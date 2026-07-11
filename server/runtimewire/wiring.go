@@ -35,14 +35,20 @@ func (w *RuntimeWiring) Close() error {
 }
 
 type RuntimeWiringOptions struct {
+	Context                             context.Context
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
 	FastMode                            *runtime.FastModeState
 	Sources                             map[string]string
 	Client                              llm.Client
+	ClientFactory                       RuntimeClientFactory
+	ReviewerClientFactory               RuntimeClientFactory
 	WorkflowRun                         *workflowruntime.Config
+	AskQuestionBatchSkipped             func(askquestion.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
+	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
 	SkipContinuationAgentRoleValidation bool
+	StepLifecycle                       runtime.StepLifecycleSink
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -54,34 +60,50 @@ func NewRuntimeWiring(store *session.Store, active config.Settings, enabledTools
 }
 
 func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, background *shelltool.Manager, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
+	if opts.Client != nil && opts.ClientFactory != nil {
+		return nil, ErrRuntimeClientFactoryConflict
+	}
 	var eng *runtime.Engine
-	localTools, askBroker, background, err := NewLocalToolRegistryBinding(
-		workspaceRoot,
-		store.Meta().SessionID,
-		enabledTools,
-		time.Duration(active.MinimumExecToBgSeconds)*time.Second,
-		active.ShellOutputMaxChars,
-		active.AllowNonCwdEdits,
-		llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
-		logger,
-		background,
-		func() triggerhandofftool.TriggerHandoffController { return eng },
-		func() bool {
+	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		WorkspaceRoot:            workspaceRoot,
+		OwnerSessionID:           store.Meta().SessionID,
+		Enabled:                  enabledTools,
+		MinimumExecToBgTime:      time.Duration(active.MinimumExecToBgSeconds) * time.Second,
+		ShellOutputMaxChars:      active.ShellOutputMaxChars,
+		AllowNonCwdEdits:         active.AllowNonCwdEdits,
+		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
+		Logger:                   logger,
+		Background:               background,
+		GlobalConfigDir:          opts.GlobalConfigDir,
+		TriggerHandoffController: func() triggerhandofftool.TriggerHandoffController { return eng },
+		QuestionsEnabledGetter: func() bool {
 			if eng == nil {
 				return true
 			}
 			return eng.QuestionsEnabled()
 		},
-	)
+	})
 	if err != nil {
 		return nil, err
 	}
 	toolRegistry := localTools.Registry()
+	factoryContext := opts.Context
+	if factoryContext == nil {
+		factoryContext = context.Background()
+	}
 
 	mainProvider := mainProviderRuntimeSettings(active)
+	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLockedOrOverride(store.Meta().Locked, active.ProviderCapabilities); ok {
+		mainProvider.ProviderCapabilitiesOverride = &resolvedCapabilities
+	}
 	var client llm.Client
 	if opts.Client != nil {
 		client = opts.Client
+	} else if opts.ClientFactory != nil {
+		client, err = newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeMain, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, mainProvider)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		var mainAuth llm.AuthHeaderProvider
 		if mgr != nil && !strings.EqualFold(strings.TrimSpace(mainProvider.Auth), "none") {
@@ -105,6 +127,12 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 
 	reviewerProvider := reviewerProviderRuntimeSettings(active)
 	newReviewerClient := func() (llm.Client, error) {
+		if opts.ClientFactory != nil {
+			return newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
+		}
+		if opts.ReviewerClientFactory != nil {
+			return newRuntimeClientFromFactory(factoryContext, opts.ReviewerClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
+		}
 		var reviewerAuth llm.AuthHeaderProvider
 		if mgr != nil && !strings.EqualFold(strings.TrimSpace(reviewerProvider.Auth), "none") {
 			reviewerAuth = mgr
@@ -147,6 +175,10 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 			skipContinuationAgentRoleValidation: opts.SkipContinuationAgentRoleValidation,
 		}
 	}
+	providerCapabilitiesOverride := mainProvider.ProviderCapabilitiesOverride
+	if opts.ProviderCapabilitiesOverride != nil {
+		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
+	}
 	eng, err = runtime.New(store, client, toolRegistry, runtime.Config{
 		Model:                         active.Model,
 		Temperature:                   1,
@@ -157,7 +189,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 		FastModeState:                 opts.FastMode,
 		WebSearchMode:                 active.WebSearch,
 		PromptFacingSnapshotReloader:  promptReloader,
-		ProviderCapabilitiesOverride:  mainProvider.ProviderCapabilitiesOverride,
+		ProviderCapabilitiesOverride:  providerCapabilitiesOverride,
 		EnabledTools:                  enabledTools,
 		DisabledSkills:                config.DisabledSkillToggles(active),
 		SubagentCatalogSettings:       active,
@@ -174,6 +206,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 		HeadlessMode:                  opts.Headless,
 		ToolPreambles:                 active.ToolPreambles,
 		WorkflowRun:                   opts.WorkflowRun,
+		AskQuestionBatchSkipped:       opts.AskQuestionBatchSkipped,
 		TranscriptWorkingDir:          workspaceRoot,
 		GlobalConfigDir:               opts.GlobalConfigDir,
 		Reviewer: runtime.ReviewerConfig{
@@ -192,6 +225,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 			}
 			eventBridge.Publish(evt)
 		},
+		StepLifecycle: opts.StepLifecycle,
 	})
 	if err != nil {
 		return nil, err

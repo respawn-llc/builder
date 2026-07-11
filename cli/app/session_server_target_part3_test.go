@@ -46,16 +46,15 @@ func TestStartSessionServerUsesConfiguredDaemonForSessionLifecycleDraftPersisten
 
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "session lifecycle draft persistence")
 	defer runtimePlan.Close()
-	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, ControllerLeaseID: runtimePlan.ControllerLeaseID, Input: "saved draft"}); err != nil {
+	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "saved draft"}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
 	if got := sessionLaunchInitialInputFromServer(context.Background(), server, plan.SessionID, "transition draft"); got != "saved draft" {
 		t.Fatalf("sessionLaunchInitialInputFromServer = %q, want saved draft", got)
 	}
 	resolved, err := server.SessionLifecycleClient().ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		ClientRequestID:   uuid.NewString(),
-		SessionID:         plan.SessionID,
-		ControllerLeaseID: runtimePlan.ControllerLeaseID,
+		ClientRequestID: uuid.NewString(),
+		SessionID:       plan.SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:          "open_session",
 			TargetSessionID: plan.SessionID,
@@ -354,36 +353,6 @@ func waitForSessionActivitySubscriptionEvent(t *testing.T, sub serverapi.Session
 	}
 }
 
-func waitForRemoteTranscriptPage(t *testing.T, views client.SessionViewClient, sessionID string, predicate func(clientui.TranscriptPage) bool) clientui.TranscriptPage {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := views.GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: sessionID})
-		if err != nil {
-			t.Fatalf("GetSessionTranscriptPage: %v", err)
-		}
-		if predicate == nil || predicate(resp.Transcript) {
-			return resp.Transcript
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	resp, err := views.GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: sessionID})
-	if err != nil {
-		t.Fatalf("GetSessionTranscriptPage final: %v", err)
-	}
-	t.Fatalf("timed out waiting for transcript page match for session %s: %+v", sessionID, resp.Transcript)
-	return clientui.TranscriptPage{}
-}
-
-func transcriptPageContainsAssistantText(page clientui.TranscriptPage, want string) bool {
-	for _, entry := range page.Entries {
-		if entry.Role == "assistant" && entry.Text == want {
-			return true
-		}
-	}
-	return false
-}
-
 func waitForRemoteProcess(t *testing.T, views client.ProcessViewClient, sessionID string, processID string) clientui.BackgroundProcess {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -441,25 +410,19 @@ func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServe
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "workflow parity")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello parity")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello parity")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
 	if message != wantReply {
 		t.Fatalf("assistant message = %q, want %q", message, wantReply)
 	}
-	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, ControllerLeaseID: runtimePlan.ControllerLeaseID, Input: "workflow draft"}); err != nil {
+	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "workflow draft"}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
 	if got := sessionLaunchInitialInputFromServer(context.Background(), server, plan.SessionID, "transition draft"); got != "workflow draft" {
 		t.Fatalf("sessionLaunchInitialInputFromServer = %q, want workflow draft", got)
-	}
-	refreshed, err := server.SessionViewClient().GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: plan.SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionMainView: %v", err)
-	}
-	if refreshed.MainView.Session.Transcript.CommittedEntryCount == 0 {
-		t.Fatalf("expected transcript metadata, got %+v", refreshed.MainView.Session.Transcript)
 	}
 }
 

@@ -84,37 +84,21 @@ func TestEnsureReadyInteractiveReloadsResultMetadata(t *testing.T) {
 	}
 }
 
-func TestEnsureReadyHeadlessWritesDefaultSettingsAndReloadsMetadata(t *testing.T) {
+func TestEnsureReadyHeadlessRequiresFinalizeWithoutWritingSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	reloaded, changed, err := EnsureOnboardingReady(context.Background(), config.App{}, nil, false, func() (config.App, error) {
+	_, changed, err := EnsureOnboardingReady(context.Background(), config.App{}, nil, false, func() (config.App, error) {
 		return config.App{}, nil
 	}, nil)
-	if err != nil {
-		t.Fatalf("ensure ready: %v", err)
+	if !errors.Is(err, ErrOnboardingRequired) {
+		t.Fatalf("ensure ready error = %v, want ErrOnboardingRequired", err)
 	}
-	if !changed {
-		t.Fatal("expected onboarding changes")
+	if changed {
+		t.Fatal("expected no onboarding changes")
 	}
 	settingsPath := filepath.Join(home, config.ConfigDirName, "config.toml")
-	if reloaded.Source.SettingsPath != settingsPath {
-		t.Fatalf("settings path = %q, want %q", reloaded.Source.SettingsPath, settingsPath)
-	}
-	if !reloaded.Source.SettingsFileExists {
-		t.Fatal("expected settings file exists flag")
-	}
-	if !reloaded.Source.CreatedDefaultConfig {
-		t.Fatal("expected created default config flag")
-	}
-	if _, err := os.Stat(settingsPath); err != nil {
-		t.Fatalf("expected settings file to exist: %v", err)
-	}
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("read settings file: %v", err)
-	}
-	if len(data) == 0 {
-		t.Fatal("expected default settings file to be non-empty")
+	if _, err := os.Stat(settingsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected settings file to remain absent, stat err=%v", err)
 	}
 }

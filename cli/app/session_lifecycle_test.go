@@ -3,14 +3,16 @@ package app
 import (
 	"context"
 	"core/cli/app/internal/projectbinding"
-	"core/server/llm"
+	"core/server/launch"
 	"core/server/metadata"
+	"core/server/registry"
 	"core/server/session"
+	"core/server/session/sessiontest"
+	"core/server/sessionlaunch"
 	shelltool "core/server/tools/shell"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/rollbacktarget"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"errors"
@@ -78,6 +80,101 @@ func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *test
 	want := `workspace root ` + strconv.Quote(missingWorkspace) + ` is missing; run ` + "`kent rebind " + strconv.Quote(summaries[0].SessionID) + " " + strconv.Quote(newWorkspace) + "`"
 	if got := err.Error(); got != want {
 		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	stopErr := errors.New("stop after launch plan")
+	var got serverapi.SessionPlanRequest
+	server := &testEmbeddedServer{
+		cfg: config.App{
+			WorkspaceRoot:   workspaceRoot,
+			PersistenceRoot: t.TempDir(),
+			Settings:        config.Settings{Theme: "dark"},
+		},
+		projectID: "project-1",
+		projectViewClient: sessionLifecycleProjectViewClient(metadata.Binding{
+			ProjectID:   "project-1",
+			WorkspaceID: "workspace-1",
+		}, workspaceRoot, nil),
+		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
+			got = req
+			return serverapi.SessionPlanResponse{}, stopErr
+		}},
+	}
+
+	err := runSessionLifecycleWithOptions(context.Background(), server, nil, "", sessionLifecycleOptions{
+		ForceNewSession: true,
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: "worker"},
+	})
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
+	}
+	if got.Mode != serverapi.SessionLaunchModeInteractive || !got.ForceNewSession || got.SelectedSessionID != "" {
+		t.Fatalf("launch request = %+v, want forced new interactive session", got)
+	}
+	if got.Overrides.AgentRole != "worker" {
+		t.Fatalf("agent override = %q, want worker", got.Overrides.AgentRole)
+	}
+}
+
+func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+	cfg, err := config.Load(workspaceRoot, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	reviewerSettings := cfg.Settings
+	reviewerSettings.Model = "gpt-5.6-sol"
+	workerSettings := cfg.Settings
+	workerSettings.Model = "gpt-5.4-mini"
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"reviewer": {Settings: reviewerSettings},
+		"worker":   {Settings: workerSettings},
+	}
+	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = metadataStore.Close() })
+	binding, err := metadataStore.RegisterWorkspaceBinding(ctx, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
+	store, err := session.Create(containerDir, filepath.Base(filepath.Clean(cfg.WorkspaceRoot)), cfg.WorkspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	service := sessionlaunch.NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
+	}, registry.NewSessionStoreRegistry())
+	server := &testEmbeddedServer{
+		cfg:               cfg,
+		projectID:         binding.ProjectID,
+		projectViewClient: sessionLifecycleProjectViewClient(binding, cfg.WorkspaceRoot, nil),
+		sessionLaunch:     client.NewLoopbackSessionLaunchClient(service),
+	}
+
+	err = runSessionLifecycleWithOptions(ctx, server, nil, store.Meta().SessionID, sessionLifecycleOptions{
+		Overrides: serverapi.RunPromptOverrides{AgentRole: "worker"},
+	})
+	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
+		t.Fatalf("runSessionLifecycle error = %v, want locked role change", err)
 	}
 }
 
@@ -577,7 +674,6 @@ func TestResolveSessionActionResumeReopensPicker(t *testing.T) {
 		&testEmbeddedServer{},
 		nil,
 		"",
-		"",
 		UITransition{Action: UIActionResume},
 	)
 	if err != nil {
@@ -600,151 +696,11 @@ func TestResolveSessionActionResumeReopensPicker(t *testing.T) {
 	}
 }
 
-func TestResolveReadOnlySessionActionHandlesPureNavigationLocally(t *testing.T) {
-	tests := []struct {
-		name string
-		in   UITransition
-		want resolvedSessionAction
-	}{
-		{
-			name: "new session",
-			in:   UITransition{Action: UIActionNewSession, InitialPrompt: "start", ParentSessionID: "parent-1"},
-			want: resolvedSessionAction{InitialPrompt: "start", ParentSessionID: "parent-1", ForceNewSession: true, ShouldContinue: true},
-		},
-		{
-			name: "resume picker",
-			in:   UITransition{Action: UIActionResume},
-			want: resolvedSessionAction{ShouldContinue: true},
-		},
-		{
-			name: "open session",
-			in:   UITransition{Action: UIActionOpenSession, TargetSessionID: "next-1", InitialInput: "draft"},
-			want: resolvedSessionAction{NextSessionID: "next-1", InitialInput: "draft", ShouldContinue: true},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveReadOnlySessionAction(context.Background(), nil, nil, "session-1", tt.in)
-			if err != nil {
-				t.Fatalf("resolveReadOnlySessionAction: %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("resolved = %+v, want %+v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResolveReadOnlySessionActionRejectsRollbackFork(t *testing.T) {
-	_, err := resolveReadOnlySessionAction(context.Background(), nil, nil, "session-1", UITransition{Action: UIActionForkRollback})
-	if !errors.Is(err, errReadOnlyRuntime) {
-		t.Fatalf("error = %v, want read-only runtime", err)
-	}
-}
-
-func TestResolveReadOnlySessionActionLogoutReauthenticatesWithoutLease(t *testing.T) {
-	reauthCalls := 0
-	resolved, err := resolveReadOnlySessionAction(
-		context.Background(),
-		narrowSessionLifecycleServer{
-			reauthenticate: func(context.Context, authInteractor) error {
-				reauthCalls++
-				return nil
-			},
-		},
-		nil,
-		"session-1",
-		UITransition{Action: UIActionLogout},
-	)
-	if err != nil {
-		t.Fatalf("resolveReadOnlySessionAction logout: %v", err)
-	}
-	if reauthCalls != 1 {
-		t.Fatalf("reauth calls = %d, want 1", reauthCalls)
-	}
-	if !resolved.ShouldContinue || resolved.NextSessionID != "session-1" {
-		t.Fatalf("resolved = %+v, want continue same session", resolved)
-	}
-}
-
-func TestResolveCollaborativeSessionActionHandlesPureNavigationLocally(t *testing.T) {
-	tests := []struct {
-		name string
-		in   UITransition
-		want resolvedSessionAction
-	}{
-		{
-			name: "new session",
-			in:   UITransition{Action: UIActionNewSession, InitialPrompt: "start", ParentSessionID: "parent-1"},
-			want: resolvedSessionAction{InitialPrompt: "start", ParentSessionID: "parent-1", ForceNewSession: true, ShouldContinue: true},
-		},
-		{
-			name: "resume picker",
-			in:   UITransition{Action: UIActionResume},
-			want: resolvedSessionAction{ShouldContinue: true},
-		},
-		{
-			name: "open session",
-			in:   UITransition{Action: UIActionOpenSession, TargetSessionID: "next-1", InitialInput: "draft"},
-			want: resolvedSessionAction{NextSessionID: "next-1", InitialInput: "draft", ShouldContinue: true},
-		},
-		{
-			name: "new review handoff",
-			in:   UITransition{Action: UIActionNewSession, InitialPrompt: "review this", InitialPromptHistoryRecorded: true, ParentSessionID: "parent-1"},
-			want: resolvedSessionAction{InitialPrompt: "review this", InitialPromptHistoryRecorded: true, ParentSessionID: "parent-1", ForceNewSession: true, ShouldContinue: true},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveCollaborativeSessionAction(context.Background(), nil, nil, "session-1", tt.in)
-			if err != nil {
-				t.Fatalf("resolveCollaborativeSessionAction: %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("resolved = %+v, want %+v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResolveCollaborativeSessionActionRejectsRollbackFork(t *testing.T) {
-	_, err := resolveCollaborativeSessionAction(context.Background(), nil, nil, "session-1", UITransition{Action: UIActionForkRollback})
-	if !errors.Is(err, errCollaborativeOperationBlocked) {
-		t.Fatalf("error = %v, want collaborative runtime block", err)
-	}
-}
-
-func TestResolveCollaborativeSessionActionLogoutReauthenticatesWithoutLease(t *testing.T) {
-	reauthCalls := 0
-	resolved, err := resolveCollaborativeSessionAction(
-		context.Background(),
-		narrowSessionLifecycleServer{
-			reauthenticate: func(context.Context, authInteractor) error {
-				reauthCalls++
-				return nil
-			},
-		},
-		nil,
-		"session-1",
-		UITransition{Action: UIActionLogout},
-	)
-	if err != nil {
-		t.Fatalf("resolveCollaborativeSessionAction logout: %v", err)
-	}
-	if reauthCalls != 1 {
-		t.Fatalf("reauth calls = %d, want 1", reauthCalls)
-	}
-	if !resolved.ShouldContinue || resolved.NextSessionID != "session-1" {
-		t.Fatalf("resolved = %+v, want continue same session", resolved)
-	}
-}
-
 func TestResolveSessionActionExitStaysClientLocal(t *testing.T) {
 	resolved, err := resolveSessionAction(
 		context.Background(),
 		nil,
 		nil,
-		"",
 		"",
 		UITransition{Exit: true},
 	)
@@ -761,7 +717,6 @@ func TestResolveSessionActionNewSessionUsesForceNewFlow(t *testing.T) {
 		context.Background(),
 		&testEmbeddedServer{},
 		nil,
-		"",
 		"",
 		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", ParentSessionID: "parent-1"},
 	)
@@ -805,7 +760,6 @@ func TestResolveSessionActionPreservesInitialPromptHistoryRecorded(t *testing.T)
 		narrowSessionLifecycleServer{lifecycle: client},
 		nil,
 		"session-1",
-		"lease-1",
 		UITransition{Action: UIActionNewSession, InitialPrompt: "expanded prompt", InitialPromptHistoryRecorded: true},
 	)
 	if err != nil {
@@ -838,7 +792,6 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 		context.Background(),
 		&testEmbeddedServer{background: manager},
 		nil,
-		"",
 		"",
 		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", ParentSessionID: "parent-1"},
 	)
@@ -943,8 +896,8 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTargetByID(ctx, parent.Meta().SessionID, binding.WorkspaceID, "worktree-review-lifecycle", "pkg"); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID parent: %v", err)
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-review-lifecycle"}, CwdRelpath: "pkg"}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 
 	model := newProjectedStaticUIModel(
@@ -962,7 +915,7 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}
 
 	server := &testEmbeddedServer{cfg: cfg}
-	resolved, err := resolveSessionAction(ctx, server, nil, parent.Meta().SessionID, "lease-test-controller", updated.Transition())
+	resolved, err := resolveSessionAction(ctx, server, nil, parent.Meta().SessionID, updated.Transition())
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
@@ -990,95 +943,11 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget child: %v", err)
 	}
-	if target.WorktreeID != "worktree-review-lifecycle" || target.CwdRelpath != "pkg" {
+	if target.Worktree == nil || target.Worktree.ID != "worktree-review-lifecycle" || target.CwdRelpath != "pkg" {
 		t.Fatalf("child target = %+v, want parent worktree target", target)
 	}
 	if target.EffectiveWorkdir != filepath.Join(canonicalWorktreeRoot, "pkg") {
 		t.Fatalf("child effective workdir = %q, want %q", target.EffectiveWorkdir, filepath.Join(canonicalWorktreeRoot, "pkg"))
-	}
-}
-
-func TestResolveSessionActionForkRollbackTeleportsToForkWithPrompt(t *testing.T) {
-	root := t.TempDir()
-	store := createAppRuntimeSessionAt(t, root, "workspace-x", "/tmp/work")
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-
-	resolved, err := resolveSessionAction(
-		context.Background(),
-		&testEmbeddedServer{cfg: config.App{PersistenceRoot: root}, containerDir: root},
-		nil,
-		store.Meta().SessionID,
-		"lease-test-controller",
-		UITransition{Action: UIActionForkRollback, InitialPrompt: "edited user message", ForkRollbackTargetID: rollbacktarget.EncodeUserMessageSeq(userMessageSeqAt(t, store, 1))},
-	)
-	if err != nil {
-		t.Fatalf("resolve session action: %v", err)
-	}
-	if !resolved.ShouldContinue {
-		t.Fatal("expected lifecycle to continue for fork rollback action")
-	}
-	if resolved.ForceNewSession {
-		t.Fatal("did not expect force-new for fork rollback action")
-	}
-	if resolved.ParentSessionID != "" {
-		t.Fatalf("expected no deferred parent for pre-created fork session, got %q", resolved.ParentSessionID)
-	}
-	if resolved.NextSessionID == "" {
-		t.Fatal("expected target fork session id")
-	}
-	if resolved.NextSessionID == store.Meta().SessionID {
-		t.Fatalf("expected fork session id to differ from parent, got %q", resolved.NextSessionID)
-	}
-	if resolved.InitialPrompt != "edited user message" || resolved.InitialInput != "" {
-		t.Fatalf("expected initial prompt passthrough, got prompt=%q input=%q", resolved.InitialPrompt, resolved.InitialInput)
-	}
-}
-
-func TestForkRollbackLifecycleDoesNotPersistEditedPromptAsSourceDraft(t *testing.T) {
-	root := t.TempDir()
-	store := createAppRuntimeSessionAt(t, root, "workspace-x", "/tmp/work")
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-
-	m := newProjectedStaticUIModel()
-	testSetRollbackEditing(m, 0, 0)
-	m.input = "edited user message"
-	server := &testEmbeddedServer{cfg: config.App{PersistenceRoot: root}, containerDir: root}
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected quit cmd for rollback fork")
-	}
-	if err := persistSessionDraftToServer(context.Background(), server, store.Meta().SessionID, "lease-test-controller", updated); err != nil {
-		t.Fatalf("persist source draft: %v", err)
-	}
-	reopenedSource, err := session.Open(store.Dir())
-	if err != nil {
-		t.Fatalf("reopen source store: %v", err)
-	}
-	if reopenedSource.Meta().InputDraft != "" {
-		t.Fatalf("expected no persisted source draft after fork handoff, got %q", reopenedSource.Meta().InputDraft)
-	}
-
-	resolved, err := resolveSessionAction(context.Background(), server, nil, reopenedSource.Meta().SessionID, "lease-test-controller", updated.Transition())
-	if err != nil {
-		t.Fatalf("resolve session action: %v", err)
-	}
-	if resolved.InitialPrompt != "edited user message" {
-		t.Fatalf("expected fork prompt passthrough, got %q", resolved.InitialPrompt)
-	}
-	if resolved.InitialInput != "" {
-		t.Fatalf("expected no fork input draft payload, got %q", resolved.InitialInput)
 	}
 }
 
@@ -1087,7 +956,6 @@ func TestResolveSessionActionOpenSessionUsesTargetID(t *testing.T) {
 		context.Background(),
 		&testEmbeddedServer{},
 		nil,
-		"",
 		"",
 		UITransition{Action: UIActionOpenSession, TargetSessionID: "session-42", InitialInput: "draft reply"},
 	)
@@ -1136,14 +1004,11 @@ func TestPersistSessionDraftUsesNarrowLifecycleClient(t *testing.T) {
 	}
 	model := &uiModel{}
 	model.input = "draft from ui"
-	if err := persistSessionDraftToServer(context.Background(), narrowSessionLifecycleServer{lifecycle: client}, " session-1 ", " lease-1 ", model); err != nil {
+	if err := persistSessionDraftToServer(context.Background(), narrowSessionLifecycleServer{lifecycle: client}, " session-1 ", model); err != nil {
 		t.Fatalf("persist draft: %v", err)
 	}
 	if captured.SessionID != "session-1" {
 		t.Fatalf("session id = %q, want trimmed session-1", captured.SessionID)
-	}
-	if captured.ControllerLeaseID != "lease-1" {
-		t.Fatalf("lease id = %q, want trimmed lease-1", captured.ControllerLeaseID)
 	}
 	if captured.Input != "draft from ui" {
 		t.Fatalf("input = %q, want ui draft", captured.Input)
@@ -1159,9 +1024,6 @@ func TestResolveSessionActionReauthenticatesThroughNarrowServer(t *testing.T) {
 		resolveTransition: func(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
 			if req.SessionID != "session-1" {
 				t.Fatalf("session id = %q, want session-1", req.SessionID)
-			}
-			if req.ControllerLeaseID != "lease-1" {
-				t.Fatalf("lease id = %q, want lease-1", req.ControllerLeaseID)
 			}
 			if req.Transition.Action != UIActionOpenSession || req.Transition.TargetSessionID != "next-1" {
 				t.Fatalf("transition = %+v, want open next-1", req.Transition)
@@ -1184,7 +1046,6 @@ func TestResolveSessionActionReauthenticatesThroughNarrowServer(t *testing.T) {
 		},
 		nil,
 		" session-1 ",
-		" lease-1 ",
 		UITransition{Action: UIActionOpenSession, TargetSessionID: "next-1"},
 	)
 	if err != nil {
@@ -1236,6 +1097,99 @@ func TestShouldRetryStartupUpdateNoticeUntilShown(t *testing.T) {
 	}
 	if shouldRetryStartupUpdateNotice(&uiModel{}, false) {
 		t.Fatal("did not expect retry when startup update notices are disabled")
+	}
+}
+
+func TestForcedLocalExitUsesDetachOnlyRuntimePlanClose(t *testing.T) {
+	normalClosed := false
+	detachClosed := false
+	plan := &runtimeLaunchPlan{
+		close:       func() { normalClosed = true },
+		detachClose: func() { detachClosed = true },
+	}
+	model := &uiModel{uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{forcedLocalExit: true}}
+
+	closeRuntimePlanAfterUIExit(plan, model)
+
+	if normalClosed || !detachClosed {
+		t.Fatalf("close state normal=%t detach=%t, want detach-only close", normalClosed, detachClosed)
+	}
+}
+
+func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
+	var captured serverapi.SessionPersistInputDraftRequest
+	client := &recordingSessionLifecycleClient{
+		persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+			captured = req
+			return serverapi.SessionPersistInputDraftResponse{}, nil
+		},
+	}
+	model := newUIModelDefaults(nil, nil, nil)
+	model.input = "visible draft"
+	model.activeSubmit = activeSubmitState{
+		text: "submitted before forced exit",
+		operationRef: clientui.RuntimeOperationRef{
+			Kind:            clientui.RuntimeOperationKindSubmit,
+			ClientRequestID: "submit-1",
+		},
+	}
+	model.pendingInjected = queuedUserMessagesForTest("pending injected")
+	model.queued = queuedInputsForTest("queued later")
+
+	if err := persistSessionDraftToServer(context.Background(), narrowSessionLifecycleServer{lifecycle: client}, " session-1 ", model); err != nil {
+		t.Fatalf("persistSessionDraftToServer: %v", err)
+	}
+	if captured.Input != "visible draft" || captured.SessionID != "session-1" {
+		t.Fatalf("captured draft request = %+v", captured)
+	}
+	if len(captured.RecoveryBuffers) != 2 {
+		t.Fatalf("recovery buffers = %+v, want pending injected and queued", captured.RecoveryBuffers)
+	}
+	if captured.RecoveryBuffers[0].Kind != serverapi.SessionDraftRecoveryBufferPendingInjectedInput {
+		t.Fatalf("first recovery buffer = %+v, want pending injected input", captured.RecoveryBuffers[0])
+	}
+}
+
+func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *testing.T) {
+	model := NewProjectedUIModel(nil, nil, nil,
+		WithUIInitialInput("visible draft"),
+		WithUIInitialRecoveryBuffers([]serverapi.SessionDraftRecoveryBuffer{
+			{Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit, Text: "submitted before forced exit"},
+			{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, ID: "server-1", ClientRequestID: "queue-1", Text: "pending steering"},
+			{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, ID: "queued-1", Text: "queued later"},
+		}),
+	).(*uiModel)
+
+	wantInput := "visible draft\n\npending steering\n\nqueued later"
+	if model.input != wantInput {
+		t.Fatalf("input = %q, want recovered visible retry input", model.input)
+	}
+	if model.startupSubmit != "" || model.activeSubmit.text != "" {
+		t.Fatalf("recovery must not auto-submit: startup=%q active=%+v", model.startupSubmit, model.activeSubmit)
+	}
+	if len(model.pendingInjected) != 0 || len(model.queued) != 0 {
+		t.Fatalf("recovery must not restore into operational queues: pending=%+v queued=%+v", model.pendingInjected, model.queued)
+	}
+	if len(model.recoveredDraftBuffers) != 2 {
+		t.Fatalf("recovered buffers = %+v, want non-operational recovery affordance", model.recoveredDraftBuffers)
+	}
+	if model.transientStatus != "" {
+		t.Fatalf("transient status = %q, want ordinary draft recovery to stay silent", model.transientStatus)
+	}
+}
+
+func TestNormalExitUsesNormalRuntimePlanClose(t *testing.T) {
+	normalClosed := false
+	detachClosed := false
+	plan := &runtimeLaunchPlan{
+		close:       func() { normalClosed = true },
+		detachClose: func() { detachClosed = true },
+	}
+
+	closeRuntimePlanAfterUIExit(plan, &uiModel{})
+
+	if !normalClosed || detachClosed {
+		t.Fatalf("close state normal=%t detach=%t, want normal close", normalClosed, detachClosed)
 	}
 }
 

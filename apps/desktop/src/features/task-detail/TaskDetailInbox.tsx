@@ -2,9 +2,13 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { AttentionItem, TaskDetail } from "../../api";
+import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
+import { sameTaskDetailInitialFocus } from "../../app/taskDetailInitialFocus";
+import { useAppServices } from "../../app/useAppServices";
 import { Island } from "../../ui";
 import {
   ApprovalBox,
+  InterruptedRunBox,
   QuestionBox,
 } from "./TaskDetailAttention";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
@@ -14,7 +18,7 @@ export function TaskInbox({
   currentVersion,
   detail,
   disabled,
-  focusFirstQuestion = false,
+  initialFocus,
   mutations,
   questionSelections,
   onQuestionSelectionChange,
@@ -22,14 +26,29 @@ export function TaskInbox({
   currentVersion: number;
   detail: TaskDetail;
   disabled: boolean;
-  focusFirstQuestion?: boolean | undefined;
+  initialFocus?: TaskDetailInitialFocus | undefined;
   mutations: ReturnType<typeof useTaskMutations>;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
 }>) {
-  const firstQuestionID = focusFirstQuestion
-    ? (detail.attention.find((item) => item.kind === "question")?.id ?? "")
-    : "";
+  const { logger } = useAppServices();
+  const missingFocusLogKeyRef = useRef<TaskDetailInitialFocus | null>(null);
+  const focusedAttentionID = focusedAttentionItemID(detail.attention, initialFocus);
+
+  useEffect(() => {
+    if (initialFocus === undefined || focusedAttentionID !== undefined) {
+      return;
+    }
+    if (sameTaskDetailInitialFocus(missingFocusLogKeyRef.current, initialFocus)) {
+      return;
+    }
+    missingFocusLogKeyRef.current = initialFocus;
+    void logger.append("warn", "Task detail initial focus target did not match current attention rows.", {
+      taskID: detail.id,
+      ...initialFocusLogContext(initialFocus),
+    });
+  }, [detail.id, focusedAttentionID, initialFocus, logger]);
+
   return (
     <>
       {detail.attention.map((item) => (
@@ -37,7 +56,7 @@ export function TaskInbox({
           attention={item}
           currentVersion={currentVersion}
           disabled={disabled}
-          focusOnMount={item.id === firstQuestionID}
+          focusOnMount={item.id === focusedAttentionID}
           key={item.id}
           mutations={mutations}
           onQuestionSelectionChange={onQuestionSelectionChange}
@@ -48,6 +67,42 @@ export function TaskInbox({
       ))}
     </>
   );
+}
+
+function initialFocusLogContext(focus: TaskDetailInitialFocus): Readonly<Record<string, string>> {
+  if (focus.kind === "question") {
+    return { focusAskIDs: focus.askIDs.join(","), focusKind: focus.kind };
+  }
+  if (focus.kind === "approval") {
+    return { focusKind: focus.kind, focusTaskTransitionID: focus.taskTransitionID };
+  }
+  return { focusKind: focus.kind, focusRunID: focus.runID };
+}
+
+function focusedAttentionItemID(
+  attentionItems: readonly AttentionItem[],
+  initialFocus: TaskDetailInitialFocus | undefined,
+): string | undefined {
+  if (initialFocus === undefined) {
+    return undefined;
+  }
+  if (initialFocus.kind === "question") {
+    const itemIDByAskID = new Map<string, string>();
+    for (const item of attentionItems) {
+      if (item.kind === "question" && !itemIDByAskID.has(item.askID)) {
+        itemIDByAskID.set(item.askID, item.id);
+      }
+    }
+    return initialFocus.askIDs.map((askID) => itemIDByAskID.get(askID)).find((itemID) => itemID !== undefined);
+  }
+  if (initialFocus.kind === "approval") {
+    return attentionItems.find(
+      (item) => item.kind === "approval" && item.taskTransitionID === initialFocus.taskTransitionID,
+    )?.id;
+  }
+  return attentionItems.find(
+    (item) => item.kind === "interrupted_run" && item.runID === initialFocus.runID,
+  )?.id;
 }
 
 function InboxItem({
@@ -121,6 +176,13 @@ function InboxItem({
       </div>
     );
   }
+  if (attention.kind === "interrupted_run") {
+    return (
+      <div ref={focusTargetRef}>
+        <InterruptedRunBox attention={attention} disabled={disabled} mutations={mutations} />
+      </div>
+    );
+  }
   return (
     <div ref={focusTargetRef}>
       <Island aria-label={attention.kind || t("task.inbox")} className="grid gap-[var(--space-2)]" level={1} radius="l">
@@ -132,7 +194,7 @@ function InboxItem({
 }
 
 function scheduleScroll(callback: () => void): () => void {
-  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+  if (typeof window !== "undefined" && window.requestAnimationFrame instanceof Function) {
     const frame = window.requestAnimationFrame(() => {
       callback();
     });

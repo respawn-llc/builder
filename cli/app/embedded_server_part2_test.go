@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"core/server/primaryrun"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
@@ -10,10 +9,7 @@ import (
 	"core/shared/serverapi"
 	"errors"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,6 +43,7 @@ func TestEmbeddedAppServerDeliversBackgroundCompletionWhileIdle(t *testing.T) {
 		NoticeSuppressed: true,
 		Snapshot: shelltool.Snapshot{
 			ID:             processID,
+			ActivityID:     uuid.New(),
 			OwnerSessionID: plan.SessionID,
 			State:          "completed",
 			Command:        "sleep 1; printf done",
@@ -85,6 +82,7 @@ func TestPrepareRuntimeForwardsBackgroundCompletionIntoProjectedRuntimeEvents(t 
 		NoticeSuppressed: true,
 		Snapshot: shelltool.Snapshot{
 			ID:             processID,
+			ActivityID:     uuid.New(),
 			OwnerSessionID: plan.SessionID,
 			State:          "completed",
 			Command:        "sleep 1; printf done",
@@ -241,7 +239,7 @@ func TestEmbeddedAppServerPromptActivityStreamsAndHydratesPendingResources(t *te
 	waitForPendingApprovalResources(t, runtimeClients.ApprovalViews, plan.SessionID, 0)
 }
 
-func TestEmbeddedAppServerPendingPromptsNotifyUIAskHook(t *testing.T) {
+func TestEmbeddedAppServerPendingPromptsKeepPromptActivityForAnsweringOnly(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
 	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyMemoryAuthHandler(), false)
@@ -253,9 +251,7 @@ func TestEmbeddedAppServerPendingPromptsNotifyUIAskHook(t *testing.T) {
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded ask notification")
 	defer runtimePlan.Close()
 
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-	model := newProjectedTestUIModel(runtimePlan.Wiring.runtimeClient, closedProjectedRuntimeEvents(), runtimePlan.Wiring.askEvents, WithUIAskNotificationHook(hooks))
+	model := newProjectedTestUIModel(runtimePlan.Wiring.runtimeClient, closedProjectedRuntimeEvents(), runtimePlan.Wiring.askEvents)
 
 	firstDone := make(chan error, 1)
 	go func() {
@@ -274,14 +270,6 @@ func TestEmbeddedAppServerPendingPromptsNotifyUIAskHook(t *testing.T) {
 	model = next.(*uiModel)
 	next, _ = model.Update(askEventMsg{event: second})
 	_ = next.(*uiModel)
-
-	if got := ringer.Count(); got != 2 {
-		t.Fatalf("ask notification count = %d, want 2", got)
-	}
-	wantLast := "kent: Question: " + second.req.Question
-	if got := ringer.Last(); got != wantLast {
-		t.Fatalf("last ask notification = %q, want %q", got, wantLast)
-	}
 
 	for _, evt := range []askEvent{first, second} {
 		evt.reply <- askReply{response: clientui.PromptAnswer{PromptID: evt.req.PromptID, Answer: "ok"}}
@@ -362,124 +350,6 @@ func TestEmbeddedAppServerProcessOutputStreamsAndInlineSnapshot(t *testing.T) {
 	waitForRemoteProcessExit(t, runtimeClients.ProcessViews, result.SessionID)
 }
 
-func TestEmbeddedAppServerPrepareRuntimeUsesPrimaryRunGuardedRuntimeClient(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime primary run gate")
-	defer runtimePlan.Close()
-	if runtimePlan.Wiring.runtimeClient == nil {
-		t.Fatal("expected PrepareRuntime to wire guarded runtime client")
-	}
-
-	lease, err := server.inner.AcquirePrimaryRun(plan.SessionID)
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun: %v", err)
-	}
-	defer lease.Release()
-	if _, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello"); !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("SubmitUserMessage error = %v, want active primary run", err)
-	}
-}
-
-func TestEmbeddedAppServerPrepareRuntimeRejectsConcurrentPrimarySubmitWhileRunInFlight(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	firstStarted := make(chan struct{})
-	firstRelease := make(chan struct{})
-	var requests atomic.Int32
-	responseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 11) {
-			return
-		}
-		if r.URL.Path != "/responses" {
-			t.Fatalf("unexpected path %q", r.URL.Path)
-		}
-		if got := strings.TrimSpace(r.Header.Get("Authorization")); got == "" {
-			t.Fatal("expected authorization header")
-		}
-		index := int(requests.Add(1))
-		switch index {
-		case 1:
-			close(firstStarted)
-			<-firstRelease
-		case 2:
-		default:
-			t.Fatalf("unexpected responses request index %d", index)
-		}
-		reply := map[int]string{1: "first reply", 2: "second reply"}[index]
-		writeTestOpenAICompletedResponseStream(w, reply, 11, 7)
-	}))
-	defer responseServer.Close()
-
-	server, err := startEmbeddedServer(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-		OpenAIBaseURL:         responseServer.URL,
-		OpenAIBaseURLExplicit: true,
-	}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime in-flight primary run gate")
-	defer runtimePlan.Close()
-
-	type submitResult struct {
-		message string
-		err     error
-	}
-	firstDone := make(chan submitResult, 1)
-	go func() {
-		message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "first prompt")
-		firstDone <- submitResult{message: message, err: err}
-	}()
-
-	select {
-	case <-firstStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for first submit to start")
-	}
-
-	if _, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "second prompt"); !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("second SubmitUserMessage error = %v, want active primary run", err)
-	}
-	if got := requests.Load(); got != 1 {
-		t.Fatalf("responses request count during rejected concurrent submit = %d, want 1", got)
-	}
-
-	close(firstRelease)
-	select {
-	case result := <-firstDone:
-		if result.err != nil {
-			t.Fatalf("first SubmitUserMessage error: %v", result.err)
-		}
-		if result.message != "first reply" {
-			t.Fatalf("first SubmitUserMessage message = %q, want first reply", result.message)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for first submit to finish")
-	}
-
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "third prompt")
-	if err != nil {
-		t.Fatalf("third SubmitUserMessage error: %v", err)
-	}
-	if message != "second reply" {
-		t.Fatalf("third SubmitUserMessage message = %q, want second reply", message)
-	}
-	if got := requests.Load(); got != 2 {
-		t.Fatalf("responses request count after third submit = %d, want 2", got)
-	}
-}
-
 func TestPrepareSharedRuntimeUsesCallerContextForAttachRPCs(t *testing.T) {
 	ctxKey := struct{}{}
 	ctxValue := "attach-context"
@@ -493,7 +363,7 @@ func TestPrepareSharedRuntimeUsesCallerContextForAttachRPCs(t *testing.T) {
 				if req.SessionID != "session-1" {
 					t.Fatalf("unexpected activate request: %+v", req)
 				}
-				return serverapi.SessionRuntimeActivateResponse{LeaseID: "lease-1"}, nil
+				return serverapi.SessionRuntimeActivateResponse{}, nil
 			},
 			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 				return serverapi.SessionRuntimeReleaseResponse{}, nil
@@ -546,16 +416,13 @@ func TestPrepareSharedRuntimeSubscribeFailureReleasesOnceWithBoundedContext(t *t
 			server := &testEmbeddedServer{
 				sessionRuntime: &recordingSessionRuntimeClient{
 					activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-						return serverapi.SessionRuntimeActivateResponse{LeaseID: "lease-1"}, nil
+						return serverapi.SessionRuntimeActivateResponse{}, nil
 					},
 					release: func(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 						releaseCount++
 						released <- ctx
 						if req.SessionID != "session-1" {
 							t.Fatalf("unexpected release request: %+v", req)
-						}
-						if req.LeaseID != "lease-1" {
-							t.Fatalf("release lease id = %q, want lease-1", req.LeaseID)
 						}
 						return serverapi.SessionRuntimeReleaseResponse{}, nil
 					},
@@ -614,7 +481,7 @@ func TestPrepareSharedRuntimeInstallsTurnQueueHook(t *testing.T) {
 	server := &testEmbeddedServer{
 		sessionRuntime: &recordingSessionRuntimeClient{
 			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{LeaseID: "lease-1"}, nil
+				return serverapi.SessionRuntimeActivateResponse{}, nil
 			},
 			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 				return serverapi.SessionRuntimeReleaseResponse{}, nil

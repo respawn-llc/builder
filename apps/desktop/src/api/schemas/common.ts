@@ -1,7 +1,10 @@
 import { z } from "zod";
 
 import type {
+  ApprovalDecision,
+  ApprovalQuestionPrompt,
   AttentionItem,
+  AttentionQuestionPrompt,
   BoardCard,
   BoardColumn,
   BoardGroup,
@@ -17,6 +20,7 @@ import type {
   WorkflowPickerItem,
   WorkflowValidationError,
   WorkspaceSummary,
+  OrdinaryQuestionPrompt,
 } from "../models";
 
 export const emptyString = z.string().optional().default("");
@@ -25,6 +29,41 @@ export const stringList = z
   .array(z.string())
   .nullish()
   .transform((value) => value ?? []);
+
+export const approvalDecisionSchema: z.ZodType<ApprovalDecision> = z.enum([
+  "allow_once",
+  "allow_session",
+  "deny",
+]);
+
+const ordinaryQuestionPromptSchema = z.object({
+  kind: z.literal("ordinary"),
+  suggestions: stringList,
+  recommended_option_index: z.number().optional().default(0),
+});
+
+const approvalQuestionPromptSchema = z.object({
+  kind: z.literal("approval"),
+  approval_decisions: z.array(approvalDecisionSchema).min(1),
+});
+
+export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z
+  .discriminatedUnion("kind", [ordinaryQuestionPromptSchema, approvalQuestionPromptSchema])
+  .transform((value): AttentionQuestionPrompt => {
+    switch (value.kind) {
+      case "ordinary":
+        return {
+          kind: "ordinary",
+          suggestions: value.suggestions,
+          recommendedOptionIndex: value.recommended_option_index,
+        } satisfies OrdinaryQuestionPrompt;
+      case "approval":
+        return {
+          kind: "approval",
+          approvalDecisions: value.approval_decisions,
+        } satisfies ApprovalQuestionPrompt;
+    }
+  });
 
 export const workspaceSummarySchema: z.ZodType<WorkspaceSummary> = z
   .object({
@@ -159,23 +198,15 @@ export const taskActionsSchema: z.ZodType<TaskActions> = z
   .object({
     can_start: z.boolean(),
     can_interrupt: z.boolean(),
-    interrupt_run_id: emptyString,
     can_resume: z.boolean(),
-    resume_run_id: emptyString,
     can_cancel: z.boolean(),
-    needs_detail_for_interrupt: z.boolean(),
-    needs_detail_for_resume: z.boolean(),
     manual_move_target_node_ids: stringList,
   })
   .transform((value) => ({
     canStart: value.can_start,
     canInterrupt: value.can_interrupt,
-    interruptRunID: value.interrupt_run_id,
     canResume: value.can_resume,
-    resumeRunID: value.resume_run_id,
     canCancel: value.can_cancel,
-    needsDetailForInterrupt: value.needs_detail_for_interrupt,
-    needsDetailForResume: value.needs_detail_for_resume,
     manualMoveTargetNodeIDs: value.manual_move_target_node_ids,
   }));
 
@@ -273,8 +304,10 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z
     ask_id: emptyString,
     task_transition_id: emptyString,
     message: z.string(),
+    detail_json: emptyString,
     suggestions: stringList,
     recommended_option_index: z.number().optional().default(0),
+    question: questionPromptSchema.nullish(),
     occurred_at_unix_ms: z.number(),
   })
   .transform((value) => ({
@@ -290,8 +323,10 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z
     askID: value.ask_id,
     taskTransitionID: value.task_transition_id,
     message: value.message,
+    detailJSON: value.detail_json,
     suggestions: value.suggestions,
     recommendedOptionIndex: value.recommended_option_index,
+    question: value.question ?? null,
     occurredAt: value.occurred_at_unix_ms,
   }));
 
@@ -319,6 +354,8 @@ export const runSchema: z.ZodType<TaskRun> = z
     task_id: z.string(),
     placement_id: z.string(),
     node_id: z.string(),
+    node_kind: emptyString,
+    script_path: emptyString,
     session_id: emptyString,
     session_name: emptyString,
     role: emptyString,
@@ -328,12 +365,16 @@ export const runSchema: z.ZodType<TaskRun> = z
     started_at_unix_ms: numberValue,
     completed_at_unix_ms: numberValue,
     interrupted_at_unix_ms: numberValue,
+    interruption_reason: emptyString,
+    interruption_detail_json: emptyString,
   })
   .transform((value) => ({
     id: value.id,
     taskID: value.task_id,
     placementID: value.placement_id,
     nodeID: value.node_id,
+    nodeKind: value.node_kind,
+    scriptPath: value.script_path,
     sessionID: value.session_id,
     sessionName: value.session_name,
     role: value.role,
@@ -343,6 +384,8 @@ export const runSchema: z.ZodType<TaskRun> = z
     startedAt: value.started_at_unix_ms,
     completedAt: value.completed_at_unix_ms,
     interruptedAt: value.interrupted_at_unix_ms,
+    interruptionReason: value.interruption_reason,
+    interruptionDetail: value.interruption_detail_json,
   }));
 
 export const transitionEdgeSchema: z.ZodType<TransitionEdge> = z

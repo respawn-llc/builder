@@ -37,13 +37,6 @@ type ProjectWorkflowLinkRecord struct {
 	UpdatedAtUnixMs int64
 }
 
-type RuntimeLease struct {
-	ID               string
-	SessionID        string
-	CreatedAtUnixMs  int64
-	ReleasedAtUnixMs int64
-}
-
 type Session struct {
 	ID                 string
 	ProjectID          string
@@ -58,7 +51,6 @@ type Session struct {
 	UpdatedAtUnixMs    int64
 	LastSequence       int64
 	ModelRequestCount  int64
-	InFlightStep       int64
 	LaunchVisible      int64
 	CwdRelpath         string
 	ContinuationJson   string
@@ -106,7 +98,7 @@ type TaskComment struct {
 type TaskNodePlacement struct {
 	ID                        string
 	TaskID                    string
-	NodeID                    string
+	NodeID                    sql.NullString
 	State                     string
 	ParallelBatchTransitionID sql.NullString
 	ParallelBranchEdgeID      sql.NullString
@@ -117,7 +109,7 @@ type TaskNodePlacement struct {
 type TaskNodePlacementRecord struct {
 	ID                        string
 	TaskID                    string
-	NodeID                    string
+	NodeID                    sql.NullString
 	State                     string
 	CreatedByTransitionID     string
 	ParallelBatchTransitionID sql.NullString
@@ -171,7 +163,7 @@ type TaskRunRecord struct {
 	ID                          string
 	TaskID                      string
 	PlacementID                 string
-	NodeID                      string
+	NodeID                      sql.NullString
 	SessionID                   sql.NullString
 	RunGeneration               int64
 	WorkflowRevisionSeen        int64
@@ -304,6 +296,7 @@ type WorkflowNode struct {
 	InputFieldsJson        string
 	JoinInputProvidersJson string
 	CompletionMode         string
+	ScriptPath             sql.NullString
 }
 
 type WorkflowNodeGroup struct {

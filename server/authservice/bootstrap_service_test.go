@@ -2,6 +2,7 @@ package authservice
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -116,6 +117,94 @@ func TestCompleteBootstrapNoneSavesNoAuthPreferenceWhenAuthRequired(t *testing.T
 	}
 	if !state.IsNoAuthSelected() {
 		t.Fatalf("stored state = %+v, want no-auth preference", state)
+	}
+	if !resp.NoAuthSelected {
+		t.Fatalf("NoAuthSelected = false, want true")
+	}
+}
+
+func TestGetBootstrapStatusReportsPersistedNoAuthSelection(t *testing.T) {
+	service, _ := newTestAuthBootstrapService(auth.State{
+		Scope:               auth.ScopeGlobal,
+		Method:              auth.Method{Type: auth.MethodNone},
+		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
+	})
+
+	resp, err := service.GetBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	if err != nil {
+		t.Fatalf("GetBootstrapStatus: %v", err)
+	}
+	if resp.AuthReady {
+		t.Fatal("did not expect no-auth selection to satisfy required startup readiness")
+	}
+	if !resp.NoAuthSelected {
+		t.Fatal("expected bootstrap status to report persisted no-auth selection")
+	}
+}
+
+func TestGetBootstrapStatusDoesNotReportEmptyStateAsNoAuthSelection(t *testing.T) {
+	service, _ := newTestAuthBootstrapService(auth.EmptyState())
+
+	resp, err := service.GetBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	if err != nil {
+		t.Fatalf("GetBootstrapStatus: %v", err)
+	}
+	if resp.NoAuthSelected {
+		t.Fatal("empty state must not be reported as explicit no-auth selection")
+	}
+}
+
+func TestAcknowledgeNoAuthIsNonMutating(t *testing.T) {
+	initial := auth.State{
+		Scope:               auth.ScopeGlobal,
+		Method:              auth.Method{Type: auth.MethodNone},
+		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
+	}
+	service, store := newTestAuthBootstrapService(initial)
+
+	resp, err := service.AcknowledgeNoAuth(context.Background(), serverapi.AuthAcknowledgeNoAuthRequest{})
+	if err != nil {
+		t.Fatalf("AcknowledgeNoAuth: %v", err)
+	}
+	if resp.AuthReady {
+		t.Fatal("did not expect acknowledged no-auth to satisfy raw readiness")
+	}
+	if !resp.NoAuthSelected {
+		t.Fatal("expected no-auth acknowledgement response")
+	}
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if state != initial {
+		t.Fatalf("stored state mutated: %+v, want %+v", state, initial)
+	}
+}
+
+func TestAcknowledgeNoAuthReportsReadyRealAuthWithoutNoAuthSelection(t *testing.T) {
+	service, _ := newTestAuthBootstrapService(auth.State{
+		Scope: auth.ScopeGlobal,
+		Method: auth.Method{
+			Type:   auth.MethodAPIKey,
+			APIKey: &auth.APIKeyMethod{Key: "server-key"},
+		},
+	})
+
+	resp, err := service.AcknowledgeNoAuth(context.Background(), serverapi.AuthAcknowledgeNoAuthRequest{})
+	if err != nil {
+		t.Fatalf("AcknowledgeNoAuth: %v", err)
+	}
+	if !resp.AuthReady || resp.NoAuthSelected {
+		t.Fatalf("ack response = %+v, want real-auth ready without no-auth selection", resp)
+	}
+}
+
+func TestAcknowledgeNoAuthRejectsMissingAuthAndNoAuthSelection(t *testing.T) {
+	service, _ := newTestAuthBootstrapService(auth.EmptyState())
+
+	_, err := service.AcknowledgeNoAuth(context.Background(), serverapi.AuthAcknowledgeNoAuthRequest{})
+	if !errors.Is(err, serverapi.ErrServerAuthRequired) {
+		t.Fatalf("AcknowledgeNoAuth error = %v, want ErrServerAuthRequired", err)
 	}
 }
 

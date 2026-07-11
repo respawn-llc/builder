@@ -6,11 +6,13 @@ import (
 	"math"
 	"strings"
 
+	"core/cli/tui"
 	"core/server/llm"
 	sharedtheme "core/shared/theme"
 
 	bubbleprogress "github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -20,35 +22,115 @@ const (
 
 func (l uiViewLayout) renderStatusLine(width int, style uiStyles) string {
 	m := l.model
-	indicator := renderStatusIndicator(m.theme, m.statusLinePhase(), m.statusLineSpinning(), m.spinnerFrame, m.statusLineLabel())
-	segments := make([]string, 0, 5)
-	if modeLabel := l.statusModeLabel(); modeLabel != "" {
-		segments = append(segments, style.meta.Render(modeLabel))
+	indicatorLabel := m.statusLineLabel()
+	segments := []statusLineSegment{
+		{text: style.meta.Render(l.statusBranchLabel()), priority: 9, side: statusLineSideLeft, order: 1},
+		{text: style.meta.Render(l.statusModelLabel()), priority: 8, side: statusLineSideLeft, order: 2},
+		{text: l.renderReasoningStatus(statusLineUnboundedWidth), priority: 7, side: statusLineSideRight, order: 1, kind: statusLineSegmentAttention},
+		{text: style.meta.Render(processCountLabel(m.processList.entries)), priority: 5, side: statusLineSideLeft, order: 3},
+		{text: l.renderStatusContextBar(style), priority: 4, side: statusLineSideRight, order: 3, kind: statusLineSegmentContextBar},
+		{text: l.renderStatusContextPercent(style), priority: 3, side: statusLineSideRight, order: 2, kind: statusLineSegmentContextPercent},
+		{text: l.renderDetailSelectionAction(style), priority: 10, side: statusLineSideRight, order: 0},
+		{text: l.renderHelpHint(style), priority: 10, side: statusLineSideRight, order: 0},
 	}
-	segments = append(segments, style.meta.Render(l.statusModelLabel()))
-	if branchLabel := l.statusBranchLabel(); branchLabel != "" {
-		segments = append(segments, style.meta.Render(branchLabel))
+	segments = compactStatusLineSegments(segments)
+	notice := l.renderStatusNotice(statusLineUnboundedWidth)
+	for line := l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, notice), indicatorLabel); lipgloss.Width(line) > width; line = l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, notice), indicatorLabel) {
+		if removeLowestPriorityStatusSegmentAbove(&segments, 6) {
+			continue
+		}
+		break
 	}
-	if label := processCountLabel(m.processList.entries); label != "" {
-		segments = append(segments, style.meta.Render(label))
+	if notice != "" {
+		if line := l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, notice), indicatorLabel); lipgloss.Width(line) <= width {
+			return padANSIRight(line, width)
+		}
+		if noticeWidth := l.fittingStatusNoticeWidth(width, style, segments, indicatorLabel); noticeWidth > 0 {
+			line := l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, l.renderStatusNotice(noticeWidth)), indicatorLabel)
+			return padANSIRight(line, width)
+		}
+		notice = ""
 	}
-	if serverOwnershipSection := l.renderServerOwnershipSection(style); serverOwnershipSection != "" {
-		segments = append(segments, serverOwnershipSection)
+	if line := l.renderStatusLineCandidate(width, style, segments, indicatorLabel); lipgloss.Width(line) <= width {
+		return padANSIRight(line, width)
 	}
-	separator := style.meta.Render(statusLineSeparator)
-	left := renderStatusLineLeft(indicator, segments, separator)
-	if lipgloss.Width(left) >= width {
-		return padANSIRight(truncateANSIRight(left, width), width)
+	removeStatusLineSegmentPriority(&segments, 4)
+	if line := l.renderStatusLineCandidate(width, style, segments, indicatorLabel); lipgloss.Width(line) <= width {
+		return padANSIRight(line, width)
 	}
-	right := l.renderStatusLineRight(width, left, style)
-	if right == "" {
-		return padANSIRight(left, width)
+	indicatorLabel = ""
+	line := l.renderStatusLineCandidate(width, style, segments, indicatorLabel)
+	if lipgloss.Width(line) <= width {
+		return padANSIRight(line, width)
+	}
+	return padANSIRight(truncateANSIRight(line, width), width)
+}
+
+func (l uiViewLayout) renderDetailSelectionAction(style uiStyles) string {
+	switch l.model.view.DetailSelectionAction() {
+	case tui.DetailSelectionActionExpand:
+		return style.meta.Render("Enter to expand")
+	case tui.DetailSelectionActionCollapse:
+		return style.meta.Render("Enter to collapse")
+	default:
+		return ""
+	}
+}
+
+const statusLineUnboundedWidth = 1 << 20
+
+type statusLineSide uint8
+
+const (
+	statusLineSideLeft statusLineSide = iota
+	statusLineSideRight
+)
+
+type statusLineSegmentKind uint8
+
+const (
+	statusLineSegmentDefault statusLineSegmentKind = iota
+	statusLineSegmentAttention
+	statusLineSegmentContextPercent
+	statusLineSegmentContextBar
+)
+
+type statusLineSegment struct {
+	text     string
+	priority int
+	side     statusLineSide
+	order    int
+	kind     statusLineSegmentKind
+}
+
+func (l uiViewLayout) renderStatusLineCandidate(width int, style uiStyles, segments []statusLineSegment, indicatorLabel string) string {
+	indicator := renderStatusIndicator(l.model.theme, l.model.statusLinePhase(), l.model.statusLineSpinning(), l.model.spinnerFrame, indicatorLabel)
+	left := renderStatusLineLeft(indicator, orderedStatusLineTexts(segments, statusLineSideLeft), style.meta.Render(statusLineSeparator))
+	right := renderStatusLineRight(orderedStatusLineSegments(segments, statusLineSideRight), style)
+	if strings.TrimSpace(ansi.Strip(right)) == "" {
+		return left
 	}
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
-	return padANSIRight(left+strings.Repeat(" ", gap)+right, width)
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func renderStatusLineRight(segments []statusLineSegment, style uiStyles) string {
+	var out strings.Builder
+	for index, segment := range segments {
+		if index > 0 {
+			separator := statusLineSeparator
+			if segments[index-1].kind == statusLineSegmentContextPercent &&
+				segment.kind == statusLineSegmentContextBar {
+				separator = statusLineSpinnerSeparator
+			}
+			out.WriteString(style.meta.Render(separator))
+		}
+		out.WriteString(segment.text)
+	}
+	return out.String()
 }
 
 func renderStatusLineLeft(spin string, segments []string, separator string) string {
@@ -58,11 +140,101 @@ func renderStatusLineLeft(spin string, segments []string, separator string) stri
 	return spin + statusLineSpinnerSeparator + strings.Join(segments, separator)
 }
 
-func (l uiViewLayout) statusModeLabel() string {
-	if l.model.rollback.isActive() {
-		return "editing"
+func compactStatusLineSegments(segments []statusLineSegment) []statusLineSegment {
+	out := make([]statusLineSegment, 0, len(segments))
+	for _, segment := range segments {
+		if strings.TrimSpace(ansi.Strip(segment.text)) == "" {
+			continue
+		}
+		out = append(out, segment)
 	}
-	return ""
+	return out
+}
+
+func statusLineSegmentsWithNotice(segments []statusLineSegment, notice string) []statusLineSegment {
+	if strings.TrimSpace(ansi.Strip(notice)) == "" {
+		return segments
+	}
+	out := make([]statusLineSegment, 0, len(segments))
+	for _, segment := range segments {
+		if segment.kind != statusLineSegmentAttention {
+			out = append(out, segment)
+		}
+	}
+	out = append(out, statusLineSegment{text: notice, priority: 6, side: statusLineSideRight, order: 1, kind: statusLineSegmentAttention})
+	return out
+}
+
+func removeLowestPriorityStatusSegmentAbove(segments *[]statusLineSegment, priority int) bool {
+	if len(*segments) == 0 {
+		return false
+	}
+	index := -1
+	for i := range *segments {
+		if (*segments)[i].priority <= priority {
+			continue
+		}
+		if index == -1 || (*segments)[i].priority > (*segments)[index].priority {
+			index = i
+		}
+	}
+	if index == -1 {
+		return false
+	}
+	*segments = append((*segments)[:index], (*segments)[index+1:]...)
+	return true
+}
+
+func removeStatusLineSegmentPriority(segments *[]statusLineSegment, priority int) bool {
+	for i := range *segments {
+		if (*segments)[i].priority != priority {
+			continue
+		}
+		*segments = append((*segments)[:i], (*segments)[i+1:]...)
+		return true
+	}
+	return false
+}
+
+func orderedStatusLineTexts(segments []statusLineSegment, side statusLineSide) []string {
+	selected := orderedStatusLineSegments(segments, side)
+	texts := make([]string, 0, len(selected))
+	for _, segment := range selected {
+		texts = append(texts, segment.text)
+	}
+	return texts
+}
+
+func orderedStatusLineSegments(segments []statusLineSegment, side statusLineSide) []statusLineSegment {
+	selected := make([]statusLineSegment, 0, len(segments))
+	for _, segment := range segments {
+		if segment.side == side {
+			selected = append(selected, segment)
+		}
+	}
+	for i := 1; i < len(selected); i++ {
+		for j := i; j > 0 && selected[j-1].order > selected[j].order; j-- {
+			selected[j-1], selected[j] = selected[j], selected[j-1]
+		}
+	}
+	return selected
+}
+
+func (l uiViewLayout) fittingStatusNoticeWidth(width int, style uiStyles, segments []statusLineSegment, indicatorLabel string) int {
+	full := l.renderStatusNotice(statusLineUnboundedWidth)
+	high := min(lipgloss.Width(full), width)
+	best := 0
+	for low := 1; low <= high; {
+		mid := low + (high-low)/2
+		line := l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, l.renderStatusNotice(mid)), indicatorLabel)
+		if lipgloss.Width(line) <= width {
+			best = mid
+			low = mid + 1
+			continue
+		}
+		high = mid - 1
+	}
+	return best
 }
 
 func (l uiViewLayout) statusBranchLabel() string {
@@ -77,68 +249,16 @@ func (l uiViewLayout) statusBranchLabel() string {
 	return branch
 }
 
-func (l uiViewLayout) renderStatusLineRight(width int, left string, style uiStyles) string {
-	separator := style.meta.Render(statusLineSeparator)
-	separatorWidth := lipgloss.Width(separator)
-	available := width - lipgloss.Width(left) - 1
-	if available <= 0 {
-		return ""
-	}
-	segments := make([]string, 0, 3)
-	used := 0
-	prepend := func(segment string) {
-		if segment == "" {
-			return
-		}
-		segmentWidth := lipgloss.Width(segment)
-		if segmentWidth == 0 {
-			return
-		}
-		additional := segmentWidth
-		if len(segments) > 0 {
-			additional += separatorWidth
-		}
-		if used+additional > available {
-			return
-		}
-		used += additional
-		segments = append([]string{segment}, segments...)
-	}
-
-	prepend(l.renderContextUsage(style))
-
-	headerAvailable := available - used
-	if len(segments) > 0 {
-		headerAvailable -= separatorWidth
-	}
-	prepend(l.renderActivityStatus(headerAvailable, style))
-
-	noticeAvailable := available - used
-	if len(segments) > 0 {
-		noticeAvailable -= separatorWidth
-	}
-	prepend(l.renderStatusNotice(noticeAvailable))
-
-	return strings.Join(segments, separator)
-}
-
 func (l uiViewLayout) renderStatusNotice(available int) string {
 	m := l.model
 	if available <= 0 {
 		return ""
 	}
-	text := strings.TrimSpace(m.runtimeDisconnectStatusText())
-	kind := uiStatusNoticeError
-	if text == "" && m.nativeLiveAreaError != nil {
-		text = "native terminal write failed: " + rootCauseErrorText(m.nativeLiveAreaError)
+	text := strings.TrimSpace(m.transientStatus)
+	kind := m.transientStatusKind
+	if text == "" && strings.TrimSpace(m.worktrees.visibleErrorText()) == "" {
+		text = strings.TrimSpace(m.runtimeDisconnectStatusText())
 		kind = uiStatusNoticeError
-	}
-	if text == "" {
-		if strings.TrimSpace(m.worktrees.visibleErrorText()) != "" {
-			return ""
-		}
-		text = strings.TrimSpace(m.transientStatus)
-		kind = m.transientStatusKind
 	}
 	if text == "" {
 		return ""
@@ -160,36 +280,22 @@ func rootCauseErrorText(err error) string {
 	}
 }
 
-func (l uiViewLayout) renderActivityStatus(available int, style uiStyles) string {
+func (l uiViewLayout) renderReasoningStatus(available int) string {
 	if available <= 0 {
 		return ""
 	}
 	if text := strings.TrimSpace(l.model.reasoningStatusHeader); text != "" {
 		text = truncateQueuedMessageLine(text, available)
-		return statusNoticeStyle(l.model.theme, uiStatusNoticeNeutral).Render(text)
+		return statusNoticeStyle(l.model.theme, uiStatusNoticeInfo).Render(text)
 	}
-	if l.model.runtimeDisconnectStatusVisible() {
-		return ""
-	}
-	if l.model.nativeLiveAreaError != nil {
-		return ""
-	}
-	if strings.TrimSpace(l.model.worktrees.visibleErrorText()) != "" {
-		return ""
-	}
-	if strings.TrimSpace(l.model.transientStatus) != "" {
-		return ""
-	}
-	if l.model.activity == uiActivityInterrupted {
-		return statusNoticeStyle(l.model.theme, uiStatusNoticeNeutral).Render(truncateQueuedMessageLine("interrupted", available))
-	}
-	if action, ok := l.model.view.DetailSelectedExpansionAction(); ok {
-		return style.meta.Render(truncateQueuedMessageLine("Enter to "+action, available))
-	}
+	return ""
+}
+
+func (l uiViewLayout) renderHelpHint(style uiStyles) string {
 	if !l.shouldRenderHelpHint() {
 		return ""
 	}
-	return style.meta.Render(truncateQueuedMessageLine(l.model.statusHelpHint(), available))
+	return style.meta.Render(l.model.statusHelpHint())
 }
 
 func (l uiViewLayout) shouldRenderHelpHint() bool {
@@ -204,15 +310,15 @@ func (l uiViewLayout) shouldRenderHelpHint() bool {
 }
 
 func statusNoticeStyle(theme string, kind uiStatusNoticeKind) lipgloss.Style {
-	palette := uiPalette(theme)
-	color := palette.primary
+	palette := sharedtheme.ResolvePalette(theme)
+	color := palette.App.Primary.Lipgloss()
 	switch kind {
 	case uiStatusNoticeSuccess:
-		color = palette.secondary
-	case uiStatusNoticeUpdateAvailable:
-		color = sharedtheme.DefaultPalette().Status.Success.Adaptive()
+		color = palette.Status.Success.Lipgloss()
+	case uiStatusNoticeWarning:
+		color = palette.Status.Warning.Lipgloss()
 	case uiStatusNoticeError:
-		color = sharedtheme.DefaultPalette().Status.Error.Adaptive()
+		color = palette.Status.Error.Lipgloss()
 	}
 	return lipgloss.NewStyle().Foreground(color).Bold(true)
 }
@@ -243,17 +349,20 @@ func statusModelLabelText(modelName string, thinkingLevel string, fastModeAvaila
 	return label + " (model locked)"
 }
 
-func (l uiViewLayout) renderServerOwnershipSection(style uiStyles) string {
-	if !l.model.statusConfig.OwnsServer {
-		return ""
-	}
-	return style.meta.Render("server owned")
+func (l uiViewLayout) renderStatusContextPercent(style uiStyles) string {
+	percent, _ := l.renderStatusContextUsageParts(style)
+	return percent
 }
 
-func (l uiViewLayout) renderContextUsage(style uiStyles) string {
+func (l uiViewLayout) renderStatusContextBar(style uiStyles) string {
+	_, bar := l.renderStatusContextUsageParts(style)
+	return bar
+}
+
+func (l uiViewLayout) renderStatusContextUsageParts(style uiStyles) (string, string) {
 	usage := l.model.cachedRuntimeStatus().ContextUsage
 	if usage.WindowTokens <= 0 {
-		return ""
+		return "", ""
 	}
 	used := usage.UsedTokens
 	if used < 0 {
@@ -276,7 +385,7 @@ func (l uiViewLayout) renderContextUsage(style uiStyles) string {
 	barProgress.EmptyColor = sharedtheme.ResolvePalette(l.model.theme).Status.ContextEmpty.TrueColor
 	bar := barProgress.ViewAs(float64(barPercent) / 100.0)
 	label := style.meta.Render(fmt.Sprintf("%d%%", rawPercent))
-	return label + " " + bar
+	return label, bar
 }
 
 func statusContextZone(themeName string, percent int) sharedtheme.Color {

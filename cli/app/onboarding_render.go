@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	tuiinput "core/cli/tui/input"
-	"core/server/llm"
 	"core/shared/config"
 	sharedtheme "core/shared/theme"
 	"core/shared/toolspec"
@@ -272,7 +271,7 @@ func (m *onboardingModel) renderThemePreview(width int) []string {
 	heading := lipgloss.NewStyle().Foreground(palette.primary).Bold(true).Render("Preview")
 	modelLabel := strings.TrimSpace(m.state.settings.Model)
 	if modelLabel == "" {
-		modelLabel = "gpt-5"
+		modelLabel = config.DefaultModel()
 	}
 	statusLine := lipgloss.NewStyle().Foreground(palette.primary).Bold(true).Render(config.Command) +
 		lipgloss.NewStyle().Foreground(palette.muted).Render(" | ") +
@@ -303,10 +302,11 @@ func (m *onboardingModel) renderReviewSummary(width int) []string {
 	}
 	appendRow("Theme", themeSummary, m.styles.valueNeutral)
 	appendRow("Model", m.state.settings.Model, m.styles.valueNeutral)
-	if meta, ok := llm.LookupModelMetadata(m.state.settings.Model); ok && meta.ContextWindowTokens > 0 {
+	modelFact := modelFactFor(&m.state, m.state.settings.Model)
+	if modelFact.ContextWindowTokens != nil && *modelFact.ContextWindowTokens > 0 {
 		contextValue := formatTokenWindow(m.state.settings.ModelContextWindow)
-		if m.state.settings.ModelContextWindow == meta.ContextWindowTokens {
-			contextValue = "default (" + formatTokenWindow(meta.ContextWindowTokens) + ")"
+		if m.state.settings.ModelContextWindow == *modelFact.ContextWindowTokens {
+			contextValue = "default (" + formatTokenWindow(*modelFact.ContextWindowTokens) + ")"
 		}
 		appendRow("Context window", contextValue, m.styles.valueNeutral)
 	}

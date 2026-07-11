@@ -19,7 +19,7 @@ import (
 type remoteSubscription[Wire any, Event any] struct {
 	conn  rpcwire.Conn
 	route rpccontract.Route
-	event func(Wire) Event
+	event func(Wire) (Event, error)
 	once  sync.Once
 }
 
@@ -29,6 +29,26 @@ func (c *Remote) SubscribePromptActivity(ctx context.Context, req serverapi.Prom
 		return nil, err
 	}
 	return newRemoteSubscription(conn, route, func(params protocol.PromptActivityEventParams) clientui.PendingPromptEvent { return params.Event }), nil
+}
+
+func (c *Remote) SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	conn, route, err := c.subscribeRPC(ctx, protocol.MethodAttentionNotificationSubscribe, "subscribe-attention-notification", req, "", false)
+	if err != nil {
+		return nil, err
+	}
+	return newRemoteSubscription(conn, route, func(params protocol.AttentionNotificationEventParams) clientui.AttentionNotificationEvent {
+		return params.Event
+	}), nil
+}
+
+func (c *Remote) SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	conn, route, err := c.subscribeRPC(ctx, protocol.MethodAttentionSessionNotificationSubscribe, "subscribe-session-attention-notification", req, req.SessionID, true)
+	if err != nil {
+		return nil, err
+	}
+	return newRemoteSubscription(conn, route, func(params protocol.AttentionNotificationEventParams) clientui.AttentionNotificationEvent {
+		return params.Event
+	}), nil
 }
 
 func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
@@ -87,6 +107,16 @@ func (c *Remote) SubscribeSessionActivity(ctx context.Context, req serverapi.Ses
 	return newRemoteSubscription(conn, route, func(params protocol.SessionActivityEventParams) clientui.Event { return params.Event }), nil
 }
 
+func (c *Remote) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+	conn, route, err := c.subscribeRPC(ctx, protocol.MethodSessionSubscribeTranscript, "subscribe-session-transcript", req, req.SessionID, true)
+	if err != nil {
+		return nil, err
+	}
+	return newRemoteSubscription(conn, route, func(params protocol.SessionTranscriptEventParams) clientui.TranscriptMessage {
+		return params.Message
+	}), nil
+}
+
 func (c *Remote) SubscribeProcessOutput(ctx context.Context, req serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error) {
 	conn, route, err := c.subscribeRPC(ctx, protocol.MethodProcessSubscribeOutput, "subscribe-process-output", req, "", false)
 	if err != nil {
@@ -115,6 +145,32 @@ func (c *Remote) SubscribeWorkflow(ctx context.Context, req serverapi.WorkflowSu
 	}), nil
 }
 
+func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	conn, route, err := c.subscribeRPC(ctx, protocol.MethodWorktreeSetupSubscribe, "subscribe-worktree-setup", req, "", false)
+	if err != nil {
+		return nil, err
+	}
+	return newRemoteSubscriptionWithError(conn, route, func(params protocol.WorktreeSetupEventParams) (serverapi.WorktreeSetupEvent, error) {
+		id, err := serverapi.ParseWorktreeSetupOperationID(params.Event.SetupOperationID)
+		if err != nil {
+			return serverapi.WorktreeSetupEvent{}, err
+		}
+		return serverapi.WorktreeSetupEvent{
+			SetupOperationID:    id,
+			SourceWorkspaceRoot: params.Event.SourceWorkspaceRoot,
+			WorktreeRoot:        params.Event.WorktreeRoot,
+			ScriptPath:          params.Event.ScriptPath,
+			Phase:               serverapi.WorktreeSetupPhase(params.Event.Phase),
+			Timeout:             params.Event.Timeout,
+			Canceled:            params.Event.Canceled,
+			ExitCode:            params.Event.ExitCode,
+			Stdout:              params.Event.Stdout,
+			Stderr:              params.Event.Stderr,
+			Error:               params.Event.Error,
+		}, nil
+	}), nil
+}
+
 func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID string, req any, sessionID string, attachSession bool) (rpcwire.Conn, rpccontract.Route, error) {
 	route := mustRemoteRoute(method)
 	conn, cleanup, err := c.openRPCConn(ctx)
@@ -136,6 +192,12 @@ func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID stri
 }
 
 func newRemoteSubscription[Wire any, Event any](conn rpcwire.Conn, route rpccontract.Route, event func(Wire) Event) *remoteSubscription[Wire, Event] {
+	return newRemoteSubscriptionWithError(conn, route, func(wire Wire) (Event, error) {
+		return event(wire), nil
+	})
+}
+
+func newRemoteSubscriptionWithError[Wire any, Event any](conn rpcwire.Conn, route rpccontract.Route, event func(Wire) (Event, error)) *remoteSubscription[Wire, Event] {
 	return &remoteSubscription[Wire, Event]{conn: conn, route: route, event: event}
 }
 
@@ -160,7 +222,12 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 			var zero Event
 			return zero, errors.Join(serverapi.ErrStreamFailed, err)
 		}
-		return s.event(params), nil
+		event, err := s.event(params)
+		if err != nil {
+			var zero Event
+			return zero, errors.Join(serverapi.ErrStreamFailed, err)
+		}
+		return event, nil
 	case s.route.CompleteMethod:
 		var params protocol.StreamCompleteParams
 		if err := json.Unmarshal(frame.Params, &params); err != nil {
@@ -172,7 +239,11 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 		if params.Code == 0 && strings.TrimSpace(params.Message) == "" {
 			return zero, io.EOF
 		}
-		return zero, protocolError(&protocol.ResponseError{Code: params.Code, Message: params.Message})
+		terminalErr := protocolError(&protocol.ResponseError{Code: params.Code, Message: params.Message})
+		if reason := strings.TrimSpace(params.TranscriptCloseReason); reason != "" {
+			return zero, serverapi.NewTranscriptStreamError(serverapi.TranscriptCloseReason(reason), terminalErr)
+		}
+		return zero, terminalErr
 	default:
 		var zero Event
 		return zero, errors.Join(serverapi.ErrStreamFailed, fmt.Errorf("unexpected notification method %q", frame.Method))

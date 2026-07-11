@@ -96,10 +96,7 @@ func (m *onboardingModel) applyActiveThemeStyles() {
 }
 
 func (m *onboardingModel) Init() tea.Cmd {
-	m.state.imports.pending = true
-	return tea.Batch(tickOnboardingSpinner(m.spinnerClock.NextDelay(uiAnimationNow(), spinnerTickInterval)), func() tea.Msg {
-		return onboardingImportDiscoveryDoneMsg{discovery: discoverOnboardingImportsForWorkspace(m.globalRoot, m.workspaceRoot)}
-	})
+	return nil
 }
 
 func (m *onboardingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

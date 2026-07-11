@@ -8,13 +8,17 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"core/prompts"
 	"core/server/requestmemo"
 	askquestion "core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowattention"
+	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -29,11 +33,29 @@ type Service struct {
 	events              *workflowProjectEventBroker
 	prompts             pendingPromptResponder
 	approve             transitionApprover
+	attentionFinalizer  workflowAttentionFinalizer
 	questionMemo        *requestmemo.Memo[taskQuestionAnswerMemoRequest, struct{}]
 }
 
 type taskWorktreeEnsurer interface {
-	EnsureTaskWorktree(ctx context.Context, taskID string) error
+	EnsureTaskWorktree(ctx context.Context, req TaskWorktreeEnsureRequest) error
+}
+
+type TaskWorktreeEnsureRequest struct {
+	TaskID           workflow.TaskID
+	SetupOperationID serverapi.WorktreeSetupOperationID
+}
+
+type taskWorktreeEnsureError struct {
+	err error
+}
+
+func (e taskWorktreeEnsureError) Error() string {
+	return e.err.Error()
+}
+
+func (e taskWorktreeEnsureError) Unwrap() error {
+	return e.err
 }
 
 type taskWorktreeDeleter interface {
@@ -63,6 +85,18 @@ type pendingPromptResponder interface {
 	SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error
 }
 
+type workflowAttentionFinalizer interface {
+	FinalizeTransition(context.Context, workflowattention.TransitionResult)
+	FinalizeInterruptedRun(context.Context, workflow.RunID)
+}
+
+type workflowInterruptedRunFinalizer interface {
+	ResolveInterruptedRun(context.Context, workflow.RunID)
+}
+
+const workflowAttentionResolutionPageSize = 200
+const workflowAttentionFinalizationTimeout = 5 * time.Second
+
 type taskQuestionAnswerMemoRequest struct {
 	TaskID               string
 	RunID                string
@@ -71,6 +105,8 @@ type taskQuestionAnswerMemoRequest struct {
 	Answer               string
 	SelectedOptionNumber int
 	FreeformAnswer       string
+	ApprovalDecision     clientui.ApprovalDecision
+	ApprovalCommentary   string
 }
 
 type Option func(*Service)
@@ -105,6 +141,12 @@ func WithPromptResponder(responder pendingPromptResponder) Option {
 	}
 }
 
+func WithWorkflowAttentionFinalizer(finalizer workflowAttentionFinalizer) Option {
+	return func(s *Service) {
+		s.attentionFinalizer = finalizer
+	}
+}
+
 func New(store *workflowstore.Store, view *workflowview.Service, roleResolver workflow.RoleResolver, opts ...Option) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("workflow store is required")
@@ -132,20 +174,20 @@ func (s *Service) CreateWorkflow(ctx context.Context, req serverapi.WorkflowCrea
 	return serverapi.WorkflowCreateResponse{Workflow: workflowRecord(created)}, nil
 }
 
-func (s *Service) CreateAndLinkWorkflowToProject(ctx context.Context, req serverapi.WorkflowCreateAndLinkProjectRequest) (serverapi.WorkflowCreateAndLinkProjectResponse, error) {
-	if err := req.Validate(); err != nil {
+func (s *Service) CreateAndLinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowCreateAndLinkProjectRequest) (serverapi.WorkflowCreateAndLinkProjectResponse, error) {
+	if err := request.Validate(); err != nil {
 		return serverapi.WorkflowCreateAndLinkProjectResponse{}, err
 	}
 	created, link, err := s.store.CreateAndLinkWorkflow(ctx, workflowstore.CreateAndLinkWorkflowRequest{
-		Name:          req.Name,
-		Description:   req.Description,
-		ProjectID:     req.ProjectID,
-		DefaultPolicy: workflowStoreDefaultPolicy(req.DefaultPolicy, false),
+		Name:          request.Name,
+		Description:   request.Description,
+		ProjectID:     request.ProjectID,
+		DefaultPolicy: workflowStoreDefaultPolicy(request.DefaultPolicy),
 	})
 	if err != nil {
 		return serverapi.WorkflowCreateAndLinkProjectResponse{}, err
 	}
-	s.publishWorkflowEvent(ctx, req.ProjectID, string(created.ID), "workflow_link", "linked", link.ID)
+	s.publishWorkflowEvent(ctx, request.ProjectID, string(created.ID), "workflow_link", "linked", link.ID)
 	return serverapi.WorkflowCreateAndLinkProjectResponse{Workflow: workflowRecord(created), Link: projectWorkflowLink(link)}, nil
 }
 
@@ -214,7 +256,7 @@ func (s *Service) AddWorkflowNode(ctx context.Context, req serverapi.WorkflowNod
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowNodeAddResponse{}, err
 	}
-	revision, err := s.store.AddNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
+	revision, err := s.store.AddNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
 	if err != nil {
 		return serverapi.WorkflowNodeAddResponse{}, err
 	}
@@ -226,7 +268,7 @@ func (s *Service) UpdateWorkflowNode(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowNodeUpdateResponse{}, err
 	}
-	revision, err := s.store.UpdateNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
+	revision, err := s.store.UpdateNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
 	if err != nil {
 		return serverapi.WorkflowNodeUpdateResponse{}, err
 	}
@@ -317,15 +359,15 @@ func (s *Service) UpdateWorkflowEdge(ctx context.Context, req serverapi.Workflow
 	return serverapi.WorkflowEdgeUpdateResponse{Version: revision}, nil
 }
 
-func (s *Service) LinkWorkflowToProject(ctx context.Context, req serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {
-	if err := req.Validate(); err != nil {
+func (s *Service) LinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {
+	if err := request.Validate(); err != nil {
 		return serverapi.WorkflowLinkProjectResponse{}, err
 	}
-	link, err := s.store.LinkWorkflowWithDefaultPolicy(ctx, req.ProjectID, workflow.WorkflowID(req.WorkflowID), workflowStoreDefaultPolicy(req.DefaultPolicy, req.Default))
+	link, err := s.store.LinkWorkflowWithDefaultPolicy(ctx, request.ProjectID, workflow.WorkflowID(request.WorkflowID), workflowStoreDefaultPolicy(request.DefaultPolicy))
 	if err != nil {
 		return serverapi.WorkflowLinkProjectResponse{}, err
 	}
-	s.publishWorkflowEvent(ctx, req.ProjectID, req.WorkflowID, "workflow_link", "linked", link.ID)
+	s.publishWorkflowEvent(ctx, request.ProjectID, request.WorkflowID, "workflow_link", "linked", link.ID)
 	return serverapi.WorkflowLinkProjectResponse{Link: projectWorkflowLink(link)}, nil
 }
 
@@ -390,6 +432,10 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 	if err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
 	}
+	var interruptedRunIDs []workflow.RunID
+	if req.Confirmed {
+		interruptedRunIDs = s.workflowInterruptedRunAttentionIDsByWorkflow(ctx, req.WorkflowID, links)
+	}
 	result, err := s.store.DeleteWorkflow(ctx, workflowstore.WorkflowDeleteRequest{
 		WorkflowID:           workflow.WorkflowID(req.WorkflowID),
 		Confirmed:            req.Confirmed,
@@ -406,6 +452,8 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 	if !resp.Deleted {
 		return resp, nil
 	}
+	s.finalizeWorkflowApprovalProjections(ctx, result.ResolvedApprovalTransitionProjections)
+	s.resolveWorkflowInterruptedRunAttention(ctx, interruptedRunIDs)
 	s.publishWorkflowEvent(ctx, "", req.WorkflowID, "workflow", "deleted", req.WorkflowID)
 	seen := map[string]bool{}
 	for _, link := range links {
@@ -432,7 +480,31 @@ func (s *Service) ValidateWorkflow(ctx context.Context, req serverapi.WorkflowVa
 		mode = workflow.ValidationContextDraft
 	}
 	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: mode, RoleResolver: s.roleResolver})
-	return workflowValidationResponse(def.ID, result), nil
+	resp := workflowValidationResponse(def.ID, result)
+	if mode == workflow.ValidationContextExecution {
+		resp.Errors = append(resp.Errors, scriptPathValidationErrors(def, "")...)
+		resp.Valid = workflowValidationErrorsValid(resp.Errors)
+	}
+	return resp, nil
+}
+
+func (s *Service) ValidateWorkflowScriptPath(ctx context.Context, req serverapi.WorkflowScriptPathValidateRequest) (serverapi.WorkflowValidateResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowValidateResponse{}, err
+	}
+	def, _, err := s.store.GetDefinition(ctx, workflow.WorkflowID(req.WorkflowID))
+	if err != nil {
+		return serverapi.WorkflowValidateResponse{}, err
+	}
+	diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{RawPath: req.ScriptPath})
+	errors := make([]serverapi.WorkflowValidationError, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		errors = append(errors, scriptPathValidationError(def.ID, workflow.NodeID(req.NodeID), diagnostic))
+	}
+	return serverapi.WorkflowValidateResponse{
+		Valid:  workflowValidationErrorsValid(errors),
+		Errors: errors,
+	}, nil
 }
 
 func (s *Service) ValidateWorkflowGraphDraft(ctx context.Context, req serverapi.WorkflowGraphValidateDraftRequest) (serverapi.WorkflowGraphValidateDraftResponse, error) {
@@ -541,7 +613,7 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
-	started, err := s.StartTaskAutomation(ctx, req.TaskID)
+	started, err := s.startTaskAutomation(ctx, TaskAutomationStartRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
@@ -555,44 +627,88 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
-	interrupted, err := s.store.InterruptTaskRun(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID), req.Reason)
+	// workflow.task.interrupt is always operator-initiated; persist the canonical
+	// non-attention reason even when the caller supplied custom display text.
+	interrupted, err := s.store.InterruptTaskRuns(ctx, workflow.TaskID(req.TaskID), req.SessionID, workflowattention.InterruptionReasonUserInterrupt)
 	if err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
-	if canceler, ok := s.runtimeCancel.(taskRuntimeRunCanceler); ok {
-		if err := canceler.CancelRun(ctx, interrupted.ID); err != nil {
-			return serverapi.WorkflowTaskInterruptResponse{}, err
+	cancelErr := s.cancelInterruptedRuntimes(ctx, workflow.TaskID(req.TaskID), req.SessionID, interrupted)
+	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "interrupted", req.TaskID)
+	}
+	if cancelErr != nil {
+		return serverapi.WorkflowTaskInterruptResponse{}, cancelErr
+	}
+	return serverapi.WorkflowTaskInterruptResponse{Runs: workflowTaskRunSummaries(interrupted)}, nil
+}
+
+func (s *Service) cancelInterruptedRuntimes(ctx context.Context, taskID workflow.TaskID, sessionID string, interrupted []workflowstore.RunRecord) error {
+	if s.runtimeCancel == nil {
+		return nil
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return s.runtimeCancel.CancelTaskRuns(ctx, taskID)
+	}
+	canceler, ok := s.runtimeCancel.(taskRuntimeRunCanceler)
+	if !ok {
+		return nil
+	}
+	errs := make([]error, 0, len(interrupted))
+	for _, run := range interrupted {
+		if err := canceler.CancelRun(ctx, run.ID); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "interrupted", req.TaskID, string(interrupted.ID))
+	return errors.Join(errs...)
+}
+
+func workflowTaskRunSummaries(runs []workflowstore.RunRecord) []serverapi.WorkflowTaskRunSummary {
+	summaries := make([]serverapi.WorkflowTaskRunSummary, 0, len(runs))
+	for _, run := range runs {
+		summaries = append(summaries, serverapi.WorkflowTaskRunSummary{PlacementID: string(run.PlacementID), NodeID: string(run.NodeID), Generation: run.Generation, SessionID: run.SessionID})
 	}
-	return serverapi.WorkflowTaskInterruptResponse{RunID: string(interrupted.ID)}, nil
+	return summaries
 }
 
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
-	resumed, err := s.store.ResumeTaskRunByID(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID))
+	resumed, err := s.store.ResumeTaskRuns(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
+	s.resolveWorkflowInterruptedRunAttention(ctx, runIDsFromRecords(resumed))
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "resumed", req.TaskID, string(resumed.ID))
+		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "resumed", req.TaskID)
 	}
-	return serverapi.WorkflowTaskResumeResponse{RunID: string(resumed.ID), PlacementID: string(resumed.PlacementID), NodeID: string(resumed.NodeID), Generation: resumed.Generation, SessionID: resumed.SessionID}, nil
+	return serverapi.WorkflowTaskResumeResponse{Runs: workflowTaskRunSummaries(resumed)}, nil
+}
+
+type TaskAutomationStartRequest struct {
+	TaskID           string
+	SetupOperationID serverapi.WorktreeSetupOperationID
 }
 
 func (s *Service) StartTaskAutomation(ctx context.Context, taskID string) (workflowstore.StartTaskResult, error) {
+	return s.startTaskAutomation(ctx, TaskAutomationStartRequest{TaskID: taskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()})
+}
+
+func (s *Service) StartTaskAutomationWithSetup(ctx context.Context, req TaskAutomationStartRequest) (workflowstore.StartTaskResult, error) {
+	return s.startTaskAutomation(ctx, req)
+}
+
+func (s *Service) startTaskAutomation(ctx context.Context, req TaskAutomationStartRequest) (workflowstore.StartTaskResult, error) {
+	taskID := strings.TrimSpace(req.TaskID)
 	if s.taskWorktrees != nil {
 		if err := s.store.ValidateTaskStart(ctx, workflow.TaskID(taskID)); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		if err := s.taskWorktrees.EnsureTaskWorktree(ctx, taskID); err != nil {
+		if err := s.taskWorktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: workflow.TaskID(taskID), SetupOperationID: req.SetupOperationID}); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 	}
@@ -618,10 +734,11 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
-	approved, err := s.approve(ctx, workflow.TransitionID(transitionID))
+	approved, err := s.approveTransition(ctx, workflow.TransitionID(transitionID), taskID, req.SetupOperationID)
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
+	s.finalizeWorkflowAttention(ctx, approved)
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
@@ -638,14 +755,21 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	approvalError := ""
+	resolvedApprovals := append([]workflow.TransitionID(nil), moved.ResolvedApprovalTransitionIDs...)
 	if req.AutoApprove && moved.State == "pending_approval" && !moved.RequiresApproval {
-		approved, approveErr := s.approve(ctx, moved.TransitionID)
+		approved, approveErr := s.approveTransition(ctx, moved.TransitionID, req.TaskID, req.SetupOperationID)
 		if approveErr != nil {
+			var ensureErr taskWorktreeEnsureError
+			if errors.As(approveErr, &ensureErr) {
+				return serverapi.WorkflowTaskMoveResponse{}, approveErr
+			}
 			approvalError = approveErr.Error()
 		} else {
+			approved.ResolvedApprovalTransitionIDs = append(resolvedApprovals, approved.ResolvedApprovalTransitionIDs...)
 			moved = approved
 		}
 	}
+	s.finalizeWorkflowAttention(ctx, moved)
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
@@ -653,6 +777,28 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "moved", req.TaskID, string(moved.TransitionID))
 	}
 	return serverapi.WorkflowTaskMoveResponse{TransitionID: string(moved.TransitionID), State: moved.State, PlacementIDs: placementIDs(moved.PlacementIDs), RunIDs: runIDs(moved.RunIDs), ApprovalError: approvalError}, nil
+}
+
+func (s *Service) approveTransition(ctx context.Context, transitionID workflow.TransitionID, taskID string, setupOperationID serverapi.WorktreeSetupOperationID) (workflowstore.CompleteRunResult, error) {
+	if s.taskWorktrees != nil {
+		requiresWorktree, err := s.store.PendingTransitionTargetsExecutableNode(ctx, transitionID)
+		if err != nil {
+			return workflowstore.CompleteRunResult{}, err
+		}
+		if requiresWorktree {
+			resolvedTaskID := strings.TrimSpace(taskID)
+			if resolvedTaskID == "" {
+				resolvedTaskID, _, _, err = s.store.TaskIdentityForTransition(ctx, transitionID)
+				if err != nil {
+					return workflowstore.CompleteRunResult{}, err
+				}
+			}
+			if err := s.taskWorktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: workflow.TaskID(resolvedTaskID), SetupOperationID: setupOperationID}); err != nil {
+				return workflowstore.CompleteRunResult{}, taskWorktreeEnsureError{err: err}
+			}
+		}
+	}
+	return s.approve(ctx, transitionID)
 }
 
 func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
@@ -688,6 +834,7 @@ func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.Workfl
 	if err != nil {
 		return serverapi.WorkflowTaskCompleteResponse{}, err
 	}
+	s.finalizeWorkflowAttention(ctx, completed)
 	if req.ActorKind == serverapi.WorkflowTaskCompleteActorUser {
 		notifyScheduler := true
 		if requester, ok := s.runtimeCancel.(taskRuntimeRunCancelRequester); ok {
@@ -709,6 +856,27 @@ func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.Workfl
 		PlacementIDs: placementIDs(completed.PlacementIDs),
 		RunIDs:       runIDs(completed.RunIDs),
 	}, nil
+}
+
+func (s *Service) finalizeWorkflowAttention(ctx context.Context, result workflowstore.CompleteRunResult) {
+	if s == nil || s.attentionFinalizer == nil {
+		return
+	}
+	finalizeCtx, cancel := workflowAttentionContext(ctx)
+	defer cancel()
+	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
+		TransitionID:                  result.TransitionID,
+		State:                         result.State,
+		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
+	})
+	for _, runID := range result.InterruptedRunIDs {
+		if runID == "" {
+			continue
+		}
+		runFinalizeCtx, runCancel := workflowAttentionContext(ctx)
+		s.attentionFinalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+		runCancel()
+	}
 }
 
 func workflowCompletionTargetSelector(req serverapi.WorkflowTaskCompleteRequest) workflowstore.ActiveRunCompletionTargetSelector {
@@ -742,9 +910,16 @@ func (s *Service) CancelWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if reason == "" {
 		reason = "user_canceled"
 	}
+	pendingApprovals, err := s.pendingApprovalTransitionIDs(ctx, workflow.TaskID(req.TaskID))
+	if err != nil {
+		return err
+	}
+	interruptedRunIDs := s.workflowInterruptedRunAttentionIDs(ctx, workflow.TaskID(req.TaskID))
 	if err := s.store.CancelTask(ctx, workflow.TaskID(req.TaskID), reason); err != nil {
 		return err
 	}
+	s.finalizeWorkflowAttention(ctx, workflowstore.CompleteRunResult{ResolvedApprovalTransitionIDs: pendingApprovals})
+	s.resolveWorkflowInterruptedRunAttention(ctx, interruptedRunIDs)
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "canceled", req.TaskID)
 	}
@@ -767,6 +942,11 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 			return err
 		}
 	}
+	pendingApprovals, err := s.pendingApprovalTransitionProjections(ctx, workflow.TaskID(req.TaskID))
+	if err != nil {
+		return err
+	}
+	interruptedRunIDs := s.workflowInterruptedRunAttentionIDs(ctx, workflow.TaskID(req.TaskID))
 	if s.runtimeCancel != nil {
 		if err := s.runtimeCancel.CancelTaskRuns(ctx, workflow.TaskID(req.TaskID)); err != nil {
 			return err
@@ -781,8 +961,152 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return err
 	}
+	s.finalizeWorkflowApprovalProjections(ctx, pendingApprovals)
+	s.resolveWorkflowInterruptedRunAttention(ctx, interruptedRunIDs)
 	s.publishWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), "task", "deleted", req.TaskID)
 	return nil
+}
+
+func (s *Service) resolveWorkflowInterruptedRunAttention(ctx context.Context, runIDs []workflow.RunID) {
+	if s == nil || len(runIDs) == 0 {
+		return
+	}
+	finalizer, ok := s.attentionFinalizer.(workflowInterruptedRunFinalizer)
+	if !ok {
+		return
+	}
+	for _, runID := range runIDs {
+		if runID == "" {
+			continue
+		}
+		finalizeCtx, cancel := workflowAttentionContext(ctx)
+		finalizer.ResolveInterruptedRun(finalizeCtx, runID)
+		cancel()
+	}
+}
+
+func (s *Service) workflowInterruptedRunAttentionIDs(ctx context.Context, taskID workflow.TaskID) []workflow.RunID {
+	if s == nil || s.view == nil || taskID == "" {
+		return nil
+	}
+	attention, err := s.view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(taskID)}, s.roleResolver)
+	if err != nil {
+		slog.Warn("workflow interrupted-run attention resolution lookup failed", "task_id", string(taskID), "error", err)
+		return nil
+	}
+	runIDs := make([]workflow.RunID, 0)
+	for _, item := range attention.Items {
+		if item.Kind == "interrupted_run" && strings.TrimSpace(item.RunID) != "" {
+			runIDs = append(runIDs, workflow.RunID(item.RunID))
+		}
+	}
+	return runIDs
+}
+
+func (s *Service) workflowInterruptedRunAttentionIDsByWorkflow(ctx context.Context, workflowID string, links []workflowstore.ProjectWorkflowLinkRecord) []workflow.RunID {
+	if s == nil || s.view == nil || strings.TrimSpace(workflowID) == "" {
+		return nil
+	}
+	projectIDs := make([]string, 0, len(links))
+	seenProjects := map[string]bool{}
+	for _, link := range links {
+		projectID := strings.TrimSpace(link.ProjectID)
+		if projectID == "" || seenProjects[projectID] {
+			continue
+		}
+		seenProjects[projectID] = true
+		projectIDs = append(projectIDs, projectID)
+	}
+	runIDs := make([]workflow.RunID, 0)
+	seenRuns := map[string]bool{}
+	for _, projectID := range projectIDs {
+		pageToken := ""
+		for {
+			attention, err := s.view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{
+				ProjectID: projectID,
+				PageSize:  workflowAttentionResolutionPageSize,
+				PageToken: pageToken,
+			}, s.roleResolver)
+			if err != nil {
+				slog.Warn("workflow interrupted-run attention resolution lookup failed", "workflow_id", workflowID, "project_id", projectID, "error", err)
+				break
+			}
+			for _, item := range attention.Items {
+				runID := strings.TrimSpace(item.RunID)
+				if item.Kind == "interrupted_run" && item.WorkflowID == workflowID && runID != "" && !seenRuns[runID] {
+					seenRuns[runID] = true
+					runIDs = append(runIDs, workflow.RunID(runID))
+				}
+			}
+			if attention.NextPageToken == "" {
+				break
+			}
+			pageToken = attention.NextPageToken
+		}
+	}
+	return runIDs
+}
+
+func runIDsFromRecords(runs []workflowstore.RunRecord) []workflow.RunID {
+	out := make([]workflow.RunID, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, run.ID)
+	}
+	return out
+}
+
+func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, projections []workflowstore.ApprovalTransitionProjection) {
+	if s == nil || s.attentionFinalizer == nil || len(projections) == 0 {
+		return
+	}
+	resolved := make([]workflowattention.ApprovalProjection, 0, len(projections))
+	for _, projection := range projections {
+		resolved = append(resolved, workflowattention.ApprovalProjection{
+			TransitionID:     projection.TransitionID,
+			ProjectID:        projection.ProjectID,
+			WorkflowID:       projection.WorkflowID,
+			TaskID:           projection.TaskID,
+			TaskShortID:      projection.TaskShortID,
+			TaskTitle:        projection.TaskTitle,
+			RunID:            string(projection.SourceRunID),
+			SessionID:        projection.SessionID,
+			Message:          "action required",
+			OccurredAtUnixMs: projection.OccurredAtUnixMs,
+		})
+	}
+	finalizeCtx, cancel := workflowAttentionContext(ctx)
+	defer cancel()
+	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{ResolvedApprovalProjections: resolved})
+}
+
+func workflowAttentionContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), workflowAttentionFinalizationTimeout)
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), workflowAttentionFinalizationTimeout)
+}
+
+func (s *Service) pendingApprovalTransitionIDs(ctx context.Context, taskID workflow.TaskID) ([]workflow.TransitionID, error) {
+	if s == nil || s.store == nil {
+		return nil, nil
+	}
+	return s.store.ListPendingApprovalTransitionIDs(ctx, taskID)
+}
+
+func (s *Service) pendingApprovalTransitionProjections(ctx context.Context, taskID workflow.TaskID) ([]workflowstore.ApprovalTransitionProjection, error) {
+	transitionIDs, err := s.pendingApprovalTransitionIDs(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]workflowstore.ApprovalTransitionProjection, 0, len(transitionIDs))
+	for _, transitionID := range transitionIDs {
+		projection, err := s.store.ApprovalTransitionProjection(ctx, transitionID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, projection)
+	}
+	return out, nil
 }
 
 func (s *Service) ListWorkflowAttention(ctx context.Context, req serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
@@ -807,6 +1131,10 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 		return errors.New("prompt responder is required")
 	}
 	memoReq := taskQuestionAnswerMemoRequest{TaskID: req.TaskID, RunID: req.RunID, AskID: req.AskID, ErrorMessage: req.ErrorMessage, Answer: req.Answer, SelectedOptionNumber: req.SelectedOptionNumber, FreeformAnswer: req.FreeformAnswer}
+	if req.Approval != nil {
+		memoReq.ApprovalDecision = req.Approval.Decision
+		memoReq.ApprovalCommentary = req.Approval.Commentary
+	}
 	_, err := s.questionMemo.Do(ctx, req.ClientRequestID, memoReq, sameTaskQuestionAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
 		run, err := s.store.ResolveTaskWaitingAsk(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID), req.AskID)
 		if err != nil {
@@ -816,8 +1144,20 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 			if err := s.prompts.SubmitPromptResponse(run.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage)); err != nil {
 				return struct{}{}, err
 			}
-		} else if err := s.prompts.SubmitPromptResponse(run.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID, Answer: req.Answer, SelectedOptionNumber: req.SelectedOptionNumber, FreeformAnswer: req.FreeformAnswer}, nil); err != nil {
-			return struct{}{}, err
+		} else {
+			response := askquestion.AskQuestionResponse{RequestID: req.AskID, Answer: req.Answer, SelectedOptionNumber: req.SelectedOptionNumber, FreeformAnswer: req.FreeformAnswer}
+			if req.Approval != nil {
+				response = askquestion.AskQuestionResponse{
+					RequestID: req.AskID,
+					Approval: &askquestion.AskQuestionApprovalPayload{
+						Decision:   askquestion.AskQuestionApprovalDecision(req.Approval.Decision),
+						Commentary: req.Approval.Commentary,
+					},
+				}
+			}
+			if err := s.prompts.SubmitPromptResponse(run.SessionID, response, nil); err != nil {
+				return struct{}{}, err
+			}
 		}
 		if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 			s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "question_answered", req.TaskID, string(run.ID), req.AskID)
@@ -834,7 +1174,9 @@ func sameTaskQuestionAnswerMemoRequest(a taskQuestionAnswerMemoRequest, b taskQu
 		a.ErrorMessage == b.ErrorMessage &&
 		a.Answer == b.Answer &&
 		a.SelectedOptionNumber == b.SelectedOptionNumber &&
-		a.FreeformAnswer == b.FreeformAnswer
+		a.FreeformAnswer == b.FreeformAnswer &&
+		a.ApprovalDecision == b.ApprovalDecision &&
+		a.ApprovalCommentary == b.ApprovalCommentary
 }
 
 func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentAddRequest) (serverapi.WorkflowTaskCommentAddResponse, error) {
@@ -1022,10 +1364,7 @@ func projectWorkflowLink(row workflowstore.ProjectWorkflowLinkRecord) serverapi.
 	return serverapi.ProjectWorkflowLink{ID: row.ID, ProjectID: row.ProjectID, WorkflowID: string(row.WorkflowID), Default: row.IsDefault}
 }
 
-func workflowStoreDefaultPolicy(policy serverapi.WorkflowProjectLinkDefaultMode, legacyDefault bool) workflowstore.WorkflowLinkDefaultPolicy {
-	if legacyDefault {
-		return workflowstore.WorkflowLinkDefaultAlways
-	}
+func workflowStoreDefaultPolicy(policy serverapi.WorkflowProjectLinkDefaultMode) workflowstore.WorkflowLinkDefaultPolicy {
 	switch policy {
 	case serverapi.WorkflowProjectLinkDefaultAlways:
 		return workflowstore.WorkflowLinkDefaultAlways
@@ -1081,10 +1420,52 @@ func (s *Service) workflowGraphValidationResults(ctx context.Context, workflowID
 func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Definition, modes []serverapi.WorkflowValidationMode) map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse {
 	out := make(map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse, len(modes))
 	for _, mode := range modes {
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContext(mode), RoleResolver: s.roleResolver})
-		out[mode] = workflowValidationResponse(def.ID, result)
+		context := workflow.ValidationContext(mode)
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: context, RoleResolver: s.roleResolver})
+		resp := workflowValidationResponse(def.ID, result)
+		if context == workflow.ValidationContextExecution {
+			resp.Errors = append(resp.Errors, scriptPathValidationErrors(def, "")...)
+			resp.Valid = workflowValidationErrorsValid(resp.Errors)
+		}
+		out[mode] = resp
 	}
 	return out
+}
+
+func scriptPathValidationErrors(def workflow.Definition, worktreeRoot string) []serverapi.WorkflowValidationError {
+	out := []serverapi.WorkflowValidationError{}
+	for _, node := range def.Nodes {
+		if node.Kind() != workflow.NodeKindScript {
+			continue
+		}
+		diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{
+			RawPath:      workflow.NodeScriptPath(node).String(),
+			WorktreeRoot: worktreeRoot,
+		})
+		for _, diagnostic := range diagnostics {
+			out = append(out, scriptPathValidationError(def.ID, workflow.NodeIDOf(node), diagnostic))
+		}
+	}
+	return out
+}
+
+func scriptPathValidationError(workflowID workflow.WorkflowID, nodeID workflow.NodeID, diagnostic workflowscript.Diagnostic) serverapi.WorkflowValidationError {
+	return serverapi.WorkflowValidationError{
+		Code:          diagnostic.Code,
+		Message:       diagnostic.Message,
+		WorkflowID:    string(workflowID),
+		NodeID:        string(nodeID),
+		BlocksContext: diagnostic.Blocking,
+	}
+}
+
+func workflowValidationErrorsValid(errors []serverapi.WorkflowValidationError) bool {
+	for _, err := range errors {
+		if err.BlocksContext {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID string, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft) (workflow.Definition, error) {
@@ -1110,19 +1491,33 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID s
 		if strings.TrimSpace(node.GroupID) != "" {
 			groupMemberIDs[node.GroupID] = append(groupMemberIDs[node.GroupID], workflow.NodeID(node.ID))
 		}
-		def.Nodes = append(def.Nodes, workflow.Node{
-			WorkflowID:         workflow.WorkflowID(workflowID),
-			ID:                 workflow.NodeID(node.ID),
-			Key:                workflow.ModelKey(node.Key),
-			Kind:               workflow.NodeKind(node.Kind),
-			DisplayName:        node.DisplayName,
-			GroupID:            node.GroupID,
-			SubagentRole:       node.SubagentRole,
-			PromptTemplate:     node.PromptTemplate,
-			CompletionMode:     node.CompletionMode,
-			InputFields:        inputFields(node.InputFields),
-			JoinInputProviders: joinInputProviders(node.JoinInputProviders),
-		})
+		workflowNode, err := workflow.NewNode(
+			workflow.NodeIdentity{
+				WorkflowID:  workflow.WorkflowID(workflowID),
+				ID:          workflow.NodeID(node.ID),
+				Key:         workflow.ModelKey(node.Key),
+				DisplayName: node.DisplayName,
+				GroupID:     node.GroupID,
+			},
+			workflow.NodeKind(node.Kind),
+			workflow.NodeFields{
+				SubagentRole:   node.SubagentRole,
+				PromptTemplate: node.PromptTemplate,
+				CompletionMode: node.CompletionMode,
+				ScriptPath: func() workflow.OptionalScriptPath {
+					if scriptPath, ok := workflow.PresentScriptPath(optionalStringValue(node.ScriptPath)); ok {
+						return scriptPath
+					}
+					return workflow.AbsentScriptPath()
+				}(),
+				InputFields:        inputFields(node.InputFields),
+				JoinInputProviders: joinInputProviders(node.JoinInputProviders),
+			},
+		)
+		if err != nil {
+			return workflow.Definition{}, err
+		}
+		def.Nodes = append(def.Nodes, workflowNode)
 	}
 	for index := range def.NodeGroups {
 		def.NodeGroups[index].MemberNodeIDs = groupMemberIDs[def.NodeGroups[index].ID]
@@ -1181,7 +1576,7 @@ func workflowGraphStoreSaveRequest(workflowID string, expectedVersion int64, met
 		req.NodeGroups = append(req.NodeGroups, workflowstore.NodeGroupRecord{ID: group.ID, WorkflowID: workflow.WorkflowID(workflowID), Key: workflow.ModelKey(group.Key), DisplayName: group.DisplayName})
 	}
 	for _, node := range graph.Nodes {
-		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflow.WorkflowID(workflowID), Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, InputFields: inputFields(node.InputFields), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
+		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflow.WorkflowID(workflowID), Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), InputFields: inputFields(node.InputFields), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
 	}
 	for _, group := range graph.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflow.WorkflowID(workflowID), SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
@@ -1250,6 +1645,13 @@ func inputFields(in []serverapi.WorkflowInputField) []workflow.InputField {
 		out = append(out, workflow.InputField{Name: field.Name, Description: field.Description})
 	}
 	return out
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func joinInputProviders(in []serverapi.WorkflowJoinInputProvider) []workflow.JoinInputProvider {

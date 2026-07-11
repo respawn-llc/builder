@@ -25,8 +25,6 @@ const (
 	ErrCodeWorkspaceNotRegistered        = -32013
 	ErrCodeProjectNotFound               = -32014
 	ErrCodeProjectUnavailable            = -32015
-	ErrCodeSessionAlreadyControlled      = -32016
-	ErrCodeInvalidControllerLease        = -32017
 	ErrCodeAuthRequired                  = -32018
 	ErrCodeRuntimeUnavailable            = -32019
 	ErrCodePromptNotFound                = -32020
@@ -37,7 +35,12 @@ const (
 	ErrCodeProtocolVersionMismatch       = -32025
 	ErrCodeWorkflowTaskCompleteAmbiguous = -32026
 	ErrCodeWorkflowTaskCompleteNotFound  = -32027
-	ErrCodeActivePrimaryRun              = -32028
+	ErrCodeModelStreamStalled            = -32028
+	ErrCodeRuntimeNoActiveRun            = -32029
+	ErrCodeRuntimeNoFinalAnswer          = -32030
+	ErrCodeUnsupportedProvider           = -32031
+	ErrCodeServerNotReady                = -32032
+	ErrCodeOnboardingFinalizeFailed      = -32033
 )
 
 type Request struct {
@@ -55,8 +58,15 @@ type Response struct {
 }
 
 type ResponseError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+type StructuredRPCError interface {
+	error
+	RPCErrorCode() int
+	RPCErrorData() json.RawMessage
 }
 
 func (r Request) Validate() error {
@@ -83,9 +93,13 @@ func NewSuccessResponse(id string, result any) Response {
 }
 
 func NewErrorResponse(id string, code int, message string) Response {
+	return NewErrorResponseWithData(id, code, message, nil)
+}
+
+func NewErrorResponseWithData(id string, code int, message string, data json.RawMessage) Response {
 	return Response{
 		JSONRPC: JSONRPCVersion,
 		ID:      strings.TrimSpace(id),
-		Error:   &ResponseError{Code: code, Message: strings.TrimSpace(message)},
+		Error:   &ResponseError{Code: code, Message: strings.TrimSpace(message), Data: data},
 	}
 }

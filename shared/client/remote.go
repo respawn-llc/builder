@@ -23,6 +23,7 @@ type Remote struct {
 	workspaceID    string
 	workspaceRoot  string
 	expectedRootID atomic.Value // string; empty disables root validation
+	noAuthAck      atomic.Bool
 	closed         atomic.Bool
 }
 
@@ -101,6 +102,57 @@ func (c *Remote) rootID() string {
 	return ""
 }
 
+func (c *Remote) EnableNoAuthBootstrapAcknowledgement(ctx context.Context) error {
+	if c == nil {
+		return errors.New("remote client is required")
+	}
+	resp, err := c.AcknowledgeNoAuth(ctx, serverapi.AuthAcknowledgeNoAuthRequest{})
+	if err != nil {
+		c.noAuthAck.Store(false)
+		return err
+	}
+	if resp.NoAuthSelected {
+		c.noAuthAck.Store(true)
+		return nil
+	}
+	c.noAuthAck.Store(false)
+	if resp.AuthReady {
+		return nil
+	}
+	return serverapi.ErrServerAuthRequired
+}
+
+func (c *Remote) DisableNoAuthBootstrapAcknowledgement() {
+	if c != nil {
+		c.noAuthAck.Store(false)
+	}
+}
+
+func (c *Remote) NoAuthBootstrapAcknowledgementEnabled() bool {
+	return c != nil && c.noAuthAck.Load()
+}
+
+func (c *Remote) acknowledgeNoAuthOnConn(ctx context.Context, conn rpcwire.Conn) error {
+	if c == nil || !c.noAuthAck.Load() {
+		return nil
+	}
+	var resp serverapi.AuthAcknowledgeNoAuthResponse
+	if err := callRPC(ctx, conn, "auth-acknowledge-no-auth", protocol.MethodAuthAcknowledgeNoAuth, serverapi.AuthAcknowledgeNoAuthRequest{}, &resp); err != nil {
+		if errors.Is(err, serverapi.ErrServerAuthRequired) {
+			c.noAuthAck.Store(false)
+		}
+		return err
+	}
+	if resp.NoAuthSelected {
+		return nil
+	}
+	c.noAuthAck.Store(false)
+	if resp.AuthReady {
+		return nil
+	}
+	return serverapi.ErrServerAuthRequired
+}
+
 func (c *Remote) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
 	return callUnscopedRPC[serverapi.ServerReadinessRequest, serverapi.ServerReadinessResponse](c, ctx, protocol.MethodServerReadinessGet, req)
 }
@@ -146,7 +198,19 @@ func (c *Remote) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthG
 }
 
 func (c *Remote) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	return callUnscopedRPC[serverapi.AuthCompleteBootstrapRequest, serverapi.AuthCompleteBootstrapResponse](c, ctx, protocol.MethodAuthCompleteBootstrap, req)
+	resp, err := callUnscopedRPC[serverapi.AuthCompleteBootstrapRequest, serverapi.AuthCompleteBootstrapResponse](c, ctx, protocol.MethodAuthCompleteBootstrap, req)
+	if err == nil {
+		if resp.NoAuthSelected {
+			c.noAuthAck.Store(true)
+		} else if resp.AuthReady {
+			c.noAuthAck.Store(false)
+		}
+	}
+	return resp, err
+}
+
+func (c *Remote) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+	return callUnscopedRPC[serverapi.AuthAcknowledgeNoAuthRequest, serverapi.AuthAcknowledgeNoAuthResponse](c, ctx, protocol.MethodAuthAcknowledgeNoAuth, req)
 }
 
 func (c *Remote) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
@@ -297,6 +361,10 @@ func (c *Remote) ValidateWorkflow(ctx context.Context, req serverapi.WorkflowVal
 	return callUnscopedRPC[serverapi.WorkflowValidateRequest, serverapi.WorkflowValidateResponse](c, ctx, protocol.MethodWorkflowValidate, req)
 }
 
+func (c *Remote) ValidateWorkflowScriptPath(ctx context.Context, req serverapi.WorkflowScriptPathValidateRequest) (serverapi.WorkflowValidateResponse, error) {
+	return callUnscopedRPC[serverapi.WorkflowScriptPathValidateRequest, serverapi.WorkflowValidateResponse](c, ctx, protocol.MethodWorkflowScriptPathValidate, req)
+}
+
 func (c *Remote) ValidateWorkflowGraphDraft(ctx context.Context, req serverapi.WorkflowGraphValidateDraftRequest) (serverapi.WorkflowGraphValidateDraftResponse, error) {
 	return callUnscopedRPC[serverapi.WorkflowGraphValidateDraftRequest, serverapi.WorkflowGraphValidateDraftResponse](c, ctx, protocol.MethodWorkflowGraphValidateDraft, req)
 }
@@ -416,11 +484,6 @@ func (c *Remote) GetSessionTranscriptPage(ctx context.Context, req serverapi.Ses
 	return resp, c.call(ctx, protocol.MethodSessionGetTranscriptPage, req, &resp)
 }
 
-func (c *Remote) GetSessionCommittedTranscriptSuffix(ctx context.Context, req serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
-	var resp serverapi.SessionCommittedTranscriptSuffixResponse
-	return resp, c.call(ctx, protocol.MethodSessionGetCommittedTranscriptSuffix, req, &resp)
-}
-
 func (c *Remote) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
 	var resp serverapi.SessionInitialInputResponse
 	return resp, c.call(ctx, protocol.MethodSessionGetInitialInput, req, &resp)
@@ -507,10 +570,6 @@ func (c *Remote) ShouldCompactBeforeUserMessage(ctx context.Context, req servera
 	return callControlRPC[serverapi.RuntimeShouldCompactBeforeUserMessageRequest, serverapi.RuntimeShouldCompactBeforeUserMessageResponse](c, ctx, protocol.MethodRuntimeShouldCompactBeforeUserMessage, req)
 }
 
-func (c *Remote) SubmitUserMessage(ctx context.Context, req serverapi.RuntimeSubmitUserMessageRequest) (serverapi.RuntimeSubmitUserMessageResponse, error) {
-	return callDedicatedRPC[serverapi.RuntimeSubmitUserMessageRequest, serverapi.RuntimeSubmitUserMessageResponse](c, ctx, "runtime-submit-user-message", protocol.MethodRuntimeSubmitUserMessage, req)
-}
-
 func (c *Remote) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 	return callDedicatedRPC[serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](c, ctx, "runtime-submit-user-turn", protocol.MethodRuntimeSubmitUserTurn, req)
 }
@@ -535,12 +594,24 @@ func (c *Remote) SubmitQueuedUserMessages(ctx context.Context, req serverapi.Run
 	return callDedicatedRPC[serverapi.RuntimeSubmitQueuedUserMessagesRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse](c, ctx, "runtime-submit-queued-user-messages", protocol.MethodRuntimeSubmitQueuedUserMessages, req)
 }
 
-func (c *Remote) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) error {
-	return c.callDedicated(ctx, "runtime-interrupt", protocol.MethodRuntimeInterrupt, req, nil)
+func (c *Remote) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
+	return callDedicatedRPC[serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](c, ctx, "runtime-interrupt", protocol.MethodRuntimeInterrupt, req)
 }
 
 func (c *Remote) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
 	return callControlRPC[serverapi.RuntimeQueueUserMessageRequest, serverapi.RuntimeQueueUserMessageResponse](c, ctx, protocol.MethodRuntimeQueueUserMessage, req)
+}
+
+func (c *Remote) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {
+	return callControlRPC[serverapi.RuntimeLiveSteerRequest, serverapi.RuntimeLiveSteerResponse](c, ctx, protocol.MethodRuntimeLiveSteer, req)
+}
+
+func (c *Remote) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error) {
+	return callDedicatedRPC[serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](c, ctx, "runtime-live-stop", protocol.MethodRuntimeLiveStop, req)
+}
+
+func (c *Remote) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
+	return callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
 }
 
 func (c *Remote) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
@@ -680,6 +751,10 @@ func (c *Remote) openControlRPCConn(ctx context.Context) (rpcwire.Conn, protocol
 		cleanup()
 		return nil, protocol.ServerIdentity{}, err
 	}
+	if err := c.acknowledgeNoAuthOnConn(ctx, conn); err != nil {
+		cleanup()
+		return nil, protocol.ServerIdentity{}, err
+	}
 	if err := attachProjectRPC(ctx, conn, c.projectID, c.workspaceID, c.workspaceRoot); err != nil {
 		cleanup()
 		return nil, protocol.ServerIdentity{}, err
@@ -710,10 +785,13 @@ var _ SessionViewClient = (*Remote)(nil)
 var _ SessionLifecycleClient = (*Remote)(nil)
 var _ SessionRuntimeClient = (*Remote)(nil)
 var _ RuntimeControlClient = (*Remote)(nil)
+var _ RuntimeLiveControlClient = (*Remote)(nil)
 var _ ProcessViewClient = (*Remote)(nil)
 var _ ProcessControlClient = (*Remote)(nil)
 var _ ProcessOutputClient = (*Remote)(nil)
 var _ SessionActivityClient = (*Remote)(nil)
+var _ SessionTranscriptClient = (*Remote)(nil)
+var _ AttentionNotificationClient = (*Remote)(nil)
 var _ RunPromptClient = (*Remote)(nil)
 var _ AskViewClient = (*Remote)(nil)
 var _ PromptControlClient = (*Remote)(nil)

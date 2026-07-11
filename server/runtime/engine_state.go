@@ -11,7 +11,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
-	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
@@ -19,8 +18,9 @@ func (e *Engine) overlayLiveStreaming(snapshot *ChatSnapshot) {
 	if e == nil || snapshot == nil {
 		return
 	}
-	streaming, streamingErr := e.transcriptRuntimeState().StreamingSnapshot()
+	streaming, streamingErr, streamingMetadata := e.transcriptRuntimeState().StreamingSnapshot()
 	snapshot.Streaming = streaming
+	snapshot.StreamingMetadata = streamingMetadata
 	snapshot.StreamingError = streamingErr
 }
 
@@ -110,7 +110,21 @@ func TranscriptSegmentPageFromStore(store *session.Store, cursor int64, cacheWar
 	if store == nil {
 		return TranscriptSegmentPage{}, nil
 	}
+	if cursor <= 0 {
+		return TranscriptSegmentPage{}, fmt.Errorf("transcript segment cursor must be positive, got %d", cursor)
+	}
 	window, err := store.ReadSegmentBackward(cursor, isCompactionSegmentBoundary)
+	if err != nil {
+		return TranscriptSegmentPage{}, err
+	}
+	return segmentPageFromWindow(window, cacheWarningMode)
+}
+
+func TranscriptNewestSegmentPageFromStore(store *session.Store, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
+	if store == nil {
+		return TranscriptSegmentPage{}, nil
+	}
+	window, err := store.ReadNewestSegmentBackward(isCompactionSegmentBoundary)
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
@@ -153,9 +167,18 @@ func (e *Engine) TranscriptSegmentPage(cursor int64) (TranscriptSegmentPage, err
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
-	if cursor <= 0 {
-		e.overlayLiveStreaming(&page.Snapshot)
+	return page, nil
+}
+
+func (e *Engine) TranscriptNewestSegmentPage() (TranscriptSegmentPage, error) {
+	if e == nil || e.store == nil {
+		return TranscriptSegmentPage{}, nil
 	}
+	page, err := TranscriptNewestSegmentPageFromStore(e.store, e.cfg.CacheWarningMode)
+	if err != nil {
+		return TranscriptSegmentPage{}, err
+	}
+	e.overlayLiveStreaming(&page.Snapshot)
 	return page, nil
 }
 
@@ -192,6 +215,10 @@ func (e *Engine) ActiveRun() *RunSnapshot {
 		return nil
 	}
 	return e.stepLifecycle.Snapshot()
+}
+
+func (e *Engine) ActiveStepSnapshot() *RunSnapshot {
+	return e.ActiveRun()
 }
 
 func (e *Engine) LastCommittedAssistantFinalAnswer() string {
@@ -237,7 +264,7 @@ func (e *Engine) AppendCommittedEntry(role, text string) error {
 
 func (e *Engine) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility) error {
 	return e.appendCommittedEntry(storedLocalEntry{
-		Visibility: transcript.NormalizeEntryVisibility(visibility),
+		Visibility: normalizeRuntimeEntryVisibility(visibility),
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
 	})
@@ -271,6 +298,17 @@ func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
 func (e *Engine) SetStreamingError(text string) {
 	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).SetStreamingError(text)
 	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+}
+
+func (e *Engine) ReportPromptHistoryPersistError(reason string) {
+	if e == nil {
+		return
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return
+	}
+	_ = e.steer("", steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
 }
 
 func (e *Engine) ClearStreamingError() {
@@ -665,6 +703,25 @@ func conversationPromptCacheKey(sessionID string, compactionCount int) string {
 	return fmt.Sprintf("%s/compact-%d", trimmed, compactionCount)
 }
 
+func conversationPromptCacheKeyForLineage(sessionID string, lineageGeneration, compactionCount int) string {
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return ""
+	}
+	if lineageGeneration > 0 {
+		trimmed = fmt.Sprintf("%s/contract-%d", trimmed, lineageGeneration)
+	}
+	return conversationPromptCacheKey(trimmed, compactionCount)
+}
+
+func (e *Engine) conversationPromptCacheKey(sessionID string) string {
+	if e == nil || e.store == nil {
+		return ""
+	}
+	meta := e.store.Meta()
+	return conversationPromptCacheKeyForLineage(sessionID, meta.PromptCacheLineageGeneration, e.compactionRuntimeState().Count())
+}
+
 func (e *Engine) ParentSessionID() string {
 	return strings.TrimSpace(e.store.Meta().ParentSessionID)
 }
@@ -674,6 +731,32 @@ func (e *Engine) SetTranscriptWorkingDir(workdir string) {
 		return
 	}
 	e.transcriptRuntimeState().SetWorkingDir(workdir)
+}
+
+func (e *Engine) TranscriptWorkingDir() string {
+	return e.transcriptWorkingDir()
+}
+
+func (e *Engine) WorktreeReminderState() *session.WorktreeReminderState {
+	if e == nil {
+		return nil
+	}
+	state := e.store.Meta().WorktreeReminder
+	if state == nil {
+		return nil
+	}
+	copyState := *state
+	return &copyState
+}
+
+func (e *Engine) SetWorktreeReminderState(state *session.WorktreeReminderState) error {
+	if e == nil {
+		return ErrEngineClosed
+	}
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
+	return e.store.SetWorktreeReminderState(state)
 }
 
 func (e *Engine) transcriptWorkingDir() string {
@@ -717,20 +800,10 @@ type historyReplacementPayload struct {
 	// event so a workflow run never recompacts a continuation it already committed.
 	WorkflowRunID                     string             `json:"workflow_run_id,omitempty"`
 	CompactionNumber                  int                `json:"compaction_number,omitempty"`
+	CommittedEntryStart               *int               `json:"committed_entry_start,omitempty"`
 	PendingHandoffFutureMessage       string             `json:"pending_handoff_future_message,omitempty"`
 	LastCommittedAssistantFinalAnswer string             `json:"last_committed_assistant_final_answer,omitempty"`
 	Items                             []llm.ResponseItem `json:"items"`
-}
-
-func toToolNames(ids []toolspec.ID) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		out = append(out, string(id))
-	}
-	return out
 }
 
 func (e *Engine) setLastUsage(usage llm.Usage) {
@@ -826,6 +899,13 @@ func (e *Engine) transcriptRuntimeState() *transcriptRuntimeState {
 	return e.transcriptState
 }
 
+func (e *Engine) TranscriptLiveToolSnapshot() []TranscriptLiveToolStart {
+	if e == nil {
+		return nil
+	}
+	return e.transcriptRuntimeState().LiveToolSnapshot()
+}
+
 func (e *Engine) lockedContractState() *lockedContractState {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -846,7 +926,13 @@ func (e *Engine) modelRequests() *modelRequestRuntimeState {
 
 func (e *Engine) emitRaw(evt Event) {
 	evt.TranscriptRevision = e.TranscriptRevision()
-	if evt.CommittedEntryCount == 0 {
+	carriesCommittedRange := eventShouldCarryCommittedEntryCount(evt)
+	if !carriesCommittedRange {
+		evt.CommittedEntryCount = 0
+		evt.CommittedEntryStart = 0
+		evt.CommittedEntryStartSet = false
+	}
+	if evt.CommittedEntryCount == 0 && carriesCommittedRange {
 		evt.CommittedEntryCount = e.CommittedTranscriptEntryCount()
 	}
 	if evt.ContextUsage == nil && eventShouldCarryContextUsage(evt) {
@@ -880,9 +966,18 @@ func eventShouldCarryContextUsage(evt Event) bool {
 	}
 }
 
+func eventShouldCarryCommittedEntryCount(evt Event) bool {
+	switch evt.Kind {
+	case EventBackgroundUpdated:
+		return false
+	default:
+		return true
+	}
+}
+
 func eventMayInferCommittedEntryStart(kind EventKind) bool {
 	switch kind {
-	case EventCompactionCompleted, EventCompactionFailed:
+	case EventCompactionCompleted, EventCompactionFailed, EventBackgroundUpdated:
 		return false
 	default:
 		return true

@@ -8,16 +8,19 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"core/server/llm"
 	"core/server/workflow"
+	"core/server/workflowattention"
 	"core/server/workflowstore"
 	"core/shared/config"
 )
 
 const (
-	CompleteNodeToolName = "complete_node"
-	structuredOutputName = "workflow_completion"
+	CompleteNodeToolName         = "complete_node"
+	structuredOutputName         = "workflow_completion"
+	attentionFinalizationTimeout = 5 * time.Second
 )
 
 // ErrStructuredOutputUnsupported is returned when structured-output completion
@@ -128,6 +131,7 @@ type ViolationResult struct {
 type Controller interface {
 	CompleteWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error)
 	RecordWorkflowProtocolViolation(ctx context.Context, req ViolationRequest) (ViolationResult, error)
+	ResetWorkflowProtocolViolationBudget(ctx context.Context, req ViolationResetRequest) error
 	ObserveWorkflowRunCompletion(ctx context.Context, req CompletionObservationRequest) (CompletionObservationResult, error)
 }
 
@@ -140,12 +144,26 @@ type ViolationRequest struct {
 	RequireGeneration  bool
 }
 
+type ViolationResetRequest struct {
+	RunID              workflow.RunID
+	ExpectedGeneration int64
+	RequireGeneration  bool
+}
+
 type StoreController struct {
 	Store interface {
 		CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error)
 		RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
+		ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
 		GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error)
 	}
+	AttentionFinalizer interface {
+		FinalizeTransition(context.Context, workflowattention.TransitionResult)
+	}
+}
+
+type interruptedRunAttentionFinalizer interface {
+	FinalizeInterruptedRun(context.Context, workflow.RunID)
 }
 
 func (c StoreController) CompleteWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error) {
@@ -163,6 +181,25 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 	})
 	if err != nil {
 		return CompletionResult{}, normalizeStoreCompletionError(err)
+	}
+	if c.AttentionFinalizer != nil {
+		finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
+		defer cancel()
+		c.AttentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
+			TransitionID:                  result.TransitionID,
+			State:                         result.State,
+			ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
+		})
+		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
+			for _, runID := range result.InterruptedRunIDs {
+				if runID == "" {
+					continue
+				}
+				runFinalizeCtx, runCancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
+				finalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+				runCancel()
+			}
+		}
 	}
 	return CompletionResult{TransitionID: result.TransitionID, State: result.State}, nil
 }
@@ -196,7 +233,25 @@ func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, re
 	if err != nil {
 		return ViolationResult{}, err
 	}
+	if result.Interrupted {
+		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
+			finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
+			defer cancel()
+			finalizer.FinalizeInterruptedRun(finalizeCtx, req.RunID)
+		}
+	}
 	return ViolationResult{Count: result.Count, Interrupted: result.Interrupted}, nil
+}
+
+func (c StoreController) ResetWorkflowProtocolViolationBudget(ctx context.Context, req ViolationResetRequest) error {
+	if c.Store == nil {
+		return errors.New("workflow completion store is required")
+	}
+	return c.Store.ResetProtocolViolationBudget(ctx, workflowstore.ResetProtocolViolationBudgetRequest{
+		RunID:              req.RunID,
+		ExpectedGeneration: req.ExpectedGeneration,
+		RequireGeneration:  req.RequireGeneration,
+	})
 }
 
 func SelectCompletionMode(selection CompletionModeSelection) (CompletionMode, error) {

@@ -4,13 +4,13 @@ package main
 
 import (
 	"context"
-	"core/shared/config"
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+
+	"core/shared/config"
 )
 
 func TestWindowsInstallWithoutForceRejectsExistingDifferentScript(t *testing.T) {
@@ -21,7 +21,7 @@ func TestWindowsInstallWithoutForceRejectsExistingDifferentScript(t *testing.T) 
 	if err := os.WriteFile(windowsTaskScriptPath(spec), []byte("old script"), 0o644); err != nil {
 		t.Fatalf("write existing task script: %v", err)
 	}
-	calls := captureWindowsServiceCommands(t, func(ctx context.Context, name string, args ...string) (serviceCommandResult, error) {
+	calls := captureWindowsServiceCommands(t, func(context.Context, string, ...string) (serviceCommandResult, error) {
 		return serviceCommandResult{}, errors.New("unexpected command")
 	})
 
@@ -32,12 +32,12 @@ func TestWindowsInstallWithoutForceRejectsExistingDifferentScript(t *testing.T) 
 	if string(mustReadFile(t, windowsTaskScriptPath(spec))) != "old script" {
 		t.Fatal("expected existing script to remain unchanged")
 	}
-	if len(*calls) != 0 {
-		t.Fatalf("commands = %+v, want none", *calls)
+	if len(calls.commands()) != 0 {
+		t.Fatalf("commands = %+v, want none", calls.commands())
 	}
 }
 
-func TestWindowsInstallWithoutForceReRegistersOrphanScript(t *testing.T) {
+func TestWindowsInstallRewritesOrphanScriptAndRegistersTask(t *testing.T) {
 	spec := windowsServiceTestSpec(t)
 	if err := os.MkdirAll(filepath.Dir(windowsTaskScriptPath(spec)), 0o755); err != nil {
 		t.Fatalf("mkdir task script dir: %v", err)
@@ -45,16 +45,14 @@ func TestWindowsInstallWithoutForceReRegistersOrphanScript(t *testing.T) {
 	if err := os.WriteFile(windowsTaskScriptPath(spec), []byte("old script"), 0o644); err != nil {
 		t.Fatalf("write existing task script: %v", err)
 	}
-	calls := captureWindowsServiceCommands(t, func(ctx context.Context, name string, args ...string) (serviceCommandResult, error) {
-		switch name {
-		case "schtasks":
-			if len(args) > 0 && args[0] == "/Query" {
-				return serviceCommandResult{}, errors.New("task missing")
-			}
-			return serviceCommandResult{}, nil
-		default:
+	calls := captureWindowsServiceCommands(t, func(_ context.Context, name string, args ...string) (serviceCommandResult, error) {
+		if name != "schtasks" {
 			return serviceCommandResult{}, errors.New("unexpected command")
 		}
+		if len(args) > 0 && args[0] == "/Query" {
+			return serviceCommandResult{}, errors.New("task missing")
+		}
+		return serviceCommandResult{}, nil
 	})
 
 	if err := (scheduledTaskServiceBackend{}).Install(context.Background(), spec, false, false); err != nil {
@@ -63,8 +61,8 @@ func TestWindowsInstallWithoutForceReRegistersOrphanScript(t *testing.T) {
 	if string(mustReadFile(t, windowsTaskScriptPath(spec))) == "old script" {
 		t.Fatal("expected orphan script to be rewritten")
 	}
-	if len(*calls) != 2 || (*calls)[1][0] != "schtasks" || (*calls)[1][1] != "/Create" {
-		t.Fatalf("calls = %+v, want query then create", *calls)
+	if !calls.saw("schtasks", "/Create") {
+		t.Fatalf("commands = %+v, want scheduled task registration", calls.commands())
 	}
 }
 
@@ -76,16 +74,14 @@ func TestWindowsInstallRemovesStartupFallbackAfterScheduledTaskRegistration(t *t
 	if err := os.WriteFile(windowsStartupItemPath(), []byte("fallback"), 0o644); err != nil {
 		t.Fatalf("write startup item: %v", err)
 	}
-	calls := captureWindowsServiceCommands(t, func(ctx context.Context, name string, args ...string) (serviceCommandResult, error) {
-		switch name {
-		case "schtasks":
-			if len(args) > 0 && args[0] == "/Query" {
-				return serviceCommandResult{}, errors.New("task missing")
-			}
-			return serviceCommandResult{}, nil
-		default:
+	calls := captureWindowsServiceCommands(t, func(_ context.Context, name string, args ...string) (serviceCommandResult, error) {
+		if name != "schtasks" {
 			return serviceCommandResult{}, errors.New("unexpected command")
 		}
+		if len(args) > 0 && args[0] == "/Query" {
+			return serviceCommandResult{}, errors.New("task missing")
+		}
+		return serviceCommandResult{}, nil
 	})
 
 	if err := (scheduledTaskServiceBackend{}).Install(context.Background(), spec, true, false); err != nil {
@@ -94,8 +90,8 @@ func TestWindowsInstallRemovesStartupFallbackAfterScheduledTaskRegistration(t *t
 	if _, err := os.Stat(windowsStartupItemPath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("startup fallback stat err = %v, want not exist", err)
 	}
-	if len(*calls) != 2 || (*calls)[1][0] != "schtasks" || (*calls)[1][1] != "/Create" {
-		t.Fatalf("calls = %+v, want query then create", *calls)
+	if !calls.saw("schtasks", "/Create") {
+		t.Fatalf("commands = %+v, want scheduled task registration before fallback removal", calls.commands())
 	}
 }
 
@@ -107,7 +103,7 @@ func TestWindowsStopStartupFallbackKillsTaskScriptProcess(t *testing.T) {
 	if err := os.WriteFile(windowsStartupItemPath(), []byte("launcher"), 0o644); err != nil {
 		t.Fatalf("write startup item: %v", err)
 	}
-	calls := captureWindowsServiceCommands(t, func(ctx context.Context, name string, args ...string) (serviceCommandResult, error) {
+	calls := captureWindowsServiceCommands(t, func(_ context.Context, name string, args ...string) (serviceCommandResult, error) {
 		switch name {
 		case "schtasks":
 			return serviceCommandResult{}, errors.New("task missing")
@@ -123,9 +119,8 @@ func TestWindowsStopStartupFallbackKillsTaskScriptProcess(t *testing.T) {
 	if err := (scheduledTaskServiceBackend{}).Stop(context.Background(), spec); err != nil {
 		t.Fatalf("stop fallback: %v", err)
 	}
-	want := []string{"taskkill", "/T", "/F", "/PID", "123"}
-	if len(*calls) != 3 || !reflect.DeepEqual((*calls)[2], want) {
-		t.Fatalf("calls = %+v, want final %v", *calls, want)
+	if !calls.sawAll("taskkill", "/T", "/F", "/PID", "123") {
+		t.Fatalf("commands = %+v, want taskkill for fallback script pid", calls.commands())
 	}
 }
 
@@ -137,7 +132,7 @@ func TestWindowsStatusReportsRegisteredServerPID(t *testing.T) {
 	if err := os.WriteFile(windowsTaskScriptPath(spec), []byte(renderWindowsTaskScript(spec)), 0o644); err != nil {
 		t.Fatalf("write task script: %v", err)
 	}
-	captureWindowsServiceCommands(t, func(ctx context.Context, name string, args ...string) (serviceCommandResult, error) {
+	captureWindowsServiceCommands(t, func(_ context.Context, name string, args ...string) (serviceCommandResult, error) {
 		switch name {
 		case "schtasks":
 			return serviceCommandResult{Stdout: "Status: Running\r\n"}, nil
@@ -159,8 +154,8 @@ func TestWindowsStatusReportsRegisteredServerPID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if status.PID != 222 {
-		t.Fatalf("status PID = %d, want registered server PID 222", status.PID)
+	if !status.Installed || !status.Running || status.PID != 222 {
+		t.Fatalf("status = %+v, want running service with registered server PID 222", status)
 	}
 }
 
@@ -172,7 +167,7 @@ func TestWindowsStatusDoesNotTreatBareServerProcessAsServiceRunning(t *testing.T
 	if err := os.WriteFile(windowsTaskScriptPath(spec), []byte(renderWindowsTaskScript(spec)), 0o644); err != nil {
 		t.Fatalf("write task script: %v", err)
 	}
-	captureWindowsServiceCommands(t, func(ctx context.Context, name string, args ...string) (serviceCommandResult, error) {
+	captureWindowsServiceCommands(t, func(_ context.Context, name string, args ...string) (serviceCommandResult, error) {
 		switch name {
 		case "schtasks":
 			return serviceCommandResult{Stdout: "Status: Ready\r\n"}, nil
@@ -202,7 +197,7 @@ func TestWindowsStatusDoesNotTreatBareServerProcessAsServiceRunning(t *testing.T
 func TestParseWindowsCommandLinePreservesPathBackslashes(t *testing.T) {
 	got := parseWindowsCommandLine(`"C:\Users\Nek\AppData\Local\Kent\kent.exe" serve`)
 	want := []string{`C:\Users\Nek\AppData\Local\Kent\kent.exe`, "serve"}
-	if !reflect.DeepEqual(got, want) {
+	if !windowsStringSlicesEqual(got, want) {
 		t.Fatalf("parseWindowsCommandLine = %#v, want %#v", got, want)
 	}
 }
@@ -222,16 +217,60 @@ func windowsServiceTestSpec(t *testing.T) serviceSpec {
 	}
 }
 
-func captureWindowsServiceCommands(t *testing.T, fn func(context.Context, string, ...string) (serviceCommandResult, error)) *[][]string {
+type windowsCommandRecorder struct {
+	calls []serviceCommandInvocation
+}
+
+type serviceCommandInvocation struct {
+	Name string
+	Args []string
+}
+
+func captureWindowsServiceCommands(t *testing.T, fn func(context.Context, string, ...string) (serviceCommandResult, error)) *windowsCommandRecorder {
 	t.Helper()
 	original := runServiceCommand
-	calls := [][]string{}
+	recorder := &windowsCommandRecorder{}
 	runServiceCommand = func(ctx context.Context, name string, args ...string) (serviceCommandResult, error) {
-		calls = append(calls, append([]string{name}, args...))
+		recorder.calls = append(recorder.calls, serviceCommandInvocation{Name: name, Args: append([]string(nil), args...)})
 		return fn(ctx, name, args...)
 	}
 	t.Cleanup(func() { runServiceCommand = original })
-	return &calls
+	return recorder
+}
+
+func (r *windowsCommandRecorder) commands() []serviceCommandInvocation {
+	return append([]serviceCommandInvocation(nil), r.calls...)
+}
+
+func (r *windowsCommandRecorder) saw(name string, firstArg string) bool {
+	for _, call := range r.calls {
+		if call.Name == name && len(call.Args) > 0 && call.Args[0] == firstArg {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *windowsCommandRecorder) sawAll(values ...string) bool {
+	for _, call := range r.calls {
+		actual := append([]string{call.Name}, call.Args...)
+		if windowsStringSlicesEqual(actual, values) {
+			return true
+		}
+	}
+	return false
+}
+
+func windowsStringSlicesEqual(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func mustReadFile(t *testing.T, path string) []byte {

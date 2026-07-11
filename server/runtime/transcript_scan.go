@@ -123,7 +123,12 @@ func (s *inMemoryTranscriptScan) visibleEntriesFromMessage(msg llm.Message, seq 
 		}
 	case llm.RoleAssistant:
 		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
-			entries = append(entries, ChatEntry{Role: "assistant", Text: msg.Content, Phase: msg.Phase})
+			entries = append(entries, ChatEntry{
+				Visibility: assistantTranscriptVisibility(msg.Phase),
+				Role:       "assistant",
+				Text:       msg.Content,
+				Phase:      msg.Phase,
+			})
 		}
 		for _, call := range msg.ToolCalls {
 			entries = append(entries, formatPersistedToolCall(call))
@@ -181,6 +186,7 @@ func (s *inMemoryTranscriptScan) synthesizedToolResult(call llm.ToolCall) (ChatE
 }
 
 func (s *inMemoryTranscriptScan) appendEntry(entry ChatEntry) {
+	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entryIndex := s.totalEntries
 	if entryIndex >= s.request.Offset && (s.request.Limit == 0 || entryIndex < s.request.Offset+s.request.Limit) {
 		s.pageEntries = append(s.pageEntries, clonePersistedChatEntry(entry))

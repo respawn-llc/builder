@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/clientui"
 	"core/shared/workflowkey"
 )
 
@@ -20,6 +21,16 @@ const (
 const WorkflowListMaxPageSize = 100
 const WorkflowTaskListMaxPageSize = 100
 const WorkflowTaskListMaxSortSelectors = 5
+
+type WorkflowNodeKind string
+
+const (
+	WorkflowNodeKindStart    WorkflowNodeKind = "start"
+	WorkflowNodeKindAgent    WorkflowNodeKind = "agent"
+	WorkflowNodeKindScript   WorkflowNodeKind = "script"
+	WorkflowNodeKindJoin     WorkflowNodeKind = "join"
+	WorkflowNodeKindTerminal WorkflowNodeKind = "terminal"
+)
 
 const (
 	WorkflowGraphDraftMaxNodeGroups       = 200
@@ -76,6 +87,7 @@ type WorkflowNode struct {
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
+	ScriptPath         *string                     `json:"script_path,omitempty"`
 	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 	OutputFields       []WorkflowOutputField       `json:"output_fields,omitempty"`
@@ -212,6 +224,7 @@ type WorkflowGraphDraftNode struct {
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
+	ScriptPath         *string                     `json:"script_path,omitempty"`
 	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 }
@@ -387,6 +400,7 @@ type WorkflowNodeAddRequest struct {
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
+	ScriptPath         *string                     `json:"script_path,omitempty"`
 	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 }
@@ -405,6 +419,7 @@ type WorkflowNodeUpdateRequest struct {
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
+	ScriptPath         *string                     `json:"script_path,omitempty"`
 	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 }
@@ -502,7 +517,6 @@ type WorkflowEdgeUpdateResponse struct {
 type WorkflowLinkProjectRequest struct {
 	ProjectID     string                         `json:"project_id"`
 	WorkflowID    string                         `json:"workflow_id"`
-	Default       bool                           `json:"default"`
 	DefaultPolicy WorkflowProjectLinkDefaultMode `json:"default_policy,omitempty"`
 }
 
@@ -605,6 +619,12 @@ type WorkflowValidateRequest struct {
 	Mode       WorkflowValidationMode `json:"mode"`
 }
 
+type WorkflowScriptPathValidateRequest struct {
+	WorkflowID string `json:"workflow_id"`
+	NodeID     string `json:"node_id"`
+	ScriptPath string `json:"script_path"`
+}
+
 type WorkflowValidateResponse struct {
 	Valid  bool                      `json:"valid"`
 	Errors []WorkflowValidationError `json:"errors"`
@@ -654,7 +674,8 @@ type WorkflowTaskUpdateResponse struct {
 }
 
 type WorkflowTaskStartRequest struct {
-	TaskID string `json:"task_id"`
+	TaskID           string                   `json:"task_id"`
+	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
 }
 
 type WorkflowTaskStartResponse struct {
@@ -665,20 +686,23 @@ type WorkflowTaskStartResponse struct {
 
 type WorkflowTaskResumeRequest struct {
 	TaskID string `json:"task_id"`
-	RunID  string `json:"run_id,omitempty"`
 }
 
-type WorkflowTaskResumeResponse struct {
-	RunID       string `json:"run_id"`
+type WorkflowTaskRunSummary struct {
 	PlacementID string `json:"placement_id"`
 	NodeID      string `json:"node_id"`
 	Generation  int64  `json:"generation"`
 	SessionID   string `json:"session_id,omitempty"`
 }
 
+type WorkflowTaskResumeResponse struct {
+	Runs []WorkflowTaskRunSummary `json:"runs"`
+}
+
 type WorkflowTaskApproveRequest struct {
-	TaskTransitionID string `json:"task_transition_id,omitempty"`
-	TransitionID     string `json:"transition_id,omitempty"`
+	TaskTransitionID string                   `json:"task_transition_id,omitempty"`
+	TransitionID     string                   `json:"transition_id,omitempty"`
+	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
 }
 
 type WorkflowTaskApproveResponse struct {
@@ -690,12 +714,13 @@ type WorkflowTaskApproveResponse struct {
 }
 
 type WorkflowTaskMoveRequest struct {
-	TaskID           string            `json:"task_id"`
-	TargetNodeID     string            `json:"target_node_id"`
-	OutputValues     map[string]string `json:"output_values,omitempty"`
-	Commentary       string            `json:"commentary,omitempty"`
-	AllowMissingEdge bool              `json:"allow_missing_edge,omitempty"`
-	AutoApprove      bool              `json:"auto_approve,omitempty"`
+	TaskID           string                   `json:"task_id"`
+	TargetNodeID     string                   `json:"target_node_id"`
+	OutputValues     map[string]string        `json:"output_values,omitempty"`
+	Commentary       string                   `json:"commentary,omitempty"`
+	AllowMissingEdge bool                     `json:"allow_missing_edge,omitempty"`
+	AutoApprove      bool                     `json:"auto_approve,omitempty"`
+	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
 }
 
 type WorkflowTaskMoveResponse struct {
@@ -763,13 +788,13 @@ type WorkflowTaskDeleteRequest struct {
 }
 
 type WorkflowTaskInterruptRequest struct {
-	TaskID string `json:"task_id"`
-	RunID  string `json:"run_id,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	TaskID    string `json:"task_id"`
+	SessionID string `json:"session_id,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type WorkflowTaskInterruptResponse struct {
-	RunID string `json:"run_id"`
+	Runs []WorkflowTaskRunSummary `json:"runs"`
 }
 
 type WorkflowAttentionListRequest struct {
@@ -794,32 +819,54 @@ type WorkflowTaskAttentionListResponse struct {
 }
 
 type WorkflowAttentionItem struct {
-	ID                     string   `json:"id"`
-	Kind                   string   `json:"kind"`
-	ProjectID              string   `json:"project_id,omitempty"`
-	WorkflowID             string   `json:"workflow_id,omitempty"`
-	TaskID                 string   `json:"task_id,omitempty"`
-	TaskShortID            string   `json:"task_short_id,omitempty"`
-	TaskTitle              string   `json:"task_title,omitempty"`
-	RunID                  string   `json:"run_id,omitempty"`
-	SessionID              string   `json:"session_id,omitempty"`
-	AskID                  string   `json:"ask_id,omitempty"`
-	TaskTransitionID       string   `json:"task_transition_id,omitempty"`
-	Message                string   `json:"message"`
-	Suggestions            []string `json:"suggestions,omitempty"`
-	RecommendedOptionIndex int      `json:"recommended_option_index,omitempty"`
-	OccurredAtUnixMs       int64    `json:"occurred_at_unix_ms"`
+	ID                     string                           `json:"id"`
+	Kind                   string                           `json:"kind"`
+	ProjectID              string                           `json:"project_id,omitempty"`
+	WorkflowID             string                           `json:"workflow_id,omitempty"`
+	TaskID                 string                           `json:"task_id,omitempty"`
+	TaskShortID            string                           `json:"task_short_id,omitempty"`
+	TaskTitle              string                           `json:"task_title,omitempty"`
+	RunID                  string                           `json:"run_id,omitempty"`
+	SessionID              string                           `json:"session_id,omitempty"`
+	AskID                  string                           `json:"ask_id,omitempty"`
+	TaskTransitionID       string                           `json:"task_transition_id,omitempty"`
+	Message                string                           `json:"message"`
+	DetailJSON             string                           `json:"detail_json,omitempty"`
+	Suggestions            []string                         `json:"suggestions,omitempty"`
+	RecommendedOptionIndex int                              `json:"recommended_option_index,omitempty"`
+	Question               *WorkflowAttentionQuestionPrompt `json:"question,omitempty"`
+	OccurredAtUnixMs       int64                            `json:"occurred_at_unix_ms"`
+}
+
+type WorkflowAttentionQuestionKind string
+
+const (
+	WorkflowAttentionQuestionKindOrdinary WorkflowAttentionQuestionKind = "ordinary"
+	WorkflowAttentionQuestionKindApproval WorkflowAttentionQuestionKind = "approval"
+)
+
+type WorkflowAttentionQuestionPrompt struct {
+	Kind                   WorkflowAttentionQuestionKind `json:"kind"`
+	Suggestions            []string                      `json:"suggestions,omitempty"`
+	RecommendedOptionIndex int                           `json:"recommended_option_index,omitempty"`
+	ApprovalDecisions      []clientui.ApprovalDecision   `json:"approval_decisions,omitempty"`
+}
+
+type WorkflowTaskQuestionApprovalAnswer struct {
+	Decision   clientui.ApprovalDecision `json:"decision"`
+	Commentary string                    `json:"commentary,omitempty"`
 }
 
 type WorkflowTaskQuestionAnswerRequest struct {
-	ClientRequestID      string `json:"client_request_id"`
-	TaskID               string `json:"task_id"`
-	RunID                string `json:"run_id,omitempty"`
-	AskID                string `json:"ask_id"`
-	ErrorMessage         string `json:"error_message,omitempty"`
-	Answer               string `json:"answer,omitempty"`
-	SelectedOptionNumber int    `json:"selected_option_number,omitempty"`
-	FreeformAnswer       string `json:"freeform_answer,omitempty"`
+	ClientRequestID      string                              `json:"client_request_id"`
+	TaskID               string                              `json:"task_id"`
+	RunID                string                              `json:"run_id,omitempty"`
+	AskID                string                              `json:"ask_id"`
+	ErrorMessage         string                              `json:"error_message,omitempty"`
+	Answer               string                              `json:"answer,omitempty"`
+	SelectedOptionNumber int                                 `json:"selected_option_number,omitempty"`
+	FreeformAnswer       string                              `json:"freeform_answer,omitempty"`
+	Approval             *WorkflowTaskQuestionApprovalAnswer `json:"approval,omitempty"`
 }
 
 type WorkflowTaskCommentAddRequest struct {
@@ -956,7 +1003,6 @@ type WorkflowBoard struct {
 	HasHiddenDoneCards bool                    `json:"has_hidden_done_cards"`
 	NextPageToken      string                  `json:"next_page_token"`
 	GeneratedAtUnixMs  int64                   `json:"generated_at_unix_ms"`
-	Workflows          []WorkflowBoardWorkflow `json:"legacy_workflows,omitempty"`
 }
 
 type ProjectBoardProject struct {
@@ -1028,12 +1074,8 @@ type WorkflowTaskStatus struct {
 type WorkflowTaskActions struct {
 	CanStart                bool     `json:"can_start"`
 	CanInterrupt            bool     `json:"can_interrupt"`
-	InterruptRunID          string   `json:"interrupt_run_id,omitempty"`
 	CanResume               bool     `json:"can_resume"`
-	ResumeRunID             string   `json:"resume_run_id,omitempty"`
 	CanCancel               bool     `json:"can_cancel"`
-	NeedsDetailForInterrupt bool     `json:"needs_detail_for_interrupt"`
-	NeedsDetailForResume    bool     `json:"needs_detail_for_resume"`
 	ManualMoveTargetNodeIDs []string `json:"manual_move_target_node_ids,omitempty"`
 }
 
@@ -1062,18 +1104,6 @@ type WorkflowProjectSubscription interface {
 type WorkflowSubscription interface {
 	Next(ctx context.Context) (WorkflowProjectEvent, error)
 	Close() error
-}
-
-type WorkflowBoardWorkflow struct {
-	Workflow WorkflowRecord        `json:"workflow"`
-	Nodes    []WorkflowBoardNode   `json:"nodes"`
-	Tasks    []WorkflowTaskSummary `json:"tasks"`
-}
-
-type WorkflowBoardNode struct {
-	Node             WorkflowNode          `json:"node"`
-	ActivePlacements []WorkflowPlacement   `json:"active_placements"`
-	Tasks            []WorkflowTaskSummary `json:"tasks"`
 }
 
 type WorkflowTaskGetRequest struct {
@@ -1148,6 +1178,8 @@ type WorkflowRun struct {
 	TaskID              string `json:"task_id"`
 	PlacementID         string `json:"placement_id"`
 	NodeID              string `json:"node_id"`
+	NodeKind            string `json:"node_kind,omitempty"`
+	ScriptPath          string `json:"script_path,omitempty"`
 	SessionID           string `json:"session_id,omitempty"`
 	SessionName         string `json:"session_name,omitempty"`
 	Role                string `json:"role,omitempty"`
@@ -1157,6 +1189,7 @@ type WorkflowRun struct {
 	CompletedAtUnixMs   int64  `json:"completed_at_unix_ms"`
 	InterruptedAtUnixMs int64  `json:"interrupted_at_unix_ms"`
 	InterruptionReason  string `json:"interruption_reason,omitempty"`
+	InterruptionDetail  string `json:"interruption_detail_json,omitempty"`
 	WaitingAskID        string `json:"waiting_ask_id,omitempty"`
 }
 
@@ -1259,17 +1292,17 @@ func (r WorkflowGetRequest) Validate() error {
 }
 
 func (r WorkflowNodeAddRequest) Validate() error {
-	return validateWorkflowNodeFields(r.WorkflowID, "", r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.InputFields, r.JoinInputProviders)
+	return validateWorkflowNodeFields(r.WorkflowID, "", r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.InputFields, r.JoinInputProviders)
 }
 
 func (r WorkflowNodeUpdateRequest) Validate() error {
 	if err := validateRequired("node_id", r.NodeID); err != nil {
 		return err
 	}
-	return validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.InputFields, r.JoinInputProviders)
+	return validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.InputFields, r.JoinInputProviders)
 }
 
-func validateWorkflowNodeFields(workflowID string, nodeID string, key string, kind string, displayName string, groupKey string, completionMode string, inputFields []WorkflowInputField, joinInputProviders []WorkflowJoinInputProvider) error {
+func validateWorkflowNodeFields(workflowID string, nodeID string, key string, kind string, displayName string, groupKey string, completionMode string, scriptPath *string, inputFields []WorkflowInputField, joinInputProviders []WorkflowJoinInputProvider) error {
 	if err := validateRequired("workflow_id", workflowID); err != nil {
 		return err
 	}
@@ -1284,6 +1317,12 @@ func validateWorkflowNodeFields(workflowID string, nodeID string, key string, ki
 	}
 	if err := validateWorkflowNodeCompletionMode(kind, completionMode); err != nil {
 		return err
+	}
+	if scriptPath != nil && strings.TrimSpace(*scriptPath) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "script_path", "script_path must be null or a non-empty path")
+	}
+	if scriptPath != nil && strings.TrimSpace(kind) != "script" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "script_path", "script_path is only valid for script nodes")
 	}
 	if strings.TrimSpace(groupKey) != "" {
 		if err := validateModelKey("group_key", groupKey); err != nil {
@@ -1439,9 +1478,9 @@ func validateWorkflowContextSource(source WorkflowContextSource) error {
 			return err
 		}
 		return nil
-	case "previous_target":
+	case "previous_target", "previous_target_or_new":
 		if strings.TrimSpace(source.NodeKey) != "" {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "context_source.node_key", "context_source.node_key must be empty for previous_target")
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "context_source.node_key", "context_source.node_key must be empty for target-derived context sources")
 		}
 		return nil
 	default:
@@ -1504,6 +1543,13 @@ func (r WorkflowValidateRequest) Validate() error {
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "mode", "mode must be draft, task_creation, or execution")
 	}
+}
+
+func (r WorkflowScriptPathValidateRequest) Validate() error {
+	return validateRequiredFields(
+		requiredField("workflow_id", r.WorkflowID),
+		requiredField("node_id", r.NodeID),
+	)
 }
 
 func (r WorkflowGraphValidateDraftRequest) Validate() error {
@@ -1616,6 +1662,9 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		if err := validateWorkflowNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.completion_mode", err.Error())
 		}
+		if node.ScriptPath != nil && strings.TrimSpace(node.Kind) != "script" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.script_path", "script_path is only valid on script nodes")
+		}
 		if len(node.InputFields) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.nodes.input_fields", fmt.Sprintf("input_fields must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
 		}
@@ -1624,6 +1673,9 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		}
 	}
 	for _, edge := range graph.Edges {
+		if err := validateWorkflowContextSource(edge.ContextSource); err != nil {
+			return err
+		}
 		if len(edge.Parameters) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.edges.parameters", fmt.Sprintf("parameters must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
 		}
@@ -1651,7 +1703,10 @@ func (r WorkflowTaskUpdateRequest) Validate() error {
 }
 
 func (r WorkflowTaskStartRequest) Validate() error {
-	return validateRequired("task_id", r.TaskID)
+	if err := validateRequired("task_id", r.TaskID); err != nil {
+		return err
+	}
+	return r.SetupOperationID.Validate()
 }
 
 func (r WorkflowTaskResumeRequest) Validate() error {
@@ -1660,13 +1715,19 @@ func (r WorkflowTaskResumeRequest) Validate() error {
 
 func (r WorkflowTaskApproveRequest) Validate() error {
 	if strings.TrimSpace(r.TaskTransitionID) != "" {
-		return nil
+		return r.SetupOperationID.Validate()
 	}
-	return validateRequired("transition_id", r.TransitionID)
+	if err := validateRequired("transition_id", r.TransitionID); err != nil {
+		return err
+	}
+	return r.SetupOperationID.Validate()
 }
 
 func (r WorkflowTaskMoveRequest) Validate() error {
-	return validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID))
+	if err := validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID)); err != nil {
+		return err
+	}
+	return r.SetupOperationID.Validate()
 }
 
 func (r WorkflowTaskCompleteRequest) Validate() error {
@@ -1765,14 +1826,23 @@ func (r WorkflowTaskQuestionAnswerRequest) Validate() error {
 	}
 	hasTextAnswer := strings.TrimSpace(r.Answer) != ""
 	hasFreeform := strings.TrimSpace(r.FreeformAnswer) != ""
+	hasApproval := r.Approval != nil
 	if r.SelectedOptionNumber < 0 {
 		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "selected_option_number", Message: "selected_option_number must be non-negative"}
 	}
 	hasSelected := r.SelectedOptionNumber > 0
-	hasAnswer := hasTextAnswer || hasFreeform || hasSelected
+	hasAnswer := hasTextAnswer || hasFreeform || hasSelected || hasApproval
 	hasError := strings.TrimSpace(r.ErrorMessage) != ""
 	if hasAnswer && hasError {
 		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "error_message", Message: "error_message cannot be combined with answer fields"}
+	}
+	if hasApproval {
+		if hasTextAnswer || hasFreeform || hasSelected {
+			return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "approval", Message: "approval cannot be combined with ordinary answer fields"}
+		}
+		if err := validateWorkflowApprovalDecision(r.Approval.Decision); err != nil {
+			return err
+		}
 	}
 	if hasTextAnswer && (hasFreeform || hasSelected) {
 		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "answer", Message: "answer cannot be combined with selected_option_number or freeform_answer"}
@@ -1781,6 +1851,15 @@ func (r WorkflowTaskQuestionAnswerRequest) Validate() error {
 		return WorkflowRequestValidationError{Code: WorkflowRequestErrorRequired, Field: "answer", Message: "answer is required"}
 	}
 	return nil
+}
+
+func validateWorkflowApprovalDecision(decision clientui.ApprovalDecision) error {
+	switch decision {
+	case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
+		return nil
+	default:
+		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidValue, Field: "approval.decision", Message: "approval.decision is invalid"}
+	}
 }
 
 func (r WorkflowTaskCommentAddRequest) Validate() error {

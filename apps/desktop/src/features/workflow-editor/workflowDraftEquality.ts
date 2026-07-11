@@ -33,17 +33,22 @@ function workflowNodesEqual(a: WorkflowNode, b: WorkflowNode): boolean {
 }
 
 function workflowNodeMetadataEqual(a: WorkflowNode, b: WorkflowNode): boolean {
-  return (
-    a.id === b.id &&
-    a.key === b.key &&
-    a.kind === b.kind &&
-    a.name === b.name &&
-    a.groupID === b.groupID &&
-    a.groupKey === b.groupKey &&
-    a.subagentRole === b.subagentRole &&
-    a.promptTemplate === b.promptTemplate &&
-    (a.completionMode ?? "") === (b.completionMode ?? "")
-  );
+  return sameLengthAndEvery(workflowNodeMetadataValues(a), workflowNodeMetadataValues(b), (left, right) => left === right);
+}
+
+function workflowNodeMetadataValues(node: WorkflowNode): readonly string[] {
+  return [
+    node.id,
+    node.key,
+    node.kind,
+    node.name,
+    node.groupID,
+    node.groupKey,
+    node.subagentRole,
+    node.promptTemplate,
+    node.completionMode ?? "",
+    node.scriptPath ?? "",
+  ];
 }
 
 function transitionGroupsEqual(

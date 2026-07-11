@@ -2,9 +2,11 @@ package llm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
+	"core/shared/llmerrors"
 	"core/shared/textutil"
 	"github.com/openai/openai-go/v3/responses"
 )
@@ -22,10 +24,12 @@ type responseStreamAccumulator struct {
 }
 
 type responseStreamError struct {
-	Code    string
-	Param   string
+	Raw              string
+	ProviderContract *responseStreamProviderContract
+}
+
+type responseStreamProviderContract struct {
 	Message string
-	Raw     string
 }
 
 func newResponseStreamAccumulator(callbacks StreamCallbacks, windowTokens int) *responseStreamAccumulator {
@@ -37,6 +41,10 @@ func newResponseStreamAccumulator(callbacks StreamCallbacks, windowTokens int) *
 		reasoning:         newReasoningAccumulator(),
 		passthrough:       newPassthroughOutputAccumulator(),
 	}
+}
+
+func (a *responseStreamAccumulator) hasCompleted() bool {
+	return a != nil && a.completed != nil
 }
 
 func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUnion) {
@@ -78,27 +86,68 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		a.reasoning.Set(reasoningRoleSummary, key, evt.Part.Text)
 		a.emitReasoningSummaryDelta(key)
 	case "response.completed":
-		completed := evt.AsResponseCompleted().Response
+		completedEvent := evt.AsResponseCompleted()
+		if !responseCompletedEventHasValidPayload(completedEvent) {
+			a.responseError = &responseStreamError{
+				Raw: completedEvent.RawJSON(),
+				ProviderContract: &responseStreamProviderContract{
+					Message: "OpenAI-compatible Responses stream emitted response.completed without a valid response payload",
+				},
+			}
+			return
+		}
+		completed := completedEvent.Response
 		a.completed = &completed
 	case "response.failed":
 		failed := evt.AsResponseFailed()
 		a.responseError = &responseStreamError{Raw: failed.RawJSON()}
-	case "error":
-		errorEvent := evt.AsError()
-		a.responseError = &responseStreamError{
-			Code:    errorEvent.Code,
-			Param:   errorEvent.Param,
-			Message: errorEvent.Message,
-			Raw:     evt.RawJSON(),
+	case "response.incomplete":
+		incomplete := evt.AsResponseIncomplete()
+		raw := incomplete.RawJSON()
+		if strings.TrimSpace(incomplete.Response.IncompleteDetails.Reason) == "" {
+			a.responseError = &responseStreamError{
+				Raw: raw,
+				ProviderContract: &responseStreamProviderContract{
+					Message: "OpenAI-compatible Responses stream emitted response.incomplete without incomplete_details.reason",
+				},
+			}
+			return
 		}
+		a.responseError = &responseStreamError{Raw: raw}
+	case "error":
+		a.responseError = &responseStreamError{Raw: evt.RawJSON()}
 	}
 }
 
-func (a *responseStreamAccumulator) Err(providerID string) error {
+func responseCompletedEventHasValidPayload(evt responses.ResponseCompletedEvent) bool {
+	if !evt.JSON.Response.Valid() || !evt.Response.JSON.Output.Valid() {
+		return false
+	}
+	var output []json.RawMessage
+	if err := json.Unmarshal([]byte(evt.Response.JSON.Output.Raw()), &output); err != nil {
+		return false
+	}
+	return output != nil
+}
+
+func (a *responseStreamAccumulator) Err(providerID string, responseStatus *openAIResponseStatus) error {
 	if a == nil || a.responseError == nil {
 		return nil
 	}
-	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil); ok {
+	if responseStatus == nil {
+		message := strings.TrimSpace(a.responseError.Raw)
+		if a.responseError.ProviderContract != nil {
+			message = a.responseError.ProviderContract.Message
+		}
+		if message == "" {
+			message = "unrecognized stream error"
+		}
+		return errors.New(message)
+	}
+	if a.responseError.ProviderContract != nil {
+		return llmerrors.NewProviderContractError(providerID, responseStatus.Code, errors.New(a.responseError.ProviderContract.Message))
+	}
+	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil, responseStatus.Code); ok {
 		return err
 	}
 	message := strings.TrimSpace(a.responseError.Raw)
@@ -107,6 +156,7 @@ func (a *responseStreamAccumulator) Err(providerID string) error {
 	}
 	return &ProviderAPIError{
 		ProviderID: providerID,
+		StatusCode: responseStatus.Code,
 		Code:       UnifiedErrorCodeUnknown,
 		Message:    message,
 		Raw:        message,
@@ -123,8 +173,13 @@ func (a *responseStreamAccumulator) emitReasoningSummaryDelta(key string) {
 func (a *responseStreamAccumulator) Response() OpenAIResponse {
 	usage := Usage{WindowTokens: a.windowTokens}
 	streamText, streamPhase, streamOutputIndex, hasResolvedStream := a.assistantMessages.Resolve()
-	finalText := a.assistantText.String()
-	if strings.TrimSpace(streamText) != "" {
+	rawDeltaText := a.assistantText.String()
+	streamedDeltaText := ""
+	if a.callbacks.OnAssistantDelta != nil {
+		streamedDeltaText = rawDeltaText
+	}
+	finalText := rawDeltaText
+	if assistantResponseTextExtendsStream(streamedDeltaText, streamText) {
 		finalText = streamText
 	}
 	finalPhase := streamPhase
@@ -149,7 +204,7 @@ func (a *responseStreamAccumulator) Response() OpenAIResponse {
 		usage = usageFromSDK(a.completed.Usage, a.windowTokens)
 	}
 	parsedItems, parsedText, parsedPhase, parsedCalls, parsedReasoning, parsedReasoningItems := parseOutputItems(a.completed.Output)
-	if strings.TrimSpace(parsedText) != "" {
+	if assistantResponseTextExtendsStream(streamedDeltaText, parsedText) {
 		finalText = parsedText
 	}
 	if parsedPhase != "" {
@@ -174,19 +229,28 @@ func (a *responseStreamAccumulator) Response() OpenAIResponse {
 	}
 }
 
+func assistantResponseTextExtendsStream(streamed string, candidate string) bool {
+	if candidate == "" {
+		return false
+	}
+	if streamed == "" {
+		return true
+	}
+	return strings.HasPrefix(candidate, streamed)
+}
+
 func repairAssistantOutputItems(items []ResponseItem, text string, phase MessagePhase, outputIndex int64, hasResolvedStream bool) []ResponseItem {
 	if len(items) == 0 {
 		return nil
 	}
 	repaired := CloneResponseItems(items)
-	lastAssistantIdx := -1
+	assistantIndexes := make([]int, 0, len(repaired))
 	for idx := len(repaired) - 1; idx >= 0; idx-- {
 		if repaired[idx].Type == ResponseItemTypeMessage && repaired[idx].Role == RoleAssistant {
-			lastAssistantIdx = idx
-			break
+			assistantIndexes = append(assistantIndexes, idx)
 		}
 	}
-	if lastAssistantIdx < 0 {
+	if len(assistantIndexes) == 0 {
 		if strings.TrimSpace(text) == "" {
 			return repaired
 		}
@@ -212,11 +276,20 @@ func repairAssistantOutputItems(items []ResponseItem, text string, phase Message
 		repaired[insertAt] = assistant
 		return repaired
 	}
-	if strings.TrimSpace(repaired[lastAssistantIdx].Content) == "" && strings.TrimSpace(text) != "" {
-		repaired[lastAssistantIdx].Content = text
+	targetAssistantIdx := assistantIndexes[0]
+	if hasResolvedStream {
+		for _, idx := range assistantIndexes {
+			if repaired[idx].OutputIndex == outputIndex {
+				targetAssistantIdx = idx
+				break
+			}
+		}
 	}
-	if repaired[lastAssistantIdx].Phase == "" && phase != "" {
-		repaired[lastAssistantIdx].Phase = phase
+	if len(assistantIndexes) == 1 && text != "" && repaired[targetAssistantIdx].Content != text {
+		repaired[targetAssistantIdx].Content = text
+	}
+	if repaired[targetAssistantIdx].Phase == "" && phase != "" {
+		repaired[targetAssistantIdx].Phase = phase
 	}
 	return repaired
 }

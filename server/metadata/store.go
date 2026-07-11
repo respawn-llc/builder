@@ -24,22 +24,6 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-var statPathForAvailability = os.Stat
-
-// SetAvailabilityStatForTest overrides path availability probing and returns a restore function.
-// It exists to keep availability-driven tests deterministic across platforms.
-func SetAvailabilityStatForTest(fn func(string) (os.FileInfo, error)) func() {
-	previous := statPathForAvailability
-	if fn == nil {
-		statPathForAvailability = os.Stat
-	} else {
-		statPathForAvailability = fn
-	}
-	return func() {
-		statPathForAvailability = previous
-	}
-}
-
 type Binding struct {
 	ProjectID       string
 	ProjectKey      string
@@ -48,16 +32,6 @@ type Binding struct {
 	CanonicalRoot   string
 	WorkspaceName   string
 	WorkspaceStatus string
-}
-
-// Runtime leases are durable controller tokens with release invalidation.
-// Runtime active/liveness ownership remains process-local state owned by
-// sessionruntime.Service and RuntimeRegistry.
-type RuntimeLeaseRecord struct {
-	LeaseID    string
-	SessionID  string
-	CreatedAt  time.Time
-	ReleasedAt time.Time
 }
 
 type WorktreeRecord struct {
@@ -90,7 +64,6 @@ type Store struct {
 var (
 	ErrInvalidProjectKey      = errors.New("invalid project key")
 	ErrProjectKeyAlreadyInUse = errors.New("project key already in use")
-	ErrInvalidRuntimeLease    = errors.New("invalid runtime lease")
 
 	// ErrWorkspaceAlreadyBound is returned when a rebind target canonical root
 	// is already bound to a workspace. Callers match it via errors.Is.
@@ -104,13 +77,6 @@ var (
 	// ErrPathEscapesPersistenceRoot is returned when a resolved path escapes or
 	// lands outside the persistence root. Callers match it via errors.Is.
 	ErrPathEscapesPersistenceRoot = errors.New("path escapes persistence root")
-
-	// Runtime-lease validation sub-cases. Each chains ErrInvalidRuntimeLease so
-	// existing errors.Is(err, ErrInvalidRuntimeLease) checks keep matching while
-	// callers can match the specific failure via errors.Is.
-	ErrRuntimeLeaseSessionIDRequired = fmt.Errorf("%w: session id is required", ErrInvalidRuntimeLease)
-	ErrRuntimeLeaseIDRequired        = fmt.Errorf("%w: lease id is required", ErrInvalidRuntimeLease)
-	ErrRuntimeLeaseReleased          = fmt.Errorf("%w: runtime lease has been released", ErrInvalidRuntimeLease)
 
 	// Worktree record required-field validation sentinels.
 	ErrWorktreeIDRequired            = errors.New("worktree id is required")
@@ -128,6 +94,38 @@ type WorktreeWorkspaceMismatchError struct {
 
 func (e *WorktreeWorkspaceMismatchError) Error() string {
 	return fmt.Sprintf("worktree %q does not belong to workspace %q", e.WorktreeID, e.WorkspaceID)
+}
+
+type SessionExecutionTargetUpdate struct {
+	SessionID  string
+	Workspace  *SessionExecutionTargetUpdateWorkspace
+	Worktree   *SessionExecutionTargetUpdateWorktree
+	CwdRelpath string
+}
+
+type SessionExecutionTargetUpdateWorkspace struct {
+	ID string
+}
+
+type SessionExecutionTargetUpdateWorktree struct {
+	ID string
+}
+
+func SessionExecutionTargetUpdateFromReadModel(sessionID string, target clientui.SessionExecutionTarget) SessionExecutionTargetUpdate {
+	var workspace *SessionExecutionTargetUpdateWorkspace
+	if strings.TrimSpace(target.WorkspaceID) != "" {
+		workspace = &SessionExecutionTargetUpdateWorkspace{ID: target.WorkspaceID}
+	}
+	var worktree *SessionExecutionTargetUpdateWorktree
+	if target.Worktree != nil {
+		worktree = &SessionExecutionTargetUpdateWorktree{ID: target.Worktree.ID}
+	}
+	return SessionExecutionTargetUpdate{
+		SessionID:  sessionID,
+		Workspace:  workspace,
+		Worktree:   worktree,
+		CwdRelpath: target.CwdRelpath,
+	}
 }
 
 func (s *Store) PersistenceRoot() string {
@@ -407,27 +405,46 @@ func (s *Store) DeleteWorktreeRecordByID(ctx context.Context, worktreeID string)
 	return nil
 }
 
-func (s *Store) UpdateSessionExecutionTargetByID(ctx context.Context, sessionID string, workspaceID string, worktreeID string, cwdRelpath string) error {
+func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update SessionExecutionTargetUpdate) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	trimmedWorktreeID := strings.TrimSpace(worktreeID)
-	if trimmedWorktreeID != "" {
+	trimmedSessionID := strings.TrimSpace(update.SessionID)
+	if trimmedSessionID == "" {
+		return errors.New("session id is required")
+	}
+	workspaceID := sql.NullString{}
+	if update.Workspace != nil {
+		trimmedWorkspaceID := strings.TrimSpace(update.Workspace.ID)
+		if trimmedWorkspaceID == "" {
+			return errors.New("workspace id is required")
+		}
+		workspaceID = sql.NullString{String: trimmedWorkspaceID, Valid: true}
+	}
+	worktreeID := sql.NullString{}
+	if update.Worktree != nil {
+		if !workspaceID.Valid {
+			return errors.New("workspace id is required when worktree is selected")
+		}
+		trimmedWorktreeID := strings.TrimSpace(update.Worktree.ID)
+		if trimmedWorktreeID == "" {
+			return ErrWorktreeIDRequired
+		}
 		record, err := s.GetWorktreeRecordByID(ctx, trimmedWorktreeID)
 		if err != nil {
 			return err
 		}
-		if strings.TrimSpace(record.WorkspaceID) != trimmedWorkspaceID {
-			return &WorktreeWorkspaceMismatchError{WorktreeID: trimmedWorktreeID, WorkspaceID: trimmedWorkspaceID}
+		if strings.TrimSpace(record.WorkspaceID) != workspaceID.String {
+			return &WorktreeWorkspaceMismatchError{WorktreeID: trimmedWorktreeID, WorkspaceID: workspaceID.String}
 		}
+		worktreeID = sql.NullString{String: trimmedWorktreeID, Valid: true}
 	}
 	params := sqlitegen.UpdateSessionExecutionTargetByIDParams{
-		WorkspaceID:     sql.NullString{String: trimmedWorkspaceID, Valid: trimmedWorkspaceID != ""},
-		WorktreeID:      sql.NullString{String: trimmedWorktreeID, Valid: trimmedWorktreeID != ""},
-		CwdRelpath:      normalizeSessionCwdRelpath(cwdRelpath),
+		WorkspaceID:     workspaceID,
+		WorktreeID:      worktreeID,
+		CwdRelpath:      normalizeSessionCwdRelpath(update.CwdRelpath),
 		UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
-		SessionID:       strings.TrimSpace(sessionID),
+		SessionID:       trimmedSessionID,
 	}
 	rows, err := s.queries.UpdateSessionExecutionTargetByID(ctx, params)
 	if err != nil {
@@ -455,6 +472,9 @@ type ProjectSessionArtifact struct {
 	ArtifactRelpath string
 }
 
+type ProjectDeleteRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error)
+type WorkspaceUnlinkRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error)
+
 func projectDeleteBlockersFromCounts(counts sqlitegen.GetProjectDeleteBlockerCountsRow) []serverapi.ProjectDeleteBlocker {
 	blockers := []serverapi.ProjectDeleteBlocker{}
 	add := func(code string, message string, count int64) {
@@ -462,7 +482,6 @@ func projectDeleteBlockersFromCounts(counts sqlitegen.GetProjectDeleteBlockerCou
 			blockers = append(blockers, serverapi.ProjectDeleteBlocker{Code: code, Message: message, Count: int(count)})
 		}
 	}
-	add("active_sessions", "Project has sessions with in-flight steps.", counts.ActiveSessions)
 	add("non_terminal_tasks", "Project has active or non-terminal tasks.", counts.NonTerminalTasks)
 	add("active_runs", "Project has active workflow runs.", counts.ActiveRuns)
 	add("runnable_runs", "Project has runnable workflow runs.", counts.RunnableRuns)
@@ -470,6 +489,14 @@ func projectDeleteBlockersFromCounts(counts sqlitegen.GetProjectDeleteBlockerCou
 }
 
 func (s *Store) DeleteProject(ctx context.Context, projectID string, deleteArtifact func(ProjectSessionArtifact, bool) error) ([]serverapi.ProjectDeleteBlocker, error) {
+	return s.DeleteProjectWithPreflightBlockers(ctx, projectID, nil, deleteArtifact)
+}
+
+func (s *Store) DeleteProjectWithPreflightBlockers(ctx context.Context, projectID string, preflightBlockers []serverapi.ProjectDeleteBlocker, deleteArtifact func(ProjectSessionArtifact, bool) error) ([]serverapi.ProjectDeleteBlocker, error) {
+	return s.DeleteProjectWithRuntimeBlockers(ctx, projectID, preflightBlockers, nil, deleteArtifact)
+}
+
+func (s *Store) DeleteProjectWithRuntimeBlockers(ctx context.Context, projectID string, preflightBlockers []serverapi.ProjectDeleteBlocker, runtimeBlocker ProjectDeleteRuntimeBlocker, deleteArtifact func(ProjectSessionArtifact, bool) error) ([]serverapi.ProjectDeleteBlocker, error) {
 	if s == nil || s.db == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -490,11 +517,29 @@ func (s *Store) DeleteProject(ctx context.Context, projectID string, deleteArtif
 	if locked == 0 {
 		return nil, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
 	}
+	releaseRuntimeBlocker := func() {}
+	if runtimeBlocker != nil {
+		sessionIDs, err := q.ListProjectSessionIDs(ctx, trimmedProjectID)
+		if err != nil {
+			return nil, fmt.Errorf("list project sessions for runtime blockers: %w", err)
+		}
+		runtimeBlockers, release, err := runtimeBlocker(ctx, sessionIDs)
+		if release != nil {
+			releaseRuntimeBlocker = release
+			defer releaseRuntimeBlocker()
+		}
+		if err != nil {
+			return nil, err
+		}
+		preflightBlockers = append(append([]serverapi.ProjectDeleteBlocker{}, preflightBlockers...), runtimeBlockers...)
+	}
 	counts, err := q.GetProjectDeleteBlockerCounts(ctx, trimmedProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("count project delete blockers: %w", err)
 	}
-	if blockers := projectDeleteBlockersFromCounts(counts); len(blockers) > 0 {
+	blockers := append([]serverapi.ProjectDeleteBlocker{}, preflightBlockers...)
+	blockers = append(blockers, projectDeleteBlockersFromCounts(counts)...)
+	if len(blockers) > 0 {
 		return blockers, nil
 	}
 	artifacts, err := q.ListProjectSessionArtifacts(ctx, trimmedProjectID)
@@ -521,6 +566,13 @@ func (s *Store) DeleteProject(ctx context.Context, projectID string, deleteArtif
 	}
 	_ = deleteArtifact(ProjectSessionArtifact{ArtifactRelpath: filepath.ToSlash(filepath.Join("projects", trimmedProjectID, "sessions"))}, true)
 	return nil, nil
+}
+
+func (s *Store) ListProjectSessionIDs(ctx context.Context, projectID string) ([]string, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("metadata store is required")
+	}
+	return s.queries.ListProjectSessionIDs(ctx, strings.TrimSpace(projectID))
 }
 
 func (s *Store) ListSessionsTargetingWorktree(ctx context.Context, worktreeID string) ([]WorktreeSessionBlocker, error) {
@@ -736,6 +788,14 @@ func (s *Store) SetProjectDefaultWorkspace(ctx context.Context, projectID string
 }
 
 func (s *Store) UnlinkProjectWorkspace(ctx context.Context, projectID string, workspaceID string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
+	return s.UnlinkProjectWorkspaceWithPreflightBlockers(ctx, projectID, workspaceID, nil)
+}
+
+func (s *Store) UnlinkProjectWorkspaceWithPreflightBlockers(ctx context.Context, projectID string, workspaceID string, preflightBlockers []serverapi.ProjectWorkspaceUnlinkBlocker) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
+	return s.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, projectID, workspaceID, preflightBlockers, nil)
+}
+
+func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, projectID string, workspaceID string, preflightBlockers []serverapi.ProjectWorkspaceUnlinkBlocker, runtimeBlocker WorkspaceUnlinkRuntimeBlocker) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -762,6 +822,7 @@ func (s *Store) UnlinkProjectWorkspace(ctx context.Context, projectID string, wo
 	if err != nil {
 		return nil, err
 	}
+	blockers = append(append([]serverapi.ProjectWorkspaceUnlinkBlocker{}, preflightBlockers...), blockers...)
 	if len(blockers) > 0 {
 		return blockers, nil
 	}
@@ -771,6 +832,16 @@ func (s *Store) UnlinkProjectWorkspace(ctx context.Context, projectID string, wo
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	locked, err := q.AcquireWorkspaceUnlinkWriteLock(ctx, sqlitegen.AcquireWorkspaceUnlinkWriteLockParams{
+		ProjectID:   trimmedProjectID,
+		WorkspaceID: trimmedWorkspaceID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("lock workspace unlink: %w", err)
+	}
+	if locked == 0 {
+		return nil, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+	}
 	workspace, err = q.GetWorkspaceByID(ctx, trimmedWorkspaceID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -781,10 +852,27 @@ func (s *Store) UnlinkProjectWorkspace(ctx context.Context, projectID string, wo
 	if strings.TrimSpace(workspace.ProjectID) != trimmedProjectID {
 		return nil, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
 	}
+	releaseRuntimeBlocker := func() {}
+	if runtimeBlocker != nil {
+		sessionIDs, err := q.ListWorkspaceSessionIDs(ctx, sql.NullString{String: trimmedWorkspaceID, Valid: true})
+		if err != nil {
+			return nil, fmt.Errorf("list workspace sessions for runtime blockers: %w", err)
+		}
+		runtimeBlockers, release, err := runtimeBlocker(ctx, sessionIDs)
+		if release != nil {
+			releaseRuntimeBlocker = release
+			defer releaseRuntimeBlocker()
+		}
+		if err != nil {
+			return nil, err
+		}
+		preflightBlockers = append(append([]serverapi.ProjectWorkspaceUnlinkBlocker{}, preflightBlockers...), runtimeBlockers...)
+	}
 	blockers, err = workspaceUnlinkBlockersWithQueries(ctx, q, trimmedProjectID, workspace)
 	if err != nil {
 		return nil, err
 	}
+	blockers = append(append([]serverapi.ProjectWorkspaceUnlinkBlocker{}, preflightBlockers...), blockers...)
 	if len(blockers) > 0 {
 		return blockers, nil
 	}
@@ -799,6 +887,14 @@ func (s *Store) UnlinkProjectWorkspace(ctx context.Context, projectID string, wo
 		return nil, fmt.Errorf("commit workspace unlink tx: %w", err)
 	}
 	return nil, nil
+}
+
+func (s *Store) ListWorkspaceSessionIDs(ctx context.Context, workspaceID string) ([]string, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("metadata store is required")
+	}
+	trimmed := strings.TrimSpace(workspaceID)
+	return s.queries.ListWorkspaceSessionIDs(ctx, sql.NullString{String: trimmed, Valid: trimmed != ""})
 }
 
 func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workspace sqlitegen.Workspace) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
@@ -828,11 +924,6 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 		return nil, fmt.Errorf("count non-terminal workspace tasks: %w", err)
 	}
 	addCountBlocker("non_terminal_tasks", "Active or non-terminal tasks still depend on this workspace.", nonTerminalTasks)
-	activeSessions, err := q.CountActiveSessionsByWorkspace(ctx, workspaceID)
-	if err != nil {
-		return nil, fmt.Errorf("count active workspace sessions: %w", err)
-	}
-	addCountBlocker("active_sessions", "Active sessions still depend on this workspace.", activeSessions)
 	activeRuns, err := q.CountActiveTaskRunsByWorkspace(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count active workspace runs: %w", err)
@@ -1037,6 +1128,17 @@ func (s *Store) RetargetSessionWorkspace(ctx context.Context, sessionID string, 
 		return Binding{}, err
 	}
 	if err := opened.SetWorkspaceRoot(binding.CanonicalRoot); err != nil {
+		return Binding{}, err
+	}
+	if err := opened.SetWorktreeReminderState(nil); err != nil {
+		return Binding{}, err
+	}
+	if err := s.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{
+		SessionID:  trimmedSessionID,
+		Workspace:  &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		Worktree:   nil,
+		CwdRelpath: ".",
+	}); err != nil {
 		return Binding{}, err
 	}
 	return binding, nil
@@ -1703,90 +1805,6 @@ func (s *Store) SessionBelongsToProject(ctx context.Context, sessionID string, p
 	return strings.TrimSpace(row.ProjectID) == strings.TrimSpace(projectID), nil
 }
 
-func (s *Store) CreateRuntimeLease(ctx context.Context, sessionID string) (RuntimeLeaseRecord, error) {
-	if s == nil || s.queries == nil {
-		return RuntimeLeaseRecord{}, errors.New("metadata store is required")
-	}
-	now := time.Now().UTC()
-	record := RuntimeLeaseRecord{
-		LeaseID:   "lease-" + uuid.NewString(),
-		SessionID: strings.TrimSpace(sessionID),
-		CreatedAt: now,
-	}
-	if record.SessionID == "" {
-		return RuntimeLeaseRecord{}, errors.New("session id is required")
-	}
-	if err := s.queries.InsertRuntimeLease(ctx, sqlitegen.InsertRuntimeLeaseParams{
-		ID:              record.LeaseID,
-		SessionID:       record.SessionID,
-		CreatedAtUnixMs: record.CreatedAt.UnixMilli(),
-	}); err != nil {
-		return RuntimeLeaseRecord{}, fmt.Errorf("insert runtime lease: %w", err)
-	}
-	return record, nil
-}
-
-// ValidateRuntimeLease validates that a durable controller token exists,
-// belongs to the session, and has not been released. Active runtime ownership is
-// process-local and must stay out of SQLite.
-func (s *Store) ValidateRuntimeLease(ctx context.Context, sessionID string, leaseID string) (RuntimeLeaseRecord, error) {
-	if s == nil || s.queries == nil {
-		return RuntimeLeaseRecord{}, errors.New("metadata store is required")
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return RuntimeLeaseRecord{}, ErrRuntimeLeaseSessionIDRequired
-	}
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	if trimmedLeaseID == "" {
-		return RuntimeLeaseRecord{}, ErrRuntimeLeaseIDRequired
-	}
-	record, err := s.getRuntimeLeaseByID(ctx, trimmedLeaseID)
-	if err != nil {
-		return RuntimeLeaseRecord{}, err
-	}
-	if strings.TrimSpace(record.SessionID) != trimmedSessionID {
-		return RuntimeLeaseRecord{}, fmt.Errorf("%w: runtime lease %q does not belong to session %q", ErrInvalidRuntimeLease, trimmedLeaseID, trimmedSessionID)
-	}
-	if !record.ReleasedAt.IsZero() {
-		return RuntimeLeaseRecord{}, fmt.Errorf("runtime lease %q: %w", trimmedLeaseID, ErrRuntimeLeaseReleased)
-	}
-	return record, nil
-}
-
-func (s *Store) ReleaseRuntimeLease(ctx context.Context, sessionID string, leaseID string) (RuntimeLeaseRecord, error) {
-	if s == nil || s.queries == nil {
-		return RuntimeLeaseRecord{}, errors.New("metadata store is required")
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return RuntimeLeaseRecord{}, ErrRuntimeLeaseSessionIDRequired
-	}
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	if trimmedLeaseID == "" {
-		return RuntimeLeaseRecord{}, ErrRuntimeLeaseIDRequired
-	}
-	record, err := s.getRuntimeLeaseByID(ctx, trimmedLeaseID)
-	if err != nil {
-		return RuntimeLeaseRecord{}, err
-	}
-	if strings.TrimSpace(record.SessionID) != trimmedSessionID {
-		return RuntimeLeaseRecord{}, fmt.Errorf("%w: runtime lease %q does not belong to session %q", ErrInvalidRuntimeLease, trimmedLeaseID, trimmedSessionID)
-	}
-	if !record.ReleasedAt.IsZero() {
-		return record, nil
-	}
-	releasedAt := time.Now().UTC()
-	if err := s.queries.ReleaseRuntimeLease(ctx, sqlitegen.ReleaseRuntimeLeaseParams{
-		LeaseID:          trimmedLeaseID,
-		SessionID:        trimmedSessionID,
-		ReleasedAtUnixMs: releasedAt.UnixMilli(),
-	}); err != nil {
-		return RuntimeLeaseRecord{}, fmt.Errorf("release runtime lease: %w", err)
-	}
-	return s.getRuntimeLeaseByID(ctx, trimmedLeaseID)
-}
-
 func (s *Store) ResolvePersistedSession(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error) {
 	if s == nil || s.queries == nil {
 		return session.PersistedSessionRecord{}, errors.New("metadata store is required")
@@ -1819,6 +1837,13 @@ func (s *Store) ImportSessionSnapshot(ctx context.Context, snapshot session.Pers
 func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
+	}
+	if snapshot.Meta.Continuation != nil {
+		continuation, err := session.NormalizeContinuationContext(*snapshot.Meta.Continuation)
+		if err != nil {
+			return fmt.Errorf("validate session continuation: %w", err)
+		}
+		snapshot.Meta.Continuation = continuation
 	}
 	binding, err := s.EnsureWorkspaceBinding(ctx, snapshot.Meta.WorkspaceRoot)
 	if err != nil {
@@ -1866,18 +1891,16 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	metadataJSON, err := marshalJSON(map[string]any{
 		"workspace_root":                     snapshot.Meta.WorkspaceRoot,
 		"workspace_container":                snapshot.Meta.WorkspaceContainer,
+		"prompt_cache_lineage_generation":    snapshot.Meta.PromptCacheLineageGeneration,
 		"headless_active":                    snapshot.Meta.HeadlessActive,
 		"compaction_soon_reminder_issued":    snapshot.Meta.CompactionSoonReminderIssued,
 		"generated_recovered_warning_issued": snapshot.Meta.GeneratedRecoveredWarningIssued,
 		"worktree_reminder":                  persistedWorktreeReminder,
 		"goal":                               snapshot.Meta.Goal,
+		"workflow_session":                   snapshot.Meta.WorkflowSession,
 	})
 	if err != nil {
 		return err
-	}
-	inFlightStep := int64(0)
-	if snapshot.Meta.InFlightStep {
-		inFlightStep = 1
 	}
 	launchVisible := int64(0)
 	if sessionLaunchVisible(snapshot.Meta) {
@@ -1897,7 +1920,6 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		UpdatedAtUnixMs:    snapshot.Meta.UpdatedAt.UTC().UnixMilli(),
 		LastSequence:       snapshot.Meta.LastSequence,
 		ModelRequestCount:  snapshot.Meta.ModelRequestCount,
-		InFlightStep:       inFlightStep,
 		LaunchVisible:      launchVisible,
 		CwdRelpath:         cwdRelpath,
 		ContinuationJson:   continuationJSON,
@@ -1908,7 +1930,7 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 }
 
 func availabilityForPath(path string) string {
-	if _, err := statPathForAvailability(path); err != nil {
+	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "missing"
 		}
@@ -1953,17 +1975,6 @@ func sessionLaunchVisible(meta session.Meta) bool {
 	return meta.ModelRequestCount > 0
 }
 
-func (s *Store) getRuntimeLeaseByID(ctx context.Context, leaseID string) (RuntimeLeaseRecord, error) {
-	row, err := s.queries.GetRuntimeLeaseByID(ctx, strings.TrimSpace(leaseID))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return RuntimeLeaseRecord{}, fmt.Errorf("%w: runtime lease %q was not found", ErrInvalidRuntimeLease, strings.TrimSpace(leaseID))
-		}
-		return RuntimeLeaseRecord{}, fmt.Errorf("get runtime lease: %w", err)
-	}
-	return runtimeLeaseRecordFromRow(row), nil
-}
-
 func marshalJSON(v any) (string, error) {
 	if v == nil {
 		return "{}", nil
@@ -1990,21 +2001,24 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 	metadataPayload := struct {
 		WorkspaceRoot                   string                         `json:"workspace_root"`
 		WorkspaceContainer              string                         `json:"workspace_container"`
+		PromptCacheLineageGeneration    int                            `json:"prompt_cache_lineage_generation"`
 		HeadlessActive                  bool                           `json:"headless_active"`
 		CompactionSoonReminderIssued    bool                           `json:"compaction_soon_reminder_issued"`
 		GeneratedRecoveredWarningIssued bool                           `json:"generated_recovered_warning_issued"`
 		WorktreeReminder                *session.WorktreeReminderState `json:"worktree_reminder"`
 		Goal                            *session.GoalState             `json:"goal"`
+		WorkflowSession                 *session.WorkflowSessionState  `json:"workflow_session"`
 	}{}
 	if err := unmarshalStoredJSON(row.MetadataJson, &metadataPayload); err != nil {
 		return session.Meta{}, fmt.Errorf("decode session metadata json: %w", err)
 	}
-	continuation := &session.ContinuationContext{}
-	if err := unmarshalStoredJSON(row.ContinuationJson, continuation); err != nil {
+	var decodedContinuation session.ContinuationContext
+	if err := unmarshalStoredJSON(row.ContinuationJson, &decodedContinuation); err != nil {
 		return session.Meta{}, fmt.Errorf("decode continuation json: %w", err)
 	}
-	if strings.TrimSpace(continuation.OpenAIBaseURL) == "" && strings.TrimSpace(continuation.AgentRole) == "" {
-		continuation = nil
+	continuation, err := session.NormalizeContinuationContext(decodedContinuation)
+	if err != nil {
+		return session.Meta{}, fmt.Errorf("validate continuation json: %w", err)
 	}
 	locked := &session.LockedContract{}
 	if err := unmarshalStoredJSON(row.LockedJson, locked); err != nil {
@@ -2043,12 +2057,13 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		UpdatedAt:                       timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		LastSequence:                    row.LastSequence,
 		ModelRequestCount:               row.ModelRequestCount,
-		InFlightStep:                    row.InFlightStep != 0,
+		PromptCacheLineageGeneration:    metadataPayload.PromptCacheLineageGeneration,
 		HeadlessActive:                  metadataPayload.HeadlessActive,
 		CompactionSoonReminderIssued:    metadataPayload.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: metadataPayload.GeneratedRecoveredWarningIssued,
 		WorktreeReminder:                metadataPayload.WorktreeReminder,
 		Goal:                            metadataPayload.Goal,
+		WorkflowSession:                 metadataPayload.WorkflowSession,
 		UsageState:                      usageState,
 		Locked:                          locked,
 	}, nil
@@ -2110,17 +2125,26 @@ func projectHomeSummaryFromRow(row sqlitegen.ListProjectHomeSummariesRow) server
 }
 
 func sessionExecutionTargetFromRow(row sqlitegen.GetSessionExecutionTargetByIDRow) clientui.SessionExecutionTarget {
-	worktreeID := ""
-	if row.WorktreeID.Valid {
-		worktreeID = row.WorktreeID.String
-	}
 	workspaceName := displayNameForPath(row.WorkspaceRoot)
 	if strings.TrimSpace(row.WorkspaceID) == "" && strings.TrimSpace(row.WorkspaceSnapshotName) != "" {
 		workspaceName = strings.TrimSpace(row.WorkspaceSnapshotName)
 	}
 	baseRoot := strings.TrimSpace(row.WorkspaceRoot)
-	if strings.TrimSpace(row.WorktreeRoot) != "" {
-		baseRoot = strings.TrimSpace(row.WorktreeRoot)
+	var worktree *clientui.SessionExecutionWorktreeTarget
+	if row.WorktreeID.Valid {
+		worktreeRoot := ""
+		if row.WorktreeRoot.Valid {
+			worktreeRoot = row.WorktreeRoot.String
+		}
+		worktree = &clientui.SessionExecutionWorktreeTarget{
+			ID:           row.WorktreeID.String,
+			Name:         displayNameForPath(worktreeRoot),
+			Root:         worktreeRoot,
+			Availability: availabilityForOptionalPath(worktreeRoot),
+		}
+		if strings.TrimSpace(worktreeRoot) != "" {
+			baseRoot = strings.TrimSpace(worktreeRoot)
+		}
 	}
 	cwdRelpath := normalizeSessionCwdRelpath(row.CwdRelpath)
 	effectiveWorkdir := effectiveWorkdirWithinRoot(baseRoot, cwdRelpath)
@@ -2129,21 +2153,9 @@ func sessionExecutionTargetFromRow(row sqlitegen.GetSessionExecutionTargetByIDRo
 		WorkspaceName:         workspaceName,
 		WorkspaceRoot:         row.WorkspaceRoot,
 		WorkspaceAvailability: availabilityForOptionalPath(row.WorkspaceRoot),
-		WorktreeID:            worktreeID,
-		WorktreeName:          displayNameForPath(row.WorktreeRoot),
-		WorktreeRoot:          row.WorktreeRoot,
-		WorktreeAvailability:  availabilityForOptionalPath(row.WorktreeRoot),
+		Worktree:              worktree,
 		CwdRelpath:            cwdRelpath,
 		EffectiveWorkdir:      effectiveWorkdir,
-	}
-}
-
-func runtimeLeaseRecordFromRow(row sqlitegen.RuntimeLease) RuntimeLeaseRecord {
-	return RuntimeLeaseRecord{
-		LeaseID:    row.ID,
-		SessionID:  row.SessionID,
-		CreatedAt:  timeFromStoredTimestamp(row.CreatedAtUnixMs),
-		ReleasedAt: timeFromStoredTimestamp(row.ReleasedAtUnixMs),
 	}
 }
 

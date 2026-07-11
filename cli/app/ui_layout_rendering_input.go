@@ -36,11 +36,7 @@ func (l uiViewLayout) renderInputLines(width int, style uiStyles) []string {
 		return l.renderAskInputLines(width, style)
 	}
 
-	lineStyle := style.input
-	if m.isInputSubmitLocked() {
-		lineStyle = style.inputDisabled
-	}
-	return renderFramedEditableInputLines(width, inputContentLineLimit(l.effectiveHeight()), l.mainInputRenderSpec(), lineStyle, l.inputBorderStyle())
+	return renderFramedEditableInputLines(width, inputContentLineLimit(l.effectiveHeight()), l.mainInputRenderSpec(), style.input, l.inputBorderStyle())
 }
 
 func (l uiViewLayout) renderAskInputLines(width int, style uiStyles) []string {
@@ -88,9 +84,6 @@ func renderRecommendedAskLine(text string, mutedSuffix string, width int, recomm
 }
 
 func (l uiViewLayout) mainInputPrefix() string {
-	if l.model.isInputSubmitLocked() {
-		return "⨯ "
-	}
 	return "› "
 }
 
@@ -108,7 +101,7 @@ func (l uiViewLayout) inputPaneCursor(width int) uiInputFieldCursor {
 		return uiInputFieldCursor{}
 	}
 	inputState := l.model.inputModeState()
-	if inputState.InputLocked || inputState.Mode == uiInputModeProcessList || inputState.Mode == uiInputModeWorktree || inputState.Mode == uiInputModeRollbackSelection {
+	if inputState.Mode == uiInputModeProcessList || inputState.Mode == uiInputModeWorktree || inputState.Mode == uiInputModeRollbackSelection {
 		return uiInputFieldCursor{}
 	}
 	if inputState.ShowsAskInput {
@@ -124,7 +117,7 @@ func (l uiViewLayout) inputPaneCursor(width int) uiInputFieldCursor {
 		return uiInputFieldCursor{}
 	}
 	cursorLine, cursorCol = normalizeInputFieldCursorCell(cursorLine, cursorCol, width, len(visible))
-	return uiInputFieldCursor{Visible: true, Row: cursorLine + 1, Col: cursorCol}
+	return uiInputFieldCursor{Visible: true, Row: framedInputContentCursorRow(cursorLine), Col: cursorCol}
 }
 
 func (l uiViewLayout) wrappedAskPromptLines(width int) ([]wrappedAskPromptLine, int) {
@@ -235,7 +228,11 @@ func (l uiViewLayout) askInputPaneCursor(width int) uiInputFieldCursor {
 		cursorCol = lines[cursorLine].CursorCol
 	}
 	cursorLine, cursorCol = normalizeInputFieldCursorCell(cursorLine, cursorCol, width, len(lines))
-	return uiInputFieldCursor{Visible: true, Row: cursorLine + 1, Col: cursorCol}
+	return uiInputFieldCursor{Visible: true, Row: framedInputContentCursorRow(cursorLine), Col: cursorCol}
+}
+
+func framedInputContentCursorRow(contentRow int) int {
+	return contentRow + 2
 }
 
 func normalizeInputFieldCursorCell(row int, col int, width int, lineCount int) (int, int) {

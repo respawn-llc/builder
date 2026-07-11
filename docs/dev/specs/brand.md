@@ -1,6 +1,9 @@
 Authoritative branding guidelines.
 
 - The ASCII art of the banner is using the "Big money NW" font, diagonal gradient using primary and secondary colors.
+- UI direction is clean, elegant, effective, island-based, and productivity-focused.
+- Island-style rounded surfaces render over glass material with readable contrast in light/dark themes.
+- Theme supports dark, light, and config override; system/auto otherwise.
 
 Official color palette of the app: 
 
@@ -17,3 +20,5 @@ Fonts:
 - Main: Montserrat
 - Monospace: Monaspace Neon
 - Heading: Montserrat alternates.
+
+

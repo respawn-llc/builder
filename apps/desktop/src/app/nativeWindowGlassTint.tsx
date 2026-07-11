@@ -28,7 +28,7 @@ export function useNativeWindowGlassTintSync(nativeBridge: NativeBridge): void {
     });
 
     const systemTheme =
-      typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: light)") : null;
+      window.matchMedia instanceof Function ? window.matchMedia("(prefers-color-scheme: light)") : null;
     systemTheme?.addEventListener("change", syncTint);
     return () => {
       observer.disconnect();

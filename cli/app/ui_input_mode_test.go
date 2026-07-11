@@ -79,15 +79,11 @@ func TestInputModeStateExposesRenderingAndInteractionFlags(t *testing.T) {
 	m := &uiModel{
 		uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeRollbackEdit}},
 	}
-	m.setBusy(true)
-	m.setInputSubmitLocked(true)
+	m.setRuntimeActivityBusyForTest(true)
 	state := m.inputModeState()
 
 	if state.Mode != uiInputModeRollbackEdit {
 		t.Fatalf("mode = %q, want %q", state.Mode, uiInputModeRollbackEdit)
-	}
-	if !state.InputLocked {
-		t.Fatal("expected locked input state")
 	}
 	if !state.Busy {
 		t.Fatal("expected busy input state")

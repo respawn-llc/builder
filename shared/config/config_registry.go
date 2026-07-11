@@ -66,6 +66,7 @@ type settingDocOptions struct {
 	omitInTOML                   bool
 	resolveRelativeToSettingsDir bool
 	defaultValue                 func(settingsState) any
+	allowEmptyString             bool
 }
 
 type scalarSetting[T any] struct {
@@ -85,6 +86,23 @@ type toolsSetting struct{}
 type skillsSetting struct{}
 type subagentsSetting struct{}
 
+type subagentRoleApplicableSetting interface {
+	appliesToSubagentRole() bool
+}
+
+type rootOnlyBoolSetting struct {
+	scalarSetting[bool]
+}
+
+func (rootOnlyBoolSetting) appliesToSubagentRole() bool {
+	return false
+}
+
+func settingAppliesToSubagentRole(setting registrySetting) bool {
+	scoped, ok := setting.(subagentRoleApplicableSetting)
+	return !ok || scoped.appliesToSubagentRole()
+}
+
 var configRegistry = newSettingsRegistry()
 
 func newSettingsRegistry() settingsRegistry {
@@ -102,7 +120,7 @@ func newSettingsRegistry() settingsRegistry {
 			"KENT_THINKING_LEVEL",
 			func(opts LoadOptions) (string, bool, error) { return trimmedCLIString(opts.ThinkingLevel) },
 			nil,
-			settingDocOptions{}),
+			settingDocOptions{allowEmptyString: true}),
 		newStringSetting("model_verbosity", defaultModelVerbosity,
 			func(state *settingsState, value ModelVerbosity) { state.Settings.ModelVerbosity = value },
 			func(state settingsState) ModelVerbosity { return state.Settings.ModelVerbosity },
@@ -252,6 +270,15 @@ func newSettingsRegistry() settingsRegistry {
 			},
 			"KENT_PROVIDER_CAPABILITIES_SUPPORTS_SERVER_SIDE_CONTEXT_EDIT",
 			settingDocOptions{commented: true}),
+		newBoolSetting("provider_capabilities.supports_provider_verbosity", false,
+			func(state *settingsState, value bool) {
+				state.Settings.ProviderCapabilities.SupportsProviderVerbosity = value
+			},
+			func(state settingsState) bool {
+				return state.Settings.ProviderCapabilities.SupportsProviderVerbosity
+			},
+			"KENT_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY",
+			settingDocOptions{commented: true}),
 		newBoolSetting("provider_capabilities.is_openai_first_party", false,
 			func(state *settingsState, value bool) { state.Settings.ProviderCapabilities.IsOpenAIFirstParty = value },
 			func(state settingsState) bool { return state.Settings.ProviderCapabilities.IsOpenAIFirstParty },
@@ -367,6 +394,12 @@ func newSettingsRegistry() settingsRegistry {
 			nil,
 			nil,
 			settingDocOptions{}),
+		newIntSetting("worktrees.setup_timeout_seconds", defaultWorktreeSetupTimeoutSeconds,
+			func(state *settingsState, value int) { state.Settings.Worktrees.SetupTimeoutSeconds = value },
+			func(state settingsState) int { return state.Settings.Worktrees.SetupTimeoutSeconds },
+			"",
+			nil,
+			settingDocOptions{}),
 		newStringSetting("workflow.completion_mode", defaultWorkflowCompletionMode,
 			func(state *settingsState, value WorkflowCompletionMode) {
 				state.Settings.Workflow.CompletionMode = value
@@ -390,6 +423,11 @@ func newSettingsRegistry() settingsRegistry {
 			"KENT_WORKFLOW_MAX_INVALID_COMPLETION_ATTEMPTS",
 			nil,
 			settingDocOptions{}),
+		rootOnlyBoolSetting{newBoolSetting("workflow.subagents", defaultWorkflowSubagents,
+			func(state *settingsState, value bool) { state.Settings.Workflow.Subagents = value },
+			func(state settingsState) bool { return state.Settings.Workflow.Subagents },
+			"",
+			settingDocOptions{})},
 		newStringSetting("reviewer.frequency", defaultReviewerFrequency,
 			func(state *settingsState, value string) { state.Settings.Reviewer.Frequency = value },
 			func(state settingsState) string { return state.Settings.Reviewer.Frequency },
@@ -416,7 +454,8 @@ func newSettingsRegistry() settingsRegistry {
 			nil,
 			nil,
 			settingDocOptions{
-				omitInTOML: true,
+				omitInTOML:       true,
+				allowEmptyString: true,
 				defaultValue: func(settingsState) any {
 					return "<inherits thinking_level when unset>"
 				},
@@ -544,6 +583,15 @@ func newSettingsRegistry() settingsRegistry {
 				return state.Settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit
 			},
 			"KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_SERVER_SIDE_CONTEXT_EDIT",
+			settingDocOptions{commented: true}),
+		newBoolSetting("reviewer.provider_capabilities.supports_provider_verbosity", false,
+			func(state *settingsState, value bool) {
+				state.Settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity = value
+			},
+			func(state settingsState) bool {
+				return state.Settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity
+			},
+			"KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY",
 			settingDocOptions{commented: true}),
 		newBoolSetting("reviewer.provider_capabilities.is_openai_first_party", false,
 			func(state *settingsState, value bool) {
@@ -735,7 +783,11 @@ func newStringSetting[T ~string](
 		get:                get,
 		transformFileValue: transformFileValue,
 		decodeFile: func(raw settingsFile, path []string) (T, bool, error) {
-			value, ok, err := lookupFileString(raw, path)
+			lookup := lookupFileString
+			if doc.allowEmptyString {
+				lookup = lookupFileStringAllowEmpty
+			}
+			value, ok, err := lookup(raw, path)
 			if err != nil || !ok {
 				return *new(T), ok, err
 			}
@@ -1018,7 +1070,7 @@ func (skillsSetting) applyFile(raw settingsFile, settingsPath string, state *set
 	seenNormalized := make(map[string]string, len(keys))
 	for _, key := range keys {
 		rawValue := table[key]
-		normalized := strings.ToLower(strings.Join(strings.Fields(key), " "))
+		normalized := NormalizeSkillName(key)
 		if normalized == "" {
 			return fmt.Errorf("invalid skills key in %s: %q", settingsPath, key)
 		}
@@ -1036,9 +1088,15 @@ func (skillsSetting) applyFile(raw settingsFile, settingsPath string, state *set
 	return nil
 }
 
+// NormalizeSkillName returns the canonical key used for skill toggles and
+// runtime/catalog disabled-skill matching.
+func NormalizeSkillName(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(name), " "))
+}
+
 func (skillsSetting) registerFileKeys(tree *fileKeyTree) {
 	tree.allowDynamicChildren([]string{"skills"}, func(key string) bool {
-		return strings.ToLower(strings.Join(strings.Fields(key), " ")) != ""
+		return NormalizeSkillName(key) != ""
 	}, nil)
 }
 
@@ -1084,17 +1142,7 @@ func registerSubagentFileKeys(tree *fileKeyTree, settings []registrySetting) {
 	if tree == nil {
 		return
 	}
-	template := newFileKeyTree()
-	template.allowPath([]string{"description"})
-	template.allowPath([]string{"agent_callable"})
-	for _, setting := range settings {
-		if _, ok := setting.(subagentsSetting); ok {
-			continue
-		}
-		if fileKeySetting, ok := setting.(fileKeyRegisteringSetting); ok {
-			fileKeySetting.registerFileKeys(template)
-		}
-	}
+	template := subagentRoleMetadataFileKeyTree(settings)
 	tree.allowDynamicChildren([]string{"subagents"}, func(key string) bool {
 		return IsSubagentRoleNameShape(key)
 	}, template)
@@ -1115,10 +1163,17 @@ func parseSubagentRole(raw settingsFile, settingsPath string, roleKey string) (S
 	if err != nil {
 		return SubagentRole{}, fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, err)
 	}
+	workflowSubagent, workflowSubagentSet, err := parseSubagentWorkflowSubagent(raw)
+	if err != nil {
+		return SubagentRole{}, fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, err)
+	}
 	roleState := configRegistry.defaultState()
 	roleSources := configRegistry.defaultSourceMap()
 	for _, setting := range configRegistry.settings {
 		if _, ok := setting.(subagentsSetting); ok {
+			continue
+		}
+		if !settingAppliesToSubagentRole(setting) {
 			continue
 		}
 		if err := setting.applyFile(raw, settingsPath, &roleState, roleSources); err != nil {
@@ -1149,20 +1204,30 @@ func parseSubagentRole(raw settingsFile, settingsPath string, roleKey string) (S
 	}
 	roleState.Settings.Subagents = nil
 	return SubagentRole{
-		Settings:         roleState.Settings,
-		Sources:          explicitSources,
-		Description:      description,
-		AgentCallable:    agentCallable,
-		AgentCallableSet: agentCallableSet,
+		Settings:            roleState.Settings,
+		Sources:             explicitSources,
+		Description:         description,
+		AgentCallable:       agentCallable,
+		AgentCallableSet:    agentCallableSet,
+		WorkflowSubagent:    workflowSubagent,
+		WorkflowSubagentSet: workflowSubagentSet,
 	}, nil
 }
 
 func subagentRoleKeyTree(settings []registrySetting) *fileKeyTree {
+	return subagentRoleMetadataFileKeyTree(settings)
+}
+
+func subagentRoleMetadataFileKeyTree(settings []registrySetting) *fileKeyTree {
 	tree := newFileKeyTree()
 	tree.allowPath([]string{"description"})
 	tree.allowPath([]string{"agent_callable"})
+	tree.allowPath([]string{"workflow_subagent"})
 	for _, setting := range settings {
 		if _, ok := setting.(subagentsSetting); ok {
+			continue
+		}
+		if !settingAppliesToSubagentRole(setting) {
 			continue
 		}
 		if fileKeySetting, ok := setting.(fileKeyRegisteringSetting); ok {
@@ -1189,7 +1254,15 @@ func parseSubagentDescription(raw settingsFile) (string, error) {
 }
 
 func parseSubagentAgentCallable(raw settingsFile) (bool, bool, error) {
-	value, ok, err := lookupFileBool(raw, []string{"agent_callable"})
+	return parseSubagentBooleanMetadata(raw, "agent_callable")
+}
+
+func parseSubagentWorkflowSubagent(raw settingsFile) (bool, bool, error) {
+	return parseSubagentBooleanMetadata(raw, "workflow_subagent")
+}
+
+func parseSubagentBooleanMetadata(raw settingsFile, key string) (bool, bool, error) {
+	value, ok, err := lookupFileBool(raw, []string{key})
 	if err != nil {
 		return false, false, err
 	}
@@ -1302,6 +1375,18 @@ func lookupFileString(raw settingsFile, path []string) (string, bool, error) {
 	return trimmed, true, nil
 }
 
+func lookupFileStringAllowEmpty(raw settingsFile, path []string) (string, bool, error) {
+	value, ok, err := lookupFileValue(raw, path)
+	if err != nil || !ok {
+		return "", ok, err
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false, &SettingsKeyTypeError{Key: strings.Join(path, "."), ExpectedType: "string"}
+	}
+	return strings.TrimSpace(text), true, nil
+}
+
 func lookupFileBool(raw settingsFile, path []string) (bool, bool, error) {
 	value, ok, err := lookupFileValue(raw, path)
 	if err != nil || !ok {
@@ -1372,7 +1457,7 @@ func toolSourceKey(id toolspec.ID) string {
 }
 
 func skillSourceKey(name string) string {
-	return "skills." + strings.ToLower(strings.Join(strings.Fields(name), " "))
+	return "skills." + NormalizeSkillName(name)
 }
 
 func defaultEnabledToolMap() map[toolspec.ID]bool {

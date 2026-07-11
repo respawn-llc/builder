@@ -24,7 +24,7 @@ function randomUUID(): string {
 }
 
 function randomUUIDFrom(crypto: Partial<Pick<Crypto, "randomUUID">>): string {
-  if (typeof crypto.randomUUID === "function") {
+  if (crypto.randomUUID !== undefined) {
     return crypto.randomUUID();
   }
   throw new Error("crypto.randomUUID is required to create workflow topology ids");

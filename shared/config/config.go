@@ -27,14 +27,16 @@ type WorkflowCompletionMode string
 type SleepPreventionMode string
 
 type WorktreeSettings struct {
-	BaseDir     string
-	SetupScript string
+	BaseDir             string
+	SetupScript         string
+	SetupTimeoutSeconds int
 }
 
 type WorkflowSettings struct {
 	CompletionMode               WorkflowCompletionMode
 	Concurrency                  int
 	MaxInvalidCompletionAttempts int
+	Subagents                    bool
 }
 
 const (
@@ -91,11 +93,13 @@ type ShellSettings struct {
 }
 
 type SubagentRole struct {
-	Settings         Settings
-	Sources          map[string]string
-	Description      string
-	AgentCallable    bool
-	AgentCallableSet bool
+	Settings            Settings
+	Sources             map[string]string
+	Description         string
+	AgentCallable       bool
+	AgentCallableSet    bool
+	WorkflowSubagent    bool
+	WorkflowSubagentSet bool
 }
 
 type SystemPromptFileScope string
@@ -164,6 +168,7 @@ type ProviderCapabilitiesOverride struct {
 	SupportsNativeWebSearch        bool
 	SupportsReasoningEncrypted     bool
 	SupportsServerSideContextEdit  bool
+	SupportsProviderVerbosity      bool
 	IsOpenAIFirstParty             bool
 }
 

@@ -24,23 +24,6 @@ func TestRenderSystemPromptTemplateUsesTypedFields(t *testing.T) {
 	}
 }
 
-func TestSystemPromptRendersDeprecatedBuilderCommandAlias(t *testing.T) {
-	// Custom prompts migrated from Builder may still use the deprecated
-	// {{.BuilderCommand}} placeholder; it must render identically to
-	// {{.LaunchCommand}} in both the default-prompt and explicit-default paths
-	// so those sessions keep starting through the rebrand window.
-	for _, defaultPrompt := range []string{"", "base default prompt"} {
-		alias := renderSystemPromptTemplate("cmd={{.BuilderCommand}}", SystemPromptTemplateArgs{}, defaultPrompt)
-		launch := renderSystemPromptTemplate("cmd={{.LaunchCommand}}", SystemPromptTemplateArgs{}, defaultPrompt)
-		if alias != launch {
-			t.Fatalf("BuilderCommand alias = %q, want identical to LaunchCommand %q (defaultPrompt=%q)", alias, launch, defaultPrompt)
-		}
-		if !strings.Contains(alias, LaunchCommand()) {
-			t.Fatalf("expected alias render to contain launch command, got %q", alias)
-		}
-	}
-}
-
 func TestCustomSystemPromptResolvesDefaultSystemPromptPlaceholder(t *testing.T) {
 	defaultPrompt := BaseSystemPrompt(SystemPromptTemplateArgs{
 		EstimatedToolCallsForContext: 123,
@@ -125,6 +108,23 @@ func TestCustomSystemPromptRejectsRemovedManualEditInstructionPlaceholder(t *tes
 	}
 	if placeholderErr.Placeholder != "ManualEditInstruction" {
 		t.Fatalf("expected placeholder ManualEditInstruction, got %q", placeholderErr.Placeholder)
+	}
+}
+
+func TestCustomSystemPromptRejectsRemovedBuilderCommandPlaceholder(t *testing.T) {
+	_, err := RenderCustomSystemPrompt("{{.BuilderCommand}}", false, SystemPromptTemplateArgs{
+		EstimatedToolCallsForContext: 123,
+		EditingToolName:              "patch",
+	})
+	if err == nil {
+		t.Fatal("expected removed BuilderCommand placeholder to fail")
+	}
+	var placeholderErr *UnknownTemplatePlaceholderError
+	if !errors.As(err, &placeholderErr) {
+		t.Fatalf("expected UnknownTemplatePlaceholderError, got %v", err)
+	}
+	if placeholderErr.Placeholder != "BuilderCommand" {
+		t.Fatalf("expected placeholder BuilderCommand, got %q", placeholderErr.Placeholder)
 	}
 }
 
@@ -352,6 +352,49 @@ func TestRenderGoalNudgePrompt(t *testing.T) {
 	}
 	if strings.Contains(rendered, "{{") {
 		t.Fatalf("expected goal nudge placeholders rendered, got %q", rendered)
+	}
+}
+
+func TestRenderWorkflowNudgePrompt(t *testing.T) {
+	rendered, err := RenderWorkflowNudgePrompt(
+		"transition is required",
+		"Call complete_node with the selected transition.",
+		"Ship workflow execution.",
+		"Continue working toward the active session goal.",
+	)
+	if err != nil {
+		t.Fatalf("RenderWorkflowNudgePrompt: %v", err)
+	}
+	for _, want := range []string{
+		"transition is required",
+		"Call complete_node with the selected transition.",
+		"Ship workflow execution.",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected workflow nudge to substitute %q, got %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "{{") {
+		t.Fatalf("expected workflow nudge placeholders rendered, got %q", rendered)
+	}
+}
+
+func TestRenderWorkflowNudgePromptRequiresReasonAndNodeCompletionInstructions(t *testing.T) {
+	tests := []struct {
+		name         string
+		reason       string
+		instructions string
+	}{
+		{name: "missing rejection reason", instructions: "Call complete_node."},
+		{name: "missing node completion instructions", reason: "transition is required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := RenderWorkflowNudgePrompt(tt.reason, tt.instructions, "", ""); err == nil {
+				t.Fatal("RenderWorkflowNudgePrompt accepted an incomplete nudge")
+			}
+		})
 	}
 }
 

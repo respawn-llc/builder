@@ -12,15 +12,16 @@ import (
 )
 
 type workflowRunMetadata struct {
-	ContextMode            string                       `json:"context_mode"`
-	ContextSource          workflow.ContextSource       `json:"context_source,omitempty"`
-	SourceRunID            string                       `json:"source_run_id,omitempty"`
-	SourceSessionID        string                       `json:"source_session_id,omitempty"`
-	NodeOutputValues       map[string]map[string]string `json:"node_output_values,omitempty"`
-	PromptTemplate         string                       `json:"prompt_template,omitempty"`
-	Parameters             []workflow.Parameter         `json:"parameters,omitempty"`
-	PriorParameterValues   map[string]map[string]string `json:"prior_parameter_values,omitempty"`
-	TargetRunStartSnapshot *runStartSnapshot            `json:"target_run_start_snapshot,omitempty"`
+	ContextMode             string                       `json:"context_mode"`
+	ContextSource           workflow.ContextSource       `json:"context_source,omitempty"`
+	ContextResolutionFrozen bool                         `json:"context_resolution_frozen,omitempty"`
+	SourceRunID             string                       `json:"source_run_id,omitempty"`
+	SourceSessionID         string                       `json:"source_session_id,omitempty"`
+	NodeOutputValues        map[string]map[string]string `json:"node_output_values,omitempty"`
+	PromptTemplate          string                       `json:"prompt_template,omitempty"`
+	Parameters              []workflow.Parameter         `json:"parameters,omitempty"`
+	PriorParameterValues    map[string]map[string]string `json:"prior_parameter_values,omitempty"`
+	TargetRunStartSnapshot  *runStartSnapshot            `json:"target_run_start_snapshot,omitempty"`
 }
 
 type resolvedContextSourceRun struct {
@@ -28,74 +29,100 @@ type resolvedContextSourceRun struct {
 	sessionID string
 }
 
-func resolvedContextSourceRunFromMetadata(ctx context.Context, q *sqlitegen.Queries, metadata workflowRunMetadata) (resolvedContextSourceRun, bool, error) {
-	runID := strings.TrimSpace(metadata.SourceRunID)
-	if runID == "" {
-		return resolvedContextSourceRun{}, false, nil
+type resolvedContextInvocation struct {
+	contextMode workflow.ContextMode
+	source      resolvedContextSourceRun
+}
+
+func (resolution resolvedContextInvocation) runMetadata(edge edgeContractSnapshot) workflowRunMetadata {
+	return workflowRunMetadata{
+		ContextMode:             string(resolution.contextMode),
+		ContextSource:           workflow.CanonicalContextSource(edge.ContextSource),
+		ContextResolutionFrozen: true,
+		SourceRunID:             resolution.source.runID,
+		SourceSessionID:         resolution.source.sessionID,
 	}
+}
+
+func resolvedContextInvocationFromMetadata(ctx context.Context, q *sqlitegen.Queries, metadata workflowRunMetadata, defaultMode workflow.ContextMode) (resolvedContextInvocation, bool, error) {
+	contextMode := defaultMode
+	if strings.TrimSpace(metadata.ContextMode) != "" {
+		contextMode = workflow.ContextMode(strings.TrimSpace(metadata.ContextMode))
+	}
+	runID := strings.TrimSpace(metadata.SourceRunID)
+	if runID == "" && !metadata.ContextResolutionFrozen {
+		return resolvedContextInvocation{}, false, nil
+	}
+	source := resolvedContextSourceRun{}
 	sessionID := strings.TrimSpace(metadata.SourceSessionID)
-	if sessionID == "" {
+	if runID != "" && sessionID == "" {
 		run, err := q.GetTaskRun(ctx, runID)
 		if err != nil {
-			return resolvedContextSourceRun{}, true, err
+			return resolvedContextInvocation{}, true, err
 		}
 		sessionID = strings.TrimSpace(run.SessionID.String)
 	}
-	return resolvedContextSourceRun{runID: runID, sessionID: sessionID}, true, nil
+	if runID != "" {
+		source = resolvedContextSourceRun{runID: runID, sessionID: sessionID}
+	}
+	return resolvedContextInvocation{contextMode: contextMode, source: source}, true, nil
 }
 
-func (s *Store) resolveContextSourceRun(ctx context.Context, q *sqlitegen.Queries, taskID string, beforeUnixMs int64, sourcePlacementID string, immediate *sqlitegen.TaskRunRecord, snapshot runStartSnapshot, edge edgeContractSnapshot) (resolvedContextSourceRun, error) {
+func (s *Store) resolveContextInvocation(ctx context.Context, q *sqlitegen.Queries, taskID string, beforeUnixMs int64, sourcePlacementID string, immediate *sqlitegen.TaskRunRecord, snapshot runStartSnapshot, edge edgeContractSnapshot) (resolvedContextInvocation, error) {
 	source := workflow.CanonicalContextSource(edge.ContextSource)
 	switch source.Kind {
 	case workflow.ContextSourceImmediateSource:
 		if immediate == nil {
-			return resolvedContextSourceRun{}, nil
+			return resolvedContextInvocation{contextMode: edge.ContextMode}, nil
 		}
-		return resolvedContextSourceRun{runID: immediate.ID, sessionID: strings.TrimSpace(immediate.SessionID.String)}, nil
+		return resolvedContextInvocation{contextMode: edge.ContextMode, source: resolvedContextSourceRun{runID: immediate.ID, sessionID: strings.TrimSpace(immediate.SessionID.String)}}, nil
 	case workflow.ContextSourceSelectedNode:
 		node, ok := snapshot.nodeByKey(source.NodeKey)
 		if !ok {
-			return resolvedContextSourceRun{}, fmt.Errorf("selected context source node %q missing from run snapshot", source.NodeKey)
+			return resolvedContextInvocation{}, fmt.Errorf("selected context source node %q missing from run snapshot", source.NodeKey)
 		}
-		runID, err := q.GetLatestCompletedContextSourceRun(ctx, sqlitegen.GetLatestCompletedContextSourceRunParams{TaskID: taskID, NodeID: string(node.ID), BeforeUnixMs: beforeUnixMs})
+		runID, err := q.GetLatestCompletedContextSourceRun(ctx, sqlitegen.GetLatestCompletedContextSourceRunParams{TaskID: taskID, NodeID: nullableString(string(node.ID)), BeforeUnixMs: beforeUnixMs})
 		if errors.Is(err, sql.ErrNoRows) {
-			return resolvedContextSourceRun{}, ContextSourceNoCompletedRunError{Kind: ContextSourceKindSelected, NodeKey: string(source.NodeKey)}
+			return resolvedContextInvocation{}, ContextSourceNoCompletedRunError{Kind: ContextSourceKindSelected, NodeKey: string(source.NodeKey)}
 		}
 		if err != nil {
-			return resolvedContextSourceRun{}, err
+			return resolvedContextInvocation{}, err
 		}
 		run, err := q.GetTaskRun(ctx, runID)
 		if err != nil {
-			return resolvedContextSourceRun{}, err
+			return resolvedContextInvocation{}, err
 		}
-		return resolvedContextSourceRun{runID: run.ID, sessionID: strings.TrimSpace(run.SessionID.String)}, nil
-	case workflow.ContextSourcePreviousTarget:
+		return resolvedContextInvocation{contextMode: edge.ContextMode, source: resolvedContextSourceRun{runID: run.ID, sessionID: strings.TrimSpace(run.SessionID.String)}}, nil
+	case workflow.ContextSourcePreviousTarget, workflow.ContextSourcePreviousTargetOrNew:
 		targetID := strings.TrimSpace(string(edge.TargetNode.ID))
 		if targetID == "" {
-			return resolvedContextSourceRun{}, errors.New("previous target context source target node missing from run snapshot")
+			return resolvedContextInvocation{}, errors.New("previous target context source target node missing from run snapshot")
 		}
 		batchID, batchScoped, err := contextSourceBatchScope(ctx, q, sourcePlacementID)
 		if err != nil {
-			return resolvedContextSourceRun{}, err
+			return resolvedContextInvocation{}, err
 		}
 		runID, err := latestCompletedContextSourceRun(ctx, q, taskID, targetID, beforeUnixMs, batchID, batchScoped)
 		if errors.Is(err, sql.ErrNoRows) {
+			if source.Kind == workflow.ContextSourcePreviousTargetOrNew {
+				return resolvedContextInvocation{contextMode: workflow.ContextModeNewSession}, nil
+			}
 			targetKey := strings.TrimSpace(string(edge.TargetNode.Key))
 			if targetKey == "" {
 				targetKey = targetID
 			}
-			return resolvedContextSourceRun{}, ContextSourceNoCompletedRunError{Kind: ContextSourceKindPreviousTarget, NodeKey: targetKey}
+			return resolvedContextInvocation{}, ContextSourceNoCompletedRunError{Kind: ContextSourceKindPreviousTarget, NodeKey: targetKey}
 		}
 		if err != nil {
-			return resolvedContextSourceRun{}, err
+			return resolvedContextInvocation{}, err
 		}
 		run, err := q.GetTaskRun(ctx, runID)
 		if err != nil {
-			return resolvedContextSourceRun{}, err
+			return resolvedContextInvocation{}, err
 		}
-		return resolvedContextSourceRun{runID: run.ID, sessionID: strings.TrimSpace(run.SessionID.String)}, nil
+		return resolvedContextInvocation{contextMode: edge.ContextMode, source: resolvedContextSourceRun{runID: run.ID, sessionID: strings.TrimSpace(run.SessionID.String)}}, nil
 	default:
-		return resolvedContextSourceRun{}, fmt.Errorf("context source kind %q is invalid", source.Kind)
+		return resolvedContextInvocation{}, fmt.Errorf("context source kind %q is invalid", source.Kind)
 	}
 }
 
@@ -114,9 +141,9 @@ func contextSourceBatchScope(ctx context.Context, q *sqlitegen.Queries, sourcePl
 
 func latestCompletedContextSourceRun(ctx context.Context, q *sqlitegen.Queries, taskID string, nodeID string, beforeUnixMs int64, batchID string, batchScoped bool) (string, error) {
 	if !batchScoped {
-		return q.GetLatestCompletedContextSourceRun(ctx, sqlitegen.GetLatestCompletedContextSourceRunParams{TaskID: taskID, NodeID: nodeID, BeforeUnixMs: beforeUnixMs})
+		return q.GetLatestCompletedContextSourceRun(ctx, sqlitegen.GetLatestCompletedContextSourceRunParams{TaskID: taskID, NodeID: nullableString(nodeID), BeforeUnixMs: beforeUnixMs})
 	}
-	return q.GetLatestCompletedContextSourceRunInBatch(ctx, sqlitegen.GetLatestCompletedContextSourceRunInBatchParams{TaskID: taskID, NodeID: nodeID, BatchID: sql.NullString{String: batchID, Valid: true}, BeforeUnixMs: beforeUnixMs})
+	return q.GetLatestCompletedContextSourceRunInBatch(ctx, sqlitegen.GetLatestCompletedContextSourceRunInBatchParams{TaskID: taskID, NodeID: nullableString(nodeID), BatchID: sql.NullString{String: batchID, Valid: true}, BeforeUnixMs: beforeUnixMs})
 }
 
 func (s *Store) resolvePromptPriorParameterValues(ctx context.Context, q *sqlitegen.Queries, taskID string, beforeUnixMs int64, sourcePlacementID string, edge edgeContractSnapshot) (map[string]map[string]string, error) {

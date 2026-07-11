@@ -41,6 +41,10 @@ func TestRemoteWorkflowListRoute(t *testing.T) {
 			handlerErr <- fmt.Errorf("send workflow list response: %w", err)
 			return
 		}
+		if err := websocket.JSON.Receive(ws, &req); err == nil {
+			handlerErr <- fmt.Errorf("unexpected request after workflow list: method = %q", req.Method)
+			return
+		}
 		handlerErr <- nil
 	}))
 	defer server.Close()
@@ -49,14 +53,16 @@ func TestRemoteWorkflowListRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
-	defer func() { _ = remote.Close() }()
 	resp, err := remote.ListWorkflows(context.Background(), serverapi.WorkflowListRequest{})
 	if err != nil {
+		_ = remote.Close()
 		t.Fatalf("ListWorkflows: %v", err)
 	}
 	if len(resp.Workflows) != 1 || resp.Workflows[0].ID != "workflow-1" {
+		_ = remote.Close()
 		t.Fatalf("response = %+v", resp)
 	}
+	_ = remote.Close()
 	if err := <-handlerErr; err != nil {
 		t.Fatal(err)
 	}

@@ -78,6 +78,13 @@ type GeneratedSyncResult struct {
 	RecoveredRootNonEmpty bool
 }
 
+type GeneratedLayout struct {
+	GeneratedRoot       string
+	GeneratedSkillsRoot string
+	UserSkillsRoot      string
+	RecoveryRoot        string
+}
+
 type marker struct {
 	SchemaVersion int    `json:"schema_version"`
 	AppVersion    string `json:"app_version"`
@@ -160,38 +167,51 @@ func GeneratedSync(ctx context.Context, opts GeneratedSyncOptions) (GeneratedSyn
 }
 
 func GeneratedRoot() (string, error) {
-	paths, err := resolvePaths("")
+	layout, err := GeneratedLayoutFor("")
 	if err != nil {
 		return "", err
 	}
-	return paths.generatedRoot, nil
+	return layout.GeneratedRoot, nil
 }
 
 func GeneratedSkillsRoot() (string, error) {
-	paths, err := resolvePaths("")
+	layout, err := GeneratedLayoutFor("")
 	if err != nil {
 		return "", err
 	}
-	return paths.generatedSkillsRoot, nil
+	return layout.GeneratedSkillsRoot, nil
 }
 
 // GeneratedSkillsRootFor resolves the generated skills root under the supplied
 // persistence config root. An empty configRoot falls back to the default
 // (<home>/.kent), matching GeneratedSkillsRoot().
 func GeneratedSkillsRootFor(configRoot string) (string, error) {
-	paths, err := resolvePathsForRoot("", configRoot)
+	layout, err := GeneratedLayoutFor(configRoot)
 	if err != nil {
 		return "", err
 	}
-	return paths.generatedSkillsRoot, nil
+	return layout.GeneratedSkillsRoot, nil
 }
 
 func RecoveryRoot() (string, error) {
-	paths, err := resolvePaths("")
+	layout, err := GeneratedLayoutFor("")
 	if err != nil {
 		return "", err
 	}
-	return paths.recoveryRoot, nil
+	return layout.RecoveryRoot, nil
+}
+
+func GeneratedLayoutFor(configRoot string) (GeneratedLayout, error) {
+	paths, err := resolvePathsForRoot("", configRoot)
+	if err != nil {
+		return GeneratedLayout{}, err
+	}
+	return GeneratedLayout{
+		GeneratedRoot:       paths.generatedRoot,
+		GeneratedSkillsRoot: paths.generatedSkillsRoot,
+		UserSkillsRoot:      paths.homeSkillsRoot,
+		RecoveryRoot:        paths.recoveryRoot,
+	}, nil
 }
 
 // RecoveredWarning returns the default-root recovery warning (referring to the

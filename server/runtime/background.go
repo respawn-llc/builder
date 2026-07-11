@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/toolspec"
+	"core/shared/valuecopy"
 )
 
 type defaultBackgroundNoticeScheduler struct {
@@ -37,15 +38,16 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 	if !queueNotice {
 		return
 	}
-	if evt.Type != "completed" && evt.Type != "killed" {
+	if !evt.Type.IsTerminal() {
 		return
 	}
 	b.QueueDeveloperNotice(llm.Message{
-		Role:           llm.RoleDeveloper,
-		MessageType:    llm.MessageTypeBackgroundNotice,
-		Name:           strings.TrimSpace(evt.ID),
-		Content:        formatBackgroundShellNotice(evt),
-		CompactContent: formatBackgroundShellCompact(evt),
+		Role:               llm.RoleDeveloper,
+		MessageType:        llm.MessageTypeBackgroundNotice,
+		Name:               strings.TrimSpace(evt.ID),
+		Content:            formatBackgroundShellNotice(evt),
+		CompactContent:     formatBackgroundShellCompact(evt),
+		BackgroundExitCode: valuecopy.Pointer(evt.ExitCode),
 	})
 }
 
@@ -200,7 +202,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		b.clearScheduled()
 		return llm.Message{}, nil
 	}
-	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true}, func(stepCtx context.Context, stepID string) error {
+	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
 		pending := b.DrainPendingNotices()
 		if len(pending) == 0 {
 			return nil
@@ -215,7 +217,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		assistant = msg
 		return runErr
 	})
-	if errors.Is(err, errExclusiveStepBusy) {
+	if errors.Is(err, ErrAgentBusy) {
 		b.clearScheduled()
 		return llm.Message{}, nil
 	}

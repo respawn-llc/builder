@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	workflowInvalidNudge = "Workflow completion was rejected. Retry with valid workflow completion output only."
 	// This is not a config fallback. Runtime config validation should reject
 	// invalid caps; if an invalid value reaches the runtime anyway, fail closed
 	// by recording one durable violation and interrupting immediately.
@@ -55,6 +54,17 @@ func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workf
 		Kind:               kind,
 		MaxCount:           maxCount,
 		Detail:             string(payload),
+		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
+		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
+	})
+}
+
+func (e *Engine) resetWorkflowProtocolViolationBudget(ctx context.Context) error {
+	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+		return nil
+	}
+	return e.cfg.WorkflowRun.Controller.ResetWorkflowProtocolViolationBudget(ctx, workflowruntime.ViolationResetRequest{
+		RunID:              e.cfg.WorkflowRun.Contract.RunID,
 		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
 		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
 	})

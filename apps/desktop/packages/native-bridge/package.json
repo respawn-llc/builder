@@ -10,18 +10,21 @@
     }
   },
   "scripts": {
-    "build": "tsc -b --pretty false",
-    "typecheck": "tsc -b --pretty false"
+    "build": "node ./node_modules/typescript7/bin/tsc -b --pretty false",
+    "typecheck": "node ./node_modules/typescript7/bin/tsc -b --pretty false"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
+    "@tauri-apps/plugin-notification": "2.3.3",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-store": "^2.4.0",
-    "@tauri-apps/plugin-updater": "^2.10.1"
+    "@tauri-apps/plugin-store": "^2.4.3",
+    "@tauri-apps/plugin-updater": "^2.10.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "typescript": "^6.0.3",
-    "vitest": "^4.1.6"
+    "typescript7": "npm:typescript@7.0.2",
+    "vitest": "^4.1.9"
   }
 }

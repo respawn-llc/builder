@@ -1,0 +1,2 @@
+*.expected.ansi -whitespace
+*.expected.txt -whitespace

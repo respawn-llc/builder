@@ -70,6 +70,19 @@ describe("classifyDrop", () => {
       ),
     ).toEqual({ kind: "missingInput" });
   });
+
+  it("auto-approves script targets like other executable automation targets", () => {
+    expect(
+      classifyDrop(
+        {
+          ...baseColumn,
+          kind: "script",
+        },
+        { ...baseDragPayload, manualMoveTargetNodeIDs: [] },
+        undefined,
+      ),
+    ).toEqual({ kind: "move", allowMissingEdge: true, autoApprove: true });
+  });
 });
 
 const baseDragPayload: BoardCardDragPayload = {

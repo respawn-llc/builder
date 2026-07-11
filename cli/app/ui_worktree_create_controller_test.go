@@ -116,3 +116,28 @@ func TestWorktreeCreateControllerSubmitStartsResolution(t *testing.T) {
 		t.Fatalf("resolve requests = %+v, want feature/new", client.resolveRequests)
 	}
 }
+
+func TestWorktreeCreateSetupEventUpdatesPendingOperationState(t *testing.T) {
+	model := newWorktreeCreateControllerTestModel(t, &worktreeCommandTestClient{listResp: testMainWorktreeListResponse()})
+	model.worktrees.mutationToken = 7
+	model.worktrees.create.submitting = true
+	event := serverapi.WorktreeSetupEvent{
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SourceWorkspaceRoot: "/repo",
+		WorktreeRoot:        "/repo/.worktrees/feature",
+		ScriptPath:          "/repo/scripts/setup.sh",
+		Phase:               serverapi.WorktreeSetupPhaseStarted,
+	}
+
+	updated := model.worktreeReducer().Update(worktreeSetupEventMsg{token: 7, event: event}).model
+
+	if updated.worktrees.create.setupEvent == nil {
+		t.Fatal("setup event was not reduced into create state")
+	}
+	if updated.worktrees.create.setupEvent.ScriptPath != event.ScriptPath || updated.worktrees.create.setupEvent.WorktreeRoot != event.WorktreeRoot {
+		t.Fatalf("setup event state = %+v, want script/worktree paths", updated.worktrees.create.setupEvent)
+	}
+	if !updated.worktrees.create.submitting {
+		t.Fatal("create operation stopped submitting before create response")
+	}
+}

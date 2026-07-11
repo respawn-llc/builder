@@ -4,7 +4,6 @@ import { z } from "zod";
 import { createNativeDialogRoutes, workspaceUnlinkNativeDialogPath } from "./nativeDialogRoutes";
 import {
   HomeShellRoute,
-  LegacyWorkflowEditorRedirectRoute,
   ProjectRoute,
   RootRoute,
   TaskRoute,
@@ -17,15 +16,11 @@ import {
 } from "./workflowDeleteConfirmRoute";
 import { createWorkflowDeleteWindowRoute } from "./workflowDeleteRoute";
 
-const optionalSearchString = z.preprocess(
-  (value: unknown) => (typeof value === "string" ? value : ""),
-  z.string(),
-);
+const optionalSearchString = z.string().catch("");
 
 const projectSearchSchema = z.object({
   workflowId: optionalSearchString,
   taskId: optionalSearchString,
-  resumeRunId: optionalSearchString,
 });
 
 const workflowEditorSearchSchema = z.object({
@@ -60,14 +55,6 @@ const workflowEditorRoute = createRoute({
   component: WorkflowEditorShellRoute,
 });
 
-const legacyWorkflowEditorRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/projects/$projectId/workflows/$workflowId/editor",
-  validateSearch: (search: Record<string, unknown>) =>
-    projectSearchSchema.pick({ workflowId: true }).parse(search),
-  component: LegacyWorkflowEditorRedirectRoute,
-});
-
 const taskRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks/$taskId",
@@ -83,7 +70,6 @@ const routeTree = rootRoute.addChildren([
   projectRoute,
   workflowLibraryRoute,
   workflowEditorRoute,
-  legacyWorkflowEditorRoute,
   taskRoute,
   ...nativeDialogRoutes,
   workflowDeleteWindowRoute,

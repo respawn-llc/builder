@@ -106,3 +106,14 @@ func DefaultEnabledToolIDs() []ID {
 	copy(out, defaultEnabledIDs)
 	return out
 }
+
+func IDStrings(ids []ID) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		out = append(out, string(id))
+	}
+	return out
+}

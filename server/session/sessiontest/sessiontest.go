@@ -1,9 +1,9 @@
-// Package sessiontest provides test-only helpers for inspecting a session
-// store's full event history. Production code must never materialize the full
-// event log into memory (histories can reach gigabytes); these helpers exist so
-// tests can assert against the complete history without reintroducing a
-// production full-history materializer. The repo-wide architecture guard fails
-// if any production package imports this package.
+// Package sessiontest provides test-only session fixtures and inspection
+// helpers. Production code must never materialize the full event log into
+// memory (histories can reach gigabytes); these helpers exist so tests can
+// assert against complete histories and optional continuation roles without
+// reintroducing production support for either behavior. The repo-wide
+// architecture guard fails if any production package imports this package.
 package sessiontest
 
 import (
@@ -26,13 +26,24 @@ func CollectEvents(store *session.Store) ([]session.Event, error) {
 	return events, nil
 }
 
+// AgentRole constructs a present continuation agent-role fixture. Test-only.
+func AgentRole(value string) *string {
+	return &value
+}
+
+// SameAgentRole compares optional continuation agent-role fixtures. Test-only.
+func SameAgentRole(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 // Snapshot mirrors the durable session state a test commonly asserts against:
-// metadata, the full event history, derived run records, and conversation
-// freshness.
+// metadata, the full event history, and conversation freshness.
 type Snapshot struct {
 	Meta                  session.Meta
 	Events                []session.Event
-	Runs                  []session.RunRecord
 	ConversationFreshness session.ConversationFreshness
 }
 
@@ -51,7 +62,6 @@ func SnapshotFromDir(dir string) (Snapshot, error) {
 	return Snapshot{
 		Meta:                  store.Meta(),
 		Events:                events,
-		Runs:                  session.ProjectRuns(events),
 		ConversationFreshness: store.ConversationFreshness(),
 	}, nil
 }

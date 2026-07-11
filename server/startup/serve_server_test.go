@@ -17,6 +17,7 @@ import (
 	"core/server/authservice"
 	corepkg "core/server/core"
 	"core/server/metadata"
+	rpccontract "core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -68,18 +69,35 @@ var noopOnboarding = OnboardingHandler(func(_ context.Context, req OnboardingReq
 	return reloaded, nil
 })
 
-type notifyingListener struct {
-	net.Listener
-	acceptDone chan struct{}
-	once       sync.Once
+var serveTestPortReservations = struct {
+	sync.Mutex
+	listeners map[string]net.Listener
+}{listeners: map[string]net.Listener{}}
+
+func reserveServeTestPort(t *testing.T, listener net.Listener) {
+	t.Helper()
+	addr := listener.Addr().String()
+	serveTestPortReservations.Lock()
+	if existing := serveTestPortReservations.listeners[addr]; existing != nil {
+		_ = existing.Close()
+	}
+	serveTestPortReservations.listeners[addr] = listener
+	serveTestPortReservations.Unlock()
+	t.Cleanup(func() { releaseServeTestPort(addr) })
 }
 
-func (l *notifyingListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		l.once.Do(func() { close(l.acceptDone) })
+func releaseServeTestPort(addr string) {
+	serveTestPortReservations.Lock()
+	listener := serveTestPortReservations.listeners[addr]
+	delete(serveTestPortReservations.listeners, addr)
+	serveTestPortReservations.Unlock()
+	if listener != nil {
+		_ = listener.Close()
 	}
-	return conn, err
+}
+
+func releaseServeTestPortForConfig(cfg config.App) {
+	releaseServeTestPort(net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)))
 }
 
 func registerServeWorkspace(t *testing.T, workspace string) {
@@ -88,6 +106,9 @@ func registerServeWorkspace(t *testing.T, workspace string) {
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
+	}
+	if _, _, err := config.WriteDefaultSettingsFileAt(cfg.Source.HomeSettingsPath); err != nil {
+		t.Fatalf("write test settings: %v", err)
 	}
 	if _, err := metadata.RegisterBinding(context.Background(), cfg.PersistenceRoot, cfg.WorkspaceRoot); err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
@@ -119,38 +140,9 @@ func configureServeTestServerPort(t *testing.T) {
 		t.Fatalf("reserve server port: %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	ReserveTestListenReservation(listener)
-	t.Cleanup(func() { ReleaseTestListenReservation(listener.Addr().String()) })
+	reserveServeTestPort(t, listener)
 	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
 	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
-}
-
-func TestReserveTestListenReservationDrainerStopsAfterRelease(t *testing.T) {
-	base, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	listener := &notifyingListener{Listener: base, acceptDone: make(chan struct{})}
-	addr := listener.Addr().String()
-	t.Cleanup(func() { ReleaseTestListenReservation(addr) })
-
-	ReserveTestListenReservation(listener)
-	conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-	if err != nil {
-		t.Fatalf("dial reserved listener: %v", err)
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	if _, err := conn.Read(make([]byte, 1)); err == nil {
-		t.Fatal("expected reserved listener drainer to close accepted connection")
-	}
-	_ = conn.Close()
-
-	ReleaseTestListenReservation(addr)
-	select {
-	case <-listener.acceptDone:
-	case <-time.After(time.Second):
-		t.Fatal("reserved listener drainer did not exit after release")
-	}
 }
 
 func TestStartBuildsStandaloneServerFromCoreStartup(t *testing.T) {
@@ -193,6 +185,74 @@ func TestStartBuildsStandaloneServerFromCoreStartup(t *testing.T) {
 	}
 	if coreProjects.Projects[0].ProjectID != serverProjects.Projects[0].ProjectID {
 		t.Fatalf("project listing mismatch core=%+v server=%+v", coreProjects.Projects[0], serverProjects.Projects[0])
+	}
+}
+
+func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
+	capabilities := newServerIdentity(config.App{}).Capabilities
+	if !capabilities.JSONRPCWebSocket ||
+		!capabilities.AuthBootstrap ||
+		!capabilities.ProjectAttach ||
+		!capabilities.SessionAttach ||
+		!capabilities.HealthEndpoint ||
+		!capabilities.ReadinessEndpoint ||
+		!capabilities.RunPrompt ||
+		!capabilities.SessionPlan ||
+		!capabilities.SessionLifecycle ||
+		!capabilities.SessionTranscript ||
+		!capabilities.SessionRuntime ||
+		!capabilities.RuntimeControl ||
+		!capabilities.RuntimeLiveControl ||
+		!capabilities.PromptControl ||
+		!capabilities.PromptActivity ||
+		!capabilities.SessionActivity ||
+		!capabilities.ProcessOutput ||
+		!capabilities.AttentionNotifications ||
+		!capabilities.OnboardingFinalize {
+		t.Fatalf("current route contracts produced incomplete server capabilities: %+v", capabilities)
+	}
+}
+
+func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
+	capabilities := serverCapabilityFlags([]rpccontract.Route{
+		{Method: protocol.MethodHandshake, Dependency: rpccontract.DependencyProtocol},
+		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocolAttach},
+		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencyProtocolAttach},
+		{Dependency: rpccontract.DependencyRunPrompt},
+	})
+
+	if !capabilities.JSONRPCWebSocket || !capabilities.ProjectAttach || !capabilities.SessionAttach || !capabilities.RunPrompt {
+		t.Fatalf("expected supplied routes to enable matching capabilities: %+v", capabilities)
+	}
+	if !capabilities.HealthEndpoint || !capabilities.ReadinessEndpoint {
+		t.Fatalf("health/readiness endpoints are mux capabilities, got %+v", capabilities)
+	}
+	if capabilities.AuthBootstrap ||
+		capabilities.RuntimeLiveControl ||
+		capabilities.AttentionNotifications {
+		t.Fatalf("capabilities must not be true without their routes/dependencies: %+v", capabilities)
+	}
+}
+
+func TestServerCapabilityFlagsRequireAttachRouteDependencyPerMethod(t *testing.T) {
+	capabilities := serverCapabilityFlags([]rpccontract.Route{
+		{Method: protocol.MethodHandshake, Dependency: rpccontract.DependencyProtocol},
+		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocol},
+		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencyProtocolAttach},
+	})
+
+	if capabilities.ProjectAttach {
+		t.Fatalf("ProjectAttach advertised without protocol_attach dependency: %+v", capabilities)
+	}
+	if !capabilities.SessionAttach {
+		t.Fatalf("SessionAttach not advertised with protocol_attach dependency: %+v", capabilities)
+	}
+}
+
+func TestServerCapabilityFlagsAdvertiseRuntimeLiveControlWhenHandlersAreExecutable(t *testing.T) {
+	capabilities := serverCapabilityFlags(rpccontract.Routes())
+	if !capabilities.RuntimeLiveControl {
+		t.Fatalf("RuntimeLiveControl not advertised after executable live handlers are wired: %+v", capabilities)
 	}
 }
 
@@ -239,6 +299,7 @@ func TestServeExposesConfiguredHealthEndpoints(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 
@@ -321,6 +382,7 @@ func TestServeExposesDerivedLocalUnixSocketAndCleansStalePath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 	defer func() {
@@ -382,6 +444,7 @@ func TestEmbeddedServeBackgroundExposesAttachEndpointUntilClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start embedded: %v", err)
 	}
+	releaseServeTestPortForConfig(server.Config())
 	if err := server.ServeBackground(); err != nil {
 		_ = server.Close()
 		t.Fatalf("ServeBackground: %v", err)
@@ -453,6 +516,7 @@ func TestServeDegradesToTCPWhenDerivedLocalSocketFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 	defer func() {
@@ -499,6 +563,7 @@ func TestServeStartsUnauthenticatedAndReportsBootstrapReadiness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 
@@ -554,6 +619,143 @@ func TestServeStartsUnauthenticatedAndReportsBootstrapReadiness(t *testing.T) {
 	}
 }
 
+func TestServeReadinessDoesNotRequireAuthForNonFirstPartyProvider(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	writeServeSettings(t, home, `
+model = "gpt-5"
+openai_base_url = "http://127.0.0.1:11434/v1"
+`)
+	configureServeTestServerPort(t)
+	cfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load for binding: %v", err)
+	}
+	if _, err := metadata.RegisterBinding(context.Background(), cfg.PersistenceRoot, workspace); err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+
+	server := startServeTestServer(t,
+		Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, AllowUnauthenticated: true},
+		envAuthHandler{lookupEnv: func(string) string { return "" }},
+		noopOnboarding,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		releaseServeTestPortForConfig(server.Config())
+		errCh <- server.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) {
+			t.Errorf("Serve error = %v, want context canceled", serveErr)
+		}
+	})
+
+	loadCfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	readyURL := config.ServerHTTPBaseURL(loadCfg) + protocol.ReadinessPath
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, requestErr := client.Get(readyURL)
+		if requestErr == nil {
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("readiness status = %d, want 200", resp.StatusCode)
+			}
+			var body map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode readiness body: %v", err)
+			}
+			if body["ready"] != true || body["auth_ready"] != false {
+				t.Fatalf("readiness body = %+v, want ready with unavailable auth", body)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET ready: %v", requestErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+	registerEmbeddedWorkspace(t, workspace)
+
+	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{lookupEnv: func(string) string { return "" }}, nil)
+	if server.Core != nil || server.deps == nil {
+		t.Fatal("expected missing-config serve startup surface without configured core")
+	}
+	readiness, err := server.deps.ServerStatusClient().GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("GetServerReadiness: %v", err)
+	}
+	if readiness.Ready || len(readiness.Causes) == 0 {
+		t.Fatalf("readiness = %+v, want not ready with onboarding cause", readiness)
+	}
+	cause := readiness.Causes[0]
+	if cause.Code != string(serverapi.ServerNotReadyOnboardingRequired) || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
+		t.Fatalf("unexpected onboarding readiness cause: %+v", cause)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
+	}
+}
+
+func TestStartupControlSurfaceRejectsConfigThatAppearsBeforeRootLock(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+	loadCfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if _, _, err := config.WriteDefaultSettingsFileAt(loadCfg.Source.HomeSettingsPath); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	_, _, err = buildStartupControlSurface(context.Background(), buildRequest(Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}), true, envAuthHandler{}, Options{})
+	if !errors.Is(err, errStartupControlSurfaceNotRequired) {
+		t.Fatalf("buildStartupControlSurface error = %v, want not required", err)
+	}
+}
+
+func TestServeOnboardingHandlerReceivesCapabilityFactsClient(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+
+	receivedFacts := false
+	onboarding := OnboardingHandler(func(ctx context.Context, req OnboardingRequest) (config.App, error) {
+		if req.CapabilityFactsClient == nil {
+			t.Fatal("capability facts client was not threaded into serve onboarding")
+		}
+		if _, err := req.CapabilityFactsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{}); err != nil {
+			t.Fatalf("GetCapabilityFacts: %v", err)
+		}
+		receivedFacts = true
+		return req.Config, ErrOnboardingRequired
+	})
+
+	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, onboarding)
+	defer func() { _ = server.Close() }()
+	if !receivedFacts {
+		t.Fatal("expected onboarding handler to receive capability facts")
+	}
+}
+
 func TestConfiguredRemoteGetsServerReadinessWhenAuthMissing(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -579,6 +781,7 @@ model = "blocked-model"
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 	defer func() {
@@ -633,8 +836,82 @@ model = "blocked-model"
 	}
 	assertReadinessRoles(t, readiness.SubagentRoles, []string{"default", "fast", "blocked", "coder"})
 	cause := readiness.Causes[0]
-	if cause.Code != "server_not_ready" || cause.Severity != "error" || cause.Summary == "" || cause.NextAction == "" {
+	if cause.Code != "server_not_ready" || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
 		t.Fatalf("unexpected generic readiness cause: %+v", cause)
+	}
+}
+
+func TestMissingConfigFinalizeActivationFailureIsTypedAndRetryConflicts(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+
+	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, nil)
+	if server.Core != nil || server.deps == nil {
+		t.Fatal("expected missing-config serve startup surface")
+	}
+	metadataBlocker := filepath.Join(server.cfg.PersistenceRoot, "db")
+	if err := os.WriteFile(metadataBlocker, []byte("block metadata open"), 0o644); err != nil {
+		t.Fatalf("write metadata blocker: %v", err)
+	}
+
+	_, err := server.deps.OnboardingFinalizeClient().FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
+	if !errors.Is(err, serverapi.ErrServerNotReadyActivationFailed) {
+		t.Fatalf("finalize error = %v, want activation_failed", err)
+	}
+	var readyErr *serverapi.ServerNotReadyError
+	if !errors.As(err, &readyErr) {
+		t.Fatalf("finalize error = %T %v, want ServerNotReadyError", err, err)
+	}
+	details := readyErr.Details.(serverapi.ServerNotReadyDetails)
+	if !details.OnboardingCompleted || details.SettingsPath == nil || *details.SettingsPath == "" || details.Diagnostic == nil || *details.Diagnostic == "" {
+		t.Fatalf("activation details = %+v", details)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); statErr != nil {
+		t.Fatalf("config should remain written after activation failure: %v", statErr)
+	}
+	if state := server.deps.ServerReadinessState(); state.Ready || state.Reason == nil || *state.Reason != serverapi.ServerNotReadyActivationFailed || state.Diagnostic == nil || *state.Diagnostic == "" {
+		t.Fatalf("readiness = %+v, want activation_failed diagnostic", state)
+	}
+	readiness, statusErr := server.deps.ServerStatusClient().GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if statusErr != nil {
+		t.Fatalf("GetServerReadiness after activation failure: %v", statusErr)
+	}
+	if readiness.Ready || len(readiness.Causes) == 0 || readiness.Causes[0].DiagnosticID == "" {
+		t.Fatalf("readiness response after activation failure = %+v", readiness)
+	}
+	_, retryErr := server.deps.OnboardingFinalizeClient().FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
+	if !errors.Is(retryErr, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
+		t.Fatalf("retry error = %v, want config_already_exists", retryErr)
+	}
+}
+
+type finalizeServiceFunc func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+
+func (f finalizeServiceFunc) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	return f(ctx, req)
+}
+
+func TestStartupFinalizeActivationUsesServerOwnedContext(t *testing.T) {
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	activationCtxCanceled := true
+	service := startupFinalizeService{
+		service: finalizeServiceFunc(func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+			return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
+		}),
+		activationContext: context.Background(),
+		activate: func(ctx context.Context, _ serverapi.OnboardingFinalizeResponse) error {
+			activationCtxCanceled = ctx.Err() != nil
+			return nil
+		},
+	}
+	if _, err := service.FinalizeOnboarding(requestCtx, serverapi.OnboardingFinalizeRequest{}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	if activationCtxCanceled {
+		t.Fatal("activation used canceled request context")
 	}
 }
 
@@ -675,7 +952,7 @@ func TestServeFailsWhenConfiguredPortIsOccupied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	ReleaseTestListenReservation(net.JoinHostPort(loadCfg.Settings.ServerHost, strconv.Itoa(loadCfg.Settings.ServerPort)))
+	releaseServeTestPortForConfig(loadCfg)
 	listener, err := net.Listen("tcp", net.JoinHostPort(loadCfg.Settings.ServerHost, strconv.Itoa(loadCfg.Settings.ServerPort)))
 	if err != nil {
 		t.Fatalf("occupy configured port: %v", err)

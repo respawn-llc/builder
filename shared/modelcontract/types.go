@@ -14,5 +14,6 @@ type ProviderCapabilities struct {
 	SupportsNativeWebSearch        bool
 	SupportsReasoningEncrypted     bool
 	SupportsServerSideContextEdit  bool
+	SupportsProviderVerbosity      bool
 	IsOpenAIFirstParty             bool
 }

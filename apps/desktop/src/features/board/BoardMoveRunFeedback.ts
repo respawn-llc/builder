@@ -39,8 +39,8 @@ export function useBoardMoveRunFeedback(): BoardMoveRunTracker {
         id: `board-move-run-interrupted-${runID}`,
         tone: "danger",
         title: t("board.moveRunInterrupted"),
-        body: t("board.moveRunInterruptedBody", { runID, taskID: input.taskID }),
-        dismissible: false,
+        body: t("board.moveRunInterruptedBody", { taskID: input.taskID }),
+        durationMs: Infinity,
       });
     },
     [push, t],

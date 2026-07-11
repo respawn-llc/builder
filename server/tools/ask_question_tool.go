@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"core/prompts"
+	"core/shared/clientui"
 
 	"github.com/google/uuid"
 )
@@ -17,12 +18,28 @@ import (
 // model-facing tool payload shape because internal approval workflows carry
 // fields that must never be exposed through the ask_question tool contract.
 type AskQuestionRequest struct {
-	ID                     string                      `json:"-"`
-	Question               string                      `json:"-"`
-	Suggestions            []string                    `json:"-"`
-	RecommendedOptionIndex int                         `json:"-"`
-	Approval               bool                        `json:"-"`
-	ApprovalOptions        []AskQuestionApprovalOption `json:"-"`
+	ID                     string                                `json:"-"`
+	Question               string                                `json:"-"`
+	Suggestions            []string                              `json:"-"`
+	RecommendedOptionIndex int                                   `json:"-"`
+	Approval               bool                                  `json:"-"`
+	ApprovalOptions        []AskQuestionApprovalOption           `json:"-"`
+	Origin                 AskQuestionOrigin                     `json:"-"`
+	RunID                  string                                `json:"-"`
+	StepID                 string                                `json:"-"`
+	ToolCallID             string                                `json:"-"`
+	QuestionBatch          *AskQuestionBatchMetadata             `json:"-"`
+	AttentionTarget        *clientui.AttentionNotificationTarget `json:"-"`
+}
+
+func (r AskQuestionRequest) IsTaskScopedApprovalQuestion() bool {
+	if !r.Approval || r.AttentionTarget == nil || r.AttentionTarget.Focus == nil {
+		return false
+	}
+	if r.AttentionTarget.Kind != clientui.AttentionNotificationTargetWorkflowTask {
+		return false
+	}
+	return r.AttentionTarget.Focus.Kind == clientui.AttentionNotificationFocusQuestion
 }
 
 // AskQuestionToolRequest is the model-facing ask_question payload. Keep this limited to
@@ -40,6 +57,7 @@ var (
 	ErrAskQuestionApprovalForbidsSuggestions    = errors.New("approval questions must not set suggestions")
 	ErrAskQuestionApprovalForbidsRecommended    = errors.New("approval questions must not set recommended_option_index")
 	ErrAskQuestionApprovalRequiresResponse      = errors.New("approval questions require approval responses")
+	ErrAskQuestionApprovalForbidsOrdinaryAnswer = errors.New("approval questions must not return ordinary answer fields")
 	ErrAskQuestionNonApprovalForbidsApproval    = errors.New("non-approval questions must not return approval payloads")
 	ErrAskQuestionNonApprovalRequiresAnswer     = errors.New("non-approval questions require an answer")
 	ErrAskQuestionSelectedOptionRequiresSuggest = errors.New("selected option numbers require suggestions")
@@ -267,6 +285,10 @@ func normalizedRecommendedOptionIndex(index int, suggestionCount int) int {
 }
 
 func validateResponse(req AskQuestionRequest, resp AskQuestionResponse) error {
+	return ValidateAskQuestionResponse(req, resp)
+}
+
+func ValidateAskQuestionResponse(req AskQuestionRequest, resp AskQuestionResponse) error {
 	if !req.Approval {
 		if resp.Approval != nil {
 			return ErrAskQuestionNonApprovalForbidsApproval
@@ -288,7 +310,18 @@ func validateResponse(req AskQuestionRequest, resp AskQuestionResponse) error {
 	if resp.Approval == nil {
 		return ErrAskQuestionApprovalRequiresResponse
 	}
-	return validateApprovalDecision(resp.Approval.Decision)
+	if resp.SelectedOptionNumber != 0 || strings.TrimSpace(resp.Answer) != "" || strings.TrimSpace(resp.FreeformAnswer) != "" {
+		return ErrAskQuestionApprovalForbidsOrdinaryAnswer
+	}
+	if err := validateApprovalDecision(resp.Approval.Decision); err != nil {
+		return err
+	}
+	for _, option := range req.ApprovalOptions {
+		if option.Decision == resp.Approval.Decision {
+			return nil
+		}
+	}
+	return fmt.Errorf("approval decision %q was not offered", resp.Approval.Decision)
 }
 
 func normalizedFreeformAnswer(resp AskQuestionResponse) string {
@@ -375,6 +408,36 @@ func (r AskQuestionToolRequest) request(callID string) AskQuestionRequest {
 	}
 }
 
+func PrepareAskQuestionToolRequest(callID string, input json.RawMessage) (AskQuestionRequest, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(input, &raw); err != nil {
+		return AskQuestionRequest{}, fmt.Errorf("invalid input: %w", err)
+	}
+	if _, ok := raw["action"]; ok {
+		return AskQuestionRequest{}, errors.New("invalid input: field \"action\" is not allowed")
+	}
+	if _, ok := raw["approval"]; ok {
+		return AskQuestionRequest{}, errors.New("invalid input: field \"approval\" is not allowed")
+	}
+	if _, ok := raw["approval_options"]; ok {
+		return AskQuestionRequest{}, errors.New("invalid input: field \"approval_options\" is not allowed")
+	}
+	var in AskQuestionToolRequest
+	if err := json.Unmarshal(input, &in); err != nil {
+		return AskQuestionRequest{}, fmt.Errorf("invalid input: %w", err)
+	}
+	req := in.request(callID)
+	req.Suggestions = normalizedSuggestions(req.Suggestions)
+	req.RecommendedOptionIndex = normalizedRecommendedOptionIndex(req.RecommendedOptionIndex, len(req.Suggestions))
+	if req.Question == "" {
+		return AskQuestionRequest{}, errors.New("question is required")
+	}
+	if err := validateRequest(req); err != nil {
+		return AskQuestionRequest{}, err
+	}
+	return req, nil
+}
+
 type AskQuestionTool struct {
 	broker           *AskQuestionBroker
 	questionsEnabled func() bool
@@ -384,31 +447,32 @@ func NewAskQuestionTool(b *AskQuestionBroker, questionsEnabled func() bool) *Ask
 	return &AskQuestionTool{broker: b, questionsEnabled: questionsEnabled}
 }
 
+func (t *AskQuestionTool) QuestionsEnabled() bool {
+	return t == nil || t.questionsEnabled == nil || t.questionsEnabled()
+}
+
 func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
-	if t.questionsEnabled != nil && !t.questionsEnabled() {
+	if !t.QuestionsEnabled() {
+		notifyAskQuestionBatchSkipped(c)
 		return ErrorResult(c, prompts.QuestionsDisabledPrompt), nil
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(c.Input, &raw); err != nil {
-		return ErrorResult(c, fmt.Sprintf("invalid input: %v", err)), nil
+	req, prepareErr := PrepareAskQuestionToolRequest(c.ID, c.Input)
+	if prepareErr != nil {
+		notifyAskQuestionBatchSkipped(c)
+		return ErrorResult(c, prepareErr.Error()), nil
 	}
-	if _, ok := raw["action"]; ok {
-		return ErrorResult(c, "invalid input: field \"action\" is not allowed"), nil
+	if c.AskQuestionBatch != nil {
+		batch := *c.AskQuestionBatch
+		batch.BatchPromptIDs = append([]string(nil), c.AskQuestionBatch.BatchPromptIDs...)
+		req.Origin = batch.Origin
+		req.RunID = batch.RunID
+		req.StepID = batch.StepID
+		req.ToolCallID = c.ID
+		req.QuestionBatch = &batch
 	}
-	if _, ok := raw["approval"]; ok {
-		return ErrorResult(c, "invalid input: field \"approval\" is not allowed"), nil
-	}
-	if _, ok := raw["approval_options"]; ok {
-		return ErrorResult(c, "invalid input: field \"approval_options\" is not allowed"), nil
-	}
-
-	var in AskQuestionToolRequest
-	if err := json.Unmarshal(c.Input, &in); err != nil {
-		return ErrorResult(c, fmt.Sprintf("invalid input: %v", err)), nil
-	}
-	req := in.request(c.ID)
 	resp, err := t.broker.Ask(ctx, req)
 	if err != nil {
+		notifyAskQuestionBatchSkipped(c)
 		return ErrorResult(c, err.Error()), nil
 	}
 	summary, summaryErr := buildToolOutputSummary(resp)
@@ -420,4 +484,13 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 		return Result{}, marshalErr
 	}
 	return Result{CallID: c.ID, Name: c.Name, Output: body, CondensedText: buildCondensedToolOutputText(req, resp)}, nil
+}
+
+func notifyAskQuestionBatchSkipped(c Call) {
+	if c.AskQuestionBatch == nil || c.OnAskQuestionBatchSkipped == nil {
+		return
+	}
+	batch := *c.AskQuestionBatch
+	batch.BatchPromptIDs = append([]string(nil), c.AskQuestionBatch.BatchPromptIDs...)
+	c.OnAskQuestionBatchSkipped(batch)
 }

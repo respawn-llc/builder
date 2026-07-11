@@ -58,8 +58,10 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	if tableExists(t, store.db, "workflow_events") {
 		t.Fatal("workflow_events should not exist; workflow invalidations are process-local live signals")
 	}
+	if tableExists(t, store.db, "runtime_leases") {
+		t.Fatal("runtime_leases should not exist; runtime ownership is process-local run state")
+	}
 	for _, index := range []string{
-		"runtime_leases_session_idx",
 		"workspaces_project_idx",
 		"workflow_transition_groups_source_transition_idx",
 		"tasks_project_short_id_idx",
@@ -166,14 +168,6 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 			t.Fatalf("task_comments.%s should not exist; comments are hard-deleted task notes", column)
 		}
 	}
-	for _, column := range []string{"client_id", "request_id", "acquired_at_unix_ms", "metadata_json"} {
-		if columnExists(t, store.db, "runtime_leases", column) {
-			t.Fatalf("runtime_leases.%s should not exist; runtime leases store durable token facts only", column)
-		}
-	}
-	if !columnExists(t, store.db, "runtime_leases", "released_at_unix_ms") {
-		t.Fatal("runtime_leases.released_at_unix_ms should exist for released-lease invalidation")
-	}
 	var foreignKeys int
 	if err := store.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
 		t.Fatalf("PRAGMA foreign_keys: %v", err)
@@ -262,6 +256,9 @@ func TestWorkflowSchemaConstraints(t *testing.T) {
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-second-start', 'workflow-1', 'second_start', 'start', 'Second Start', '[]')`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-invalid-kind', 'workflow-1', 'bad', 'robot', 'Bad', '[]')`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, completion_mode, output_fields_json) VALUES ('node-terminal-completion-mode', 'workflow-1', 'terminal_mode', 'terminal', 'Terminal Mode', 'tool', '[]')`)
+	execSeed(t, store.db, "script node with path", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-valid', 'workflow-1', 'script_valid', 'script', 'Script Valid', '[]', 'scripts/complete')`)
+	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-blank-path', 'workflow-1', 'script_blank', 'script', 'Script Blank', '[]', '   ')`)
+	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-agent-script-path', 'workflow-1', 'agent_script_path', 'agent', 'Agent Script Path', '[]', 'scripts/complete')`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, group_id) VALUES ('node-cross-group', 'workflow-1', 'cross_group', 'agent', 'Cross Group', '[]', 'group-other')`)
 	assertSQLiteConstraint(t, store.db, `UPDATE workflow_nodes SET group_id = 'group-other' WHERE id = 'node-agent'`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-bool', 'group-start', 'bad_bool', 'node-agent', 2, 'new_session', '{}', '{}')`)
@@ -272,6 +269,8 @@ func TestWorkflowSchemaConstraints(t *testing.T) {
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-previous-target-key', 'group-start', 'bad_previous_target_context_key', 'node-agent', 0, 'continue_session', 'previous_target', 'agent', '{}', '{}')`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-time', 'Bad', 1, -1, 1)`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-rev', 'Bad', 0, 1, 1)`)
+	execSeed(t, store.db, "script actor transition", `INSERT INTO task_transitions (id, task_id, transition_id, workflow_revision_seen, actor, state, created_at_unix_ms) VALUES ('transition-script-actor', 'task-1', 'done', 1, 'script', 'applied', 1)`)
+	assertSQLiteConstraint(t, store.db, `INSERT INTO task_transitions (id, task_id, transition_id, workflow_revision_seen, actor, state, created_at_unix_ms) VALUES ('transition-invalid-actor', 'task-1', 'done', 1, 'robot', 'applied', 1)`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, effective_completion_mode, created_at_unix_ms, updated_at_unix_ms) VALUES ('run-bad-completion-mode', 'placement-start', 1, 'invalid', 1, 1)`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, invalid_completion_count, created_at_unix_ms, updated_at_unix_ms) VALUES ('run-bad-counter', 'placement-start', 1, -1, 1, 1)`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-system-author', 'task-1', 'system note', 'system', 1, 1)`)
@@ -426,6 +425,12 @@ func TestWorkflowRuntimeSchemaRejectsCrossWorkflowPlacementsAndRuns(t *testing.T
 	assertSQLiteConstraint(t, store.db, `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('placement-cross-workflow', 'task-1', 'node-agent-2', 'active', ?, ?)`, now, now)
 	assertSQLiteConstraint(t, store.db, `UPDATE task_node_placements SET node_id = 'node-agent-2' WHERE id = 'placement-start'`)
+	execSeed(t, store.db, "canceled active agent placement", `UPDATE tasks SET canceled_at_unix_ms = ? WHERE id = 'task-2'`, now)
+	execSeed(t, store.db, "active agent placement on canceled task", `UPDATE task_node_placements SET node_id = 'node-agent' WHERE id = 'placement-start-2'`)
+	assertSQLiteConstraint(t, store.db, `UPDATE workflow_nodes SET kind = 'terminal' WHERE id = 'node-agent'`)
+	execSeed(t, store.db, "historical node", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-history', 'workflow-1', 'history', 'agent', 'History', '[]')`)
+	execSeed(t, store.db, "completed historical placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-history', 'task-1', 'node-history', 'completed', ?, ?)`, now, now)
+	assertSQLiteConstraint(t, store.db, `UPDATE workflow_nodes SET kind = 'terminal' WHERE id = 'node-history'`)
 	execSeed(t, store.db, "derived task run", `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('run-derived', 'placement-start', 1, ?, ?)`, now, now)
 	var taskID string

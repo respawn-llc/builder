@@ -14,9 +14,25 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) error {
+	if r.PresentationDelta != nil {
+		panic(fmt.Sprintf(
+			"tool result presentation invariant violated: unconsumed presentation delta reached persistence (call_id=%q tool=%q)",
+			r.CallID,
+			r.Name,
+		))
+	}
+	if r.Presentation == nil {
+		panic(fmt.Sprintf(
+			"tool result presentation invariant violated: live completion reached persistence without finalized presentation (call_id=%q tool=%q)",
+			r.CallID,
+			r.Name,
+		))
+	}
 	if sessionID, ok := harvestedBackgroundCompletionSessionID(r); ok {
 		e.ensureOrchestrationCollaborators()
 		e.backgroundFlow.ConsumePendingBackgroundNotice(sessionID)
@@ -129,7 +145,7 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 
 func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
 	return &ChatEntry{
-		Visibility:    entry.Visibility,
+		Visibility:    normalizeRuntimeEntryVisibility(entry.Visibility),
 		Role:          strings.TrimSpace(entry.Role),
 		Text:          strings.TrimSpace(entry.Text),
 		CondensedText: strings.TrimSpace(entry.CondensedText),
@@ -173,10 +189,30 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 		}
 	}
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
-	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && msg.Role == llm.RoleDeveloper && (msg.MessageType == llm.MessageTypeGoal || msg.MessageType == llm.MessageTypeWorktreeMode || msg.MessageType == llm.MessageTypeWorktreeModeExit) {
+	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
 	}
 	return nil
+}
+
+func (e *Engine) emitLiveToolAbortsRaw(stepID string, reason string) {
+	if e == nil || e.store == nil {
+		return
+	}
+	starts := e.transcriptRuntimeState().AbortLiveTools()
+	for _, start := range starts {
+		call := llm.ToolCall{ID: start.ToolCallID, Name: start.ToolName}
+		e.emitRaw(Event{
+			Kind:            EventToolCallAborted,
+			StepID:          strings.TrimSpace(stepID),
+			ToolCall:        &call,
+			ToolAbortReason: strings.TrimSpace(reason),
+		})
+	}
+}
+
+func shouldEmitCommittedMessageEvent(msg llm.Message) bool {
+	return len(VisibleChatEntriesFromMessage(msg)) > 0
 }
 
 func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch []string, queueItems []QueuedUserMessage) error {
@@ -220,6 +256,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 			},
 		})
 	}
+	e.completeLiveRunQueueItems(queuedUserMessageIDSet(normalizedItems))
 	return nil
 }
 
@@ -248,6 +285,20 @@ func queuedUserMessageStatusItemIDs(items []QueuedUserMessage) []string {
 	return ids
 }
 
+func queuedUserMessageIDSet(items []QueuedUserMessage) map[string]struct{} {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
 func (e *Engine) emitQueuedUserMessageStatus(item QueuedUserMessage, status QueuedUserMessageStatus, reason QueuedUserMessageFailureReason, restore bool) {
 	if e == nil || item.ID == "" {
 		return
@@ -262,6 +313,9 @@ func (e *Engine) emitQueuedUserMessageStatus(item QueuedUserMessage, status Queu
 	if restore {
 		event.RestoreText = item.Text
 	}
+	if status == QueuedUserMessageAccepted {
+		event.RestoreText = item.Text
+	}
 	e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
 }
 
@@ -274,14 +328,42 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
 	}
+	e.completeLiveRunQueueItems(queuedUserMessageIDSet(messages))
 	return messages
 }
 
-func (e *Engine) clearStreamingAssistantStateRaw(stepID string) {
-	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ClearStreamingAssistantState()
+func (e *Engine) clearStreamingAssistantStateRaw() (*AssistantStreamMetadata, *uuid.UUID) {
+	return newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ClearStreamingAssistantState()
+}
+
+func (e *Engine) emitStreamingAssistantResetEventsRaw(stepID string, metadata *AssistantStreamMetadata, streamID *uuid.UUID, abortReason AssistantStreamAbortReason) {
 	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
-	e.emitRaw(Event{Kind: EventAssistantDeltaReset, StepID: stepID})
+	e.emitRaw(Event{Kind: EventAssistantDeltaReset, StepID: stepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(metadata), AssistantTranscriptStreamID: cloneTranscriptStreamID(streamID), AssistantStreamAbortReason: string(abortReason)})
 	e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID})
+}
+
+func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steeringCommittedAssistantMessage) error {
+	finalizesStreaming := committedAssistantMessageFinalizesStreaming(committed.message)
+	var clearedMetadata *AssistantStreamMetadata
+	var clearedStreamID *uuid.UUID
+	if finalizesStreaming {
+		clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
+		newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).RecordAssistantStreamFinalization(committed.committedStart, clearedStreamID)
+	}
+	e.emitRaw(Event{
+		Kind:                        EventAssistantMessage,
+		StepID:                      stepID,
+		Message:                     committed.message,
+		AssistantStreamMetadata:     cloneAssistantStreamMetadata(clearedMetadata),
+		AssistantTranscriptStreamID: cloneTranscriptStreamID(clearedStreamID),
+		CommittedTranscriptChanged:  true,
+		CommittedEntryStart:         committed.committedStart,
+		CommittedEntryStartSet:      committed.committedStartSet,
+	})
+	if finalizesStreaming {
+		e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, "")
+	}
+	return nil
 }
 
 func flushedUserMessageEvent(msg llm.Message, stepID string) *Event {

@@ -73,7 +73,6 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	followUp, err := r.stepRunner.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
 		ReviewerFrequency:              "off",
 		ReviewerClient:                 nil,
-		EmitAssistantEvent:             false,
 		RefreshReviewerConfigOnResolve: false,
 	})
 	if err != nil {
@@ -101,7 +100,13 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		CacheHitPercent:       reviewerResult.CacheHitPercent,
 		HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
 	}
-	return reviewerFollowUpResult{Message: followUp.Message, Completion: &status, AssistantCommittedStart: followUp.AssistantCommittedStart, AssistantCommittedStartSet: followUp.AssistantCommittedStartSet}, nil
+	return reviewerFollowUpResult{
+		Message:                    followUp.Message,
+		Completion:                 &status,
+		AssistantCommittedStart:    followUp.AssistantCommittedStart,
+		AssistantCommittedStartSet: followUp.AssistantCommittedStartSet,
+		AssistantEventEmitted:      !followUp.NoopFinalAnswer && !isNoopFinalAnswer(followUp.Message),
+	}, nil
 }
 
 func (r *defaultReviewerPipeline) RunSuggestions(ctx context.Context, stepID string, reviewerClient llm.Client) (reviewerSuggestionsResult, error) {

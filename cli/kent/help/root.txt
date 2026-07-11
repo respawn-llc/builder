@@ -1,5 +1,6 @@
 Usage of kent:
   kent [flags]
+  kent --agent <role>
   kent --continue <session-id>
   kent run [flags] <prompt>
   kent serve [flags]
@@ -16,7 +17,9 @@ Usage of kent:
 
 What This Does:
   `kent` without a subcommand starts the interactive TUI.
+  `kent --agent <role>` creates an interactive session with a subagent role.
   `kent --continue <session-id>` reopens a previous session in the interactive TUI.
+  On locked sessions, `--agent` may only repeat the session's persisted role.
   `kent run` executes one headless prompt and exits.
   `kent serve` starts the app server in daemon mode.
   `kent service` manages the Kent server background service.

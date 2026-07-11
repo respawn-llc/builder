@@ -11,10 +11,13 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/llm"
 	"core/server/registry"
+	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/session"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
@@ -61,7 +64,7 @@ func TestNewWithContextComposesRequiredBundles(t *testing.T) {
 	if appCore.bundles.Prompts == nil || appCore.bundles.Prompts.askViews == nil || appCore.bundles.Prompts.approvalViews == nil || appCore.bundles.Prompts.promptControl == nil || appCore.bundles.Prompts.promptActivity == nil {
 		t.Fatal("expected prompt bundle clients")
 	}
-	if appCore.bundles.Runtime == nil || appCore.bundles.Runtime.background == nil || appCore.bundles.Runtime.backgroundRouter == nil || appCore.bundles.Runtime.runtimeRegistry == nil || appCore.bundles.Runtime.runtimeControls == nil || appCore.bundles.Runtime.sessionRuntime == nil || appCore.bundles.Runtime.sessionActivity == nil {
+	if appCore.bundles.Runtime == nil || appCore.bundles.Runtime.background == nil || appCore.bundles.Runtime.backgroundRouter == nil || appCore.bundles.Runtime.runtimeRegistry == nil || appCore.bundles.Runtime.runtimeControls == nil || appCore.bundles.Runtime.sessionRuntime == nil || appCore.bundles.Runtime.sessionActivity == nil || appCore.bundles.Runtime.sessionTranscript == nil {
 		t.Fatal("expected runtime bundle services")
 	}
 	if appCore.bundles.Sessions == nil || appCore.bundles.Sessions.sessionLaunch == nil || appCore.bundles.Sessions.sessionViews == nil || appCore.bundles.Sessions.sessionLifecycle == nil || appCore.bundles.Sessions.runPrompt == nil {
@@ -88,11 +91,49 @@ func TestNewWithContextComposesRequiredBundles(t *testing.T) {
 	}
 }
 
+func TestNewWithContextOptionsAcceptsRuntimeClientFactory(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildAuthSupport: %v", err)
+	}
+	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
+	if err != nil {
+		t.Fatalf("BuildRuntimeSupport: %v", err)
+	}
+	appCore, err := NewWithContextOptions(t.Context(), resolved.Config, authSupport, runtimeSupport, Options{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return nil, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewWithContextOptions: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+	if appCore.bundles == nil || appCore.bundles.Runtime == nil || appCore.bundles.Runtime.sessionRuntimeService == nil {
+		t.Fatal("expected runtime bundle with session runtime service")
+	}
+}
+
 func TestRuntimePendingAskResolverUsesPendingPromptSource(t *testing.T) {
 	resolver := runtimePendingAskResolver{prompts: fakePendingPromptSource{items: map[string][]registry.PendingPromptSnapshot{
 		"session-1": {
 			{Request: askquestion.AskQuestionRequest{ID: "ask-1", Question: "Need input?"}, CreatedAt: time.Unix(1, 0)},
 			{Request: askquestion.AskQuestionRequest{ID: "approval-1", Question: "Approve?", Approval: true}, CreatedAt: time.Unix(2, 0)},
+			{Request: askquestion.AskQuestionRequest{ID: "approval-2", Question: "Approve?", Approval: true, AttentionTarget: &clientui.AttentionNotificationTarget{
+				Kind: clientui.AttentionNotificationTargetWorkflowTask,
+				Focus: &clientui.AttentionNotificationTaskDetailFocus{
+					Kind:   clientui.AttentionNotificationFocusQuestion,
+					AskIDs: []string{"approval-2"},
+				},
+			}}, CreatedAt: time.Unix(3, 0)},
 		},
 	}}}
 
@@ -108,7 +149,14 @@ func TestRuntimePendingAskResolverUsesPendingPromptSource(t *testing.T) {
 		t.Fatalf("CanRehydrate approval: %v", err)
 	}
 	if ok {
-		t.Fatal("approval prompt must not satisfy workflow ask rehydration")
+		t.Fatal("generic approval prompt must not satisfy workflow ask rehydration")
+	}
+	ok, err = resolver.CanRehydrate(t.Context(), "session-1", workflow.RunID("run-1"), "approval-2")
+	if err != nil {
+		t.Fatalf("CanRehydrate task approval: %v", err)
+	}
+	if !ok {
+		t.Fatal("task-scoped approval prompt should satisfy workflow ask rehydration")
 	}
 	ok, err = resolver.CanRehydrate(t.Context(), "session-1", workflow.RunID("run-1"), "missing")
 	if err != nil {
@@ -193,6 +241,188 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 	}
 }
 
+func TestComposedAttentionClientUsesOneRootGlobalTaskDetailBroker(t *testing.T) {
+	ctx := context.Background()
+	appCore := newComposedCoreForAttentionTest(t)
+	registerCoreRuntime(t, appCore, "session-1")
+	registerCoreRuntime(t, appCore, "session-2")
+
+	desktop, err := appCore.AttentionNotificationClient().SubscribeAttentionNotifications(ctx, serverapi.AttentionNotificationSubscribeRequest{})
+	if err != nil {
+		t.Fatalf("SubscribeAttentionNotifications: %v", err)
+	}
+	sessionOne, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications session-1: %v", err)
+	}
+	sessionTwo, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-2"})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications session-2: %v", err)
+	}
+
+	appCore.BeginPendingPrompt("session-1", coreTaskBatchAskRequest("ask-a", "project-a", "task-a", "session-1"))
+	appCore.BeginPendingPrompt("session-2", coreTaskBatchAskRequest("ask-b", "project-b", "task-b", "session-2"))
+
+	firstDesktop := nextCoreAttentionEvent(t, desktop)
+	secondDesktop := nextCoreAttentionEvent(t, desktop)
+	if firstDesktop.Pending.Target.ProjectID != "project-a" || secondDesktop.Pending.Target.ProjectID != "project-b" {
+		t.Fatalf("desktop project delivery = %+v then %+v", firstDesktop, secondDesktop)
+	}
+	if event := nextCoreAttentionEvent(t, sessionOne); event.Pending.Target.TaskID != "task-a" {
+		t.Fatalf("session-1 task-detail event = %+v", event)
+	}
+	if event := nextCoreAttentionEvent(t, sessionTwo); event.Pending.Target.TaskID != "task-b" {
+		t.Fatalf("session-2 task-detail event = %+v", event)
+	}
+}
+
+func TestComposedAttentionClientKeepsGenericPromptsOffDesktopRootStream(t *testing.T) {
+	ctx := context.Background()
+	appCore := newComposedCoreForAttentionTest(t)
+	registerCoreRuntime(t, appCore, "session-1")
+
+	desktop, err := appCore.AttentionNotificationClient().SubscribeAttentionNotifications(ctx, serverapi.AttentionNotificationSubscribeRequest{})
+	if err != nil {
+		t.Fatalf("SubscribeAttentionNotifications: %v", err)
+	}
+	sessionSub, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
+	}
+
+	appCore.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-generic", Question: "Generic prompt?"})
+	pending := nextCoreAttentionEvent(t, sessionSub)
+	if pending.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
+		t.Fatalf("generic prompt target = %+v", pending.Pending.Target)
+	}
+	if event, err := desktop.Next(shortCoreAttentionContext(t)); err == nil {
+		t.Fatalf("desktop received generic pending event: %+v", event)
+	}
+
+	appCore.CompletePendingPrompt("session-1", "ask-generic")
+	resolved := nextCoreAttentionEvent(t, sessionSub)
+	genericID := clientui.AttentionNotificationID{
+		Kind: clientui.AttentionNotificationKindQuestion,
+		UUID: "ask-generic",
+	}
+	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, genericID) {
+		t.Fatalf("generic resolved event = %+v", resolved)
+	}
+	if event, err := desktop.Next(shortCoreAttentionContext(t)); err == nil {
+		t.Fatalf("desktop received generic resolved event: %+v", event)
+	}
+}
+
+func TestComposedAttentionClientRoutesTargetlessTaskDetailResolvedToDesktop(t *testing.T) {
+	ctx := context.Background()
+	appCore := newComposedCoreForAttentionTest(t)
+	registerCoreRuntime(t, appCore, "session-1")
+
+	desktop, err := appCore.AttentionNotificationClient().SubscribeAttentionNotifications(ctx, serverapi.AttentionNotificationSubscribeRequest{})
+	if err != nil {
+		t.Fatalf("SubscribeAttentionNotifications: %v", err)
+	}
+	req := coreTaskBatchAskRequest("ask-a", "project-a", "task-a", "session-1")
+	appCore.BeginPendingPrompt("session-1", req)
+	pending := nextCoreAttentionEvent(t, desktop)
+	if pending.Type != clientui.AttentionNotificationEventPending {
+		t.Fatalf("pending event = %+v", pending)
+	}
+	appCore.bundles.Runtime.runtimeRegistry.MarkTaskQuestionCleared(*req.QuestionBatch, "ask-a")
+	resolved := nextCoreAttentionEvent(t, desktop)
+	if resolved.Type != clientui.AttentionNotificationEventResolved || resolved.Pending != nil || !attentionNotificationEventIDMatches(resolved, pending.Pending.ID) {
+		t.Fatalf("targetless resolved event = %+v", resolved)
+	}
+}
+
+func newComposedCoreForAttentionTest(t *testing.T) *Core {
+	t.Helper()
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildAuthSupport: %v", err)
+	}
+	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
+	if err != nil {
+		t.Fatalf("BuildRuntimeSupport: %v", err)
+	}
+	appCore, err := NewWithContext(t.Context(), resolved.Config, authSupport, runtimeSupport)
+	if err != nil {
+		t.Fatalf("NewWithContext: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+	return appCore
+}
+
+func registerCoreRuntime(t *testing.T, appCore *Core, sessionID string) {
+	t.Helper()
+	claim, _, _ := appCore.bundles.Runtime.runtimeRegistry.AcquireRuntimeClaim(sessionID, "")
+	if claim == nil {
+		t.Fatalf("AcquireRuntimeClaim(%q) returned nil claim", sessionID)
+	}
+	claim.Resolve(&runtime.Engine{}, nil, nil)
+	t.Cleanup(func() {
+		if active := appCore.bundles.Runtime.runtimeRegistry.RuntimeClaimFor(sessionID); active != nil {
+			_, _ = active.Close(context.Background(), nil)
+		}
+	})
+}
+
+func coreTaskBatchAskRequest(askID string, projectID string, taskID string, sessionID string) askquestion.AskQuestionRequest {
+	return askquestion.AskQuestionRequest{
+		ID:       askID,
+		Question: "Task question?",
+		QuestionBatch: &askquestion.AskQuestionBatchMetadata{
+			Origin:              askquestion.AskQuestionOriginModelTool,
+			RunID:               "run-" + taskID,
+			StepID:              "step-" + taskID,
+			BatchID:             "batch-" + taskID,
+			PromptID:            askID,
+			BatchPromptIDs:      []string{askID},
+			CandidateOrdinal:    0,
+			PreparedPromptCount: 1,
+		},
+		AttentionTarget: &clientui.AttentionNotificationTarget{
+			Kind:      clientui.AttentionNotificationTargetWorkflowTask,
+			ProjectID: projectID,
+			TaskID:    taskID,
+			SessionID: sessionID,
+			RunID:     "run-" + taskID,
+			Focus: &clientui.AttentionNotificationTaskDetailFocus{
+				Kind:   clientui.AttentionNotificationFocusQuestion,
+				AskIDs: []string{askID},
+			},
+		},
+	}
+}
+
+func nextCoreAttentionEvent(t *testing.T, sub serverapi.AttentionNotificationSubscription) clientui.AttentionNotificationEvent {
+	t.Helper()
+	event, err := sub.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	return event
+}
+
+func shortCoreAttentionContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func attentionNotificationEventIDMatches(event clientui.AttentionNotificationEvent, id clientui.AttentionNotificationID) bool {
+	return event.ID != nil && *event.ID == id
+}
+
 type fakePendingPromptSource struct {
 	items map[string][]registry.PendingPromptSnapshot
 }
@@ -218,7 +448,7 @@ func createCoreValidWorkflow(t *testing.T, ctx context.Context, store *workflows
 		t.Fatalf("AddNode: %v", err)
 	}
 	startGroupID := workflow.TransitionGroupID("group-start-" + string(created.ID))
-	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: startGroupID, WorkflowID: created.ID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: startGroupID, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddTransitionGroup start: %v", err)
 	}
 	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."}); err != nil {
@@ -228,7 +458,7 @@ func createCoreValidWorkflow(t *testing.T, ctx context.Context, store *workflows
 	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: doneGroupID, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddTransitionGroup done: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession}); err != nil {
+	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
 		t.Fatalf("AddEdge done: %v", err)
 	}
 	return created.ID
@@ -237,10 +467,10 @@ func createCoreValidWorkflow(t *testing.T, ctx context.Context, store *workflows
 func coreWorkflowNodeByKind(t *testing.T, def workflow.Definition, kind workflow.NodeKind) workflow.Node {
 	t.Helper()
 	for _, node := range def.Nodes {
-		if node.Kind == kind {
+		if node.Kind() == kind {
 			return node
 		}
 	}
 	t.Fatalf("missing workflow node kind %q in %+v", kind, def.Nodes)
-	return workflow.Node{}
+	return nil
 }

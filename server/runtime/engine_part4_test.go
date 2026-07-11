@@ -167,7 +167,7 @@ func TestSubmitUserMessageCommentaryWithoutToolsEmitsRealtimeAssistantEvent(t *t
 	}
 }
 
-func TestSubmitUserMessageCommentaryWithToolCallsEmitsRealtimeAssistantEventWithoutDuplicateToolCalls(t *testing.T) {
+func TestSubmitUserMessageCommentaryWithToolCallsEmitsContiguousAssistantEvent(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -227,8 +227,8 @@ func TestSubmitUserMessageCommentaryWithToolCallsEmitsRealtimeAssistantEventWith
 	if len(assistantContents) != 2 || assistantContents[0] != "working" || assistantContents[1] != "done" {
 		t.Fatalf("assistant realtime events = %+v, want [working done]", assistantContents)
 	}
-	if commentaryToolCalls != 0 {
-		t.Fatalf("expected commentary assistant event to omit tool calls, got %d", commentaryToolCalls)
+	if commentaryToolCalls != 1 {
+		t.Fatalf("expected commentary assistant event to carry persisted tool call entries, got %d", commentaryToolCalls)
 	}
 }
 
@@ -358,6 +358,72 @@ func TestSubmitUserMessageCommentaryWithToolCallsPublishesCommittedEntryStartMet
 	if toolStartEvt.CommittedEntryStart >= toolCompleteEvt.CommittedEntryStart {
 		t.Fatalf("expected tool call before tool result in committed order, start=%+v complete=%+v", toolStartEvt, toolCompleteEvt)
 	}
+	assistantEntries := TranscriptEntriesFromEvent(assistantEvt)
+	if len(assistantEntries) < 2 {
+		t.Fatalf("commentary assistant event must carry persisted tool-call entries to avoid sparse committed frontier, got %+v", assistantEntries)
+	}
+	if assistantEntries[0].Role != "assistant" || assistantEntries[1].Role != "tool_call" {
+		t.Fatalf("unexpected commentary assistant event entries: %+v", assistantEntries)
+	}
+}
+
+func TestSubmitUserMessageMissingPhaseWithToolCallsPublishesContiguousAssistantEvent(t *testing.T) {
+	store := mustCreateTestSession(t)
+
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: "working without phase",
+			},
+			ToolCalls: []llm.ToolCall{{ID: "call_shell_missing_phase", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: "done",
+				Phase:   llm.MessagePhaseFinal,
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+	}}
+
+	events := make([]Event, 0, 16)
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model:   "gpt-5",
+		OnEvent: func(evt Event) { events = append(events, evt) },
+	})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "do the task"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	assistantIdx := -1
+	toolCompleteIdx := -1
+	for idx, evt := range events {
+		if evt.Kind == EventAssistantMessage && evt.Message.Content == "working without phase" {
+			assistantIdx = idx
+		}
+		if evt.Kind == EventToolCallCompleted && evt.ToolResult != nil && evt.ToolResult.CallID == "call_shell_missing_phase" {
+			toolCompleteIdx = idx
+		}
+	}
+	if assistantIdx < 0 {
+		t.Fatalf("expected missing-phase assistant event before tool completion, got %+v", events)
+	}
+	if toolCompleteIdx < 0 {
+		t.Fatalf("expected tool_call_completed event, got %+v", events)
+	}
+	if assistantIdx > toolCompleteIdx {
+		t.Fatalf("assistant event index %d must be before tool completion %d; events=%+v", assistantIdx, toolCompleteIdx, events)
+	}
+	assistantEntries := TranscriptEntriesFromEvent(events[assistantIdx])
+	if len(assistantEntries) < 2 || assistantEntries[0].Role != "assistant" || assistantEntries[1].Role != "tool_call" {
+		t.Fatalf("missing-phase assistant event must carry assistant + tool-call rows, got %+v", assistantEntries)
+	}
+	committedEvents := committedTranscriptEventsWithEntries(events)
+	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedEvents)
 }
 
 func TestAutoCompactionStatusEventDoesNotPublishCommittedEntryStart(t *testing.T) {
@@ -436,7 +502,8 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 	if err := newCompactionPersistence(eng).replaceHistory("step-1", "local", compactionModeManual, replacement); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
-	if err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionCompleted, compactionModeManual, "local", "", 2, 1, ""); err != nil {
+	trimmed := 2
+	if err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionCompleted, compactionModeManual, "local", "", &trimmed, 1, ""); err != nil {
 		t.Fatalf("emit compaction status: %v", err)
 	}
 
@@ -708,10 +775,15 @@ func TestSubmitUserMessageFinalAnswerWithToolCallsExecutesToolCallsBeforeFinal(t
 	toolCompleted := false
 	toolCallBeforeFinal := false
 	toolResultBeforeFinal := false
+	recoveryBeforeToolCall := false
+	recoverySeen := false
 	finalSeen := false
 	developerWarningFound := false
 	persistedFinalHasToolCalls := false
 	for _, evt := range events {
+		if evt.Kind == "model_recovery_pending" {
+			recoverySeen = true
+		}
 		if evt.Kind == "tool_completed" {
 			toolCompleted = true
 		}
@@ -729,6 +801,7 @@ func TestSubmitUserMessageFinalAnswerWithToolCallsExecutesToolCallsBeforeFinal(t
 			if finalSeen {
 				t.Fatalf("tool call persisted after final response")
 			}
+			recoveryBeforeToolCall = recoverySeen
 			toolCallBeforeFinal = true
 		}
 		if persisted.Role == llm.RoleTool && persisted.ToolCallID == "call_shell_1" {
@@ -749,6 +822,9 @@ func TestSubmitUserMessageFinalAnswerWithToolCallsExecutesToolCallsBeforeFinal(t
 	}
 	if !toolCallBeforeFinal {
 		t.Fatalf("expected tool call message before final response")
+	}
+	if !recoveryBeforeToolCall {
+		t.Fatalf("expected model recovery marker before final-answer tool call message, events=%+v", events)
 	}
 	if !toolResultBeforeFinal {
 		t.Fatalf("expected tool result message before final response")

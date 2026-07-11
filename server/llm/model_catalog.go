@@ -12,10 +12,23 @@ type ModelMetadata = modelcontract.ModelMetadata
 var defaultSupportedThinkingLevels = []string{"low", "medium", "high"}
 var defaultSupportedVerbosityLevels = []string{"low", "medium", "high"}
 
+type ModelVerbositySupportSource string
+
+const (
+	ModelVerbositySupportSourceModelCatalog    ModelVerbositySupportSource = "model_catalog"
+	ModelVerbositySupportSourceProviderDefault ModelVerbositySupportSource = "provider_default"
+)
+
+type ModelVerbositySupport struct {
+	Supported bool
+	Source    ModelVerbositySupportSource
+	Levels    []string
+}
+
 func ModelDisplayLabel(model string, thinkingLevel string) string {
 	modelLabel := strings.TrimSpace(model)
 	if modelLabel == "" {
-		modelLabel = "gpt-5"
+		modelLabel = config.DefaultModel()
 	}
 	level := strings.TrimSpace(thinkingLevel)
 	if level == "" {
@@ -67,10 +80,24 @@ func SupportsVerbosityModel(model string) bool {
 		return false
 	}
 	contract, ok := LookupModelCapabilityContract(normalized)
+	return ok && contract.SupportsVerbosity
+}
+
+func VerbositySupportForModelAndProvider(model string, providerCaps ProviderCapabilities) ModelVerbositySupport {
+	contract, ok := LookupModelCapabilityContract(model)
 	if ok {
-		return contract.SupportsVerbosity
+		return ModelVerbositySupport{
+			Supported: contract.SupportsVerbosity,
+			Source:    ModelVerbositySupportSourceModelCatalog,
+			Levels:    verbosityLevelsFromSupport(contract.SupportsVerbosity, contract.SupportedVerbosityLevels),
+		}
 	}
-	return strings.HasPrefix(normalized, "gpt-5")
+	supported := strings.TrimSpace(model) != "" && providerCaps.SupportsProviderVerbosity
+	return ModelVerbositySupport{
+		Supported: supported,
+		Source:    ModelVerbositySupportSourceProviderDefault,
+		Levels:    verbosityLevelsFromSupport(supported, nil),
+	}
 }
 
 func LookupModelMetadata(model string) (ModelMetadata, bool) {
@@ -113,13 +140,23 @@ func SupportedVerbosityLevelsModel(model string) []string {
 		return nil
 	}
 	contract, ok := LookupModelCapabilityContract(model)
-	if ok && len(contract.SupportedVerbosityLevels) > 0 {
-		return append([]string(nil), contract.SupportedVerbosityLevels...)
+	if !ok {
+		return nil
 	}
-	return append([]string(nil), defaultSupportedVerbosityLevels...)
+	return verbosityLevelsFromSupport(contract.SupportsVerbosity, contract.SupportedVerbosityLevels)
 }
 
 func SupportsLargeContextWindowModel(model string) bool {
 	contract, ok := LookupModelCapabilityContract(model)
 	return ok && contract.LargeContextWindowTokens > 0
+}
+
+func verbosityLevelsFromSupport(supported bool, levels []string) []string {
+	if !supported {
+		return nil
+	}
+	if len(levels) > 0 {
+		return append([]string(nil), levels...)
+	}
+	return append([]string(nil), defaultSupportedVerbosityLevels...)
 }

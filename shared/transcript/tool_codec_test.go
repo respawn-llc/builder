@@ -50,12 +50,13 @@ func TestEncodeDecodeToolCallMetaRoundTripsShellOutputStatus(t *testing.T) {
 		IsShell:            true,
 		RawOutputRequested: true,
 		OutputTruncated:    true,
+		MovedToBackground:  true,
 	})
 	meta, ok := DecodeToolCallMeta(raw)
 	if !ok {
 		t.Fatal("expected tool metadata to decode successfully")
 	}
-	if !meta.RawOutputRequested || !meta.OutputTruncated {
+	if !meta.RawOutputRequested || !meta.OutputTruncated || !meta.MovedToBackground {
 		t.Fatalf("expected shell output status to round-trip, got %+v", meta)
 	}
 }

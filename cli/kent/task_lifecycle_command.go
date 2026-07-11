@@ -210,9 +210,9 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-	defer cancel()
-	resp, err := remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{TaskID: taskID})
+	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
+		return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: setupOperationID, TaskID: taskID})
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -372,9 +372,9 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		return 1
 	}
 	defer func() { _ = remote.Close() }()
-	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-	defer cancel()
-	resp, err := remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{TransitionID: positionals[0]})
+	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskApproveResponse, error) {
+		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0]})
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -421,9 +421,9 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-	defer cancel()
-	resp, err := remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary})
+	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
+		return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupOperationID, TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary})
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -435,6 +435,67 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	writeTaskTransitionResult(stdout, "Moved task", detail, resp.TransitionID, resp.RunIDs)
 	return 0
+}
+
+type worktreeSetupProgressSubscriber interface {
+	SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error)
+}
+
+func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote workflowCommandRemote, stderr io.Writer, mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error)) (T, error) {
+	setupOperationID := serverapi.NewWorktreeSetupOperationID()
+	stopSetupProgress, err := subscribeWorktreeSetupProgress(ctx, remote, setupOperationID, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: worktree setup progress subscription unavailable: %v\n", err)
+		stopSetupProgress = func() error { return nil }
+	}
+	resp, mutateErr := mutate(ctx, setupOperationID)
+	if setupProgressErr := stopSetupProgress(); setupProgressErr != nil {
+		fmt.Fprintf(stderr, "warning: worktree setup progress stream ended unexpectedly: %v\n", setupProgressErr)
+	}
+	return resp, mutateErr
+}
+
+func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandRemote, setupOperationID serverapi.WorktreeSetupOperationID, stderr io.Writer) (func() error, error) {
+	subscriber, ok := remote.(worktreeSetupProgressSubscriber)
+	if !ok {
+		return nil, errors.New("worktree setup progress subscription is unavailable")
+	}
+	subscription, err := subscriber.SubscribeWorktreeSetup(ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupOperationID})
+	if err != nil {
+		return nil, err
+	}
+	progressCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		defer func() { _ = subscription.Close() }()
+		for {
+			event, err := subscription.Next(progressCtx)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(progressCtx.Err(), context.Canceled) || errors.Is(err, io.EOF) {
+					done <- nil
+					return
+				}
+				done <- err
+				return
+			}
+			writeWorktreeSetupProgress(stderr, event)
+			if event.Phase == serverapi.WorktreeSetupPhaseCompleted || event.Phase == serverapi.WorktreeSetupPhaseFailed {
+				done <- nil
+				return
+			}
+		}
+	}()
+	return func() error {
+		cancel()
+		return <-done
+	}, nil
+}
+
+func writeWorktreeSetupProgress(stderr io.Writer, event serverapi.WorktreeSetupEvent) {
+	if event.Phase != serverapi.WorktreeSetupPhaseStarted {
+		return
+	}
+	fmt.Fprintf(stderr, "Waiting for worktree setup script %s in %s.\n", event.ScriptPath, event.WorktreeRoot)
 }
 
 type stringMapFlag struct {
@@ -482,8 +543,10 @@ func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRe
 			}
 			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s with run %s but failed to load task detail while waiting for session id: %w", taskID, trimmedRunID, err)
 		}
-		if run, ok := workflowTaskRunByID(detail, trimmedRunID); ok && strings.TrimSpace(run.SessionID) != "" {
-			return detail, nil
+		if run, ok := workflowTaskRunByID(detail, trimmedRunID); ok {
+			if workflowTaskRunDoesNotRequireSession(run) || strings.TrimSpace(run.SessionID) != "" {
+				return detail, nil
+			}
 		}
 		timer := time.NewTimer(interval)
 		select {
@@ -493,4 +556,8 @@ func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRe
 		case <-timer.C:
 		}
 	}
+}
+
+func workflowTaskRunDoesNotRequireSession(run serverapi.WorkflowRun) bool {
+	return serverapi.WorkflowNodeKind(strings.TrimSpace(run.NodeKind)) == serverapi.WorkflowNodeKindScript
 }

@@ -81,7 +81,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				continue
 			}
 			e.resetLocalDiagnostics()
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistory(payload.Items)
+			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistoryAtCommittedEntryStart(payload.Items, payload.CommittedEntryStart)
 			e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(payload.LastCommittedAssistantFinalAnswer)
 			if payload.CompactionNumber > 0 {
 				e.compactionRuntimeState().SetCount(payload.CompactionNumber)
@@ -289,6 +289,7 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, queu
 	} else {
 		pending = m.queue.DrainByID(queueItemIDs)
 	}
+	pending = m.engine.dropStoppedLiveRunQueueItems(pending)
 	return m.flushPendingUserInjections(stepID, pending)
 }
 
@@ -302,10 +303,25 @@ func (m *defaultMessageLifecycle) flushPendingUserInjections(stepID string, pend
 
 	queuedMessages := normalizeQueuedUserMessages(pending)
 	if len(queuedMessages) > 0 {
+		pending = e.dropStoppedLiveRunQueueItems(pending)
+		queuedMessages = normalizeQueuedUserMessages(pending)
+		if len(queuedMessages) == 0 {
+			return flushed, nil
+		}
 		joined := strings.Join(queuedMessages, "\n\n")
-		if err := e.steer(stepID, steerQueuedUserMessageFlushIntent(joined, queuedMessages, queuedUserMessagesForFlush(pending))); err != nil {
+		committed, err := e.commitLiveRunQueueItemsUnlessStopped(pending, func() error {
+			return e.steer(stepID, steerQueuedUserMessageFlushIntent(joined, queuedMessages, queuedUserMessagesForFlush(pending)))
+		})
+		if err != nil {
 			m.queue.RestoreFront(pending)
 			return flushed, err
+		}
+		if !committed {
+			for _, item := range pending {
+				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
+				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+			}
+			return flushed, nil
 		}
 		flushed++
 	}
@@ -328,11 +344,30 @@ func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID 
 	return m.queue.Queue(text, clientRequestID)
 }
 
+func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage {
+	if m == nil || m.queue == nil {
+		return QueuedUserMessage{}
+	}
+	return m.queue.QueueItem(item)
+}
+
 func (m *defaultMessageLifecycle) DrainPendingUserInjections() []QueuedUserMessage {
 	if m == nil || m.queue == nil {
 		return nil
 	}
 	pending := m.queue.Drain()
+	out := make([]QueuedUserMessage, 0, len(pending))
+	for _, item := range pending {
+		out = append(out, item.message)
+	}
+	return out
+}
+
+func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage {
+	if m == nil || m.queue == nil || len(ids) == 0 {
+		return nil
+	}
+	pending := m.queue.DrainByID(ids)
 	out := make([]QueuedUserMessage, 0, len(pending))
 	for _, item := range pending {
 		out = append(out, item.message)

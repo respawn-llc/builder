@@ -52,7 +52,6 @@ func (c uiAskController) acceptEvent(evt askEvent) {
 		c.resolvePrompt(evt.promptID())
 		return
 	}
-	c.notifyAskPending(evt.req)
 	incomingPromptID := strings.TrimSpace(evt.req.PromptID)
 	if incomingPromptID != "" && m.ask.hasCurrent() && strings.TrimSpace(m.ask.current.req.PromptID) == incomingPromptID {
 		m.ask.current.req = evt.req
@@ -68,14 +67,6 @@ func (c uiAskController) acceptEvent(evt askEvent) {
 		return
 	}
 	m.ask.queue = append(m.ask.queue, evt)
-}
-
-func (c uiAskController) notifyAskPending(req clientui.PendingPromptEvent) {
-	m := c.model
-	if m == nil || m.askNotificationHook == nil {
-		return
-	}
-	m.askNotificationHook.OnAsk(req)
 }
 
 func (c uiAskController) resolvePrompt(promptID string) {
@@ -153,16 +144,15 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlC:
 		hasNext := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
 		interruptCmd := tea.Cmd(nil)
-		if m.isBusy() {
-			interruptCmd = m.inputController().interruptBusyRuntime()
-			m.setBusy(false)
+		if m.blocksRuntimeInput() {
+			_, interruptCmd = m.inputController().handleRuntimeCtrlC(nil)
 		}
 		if hasNext {
 			m.activity = uiActivityQuestion
 		} else {
 			m.activity = uiActivityInterrupted
 		}
-		return m, interruptCmd
+		return m, tea.Batch(interruptCmd, m.interruptedStatusNoticeCmd())
 	case tea.KeyEsc:
 		hasNext := c.answer(clientui.PromptAnswer{}, errors.New("question canceled"))
 		if hasNext {

@@ -21,19 +21,8 @@ type RuntimeReasoningState struct {
 }
 
 type PendingInputState struct {
-	Input            string
-	PendingInjected  []clientui.QueuedUserMessage
-	LockedInjectText string
-	LockedInjectID   string
-	Submission       InputSubmissionLifecycle
+	PendingInjected []clientui.QueuedUserMessage
 }
-
-type InputSubmissionLifecycle string
-
-const (
-	InputSubmissionUnlocked InputSubmissionLifecycle = "unlocked"
-	InputSubmissionLocked   InputSubmissionLifecycle = "locked"
-)
 
 type BackgroundNoticeKind uint8
 
@@ -47,40 +36,6 @@ type BackgroundNotice struct {
 	Kind    BackgroundNoticeKind
 }
 
-type RuntimeTranscriptSyncReason string
-
-const (
-	RuntimeTranscriptSyncNone                  RuntimeTranscriptSyncReason = ""
-	RuntimeTranscriptSyncStreamGap             RuntimeTranscriptSyncReason = "stream_gap"
-	RuntimeTranscriptSyncCommittedAdvance      RuntimeTranscriptSyncReason = "committed_advance"
-	RuntimeTranscriptSyncRecovery              RuntimeTranscriptSyncReason = "recovery"
-	RuntimeTranscriptSyncStreamingErrorUpdated RuntimeTranscriptSyncReason = "streaming_error_updated"
-)
-
-type RuntimeTranscriptSyncCommand struct {
-	Reason        RuntimeTranscriptSyncReason
-	RecoveryCause clientui.TranscriptRecoveryCause
-}
-
-type RuntimeAssistantStreamCommandKind uint8
-
-const (
-	RuntimeAssistantStreamAppend RuntimeAssistantStreamCommandKind = iota + 1
-	RuntimeAssistantStreamClear
-)
-
-type RuntimeAssistantStreamCommand struct {
-	Kind   RuntimeAssistantStreamCommandKind
-	Delta  string
-	Phase  clientui.MessagePhase
-	StepID string
-}
-
-type RuntimeTranscriptReduction struct {
-	Sync            RuntimeTranscriptSyncCommand
-	AssistantStream []RuntimeAssistantStreamCommand
-}
-
 type RuntimeActivityCommand uint8
 
 const (
@@ -92,20 +47,12 @@ const (
 type RuntimeRunStateReduction struct {
 	State           RuntimeRunState
 	Activity        RuntimeActivityCommand
-	ExternalRuntime *clientui.ExternalRuntimeStatus
+	RuntimeActivity *clientui.RuntimeActivity
 	Err             error
 }
 
-type RuntimeDraftInputCommandKind uint8
-
-const (
-	RuntimePendingInputKeepDraft RuntimeDraftInputCommandKind = iota
-	RuntimePendingInputClearDraft
-)
-
 type RuntimePendingInputReduction struct {
 	State                PendingInputState
-	DraftCommand         RuntimeDraftInputCommandKind
 	ConsumedQueueItemIDs []string
 	RestoredText         string
 }
@@ -135,8 +82,9 @@ const (
 )
 
 type RuntimeNoticeReduction struct {
-	BackgroundNotice *BackgroundNotice
-	DiagnosticNotice *BackgroundNotice
+	BackgroundNotice    *BackgroundNotice
+	DiagnosticNotice    *BackgroundNotice
+	TransientDiagnostic *BackgroundNotice
 }
 
 type RuntimeBackgroundProcessReduction struct {
@@ -148,7 +96,6 @@ type RuntimeConversationReduction struct {
 }
 
 type RuntimeEventReduction struct {
-	Transcript          RuntimeTranscriptReduction
 	RunState            RuntimeRunStateReduction
 	Conversation        RuntimeConversationReduction
 	PendingInput        RuntimePendingInputReduction
@@ -174,7 +121,6 @@ func ReduceRuntimeEvent(
 		backgroundProcessReduction = RuntimeBackgroundProcessReduction{Command: RuntimeBackgroundProcessRefresh}
 	}
 	return RuntimeEventReduction{
-		Transcript:          ReduceRuntimeTranscriptEvent(evt),
 		RunState:            ReduceRuntimeRunStateEvent(runState, activityRunning, evt),
 		Conversation:        conversationReduction,
 		PendingInput:        ReduceRuntimePendingInputEvent(input, evt),
@@ -182,27 +128,6 @@ func ReduceRuntimeEvent(
 		BackgroundProcesses: backgroundProcessReduction,
 		Notices:             ReduceRuntimeNoticeEvent(evt),
 	}
-}
-
-func ReduceRuntimeTranscriptEvent(evt clientui.Event) RuntimeTranscriptReduction {
-	switch evt.Kind {
-	case clientui.EventStreamGap:
-		return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncStreamGap, RecoveryCause: evt.RecoveryCause}}
-	case clientui.EventConversationUpdated:
-		if evt.RecoveryCause != clientui.TranscriptRecoveryCauseNone {
-			return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncRecovery, RecoveryCause: evt.RecoveryCause}}
-		}
-		if evt.CommittedTranscriptChanged {
-			return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncCommittedAdvance}}
-		}
-	case clientui.EventStreamingErrorUpdated:
-		return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncStreamingErrorUpdated}}
-	case clientui.EventAssistantDelta:
-		return RuntimeTranscriptReduction{AssistantStream: []RuntimeAssistantStreamCommand{{Kind: RuntimeAssistantStreamAppend, Delta: evt.AssistantDelta, Phase: evt.AssistantDeltaPhase, StepID: evt.StepID}}}
-	case clientui.EventAssistantDeltaReset:
-		return RuntimeTranscriptReduction{AssistantStream: []RuntimeAssistantStreamCommand{{Kind: RuntimeAssistantStreamClear, StepID: evt.StepID}}}
-	}
-	return RuntimeTranscriptReduction{}
 }
 
 func ReduceRuntimeRunStateEvent(state RuntimeRunState, activityRunning bool, evt clientui.Event) RuntimeRunStateReduction {
@@ -228,24 +153,17 @@ func ReduceRuntimeRunStateEvent(state RuntimeRunState, activityRunning bool, evt
 			reduction.Err = err
 			return reduction
 		}
-		reduction.State.Run = evt.RunState.Lifecycle
-		if evt.RunState.Lifecycle.IsRunning() {
+	case clientui.EventRuntimeActivityChanged:
+		if evt.RuntimeActivity == nil {
+			return reduction
+		}
+		reduction.RuntimeActivity = evt.RuntimeActivity
+		if evt.RuntimeActivity.ActiveForControl() {
+			reduction.State.Run = clientui.MustRunLifecycle(clientui.RunLifecycleRunning, runModeFromRuntimeActivityKind(evt.RuntimeActivity.ActiveKind))
 			reduction.Activity = RuntimeActivityRunning
 			return reduction
 		}
-		if activityRunning {
-			reduction.Activity = RuntimeActivityIdle
-		}
-	case clientui.EventExternalRuntimeStatus:
-		reduction.ExternalRuntime = cloneExternalRuntimeStatus(evt.ExternalRuntimeStatus)
-		if externalRuntimeBusy(evt.ExternalRuntimeStatus) {
-			reduction.Activity = RuntimeActivityRunning
-			return reduction
-		}
-		if reduction.State.Run.IsRunning() {
-			reduction.Activity = RuntimeActivityRunning
-			return reduction
-		}
+		reduction.State.Run = clientui.IdleRunLifecycle()
 		if activityRunning {
 			reduction.Activity = RuntimeActivityIdle
 		}
@@ -253,46 +171,22 @@ func ReduceRuntimeRunStateEvent(state RuntimeRunState, activityRunning bool, evt
 	return reduction
 }
 
-func cloneExternalRuntimeStatus(status *clientui.ExternalRuntimeStatus) *clientui.ExternalRuntimeStatus {
-	if status == nil {
-		return nil
+func runModeFromRuntimeActivityKind(kind clientui.RuntimeActivityActiveKind) clientui.RunMode {
+	if kind == clientui.RuntimeActivityActiveKindGoalLoop {
+		return clientui.RunModeGoalLoop
 	}
-	next := *status
-	return &next
-}
-
-func externalRuntimeBusy(status *clientui.ExternalRuntimeStatus) bool {
-	if status == nil {
-		return false
-	}
-	switch status.State {
-	case clientui.ExternalRuntimeStateOwnerRunning, clientui.ExternalRuntimeStateDraining, clientui.ExternalRuntimeStateClosing:
-		return true
-	default:
-		return false
-	}
+	return clientui.RunModeTurn
 }
 
 func ReduceRuntimePendingInputEvent(input PendingInputState, evt clientui.Event) RuntimePendingInputReduction {
 	next := clonePendingInputState(input)
-	reduction := RuntimePendingInputReduction{
-		State:        next,
-		DraftCommand: RuntimePendingInputKeepDraft,
-	}
+	reduction := RuntimePendingInputReduction{State: next}
 	switch evt.Kind {
 	case clientui.EventUserMessageFlushed:
 		consumed := consumedQueuedUserMessages(reduction.State.PendingInjected, evt.UserMessageBatchQueueItemIDs)
 		if len(consumed) > 0 {
 			reduction.State.PendingInjected = append([]clientui.QueuedUserMessage(nil), reduction.State.PendingInjected[len(consumed):]...)
 			reduction.ConsumedQueueItemIDs = append([]string(nil), evt.UserMessageBatchQueueItemIDs[:len(consumed)]...)
-		}
-		if reduction.State.Submission == InputSubmissionLocked && containsQueuedUserMessageID(consumed, reduction.State.LockedInjectID) {
-			if reduction.State.Input == reduction.State.LockedInjectText {
-				reduction.DraftCommand = RuntimePendingInputClearDraft
-			}
-			reduction.State.LockedInjectText = ""
-			reduction.State.LockedInjectID = ""
-			reduction.State.Submission = InputSubmissionUnlocked
 		}
 	case clientui.EventQueuedUserMessageStatus:
 		status := evt.QueuedUserMessageStatus
@@ -303,12 +197,10 @@ func ReduceRuntimePendingInputEvent(input PendingInputState, evt clientui.Event)
 		case clientui.QueuedUserMessageSubmitted, clientui.QueuedUserMessageDiscarded:
 			if _, removed := removePendingQueuedUserMessageByStatus(&reduction.State.PendingInjected, status); removed {
 				reduction.consumeQueuedStatusIDs(status)
-				reduction.unlockSubmittedPendingInput(status.QueueItemID)
 			}
 		case clientui.QueuedUserMessageFailed:
 			if _, removed := removePendingQueuedUserMessageByStatus(&reduction.State.PendingInjected, status); removed {
 				reduction.consumeQueuedStatusIDs(status)
-				reduction.unlockSubmittedPendingInput(status.QueueItemID)
 				reduction.RestoredText = strings.TrimSpace(status.RestoreText)
 			}
 		}
@@ -326,15 +218,6 @@ func (reduction *RuntimePendingInputReduction) consumeQueuedStatusIDs(status *cl
 	if id := strings.TrimSpace(status.ClientRequestID); id != "" {
 		reduction.ConsumedQueueItemIDs = append(reduction.ConsumedQueueItemIDs, id)
 	}
-}
-
-func (reduction *RuntimePendingInputReduction) unlockSubmittedPendingInput(queueItemID string) {
-	if reduction.State.Submission != InputSubmissionLocked || !queuedUserMessageIDMatches(reduction.State.LockedInjectID, queueItemID) {
-		return
-	}
-	reduction.State.LockedInjectText = ""
-	reduction.State.LockedInjectID = ""
-	reduction.State.Submission = InputSubmissionUnlocked
 }
 
 func ReduceRuntimeReasoningEvent(state RuntimeReasoningState, evt clientui.Event) RuntimeReasoningReduction {
@@ -378,6 +261,12 @@ func ReduceRuntimeNoticeEvent(evt clientui.Event) RuntimeNoticeReduction {
 			return RuntimeNoticeReduction{}
 		}
 		return RuntimeNoticeReduction{DiagnosticNotice: &BackgroundNotice{Message: "sleep prevention failed: " + msg, Kind: BackgroundNoticeError}}
+	case clientui.EventPromptHistoryPersistFailed:
+		msg := strings.TrimSpace(evt.Error)
+		if msg == "" {
+			return RuntimeNoticeReduction{}
+		}
+		return RuntimeNoticeReduction{TransientDiagnostic: &BackgroundNotice{Message: "prompt history persistence failed: " + msg, Kind: BackgroundNoticeError}}
 	}
 	return RuntimeNoticeReduction{}
 }
@@ -425,18 +314,6 @@ func consumedQueuedUserMessages(pending []clientui.QueuedUserMessage, ids []stri
 		consumed = append(consumed, pending[index])
 	}
 	return consumed
-}
-
-func containsQueuedUserMessageID(messages []clientui.QueuedUserMessage, id string) bool {
-	if id == "" {
-		return false
-	}
-	for _, message := range messages {
-		if message.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func removePendingQueuedUserMessageByStatus(messages *[]clientui.QueuedUserMessage, status *clientui.QueuedUserMessageStatusEvent) (clientui.QueuedUserMessage, bool) {

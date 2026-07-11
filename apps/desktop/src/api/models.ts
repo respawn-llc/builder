@@ -1,8 +1,8 @@
 export type ServerCause = Readonly<{
   code: string;
   severity: string;
-  summary: string;
-  nextAction: string;
+  summary?: string;
+  nextAction?: string;
   diagnosticID: string;
 }>;
 
@@ -123,6 +123,21 @@ export type PendingAsk = Readonly<{
   createdAt: string;
 }>;
 
+export type ApprovalDecision = "allow_once" | "allow_session" | "deny";
+
+export type OrdinaryQuestionPrompt = Readonly<{
+  kind: "ordinary";
+  suggestions: readonly string[];
+  recommendedOptionIndex: number;
+}>;
+
+export type ApprovalQuestionPrompt = Readonly<{
+  kind: "approval";
+  approvalDecisions: readonly ApprovalDecision[];
+}>;
+
+export type AttentionQuestionPrompt = OrdinaryQuestionPrompt | ApprovalQuestionPrompt;
+
 export type WorkflowValidationError = Readonly<{
   code: string;
   message: string;
@@ -194,6 +209,7 @@ export type WorkflowNode = Readonly<{
   subagentRole: string;
   promptTemplate: string;
   completionMode?: string | undefined;
+  scriptPath?: string | null | undefined;
   inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
   outputFields: readonly WorkflowOutputField[];
@@ -302,6 +318,7 @@ export type WorkflowGraphDraftNode = Readonly<{
   subagentRole: string;
   promptTemplate: string;
   completionMode?: string | undefined;
+  scriptPath?: string | null | undefined;
   inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
 }>;
@@ -444,12 +461,8 @@ export type TaskStatus = Readonly<{
 export type TaskActions = Readonly<{
   canStart: boolean;
   canInterrupt: boolean;
-  interruptRunID: string;
   canResume: boolean;
-  resumeRunID: string;
   canCancel: boolean;
-  needsDetailForInterrupt: boolean;
-  needsDetailForResume: boolean;
   manualMoveTargetNodeIDs: readonly string[];
 }>;
 
@@ -530,8 +543,10 @@ export type AttentionItem = Readonly<{
   askID: string;
   taskTransitionID: string;
   message: string;
+  detailJSON: string;
   suggestions: readonly string[];
   recommendedOptionIndex: number;
+  question: AttentionQuestionPrompt | null;
   occurredAt: number;
 }>;
 
@@ -560,6 +575,8 @@ export type TaskRun = Readonly<{
   taskID: string;
   placementID: string;
   nodeID: string;
+  nodeKind: string;
+  scriptPath: string;
   sessionID: string;
   sessionName: string;
   role: string;
@@ -569,6 +586,8 @@ export type TaskRun = Readonly<{
   startedAt: number;
   completedAt: number;
   interruptedAt: number;
+  interruptionReason: string;
+  interruptionDetail: string;
 }>;
 
 export type TaskTransition = Readonly<{

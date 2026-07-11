@@ -14,6 +14,9 @@ func TestGetServerReadinessIncludesWorkflowAssigneeRoles(t *testing.T) {
 	service := NewServerStatusService(nil, config.App{
 		Settings: config.Settings{
 			Model: "base",
+			Workflow: config.WorkflowSettings{
+				Subagents: false,
+			},
 			Subagents: map[string]config.SubagentRole{
 				"coder": {
 					Settings: config.Settings{Model: "coder-model"},
@@ -24,6 +27,12 @@ func TestGetServerReadinessIncludesWorkflowAssigneeRoles(t *testing.T) {
 					AgentCallableSet: true,
 					Settings:         config.Settings{Model: "blocked-model"},
 					Sources:          map[string]string{"model": "test"},
+				},
+				"workflow_hidden": {
+					Settings:            config.Settings{Model: "workflow-hidden-model"},
+					Sources:             map[string]string{"model": "test"},
+					WorkflowSubagent:    false,
+					WorkflowSubagentSet: true,
 				},
 			},
 		},
@@ -38,7 +47,7 @@ func TestGetServerReadinessIncludesWorkflowAssigneeRoles(t *testing.T) {
 	for _, role := range readiness.SubagentRoles {
 		got = append(got, role.Name)
 	}
-	want := []string{"default", "fast", "blocked", "coder"}
+	want := []string{"default", "fast", "blocked", "coder", "workflow_hidden"}
 	if len(got) != len(want) {
 		t.Fatalf("roles = %+v, want %+v", got, want)
 	}

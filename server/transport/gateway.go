@@ -15,6 +15,7 @@ import (
 	"core/server/metadata"
 	rpccontract "core/shared/apicontract"
 	"core/shared/client"
+	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
@@ -39,12 +40,18 @@ type Gateway struct {
 type GatewayDependencies interface {
 	GatewayServerStatusDependencies
 	GatewayAuthDependencies
+	GatewayCapabilityFactsDependencies
+	GatewayOnboardingDependencies
 	GatewayProjectDependencies
 	GatewaySessionDependencies
 	GatewayRuntimeDependencies
 	GatewayPromptDependencies
 	GatewayProcessDependencies
 	GatewayWorktreeDependencies
+}
+
+type GatewayDependencyAvailability interface {
+	RouteDependencyAvailable(rpccontract.Dependency) error
 }
 
 type GatewayServerStatusDependencies interface {
@@ -56,6 +63,14 @@ type GatewayAuthDependencies interface {
 	AuthBootstrapClient() client.AuthBootstrapClient
 	AuthStatusClient() client.AuthStatusClient
 	ServerAuthRequired() bool
+}
+
+type GatewayCapabilityFactsDependencies interface {
+	CapabilityFactsClient() client.CapabilityFactsClient
+}
+
+type GatewayOnboardingDependencies interface {
+	OnboardingFinalizeClient() client.OnboardingFinalizeClient
 }
 
 type GatewayProjectDependencies interface {
@@ -72,6 +87,7 @@ type GatewaySessionDependencies interface {
 	SessionLifecycleClient() client.SessionLifecycleClient
 	SessionRuntimeClient() client.SessionRuntimeClient
 	SessionActivityClient() client.SessionActivityClient
+	SessionTranscriptClient() client.SessionTranscriptClient
 	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (client.SessionLaunchClient, error)
 	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (client.SessionLaunchClient, error)
 	RunPromptClientForProjectWorkspace(context.Context, string, string) (client.RunPromptClient, error)
@@ -80,6 +96,7 @@ type GatewaySessionDependencies interface {
 
 type GatewayRuntimeDependencies interface {
 	RuntimeControlClient() client.RuntimeControlClient
+	RuntimeLiveControlClient() client.RuntimeLiveControlClient
 }
 
 type GatewayPromptDependencies interface {
@@ -87,6 +104,7 @@ type GatewayPromptDependencies interface {
 	ApprovalViewClient() client.ApprovalViewClient
 	PromptControlClient() client.PromptControlClient
 	PromptActivityClient() client.PromptActivityClient
+	AttentionNotificationClient() client.AttentionNotificationClient
 }
 
 type GatewayProcessDependencies interface {
@@ -113,6 +131,19 @@ type gatewayProgressHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Cont
 
 var gatewayProgressHandlers = routeHandlersForKind(rpccontract.KindProgress, gatewayProgressHandlerEntries)
 
+func RuntimeLiveControlRoutesExecutable() bool {
+	for _, method := range []string{
+		protocol.MethodRuntimeLiveSteer,
+		protocol.MethodRuntimeLiveStop,
+		protocol.MethodRuntimeLiveWait,
+	} {
+		if _, ok := gatewayUnaryHandlers[method]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func protocolSubscriptionMethodSet() map[string]struct{} {
 	methods := rpccontract.SubscriptionMethods()
 	set := make(map[string]struct{}, len(methods))
@@ -124,28 +155,27 @@ func protocolSubscriptionMethodSet() map[string]struct{} {
 
 type connectionState struct {
 	handshakeDone         bool
+	noAuthAccepted        bool
 	attachedProject       string
 	attachedWorkspaceID   string
 	attachedWorkspaceRoot string
 	attachedSession       string
 	runtimeOwnerID        string
-	ownedRuntimeLeases    map[string]connectionOwnedRuntimeLease
-}
-
-type connectionOwnedRuntimeLease struct {
-	SessionID string
-	LeaseID   string
-	OwnerID   string
+	ownedRuntimes         map[string]struct{}
 }
 
 type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request)
 
 var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
-	protocol.MethodSessionSubscribeActivity: (*Gateway).serveSessionActivitySubscription,
-	protocol.MethodProcessSubscribeOutput:   (*Gateway).serveProcessOutputSubscription,
-	protocol.MethodPromptSubscribeActivity:  (*Gateway).servePromptActivitySubscription,
-	protocol.MethodWorkflowSubscribe:        (*Gateway).serveWorkflowSubscription,
-	protocol.MethodWorkflowSubscribeProject: (*Gateway).serveWorkflowProjectSubscription,
+	protocol.MethodSessionSubscribeActivity:              (*Gateway).serveSessionActivitySubscription,
+	protocol.MethodSessionSubscribeTranscript:            (*Gateway).serveSessionTranscriptSubscription,
+	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
+	protocol.MethodPromptSubscribeActivity:               (*Gateway).servePromptActivitySubscription,
+	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
+	protocol.MethodAttentionSessionNotificationSubscribe: (*Gateway).serveSessionAttentionNotificationSubscription,
+	protocol.MethodWorkflowSubscribe:                     (*Gateway).serveWorkflowSubscription,
+	protocol.MethodWorkflowSubscribeProject:              (*Gateway).serveWorkflowProjectSubscription,
+	protocol.MethodWorktreeSetupSubscribe:                (*Gateway).serveWorktreeSetupSubscription,
 }
 
 var gatewaySubscriptionHandlers = routeHandlersForKind(rpccontract.KindSubscription, gatewaySubscriptionHandlerEntries)
@@ -213,7 +243,7 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 		cancel()
 	}()
 	state := &connectionState{runtimeOwnerID: uuid.NewString()}
-	defer g.cleanupConnectionRuntimeLeases(state)
+	defer g.cleanupConnectionRuntimes(state)
 	for {
 		req, err := receiveRequest(connCtx, conn)
 		if err != nil {
@@ -238,8 +268,8 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 
 const gatewayRuntimeCleanupTimeout = 3 * time.Second
 
-func (g *Gateway) cleanupConnectionRuntimeLeases(state *connectionState) {
-	owned := state.takeOwnedRuntimeLeases()
+func (g *Gateway) cleanupConnectionRuntimes(state *connectionState) {
+	owned := state.takeOwnedRuntimes()
 	if len(owned) == 0 || g == nil || isNilGatewayDependencies(g.deps) {
 		return
 	}
@@ -247,15 +277,16 @@ func (g *Gateway) cleanupConnectionRuntimeLeases(state *connectionState) {
 	if client == nil {
 		return
 	}
-	for _, lease := range owned {
+	ownerID := strings.TrimSpace(state.runtimeOwnerID)
+	for _, sessionID := range owned {
 		ctx, cancel := context.WithTimeout(context.Background(), gatewayRuntimeCleanupTimeout)
 		_, _ = client.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
 			ClientRequestID: uuid.NewString(),
-			SessionID:       lease.SessionID,
-			LeaseID:         lease.LeaseID,
+			SessionID:       sessionID,
 			OnlyIfIdle:      true,
 			DropOwner:       true,
-			OwnerID:         lease.OwnerID,
+			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
+			OwnerID:         ownerID,
 		})
 		cancel()
 	}
@@ -268,14 +299,19 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if req.Method != protocol.MethodHandshake && !state.handshakeDone {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
-	if err := newRoutePolicyExecutor(g).requireAuth(ctx, req.Method); err != nil {
-		return responseForError(req.ID, err)
-	}
-	handler, ok := gatewayUnaryHandlers[req.Method]
+	route, ok := rpccontract.RouteByMethod(req.Method)
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
-	route, ok := rpccontract.RouteByMethod(req.Method)
+	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
+		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
+			return responseForError(req.ID, err)
+		}
+	}
+	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
+		return responseForError(req.ID, err)
+	}
+	handler, ok := gatewayUnaryHandlers[req.Method]
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
@@ -324,6 +360,10 @@ func sendResponse(ctx context.Context, conn rpcwire.Conn, resp protocol.Response
 }
 
 func responseForError(id string, err error) protocol.Response {
+	var structured protocol.StructuredRPCError
+	if errors.As(err, &structured) {
+		return protocol.NewErrorResponseWithData(id, structured.RPCErrorCode(), err.Error(), structured.RPCErrorData())
+	}
 	code, message := protocolError(err)
 	return protocol.NewErrorResponse(id, code, message)
 }
@@ -333,11 +373,14 @@ func protocolError(err error) (int, string) {
 		return protocol.ErrCodeInternalError, "internal error"
 	}
 	message := strings.TrimSpace(err.Error())
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, serverapi.ErrRuntimeOperationCanceled) {
 		if message == "" || message == context.Canceled.Error() {
 			message = canceledByClientMessage
 		}
 		return protocol.ErrCodeRequestCanceled, message
+	}
+	if errors.Is(err, llmerrors.ErrModelStreamStalled) {
+		return protocol.ErrCodeModelStreamStalled, message
 	}
 	if errors.Is(err, serverapi.ErrStreamGap) {
 		return protocol.ErrCodeStreamGap, message
@@ -351,17 +394,14 @@ func protocolError(err error) (int, string) {
 	if errors.Is(err, serverapi.ErrProjectUnavailable) {
 		return protocol.ErrCodeProjectUnavailable, message
 	}
-	if errors.Is(err, serverapi.ErrSessionAlreadyControlled) {
-		return protocol.ErrCodeSessionAlreadyControlled, message
-	}
-	if errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		return protocol.ErrCodeInvalidControllerLease, message
-	}
 	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return protocol.ErrCodeRuntimeUnavailable, message
 	}
-	if errors.Is(err, serverapi.ErrActivePrimaryRun) {
-		return protocol.ErrCodeActivePrimaryRun, message
+	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		return protocol.ErrCodeRuntimeNoActiveRun, message
+	}
+	if errors.Is(err, serverapi.ErrRuntimeNoFinalAnswer) {
+		return protocol.ErrCodeRuntimeNoFinalAnswer, message
 	}
 	if errors.Is(err, serverapi.ErrStreamUnavailable) {
 		return protocol.ErrCodeStreamUnavailable, message
@@ -387,6 +427,9 @@ func protocolError(err error) (int, string) {
 	if errors.Is(err, serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous) {
 		return protocol.ErrCodeWorkflowTaskCompleteAmbiguous, message
 	}
+	if errors.Is(err, serverapi.ErrUnsupportedProvider) {
+		return protocol.ErrCodeUnsupportedProvider, message
+	}
 	if errors.Is(err, serverapi.ErrServerAuthRequired) || errors.Is(err, auth.ErrAuthNotConfigured) {
 		return protocol.ErrCodeAuthRequired, message
 	}
@@ -398,7 +441,11 @@ func streamCompleteParams(err error) protocol.StreamCompleteParams {
 		return protocol.StreamCompleteParams{}
 	}
 	code, message := protocolError(err)
-	return protocol.StreamCompleteParams{Code: code, Message: message}
+	params := protocol.StreamCompleteParams{Code: code, Message: message}
+	if reason, ok := serverapi.TranscriptCloseReasonOf(err); ok {
+		params.TranscriptCloseReason = string(reason)
+	}
+	return params
 }
 
 func decodeParams[T any](raw json.RawMessage) (T, error) {

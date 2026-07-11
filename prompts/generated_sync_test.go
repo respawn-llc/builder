@@ -29,6 +29,53 @@ func TestSyncSeedsMissingGeneratedRoot(t *testing.T) {
 	}
 }
 
+func TestGeneratedLayoutForCustomPersistenceRoot(t *testing.T) {
+	root := t.TempDir()
+	layout, err := GeneratedLayoutFor(root)
+	if err != nil {
+		t.Fatalf("GeneratedLayoutFor: %v", err)
+	}
+	if layout.GeneratedRoot != filepath.Join(root, generatedDirName) {
+		t.Fatalf("generated root = %q, want %q", layout.GeneratedRoot, filepath.Join(root, generatedDirName))
+	}
+	if layout.GeneratedSkillsRoot != filepath.Join(root, generatedDirName, generatedSkillsDir) {
+		t.Fatalf("generated skills root = %q, want %q", layout.GeneratedSkillsRoot, filepath.Join(root, generatedDirName, generatedSkillsDir))
+	}
+	if layout.UserSkillsRoot != filepath.Join(root, generatedSkillsDir) {
+		t.Fatalf("user skills root = %q, want %q", layout.UserSkillsRoot, filepath.Join(root, generatedSkillsDir))
+	}
+	if layout.RecoveryRoot != filepath.Join(root, recoveredDirName) {
+		t.Fatalf("recovery root = %q, want %q", layout.RecoveryRoot, filepath.Join(root, recoveredDirName))
+	}
+}
+
+func TestGeneratedLayoutForEmptyRootMatchesDefaultHelpers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	layout, err := GeneratedLayoutFor("")
+	if err != nil {
+		t.Fatalf("GeneratedLayoutFor empty: %v", err)
+	}
+	generatedRoot, err := GeneratedRoot()
+	if err != nil {
+		t.Fatalf("GeneratedRoot: %v", err)
+	}
+	generatedSkillsRoot, err := GeneratedSkillsRoot()
+	if err != nil {
+		t.Fatalf("GeneratedSkillsRoot: %v", err)
+	}
+	recoveryRoot, err := RecoveryRoot()
+	if err != nil {
+		t.Fatalf("RecoveryRoot: %v", err)
+	}
+	if layout.GeneratedRoot != generatedRoot || layout.GeneratedSkillsRoot != generatedSkillsRoot || layout.RecoveryRoot != recoveryRoot {
+		t.Fatalf("layout = %+v, want generated=%q skills=%q recovery=%q", layout, generatedRoot, generatedSkillsRoot, recoveryRoot)
+	}
+	if layout.UserSkillsRoot != filepath.Join(home, configDirName, generatedSkillsDir) {
+		t.Fatalf("user skills root = %q, want default home skills root", layout.UserSkillsRoot)
+	}
+}
+
 func TestSyncUpgradesCleanGeneratedRootWithoutRecovery(t *testing.T) {
 	home := t.TempDir()
 	oldFS := fstest.MapFS{

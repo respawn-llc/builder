@@ -1,6 +1,7 @@
 import { EdgeLabelRenderer, type EdgeProps } from "@xyflow/react";
 import type { MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { z } from "zod";
 
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, IslandSurface } from "../../ui";
 import { cx } from "../../ui/classes";
@@ -9,6 +10,9 @@ import { workflowEdgeColor } from "./workflowGraphColors";
 import type { WorkflowGraphEdge as WorkflowGraphEdgeModel } from "./workflowGraphLayout";
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
 import { workflowGraphZOrder } from "./workflowGraphZOrder";
+
+const markerEndIDSchema = z.string();
+const edgeMarkerSchema = z.object({ color: z.string().optional() });
 
 export function WorkflowGraphEdge(
   props: EdgeProps<WorkflowGraphEdgeModel> &
@@ -22,6 +26,7 @@ export function WorkflowGraphEdge(
   const edgePath = workflowEdgePath(props);
   const label = props.data?.label ?? "";
   const color = edgeColor(props);
+  const markerEnd = markerEndIDSchema.safeParse(props.markerEnd);
   const edgeID = props.data?.entityKind === "edge" ? props.data.entityID : "";
   const inspect = (event: MouseEvent) => {
     event.stopPropagation();
@@ -62,7 +67,7 @@ export function WorkflowGraphEdge(
               data-testid="workflow-edge-path"
               data-edge-id={props.id}
               d={edgePath.path}
-              markerEnd={typeof props.markerEnd === "string" ? props.markerEnd : undefined}
+              markerEnd={markerEnd.success ? markerEnd.data : undefined}
               onClick={inspect}
               style={{
                 fill: "none",
@@ -124,8 +129,9 @@ export function WorkflowGraphEdge(
 }
 
 function edgeColor(props: EdgeProps<WorkflowGraphEdgeModel>): string {
-  if (props.markerEnd !== undefined && typeof props.markerEnd !== "string" && props.markerEnd.color !== undefined) {
-    return props.markerEnd.color;
+  const marker = edgeMarkerSchema.safeParse(props.markerEnd);
+  if (marker.success && marker.data.color !== undefined) {
+    return marker.data.color;
   }
   return workflowEdgeColor(props.data?.contextMode ?? "", props.data?.hasError === true);
 }

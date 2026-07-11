@@ -103,7 +103,7 @@ func TestCustomKeyCtrlEnterXtermVariantQueuesAndStartsSubmission(t *testing.T) {
 
 func TestCustomKeyCtrlEnterQueuesPostTurnWhenBusy(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.input = "echo hi"
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyCtrlEnter})
@@ -114,9 +114,6 @@ func TestCustomKeyCtrlEnterQueuesPostTurnWhenBusy(t *testing.T) {
 	}
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("did not expect injected steering messages, got %d", len(updated.pendingInjected))
-	}
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect submit lock for ctrl+enter queue")
 	}
 }
 
@@ -146,10 +143,6 @@ func TestCustomKeyShiftEnterThenEnterDoesNotSubmitTrailingNewline(t *testing.T) 
 
 	if !updated.isBusy() {
 		t.Fatal("expected submission started")
-	}
-	snapshot := stripANSIAndTrimRight(updated.view.CommittedOngoingProjection().Render(tui.TranscriptDivider))
-	if strings.Contains(snapshot, "❯ hello\n\n") {
-		t.Fatalf("expected submitted user message without trailing blank line, got %q", snapshot)
 	}
 }
 
@@ -554,7 +547,7 @@ func TestAskFreeformCtrlUEditingMatchesMainInput(t *testing.T) {
 func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	_, eng := newAppRuntimeEngine(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
 	m := newProjectedEngineUIModel(eng)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	reply := make(chan askReply, 1)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionAllowSession, Label: "Allow for this session"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -651,6 +644,22 @@ func TestDetailModeHidesInputBox(t *testing.T) {
 	}
 }
 
+func TestTabInsideDetailReturnsToOngoingMode(t *testing.T) {
+	m := newProjectedStaticUIModel()
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated := next.(*uiModel)
+	if updated.view.Mode() != tui.ModeDetail {
+		t.Fatalf("mode=%q want detail", updated.view.Mode())
+	}
+
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = next.(*uiModel)
+	if updated.view.Mode() != tui.ModeOngoing {
+		t.Fatalf("mode=%q want ongoing after Tab", updated.view.Mode())
+	}
+}
+
 func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 	m := newProjectedStaticUIModel(
 		WithUIModelName("gpt-5"),
@@ -669,7 +678,7 @@ func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 
 	lines := strings.Split(ansi.Strip(updated.View()), "\n")
 	statusLine := lines[len(lines)-1]
-	if want := statusStateCircleGlyph + statusLineSpinnerSeparator + "gpt-5 · detail-mode-v2"; !strings.HasPrefix(statusLine, want) {
+	if want := statusStateCircleGlyph + statusLineSpinnerSeparator + "detail-mode-v2 · gpt-5"; !strings.HasPrefix(statusLine, want) {
 		t.Fatalf("detail status line prefix = %q, want prefix %q", statusLine, want)
 	}
 	if strings.Contains(statusLine, statusStateCircleGlyph+statusLineSpinnerSeparator+"ongoing"+statusLineSeparator) ||
@@ -680,113 +689,45 @@ func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 	}
 }
 
-func TestAskQuestionLargeMarkdownPromptPreservesLogicalLines(t *testing.T) {
-	question := strings.Join([]string{
-		"    val preserved = true",
-		"Please review this plan before I continue:",
-		"",
-		"```kotlin",
-		"fun main() {",
-		"    println(\"hi\")",
-		"}",
-		"```",
-		"",
-		"- Keep the four leading spaces in the code block.",
-		"- Do not collapse blank lines.",
-	}, "\n")
-	m := newProjectedStaticUIModel()
-	m.termWidth = 72
-	m.termHeight = 24
-	m.windowSizeKnown = true
-	m.layout().syncViewport()
-	testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{Question: question}, reply: make(chan askReply, 1)})
-
-	wrapped, _ := m.layout().wrappedAskPromptLines(64)
-	gotLines := make([]string, 0, len(wrapped))
-	for _, line := range wrapped {
-		if strings.Contains(line.Text, "\n") {
-			t.Fatalf("ask prompt line contains embedded newline: %+v", line)
-		}
-		gotLines = append(gotLines, strings.TrimRight(ansi.Strip(line.Text), " "))
-	}
-	got := strings.Join(gotLines, "\n")
-	if strings.Contains(got, "```") || strings.Contains(got, "- Keep") || strings.Contains(got, "**") {
-		t.Fatalf("expected inline ask question markdown rendered, got %q", got)
-	}
-	for _, want := range []string{
-		"val preserved = true",
-		"Please review this plan before I continue:",
-		"fun main() {",
-		"    println(\"hi\")",
-		"}",
-		"• Keep the four leading spaces in the code block.",
-		"• Do not collapse blank lines.",
-		"›",
-		"Enter to submit",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("ask prompt markdown missing %q in %q", want, got)
-		}
-	}
-}
-
-func TestAskQuestionPickerQuestionLinesWrapInsteadOfEllipsizing(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.termWidth = 40
-	m.termHeight = 12
-	m.windowSizeKnown = true
-	m.layout().syncViewport()
-	testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{
-		Question: "This question is intentionally far too long to fit in the live ask input area on one line.",
-		Suggestions: []string{
-			"Proceed",
+func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
+	page := clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("line one\nline two\nline three\nline four"),
 		},
-	}, reply: make(chan askReply, 1)})
-
-	wrapped, _ := m.layout().wrappedAskPromptLines(32)
-	if len(wrapped) == 0 {
-		t.Fatal("expected ask prompt lines")
 	}
-	questionLines := 0
-	plain := make([]string, 0, len(wrapped))
-	for _, line := range wrapped {
-		if line.Line.Kind == askPromptLineKindQuestion {
-			questionLines++
-			plain = append(plain, ansi.Strip(line.Text))
-			if strings.HasSuffix(ansi.Strip(line.Text), "…") {
-				t.Fatalf("expected picker question line to wrap, not ellipsize: %+v", line)
-			}
-		}
-	}
-	if questionLines < 2 {
-		t.Fatalf("expected long picker question to wrap across multiple lines, got %d in %q", questionLines, strings.Join(plain, "\n"))
-	}
-}
-
-func TestAskQuestionFreeformPromptQuestionLinesWrapInsteadOfEllipsizing(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.termWidth = 40
-	m.termHeight = 12
+	m := newProjectedStaticUIModel(
+		WithUISessionID(detailTestSessionID),
+		WithUIModelName("gpt-5"),
+	)
+	m.statusConfig.SessionViews = &countingSessionViewClient{page: page}
+	m.termWidth = 100
+	m.termHeight = 16
 	m.windowSizeKnown = true
 	m.layout().syncViewport()
-	testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{
-		Question: "This question is intentionally far too long to fit in the live ask input area on one line.",
-	}, reply: make(chan askReply, 1)})
 
-	wrapped, _ := m.layout().wrappedAskPromptLines(32)
-	questionLines := 0
-	plain := make([]string, 0, len(wrapped))
-	for _, line := range wrapped {
-		if line.Line.Kind == askPromptLineKindQuestion {
-			questionLines++
-			plain = append(plain, ansi.Strip(line.Text))
-			if strings.HasSuffix(ansi.Strip(line.Text), "…") {
-				t.Fatalf("expected freeform question line to wrap, not ellipsize: %+v", line)
-			}
+	cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{
+		target:            tui.ModeDetail,
+		suppressAltScreen: true,
+		preserveSurface:   true,
+	})
+	updated := m
+	for _, msg := range collectCmdMessages(t, cmd) {
+		if load, ok := msg.(detailTranscriptLoadMsg); ok {
+			updated = updateUIModel(t, updated, load)
 		}
 	}
-	if questionLines < 2 {
-		t.Fatalf("expected long freeform question to wrap across multiple lines, got %d in %q", questionLines, strings.Join(plain, "\n"))
+	if updated.view.Mode() != tui.ModeDetail {
+		t.Fatalf("mode=%q want detail", updated.view.Mode())
+	}
+	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionExpand {
+		t.Fatalf("detail selection action = %v, want expand", got)
+	}
+
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = next.(*uiModel)
+	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
+		t.Fatalf("detail selection action = %v, want collapse", got)
 	}
 }
 
@@ -823,139 +764,134 @@ func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *test
 	}
 }
 
-func TestDoubleEscEntersRollbackSelectionAndEnterStartsEditing(t *testing.T) {
-	m := newProjectedStaticUIModel(WithUIInitialTranscript([]UITranscriptEntry{
-		{Role: "user", Text: "u1"},
-		{Role: "assistant", Text: "a1"},
-		{Role: "user", Text: "u2"},
-	}))
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-
-	if !testRollbackSelecting(updated) {
-		t.Fatal("expected rollback selection mode after double esc")
-	}
-	if testRollbackSelection(updated) != 1 {
-		t.Fatalf("expected last user message selected by default, got %d", testRollbackSelection(updated))
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-	if !testRollbackEditing(updated) {
-		t.Fatal("expected rollback editing mode after enter")
-	}
-	if testRollbackSelecting(updated) {
-		t.Fatal("did not expect rollback selection mode while editing")
-	}
-	if updated.input != "u2" {
-		t.Fatalf("expected selected message loaded into input, got %q", updated.input)
-	}
-	rawDetail := updated.view.DetailProjection(true, true).Render(tui.TranscriptDivider)
-	selectedLine := lineContaining(rawDetail, "u2")
-	if selectedLine == "" {
-		t.Fatalf("expected rollback edit state to retain selected detail entry, got %q", stripANSIPreserve(rawDetail))
-	}
-	if !strings.Contains(selectedLine, themeSelectionBackgroundEscape(updated.theme)) {
-		t.Fatalf("expected rollback edit state to keep selection background, got %q", selectedLine)
-	}
-}
-
-func TestBareEscapeRuneDoubleEscEntersRollbackSelection(t *testing.T) {
-	m := newProjectedStaticUIModel(WithUIInitialTranscript([]UITranscriptEntry{
-		{Role: "user", Text: "u1"},
-		{Role: "assistant", Text: "a1"},
-	}))
-
-	escapeRune := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\x1b'}}
-	next, _ := m.Update(escapeRune)
-	updated := next.(*uiModel)
-	next, _ = updated.Update(escapeRune)
-	updated = next.(*uiModel)
-
-	if !testRollbackSelecting(updated) {
-		t.Fatal("expected rollback selection mode after double bare escape rune")
-	}
-	if updated.input != "" {
-		t.Fatalf("expected bare escape rune not to enter prompt text, got %q", updated.input)
-	}
-}
-
-func TestRollbackSelectionHighlightsSelectedMessageFullWidth(t *testing.T) {
-	m := newProjectedStaticUIModel(WithUIInitialTranscript([]UITranscriptEntry{
-		{Role: "user", Text: "first user"},
-		{Role: "assistant", Text: "first answer"},
-		{Role: "user", Text: "selected user"},
-		{Role: "assistant", Text: "latest answer"},
-	}))
-	m.termWidth = 80
-	m.termHeight = 16
+func TestAskQuestionPickerMarkdownQuestionWrapsWithoutSourceMarkers(t *testing.T) {
+	question := strings.Join([]string{
+		"Review **generated plan** and the [design note](https://example.com/design).",
+		"",
+		"- First item",
+		"- Second item",
+	}, "\n")
+	m := newProjectedStaticUIModel()
+	m.termWidth = 40
+	m.termHeight = 14
 	m.windowSizeKnown = true
 	m.layout().syncViewport()
+	testSetActiveAsk(m, &askEvent{
+		req:   clientui.PendingPromptEvent{Question: question},
+		reply: make(chan askReply, 1),
+	})
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-
-	if !testRollbackSelecting(updated) {
-		t.Fatal("expected rollback selection mode after double esc")
+	wrapped, _ := m.layout().wrappedAskPromptLines(32)
+	var questionLines []string
+	for _, line := range wrapped {
+		if line.Line.Kind != askPromptLineKindQuestion {
+			continue
+		}
+		if width := lipgloss.Width(line.Text); width > 32 {
+			t.Fatalf("question line width = %d, want <= 32: %q", width, line.Text)
+		}
+		questionLines = append(questionLines, ansi.Strip(line.Text))
 	}
-	if updated.view.Mode() != tui.ModeDetail {
-		t.Fatalf("expected rollback selection in detail overlay, got mode %q", updated.view.Mode())
+	plain := strings.Join(questionLines, "\n")
+	if len(questionLines) < 3 {
+		t.Fatalf("question lines = %d, want wrapped Markdown: %q", len(questionLines), plain)
 	}
-
-	raw := updated.View()
-	selectedLine := lineContaining(raw, "selected user")
-	if selectedLine == "" {
-		t.Fatalf("expected rollback selection view to contain selected message, got %q", stripANSIPreserve(raw))
+	if strings.Contains(plain, "**generated plan**") || strings.Contains(plain, "- First item") {
+		t.Fatalf("question retained Markdown source markers: %q", plain)
 	}
-	if got := lipgloss.Width(selectedLine); got != updated.termWidth {
-		t.Fatalf("expected selected rollback line to span viewport width %d, got %d in %q", updated.termWidth, got, selectedLine)
-	}
-	if !strings.Contains(selectedLine, themeSelectionBackgroundEscape(updated.theme)) {
-		t.Fatalf("expected rollback selection line to use selection background, got %q", selectedLine)
+	continuous := strings.ReplaceAll(plain, "\n", "")
+	for _, content := range []string{"Review generated plan", "design note", "First item", "Second item"} {
+		if !strings.Contains(continuous, content) {
+			t.Fatalf("question Markdown missing %q: %q", content, plain)
+		}
 	}
 }
 
-func TestRollbackEditingEscReturnsToSelection(t *testing.T) {
-	m := newProjectedStaticUIModel(WithUIInitialTranscript([]UITranscriptEntry{
-		{Role: "user", Text: "u1"},
-		{Role: "assistant", Text: "a1"},
-		{Role: "user", Text: "u2"},
-	}))
-	testSetRollbackEditing(m, 1, 2)
-	m.input = "edited"
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated := next.(*uiModel)
-	if !testRollbackSelecting(updated) {
-		t.Fatal("expected rollback selection mode after esc")
-	}
-	if testRollbackSelection(updated) != 1 {
-		t.Fatalf("expected rollback selection preserved, got %d", testRollbackSelection(updated))
-	}
-}
-
-func TestRollbackEditingSubmitQuitsIntoForkTransition(t *testing.T) {
+func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	testSetRollbackEditing(m, 0, 3)
-	m.input = "edited user message"
+	m.termWidth = 56
+	m.termHeight = 9
+	m.windowSizeKnown = true
+	m.layout().syncViewport()
+	testSetActiveAsk(m, &askEvent{
+		req: clientui.PendingPromptEvent{
+			Question: strings.Repeat("Long **Markdown question** content. ", 8),
+			Suggestions: []string{
+				"First",
+				"Second",
+			},
+		},
+		reply: make(chan askReply, 1),
+	})
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := next.(*uiModel)
-	if updated.exitAction != UIActionForkRollback {
-		t.Fatalf("expected fork rollback action, got %q", updated.exitAction)
+	visible, _ := m.layout().visibleAskPromptLinesWithCursor(48)
+	questionLines := 0
+	optionLines := 0
+	hintLines := 0
+	for _, line := range visible {
+		switch line.Line.Kind {
+		case askPromptLineKindQuestion:
+			questionLines++
+		case askPromptLineKindOption:
+			optionLines++
+		case askPromptLineKindHint:
+			hintLines++
+		}
 	}
-	if updated.nextForkRollbackTargetID != rollbackTargetIDForTestSelection(3) {
-		t.Fatalf("expected rollback target id, got %q", updated.nextForkRollbackTargetID)
+	if optionLines != 3 {
+		t.Fatalf("visible option lines = %d, want all two suggestions plus freeform: %+v", optionLines, visible)
 	}
-	if updated.nextSessionInitialPrompt != "edited user message" {
-		t.Fatalf("expected startup prompt to match edited input, got %q", updated.nextSessionInitialPrompt)
+	if hintLines != 1 {
+		t.Fatalf("visible hint lines = %d, want 1: %+v", hintLines, visible)
 	}
-	if updated.input != "" {
-		t.Fatalf("expected rollback edit buffer cleared before quit, got %q", updated.input)
+	if questionLines != 1 {
+		t.Fatalf("visible question lines = %d, want remaining one-line capacity: %+v", questionLines, visible)
+	}
+}
+
+func TestAskQuestionPickerRendersHeadingsRulesAndTables(t *testing.T) {
+	question := strings.Join([]string{
+		"# Primary heading",
+		"",
+		"---",
+		"",
+		"## Results",
+		"",
+		"| Element | State |",
+		"| --- | --- |",
+		"| Header | Ready |",
+		"| Table | Ready |",
+	}, "\n")
+	m := newProjectedStaticUIModel()
+	m.termWidth = 64
+	m.termHeight = 20
+	m.windowSizeKnown = true
+	m.layout().syncViewport()
+	testSetActiveAsk(m, &askEvent{
+		req:   clientui.PendingPromptEvent{Question: question},
+		reply: make(chan askReply, 1),
+	})
+
+	wrapped, _ := m.layout().wrappedAskPromptLines(56)
+	var questionLines []string
+	for _, line := range wrapped {
+		if line.Line.Kind != askPromptLineKindQuestion {
+			continue
+		}
+		if width := lipgloss.Width(line.Text); width > 56 {
+			t.Fatalf("question line width = %d, want <= 56: %q", width, line.Text)
+		}
+		questionLines = append(questionLines, ansi.Strip(line.Text))
+	}
+	plain := strings.Join(questionLines, "\n")
+	for _, source := range []string{"| Element | State |", "| --- | --- |"} {
+		if strings.Contains(plain, source) {
+			t.Fatalf("question retained Markdown source %q: %q", source, plain)
+		}
+	}
+	for _, content := range []string{"Primary heading", "Results", "Element", "State", "Header", "Table", "Ready"} {
+		if !strings.Contains(plain, content) {
+			t.Fatalf("question Markdown missing %q: %q", content, plain)
+		}
 	}
 }

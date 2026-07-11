@@ -11,32 +11,33 @@ type EventKind string
 type TranscriptRecoveryCause string
 
 const (
-	EventConversationUpdated     EventKind = "conversation_updated"
-	EventStreamGap               EventKind = "stream_gap"
-	EventAssistantDelta          EventKind = "assistant_delta"
-	EventAssistantDeltaReset     EventKind = "assistant_delta_reset"
-	EventStreamingErrorUpdated   EventKind = "streaming_error_updated"
-	EventReasoningDelta          EventKind = "reasoning_delta"
-	EventReasoningDeltaReset     EventKind = "reasoning_delta_reset"
-	EventAssistantMessage        EventKind = "assistant_message"
-	EventModelResponse           EventKind = "model_response_received"
-	EventUserMessageFlushed      EventKind = "user_message_flushed"
-	EventToolCallStarted         EventKind = "tool_call_started"
-	EventToolCallCompleted       EventKind = "tool_call_completed"
-	EventReviewerStarted         EventKind = "reviewer_started"
-	EventReviewerCompleted       EventKind = "reviewer_completed"
-	EventInFlightClearFailed     EventKind = "in_flight_clear_failed"
-	EventCompactionStarted       EventKind = "context_compaction_started"
-	EventCompactionCompleted     EventKind = "context_compaction_completed"
-	EventCompactionFailed        EventKind = "context_compaction_failed"
-	EventCacheWarning            EventKind = "cache_warning"
-	EventLocalEntryAdded         EventKind = "local_entry_added"
-	EventRunStateChanged         EventKind = "run_state_changed"
-	EventBackgroundUpdated       EventKind = "background_updated"
-	EventSleepGuardFailed        EventKind = "sleep_guard_failed"
-	EventGoalStatusUpdated       EventKind = "goal_status_updated"
-	EventQueuedUserMessageStatus EventKind = "queued_user_message_status"
-	EventExternalRuntimeStatus   EventKind = "external_runtime_status"
+	EventConversationUpdated        EventKind = "conversation_updated"
+	EventStreamGap                  EventKind = "stream_gap"
+	EventAssistantDelta             EventKind = "assistant_delta"
+	EventAssistantDeltaReset        EventKind = "assistant_delta_reset"
+	EventStreamingErrorUpdated      EventKind = "streaming_error_updated"
+	EventReasoningDelta             EventKind = "reasoning_delta"
+	EventReasoningDeltaReset        EventKind = "reasoning_delta_reset"
+	EventAssistantMessage           EventKind = "assistant_message"
+	EventModelResponse              EventKind = "model_response_received"
+	EventUserMessageFlushed         EventKind = "user_message_flushed"
+	EventToolCallStarted            EventKind = "tool_call_started"
+	EventToolCallCompleted          EventKind = "tool_call_completed"
+	EventReviewerStarted            EventKind = "reviewer_started"
+	EventReviewerCompleted          EventKind = "reviewer_completed"
+	EventInFlightClearFailed        EventKind = "in_flight_clear_failed"
+	EventCompactionStarted          EventKind = "context_compaction_started"
+	EventCompactionCompleted        EventKind = "context_compaction_completed"
+	EventCompactionFailed           EventKind = "context_compaction_failed"
+	EventCacheWarning               EventKind = "cache_warning"
+	EventLocalEntryAdded            EventKind = "local_entry_added"
+	EventRunStateChanged            EventKind = "run_state_changed"
+	EventBackgroundUpdated          EventKind = "background_updated"
+	EventSleepGuardFailed           EventKind = "sleep_guard_failed"
+	EventPromptHistoryPersistFailed EventKind = "prompt_history_persist_failed"
+	EventGoalStatusUpdated          EventKind = "goal_status_updated"
+	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
+	EventRuntimeActivityChanged     EventKind = "runtime_activity_changed"
 
 	TranscriptRecoveryCauseNone         TranscriptRecoveryCause = ""
 	TranscriptRecoveryCauseStreamGap    TranscriptRecoveryCause = "stream_gap"
@@ -49,10 +50,6 @@ type Event struct {
 	StepID                       string
 	RecoveryCause                TranscriptRecoveryCause
 	CommittedTranscriptChanged   bool
-	TranscriptRevision           int64
-	CommittedEntryCount          int
-	CommittedEntryStart          int
-	CommittedEntryStartSet       bool
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          MessagePhase
@@ -60,7 +57,6 @@ type Event struct {
 	UserMessage                  string
 	UserMessageBatch             []string
 	UserMessageBatchQueueItemIDs []string
-	TranscriptEntries            []ChatEntry
 	Compaction                   *CompactionStatus
 	CacheWarning                 *transcript.CacheWarning
 	CacheWarningVisibility       EntryVisibility
@@ -69,7 +65,9 @@ type Event struct {
 	Background                   *BackgroundShellEvent
 	GoalStatus                   *RuntimeGoalStatusUpdate
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
-	ExternalRuntimeStatus        *ExternalRuntimeStatus
+	ReadModelVersion             ReadModelVersion
+	RuntimeActivity              *RuntimeActivity
+	InputReconciliation          *RuntimeInputReconciliationSnapshot
 }
 
 type RuntimeGoalStatusUpdate struct {
@@ -94,6 +92,7 @@ const (
 	QueuedUserMessageFailureClosing                    QueuedUserMessageFailureReason = "closing"
 	QueuedUserMessageFailureTerminalWorkflowCompletion QueuedUserMessageFailureReason = "terminal_workflow_completion"
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
+	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
 )
 
 type QueuedUserMessageStatusEvent struct {
@@ -120,6 +119,7 @@ type ReasoningDelta struct {
 type RunState struct {
 	Lifecycle  RunLifecycle
 	RunID      string
+	ActiveKind RuntimeActivityActiveKind
 	Status     RunStatus
 	StartedAt  time.Time
 	FinishedAt time.Time
@@ -142,64 +142,38 @@ type BackgroundShellEvent struct {
 }
 
 type ChatEntry struct {
-	Visibility        EntryVisibility
-	RollbackTargetID  string
-	Role              string
-	Text              string
-	CondensedText     string
-	Phase             string
-	MessageType       string
-	SourcePath        string
-	CompactLabel      string
-	ToolResultSummary string
-	ToolCallID        string
-	NoticeID          string
-	ToolCall          *ToolCallMeta
+	Visibility         EntryVisibility
+	RollbackTargetID   string
+	Role               string
+	Text               string
+	CondensedText      string
+	Phase              MessagePhase
+	MessageType        MessageType
+	SourcePath         string
+	CompactLabel       string
+	ToolResultSummary  string
+	ToolCallID         string
+	NoticeID           string
+	BackgroundExitCode *int
+	ToolCall           *ToolCallMeta
 }
 
 const ChatEntryPhaseFinalAnswer = string(MessagePhaseFinal)
 
-type ChatSnapshot struct {
-	Entries        []ChatEntry
-	Streaming      string
-	StreamingError string
-}
-
 type TranscriptPageRequest struct {
-	Cursor      int64
-	NewerCursor int64
+	Cursor      *int64
+	NewerCursor *int64
 }
 
 type TranscriptPage struct {
 	SessionID             string
 	SessionName           string
 	ConversationFreshness ConversationFreshness
-	Revision              int64
-	TotalEntries          int
-	Offset                int
-	NextOffset            int
-	HasMore               bool
-	OlderCursor           int64
+	OlderCursor           *int64
 	HasMoreAbove          bool
-	NewerCursor           int64
+	NewerCursor           *int64
 	HasMoreBelow          bool
-	Entries               []ChatEntry
-	Streaming             string
-	StreamingError        string
-}
-
-type CommittedTranscriptSuffixRequest struct{}
-
-type CommittedTranscriptSuffix struct {
-	SessionID             string
-	SessionName           string
-	ConversationFreshness ConversationFreshness
-	Revision              int64
-	CommittedEntryCount   int
-	StartEntryCount       int
-	NextEntryCount        int
-	HasMore               bool
-	Entries               []ChatEntry
+	Entries               []TranscriptCommittedRow
 }
 
 type ToolPresentationKind string
@@ -253,4 +227,5 @@ type ToolCallMeta struct {
 	OmitSuccessfulResult   bool
 	RawOutputRequested     bool
 	OutputTruncated        bool
+	MovedToBackground      bool
 }

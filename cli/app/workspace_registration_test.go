@@ -7,6 +7,7 @@ import (
 	"net"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 
 	"core/server/llm"
@@ -38,6 +39,17 @@ func newAppTestHome(t *testing.T) string {
 }
 
 func newRegisteredAppWorkspace(t *testing.T) (home string, workspace string) {
+	t.Helper()
+	home = newAppTestHome(t)
+	workspace = t.TempDir()
+	registerAppWorkspace(t, workspace)
+	if _, _, err := config.WriteDefaultSettingsFileAt(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
+		t.Fatalf("write test settings: %v", err)
+	}
+	return home, workspace
+}
+
+func newRegisteredAppWorkspaceWithoutSettings(t *testing.T) (home string, workspace string) {
 	t.Helper()
 	home = newAppTestHome(t)
 	workspace = t.TempDir()
@@ -79,6 +91,7 @@ func startStandingRunPromptServer(t *testing.T, workspace, openAIBaseURL string)
 
 func startStandingRunPromptServerWithAuth(t *testing.T, workspace, openAIBaseURL string, authHandler serverstartup.AuthHandler) func() {
 	t.Helper()
+	releasePortProbe := reserveAppDirectServePort(t)
 	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
@@ -89,7 +102,7 @@ func startStandingRunPromptServerWithAuth(t *testing.T, workspace, openAIBaseURL
 	if err != nil {
 		t.Fatalf("StartServeServer: %v", err)
 	}
-	stop := serveAppServer(t, srv)
+	stop := serveAppServerAfter(t, srv, releasePortProbe)
 	cleanup := func() {
 		stop()
 		_ = srv.Close()
@@ -106,10 +119,15 @@ func startStandingRunPromptServerWithAuth(t *testing.T, workspace, openAIBaseURL
 }
 
 func serveAppServer(t *testing.T, srv *serverstartup.ServeServer) func() {
+	return serveAppServerAfter(t, srv, func() {})
+}
+
+func serveAppServerAfter(t *testing.T, srv *serverstartup.ServeServer, beforeServe func()) func() {
 	t.Helper()
 	serveCtx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		beforeServe()
 		errCh <- srv.Serve(serveCtx)
 	}()
 	return func() {
@@ -120,6 +138,23 @@ func serveAppServer(t *testing.T, srv *serverstartup.ServeServer) func() {
 	}
 }
 
+func reserveAppDirectServePort(t *testing.T) func() {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve direct serve port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
+	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
+	var once sync.Once
+	release := func() {
+		once.Do(func() { _ = listener.Close() })
+	}
+	t.Cleanup(release)
+	return release
+}
+
 func prepareAppRuntimePlan(t *testing.T, server launchPlannerServer, req sessionLaunchRequest, diagnosticWriter io.Writer, startLogLine string) (sessionLaunchPlan, *runtimeLaunchPlan) {
 	t.Helper()
 	planner := newSessionLaunchPlanner(server)
@@ -127,6 +162,21 @@ func prepareAppRuntimePlan(t *testing.T, server launchPlannerServer, req session
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
+	runtimePlan, err := planner.PrepareRuntime(context.Background(), plan, diagnosticWriter, startLogLine)
+	if err != nil {
+		t.Fatalf("PrepareRuntime: %v", err)
+	}
+	return plan, runtimePlan
+}
+
+func prepareAppRuntimePlanWithOpenAIBaseURL(t *testing.T, server launchPlannerServer, req sessionLaunchRequest, openAIBaseURL string, diagnosticWriter io.Writer, startLogLine string) (sessionLaunchPlan, *runtimeLaunchPlan) {
+	t.Helper()
+	planner := newSessionLaunchPlanner(server)
+	plan, err := planner.PlanSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	plan.ActiveSettings.OpenAIBaseURL = openAIBaseURL
 	runtimePlan, err := planner.PrepareRuntime(context.Background(), plan, diagnosticWriter, startLogLine)
 	if err != nil {
 		t.Fatalf("PrepareRuntime: %v", err)
@@ -174,8 +224,9 @@ func configureAppTestServerPort(t *testing.T) {
 		t.Fatalf("reserve server port: %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	serverstartup.ReserveTestListenReservation(listener)
-	t.Cleanup(func() { serverstartup.ReleaseTestListenReservation(listener.Addr().String()) })
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release server port probe: %v", err)
+	}
 	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
 	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
 }

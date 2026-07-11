@@ -8,26 +8,70 @@ import (
 	"time"
 
 	"core/shared/client"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
 
 type runtimeAttachmentTestServer struct {
-	runtime        client.SessionRuntimeClient
-	sessionEvents  client.SessionActivityClient
-	promptEvents   client.PromptActivityClient
-	sessionViews   client.SessionViewClient
-	runtimeControl client.RuntimeControlClient
+	runtime                         client.SessionRuntimeClient
+	sessionEvents                   client.SessionActivityClient
+	attention                       client.AttentionNotificationClient
+	attentionNotificationsSupported *bool
+	promptEvents                    client.PromptActivityClient
+	sessionViews                    client.SessionViewClient
+	runtimeControl                  client.RuntimeControlClient
 }
 
 func (s runtimeAttachmentTestServer) RuntimeAttachmentClients() runtimeAttachmentClients {
-	return runtimeAttachmentClients{
-		PromptActivity:  s.promptEvents,
-		RuntimeControls: s.runtimeControl,
-		SessionActivity: s.sessionEvents,
-		SessionRuntime:  s.runtime,
-		SessionViews:    s.sessionViews,
+	attentionSupported := s.attention != nil
+	if s.attentionNotificationsSupported != nil {
+		attentionSupported = *s.attentionNotificationsSupported
 	}
+	return runtimeAttachmentClients{
+		PromptActivity:                  s.promptEvents,
+		Attention:                       s.attention,
+		AttentionNotificationsSupported: attentionSupported,
+		RuntimeControls:                 s.runtimeControl,
+		SessionActivity:                 s.sessionEvents,
+		SessionRuntime:                  s.runtime,
+		SessionViews:                    s.sessionViews,
+	}
+}
+
+type noOpAttentionNotificationSubscription struct{}
+
+func (noOpAttentionNotificationSubscription) Next(context.Context) (clientui.AttentionNotificationEvent, error) {
+	return clientui.AttentionNotificationEvent{}, io.EOF
+}
+
+func (noOpAttentionNotificationSubscription) Close() error { return nil }
+
+type noOpPromptActivitySubscription struct{}
+
+func (noOpPromptActivitySubscription) Next(context.Context) (clientui.PendingPromptEvent, error) {
+	return clientui.PendingPromptEvent{}, io.EOF
+}
+
+func (noOpPromptActivitySubscription) Close() error { return nil }
+
+type recordingAttentionNotificationClient struct {
+	subscribe        func(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
+	subscribeSession func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
+}
+
+func (c *recordingAttentionNotificationClient) SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	if c.subscribe != nil {
+		return c.subscribe(ctx, req)
+	}
+	return noOpAttentionNotificationSubscription{}, nil
+}
+
+func (c *recordingAttentionNotificationClient) SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	if c.subscribeSession != nil {
+		return c.subscribeSession(ctx, req)
+	}
+	return noOpAttentionNotificationSubscription{}, nil
 }
 
 func TestRuntimeAttachmentSubscribeFailureReleasesRuntime(t *testing.T) {
@@ -47,12 +91,12 @@ func TestRuntimeAttachmentSubscribeFailureReleasesRuntime(t *testing.T) {
 			server := runtimeAttachmentTestServer{
 				runtime: &recordingSessionRuntimeClient{
 					activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-						return serverapi.SessionRuntimeActivateResponse{LeaseID: "lease-1"}, nil
+						return serverapi.SessionRuntimeActivateResponse{}, nil
 					},
 					release: func(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 						releaseCount++
 						released <- ctx
-						if req.SessionID != "session-1" || req.LeaseID != "lease-1" {
+						if req.SessionID != "session-1" {
 							t.Fatalf("unexpected release request: %+v", req)
 						}
 						return serverapi.SessionRuntimeReleaseResponse{}, nil
@@ -73,6 +117,11 @@ func TestRuntimeAttachmentSubscribeFailureReleasesRuntime(t *testing.T) {
 							return nil, tc.promptErr
 						}
 						return nil, nil
+					},
+				},
+				attention: &recordingAttentionNotificationClient{
+					subscribeSession: func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+						return noOpAttentionNotificationSubscription{}, nil
 					},
 				},
 			}
@@ -107,16 +156,111 @@ func TestRuntimeAttachmentSubscribeFailureReleasesRuntime(t *testing.T) {
 	}
 }
 
+func TestRuntimeAttachmentSupportedAttentionSubscribeFailureReleasesRuntime(t *testing.T) {
+	releaseCount := 0
+	subscribeErr := errors.New("attention stream unavailable")
+	server := runtimeAttachmentTestServer{
+		runtime: &recordingSessionRuntimeClient{
+			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+				return serverapi.SessionRuntimeActivateResponse{}, nil
+			},
+			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
+				releaseCount++
+				return serverapi.SessionRuntimeReleaseResponse{}, nil
+			},
+		},
+		sessionEvents: &recordingSessionActivityClient{
+			subscribe: func(context.Context, serverapi.SessionActivitySubscribeRequest) (serverapi.SessionActivitySubscription, error) {
+				return noOpSessionActivitySubscription{}, nil
+			},
+		},
+		promptEvents: &recordingPromptActivityClient{
+			subscribe: func(context.Context, serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error) {
+				return noOpPromptActivitySubscription{}, nil
+			},
+		},
+		attention: &recordingAttentionNotificationClient{
+			subscribeSession: func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+				return nil, subscribeErr
+			},
+		},
+		sessionViews:   &countingSessionViewClient{},
+		runtimeControl: &reconnectRetryRuntimeControlClient{},
+	}
+
+	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-fallback"}, io.Discard, "test")
+	if !errors.Is(err, subscribeErr) {
+		t.Fatalf("prepareSharedRuntime error = %v, want %v", err, subscribeErr)
+	}
+	if plan != nil {
+		t.Fatalf("plan = %+v, want nil after attach failure", plan)
+	}
+	if releaseCount != 1 {
+		t.Fatalf("release count = %d, want 1", releaseCount)
+	}
+}
+
+func TestRuntimeAttachmentPromptActivityFallbackWhenAttentionUnsupported(t *testing.T) {
+	releaseCount := 0
+	attentionSubscribeCalls := 0
+	server := runtimeAttachmentTestServer{
+		runtime: &recordingSessionRuntimeClient{
+			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+				return serverapi.SessionRuntimeActivateResponse{}, nil
+			},
+			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
+				releaseCount++
+				return serverapi.SessionRuntimeReleaseResponse{}, nil
+			},
+		},
+		sessionEvents: &recordingSessionActivityClient{
+			subscribe: func(context.Context, serverapi.SessionActivitySubscribeRequest) (serverapi.SessionActivitySubscription, error) {
+				return noOpSessionActivitySubscription{}, nil
+			},
+		},
+		promptEvents: &recordingPromptActivityClient{
+			subscribe: func(context.Context, serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error) {
+				return noOpPromptActivitySubscription{}, nil
+			},
+		},
+		attention: &recordingAttentionNotificationClient{
+			subscribeSession: func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+				attentionSubscribeCalls++
+				return nil, errors.New("attention stream should not be used without capability")
+			},
+		},
+		attentionNotificationsSupported: boolPointer(false),
+		sessionViews:                    &countingSessionViewClient{},
+		runtimeControl:                  &reconnectRetryRuntimeControlClient{},
+	}
+
+	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-fallback"}, io.Discard, "test")
+	if err != nil {
+		t.Fatalf("prepareSharedRuntime: %v", err)
+	}
+	plan.Close()
+	if releaseCount != 1 {
+		t.Fatalf("release count = %d, want 1", releaseCount)
+	}
+	if attentionSubscribeCalls != 0 {
+		t.Fatalf("attention subscribe calls = %d, want 0", attentionSubscribeCalls)
+	}
+}
+
+func boolPointer(value bool) *bool {
+	return &value
+}
+
 func TestRuntimeAttachmentCloseReleasesRuntime(t *testing.T) {
 	releaseCount := 0
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
 			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{LeaseID: "lease-close"}, nil
+				return serverapi.SessionRuntimeActivateResponse{}, nil
 			},
 			release: func(_ context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 				releaseCount++
-				if req.SessionID != "session-close" || req.LeaseID != "lease-close" {
+				if req.SessionID != "session-close" {
 					t.Fatalf("unexpected release request: %+v", req)
 				}
 				return serverapi.SessionRuntimeReleaseResponse{}, nil
@@ -132,8 +276,13 @@ func TestRuntimeAttachmentCloseReleasesRuntime(t *testing.T) {
 				return nil, nil
 			},
 		},
+		attention: &recordingAttentionNotificationClient{
+			subscribeSession: func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+				return noOpAttentionNotificationSubscription{}, nil
+			},
+		},
 		sessionViews:   &countingSessionViewClient{},
-		runtimeControl: &leaseRetryRuntimeControlClient{},
+		runtimeControl: &reconnectRetryRuntimeControlClient{},
 	}
 
 	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-close"}, io.Discard, "test")
@@ -146,110 +295,7 @@ func TestRuntimeAttachmentCloseReleasesRuntime(t *testing.T) {
 	}
 }
 
-func TestRuntimeAttachmentLegacyReadOnlyActivationIsNoControl(t *testing.T) {
-	releaseCount := 0
-	controls := &leaseRetryRuntimeControlClient{allowEmptySubmit: true}
-	server := runtimeAttachmentTestServer{
-		runtime: &recordingSessionRuntimeClient{
-			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{ReadOnly: true}, nil
-			},
-			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-				releaseCount++
-				return serverapi.SessionRuntimeReleaseResponse{}, nil
-			},
-		},
-		sessionEvents: &recordingSessionActivityClient{
-			subscribe: func(context.Context, serverapi.SessionActivitySubscribeRequest) (serverapi.SessionActivitySubscription, error) {
-				return noOpSessionActivitySubscription{}, nil
-			},
-		},
-		promptEvents: &recordingPromptActivityClient{
-			subscribe: func(context.Context, serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error) {
-				return nil, nil
-			},
-		},
-		sessionViews:   &countingSessionViewClient{},
-		runtimeControl: controls,
-	}
-
-	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-readonly"}, io.Discard, "test")
-	if err != nil {
-		t.Fatalf("prepareSharedRuntime: %v", err)
-	}
-	if !plan.ReadOnly || plan.AccessMode != serverapi.SessionRuntimeAttachModeNoControl {
-		t.Fatalf("plan readOnly=%v mode=%q, want read-only no-control", plan.ReadOnly, plan.AccessMode)
-	}
-	if _, err := plan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello"); err != nil {
-		if !errors.Is(err, errReadOnlyRuntime) {
-			t.Fatalf("SubmitUserMessage error = %v, want read-only runtime", err)
-		}
-	} else {
-		t.Fatal("SubmitUserMessage unexpectedly succeeded for read-only no-control attach")
-	}
-	plan.Close()
-	if releaseCount != 0 {
-		t.Fatalf("release count = %d, want none for read-only attach", releaseCount)
-	}
-}
-
-func TestRuntimeAttachmentCollaborativeSubmitUsesLiveRuntimeWithoutLeaseOrRelease(t *testing.T) {
-	releaseCount := 0
-	controls := &leaseRetryRuntimeControlClient{allowEmptySubmit: true}
-	server := runtimeAttachmentTestServer{
-		runtime: &recordingSessionRuntimeClient{
-			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{
-					Mode: serverapi.SessionRuntimeAttachModeCollaborative,
-					AllowedOperations: []serverapi.SessionRuntimeOperation{
-						serverapi.SessionRuntimeOperationSubmitUserTurn,
-						serverapi.SessionRuntimeOperationQueueUserMessage,
-					},
-				}, nil
-			},
-			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-				releaseCount++
-				return serverapi.SessionRuntimeReleaseResponse{}, nil
-			},
-		},
-		sessionEvents: &recordingSessionActivityClient{
-			subscribe: func(context.Context, serverapi.SessionActivitySubscribeRequest) (serverapi.SessionActivitySubscription, error) {
-				return noOpSessionActivitySubscription{}, nil
-			},
-		},
-		promptEvents: &recordingPromptActivityClient{
-			subscribe: func(context.Context, serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error) {
-				return nil, nil
-			},
-		},
-		sessionViews:   &countingSessionViewClient{},
-		runtimeControl: controls,
-	}
-
-	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-collab"}, io.Discard, "test")
-	if err != nil {
-		t.Fatalf("prepareSharedRuntime: %v", err)
-	}
-	if plan.ReadOnly || plan.HasControllerLease() {
-		t.Fatalf("plan readOnly=%v lease=%q, want collaborative without controller lease", plan.ReadOnly, plan.CurrentControllerLeaseID())
-	}
-	message, err := plan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "steer live runtime")
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "collaborative" {
-		t.Fatalf("message = %q, want collaborative", message)
-	}
-	if got := controls.submitLeaseIDs(); len(got) != 1 || got[0] != "" {
-		t.Fatalf("submit lease ids = %+v, want one empty lease", got)
-	}
-	plan.Close()
-	if releaseCount != 0 {
-		t.Fatalf("release count = %d, want no release for collaborative attach", releaseCount)
-	}
-}
-
-func TestRuntimeAttachmentLeaseRecoveryUsesActivation(t *testing.T) {
+func TestRuntimeAttachmentReactivationUsesActivation(t *testing.T) {
 	activateCalls := 0
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
@@ -261,26 +307,19 @@ func TestRuntimeAttachmentLeaseRecoveryUsesActivation(t *testing.T) {
 				if req.ActiveSettings.Model != "gpt-test" {
 					t.Fatalf("model = %q, want gpt-test", req.ActiveSettings.Model)
 				}
-				return serverapi.SessionRuntimeActivateResponse{LeaseID: map[int]string{1: "lease-1", 2: "lease-2"}[activateCalls]}, nil
+				return serverapi.SessionRuntimeActivateResponse{}, nil
 			},
 		},
 	}
-	lease, manager, err := activateSharedRuntime(context.Background(), server.RuntimeAttachmentClients(), sessionLaunchPlan{
+	reactivator, _, err := activateSharedRuntime(context.Background(), server.RuntimeAttachmentClients(), sessionLaunchPlan{
 		SessionID:      "session-recover",
 		ActiveSettings: config.Settings{Model: "gpt-test"},
 	})
 	if err != nil {
 		t.Fatalf("activateSharedRuntime: %v", err)
 	}
-	if lease.ID != "lease-1" || manager.Value() != "lease-1" {
-		t.Fatalf("initial lease = %q manager = %q, want lease-1", lease.ID, manager.Value())
-	}
-	recovered, err := manager.Recover(context.Background())
-	if err != nil {
-		t.Fatalf("recover lease: %v", err)
-	}
-	if recovered != "lease-2" || manager.Value() != "lease-2" {
-		t.Fatalf("recovered lease = %q manager = %q, want lease-2", recovered, manager.Value())
+	if err := reactivator.Reactivate(context.Background()); err != nil {
+		t.Fatalf("reactivate: %v", err)
 	}
 	if activateCalls != 2 {
 		t.Fatalf("activate calls = %d, want 2", activateCalls)

@@ -166,9 +166,7 @@ function firstDurationMs(value: string): number | null {
 }
 
 function prefersReducedMotion(): boolean {
-  return (
-    typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
+  return window.matchMedia instanceof Function && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 function floatingNoticeShellClassName({

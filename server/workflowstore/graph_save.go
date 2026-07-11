@@ -35,11 +35,12 @@ type WorkflowGraphSaveMetadata struct {
 }
 
 type WorkflowGraphSaveImpact struct {
-	RemovedNodeCount            int64
-	RemovedTransitionGroupCount int64
-	RemovedEdgeCount            int64
-	NodeTaskReferenceCount      int64
-	EdgeTaskReferenceCount      int64
+	RemovedNodeCount              int64
+	RemovedTransitionGroupCount   int64
+	RemovedEdgeCount              int64
+	NodeTaskReferenceCount        int64
+	CurrentNodeTaskReferenceCount int64
+	EdgeTaskReferenceCount        int64
 }
 
 type WorkflowGraphSaveBlocker struct {
@@ -318,7 +319,11 @@ func prepareWorkflowGraphSave(workflowID workflow.WorkflowID, displayName string
 		if node.GroupID != "" {
 			groupNodeIDs[node.GroupID] = append(groupNodeIDs[node.GroupID], node.ID)
 		}
-		def.Nodes = append(def.Nodes, workflow.Node{WorkflowID: node.WorkflowID, ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: node.GroupID, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, InputFields: node.InputFields, JoinInputProviders: node.JoinInputProviders, OutputFields: node.OutputFields})
+		workflowNode, err := workflowNodeFromRecord(node)
+		if err != nil {
+			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
+		}
+		def.Nodes = append(def.Nodes, workflowNode)
 	}
 	for _, group := range prepared.nodeGroups {
 		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: group.WorkflowID, ID: group.ID, Key: group.Key, DisplayName: group.DisplayName, MemberNodeIDs: groupNodeIDs[group.ID]})
@@ -393,11 +398,16 @@ func workflowGraphSaveImpact(ctx context.Context, q *sqlitegen.Queries, workflow
 		RemovedEdgeCount:            int64(len(removed.edges)),
 	}
 	for _, nodeID := range removed.nodes {
-		count, err := q.CountTaskNodeReferences(ctx, string(nodeID))
+		count, err := q.CountTaskNodeReferences(ctx, nullableString(string(nodeID)))
 		if err != nil {
 			return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
 		}
 		impact.NodeTaskReferenceCount += count
+		currentCount, err := q.CountCurrentTaskNodeAnchorReferences(ctx, nullableString(string(nodeID)))
+		if err != nil {
+			return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
+		}
+		impact.CurrentNodeTaskReferenceCount += currentCount
 	}
 	for _, edgeID := range removed.edges {
 		count, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
@@ -411,8 +421,8 @@ func workflowGraphSaveImpact(ctx context.Context, q *sqlitegen.Queries, workflow
 
 func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) []WorkflowGraphSaveBlocker {
 	blockers := []WorkflowGraphSaveBlocker{}
-	if impact.NodeTaskReferenceCount > 0 {
-		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "node_task_references", Message: "Removed workflow nodes are referenced by existing tasks.", Count: impact.NodeTaskReferenceCount})
+	if impact.CurrentNodeTaskReferenceCount > 0 {
+		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "node_task_references", Message: "Removed workflow nodes are referenced by current task state.", Count: impact.CurrentNodeTaskReferenceCount})
 	}
 	if impact.EdgeTaskReferenceCount > 0 {
 		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "edge_task_references", Message: "Removed workflow edges are referenced by existing tasks.", Count: impact.EdgeTaskReferenceCount})
@@ -490,6 +500,7 @@ type comparableWorkflowGraphSaveNode struct {
 	SubagentRole       string
 	PromptTemplate     string
 	CompletionMode     string
+	ScriptPath         string
 	InputFields        []workflow.InputField
 	JoinInputProviders []workflow.JoinInputProvider
 	OutputFields       []workflow.OutputField
@@ -523,7 +534,7 @@ type comparableWorkflowGraphSaveEdge struct {
 }
 
 func comparableWorkflowGraphSaveNodesEqual(item comparableWorkflowGraphSaveNode, other comparableWorkflowGraphSaveNode) bool {
-	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.Key == other.Key && item.Kind == other.Kind && item.DisplayName == other.DisplayName && item.GroupID == other.GroupID && item.SubagentRole == other.SubagentRole && item.PromptTemplate == other.PromptTemplate && item.CompletionMode == other.CompletionMode && item.SortOrder == other.SortOrder && slices.Equal(item.InputFields, other.InputFields) && slices.Equal(item.JoinInputProviders, other.JoinInputProviders) && slices.Equal(item.OutputFields, other.OutputFields)
+	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.Key == other.Key && item.Kind == other.Kind && item.DisplayName == other.DisplayName && item.GroupID == other.GroupID && item.SubagentRole == other.SubagentRole && item.PromptTemplate == other.PromptTemplate && item.CompletionMode == other.CompletionMode && item.ScriptPath == other.ScriptPath && item.SortOrder == other.SortOrder && slices.Equal(item.InputFields, other.InputFields) && slices.Equal(item.JoinInputProviders, other.JoinInputProviders) && slices.Equal(item.OutputFields, other.OutputFields)
 }
 
 func comparableWorkflowGraphSaveEdgesEqual(item comparableWorkflowGraphSaveEdge, other comparableWorkflowGraphSaveEdge) bool {
@@ -545,7 +556,7 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 		out.NodeGroups = append(out.NodeGroups, comparableWorkflowGraphSaveNodeGroup{ID: group.ID, WorkflowID: group.WorkflowID, Key: group.Key, DisplayName: strings.TrimSpace(group.DisplayName), SortOrder: sortOrder})
 	}
 	for index, node := range prepared.nodes {
-		out.Nodes = append(out.Nodes, comparableWorkflowGraphSaveNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.Key, Kind: node.Kind, DisplayName: strings.TrimSpace(node.DisplayName), GroupID: strings.TrimSpace(node.GroupID), SubagentRole: strings.TrimSpace(node.SubagentRole), PromptTemplate: strings.TrimSpace(node.PromptTemplate), CompletionMode: nodeCompletionMode(node), InputFields: node.InputFields, JoinInputProviders: node.JoinInputProviders, OutputFields: node.OutputFields, SortOrder: int64(index * 100)})
+		out.Nodes = append(out.Nodes, comparableWorkflowGraphSaveNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.Key, Kind: node.Kind, DisplayName: strings.TrimSpace(node.DisplayName), GroupID: strings.TrimSpace(node.GroupID), SubagentRole: strings.TrimSpace(node.SubagentRole), PromptTemplate: strings.TrimSpace(node.PromptTemplate), CompletionMode: nodeCompletionMode(node), ScriptPath: strings.TrimSpace(node.ScriptPath), InputFields: node.InputFields, JoinInputProviders: node.JoinInputProviders, OutputFields: node.OutputFields, SortOrder: int64(index * 100)})
 	}
 	for index, group := range prepared.transitionGroups {
 		out.TransitionGroups = append(out.TransitionGroups, comparableWorkflowGraphSaveTransitionGroup{ID: group.ID, WorkflowID: group.WorkflowID, SourceNodeID: group.SourceNodeID, TransitionID: workflow.TransitionID(strings.TrimSpace(string(group.TransitionID))), DisplayName: strings.TrimSpace(group.DisplayName), Description: strings.TrimSpace(group.Description), SortOrder: int64(index * 100)})
@@ -645,6 +656,7 @@ func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeReco
 		SubagentRole:           strings.TrimSpace(node.SubagentRole),
 		PromptTemplate:         strings.TrimSpace(node.PromptTemplate),
 		CompletionMode:         nodeCompletionMode(node),
+		ScriptPath:             nullableString(node.ScriptPath),
 		InputFieldsJson:        inputFields,
 		JoinInputProvidersJson: joinProviders,
 		OutputFieldsJson:       outputFields,

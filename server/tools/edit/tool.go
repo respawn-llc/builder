@@ -14,9 +14,7 @@ import (
 
 	"core/server/tools"
 	patchtool "core/server/tools/patch"
-	"core/shared/toolspec"
-	"core/shared/transcript"
-	patchformat "core/shared/transcript/patchformat"
+	"core/shared/config"
 )
 
 const (
@@ -33,13 +31,13 @@ type Tool struct {
 	outsideWorkspaceApprover     tools.FSGuardApprover
 	outsideWorkspaceSessionMu    sync.RWMutex
 	outsideWorkspaceSessionAllow bool
+	pathDenyPolicy               tools.PathDenyPolicy
 }
 
 type resolvedPath struct {
-	requested string
-	cleaned   string
-	real      string
-	symlink   bool
+	cleaned string
+	real    string
+	symlink bool
 }
 
 func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error) {
@@ -65,7 +63,7 @@ func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error
 }
 
 func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
-	in, err := parseInput(c.Input)
+	in, err := tools.ParseEditInput(c.Input)
 	if err != nil {
 		return editErrorResult(c, err), nil
 	}
@@ -75,70 +73,55 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	}
 	unlock := tools.LockFSGuardPaths([]string{resolved.real})
 	defer unlock()
-	outcome, err := t.apply(ctx, resolved, in)
-	if err != nil {
+	if err := t.apply(ctx, resolved, in); err != nil {
 		return editErrorResult(c, err), nil
 	}
 	message := "ok"
 	if resolved.symlink {
 		message = "ok; warning: edited through symlink, real path is " + resolved.real + "; use that path directly next time"
 	}
-	result := editSuccessResult(c, message)
-	result.Presentation = &transcript.ToolCallMeta{
-		ToolName:     string(toolspec.ToolEdit),
-		Command:      outcome.rendered.DetailText(),
-		CompactText:  outcome.rendered.SummaryText(),
-		PatchRender:  outcome.rendered,
-		RenderHint:   &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
-		PatchSummary: outcome.rendered.SummaryText(),
-		PatchDetail:  outcome.rendered.DetailText(),
-	}
-	return result, nil
+	return editSuccessResult(c, message), nil
 }
 
-type applyOutcome struct {
-	rendered *patchformat.RenderedPatch
-}
-
-func (t *Tool) apply(ctx context.Context, path resolvedPath, in input) (applyOutcome, error) {
+func (t *Tool) apply(ctx context.Context, path resolvedPath, in tools.EditInput) error {
 	select {
 	case <-ctx.Done():
-		return applyOutcome{}, ctx.Err()
+		return ctx.Err()
 	default:
 	}
 	info, statErr := os.Stat(path.real)
 	if statErr == nil && info.IsDir() {
-		return applyOutcome{}, failf("path is a directory: %s.", path.real)
+		return failf("path is a directory: %s.", path.real)
 	}
 	if in.OldString == "" {
 		return t.create(path, in.NewString, info, statErr)
 	}
 	if errors.Is(statErr, os.ErrNotExist) {
-		return applyOutcome{}, failf("old_string matched 0 occurrences in %s. Provide exact current text or more context.", path.real)
+		return failf("old_string matched 0 occurrences in %s. Provide exact current text or more context.", path.real)
 	}
 	if statErr != nil {
-		return applyOutcome{}, failf("stat path %s: %v", path.real, statErr)
+		return failf("stat path %s: %v", path.real, statErr)
 	}
 	if !info.Mode().IsRegular() {
-		return applyOutcome{}, failf("path is not a regular file: %s.", path.real)
+		return failf("path is not a regular file: %s.", path.real)
 	}
 	if info.Size() > maxEditableBytes {
-		return applyOutcome{}, failf("maximum editable text file size is 100 MiB.")
+		return failf("maximum editable text file size is 100 MiB.")
 	}
 	if err := rejectBinaryExtension(path.real); err != nil {
-		return applyOutcome{}, err
+		return err
 	}
 	original, err := os.ReadFile(path.real)
 	if err != nil {
-		return applyOutcome{}, failf("read %s: %v", path.real, err)
+		return failf("read %s: %v", path.real, err)
 	}
 	text, bom, err := decodeText(original, path.real)
 	if err != nil {
-		return applyOutcome{}, err
+		return err
 	}
 	selection, err := selectReplacement(text, in)
 	if err != nil {
-		return applyOutcome{}, failf("%s in %s. Provide exact current text or more context.", err.Error(), path.real)
+		return failf("%s in %s. Provide exact current text or more context.", err.Error(), path.real)
 	}
 	updatedText := applyReplacement(text, selection)
 	next := []byte(updatedText)
@@ -146,55 +129,55 @@ func (t *Tool) apply(ctx context.Context, path resolvedPath, in input) (applyOut
 		next = append([]byte(utf8BOM), next...)
 	}
 	if bytes.Equal(next, original) {
-		return applyOutcome{}, failf("replacement produced no changes.")
+		return failf("replacement produced no changes.")
 	}
 	if len(next) > maxEditableBytes {
-		return applyOutcome{}, failf("maximum editable text file size is 100 MiB.")
+		return failf("maximum editable text file size is 100 MiB.")
 	}
 	if err := writeAtomicallyIfUnchanged(path.real, next, info); err != nil {
-		return applyOutcome{}, err
+		return err
 	}
-	return applyOutcome{rendered: renderEditDiff(path.requested, text, updatedText)}, nil
+	return nil
 }
 
-func (t *Tool) create(path resolvedPath, newText string, info os.FileInfo, statErr error) (applyOutcome, error) {
+func (t *Tool) create(path resolvedPath, newText string, info os.FileInfo, statErr error) error {
 	if len([]byte(newText)) > maxEditableBytes {
-		return applyOutcome{}, failf("maximum editable text file size is 100 MiB.")
+		return failf("maximum editable text file size is 100 MiB.")
 	}
 	if err := rejectBinaryExtension(path.real); err != nil {
-		return applyOutcome{}, err
+		return err
 	}
 	if hasMixedLineEndings(newText) {
-		return applyOutcome{}, failf("create content uses mixed line endings.")
+		return failf("create content uses mixed line endings.")
 	}
 	if err := rejectBinaryBytes([]byte(newText), path.real); err != nil {
-		return applyOutcome{}, err
+		return err
 	}
 	existingBOM := false
 	if statErr == nil {
 		if info.IsDir() {
-			return applyOutcome{}, failf("path is a directory: %s.", path.real)
+			return failf("path is a directory: %s.", path.real)
 		}
 		if !info.Mode().IsRegular() {
-			return applyOutcome{}, failf("path is not a regular file: %s.", path.real)
+			return failf("path is not a regular file: %s.", path.real)
 		}
 		if info.Size() > maxEditableBytes {
-			return applyOutcome{}, failf("maximum editable text file size is 100 MiB.")
+			return failf("maximum editable text file size is 100 MiB.")
 		}
 		data, err := os.ReadFile(path.real)
 		if err != nil {
-			return applyOutcome{}, failf("read %s: %v", path.real, err)
+			return failf("read %s: %v", path.real, err)
 		}
 		text, bom, err := decodeText(data, path.real)
 		if err != nil {
-			return applyOutcome{}, err
+			return err
 		}
 		if strings.TrimSpace(text) != "" {
-			return applyOutcome{}, failf("target file already contains text: %s.", path.real)
+			return failf("target file already contains text: %s.", path.real)
 		}
 		existingBOM = bom
 	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return applyOutcome{}, failf("stat path %s: %v", path.real, statErr)
+		return failf("stat path %s: %v", path.real, statErr)
 	}
 	next := []byte(newText)
 	if existingBOM && !strings.HasPrefix(newText, utf8BOM) {
@@ -205,9 +188,9 @@ func (t *Tool) create(path resolvedPath, newText string, info os.FileInfo, statE
 		before = info
 	}
 	if err := writeAtomicallyIfUnchanged(path.real, next, before); err != nil {
-		return applyOutcome{}, err
+		return err
 	}
-	return applyOutcome{rendered: renderEditDiff(path.requested, "", string(next))}, nil
+	return nil
 }
 
 func decodeText(data []byte, path string) (string, bool, error) {
@@ -357,7 +340,7 @@ func (t *Tool) resolvePath(ctx context.Context, requested string) (resolvedPath,
 	if _, err := t.outsideGuard().Allow(ctx, requested, real, approved); err != nil {
 		return resolvedPath{}, err
 	}
-	return resolvedPath{requested: requested, cleaned: cleaned, real: real, symlink: t.isUserSymlink(cleaned, real)}, nil
+	return resolvedPath{cleaned: cleaned, real: real, symlink: t.isUserSymlink(cleaned, real)}, nil
 }
 
 func canReuseOutsideApproval(cleaned string, real string) bool {
@@ -384,54 +367,28 @@ func (t *Tool) isUserSymlink(cleaned string, real string) bool {
 }
 
 func resolveRealTarget(cleaned string) (string, error) {
-	if real, err := filepath.EvalSymlinks(cleaned); err == nil {
-		return filepath.Clean(real), nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+	real, err := config.ResolveExistingAncestorRealPath(cleaned)
+	if err != nil {
 		return "", failf("resolve path %q: %v", cleaned, err)
 	}
-	parent := filepath.Dir(cleaned)
-	for {
-		info, err := os.Stat(parent)
-		if err == nil {
-			if !info.IsDir() {
-				return "", failf("parent path is not a directory: %s.", parent)
-			}
-			parentReal, evalErr := filepath.EvalSymlinks(parent)
-			if evalErr != nil {
-				return "", failf("resolve parent path for %q: %v", cleaned, evalErr)
-			}
-			rel, relErr := filepath.Rel(parent, cleaned)
-			if relErr != nil {
-				return "", failf("resolve path %q: %v", cleaned, relErr)
-			}
-			return filepath.Clean(filepath.Join(parentReal, rel)), nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return "", failf("stat parent path for %q: %v", cleaned, err)
-		}
-		next := filepath.Dir(parent)
-		if next == parent {
-			return "", failf("resolve parent path for %q: no existing ancestor", cleaned)
-		}
-		parent = next
-	}
+	return real, nil
 }
 
 func (t *Tool) outsideGuard() tools.FSGuard {
-	return tools.NewFSGuard(
-		t.workspaceRoot,
-		t.workspaceRootReal,
-		t.workspaceRootInfo,
-		t.workspaceOnly,
-		t.allowOutsideWorkspace,
-		t.outsideWorkspaceApprover,
-		t.outsideWorkspaceSessionAllowed,
-		t.setOutsideWorkspaceSessionAllowed,
-		"If it's essential to the task, ask the user to make the edit manually at the end of the task.",
-		tools.FSGuardErrorLabels{
+	return tools.NewFSGuard(tools.FSGuardConfig{
+		WorkspaceRoot:         t.workspaceRoot,
+		WorkspaceRootReal:     t.workspaceRootReal,
+		WorkspaceRootInfo:     t.workspaceRootInfo,
+		WorkspaceOnly:         t.workspaceOnly,
+		AllowOutsideWorkspace: t.allowOutsideWorkspace,
+		Approver:              t.outsideWorkspaceApprover,
+		SessionAllowed:        t.outsideWorkspaceSessionAllowed,
+		SetSessionAllowed:     t.setOutsideWorkspaceSessionAllowed,
+		RejectionInstruction:  "If it's essential to the task, ask the user to make the edit manually at the end of the task.",
+		ErrorLabels: tools.FSGuardErrorLabels{
 			OutsidePath: "edit target outside workspace",
 		},
-		tools.FSGuardFailureFactory{
+		Failures: tools.FSGuardFailureFactory{
 			NoPermission: func(path string, reason string) error {
 				return failf("no file edit permission for %s. %s", path, reason)
 			},
@@ -445,48 +402,7 @@ func (t *Tool) outsideGuard() tools.FSGuard {
 				return failf("user denied the edit for %s.\nUser said: %s", path, commentary)
 			},
 		},
-		patchtool.IsPathInTemporaryDir,
-		nil,
-	)
-}
-
-func renderEditDiff(path string, oldText string, newText string) *patchformat.RenderedPatch {
-	doc := patchformat.Document{Hunks: []any{patchformat.UpdateFile{
-		Path:    path,
-		Changes: diffLines(oldText, newText),
-	}}}
-	rendered := patchformat.Format(doc, "")
-	return &rendered
-}
-
-func diffLines(oldText, newText string) []patchformat.ChangeLine {
-	oldLines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(oldText, "\r\n", "\n"), "\n"), "\n")
-	newLines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(newText, "\r\n", "\n"), "\n"), "\n")
-	if len(oldLines) == 1 && oldLines[0] == "" {
-		oldLines = nil
-	}
-	if len(newLines) == 1 && newLines[0] == "" {
-		newLines = nil
-	}
-	commonPrefix := 0
-	for commonPrefix < len(oldLines) && commonPrefix < len(newLines) && oldLines[commonPrefix] == newLines[commonPrefix] {
-		commonPrefix++
-	}
-	oldSuffix := len(oldLines)
-	newSuffix := len(newLines)
-	for oldSuffix > commonPrefix && newSuffix > commonPrefix && oldLines[oldSuffix-1] == newLines[newSuffix-1] {
-		oldSuffix--
-		newSuffix--
-	}
-	out := make([]patchformat.ChangeLine, 0, oldSuffix-commonPrefix+newSuffix-commonPrefix)
-	for _, line := range oldLines[commonPrefix:oldSuffix] {
-		out = append(out, patchformat.ChangeLine{Kind: '-', Content: line})
-	}
-	for _, line := range newLines[commonPrefix:newSuffix] {
-		out = append(out, patchformat.ChangeLine{Kind: '+', Content: line})
-	}
-	if len(out) == 0 && oldText != newText {
-		out = append(out, patchformat.ChangeLine{Kind: '-', Content: oldText}, patchformat.ChangeLine{Kind: '+', Content: newText})
-	}
-	return out
+		TemporaryPathAllowed: patchtool.IsPathInTemporaryDir,
+		PathDenyPolicy:       t.pathDenyPolicy,
+	})
 }

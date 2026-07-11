@@ -10,7 +10,6 @@ import (
 
 	"core/server/tools"
 	"core/server/tools/shell/postprocess"
-	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
@@ -114,20 +113,19 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		return tools.Result{}, marshalErr
 	}
 	toolResult := tools.Result{CallID: c.ID, Name: c.Name, Output: body}
-	if in.Raw || result.Truncated {
-		toolResult.Presentation = shellOutputStatusPresentation(c.Name, in.Raw, result.Truncated)
+	if in.Raw || result.Truncated || result.MovedToBackground {
+		toolResult.PresentationDelta = shellResultPresentationDelta(in.Raw, result.Truncated, result.MovedToBackground)
 	}
 	return toolResult, nil
 }
 
-func shellOutputStatusPresentation(name toolspec.ID, rawRequested bool, truncated bool) *transcript.ToolCallMeta {
-	if !rawRequested && !truncated {
+func shellResultPresentationDelta(rawRequested bool, truncated bool, movedToBackground bool) *transcript.ToolResultPresentationDelta {
+	if !rawRequested && !truncated && !movedToBackground {
 		return nil
 	}
-	return &transcript.ToolCallMeta{
-		ToolName:           string(name),
-		IsShell:            true,
+	return &transcript.ToolResultPresentationDelta{
 		RawOutputRequested: rawRequested,
 		OutputTruncated:    truncated,
+		MovedToBackground:  movedToBackground,
 	}
 }

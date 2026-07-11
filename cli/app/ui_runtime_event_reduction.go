@@ -7,16 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func shouldRefreshDeferredCommittedTailOnRunEnd(m *uiModel, evt clientui.Event) bool {
-	if m == nil || !m.hasRuntimeClient() || len(m.deferredCommittedTail) == 0 {
-		return false
-	}
-	if evt.Kind != clientui.EventRunStateChanged || evt.RunState == nil {
-		return false
-	}
-	return !evt.RunState.Lifecycle.IsRunning()
-}
-
 func (a uiRuntimeAdapter) runtimeRunState() runtimestate.RuntimeRunState {
 	m := a.model
 	if err := m.runtimeLifecycle.Run.Validate(); err != nil {
@@ -42,16 +32,8 @@ func (a uiRuntimeAdapter) runtimeReasoningState() runtimestate.RuntimeReasoningS
 
 func (a uiRuntimeAdapter) pendingInputState() runtimestate.PendingInputState {
 	m := a.model
-	submission := runtimestate.InputSubmissionUnlocked
-	if m.isInputSubmitLocked() {
-		submission = runtimestate.InputSubmissionLocked
-	}
 	return runtimestate.PendingInputState{
-		Input:            m.input,
-		PendingInjected:  m.pendingInjected,
-		LockedInjectText: m.lockedInjectText,
-		LockedInjectID:   m.lockedInjectID,
-		Submission:       submission,
+		PendingInjected: m.pendingInjected,
 	}
 }
 
@@ -61,46 +43,37 @@ func (a uiRuntimeAdapter) applyRuntimeEventReduction(reduction runtimestate.Runt
 	if reduction.RunState.Err != nil {
 		m.activity = uiActivityError
 		cmd = m.sendTransientStatusWithNoticeID("invalid runtime lifecycle: "+reduction.RunState.Err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-	} else if err := m.setRunLifecycle(reduction.RunState.State.Run); err != nil {
-		m.activity = uiActivityError
-		cmd = m.sendTransientStatusWithNoticeID("invalid runtime lifecycle: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	} else if reduction.RunState.Activity != runtimestate.RuntimeActivityUnchanged {
+		if reduction.RunState.RuntimeActivity == nil {
+			m.runtimeLifecycle.Run = reduction.RunState.State.Run
+		} else if err := m.applyRuntimeActivityProjection(*reduction.RunState.RuntimeActivity); err != nil {
+			m.activity = uiActivityError
+			cmd = m.sendTransientStatusWithNoticeID("invalid runtime activity: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		}
 	}
 	m.setCompacting(reduction.RunState.State.Compaction.IsRunning())
 	m.setReviewerRunning(reduction.RunState.State.Reviewer.IsRunning())
 	m.setReviewerBlocking(reduction.RunState.State.Reviewer.IsBlocking())
-	if reduction.RunState.ExternalRuntime != nil {
-		m.setExternalRuntimeStatus(reduction.RunState.ExternalRuntime)
-	}
 	m.conversationFreshness = reduction.Conversation.State.Freshness
 	m.reasoningStatusHeader = reduction.Reasoning.State.StatusHeader
 	m.pendingInjected = reduction.PendingInput.State.PendingInjected
 	for _, answer := range m.removeInjectedQueueItemsByIDs(reduction.PendingInput.ConsumedQueueItemIDs) {
 		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
 	}
-	m.lockedInjectText = reduction.PendingInput.State.LockedInjectText
-	m.lockedInjectID = reduction.PendingInput.State.LockedInjectID
-	m.setInputSubmitLocked(reduction.PendingInput.State.Submission == runtimestate.InputSubmissionLocked)
 	if reduction.PendingInput.RestoredText != "" {
 		m.inputController().restoreInjectedTextIntoInput(reduction.PendingInput.RestoredText)
 		cmd = tea.Batch(cmd, m.sendTransientStatusWithNoticeID("queued message was not submitted; restored to input", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}
-	switch reduction.PendingInput.DraftCommand {
-	case runtimestate.RuntimePendingInputClearDraft:
-		m.clearInput()
-	}
 	switch reduction.RunState.Activity {
 	case runtimestate.RuntimeActivityRunning:
-		m.activity = uiActivityRunning
-		m.setBusy(true)
-	case runtimestate.RuntimeActivityIdle:
-		if m.externalRuntimeBusy() {
+		if reduction.RunState.RuntimeActivity == nil && m.activity != uiActivityQuestion {
 			m.activity = uiActivityRunning
-			m.setBusy(true)
-		} else {
-			m.activity = uiActivityIdle
-			m.setBusy(false)
-			cmd = tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
 		}
+	case runtimestate.RuntimeActivityIdle:
+		if reduction.RunState.RuntimeActivity == nil {
+			m.activity = uiActivityIdle
+		}
+		cmd = tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
 	}
 	switch reduction.BackgroundProcesses.Command {
 	case runtimestate.RuntimeBackgroundProcessRefresh:
@@ -112,19 +85,20 @@ func (a uiRuntimeAdapter) applyRuntimeEventReduction(reduction runtimestate.Runt
 }
 
 func (a uiRuntimeAdapter) reconcileInterruptFromRunState(evt clientui.Event) tea.Cmd {
+	return nil
+}
+
+func (a uiRuntimeAdapter) reconcileInterruptFromRuntimeActivity(evt clientui.Event) tea.Cmd {
 	m := a.model
-	if m == nil || evt.Kind != clientui.EventRunStateChanged || evt.RunState == nil || evt.RunState.Lifecycle.IsRunning() {
-		return nil
-	}
-	if evt.RunState.Status != clientui.RunStatusInterrupted {
-		m.setPendingInterrupt(false)
+	if m == nil || evt.Kind != clientui.EventRuntimeActivityChanged || evt.RuntimeActivity == nil || evt.RuntimeActivity.ActiveForControl() {
 		return nil
 	}
 	if m.hasPendingInterrupt() {
+		if m.pendingInterruptNeedsInputReconciliation() {
+			return m.requestInputReconciliationRefresh()
+		}
 		return m.acknowledgePendingInterrupt()
 	}
-	m.activity = uiActivityInterrupted
-	m.clearReviewerState()
 	return nil
 }
 
@@ -133,30 +107,113 @@ func (m *uiModel) acknowledgePendingInterrupt() tea.Cmd {
 		return nil
 	}
 	var cmd tea.Cmd
-	if m.activeSubmit.restoreOnInterrupt && !m.activeSubmit.flushed {
+	restoreActiveSubmit, ambiguous := m.shouldRestoreActiveSubmitAfterInterrupt()
+	if restoreActiveSubmit {
 		c := uiInputController{model: m}
 		c.restoreSubmittedTextIntoInput(m.activeSubmit.text)
 	}
 	m.activeSubmit = activeSubmitState{}
+	m.clearPendingRuntimeOperations(
+		clientui.RuntimeOperationKindSubmit,
+		clientui.RuntimeOperationKindPreSubmitCompact,
+		clientui.RuntimeOperationKindUserShell,
+		clientui.RuntimeOperationKindCompact,
+		clientui.RuntimeOperationKindSubmitQueued,
+	)
 	c := uiInputController{model: m}
-	cmd = tea.Batch(c.releaseLockedInjectedInput(true), c.restorePendingInjectedIntoInput())
+	cmd = c.restorePendingInjectedIntoInput()
 	c.restoreQueuedMessagesIntoInput()
 	m.setPendingInterrupt(false)
-	m.setBusy(false)
 	m.activity = uiActivityInterrupted
 	m.clearReviewerState()
+	cmd = tea.Batch(cmd, m.interruptedStatusNoticeCmd())
+	if ambiguous {
+		cmd = tea.Batch(cmd, m.sendTransientStatusWithNoticeID("runtime input state is unknown; restored local text for review", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+	}
 	return cmd
 }
 
-func (a uiRuntimeAdapter) effectiveRuntimeTranscriptSync(evt clientui.Event, proposed runtimestate.RuntimeTranscriptSyncCommand) runtimestate.RuntimeTranscriptSyncCommand {
-	if evt.Kind != clientui.EventConversationUpdated {
-		return proposed
+func (m *uiModel) shouldRestoreActiveSubmitAfterInterrupt() (bool, bool) {
+	if m == nil || !m.activeSubmit.restoreOnInterrupt {
+		return false, false
 	}
-	if !shouldRecoverCommittedTranscriptFromConversationUpdate(a.model, evt) {
-		return runtimestate.RuntimeTranscriptSyncCommand{}
+	ref := m.activeSubmit.operationRef
+	if err := ref.Validate(); err != nil {
+		return true, true
 	}
-	if proposed.Reason != runtimestate.RuntimeTranscriptSyncNone {
-		return proposed
+	view := m.cachedRuntimeMainView()
+	for _, record := range view.InputReconciliation.Operations {
+		if record.OperationRef != ref {
+			continue
+		}
+		switch record.State {
+		case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
+			return false, false
+		case clientui.RuntimeInputReconciliationCanceledNotCommitted, clientui.RuntimeInputReconciliationFailedWithRestore:
+			return true, false
+		case clientui.RuntimeInputReconciliationUnknown, clientui.RuntimeInputReconciliationEvicted:
+			if m.activeSubmit.flushed {
+				return false, false
+			}
+			return true, true
+		}
 	}
-	return runtimestate.RuntimeTranscriptSyncCommand{Reason: runtimestate.RuntimeTranscriptSyncCommittedAdvance}
+	if m.activeSubmit.flushed {
+		return false, false
+	}
+	return true, true
+}
+
+func (m *uiModel) pendingInterruptNeedsInputReconciliation() bool {
+	if !m.pendingInterruptBlocksRawInputCleanup() {
+		return false
+	}
+	return m.canRequestInputReconciliationRefresh()
+}
+
+func (m *uiModel) pendingInterruptBlocksRawInputCleanup() bool {
+	if m == nil || !m.hasPendingInterrupt() {
+		return false
+	}
+	return m.pendingInterruptMissingInputReconciliation(m.cachedRuntimeMainView())
+}
+
+func (m *uiModel) pendingInterruptMissingInputReconciliation(view clientui.RuntimeMainView) bool {
+	if m == nil {
+		return false
+	}
+	ref := m.activeSubmit.operationRef
+	if err := ref.Validate(); err != nil {
+		return false
+	}
+	for _, record := range view.InputReconciliation.Operations {
+		if record.OperationRef == ref {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *uiModel) canRequestInputReconciliationRefresh() bool {
+	if m == nil {
+		return false
+	}
+	client := m.runtimeClient()
+	if _, ok := client.(interface{ sessionRuntimeBoundary() }); !ok {
+		return false
+	}
+	_, canRefresh := client.(runtimeMainViewReconciliationClient)
+	_, canInterrupt := client.(runtimeInterruptReconciliationClient)
+	return canRefresh && canInterrupt
+}
+
+func (m *uiModel) requestInputReconciliationRefresh() tea.Cmd {
+	if !m.canRequestInputReconciliationRefresh() {
+		return nil
+	}
+	return m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequest{
+		cause:    runtimeMainViewRefreshCauseManual,
+		class:    runtimeSyncPolicyClassAllowed,
+		priority: 100,
+	}).cmd
 }

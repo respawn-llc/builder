@@ -2,7 +2,6 @@ package app
 
 import (
 	"core/cli/tui"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -53,6 +52,10 @@ func (surface uiSurface) wantsAltScreen() bool {
 	}
 }
 
+func isOngoingNormalBufferRestoreTransition(prev, next uiSurface) bool {
+	return prev.wantsAltScreen() && next == uiSurfaceOngoingTranscript
+}
+
 // wantsAlternateScroll reports whether a surface enables terminal alternate-scroll
 // (`?1007`) while active. Per docs/dev/specs/tui-transcript.md, every alt-screen
 // surface enables it except ongoing (never) and the rollback/edit picker (which
@@ -73,20 +76,23 @@ func (m *uiModel) restoreTranscriptSurface() tea.Cmd {
 }
 
 func (m *uiModel) activateSurface(surface uiSurface) tea.Cmd {
+	return m.activateSurfaceFrom(m.surface(), surface, false)
+}
+
+func (m *uiModel) activateSurfaceFrom(prev, surface uiSurface, suppressAltScreen bool) tea.Cmd {
 	if surface == "" {
 		surface = surfaceForTranscriptMode(m.view.Mode())
 	}
-	prev := m.surface()
+	m.updateOngoingOwnershipBeforeSurfaceTransition(prev, surface)
 	m.activeSurface = surface
 	m.syncRendererOutputGate()
-	if prev == surface {
+	if prev == surface || suppressAltScreen {
 		return nil
 	}
-	transitionCmd := m.altScreenCmdForSurfaceTransition(prev, surface)
-	if surface == uiSurfaceOngoingTranscript {
-		return sequenceCmds(transitionCmd, m.nativeSurfaceResizeRehydrateNowCmd())
-	}
-	return transitionCmd
+	return sequenceCmds(
+		m.altScreenCmdForSurfaceTransition(prev, surface),
+		m.ongoingOwnershipAfterSurfaceTransitionCmd(prev, surface),
+	)
 }
 
 type uiPresentationFeatureReducer struct {
@@ -98,92 +104,7 @@ func (m *uiModel) presentationReducer() uiPresentationFeatureReducer {
 }
 
 func (r uiPresentationFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
-	switch msg.(type) {
-	case nativeSurfaceResumeMsg:
-		m.syncRendererOutputGate()
-		m.layout().syncViewport()
-		if m.nativePhysicalAltScreenActive() {
-			return handledUIFeatureUpdate(m, nativeSurfaceResumeRetryCmd())
-		}
-		if err := m.flushNativeSurfaceHoldoff(); err != nil {
-			return handledUIFeatureUpdate(m, m.nativeSurfaceErrorCmd("flush native holdoff", err))
-		}
-		return handledUIFeatureUpdate(m, m.nativeSurfaceResizeRehydrateNowCmd())
-	}
-	switch msg := msg.(type) {
-	case nativeSurfaceResizeRehydrateMsg:
-		m.layout().syncViewport()
-		if !m.nativeResizeRehydrateMessageCurrent(msg) {
-			return handledUIFeatureUpdate(m, nil)
-		}
-		m.nativeResizeRehydrateSettled = true
-		if m.surface() != uiSurfaceOngoingTranscript || m.altScreenActive || !m.nativeSurfaceConfigured() {
-			return handledUIFeatureUpdate(m, nil)
-		}
-		if m.nativePhysicalAltScreenActive() {
-			return handledUIFeatureUpdate(m, nativeSurfaceResizeRehydrateRetryCmd(msg))
-		}
-		surfaceReady := m.nativeSurface.ready(msg.width, msg.height)
-		m.nativeResizeRehydrateActive = true
-		if !surfaceReady {
-			m.nativeSurface.Close()
-		}
-		if !surfaceReady && !m.nativeSurface.ensure(msg.width, msg.height) {
-			m.nativeResizeRehydrateActive = false
-			m.nativeResizeRehydrateToken = 0
-			m.nativeResizeRehydrateSettled = false
-			return handledUIFeatureUpdate(m, nil)
-		}
-		m.nativeResizeRehydrateActive = false
-		m.nativeResizeRehydrateToken = 0
-		m.nativeResizeRehydrateSettled = false
-		if err := m.flushNativeSurfaceHoldoff(); err != nil {
-			return handledUIFeatureUpdate(m, m.nativeSurfaceErrorCmd("resize flush native stable", err))
-		}
-		return handledUIFeatureUpdate(m, nil)
-	}
 	return uiFeatureUpdateResult{}
-}
-
-func nativeSurfaceResumeCmd() tea.Cmd {
-	return func() tea.Msg {
-		return nativeSurfaceResumeMsg{}
-	}
-}
-
-func nativeSurfaceResumeRetryCmd() tea.Cmd {
-	return tea.Tick(10*time.Millisecond, func(time.Time) tea.Msg {
-		return nativeSurfaceResumeMsg{}
-	})
-}
-
-func nativeSurfaceResizeRehydrateRetryCmd(msg nativeSurfaceResizeRehydrateMsg) tea.Cmd {
-	return tea.Tick(10*time.Millisecond, func(time.Time) tea.Msg {
-		return msg
-	})
-}
-
-func (m *uiModel) nativeSurfaceResizeRehydrateNowCmd() tea.Cmd {
-	if m == nil || m.nativeResizeRehydrateToken == 0 || !m.nativeResizeRehydrateSettled || m.termWidth <= 0 || m.termHeight <= 0 {
-		return nil
-	}
-	msg := nativeSurfaceResizeRehydrateMsg{
-		token:  m.nativeResizeRehydrateToken,
-		width:  m.termWidth,
-		height: m.termHeight,
-	}
-	return func() tea.Msg {
-		return msg
-	}
-}
-
-func (m *uiModel) nativeResizeRehydrateMessageCurrent(msg nativeSurfaceResizeRehydrateMsg) bool {
-	return m != nil &&
-		msg.token != 0 &&
-		msg.token == m.nativeResizeRehydrateToken &&
-		msg.width == m.termWidth &&
-		msg.height == m.termHeight
 }
 
 func (m *uiModel) altScreenCmdForSurfaceTransition(prev, next uiSurface) tea.Cmd {
@@ -199,9 +120,9 @@ func (m *uiModel) altScreenCmdForSurfaceTransition(prev, next uiSurface) tea.Cmd
 	if prevWantsAlt && !nextWantsAlt && m.altScreenActive {
 		m.altScreenActive = false
 		if prev.wantsAlternateScroll() {
-			return tea.Sequence(disableAlternateScrollCmd(), tea.ExitAltScreen, nativeSurfaceResumeCmd())
+			return tea.Sequence(disableAlternateScrollCmd(), tea.ExitAltScreen)
 		}
-		return tea.Sequence(tea.ExitAltScreen, nativeSurfaceResumeCmd())
+		return tea.ExitAltScreen
 	}
 	if prevWantsAlt && nextWantsAlt && m.altScreenActive {
 		prevWantsAlternateScroll := prev.wantsAlternateScroll()

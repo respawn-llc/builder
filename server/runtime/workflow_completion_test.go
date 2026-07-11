@@ -23,6 +23,8 @@ import (
 type fakeWorkflowController struct {
 	completed                           atomic.Int64
 	violations                          atomic.Int64
+	protocolBudgetResets                atomic.Int64
+	protocolBudgetResetErr              error
 	maxHits                             atomic.Int64
 	completionObservations              atomic.Int64
 	completeExternallyAfterObservations int64
@@ -48,6 +50,15 @@ func (c *fakeWorkflowController) RecordWorkflowProtocolViolation(_ context.Conte
 		c.maxHits.Add(1)
 	}
 	return workflowruntime.ViolationResult{Count: count, Interrupted: interrupted}, nil
+}
+
+func (c *fakeWorkflowController) ResetWorkflowProtocolViolationBudget(_ context.Context, _ workflowruntime.ViolationResetRequest) error {
+	if c.protocolBudgetResetErr != nil {
+		return c.protocolBudgetResetErr
+	}
+	c.violations.Store(0)
+	c.protocolBudgetResets.Add(1)
+	return nil
 }
 
 func (c *fakeWorkflowController) ObserveWorkflowRunCompletion(_ context.Context, req workflowruntime.CompletionObservationRequest) (workflowruntime.CompletionObservationResult, error) {
@@ -793,7 +804,7 @@ func TestQueuedSubmitRetryFailsQueuedSteeringWhenWorkflowCompletesWhileBusy(t *t
 	}
 }
 
-func TestWorkflowAutoDrainTerminalCompletionFailsLaterIdleQueuedSteering(t *testing.T) {
+func TestWorkflowInterruptedAutoDrainLeavesLaterIdleQueuedSteeringPending(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := newBlockingThenQueuedResponseClient(structuredFinalResponse(`{"commentary":"complete","summary":"done"}`))
@@ -839,20 +850,14 @@ func TestWorkflowAutoDrainTerminalCompletionFailsLaterIdleQueuedSteering(t *test
 		t.Fatal("timed out waiting for queued steering call to return")
 	}
 	waitEngineLifecycleTasks(t, eng)
-	if got := client.callCount(); got != 2 {
-		t.Fatalf("model calls = %d, want interrupted run plus auto drain", got)
+	if got := client.callCount(); got != 1 {
+		t.Fatalf("model calls = %d, want interrupted run only", got)
 	}
-	if eng.HasQueuedUserWork() {
-		t.Fatal("queued user work remained after terminal auto drain")
+	if !eng.HasQueuedUserWork() {
+		t.Fatal("expected explicit idle queue to remain pending")
 	}
-	foundExplicitFailure := false
-	for _, status := range statuses {
-		if status.QueueItemID == explicit.ID && status.Status == QueuedUserMessageFailed && status.FailureReason == QueuedUserMessageFailureTerminalWorkflowCompletion {
-			foundExplicitFailure = true
-		}
-	}
-	if !foundExplicitFailure {
-		t.Fatalf("queued statuses = %+v, want terminal failure for explicit idle queue %q", statuses, explicit.ID)
+	if !eng.DiscardQueuedUserMessage(explicit.ID) {
+		t.Fatalf("expected explicit idle queue %q to remain discardable; statuses=%+v", explicit.ID, statuses)
 	}
 }
 
@@ -1091,41 +1096,59 @@ func TestWorkflowFinalAnswersUseInvalidCompletionCap(t *testing.T) {
 	assertDeveloperErrorFeedbackAfterAssistantFinal(t, eng, "done 1", strings.TrimSpace(prompts.WorkflowFinalAnswerNudgePrompt))
 }
 
-func TestWorkflowEmptyFinalAnswersUseInvalidCompletionCap(t *testing.T) {
+func TestWorkflowToolModeEmptyFinalUsesGenericFeedback(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
 		structuredFinalResponse(""),
-		structuredFinalResponse(""),
-		structuredFinalResponse(""),
-		structuredFinalResponse("unexpected"),
+		commentaryResponse("complete", completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`))),
 	}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	assertModelCallCount(t, client, 2)
-	if got := controller.maxHits.Load(); got != 1 {
-		t.Fatalf("max hits = %d, want 1", got)
+	if got := controller.violations.Load(); got != 0 {
+		t.Fatalf("violations = %d, want 0", got)
+	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("completions = %d, want 1", got)
+	}
+	if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+		t.Fatalf("empty final did not add generic developer feedback")
 	}
 }
 
-func TestWorkflowStructuredEmptyFinalInterruptsAtInvalidCompletionCap(t *testing.T) {
+func TestWorkflowStructuredModeEmptyFinalUsesGenericFeedback(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
 		structuredFinalResponse(""),
-		structuredFinalResponse(""),
-		structuredFinalResponse("unexpected"),
+		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
 	}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput), Config{})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	assertModelCallCount(t, client, 2)
-	if got := controller.maxHits.Load(); got != 1 {
-		t.Fatalf("max hits = %d, want 1", got)
+	if got := controller.violations.Load(); got != 0 {
+		t.Fatalf("violations = %d, want 0", got)
 	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("completions = %d, want 1", got)
+	}
+	if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+		t.Fatalf("empty final did not add generic developer feedback")
+	}
+}
+
+func requestHasDeveloperErrorFeedback(request llm.Request) bool {
+	for _, message := range requestMessages(request) {
+		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeErrorFeedback {
+			return true
+		}
+	}
+	return false
 }
 
 func assertCompletionSchema(t *testing.T, schema json.RawMessage, parameterDescriptions map[string]string) {

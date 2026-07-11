@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"core/prompts"
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
@@ -30,12 +31,13 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 	patchEditsApplied := false
 	deferredFinal := llm.Message{}
 	deferredFinalCommittedStart := -1
+	deferredFinalEventEmitted := false
 	hasDeferredFinal := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
 		}
-		if err := e.drainActiveRunGoalMutations(stepID); err != nil {
+		if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 			return stepLoopResult{}, err
 		}
 		if terminal, err := s.workflowDurableCompletionTerminal(ctx, stepID); err != nil {
@@ -116,6 +118,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			strings.TrimSpace(assistantMsg.Content) != "" &&
 			(len(localToolCalls) > 0 || len(hostedToolExecutions) > 0)
 		if finalAnswerWithToolCalls {
+			if err := e.markProviderVisibleModelRecovery(stepID); err != nil {
+				return stepLoopResult{}, err
+			}
 			applied, terminal, err := s.materializeFinalAnswerToolCalls(ctx, stepID, localToolCalls, hostedToolExecutions)
 			if err != nil {
 				return stepLoopResult{}, err
@@ -144,9 +149,15 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			}))
 
 		}
+		if !noopFinalAnswer && !finalAnswerWithToolCalls {
+			if err := e.markProviderVisibleModelRecovery(stepID); err != nil {
+				return stepLoopResult{}, err
+			}
+		}
 		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistantMsg})); err != nil {
 			return stepLoopResult{}, err
 		}
+		assistantEventEmitted := false
 		if !noopFinalAnswer {
 			executableCallIDs := make(map[string]struct{}, len(localToolCalls))
 			for _, call := range localToolCalls {
@@ -157,21 +168,22 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			toolCallStarts := map[string]int(nil)
 			assistantCommittedStart, toolCallStarts = committedStartsForPersistedAssistantMessage(e, assistantMsg, executableCallIDs)
 			e.rememberPendingToolCallStarts(toolCallStarts)
-			if liveAssistant, ok := liveCommittedAssistantEventMessage(assistantMsg); ok && options.EmitAssistantEvent {
-				_ = e.steer(stepID, steerEventIntent(Event{
-					Kind:                       EventAssistantMessage,
-					StepID:                     stepID,
-					Message:                    liveAssistant,
-					CommittedTranscriptChanged: true,
-					CommittedEntryStart:        assistantCommittedStart,
-					CommittedEntryStartSet:     assistantCommittedStart >= 0,
-				}))
+		}
+		if shouldPublishFinalAssistantBeforeLaterCommittedRows(assistantMsg, noopFinalAnswer) {
+			if err := s.publishCommittedAssistantMessage(stepID, assistantMsg, assistantCommittedStart, assistantCommittedStart >= 0); err != nil {
+				return stepLoopResult{}, err
+			}
+			assistantEventEmitted = true
+		}
+		if !noopFinalAnswer {
+			if liveAssistant, ok := liveCommittedAssistantEventMessage(assistantMsg); ok {
+				_ = s.publishCommittedAssistantMessage(stepID, liveAssistant, assistantCommittedStart, assistantCommittedStart >= 0)
 
 			}
 			for _, entry := range resp.Reasoning {
 				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
-					Visibility: transcript.EntryVisibilityAuto,
-					Role:       entry.Role,
+					Visibility: transcript.EntryVisibilityDetail,
+					Role:       string(transcript.EntryRoleReasoning),
 					Text:       entry.Text,
 				})); err != nil {
 					return stepLoopResult{}, err
@@ -185,6 +197,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		for _, hosted := range hostedToolExecutions {
+			if err := s.publishHostedToolStart(stepID, hosted.Call); err != nil {
+				return stepLoopResult{}, err
+			}
 			if err := e.steer(stepID, steerToolCompletionIntent(hosted.Result)); err != nil {
 				return stepLoopResult{}, err
 			}
@@ -192,6 +207,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg})); err != nil {
 				return stepLoopResult{}, err
 			}
+		}
+
+		if responseOutputIsReasoningOnly(resp.OutputItems) {
+			continue
 		}
 
 		if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
@@ -244,6 +263,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) != "" && !noopFinalAnswer {
 					deferredFinal = assistantMsg
 					deferredFinalCommittedStart = assistantCommittedStart
+					deferredFinalEventEmitted = assistantEventEmitted
 					hasDeferredFinal = true
 				}
 				continue
@@ -259,12 +279,16 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			resolvedCommittedStartSet := assistantCommittedStart >= 0
 			var reviewerCompletion *ReviewerStatus
 			if hasDeferredFinal {
-				resolved = deferredFinal
-				resolvedNoopFinalAnswer = isNoopFinalAnswer(resolved)
-				resolvedCommittedStart = deferredFinalCommittedStart
-				resolvedCommittedStartSet = deferredFinalCommittedStart >= 0
+				if resolvedNoopFinalAnswer {
+					resolved = deferredFinal
+					resolvedNoopFinalAnswer = isNoopFinalAnswer(resolved)
+					resolvedCommittedStart = deferredFinalCommittedStart
+					resolvedCommittedStartSet = deferredFinalCommittedStart >= 0
+					assistantEventEmitted = deferredFinalEventEmitted
+				}
 				hasDeferredFinal = false
 				deferredFinalCommittedStart = -1
+				deferredFinalEventEmitted = false
 			}
 			if resolvedNoopFinalAnswer {
 				if e.goalActive() {
@@ -281,13 +305,12 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			if options.RefreshReviewerConfigOnResolve {
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
-			assistantEventEmitted := false
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
-				if options.EmitAssistantEvent {
+				if !assistantEventEmitted {
 					// The answer is already committed before supervisor entries are appended.
 					// Publish it first so live clients never see supervisor entries as a gap
 					// after an unannounced committed assistant message.
-					_ = e.steer(stepID, steerEventIntent(Event{Kind: EventAssistantMessage, StepID: stepID, Message: resolved, CommittedTranscriptChanged: true, CommittedEntryStart: resolvedCommittedStart, CommittedEntryStartSet: resolvedCommittedStartSet}))
+					_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedStart, resolvedCommittedStartSet)
 					assistantEventEmitted = true
 				}
 				preReviewMessage := resolved
@@ -297,19 +320,21 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 					reviewerCompletion = reviewed.Completion
 					resolvedCommittedStart = reviewed.AssistantCommittedStart
 					resolvedCommittedStartSet = reviewed.AssistantCommittedStartSet
+					assistantEventEmitted = reviewed.AssistantEventEmitted || (assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved))
+				} else {
+					assistantEventEmitted = assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved)
 				}
-				assistantEventEmitted = assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved)
 			}
-			if options.EmitAssistantEvent && !assistantEventEmitted {
-				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventAssistantMessage, StepID: stepID, Message: resolved, CommittedTranscriptChanged: true, CommittedEntryStart: resolvedCommittedStart, CommittedEntryStartSet: resolvedCommittedStartSet}))
+			if !assistantEventEmitted {
+				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedStart, resolvedCommittedStartSet)
 			}
 			if reviewerCompletion != nil {
-				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: "reviewer_status", Text: reviewerStatusText(*reviewerCompletion, nil)})); err != nil {
+				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: reviewerStatusEntryRole(*reviewerCompletion), Text: reviewerStatusText(*reviewerCompletion, nil)})); err != nil {
 					return stepLoopResult{}, err
 				}
 				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion}))
 			}
-			if err := e.drainActiveRunGoalMutations(stepID); err != nil {
+			if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 				return stepLoopResult{}, err
 			}
 			return stepLoopResult{Message: resolved, ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
@@ -352,6 +377,20 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 	}
 	_, toolCallStarts := committedStartsForPersistedAssistantMessage(e, toolCallMessage, executableCallIDs)
 	e.rememberPendingToolCallStarts(toolCallStarts)
+	if len(VisibleChatEntriesFromMessage(toolCallMessage)) > 0 {
+		committedStart := -1
+		for _, start := range toolCallStarts {
+			if committedStart < 0 || start < committedStart {
+				committedStart = start
+			}
+		}
+		if committedStart < 0 {
+			committedStart, _ = committedStartsForPersistedAssistantMessage(e, toolCallMessage, nil)
+		}
+		if err := s.publishCommittedAssistantMessage(stepID, toolCallMessage, committedStart, committedStart >= 0); err != nil {
+			return false, false, err
+		}
+	}
 
 	patchEditsApplied, terminal, err := s.executeLocalToolCallsAndAppendResults(ctx, stepID, localToolCalls)
 	if err != nil {
@@ -413,6 +452,9 @@ func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Cont
 func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, hostedToolExecutions []hostedToolExecution) error {
 	e := s.engine
 	for _, hosted := range hostedToolExecutions {
+		if err := s.publishHostedToolStart(stepID, hosted.Call); err != nil {
+			return err
+		}
 		if err := e.steer(stepID, steerToolCompletionIntent(hosted.Result)); err != nil {
 			return err
 		}
@@ -424,9 +466,22 @@ func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, ho
 	return nil
 }
 
+func (s *defaultStepExecutor) publishHostedToolStart(stepID string, call llm.ToolCall) error {
+	normalized := normalizeToolCallForTranscript(call, s.engine.transcriptWorkingDir())
+	return s.engine.steer(stepID, steerEventIntent(Event{
+		Kind:                       EventToolCallStarted,
+		StepID:                     stepID,
+		ToolCall:                   &normalized,
+		CommittedTranscriptChanged: true,
+	}))
+}
+
 func (s *defaultStepExecutor) handleWorkflowAssistantWithoutTools(ctx context.Context, stepID string, assistantMsg llm.Message) (bool, bool, error) {
 	e := s.engine
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+		return false, false, nil
+	}
+	if assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) == "" {
 		return false, false, nil
 	}
 	outcome, err := s.workflowCompletionAdapter().Evaluate(ctx, assistantMsg)
@@ -491,19 +546,19 @@ func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.C
 	if record.Interrupted {
 		return true, nil
 	}
-	content := workflowInvalidNudge
-	if strings.TrimSpace(err.Error()) != "" {
-		content += "\n\n" + err.Error()
-	}
 	instructions, instructionsErr := e.currentWorkflowCompletionInstructions(ctx)
 	if instructionsErr != nil {
 		return false, instructionsErr
 	}
-	if strings.TrimSpace(instructions) != "" {
-		content += "\n\n" + strings.TrimSpace(instructions)
+	goalText := ""
+	goalReminder := ""
+	if objective, reminder, ok := e.goalContinuation().reminderContext(); ok {
+		goalText = objective
+		goalReminder = reminder
 	}
-	if reminder, ok := e.goalContinuation().reminderText(); ok {
-		content += "\n\n" + reminder
+	content, renderErr := prompts.RenderWorkflowNudgePrompt(err.Error(), instructions, goalText, goalReminder)
+	if renderErr != nil {
+		return false, renderErr
 	}
 	return false, e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: content}}))
 }
@@ -549,7 +604,7 @@ func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID strin
 	if err != nil {
 		return err
 	}
-	if err := e.requireAskQuestionForActiveGoal(); err != nil {
+	if err := e.requireAskQuestionWhenGoalActive(); err != nil {
 		return err
 	}
 	if handoffCompacted {
@@ -572,18 +627,43 @@ func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID strin
 	return newCompactionReminderCoordinator(e).maybeAppend(ctx, stepID)
 }
 
+func (s *defaultStepExecutor) publishCommittedAssistantMessage(stepID string, msg llm.Message, committedStart int, committedStartSet bool) error {
+	return s.engine.steer(stepID, steerCommittedAssistantMessageIntent(msg, committedStart, committedStartSet))
+}
+
+func committedAssistantMessageFinalizesStreaming(msg llm.Message) bool {
+	if msg.Role != llm.RoleAssistant || isNoopFinalAnswer(msg) {
+		return false
+	}
+	for _, entry := range VisibleChatEntriesFromMessage(msg) {
+		if strings.TrimSpace(entry.Role) == "assistant" && strings.TrimSpace(entry.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func liveCommittedAssistantEventMessage(msg llm.Message) (llm.Message, bool) {
-	if msg.Phase != llm.MessagePhaseCommentary {
+	if msg.Phase == llm.MessagePhaseFinal {
 		return llm.Message{}, false
 	}
-	if strings.TrimSpace(msg.Content) == "" {
+	if len(VisibleChatEntriesFromMessage(msg)) == 0 {
 		return llm.Message{}, false
 	}
-	return llm.Message{
-		Role:    llm.RoleAssistant,
-		Content: msg.Content,
-		Phase:   msg.Phase,
-	}, true
+	if msg.Phase != llm.MessagePhaseCommentary && len(msg.ToolCalls) == 0 {
+		return llm.Message{}, false
+	}
+	return msg, true
+}
+
+func shouldPublishFinalAssistantBeforeLaterCommittedRows(msg llm.Message, noopFinalAnswer bool) bool {
+	if noopFinalAnswer {
+		return false
+	}
+	if msg.Phase != llm.MessagePhaseFinal || strings.TrimSpace(msg.Content) == "" {
+		return false
+	}
+	return true
 }
 
 func sameVisibleAssistantMessage(a, b llm.Message) bool {

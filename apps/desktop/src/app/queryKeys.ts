@@ -34,12 +34,19 @@ export const queryKeys = {
     graphSignature,
   ],
   workflowValidation: (workflowID: string, mode: string) => ["workflow-validation", workflowID, mode],
-  workflowGraphLayout: (
-    workflowID: string,
-    version: number,
-    valid: boolean,
-    errors: readonly unknown[],
-  ) => ["workflow-graph-layout", workflowID, version, valid, errors],
+  workflowScriptPathValidation: (workflowID: string, nodeID: string, scriptPath: string) => [
+    "workflow-script-path-validation",
+    workflowID,
+    nodeID,
+    scriptPath,
+  ],
+  workflowGraphLayout: (workflowID: string, version: number, valid: boolean, errors: readonly unknown[]) => [
+    "workflow-graph-layout",
+    workflowID,
+    version,
+    valid,
+    errors,
+  ],
   projectWorkflowLinks: (projectID: string) => ["project-workflow-links", projectID],
   boardNodeCardsRoot: (projectID: string, workflowID: string) => ["board-node-cards", projectID, workflowID],
   boardNodeCards: (projectID: string, workflowID: string, nodeID: string) => [
@@ -51,5 +58,5 @@ export const queryKeys = {
   task: (taskID: string) => ["task", taskID],
   activity: (taskID: string) => ["activity", taskID],
   comments: (taskID: string) => ["comments", taskID],
-  pendingAsks: (sessionID: string) => ["pending-asks", sessionID],
+  pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],
 };

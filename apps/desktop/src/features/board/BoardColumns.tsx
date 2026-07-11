@@ -47,9 +47,9 @@ export type KanbanColumnProps = Readonly<{
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>) => void;
   onExpandColumn?: () => void;
-  onInterruptTask: (taskID: string, runID: string) => void;
+  onInterruptTask: (taskID: string) => void;
   onLoadMoreCards: () => void;
-  onResumeTask: (taskID: string, runID: string) => void;
+  onResumeTask: (taskID: string) => void;
 }>;
 
 export function KanbanGroup({
@@ -197,11 +197,11 @@ export function KanbanColumn({
                   onDragEnd={onCardDragEnd}
                   onDragStart={onCardDragStart}
                   onDelete={onDeleteTask}
-                  onInterrupt={(runID) => {
-                    onInterruptTask(card.id, runID);
+                  onInterrupt={() => {
+                    onInterruptTask(card.id);
                   }}
-                  onResume={(runID) => {
-                    onResumeTask(card.id, runID);
+                  onResume={() => {
+                    onResumeTask(card.id);
                   }}
                 />
               ))}
@@ -267,8 +267,8 @@ function TaskCard({
   onDragEnd: () => void;
   onDragStart: (payload: BoardCardDragPayload) => void;
   onDelete: (taskID: string) => void;
-  onInterrupt: (runID: string) => void;
-  onResume: (runID: string) => void;
+  onInterrupt: (taskID: string) => void;
+  onResume: (taskID: string) => void;
 }>) {
   const { t } = useTranslation();
   const { cardClassName, cardStyle, registerCard: registerMotionCard } = useBoardCardMotion();
@@ -433,8 +433,8 @@ function TaskCardActions({
 }: Readonly<{
   card: KanbanCardVM;
   actionsDisabled: boolean;
-  onInterrupt: (runID: string) => void;
-  onResume: (runID: string) => void;
+  onInterrupt: (taskID: string) => void;
+  onResume: (taskID: string) => void;
 }>) {
   const { t } = useTranslation();
   const canInterrupt = card.actions.canInterrupt && !isWaitingForAnswer(card.statusKind);
@@ -447,7 +447,7 @@ function TaskCardActions({
         <Button
           onClick={(event) => {
             event.stopPropagation();
-            onResume(card.actions.resumeRunID);
+            onResume(card.id);
           }}
           disabled={actionsDisabled}
           variant="primary"
@@ -459,7 +459,7 @@ function TaskCardActions({
         <Button
           onClick={(event) => {
             event.stopPropagation();
-            onInterrupt(card.actions.interruptRunID);
+            onInterrupt(card.id);
           }}
           disabled={actionsDisabled}
           variant="danger"

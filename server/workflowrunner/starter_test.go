@@ -5,25 +5,33 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"core/server/attentionnotify"
+	"core/server/auth"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/registry"
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/session"
+	"core/server/session/sessiontest"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowattention"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/server/workflowview"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -102,27 +110,6 @@ func TestSchedulerNamesFreshWorkflowSessionFromAcceptedTransition(t *testing.T) 
 	}
 	if meta.FirstPromptPreview != startEdgePrompt {
 		t.Fatalf("session preview = %q, want rendered start edge prompt %q", meta.FirstPromptPreview, startEdgePrompt)
-	}
-}
-
-func TestStarterHoldsPrimaryRunLeaseThroughWorkflowRuntimeCloseDrain(t *testing.T) {
-	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"finished structured"}`))
-	trackingRuntimes := &primaryRunAcquireTrackingRegistry{RuntimeRegistry: registry.NewRuntimeRegistry()}
-	fixture.runtimes = trackingRuntimes
-	fixture.rebuildStarter(t)
-	task := fixture.createStartedTask(t)
-	scheduler := fixture.scheduler(t)
-
-	if err := scheduler.Process(context.Background()); err != nil {
-		t.Fatalf("Process: %v", err)
-	}
-	fixture.waitForCompletedRun(t, task.ID)
-
-	if got := trackingRuntimes.AcquireCount(); got != 1 {
-		t.Fatalf("primary-run acquisitions = %d, want only workflow owner acquisition before close drain", got)
-	}
-	if !trackingRuntimes.RegisterObservedOwnerLeaseBlock() {
-		t.Fatal("runtime registration did not observe workflow owner primary-run lease already held")
 	}
 }
 
@@ -288,6 +275,322 @@ func TestWorkflowRuntimeMultipleAskQuestionsInOneToolBatchResumeSequentially(t *
 	}
 	if !seenAskResults["call-ask-1"] || !seenAskResults["call-ask-2"] {
 		t.Fatalf("ask_question tool result call IDs = %+v, want both asks", askResults)
+	}
+}
+
+func TestWorkflowRuntimeTaskQuestionBatchPublishesOneTaskDetailAttention(t *testing.T) {
+	completeInput := json.RawMessage(`{"commentary":"answered both and finished"}`)
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeTool,
+		ScriptedToolBatch("questions",
+			llm.ToolCall{ID: "call-ask-1", Name: "ask_question", Input: json.RawMessage(`{"question":"First direction?","suggestions":["ship","stop"],"recommended_option_index":1}`)},
+			llm.ToolCall{ID: "call-ask-2", Name: "ask_question", Input: json.RawMessage(`{"question":"Second direction?","suggestions":["fast","safe"],"recommended_option_index":2}`)},
+		),
+		ScriptedToolBatch("complete", llm.ToolCall{ID: "call-complete", Name: "complete_node", Input: completeInput}),
+	)
+	enableAskQuestionTool(t, &fixture)
+	fixture.rebuildStarter(t)
+	desktopSub, err := fixture.attentionBroker.SubscribeDesktop()
+	if err != nil {
+		t.Fatalf("SubscribeDesktop: %v", err)
+	}
+	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
+
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	first := fixture.waitForWaitingAsk(t, task.ID, "call-ask-1")
+	prompts := fixture.runtimes.ListPendingPrompts(first.SessionID)
+	if len(prompts) != 1 || prompts[0].Request.AttentionTarget == nil || prompts[0].Request.QuestionBatch == nil {
+		t.Fatalf("pending prompt lacks task-detail attention enrichment: %+v", prompts)
+	}
+	pending := nextWorkflowAttentionEvent(t, desktopSub)
+	assertTaskQuestionBatchPending(t, pending, fixture, task, first.SessionID, "call-ask-1")
+	if err := fixture.runtimes.SubmitPromptResponse(first.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-1", Answer: "Ship it"}, nil); err != nil {
+		t.Fatalf("SubmitPromptResponse first: %v", err)
+	}
+	second := fixture.waitForWaitingAsk(t, task.ID, "call-ask-2")
+	update := nextWorkflowAttentionEvent(t, desktopSub)
+	assertTaskQuestionBatchPending(t, update, fixture, task, second.SessionID, "call-ask-2")
+	if update.Pending.ID != pending.Pending.ID {
+		t.Fatalf("second batch update id = %q, want same batch id %q", update.Pending.ID, pending.Pending.ID)
+	}
+	if update.Pending.Question == nil || update.Pending.Question.MaterializedCount != 2 {
+		t.Fatalf("second batch question state = %+v, want both asks materialized", update.Pending.Question)
+	}
+	if err := fixture.runtimes.SubmitPromptResponse(second.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-2", Answer: "Keep it safe"}, nil); err != nil {
+		t.Fatalf("SubmitPromptResponse second: %v", err)
+	}
+	resolved := nextWorkflowAttentionEvent(t, desktopSub)
+	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, pending.Pending.ID) || resolved.Kind != clientui.AttentionNotificationKindQuestion {
+		t.Fatalf("resolved event = %+v, want question batch resolved for %q", resolved, pending.Pending.ID)
+	}
+	fixture.waitForCompletedRun(t, task.ID)
+}
+
+func TestWorkflowAskHandlerRejectsTaskQuestionWithoutBatchMetadata(t *testing.T) {
+	starter := &Starter{}
+	req := SchedulerStartRunRequest{RunID: "run-1", Generation: 7}
+	input := workflowstore.RunStartContext{Task: workflowstore.TaskRecord{ID: "task-1"}}
+	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", req, input, askquestion.AskQuestionRequest{
+		ID:         "ask-1",
+		Question:   "Missing metadata?",
+		StepID:     "step-1",
+		ToolCallID: "call-1",
+	})
+
+	if err == nil {
+		t.Fatal("handleWorkflowAsk returned nil error, want missing metadata invariant error")
+	}
+	for _, want := range []string{"task_id=task-1", "run_id=run-1", "step_id=step-1", "call_id=call-1", "ask_id=ask-1", "approval=false"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("missing metadata error = %q, want diagnostic field %q", err.Error(), want)
+		}
+	}
+}
+
+func TestWorkflowAskHandlerApprovalUsesDurableTaskQuestionState(t *testing.T) {
+	runtimes := &workflowAskHandlerRuntime{
+		response: askquestion.AskQuestionResponse{
+			RequestID: "approval-1",
+			Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce},
+		},
+	}
+	store := &recordingRuntimeStore{}
+	starter := &Starter{store: store, runtimes: runtimes}
+	resp, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:       "approval-1",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{{
+			Decision: askquestion.AskQuestionApprovalDecisionAllowOnce,
+			Label:    "Allow once",
+		}},
+	})
+
+	if err != nil {
+		t.Fatalf("handleWorkflowAsk approval: %v", err)
+	}
+	if resp.Approval == nil || resp.Approval.Decision != askquestion.AskQuestionApprovalDecisionAllowOnce {
+		t.Fatalf("approval response = %+v", resp)
+	}
+	if store.waitingAskID != "approval-1" || store.clearedAskID != "approval-1" {
+		t.Fatalf("waiting ask lifecycle set=%q cleared=%q, want approval-1", store.waitingAskID, store.clearedAskID)
+	}
+	if len(runtimes.awaited) != 1 {
+		t.Fatalf("awaited approval requests = %+v, want one", runtimes.awaited)
+	}
+	target := runtimes.awaited[0].AttentionTarget
+	if target == nil || target.Kind != clientui.AttentionNotificationTargetWorkflowTask || target.Focus == nil || target.Focus.Kind != clientui.AttentionNotificationFocusQuestion || len(target.Focus.AskIDs) != 1 || target.Focus.AskIDs[0] != "approval-1" {
+		t.Fatalf("awaited approval target = %+v, want task question focus for approval-1", target)
+	}
+	if runtimes.cleared != nil || runtimes.skipped != nil {
+		t.Fatalf("approval touched batch question attention cleared=%+v skipped=%+v", runtimes.cleared, runtimes.skipped)
+	}
+	if len(runtimes.approvalCleared) != 1 || runtimes.approvalCleared[0] != "approval-1" {
+		t.Fatalf("approval clear markers = %+v, want approval-1", runtimes.approvalCleared)
+	}
+}
+
+func TestWorkflowAskHandlerClearFailureLeavesTaskQuestionAttentionUnresolved(t *testing.T) {
+	clearErr := errors.New("clear failed")
+	batch := workflowTestAskBatch("ask-1", "ask-1")
+	runtimes := &workflowAskHandlerRuntime{response: askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "done"}}
+	store := &recordingRuntimeStore{clearErr: clearErr}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:            "ask-1",
+		Question:      "Proceed?",
+		Origin:        askquestion.AskQuestionOriginModelTool,
+		QuestionBatch: &batch,
+	})
+
+	if !errors.Is(err, clearErr) {
+		t.Fatalf("handleWorkflowAsk error = %v, want clear error", err)
+	}
+	if store.waitingAskID != "ask-1" || store.clearedAskID != "ask-1" {
+		t.Fatalf("store calls waiting=%q cleared=%q", store.waitingAskID, store.clearedAskID)
+	}
+	if len(runtimes.cleared) != 0 {
+		t.Fatalf("task question attention cleared despite durable clear failure: %+v", runtimes.cleared)
+	}
+}
+
+func TestWorkflowAskHandlerApprovalClearFailureLeavesQuestionAttentionUnresolved(t *testing.T) {
+	clearErr := errors.New("clear failed")
+	runtimes := &workflowAskHandlerRuntime{
+		response: askquestion.AskQuestionResponse{
+			RequestID: "approval-1",
+			Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce},
+		},
+	}
+	store := &recordingRuntimeStore{clearErr: clearErr}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:       "approval-1",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{{
+			Decision: askquestion.AskQuestionApprovalDecisionAllowOnce,
+			Label:    "Allow once",
+		}},
+	})
+
+	if !errors.Is(err, clearErr) {
+		t.Fatalf("handleWorkflowAsk approval error = %v, want clear error", err)
+	}
+	if store.waitingAskID != "approval-1" || store.clearedAskID != "approval-1" {
+		t.Fatalf("approval waiting ask lifecycle set=%q cleared=%q", store.waitingAskID, store.clearedAskID)
+	}
+	if len(runtimes.approvalCleared) != 0 {
+		t.Fatalf("approval clear failure published durable clear marker: %+v", runtimes.approvalCleared)
+	}
+}
+
+func TestWorkflowAskHandlerSetWaitingAskFailureSkipsUnmaterializedBatchQuestions(t *testing.T) {
+	setErr := errors.New("set waiting ask failed")
+	batch := workflowTestAskBatch("ask-2", "ask-1", "ask-2", "ask-3")
+	runtimes := &workflowAskHandlerRuntime{}
+	store := &recordingRuntimeStore{setErr: setErr}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:            "ask-2",
+		Question:      "Proceed?",
+		Origin:        askquestion.AskQuestionOriginModelTool,
+		QuestionBatch: &batch,
+	})
+
+	if !errors.Is(err, setErr) {
+		t.Fatalf("handleWorkflowAsk error = %v, want set waiting ask error", err)
+	}
+	if len(runtimes.awaited) != 0 {
+		t.Fatalf("runtime awaited prompt despite durable waiting ask failure: %+v", runtimes.awaited)
+	}
+	if len(runtimes.prepared) != 1 || runtimes.prepared[0] != "ask-2" {
+		t.Fatalf("prepared batches = %+v, want current prompt preparation", runtimes.prepared)
+	}
+	if got, want := runtimes.skipped, []string{"ask-1", "ask-2", "ask-3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("skipped attention ids = %+v, want %+v", got, want)
+	}
+}
+
+func TestWorkflowAskHandlerCancellationClearsAndSkipsRemainingBatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
+	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	store := &recordingRuntimeStore{}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:            "ask-1",
+		Question:      "Proceed?",
+		Origin:        askquestion.AskQuestionOriginModelTool,
+		QuestionBatch: &batch,
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("handleWorkflowAsk error = %v, want context.Canceled", err)
+	}
+	if store.clearedAskID != "ask-1" {
+		t.Fatalf("cleared ask id = %q, want ask-1", store.clearedAskID)
+	}
+	if len(runtimes.cleared) != 1 || runtimes.cleared[0] != "ask-1" {
+		t.Fatalf("cleared attention ids = %+v", runtimes.cleared)
+	}
+	if len(runtimes.skipped) != 1 || runtimes.skipped[0] != "ask-2" {
+		t.Fatalf("skipped attention ids = %+v, want ask-2", runtimes.skipped)
+	}
+}
+
+func TestWorkflowAskHandlerTerminalPromptCloseClearsAndSkipsRemainingBatch(t *testing.T) {
+	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
+	runtimes := &workflowAskHandlerRuntime{err: io.EOF}
+	store := &recordingRuntimeStore{}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:            "ask-1",
+		Question:      "Proceed?",
+		Origin:        askquestion.AskQuestionOriginModelTool,
+		QuestionBatch: &batch,
+	})
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("handleWorkflowAsk error = %v, want io.EOF", err)
+	}
+	if got, want := runtimes.cleared, []string{"ask-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleared attention ids = %+v, want %+v", got, want)
+	}
+	if got, want := runtimes.skipped, []string{"ask-2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("skipped attention ids = %+v, want %+v", got, want)
+	}
+}
+
+func TestWorkflowAskHandlerCancellationAfterDurableClearResolvesBatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
+	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	store := &recordingRuntimeStore{
+		clearErr: sql.ErrNoRows,
+		getRun: workflowstore.RunRecord{
+			ID:            "run-1",
+			Generation:    7,
+			InterruptedAt: 123,
+		},
+	}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:            "ask-1",
+		Question:      "Proceed?",
+		Origin:        askquestion.AskQuestionOriginModelTool,
+		QuestionBatch: &batch,
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("handleWorkflowAsk error = %v, want context.Canceled", err)
+	}
+	if store.clearedAskID != "ask-1" {
+		t.Fatalf("cleared ask id = %q, want ask-1", store.clearedAskID)
+	}
+	if got, want := runtimes.cleared, []string{"ask-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleared attention ids = %+v, want %+v", got, want)
+	}
+	if got, want := runtimes.skipped, []string{"ask-2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("skipped attention ids = %+v, want %+v", got, want)
+	}
+}
+
+func TestWorkflowAskHandlerApprovalCancellationAfterDurableClearResolvesQuestion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	store := &recordingRuntimeStore{
+		clearErr: sql.ErrNoRows,
+		getRun: workflowstore.RunRecord{
+			ID:            "run-1",
+			Generation:    7,
+			InterruptedAt: 123,
+		},
+	}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:       "approval-1",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{{
+			Decision: askquestion.AskQuestionApprovalDecisionAllowOnce,
+			Label:    "Allow once",
+		}},
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("handleWorkflowAsk approval error = %v, want context.Canceled", err)
+	}
+	if store.clearedAskID != "approval-1" {
+		t.Fatalf("cleared ask id = %q, want approval-1", store.clearedAskID)
+	}
+	if got, want := runtimes.approvalCleared, []string{"approval-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("approval clear markers = %+v, want %+v", got, want)
 	}
 }
 
@@ -633,7 +936,8 @@ func TestStarterStartWorkflowRunFailsExplicitShellModeWithoutShell(t *testing.T)
 	disableCoderShell(t, &fixture)
 	fixture.rebuildStarter(t)
 	task := fixture.createStartedTask(t)
-	scheduler := fixture.scheduler(t)
+	finalizer := &recordingInterruptedRunFinalizer{}
+	scheduler := fixture.schedulerWithOptions(t, WithSchedulerAttentionFinalizer(finalizer))
 
 	if err := scheduler.Process(context.Background()); err == nil {
 		t.Fatal("expected scheduler start error")
@@ -644,6 +948,9 @@ func TestStarterStartWorkflowRunFailsExplicitShellModeWithoutShell(t *testing.T)
 	}
 	if len(runs) != 1 || runs[0].InterruptedAt == 0 || runs[0].EffectiveCompletionMode != "" || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
 		t.Fatalf("run after explicit shell failure = %+v, want interrupted without stored mode", runs)
+	}
+	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != runs[0].ID {
+		t.Fatalf("interrupted run finalizations = %+v, want %s", finalizer.interruptedRuns, runs[0].ID)
 	}
 }
 
@@ -749,6 +1056,55 @@ func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) 
 	}
 }
 
+func TestBuildWorkflowTaskInstructionsRendersTransitionCommentaryParameter(t *testing.T) {
+	instructions, err := BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
+		Task: workflowstore.TaskRecord{
+			ID:         "task-1",
+			WorkflowID: "workflow-1",
+			ShortID:    "RUN-1",
+			Title:      "Task title",
+			Body:       "Task body",
+		},
+		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Node: workflowstore.NodeRecord{
+			ID:          "node-review",
+			Key:         "review",
+			DisplayName: "Review",
+		},
+		PromptTemplate: "Use {{.Params.commentary}}.",
+	})
+	if err != nil {
+		t.Fatalf("BuildWorkflowTaskInstructions without commentary: %v", err)
+	}
+	if instructions.NodePrompt != "Use ." {
+		t.Fatalf("node prompt without commentary = %q", instructions.NodePrompt)
+	}
+
+	instructions, err = BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
+		Task: workflowstore.TaskRecord{
+			ID:         "task-1",
+			WorkflowID: "workflow-1",
+			ShortID:    "RUN-1",
+			Title:      "Task title",
+			Body:       "Task body",
+		},
+		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Node: workflowstore.NodeRecord{
+			ID:          "node-review",
+			Key:         "review",
+			DisplayName: "Review",
+		},
+		PromptTemplate:  "Use {{.Params.commentary}}.",
+		ParameterValues: map[string]string{"commentary": "ready for review"},
+	})
+	if err != nil {
+		t.Fatalf("BuildWorkflowTaskInstructions with commentary: %v", err)
+	}
+	if instructions.NodePrompt != "Use ready for review." {
+		t.Fatalf("node prompt with commentary = %q", instructions.NodePrompt)
+	}
+}
+
 func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
@@ -793,6 +1149,79 @@ func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 	assertPromptContains(t, reqs[1], []string{"Use Run workflow and first summary."})
 }
 
+func TestWorkflowRuntimePreviousTargetOrNewFallsBackToNewSession(t *testing.T) {
+	fixture := newChainedStarterFixture(t)
+	workflowID := createChainedStarterWorkflowWithContextModeAndSource(t, fixture.store, workflow.ContextModeContinueSession, workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, "coder")
+	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow chained: %v", err)
+	}
+	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
+
+	if err := scheduler.Start(context.Background()); err != nil {
+		t.Fatalf("scheduler.Start: %v", err)
+	}
+	fixture.waitForAllRunsCompleted(t, task.ID, 2)
+
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("runs = %+v, want plan and implementation runs", runs)
+	}
+	if strings.TrimSpace(runs[0].SessionID) == "" || strings.TrimSpace(runs[1].SessionID) == "" || runs[0].SessionID == runs[1].SessionID {
+		t.Fatalf("runs = %+v, want previous_target_or_new fallback to start target in a fresh session", runs)
+	}
+	input, err := fixture.store.GetRunStartContext(context.Background(), runs[1].ID)
+	if err != nil {
+		t.Fatalf("GetRunStartContext fallback run: %v", err)
+	}
+	if input.ContextMode != workflow.ContextModeNewSession || input.SourceSessionID != "" || input.SourceRunID != "" {
+		t.Fatalf("fallback start context = mode %q source %q/%q, want effective new_session without source", input.ContextMode, input.SourceRunID, input.SourceSessionID)
+	}
+}
+
+func TestWorkflowRuntimePreviousTargetOrNewContinuesPriorTargetRun(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
+		ScriptedFinalAnswer(`{"commentary":"planned","prior_summary":"first plan"}`),
+		ScriptedFinalAnswer(`{"transition":"rework","commentary":"needs changes"}`),
+		ScriptedFinalAnswer(`{"commentary":"replanned","prior_summary":"second plan"}`),
+		ScriptedFinalAnswer(`{"transition":"done","commentary":"approved"}`),
+	)
+	workflowID := createPreviousTargetOrNewLoopStarterWorkflow(t, fixture.store, workflow.ContextModeContinueSession)
+	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow loop: %v", err)
+	}
+	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
+
+	if err := scheduler.Start(context.Background()); err != nil {
+		t.Fatalf("scheduler.Start: %v", err)
+	}
+	fixture.waitForAllRunsCompleted(t, task.ID, 4)
+
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 4 {
+		t.Fatalf("runs = %+v, want plan, review, replan, review", runs)
+	}
+	firstReview := runs[1]
+	secondReview := runs[3]
+	if strings.TrimSpace(firstReview.SessionID) == "" || secondReview.SessionID != firstReview.SessionID {
+		t.Fatalf("review runs = %+v then %+v, want second previous_target_or_new target run to continue first review session", firstReview, secondReview)
+	}
+	input, err := fixture.store.GetRunStartContext(context.Background(), secondReview.ID)
+	if err != nil {
+		t.Fatalf("GetRunStartContext second review: %v", err)
+	}
+	if input.ContextMode != workflow.ContextModeContinueSession || input.SourceRunID != firstReview.ID || input.SourceSessionID != firstReview.SessionID {
+		t.Fatalf("second review start context = mode %q source %q/%q, want first review %q/%q", input.ContextMode, input.SourceRunID, input.SourceSessionID, firstReview.ID, firstReview.SessionID)
+	}
+}
+
 func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
@@ -814,7 +1243,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 		t.Fatalf("runs after first process = %+v, want completed source and unstarted target", runs)
 	}
 	role := fixture.cfg.Settings.Subagents["coder"]
-	role.Settings.Model = "gpt-5.5-drifted"
+	role.Settings.Model = "gpt-5.6-sol-drifted"
 	role.Sources["model"] = "drifted-test"
 	fixture.cfg.Settings.Subagents["coder"] = role
 	fixture.rebuildStarter(t)
@@ -828,7 +1257,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 	if len(reqs) < 2 {
 		t.Fatalf("fake model request count = %d, want 2", len(reqs))
 	}
-	if reqs[0].Model == "" || reqs[1].Model != reqs[0].Model || reqs[1].Model == "gpt-5.5-drifted" {
+	if reqs[0].Model == "" || reqs[1].Model != reqs[0].Model || reqs[1].Model == "gpt-5.6-sol-drifted" {
 		t.Fatalf("request models = %q then %q, want locked source session model reused after config drift", reqs[0].Model, reqs[1].Model)
 	}
 }
@@ -925,12 +1354,80 @@ func TestWorkflowRuntimeCompactAndContinueReusesSourceSessionWithRealCompaction(
 	}
 }
 
+func TestWorkflowRuntimePreviousTargetOrNewCompactsPriorTargetRun(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
+		ScriptedFinalAnswer(`{"commentary":"planned","prior_summary":"first plan"}`),
+		ScriptedFinalAnswer(`{"transition":"rework","commentary":"needs changes"}`),
+		ScriptedFinalAnswer(`{"commentary":"replanned","prior_summary":"second plan"}`),
+		ScriptedFinalAnswer("compacted review context"),
+		ScriptedFinalAnswer(`{"transition":"done","commentary":"approved"}`),
+	)
+	workflowID := createPreviousTargetOrNewLoopStarterWorkflow(t, fixture.store, workflow.ContextModeCompactAndContinueSession)
+	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow loop: %v", err)
+	}
+	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
+
+	if err := scheduler.Start(context.Background()); err != nil {
+		t.Fatalf("scheduler.Start: %v", err)
+	}
+	fixture.waitForAllRunsCompleted(t, task.ID, 4)
+
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 4 {
+		t.Fatalf("runs = %+v, want plan, review, replan, review", runs)
+	}
+	firstReview := runs[1]
+	secondReview := runs[3]
+	if strings.TrimSpace(firstReview.SessionID) == "" || secondReview.SessionID != firstReview.SessionID {
+		t.Fatalf("review runs = %+v then %+v, want compact previous_target_or_new target run to reuse first review session", firstReview, secondReview)
+	}
+	input, err := fixture.store.GetRunStartContext(context.Background(), secondReview.ID)
+	if err != nil {
+		t.Fatalf("GetRunStartContext second review: %v", err)
+	}
+	if input.ContextMode != workflow.ContextModeCompactAndContinueSession || input.SourceRunID != firstReview.ID || input.SourceSessionID != firstReview.SessionID {
+		t.Fatalf("second review start context = mode %q source %q/%q, want compact first review %q/%q", input.ContextMode, input.SourceRunID, input.SourceSessionID, firstReview.ID, firstReview.SessionID)
+	}
+	if runID := fixture.historyReplacedWorkflowRunID(t, secondReview.SessionID); runID != string(secondReview.ID) {
+		t.Fatalf("history_replaced workflow_run_id = %q, want compact previous_target_or_new run %q", runID, secondReview.ID)
+	}
+}
+
 func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
 		ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`),
 		ScriptedFinalAnswer(`{"commentary":"compaction summary"}`),
 		ScriptedFinalAnswer(`{"commentary":"second done"}`),
 	)
+	coderRole := fixture.cfg.Settings.Subagents["coder"]
+	coderRole.Settings.Model = "gpt-5.3-codex-spark"
+	coderRole.Sources = map[string]string{"model": "test"}
+	fixture.cfg.Settings.Subagents["coder"] = coderRole
+	reviewerRole := fixture.cfg.Settings.Subagents["reviewer"]
+	reviewerRole.Settings.Model = "gpt-5.6-sol"
+	reviewerRole.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolEdit: true}
+	reviewerRole.Sources = map[string]string{
+		"model":       "test",
+		"tools.shell": "test",
+		"tools.patch": "test",
+		"tools.edit":  "test",
+	}
+	fixture.cfg.Settings.Subagents["reviewer"] = reviewerRole
+	fixture.client = NewScriptedClient(llm.ProviderCapabilities{
+		ProviderID:             "fake",
+		SupportsResponsesAPI:   true,
+		SupportsPromptCacheKey: true,
+	}, ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`),
+		ScriptedFinalAnswer(`{"commentary":"compaction summary"}`),
+		ScriptedFinalAnswer(`{"commentary":"second done"}`),
+	)
+	fixture.clientFactory = func(SchedulerStartRunRequest) llm.Client { return fixture.client }
+	fixture.rebuildStarter(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeCompactAndContinueSession, "reviewer")
 	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow chained: %v", err)
@@ -953,6 +1450,13 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if len(runs) != 2 || runs[1].InterruptedAt != 0 || runs[1].CompletedAt == 0 || runs[0].SessionID != runs[1].SessionID {
 		t.Fatalf("runs = %+v, want cross-role compact_and_continue to complete in source session", runs)
 	}
+	reqs := fixture.client.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("model request count = %d, want source turn, target-contract compaction, and target turn", len(reqs))
+	}
+	if reqs[0].Model != "gpt-5.3-codex-spark" || reqs[1].Model != "gpt-5.6-sol" || reqs[2].Model != "gpt-5.6-sol" {
+		t.Fatalf("request models = %q, %q, %q, want source model then target model for compaction and target turn", reqs[0].Model, reqs[1].Model, reqs[2].Model)
+	}
 	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
 	sourceDir, err := session.ResolveScopedSessionDir(containerDir, runs[1].SessionID)
 	if err != nil {
@@ -962,8 +1466,24 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open source session: %v", err)
 	}
-	if got := sourceStore.Meta().Continuation; got == nil || got.AgentRole != "reviewer" {
+	if got := sourceStore.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("reviewer")) {
 		t.Fatalf("continuation role = %+v, want reviewer", got)
+	}
+	if got := sourceStore.Meta().PromptCacheLineageGeneration; got != 1 {
+		t.Fatalf("prompt cache lineage generation = %d, want fresh target generation 1", got)
+	}
+	if locked := sourceStore.Meta().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
+		t.Fatalf("locked prompt-facing contract = %+v, want refreshed prompt and request shape", locked)
+	} else if !lockedContractHasTool(locked, toolspec.ToolEdit) || lockedContractHasTool(locked, toolspec.ToolExecCommand) {
+		t.Fatalf("locked enabled tools = %+v, want refreshed reviewer role tools", locked.EnabledTools)
+	} else if locked.Model != "gpt-5.6-sol" {
+		t.Fatalf("locked model = %q, want target reviewer model", locked.Model)
+	}
+	if reqs[0].PromptCacheKey == "" || reqs[1].PromptCacheKey == "" {
+		t.Fatalf("request cache keys = %q, %q, want cache lineages for source and target contracts", reqs[0].PromptCacheKey, reqs[1].PromptCacheKey)
+	}
+	if reqs[1].PromptCacheKey == reqs[0].PromptCacheKey {
+		t.Fatalf("target compaction cache key = %q, want fresh target-contract cache lineage instead of source key %q", reqs[1].PromptCacheKey, reqs[0].PromptCacheKey)
 	}
 }
 
@@ -985,7 +1505,7 @@ func TestWorkflowRuntimeFanoutCompactAndContinueClonesUseBranchTransitionMetadat
 	}
 	nodeKeyByID := map[workflow.NodeID]workflow.ModelKey{}
 	for _, node := range def.Nodes {
-		nodeKeyByID[workflow.NodeID(node.ID)] = node.Key
+		nodeKeyByID[workflow.NodeIDOf(node)] = workflow.NodeKey(node)
 	}
 	task := fixture.createStartedTask(t)
 
@@ -1063,7 +1583,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 
@@ -1090,8 +1610,98 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != "" {
+	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared role", got)
+	}
+}
+
+func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))
+	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
+	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("create source session: %v", err)
+	}
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+
+	plan, _, err := fixture.starter.planSession(context.Background(), workflowstore.RunStartContext{
+		ContextMode:     workflow.ContextModeContinueSession,
+		SourceSessionID: source.Meta().SessionID,
+		Task: workflowstore.TaskRecord{
+			ID:        "task-1",
+			ProjectID: fixture.projectID,
+			ShortID:   "RUN-1",
+			Title:     "Task title",
+		},
+		Workflow:       workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Node:           workflowstore.NodeRecord{ID: "node-1", Key: "plan", SubagentRole: "coder"},
+		PromptTemplate: "Continue.",
+	})
+	if err != nil {
+		t.Fatalf("planSession: %v", err)
+	}
+	if plan.ActiveSettings.Model != "gpt-5.6-sol" {
+		t.Fatalf("model = %q, want locked model", plan.ActiveSettings.Model)
+	}
+	reopened, err := session.Open(source.Dir(), fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("open source session: %v", err)
+	}
+	if got := reopened.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
+		t.Fatalf("continuation = %+v, want coder role persisted", got)
+	}
+}
+
+func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))
+	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
+	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("create source session: %v", err)
+	}
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	planner := launch.Planner{
+		Config:       fixture.cfg,
+		ContainerDir: containerDir,
+		StoreOptions: fixture.metadata.AuthoritativeSessionStoreOptions(),
+	}
+	plan, err := planner.PlanSession(context.Background(), launch.SessionRequest{
+		Mode:              launch.ModeHeadless,
+		SelectedSessionID: source.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	_, _, err = launch.ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: "coder"}, auth.EmptyState())
+	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
+		t.Fatalf("ApplyRunPromptOverrides error = %v, want locked role change", err)
+	}
+
+	plan, _, err = fixture.starter.planSession(context.Background(), workflowstore.RunStartContext{
+		ContextMode:     workflow.ContextModeContinueSession,
+		SourceSessionID: source.Meta().SessionID,
+		Task: workflowstore.TaskRecord{
+			ID:        "task-1",
+			ProjectID: fixture.projectID,
+			ShortID:   "RUN-1",
+			Title:     "Task title",
+		},
+		Workflow:       workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Node:           workflowstore.NodeRecord{ID: "node-1", Key: "plan", SubagentRole: "coder"},
+		PromptTemplate: "Continue.",
+	})
+	if err != nil {
+		t.Fatalf("workflow planSession: %v", err)
+	}
+	if got := plan.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
+		t.Fatalf("workflow continuation = %+v, want coder role", got)
 	}
 }
 
@@ -1119,8 +1729,39 @@ func TestWorkflowRuntimeStartFailsWhenRoleDisappearedAfterTaskStart(t *testing.T
 	}
 }
 
+func TestWorkflowRuntimeStartsWorkflowHiddenConfiguredNoOpRole(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
+		ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`),
+		ScriptedFinalAnswer(`{"commentary":"second done"}`),
+	)
+	fixture.cfg.Settings.Workflow.Subagents = false
+	fixture.cfg.Settings.Subagents["planner"] = config.SubagentRole{
+		Settings:            config.Settings{ThinkingLevel: fixture.cfg.Settings.ThinkingLevel},
+		Sources:             map[string]string{"thinking_level": "test"},
+		WorkflowSubagent:    false,
+		WorkflowSubagentSet: true,
+	}
+	fixture.rebuildStarter(t)
+	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeNewSession, "planner")
+	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow chained: %v", err)
+	}
+	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
+
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("first Process: %v", err)
+	}
+	fixture.waitForRunCount(t, task.ID, 2)
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("second Process: %v", err)
+	}
+	fixture.waitForCompletedRunCount(t, task.ID, 2)
+}
+
 func TestWorkflowRuntimeStartFailsWhenTransitionPromptPreviewCannotRender(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"should not run"}`))
+	finalizer := &recordingInterruptedRunFinalizer{}
 	task := fixture.createStartedTask(t)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1132,7 +1773,7 @@ func TestWorkflowRuntimeStartFailsWhenTransitionPromptPreviewCannotRender(t *tes
 	if _, err := fixture.metadata.DB().ExecContext(context.Background(), `UPDATE task_runs SET metadata_json = json_set(metadata_json, '$.prompt_template', ?) WHERE id = ?`, "{{.Missing}}", string(runs[0].ID)); err != nil {
 		t.Fatalf("update run prompt metadata: %v", err)
 	}
-	scheduler := fixture.scheduler(t)
+	scheduler := fixture.schedulerWithOptions(t, WithSchedulerAttentionFinalizer(finalizer))
 
 	if err := scheduler.Process(context.Background()); !errors.Is(err, ErrSchedulerRuntimeStartFailed) {
 		t.Fatalf("Process error = %v, want scheduler runtime start failure", err)
@@ -1144,6 +1785,9 @@ func TestWorkflowRuntimeStartFailsWhenTransitionPromptPreviewCannotRender(t *tes
 	if len(runs) != 1 || runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed || strings.TrimSpace(runs[0].SessionID) != "" {
 		t.Fatalf("run after prompt render failure = %+v, want interrupted without attached session", runs)
 	}
+	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != runs[0].ID {
+		t.Fatalf("interrupted run finalizations = %+v, want %s", finalizer.interruptedRuns, runs[0].ID)
+	}
 	if reqs := fixture.client.Requests(); len(reqs) != 0 {
 		t.Fatalf("model requests = %+v, want none before invalid prompt render failure", reqs)
 	}
@@ -1152,7 +1796,7 @@ func TestWorkflowRuntimeStartFailsWhenTransitionPromptPreviewCannotRender(t *tes
 func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"resumed"}`))
 	task := fixture.createStartedTask(t)
-	if err := fixture.worktrees.EnsureTaskWorktree(context.Background(), string(task.ID)); err != nil {
+	if err := fixture.worktrees.EnsureTaskWorktree(context.Background(), TaskWorktreeEnsureRequest{TaskID: task.ID}); err != nil {
 		t.Fatalf("EnsureTaskWorktree: %v", err)
 	}
 	def, _, err := fixture.store.GetDefinition(context.Background(), fixture.workflowID)
@@ -1196,10 +1840,14 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 		t.Fatalf("interrupted run session = %+v", runs)
 	}
 	originalSessionID := runs[0].SessionID
-	resumed, err := fixture.store.ResumeTaskRun(context.Background(), task.ID)
+	resumedRuns, err := fixture.store.ResumeTaskRuns(context.Background(), task.ID)
 	if err != nil {
-		t.Fatalf("ResumeTaskRun: %v", err)
+		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
+	if len(resumedRuns) != 1 {
+		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
+	}
+	resumed := resumedRuns[0]
 	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
 		t.Fatalf("Process resumed: %v", err)
 	}
@@ -1215,6 +1863,91 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	if meta.Name != "RUN-1: Backlog -> Agent" || meta.FirstPromptPreview != startEdgePrompt {
 		t.Fatalf("resumed session metadata = name %q preview %q, want accepted transition metadata", meta.Name, meta.FirstPromptPreview)
 	}
+}
+
+func TestStartWorkflowRunWaitsForTaskWorktreeEnsureBeforeRunContext(t *testing.T) {
+	ensureStarted := make(chan TaskWorktreeEnsureRequest, 1)
+	releaseEnsure := make(chan struct{})
+	ensureErr := errors.New("setup failed")
+	ensurer := blockingStarterTaskWorktreeEnsurer{started: ensureStarted, release: releaseEnsure, err: ensureErr}
+	starter := &Starter{store: &recordingRuntimeStore{}, worktrees: ensurer}
+	done := make(chan error, 1)
+	go func() {
+		done <- starter.StartWorkflowRun(context.Background(), SchedulerStartRunRequest{TaskID: "task-1", RunID: "run-1", Generation: 1})
+	}()
+	var req TaskWorktreeEnsureRequest
+	select {
+	case req = <-ensureStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for worktree ensure")
+	}
+	if req.TaskID != "task-1" || req.RunID != "run-1" {
+		t.Fatalf("ensure request = %+v", req)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("StartWorkflowRun returned before ensure released: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseEnsure)
+	select {
+	case err := <-done:
+		if !errors.Is(err, ensureErr) {
+			t.Fatalf("StartWorkflowRun error = %v, want %v", err, ensureErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for StartWorkflowRun")
+	}
+}
+
+func TestStartWorkflowRunIncludesSetupCreatedSkillInFirstModelRequest(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"done"}`))
+	const skillName = "setup-created-workflow-skill"
+	const skillDescription = "created before context lock"
+	var skillPath string
+	fixture.worktrees.afterCreate = func(worktreeRoot string) error {
+		skillDir := filepath.Join(worktreeRoot, config.ConfigDirName, "skills", skillName)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			return err
+		}
+		skillPath = filepath.Join(skillDir, "SKILL.md")
+		content := "---\nname: " + skillName + "\ndescription: " + skillDescription + "\n---\n\n# Setup skill\n"
+		if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
+			return err
+		}
+		canonicalPath, err := filepath.EvalSymlinks(skillPath)
+		if err == nil {
+			skillPath = canonicalPath
+		}
+		return nil
+	}
+	task := fixture.createStartedTask(t)
+
+	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	fixture.waitForCompletedRun(t, task.ID)
+
+	reqs := fixture.client.Requests()
+	if len(reqs) == 0 {
+		t.Fatal("fake model was not called")
+	}
+	if skillPath == "" {
+		t.Fatal("task worktree setup hook did not create a skill")
+	}
+	assertRequestHasSkillEntry(t, reqs[0], skillName, skillPath, skillDescription)
+}
+
+type blockingStarterTaskWorktreeEnsurer struct {
+	started chan<- TaskWorktreeEnsureRequest
+	release <-chan struct{}
+	err     error
+}
+
+func (e blockingStarterTaskWorktreeEnsurer) EnsureTaskWorktree(_ context.Context, req TaskWorktreeEnsureRequest) error {
+	e.started <- req
+	<-e.release
+	return e.err
 }
 
 func TestRemoveFanoutCloneDeletesOrphanedClone(t *testing.T) {
@@ -1255,20 +1988,14 @@ type starterFixture struct {
 	view     interface {
 		GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error)
 	}
-	worktrees     *metadataTaskWorktrees
-	client        *ScriptedClient
-	clientFactory func(SchedulerStartRunRequest) llm.Client
-	runtimes      starterRuntimeRegistry
-	starter       *Starter
-	workflowID    workflow.WorkflowID
-	projectID     string
-}
-
-type primaryRunAcquireTrackingRegistry struct {
-	*registry.RuntimeRegistry
-	mu                              sync.Mutex
-	acquireCount                    int
-	registerObservedOwnerLeaseBlock bool
+	worktrees       *metadataTaskWorktrees
+	client          *ScriptedClient
+	clientFactory   func(SchedulerStartRunRequest) llm.Client
+	runtimes        starterRuntimeRegistry
+	starter         *Starter
+	workflowID      workflow.WorkflowID
+	projectID       string
+	attentionBroker *attentionnotify.Broker
 }
 
 type starterRuntimeRegistry interface {
@@ -1277,46 +2004,12 @@ type starterRuntimeRegistry interface {
 	SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error
 }
 
-func (r *primaryRunAcquireTrackingRegistry) AcquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
-	lease, err := r.RuntimeRegistry.AcquirePrimaryRun(sessionID)
-	if err != nil {
-		return nil, err
-	}
-	r.mu.Lock()
-	r.acquireCount++
-	r.mu.Unlock()
-	return lease, nil
-}
-
-func (r *primaryRunAcquireTrackingRegistry) RegisterRuntimeHooks(sessionID string, engine *runtime.Engine, rebind func(string) error) {
-	lease, err := r.RuntimeRegistry.AcquirePrimaryRun(sessionID)
-	ownerLeaseHeld := errors.Is(err, primaryrun.ErrActivePrimaryRun)
-	if err == nil && lease != nil {
-		lease.Release()
-	}
-	r.mu.Lock()
-	r.registerObservedOwnerLeaseBlock = ownerLeaseHeld
-	r.mu.Unlock()
-	r.RuntimeRegistry.RegisterRuntimeHooks(sessionID, engine, rebind)
-}
-
-func (r *primaryRunAcquireTrackingRegistry) AcquireCount() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.acquireCount
-}
-
-func (r *primaryRunAcquireTrackingRegistry) RegisterObservedOwnerLeaseBlock() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.registerObservedOwnerLeaseBlock
-}
-
 func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps ...ScriptedRuntimeStep) starterFixture {
 	t.Helper()
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, "kent-root"))
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
@@ -1337,7 +2030,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if err := metadataStore.SetProjectKey(context.Background(), binding.ProjectID, "RUN"); err != nil {
 		t.Fatalf("SetProjectKey: %v", err)
 	}
-	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true, "reviewer": true}))
+	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true, "reviewer": true, "planner": true}))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
@@ -1348,10 +2041,13 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	worktrees := &metadataTaskWorktrees{t: t, metadata: metadataStore, workspaceID: binding.WorkspaceID, root: filepath.Join(home, "task-worktrees")}
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: mode == config.WorkflowCompletionModeStructuredOutput}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
-	runtimes := registry.NewRuntimeRegistry()
-	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, nil, runtimes, StarterOptions{
-		ClientFactory: clientFactory,
-		Worktrees:     worktrees,
+	attentionBroker := attentionnotify.NewBroker()
+	runtimes := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
+	sessionRuntime := sessionruntime.NewService(cfg.PersistenceRoot, metadataStore, nil, nil, nil, nil, runtimes, nil)
+	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, runtimes, StarterOptions{
+		ClientFactory:  clientFactory,
+		Worktrees:      worktrees,
+		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
@@ -1361,7 +2057,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if _, err := store.LinkWorkflow(context.Background(), binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, starter: starter, workflowID: workflowID, projectID: binding.ProjectID}
+	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker}
 }
 
 func newChainedStarterFixture(t *testing.T) starterFixture {
@@ -1380,9 +2076,11 @@ func (f *starterFixture) rebuildStarter(t *testing.T) {
 	if f.runtimes == nil {
 		f.runtimes = registry.NewRuntimeRegistry()
 	}
-	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, nil, f.runtimes, StarterOptions{
-		ClientFactory: f.clientFactory,
-		Worktrees:     f.worktrees,
+	sessionRuntime := sessionruntime.NewService(f.cfg.PersistenceRoot, f.metadata, nil, nil, nil, nil, f.runtimes.(*registry.RuntimeRegistry), nil)
+	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, f.runtimes, StarterOptions{
+		ClientFactory:  f.clientFactory,
+		Worktrees:      f.worktrees,
+		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
@@ -1393,7 +2091,12 @@ func (f *starterFixture) rebuildStarter(t *testing.T) {
 
 func (f starterFixture) scheduler(t *testing.T) *SchedulerService {
 	t.Helper()
-	scheduler, err := NewSchedulerService(f.store, f.starter, SchedulerConfig{Concurrency: 1})
+	return f.schedulerWithOptions(t)
+}
+
+func (f starterFixture) schedulerWithOptions(t *testing.T, opts ...SchedulerOption) *SchedulerService {
+	t.Helper()
+	scheduler, err := NewSchedulerService(f.store, f.starter, SchedulerConfig{Concurrency: 1}, opts...)
 	if err != nil {
 		t.Fatalf("scheduler.New: %v", err)
 	}
@@ -1417,7 +2120,7 @@ func (f starterFixture) createStartedTask(t *testing.T) workflowstore.TaskRecord
 func (f starterFixture) claimPlannedRun(t *testing.T) (workflowstore.RunnableRunRecord, workflowstore.RunStartContext, launch.SessionPlan) {
 	t.Helper()
 	task := f.createStartedTask(t)
-	if err := f.worktrees.EnsureTaskWorktree(context.Background(), string(task.ID)); err != nil {
+	if err := f.worktrees.EnsureTaskWorktree(context.Background(), TaskWorktreeEnsureRequest{TaskID: task.ID}); err != nil {
 		t.Fatalf("EnsureTaskWorktree: %v", err)
 	}
 	runs, err := f.store.ListRuns(context.Background(), task.ID)
@@ -1451,6 +2154,270 @@ func disableCoderShell(t *testing.T, fixture *starterFixture) {
 	}
 	role.Sources["tools."+toolspec.ConfigName(toolspec.ToolExecCommand)] = "test"
 	fixture.cfg.Settings.Subagents["coder"] = role
+}
+
+func enableAskQuestionTool(t *testing.T, fixture *starterFixture) {
+	t.Helper()
+	role := fixture.cfg.Settings.Subagents["coder"]
+	role.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	if role.Sources == nil {
+		role.Sources = map[string]string{}
+	}
+	role.Sources["tools."+toolspec.ConfigName(toolspec.ToolAskQuestion)] = "test"
+	fixture.cfg.Settings.Subagents["coder"] = role
+}
+
+func nextWorkflowAttentionEvent(t *testing.T, sub serverapi.AttentionNotificationSubscription) clientui.AttentionNotificationEvent {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	event, err := sub.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next attention event: %v", err)
+	}
+	return event
+}
+
+func workflowAttentionEventWithin(t *testing.T, sub serverapi.AttentionNotificationSubscription, timeout time.Duration) (clientui.AttentionNotificationEvent, bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	event, err := sub.Next(ctx)
+	if err != nil {
+		return clientui.AttentionNotificationEvent{}, false
+	}
+	return event, true
+}
+
+func attentionNotificationEventIDMatches(event clientui.AttentionNotificationEvent, id clientui.AttentionNotificationID) bool {
+	return event.ID != nil && *event.ID == id
+}
+
+func assertTaskQuestionBatchPending(t *testing.T, event clientui.AttentionNotificationEvent, fixture starterFixture, task workflowstore.TaskRecord, sessionID string, currentAskID string) {
+	t.Helper()
+	if event.Type != clientui.AttentionNotificationEventPending || event.Pending == nil {
+		t.Fatalf("attention event = %+v, want pending", event)
+	}
+	pending := event.Pending
+	if pending.Kind != clientui.AttentionNotificationKindQuestion ||
+		pending.ID.Kind != clientui.AttentionNotificationKindQuestion ||
+		pending.ID.UUID == "" {
+		t.Fatalf("pending id/kind = %q/%q", pending.ID, pending.Kind)
+	}
+	target := pending.Target
+	if target.Kind != clientui.AttentionNotificationTargetWorkflowTask ||
+		target.ProjectID != fixture.projectID ||
+		target.WorkflowID != string(fixture.workflowID) ||
+		target.TaskID != string(task.ID) ||
+		target.TaskShortID != task.ShortID ||
+		target.SessionID != sessionID {
+		t.Fatalf("target = %+v, want task detail for task/session", target)
+	}
+	if target.RunID == "" {
+		t.Fatalf("target run id missing: %+v", target)
+	}
+	if target.Focus == nil || target.Focus.Kind != clientui.AttentionNotificationFocusQuestion {
+		t.Fatalf("target focus = %+v, want question focus", target.Focus)
+	}
+	if got := target.Focus.AskIDs; len(got) != 2 || got[0] != "call-ask-1" || got[1] != "call-ask-2" {
+		t.Fatalf("focus ask ids = %+v, want ordered prepared asks", got)
+	}
+	if pending.Question == nil || pending.Question.DisplayCount != 2 {
+		t.Fatalf("question state = %+v, want count 2", pending.Question)
+	}
+	if got := pending.Question.PreparedAskIDs; len(got) != 2 || got[0] != "call-ask-1" || got[1] != "call-ask-2" {
+		t.Fatalf("prepared ask ids = %+v, want ordered prepared asks", got)
+	}
+	foundCurrent := false
+	for _, askID := range pending.Question.CurrentUnresolvedAskIDs {
+		if askID == currentAskID {
+			foundCurrent = true
+		}
+	}
+	if !foundCurrent {
+		t.Fatalf("current unresolved asks = %+v, want %q", pending.Question.CurrentUnresolvedAskIDs, currentAskID)
+	}
+}
+
+func workflowTestRunStartContext() workflowstore.RunStartContext {
+	return workflowstore.RunStartContext{
+		Task: workflowstore.TaskRecord{
+			ID:         "task-1",
+			ProjectID:  "project-1",
+			WorkflowID: "workflow-1",
+			ShortID:    "RUN-1",
+			Title:      "Task title",
+		},
+	}
+}
+
+func workflowTestAskBatch(promptID string, askIDs ...string) askquestion.AskQuestionBatchMetadata {
+	return askquestion.AskQuestionBatchMetadata{
+		Origin:              askquestion.AskQuestionOriginModelTool,
+		RunID:               "run-1",
+		StepID:              "step-1",
+		BatchID:             "batch-1",
+		PromptID:            promptID,
+		BatchPromptIDs:      append([]string(nil), askIDs...),
+		PreparedPromptCount: len(askIDs),
+	}
+}
+
+type workflowAskHandlerRuntime struct {
+	response        askquestion.AskQuestionResponse
+	err             error
+	awaited         []askquestion.AskQuestionRequest
+	prepared        []string
+	cleared         []string
+	skipped         []string
+	approvalCleared []string
+}
+
+func (r *workflowAskHandlerRuntime) PublishRuntimeEvent(string, runtime.Event) {}
+
+func (r *workflowAskHandlerRuntime) PublishRuntimeEventForEngine(string, *runtime.Engine, runtime.Event) {
+}
+
+func (r *workflowAskHandlerRuntime) PublishRuntimeActivitySnapshot(string, runtimeactivity.ResponseSnapshot) {
+}
+
+func (r *workflowAskHandlerRuntime) AwaitPromptResponse(_ context.Context, _ string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	r.awaited = append(r.awaited, req)
+	return r.response, r.err
+}
+
+func (r *workflowAskHandlerRuntime) MarkTaskQuestionCleared(_ askquestion.AskQuestionBatchMetadata, askID string) {
+	r.cleared = append(r.cleared, askID)
+}
+
+func (r *workflowAskHandlerRuntime) PrepareTaskQuestionBatch(batch askquestion.AskQuestionBatchMetadata, _ string, _ *clientui.AttentionNotificationTarget, _ string, _ time.Time) error {
+	r.prepared = append(r.prepared, batch.PromptID)
+	return nil
+}
+
+func (r *workflowAskHandlerRuntime) MarkTaskQuestionSkipped(batch askquestion.AskQuestionBatchMetadata) {
+	r.skipped = append(r.skipped, batch.PromptID)
+}
+
+func (r *workflowAskHandlerRuntime) MarkTaskApprovalQuestionCleared(_ clientui.AttentionNotificationTarget, askID string) {
+	r.approvalCleared = append(r.approvalCleared, askID)
+}
+
+type recordingRuntimeStore struct {
+	waitingAskID string
+	clearedAskID string
+	setErr       error
+	clearErr     error
+	getRun       workflowstore.RunRecord
+	getRunErr    error
+}
+
+func (s *recordingRuntimeStore) GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error) {
+	return s.getRun, s.getRunErr
+}
+
+func (s *recordingRuntimeStore) GetRunStartContext(context.Context, workflow.RunID) (workflowstore.RunStartContext, error) {
+	panic("GetRunStartContext not expected")
+}
+
+func (s *recordingRuntimeStore) GetRunCompletionContext(context.Context, workflow.RunID) (workflowstore.RunCompletionContext, error) {
+	panic("GetRunCompletionContext not expected")
+}
+
+func (s *recordingRuntimeStore) AttachRunSession(context.Context, workflow.RunID, int64, string) error {
+	panic("AttachRunSession not expected")
+}
+
+func (s *recordingRuntimeStore) SetRunEffectiveCompletionMode(context.Context, workflow.RunID, int64, string) error {
+	panic("SetRunEffectiveCompletionMode not expected")
+}
+
+func (s *recordingRuntimeStore) SetRunWaitingAsk(_ context.Context, _ workflow.RunID, _ int64, askID string) error {
+	s.waitingAskID = askID
+	return s.setErr
+}
+
+func (s *recordingRuntimeStore) ClearRunWaitingAsk(_ context.Context, _ workflow.RunID, _ int64, askID string) error {
+	s.clearedAskID = askID
+	return s.clearErr
+}
+
+func (s *recordingRuntimeStore) CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error) {
+	panic("CompleteRun not expected")
+}
+
+func (s *recordingRuntimeStore) RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error) {
+	panic("RecordProtocolViolation not expected")
+}
+
+func (s *recordingRuntimeStore) ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error {
+	panic("ResetProtocolViolationBudget not expected")
+}
+
+func (s *recordingRuntimeStore) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {
+	panic("CountTaskComments not expected")
+}
+
+func (s *recordingRuntimeStore) InterruptRun(context.Context, workflow.RunID, string, string) error {
+	panic("InterruptRun not expected")
+}
+
+func (s *recordingRuntimeStore) InterruptRunGeneration(context.Context, workflow.RunID, int64, string, string) error {
+	panic("InterruptRunGeneration not expected")
+}
+
+type panicRuntimeStore struct {
+	recordingRuntimeStore
+	t *testing.T
+}
+
+type recordingInterruptedRunFinalizer struct {
+	transitions     []workflowattention.TransitionResult
+	interruptedRuns []workflow.RunID
+}
+
+func (f *recordingInterruptedRunFinalizer) FinalizeTransition(_ context.Context, result workflowattention.TransitionResult) {
+	f.transitions = append(f.transitions, result)
+}
+
+func (f *recordingInterruptedRunFinalizer) FinalizeInterruptedRun(_ context.Context, runID workflow.RunID) {
+	f.interruptedRuns = append(f.interruptedRuns, runID)
+}
+
+func TestScriptCompletionAttentionFinalizesTransitionAndInterruptedRuns(t *testing.T) {
+	finalizer := &recordingInterruptedRunFinalizer{}
+	starter := &Starter{attentionFinalizer: finalizer}
+
+	starter.finalizeScriptCompletionAttention(context.Background(), workflowstore.CompleteRunResult{
+		TransitionID:                  "transition-script",
+		State:                         "pending_approval",
+		ResolvedApprovalTransitionIDs: []workflow.TransitionID{"transition-resolved"},
+		InterruptedRunIDs:             []workflow.RunID{"run-interrupted"},
+	})
+
+	if len(finalizer.transitions) != 1 {
+		t.Fatalf("finalized transitions = %+v, want one", finalizer.transitions)
+	}
+	transition := finalizer.transitions[0]
+	if transition.TransitionID != "transition-script" || transition.State != "pending_approval" {
+		t.Fatalf("finalized transition = %+v", transition)
+	}
+	if len(transition.ResolvedApprovalTransitionIDs) != 1 || transition.ResolvedApprovalTransitionIDs[0] != "transition-resolved" {
+		t.Fatalf("resolved approvals = %+v", transition.ResolvedApprovalTransitionIDs)
+	}
+	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != "run-interrupted" {
+		t.Fatalf("finalized interrupted runs = %+v", finalizer.interruptedRuns)
+	}
+}
+
+func (s panicRuntimeStore) SetRunWaitingAsk(context.Context, workflow.RunID, int64, string) error {
+	s.t.Fatal("approval prompt must not set durable workflow waiting ask")
+	return nil
+}
+
+func (s panicRuntimeStore) ClearRunWaitingAsk(context.Context, workflow.RunID, int64, string) error {
+	s.t.Fatal("approval prompt must not clear durable workflow waiting ask")
+	return nil
 }
 
 func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID) {
@@ -1610,7 +2577,7 @@ func (f starterFixture) assertRunSessionUsesTaskWorktree(t *testing.T, sessionID
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if strings.TrimSpace(target.WorktreeID) == "" || !strings.HasSuffix(target.EffectiveWorkdir, string(filepath.Separator)+"RUN-1") {
+	if target.Worktree == nil || strings.TrimSpace(target.Worktree.ID) == "" || !strings.HasSuffix(target.EffectiveWorkdir, string(filepath.Separator)+"RUN-1") {
 		t.Fatalf("session target = %+v, want task worktree", target)
 	}
 	return target.EffectiveWorkdir
@@ -1719,12 +2686,14 @@ type metadataTaskWorktrees struct {
 	metadata    *metadata.Store
 	workspaceID string
 	root        string
+	afterCreate func(worktreeRoot string) error
 }
 
-func (e *metadataTaskWorktrees) EnsureTaskWorktree(ctx context.Context, taskID string) error {
+func (e *metadataTaskWorktrees) EnsureTaskWorktree(ctx context.Context, req TaskWorktreeEnsureRequest) error {
 	if e == nil || e.metadata == nil {
 		return nil
 	}
+	taskID := string(req.TaskID)
 	var shortID string
 	if err := e.metadata.DB().QueryRowContext(ctx, `SELECT short_id FROM tasks WHERE id = ?`, taskID).Scan(&shortID); err != nil {
 		return err
@@ -1733,6 +2702,11 @@ func (e *metadataTaskWorktrees) EnsureTaskWorktree(ctx context.Context, taskID s
 	worktreeRoot := filepath.Join(e.root, shortID)
 	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
 		return err
+	}
+	if e.afterCreate != nil {
+		if err := e.afterCreate(worktreeRoot); err != nil {
+			return err
+		}
 	}
 	if err := e.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
 		ID:              worktreeID,
@@ -1777,7 +2751,7 @@ func createStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.Wo
 	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Implement the task.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-start-" + string(created.ID)), WorkflowID: created.ID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-start-" + string(created.ID)), WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddTransitionGroup start: %v", err)
 	}
 	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-start-" + string(created.ID)), Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement the task."}); err != nil {
@@ -1786,7 +2760,7 @@ func createStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.Wo
 	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-done-" + string(created.ID)), WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddTransitionGroup done: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-done-" + string(created.ID)), Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession}); err != nil {
+	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-done-" + string(created.ID)), Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
 		t.Fatalf("AddEdge done: %v", err)
 	}
 	return created.ID
@@ -1798,6 +2772,11 @@ func createChainedStarterWorkflow(t *testing.T, store *workflowstore.Store) work
 }
 
 func createChainedStarterWorkflowWithContextMode(t *testing.T, store *workflowstore.Store, contextMode workflow.ContextMode, targetRole string) workflow.WorkflowID {
+	t.Helper()
+	return createChainedStarterWorkflowWithContextModeAndSource(t, store, contextMode, workflow.ContextSource{}, targetRole)
+}
+
+func createChainedStarterWorkflowWithContextModeAndSource(t *testing.T, store *workflowstore.Store, contextMode workflow.ContextMode, contextSource workflow.ContextSource, targetRole string) workflow.WorkflowID {
 	t.Helper()
 	ctx := context.Background()
 	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Chained Runner Workflow"})
@@ -1824,7 +2803,7 @@ func createChainedStarterWorkflowWithContextMode(t *testing.T, store *workflowst
 	nextGroup := workflow.TransitionGroupID("group-next-" + string(created.ID))
 	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
 	for _, group := range []workflowstore.TransitionGroupRecord{
-		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"},
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
 		{ID: nextGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "next", DisplayName: "Next"},
 		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: implID, TransitionID: "done", DisplayName: "Done"},
 	} {
@@ -1834,8 +2813,58 @@ func createChainedStarterWorkflowWithContextMode(t *testing.T, store *workflowst
 	}
 	for _, edge := range []workflowstore.EdgeRecord{
 		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan the task."},
-		{ID: workflow.EdgeID("edge-next-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implID, ContextMode: contextMode, PromptTemplate: "Use {{.TaskTitle}} and {{.Params.prior_summary}}.", Parameters: []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary."}}},
-		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-next-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implID, ContextMode: contextMode, ContextSource: contextSource, PromptTemplate: "Use {{.TaskTitle}} and {{.Params.prior_summary}}.", Parameters: []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary."}}},
+		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+	} {
+		if _, err := store.AddEdge(ctx, edge); err != nil {
+			t.Fatalf("AddEdge %s: %v", edge.Key, err)
+		}
+	}
+	return created.ID
+}
+
+func createPreviousTargetOrNewLoopStarterWorkflow(t *testing.T, store *workflowstore.Store, contextMode workflow.ContextMode) workflow.WorkflowID {
+	t.Helper()
+	ctx := context.Background()
+	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Previous Target Or New Runner Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	def, _, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	start := starterNodeByKind(t, def, workflow.NodeKindStart)
+	done := starterNodeByKind(t, def, workflow.NodeKindTerminal)
+	planID := workflow.NodeID("node-plan-" + string(created.ID))
+	reviewID := workflow.NodeID("node-review-" + string(created.ID))
+	for _, node := range []workflowstore.NodeRecord{
+		{ID: planID, WorkflowID: created.ID, Key: "plan", Kind: workflow.NodeKindAgent, DisplayName: "Plan", SubagentRole: "coder", PromptTemplate: "Plan the task.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}},
+		{ID: reviewID, WorkflowID: created.ID, Key: "review", Kind: workflow.NodeKindAgent, DisplayName: "Review", SubagentRole: "reviewer", PromptTemplate: "Review {{.Params.prior_summary}}."},
+	} {
+		if _, err := store.AddNode(ctx, node); err != nil {
+			t.Fatalf("AddNode %s: %v", node.Key, err)
+		}
+	}
+	startGroup := workflow.TransitionGroupID("group-start-" + string(created.ID))
+	reviewGroup := workflow.TransitionGroupID("group-review-" + string(created.ID))
+	reworkGroup := workflow.TransitionGroupID("group-rework-" + string(created.ID))
+	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
+	for _, group := range []workflowstore.TransitionGroupRecord{
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
+		{ID: reviewGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "review", DisplayName: "Review"},
+		{ID: reworkGroup, WorkflowID: created.ID, SourceNodeID: reviewID, TransitionID: "rework", DisplayName: "Rework"},
+		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: reviewID, TransitionID: "done", DisplayName: "Done"},
+	} {
+		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
+			t.Fatalf("AddTransitionGroup %s: %v", group.TransitionID, err)
+		}
+	}
+	for _, edge := range []workflowstore.EdgeRecord{
+		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan the task."},
+		{ID: workflow.EdgeID("edge-review-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: reviewGroup, Key: "review", TargetNodeID: reviewID, ContextMode: contextMode, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "Review {{.Params.prior_summary}}.", Parameters: []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary."}}},
+		{ID: workflow.EdgeID("edge-rework-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Revise the plan."},
+		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("AddEdge %s: %v", edge.Key, err)
@@ -1882,7 +2911,7 @@ func createFanoutCompactStarterWorkflow(t *testing.T, store *workflowstore.Store
 	synthGroup := workflow.TransitionGroupID("group-synth-" + string(created.ID))
 	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
 	for _, group := range []workflowstore.TransitionGroupRecord{
-		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"},
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
 		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "split", DisplayName: "Split"},
 		{ID: joinAGroup, WorkflowID: created.ID, SourceNodeID: implAID, TransitionID: "join", DisplayName: "Join"},
 		{ID: joinBGroup, WorkflowID: created.ID, SourceNodeID: implBID, TransitionID: "join", DisplayName: "Join"},
@@ -1900,7 +2929,7 @@ func createFanoutCompactStarterWorkflow(t *testing.T, store *workflowstore.Store
 		{ID: joinAEdgeID, WorkflowID: created.ID, TransitionGroupID: joinAGroup, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined branch summary."}}},
 		{ID: joinBEdgeID, WorkflowID: created.ID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
 		{ID: workflow.EdgeID("edge-synth-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: synthGroup, Key: "synth", TargetNodeID: synthID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Synthesize {{.Params.joined}}."},
-		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("AddEdge %s: %v", edge.Key, err)
@@ -1925,12 +2954,12 @@ func updateChainedStarterWorkflowNextEdgeContextMode(t *testing.T, metadataStore
 func starterNodeByKind(t *testing.T, def workflow.Definition, kind workflow.NodeKind) workflow.Node {
 	t.Helper()
 	for _, node := range def.Nodes {
-		if node.Kind == kind {
+		if node.Kind() == kind {
 			return node
 		}
 	}
 	t.Fatalf("node kind %s missing", kind)
-	return workflow.Node{}
+	return nil
 }
 
 func starterEdgeByKey(t *testing.T, def workflow.Definition, key workflow.ModelKey) workflow.Edge {
@@ -1963,6 +2992,23 @@ func requestPromptText(req llm.Request) string {
 	return haystack.String()
 }
 
+func assertRequestHasSkillEntry(t *testing.T, req llm.Request, name string, skillPath string, description string) {
+	t.Helper()
+	wantLine := "- " + name + ": " + filepath.ToSlash(skillPath) + " . " + description
+	for _, item := range req.Items {
+		if item.Role != llm.RoleDeveloper || item.MessageType != llm.MessageTypeSkills {
+			continue
+		}
+		for _, line := range strings.Split(item.Content, "\n") {
+			if line == wantLine {
+				return
+			}
+		}
+		t.Fatalf("skills message missing setup-created skill entry %q: %q", wantLine, item.Content)
+	}
+	t.Fatalf("request missing structured skills message: %+v", req.Items)
+}
+
 func assertNoUserPrompt(t *testing.T, req llm.Request) {
 	t.Helper()
 	userPrompts := []string{}
@@ -1980,6 +3026,18 @@ func assertNoUserPrompt(t *testing.T, req llm.Request) {
 func requestHasTool(req llm.Request, name string) bool {
 	for _, tool := range req.Tools {
 		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func lockedContractHasTool(locked *session.LockedContract, target toolspec.ID) bool {
+	if locked == nil {
+		return false
+	}
+	for _, raw := range locked.EnabledTools {
+		if raw == string(target) {
 			return true
 		}
 	}

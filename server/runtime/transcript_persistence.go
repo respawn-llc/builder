@@ -9,6 +9,8 @@ import (
 	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 type transcriptPersistenceCoordinator struct {
@@ -43,9 +45,16 @@ func (p transcriptPersistenceCoordinator) AppendCommittedEntryWithVisibility(rol
 	}
 }
 
-func (p transcriptPersistenceCoordinator) AppendStreamingDelta(delta string) {
+func (p transcriptPersistenceCoordinator) AppendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) (*AssistantStreamMetadata, *uuid.UUID) {
 	if chat := p.chatProjection(); chat != nil {
-		chat.appendStreamingDelta(delta)
+		return chat.appendStreamingDelta(stepID, baseRevision, baseCommittedEntryCount, delta, phase)
+	}
+	return nil, nil
+}
+
+func (p transcriptPersistenceCoordinator) RecordAssistantStreamFinalization(committedEntryStart int, streamID *uuid.UUID) {
+	if chat := p.chatProjection(); chat != nil {
+		chat.recordAssistantStreamFinalization(committedEntryStart, streamID)
 	}
 }
 
@@ -71,16 +80,22 @@ func (p transcriptPersistenceCoordinator) RestoreToolCompletionPayload(payload [
 }
 
 func (p transcriptPersistenceCoordinator) ReplaceHistory(items []llm.ResponseItem) {
+	p.ReplaceHistoryAtCommittedEntryStart(items, nil)
+}
+
+func (p transcriptPersistenceCoordinator) ReplaceHistoryAtCommittedEntryStart(items []llm.ResponseItem, committedEntryStart *int) {
 	if chat := p.chatProjection(); chat != nil {
-		chat.replaceHistory(items)
+		chat.replaceHistoryAtCommittedEntryStart(items, committedEntryStart)
 	}
 }
 
-func (p transcriptPersistenceCoordinator) ClearStreamingAssistantState() {
+func (p transcriptPersistenceCoordinator) ClearStreamingAssistantState() (*AssistantStreamMetadata, *uuid.UUID) {
 	if chat := p.chatProjection(); chat != nil {
-		chat.discardStreaming()
+		metadata, streamID := chat.discardStreaming()
 		chat.clearStreamingError()
+		return metadata, streamID
 	}
+	return nil, nil
 }
 
 func (p transcriptPersistenceCoordinator) SetStreamingError(text string) {

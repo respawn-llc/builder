@@ -15,6 +15,7 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "noUncheckedIndexedAccess": true,
+    "noUncheckedSideEffectImports": true,
     "paths": {
       "@/*": ["./src/*"],
       "@app/native-bridge": ["./packages/native-bridge/src/index.ts"],

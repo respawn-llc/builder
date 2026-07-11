@@ -1,4 +1,5 @@
 import type { Connection, Edge, Node } from "@xyflow/react";
+import { z } from "zod";
 
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
 import type {
@@ -9,6 +10,19 @@ import type {
   WorkflowGraphNodeData,
 } from "./workflowGraphLayout";
 import { isInspectableWorkflowNodeKind } from "./workflowGraphNodeKinds";
+
+const workflowGraphNodeDataSchema = z.object({
+  entityKind: z.literal("node"),
+  entityID: z.string(),
+});
+const workflowGraphGroupDataSchema = z.object({
+  entityKind: z.literal("group"),
+  entityID: z.string(),
+});
+const workflowGraphEdgeDataSchema = z.object({
+  entityKind: z.literal("edge"),
+  entityID: z.string(),
+});
 
 export type WorkflowGraphReconnectEndpoint = "source" | "target";
 
@@ -129,15 +143,15 @@ export function isFormTarget(target: EventTarget | null): boolean {
 }
 
 function isWorkflowGraphNodeData(data: Node["data"]): data is WorkflowGraphNodeData {
-  return data.entityKind === "node" && typeof data.entityID === "string";
+  return workflowGraphNodeDataSchema.safeParse(data).success;
 }
 
 function isWorkflowGraphGroupData(data: Node["data"]): data is WorkflowGraphGroupData {
-  return data.entityKind === "group" && typeof data.entityID === "string";
+  return workflowGraphGroupDataSchema.safeParse(data).success;
 }
 
 function isWorkflowGraphEdgeData(data: Edge["data"]): data is WorkflowGraphEdgeData {
-  return data?.entityKind === "edge" && typeof data.entityID === "string";
+  return workflowGraphEdgeDataSchema.safeParse(data).success;
 }
 
 function workflowGraphEdgeID(edge: Edge): string | null {

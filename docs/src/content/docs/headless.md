@@ -19,7 +19,27 @@ Continue an existing headless session:
 kent run --continue <session-id> "<follow-up>"
 ```
 
+Control an active shared run from another shell or agent:
+
+```bash
+kent run steer <session-id> "adjust the next step"
+kent run stop <session-id>
+kent run wait <session-id>
+```
+
 `kent run` needs a server connection to keep long-running shells and agents properly orchestrated. If you want to script kent runs, make sure the [Server](../server/) is running.
+
+## Live Controls
+
+Live controls target an explicitly named active session. They do not use `KENT_SESSION_ID` as a default, and they reject targeting their own `KENT_SESSION_ID`.
+
+`kent run steer <session-id> <message...>` queues a non-empty message into an already-active run and prints `ok`. If the run is idle, Kent reports the equivalent `kent run --continue <session-id> <message>` command instead of starting a new turn.
+
+`kent run stop <session-id>` interrupts the active shared runtime. It prints `Stopped` when it interrupts work, and `No active run` when the session is idle or nonexistent.
+
+`kent run wait <session-id>` waits for the active run's final answer and prints the same final-text shape as `kent run`. `kent run wait --output-mode=json <session-id>` uses the same JSON result object as ordinary JSON headless runs.
+
+Live steering is command-based only; standard input is not interpreted as steering.
 
 ## Subagent Roles
 
@@ -27,14 +47,24 @@ Roles are needed to create specialized subagent types for different tasks. Treat
 
 `--agent <role>` selects a named subagent role from `[subagents.<role>]` in the local or global config file. `--agent default` clears a resumed role and uses the base settings; `none` and `self` are not run-agent selectors. To define a new role, edit the config:
 
+To open an interactive session with a role, run:
+
+```bash
+kent --agent research
+```
+
+To apply a role while reopening a specific session, combine it with `--session` or `--continue`.
+If that session has a locked model request shape, the role must match the session's persisted role; `--agent default` cannot clear a locked role.
+
 ```toml
 [subagents.research]
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 thinking_level = "xhigh"
 system_prompt_file = "research-agent.md"
 description = "Use when you need fast, smart general-purpose researcher for deep thinking or complicated plans."
 priority_request_mode = true
 agent_callable = true
+workflow_subagent = true
 
 [subagents.research.tools]
 patch = false
@@ -44,6 +74,7 @@ patch = false
 ```
 
 - Set `agent_callable = false` to disallow agents to call that subagent role on their own.
+- Set `workflow_subagent = false` to disallow workflow agents from calling that custom role.
 - The built-in `fast` role exists even without config.
 - Subagent roles inherit the main config and then override only the keys you set in that role table.
 
@@ -53,10 +84,13 @@ Useful role-specific keys include:
 - `thinking_level`, `model_verbosity`, `priority_request_mode`
 - `system_prompt_file`
 - `description`, `agent_callable`
+- `workflow_subagent`
 - `[subagents.<role>.tools]`
 - `[subagents.<role>.skills]`
 
 For the full list of shared overrides, see [Configuration](../config/).
+
+Workflow-agent launches of hidden custom roles fail. Direct `kent run --agent <role>` commands from a human shell remain available, and `fast` is exempt from workflow-specific controls.
 
 ## Session Behavior
 

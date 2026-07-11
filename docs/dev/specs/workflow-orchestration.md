@@ -37,18 +37,18 @@
 - Workflows carry a monotonic `version` over persisted definition changes. This is traceability/stale-warning data, not immutable graph versioning.
 - Metadata-only changes and graph changes each increment workflow `version` once; combined metadata+graph saves also increment it once; no-op saves increment neither.
 - Tasks, runs, transitions, approvals, and edge snapshots store observed workflow version where historical traceability is required.
-- Run-start snapshots and transition/approval/fan-out edge snapshots keep using their snapshot. Anything not snapshotted uses current workflow graph/config at execution time.
+- Run-start snapshots and transition/approval/fan-out edge snapshots keep using their snapshot unless a node-specific runtime contract says otherwise. Script nodes live-load their current `script_path` and completion contract from the workflow graph when the run executes/completes.
 
 ## Nodes, Edges, And Validation
 
-- Nodes configure agent runs: subagent role, prompt/template, output schema, limits, stop conditions, and worktree/session execution policy.
+- Nodes configure workflow states and executable behavior. Agent nodes configure subagent role, completion mode, and worktree/session execution policy. Script nodes configure an executable script path.
 - Edges configure transitions: target node, approval/manual interaction, context preservation, context source, input bindings, output requirements, routing, and join/aggregation behavior.
 - Subagent role is the executable node assignee. There is no separate assignee field.
 - Workflow nodes select existing subagent roles only. There are no per-node model/provider/tool/auth overrides.
 - Visible executable/terminal node identity is Kanban column/status identity. Join nodes are internal merge plumbing omitted from board read models.
-- Workflows can contain start, agent, join, and terminal nodes. Approval is an edge property, not a manual-node requirement.
+- Workflows can contain start, agent, script, join, and terminal nodes. Approval is an edge property, not a manual-node requirement.
 - V1 has exactly one start node. The start node is non-executable and has no inputs.
-- For task creation/automation, the start node must have exactly one outgoing transition group containing exactly one edge targeting an agent node.
+- For task creation/automation, the start node must have exactly one outgoing transition group containing exactly one edge targeting an executable node.
 - Terminal nodes are strict sinks. Manual reopen/rework is a user override execution, not a durable graph transition.
 - Draft validation reports semantic errors but does not block save/link/default selection.
 - Task creation and execution validation accumulate all safe actionable errors and reject invalid graph/role/input configurations.
@@ -83,6 +83,18 @@
 - Runtime enforces one protocol cap. Repeated final answers in invalid modes or invalid completion attempts interrupt the run after `[workflow].max_invalid_completion_attempts = 5`.
 - No wall-clock runtime cap is required for v1.
 
+## Script Nodes
+
+- Script nodes are first-class executable workflow nodes. They can be Start targets, fan-out branches, join predecessors/successors, manual automation targets, and board columns anywhere agent nodes are accepted by graph semantics.
+- Script nodes store nullable `script_path`. Missing, nonexistent, directory, and non-executable paths do not block graph save or node add/update; they block execution validation, task start, or target run execution as appropriate.
+- Relative script paths resolve against the task managed worktree root. Absolute paths resolve on the Kent server host.
+- Script execution directly `exec`s the resolved file with the task managed worktree as cwd. It does not use a shell wrapper, retries, or a timeout.
+- Script stdin is one JSON object. Incoming workflow parameter values are top-level properties. `_kent` is reserved for minimal runtime identifiers, including `run_id` and `placement_id`.
+- Script stdout is parsed as the workflow completion JSON using the same completion contract as agent nodes. Stderr is diagnostics only and is not mixed into completion parsing.
+- Script run failures, invalid stdout, invalid script path, cancellation, and execution errors interrupt the run with bounded structured details.
+- Script completion persists transition actor `script`.
+- Resuming an interrupted script run reruns the same task run generation with cached incoming parameter values, the current workflow DB script path, and the current script outgoing transition/output contract.
+
 ## Workflow Prompting
 
 - Workflow runs use dedicated workflow-mode developer instructions.
@@ -90,8 +102,8 @@
 - Workflow runtime builds on reusable headless/session infrastructure for session launch, runtime wiring, logging, progress, subagent role handling, and mode prompts.
 - `RunPromptService.RunPrompt` final text is not workflow completion authority.
 - Existing user goal state is not reused as workflow autonomy state.
-- Workflow task sessions reject `/goal`; the workflow node/run is the task objective driver.
-- If terminal workflow completion commits before accepted limited-control steering is drained, the queued steering resolves with a visible failure and is not applied to the completed run.
+- Workflow task sessions reject user `/goal` control; the workflow node/run is the task objective driver. Agents may still set themselves goals and complete them, per the agent goal rules in core-runtime-tools.
+- If terminal workflow completion commits before accepted client steering is drained, the queued steering resolves with a visible failure and is not applied to the completed run.
 - Task comment bodies are not automatically injected into agent context. When a task has visible comments, workflow-mode instructions include the visible comment count and a `kent task comment list <task>` pull command. Kent re-queries the visible comment count each time the workflow instructions are appended without mutating previously persisted model-visible prompt items.
 
 ## Questions And Approvals
@@ -106,17 +118,21 @@
 - If pending ask cannot rehydrate, workflow run becomes interrupted with actionable resume path.
 - Edge approval is a boolean edge property.
 - When any edge in a selected transition group requires approval, the whole group waits for one approval before any target placement/run starts.
-- Pending approvals store resolved transition group, edge set, workflow version, source node snapshot, transition display snapshot, target node snapshots, and effective edge config snapshots.
+- Pending approvals store resolved transition group, edge set, workflow version, source node snapshot, transition display snapshot, target node snapshots, effective edge config snapshots, and frozen context-source resolution.
 - Later graph edits do not change what a user approves.
 - Every applied transition stores transition-edge snapshot rows, not only pending approvals.
 - A task awaiting approval has no active placement; its live position is the pending transition's source node, surfaced as a synthesized `waiting_approval` placement.
 - Manually moving a task that is awaiting approval overrides the proposed transition: the pending approval is marked `rejected` (auditable, not deleted) and the task moves from the approval's source node to the chosen target. This is the operator path to reject a proposed transition (e.g. sending an awaiting-approval plan back to Backlog).
+- Missing-edge manual overrides cannot target executable nodes. Manual movement into an agent or script node requires a concrete workflow edge so the target run has a real prompt/contract.
 
 ## Context Preservation And Bindings
 
 - Per-edge context preservation supports `new_session`, `continue_session`, and `compact_and_continue_session`.
-- Continuation modes may select `immediate_source` or `node:<node_key>` as context source.
-- Continuation modes apply the target node's subagent role context. A reused session remains authoritative for immutable contract fields already snapshotted by prior model dispatch.
+- Continuation modes may select `immediate_source`, `node:<node_key>`, `previous_target`, or `previous_target_or_new` as context source.
+- `previous_target` resolves the latest completed run of the target node before the transition event and fails when none exists.
+- `previous_target_or_new` resolves the latest completed run of the target node before the transition event when one exists; otherwise the target run starts with effective `new_session` and no source run/session.
+- Pending approvals freeze context-source resolution before approval. A fallback-to-new result remains effective `new_session` even if another target run completes before approval, and a resolved prior-target source remains fixed even if a newer target run completes before approval.
+- Continuation modes apply the target node's subagent role context. `continue_session` preserves the reused session's contract generation. `compact_and_continue_session` compacts the reused session and establishes a fresh target-node contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
 - `new_session` uses current role config at its fresh context boundary.
 - Consuming agent nodes own required inputs as named top-level string fields with descriptions.
 - Prompt placeholders validate against the consuming node's required inputs through `.Inputs.<name>`.
@@ -147,18 +163,20 @@
 
 ## Scheduler And Recovery
 
-- Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime ownership are live memory, not durable run states.
+- Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime execution are live memory, not durable run states.
 - Runnable work derives from active executable placements with approved automation intent, no terminal run outcome, and no task cancellation.
 - Pending-work ordering is scheduler memory.
-- Active execution derives from live runtime registry/scheduler ownership.
+- Active execution derives from the live runtime registry and scheduler.
 - Concurrency limit is global only and configured in `[workflow].concurrency`.
-- Scheduler does not own runtime leases. Runtime leases remain execution-control state, not scheduling authority.
+- Scheduler does not control runtime execution. Runtime execution is ownerless registry lifecycle state, not scheduling authority.
 - Startup rebuilds runnable work from durable state.
 - Completed runs and pending approvals remain as-is.
 - Waiting-for-question remains only if the pending ask can rehydrate.
 - Started runs with no terminal outcome and no live owner after startup become interrupted with restart/shutdown reason.
 - Interrupted runs are never automatically retried.
-- Explicit resume continues the interrupted session/run from current transcript/worktree state.
+- Explicit resume is task-level: it continues every interrupted run of the task from current transcript/worktree state, with no run selection.
+- Explicit interrupt is task-level with an optional session-id selector: no session interrupts all running runs of the task; a specific session interrupts only that run. Run id is never an operator-facing selector — the public per-run identifier is the session id.
+- Manual moves are rejected while a task has any started active run that is not completed or interrupted, including runs waiting on a question. The operator must interrupt, wait for completion, or resume from an interrupted state before manually moving the task.
 - Completion/transition application uses a fence/generation or compare-and-swap so stale runtime callbacks cannot mutate superseded runs.
 - Run completion and transition application remain one SQLite transaction.
 - Runtime failures, cancellation, crashes, model/runtime interruptions, and fixable scheduling validation blockers converge on interrupted outcome with reason metadata.
@@ -167,12 +185,15 @@
 ## Worktrees
 
 - A task owns one managed worktree by default.
-- All executable agent nodes require and reuse the task managed worktree.
-- Kent creates the managed worktree on task start before first executable run is scheduled.
+- All executable nodes require and reuse the task managed worktree.
+- Kent creates and, when configured, runs setup for the managed worktree on task start before first executable run is scheduled. Blocking setup prevents runs from locking context before setup-provided local skills, docs, or other worktree files are present.
+- Managed worktree setup failure fails task start without scheduling an executable run. The created worktree stays available for inspection or manual repair.
+- Starting the task again trusts an existing managed worktree as manually repaired. If the managed worktree was removed, task start recreates it and runs setup again.
 - Task worktree branch name is the task short ID.
 - Worktree creation reuses existing worktree branch/root collision handling.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.
-- Workflow worktree creation uses lower-level primitives and does not require an interactive session controller lease.
+- Worktree deletion blocks if another session targeting the worktree has an active run, and holds a run-exclusion on all targeting sessions across the `git` removal so no new run can start mid-deletion; a run submitted during the window is rejected with `ErrSessionWorktreeDeleting` until the exclusion releases.
+- Workflow worktree creation uses lower-level primitives directly.
 
 ## Project Keys And Task IDs
 
@@ -219,7 +240,6 @@
 - Direct duplicated `tasks.project_id` and `tasks.workflow_id` columns are removed with a hard cutover.
 - Project default pointers use `projects.default_project_workflow_link_id` and `projects.primary_workspace_id`, each constrained to rows owned by the same project.
 - Workspace/worktree labels, availability, primary/default status, and main-worktree status are read-model facts derived from canonical roots/pointers.
-- Runtime leases persist durable controller-token facts only: `id`, `session_id`, and `created_at_unix_ms`.
 - Workflow invalidation events are process-local live signals, not durable/replayable sequence state. SQLite does not store `workflow_events`.
 - GUI clients refetch read models after subscription ACK/reconnect/error and treat live events as invalidation hints.
 - There is no product archive lifecycle for workflows or nodes.
@@ -232,7 +252,7 @@
 
 ## Schema Minimization Decisions
 
-- Approved cutover removals include `workflow_events`, `project_workflow_links.unlinked_at_unix_ms`, duplicated task project/workflow columns, workflow graph opaque metadata, `runtime_leases.request_id`, workspace/worktree display labels, `task_comments.source_run_id`, comment soft-delete, and redundant indexes when equivalent unique/leading-key indexes remain.
+- Approved cutover removals include `workflow_events`, `project_workflow_links.unlinked_at_unix_ms`, duplicated task project/workflow columns, workflow graph opaque metadata, the `runtime_leases` table, workspace/worktree display labels, `task_comments.source_run_id`, comment soft-delete, and redundant indexes when equivalent unique/leading-key indexes remain.
 - Keep `tasks.source_url` as a structured task field.
 - Keep `tasks.short_id` as stored durable product data.
 - Task sequence allocation is transactional behavior, not product state stored as `projects.next_task_seq`.

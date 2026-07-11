@@ -2,7 +2,10 @@ package serverapi
 
 import "errors"
 
-var ErrSessionAlreadyControlled = errors.New("session is already controlled by another client")
-var ErrInvalidControllerLease = errors.New("controller lease is invalid or expired")
 var ErrRuntimeUnavailable = errors.New("session runtime is unavailable")
-var ErrActivePrimaryRun = errors.New("session already has an active primary run")
+
+var ErrRuntimeNoActiveRun = errors.New("session runtime has no active live run")
+
+var ErrRuntimeNoFinalAnswer = errors.New("session runtime live run completed without a final answer")
+
+var ErrSessionRunStarting = errors.New("session runtime is being recreated; try again once it is ready")

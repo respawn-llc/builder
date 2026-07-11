@@ -7,7 +7,7 @@ WORKDIR /src
 
 COPY . /src
 
-RUN KENT_SKIP_FRONTEND=1 /src/scripts/build.sh --output /out/kent
+RUN KENT_SKIP_FRONTEND=1 /src/scripts/build.sh server --output /out/kent
 
 FROM debian:bookworm-slim
 

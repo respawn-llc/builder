@@ -1,7 +1,14 @@
+import { z } from "zod";
+
 import { ApiClient } from "./client";
 import { ContractError } from "./errors";
 import { FakeRpcTransport } from "./fakeTransport";
 import { protocolVersion } from "./jsonRpcSocket";
+
+const startTaskParamsSchema = z.object({
+  task_id: z.literal("task-1"),
+  setup_operation_id: z.string(),
+});
 
 describe("ApiClient", () => {
   it("parses readiness and sends mutation params through typed method boundary", async () => {
@@ -32,7 +39,9 @@ describe("ApiClient", () => {
     });
     await client.startTask("task-1");
 
-    expect(transport.calls).toContainEqual({ method: "workflow.task.start", params: { task_id: "task-1" } });
+    const startCall = transport.calls.find((call) => call.method === "workflow.task.start");
+    expect(startCall?.options).toEqual({ timeoutMs: null });
+    expect(startTaskParamsSchema.parse(startCall?.params).task_id).toBe("task-1");
   });
 
   it("rejects server contract drift before feature code receives raw data", async () => {
@@ -327,6 +336,29 @@ describe("ApiClient", () => {
     expect(transport.calls).toContainEqual({
       method: "workflow.listProjectLinks",
       params: { project_id: "project-1" },
+    });
+  });
+
+  it("maps previous-target-or-new workflow context sources", async () => {
+    const response = {
+      definition: {
+        ...workflowDefinitionResponse.definition,
+        edges: workflowDefinitionResponse.definition.edges.map((edge) => ({
+          ...edge,
+          context_source: { kind: "previous_target_or_new", node_key: "" },
+        })),
+      },
+    };
+    const transport = new FakeRpcTransport([{ method: "workflow.get", result: response }]);
+    const client = new ApiClient(transport);
+
+    await expect(client.getWorkflow("workflow-1")).resolves.toMatchObject({
+      edges: [
+        {
+          contextSource: { kind: "previous_target_or_new", nodeKey: "" },
+          id: "edge-1",
+        },
+      ],
     });
   });
 
@@ -782,8 +814,6 @@ const emptyTaskDetailResponse = {
       can_interrupt: false,
       can_resume: false,
       can_cancel: true,
-      needs_detail_for_interrupt: false,
-      needs_detail_for_resume: false,
       manual_move_target_node_ids: [],
     },
     attention: null,

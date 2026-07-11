@@ -5,9 +5,6 @@ import (
 	"testing"
 
 	"core/cli/app/commands"
-	"core/cli/tui"
-	"core/server/llm"
-	"core/server/runtime"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -140,7 +137,7 @@ func TestBusyEnterCommandBehavior(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newProjectedStaticUIModel()
-			m.setBusy(true)
+			m.setRuntimeActivityBusyForTest(true)
 			m.activity = uiActivityRunning
 			m.input = tt.input
 			if tt.setup != nil {
@@ -256,7 +253,7 @@ func TestBusyQueueSubmissionCommandBehavior(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newProjectedStaticUIModel()
-			m.setBusy(true)
+			m.setRuntimeActivityBusyForTest(true)
 			m.activity = uiActivityRunning
 			m.input = tt.input
 			if tt.setup != nil {
@@ -309,7 +306,7 @@ func TestBusyQueueSubmissionCommandBehavior(t *testing.T) {
 
 func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/compact tighten summary"
 
@@ -335,114 +332,44 @@ func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
 	}
 }
 
-func TestBusyQueuedCopyCopiesFinalAnswerAfterTurnDrains(t *testing.T) {
-	copier := &stubClipboardTextCopier{}
-	m := newProjectedStaticUIModel(WithUIClipboardTextCopier(copier))
-	m.transcriptEntries = []tui.TranscriptEntry{{Role: "assistant", Text: "copied from queue", Phase: llm.MessagePhaseFinal}}
-	m.setBusy(true)
-	m.activity = uiActivityRunning
-	m.input = "/copy"
+func TestCompactionKeepsInputEditableAndQueuesSteering(t *testing.T) {
+	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m.startupCmds = nil
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	cmd := m.inputController().startCompactionWithOrigin("", uiCompactionOriginManual)
+	if cmd == nil {
+		t.Fatal("expected compaction command")
+	}
+	if !m.isCompacting() {
+		t.Fatal("expected compaction lifecycle to be running")
+	}
+	if !m.blocksRuntimeInput() {
+		t.Fatal("expected compaction to keep runtime input delivery blocked")
+	}
+	prefix := m.layout().mainInputPrefix()
+	if prefix != "› " {
+		t.Fatalf("main input prefix = %q, want editable prompt", prefix)
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("steer during compaction")})
 	updated := next.(*uiModel)
-	if cmd != nil {
-		t.Fatal("did not expect immediate execution for queued /copy")
-	}
-	if len(updated.queued) != 1 || updated.queued[0].Text != "/copy" {
-		t.Fatalf("expected queued /copy command, got %+v", updated.queued)
+	if updated.input != "steer during compaction" {
+		t.Fatalf("input = %q, want steering draft", updated.input)
 	}
 
-	next, cmd = updated.Update(submitDoneMsg{message: "done"})
+	next, queueCmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected clipboard copy command after queued /copy drains")
+	if queueCmd == nil {
+		t.Fatal("expected async queue create command")
 	}
-	if len(updated.queued) != 0 {
-		t.Fatalf("expected queued /copy drained, got %+v", updated.queued)
+	if updated.input != "" {
+		t.Fatalf("input = %q, want cleared after queueing", updated.input)
 	}
-
-	next, followCmd := updated.Update(cmd())
-	updated = next.(*uiModel)
-	if copier.calls != 1 {
-		t.Fatalf("expected one clipboard copy, got %d", copier.calls)
+	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "steer during compaction" {
+		t.Fatalf("pending injected = %+v, want queued steering", updated.pendingInjected)
 	}
-	if copier.text != "copied from queue" {
-		t.Fatalf("copied text = %q, want %q", copier.text, "copied from queue")
-	}
-	if updated.transientStatus != "Copied final answer to clipboard" {
-		t.Fatalf("unexpected transient status %q", updated.transientStatus)
-	}
-	if updated.transientStatusKind != uiStatusNoticeSuccess {
-		t.Fatalf("expected success status kind, got %d", updated.transientStatusKind)
-	}
-	if followCmd == nil {
-		t.Fatal("expected transient-status clear command after queued /copy success")
-	}
-}
-
-func TestBusyQueuedFastAppliesToNextRuntimeRequestAfterTurnDrains(t *testing.T) {
-	client := &requestCaptureFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "next done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	_, eng := newAppRuntimeEngine(t, client, runtime.Config{Model: "gpt-5.3-codex"})
-
-	m := newProjectedEngineUIModel(eng)
-	m.setBusy(true)
-	m.activity = uiActivityRunning
-	m.promptHistoryDraft = "previous prompt"
-	m.promptHistoryDraftCursor = -1
-	m.input = "/fast on"
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	updated := next.(*uiModel)
-	if len(updated.queued) != 1 || updated.queued[0].Text != "/fast on" {
-		t.Fatalf("expected queued /fast command, got %+v", updated.queued)
-	}
-	if updated.input != "" || updated.promptHistoryDraft != "" || updated.promptHistoryDraftCursor != -1 {
-		t.Fatalf("expected queued /fast to discard prompt-history draft, input=%q draft=%q cursor=%d", updated.input, updated.promptHistoryDraft, updated.promptHistoryDraftCursor)
-	}
-
-	next, cmd := updated.Update(submitDoneMsg{message: "prior turn done"})
-	updated = next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected queued /fast feedback command")
-	}
-	for _, msg := range collectCmdMessages(t, cmd) {
-		next, _ = updated.Update(msg)
-		updated = next.(*uiModel)
-	}
-	if !eng.FastModeEnabled() {
-		t.Fatal("expected queued /fast to enable runtime fast mode")
-	}
-	if len(updated.queued) != 0 {
-		t.Fatalf("expected queued /fast to drain, got %+v", updated.queued)
-	}
-	if updated.isBusy() {
-		t.Fatal("did not expect queued /fast alone to start a new turn")
-	}
-
-	updated.input = "next prompt"
-	next, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected submit command for next prompt")
-	}
-
-	for _, msg := range collectCmdMessages(t, cmd) {
-		done, ok := msg.(submitDoneMsg)
-		if !ok {
-			continue
-		}
-		next, _ = updated.Update(done)
-		updated = next.(*uiModel)
-	}
-
-	requests := client.Requests()
-	if len(requests) != 1 {
-		t.Fatalf("captured requests = %d, want 1", len(requests))
-	}
-	if !requests[0].FastMode {
-		t.Fatal("expected next runtime request after queued /fast to use fast mode")
+	if !updated.isCompacting() {
+		t.Fatal("queueing steering must not clear compaction lifecycle")
 	}
 }

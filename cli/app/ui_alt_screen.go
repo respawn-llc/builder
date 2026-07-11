@@ -3,13 +3,13 @@ package app
 import (
 	"core/cli/tui"
 	"os"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var writeTerminalSequence = func(sequence string) {
-	_, _ = os.Stdout.WriteString(sequence)
+var writeTerminalSequence = func(sequence string) error {
+	_, err := os.Stdout.WriteString(sequence)
+	return err
 }
 
 func (m *uiModel) toggleTranscriptMode() tea.Cmd {
@@ -32,50 +32,31 @@ type transcriptModeTransitionOptions struct {
 
 func (m *uiModel) transitionTranscriptModeWithOptions(options transcriptModeTransitionOptions) tea.Cmd {
 	prevMode := m.view.Mode()
-	m.forwardToView(tui.SetModeMsg{Mode: options.target, SkipDetailWarmup: options.skipDetailWarmup})
-	nextMode := m.view.Mode()
-	if prevMode != nextMode && nextMode == tui.ModeDetail {
-		m.primeDetailTranscriptFromCurrentTail()
+	prevSurface := m.surface()
+	next, _ := m.view.Update(tui.SetModeMsg{Mode: options.target, SkipDetailWarmup: options.skipDetailWarmup})
+	if casted, ok := next.(tui.Model); ok {
+		m.view = casted
 	}
+	nextMode := m.view.Mode()
 	if nextMode != tui.ModeOngoing {
 		m.helpVisible = false
 	} else if prevMode != nextMode && m.inputMode() == uiInputModeMain {
 		m.restorePrimaryInputMode()
 	}
-	if prevMode != nextMode && nextMode == tui.ModeOngoing {
-		m.syncRecentTailViewFromRuntimeState()
-	}
+	surfaceTransitionCmd := tea.Cmd(nil)
 	if !options.preserveSurface && (nextMode == tui.ModeOngoing || nextMode == tui.ModeDetail) {
-		m.activeSurface = surfaceForTranscriptMode(nextMode)
-		m.syncRendererOutputGate()
+		surfaceTransitionCmd = m.activateSurfaceFrom(prevSurface, surfaceForTranscriptMode(nextMode), options.suppressAltScreen)
 	}
 	clearCmd := m.clearCmdForModeTransition(prevMode, nextMode)
 	transitionCmd := tea.Cmd(nil)
-	if !options.suppressAltScreen {
+	if !options.suppressAltScreen && surfaceTransitionCmd == nil {
 		transitionCmd = m.altScreenCmdForModeTransition(prevMode, nextMode)
 	}
 	detailLoadCmd := m.detailLoadCmdForModeTransition(prevMode, nextMode)
-	if clearCmd == nil && transitionCmd == nil && detailLoadCmd == nil {
+	if clearCmd == nil && surfaceTransitionCmd == nil && transitionCmd == nil && detailLoadCmd == nil {
 		return nil
 	}
-	return sequenceCmds(clearCmd, transitionCmd, detailLoadCmd)
-}
-
-func (m *uiModel) syncRecentTailViewFromRuntimeState() {
-	if m == nil || !m.hasRuntimeClient() {
-		return
-	}
-	totalEntries := m.transcriptTotalEntries
-	if totalEntries < m.transcriptBaseOffset+len(m.transcriptEntries) {
-		totalEntries = m.transcriptBaseOffset + len(m.transcriptEntries)
-	}
-	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   m.transcriptBaseOffset,
-		TotalEntries: totalEntries,
-		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
-		Ongoing:      m.view.OngoingStreamingText(),
-		OngoingError: m.view.OngoingErrorText(),
-	})
+	return sequenceCmds(clearCmd, surfaceTransitionCmd, transitionCmd, detailLoadCmd)
 }
 
 func (m *uiModel) clearCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
@@ -92,10 +73,9 @@ func (m *uiModel) detailLoadCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 	if prev == next || next != tui.ModeDetail {
 		return nil
 	}
-	m.detailTranscript.totalEntries = max(m.detailTranscript.totalEntries, m.view.TranscriptTotalEntries())
-	return tea.Tick(time.Millisecond, func(time.Time) tea.Msg {
-		return detailTranscriptLoadMsg{}
-	})
+	cancelCmd := m.cancelPendingDetailTranscriptRequest()
+	loadCmd := m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
+	return sequenceCmds(cancelCmd, loadCmd)
 }
 
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
@@ -123,14 +103,18 @@ func (m *uiModel) altScreenCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 
 func enableAlternateScrollCmd() tea.Cmd {
 	return func() tea.Msg {
-		writeTerminalSequence("\x1b[?1007h")
+		if err := writeTerminalSequence("\x1b[?1007h"); err != nil {
+			return terminalSequenceWriteErrMsg{err: err}
+		}
 		return nil
 	}
 }
 
 func disableAlternateScrollCmd() tea.Cmd {
 	return func() tea.Msg {
-		writeTerminalSequence("\x1b[?1007l")
+		if err := writeTerminalSequence("\x1b[?1007l"); err != nil {
+			return terminalSequenceWriteErrMsg{err: err}
+		}
 		return nil
 	}
 }

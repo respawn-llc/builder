@@ -16,6 +16,7 @@ import {
 } from "@dnd-kit/sortable";
 import { GripVertical, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { z } from "zod";
 
 import type { WorkflowDefinition, WorkflowParameter } from "../../api";
 import {
@@ -39,6 +40,8 @@ import {
   type PromptTemplatePlaceholder,
 } from "./workflowPromptTemplatePlaceholders";
 import { derivedNodeWiring, joinProviderOptions } from "./workflowInspectorWiring";
+
+const sortableRowIDSchema = z.string();
 
 export function PromptTemplateEditor({
   onPromptChange,
@@ -383,13 +386,15 @@ function reorderEdgeParameter(
   if (overID === undefined || event.active.id === overID) {
     return;
   }
-  if (typeof event.active.id !== "string" || typeof overID !== "string") {
+  const activeRowID = sortableRowIDSchema.safeParse(event.active.id);
+  const overRowID = sortableRowIDSchema.safeParse(overID);
+  if (!activeRowID.success || !overRowID.success) {
     return;
   }
   controller.dispatch({
-    activeRowID: event.active.id,
+    activeRowID: activeRowID.data,
     edgeID,
-    overRowID: overID,
+    overRowID: overRowID.data,
     type: "reorderEdgeParameter",
   });
 }

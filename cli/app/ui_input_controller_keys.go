@@ -45,29 +45,22 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.view.Mode() == tui.ModeDetail && inputState.Mode != uiInputModeRollbackEdit {
 		switch msg.Type {
 		case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
-			m.forwardToView(tea.KeyMsg{Type: msg.Type})
-			return m, m.maybeRequestDetailTranscriptPage()
+			return m, m.forwardToView(tea.KeyMsg{Type: msg.Type})
 		case tea.KeyEnter:
-			m.forwardToView(tea.KeyMsg{Type: msg.Type})
-			return m, nil
+			return m, m.forwardToView(tea.KeyMsg{Type: msg.Type})
 		case tea.KeyEsc:
-			if m.isBusy() ||
-				m.isInputSubmitLocked() ||
+			if m.blocksRuntimeInput() ||
 				strings.TrimSpace(m.input) != "" {
 				return m, nil
 			}
 			return c.handleIdleRollbackEsc()
-		case tea.KeyShiftTab, tea.KeyCtrlT:
+		case tea.KeyTab, tea.KeyShiftTab, tea.KeyCtrlT:
 			return m, m.toggleTranscriptMode()
 		case tea.KeyCtrlC:
 			// Preserve the normal interrupt/quit path below.
 		default:
 			return m, nil
 		}
-	}
-	if m.isInputSubmitLocked() &&
-		isSharedInputEditKeyForGOOS(msg, runtime.GOOS) {
-		return m, nil
 	}
 	if handleSharedInputEditKeyForGOOS(msg, uiSharedInputEditActions{
 		Backspace:          m.backspaceInput,
@@ -81,15 +74,13 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}, runtime.GOOS) {
 		return m, nil
 	}
-	if !m.isInputSubmitLocked() {
-		switch msg.Type {
-		case tea.KeyTab, tea.KeyEnter:
-			if m.shouldBlockPathReferenceAcceptanceKey() {
-				return m, nil
-			}
-			if m.acceptPathReferenceSelection() {
-				return m, nil
-			}
+	switch msg.Type {
+	case tea.KeyTab, tea.KeyEnter:
+		if m.shouldBlockPathReferenceAcceptanceKey() {
+			return m, nil
+		}
+		if m.acceptPathReferenceSelection() {
+			return m, nil
 		}
 	}
 	if isQueueSubmissionKey(msg) {
@@ -108,8 +99,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return c.queueOrStartSubmission(text)
 	}
-	if !m.isInputSubmitLocked() &&
-		!msg.Alt {
+	if !msg.Alt {
 		switch msg.Type {
 		case tea.KeyUp:
 			if m.navigateSlashCommandPicker(-1) {
@@ -141,18 +131,13 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	if !m.isInputSubmitLocked() &&
-		isClipboardImagePasteKey(msg) {
+	if isClipboardImagePasteKey(msg) {
 		return m, m.pasteClipboardImageCmd(uiClipboardPasteTargetMain)
 	}
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		if m.isBusy() {
-			return m, c.interruptBusyRuntime()
-		}
-		m.exitAction = UIActionExit
-		return m, tea.Quit
+		return c.handleRuntimeCtrlC(nil)
 	case tea.KeyShiftTab, tea.KeyCtrlT:
 		return m, m.toggleTranscriptMode()
 	case tea.KeyEsc:
@@ -162,8 +147,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.view.Mode() != tui.ModeOngoing {
 			return m, nil
 		}
-		if m.isBusy() ||
-			m.isInputSubmitLocked() ||
+		if m.blocksRuntimeInput() ||
 			strings.TrimSpace(m.input) != "" {
 			return m, nil
 		}
@@ -172,7 +156,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		c.normalizePendingCSIShiftEnterOnEnter()
 		text := strings.TrimSpace(m.input)
 		if text == "" {
-			if !m.isBusy() && len(m.queued) > 0 {
+			if !m.blocksRuntimeInput() && len(m.queued) > 0 {
 				return c.flushQueuedInputs(queueDrainOne)
 			}
 			return m, nil
@@ -183,7 +167,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if inputState.Mode == uiInputModeRollbackEdit && !inputState.Busy {
 			return c.startRollbackFork(text)
 		}
-		if m.isBusy() {
+		if m.blocksRuntimeInput() {
 			if handled, next, cmd := c.handleEnteredSlashCommandInput(text); handled {
 				return next, cmd
 			}
@@ -193,7 +177,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		_, isUserShell := parseUserShellCommand(text)
 		draftText, draftCursor, restoreDraft := m.capturePromptHistoryDraftForReuse()
-		if m.isBusy() {
+		if m.blocksRuntimeInput() {
 			if isUserShell {
 				m.queueInput(text)
 				m.restoreCapturedPromptHistoryDraft(draftText, draftCursor, restoreDraft)
@@ -222,24 +206,15 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.restoreCapturedPromptHistoryDraft(draftText, draftCursor, restoreDraft)
 		return m, c.startSubmissionWithPromptHistoryAndQueuePositionAndID(text, preSubmitQueueBack, "")
 	case tea.KeyCtrlJ, keyTypeShiftEnterCSI:
-		if m.isInputSubmitLocked() {
-			return m, nil
-		}
 		m.insertInputRunes([]rune{'\n'})
 		if msg.Type == keyTypeShiftEnterCSI {
 			c.markPendingCSIShiftEnter()
 		}
 		return m, nil
 	case tea.KeySpace:
-		if m.isInputSubmitLocked() {
-			return m, nil
-		}
 		m.insertInputRunes([]rune{' '})
 		return m, nil
 	case tea.KeyLeft:
-		if m.isInputSubmitLocked() {
-			return m, nil
-		}
 		if msg.Alt {
 			m.moveCursorWordLeft()
 			return m, nil
@@ -247,9 +222,6 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveCursorLeft()
 		return m, nil
 	case tea.KeyRight:
-		if m.isInputSubmitLocked() {
-			return m, nil
-		}
 		if msg.Alt {
 			m.moveCursorWordRight()
 			return m, nil
@@ -257,57 +229,31 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveCursorRight()
 		return m, nil
 	case tea.KeyHome, tea.KeyCtrlA:
-		if m.isInputSubmitLocked() {
-			return m, nil
-		}
 		m.moveCursorStart()
 		return m, nil
 	case tea.KeyEnd, tea.KeyCtrlE, tea.KeyCtrlEnd:
-		if m.isInputSubmitLocked() {
-			return m, nil
-		}
 		m.moveCursorEnd()
 		return m, nil
 	case tea.KeyCtrlLeft:
-		if m.isInputSubmitLocked() {
-			return m, nil
-		}
 		m.moveCursorWordLeft()
 		return m, nil
 	case tea.KeyCtrlRight:
-		if m.isInputSubmitLocked() {
-			return m, nil
-		}
 		m.moveCursorWordRight()
 		return m, nil
 	case tea.KeyUp:
-		if m.isInputSubmitLocked() {
-			m.forwardToView(tea.KeyMsg{Type: tea.KeyUp})
-			return m, nil
-		}
 		m.moveCursorUpLine()
 		return m, nil
 	case tea.KeyDown:
-		if m.isInputSubmitLocked() {
-			m.forwardToView(tea.KeyMsg{Type: tea.KeyDown})
-			return m, nil
-		}
 		m.moveCursorDownLine()
 		return m, nil
 	case tea.KeyPgUp, tea.KeyPgDown:
 		return m, nil
 	default:
 		if isShiftEnterKey(msg) {
-			if m.isInputSubmitLocked() {
-				return m, nil
-			}
 			m.insertInputRunes([]rune{'\n'})
 			return m, nil
 		}
 		if msg.Type == tea.KeyRunes {
-			if m.isInputSubmitLocked() {
-				return m, nil
-			}
 			return m, m.insertInputRunes(msg.Runes)
 		}
 		return m, nil
@@ -340,12 +286,14 @@ func (c uiInputController) handleRollbackSelectionKey(msg tea.KeyMsg) (tea.Model
 	m := c.model
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		m.exitAction = UIActionExit
-		if overlayCmd := m.popRollbackOverlay(); overlayCmd != nil {
+		return c.handleRuntimeCtrlC(func() tea.Cmd {
+			if overlayCmd := m.popRollbackOverlay(); overlayCmd != nil {
+				m.stopRollbackSelectionMode()
+				return overlayCmd
+			}
 			m.stopRollbackSelectionMode()
-			return m, tea.Sequence(overlayCmd, tea.Quit)
-		}
-		return m, tea.Quit
+			return nil
+		})
 	case tea.KeyEsc:
 		return m, c.stopRollbackSelectionFlowCmd()
 	case tea.KeyUp:
@@ -357,10 +305,8 @@ func (c uiInputController) handleRollbackSelectionKey(msg tea.KeyMsg) (tea.Model
 		m.moveRollbackSelection(-1)
 		return m, nil
 	case tea.KeyDown:
-		if m.rollback.selection >= len(m.rollback.candidates)-1 {
-			if cmd := m.requestRollbackSelectionPage(1); cmd != nil {
-				return m, cmd
-			}
+		if cmd := m.requestRollbackSelectionPage(1); cmd != nil {
+			return m, cmd
 		}
 		m.moveRollbackSelection(1)
 		return m, nil

@@ -26,7 +26,7 @@ func newUIModelDefaults(runtimeClient clientui.RuntimeClient, runtimeEvents <-ch
 func newUIRuntimeFeatureState(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, askEvents <-chan askEvent) uiRuntimeFeatureState {
 	return uiRuntimeFeatureState{
 		engine:        runtimeClient,
-		view:          tui.NewModel(tui.WithCompactDetail()),
+		view:          tui.NewModel(),
 		runtimeEvents: runtimeEvents,
 		askEvents:     askEvents,
 	}
@@ -81,7 +81,7 @@ func newUIStatusFeatureState() uiStatusFeatureState {
 
 func newUIRollbackFeatureState() uiRollbackFeatureState {
 	return uiRollbackFeatureState{
-		rollback: uiRollbackState{phase: uiRollbackPhaseInactive, selectedTranscriptEntry: -1},
+		rollback: uiRollbackState{phase: uiRollbackPhaseInactive},
 	}
 }
 

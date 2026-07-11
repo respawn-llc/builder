@@ -41,18 +41,19 @@ From a project, create or link a workflow, open the workflow editor, then edit t
 ## 2. Set Up Agent Roles
 
 Workflow agent nodes run existing Kent subagent roles. Create roles for the specialists you want in your process, then choose those roles in the node's Assignee field.
+Roles hidden from workflow-agent delegation remain valid node assignees.
 
 ```toml
 [subagents.implementer]
 description = "Implements approved tasks and leaves reviewable changes."
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 thinking_level = "high"
 system_prompt_file = "agents/implementer.md"
 agent_callable = true
 
 [subagents.reviewer]
 description = "Reviews changes and returns actionable findings."
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 thinking_level = "xhigh"
 system_prompt_file = "agents/reviewer.md"
 agent_callable = true
@@ -67,7 +68,7 @@ Workflow nodes do not define their own model, provider, tool, or auth overrides.
 - A workflow is the reusable graph definition.
 - A project links workflows, provides workspaces, and owns the task board.
 - A task is the durable unit of work that moves through one workflow.
-- A run is one Kent session started for one executable agent node.
+- A run is one execution attempt for one executable node. Agent runs start or continue Kent sessions. Script runs execute a local server-side script.
 
 Creating a task puts it in Backlog. Starting the task applies the workflow's start transition and begins automation. This makes it safe to collect work in Backlog before the workflow is fully executable.
 
@@ -79,6 +80,7 @@ Nodes are workflow states. Visible executable and terminal nodes become board co
 | --- | --- |
 | Start / Backlog | Where tasks rest after creation. Each workflow has one start node. |
 | Agent | Runs a Kent agent using the selected subagent role. |
+| Script | Executes a local script on the Kent server and parses stdout as workflow completion JSON. |
 | Join | Waits for parallel branches and aggregates their parameters. Joins are graph plumbing, not board columns. |
 | Terminal | A sink where automation stops, commonly Done. |
 
@@ -147,9 +149,50 @@ Use the approved plan:
 {{.Params.planning.plan_file_path}}
 ```
 
+A prompt can reference the previous transition commentary:
+
+```md
+Source transition notes:
+{{.Params.commentary}}
+```
+
+If the previous transition has no commentary, the placeholder renders as an empty string.
+
 A previous-transition parameter is valid only when every path to the prompt passes through that transition. If a value might not exist because of branching, declare a local parameter on the transition that needs it.
 
 ![Kent Desktop workflow transition inspector showing a prompt with task and parameter placeholders.](/desktop/desktop-workflow-prompt-editor.webp)
+
+### Script Nodes
+
+Use a Script node when a workflow step should run a deterministic local executable instead of an agent. Script nodes can be used anywhere an agent node can be used in the workflow graph, including the first node after Backlog and branches inside parallel groups.
+
+Set the script path on the script node. Absolute paths are resolved on the Kent server. Relative paths resolve against the task's managed worktree. Workflow graph saves allow empty or invalid paths so you can draft the graph, but execution validation and task start require the selected script to exist, be a file, and be executable.
+
+Kent executes the script directly, without a shell wrapper. Stdin is JSON:
+
+```json
+{
+  "plan_file": "docs/plan.md",
+  "_kent": {
+    "run_id": "run_123",
+    "placement_id": "placement_123"
+  }
+}
+```
+
+Top-level properties are the incoming workflow parameter values. `_kent` is reserved for Kent runtime identifiers.
+
+Stdout must be the workflow completion JSON. Stderr is diagnostics only. For example:
+
+```json
+{
+  "transition": "done",
+  "commentary": "Generated release notes.",
+  "release_notes_path": "docs/release-notes.md"
+}
+```
+
+If the script exits non-zero, writes invalid completion JSON, omits required parameters, or becomes unavailable, Kent interrupts the run. Resume reruns the script with the same incoming parameter values and the current workflow script path and transition contract.
 
 ### Parameters
 
@@ -182,6 +225,7 @@ Continuation modes also have a context source:
 - Immediate source uses the session from the node that just completed.
 - Selected node uses a previous node that is guaranteed to have run before this transition.
 - Previous run of this target is for loops where the workflow returns to a node and should continue that node's prior session.
+- Previous run of this target, or new session is for re-review loops where the first pass starts fresh and later passes continue the target's prior session.
 
 Use `new_session` or `compact_and_continue_session` when changing subagent roles. Use `continue_session` when preserving the exact working context matters more than changing roles.
 
@@ -224,7 +268,7 @@ The editor shows draft validation and execution validation. Draft validation cat
 
 A workflow can remain linked to a project while execution validation fails. Backlog tasks and comments remain available, but starting automation requires a valid executable workflow.
 
-Graph edits are blocked when active tasks would be affected. Active tasks include tasks in agent nodes, waiting for approval, waiting on questions, interrupted in a run, or otherwise not safely parked in Backlog or a terminal node. Destructive saves that affect only Backlog or terminal task references require confirmation.
+Graph edits are blocked when active tasks would be affected. Active tasks include tasks in executable nodes with running or runnable work, waiting for approval, waiting on questions, or otherwise not safely parked in Backlog or a terminal node. Interrupted runs do not block workflow edits until they are resumed. Destructive saves that affect only Backlog or terminal task references require confirmation.
 
 ## 6. Manage Tasks
 

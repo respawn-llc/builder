@@ -8,18 +8,9 @@ func (m *uiModel) runtimeSessionView() clientui.RuntimeSessionView {
 }
 
 func (m *uiModel) localRuntimeSessionView() clientui.RuntimeSessionView {
-	transcript := m.localRuntimeTranscript()
 	return clientui.RuntimeSessionView{
 		SessionID:             m.sessionID,
 		SessionName:           m.sessionName,
 		ConversationFreshness: m.conversationFreshness,
-		Transcript: clientui.TranscriptMetadata{
-			Revision:            transcript.Revision,
-			CommittedEntryCount: transcript.TotalEntries,
-		},
-		Chat: clientui.ChatSnapshot{
-			Entries:   transcript.Entries,
-			Streaming: transcript.Streaming,
-		},
 	}
 }

@@ -31,6 +31,19 @@ func (s fakePromptActivitySubscription) Next(context.Context) (clientui.PendingP
 
 func (s fakePromptActivitySubscription) Close() error { return nil }
 
+type fakeAttentionNotificationSubscription struct {
+	closed bool
+}
+
+func (s *fakeAttentionNotificationSubscription) Next(context.Context) (clientui.AttentionNotificationEvent, error) {
+	return clientui.AttentionNotificationEvent{}, io.EOF
+}
+
+func (s *fakeAttentionNotificationSubscription) Close() error {
+	s.closed = true
+	return nil
+}
+
 type fakeSessionActivityService struct {
 	subscribeRequests []serverapi.SessionActivitySubscribeRequest
 	sub               serverapi.SessionActivitySubscription
@@ -48,6 +61,21 @@ type fakePromptActivityService struct {
 	err               error
 }
 
+type fakeAttentionNotificationService struct {
+	subscribeRequests []serverapi.AttentionSessionNotificationSubscribeRequest
+	sub               serverapi.AttentionNotificationSubscription
+	err               error
+}
+
+func (s *fakeAttentionNotificationService) SubscribeAttentionNotifications(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return nil, errors.New("desktop attention route is not used by runtime attach")
+}
+
+func (s *fakeAttentionNotificationService) SubscribeSessionAttentionNotifications(_ context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	s.subscribeRequests = append(s.subscribeRequests, req)
+	return s.sub, s.err
+}
+
 func (s *fakePromptActivityService) SubscribePromptActivity(_ context.Context, req serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error) {
 	s.subscribeRequests = append(s.subscribeRequests, req)
 	return s.sub, s.err
@@ -56,12 +84,16 @@ func (s *fakePromptActivityService) SubscribePromptActivity(_ context.Context, r
 func TestSubscribeActivitiesReturnsBothSubscriptions(t *testing.T) {
 	sessionSub := &fakeSessionActivitySubscription{}
 	promptSub := fakePromptActivitySubscription{}
+	attentionSub := &fakeAttentionNotificationSubscription{}
 	sessionActivity := &fakeSessionActivityService{sub: sessionSub}
 	promptActivity := &fakePromptActivityService{sub: promptSub}
+	attention := &fakeAttentionNotificationService{sub: attentionSub}
 	activities, err := SubscribeActivities(context.Background(), ActivityRequest{
-		SessionID:       "session-1",
-		SessionActivity: sessionActivity,
-		PromptActivity:  promptActivity,
+		SessionID:                       "session-1",
+		SessionActivity:                 sessionActivity,
+		PromptActivity:                  promptActivity,
+		Attention:                       attention,
+		AttentionNotificationsSupported: true,
 	})
 	if err != nil {
 		t.Fatalf("SubscribeActivities: %v", err)
@@ -72,20 +104,27 @@ func TestSubscribeActivitiesReturnsBothSubscriptions(t *testing.T) {
 	if activities.Prompt == nil {
 		t.Fatal("expected prompt subscription")
 	}
+	if activities.Attention != attentionSub {
+		t.Fatal("expected attention notification subscription")
+	}
 	if sessionActivity.subscribeRequests[0].SessionID != "session-1" || promptActivity.subscribeRequests[0].SessionID != "session-1" {
 		t.Fatalf("unexpected subscribe requests: %#v %#v", sessionActivity.subscribeRequests, promptActivity.subscribeRequests)
 	}
+	if len(attention.subscribeRequests) != 1 || attention.subscribeRequests[0].SessionID != "session-1" || !attention.subscribeRequests[0].IncludePendingPromptSnapshot {
+		t.Fatalf("unexpected attention subscribe requests: %#v", attention.subscribeRequests)
+	}
 }
 
-func TestSubscribeActivitiesReleasesLeaseOnSessionSubscribeFailure(t *testing.T) {
+func TestSubscribeActivitiesReleasesOnSessionSubscribeFailure(t *testing.T) {
 	runtime := &fakeRuntimeService{}
 	subscribeErr := errors.New("session subscribe failed")
 	_, err := SubscribeActivities(context.Background(), ActivityRequest{
-		SessionID:       "session-1",
-		Runtime:         runtime,
-		LeaseID:         "lease-1",
-		SessionActivity: &fakeSessionActivityService{err: subscribeErr},
-		PromptActivity:  &fakePromptActivityService{sub: fakePromptActivitySubscription{}},
+		SessionID:                       "session-1",
+		Runtime:                         runtime,
+		SessionActivity:                 &fakeSessionActivityService{err: subscribeErr},
+		PromptActivity:                  &fakePromptActivityService{sub: fakePromptActivitySubscription{}},
+		Attention:                       &fakeAttentionNotificationService{sub: &fakeAttentionNotificationSubscription{}},
+		AttentionNotificationsSupported: true,
 	})
 	if !errors.Is(err, subscribeErr) {
 		t.Fatalf("error = %v, want %v", err, subscribeErr)
@@ -95,16 +134,17 @@ func TestSubscribeActivitiesReleasesLeaseOnSessionSubscribeFailure(t *testing.T)
 	}
 }
 
-func TestSubscribeActivitiesClosesSessionSubscriptionAndReleasesLeaseOnPromptFailure(t *testing.T) {
+func TestSubscribeActivitiesClosesSessionSubscriptionAndReleasesOnPromptFailure(t *testing.T) {
 	sessionSub := &fakeSessionActivitySubscription{}
 	runtime := &fakeRuntimeService{}
 	subscribeErr := errors.New("prompt subscribe failed")
 	_, err := SubscribeActivities(context.Background(), ActivityRequest{
-		SessionID:       "session-1",
-		Runtime:         runtime,
-		LeaseID:         "lease-1",
-		SessionActivity: &fakeSessionActivityService{sub: sessionSub},
-		PromptActivity:  &fakePromptActivityService{err: subscribeErr},
+		SessionID:                       "session-1",
+		Runtime:                         runtime,
+		SessionActivity:                 &fakeSessionActivityService{sub: sessionSub},
+		PromptActivity:                  &fakePromptActivityService{err: subscribeErr},
+		Attention:                       &fakeAttentionNotificationService{sub: &fakeAttentionNotificationSubscription{}},
+		AttentionNotificationsSupported: true,
 	})
 	if !errors.Is(err, subscribeErr) {
 		t.Fatalf("error = %v, want %v", err, subscribeErr)
@@ -117,77 +157,80 @@ func TestSubscribeActivitiesClosesSessionSubscriptionAndReleasesLeaseOnPromptFai
 	}
 }
 
-func TestSubscribeActivitiesDoesNotReleaseReadOnlyAttachOnFailure(t *testing.T) {
+func TestSubscribeActivitiesClosesSubscriptionsAndReleasesOnSupportedAttentionSubscribeFailure(t *testing.T) {
+	sessionSub := &fakeSessionActivitySubscription{}
+	promptSub := &fakeAttentionPromptSubscription{}
 	runtime := &fakeRuntimeService{}
+	subscribeErr := errors.New("attention subscribe failed")
 	_, err := SubscribeActivities(context.Background(), ActivityRequest{
-		SessionID:       "session-1",
-		Runtime:         runtime,
-		ReadOnly:        true,
-		SessionActivity: &fakeSessionActivityService{err: errors.New("session subscribe failed")},
-		PromptActivity:  &fakePromptActivityService{sub: fakePromptActivitySubscription{}},
+		SessionID:                       "session-1",
+		Runtime:                         runtime,
+		OwnerID:                         "owner-1",
+		SessionActivity:                 &fakeSessionActivityService{sub: sessionSub},
+		PromptActivity:                  &fakePromptActivityService{sub: promptSub},
+		Attention:                       &fakeAttentionNotificationService{err: subscribeErr},
+		AttentionNotificationsSupported: true,
 	})
-	if err == nil {
-		t.Fatal("expected subscribe failure")
+	if !errors.Is(err, subscribeErr) {
+		t.Fatalf("error = %v, want %v", err, subscribeErr)
 	}
-	if len(runtime.releaseRequests) != 0 {
-		t.Fatalf("release requests = %d, want none for read-only attach", len(runtime.releaseRequests))
+	if !sessionSub.closed || !promptSub.closed {
+		t.Fatalf("subscriptions should be closed after attention subscribe failure; session=%v prompt=%v", sessionSub.closed, promptSub.closed)
+	}
+	if len(runtime.releaseRequests) != 1 {
+		t.Fatalf("release requests = %d, want 1", len(runtime.releaseRequests))
 	}
 }
 
-func TestSubscribeActivitiesReadOnlyDoesNotRequirePromptActivity(t *testing.T) {
+func TestSubscribeActivitiesFallsBackToPromptActivityWhenAttentionUnsupported(t *testing.T) {
 	sessionSub := &fakeSessionActivitySubscription{}
+	promptSub := &fakeAttentionPromptSubscription{}
+	attention := &fakeAttentionNotificationService{err: errors.New("attention route should not be used")}
 	activities, err := SubscribeActivities(context.Background(), ActivityRequest{
 		SessionID:       "session-1",
-		ReadOnly:        true,
 		SessionActivity: &fakeSessionActivityService{sub: sessionSub},
+		PromptActivity:  &fakePromptActivityService{sub: promptSub},
+		Attention:       attention,
 	})
 	if err != nil {
 		t.Fatalf("SubscribeActivities: %v", err)
 	}
-	if activities.Session != sessionSub {
-		t.Fatal("expected session subscription")
+	if sessionSub.closed || promptSub.closed {
+		t.Fatalf("subscriptions should remain open for prompt-activity fallback; session=%v prompt=%v", sessionSub.closed, promptSub.closed)
 	}
-	if activities.Prompt != nil {
-		t.Fatal("expected no prompt subscription for read-only attach")
+	if len(attention.subscribeRequests) != 0 {
+		t.Fatalf("unsupported attention should not subscribe: %#v", attention.subscribeRequests)
+	}
+	if activities.Session != sessionSub || activities.Prompt != promptSub || activities.Attention != nil {
+		t.Fatalf("unexpected fallback activities: %+v", activities)
 	}
 }
 
-func TestSubscribeActivitiesCollaborativeSubscribesPromptActivityWithoutLease(t *testing.T) {
+func TestSubscribeActivitiesAllowsMissingAttentionService(t *testing.T) {
 	sessionSub := &fakeSessionActivitySubscription{}
 	promptSub := fakePromptActivitySubscription{}
-	sessionActivity := &fakeSessionActivityService{sub: sessionSub}
-	promptActivity := &fakePromptActivityService{sub: promptSub}
 	activities, err := SubscribeActivities(context.Background(), ActivityRequest{
 		SessionID:       "session-1",
-		Mode:            serverapi.SessionRuntimeAttachModeCollaborative,
-		SessionActivity: sessionActivity,
-		PromptActivity:  promptActivity,
+		SessionActivity: &fakeSessionActivityService{sub: sessionSub},
+		PromptActivity:  &fakePromptActivityService{sub: promptSub},
 	})
 	if err != nil {
 		t.Fatalf("SubscribeActivities: %v", err)
 	}
-	if activities.Session != sessionSub || activities.Prompt == nil {
-		t.Fatalf("activities = %+v, want session and prompt subscriptions", activities)
-	}
-	if len(promptActivity.subscribeRequests) != 1 || promptActivity.subscribeRequests[0].SessionID != "session-1" {
-		t.Fatalf("prompt requests = %#v, want collaborative prompt subscription", promptActivity.subscribeRequests)
+	if activities.Session != sessionSub || activities.Prompt == nil || activities.Attention != nil {
+		t.Fatalf("unexpected activities: %+v", activities)
 	}
 }
 
-func TestSubscribeActivitiesNoControlDoesNotRequirePromptActivity(t *testing.T) {
-	sessionSub := &fakeSessionActivitySubscription{}
-	activities, err := SubscribeActivities(context.Background(), ActivityRequest{
-		SessionID:       "session-1",
-		Mode:            serverapi.SessionRuntimeAttachModeNoControl,
-		SessionActivity: &fakeSessionActivityService{sub: sessionSub},
-	})
-	if err != nil {
-		t.Fatalf("SubscribeActivities: %v", err)
-	}
-	if activities.Session != sessionSub {
-		t.Fatal("expected session subscription")
-	}
-	if activities.Prompt != nil {
-		t.Fatal("expected no prompt subscription for no-control attach")
-	}
+type fakeAttentionPromptSubscription struct {
+	closed bool
+}
+
+func (s *fakeAttentionPromptSubscription) Next(context.Context) (clientui.PendingPromptEvent, error) {
+	return clientui.PendingPromptEvent{}, io.EOF
+}
+
+func (s *fakeAttentionPromptSubscription) Close() error {
+	s.closed = true
+	return nil
 }

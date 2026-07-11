@@ -29,8 +29,8 @@ func DeriveWiring(def Definition) DerivedWiring {
 	groupsByID := make(map[TransitionGroupID]TransitionGroup, len(def.TransitionGroups))
 	incomingByNode := make(map[NodeID][]Edge, len(def.Edges))
 	for _, node := range def.Nodes {
-		if strings.TrimSpace(string(node.ID)) != "" {
-			nodesByID[node.ID] = node
+		if strings.TrimSpace(string(NodeIDOf(node))) != "" {
+			nodesByID[NodeIDOf(node)] = node
 		}
 	}
 	for _, group := range def.TransitionGroups {
@@ -47,7 +47,7 @@ func DeriveWiring(def Definition) DerivedWiring {
 			continue
 		}
 		source, sourceExists := nodesByID[group.SourceNodeID]
-		if sourceExists && (source.Kind == NodeKindStart || source.Kind == NodeKindJoin) {
+		if sourceExists && (source.Kind() == NodeKindStart || source.Kind() == NodeKindJoin) {
 			continue
 		}
 		requiredFields := edgeParameterFields(edge)
@@ -59,7 +59,7 @@ func DeriveWiring(def Definition) DerivedWiring {
 		derived.addPossibleProvisionFields(group.SourceNodeID, requiredFields, ValidationError{NodeID: group.SourceNodeID, EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID})
 	}
 	for _, node := range def.Nodes {
-		if node.Kind == NodeKindJoin {
+		if node.Kind() == NodeKindJoin {
 			derived.deriveJoinAggregateParameters(node, incomingByNode)
 		}
 	}
@@ -91,8 +91,8 @@ func (w DerivedWiring) JoinOutputFieldsForNode(nodeID NodeID) []OutputField {
 }
 
 func (w DerivedWiring) TransitionOutputFieldsForEdge(edge Edge, source Node) []OutputField {
-	if source.Kind == NodeKindJoin {
-		return w.JoinOutputFieldsForNode(source.ID)
+	if source.Kind() == NodeKindJoin {
+		return w.JoinOutputFieldsForNode(NodeIDOf(source))
 	}
 	return w.RequiredProvisionFieldsForEdge(edge.ID)
 }
@@ -101,7 +101,7 @@ func TransitionOutputFieldsForTargetNode(def Definition, derived DerivedWiring, 
 	nodesByID := make(map[NodeID]Node, len(def.Nodes))
 	groupsByID := make(map[TransitionGroupID]TransitionGroup, len(def.TransitionGroups))
 	for _, node := range def.Nodes {
-		nodesByID[node.ID] = node
+		nodesByID[NodeIDOf(node)] = node
 	}
 	for _, group := range def.TransitionGroups {
 		groupsByID[group.ID] = group
@@ -146,7 +146,7 @@ func (w *DerivedWiring) addRequiredProviderFields(edgeID EdgeID, fields []Output
 }
 
 func (w *DerivedWiring) deriveJoinAggregateParameters(join Node, incomingByNode map[NodeID][]Edge) {
-	incomingEdges := incomingByNode[join.ID]
+	incomingEdges := incomingByNode[NodeIDOf(join)]
 	groupFields := map[TransitionGroupID][]OutputField{}
 	groupOrder := []TransitionGroupID{}
 	seenGroup := map[TransitionGroupID]bool{}
@@ -155,7 +155,7 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(join Node, incomingByNode 
 		if len(fields) == 0 {
 			continue
 		}
-		ref := ValidationError{NodeID: join.ID, EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
+		ref := ValidationError{NodeID: NodeIDOf(join), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
 		w.addRequiredProviderFields(edge.ID, fields, ref)
 		if !seenGroup[edge.TransitionGroupID] {
 			groupOrder = append(groupOrder, edge.TransitionGroupID)
@@ -175,14 +175,14 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(join Node, incomingByNode 
 				continue
 			}
 			if owner, exists := ownerByField[name]; exists && owner != groupID {
-				w.addDiagnostic(CodeProvisionFieldOverlap, fmt.Sprintf("%s: join aggregate parameter %s is produced by multiple transitions", fmt.Sprintf("Node %s", nodeDisplayName(join)), name), ValidationError{NodeID: join.ID, FieldName: name, TransitionGroupID: groupID})
+				w.addDiagnostic(CodeProvisionFieldOverlap, fmt.Sprintf("%s: join aggregate parameter %s is produced by multiple transitions", fmt.Sprintf("Node %s", nodeDisplayName(join)), name), ValidationError{NodeID: NodeIDOf(join), FieldName: name, TransitionGroupID: groupID})
 				continue
 			}
 			ownerByField[name] = groupID
 			aggregate = appendUniqueOutputFields(aggregate, []OutputField{field})
 		}
 	}
-	w.joinOutputFieldsByNode[join.ID] = aggregate
+	w.joinOutputFieldsByNode[NodeIDOf(join)] = aggregate
 }
 
 func (w *DerivedWiring) addDiagnostic(code ValidationErrorCode, message string, ref ValidationError) {

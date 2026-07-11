@@ -22,6 +22,7 @@ type promptActivityBroker struct {
 	nextID      uint64
 	nextSeq     uint64
 	history     []clientui.PendingPromptEvent
+	lowerBound  clientui.ReadModelVersion
 	closed      bool
 	subscribers map[uint64]*promptActivitySubscription
 }
@@ -40,31 +41,35 @@ func newPromptActivityBroker() *promptActivityBroker {
 	return &promptActivityBroker{subscribers: make(map[uint64]*promptActivitySubscription)}
 }
 
-func (e *runtimeEntry) SubscribePromptActivityInitial(sessionID string, beforeSubscribe func()) (*promptActivitySubscription, error) {
+func (e *runtimeEntry) SubscribePromptActivityInitial(sessionID string, version clientui.ReadModelVersion, beforeSubscribe func()) (*promptActivitySubscription, error) {
 	if e == nil || e.promptActivity == nil {
 		return nil, fmt.Errorf("prompt activity stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
 	return e.pendingPrompts.WithLockedSnapshotResult(func(items []PendingPromptSnapshot) (*promptActivitySubscription, error) {
 		initial := make([]clientui.PendingPromptEvent, 0, len(items)+1)
 		for _, item := range items {
-			initial = append(initial, pendingPromptEventFromSnapshot(sessionID, item, pendingPromptEventPending))
+			initial = append(initial, pendingPromptEventFromSnapshot(sessionID, item, pendingPromptEventPending, version))
 		}
-		initial = append(initial, clientui.PendingPromptEvent{Type: clientui.PendingPromptEventSnapshot, SessionID: sessionID})
+		initial = append(initial, clientui.PendingPromptEvent{Type: clientui.PendingPromptEventSnapshot, SessionID: sessionID, ReadModelVersion: version})
 		if beforeSubscribe != nil {
 			beforeSubscribe()
 		}
-		return e.promptActivity.Subscribe(initial, 0)
+		return e.promptActivity.Subscribe(initial, version)
 	})
 }
 
-func (e *runtimeEntry) PublishPendingPrompt(sessionID string, snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
+func (e *runtimeEntry) PublishPendingPrompt(sessionID string, snapshot PendingPromptSnapshot, eventType pendingPromptEventType, version clientui.ReadModelVersion) {
 	if e == nil || e.promptActivity == nil || snapshot.Request.ID == "" {
 		return
 	}
-	e.promptActivity.Publish(pendingPromptEventFromSnapshot(sessionID, snapshot, eventType))
+	if e.sessionFeed != nil {
+		prompt := transcriptPendingPromptFromSnapshot(sessionID, snapshot, eventType)
+		e.sessionFeed.Publish([]clientui.TranscriptMessage{{Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &prompt}})
+	}
+	e.promptActivity.Publish(pendingPromptEventFromSnapshot(sessionID, snapshot, eventType, version))
 }
 
-func (b *promptActivityBroker) Subscribe(initial []clientui.PendingPromptEvent, afterSequence uint64) (*promptActivitySubscription, error) {
+func (b *promptActivityBroker) Subscribe(initial []clientui.PendingPromptEvent, afterVersion clientui.ReadModelVersion) (*promptActivitySubscription, error) {
 	if b == nil {
 		return nil, fmt.Errorf("prompt activity stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
@@ -75,12 +80,12 @@ func (b *promptActivityBroker) Subscribe(initial []clientui.PendingPromptEvent, 
 		sub.closeWithError(io.EOF)
 		return sub, nil
 	}
-	if afterSequence > 0 && !b.canReplayLocked(afterSequence) {
+	if !isZeroReadModelVersion(afterVersion) && !b.canReplayLocked(afterVersion) {
 		b.mu.Unlock()
-		return nil, fmt.Errorf("prompt activity cursor %d is outside retained range: %w", afterSequence, serverapi.ErrStreamGap)
+		return nil, fmt.Errorf("prompt activity cursor %+v is outside retained range: %w", afterVersion, serverapi.ErrStreamGap)
 	}
-	if afterSequence > 0 {
-		for _, evt := range b.replayAfterLocked(afterSequence) {
+	if !isZeroReadModelVersion(afterVersion) {
+		for _, evt := range b.replayAfterLocked(afterVersion) {
 			if !sub.publish(evt) {
 				b.mu.Unlock()
 				sub.closeWithError(serverapi.ErrStreamGap)
@@ -113,7 +118,9 @@ func (b *promptActivityBroker) Publish(evt clientui.PendingPromptEvent) {
 	evt.Sequence = b.nextSeq
 	b.history = append(b.history, evt)
 	if len(b.history) > promptActivityBufferSize {
-		copy(b.history, b.history[len(b.history)-promptActivityBufferSize:])
+		evicted := len(b.history) - promptActivityBufferSize
+		b.lowerBound = b.history[evicted-1].ReadModelVersion
+		copy(b.history, b.history[evicted:])
 		b.history = b.history[:promptActivityBufferSize]
 	}
 	subs := make([]*promptActivitySubscription, 0, len(b.subscribers))
@@ -137,26 +144,33 @@ func (b *promptActivityBroker) SubscriberCount() int {
 	return len(b.subscribers)
 }
 
-func (b *promptActivityBroker) canReplayLocked(afterSequence uint64) bool {
-	if afterSequence == 0 || afterSequence == b.nextSeq {
+func (b *promptActivityBroker) canReplayLocked(afterVersion clientui.ReadModelVersion) bool {
+	if isZeroReadModelVersion(afterVersion) {
 		return true
 	}
-	if afterSequence > b.nextSeq {
-		return false
-	}
 	if len(b.history) == 0 {
+		return true
+	}
+	latest := b.history[len(b.history)-1].ReadModelVersion
+	if !sameReadModelGeneration(afterVersion, latest) {
 		return false
 	}
-	return afterSequence >= b.history[0].Sequence-1
+	if !isZeroReadModelVersion(b.lowerBound) && afterVersion.Sequence < b.lowerBound.Sequence {
+		return false
+	}
+	if afterVersion.Sequence >= latest.Sequence {
+		return true
+	}
+	return true
 }
 
-func (b *promptActivityBroker) replayAfterLocked(afterSequence uint64) []clientui.PendingPromptEvent {
-	if afterSequence == 0 || len(b.history) == 0 {
+func (b *promptActivityBroker) replayAfterLocked(afterVersion clientui.ReadModelVersion) []clientui.PendingPromptEvent {
+	if isZeroReadModelVersion(afterVersion) || len(b.history) == 0 {
 		return nil
 	}
 	replay := make([]clientui.PendingPromptEvent, 0)
 	for _, evt := range b.history {
-		if evt.Sequence > afterSequence {
+		if evt.ReadModelVersion.NewerThan(afterVersion) {
 			replay = append(replay, evt)
 		}
 	}
@@ -267,9 +281,10 @@ func (s *promptActivitySubscription) closeWithError(err error) {
 	}
 }
 
-func pendingPromptEventFromSnapshot(sessionID string, snapshot PendingPromptSnapshot, eventType pendingPromptEventType) clientui.PendingPromptEvent {
+func pendingPromptEventFromSnapshot(sessionID string, snapshot PendingPromptSnapshot, eventType pendingPromptEventType, version clientui.ReadModelVersion) clientui.PendingPromptEvent {
 	evt := clientui.PendingPromptEvent{
 		Type:                   eventType,
+		ReadModelVersion:       version,
 		PromptID:               snapshot.Request.ID,
 		SessionID:              sessionID,
 		Question:               snapshot.Request.Question,
@@ -285,6 +300,36 @@ func pendingPromptEventFromSnapshot(sessionID string, snapshot PendingPromptSnap
 		}
 	}
 	return evt
+}
+
+func isZeroReadModelVersion(version clientui.ReadModelVersion) bool {
+	return version.Epoch == "" && version.Generation == 0 && version.Sequence == 0
+}
+
+func sameReadModelGeneration(left clientui.ReadModelVersion, right clientui.ReadModelVersion) bool {
+	return left.Epoch == right.Epoch && left.Generation == right.Generation
+}
+
+func transcriptPendingPromptFromSnapshot(sessionID string, snapshot PendingPromptSnapshot, eventType pendingPromptEventType) clientui.TranscriptPendingSessionPrompt {
+	state := clientui.TranscriptPromptPending
+	if eventType == pendingPromptEventResolved {
+		state = clientui.TranscriptPromptResolved
+	}
+	kind := clientui.TranscriptPromptQuestion
+	if snapshot.Request.Approval {
+		kind = clientui.TranscriptPromptApproval
+	}
+	return clientui.TranscriptPendingSessionPrompt{
+		ID:        snapshot.Request.ID,
+		Kind:      kind,
+		State:     state,
+		SessionID: sessionID,
+		Data: clientui.TranscriptPendingSessionPromptData{
+			ToolCallID: snapshot.Request.ToolCallID,
+			ToolName:   "ask_question",
+			Question:   snapshot.Request.Question,
+		},
+	}
 }
 
 var _ serverapi.PromptActivitySubscription = (*promptActivitySubscription)(nil)

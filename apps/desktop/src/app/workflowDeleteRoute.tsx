@@ -7,10 +7,9 @@ import { InvalidNativeDialogRoute } from "./InvalidNativeDialogRoute";
 
 export const workflowDeleteNativeDialogPath = "/native-dialog/workflow-delete";
 
-const optionalSearchString = z.preprocess(
-  (value: unknown) => (typeof value === "string" || typeof value === "number" ? value.toString() : ""),
-  z.string(),
-);
+const optionalSearchString = z
+  .union([z.string(), z.number().transform((value) => value.toString())])
+  .catch("");
 
 const workflowDeleteSearchSchema = z.object({
   active_run_count: optionalSearchString,

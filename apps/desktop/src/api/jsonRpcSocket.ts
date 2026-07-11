@@ -27,6 +27,7 @@ const notificationSchema = z.object({
   method: z.string(),
   params: z.unknown().optional(),
 });
+const textFrameSchema = z.string();
 
 export async function openSocket(endpoint: string, timeoutMilliseconds: number): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -131,10 +132,11 @@ export async function sendSocketRequest(
       reject(cause);
     };
     const listener = (event: MessageEvent<unknown>) => {
-      if (typeof event.data !== "string") {
+      const textFrame = textFrameSchema.safeParse(event.data);
+      if (!textFrame.success) {
         return;
       }
-      const response = responseSchema.safeParse(parseFrame(event.data));
+      const response = responseSchema.safeParse(parseFrame(textFrame.data));
       if (!response.success || response.data.id !== id) {
         return;
       }
@@ -235,6 +237,8 @@ export function subscriptionCompleteMethod(subscriptionMethod: string): string |
       return "workflow.complete";
     case "workflow.subscribeProject":
       return "workflow.project.complete";
+    case "attention.notification.subscribe":
+      return "attention.notification.complete";
     default:
       return null;
   }
@@ -245,10 +249,11 @@ export function handleSubscriptionMessage(
   handler: RpcEventHandler,
   completeMethod: string | null,
 ): SubscriptionMessageResult {
-  if (typeof event.data !== "string") {
+  const textFrame = textFrameSchema.safeParse(event.data);
+  if (!textFrame.success) {
     return { kind: "active" };
   }
-  const parsed = parseFrame(event.data);
+  const parsed = parseFrame(textFrame.data);
   const notification = notificationSchema.safeParse(parsed);
   if (!notification.success) {
     return { kind: "active" };

@@ -14,13 +14,15 @@ import (
 	"core/server/tools"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
+	"core/shared/textutil"
+
+	"github.com/google/uuid"
 )
 
 type Manager struct {
 	mu                  sync.Mutex
 	nextID              int
 	entries             map[string]*processEntry
-	sessionTokens       map[string]map[string]int
 	tempDir             string
 	onEvent             func(Event)
 	minimumExecToBgTime time.Duration
@@ -65,7 +67,6 @@ func NewManager(opts ...ManagerOption) (*Manager, error) {
 	mgr := &Manager{
 		nextID:              initialProcessID,
 		entries:             make(map[string]*processEntry),
-		sessionTokens:       make(map[string]map[string]int),
 		tempDir:             tempDir,
 		minimumExecToBgTime: defaultMinimumExecToBgTime,
 		closeGracePeriod:    closeGracePeriod,
@@ -126,17 +127,9 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	cmd := exec.CommandContext(context.Background(), req.Command[0], req.Command[1:]...)
 	cmd.Dir = workdir
 	ownerSessionID := strings.TrimSpace(req.OwnerSessionID)
-	shellToken := ""
-	if ownerSessionID != "" {
-		shellToken, err = newShellToken()
-		if err != nil {
-			m.releaseEntry(id)
-			return ExecResult{}, err
-		}
-	}
 	ownerRunID := strings.TrimSpace(req.OwnerRunID)
 	ownerStepID := strings.TrimSpace(req.OwnerStepID)
-	cmd.Env = tools.EnrichShellEnvForSessionRunToken(os.Environ(), ownerSessionID, ownerRunID, ownerStepID, shellToken)
+	cmd.Env = tools.EnrichShellEnvForInvocation(os.Environ(), ownerSessionID, ownerRunID, ownerStepID)
 	prepareManagedExec(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -148,8 +141,8 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	}
 	entry := &processEntry{
 		id:             id,
+		activityID:     uuid.New(),
 		ownerSessionID: ownerSessionID,
-		shellToken:     shellToken,
 		ownerRunID:     ownerRunID,
 		ownerStepID:    ownerStepID,
 		command:        strings.TrimSpace(req.DisplayCommand),
@@ -176,7 +169,6 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	cmd.Stderr = writer
 	m.mu.Lock()
 	if m.closed {
-		m.unregisterSessionTokenLocked(ownerSessionID, shellToken)
 		m.mu.Unlock()
 		entry.mu.Lock()
 		stdin, log := entry.detachResourcesLocked()
@@ -184,16 +176,9 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		closeDetachedResources(stdin, log)
 		return ExecResult{}, errors.New("background shell manager is closed")
 	}
-	m.registerSessionTokenLocked(ownerSessionID, shellToken)
 	m.mu.Unlock()
-	tokenRegistered := true
 
 	if err := cmd.Start(); err != nil {
-		if tokenRegistered {
-			m.mu.Lock()
-			m.unregisterSessionTokenLocked(ownerSessionID, shellToken)
-			m.mu.Unlock()
-		}
 		entry.mu.Lock()
 		stdin, log := entry.detachResourcesLocked()
 		entry.mu.Unlock()
@@ -203,12 +188,6 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	}
 	if !req.KeepStdinOpen {
 		if err := stdin.Close(); err != nil {
-			if tokenRegistered {
-				m.mu.Lock()
-				m.unregisterSessionTokenLocked(ownerSessionID, shellToken)
-				m.mu.Unlock()
-				tokenRegistered = false
-			}
 			_ = killManagedProcess(cmd.Process)
 			gracePeriod := m.closeGracePeriod
 			if gracePeriod <= 0 {
@@ -229,12 +208,6 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		if tokenRegistered {
-			m.mu.Lock()
-			m.unregisterSessionTokenLocked(ownerSessionID, shellToken)
-			m.mu.Unlock()
-			tokenRegistered = false
-		}
 		_ = killManagedProcess(cmd.Process)
 		gracePeriod := m.closeGracePeriod
 		if gracePeriod <= 0 {
@@ -274,7 +247,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 			return ExecResult{}, err
 		}
 		display, truncated, _ := truncateWithTemplate(processed.Output, maxOutputChars, truncationBannerTemplate)
-		result.ExitCode = postprocess.CloneIntPtr(snapshot.ExitCode)
+		result.ExitCode = textutil.CloneInt(snapshot.ExitCode)
 		result.Output = display
 		result.Truncated = truncated
 		result.Warning = processed.Warning
@@ -393,7 +366,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		OutputPath:         snapshot.LogPath,
 		Running:            snapshot.Running,
 		Backgrounded:       snapshot.Backgrounded,
-		ExitCode:           postprocess.CloneIntPtr(snapshot.ExitCode),
+		ExitCode:           textutil.CloneInt(snapshot.ExitCode),
 		RawOutputRequested: snapshot.RawOutputRequested,
 		Truncated:          sourceTruncated || displayTruncated,
 	}, nil

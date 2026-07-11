@@ -7,8 +7,16 @@ import (
 
 	"core/server/auth"
 	serverstartup "core/server/startup"
+	"core/shared/client"
 	"core/shared/config"
+	"core/shared/serverapi"
 )
+
+type embeddedAttachFactsService struct{}
+
+func (embeddedAttachFactsService) GetCapabilityFacts(context.Context, serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
+	return serverapi.CapabilityFactsResponse{Defaults: serverapi.CapabilityDefaultFacts{PrimaryModelID: "gpt-5.6-sol"}}, nil
+}
 
 func TestBuildStartupRequestMapsOptions(t *testing.T) {
 	req := buildStartupRequest(StartupRequest{
@@ -25,6 +33,7 @@ func TestBuildStartupRequestMapsOptions(t *testing.T) {
 			ModelTimeoutSeconds: 42,
 			Tools:               "shell,patch",
 		},
+		StartupOptions: serverstartup.Options{Core: serverstartup.Options{}.Core},
 	})
 
 	if req.WorkspaceRoot != "/tmp/workspace" || !req.WorkspaceRootExplicit {
@@ -47,6 +56,7 @@ func TestBuildStartupRequestMapsOptions(t *testing.T) {
 func TestAdaptOnboardingHandlerMapsRequest(t *testing.T) {
 	expected := errors.New("mapped")
 	mgr := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	factsClient := client.NewLoopbackCapabilityFactsClient(embeddedAttachFactsService{})
 	reload := func() (config.App, error) {
 		return config.App{WorkspaceRoot: "/reloaded"}, nil
 	}
@@ -56,6 +66,16 @@ func TestAdaptOnboardingHandlerMapsRequest(t *testing.T) {
 		}
 		if req.AuthManager != mgr {
 			t.Fatal("auth manager was not mapped")
+		}
+		if req.CapabilityFactsClient == nil {
+			t.Fatal("capability facts client was not mapped")
+		}
+		facts, err := req.CapabilityFactsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{})
+		if err != nil {
+			t.Fatalf("capability facts: %v", err)
+		}
+		if facts.Defaults.PrimaryModelID != "gpt-5.6-sol" {
+			t.Fatalf("capability facts = %+v", facts)
 		}
 		reloaded, err := req.ReloadConfig()
 		if err != nil {
@@ -68,9 +88,10 @@ func TestAdaptOnboardingHandlerMapsRequest(t *testing.T) {
 	})
 
 	_, err := adapter(context.Background(), serverstartup.OnboardingRequest{
-		Config:       config.App{WorkspaceRoot: "/workspace"},
-		AuthManager:  mgr,
-		ReloadConfig: reload,
+		Config:                config.App{WorkspaceRoot: "/workspace"},
+		AuthManager:           mgr,
+		CapabilityFactsClient: factsClient,
+		ReloadConfig:          reload,
 	})
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected mapped error, got %v", err)

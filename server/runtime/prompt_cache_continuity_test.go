@@ -18,12 +18,12 @@ import (
 	"core/shared/transcript"
 )
 
-// This regression test guards prompt-cache continuity across restarts.
-// It seeds a realistic live runtime conversation, relies on production
-// persistence to write session.json/events.jsonl, replays the persisted event
-// stream, reopens the runtime from disk, and finally proves that the OpenAI
-// request payload shape is unchanged before vs after reload.
-func TestBuildRequest_ReopenPreservesOpenAIRequestPayload(t *testing.T) {
+// This regression test guards prompt-cache continuity across restarts. It
+// seeds a realistic live runtime conversation, relies on production persistence
+// to write session.json/events.jsonl, replays the persisted event stream,
+// reopens the runtime from disk, and finally proves that the cache-relevant
+// request prefix is unchanged before vs after reload.
+func TestBuildRequest_ReopenPreservesPromptCachePrefix(t *testing.T) {
 	fixture := newPromptCacheContinuityFixture(t)
 	fixture.assertPersistedProjectionParity(t)
 	originalReq, err := fixture.engine.buildRequest(context.Background(), "", true)
@@ -36,13 +36,13 @@ func TestBuildRequest_ReopenPreservesOpenAIRequestPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build reloaded request: %v", err)
 	}
-	assertOpenAIResponsesPayloadEqual(t, fixture.payloadOptions(t), originalReq, reloadedReq)
+	assertPromptCacheChunksEqual(t, originalReq, reloadedReq)
 }
 
 // Reviewer requests transform transcript state differently from normal runtime
 // turns, so they need their own continuity check over the same events.jsonl
 // persistence boundary.
-func TestBuildReviewerRequest_ReopenPreservesOpenAIRequestPayload(t *testing.T) {
+func TestBuildReviewerRequest_ReopenPreservesPromptCachePrefix(t *testing.T) {
 	fixture := newPromptCacheContinuityFixture(t)
 	fixture.assertPersistedProjectionParity(t)
 	originalReq, err := fixture.engine.buildReviewerRequest(context.Background(), fixture.reviewerClient)
@@ -55,7 +55,7 @@ func TestBuildReviewerRequest_ReopenPreservesOpenAIRequestPayload(t *testing.T) 
 	if err != nil {
 		t.Fatalf("build reloaded reviewer request: %v", err)
 	}
-	assertOpenAIResponsesPayloadEqual(t, fixture.payloadOptions(t), originalReq, reloadedReq)
+	assertPromptCacheChunksEqual(t, originalReq, reloadedReq)
 }
 
 func TestHeadlessToInteractiveReopenPreservesPromptCachePrefix(t *testing.T) {
@@ -249,15 +249,6 @@ func (f *promptCacheContinuityFixture) reopen(t *testing.T) (*Engine, *session.S
 	return reopened, reopenedStore
 }
 
-func (f *promptCacheContinuityFixture) payloadOptions(t *testing.T) llm.OpenAIResponsesPayloadOptions {
-	t.Helper()
-	caps, err := f.client.ProviderCapabilities(context.Background())
-	if err != nil {
-		t.Fatalf("provider capabilities: %v", err)
-	}
-	return llm.OpenAIResponsesPayloadOptions{Capabilities: caps}
-}
-
 // Compare live runtime state with the projection reconstructed from persisted
 // events first, so failures tell us whether drift came from persistence/hydrate
 // or later request building.
@@ -321,12 +312,20 @@ func seedPromptCacheContinuityConversation(t *testing.T, engine *Engine) {
 	}
 }
 
-func assertOpenAIResponsesPayloadEqual(t *testing.T, options llm.OpenAIResponsesPayloadOptions, original llm.Request, reloaded llm.Request) {
+func assertPromptCacheChunksEqual(t *testing.T, original llm.Request, reloaded llm.Request) {
 	t.Helper()
-	originalJSON := mustMarshalOpenAIResponsesPayload(t, original, options)
-	reloadedJSON := mustMarshalOpenAIResponsesPayload(t, reloaded, options)
+	originalChunks, err := promptCacheChunks(original)
+	if err != nil {
+		t.Fatalf("original prompt cache chunks: %v", err)
+	}
+	reloadedChunks, err := promptCacheChunks(reloaded)
+	if err != nil {
+		t.Fatalf("reloaded prompt cache chunks: %v", err)
+	}
+	originalJSON := mustMarshalCanonicalJSON(t, originalChunks)
+	reloadedJSON := mustMarshalCanonicalJSON(t, reloadedChunks)
 	if !bytes.Equal(originalJSON, reloadedJSON) {
-		t.Fatalf("openai responses payload mismatch after reopen\noriginal=%s\nreloaded=%s", originalJSON, reloadedJSON)
+		t.Fatalf("prompt cache chunks mismatch after reopen\noriginal=%s\nreloaded=%s", originalJSON, reloadedJSON)
 	}
 }
 
@@ -407,19 +406,6 @@ func assertPersistedProjectionMatchesRuntime(t *testing.T, persisted promptCache
 	}
 }
 
-func mustMarshalOpenAIResponsesPayload(t *testing.T, request llm.Request, options llm.OpenAIResponsesPayloadOptions) []byte {
-	t.Helper()
-	data, err := llm.MarshalOpenAIResponsesRequestJSON(request, options)
-	if err != nil {
-		t.Fatalf("marshal openai responses payload: %v", err)
-	}
-	var out bytes.Buffer
-	if err := json.Indent(&out, data, "", "  "); err != nil {
-		t.Fatalf("indent openai responses payload: %v", err)
-	}
-	return out.Bytes()
-}
-
 func mustMarshalCanonicalJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
@@ -457,7 +443,7 @@ func persistedMainViewComparable(t *testing.T, store *session.Store, scan *Persi
 		CommittedEntryCount:            scan.TotalEntries(),
 		ParentSessionID:                meta.ParentSessionID,
 		LastCommittedAssistantResponse: scan.LastCommittedAssistantFinalAnswer(),
-		ActiveRun:                      comparablePersistedRunView(t, store),
+		ActiveRun:                      nil,
 	}
 }
 
@@ -474,28 +460,6 @@ func mustScanPersistedTranscript(t *testing.T, store *session.Store) *PersistedT
 
 func comparableRuntimeRunView(run *RunSnapshot) *promptCacheComparableRunView {
 	if run == nil {
-		return nil
-	}
-	finishedAt := ""
-	if !run.FinishedAt.IsZero() {
-		finishedAt = run.FinishedAt.UTC().Format(time.RFC3339Nano)
-	}
-	return &promptCacheComparableRunView{
-		RunID:      run.RunID,
-		StepID:     run.StepID,
-		Status:     string(run.Status),
-		StartedAt:  run.StartedAt.UTC().Format(time.RFC3339Nano),
-		FinishedAt: finishedAt,
-	}
-}
-
-func comparablePersistedRunView(t *testing.T, store *session.Store) *promptCacheComparableRunView {
-	t.Helper()
-	run, err := store.LatestRun()
-	if err != nil {
-		t.Fatalf("latest run: %v", err)
-	}
-	if run == nil || run.Status != session.RunStatusRunning {
 		return nil
 	}
 	finishedAt := ""

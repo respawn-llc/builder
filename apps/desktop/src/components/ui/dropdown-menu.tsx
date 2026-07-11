@@ -20,9 +20,7 @@ function DropdownMenuGroup({ ...props }: React.ComponentProps<typeof DropdownMen
   return <DropdownMenuPrimitive.Group data-slot="dropdown-menu-group" {...props} />;
 }
 
-function DropdownMenuRadioGroup({
-  ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>) {
+function DropdownMenuRadioGroup({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>) {
   return <DropdownMenuPrimitive.RadioGroup data-slot="dropdown-menu-radio-group" {...props} />;
 }
 
@@ -35,7 +33,8 @@ function DropdownMenuSubTrigger({
   inset,
   children,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & Readonly<{ inset?: boolean | undefined }>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> &
+  Readonly<{ inset?: boolean | undefined }>) {
   return (
     <DropdownMenuPrimitive.SubTrigger
       className={cn(dropdownMenuItemClassName, inset && "pl-8", className)}
@@ -53,7 +52,8 @@ function DropdownMenuSubContent({
   level,
   sideOffset = 6,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent> & Readonly<{ level?: IslandLevel | undefined }>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent> &
+  Readonly<{ level?: IslandLevel | undefined }>) {
   return (
     <DropdownMenuPrimitive.SubContent
       className={cn(dropdownMenuContentClassName(level), className)}
@@ -71,7 +71,8 @@ function DropdownMenuContent({
   level,
   sideOffset = 6,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & Readonly<{ level?: IslandLevel | undefined }>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Content> &
+  Readonly<{ level?: IslandLevel | undefined }>) {
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
@@ -195,7 +196,7 @@ function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"spa
 }
 
 const dropdownMenuItemClassName =
-  "relative flex min-h-9 cursor-default select-none items-center gap-[var(--space-2)] rounded-[var(--radius-m)] border border-transparent px-[var(--space-3)] py-[var(--space-2)] text-sm font-semibold outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:border-[var(--color-primary)] data-[highlighted]:bg-[var(--color-island-2)]";
+  "relative flex min-h-9 cursor-default select-none items-center gap-[var(--space-2)] rounded-[var(--radius-m)] border border-transparent px-[var(--space-3)] py-[var(--space-2)] text-sm font-semibold outline-none transition-colors data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50 data-[highlighted]:border-[var(--color-primary)] data-[highlighted]:bg-[var(--color-island-2)]";
 
 function dropdownMenuContentClassName(level: IslandLevel | undefined): string {
   return cn(

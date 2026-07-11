@@ -26,7 +26,7 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 	if !batchID.Valid || strings.TrimSpace(batchID.String) == "" {
 		return CompleteRunResult{}, nil
 	}
-	_, err = q.GetExistingJoinPlacement(ctx, sqlitegen.GetExistingJoinPlacementParams{TaskID: taskID, NodeID: string(joinEdge.TargetNode.ID), BatchID: sql.NullString{String: batchID.String, Valid: true}})
+	_, err = q.GetExistingJoinPlacement(ctx, sqlitegen.GetExistingJoinPlacementParams{TaskID: taskID, NodeID: nullableString(string(joinEdge.TargetNode.ID)), BatchID: sql.NullString{String: batchID.String, Valid: true}})
 	if err == nil {
 		return CompleteRunResult{}, nil
 	}
@@ -77,7 +77,7 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		return CompleteRunResult{}, err
 	}
 	joinPlacementID := prefixedID("placement")
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: joinPlacementID, TaskID: taskID, NodeID: string(joinEdge.TargetNode.ID), State: "completed", ParallelBatchTransitionID: sql.NullString{String: batchID.String, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: joinPlacementID, TaskID: taskID, NodeID: nullableString(string(joinEdge.TargetNode.ID)), State: "completed", ParallelBatchTransitionID: sql.NullString{String: batchID.String, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 		return CompleteRunResult{}, err
 	}
 	joinTransitionID := prefixedID("transition")
@@ -87,14 +87,22 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 	result := CompleteRunResult{TransitionID: workflow.TransitionID(joinTransitionID), State: "applied"}
 	outEdge := group.Edges[0]
 	targetPlacementID := prefixedID("placement")
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: taskID, NodeID: string(outEdge.TargetNode.ID), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: taskID, NodeID: nullableString(string(outEdge.TargetNode.ID)), State: placementStateForNode(outEdge.TargetNode), CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 		return CompleteRunResult{}, err
 	}
 	result.PlacementIDs = append(result.PlacementIDs, workflow.PlacementID(targetPlacementID))
 	if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, joinTransitionID, outEdge, targetPlacementID, "applied", workflowRunMetadata{ContextSource: workflow.CanonicalContextSource(outEdge.ContextSource)}); err != nil {
 		return CompleteRunResult{}, err
 	}
-	if outEdge.TargetNode.Kind == workflow.NodeKindAgent {
+	if executableNodeKind(outEdge.TargetNode.Kind) {
+		task, err := q.GetTask(ctx, taskID)
+		if err != nil {
+			return CompleteRunResult{}, err
+		}
+		worktreeRoot, err := taskManagedWorktreeRoot(ctx, q, task)
+		if err != nil {
+			return CompleteRunResult{}, err
+		}
 		targetRunID := prefixedID("run")
 		targetSnapshot, foundSnapshot, err := joinSnapshot.forNode(outEdge.TargetNode)
 		if err != nil {
@@ -107,7 +115,7 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		source, err := s.resolveContextSourceRun(ctx, q, taskID, now, joinPlacementID, nil, joinSnapshot, outEdge)
+		resolution, err := s.resolveContextInvocation(ctx, q, taskID, now, joinPlacementID, nil, joinSnapshot, outEdge)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
@@ -115,22 +123,30 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		targetMetadataJSON, err := workflow.MarshalString(workflowRunMetadata{
-			ContextMode:          string(outEdge.ContextMode),
-			ContextSource:        workflow.CanonicalContextSource(outEdge.ContextSource),
-			SourceRunID:          source.runID,
-			SourceSessionID:      source.sessionID,
-			PromptTemplate:       strings.TrimSpace(outEdge.PromptTemplate),
-			Parameters:           append([]workflow.Parameter(nil), outEdge.Parameters...),
-			PriorParameterValues: clonePriorParameterValues(priorParameterValues),
-		})
+		targetMetadata := resolution.runMetadata(outEdge)
+		targetMetadata.PromptTemplate = strings.TrimSpace(outEdge.PromptTemplate)
+		targetMetadata.Parameters = append([]workflow.Parameter(nil), outEdge.Parameters...)
+		targetMetadata.PriorParameterValues = clonePriorParameterValues(priorParameterValues)
+		targetMetadataJSON, err := workflow.MarshalString(targetMetadata)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptionDetailJson: "{}", RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
+		interruptionReason, interruptionDetail, invalidScript, err := s.scriptNodeInterruption(ctx, q, outEdge.TargetNode.ID, worktreeRoot)
+		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		result.RunIDs = append(result.RunIDs, workflow.RunID(targetRunID))
+		interruptedAt := int64(0)
+		if invalidScript {
+			interruptedAt = now
+		}
+		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: interruptionReason, InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
+			return CompleteRunResult{}, err
+		}
+		targetRun := workflow.RunID(targetRunID)
+		result.RunIDs = append(result.RunIDs, targetRun)
+		if invalidScript {
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, targetRun)
+		}
 	}
 	return result, nil
 }

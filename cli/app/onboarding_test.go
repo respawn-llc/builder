@@ -8,13 +8,13 @@ import (
 	"core/prompts"
 	"core/server/runtime"
 	"core/shared/config"
+	"core/shared/serverapi"
 	"core/shared/theme"
 	"core/shared/toolspec"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -30,149 +30,154 @@ func writeOnboardingTestSkill(t *testing.T, dir string, name string, description
 	}
 }
 
-func TestSkillSelectionCandidatesAnnotateOpponentSource(t *testing.T) {
-	state := &onboardingFlowState{
-		imports: onboardingImportDiscovery{skillSymlinkItems: map[onboardingImportProviderID][]onboardingSkillImportItem{
-			onboardingImportProviderCodex: {
-				{ID: "codex:skill", Provider: onboardingImportProviderCodex, ProviderLabel: "Codex", TargetDirName: "skill-creator", SkillName: "skill-creator", SourceDir: "/tmp/codex/skill-creator", ModifiedAt: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)},
-				{ID: "codex:skill-copy", Provider: onboardingImportProviderCodex, ProviderLabel: "Codex", TargetDirName: "skill-creator", SkillName: "skill-creator", SourceDir: "/tmp/codex/skill-creator-copy", ModifiedAt: time.Date(2026, 1, 1, 2, 0, 0, 0, time.UTC)},
+func skillSymlinkChoiceFact(provider string, root string, count int) serverapi.ImportChoiceFact {
+	sourceKind := "external_provider"
+	return serverapi.ImportChoiceFact{
+		Ref: serverapi.ImportChoiceRef{
+			Mode:             string(onboardingImportModeSymlinkSource),
+			SourceKind:       &sourceKind,
+			ImportProviderID: &provider,
+			SourceRootPath:   &root,
+		},
+		ImportProviderID: &provider,
+		SourceRootPath:   &root,
+		ItemCount:        count,
+	}
+}
+
+func skillItemFact(provider string, root string, path string, target string, name string, conflicts []serverapi.ImportConflictFact, enabled bool) serverapi.ImportItemFact {
+	return serverapi.ImportItemFact{
+		Ref: serverapi.ImportItemRef{
+			ItemKind:         "skill",
+			SourceKind:       "external_provider",
+			ImportProviderID: &provider,
+			SourceRootPath:   &root,
+			SourcePath:       &path,
+			TargetName:       target,
+			Name:             &name,
+		},
+		Conflicts:      conflicts,
+		DefaultEnabled: &enabled,
+	}
+}
+
+func testImportProviderPtr(provider onboardingImportProviderID) *onboardingImportProviderID {
+	return &provider
+}
+
+func testImportSelection(provider onboardingImportProviderID, sourceRoot string) onboardingImportSelection {
+	sourceKind := "external_provider"
+	providerID := string(provider)
+	return onboardingImportSelection{
+		Mode:       onboardingImportModeSymlinkSource,
+		Provider:   &provider,
+		SourceRoot: &sourceRoot,
+		ChoiceRef: serverapi.ImportChoiceRef{
+			Mode:             string(onboardingImportModeSymlinkSource),
+			SourceKind:       &sourceKind,
+			ImportProviderID: &providerID,
+			SourceRootPath:   &sourceRoot,
+		},
+	}
+}
+
+func TestOnboardingImportDiscoveryUsesServerFactsForChoicesAndCandidates(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	itemPath := filepath.Join(root, "skill-creator")
+	otherPath := filepath.Join(root, "skill-creator-copy")
+	facts := serverapi.ImportCapabilityFacts{
+		Skills: serverapi.ImportItemGroupFact{Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 2)}},
+		SkillEnablement: []serverapi.SkillEnablementProjectionFact{{
+			ChoiceRef: skillSymlinkChoiceFact("codex", root, 2).Ref,
+			Candidates: []serverapi.ImportItemFact{
+				skillItemFact("codex", root, itemPath, "skill-creator", "skill-creator", []serverapi.ImportConflictFact{{SourceKind: "external_provider", Path: &otherPath}}, true),
+				skillItemFact("codex", root, otherPath, "skill-creator", "skill-creator", []serverapi.ImportConflictFact{{SourceKind: "external_provider", Path: &itemPath}}, true),
 			},
 		}},
-		skillImport: onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderCodex},
+		Recommendations: serverapi.ImportRecommendationFacts{Skills: &serverapi.ImportModeRecommendationFact{ChoiceRef: skillSymlinkChoiceFact("codex", root, 2).Ref, ItemCount: 2}},
 	}
+	discovery := onboardingImportDiscoveryFromFacts(facts)
+	choiceID := discovery.skillRecommendationID
+	var selection onboardingImportSelection
+	if err := applyImportChoice(&selection, choiceID, discovery.skillChoices); err != nil {
+		t.Fatalf("apply import choice from facts: %v", err)
+	}
+	state := &onboardingFlowState{imports: discovery, skillImport: selection}
 	items := skillSelectionCandidates(state)
 	if len(items) != 2 {
-		t.Fatalf("expected both duplicate symlink candidates to remain visible, got %d", len(items))
+		t.Fatalf("expected both server-projected duplicate candidates to remain visible, got %d", len(items))
+	}
+	if discovery.skillRecommendationID == "" {
+		t.Fatal("expected recommendation from server facts")
 	}
 	for _, item := range items {
-		if item.DuplicateSourceNote != "skill-creator-copy" && item.DuplicateSourceNote != "skill-creator" {
-			t.Fatalf("expected duplicate note to mention the sibling source, got %q", item.DuplicateSourceNote)
+		if !strings.Contains(item.Warning, "skill-creator") {
+			t.Fatalf("expected warning derived from server conflict facts, got %q", item.Warning)
 		}
 	}
 }
 
-func TestDiscoverOnboardingImportsSkipsExistingTargets(t *testing.T) {
-	newAppTestHome(t)
-	globalRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(globalRoot, "skills", "existing-skill"), 0o755); err != nil {
-		t.Fatalf("mkdir skills: %v", err)
+func TestOnboardingImportErrorsDoNotHideValidServerChoices(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	facts := serverapi.ImportCapabilityFacts{
+		Skills: serverapi.ImportItemGroupFact{Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)}},
+		Errors: []serverapi.ImportErrorFact{{Code: "provider_discovery_failed", Scope: "provider", Operation: "discover_skills", Message: "unreadable source"}},
+		Recommendations: serverapi.ImportRecommendationFacts{
+			Skills: &serverapi.ImportModeRecommendationFact{ChoiceRef: skillSymlinkChoiceFact("codex", root, 1).Ref, ItemCount: 1},
+		},
 	}
-	if err := os.MkdirAll(filepath.Join(globalRoot, "commands"), 0o755); err != nil {
-		t.Fatalf("mkdir commands: %v", err)
+	state := &onboardingFlowState{imports: onboardingImportDiscoveryFromFacts(facts)}
+
+	screen := buildSkillImportScreen(state)
+	foundChoice := false
+	for _, option := range screen.Options {
+		for _, choice := range state.imports.skillChoices {
+			if option.ID == choice.OptionID && choice.Mode == onboardingImportModeSymlinkSource && choice.Count == 1 {
+				foundChoice = true
+			}
+		}
 	}
-	if err := os.WriteFile(filepath.Join(globalRoot, "commands", "demo.md"), []byte("demo"), 0o644); err != nil {
-		t.Fatalf("write command: %v", err)
-	}
-	discovery := discoverOnboardingImportsForWorkspace(globalRoot, "")
-	if discovery.err != nil {
-		t.Fatalf("discover imports: %v", discovery.err)
-	}
-	if !discovery.skipSkills {
-		t.Fatal("expected skills import flow to be skipped when skills root already exists")
-	}
-	if !discovery.skipCommands {
-		t.Fatal("expected command import flow to be skipped when commands root already exists")
+	if !foundChoice {
+		t.Fatalf("expected valid choices to remain visible despite scoped import error, got %+v", screen.Options)
 	}
 }
 
-func TestDiscoverOnboardingImportsIncludesAgentsSkillsAndCommands(t *testing.T) {
-	home := newAppTestHome(t)
-	globalRoot := t.TempDir()
-	agentsSkillsDir := filepath.Join(home, ".agents", "skills")
-	writeOnboardingTestSkill(t, filepath.Join(agentsSkillsDir, "demo-skill"), "demo", "from agents")
-	agentsCommandsDir := filepath.Join(home, ".agents", "commands")
-	if err := os.MkdirAll(agentsCommandsDir, 0o755); err != nil {
-		t.Fatalf("mkdir agents commands: %v", err)
+func TestOnboardingImportTargetSkipFactsHideImportSteps(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	facts := serverapi.ImportCapabilityFacts{
+		Skills: serverapi.ImportItemGroupFact{
+			Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)},
+			Target:  serverapi.ImportTargetFact{Skip: true, Conflicts: []serverapi.ImportConflictFact{{SourceKind: "global"}}},
+		},
 	}
-	if err := os.WriteFile(filepath.Join(agentsCommandsDir, "review.md"), []byte("review"), 0o644); err != nil {
-		t.Fatalf("write agents command: %v", err)
-	}
+	state := &onboardingFlowState{imports: onboardingImportDiscoveryFromFacts(facts)}
 
-	discovery := discoverOnboardingImportsForWorkspace(globalRoot, "")
-	if discovery.err != nil {
-		t.Fatalf("discover imports: %v", discovery.err)
-	}
-	if got := discovery.skillSymlinkRoots[onboardingImportProviderAgents]; got != agentsSkillsDir {
-		t.Fatalf("expected agents skill root %q, got %q", agentsSkillsDir, got)
-	}
-	items := discovery.skillSymlinkItems[onboardingImportProviderAgents]
-	if len(items) != 1 {
-		t.Fatalf("expected one agents skill import candidate, got %+v", items)
-	}
-	if items[0].ProviderLabel != "Agents" || items[0].TargetDirName != "demo-skill" {
-		t.Fatalf("unexpected agents skill candidate: %+v", items[0])
-	}
-	if got := discovery.commandSymlinkRoots[onboardingImportProviderAgents]; got != agentsCommandsDir {
-		t.Fatalf("expected agents command root %q, got %q", agentsCommandsDir, got)
-	}
-	commandItems := discovery.commandSymlinkItems[onboardingImportProviderAgents]
-	if len(commandItems) != 1 {
-		t.Fatalf("expected one agents slash command import candidate, got %+v", commandItems)
-	}
-	if commandItems[0].ProviderLabel != "Agents" || commandItems[0].TargetFileName != "review.md" {
-		t.Fatalf("unexpected agents slash command candidate: %+v", commandItems[0])
+	for _, step := range newOnboardingWorkflow(state).steps {
+		if step.id == "skills_import" && step.visible(state) {
+			t.Fatalf("expected server target skip facts to hide skill import step")
+		}
 	}
 }
 
-func TestDiscoverProviderCommandSymlinkItemsPreferRootCommandsDirectory(t *testing.T) {
-	base := t.TempDir()
-	commandsDir := filepath.Join(base, "commands")
-	nestedPluginPrompts := filepath.Join(base, "plugins", "sample", "prompts")
-	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
-		t.Fatalf("mkdir commands: %v", err)
+func TestOnboardingSkippedImportErrorScreenCanContinueWithNoneChoice(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	facts := serverapi.ImportCapabilityFacts{
+		Skills: serverapi.ImportItemGroupFact{
+			Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)},
+			Target:  serverapi.ImportTargetFact{Skip: true, Conflicts: []serverapi.ImportConflictFact{{SourceKind: "global"}}},
+		},
+		Errors: []serverapi.ImportErrorFact{{Code: "target_read_failed", Scope: "target", Operation: "read_import_target", Message: "permission denied"}},
 	}
-	if err := os.MkdirAll(nestedPluginPrompts, 0o755); err != nil {
-		t.Fatalf("mkdir nested prompts: %v", err)
+	state := &onboardingFlowState{imports: onboardingImportDiscoveryFromFacts(facts)}
+	screen := buildSkillImportScreen(state)
+	if len(screen.Options) != 1 {
+		t.Fatalf("expected only none option for skipped import, got %+v", screen.Options)
 	}
-	if err := os.WriteFile(filepath.Join(commandsDir, "review.md"), []byte("commands"), 0o644); err != nil {
-		t.Fatalf("write root command: %v", err)
+	if err := applyImportChoice(&state.skillImport, screen.Options[0].ID, state.imports.skillChoices); err != nil {
+		t.Fatalf("expected skipped none choice to be accepted: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(nestedPluginPrompts, "plugin.md"), []byte("plugin"), 0o644); err != nil {
-		t.Fatalf("write nested plugin prompt: %v", err)
-	}
-	root, items, err := onboarding.DiscoverProviderCommands(onboardingImportProvider{ID: onboardingImportProviderClaudeCode, Label: "Claude Code"}, base)
-	if err != nil {
-		t.Fatalf("discover provider command symlink items: %v", err)
-	}
-	if root != commandsDir {
-		t.Fatalf("expected command symlink root %q, got %q", commandsDir, root)
-	}
-	if len(items) != 1 {
-		t.Fatalf("expected only direct root commands to be symlinkable, got %+v", items)
-	}
-	if items[0].TargetFileName != "review.md" {
-		t.Fatalf("expected review.md to be symlinked, got %+v", items[0])
-	}
-}
-
-func TestDiscoverProviderCommandSymlinkItemsFallBackToPromptsWhenCommandsHasNoDirectMarkdown(t *testing.T) {
-	base := t.TempDir()
-	commandsDir := filepath.Join(base, "commands")
-	promptsDir := filepath.Join(base, "prompts")
-	if err := os.MkdirAll(filepath.Join(commandsDir, "nested"), 0o755); err != nil {
-		t.Fatalf("mkdir nested commands: %v", err)
-	}
-	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
-		t.Fatalf("mkdir prompts: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(commandsDir, "nested", "ignored.md"), []byte("ignored"), 0o644); err != nil {
-		t.Fatalf("write nested command: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(promptsDir, "review.md"), []byte("prompts"), 0o644); err != nil {
-		t.Fatalf("write prompt command: %v", err)
-	}
-	root, items, err := onboarding.DiscoverProviderCommands(onboardingImportProvider{ID: onboardingImportProviderClaudeCode, Label: "Claude Code"}, base)
-	if err != nil {
-		t.Fatalf("discover provider command symlink items: %v", err)
-	}
-	if root != promptsDir {
-		t.Fatalf("expected prompt symlink root %q, got %q", promptsDir, root)
-	}
-	if len(items) != 1 {
-		t.Fatalf("expected prompts fallback to expose one direct command, got %+v", items)
-	}
-	if items[0].TargetFileName != "review.md" {
-		t.Fatalf("expected review.md prompt command to be symlinked, got %+v", items[0])
+	if state.skillImport.Mode != onboardingImportModeNone {
+		t.Fatalf("expected none selection, got %+v", state.skillImport)
 	}
 }
 
@@ -183,7 +188,7 @@ func TestExecuteSkillImportSymlinksRootDirectory(t *testing.T) {
 	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
 		t.Fatalf("mkdir source: %v", err)
 	}
-	if _, err := executeSkillImport(globalRoot, onboardingImportDiscovery{}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderCodex}); err != nil {
+	if _, err := executeSkillImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderCodex, sourceDir)); err != nil {
 		t.Fatalf("execute skill import: %v", err)
 	}
 	targetPath := filepath.Join(globalRoot, "skills")
@@ -208,7 +213,7 @@ func TestExecuteSkillImportSymlinksAgentsRootDirectory(t *testing.T) {
 	globalRoot := t.TempDir()
 	sourceDir := filepath.Join(home, ".agents", "skills")
 	writeOnboardingTestSkill(t, filepath.Join(sourceDir, "demo-skill"), "demo", "from agents")
-	if _, err := executeSkillImport(globalRoot, onboardingImportDiscovery{}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderAgents}); err != nil {
+	if _, err := executeSkillImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderAgents, sourceDir)); err != nil {
 		t.Fatalf("execute skill import: %v", err)
 	}
 	targetPath := filepath.Join(globalRoot, "skills")
@@ -233,7 +238,7 @@ func TestExecuteSkillImportReplacesEmptyTargetDirectory(t *testing.T) {
 		t.Fatalf("mkdir empty target: %v", err)
 	}
 
-	if _, err := executeSkillImport(globalRoot, onboardingImportDiscovery{}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderCodex}); err != nil {
+	if _, err := executeSkillImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderCodex, sourceDir)); err != nil {
 		t.Fatalf("execute skill import with empty target: %v", err)
 	}
 	info, err := os.Lstat(targetPath)
@@ -252,9 +257,7 @@ func TestExecuteSkillImportDoesNotDeleteEmptyTargetWhenSourceValidationFails(t *
 		t.Fatalf("mkdir empty target: %v", err)
 	}
 
-	_, err := executeSkillImport(globalRoot, onboardingImportDiscovery{
-		skillSymlinkRoots: map[onboardingImportProviderID]string{onboardingImportProviderCodex: filepath.Join(t.TempDir(), "missing-skills")},
-	}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderCodex})
+	_, err := executeSkillImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderCodex, filepath.Join(t.TempDir(), "missing-skills")))
 	if err == nil {
 		t.Fatal("expected missing skill source to fail")
 	}
@@ -267,69 +270,12 @@ func TestExecuteSkillImportDoesNotDeleteEmptyTargetWhenSourceValidationFails(t *
 	}
 }
 
-func TestProviderSkillSymlinkSourcePrefersCodexLocalSkills(t *testing.T) {
-	home := newAppTestHome(t)
-	if err := os.MkdirAll(filepath.Join(home, ".codex", "skills", "local"), 0o755); err != nil {
-		t.Fatalf("mkdir codex local skills: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(home, ".codex", "skills", ".system"), 0o755); err != nil {
-		t.Fatalf("mkdir codex system skills: %v", err)
-	}
-	resolved, err := providerSkillSymlinkSource(onboardingImportProviderCodex)
-	if err != nil {
-		t.Fatalf("provider skill symlink source: %v", err)
-	}
-	expected := filepath.Join(home, ".codex", "skills", "local")
-	if resolved != expected {
-		t.Fatalf("expected codex skill symlink source %q, got %q", expected, resolved)
-	}
-}
-
-func TestDiscoverProviderSkillSymlinkItemsFallsBackWhenPreferredDirectoryIsEmpty(t *testing.T) {
-	home := t.TempDir()
-	provider, ok := onboarding.ByID(onboardingImportProviderCodex)
-	if !ok {
-		t.Fatal("expected codex provider")
-	}
-	base := filepath.Join(home, ".codex")
-	if err := os.MkdirAll(filepath.Join(base, "skills", "local"), 0o755); err != nil {
-		t.Fatalf("mkdir local skills: %v", err)
-	}
-	writeOnboardingTestSkill(t, filepath.Join(base, "skills", "fallback-skill"), "fallback", "from skills root")
-
-	root, items, err := onboarding.DiscoverProviderSkills(provider, base)
-	if err != nil {
-		t.Fatalf("discoverProviderSkillSymlinkItems: %v", err)
-	}
-	expectedRoot := filepath.Join(base, "skills")
-	if root != expectedRoot {
-		t.Fatalf("root = %q, want %q", root, expectedRoot)
-	}
-	if len(items) != 1 || items[0].TargetDirName != "fallback-skill" {
-		t.Fatalf("unexpected discovered items: %+v", items)
-	}
-}
-
-func TestProviderSkillSymlinkSourceErrorsWithoutSkillsRoot(t *testing.T) {
-	home := newAppTestHome(t)
-	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
-		t.Fatalf("mkdir provider home: %v", err)
-	}
-	_, err := providerSkillSymlinkSource(onboardingImportProviderClaudeCode)
-	if err == nil {
-		t.Fatal("expected missing skills root to fail")
-	}
-	if !errors.Is(err, onboarding.ErrSkillsDirectoryNotFound) {
-		t.Fatalf("expected missing skills root error, got %v", err)
-	}
-}
-
 func TestApplyImportChoiceRejectsRemovedCopyModes(t *testing.T) {
 	selection := onboardingImportSelection{}
-	if err := applyImportChoice(&selection, "copy:claude_code"); err == nil {
+	if err := applyImportChoice(&selection, "copy:claude_code", nil); err == nil {
 		t.Fatal("expected removed copy mode to be rejected")
 	}
-	if err := applyImportChoice(&selection, "merge"); err == nil {
+	if err := applyImportChoice(&selection, "merge", nil); err == nil {
 		t.Fatal("expected removed merge mode to be rejected")
 	}
 }
@@ -344,7 +290,7 @@ func TestExecuteCommandImportSymlinksRootDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sourceDir, "review.md"), []byte("review"), 0o644); err != nil {
 		t.Fatalf("write source command: %v", err)
 	}
-	if _, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderClaudeCode}); err != nil {
+	if _, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderClaudeCode, sourceDir)); err != nil {
 		t.Fatalf("execute command import: %v", err)
 	}
 	targetPath := filepath.Join(globalRoot, "prompts")
@@ -374,7 +320,7 @@ func TestExecuteCommandImportSymlinksAgentsRootDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sourceDir, "review.md"), []byte("review"), 0o644); err != nil {
 		t.Fatalf("write source command: %v", err)
 	}
-	if _, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderAgents}); err != nil {
+	if _, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderAgents, sourceDir)); err != nil {
 		t.Fatalf("execute command import: %v", err)
 	}
 	targetPath := filepath.Join(globalRoot, "prompts")
@@ -390,9 +336,7 @@ func TestExecuteCommandImportSymlinksAgentsRootDirectory(t *testing.T) {
 func TestExecuteCommandImportValidatesSourceDirectory(t *testing.T) {
 	globalRoot := t.TempDir()
 	missingSource := filepath.Join(t.TempDir(), "missing-prompts")
-	_, err := executeCommandImport(globalRoot, onboardingImportDiscovery{
-		commandSymlinkRoots: map[onboardingImportProviderID]string{onboardingImportProviderClaudeCode: missingSource},
-	}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderClaudeCode})
+	_, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderClaudeCode, missingSource))
 	if err == nil {
 		t.Fatal("expected missing command source to fail")
 	}
@@ -408,9 +352,7 @@ func TestExecuteCommandImportDoesNotDeleteEmptyTargetWhenSourceValidationFails(t
 		t.Fatalf("mkdir empty target: %v", err)
 	}
 
-	_, err := executeCommandImport(globalRoot, onboardingImportDiscovery{
-		commandSymlinkRoots: map[onboardingImportProviderID]string{onboardingImportProviderClaudeCode: filepath.Join(t.TempDir(), "missing-prompts")},
-	}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderClaudeCode})
+	_, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderClaudeCode, filepath.Join(t.TempDir(), "missing-prompts")))
 	if err == nil {
 		t.Fatal("expected missing command source to fail")
 	}
@@ -441,7 +383,7 @@ func TestExecuteCommandImportFallsBackToPromptsWhenCommandsHasNoDirectMarkdown(t
 		t.Fatalf("write prompt command: %v", err)
 	}
 
-	if _, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderClaudeCode}); err != nil {
+	if _, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderClaudeCode, promptsDir)); err != nil {
 		t.Fatalf("execute command import: %v", err)
 	}
 	targetPath := filepath.Join(globalRoot, "prompts")
@@ -465,7 +407,7 @@ func TestExecuteCommandImportFallsBackToAgentsPromptsWhenCommandsMissing(t *test
 		t.Fatalf("write prompt command: %v", err)
 	}
 
-	if _, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderAgents}); err != nil {
+	if _, err := executeCommandImport(globalRoot, onboardingImportDiscovery{}, testImportSelection(onboardingImportProviderAgents, promptsDir)); err != nil {
 		t.Fatalf("execute command import: %v", err)
 	}
 	targetPath := filepath.Join(globalRoot, "prompts")
@@ -525,15 +467,19 @@ func TestOnboardingModelCtrlHTogglesMultiSelect(t *testing.T) {
 }
 
 func TestBuildSkillSelectionScreenAddsToggleAllOptionWhenThereAreMoreThanTwoItems(t *testing.T) {
+	choiceID := "test-choice"
+	sourceRoot := t.TempDir()
 	state := &onboardingFlowState{
-		imports: onboardingImportDiscovery{skillSymlinkItems: map[onboardingImportProviderID][]onboardingSkillImportItem{
-			onboardingImportProviderCodex: {
-				{ID: "codex:one", Provider: onboardingImportProviderCodex, ProviderLabel: "Codex", TargetDirName: "one", SkillName: "one"},
-				{ID: "codex:two", Provider: onboardingImportProviderCodex, ProviderLabel: "Codex", TargetDirName: "two", SkillName: "two"},
-				{ID: "codex:three", Provider: onboardingImportProviderCodex, ProviderLabel: "Codex", TargetDirName: "three", SkillName: "three"},
+		skillImport: testImportSelection(onboardingImportProviderCodex, sourceRoot),
+		imports: onboardingImportDiscovery{skillEnablementByChoice: map[string][]onboardingSkillImportItem{
+			choiceID: {
+				{ID: "codex:one", Provider: testImportProviderPtr(onboardingImportProviderCodex), ProviderLabel: "Codex", TargetDirName: "one", SkillName: "one", DefaultEnabled: true},
+				{ID: "codex:two", Provider: testImportProviderPtr(onboardingImportProviderCodex), ProviderLabel: "Codex", TargetDirName: "two", SkillName: "two", DefaultEnabled: true},
+				{ID: "codex:three", Provider: testImportProviderPtr(onboardingImportProviderCodex), ProviderLabel: "Codex", TargetDirName: "three", SkillName: "three", DefaultEnabled: true},
 			},
+		}, skillChoices: []onboardingImportChoice{
+			{OptionID: choiceID, Mode: onboardingImportModeSymlinkSource, Provider: testImportProviderPtr(onboardingImportProviderCodex), SourceRoot: &sourceRoot, Ref: testImportSelection(onboardingImportProviderCodex, sourceRoot).ChoiceRef},
 		}},
-		skillImport: onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderCodex},
 	}
 	screen := buildSkillSelectionScreen(state)
 	if len(screen.Options) == 0 || screen.Options[0].ID != onboardingToggleAllOptionID {
@@ -544,36 +490,11 @@ func TestBuildSkillSelectionScreenAddsToggleAllOptionWhenThereAreMoreThanTwoItem
 	}
 }
 
-func TestDiscoverOnboardingImportsIncludesGeneratedSkillCandidates(t *testing.T) {
-	home := newAppTestHome(t)
-
-	discovery := discoverOnboardingImportsForWorkspace(filepath.Join(home, config.ConfigDirName), "")
-	if discovery.err != nil {
-		t.Fatalf("discover onboarding imports: %v", discovery.err)
-	}
-	if len(discovery.generatedSkillItems) == 0 {
-		t.Fatal("expected generated skills to be listed during onboarding")
-	}
-
-	seen := map[string]bool{}
-	for _, item := range discovery.generatedSkillItems {
-		seen[item.SkillName] = true
-		if item.ProviderLabel != "Preinstalled" {
-			t.Fatalf("expected generated skill provider label Preinstalled, got %+v", item)
-		}
-	}
-	for _, name := range []string{"kent-dogfooding", "creating-skills"} {
-		if !seen[name] {
-			t.Fatalf("expected generated skill %q in onboarding candidates, got %+v", name, discovery.generatedSkillItems)
-		}
-	}
-}
-
 func TestBuildSkillSelectionScreenShowsGeneratedSkillsWithoutImport(t *testing.T) {
 	state := &onboardingFlowState{
 		imports: onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
-			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding"},
-			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills"},
+			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
+			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
 		}},
 		skillImport: onboardingImportSelection{Mode: onboardingImportModeNone},
 	}
@@ -597,8 +518,8 @@ func TestBuildSkillSelectionScreenShowsGeneratedSkillsWithoutImport(t *testing.T
 func TestBuildSkillTogglesCanDisableGeneratedSkillWithoutImport(t *testing.T) {
 	state := &onboardingFlowState{
 		imports: onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
-			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding"},
-			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills"},
+			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
+			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
 		}},
 		skillImport: onboardingImportSelection{Mode: onboardingImportModeNone},
 	}
@@ -612,48 +533,16 @@ func TestBuildSkillTogglesCanDisableGeneratedSkillWithoutImport(t *testing.T) {
 	}
 }
 
-func TestSkillSelectionCandidatesHideGeneratedSkillsShadowedByExistingSkills(t *testing.T) {
-	state := &onboardingFlowState{
-		imports: onboardingImportDiscovery{
-			existingSkillNames: map[string]bool{"kent-dogfooding": true},
-			generatedSkillItems: []onboardingSkillImportItem{
-				{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding"},
-				{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills"},
-			},
-		},
-	}
-	items := skillSelectionCandidates(state)
-	if len(items) != 1 || items[0].SkillName != "creating-skills" {
-		t.Fatalf("expected only unshadowed generated skill, got %+v", items)
-	}
-}
-
-func TestDiscoverOnboardingImportsHidesGeneratedSkillsShadowedByWorkspaceSkills(t *testing.T) {
-	home := newAppTestHome(t)
-	workspace := t.TempDir()
-	writeOnboardingTestSkill(t, filepath.Join(workspace, config.ConfigDirName, "skills", "kent-dogfooding"), "kent-dogfooding", "workspace override")
-
-	discovery := discoverOnboardingImportsForWorkspace(filepath.Join(home, config.ConfigDirName), workspace)
-	if discovery.err != nil {
-		t.Fatalf("discover onboarding imports: %v", discovery.err)
-	}
-	for _, item := range skillSelectionCandidates(&onboardingFlowState{imports: discovery}) {
-		if strings.ToLower(strings.Join(strings.Fields(item.SkillName), " ")) == "kent-dogfooding" {
-			t.Fatalf("expected workspace skill to shadow generated kent-dogfooding, got %+v", item)
-		}
-	}
-}
-
 func TestReviewSummaryIncludesGeneratedSkillSelectionWithoutImport(t *testing.T) {
 	state := &onboardingFlowState{
 		settings: config.Settings{
 			Theme:        theme.Auto,
-			Model:        "gpt-5.5",
+			Model:        "gpt-5.6-sol",
 			EnabledTools: map[toolspec.ID]bool{},
 		},
 		imports: onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
-			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding"},
-			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills"},
+			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
+			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
 		}},
 		skillSelection: map[string]bool{
 			"generated:kent-dogfooding": true,
@@ -687,8 +576,8 @@ func TestOnboardingFinalWritePersistsDisabledGeneratedSkillAndRuntimeHonorsIt(t 
 	state := onboardingFlowState{
 		settings: defaultCfg.Settings,
 		imports: onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
-			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding"},
-			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills"},
+			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
+			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
 		}},
 		skillSelection: map[string]bool{
 			"generated:kent-dogfooding": false,

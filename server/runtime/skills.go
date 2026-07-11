@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"core/prompts"
-	generatedassets "core/prompts"
+	"core/server/skillcatalog"
+	"core/shared/config"
 
 	"gopkg.in/yaml.v3"
 )
@@ -25,7 +26,7 @@ var skillsPrompt = strings.TrimSpace(prompts.SkillsPrompt)
 var readSkillsDir = os.ReadDir
 
 // errReadSkillsDirectory wraps failures to read a skills discovery directory.
-var errReadSkillsDirectory = errors.New("read skills directory")
+var errReadSkillsDirectory = skillcatalog.ErrReadSkillsDirectory
 
 type injectedSkill struct {
 	Name        string
@@ -77,57 +78,22 @@ func skillsContextMessageWithDisabled(workspaceRoot string, disabledSkills map[s
 }
 
 func discoverInjectedSkills(workspaceRoot, globalConfigDir string, disabledSkills map[string]bool) ([]injectedSkill, []skillDiscoveryIssue, error) {
-	roots, err := skillDiscoveryRoots(workspaceRoot, globalConfigDir)
+	result, err := skillcatalog.Discover(skillcatalog.Options{
+		WorkspaceRoot:  workspaceRoot,
+		ConfigRoot:     globalConfigDir,
+		DisabledSkills: disabledSkills,
+		ReadDir:        readSkillsDir,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
-	candidates := make([]injectedSkill, 0)
-	issues := make([]skillDiscoveryIssue, 0)
-	userSkillNames := map[string]bool{}
-	seenPaths := map[string]bool{}
-	for _, root := range roots {
-		entries, readErr := readSkillsDir(root.Path)
-		if readErr != nil {
-			if os.IsNotExist(readErr) {
-				continue
-			}
-			return nil, nil, fmt.Errorf("%w %q: %w", errReadSkillsDirectory, root.Path, readErr)
-		}
-		for _, entry := range entries {
-			resolution := resolveSkillDir(root.Path, entry)
-			if resolution.Issue != nil {
-				issues = append(issues, *resolution.Issue)
-			}
-			if !resolution.Discoverable {
-				continue
-			}
-			skillPath := filepath.Join(resolution.SkillDir, skillFileName)
-			skill, ok := parseInjectedSkill(skillPath)
-			if !ok {
-				continue
-			}
-			if seenPaths[skill.Path] {
-				continue
-			}
-			seenPaths[skill.Path] = true
-			skill.SourceKind = root.Kind
-			candidates = append(candidates, skill)
-			if root.Kind != skillSourceGenerated {
-				userSkillNames[strings.ToLower(sanitizeSkillSingleLine(skill.Name))] = true
-			}
-		}
+	out := make([]injectedSkill, 0, len(result.Skills))
+	for _, skill := range result.Skills {
+		out = append(out, injectedSkill{Name: skill.Name, Description: skill.Description, Path: skill.Path, SourceKind: skillSourceKind(skill.SourceKind)})
 	}
-
-	out := make([]injectedSkill, 0, len(candidates))
-	for _, skill := range candidates {
-		nameKey := strings.ToLower(sanitizeSkillSingleLine(skill.Name))
-		if disabledSkills[nameKey] {
-			continue
-		}
-		if skill.SourceKind == skillSourceGenerated && userSkillNames[nameKey] {
-			continue
-		}
-		out = append(out, skill)
+	issues := make([]skillDiscoveryIssue, 0, len(result.Issues))
+	for _, issue := range result.Issues {
+		issues = append(issues, skillDiscoveryIssue{Name: issue.Name, Path: issue.Path, Reason: issue.Reason})
 	}
 	return out, issues, nil
 }
@@ -195,31 +161,14 @@ func formatSkillDiscoveryWarning(issue skillDiscoveryIssue) string {
 }
 
 func skillDiscoveryRoots(workspaceRoot, globalConfigDir string) ([]skillRoot, error) {
-	globalDir, err := resolveGlobalConfigDir(globalConfigDir)
+	catalogRoots, err := skillcatalog.Roots(workspaceRoot, globalConfigDir)
 	if err != nil {
 		return nil, err
 	}
-
-	roots := make([]skillRoot, 0, 3)
-	seen := map[string]bool{}
-	addPath := func(path string, kind skillSourceKind) {
-		cleaned := filepath.Clean(path)
-		if cleaned == "" || seen[cleaned] {
-			return
-		}
-		seen[cleaned] = true
-		roots = append(roots, skillRoot{Path: cleaned, Kind: kind})
+	roots := make([]skillRoot, 0, len(catalogRoots))
+	for _, root := range catalogRoots {
+		roots = append(roots, skillRoot{Path: root.Path, Kind: skillSourceKind(root.Kind)})
 	}
-
-	addPath(filepath.Join(globalDir, skillsDirName), skillSourceGlobal)
-	if strings.TrimSpace(workspaceRoot) != "" {
-		addPath(filepath.Join(workspaceRoot, agentsGlobalDirName, skillsDirName), skillSourceWorkspace)
-	}
-	generatedRoot, err := generatedassets.GeneratedSkillsRootFor(globalConfigDir)
-	if err != nil {
-		return nil, err
-	}
-	addPath(generatedRoot, skillSourceGenerated)
 	return roots, nil
 }
 
@@ -256,7 +205,7 @@ func parseInjectedSkill(path string) (injectedSkill, bool) {
 }
 
 func ParseSkillMetadata(path string) (SkillMetadata, bool) {
-	skill, ok := parseInjectedSkill(path)
+	skill, ok := skillcatalog.ParseSkillMetadata(path)
 	if !ok {
 		return SkillMetadata{}, false
 	}
@@ -301,7 +250,7 @@ func normalizedDisabledSkills(disabledSkills map[string]bool) map[string]bool {
 		if !disabled {
 			continue
 		}
-		key := strings.ToLower(sanitizeSkillSingleLine(name))
+		key := config.NormalizeSkillName(name)
 		if key == "" {
 			continue
 		}

@@ -22,7 +22,7 @@ import (
 
 func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "keep this draft"
 
@@ -57,7 +57,7 @@ func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 
 func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "steer after review"
 
@@ -65,9 +65,6 @@ func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	started := next.(*uiModel)
 	if !started.isReviewerRunning() {
 		t.Fatal("expected reviewer to be running")
-	}
-	if started.isInputSubmitLocked() {
-		t.Fatal("did not expect input lock while reviewer is running")
 	}
 
 	next, _ = started.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -77,9 +74,6 @@ func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	}
 	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "steer after review" {
 		t.Fatalf("expected reviewer steering injected for earliest flush, got %+v", updated.pendingInjected)
-	}
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect submit lock while waiting for reviewer steering flush")
 	}
 	if updated.input != "" {
 		t.Fatalf("expected input cleared immediately after queueing reviewer steering, got %q", updated.input)
@@ -487,7 +481,7 @@ func TestHelpToggleClearsRollbackEscArming(t *testing.T) {
 	if updated.helpVisible {
 		t.Fatal("expected esc to dismiss help")
 	}
-	if testRollbackSelecting(updated) {
+	if updated.rollback.isSelecting() {
 		t.Fatal("did not expect esc after help toggle to open rollback selection")
 	}
 	if updated.lastEscAt.IsZero() {
@@ -560,60 +554,5 @@ func TestTranscriptToggleClosesVisibleHelp(t *testing.T) {
 	}
 	if updated.view.Mode() != tui.ModeDetail {
 		t.Fatalf("expected detail mode after transcript toggle, got %q", updated.view.Mode())
-	}
-}
-
-func TestHelpRollbackSelectionDismissesAndMovesSelection(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
-	m.transcriptEntries = []tui.TranscriptEntry{{Role: "user", Text: "one"}, {Role: "assistant", Text: "a"}, {Role: "user", Text: "two"}}
-	seedTestRollbackTargets(m)
-	if !m.startRollbackSelectionMode() {
-		t.Fatal("expected rollback selection mode to start")
-	}
-	m.layout().syncViewport()
-
-	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})
-	updated := next.(*uiModel)
-	updated.rollback.selection = 0
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = next.(*uiModel)
-
-	if updated.helpVisible {
-		t.Fatal("expected rollback selection key to dismiss help")
-	}
-	if testRollbackSelection(updated) != 1 {
-		t.Fatalf("expected rollback selection to move, got %d", testRollbackSelection(updated))
-	}
-}
-
-func TestHelpRollbackEditDismissesAndReturnsToSelection(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
-	m.transcriptEntries = []tui.TranscriptEntry{{Role: "user", Text: "one"}, {Role: "assistant", Text: "a"}, {Role: "user", Text: "two"}}
-	seedTestRollbackTargets(m)
-	if !m.startRollbackSelectionMode() {
-		t.Fatal("expected rollback selection mode to start")
-	}
-	if _, ok := m.beginRollbackEditing(); !ok {
-		t.Fatal("expected rollback editing mode to start")
-	}
-	m.input = ""
-	m.layout().syncViewport()
-
-	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-
-	if updated.helpVisible {
-		t.Fatal("expected rollback edit key to dismiss help")
-	}
-	if !testRollbackSelecting(updated) || testRollbackEditing(updated) {
-		t.Fatalf("expected esc to return to rollback selection, rollbackMode=%t rollbackEditing=%t", testRollbackSelecting(updated), testRollbackEditing(updated))
 	}
 }

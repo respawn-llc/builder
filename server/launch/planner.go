@@ -34,7 +34,7 @@ const (
 // session execution target into a newly created child session.
 type MetadataExecutionTargetStore interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
-	UpdateSessionExecutionTargetByID(ctx context.Context, sessionID string, workspaceID string, worktreeID string, cwdRelpath string) error
+	UpdateSessionExecutionTarget(ctx context.Context, update metadata.SessionExecutionTargetUpdate) error
 	DeleteSessionRecordByID(ctx context.Context, sessionID string) error
 	Close() error
 }
@@ -59,17 +59,22 @@ type SessionRequest struct {
 }
 
 type SessionPlan struct {
-	Store               *session.Store
-	ActiveSettings      config.Settings
-	BaseSettings        config.Settings
-	EnabledTools        []toolspec.ID
-	ConfiguredModelName string
-	SessionName         string
-	PromptHistory       []string
-	ModelContractLocked bool
-	WorkspaceRoot       string
-	Source              config.SourceReport
-	BaseSource          config.SourceReport
+	Store                               *session.Store
+	ActiveSettings                      config.Settings
+	BaseSettings                        config.Settings
+	EnabledTools                        []toolspec.ID
+	ConfiguredModelName                 string
+	SessionName                         string
+	PromptHistory                       []string
+	ModelContractLocked                 bool
+	SkipContinuationAgentRoleValidation bool
+	WorkspaceRoot                       string
+	Source                              config.SourceReport
+	BaseSource                          config.SourceReport
+}
+
+type RunPromptOverrideOptions struct {
+	AllowLockedAgentRoleChange bool
 }
 
 type PromptFacingSnapshotResolution struct {
@@ -80,21 +85,37 @@ type PromptFacingSnapshotResolution struct {
 }
 
 func ResolvePromptFacingSnapshotConfig(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (PromptFacingSnapshotResolution, error) {
+	plan, err := ResolvePromptFacingSnapshotPlan(app, store, skipContinuationAgentRoleValidation)
+	if err != nil {
+		return PromptFacingSnapshotResolution{}, err
+	}
+	return PromptFacingSnapshotResolution{
+		Settings:      plan.ActiveSettings,
+		Source:        plan.Source,
+		ActiveToolIDs: plan.EnabledTools,
+		WebSearchMode: strings.TrimSpace(plan.ActiveSettings.WebSearch),
+	}, nil
+}
+
+// ResolvePromptFacingSnapshotPlan reconstructs the request-facing session plan
+// from a persisted store without creating or selecting a session. It is shared
+// by diagnostic paths that need the same settings, source, tools, and
+// locked-contract semantics as launch planning.
+func ResolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (SessionPlan, error) {
 	if store == nil {
-		return PromptFacingSnapshotResolution{}, errors.New("session store is required")
+		return SessionPlan{}, errors.New("session store is required")
 	}
 	meta := store.Meta()
 	baseActive := EffectiveSettings(app.Settings, meta.Locked)
 	baseSource := app.Source
 	active, source := baseActive, baseSource
 	if meta.Continuation != nil {
-		role := strings.TrimSpace(meta.Continuation.AgentRole)
 		var err error
-		active, source, err = applyPersistedSubagentRoleSettings(baseActive, baseSource, role, meta.Locked == nil, !skipContinuationAgentRoleValidation)
+		active, source, err = applyPersistedSubagentRoleSettings(baseActive, baseSource, meta.Continuation.AgentRole, meta.Locked == nil, !skipContinuationAgentRoleValidation)
 		if err != nil {
-			return PromptFacingSnapshotResolution{}, err
+			return SessionPlan{}, err
 		}
-		if shouldApplyPersistedContinuationBaseURL(baseActive, role) {
+		if shouldApplyPersistedContinuationBaseURL(baseActive, meta.Continuation.AgentRole) {
 			if baseURL := strings.TrimSpace(meta.Continuation.OpenAIBaseURL); baseURL != "" {
 				active.OpenAIBaseURL = baseURL
 			}
@@ -102,23 +123,37 @@ func ResolvePromptFacingSnapshotConfig(app config.App, store *session.Store, ski
 	}
 	enabledTools, err := ActiveToolIDsForPlan(active, source, meta.Locked)
 	if err != nil {
-		return PromptFacingSnapshotResolution{}, err
+		return SessionPlan{}, err
 	}
 	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
-			EnabledTools:    toolIDNames(enabledTools),
+			EnabledTools:    toolspec.IDStrings(enabledTools),
 			HasEnabledTools: true,
 			WebSearchMode:   strings.TrimSpace(active.WebSearch),
 		})
 		if backfillErr != nil && !backfill.Committed {
-			return PromptFacingSnapshotResolution{}, backfillErr
+			return SessionPlan{}, backfillErr
+		}
+		if backfill.Committed && backfill.Locked != nil {
+			meta.Locked = backfill.Locked
 		}
 	}
-	return PromptFacingSnapshotResolution{
-		Settings:      active,
-		Source:        source,
-		ActiveToolIDs: enabledTools,
-		WebSearchMode: strings.TrimSpace(active.WebSearch),
+	configuredModelName := app.Settings.Model
+	if meta.Locked == nil {
+		configuredModelName = active.Model
+	}
+	return SessionPlan{
+		Store:                               store,
+		ActiveSettings:                      active,
+		BaseSettings:                        baseActive,
+		EnabledTools:                        enabledTools,
+		ConfiguredModelName:                 configuredModelName,
+		SessionName:                         meta.Name,
+		ModelContractLocked:                 meta.Locked != nil,
+		SkipContinuationAgentRoleValidation: skipContinuationAgentRoleValidation,
+		WorkspaceRoot:                       app.WorkspaceRoot,
+		Source:                              source,
+		BaseSource:                          baseSource,
 	}, nil
 }
 
@@ -142,10 +177,10 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	meta := store.Meta()
 	baseActive := EffectiveSettings(p.Config.Settings, meta.Locked)
 	baseSource := p.Config.Source
-	continuationAgentRole := ""
+	var continuationAgentRole *string
 	continuationBaseURL := ""
 	if meta.Continuation != nil {
-		continuationAgentRole = strings.TrimSpace(meta.Continuation.AgentRole)
+		continuationAgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
 		continuationBaseURL = strings.TrimSpace(meta.Continuation.OpenAIBaseURL)
 	}
 	active, source := baseActive, baseSource
@@ -171,7 +206,7 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	}
 	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
-			EnabledTools:    toolIDNames(enabledTools),
+			EnabledTools:    toolspec.IDStrings(enabledTools),
 			HasEnabledTools: true,
 			WebSearchMode:   strings.TrimSpace(active.WebSearch),
 		})
@@ -187,47 +222,52 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		configuredModelName = active.Model
 	}
 	return SessionPlan{
-		Store:               store,
-		ActiveSettings:      active,
-		BaseSettings:        baseActive,
-		EnabledTools:        enabledTools,
-		ConfiguredModelName: configuredModelName,
-		SessionName:         meta.Name,
-		ModelContractLocked: meta.Locked != nil,
-		WorkspaceRoot:       p.Config.WorkspaceRoot,
-		Source:              source,
-		BaseSource:          baseSource,
+		Store:                               store,
+		ActiveSettings:                      active,
+		BaseSettings:                        baseActive,
+		EnabledTools:                        enabledTools,
+		ConfiguredModelName:                 configuredModelName,
+		SessionName:                         meta.Name,
+		ModelContractLocked:                 meta.Locked != nil,
+		SkipContinuationAgentRoleValidation: req.SkipContinuationAgentRoleValidation,
+		WorkspaceRoot:                       p.Config.WorkspaceRoot,
+		Source:                              source,
+		BaseSource:                          baseSource,
 	}, nil
 }
 
-func applyPersistedSubagentRoleSettings(base config.Settings, source config.SourceReport, roleName string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, error) {
-	normalizedRole := config.NormalizeSubagentSelector(roleName)
-	if normalizedRole == "" {
+func applyPersistedSubagentRoleSettings(base config.Settings, source config.SourceReport, roleName *string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, error) {
+	if roleName == nil {
 		return base, source, nil
 	}
-	role, hasRole := base.Subagents[normalizedRole]
-	if !hasRole && normalizedRole != config.BuiltInSubagentRoleFast {
+	lookup := config.LookupSubagentRole(base, *roleName)
+	if lookup.Status == config.SubagentRoleLookupInvalid {
+		return base, source, nil
+	}
+	if lookup.Status == config.SubagentRoleLookupMissing {
 		return base, source, nil
 	}
 	providerSettings := cloneSettings(base)
-	applySubagentProviderOverrides(&providerSettings, role)
-	resolved, effectiveSource, _, err := resolveSubagentSettingsWithProviderID(base, source, normalizedRole, persistedRoleProviderID(providerSettings), allowModelOverride, validate)
+	applySubagentProviderOverrides(&providerSettings, lookup.Role)
+	resolved, effectiveSource, _, err := resolveSubagentSettingsWithProviderID(base, source, *lookup.NormalizedSelector, persistedRoleProviderID(providerSettings), allowModelOverride, validate)
 	if err != nil {
 		return config.Settings{}, config.SourceReport{}, err
 	}
 	return resolved, effectiveSource, nil
 }
 
-func shouldApplyPersistedContinuationBaseURL(base config.Settings, roleName string) bool {
-	normalizedRole := config.NormalizeSubagentSelector(roleName)
-	if normalizedRole == "" {
+func shouldApplyPersistedContinuationBaseURL(base config.Settings, roleName *string) bool {
+	if roleName == nil {
 		return true
 	}
-	role, hasRole := base.Subagents[normalizedRole]
-	if !hasRole && normalizedRole != config.BuiltInSubagentRoleFast {
+	lookup := config.LookupSubagentRole(base, *roleName)
+	if lookup.Status == config.SubagentRoleLookupInvalid {
+		return true
+	}
+	if lookup.Status == config.SubagentRoleLookupMissing {
 		return false
 	}
-	_, hasRoleBaseURL := role.Sources["openai_base_url"]
+	_, hasRoleBaseURL := lookup.Role.Sources["openai_base_url"]
 	return !hasRoleBaseURL
 }
 
@@ -252,12 +292,16 @@ func persistedRoleProviderID(settings config.Settings) string {
 }
 
 func ApplyRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State) (SessionPlan, []string, error) {
-	return applyRunPromptOverridesWithBudgetApplier(plan, overrides, authState, applyDerivedModelContextBudgetOverrides)
+	return ApplyRunPromptOverridesWithOptions(plan, overrides, authState, RunPromptOverrideOptions{})
+}
+
+func ApplyRunPromptOverridesWithOptions(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
+	return applyRunPromptOverridesWithBudgetApplier(plan, overrides, authState, options, applyDerivedModelContextBudgetOverrides)
 }
 
 type modelContextBudgetApplier func(settings *config.Settings, explicitSources map[string]string, originalModel string, allowModelOverride bool)
 
-func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
+func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
 	if !overrides.HasAny() {
 		return plan, nil, nil
 	}
@@ -272,30 +316,50 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 		baseSource = plan.Source
 	}
 	shouldPersistContinuation := false
-	continuationAgentRole := ""
+	var continuationAgentRole *string
 	if plan.Store.Meta().Continuation != nil {
-		continuationAgentRole = strings.TrimSpace(plan.Store.Meta().Continuation.AgentRole)
+		continuationAgentRole = cloneContinuationRole(plan.Store.Meta().Continuation.AgentRole)
 	}
+	activeToolLock := plan.Store.Meta().Locked
+	if options.AllowLockedAgentRoleChange {
+		activeToolLock = nil
+	}
+	staleLockedPromptFacingContract := false
 	persistContinuation := func() error {
-		return next.Store.SetContinuationContext(session.ContinuationContext{
+		ctx := session.ContinuationContext{
 			OpenAIBaseURL: next.ActiveSettings.OpenAIBaseURL,
 			AgentRole:     continuationAgentRole,
-		})
+		}
+		if staleLockedPromptFacingContract {
+			_, err := next.Store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx)
+			return err
+		}
+		return next.Store.SetContinuationContext(ctx)
 	}
 	roleOverride, err := overrides.AgentRoleOverride()
 	if err != nil {
 		return SessionPlan{}, nil, fmt.Errorf("%w: %v", errInvalidAgentRole, err)
 	}
+	var requestedContinuationRole *string
+	if roleOverride.Present && !roleOverride.Default {
+		requestedContinuationRole = cloneContinuationRole(&roleOverride.Role)
+	}
+	if roleOverride.Present && plan.ModelContractLocked && !sameContinuationRole(continuationAgentRole, requestedContinuationRole) && !options.AllowLockedAgentRoleChange && !plan.SkipContinuationAgentRoleValidation {
+		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationRoleDisplay(continuationAgentRole), roleOverride.Role)
+	}
+	if roleOverride.Present && plan.ModelContractLocked && !sameContinuationRole(continuationAgentRole, requestedContinuationRole) && options.AllowLockedAgentRoleChange {
+		staleLockedPromptFacingContract = true
+	}
 	if roleOverride.Present {
 		shouldPersistContinuation = true
-		continuationAgentRole = roleOverride.Role
+		continuationAgentRole = requestedContinuationRole
 		next.ActiveSettings = cloneSettings(baseSettings)
 		next.Source = baseSource
 		if !plan.ModelContractLocked {
 			next.ConfiguredModelName = next.ActiveSettings.Model
 		}
 		if roleOverride.Default {
-			enabledTools, err := ActiveToolIDsForPlan(next.ActiveSettings, next.Source, plan.Store.Meta().Locked)
+			enabledTools, err := ActiveToolIDsForPlan(next.ActiveSettings, next.Source, activeToolLock)
 			if err != nil {
 				return SessionPlan{}, nil, err
 			}
@@ -319,7 +383,7 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 			next.ConfiguredModelName = resolved.Model
 		}
 		roleSource := sourceReportWithSubagentRoleSources(baseSource, baseSettings, roleOverride.Role, !plan.ModelContractLocked)
-		enabledTools, err := ActiveToolIDsForPlan(next.ActiveSettings, roleSource, plan.Store.Meta().Locked)
+		enabledTools, err := ActiveToolIDsForPlan(next.ActiveSettings, roleSource, activeToolLock)
 		if err != nil {
 			return SessionPlan{}, nil, err
 		}
@@ -406,6 +470,28 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 	return next, warnings, nil
 }
 
+func continuationRoleDisplay(role *string) string {
+	if role == nil {
+		return config.DefaultSubagentRole
+	}
+	return *role
+}
+
+func cloneContinuationRole(role *string) *string {
+	if role == nil {
+		return nil
+	}
+	copyRole := *role
+	return &copyRole
+}
+
+func sameContinuationRole(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func validateRunPromptOverrideSettings(settings config.Settings, source config.SourceReport) (config.Settings, error) {
 	validated := cloneSettings(settings)
 	sources := cloneStringMap(source.Sources)
@@ -434,12 +520,8 @@ func mergeOverrideSources(base config.SourceReport, override config.SourceReport
 }
 
 func sourceReportWithSubagentRoleSources(base config.SourceReport, settings config.Settings, roleName string, allowModelOverride bool) config.SourceReport {
-	normalizedRole := config.NormalizeSubagentRole(roleName)
-	if normalizedRole == "" {
-		return base
-	}
-	role, ok := settings.Subagents[normalizedRole]
-	if !ok || len(role.Sources) == 0 {
+	lookup := config.LookupSubagentRole(settings, roleName)
+	if lookup.Status != config.SubagentRoleLookupPresent || len(lookup.Role.Sources) == 0 {
 		return base
 	}
 	next := base
@@ -447,7 +529,7 @@ func sourceReportWithSubagentRoleSources(base config.SourceReport, settings conf
 	if !allowModelOverride && strings.TrimSpace(next.Sources["model"]) == "default" {
 		next.Sources["model"] = "session"
 	}
-	for key := range role.Sources {
+	for key := range lookup.Role.Sources {
 		if key == "model" && !allowModelOverride {
 			continue
 		}
@@ -598,7 +680,7 @@ func (p Planner) updateChildExecutionTarget(ctx context.Context, childSessionID 
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	return store.UpdateSessionExecutionTargetByID(ctx, childSessionID, target.WorkspaceID, target.WorktreeID, target.CwdRelpath)
+	return store.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdateFromReadModel(childSessionID, target))
 }
 
 func (p Planner) rollbackChildSession(child *session.Store) error {
@@ -675,17 +757,6 @@ func ActiveToolIDsForPlan(settings config.Settings, source config.SourceReport, 
 		return nil, ErrPatchEditToolsConflict
 	}
 	return DedupeSortToolIDs(enabledToolIDs(enabled)), nil
-}
-
-func toolIDNames(ids []toolspec.ID) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		out = append(out, string(id))
-	}
-	return out
 }
 
 func bothEditToolSourcesDefault(source config.SourceReport) bool {

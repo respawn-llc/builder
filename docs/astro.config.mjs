@@ -1,14 +1,29 @@
 import { defineConfig } from 'astro/config';
+import { satteri } from '@astrojs/markdown-satteri';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightDocSearch from '@astrojs/starlight-docsearch';
-import remarkGfm from 'remark-gfm';
 import starlightLlmsTxt from 'starlight-llms-txt';
 
 import { resolveDocsConfig } from './scripts/site-config.mjs';
 
 const docsConfig = resolveDocsConfig();
 const socialPreviewUrl = docsConfig.getPublicUrl(docsConfig.socialPreviewPath);
+// Apply the local Search override after starlightDocSearch installs its virtual
+// config module, avoiding the plugin's false-positive "custom Search" warning.
+const kentDocSearchLifecyclePlugin = {
+  name: 'kent-docsearch-lifecycle',
+  hooks: {
+    'config:setup'({ config, updateConfig }) {
+      updateConfig({
+        components: {
+          ...config.components,
+          Search: './src/components/Search.astro',
+        },
+      });
+    },
+  },
+};
 
 export default defineConfig({
   output: 'static',
@@ -79,13 +94,15 @@ export default defineConfig({
         },
       ],
       editLink: {
-        baseUrl: docsConfig.repoEditRootUrl,
+        baseUrl: docsConfig.docsProjectEditRootUrl,
       },
       customCss: ['./src/styles/custom.css'],
+      pagefind: false,
       markdown: {
         headingLinks: true,
       },
       components: {
+        Head: './src/components/Head.astro',
         Header: './src/components/Header.astro',
         MobileMenuFooter: './src/components/MobileMenuFooter.astro',
         Footer: './src/components/Footer.astro',
@@ -108,6 +125,7 @@ export default defineConfig({
           apiKey: docsConfig.docSearch.apiKey,
           indexName: docsConfig.docSearch.indexName,
         }),
+        kentDocSearchLifecyclePlugin,
         starlightLlmsTxt({
           projectName: docsConfig.siteTitle,
           description: 'Kent terminal coding agent documentation.',
@@ -199,6 +217,11 @@ export default defineConfig({
     sitemap(),
   ],
   markdown: {
-    remarkPlugins: [remarkGfm],
+    processor: satteri({
+      features: {
+        gfm: true,
+        smartPunctuation: true,
+      },
+    }),
   },
 });

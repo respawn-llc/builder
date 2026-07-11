@@ -1,8 +1,6 @@
 #[cfg(target_os = "macos")]
 mod platform {
-    use objc2::{
-        runtime::{AnyClass, NSObjectProtocol},
-    };
+    use objc2::runtime::{AnyClass, NSObjectProtocol};
     use objc2_app_kit::{
         NSAutoresizingMaskOptions, NSColor, NSGlassEffectView, NSGlassEffectViewStyle,
         NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,

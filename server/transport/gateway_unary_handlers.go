@@ -72,7 +72,24 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			if bootstrapClient == nil {
 				return serverapi.AuthCompleteBootstrapResponse{}, serverapi.ErrServerAuthRequired
 			}
-			return bootstrapClient.CompleteAuthBootstrap(ctx, params)
+			resp, err := bootstrapClient.CompleteAuthBootstrap(ctx, params)
+			if err == nil {
+				state.noAuthAccepted = resp.NoAuthSelected
+			}
+			return resp, err
+		})
+	},
+	protocol.MethodAuthAcknowledgeNoAuth: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+			bootstrapClient := g.deps.AuthBootstrapClient()
+			if bootstrapClient == nil {
+				return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
+			}
+			resp, err := bootstrapClient.AcknowledgeNoAuth(ctx, params)
+			if err == nil {
+				state.noAuthAccepted = resp.NoAuthSelected
+			}
+			return resp, err
 		})
 	},
 	protocol.MethodAuthGetStatus: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
@@ -83,6 +100,22 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			}
 			return statusClient.GetAuthStatus(ctx, params)
 		})
+	},
+	protocol.MethodCapabilityFactsGet: gatewayClientCall[client.CapabilityFactsClient, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, client.CapabilityFactsClient.GetCapabilityFacts),
+	protocol.MethodOnboardingFinalize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		params, err := decodeParams[serverapi.OnboardingFinalizeRequest](req.Params)
+		if err != nil {
+			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+		}
+		finalizeClient := g.deps.OnboardingFinalizeClient()
+		if finalizeClient == nil {
+			return responseForError(req.ID, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil))
+		}
+		resp, err := finalizeClient.FinalizeOnboarding(ctx, params)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		return protocol.NewSuccessResponse(req.ID, resp)
 	},
 	protocol.MethodAttachProject: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params protocol.AttachProjectRequest) (protocol.AttachResponse, error) {
@@ -150,6 +183,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowDeletePreview:         gatewayClientCall[client.WorkflowClient, serverapi.WorkflowDeletePreviewRequest, serverapi.WorkflowDeletePreviewResponse](GatewayDependencies.WorkflowClient, client.WorkflowClient.PreviewWorkflowDelete),
 	protocol.MethodWorkflowDelete:                gatewayClientCall[client.WorkflowClient, serverapi.WorkflowDeleteRequest, serverapi.WorkflowDeleteResponse](GatewayDependencies.WorkflowClient, client.WorkflowClient.DeleteWorkflow),
 	protocol.MethodWorkflowValidate:              gatewayClientCall[client.WorkflowClient, serverapi.WorkflowValidateRequest, serverapi.WorkflowValidateResponse](GatewayDependencies.WorkflowClient, client.WorkflowClient.ValidateWorkflow),
+	protocol.MethodWorkflowScriptPathValidate:    gatewayClientCall[client.WorkflowClient, serverapi.WorkflowScriptPathValidateRequest, serverapi.WorkflowValidateResponse](GatewayDependencies.WorkflowClient, client.WorkflowClient.ValidateWorkflowScriptPath),
 	protocol.MethodWorkflowGraphValidateDraft:    gatewayClientCall[client.WorkflowClient, serverapi.WorkflowGraphValidateDraftRequest, serverapi.WorkflowGraphValidateDraftResponse](GatewayDependencies.WorkflowClient, client.WorkflowClient.ValidateWorkflowGraphDraft),
 	protocol.MethodWorkflowGraphDeriveWiring:     gatewayClientCall[client.WorkflowClient, serverapi.WorkflowGraphDeriveWiringRequest, serverapi.WorkflowGraphDeriveWiringResponse](GatewayDependencies.WorkflowClient, client.WorkflowClient.DeriveWorkflowGraphWiring),
 	protocol.MethodWorkflowGraphSavePreview:      gatewayClientCall[client.WorkflowClient, serverapi.WorkflowGraphSavePreviewRequest, serverapi.WorkflowGraphSavePreviewResponse](GatewayDependencies.WorkflowClient, client.WorkflowClient.PreviewWorkflowGraphSave),
@@ -185,17 +219,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			return launchClient.PlanSession(ctx, params)
 		})
 	},
-	protocol.MethodSessionGetMainView:       gatewayClientCall[client.SessionViewClient, serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](GatewayDependencies.SessionViewClient, client.SessionViewClient.GetSessionMainView),
-	protocol.MethodSessionGetTranscriptPage: gatewayClientCall[client.SessionViewClient, serverapi.SessionTranscriptPageRequest, serverapi.SessionTranscriptPageResponse](GatewayDependencies.SessionViewClient, client.SessionViewClient.GetSessionTranscriptPage),
-	protocol.MethodSessionGetCommittedTranscriptSuffix: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
-			suffixClient, ok := g.deps.SessionViewClient().(client.SessionCommittedTranscriptSuffixClient)
-			if !ok {
-				return serverapi.SessionCommittedTranscriptSuffixResponse{}, errors.New("session committed transcript suffix client is required")
-			}
-			return suffixClient.GetSessionCommittedTranscriptSuffix(ctx, params)
-		})
-	},
+	protocol.MethodSessionGetMainView:          gatewayClientCall[client.SessionViewClient, serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](GatewayDependencies.SessionViewClient, client.SessionViewClient.GetSessionMainView),
+	protocol.MethodSessionGetTranscriptPage:    gatewayClientCall[client.SessionViewClient, serverapi.SessionTranscriptPageRequest, serverapi.SessionTranscriptPageResponse](GatewayDependencies.SessionViewClient, client.SessionViewClient.GetSessionTranscriptPage),
 	protocol.MethodSessionGetInitialInput:      gatewayClientCall[client.SessionLifecycleClient, serverapi.SessionInitialInputRequest, serverapi.SessionInitialInputResponse](GatewayDependencies.SessionLifecycleClient, client.SessionLifecycleClient.GetInitialInput),
 	protocol.MethodSessionPersistInputDraft:    gatewayClientCall[client.SessionLifecycleClient, serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](GatewayDependencies.SessionLifecycleClient, client.SessionLifecycleClient.PersistInputDraft),
 	protocol.MethodSessionRetargetWorkspace:    gatewayClientCall[client.SessionLifecycleClient, serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](GatewayDependencies.SessionLifecycleClient, client.SessionLifecycleClient.RetargetSessionWorkspace),
@@ -209,8 +234,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ActivateSessionRuntime(ctx, params)
-			if err == nil && !resp.ReadOnly {
-				state.recordOwnedRuntimeLease(params.SessionID, resp.LeaseID)
+			if err == nil {
+				state.recordOwnedRuntime(params.SessionID)
 			}
 			return resp, err
 		})
@@ -219,8 +244,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ReleaseSessionRuntime(ctx, params)
-			if err == nil && resp.Released {
-				state.removeOwnedRuntimeLease(params.SessionID, params.LeaseID)
+			if err == nil && (resp.Released || params.DropOwner) {
+				state.removeOwnedRuntime(params.SessionID)
 			}
 			return resp, err
 		})
@@ -233,15 +258,17 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodRuntimeSetQuestionsEnabled:            gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeSetQuestionsEnabledRequest, serverapi.RuntimeSetQuestionsEnabledResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.SetQuestionsEnabled),
 	protocol.MethodRuntimeAppendCommittedEntry:           gatewayClientCallNoResponse[client.RuntimeControlClient, serverapi.RuntimeAppendCommittedEntryRequest](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.AppendCommittedEntry),
 	protocol.MethodRuntimeShouldCompactBeforeUserMessage: gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeShouldCompactBeforeUserMessageRequest, serverapi.RuntimeShouldCompactBeforeUserMessageResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.ShouldCompactBeforeUserMessage),
-	protocol.MethodRuntimeSubmitUserMessage:              gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeSubmitUserMessageRequest, serverapi.RuntimeSubmitUserMessageResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.SubmitUserMessage),
 	protocol.MethodRuntimeSubmitUserTurn:                 gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.SubmitUserTurn),
 	protocol.MethodRuntimeSubmitUserShellCommand:         gatewayClientCallNoResponse[client.RuntimeControlClient, serverapi.RuntimeSubmitUserShellCommandRequest](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.SubmitUserShellCommand),
 	protocol.MethodRuntimeCompactContext:                 gatewayClientCallNoResponse[client.RuntimeControlClient, serverapi.RuntimeCompactContextRequest](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.CompactContext),
 	protocol.MethodRuntimeCompactContextForPreSubmit:     gatewayClientCallNoResponse[client.RuntimeControlClient, serverapi.RuntimeCompactContextForPreSubmitRequest](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.CompactContextForPreSubmit),
 	protocol.MethodRuntimeHasQueuedUserWork:              gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeHasQueuedUserWorkRequest, serverapi.RuntimeHasQueuedUserWorkResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.HasQueuedUserWork),
 	protocol.MethodRuntimeSubmitQueuedUserMessages:       gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeSubmitQueuedUserMessagesRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.SubmitQueuedUserMessages),
-	protocol.MethodRuntimeInterrupt:                      gatewayClientCallNoResponse[client.RuntimeControlClient, serverapi.RuntimeInterruptRequest](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.Interrupt),
+	protocol.MethodRuntimeInterrupt:                      gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.Interrupt),
 	protocol.MethodRuntimeQueueUserMessage:               gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeQueueUserMessageRequest, serverapi.RuntimeQueueUserMessageResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.QueueUserMessage),
+	protocol.MethodRuntimeLiveSteer:                      gatewayClientCall[client.RuntimeLiveControlClient, serverapi.RuntimeLiveSteerRequest, serverapi.RuntimeLiveSteerResponse](GatewayDependencies.RuntimeLiveControlClient, client.RuntimeLiveControlClient.LiveSteer),
+	protocol.MethodRuntimeLiveStop:                       gatewayClientCall[client.RuntimeLiveControlClient, serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](GatewayDependencies.RuntimeLiveControlClient, client.RuntimeLiveControlClient.LiveStop),
+	protocol.MethodRuntimeLiveWait:                       gatewayClientCall[client.RuntimeLiveControlClient, serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](GatewayDependencies.RuntimeLiveControlClient, client.RuntimeLiveControlClient.LiveWait),
 	protocol.MethodRuntimeDiscardQueuedUserMessage:       gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.DiscardQueuedUserMessage),
 	protocol.MethodRuntimeRecordPromptHistory:            gatewayClientCallNoResponse[client.RuntimeControlClient, serverapi.RuntimeRecordPromptHistoryRequest](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.RecordPromptHistory),
 	protocol.MethodRuntimeGoalShow:                       gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.ShowGoal),

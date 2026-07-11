@@ -1,4 +1,5 @@
 import { createAutoNativeBridge, type NativePlatform } from "@app/native-bridge";
+import { z } from "zod";
 
 import { ApiClient, createJsonRpcTransport } from "./api";
 import { ConnectionStore } from "./api/connectionStore";
@@ -15,6 +16,7 @@ const platformAttribute = "data-platform";
 const themeAttribute = "data-theme";
 const nativeDialogThemeSearchParam = "__appTheme";
 let productionContextMenuGuardInstalled = false;
+const stringValueSchema = z.string();
 
 export async function createDefaultAppServices(): Promise<AppServices> {
   installProductionContextMenuGuard(import.meta.env.PROD);
@@ -145,7 +147,7 @@ export function readEffectiveTheme(): AppTheme {
       return configured;
     }
   }
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+  if (typeof window === "undefined" || !(window.matchMedia instanceof Function)) {
     return "dark";
   }
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
@@ -167,8 +169,9 @@ function readBrowserRpcEndpointSearchParam(): string | null {
 
 function firstNonEmptyString(...values: readonly unknown[]): string | null {
   for (const value of values) {
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value;
+    const parsed = stringValueSchema.safeParse(value);
+    if (parsed.success && parsed.data.trim().length > 0) {
+      return parsed.data;
     }
   }
   return null;
@@ -228,8 +231,9 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
-  if (typeof error === "string") {
-    return error;
+  const parsed = stringValueSchema.safeParse(error);
+  if (parsed.success) {
+    return parsed.data;
   }
   return "Unknown native context error.";
 }

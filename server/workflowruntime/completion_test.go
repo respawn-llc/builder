@@ -1,6 +1,7 @@
 package workflowruntime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -8,6 +9,8 @@ import (
 
 	"core/server/llm"
 	"core/server/workflow"
+	"core/server/workflowattention"
+	"core/server/workflowstore"
 	"core/shared/config"
 )
 
@@ -51,6 +54,63 @@ func TestSelectCompletionMode(t *testing.T) {
 				t.Fatalf("mode = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStoreControllerFinalizesWorkflowAttentionAfterCompleteRun(t *testing.T) {
+	store := &recordingCompletionStore{result: workflowstore.CompleteRunResult{TransitionID: "transition-1", State: "pending_approval", InterruptedRunIDs: []workflow.RunID{"run-script"}}}
+	finalizer := &recordingCompletionAttentionFinalizer{}
+	controller := StoreController{Store: store, AttentionFinalizer: finalizer}
+
+	result, err := controller.CompleteWorkflowRun(context.Background(), CompletionRequest{RunID: "run-1", TransitionID: "done"})
+	if err != nil {
+		t.Fatalf("CompleteWorkflowRun: %v", err)
+	}
+	if result.TransitionID != "transition-1" || result.State != "pending_approval" {
+		t.Fatalf("completion result = %+v", result)
+	}
+	if len(finalizer.results) != 1 || finalizer.results[0].TransitionID != "transition-1" || finalizer.results[0].State != "pending_approval" {
+		t.Fatalf("attention finalizer results = %+v", finalizer.results)
+	}
+	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != "run-script" {
+		t.Fatalf("interrupted run finalizations = %+v, want run-script", finalizer.interruptedRuns)
+	}
+}
+
+func TestStoreControllerFinalizesInterruptedRunAfterProtocolViolationInterruptsRun(t *testing.T) {
+	store := &recordingCompletionStore{protocolResult: workflowstore.RecordProtocolViolationResult{Count: 2, Interrupted: true}}
+	finalizer := &recordingCompletionAttentionFinalizer{}
+	controller := StoreController{Store: store, AttentionFinalizer: finalizer}
+
+	result, err := controller.RecordWorkflowProtocolViolation(context.Background(), ViolationRequest{RunID: "run-1", Kind: ViolationKindInvalidCompletion, MaxCount: 2})
+	if err != nil {
+		t.Fatalf("RecordWorkflowProtocolViolation: %v", err)
+	}
+	if result.Count != 2 || !result.Interrupted {
+		t.Fatalf("violation result = %+v", result)
+	}
+	if store.protocolReq.RunID != "run-1" || store.protocolReq.Kind != workflowstore.ProtocolViolationInvalidCompletion {
+		t.Fatalf("protocol request = %+v", store.protocolReq)
+	}
+	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != "run-1" {
+		t.Fatalf("interrupted run finalizations = %+v, want run-1", finalizer.interruptedRuns)
+	}
+}
+
+func TestStoreControllerResetsProtocolViolationBudget(t *testing.T) {
+	store := &recordingCompletionStore{}
+	controller := StoreController{Store: store}
+
+	err := controller.ResetWorkflowProtocolViolationBudget(context.Background(), ViolationResetRequest{
+		RunID:              "run-1",
+		ExpectedGeneration: 7,
+		RequireGeneration:  true,
+	})
+	if err != nil {
+		t.Fatalf("ResetWorkflowProtocolViolationBudget: %v", err)
+	}
+	if store.resetReq.RunID != "run-1" || store.resetReq.ExpectedGeneration != 7 || !store.resetReq.RequireGeneration {
+		t.Fatalf("reset request = %+v", store.resetReq)
 	}
 }
 
@@ -370,4 +430,44 @@ func TestDecodeCompletionAcceptsNullForUnselectedTransitionParameter(t *testing.
 	if _, exists := parsed.OutputValues["risk"]; exists {
 		t.Fatalf("risk should be omitted after null input: %+v", parsed.OutputValues)
 	}
+}
+
+type recordingCompletionStore struct {
+	result         workflowstore.CompleteRunResult
+	req            workflowstore.CompleteRunRequest
+	protocolResult workflowstore.RecordProtocolViolationResult
+	protocolReq    workflowstore.RecordProtocolViolationRequest
+	resetReq       workflowstore.ResetProtocolViolationBudgetRequest
+}
+
+func (s *recordingCompletionStore) CompleteRun(_ context.Context, req workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error) {
+	s.req = req
+	return s.result, nil
+}
+
+func (s *recordingCompletionStore) RecordProtocolViolation(_ context.Context, req workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error) {
+	s.protocolReq = req
+	return s.protocolResult, nil
+}
+
+func (s *recordingCompletionStore) ResetProtocolViolationBudget(_ context.Context, req workflowstore.ResetProtocolViolationBudgetRequest) error {
+	s.resetReq = req
+	return nil
+}
+
+func (s *recordingCompletionStore) GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error) {
+	panic("GetRun not expected")
+}
+
+type recordingCompletionAttentionFinalizer struct {
+	results         []workflowattention.TransitionResult
+	interruptedRuns []workflow.RunID
+}
+
+func (f *recordingCompletionAttentionFinalizer) FinalizeTransition(_ context.Context, result workflowattention.TransitionResult) {
+	f.results = append(f.results, result)
+}
+
+func (f *recordingCompletionAttentionFinalizer) FinalizeInterruptedRun(_ context.Context, runID workflow.RunID) {
+	f.interruptedRuns = append(f.interruptedRuns, runID)
 }

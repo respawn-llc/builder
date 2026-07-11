@@ -78,7 +78,7 @@ func TestBootstrapAppHeadlessUsesEnvAPIKeyWithoutPersistingAuthState(t *testing.
 		t.Fatalf("expected no persisted auth state at %q, got err=%v", authPath, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
-		t.Fatalf("expected config bootstrap artifacts to exist: %v", err)
+		t.Fatalf("expected test settings to remain available: %v", err)
 	}
 }
 
@@ -151,6 +151,37 @@ func TestBootstrapAppNoAuthPreferenceDoesNotOpenAuthPicker(t *testing.T) {
 	}
 }
 
+func TestBootstrapAppRequiredNoAuthPreferenceDoesNotOpenAuthPicker(t *testing.T) {
+	home, workspace := newRegisteredAppWorkspace(t)
+	if err := os.MkdirAll(filepath.Join(home, config.ConfigDirName), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, config.ConfigDirName, "config.toml"), []byte("model = \"gpt-5\"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
+	store := auth.NewFileStore(config.GlobalAuthConfigPath(cfg))
+	if err := store.Save(context.Background(), auth.State{
+		Scope:               auth.ScopeGlobal,
+		Method:              auth.Method{Type: auth.MethodNone},
+		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
+	}); err != nil {
+		t.Fatalf("save no-auth state: %v", err)
+	}
+	interactor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			t.Fatal("persisted no-auth under required auth must not open auth picker")
+			return authMethodPickerResult{}, nil
+		},
+	}
+
+	boot, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, interactor, true)
+	if err != nil {
+		t.Fatalf("bootstrap app: %v", err)
+	}
+	defer func() { _ = boot.Close() }()
+}
+
 func TestResolveSessionActionLogoutUsesBootstrapAuthInteractor(t *testing.T) {
 	ctx := context.Background()
 	mgr := auth.NewManager(auth.NewMemoryStore(auth.State{
@@ -188,7 +219,6 @@ func TestResolveSessionActionLogoutUsesBootstrapAuthInteractor(t *testing.T) {
 		&testEmbeddedServer{cfg: config.App{PersistenceRoot: root, Settings: config.Settings{Model: "gpt-5"}}, authManager: mgr},
 		interactor,
 		store.Meta().SessionID,
-		"lease-test-controller",
 		UITransition{Action: UIActionLogout},
 	)
 	if err != nil {
@@ -244,7 +274,6 @@ func TestResolveSessionActionLogoutAllowsNilStore(t *testing.T) {
 		&testEmbeddedServer{authManager: mgr},
 		interactor,
 		"",
-		"",
 		UITransition{Action: UIActionLogout},
 	)
 	if err != nil {
@@ -281,7 +310,6 @@ func TestResolveSessionActionLogoutCancelPreservesStoredAuth(t *testing.T) {
 		ctx,
 		&testEmbeddedServer{cfg: config.App{Settings: config.Settings{Model: "gpt-5"}}, authManager: mgr},
 		interactor,
-		"",
 		"",
 		UITransition{Action: UIActionLogout},
 	)
@@ -361,7 +389,6 @@ func TestResolveSessionActionLogoutRetryPreservesStoredAuthUntilSuccess(t *testi
 		&testEmbeddedServer{cfg: config.App{Settings: config.Settings{Model: "gpt-5"}}, authManager: mgr},
 		interactor,
 		"",
-		"",
 		UITransition{Action: UIActionLogout},
 	)
 	if err != nil {
@@ -411,7 +438,6 @@ func TestResolveSessionActionLogoutPickerFailurePreservesStoredAuth(t *testing.T
 		ctx,
 		&testEmbeddedServer{cfg: config.App{Settings: config.Settings{Model: "gpt-5"}}, authManager: mgr},
 		interactor,
-		"",
 		"",
 		UITransition{Action: UIActionLogout},
 	)
@@ -594,7 +620,6 @@ func TestResolveSessionActionLoginSkipClearsStoredAuthOnOptionalAuthSetup(t *tes
 		ctx,
 		&testEmbeddedServer{cfg: config.App{Settings: config.Settings{Model: "gpt-5", OpenAIBaseURL: "http://127.0.0.1:8080/v1"}}, authManager: mgr},
 		interactor,
-		"",
 		"",
 		UITransition{Action: UIActionLogout},
 	)

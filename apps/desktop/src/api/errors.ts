@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type RpcErrorInfo = Readonly<{
   code: number;
   message: string;
@@ -52,16 +54,18 @@ export class ServerRootMismatchError extends Error {
 }
 
 export function errorMessage(error: unknown): string {
-  if (typeof error === "string") {
-    return normalizeMessage(error);
+  const stringError = z.string().safeParse(error);
+  if (stringError.success) {
+    return normalizeMessage(stringError.data);
   }
   if (error instanceof Error) {
     return normalizeMessage(error.message);
   }
-  if (hasStringMessage(error)) {
-    return normalizeMessage(error.message);
+  const messageObject = z.object({ message: z.string() }).safeParse(error);
+  if (messageObject.success) {
+    return normalizeMessage(messageObject.data.message);
   }
-  if (isObject(error)) {
+  if (error !== null && Object(error) === error) {
     try {
       return normalizeMessage(JSON.stringify(error));
     } catch {
@@ -74,12 +78,4 @@ export function errorMessage(error: unknown): string {
 function normalizeMessage(message: string): string {
   const trimmed = message.trim();
   return trimmed.length > 0 ? trimmed : "Unknown error";
-}
-
-function hasStringMessage(error: unknown): error is Readonly<{ message: string }> {
-  return isObject(error) && typeof error.message === "string";
-}
-
-function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null;
 }

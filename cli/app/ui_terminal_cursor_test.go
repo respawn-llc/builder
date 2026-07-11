@@ -416,8 +416,8 @@ func TestMainInputCursorUsesSharedFieldDisplayWidth(t *testing.T) {
 	if !cursor.Visible {
 		t.Fatal("expected main input cursor")
 	}
-	if cursor.Row != 1 || cursor.Col != 6 {
-		t.Fatalf("cursor = %+v, want row 1 col 6", cursor)
+	if cursor.Row != framedInputContentCursorRow(0) || cursor.Col != 6 {
+		t.Fatalf("cursor = %+v, want framed content row %d col 6", cursor, framedInputContentCursorRow(0))
 	}
 	view := m.View()
 	assertRenderedLinesFitWidth(t, view, m.termWidth)
@@ -442,30 +442,13 @@ func TestAskInputCursorUsesSharedFieldDisplayWidth(t *testing.T) {
 	if !cursor.Visible {
 		t.Fatal("expected ask input cursor")
 	}
-	if cursor.Row != 2 || cursor.Col != 6 {
-		t.Fatalf("cursor = %+v, want row 2 col 6", cursor)
+	if cursor.Row != framedInputContentCursorRow(1) || cursor.Col != 6 {
+		t.Fatalf("cursor = %+v, want framed content row %d col 6", cursor, framedInputContentCursorRow(1))
 	}
 	view := m.View()
 	assertRenderedLinesFitWidth(t, view, m.termWidth)
 	if !strings.Contains(xansi.Strip(view), "› ab👍cd") {
 		t.Fatalf("expected ask input text rendered through shared field, got %q", view)
-	}
-}
-
-func TestTerminalCursorHiddenWhenInputLocked(t *testing.T) {
-	state := newUITerminalCursorState()
-	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
-	m.termWidth = 24
-	m.termHeight = 10
-	m.windowSizeKnown = true
-	m.setInputSubmitLocked(true)
-	m.input = "locked"
-	m.layout().syncViewport()
-
-	view := m.View()
-	assertRenderedLinesFitWidth(t, view, m.termWidth)
-	if _, ok := state.Snapshot(); ok {
-		t.Fatal("did not expect real terminal cursor placement while input is locked")
 	}
 }
 
@@ -565,10 +548,7 @@ func TestRealCursorFrameMarkerNotRenderedWithoutRealCursor(t *testing.T) {
 
 func TestRealCursorFrameMarkerNotRenderedInDetailMode(t *testing.T) {
 	state := newUITerminalCursorState()
-	m := newProjectedStaticUIModel(
-		WithUITerminalCursorState(state),
-		WithUIInitialTranscript([]UITranscriptEntry{{Role: "assistant", Text: "history"}}),
-	)
+	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
 	m.termWidth = 24
 	m.termHeight = 10
 	m.windowSizeKnown = true
@@ -695,46 +675,10 @@ func TestTerminalCursorProgramTracksWrappedInputAndResize(t *testing.T) {
 	}
 }
 
-func TestTerminalCursorProgramStartupReplayAfterClearScreenKeepsOngoingOutputVisible(t *testing.T) {
-	state := newUITerminalCursorState()
-	model := newProjectedStaticUIModel(
-		WithUITerminalCursorState(state),
-		WithUIInitialTranscript([]UITranscriptEntry{{Role: "assistant", Text: "startup replay marker"}}),
-	)
-
-	var out bytes.Buffer
-	program := tea.NewProgram(
-		model,
-		tea.WithInput(strings.NewReader("")),
-		tea.WithOutput(newUITerminalCursorWriter(&out, state)),
-		tea.WithoutSignals(),
-	)
-	done := make(chan error, 1)
-	go func() {
-		_, err := program.Run()
-		done <- err
-	}()
-	defer program.Quit()
-
-	program.Send(tea.WindowSizeMsg{Width: 80, Height: 20})
-	waitForTestCondition(t, 2*time.Second, "visible ongoing output after startup clear-screen replay", func() bool {
-		tail := terminalOutputAfterLastClearScreen(out.String())
-		plain := stripANSIAndTrimRight(tail)
-		return strings.Contains(plain, "startup replay marker")
-	})
-	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("program run failed: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("program did not terminate")
-	}
-
-	if plain := stripANSIAndTrimRight(terminalOutputAfterLastClearScreen(out.String())); strings.TrimSpace(plain) == "" {
-		t.Fatalf("expected nonblank ongoing output after final clear screen, got raw %q", out.String())
-	}
+func terminalCursorOutputContains(state *uiTerminalCursorState, out *bytes.Buffer, want string) bool {
+	state.writeMu.Lock()
+	defer state.writeMu.Unlock()
+	return strings.Contains(out.String(), want)
 }
 
 func terminalOutputAfterLastClearScreen(output string) string {
@@ -747,10 +691,7 @@ func terminalOutputAfterLastClearScreen(output string) string {
 
 func TestTerminalCursorProgramSurvivesAltScreenTransitionAfterPlacement(t *testing.T) {
 	state := newUITerminalCursorState()
-	model := newProjectedStaticUIModel(
-		WithUITerminalCursorState(state),
-		WithUIInitialTranscript([]UITranscriptEntry{{Role: "assistant", Text: "history marker"}}),
-	)
+	model := newProjectedStaticUIModel(WithUITerminalCursorState(state))
 	model.input = "wrapped input before alt transition"
 	model.inputCursor = -1
 
@@ -774,12 +715,12 @@ func TestTerminalCursorProgramSurvivesAltScreenTransitionAfterPlacement(t *testi
 		return ok
 	})
 	program.Send(tea.KeyMsg{Type: tea.KeyShiftTab})
-	waitForTestCondition(t, 2*time.Second, "detail alt-screen active", func() bool {
-		return model.view.Mode() == "detail" && model.altScreenActive
+	waitForTestCondition(t, 2*time.Second, "alt-screen enter flushed to output", func() bool {
+		return terminalCursorOutputContains(state, &out, "\x1b[?1049h")
 	})
 	program.Send(tea.KeyMsg{Type: tea.KeyShiftTab})
-	waitForTestCondition(t, 2*time.Second, "ongoing mode restored", func() bool {
-		return model.view.Mode() == "ongoing" && !model.altScreenActive
+	waitForTestCondition(t, 2*time.Second, "alt-screen exit flushed to output", func() bool {
+		return terminalCursorOutputContains(state, &out, "\x1b[?1049l")
 	})
 	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
 	select {
@@ -794,9 +735,6 @@ func TestTerminalCursorProgramSurvivesAltScreenTransitionAfterPlacement(t *testi
 	raw := out.String()
 	if !strings.Contains(raw, "\x1b[?1049h") || !strings.Contains(raw, "\x1b[?1049l") {
 		t.Fatalf("expected alt-screen enter/exit in output, got %q", raw)
-	}
-	if !strings.Contains(strings.Join(strings.Fields(xansi.Strip(raw)), " "), "history marker") {
-		t.Fatalf("expected output to remain coherent across alt-screen transition, got %q", raw)
 	}
 }
 

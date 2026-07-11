@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowValidation } from "../../api";
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
 import { layoutWorkflowGraph, workflowGraphLayoutWithDraftProjection } from "./workflowGraphLayout";
-import { workflowGraphAbsoluteNodeRect, workflowGraphEndpointPoint } from "./workflowGraphLayoutTestHelpers";
+import {
+  workflowGraphAbsoluteNodeRect,
+  workflowGraphEndpointPoint,
+} from "../../test-support/workflow-editor/workflowGraphLayoutTestHelpers";
+
+const nodeHeightSchema = z.number();
 
 describe("layoutWorkflowGraph", () => {
   it("builds grouped workflow graph nodes and labeled edges", async () => {
@@ -293,7 +299,8 @@ function nodeCenterY(node: WorkflowGraphNode | undefined): number | undefined {
   if (node === undefined) {
     return undefined;
   }
-  const height = typeof node.style?.height === "number" ? node.style.height : Number(node.style?.height);
+  const parsedHeight = nodeHeightSchema.safeParse(node.style?.height);
+  const height = parsedHeight.success ? parsedHeight.data : Number(node.style?.height);
   return node.position.y + height / 2;
 }
 

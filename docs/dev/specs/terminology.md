@@ -118,11 +118,15 @@ Per-transition-branch policy for the next node's execution context:
 
 ### Context Source
 
-Per-transition-branch policy deciding which earlier run supplies the source session for continuation modes. `immediate_source` uses the run that produced the selected transition. `node:<node_key>` selects the latest completed run for a guaranteed-prior agent node. `previous_target` selects the latest completed run of the transition branch target.
+Per-transition-branch policy deciding which earlier run supplies the source session for continuation modes. `immediate_source` uses the run that produced the selected transition. `node:<node_key>` selects the latest completed run for a guaranteed-prior agent node. `previous_target` selects the latest completed run of the transition branch target and requires that a matching run exists. `previous_target_or_new` selects the latest completed target run when one exists and otherwise starts the target with an effective new session.
 
 ### Run
 
-One durable execution attempt for a node on a task. A run may create or continue a Kent session, call tools, ask questions, produce a transition result, and terminate with a structured outcome.
+One durable execution attempt for an executable node on a task. Agent runs create or continue a Kent session. Script runs execute a local server-side executable. A run may call tools, ask questions, produce a transition result, and terminate with a structured outcome.
+
+### Script Node
+
+A workflow executable node that runs a local executable on the Kent server instead of starting an agent session. It reads incoming workflow parameter values from JSON stdin, writes workflow completion JSON to stdout, and uses stderr only for diagnostics.
 
 ### Interrupted Run
 
@@ -130,7 +134,7 @@ A run stopped before producing a valid transition result. Its session and worktr
 
 ### Session Contract
 
-The execution setup captured by a Kent session for one compaction generation. Model/provider setup, generation parameters, active enabled tool IDs, and native web-search mode stay locked for the session lifetime. System and reviewer prompt snapshots are immutable within a generation and can be lazily refreshed from current config/source truth after successful compaction. Developer meta context messages are transcript entries, not lazy-refreshed session-contract snapshots. Tool declarations for locked tool IDs are runtime-defined and are not persisted as session snapshots.
+The execution setup captured by a Kent session for one contract generation. Model/provider setup, generation parameters, active enabled tool IDs, and native web-search mode stay locked within that generation. `compact_and_continue_session` starts a fresh target-node contract generation; ordinary compaction can lazily refresh system and reviewer prompt snapshots from current config/source truth within its generation. Developer meta context messages are transcript entries, not lazy-refreshed session-contract snapshots. Tool declarations for locked tool IDs are runtime-defined and are not persisted as session snapshots.
 
 ### Runtime Parameter Contract
 
@@ -206,7 +210,7 @@ Primary long-running TUI mode backed by normal-buffer terminal scrollback. Ongoi
 
 ### Detail Mode
 
-Transcript inspection mode with UI-local selection, expansion, and line-oriented viewport scrolling. Detail content can update while open, but scroll/anchor behavior stays stable unless the user navigates.
+Transcript inspection mode with UI-local selection, expansion, and line-oriented viewport scrolling over stale bounded cursor pages. Server-backed page membership changes through initial mode-entry hydration, session-target replacement, and user-triggered adjacent-page loads. Runtime events never append to or reconcile the current detail page membership while it is open.
 
 ### Transcript Mode
 
@@ -236,15 +240,63 @@ Terminal-owned history of normal-buffer output. Kent does not replay, clear, or 
 
 ### Active Session Runtime
 
-The live runtime a session registers while it is running. It exists independently of who is driving it: a run owner may hold it, or it may be registered but idle between activations.
+The single shared live runtime (engine) a session registers while active. There is exactly one engine per session; every interactive client and any headless or workflow run resolves and drives that same shared engine through its queue/steer/exclusive-step boundary. It exists independently of any particular client and may be registered but idle between activations.
 
-### Run Owner
+### RuntimeActivity
 
-The headless or workflow run that holds the session's primary-run lease for the whole run and drives the runtime loop. While a run owns the session, no other writer drives the step loop.
+The server-owned live read model for whether a session runtime is unavailable, starting/reserved, registered idle, running, awaiting prompt/approval, draining, or closing, including the active kind for exclusive work such as a user turn, goal loop, compaction, shell, or background step. Clients use `RuntimeActivity` as the active/idle authority; session database run rows, transcript rows, goal status, and client-local booleans are not liveness sources.
 
-### Limited-Control Attach
+### ReadModelVersion
 
-An interactive client attached to a session whose active runtime is owned by a run. It gets a live view plus steering (queued user messages) and the allowed controls (goal, settings, compaction, worktree, process view), but not controller ownership. A limited-control attach to a running workflow task may steer and chat as usual; the only workflow-specific limit is that the model cannot submit a structured-output final answer that is invalid for the node. When no active runtime is reachable for an attach, the failure surfaces as the typed runtime-unavailable error, not internal wording.
+The single per-session epoch/generation/sequence for server-produced runtime UI facts. Runtime activity, input reconciliation, main-view snapshots, interrupt responses, versioned runtime activity/reconciliation events carried on `SessionActivity`, and migrated prompt read-model stream events all use this version so clients can ignore stale payloads with one ordering rule. It is not the raw `SessionActivity` replay cursor, and response-only versions are ordering points rather than replayable session-stream positions.
+
+### RuntimeOperationRef
+
+A client-created typed identity for an input-bearing runtime operation before dispatch. It names the operation kind and the matching request, queue item, shell, or compact identifier so runtime-control, interrupt, and reconciliation paths never infer input ownership from transcript text.
+
+### RuntimeInputReconciliation
+
+The server-owned read model that tells a client whether a `RuntimeOperationRef` was accepted, committed/submitted, canceled/not committed, failed with restore, or is unknown/evicted. It is delivered under `ReadModelVersion`; input recovery can change while runtime activity does not, but both facts share one runtime UI ordering clock.
+
+### PendingModelRecovery
+
+A non-liveness session recovery marker used to repair model context after an interrupted or crashed provider-visible step. It may describe the step and outstanding tool-call IDs needed for reopen recovery, but it never marks the runtime active, blocks release, or drives UI busy state.
+
+### DraftRecoveryBuffer
+
+Structured persisted local input that should be recoverable after an early TUI exit, including active submitted text, queued messages, pending injected input, reviewer buffers, and related operation refs. It is a retry/recovery payload, not an instruction to auto-submit.
+
+### DraftInputBuffer
+
+A typed hidden/recoverable buffer entry inside `DraftRecoveryBuffer`, such as active submitted text, queued message, pending injected input, locked injected input, or reviewer buffer. The visible prompt text is the `VisibleInput` field on `DraftRecoveryBuffer`, not a `DraftInputBuffer`.
+
+### Forced Local Detach
+
+The second-Ctrl+C exit path for a TUI client while interrupt is pending. The client exits locally and detaches its runtime owner reference without releasing or force-closing a shared daemon runtime; embedded process exit still cleans up local owner state before shutdown.
+
+### Step
+
+One model request/response iteration in the runtime loop, including any tool calls it triggers. Steps run back-to-back to form a turn.
+
+### Turn
+
+A full agent run from a user submission until the runtime returns to idle: the agent produces its final message and no further step is scheduled. A turn is composed of one or more steps.
+
+### Queue
+
+The user-facing TUI action that holds user messages until the current turn ends. Queued messages wait for the runtime to go idle, then drain into the next turn.
+
+### Steer
+
+The user-facing TUI action that injects a message to take effect after the current step ends, mid-turn between steps, rather than waiting for the turn to finish.
+
+### Steer Queue
+
+The internal queue that holds step-end-drained submissions until the current step completes. It is the single submission path for (almost) every message that lands in the transcript — user steering, queued-message flushes, worktree reminders, workflow-step output, mode-change notices, and error messages — built from typed steering intents rather than ad-hoc appenders or direct transcript writes.
+
+### Equal Full-Control Attach
+
+Every client attached to a session is an equal, full-control surface over the shared runtime: there is no ownership, no leases, no controller/limited-control distinction, no read-only attach, and no per-operation gating. The server owns runtime orchestration only (the single shared engine, safe-point application, and persistence), not client authorization.
 
 ### Goal
 

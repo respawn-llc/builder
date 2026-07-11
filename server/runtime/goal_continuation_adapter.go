@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"strings"
 
 	"core/prompts"
@@ -15,11 +14,6 @@ type goalContinuation struct {
 
 func (e *Engine) goalContinuation() goalContinuation {
 	return goalContinuation{engine: e}
-}
-
-func (c goalContinuation) Evaluate(_ context.Context, _ llm.Message) (objectiveOutcome, error) {
-	_, active := c.activeGoal()
-	return objectiveOutcome{Applicable: true, Done: !active}, nil
 }
 
 func (c goalContinuation) activeGoal() (session.GoalState, bool) {
@@ -43,10 +37,10 @@ func (c goalContinuation) nudgeMessage() (llm.Message, bool) {
 	}, c.engine.transcriptWorkingDir()), true
 }
 
-func (c goalContinuation) reminderText() (string, bool) {
+func (c goalContinuation) reminderContext() (string, string, bool) {
 	goal, ok := c.activeGoal()
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	return strings.TrimSpace(prompts.RenderGoalNudgePrompt(goal.Objective, string(goal.Status))), true
+	return strings.TrimSpace(goal.Objective), strings.TrimSpace(prompts.RenderGoalNudgePrompt(goal.Objective, string(goal.Status))), true
 }

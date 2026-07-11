@@ -26,7 +26,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 		return m, tea.Quit
 	}
 	if commandResult.SubmitUser {
-		return m, c.startSubmissionWithPreSubmitQueuePosition(commandResult.User, queuePosition, "", true)
+		return m, c.startSubmissionWithPreSubmitQueuePosition(commandResult.User, queuePosition, "")
 	}
 	prefixCmd := tea.Cmd(nil)
 	if commandResult.Text != "" {
@@ -131,7 +131,7 @@ func (m *uiModel) latestAssistantFinalAnswerFromStatus() string {
 		}
 		return ""
 	}
-	return localLastCommittedAssistantFinalAnswer(m.transcriptEntries)
+	return ""
 }
 
 func (m *uiModel) hasAssistantFinalAnswerToCopy() bool {
@@ -165,22 +165,31 @@ func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Mod
 		if m.hasRuntimeClient() {
 			current = m.cachedRuntimeStatus().ThinkingLevel
 		}
-		if current == "" {
-			current = "unknown"
-		}
-		return m, c.model.appendLocalEntryWithNoticeID("system", "Thinking level is "+current, "")
+		return m, c.model.sendThinkingLevelQueryStatus(current)
 	}
 
 	normalized, ok := clientui.NormalizeThinkingLevel(requested)
 	if !ok {
-		errText := "invalid thinking level " + strconv.Quote(requested) + " (expected low|medium|high|xhigh)"
+		errText := "invalid thinking level " + strconv.Quote(requested) + " (expected low|medium|high|xhigh|max|ultra)"
 		return m, c.model.appendLocalEntryWithNoticeID("error", errText, "")
 	}
 	if m.hasRuntimeClient() {
 		return m, m.runtimeControlCommand(runtimeControlSetThinkingLevel, normalized, false, "")
 	}
 	m.thinkingLevel = normalized
-	return m, c.model.appendLocalEntryWithNoticeID("system", "Thinking level set to "+m.thinkingLevel, "")
+	return m, c.model.sendThinkingLevelSetStatus(m.thinkingLevel)
+}
+
+func (m *uiModel) sendThinkingLevelQueryStatus(level string) tea.Cmd {
+	current := strings.TrimSpace(level)
+	if current == "" {
+		current = "unknown"
+	}
+	return m.sendTransientStatusWithNoticeID("Thinking level is "+current, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
+}
+
+func (m *uiModel) sendThinkingLevelSetStatus(level string) tea.Cmd {
+	return m.sendTransientStatusWithNoticeID("Thinking level set to "+strings.TrimSpace(level), uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, tea.Cmd) {
@@ -259,7 +268,7 @@ func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Mo
 	m.reviewerMode = nextMode
 	m.reviewerEnabled = nextMode != "off"
 	status := serverapi.ReviewerToggleStatusMessage(m.reviewerEnabled, nextMode, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeNeutral)
+	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
 }
 
 func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, tea.Cmd) {
@@ -289,7 +298,7 @@ func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, 
 	}
 	m.questionsEnabled = nextEnabled
 	status := serverapi.QuestionsToggleStatusMessage(nextEnabled, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeNeutral)
+	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
 }
 
 func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Model, tea.Cmd) {
@@ -328,5 +337,5 @@ func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Mo
 	}
 	m.autoCompactionEnabled = nextEnabled
 	status := serverapi.AutoCompactionToggleStatusMessage(nextEnabled, changed, currentCompactionMode)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeNeutral)
+	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
 }

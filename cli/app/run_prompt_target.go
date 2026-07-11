@@ -21,6 +21,7 @@ var dialConfiguredRemote = client.DialConfiguredRemoteForProjectWorkspaceID
 var dialConfiguredProjectViewRemote = func(ctx context.Context, cfg config.App) (remoteattach.ProjectViewRemote, error) {
 	return client.DialConfiguredRemote(ctx, cfg)
 }
+var dialConfiguredRuntimeLiveControlRemote = client.DialConfiguredRemote
 
 var configuredRemoteAttachTimeout = 500 * time.Millisecond
 var configuredRemoteWorkspaceDiscoveryTimeout = 5 * time.Second
@@ -28,9 +29,9 @@ var configuredRemoteWorkspaceDiscoveryTimeout = 5 * time.Second
 type configuredProjectViewRemote = remoteattach.ProjectViewRemote
 
 type runPromptWorkspaceConfig struct {
-	Options          Options
-	Config           config.App
-	ContextAgentRole string
+	Options       Options
+	Config        config.App
+	CallerContext startupconfig.CallerContext
 }
 
 func startRunPromptClient(ctx context.Context, opts Options) (client.RunPromptClient, func() error, error) {
@@ -40,9 +41,7 @@ func startRunPromptClient(ctx context.Context, opts Options) (client.RunPromptCl
 	}
 	opts = workspaceConfig.Options
 	cfg := workspaceConfig.Config
-	kentSessionCaller := strings.TrimSpace(opts.WorkspaceContextSessionID) != ""
-	contextAgentRole := strings.TrimSpace(workspaceConfig.ContextAgentRole)
-	if err := validateRunPromptAgentRole(cfg.Settings, opts.AgentRole, kentSessionCaller, contextAgentRole); err != nil {
+	if err := validateRunPromptAgentRole(cfg.Settings, opts.AgentRole, workspaceConfig.CallerContext); err != nil {
 		return nil, nil, err
 	}
 	// Omitting LaunchDaemon and StartEmbedded keeps kent run a pure client (see
@@ -94,6 +93,32 @@ func startRunPromptClient(ctx context.Context, opts Options) (client.RunPromptCl
 	return target.Value.Client, target.Close, nil
 }
 
+func startRuntimeLiveControlClient(ctx context.Context, opts Options) (client.RuntimeLiveControlClient, func() error, error) {
+	cfg, err := loadRemoteAttachConfig(opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	attachCtx, cancel := context.WithTimeout(ctx, configuredRemoteAttachTimeout)
+	defer cancel()
+	remote, err := dialConfiguredRuntimeLiveControlRemote(attachCtx, cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", errRunRequiresServer, err)
+	}
+	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
+		_ = remote.Close()
+		return nil, nil, errRunServerRootMismatch
+	}
+	if !remoteattach.SupportsRuntimeLiveControl(remote.Identity().Capabilities) {
+		_ = remote.Close()
+		return nil, nil, errRunServerIncompatible
+	}
+	if err := ensureRemoteAuthReady(ctx, remote, cfg.Settings, newHeadlessAuthInteractor(), false); err != nil {
+		_ = remote.Close()
+		return nil, nil, err
+	}
+	return remote, remote.Close, nil
+}
+
 // errRunRequiresServer is returned when no server is reachable for `kent run`.
 var errRunRequiresServer = errors.New("`kent run` can only be used when a server is already running. Start a server with `kent serve` or install a service with `kent service install` to prevent subagents and scripted runs from exiting abruptly if running concurrently with each other")
 
@@ -118,40 +143,43 @@ var (
 	errUnrecognizedSubagentRole = errors.New("unrecognized subagent role")
 )
 
-func validateRunPromptAgentRole(settings config.Settings, rawRole string, kentSessionCaller bool, contextAgentRole string) error {
+func validateRunPromptAgentRole(settings config.Settings, rawRole string, caller startupconfig.CallerContext) error {
+	context, err := callerInvocationContext(caller)
+	if err != nil {
+		return err
+	}
 	override, err := serverapi.RunPromptOverrides{AgentRole: rawRole}.AgentRoleOverride()
 	if err != nil {
 		return err
 	}
 	if !override.Present || override.Default {
-		if kentSessionCaller {
-			if err := validateContextAgentRoleCallable(settings, contextAgentRole); err != nil {
+		if caller.Kind == startupconfig.CallerKindKentSession && caller.AgentRole != nil {
+			if err := validateContextAgentRoleCallable(settings, *caller.AgentRole, context); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	roleName := override.Role
-	role, exists := settings.Subagents[roleName]
-	if !exists && roleName != config.BuiltInSubagentRoleFast {
-		return fmt.Errorf("%w: %s. It may have been removed by the user during the session. Available roles: [%s]", errUnrecognizedSubagentRole, strconv.Quote(roleName), strings.Join(config.AvailableSubagentRoleNames(settings, kentSessionCaller), ", "))
+	lookup := config.LookupSubagentRole(settings, roleName)
+	if lookup.Status != config.SubagentRoleLookupPresent {
+		return fmt.Errorf("%w: %s. It may have been removed by the user during the session. Available roles: [%s]", errUnrecognizedSubagentRole, strconv.Quote(roleName), strings.Join(config.AvailableCallableSubagentRoleNames(settings, context), ", "))
 	}
-	if kentSessionCaller && !config.SubagentRoleCallable(role) {
+	if caller.Kind == startupconfig.CallerKindKentSession && !config.SubagentRoleCallableInContext(settings, roleName, context) {
 		return errNonCallableSubagentRole
 	}
 	return nil
 }
 
-func validateContextAgentRoleCallable(settings config.Settings, rawRole string) error {
-	roleName := config.NormalizeSubagentSelector(rawRole)
-	if roleName == "" {
+func validateContextAgentRoleCallable(settings config.Settings, rawRole string, context config.SubagentInvocationContext) error {
+	lookup := config.LookupSubagentRole(settings, rawRole)
+	if lookup.Status == config.SubagentRoleLookupInvalid {
 		return nil
 	}
-	role, exists := settings.Subagents[roleName]
-	if !exists && roleName != config.BuiltInSubagentRoleFast {
-		return fmt.Errorf("%w: %s. It may have been removed by the user during the session. Available roles: [%s]", errUnrecognizedSubagentRole, strconv.Quote(roleName), strings.Join(config.AvailableSubagentRoleNames(settings, true), ", "))
+	if lookup.Status == config.SubagentRoleLookupMissing {
+		return fmt.Errorf("%w: %s. It may have been removed by the user during the session. Available roles: [%s]", errUnrecognizedSubagentRole, strconv.Quote(*lookup.NormalizedSelector), strings.Join(config.AvailableCallableSubagentRoleNames(settings, context), ", "))
 	}
-	if !config.SubagentRoleCallable(role) {
+	if !config.SubagentRoleCallableInContext(settings, rawRole, context) {
 		return errNonCallableSubagentRole
 	}
 	return nil
@@ -191,7 +219,21 @@ func resolveRunPromptWorkspaceConfig(opts Options) (runPromptWorkspaceConfig, er
 	if strings.TrimSpace(result.ResolvedWorkspaceRoot) != "" && result.ResolvedWorkspaceRoot != opts.WorkspaceRoot {
 		resolvedOpts.WorkspaceRoot = result.ResolvedWorkspaceRoot
 	}
-	return runPromptWorkspaceConfig{Options: resolvedOpts, Config: result.Config, ContextAgentRole: result.ContextAgentRole}, nil
+	return runPromptWorkspaceConfig{Options: resolvedOpts, Config: result.Config, CallerContext: result.CallerContext}, nil
+}
+
+func callerInvocationContext(caller startupconfig.CallerContext) (config.SubagentInvocationContext, error) {
+	switch caller.Kind {
+	case startupconfig.CallerKindHuman:
+		return config.SubagentInvocationContextOrdinary, nil
+	case startupconfig.CallerKindKentSession:
+		if caller.WorkflowSession {
+			return config.SubagentInvocationContextWorkflow, nil
+		}
+		return config.SubagentInvocationContextOrdinary, nil
+	default:
+		return "", errors.New("invalid run-prompt caller context")
+	}
 }
 
 func startupConfigRequest(opts Options) startupconfig.Request {

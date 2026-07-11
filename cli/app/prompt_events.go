@@ -16,7 +16,7 @@ import (
 
 var promptActivityResubscribeDelay = 250 * time.Millisecond
 
-type promptActivitySubscriber func(context.Context, uint64) (serverapi.PromptActivitySubscription, error)
+type promptActivitySubscriber func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error)
 
 type promptEventEmitter struct {
 	mu     sync.RWMutex
@@ -58,7 +58,7 @@ func (e *promptEventEmitter) close() {
 	close(e.out)
 }
 
-func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivitySubscription, subscribe promptActivitySubscriber, control client.PromptControlClient, leaseManager *controllerLeaseManager) (<-chan askEvent, func()) {
+func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivitySubscription, subscribe promptActivitySubscriber, control client.PromptControlClient, notificationFallback attentionNotificationHook) (<-chan askEvent, func()) {
 	emitter := newPromptEventEmitter(16)
 	out := (<-chan askEvent)(emitter.out)
 	if sub == nil || subscribe == nil || control == nil {
@@ -68,7 +68,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 	pollCtx, cancel := context.WithCancel(ctx)
 	var pendingMu sync.Mutex
 	pendingPromptIDs := make(map[string]struct{})
-	var lastSequence uint64
+	var lastReadModelVersion clientui.ReadModelVersion
 	var snapshotMode bool
 	snapshotPromptIDs := make(map[string]struct{})
 	snapshotPendingEvents := make([]clientui.PendingPromptEvent, 0)
@@ -86,7 +86,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 		if !isPromptPending(item.PromptID) {
 			return
 		}
-		_ = emitter.emit(pollCtx, pendingPromptEvent(pollCtx, item, leaseManager, control, requeue))
+		_ = emitter.emit(pollCtx, pendingPromptEvent(pollCtx, item, control, requeue))
 	}
 	go func() {
 		defer emitter.close()
@@ -99,7 +99,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 					return
 				}
 				for {
-					nextSub, replayed, err := resubscribePromptActivity(pollCtx, subscribe, lastSequence)
+					nextSub, replayed, err := resubscribePromptActivity(pollCtx, subscribe, lastReadModelVersion)
 					if err != nil {
 						return
 					}
@@ -134,13 +134,14 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				}
 				pendingMu.Unlock()
 				for _, promptID := range resolved {
-					if !emitter.emit(pollCtx, resolvedPromptEvent(promptID)) {
+					if !emitter.emit(pollCtx, askEvent{resolvedPromptID: strings.TrimSpace(promptID)}) {
 						_ = current.Close()
 						return
 					}
 				}
 				for _, pendingEvt := range pendingEvents {
-					askEvt := pendingPromptEvent(pollCtx, pendingEvt, leaseManager, control, requeue)
+					askEvt := pendingPromptEvent(pollCtx, pendingEvt, control, requeue)
+					notifyPromptActivityFallback(notificationFallback, pendingEvt, clientui.AttentionNotificationSourceSnapshot)
 					if !emitter.emit(pollCtx, askEvt) {
 						_ = current.Close()
 						return
@@ -149,28 +150,24 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				continue
 			}
 			if strings.TrimSpace(evt.PromptID) == "" {
-				if evt.Sequence > lastSequence {
-					lastSequence = evt.Sequence
-				}
+				lastReadModelVersion = newestPromptReadModelVersion(lastReadModelVersion, evt.ReadModelVersion)
 				continue
 			}
-			if evt.Sequence > lastSequence {
-				lastSequence = evt.Sequence
-			}
+			lastReadModelVersion = newestPromptReadModelVersion(lastReadModelVersion, evt.ReadModelVersion)
 			switch evt.Type {
 			case clientui.PendingPromptEventResolved:
 				pendingMu.Lock()
 				delete(pendingPromptIDs, evt.PromptID)
 				pendingMu.Unlock()
-				if !emitter.emit(pollCtx, resolvedPromptEvent(evt.PromptID)) {
+				if !emitter.emit(pollCtx, askEvent{resolvedPromptID: strings.TrimSpace(evt.PromptID)}) {
 					_ = current.Close()
 					return
 				}
 				continue
 			case clientui.PendingPromptEventPending:
 				pendingMu.Lock()
-				isSnapshotPending := snapshotMode && evt.Sequence == 0
-				if snapshotMode && evt.Sequence == 0 {
+				isSnapshotPending := snapshotMode
+				if snapshotMode {
 					snapshotPromptIDs[evt.PromptID] = struct{}{}
 				}
 				if _, exists := pendingPromptIDs[evt.PromptID]; exists {
@@ -187,7 +184,8 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 			default:
 				continue
 			}
-			askEvt := pendingPromptEvent(pollCtx, evt, leaseManager, control, requeue)
+			askEvt := pendingPromptEvent(pollCtx, evt, control, requeue)
+			notifyPromptActivityFallback(notificationFallback, evt, clientui.AttentionNotificationSourceLive)
 			if !emitter.emit(pollCtx, askEvt) {
 				_ = current.Close()
 				return
@@ -197,17 +195,63 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 	return out, cancel
 }
 
-func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubscriber, afterSequence uint64) (serverapi.PromptActivitySubscription, bool, error) {
+func notifyPromptActivityFallback(hook attentionNotificationHook, evt clientui.PendingPromptEvent, source clientui.AttentionNotificationSource) {
+	if hook == nil || evt.Type != clientui.PendingPromptEventPending || strings.TrimSpace(evt.PromptID) == "" {
+		return
+	}
+	occurredAt := evt.CreatedAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	kind := clientui.AttentionNotificationKindQuestion
+	if evt.Approval {
+		kind = clientui.AttentionNotificationKindApproval
+	}
+	notification := clientui.AttentionNotification{
+		ID: clientui.AttentionNotificationID{
+			Kind: kind,
+			UUID: strings.TrimSpace(evt.PromptID),
+		},
+		Kind:       kind,
+		OccurredAt: occurredAt,
+		Revision:   1,
+		Target: clientui.AttentionNotificationTarget{
+			Kind:      clientui.AttentionNotificationTargetSessionPrompt,
+			SessionID: strings.TrimSpace(evt.SessionID),
+		},
+	}
+	if evt.Approval {
+		notification.Approval = &clientui.AttentionNotificationApprovalState{
+			Message: strings.TrimSpace(evt.Question),
+		}
+	} else {
+		notification.Question = &clientui.AttentionNotificationQuestionState{
+			PreparedAskIDs:          []string{strings.TrimSpace(evt.PromptID)},
+			MaterializedAskIDs:      []string{strings.TrimSpace(evt.PromptID)},
+			CurrentUnresolvedAskIDs: []string{strings.TrimSpace(evt.PromptID)},
+			Preview:                 strings.TrimSpace(evt.Question),
+			DisplayCount:            1,
+			MaterializedCount:       1,
+		}
+	}
+	hook.OnAttentionNotification(clientui.AttentionNotificationEvent{
+		Type:    clientui.AttentionNotificationEventPending,
+		Source:  source,
+		Pending: &notification,
+	})
+}
+
+func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubscriber, afterVersion clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, bool, error) {
 	for {
 		if !waitPromptActivityRetry(ctx) {
 			return nil, false, ctx.Err()
 		}
-		sub, err := subscribe(ctx, afterSequence)
+		sub, err := subscribe(ctx, afterVersion)
 		if err == nil {
 			return sub, true, nil
 		}
-		if errors.Is(err, serverapi.ErrStreamGap) && afterSequence > 0 {
-			sub, err := subscribe(ctx, 0)
+		if errors.Is(err, serverapi.ErrStreamGap) && afterVersion != (clientui.ReadModelVersion{}) {
+			sub, err := subscribe(ctx, clientui.ReadModelVersion{})
 			if err == nil {
 				return sub, false, nil
 			}
@@ -216,6 +260,16 @@ func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubs
 			return nil, false, err
 		}
 	}
+}
+
+func newestPromptReadModelVersion(current clientui.ReadModelVersion, incoming clientui.ReadModelVersion) clientui.ReadModelVersion {
+	if incoming == (clientui.ReadModelVersion{}) {
+		return current
+	}
+	if current == (clientui.ReadModelVersion{}) || incoming.NewerThan(current) {
+		return incoming
+	}
+	return current
 }
 
 func waitPromptActivityRetry(ctx context.Context) bool {
@@ -229,7 +283,7 @@ func waitPromptActivityRetry(ctx context.Context) bool {
 	}
 }
 
-func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, leaseManager *controllerLeaseManager, control client.PromptControlClient, retry func(clientui.PendingPromptEvent)) askEvent {
+func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, control client.PromptControlClient, retry func(clientui.PendingPromptEvent)) askEvent {
 	req := item
 	req.Suggestions = append([]string(nil), item.Suggestions...)
 	req.ApprovalOptions = append([]clientui.ApprovalOption(nil), item.ApprovalOptions...)
@@ -249,11 +303,7 @@ func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, l
 			}
 		}
 		if item.Approval {
-			controllerLeaseID := ""
-			if leaseManager != nil {
-				controllerLeaseID = leaseManager.Value()
-			}
-			answerReq := serverapi.ApprovalAnswerRequest{ClientRequestID: uuid.NewString(), SessionID: item.SessionID, ControllerLeaseID: controllerLeaseID, ApprovalID: item.PromptID}
+			answerReq := serverapi.ApprovalAnswerRequest{ClientRequestID: uuid.NewString(), SessionID: item.SessionID, ApprovalID: item.PromptID}
 			if result.err != nil {
 				answerReq.ErrorMessage = result.err.Error()
 			} else if result.response.Approval != nil {
@@ -262,18 +312,14 @@ func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, l
 			} else {
 				answerReq.ErrorMessage = errors.New("approval response is required").Error()
 			}
-			if err := answerPromptApproval(promptCtx, control, leaseManager, answerReq); err != nil {
+			if err := control.AnswerApproval(promptCtx, answerReq); err != nil {
 				if retry != nil && shouldRetryPromptAnswerError(err) {
 					retry(item)
 				}
 			}
 			return
 		}
-		controllerLeaseID := ""
-		if leaseManager != nil {
-			controllerLeaseID = leaseManager.Value()
-		}
-		answerReq := serverapi.AskAnswerRequest{ClientRequestID: uuid.NewString(), SessionID: item.SessionID, ControllerLeaseID: controllerLeaseID, AskID: item.PromptID}
+		answerReq := serverapi.AskAnswerRequest{ClientRequestID: uuid.NewString(), SessionID: item.SessionID, AskID: item.PromptID}
 		if result.err != nil {
 			answerReq.ErrorMessage = result.err.Error()
 		} else {
@@ -281,49 +327,13 @@ func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, l
 			answerReq.SelectedOptionNumber = result.response.SelectedOptionNumber
 			answerReq.FreeformAnswer = result.response.FreeformAnswer
 		}
-		if err := answerPromptAsk(promptCtx, control, leaseManager, answerReq); err != nil {
+		if err := control.AnswerAsk(promptCtx, answerReq); err != nil {
 			if retry != nil && shouldRetryPromptAnswerError(err) {
 				retry(item)
 			}
 		}
 	}()
 	return askEvent{req: req, reply: reply, cancel: cancelPrompt}
-}
-
-func answerPromptAsk(ctx context.Context, control client.PromptControlClient, leaseManager *controllerLeaseManager, req serverapi.AskAnswerRequest) error {
-	err := control.AnswerAsk(ctx, req)
-	if !errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		return err
-	}
-	if leaseManager == nil {
-		return err
-	}
-	if _, recoverErr := leaseManager.Recover(ctx); recoverErr != nil {
-		return recoverErr
-	}
-	req.ClientRequestID = uuid.NewString()
-	req.ControllerLeaseID = leaseManager.Value()
-	return control.AnswerAsk(ctx, req)
-}
-
-func answerPromptApproval(ctx context.Context, control client.PromptControlClient, leaseManager *controllerLeaseManager, req serverapi.ApprovalAnswerRequest) error {
-	err := control.AnswerApproval(ctx, req)
-	if !errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		return err
-	}
-	if leaseManager == nil {
-		return err
-	}
-	if _, recoverErr := leaseManager.Recover(ctx); recoverErr != nil {
-		return recoverErr
-	}
-	req.ClientRequestID = uuid.NewString()
-	req.ControllerLeaseID = leaseManager.Value()
-	return control.AnswerApproval(ctx, req)
-}
-
-func resolvedPromptEvent(promptID string) askEvent {
-	return askEvent{resolvedPromptID: strings.TrimSpace(promptID)}
 }
 
 func shouldRetryPromptAnswerError(err error) bool {

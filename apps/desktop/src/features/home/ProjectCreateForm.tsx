@@ -1,6 +1,7 @@
 import { type ChangeEvent } from "react";
 import { useForm, type FieldErrors, type RegisterOptions, type UseFormRegisterReturn } from "react-hook-form";
 import { useTranslation } from "react-i18next";
+import { z } from "zod";
 
 import { errorMessage } from "../../api/errors";
 import { useAppNavigation } from "../../app/navigation";
@@ -11,6 +12,7 @@ import { cx } from "../../ui/classes";
 import { useProjectCreation } from "./useHomeData";
 
 const LOCAL_UNBOUND_PLAN_KIND = "local_unbound";
+const errorMessageSchema = z.string();
 
 export type ProjectDraft = Readonly<{
   name: string;
@@ -206,11 +208,11 @@ function fieldErrorMessages(
   if (error === undefined) {
     return undefined;
   }
-  const typedMessages = error.types === undefined ? [] : Object.values(error.types).filter(isString);
+  const typedMessages = error.types === undefined ? [] : Object.values(error.types).flatMap(errorMessageItem);
   if (typedMessages.length > 0) {
     return typedMessages;
   }
-  return typeof error.message === "string" ? [error.message] : undefined;
+  return error.message === undefined ? undefined : [error.message];
 }
 
 function hasLineBreak(value: string): boolean {
@@ -256,6 +258,7 @@ function isAsciiDigit(value: string): boolean {
   return code >= 48 && code <= 57;
 }
 
-function isString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+function errorMessageItem(value: unknown): readonly string[] {
+  const parsed = errorMessageSchema.safeParse(value);
+  return parsed.success && parsed.data.length > 0 ? [parsed.data] : [];
 }

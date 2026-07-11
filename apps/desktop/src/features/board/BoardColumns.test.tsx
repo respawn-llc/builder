@@ -91,7 +91,6 @@ describe("KanbanColumn", () => {
               actions: {
                 ...card.actions,
                 canInterrupt: true,
-                interruptRunID: "run-1",
               },
             },
           ]}
@@ -120,7 +119,7 @@ describe("KanbanColumn", () => {
 
     fireEvent.click(interruptButton);
 
-    expect(onInterruptTask).toHaveBeenCalledWith("task-1", "run-1");
+    expect(onInterruptTask).toHaveBeenCalledWith("task-1");
     expect(onCardClick).not.toHaveBeenCalled();
   });
 
@@ -135,7 +134,6 @@ describe("KanbanColumn", () => {
               actions: {
                 ...card.actions,
                 canInterrupt: true,
-                interruptRunID: "run-question",
               },
               statusKind: "waiting_question",
               title: "Question task",
@@ -409,9 +407,7 @@ const card: KanbanCardVM = {
     canInterrupt: false,
     canResume: false,
     canStart: true,
-    interruptRunID: "",
     manualMoveTargetNodeIDs: [],
-    resumeRunID: "",
   },
   bodyPreview: "Body",
   id: "task-1",

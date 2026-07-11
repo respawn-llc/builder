@@ -32,7 +32,7 @@ export function StartupGate({ children }: StartupGateProps): ReactElement {
       tone: "warning",
       title: t("app.reconnecting"),
       body: t("app.disconnected"),
-      dismissible: false,
+      durationMs: Infinity,
     });
   }, [connection.phase, dismiss, push, t]);
 

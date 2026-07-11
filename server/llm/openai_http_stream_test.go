@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,15 +19,22 @@ func (staticAuthHeader) AuthorizationHeader(context.Context) (string, error) {
 
 func newOpenAIStreamTestServer(t *testing.T, events ...string) *httptest.Server {
 	t.Helper()
+	var stream strings.Builder
+	for _, event := range events {
+		_, _ = fmt.Fprintf(&stream, "data: %s\n\n", event)
+	}
+	return newOpenAIRawStreamTestServer(t, stream.String())
+}
+
+func newOpenAIRawStreamTestServer(t *testing.T, stream string) *httptest.Server {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		for _, event := range events {
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
-		}
+		_, _ = w.Write([]byte(stream))
 	}))
 	t.Cleanup(server.Close)
 	return server
@@ -35,10 +43,20 @@ func newOpenAIStreamTestServer(t *testing.T, events ...string) *httptest.Server 
 func newOpenAIStreamTestTransport(t *testing.T, events ...string) *HTTPTransport {
 	t.Helper()
 	server := newOpenAIStreamTestServer(t, events...)
+	return newOpenAIStreamTestTransportForServer(server)
+}
+
+func newOpenAIStreamTestTransportForServer(server *httptest.Server) *HTTPTransport {
 	transport := NewHTTPTransport(staticAuthHeader{})
 	transport.BaseURL = server.URL
 	transport.Client = server.Client()
 	return transport
+}
+
+func newOpenAIRawStreamTestTransport(t *testing.T, stream string) *HTTPTransport {
+	t.Helper()
+	server := newOpenAIRawStreamTestServer(t, stream)
+	return newOpenAIStreamTestTransportForServer(server)
 }
 
 func joinedAssistantDeltas(deltas []AssistantDelta) string {
@@ -47,6 +65,216 @@ func joinedAssistantDeltas(deltas []AssistantDelta) string {
 		text.WriteString(delta.Text)
 	}
 	return text.String()
+}
+
+func TestGenerateStream_AcceptsCompletedResponseEOFWithoutDoneSentinel(t *testing.T) {
+	transport := newOpenAIRawStreamTestTransport(t, strings.Join([]string{
+		`event: response.completed`,
+		`data: {"type":"response.completed","sequence_number":1,"response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18},"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}]}}`,
+		``,
+		``,
+	}, "\n"))
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+
+	if resp.AssistantText != "Hello" {
+		t.Fatalf("assistant text = %q, want Hello", resp.AssistantText)
+	}
+	if resp.Usage.InputTokens != 11 || resp.Usage.OutputTokens != 7 {
+		t.Fatalf("unexpected usage: %+v", resp.Usage)
+	}
+}
+
+func TestGenerateStream_SalvagesCompletedResponseBeforeTrailingMalformedEvent(t *testing.T) {
+	transport := newOpenAIRawStreamTestTransport(t, strings.Join([]string{
+		`event: response.completed`,
+		`data: {"type":"response.completed","sequence_number":1,"response":{"usage":{"input_tokens":3,"output_tokens":5,"total_tokens":8},"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done"}]}]}}`,
+		``,
+		`event: response.completed`,
+		`data: `,
+		``,
+		``,
+	}, "\n"))
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+
+	if resp.AssistantText != "Done" {
+		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
+	}
+	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("unexpected usage: %+v", resp.Usage)
+	}
+}
+
+func TestGenerateStream_MapsResponseIncompleteEventToProviderAPIError(t *testing.T) {
+	transport := newOpenAIRawStreamTestTransport(t, strings.Join([]string{
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","output_index":0,"delta":"partial"}`,
+		``,
+		`event: response.incomplete`,
+		`data: {"type":"response.incomplete","sequence_number":2,"response":{"id":"resp_1","created_at":1,"incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"partial"}]}]}}`,
+		``,
+		``,
+	}, "\n"))
+
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	if err == nil {
+		t.Fatal("expected response incomplete event")
+	}
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderAPIError, got %T", err)
+	}
+	if providerErr.ProviderType != "response.incomplete" {
+		t.Fatalf("provider type = %q, want response.incomplete", providerErr.ProviderType)
+	}
+	if providerErr.ProviderCode != "max_output_tokens" {
+		t.Fatalf("provider code = %q, want max_output_tokens", providerErr.ProviderCode)
+	}
+	if providerErr.ProviderParam != "response.incomplete_details.reason" {
+		t.Fatalf("provider param = %q, want response.incomplete_details.reason", providerErr.ProviderParam)
+	}
+	if providerErr.StatusCode != http.StatusOK {
+		t.Fatalf("provider status = %d, want %d", providerErr.StatusCode, http.StatusOK)
+	}
+	if !IsNonRetriableModelError(err) {
+		t.Fatalf("expected response.incomplete terminal error to be non-retriable: %v", err)
+	}
+}
+
+func TestGenerateStream_MapsResponseIncompleteWithoutReasonToProviderContractError(t *testing.T) {
+	transport := newOpenAIRawStreamTestTransport(t, strings.Join([]string{
+		`event: response.incomplete`,
+		`data: {"type":"response.incomplete","sequence_number":1,"response":{"id":"resp_1","created_at":1,"output":[]}}`,
+		``,
+		``,
+	}, "\n"))
+
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	if err == nil {
+		t.Fatal("expected response incomplete event")
+	}
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderAPIError, got %T", err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+	}
+	if providerErr.StatusCode != http.StatusOK {
+		t.Fatalf("provider status = %d, want %d", providerErr.StatusCode, http.StatusOK)
+	}
+}
+
+func TestGenerateStream_RejectsCompletedEventWithoutResponsePayload(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+	}{
+		{name: "missing_response", data: `{"type":"response.completed","sequence_number":1}`},
+		{name: "empty_response", data: `{"type":"response.completed","sequence_number":1,"response":{}}`},
+		{name: "null_output", data: `{"type":"response.completed","sequence_number":1,"response":{"output":null}}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := newOpenAIRawStreamTestTransport(t, strings.Join([]string{
+				`event: response.completed`,
+				`data: ` + tc.data,
+				``,
+				``,
+			}, "\n"))
+
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+			if err == nil {
+				t.Fatal("expected provider contract error")
+			}
+			var providerErr *ProviderAPIError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("expected ProviderAPIError, got %T", err)
+			}
+			if providerErr.Code != UnifiedErrorCodeProviderContract {
+				t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+			}
+			if providerErr.StatusCode != http.StatusOK {
+				t.Fatalf("provider status = %d, want %d", providerErr.StatusCode, http.StatusOK)
+			}
+		})
+	}
+}
+
+func TestGenerateStream_RejectsPreTerminalMalformedResponsesStream(t *testing.T) {
+	cases := map[string]string{
+		"eof_without_terminal": strings.Join([]string{
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","output_index":0,"delta":"partial"}`,
+			``,
+			``,
+		}, "\n"),
+		"malformed_json_before_terminal": strings.Join([]string{
+			`event: response.output_text.delta`,
+			`data: {"type":`,
+			``,
+			``,
+		}, "\n"),
+		"empty_data_before_terminal": strings.Join([]string{
+			`data: `,
+			``,
+			``,
+		}, "\n"),
+		"invalid_schema_before_terminal": strings.Join([]string{
+			`data: {"type":1}`,
+			``,
+			``,
+		}, "\n"),
+	}
+
+	for name, stream := range cases {
+		t.Run(name, func(t *testing.T) {
+			transport := newOpenAIRawStreamTestTransport(t, stream)
+
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+			if err == nil {
+				t.Fatal("expected provider contract error")
+			}
+			var providerErr *ProviderAPIError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("expected ProviderAPIError, got %T", err)
+			}
+			if providerErr.Code != UnifiedErrorCodeProviderContract {
+				t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+			}
+			if !IsNonRetriableModelError(err) {
+				t.Fatalf("expected provider-contract stream error to be non-retriable: %v", err)
+			}
+		})
+	}
+}
+
+func TestGenerateStream_LeavesPreResponseEOFRetryable(t *testing.T) {
+	transport := NewHTTPTransport(staticAuthHeader{})
+	transport.BaseURL = "https://example.invalid"
+	transport.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, io.EOF
+	})}
+
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	if err == nil {
+		t.Fatal("expected pre-response EOF")
+	}
+	var providerErr *ProviderAPIError
+	if errors.As(err, &providerErr) {
+		t.Fatalf("expected pre-response EOF to stay outside provider-contract classification, got %+v", providerErr)
+	}
+	if IsNonRetriableModelError(err) {
+		t.Fatalf("expected pre-response EOF to remain retryable: %v", err)
+	}
 }
 
 func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
@@ -146,6 +374,57 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	}
 	if resp.AssistantPhase != MessagePhaseFinal {
 		t.Fatalf("unexpected final assistant phase: %q", resp.AssistantPhase)
+	}
+}
+
+func TestGenerateStream_PreservesDisplayedDeltasWhenCompletedMessageIsShorter(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"\n\n"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}}`,
+		`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+
+	const streamed = "Hello\n\n"
+	if got := joinedAssistantDeltas(deltas); got != streamed {
+		t.Fatalf("streamed deltas = %q, want %q", got, streamed)
+	}
+	if resp.AssistantText != streamed {
+		t.Fatalf("assistant text = %q, want exact streamed text", resp.AssistantText)
+	}
+	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Content != streamed {
+		t.Fatalf("output items = %+v, want assistant content repaired to streamed text", resp.OutputItems)
+	}
+}
+
+func TestGenerateStream_DoesNotRepairMultiMessageAssistantOutputWithAggregateText(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"A"}]},{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"B"}]}]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+
+	if resp.AssistantText != "AB" {
+		t.Fatalf("assistant text = %q, want aggregate completed text", resp.AssistantText)
+	}
+	if len(resp.OutputItems) != 2 || resp.OutputItems[0].Content != "A" || resp.OutputItems[1].Content != "B" {
+		t.Fatalf("output items = %+v, want original assistant message segments", resp.OutputItems)
 	}
 }
 

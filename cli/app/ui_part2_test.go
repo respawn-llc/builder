@@ -1,7 +1,6 @@
 package app
 
 import (
-	"core/cli/tui"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/shared/clientui"
@@ -14,340 +13,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestRollbackSelectionUsesAbsoluteTranscriptEntryIndexWhenPaged(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.termWidth = 100
-	m.termHeight = 14
-	m.windowSizeKnown = true
-	m.transcriptEntries = []tui.TranscriptEntry{
-		{Role: "user", Text: "u-100"},
-		{Role: "assistant", Text: "a-100"},
-		{Role: "user", Text: "u-101"},
-	}
-	m.transcriptBaseOffset = 200
-	m.transcriptTotalEntries = 203
-	m.forwardToView(tui.SetConversationMsg{BaseOffset: m.transcriptBaseOffset, TotalEntries: m.transcriptTotalEntries, Entries: m.transcriptEntries})
-	seedTestRollbackTargets(m)
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-
-	if !testRollbackSelecting(updated) {
-		t.Fatal("expected rollback selection mode after double esc")
-	}
-	selectedLine := lineContaining(updated.View(), "u-101")
-	if selectedLine == "" {
-		t.Fatalf("expected selected paged rollback message visible, got %q", stripANSIAndTrimRight(updated.View()))
-	}
-	if !strings.Contains(selectedLine, themeSelectionBackgroundEscape(updated.theme)) {
-		t.Fatalf("expected paged rollback selection highlight, got %q", selectedLine)
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-	if !testRollbackEditing(updated) {
-		t.Fatal("expected rollback editing mode after enter")
-	}
-	if updated.input != "u-101" {
-		t.Fatalf("expected selected paged message loaded into input, got %q", updated.input)
-	}
-
-	updated.input = "edited paged user message"
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-	if updated.nextForkRollbackTargetID != rollbackTargetIDForTestSelection(202) {
-		t.Fatalf("expected rollback target id, got %q", updated.nextForkRollbackTargetID)
-	}
-}
-
-func TestRollbackRefreshClearsPendingPageSelectionOutsideSelectionMode(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.transcriptEntries = []tui.TranscriptEntry{
-		{Role: tui.TranscriptRoleUser, Text: "older"},
-		{Role: tui.TranscriptRoleAssistant, Text: "answer"},
-		{Role: tui.TranscriptRoleUser, Text: "newer"},
-	}
-	seedTestRollbackTargets(m)
-	m.rollback.phase = uiRollbackPhaseEditing
-	m.rollback.selection = 1
-	m.rollback.pendingSelectionAnchor = 2
-	m.rollback.pendingSelectionDelta = -1
-
-	m.refreshRollbackCandidates()
-
-	if m.rollback.pendingSelectionAnchor != -1 || m.rollback.pendingSelectionDelta != 0 {
-		t.Fatalf("pending page selection not cleared: anchor=%d delta=%d", m.rollback.pendingSelectionAnchor, m.rollback.pendingSelectionDelta)
-	}
-	if m.rollback.selection != 1 {
-		t.Fatalf("selection changed outside selection mode: got %d want 1", m.rollback.selection)
-	}
-}
-
-func TestRollbackSelectionRecentersTranscript(t *testing.T) {
-	entries := make([]UITranscriptEntry, 0, 80)
-	for i := 0; i < 40; i++ {
-		entries = append(entries, UITranscriptEntry{Role: "user", Text: fmt.Sprintf("u-%d", i)})
-		entries = append(entries, UITranscriptEntry{Role: "assistant", Text: fmt.Sprintf("a-%d", i)})
-	}
-	m := newProjectedStaticUIModel(WithUIInitialTranscript(entries))
-	m.termWidth = 100
-	m.termHeight = 8
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	if updated.view.Mode() != tui.ModeDetail {
-		t.Fatalf("expected rollback selection in detail overlay, got mode %q", updated.view.Mode())
-	}
-
-	for i := 0; i < 8; i++ {
-		next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
-		updated = next.(*uiModel)
-	}
-
-	selected := testRollbackCandidates(updated)[testRollbackSelection(updated)].Text
-	lines := strings.Split(stripANSIAndTrimRight(updated.view.View()), "\n")
-	selectedLine := -1
-	for idx, line := range lines {
-		if strings.Contains(line, selected) {
-			selectedLine = idx
-			break
-		}
-	}
-	if selectedLine < 0 {
-		t.Fatalf("expected selected rollback message %q visible in viewport", selected)
-	}
-	mid := len(lines) / 2
-	if diff := absInt(selectedLine - mid); diff > 2 {
-		t.Fatalf("expected selected rollback message near viewport middle, line=%d mid=%d", selectedLine, mid)
-	}
-}
-
-func TestRollbackSelectionEdgeArrowRecentersWhenNoPageAvailable(t *testing.T) {
-	entries := make([]UITranscriptEntry, 0, 80)
-	for i := 0; i < 40; i++ {
-		entries = append(entries, UITranscriptEntry{Role: "user", Text: fmt.Sprintf("u-%d", i)})
-		entries = append(entries, UITranscriptEntry{Role: "assistant", Text: fmt.Sprintf("a-%d", i)})
-	}
-	m := newProjectedStaticUIModel(WithUIInitialTranscript(entries))
-	m.termWidth = 100
-	m.termHeight = 8
-	m.layout().syncViewport()
-
-	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	if !testRollbackSelecting(m) {
-		t.Fatal("expected rollback selection mode")
-	}
-	for testRollbackSelection(m) > 0 {
-		m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyUp})
-	}
-	selected := testRollbackCandidates(m)[testRollbackSelection(m)].Text
-	for i := 0; i < 6; i++ {
-		m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
-	}
-	if got := m.view.DetailScroll(); got == 0 {
-		t.Fatalf("expected page down to move detail scroll away from focused edge, got %d", got)
-	}
-	if strings.Contains(stripANSIAndTrimRight(m.view.View()), selected) {
-		t.Fatalf("expected page down to move selected rollback point out of view, got %q", stripANSIAndTrimRight(m.view.View()))
-	}
-
-	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyUp})
-	if got := m.view.DetailScroll(); got != 0 {
-		t.Fatalf("expected edge up fallback to restore focused clamped detail scroll, got %d", got)
-	}
-	lines := strings.Split(stripANSIAndTrimRight(m.view.View()), "\n")
-	selectedLine := -1
-	for idx, line := range lines {
-		if strings.Contains(line, selected) {
-			selectedLine = idx
-			break
-		}
-	}
-	if selectedLine < 0 {
-		t.Fatalf("expected edge up to refocus selected rollback point %q, got %q", selected, stripANSIAndTrimRight(m.view.View()))
-	}
-}
-
-func TestRollbackSelectionCancelRestoresPriorOngoingScroll(t *testing.T) {
-	entries := make([]UITranscriptEntry, 0, 120)
-	for i := 0; i < 60; i++ {
-		entries = append(entries, UITranscriptEntry{Role: "user", Text: fmt.Sprintf("u-%d", i)})
-		entries = append(entries, UITranscriptEntry{Role: "assistant", Text: fmt.Sprintf("a-%d", i)})
-	}
-	m := newProjectedStaticUIModel(WithUIInitialTranscript(entries))
-	m.termWidth = 100
-	m.termHeight = 10
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	updated := next.(*uiModel)
-	initialScroll := updated.view.OngoingScroll()
-	if initialScroll <= 0 {
-		t.Fatalf("expected non-zero ongoing scroll after page up, got %d", initialScroll)
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	if !testRollbackSelecting(updated) {
-		t.Fatal("expected rollback mode after double esc")
-	}
-	if updated.view.Mode() != tui.ModeDetail {
-		t.Fatalf("expected rollback selection in detail overlay, got mode %q", updated.view.Mode())
-	}
-
-	for i := 0; i < 6; i++ {
-		next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
-		updated = next.(*uiModel)
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	if testRollbackSelecting(updated) {
-		t.Fatal("expected rollback mode to be canceled")
-	}
-	if updated.view.Mode() != tui.ModeOngoing {
-		t.Fatalf("expected return to ongoing mode, got %q", updated.view.Mode())
-	}
-}
-
-func TestRollbackTransitionsUseDetailOverlayInNativeMode(t *testing.T) {
-	m := newProjectedStaticUIModel(
-		WithUIInitialTranscript([]UITranscriptEntry{{Role: "user", Text: "u1"}, {Role: "assistant", Text: "a1"}, {Role: "user", Text: "u2"}}),
-	)
-	m.termWidth = 100
-	m.termHeight = 10
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated := next.(*uiModel)
-	next, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	if !testRollbackSelecting(updated) {
-		t.Fatal("expected rollback mode after double esc")
-	}
-	if updated.view.Mode() != tui.ModeDetail {
-		t.Fatalf("expected rollback selection in detail overlay, got mode %q", updated.view.Mode())
-	}
-	if !testRollbackSelectionSurfaceActive(updated) {
-		t.Fatal("expected rollback selection surface in native mode")
-	}
-	if cmd == nil {
-		t.Fatal("expected native rollback entry to emit detail overlay transition command")
-	}
-
-	selected := testRollbackCandidates(updated)[testRollbackSelection(updated)].Text
-	lines := strings.Split(stripANSIAndTrimRight(updated.View()), "\n")
-	selectedLine := -1
-	for idx, line := range lines {
-		if strings.Contains(line, selected) {
-			selectedLine = idx
-			break
-		}
-	}
-	if selectedLine < 0 {
-		t.Fatalf("expected selected rollback message %q visible in detail overlay", selected)
-	}
-	mid := len(lines) / 2
-	if diff := absInt(selectedLine - mid); diff > 2 {
-		t.Fatalf("expected selected rollback message near overlay center, line=%d mid=%d", selectedLine, mid)
-	}
-
-	next, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	if testRollbackSelecting(updated) {
-		t.Fatal("expected rollback mode canceled")
-	}
-	if updated.view.Mode() != tui.ModeOngoing {
-		t.Fatalf("expected cancel to return to ongoing mode, got %q", updated.view.Mode())
-	}
-	if testRollbackSelectionSurfaceActive(updated) {
-		t.Fatal("expected rollback selection surface cleared after cancel")
-	}
-	if cmd == nil {
-		t.Fatal("expected native rollback cancel to emit detail overlay exit command")
-	}
-}
-
-func TestRollbackEditCancelChainRestoresPriorOngoingScroll(t *testing.T) {
-	entries := make([]UITranscriptEntry, 0, 120)
-	for i := 0; i < 60; i++ {
-		entries = append(entries, UITranscriptEntry{Role: "user", Text: fmt.Sprintf("u-%d", i)})
-		entries = append(entries, UITranscriptEntry{Role: "assistant", Text: fmt.Sprintf("a-%d", i)})
-	}
-	m := newProjectedStaticUIModel(WithUIInitialTranscript(entries))
-	m.termWidth = 100
-	m.termHeight = 10
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	updated := next.(*uiModel)
-	initialScroll := updated.view.OngoingScroll()
-	if initialScroll <= 0 {
-		t.Fatalf("expected non-zero ongoing scroll after page up, got %d", initialScroll)
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	if !testRollbackSelecting(updated) {
-		t.Fatal("expected rollback mode after double esc")
-	}
-	if updated.view.Mode() != tui.ModeDetail {
-		t.Fatalf("expected rollback selection in detail overlay, got mode %q", updated.view.Mode())
-	}
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
-	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-	if !testRollbackEditing(updated) {
-		t.Fatal("expected rollback editing mode after enter")
-	}
-
-	updated.input = ""
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	if !testRollbackSelecting(updated) {
-		t.Fatal("expected rollback selection mode after esc on empty edit input")
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-	if testRollbackSelecting(updated) {
-		t.Fatal("expected rollback mode canceled")
-	}
-	if updated.view.Mode() != tui.ModeOngoing {
-		t.Fatalf("expected return to ongoing mode, got %q", updated.view.Mode())
-	}
-
-	beforeAppend := updated.view.OngoingScroll()
-	updated.forwardToView(tui.AppendTranscriptMsg{Role: "assistant", Text: "new tail"})
-	afterAppend := updated.view.OngoingScroll()
-	if afterAppend < beforeAppend {
-		t.Fatalf("expected append not to move ongoing scroll away from tail, got %d from %d", afterAppend, beforeAppend)
-	}
-}
-
-func absInt(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
-
 func TestApprovalAskTabAllowsWithCommentary(t *testing.T) {
 	_, eng := newAppRuntimeEngine(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
 	m := newProjectedEngineUIModel(eng)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	reply := make(chan askReply, 1)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionAllowSession, Label: "Allow for this session"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -400,7 +69,7 @@ func TestApprovalAskAnswersWhenCommentaryQueueFails(t *testing.T) {
 	client := &runtimeControlFakeClient{queueUserMessageErr: errors.New("queue create failed")}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	reply := make(chan askReply, 1)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -447,7 +116,7 @@ func TestApprovalAskIgnoresRepeatSubmitWhileCommentaryQueuePending(t *testing.T)
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-commentary-1"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	reply := make(chan askReply, 1)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -493,7 +162,7 @@ func TestApprovalAskAnswersWhenQueuedCommentarySubmitsBeforeCreateAck(t *testing
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-commentary-1"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	reply := make(chan askReply, 2)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -615,7 +284,7 @@ func TestAskResolutionEventDismissesCurrentAndPromotesQueuedAsk(t *testing.T) {
 
 func TestAskResolutionEventRestoresRunningActivityWhenRuntimeIsBusy(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	first := askEvent{req: clientui.PendingPromptEvent{PromptID: "ask-1", Question: "First", Suggestions: []string{"one"}}, reply: make(chan askReply, 1)}
 
 	next, _ := m.Update(askEventMsg{event: first})
@@ -627,25 +296,8 @@ func TestAskResolutionEventRestoresRunningActivityWhenRuntimeIsBusy(t *testing.T
 		t.Fatalf("activity = %v, want %v", updated.activity, uiActivityRunning)
 	}
 }
-
-func TestTabIdleAppendsUserOnce(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.input = "echo hi"
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	updated := next.(*uiModel)
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-	updated = next.(*uiModel)
-
-	view := stripANSIAndTrimRight(updated.View())
-	if count := strings.Count(view, "echo hi"); count != 1 {
-		t.Fatalf("expected one user transcript entry, got %d", count)
-	}
-}
-
 func TestSubmitErrorShowsStatusOnlyWithoutRuntimeClient(t *testing.T) {
-	m := newProjectedStaticUIModel()
+	m := newProjectedStaticUIModel(WithUISessionID(detailTestSessionID))
 	longErr := "openai status 400: " + strings.Repeat("X", 320)
 
 	next, _ := m.Update(submitDoneMsg{err: errors.New(longErr)})
@@ -656,13 +308,10 @@ func TestSubmitErrorShowsStatusOnlyWithoutRuntimeClient(t *testing.T) {
 	if !strings.Contains(updated.transientStatus, "openai status 400:") {
 		t.Fatalf("expected status text, got: %q", updated.transientStatus)
 	}
-	if len(updated.transcriptEntries) != 0 {
-		t.Fatalf("submit error without runtime must not create transcript entries: %+v", updated.transcriptEntries)
-	}
 }
 
 func TestSubmitErrorShowsAPIStatusOnlyWithoutRuntimeClient(t *testing.T) {
-	m := newProjectedStaticUIModel()
+	m := newProjectedStaticUIModel(WithUISessionID(detailTestSessionID))
 	body := strings.Repeat("AUTH_ERR_", 64)
 	root := &llm.APIStatusError{StatusCode: 429, Body: body}
 	wrapped := fmt.Errorf("model generation failed after retries: %w", root)
@@ -674,9 +323,6 @@ func TestSubmitErrorShowsAPIStatusOnlyWithoutRuntimeClient(t *testing.T) {
 
 	if !strings.Contains(updated.transientStatus, "openai status 429") {
 		t.Fatalf("expected status line, got: %q", updated.transientStatus)
-	}
-	if len(updated.transcriptEntries) != 0 {
-		t.Fatalf("submit error without runtime must not create transcript entries: %+v", updated.transcriptEntries)
 	}
 }
 
@@ -758,5 +404,20 @@ func TestMainInputCtrlUDeletesCurrentLine(t *testing.T) {
 	}
 	if updated.inputCursor != 4 {
 		t.Fatalf("expected cursor at start of joined line after delete, got %d", updated.inputCursor)
+	}
+}
+
+func TestRegisterSteeredQueuedUserMessageTracksDiscardablePendingItem(t *testing.T) {
+	m := &uiModel{}
+	m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{ID: "srv-1", Text: "queued while busy", ClientRequestID: "req-1"})
+	if len(m.pendingInjected) != 1 || m.pendingInjected[0].ID != "srv-1" || m.pendingInjected[0].Text != "queued while busy" {
+		t.Fatalf("pendingInjected = %+v, want one srv-1 item", m.pendingInjected)
+	}
+	if idx := m.injectedQueueIndexByAnyID("srv-1"); idx < 0 || m.injectedQueue[idx].State != injectedRuntimeQueueEnqueued {
+		t.Fatalf("injectedQueue = %+v, want enqueued srv-1", m.injectedQueue)
+	}
+	m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{ID: "srv-1", Text: "queued while busy"})
+	if len(m.pendingInjected) != 1 || len(m.injectedQueue) != 1 {
+		t.Fatalf("re-register duplicated item, pending=%+v queue=%+v", m.pendingInjected, m.injectedQueue)
 	}
 }

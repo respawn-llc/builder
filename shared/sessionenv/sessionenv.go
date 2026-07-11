@@ -7,46 +7,17 @@ import (
 )
 
 const SessionIDEnv = brand.SessionIDEnv
-const ShellTokenEnv = brand.EnvPrefix + "SHELL_TOKEN"
-const ShellRunIDEnv = brand.EnvPrefix + "SHELL_RUN_ID"
-const ShellStepIDEnv = brand.EnvPrefix + "SHELL_STEP_ID"
+const RunIDEnv = brand.EnvPrefix + "RUN_ID"
+const StepIDEnv = brand.EnvPrefix + "STEP_ID"
 
 func LookupSessionID(lookup func(string) (string, bool)) (string, bool) {
-	if lookup == nil {
-		return "", false
-	}
-	value, ok := lookup(SessionIDEnv)
-	if !ok {
-		return "", false
-	}
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "", false
-	}
-	return trimmed, true
+	return lookupTrimmed(lookup, SessionIDEnv)
 }
 
-func LookupShellToken(lookup func(string) (string, bool)) (string, bool) {
-	if lookup == nil {
-		return "", false
-	}
-	value, ok := lookup(ShellTokenEnv)
-	if !ok {
-		return "", false
-	}
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "", false
-	}
-	return trimmed, true
-}
-
-func LookupShellRunID(lookup func(string) (string, bool)) (string, bool) {
-	return lookupTrimmed(lookup, ShellRunIDEnv)
-}
-
-func LookupShellStepID(lookup func(string) (string, bool)) (string, bool) {
-	return lookupTrimmed(lookup, ShellStepIDEnv)
+func LookupRunStepID(lookup func(string) (string, bool)) (runID string, stepID string) {
+	runID, _ = lookupTrimmed(lookup, RunIDEnv)
+	stepID, _ = lookupTrimmed(lookup, StepIDEnv)
+	return runID, stepID
 }
 
 func lookupTrimmed(lookup func(string) (string, bool), key string) (string, bool) {

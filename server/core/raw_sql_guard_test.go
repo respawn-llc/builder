@@ -5,7 +5,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -162,20 +161,7 @@ func f() { _, _, _, _, _, _, _ = "select a task in the UI", "join node missing",
 func TestProductionGoDoesNotContainRawSQL(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	violations := make([]string, 0)
-	if err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relPath, relErr := filepath.Rel(repoRoot, path)
-		if relErr != nil {
-			relPath = path
-		}
-		if d.IsDir() {
-			if skipRawSQLScanDir(relPath, d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	if err := walkProductionGoFiles(repoRoot, func(path string, relPath string) error {
 		if !isRawSQLScannedGoFile(relPath) {
 			return nil
 		}
@@ -322,17 +308,6 @@ func containsViolationPart(violations []string, part string) bool {
 
 func rawSQLViolation(path string, line int, reason string) string {
 	return fmt.Sprintf("%s:%d: %s; declare production SQL in server/metadata/queries.sql or server/metadata/lifecycle.sql and consume it through an approved generated seam", path, line, reason)
-}
-
-func skipRawSQLScanDir(relPath string, name string) bool {
-	switch name {
-	case ".git", "node_modules", "bin", "dist", "target", "vendor":
-		return true
-	}
-	if strings.HasPrefix(name, ".") && name != "." {
-		return true
-	}
-	return isApprovedGeneratedSQLPath(relPath)
 }
 
 func isRawSQLScannedGoFile(path string) bool {

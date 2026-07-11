@@ -23,8 +23,11 @@ import (
 )
 
 func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *testing.T) {
-	newAppTestHome(t)
+	home := newAppTestHome(t)
 	workspace := t.TempDir()
+	if _, _, err := config.WriteDefaultSettingsFileAt(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
+		t.Fatalf("write test settings: %v", err)
+	}
 	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
 	store := auth.NewFileStore(config.GlobalAuthConfigPath(cfg))
 	if err := store.Save(context.Background(), auth.State{
@@ -96,6 +99,71 @@ func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *t
 	}
 }
 
+func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T) {
+	newAppTestHome(t)
+	workspace := t.TempDir()
+	configureAppTestServerPort(t)
+	fakeResponses, hits := newNoAuthFakeResponsesServer(t, []string{"rebound no-auth reply"})
+	defer fakeResponses.Close()
+
+	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+		Model:                "gpt-5",
+		AllowUnauthenticated: true,
+	}, memoryAuthHandler{}, autoOnboarding)
+	if err != nil {
+		t.Fatalf("serve.Start: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+	stopServing := serveAppServer(t, srv)
+	defer stopServing()
+	waitForConfiguredRunPromptDaemon(t, workspace)
+
+	originalPicker := runProjectBindingPickerFlow
+	originalPrompt := runProjectNamePromptFlow
+	t.Cleanup(func() {
+		runProjectBindingPickerFlow = originalPicker
+		runProjectNamePromptFlow = originalPrompt
+	})
+	runProjectBindingPickerFlow = func(projects []clientui.ProjectSummary, theme string) (projectBindingPickerResult, error) {
+		return projectBindingPickerResult{CreateNew: true}, nil
+	}
+	runProjectNamePromptFlow = func(defaultName string, theme string) (string, error) {
+		return "Remote No Auth Project", nil
+	}
+
+	authPickerCalls := 0
+	interactor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			authPickerCalls++
+			if authPickerCalls > 1 {
+				t.Fatal("remote no-auth binding flow must not re-enter auth picker")
+			}
+			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
+		},
+	}
+	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, interactor, true)
+	if err != nil {
+		t.Fatalf("startSessionServer: %v", err)
+	}
+	defer func() { _ = server.Close() }()
+	bound, err := ensureInteractiveProjectBinding(context.Background(), server)
+	if err != nil {
+		t.Fatalf("ensureInteractiveProjectBinding: %v", err)
+	}
+	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after rebound no auth")
+	if err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	if submission.Message != "rebound no-auth reply" {
+		t.Fatalf("assistant message = %q, want rebound no-auth reply", submission.Message)
+	}
+	runtimePlan.Close()
+	if hits.Load() != 1 {
+		t.Fatalf("expected fake LLM call once, got %d", hits.Load())
+	}
+}
+
 func TestStartSessionServerRejectsIncompatibleDiscoveredDaemonAndFallsBack(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
@@ -130,7 +198,8 @@ func TestStartSessionServerRejectsIncompatibleDiscoveredDaemonAndFallsBack(t *te
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through embedded fallback")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through embedded fallback")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -180,7 +249,8 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutProcessOutputCapability
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after capability fallback")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after capability fallback")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -193,110 +263,6 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutProcessOutputCapability
 }
 
 func TestStartSessionServerRejectsDiscoveredDaemonWithoutAuthBootstrapCapability(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"embedded fallback reply"})
-	defer fakeResponses.Close()
-
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		JSONRPCWebSocket:        true,
-		ProjectAttach:           true,
-		SessionAttach:           true,
-		SessionPlan:             true,
-		SessionLifecycle:        true,
-		SessionTranscriptPaging: true,
-		SessionRuntime:          true,
-		RuntimeControl:          true,
-		PromptControl:           true,
-		PromptActivity:          true,
-		SessionActivity:         true,
-		ProcessOutput:           true,
-	})
-	defer cleanup()
-
-	server, err := startSessionServer(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-		OpenAIBaseURL:         fakeResponses.URL,
-		OpenAIBaseURLExplicit: true,
-	}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); ok {
-		t.Fatal("expected configured daemon without auth bootstrap capability to be rejected")
-	}
-
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
-	defer runtimePlan.Close()
-
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after auth bootstrap fallback")
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "embedded fallback reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "embedded fallback reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected embedded fallback llm call once, got %d", hits.Load())
-	}
-}
-
-func TestStartSessionServerRejectsDiscoveredDaemonWithoutProjectAttachCapability(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"embedded fallback reply"})
-	defer fakeResponses.Close()
-
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		JSONRPCWebSocket:        true,
-		AuthBootstrap:           true,
-		SessionAttach:           true,
-		SessionPlan:             true,
-		SessionLifecycle:        true,
-		SessionTranscriptPaging: true,
-		SessionRuntime:          true,
-		RuntimeControl:          true,
-		PromptControl:           true,
-		PromptActivity:          true,
-		SessionActivity:         true,
-		ProcessOutput:           true,
-	})
-	defer cleanup()
-
-	server, err := startSessionServer(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-		OpenAIBaseURL:         fakeResponses.URL,
-		OpenAIBaseURLExplicit: true,
-	}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); ok {
-		t.Fatal("expected configured daemon without project attach capability to be rejected")
-	}
-
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test project attach fallback runtime")
-	defer runtimePlan.Close()
-
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after project attach fallback")
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "embedded fallback reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "embedded fallback reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected embedded fallback llm call once, got %d", hits.Load())
-	}
-}
-
-func TestStartSessionServerRejectsDiscoveredDaemonWithoutTranscriptPagingCapability(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
 	fakeResponses, hits := newFakeResponsesServer(t, []string{"embedded fallback reply"})
@@ -329,13 +295,66 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutTranscriptPagingCapabil
 	}
 	defer func() { _ = server.Close() }()
 	if _, ok := server.(*remoteAppServer); ok {
-		t.Fatal("expected configured daemon without transcript paging capability to be rejected")
+		t.Fatal("expected configured daemon without auth bootstrap capability to be rejected")
 	}
 
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after transcript paging fallback")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after auth bootstrap fallback")
+	message := submission.Message
+	if err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	if message != "embedded fallback reply" {
+		t.Fatalf("assistant message = %q, want %q", message, "embedded fallback reply")
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("expected embedded fallback llm call once, got %d", hits.Load())
+	}
+}
+
+func TestStartSessionServerRejectsDiscoveredDaemonWithoutProjectAttachCapability(t *testing.T) {
+	_, workspace := newRegisteredAppWorkspace(t)
+
+	fakeResponses, hits := newFakeResponsesServer(t, []string{"embedded fallback reply"})
+	defer fakeResponses.Close()
+
+	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
+		JSONRPCWebSocket: true,
+		AuthBootstrap:    true,
+		SessionAttach:    true,
+		SessionPlan:      true,
+		SessionLifecycle: true,
+		SessionRuntime:   true,
+		RuntimeControl:   true,
+		PromptControl:    true,
+		PromptActivity:   true,
+		SessionActivity:  true,
+		ProcessOutput:    true,
+	})
+	defer cleanup()
+
+	server, err := startSessionServer(context.Background(), Options{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		Model:                 "gpt-5",
+		OpenAIBaseURL:         fakeResponses.URL,
+		OpenAIBaseURLExplicit: true,
+	}, readyMemoryAuthHandler(), false)
+	if err != nil {
+		t.Fatalf("startSessionServer: %v", err)
+	}
+	defer func() { _ = server.Close() }()
+	if _, ok := server.(*remoteAppServer); ok {
+		t.Fatal("expected configured daemon without project attach capability to be rejected")
+	}
+
+	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test project attach fallback runtime")
+	defer runtimePlan.Close()
+
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after project attach fallback")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -628,7 +647,8 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote interactive runtime override")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive override")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive override")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}

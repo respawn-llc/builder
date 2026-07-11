@@ -118,6 +118,9 @@ func TestPromptServiceReturnsPartialResultOnRunError(t *testing.T) {
 	if !launcher.runtime.closed {
 		t.Fatal("expected prepared runtime to be closed")
 	}
+	if !launcher.runtime.failureClosed {
+		t.Fatal("expected failed run prompt to use failure close")
+	}
 	if got := strings.Join(launcher.runtime.logs, "\n"); !strings.Contains(got, "runtime.event.drop.total=3") || !strings.Contains(got, `app.run_prompt.exit err="boom"`) {
 		t.Fatalf("unexpected logs: %q", got)
 	}
@@ -167,6 +170,7 @@ type stubPromptSessionRuntime struct {
 	err              error
 	prompt           string
 	closed           bool
+	failureClosed    bool
 	logs             []string
 	onSubmit         func(context.Context)
 	historyRequestID string
@@ -194,4 +198,9 @@ func (s *stubPromptSessionRuntime) Logf(format string, args ...any) {
 func (s *stubPromptSessionRuntime) Close() error {
 	s.closed = true
 	return nil
+}
+
+func (s *stubPromptSessionRuntime) CloseWithFailure() error {
+	s.failureClosed = true
+	return s.Close()
 }

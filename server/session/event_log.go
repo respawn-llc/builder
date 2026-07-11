@@ -82,16 +82,6 @@ func (s *Store) bootstrapEventLogStateLocked() error {
 		s.meta.ConversationEstablished = true
 		metaChanged = true
 	}
-	if runs := ProjectRuns(window.Events); len(runs) > 0 {
-		latest := runs[len(runs)-1]
-		current := s.meta.LatestRun
-		if current == nil || current.RunID != latest.RunID || current.Status != latest.Status ||
-			!current.StartedAt.Equal(latest.StartedAt) || !current.FinishedAt.Equal(latest.FinishedAt) {
-			runCopy := latest
-			s.meta.LatestRun = &runCopy
-			metaChanged = true
-		}
-	}
 	if metaChanged {
 		s.meta.UpdatedAt = time.Now().UTC()
 		if _, err := s.persistMetaLocked(); err != nil {
@@ -276,6 +266,9 @@ func readSegmentBackwardFile(path string, endOffset int64, chunkBytes int64, mat
 	if chunkBytes <= 0 {
 		chunkBytes = activeTailReverseChunkBytes
 	}
+	if endOffset <= 0 {
+		return SegmentWindow{}, fmt.Errorf("read segment backward: end offset must be positive, got %d", endOffset)
+	}
 	fp, err := openRegularSessionFile(path, "events file")
 	if err != nil {
 		return SegmentWindow{}, fmt.Errorf("open events file: %w", err)
@@ -285,9 +278,29 @@ func readSegmentBackwardFile(path string, endOffset int64, chunkBytes int64, mat
 	if err != nil {
 		return SegmentWindow{}, fmt.Errorf("seek events file: %w", err)
 	}
-	if endOffset <= 0 || endOffset > size {
+	if endOffset > size {
 		endOffset = size
 	}
+	return readSegmentBackwardFromOpenFile(fp, size, endOffset, chunkBytes, match)
+}
+
+func readNewestSegmentBackwardFile(path string, chunkBytes int64, match func(Event) bool) (SegmentWindow, error) {
+	if chunkBytes <= 0 {
+		chunkBytes = activeTailReverseChunkBytes
+	}
+	fp, err := openRegularSessionFile(path, "events file")
+	if err != nil {
+		return SegmentWindow{}, fmt.Errorf("open events file: %w", err)
+	}
+	defer func() { _ = fp.Close() }()
+	size, err := fp.Seek(0, io.SeekEnd)
+	if err != nil {
+		return SegmentWindow{}, fmt.Errorf("seek events file: %w", err)
+	}
+	return readSegmentBackwardFromOpenFile(fp, size, size, chunkBytes, match)
+}
+
+func readSegmentBackwardFromOpenFile(fp *os.File, size int64, endOffset int64, chunkBytes int64, match func(Event) bool) (SegmentWindow, error) {
 	if endOffset == 0 {
 		return SegmentWindow{ReachedStart: true, ReachedEnd: true}, nil
 	}

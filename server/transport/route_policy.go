@@ -80,11 +80,11 @@ func (e gatewayRouteError) Error() string {
 	return e.message
 }
 
-func (e routePolicyExecutor) requireAuth(ctx context.Context, method string) error {
+func (e routePolicyExecutor) requireAuth(ctx context.Context, state *connectionState, method string) error {
 	if !e.requiresServerAuth(method) {
 		return nil
 	}
-	ready, err := e.serverAuthReady(ctx)
+	ready, err := e.serverAuthReady(ctx, state)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func (e routePolicyExecutor) requiresServerAuth(method string) bool {
 	}
 }
 
-func (e routePolicyExecutor) serverAuthReady(ctx context.Context) (bool, error) {
+func (e routePolicyExecutor) serverAuthReady(ctx context.Context, connection *connectionState) (bool, error) {
 	g := e.gateway
 	if g == nil || g.deps == nil {
 		return false, nil
@@ -126,7 +126,17 @@ func (e routePolicyExecutor) serverAuthReady(ctx context.Context) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	return auth.EvaluateStartupGate(state).Ready, nil
+	if auth.EvaluateStartupGate(state).Ready {
+		return true, nil
+	}
+	if connection != nil && connection.noAuthAccepted {
+		stored, err := g.deps.AuthManager().StoredState(ctx)
+		if err != nil {
+			return false, err
+		}
+		return stored.IsNoAuthSelected(), nil
+	}
+	return false, nil
 }
 
 func decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error) {
@@ -175,6 +185,10 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 		return nil
 	case rpccontract.ScopeGoalSession:
 		return e.gateway.requireGoalSessionAccess(ctx, state, scopeParams.sessionID)
+	case rpccontract.ScopeRuntimeLiveSessionRequired:
+		return e.gateway.requireRuntimeLiveSession(ctx, scopeParams.sessionID)
+	case rpccontract.ScopeRuntimeLiveSessionOptional:
+		return nil
 	case rpccontract.ScopeProcessActiveProject:
 		_, err := e.gateway.processInActiveProject(ctx, state, scopeParams.processID)
 		return err
@@ -201,7 +215,9 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 		rpccontract.ScopeSessionActiveProjectIfSet,
 		rpccontract.ScopeSessionAttachedProject,
 		rpccontract.ScopeAttachedSession,
-		rpccontract.ScopeGoalSession:
+		rpccontract.ScopeGoalSession,
+		rpccontract.ScopeRuntimeLiveSessionRequired,
+		rpccontract.ScopeRuntimeLiveSessionOptional:
 		sessionID, ok := routeSessionID(params)
 		if !ok {
 			return routeScopeParams{}, fmt.Errorf("route %q scope %q requires typed session id accessor", route.Method, route.Scope)
@@ -231,8 +247,6 @@ func routeSessionID(params any) (string, bool) {
 	case serverapi.SessionMainViewRequest:
 		return p.SessionID, true
 	case serverapi.SessionTranscriptPageRequest:
-		return p.SessionID, true
-	case serverapi.SessionCommittedTranscriptSuffixRequest:
 		return p.SessionID, true
 	case serverapi.SessionInitialInputRequest:
 		return p.SessionID, true
@@ -272,8 +286,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.RuntimeShouldCompactBeforeUserMessageRequest:
 		return p.SessionID, true
-	case serverapi.RuntimeSubmitUserMessageRequest:
-		return p.SessionID, true
 	case serverapi.RuntimeSubmitUserTurnRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeSubmitUserShellCommandRequest:
@@ -289,6 +301,12 @@ func routeSessionID(params any) (string, bool) {
 	case serverapi.RuntimeInterruptRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeQueueUserMessageRequest:
+		return p.SessionID, true
+	case serverapi.RuntimeLiveSteerRequest:
+		return p.SessionID, true
+	case serverapi.RuntimeLiveStopRequest:
+		return p.SessionID, true
+	case serverapi.RuntimeLiveWaitRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeDiscardQueuedUserMessageRequest:
 		return p.SessionID, true
@@ -312,7 +330,11 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.SessionActivitySubscribeRequest:
 		return p.SessionID, true
+	case serverapi.TranscriptSubscribeRequest:
+		return p.SessionID, true
 	case serverapi.PromptActivitySubscribeRequest:
+		return p.SessionID, true
+	case serverapi.AttentionSessionNotificationSubscribeRequest:
 		return p.SessionID, true
 	default:
 		return "", false
@@ -386,6 +408,21 @@ func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectio
 		return nil
 	}
 	return g.requireSessionInActiveProject(ctx, state, sessionID)
+}
+
+func (g *Gateway) requireRuntimeLiveSession(ctx context.Context, sessionID string) error {
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return serverapi.ErrRuntimeUnavailable
+	}
+	metadataStore := g.deps.MetadataStore()
+	if metadataStore == nil {
+		return serverapi.ErrRuntimeUnavailable
+	}
+	if _, err := metadataStore.ResolvePersistedSession(ctx, trimmedSessionID); err != nil {
+		return fmt.Errorf("%w: %w", serverapi.ErrRuntimeUnavailable, err)
+	}
+	return nil
 }
 
 func (g *Gateway) requireSessionInAttachedProject(ctx context.Context, state *connectionState, sessionID string) error {

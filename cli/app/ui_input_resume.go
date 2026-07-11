@@ -47,11 +47,11 @@ func (c uiInputController) handleQueuedRuntimeWorkCheckDone(msg queuedRuntimeWor
 	m.observeRuntimeRequestResult(msg.err)
 	if msg.err != nil {
 		restoreCmd := c.restorePendingInjectedIntoInput()
-		if errors.Is(msg.err, runtimeattach.ErrSubmissionInterrupted) || errors.Is(msg.err, context.Canceled) {
+		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")
 			m.layout().syncViewport()
-			return m, restoreCmd
+			return m, tea.Batch(restoreCmd, m.interruptedStatusNoticeCmd())
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
 		m.activity = uiActivityError
@@ -60,44 +60,45 @@ func (c uiInputController) handleQueuedRuntimeWorkCheckDone(msg queuedRuntimeWor
 		m.layout().syncViewport()
 		return m, tea.Batch(restoreCmd, appendCmd)
 	}
-	blocked := m.injectedQueueBlocksDrain() || m.isBusy() || m.isInputSubmitLocked()
+	blocked := m.injectedQueueBlocksDrain() || m.blocksRuntimeInput()
 	if !msg.hasWork {
 		c.notifyUserCompactionCompleted(compactionOrigin, true)
 		if blocked {
 			return m, nil
 		}
-		return m, c.requestIdleRuntimeControlCommittedTranscriptSync(compactionOrigin)
+		return m, c.requestIdleRuntimeControlCommittedRefresh(compactionOrigin)
 	}
 	if blocked {
 		c.notifyUserCompactionCompleted(compactionOrigin, false)
 		return m, nil
 	}
 	c.notifyUserCompactionCompleted(compactionOrigin, false)
-	c.startBusyActivity(false)
+	c.startRuntimeOperationAffordance(false)
 	m.logf("step.resume_queued_injected pending_injected=%d", len(m.pendingInjected))
 	m.layout().syncViewport()
 	return m, tea.Batch(c.submitQueuedUserMessagesCmd(), c.model.reconcileSpinnerTicking(false))
 }
 
-func (c uiInputController) requestIdleRuntimeControlCommittedTranscriptSync(origin uiCompactionOrigin) tea.Cmd {
+func (c uiInputController) requestIdleRuntimeControlCommittedRefresh(origin uiCompactionOrigin) tea.Cmd {
 	m := c.model
 	if m == nil || origin == uiCompactionOriginNone || !m.hasRuntimeClient() {
 		return nil
 	}
-	return m.requestRuntimeCommittedConversationSync()
+	return nil
 }
 
 func (c uiInputController) submitQueuedUserMessagesCmd() tea.Cmd {
 	m := c.model
-	token := m.beginSubmitAttempt("", "")
+	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
+	token := m.beginSubmitAttempt("", "", operationRef)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
 			return newSubmitDoneMsg(token, "", "", errors.New("runtime engine is not configured"))
 		}
-		msg, err := submitQueuedRuntimeUserMessages(context.Background(), client)
+		msg, err := submitQueuedRuntimeUserMessages(context.Background(), client, operationRef)
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if isRuntimeOperationInterrupted(err) {
 				return newSubmitDoneMsg(token, "", "", runtimeattach.ErrSubmissionInterrupted)
 			}
 			return newSubmitDoneMsg(token, "", "", err)
@@ -106,9 +107,9 @@ func (c uiInputController) submitQueuedUserMessagesCmd() tea.Cmd {
 	}
 }
 
-func submitQueuedRuntimeUserMessages(ctx context.Context, client clientui.RuntimeClient) (string, error) {
+func submitQueuedRuntimeUserMessages(ctx context.Context, client clientui.RuntimeClient, operationRef clientui.RuntimeOperationRef) (string, error) {
 	if client == nil {
 		return "", errors.New("runtime engine is not configured")
 	}
-	return client.SubmitQueuedUserMessages(ctx)
+	return client.SubmitRuntimeQueued(ctx, clientui.RuntimeSubmitQueuedRequest{OperationRef: operationRef})
 }

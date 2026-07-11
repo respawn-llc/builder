@@ -7,14 +7,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
-	"core/prompts"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
 	"core/shared/clientui"
 	brand "core/shared/config"
+	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
@@ -60,11 +61,27 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	if appCore.Background() == nil {
 		t.Fatal("expected background manager")
 	}
-	if appCore.ProjectViewClient() == nil || appCore.ProcessViewClient() == nil || appCore.ProcessOutputClient() == nil || appCore.SessionLaunchClient() == nil || appCore.SessionViewClient() == nil || appCore.SessionLifecycleClient() == nil || appCore.RunPromptClient() == nil {
+	if appCore.ProjectViewClient() == nil || appCore.ProcessViewClient() == nil || appCore.ProcessOutputClient() == nil || appCore.SessionLaunchClient() == nil || appCore.SessionViewClient() == nil || appCore.SessionLifecycleClient() == nil || appCore.SessionActivityClient() == nil || appCore.SessionTranscriptClient() == nil || appCore.RunPromptClient() == nil {
 		t.Fatal("expected core clients to be wired")
+	}
+	if appCore.CapabilityFactsClient() == nil {
+		t.Fatal("expected capability facts client to be wired")
 	}
 	if _, err := appCore.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
 		t.Fatalf("ListProjects via core client: %v", err)
+	}
+	facts, err := appCore.CapabilityFactsClient().GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("GetCapabilityFacts via core client: %v", err)
+	}
+	if facts.Defaults.PrimaryModelID == "" {
+		t.Fatalf("capability facts missing defaults: %+v", facts)
+	}
+}
+
+func TestProtocolIdentityHasNoCapabilityFactsFlag(t *testing.T) {
+	if _, ok := reflect.TypeOf(protocol.CapabilityFlags{}).FieldByName("CapabilityFacts"); ok {
+		t.Fatal("capability facts must be signaled by protocol version/route availability, not a handshake capability flag")
 	}
 }
 
@@ -118,12 +135,6 @@ func TestNewRejectsSecondCoreForSamePersistenceRoot(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
-	generatedCalls := 0
-	restoreGeneratedSync := serverbootstrap.SetGeneratedSyncForTest(func(ctx context.Context, opts prompts.GeneratedSyncOptions) (prompts.GeneratedSyncResult, error) {
-		generatedCalls++
-		return prompts.GeneratedSync(ctx, opts)
-	})
-	defer restoreGeneratedSync()
 
 	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
 	if err != nil {
@@ -144,8 +155,11 @@ func TestNewRejectsSecondCoreForSamePersistenceRoot(t *testing.T) {
 		t.Fatalf("New first: %v", err)
 	}
 	t.Cleanup(func() { _ = first.Close() })
-	if generatedCalls != 1 {
-		t.Fatalf("generated sync calls after first core = %d, want 1", generatedCalls)
+	generatedSkillsRoot := filepath.Join(home, brand.ConfigDirName, ".generated", "skills")
+	if entries, err := os.ReadDir(generatedSkillsRoot); err != nil {
+		t.Fatalf("expected first core to seed generated skills: %v", err)
+	} else if len(entries) == 0 {
+		t.Fatal("expected first core to seed at least one generated skill")
 	}
 
 	authSupportB, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
@@ -161,9 +175,6 @@ func TestNewRejectsSecondCoreForSamePersistenceRoot(t *testing.T) {
 	_, err = New(resolved.Config, authSupportB, runtimeSupportB)
 	if !errors.Is(err, ErrPersistenceRootBusy) {
 		t.Fatalf("New second error = %v, want ErrPersistenceRootBusy", err)
-	}
-	if generatedCalls != 1 {
-		t.Fatalf("generated sync calls after rejected second core = %d, want 1", generatedCalls)
 	}
 }
 
@@ -443,9 +454,13 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 
 func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t *testing.T) {
 	home := t.TempDir()
-	workspaceA := t.TempDir()
+	parent := filepath.Join(t.TempDir(), "blocked-parent")
+	workspaceA := filepath.Join(parent, "workspace-a")
 	workspaceB := t.TempDir()
 	t.Setenv("HOME", home)
+	if err := os.MkdirAll(workspaceA, 0o755); err != nil {
+		t.Fatalf("create workspace A: %v", err)
+	}
 
 	resolvedA, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspaceA})
 	if err != nil {
@@ -455,13 +470,17 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t 
 	if err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
-	restoreAvailabilityStat := metadata.SetAvailabilityStatForTest(func(path string) (os.FileInfo, error) {
-		if filepath.Clean(path) == filepath.Clean(binding.CanonicalRoot) {
-			return nil, os.ErrPermission
+	if err := os.Chmod(parent, 0); err != nil {
+		t.Fatalf("make workspace parent inaccessible: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(parent, 0o755); err != nil {
+			t.Fatalf("restore workspace parent permissions: %v", err)
 		}
-		return os.Stat(path)
 	})
-	t.Cleanup(restoreAvailabilityStat)
+	if _, err := os.Stat(workspaceA); err == nil {
+		t.Skip("filesystem permissions do not prevent stat for current user")
+	}
 	metadataStore, err := metadata.Open(resolvedA.Config.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)

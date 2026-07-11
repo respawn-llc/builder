@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"core/shared/clientui"
 )
 
 func TestWorkflowCreateUpdateRequestValidation(t *testing.T) {
@@ -67,10 +69,21 @@ func TestWorkflowNodeAndEdgeRequestValidation(t *testing.T) {
 	if err := previousTargetEdge.Validate(); err != nil {
 		t.Fatalf("valid previous-target context source rejected: %v", err)
 	}
+	previousTargetOrNewEdge := validEdge
+	previousTargetOrNewEdge.ContextMode = "continue_session"
+	previousTargetOrNewEdge.ContextSource = WorkflowContextSource{Kind: "previous_target_or_new"}
+	if err := previousTargetOrNewEdge.Validate(); err != nil {
+		t.Fatalf("valid previous-target-or-new context source rejected: %v", err)
+	}
 	invalidPreviousTargetEdge := previousTargetEdge
 	invalidPreviousTargetEdge.ContextSource = WorkflowContextSource{Kind: "previous_target", NodeKey: "implement"}
 	if err := invalidPreviousTargetEdge.Validate(); !isWorkflowFieldError(err, "context_source.node_key", WorkflowRequestErrorInvalidValue) {
 		t.Fatalf("invalid previous-target context source error = %#v, want invalid_value on context_source.node_key", err)
+	}
+	invalidPreviousTargetOrNewEdge := previousTargetOrNewEdge
+	invalidPreviousTargetOrNewEdge.ContextSource = WorkflowContextSource{Kind: "previous_target_or_new", NodeKey: "implement"}
+	if err := invalidPreviousTargetOrNewEdge.Validate(); !isWorkflowFieldError(err, "context_source.node_key", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("invalid previous-target-or-new context source error = %#v, want invalid_value on context_source.node_key", err)
 	}
 	invalidSourceEdge := selectedSourceEdge
 	invalidSourceEdge.ContextSource = WorkflowContextSource{Kind: "selected_node", NodeKey: "Bad-Key"}
@@ -130,6 +143,7 @@ func TestWorkflowTransitionGroupDescriptionRequestValidation(t *testing.T) {
 }
 
 func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
+	setupOperationID := NewWorktreeSetupOperationID()
 	if err := (WorkflowTaskCreateRequest{ProjectID: "project-1", Title: "Task"}).Validate(); err != nil {
 		t.Fatalf("valid task create rejected: %v", err)
 	}
@@ -147,7 +161,7 @@ func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	if err := (WorkflowTaskUpdateRequest{TaskID: "task-1", Title: &blankTitle}).Validate(); !isWorkflowFieldError(err, "title", WorkflowRequestErrorRequired) {
 		t.Fatalf("empty update title error = %#v, want required on title", err)
 	}
-	if err := (WorkflowTaskStartRequest{TaskID: "task-1"}).Validate(); err != nil {
+	if err := (WorkflowTaskStartRequest{TaskID: "task-1", SetupOperationID: setupOperationID}).Validate(); err != nil {
 		t.Fatalf("valid task start rejected: %v", err)
 	}
 	if err := (WorkflowTaskGetRequest{ProjectID: "project-1", ShortID: "BLD-1"}).Validate(); err != nil {
@@ -171,7 +185,7 @@ func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	if err := (WorkflowTaskInterruptRequest{TaskID: "task-1"}).Validate(); err != nil {
 		t.Fatalf("valid task interrupt rejected: %v", err)
 	}
-	if err := (WorkflowTaskApproveRequest{TaskTransitionID: "transition-1"}).Validate(); err != nil {
+	if err := (WorkflowTaskApproveRequest{TaskTransitionID: "transition-1", SetupOperationID: setupOperationID}).Validate(); err != nil {
 		t.Fatalf("valid task approval rejected: %v", err)
 	}
 	if err := (WorkflowTaskApproveRequest{}).Validate(); !isWorkflowFieldError(err, "transition_id", WorkflowRequestErrorRequired) {
@@ -216,6 +230,18 @@ func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Answer: "one", FreeformAnswer: "two"}).Validate(); !isWorkflowFieldError(err, "answer", WorkflowRequestErrorInvalidMode) {
 		t.Fatalf("multi-mode task question answer error = %#v, want invalid_mode on answer", err)
 	}
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce, Commentary: "trusted"}}).Validate(); err != nil {
+		t.Fatalf("valid task approval question answer rejected: %v", err)
+	}
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce}, FreeformAnswer: "also"}).Validate(); !isWorkflowFieldError(err, "approval", WorkflowRequestErrorInvalidMode) {
+		t.Fatalf("approval plus ordinary answer error = %#v, want invalid_mode on approval", err)
+	}
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce}, ErrorMessage: "err"}).Validate(); !isWorkflowFieldError(err, "error_message", WorkflowRequestErrorInvalidMode) {
+		t.Fatalf("approval plus error error = %#v, want invalid_mode on error_message", err)
+	}
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecision("future")}}).Validate(); !isWorkflowFieldError(err, "approval.decision", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("invalid approval decision error = %#v, want invalid_value on approval.decision", err)
+	}
 	if err := (WorkflowTaskCommentAddRequest{TaskID: "task-1", Body: "comment", Author: "user"}).Validate(); err != nil {
 		t.Fatalf("valid comment add rejected: %v", err)
 	}
@@ -251,6 +277,152 @@ func isWorkflowFieldError(err error, field string, code string) bool {
 		return false
 	}
 	return validationErr.Field == field && validationErr.Code == code
+}
+
+func TestWorkflowTaskQuestionAnswerApprovalJSON(t *testing.T) {
+	req := WorkflowTaskQuestionAnswerRequest{
+		ClientRequestID: "req-1",
+		TaskID:          "task-1",
+		AskID:           "ask-1",
+		Approval: &WorkflowTaskQuestionApprovalAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: "trusted path",
+		},
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw request JSON: %v", err)
+	}
+	if _, ok := raw["Decision"]; ok {
+		t.Fatalf("marshaled JSON contains Go decision field: %#v", raw)
+	}
+	if _, ok := raw["Commentary"]; ok {
+		t.Fatalf("marshaled JSON contains Go commentary field: %#v", raw)
+	}
+	approval, ok := raw["approval"].(map[string]any)
+	if !ok {
+		t.Fatalf("marshaled JSON missing approval object: %#v", raw)
+	}
+	if approval["decision"] != string(clientui.ApprovalDecisionAllowOnce) || approval["commentary"] != "trusted path" {
+		t.Fatalf("approval JSON = %#v", approval)
+	}
+	if _, ok := approval["Decision"]; ok {
+		t.Fatalf("approval JSON contains Go decision field: %#v", approval)
+	}
+	if _, ok := approval["Commentary"]; ok {
+		t.Fatalf("approval JSON contains Go commentary field: %#v", approval)
+	}
+
+	var decoded WorkflowTaskQuestionAnswerRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Approval == nil || decoded.Approval.Decision != clientui.ApprovalDecisionAllowOnce || decoded.Approval.Commentary != "trusted path" {
+		t.Fatalf("decoded approval = %+v", decoded.Approval)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("decoded request rejected: %v", err)
+	}
+}
+
+func TestWorkflowAttentionQuestionPromptJSON(t *testing.T) {
+	item := WorkflowAttentionItem{
+		ID:                     "attention-1",
+		Kind:                   "question",
+		Message:                "Choose",
+		Suggestions:            []string{"A", "B"},
+		RecommendedOptionIndex: 1,
+		Question: &WorkflowAttentionQuestionPrompt{
+			Kind:                   WorkflowAttentionQuestionKindOrdinary,
+			Suggestions:            []string{"A", "B"},
+			RecommendedOptionIndex: 1,
+		},
+		OccurredAtUnixMs: 1,
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal ordinary question: %v", err)
+	}
+	var ordinaryRaw map[string]any
+	if err := json.Unmarshal(data, &ordinaryRaw); err != nil {
+		t.Fatalf("unmarshal ordinary question JSON: %v", err)
+	}
+	ordinaryQuestion, ok := ordinaryRaw["question"].(map[string]any)
+	if !ok {
+		t.Fatalf("ordinary question JSON missing question object: %#v", ordinaryRaw)
+	}
+	if ordinaryQuestion["kind"] != string(WorkflowAttentionQuestionKindOrdinary) {
+		t.Fatalf("ordinary question kind = %#v", ordinaryQuestion["kind"])
+	}
+	ordinarySuggestions, ok := ordinaryQuestion["suggestions"].([]any)
+	if !ok || len(ordinarySuggestions) != 2 || ordinarySuggestions[0] != "A" || ordinarySuggestions[1] != "B" {
+		t.Fatalf("ordinary question suggestions = %#v", ordinaryQuestion["suggestions"])
+	}
+	if ordinaryQuestion["recommended_option_index"] != float64(1) {
+		t.Fatalf("ordinary question recommended option = %#v", ordinaryQuestion["recommended_option_index"])
+	}
+
+	approval := WorkflowAttentionItem{
+		ID:      "attention-2",
+		Kind:    "question",
+		Message: "Approve?",
+		Question: &WorkflowAttentionQuestionPrompt{
+			Kind: WorkflowAttentionQuestionKindApproval,
+			ApprovalDecisions: []clientui.ApprovalDecision{
+				clientui.ApprovalDecisionAllowOnce,
+				clientui.ApprovalDecisionAllowSession,
+				clientui.ApprovalDecisionDeny,
+			},
+		},
+		OccurredAtUnixMs: 1,
+	}
+	data, err = json.Marshal(approval)
+	if err != nil {
+		t.Fatalf("marshal approval question: %v", err)
+	}
+	var approvalRaw map[string]any
+	if err := json.Unmarshal(data, &approvalRaw); err != nil {
+		t.Fatalf("unmarshal approval question JSON: %v", err)
+	}
+	approvalQuestion, ok := approvalRaw["question"].(map[string]any)
+	if !ok {
+		t.Fatalf("approval question JSON missing question object: %#v", approvalRaw)
+	}
+	if _, ok := approvalQuestion["label"]; ok {
+		t.Fatalf("approval prompt JSON must not carry label: %#v", approvalQuestion)
+	}
+	if _, ok := approvalQuestion["Label"]; ok {
+		t.Fatalf("approval prompt JSON must not carry Go label field: %#v", approvalQuestion)
+	}
+	if approvalQuestion["kind"] != string(WorkflowAttentionQuestionKindApproval) {
+		t.Fatalf("approval question kind = %#v", approvalQuestion["kind"])
+	}
+	decisions, ok := approvalQuestion["approval_decisions"].([]any)
+	wantDecisions := []any{
+		string(clientui.ApprovalDecisionAllowOnce),
+		string(clientui.ApprovalDecisionAllowSession),
+		string(clientui.ApprovalDecisionDeny),
+	}
+	if !ok || !equalJSONArrays(decisions, wantDecisions) {
+		t.Fatalf("approval decisions = %#v", approvalQuestion["approval_decisions"])
+	}
+}
+
+func equalJSONArrays(got []any, want []any) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestWorkflowTaskListRequestValidation(t *testing.T) {
@@ -439,6 +611,19 @@ func TestWorkflowValidateRequestValidation(t *testing.T) {
 	}
 }
 
+func TestWorkflowScriptPathValidateRequestValidation(t *testing.T) {
+	valid := WorkflowScriptPathValidateRequest{WorkflowID: "workflow-1", NodeID: "node-script", ScriptPath: ""}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("empty script path should be accepted for diagnostic validation: %v", err)
+	}
+	if err := (WorkflowScriptPathValidateRequest{NodeID: "node-script"}).Validate(); !isWorkflowFieldError(err, "workflow_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("missing workflow_id error = %#v, want required workflow_id", err)
+	}
+	if err := (WorkflowScriptPathValidateRequest{WorkflowID: "workflow-1"}).Validate(); !isWorkflowFieldError(err, "node_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("missing node_id error = %#v, want required node_id", err)
+	}
+}
+
 func TestWorkflowGraphDraftRequestValidation(t *testing.T) {
 	graphWithInvalidShape := WorkflowGraphDraft{
 		Nodes: []WorkflowGraphDraftNode{{ID: "node-1", Key: "Bad-Key", Kind: "unknown"}},
@@ -477,6 +662,31 @@ func TestWorkflowGraphDraftRequestValidation(t *testing.T) {
 	if err := invalidMode.Validate(); !isWorkflowFieldError(err, "graph.nodes.completion_mode", WorkflowRequestErrorInvalidValue) {
 		t.Fatalf("invalid graph node completion mode error = %#v, want invalid_value on graph.nodes.completion_mode", err)
 	}
+	scriptPath := "scripts/run"
+	nonScriptPathGraph := WorkflowGraphSavePreviewRequest{
+		WorkflowID:      "workflow-1",
+		ExpectedVersion: 1,
+		Graph:           WorkflowGraphDraft{Nodes: []WorkflowGraphDraftNode{{ID: "node-1", Kind: "agent", ScriptPath: &scriptPath}}},
+	}
+	if err := nonScriptPathGraph.Validate(); !isWorkflowFieldError(err, "graph.nodes.script_path", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("non-script script_path error = %#v, want invalid_value on graph.nodes.script_path", err)
+	}
+	validPreviousTargetOrNewGraph := WorkflowGraphDraft{
+		Edges: []WorkflowGraphDraftEdge{{ID: "edge-1", ContextSource: WorkflowContextSource{Kind: "previous_target_or_new"}}},
+	}
+	if err := (WorkflowGraphValidateDraftRequest{WorkflowID: "workflow-1", Modes: []WorkflowValidationMode{WorkflowValidationModeDraft}, Graph: validPreviousTargetOrNewGraph}).Validate(); err != nil {
+		t.Fatalf("valid graph previous_target_or_new context source rejected: %v", err)
+	}
+	invalidGraphSourceKind := validPreviousTargetOrNewGraph
+	invalidGraphSourceKind.Edges = []WorkflowGraphDraftEdge{{ID: "edge-1", ContextSource: WorkflowContextSource{Kind: "other"}}}
+	if err := (WorkflowGraphSaveRequest{WorkflowID: "workflow-1", ExpectedVersion: 1, Graph: invalidGraphSourceKind}).Validate(); !isWorkflowFieldError(err, "context_source.kind", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("invalid graph context source kind error = %#v, want invalid_value on context_source.kind", err)
+	}
+	invalidGraphSourceNodeKey := validPreviousTargetOrNewGraph
+	invalidGraphSourceNodeKey.Edges = []WorkflowGraphDraftEdge{{ID: "edge-1", ContextSource: WorkflowContextSource{Kind: "previous_target_or_new", NodeKey: "implement"}}}
+	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: "workflow-1", ExpectedVersion: 1, Graph: invalidGraphSourceNodeKey}).Validate(); !isWorkflowFieldError(err, "context_source.node_key", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("invalid graph context source node key error = %#v, want invalid_value on context_source.node_key", err)
+	}
 	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: "workflow-1", ExpectedVersion: -1}).Validate(); !isWorkflowFieldError(err, "expected_version", WorkflowRequestErrorInvalidValue) {
 		t.Fatalf("negative preview revision error = %#v, want invalid_value on expected_version", err)
 	}
@@ -495,10 +705,18 @@ func TestWorkflowProjectLinkRequestValidation(t *testing.T) {
 	if err := (WorkflowLinkProjectRequest{ProjectID: "project-1", WorkflowID: "workflow-1"}).Validate(); err != nil {
 		t.Fatalf("valid link request rejected: %v", err)
 	}
-	if err := (WorkflowLinkProjectRequest{ProjectID: "project-1", WorkflowID: "workflow-1", DefaultPolicy: WorkflowProjectLinkDefaultIfProjectHasNone}).Validate(); err != nil {
+	if err := (WorkflowLinkProjectRequest{
+		ProjectID:     "project-1",
+		WorkflowID:    "workflow-1",
+		DefaultPolicy: WorkflowProjectLinkDefaultIfProjectHasNone,
+	}).Validate(); err != nil {
 		t.Fatalf("valid link default policy rejected: %v", err)
 	}
-	if err := (WorkflowLinkProjectRequest{ProjectID: "project-1", WorkflowID: "workflow-1", DefaultPolicy: "sometimes"}).Validate(); !isWorkflowFieldError(err, "default_policy", WorkflowRequestErrorInvalidMode) {
+	if err := (WorkflowLinkProjectRequest{
+		ProjectID:     "project-1",
+		WorkflowID:    "workflow-1",
+		DefaultPolicy: "sometimes",
+	}).Validate(); !isWorkflowFieldError(err, "default_policy", WorkflowRequestErrorInvalidMode) {
 		t.Fatalf("invalid link default policy error = %#v, want invalid_mode on default_policy", err)
 	}
 	if err := (WorkflowCreateAndLinkProjectRequest{Name: "Workflow", ProjectID: "project-1", DefaultPolicy: WorkflowProjectLinkDefaultIfProjectHasNone}).Validate(); err != nil {

@@ -27,82 +27,19 @@ func TestSessionSnapshotSourcesParityForMainView(t *testing.T) {
 	assertEqual(t, "session id", live.Session.SessionID, dormant.Session.SessionID)
 	assertEqual(t, "session name", live.Session.SessionName, dormant.Session.SessionName)
 	assertEqual(t, "freshness", live.Session.ConversationFreshness, dormant.Session.ConversationFreshness)
-	assertEqual(t, "transcript revision", live.Session.Transcript.Revision, dormant.Session.Transcript.Revision)
 	assertEqual(t, "execution target", live.Session.ExecutionTarget, dormant.Session.ExecutionTarget)
 	assertEqual(t, "parent session id", live.Status.ParentSessionID, dormant.Status.ParentSessionID)
 	assertEqual(t, "last committed final", live.Status.LastCommittedAssistantFinalAnswer, dormant.Status.LastCommittedAssistantFinalAnswer)
 	assertEqual(t, "update status", live.Status.Update, dormant.Status.Update)
-	assertEqual(t, "active run", normalizedRunView(live.ActiveRun), normalizedRunView(dormant.ActiveRun))
+	assertEqual(t, "activity available", live.Activity.State != "", true)
+	assertEqual(t, "dormant activity", dormant.Activity.State, clientui.RuntimeActivityUnavailable)
 }
 
-func TestSessionSnapshotSourcesParityForTranscriptQueries(t *testing.T) {
+func TestSessionSnapshotSourcesParityForTranscriptTailEntries(t *testing.T) {
 	fixture := newSessionSnapshotParityFixture(t, config.CacheWarningModeVerbose)
-	pageRequests := map[string]serverapi.SessionTranscriptPageRequest{
-		"default": {SessionID: fixture.sessionID},
-	}
-	for name, req := range pageRequests {
-		t.Run(name, func(t *testing.T) {
-			live := mustTranscriptPage(t, fixture.live, req)
-			dormant := mustTranscriptPage(t, fixture.dormant, req)
-			assertEqual(t, "transcript page", normalizedTranscriptPage(live), normalizedTranscriptPage(dormant))
-		})
-	}
-
-	suffixReq := serverapi.SessionCommittedTranscriptSuffixRequest{SessionID: fixture.sessionID}
-	liveSuffix := mustCommittedSuffix(t, fixture.live, suffixReq)
-	dormantSuffix := mustCommittedSuffix(t, fixture.dormant, suffixReq)
-	assertEqual(t, "committed suffix", normalizedCommittedSuffix(liveSuffix), normalizedCommittedSuffix(dormantSuffix))
-}
-
-func TestSessionSnapshotSourcesParityForForwardCursorPaging(t *testing.T) {
-	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
-	appendParityMessage(t, store, llm.RoleUser, "u1")
-	appendParityMessage(t, store, llm.RoleAssistant, "a1")
-	if _, _, err := store.AppendEvent("step", "history_replaced", map[string]any{
-		"engine": "compaction",
-		"items":  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}),
-	}); err != nil {
-		t.Fatalf("append history_replaced: %v", err)
-	}
-	appendParityMessage(t, store, llm.RoleUser, "u2")
-	appendParityMessage(t, store, llm.RoleAssistant, "a2")
-
-	engine, err := runtime.New(store, &serviceFakeLLM{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("new engine: %v", err)
-	}
-	target := staticExecutionTargetResolver{target: clientui.SessionExecutionTarget{WorkspaceID: "workspace-1", WorkspaceRoot: dir, CwdRelpath: ".", EffectiveWorkdir: dir}}
-	live := NewService(NewStaticSessionResolver(store), NewStaticRuntimeResolver(engine), target)
-	dormant := NewService(NewStaticSessionResolver(store), nil, target)
-	sessionID := store.Meta().SessionID
-
-	tail := mustTranscriptPage(t, live, serverapi.SessionTranscriptPageRequest{SessionID: sessionID})
-	if tail.OlderCursor <= 0 {
-		t.Fatalf("tail must page above a compaction, got cursor %d", tail.OlderCursor)
-	}
-	older := mustTranscriptPage(t, live, serverapi.SessionTranscriptPageRequest{SessionID: sessionID, Cursor: tail.OlderCursor})
-	if older.NewerCursor <= 0 || !older.HasMoreBelow {
-		t.Fatalf("older segment must expose a forward cursor, got cursor=%d below=%t", older.NewerCursor, older.HasMoreBelow)
-	}
-
-	forwardReq := serverapi.SessionTranscriptPageRequest{SessionID: sessionID, NewerCursor: older.NewerCursor}
-	liveForward := mustTranscriptPage(t, live, forwardReq)
-	dormantForward := mustTranscriptPage(t, dormant, forwardReq)
-	assertEqual(t, "forward transcript page", normalizedTranscriptPage(liveForward), normalizedTranscriptPage(dormantForward))
-
-	dormantOlder := mustTranscriptPage(t, dormant, serverapi.SessionTranscriptPageRequest{SessionID: sessionID, Cursor: tail.OlderCursor})
-	assertEqual(t, "older transcript page", normalizedTranscriptPage(older), normalizedTranscriptPage(dormantOlder))
-}
-
-func appendParityMessage(t *testing.T, store *session.Store, role llm.Role, content string) {
-	t.Helper()
-	if _, _, err := store.AppendEvent("step", "message", llm.Message{Role: role, Content: content}); err != nil {
-		t.Fatalf("append %q: %v", content, err)
-	}
+	live := mustTranscriptTailEntries(t, fixture.live, fixture.sessionID)
+	dormant := mustTranscriptTailEntries(t, fixture.dormant, fixture.sessionID)
+	assertEqual(t, "transcript tail entries", normalizedChatEntries(live), normalizedChatEntries(dormant))
 }
 
 func TestSessionSnapshotSourcesParityForActiveRunStatus(t *testing.T) {
@@ -112,9 +49,11 @@ func TestSessionSnapshotSourcesParityForActiveRunStatus(t *testing.T) {
 
 	liveMain := mustMainView(t, live, store.Meta().SessionID)
 	dormantMain := mustMainView(t, dormant, store.Meta().SessionID)
-	assertEqual(t, "active main run", normalizedRunView(liveMain.ActiveRun), normalizedRunView(dormantMain.ActiveRun))
-	if liveMain.ActiveRun == nil {
-		t.Fatal("expected active run")
+	if liveMain.Activity.State != clientui.RuntimeActivityRunning {
+		t.Fatalf("live activity = %+v, want running", liveMain.Activity)
+	}
+	if dormantMain.Activity.State != clientui.RuntimeActivityUnavailable {
+		t.Fatalf("dormant activity = %+v, want unavailable", dormantMain.Activity)
 	}
 
 	close(release)
@@ -127,8 +66,8 @@ func TestLiveRuntimeSnapshotReturnsActiveRunWithoutSessionStore(t *testing.T) {
 	store, engine, release, done := startBlockingRuntimeRun(t)
 	live := NewService(nil, NewStaticRuntimeResolver(engine), nil)
 	liveMain := mustMainView(t, live, store.Meta().SessionID)
-	if liveMain.ActiveRun == nil {
-		t.Fatal("expected active run")
+	if liveMain.Activity.State != clientui.RuntimeActivityRunning {
+		t.Fatalf("expected running activity, got %+v", liveMain.Activity)
 	}
 
 	close(release)
@@ -174,15 +113,6 @@ func newSessionSnapshotParityFixture(t *testing.T, cacheWarningMode config.Cache
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2", Phase: llm.MessagePhaseFinal}); err != nil {
 		t.Fatalf("append a2: %v", err)
 	}
-	startedAt := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
-	finishedAt := startedAt.Add(10 * time.Second)
-	if _, err := store.AppendRunStarted(session.RunRecord{RunID: "run-completed", StepID: "step-1", StartedAt: startedAt}); err != nil {
-		t.Fatalf("append run start: %v", err)
-	}
-	if _, err := store.AppendRunFinished(session.RunRecord{RunID: "run-completed", StepID: "step-1", Status: session.RunStatusCompleted, StartedAt: startedAt, FinishedAt: finishedAt}); err != nil {
-		t.Fatalf("append run finish: %v", err)
-	}
-
 	engine, err := runtime.New(store, &serviceFakeLLM{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5", CacheWarningMode: cacheWarningMode})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -249,68 +179,13 @@ func mustMainView(t *testing.T, svc *Service, sessionID string) clientui.Runtime
 	return resp.MainView
 }
 
-func mustTranscriptPage(t *testing.T, svc *Service, req serverapi.SessionTranscriptPageRequest) clientui.TranscriptPage {
+func mustTranscriptTailEntries(t *testing.T, svc *Service, sessionID string) []runtime.ChatEntry {
 	t.Helper()
-	resp, err := svc.GetSessionTranscriptPage(context.Background(), req)
+	entries, err := svc.SessionTranscriptTailEntries(context.Background(), sessionID)
 	if err != nil {
-		t.Fatalf("get transcript page: %v", err)
+		t.Fatalf("get transcript tail entries: %v", err)
 	}
-	return resp.Transcript
-}
-
-func mustCommittedSuffix(t *testing.T, svc *Service, req serverapi.SessionCommittedTranscriptSuffixRequest) clientui.CommittedTranscriptSuffix {
-	t.Helper()
-	resp, err := svc.GetSessionCommittedTranscriptSuffix(context.Background(), req)
-	if err != nil {
-		t.Fatalf("get committed suffix: %v", err)
-	}
-	return resp.Suffix
-}
-
-type comparableTranscriptPage struct {
-	SessionID             string
-	SessionName           string
-	ConversationFreshness clientui.ConversationFreshness
-	Revision              int64
-	OlderCursor           int64
-	HasMoreAbove          bool
-	NewerCursor           int64
-	HasMoreBelow          bool
-	Entries               []comparableChatEntry
-}
-
-func normalizedTranscriptPage(page clientui.TranscriptPage) comparableTranscriptPage {
-	return comparableTranscriptPage{
-		SessionID:             page.SessionID,
-		SessionName:           page.SessionName,
-		ConversationFreshness: page.ConversationFreshness,
-		Revision:              page.Revision,
-		OlderCursor:           page.OlderCursor,
-		HasMoreAbove:          page.HasMoreAbove,
-		NewerCursor:           page.NewerCursor,
-		HasMoreBelow:          page.HasMoreBelow,
-		Entries:               normalizedChatEntries(page.Entries),
-	}
-}
-
-type comparableCommittedSuffix struct {
-	SessionID             string
-	SessionName           string
-	ConversationFreshness clientui.ConversationFreshness
-	Revision              int64
-	HasMore               bool
-	Entries               []comparableChatEntry
-}
-
-func normalizedCommittedSuffix(suffix clientui.CommittedTranscriptSuffix) comparableCommittedSuffix {
-	return comparableCommittedSuffix{
-		SessionID:             suffix.SessionID,
-		SessionName:           suffix.SessionName,
-		ConversationFreshness: suffix.ConversationFreshness,
-		Revision:              suffix.Revision,
-		HasMore:               suffix.HasMore,
-		Entries:               normalizedChatEntries(suffix.Entries),
-	}
+	return entries
 }
 
 type comparableChatEntry struct {
@@ -323,7 +198,7 @@ type comparableChatEntry struct {
 	CompactLabel  string
 }
 
-func normalizedChatEntries(entries []clientui.ChatEntry) []comparableChatEntry {
+func normalizedChatEntries(entries []runtime.ChatEntry) []comparableChatEntry {
 	out := make([]comparableChatEntry, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, comparableChatEntry{
@@ -331,20 +206,12 @@ func normalizedChatEntries(entries []clientui.ChatEntry) []comparableChatEntry {
 			Role:          entry.Role,
 			Text:          entry.Text,
 			CondensedText: entry.CondensedText,
-			Phase:         entry.Phase,
-			MessageType:   entry.MessageType,
+			Phase:         string(entry.Phase),
+			MessageType:   string(entry.MessageType),
 			CompactLabel:  entry.CompactLabel,
 		})
 	}
 	return out
-}
-
-func normalizedRunView(run *clientui.RunView) *clientui.RunView {
-	if run == nil {
-		return nil
-	}
-	copyRun := *run
-	return &copyRun
 }
 
 func assertEqual(t *testing.T, label string, got, want any) {

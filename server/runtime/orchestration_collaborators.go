@@ -8,17 +8,17 @@ import (
 )
 
 type exclusiveStepOptions struct {
-	EmitRunState        bool
-	PersistRunLifecycle bool
-	GoalLoop            bool
+	EmitRunState bool
+	ActiveKind   ActiveKind
 }
 
 type exclusiveStepLifecycle interface {
 	Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
 	Interrupt() error
+	InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error)
 	IsBusy() bool
 	Snapshot() *RunSnapshot
-	WithActiveRun(runID string, stepID string, fn func() error) (bool, error)
+	WithActiveStep(fn func(stepID string) error) (bool, error)
 }
 
 type backgroundNoticeScheduler interface {
@@ -32,7 +32,9 @@ type backgroundNoticeScheduler interface {
 
 type contextCompactor interface {
 	CompactContext(ctx context.Context, args string) error
+	CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) error
 	CompactContextForPreSubmit(ctx context.Context) error
+	CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) error
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
 	ShouldCompactBeforeUserMessage(ctx context.Context, text string) (bool, error)
@@ -41,7 +43,6 @@ type contextCompactor interface {
 type stepLoopOptions struct {
 	ReviewerFrequency              string
 	ReviewerClient                 llm.Client
-	EmitAssistantEvent             bool
 	RefreshReviewerConfigOnResolve bool
 	PendingUserInjectionIDs        map[string]struct{}
 }
@@ -70,7 +71,9 @@ type messageLifecycle interface {
 	RestoreMessages() error
 	FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, error)
 	DrainPendingUserInjections() []QueuedUserMessage
+	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage
+	QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage
 	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
 	HasPendingUserInjections() bool
 }
@@ -86,6 +89,7 @@ type reviewerFollowUpResult struct {
 	Completion                 *ReviewerStatus
 	AssistantCommittedStart    int
 	AssistantCommittedStartSet bool
+	AssistantEventEmitted      bool
 }
 
 type phaseProtocolTurn struct {
@@ -103,6 +107,9 @@ type phaseProtocolEnforcer interface {
 
 func (e *Engine) ensureOrchestrationCollaborators() {
 	e.collaboratorsOnce.Do(func() {
+		if e.liveRun == nil {
+			e.liveRun = newLiveRunCoordinator()
+		}
 		if e.stepLifecycle == nil {
 			e.stepLifecycle = &defaultExclusiveStepLifecycle{engine: e}
 		}

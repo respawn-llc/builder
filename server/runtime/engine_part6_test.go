@@ -39,6 +39,7 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	var (
 		eventsMu                   sync.Mutex
 		assistantEvent             *Event
+		assistantEventCount        int
 		reviewerCompletedEvent     *Event
 		snapshotAtReviewerComplete ChatSnapshot
 		eng                        *Engine
@@ -50,6 +51,7 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 				eventsMu.Lock()
 				captured := evt
 				assistantEvent = &captured
+				assistantEventCount++
 				eventsMu.Unlock()
 				return
 			}
@@ -81,11 +83,15 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 
 	eventsMu.Lock()
 	assistant := assistantEvent
+	assistantCount := assistantEventCount
 	completed := reviewerCompletedEvent
 	snapshotAtCompletion := snapshotAtReviewerComplete
 	eventsMu.Unlock()
 	if assistant == nil {
 		t.Fatal("expected follow-up assistant event")
+	}
+	if assistantCount != 1 {
+		t.Fatalf("follow-up assistant event count = %d, want 1", assistantCount)
 	}
 	if completed == nil {
 		t.Fatal("expected reviewer completed event")
@@ -236,7 +242,7 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 		return nil
 	}
 	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		if entry.Role == "reviewer_status" {
+		if transcript.IsReviewerEntryRole(entry.Role) {
 			return localEntryErr
 		}
 		return nil
@@ -274,7 +280,7 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 		t.Fatalf("expected append failure to leave transcript at persisted assistant entries only, got %+v", snapshot.Entries)
 	}
 	for _, entry := range snapshot.Entries {
-		if entry.Role == "reviewer_status" {
+		if entry.Role == string(transcript.EntryRoleReviewerStatus) || entry.Role == string(transcript.EntryRoleReviewerError) {
 			t.Fatalf("did not expect in-memory reviewer status after append failure, got %+v", snapshot.Entries)
 		}
 	}
@@ -401,7 +407,7 @@ func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T
 	}
 
 	err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{
-		Visibility: transcript.EntryVisibilityAll,
+		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       "reviewer_status",
 		Text:       "Supervisor ran, applied 1 suggestion.",
 	}))
@@ -785,6 +791,26 @@ func TestReviewerStatusTextIncludesReviewerCacheHitMetadata(t *testing.T) {
 	}, []string{"one", "two"})
 	if text != "Supervisor ran: 2 suggestions, but follow-up failed: tool crashed" {
 		t.Fatalf("expected concise follow-up failure status, got %q", text)
+	}
+}
+
+func TestReviewerStatusEntryRoleMarksErrors(t *testing.T) {
+	cases := []struct {
+		outcome string
+		want    string
+	}{
+		{outcome: "failed", want: string(transcript.EntryRoleReviewerError)},
+		{outcome: "followup_failed", want: string(transcript.EntryRoleReviewerError)},
+		{outcome: "applied", want: string(transcript.EntryRoleReviewerStatus)},
+		{outcome: "no_suggestions", want: string(transcript.EntryRoleReviewerStatus)},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.outcome, func(t *testing.T) {
+			if got := reviewerStatusEntryRole(ReviewerStatus{Outcome: tt.outcome}); got != tt.want {
+				t.Fatalf("reviewerStatusEntryRole = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -40,6 +40,12 @@ kent task list [--project]
 kent task show <short-id-or-task-id>
 ```
 
+## Approvals And Manual Moves
+Some workflow transitions wait for human approval before target runs start. Inspect the task before approving, rejecting, or moving it so you know which workflow transition is pending.
+
+Manual moves reject a pending approval and only apply to transition paths whose context source is supported by the manual-move path.
+The runtime rejects `selected_node`, `node:<node-key>`, `previous_target`, and `previous_target_or_new`; use normal workflow transitions for those cases.
+
 ## Comments
 Task comments are task-local notes mostly for **agents**. They are useful for design discussion, decision logs, review notes, cross-agent comms, and work logs that should not be committed into a worktree but need to be preserved beyond your memory. Good candidates are notes about the approaches taken, discussion between agents, hacks, caveats, etc. that don't fit in the repository or project's existing documentation paradigms. Generally, feel free to comment under tasks as much as you want if there is no better explicit location specified for the info you're trying to save.
 

@@ -37,7 +37,7 @@ func newPendingPromptStore() *pendingPromptStore {
 	return &pendingPromptStore{pending: make(map[string]*pendingPromptEntry)}
 }
 
-func (s *pendingPromptStore) Begin(req askquestion.AskQuestionRequest) (PendingPromptSnapshot, bool) {
+func (s *pendingPromptStore) Begin(req askquestion.AskQuestionRequest, publish func(PendingPromptSnapshot, pendingPromptEventType)) (PendingPromptSnapshot, bool) {
 	if s == nil {
 		return PendingPromptSnapshot{}, false
 	}
@@ -49,6 +49,9 @@ func (s *pendingPromptStore) Begin(req askquestion.AskQuestionRequest) (PendingP
 	s.mu.Lock()
 	s.pending[requestID] = &pendingPromptEntry{PendingPromptSnapshot: snapshot}
 	s.mu.Unlock()
+	if publish != nil {
+		publish(snapshot, pendingPromptEventPending)
+	}
 	return snapshot, true
 }
 
@@ -81,6 +84,20 @@ func (s *pendingPromptStore) List() []PendingPromptSnapshot {
 	return items
 }
 
+func (s *pendingPromptStore) Has(requestID string) bool {
+	if s == nil {
+		return false
+	}
+	id := strings.TrimSpace(requestID)
+	if id == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	pending := s.pending[id]
+	return pending != nil && !pending.closed
+}
+
 func (s *pendingPromptStore) Await(ctx context.Context, req askquestion.AskQuestionRequest, publish func(PendingPromptSnapshot, pendingPromptEventType)) (askquestion.AskQuestionResponse, error) {
 	if s == nil {
 		return askquestion.AskQuestionResponse{}, fmt.Errorf("pending prompt store is required")
@@ -100,7 +117,9 @@ func (s *pendingPromptStore) Await(ctx context.Context, req askquestion.AskQuest
 	}
 	s.pending[requestID] = pending
 	s.mu.Unlock()
-	publish(pending.PendingPromptSnapshot, pendingPromptEventPending)
+	if publish != nil {
+		publish(pending.PendingPromptSnapshot, pendingPromptEventPending)
+	}
 	defer func() {
 		var shouldPublishResolved bool
 		s.mu.Lock()
@@ -111,7 +130,7 @@ func (s *pendingPromptStore) Await(ctx context.Context, req askquestion.AskQuest
 			delete(s.pending, requestID)
 		}
 		s.mu.Unlock()
-		if shouldPublishResolved {
+		if shouldPublishResolved && publish != nil {
 			publish(pending.PendingPromptSnapshot, pendingPromptEventResolved)
 		}
 	}()
@@ -145,8 +164,14 @@ func (s *pendingPromptStore) Submit(resp askquestion.AskQuestionResponse, err er
 		s.mu.Unlock()
 		return fmt.Errorf("prompt %q cannot be answered through the shared boundary: %w", requestID, serverapi.ErrPromptUnsupported)
 	}
-	pending.closed = true
 	snapshot := pending.PendingPromptSnapshot
+	if err == nil {
+		if validateErr := askquestion.ValidateAskQuestionResponse(snapshot.Request, resp); validateErr != nil {
+			s.mu.Unlock()
+			return validateErr
+		}
+	}
+	pending.closed = true
 	ch := pending.response
 	delete(s.pending, requestID)
 	s.mu.Unlock()
@@ -183,6 +208,15 @@ func (s *pendingPromptStore) Close(err error) {
 }
 
 func (s *pendingPromptStore) WithLockedSnapshotResult(fn func([]PendingPromptSnapshot) (*promptActivitySubscription, error)) (*promptActivitySubscription, error) {
+	if s == nil {
+		return nil, fmt.Errorf("pending prompt store is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fn(s.listLocked())
+}
+
+func (s *pendingPromptStore) WithLockedAttentionSnapshotResult(fn func([]PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error)) (serverapi.AttentionNotificationSubscription, error) {
 	if s == nil {
 		return nil, fmt.Errorf("pending prompt store is required")
 	}

@@ -28,7 +28,7 @@ type SchedulerStore interface {
 	ClaimRun(ctx context.Context, runID workflow.RunID, expectedGeneration int64) (workflowstore.RunnableRunRecord, error)
 	InterruptRun(ctx context.Context, runID workflow.RunID, reason string, detailJSON string) error
 	InterruptRunGeneration(ctx context.Context, runID workflow.RunID, generation int64, reason string, detailJSON string) error
-	ReconcileStartedRuns(ctx context.Context, reason string) (int64, error)
+	ReconcileStartedRuns(ctx context.Context, reason string) ([]workflowstore.RunRecord, error)
 	ListWaitingAskRuns(ctx context.Context) ([]workflowstore.RunRecord, error)
 }
 
@@ -42,6 +42,10 @@ type SchedulerPendingAskResolver interface {
 
 type SchedulerLogger interface {
 	Logf(format string, args ...any)
+}
+
+type SchedulerInterruptedRunFinalizer interface {
+	FinalizeInterruptedRun(context.Context, workflow.RunID)
 }
 
 type SchedulerStartRunRequest struct {
@@ -65,6 +69,7 @@ type SchedulerService struct {
 	claimBackoff       time.Duration
 	processInterval    time.Duration
 	logger             SchedulerLogger
+	attentionFinalizer SchedulerInterruptedRunFinalizer
 
 	mu         sync.Mutex
 	active     map[workflow.RunID]SchedulerStartRunRequest
@@ -102,6 +107,12 @@ type SchedulerOption func(*SchedulerService)
 func WithSchedulerPendingAskResolver(resolver SchedulerPendingAskResolver) SchedulerOption {
 	return func(s *SchedulerService) {
 		s.pendingAskResolver = resolver
+	}
+}
+
+func WithSchedulerAttentionFinalizer(finalizer SchedulerInterruptedRunFinalizer) SchedulerOption {
+	return func(s *SchedulerService) {
+		s.attentionFinalizer = finalizer
 	}
 }
 
@@ -252,13 +263,20 @@ func (s *SchedulerService) Reconcile(ctx context.Context) error {
 			if err := s.store.InterruptRun(ctx, run.ID, ReasonSchedulerPendingAskUnavailable, "{}"); err != nil {
 				return err
 			}
+			s.finalizeInterruptedRun(ctx, run.ID)
 		} else {
 			s.logf("workflow.scheduler.recovery run_id=%s action=preserve_waiting_ask ask_id=%s", run.ID, run.WaitingAskID)
 		}
 	}
 	s.logf("workflow.scheduler.recovery action=interrupt_orphaned_started reason=%s", ReasonSchedulerStartupOrphanedRun)
-	_, err = s.store.ReconcileStartedRuns(ctx, ReasonSchedulerStartupOrphanedRun)
-	return err
+	interrupted, err := s.store.ReconcileStartedRuns(ctx, ReasonSchedulerStartupOrphanedRun)
+	if err != nil {
+		return err
+	}
+	for _, run := range interrupted {
+		s.finalizeInterruptedRun(ctx, run.ID)
+	}
+	return nil
 }
 
 func (s *SchedulerService) Process(ctx context.Context) error {
@@ -320,10 +338,18 @@ func (s *SchedulerService) Process(ctx context.Context) error {
 			if interruptErr := s.store.InterruptRunGeneration(context.WithoutCancel(ctx), claimed.ID, claimed.Generation, ReasonSchedulerRuntimeStartFailed, fmt.Sprintf(`{"error":%q}`, err.Error())); interruptErr != nil {
 				return errors.Join(fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err), interruptErr)
 			}
+			s.finalizeInterruptedRun(context.WithoutCancel(ctx), claimed.ID)
 			return fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err)
 		}
 	}
 	return nil
+}
+
+func (s *SchedulerService) finalizeInterruptedRun(ctx context.Context, runID workflow.RunID) {
+	if s == nil || s.attentionFinalizer == nil || runID == "" {
+		return
+	}
+	s.attentionFinalizer.FinalizeInterruptedRun(ctx, runID)
 }
 
 func (s *SchedulerService) claimRunWithRetry(ctx context.Context, candidate workflowstore.RunnableRunRecord) (workflowstore.RunnableRunRecord, error) {

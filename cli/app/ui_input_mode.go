@@ -62,13 +62,7 @@ const (
 type uiRollbackState struct {
 	phase                     uiRollbackPhase
 	suppressedAlternateScroll bool
-	restoreTranscriptMode     tui.Mode
-	candidates                []rollbackCandidate
 	selection                 int
-	selectedTranscriptEntry   int
-	selectedTargetID          string
-	pendingSelectionAnchor    int
-	pendingSelectionDelta     int
 }
 
 type uiStatusOverlayState struct {
@@ -113,7 +107,6 @@ func (s uiRollbackState) isActive() bool {
 
 type uiInputModeState struct {
 	Mode           uiInputMode
-	InputLocked    bool
 	Busy           bool
 	ShowsMainInput bool
 	ShowsAskInput  bool
@@ -150,10 +143,7 @@ func (m *uiModel) restorePrimaryInputMode() {
 func (m *uiModel) inputModeState() uiInputModeState {
 	mode := m.inputMode()
 	return uiInputModeState{
-		Mode: mode,
-		InputLocked: m != nil &&
-			m.isInputSubmitLocked(),
-
+		Mode:           mode,
 		Busy:           m != nil && m.isBusy(),
 		ShowsMainInput: mode.showsMainInput(),
 		ShowsAskInput:  mode.showsAskInput(),

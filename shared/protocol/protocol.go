@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"strings"
-	"time"
 )
 
 //go:embed version.json
@@ -13,30 +12,32 @@ var versionDefinition []byte
 var Version = mustLoadVersion()
 
 const (
-	RPCPath           = "/rpc"
-	HealthPath        = "/healthz"
-	HealthStatusOK    = "ok"
-	ReadinessPath     = "/readyz"
-	DiscoveryFilename = "app-server.json"
+	RPCPath        = "/rpc"
+	HealthPath     = "/healthz"
+	HealthStatusOK = "ok"
+	ReadinessPath  = "/readyz"
 )
 
 type CapabilityFlags struct {
-	JSONRPCWebSocket        bool `json:"jsonrpc_websocket"`
-	AuthBootstrap           bool `json:"auth_bootstrap"`
-	ProjectAttach           bool `json:"project_attach"`
-	SessionAttach           bool `json:"session_attach"`
-	HealthEndpoint          bool `json:"health_endpoint"`
-	ReadinessEndpoint       bool `json:"readiness_endpoint"`
-	RunPrompt               bool `json:"run_prompt"`
-	SessionPlan             bool `json:"session_plan"`
-	SessionLifecycle        bool `json:"session_lifecycle"`
-	SessionTranscriptPaging bool `json:"session_transcript_paging"`
-	SessionRuntime          bool `json:"session_runtime"`
-	RuntimeControl          bool `json:"runtime_control"`
-	PromptControl           bool `json:"prompt_control"`
-	PromptActivity          bool `json:"prompt_activity"`
-	SessionActivity         bool `json:"session_activity"`
-	ProcessOutput           bool `json:"process_output"`
+	JSONRPCWebSocket       bool `json:"jsonrpc_websocket"`
+	AuthBootstrap          bool `json:"auth_bootstrap"`
+	ProjectAttach          bool `json:"project_attach"`
+	SessionAttach          bool `json:"session_attach"`
+	HealthEndpoint         bool `json:"health_endpoint"`
+	ReadinessEndpoint      bool `json:"readiness_endpoint"`
+	RunPrompt              bool `json:"run_prompt"`
+	SessionPlan            bool `json:"session_plan"`
+	SessionLifecycle       bool `json:"session_lifecycle"`
+	SessionTranscript      bool `json:"session_transcript"`
+	SessionRuntime         bool `json:"session_runtime"`
+	RuntimeControl         bool `json:"runtime_control"`
+	RuntimeLiveControl     bool `json:"runtime_live_control"`
+	PromptControl          bool `json:"prompt_control"`
+	PromptActivity         bool `json:"prompt_activity"`
+	SessionActivity        bool `json:"session_activity"`
+	ProcessOutput          bool `json:"process_output"`
+	AttentionNotifications bool `json:"attention_notifications"`
+	OnboardingFinalize     bool `json:"onboarding_finalize"`
 }
 
 type ServerIdentity struct {
@@ -52,16 +53,6 @@ type ServerIdentity struct {
 	// a client that did select one rejects any server that does not report a
 	// matching id (including an empty id from an older build).
 	PersistenceRootID string `json:"persistence_root_id,omitempty"`
-}
-
-type DiscoveryRecord struct {
-	Identity  ServerIdentity `json:"identity"`
-	HTTPURL   string         `json:"http_url"`
-	RPCURL    string         `json:"rpc_url"`
-	HealthURL string         `json:"health_url"`
-	ReadyURL  string         `json:"ready_url"`
-	StartedAt time.Time      `json:"started_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
 }
 
 func mustLoadVersion() string {

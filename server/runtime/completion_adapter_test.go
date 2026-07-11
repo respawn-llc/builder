@@ -5,38 +5,8 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/session"
-	"core/server/tools"
 	"core/shared/config"
 )
-
-func TestGoalContinuationAdapterDecidesFromState(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
-	adapter := eng.goalContinuation()
-	ctx := context.Background()
-
-	outcome, err := adapter.Evaluate(ctx, llm.Message{})
-	if err != nil || !outcome.Applicable || !outcome.Done {
-		t.Fatalf("no goal: outcome=%+v err=%v, want Applicable+Done", outcome, err)
-	}
-
-	if _, err := eng.SetGoal("keep going", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	outcome, err = adapter.Evaluate(ctx, llm.Message{Phase: llm.MessagePhaseFinal, Content: "anything"})
-	if err != nil || !outcome.Applicable || outcome.Done || outcome.Complete != nil {
-		t.Fatalf("active goal: outcome=%+v err=%v, want Applicable, not Done, no side effect", outcome, err)
-	}
-
-	if _, err := eng.SetGoalStatus(session.GoalStatusComplete, session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoalStatus: %v", err)
-	}
-	outcome, err = adapter.Evaluate(ctx, llm.Message{})
-	if err != nil || !outcome.Done {
-		t.Fatalf("completed goal: outcome=%+v err=%v, want Done", outcome, err)
-	}
-}
 
 func TestWorkflowCompletionAdapterDecidesFromOutput(t *testing.T) {
 	ctx := context.Background()

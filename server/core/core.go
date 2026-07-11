@@ -11,7 +11,6 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/runprompt"
 	"core/server/runtime"
 	"core/server/runtimewire"
@@ -41,6 +40,16 @@ type unregisteredRunPromptClient struct{}
 
 func (unregisteredRunPromptClient) RunPrompt(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 	return serverapi.RunPromptResponse{}, serverapi.ErrWorkspaceNotRegistered
+}
+
+type unavailableAttentionNotificationClient struct{}
+
+func (unavailableAttentionNotificationClient) SubscribeAttentionNotifications(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return nil, serverapi.ErrStreamUnavailable
+}
+
+func (unavailableAttentionNotificationClient) SubscribeSessionAttentionNotifications(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return nil, serverapi.ErrStreamUnavailable
 }
 
 type projectContext struct {
@@ -282,14 +291,14 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) clien
 		return cached
 	}
 	client := runprompt.NewLoopbackRunPromptClient(runprompt.HeadlessBootstrap{
-		SessionLaunch:    s.sessionLaunchServiceForProjectContext(projectCtx),
-		AuthManager:      s.safeBundles().Auth.support.AuthManager,
-		FastModeState:    s.safeBundles().Runtime.fastModeState,
-		Background:       s.safeBundles().Runtime.background,
-		RuntimeRegistry:  s.safeBundles().Runtime.runtimeRegistry,
-		BackgroundRouter: s.safeBundles().Runtime.backgroundRouter,
-		PromptHistory:    s.safeBundles().Persistence.metadataStore,
-		PersistenceRoot:  projectCtx.config.PersistenceRoot,
+		SessionLaunch:   s.sessionLaunchServiceForProjectContext(projectCtx),
+		AuthManager:     s.safeBundles().Auth.support.AuthManager,
+		FastModeState:   s.safeBundles().Runtime.fastModeState,
+		Background:      s.safeBundles().Runtime.background,
+		RuntimeRegistry: s.safeBundles().Runtime.runtimeRegistry,
+		PromptHistory:   s.safeBundles().Persistence.metadataStore,
+		SessionRuntime:  s.safeBundles().Runtime.sessionRuntimeService,
+		PersistenceRoot: projectCtx.config.PersistenceRoot,
 	})
 	s.safeBundles().Sessions.runPromptMap[scopeKey] = client
 	return client
@@ -409,6 +418,42 @@ func (s *Core) AuthStatusClient() client.AuthStatusClient {
 	return s.safeBundles().Auth.authStatus
 }
 
+func (s *Core) CapabilityFactsClient() client.CapabilityFactsClient {
+	if s == nil {
+		return nil
+	}
+	return s.safeBundles().Capability.facts
+}
+
+func (s *Core) OnboardingFinalizeClient() client.OnboardingFinalizeClient {
+	if s == nil {
+		return nil
+	}
+	return client.NewLoopbackOnboardingFinalizeClient(configuredCoreOnboardingFinalizeService{settingsPath: configuredCoreSettingsPath(s.Config())})
+}
+
+type configuredCoreOnboardingFinalizeService struct {
+	settingsPath string
+}
+
+func (s configuredCoreOnboardingFinalizeService) FinalizeOnboarding(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: s.settingsPath}, nil)
+}
+
+func configuredCoreSettingsPath(cfg config.App) string {
+	if path := strings.TrimSpace(cfg.Source.SettingsPath); path != "" {
+		return path
+	}
+	if path := strings.TrimSpace(cfg.Source.HomeSettingsPath); path != "" {
+		return path
+	}
+	path, err := config.ResolveSettingsFilePathInRoot(cfg.PersistenceRoot)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
 func (s *Core) AskViewClient() client.AskViewClient {
 	if s == nil {
 		return nil
@@ -437,6 +482,13 @@ func (s *Core) RuntimeControlClient() client.RuntimeControlClient {
 	return s.safeBundles().Runtime.runtimeControls
 }
 
+func (s *Core) RuntimeLiveControlClient() client.RuntimeLiveControlClient {
+	if s == nil {
+		return nil
+	}
+	return s.safeBundles().Runtime.runtimeLiveControls
+}
+
 func (s *Core) ServerStatusClient() client.ServerStatusClient {
 	if s == nil {
 		return nil
@@ -458,6 +510,13 @@ func (s *Core) PromptActivityClient() client.PromptActivityClient {
 	return s.safeBundles().Prompts.promptActivity
 }
 
+func (s *Core) AttentionNotificationClient() client.AttentionNotificationClient {
+	if s == nil {
+		return unavailableAttentionNotificationClient{}
+	}
+	return s.safeBundles().Prompts.attentionNotifications
+}
+
 func (s *Core) ProcessControlClient() client.ProcessControlClient {
 	if s == nil {
 		return nil
@@ -477,6 +536,13 @@ func (s *Core) SessionActivityClient() client.SessionActivityClient {
 		return nil
 	}
 	return s.safeBundles().Runtime.sessionActivity
+}
+
+func (s *Core) SessionTranscriptClient() client.SessionTranscriptClient {
+	if s == nil {
+		return nil
+	}
+	return s.safeBundles().Runtime.sessionTranscript
 }
 
 func (s *Core) SessionLaunchClient() client.SessionLaunchClient {
@@ -528,20 +594,6 @@ func (s *Core) ResolveSessionStore(sessionID string) (*session.Store, error) {
 	return s.safeBundles().Persistence.sessionStores.ResolveStore(context.Background(), sessionID)
 }
 
-func (s *Core) RegisterRuntime(sessionID string, engine *runtime.Engine) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return
-	}
-	s.safeBundles().Runtime.runtimeRegistry.Register(sessionID, engine)
-}
-
-func (s *Core) UnregisterRuntime(sessionID string, engine *runtime.Engine) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return
-	}
-	s.safeBundles().Runtime.runtimeRegistry.Unregister(sessionID, engine)
-}
-
 func (s *Core) PublishRuntimeEvent(sessionID string, evt runtime.Event) {
 	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
 		return
@@ -568,13 +620,6 @@ func (s *Core) AwaitPromptResponse(ctx context.Context, sessionID string, req as
 		return askquestion.AskQuestionResponse{}, fmt.Errorf("runtime registry is required")
 	}
 	return s.safeBundles().Runtime.runtimeRegistry.AwaitPromptResponse(ctx, sessionID, req)
-}
-
-func (s *Core) AcquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return nil, primaryrun.ErrActivePrimaryRun
-	}
-	return s.safeBundles().Runtime.runtimeRegistry.AcquirePrimaryRun(sessionID)
 }
 
 func (s *Core) RunPromptClient() client.RunPromptClient {

@@ -3,8 +3,9 @@ package app
 import (
 	"strings"
 
-	"core/cli/tui"
 	"core/shared/clientui"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type statusLinePhase uint8
@@ -16,9 +17,17 @@ const (
 	statusLinePhaseError
 )
 
-func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) {
+func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.Cmd {
 	if m == nil {
-		return
+		return nil
+	}
+	if view.Version.Validate() == nil {
+		if m.acceptRuntimeReadModelVersion(view.Version, true) == runtimeReadModelVersionIgnore {
+			if view.Activity.State != "" && runtimeActivityConflictsWithProjection(view.Activity, m) {
+				_ = m.sendTransientStatusWithNoticeID("conflicting runtime activity read-model update ignored", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+			}
+			return nil
+		}
 	}
 	status := view.Status
 	m.reviewerMode = status.ReviewerFrequency
@@ -29,47 +38,20 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) {
 	m.fastModeEnabled = status.FastModeEnabled
 	m.conversationFreshness = status.ConversationFreshness
 	m.setRuntimeContextUsage(view.Session.SessionID, status.ContextUsage)
-	m.setExternalRuntimeStatus(view.ExternalRuntime)
-	activeRun := view.ActiveRun != nil && view.ActiveRun.Status == clientui.RunStatusRunning
-	active := activeRun || m.externalRuntimeBusy()
-	m.setBusy(active)
-	m.setGoalRun(activeRun && view.ActiveRun.Lifecycle.IsGoalLoopRunning())
-	if active {
-		m.activity = uiActivityRunning
-		return
+	if view.Activity.State != "" {
+		if err := m.applyRuntimeActivityProjection(view.Activity); err != nil {
+			m.activity = uiActivityError
+			_ = m.sendTransientStatusWithNoticeID("invalid runtime activity: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+			return nil
+		}
 	}
-	m.activity = uiActivityIdle
-}
-
-func externalRuntimeBusy(status *clientui.ExternalRuntimeStatus) bool {
-	if status == nil {
-		return false
+	if view.Activity.State != "" && !view.Activity.ActiveForControl() && m.hasPendingInterrupt() {
+		if m.pendingInterruptMissingInputReconciliation(view) {
+			return nil
+		}
+		return m.acknowledgePendingInterrupt()
 	}
-	switch status.State {
-	case clientui.ExternalRuntimeStateOwnerRunning, clientui.ExternalRuntimeStateDraining, clientui.ExternalRuntimeStateClosing:
-		return true
-	default:
-		return false
-	}
-}
-
-func (m *uiModel) setExternalRuntimeStatus(status *clientui.ExternalRuntimeStatus) {
-	if m == nil {
-		return
-	}
-	if status == nil || status.State == "" {
-		m.externalRuntimeStatus = nil
-		return
-	}
-	next := *status
-	m.externalRuntimeStatus = &next
-}
-
-func (m *uiModel) externalRuntimeBusy() bool {
-	if m == nil {
-		return false
-	}
-	return externalRuntimeBusy(m.externalRuntimeStatus)
+	return nil
 }
 
 func (m *uiModel) runtimeMainView() clientui.RuntimeMainView {
@@ -86,7 +68,15 @@ func (m *uiModel) runtimeMainView() clientui.RuntimeMainView {
 func (m *uiModel) refreshRuntimeMainView() clientui.RuntimeMainView {
 	m.checkTUIBlockingOperation("runtime main-view refresh", "RefreshMainView")
 	if client := m.runtimeClient(); client != nil {
-		view, err := client.RefreshMainView()
+		var (
+			view clientui.RuntimeMainView
+			err  error
+		)
+		if requestClient, ok := client.(runtimeMainViewReconciliationClient); ok {
+			view, err = requestClient.RefreshMainViewWithPendingRefs(m.pendingRuntimeOperationRefs())
+		} else {
+			view, err = client.RefreshMainView()
+		}
 		if err == nil {
 			m.observeRuntimeRequestResult(nil)
 			return view
@@ -144,6 +134,9 @@ func (m *uiModel) statusLinePhase() statusLinePhase {
 	if m.isReviewerRunning() {
 		return statusLinePhaseSuccess
 	}
+	if m.rollback.isActive() {
+		return statusLinePhasePrimary
+	}
 	if goalIsActive(m.cachedRuntimeStatus().Goal) {
 		return statusLinePhasePrimary
 	}
@@ -163,6 +156,9 @@ func (m *uiModel) statusLineLabel() string {
 	if m.isReviewerRunning() {
 		return "review"
 	}
+	if m.rollback.isActive() {
+		return "editing"
+	}
 	if goalIsPresent(m.cachedRuntimeStatus().Goal) {
 		return "goal"
 	}
@@ -176,7 +172,7 @@ func (m *uiModel) statusLineSpinning() bool {
 	if m == nil {
 		return false
 	}
-	return (m.runtimeLifecycle.Run.IsRunning() && m.activity != uiActivityQuestion) ||
+	return (m.runtimeActivityBusy() && m.activity != uiActivityQuestion) ||
 		m.runtimeLifecycle.Compaction.IsRunning() ||
 		m.runtimeLifecycle.Reviewer.IsRunning()
 }
@@ -192,7 +188,7 @@ func (m *uiModel) refreshRuntimeStatus() clientui.RuntimeStatus {
 }
 
 func (m *uiModel) applyRuntimeEventStatus(evt clientui.Event) {
-	if m == nil || (evt.ContextUsage == nil && evt.GoalStatus == nil) {
+	if m == nil || (evt.ContextUsage == nil && evt.GoalStatus == nil && evt.Kind != clientui.EventRuntimeActivityChanged) {
 		return
 	}
 	if evt.ContextUsage != nil {
@@ -248,123 +244,15 @@ func (m *uiModel) currentRuntimeSessionID() string {
 	return ""
 }
 
-func (m *uiModel) runtimeTranscript() clientui.TranscriptPage {
-	m.checkTUIBlockingOperation("runtime transcript read", "Transcript")
-	if client := m.runtimeClient(); client != nil {
-		return client.Transcript()
-	}
-	return m.localRuntimeTranscript()
-}
-
-func (m *uiModel) startupRuntimeTranscript() clientui.TranscriptPage {
-	if client := m.runtimeClient(); client != nil {
-		if suffixClient, ok := client.(interface {
-			RefreshCommittedTranscriptSuffix(clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error)
-		}); ok {
-			suffix, err := suffixClient.RefreshCommittedTranscriptSuffix(m.startupCommittedTranscriptSuffixRequest())
-			if err == nil {
-				m.observeRuntimeRequestResult(nil)
-				return transcriptPageFromCommittedTranscriptSuffix(suffix)
-			}
-			m.observeRuntimeRequestResult(err)
-			return m.localRuntimeTranscript()
-		}
-		if _, ok := client.(*sessionRuntimeClient); ok {
-			return m.refreshRuntimeTranscript()
-		}
-	}
-	return m.runtimeTranscript()
-}
-
-func (m *uiModel) startupCommittedTranscriptSuffixRequest() clientui.CommittedTranscriptSuffixRequest {
-	return clientui.CommittedTranscriptSuffixRequest{}
-}
-
-func (m *uiModel) refreshRuntimeTranscript() clientui.TranscriptPage {
-	if client := m.runtimeClient(); client != nil {
-		page, err := client.RefreshTranscript()
-		if err == nil {
-			m.observeRuntimeRequestResult(nil)
-			return page
-		}
-		m.observeRuntimeRequestResult(err)
-		return m.localRuntimeTranscript()
-	}
-	return m.localRuntimeTranscript()
-}
-
 func (m *uiModel) localRuntimeStatus() clientui.RuntimeStatus {
 	return clientui.RuntimeStatus{
-		ReviewerFrequency:                 m.reviewerMode,
-		ReviewerEnabled:                   m.reviewerEnabled,
-		AutoCompactionEnabled:             m.autoCompactionEnabled,
-		QuestionsEnabled:                  m.questionsEnabled,
-		FastModeAvailable:                 m.fastModeAvailable,
-		FastModeEnabled:                   m.fastModeEnabled,
-		ConversationFreshness:             m.conversationFreshness,
-		LastCommittedAssistantFinalAnswer: localLastCommittedAssistantFinalAnswer(m.transcriptEntries),
-		ThinkingLevel:                     m.thinkingLevel,
-	}
-}
-
-func localLastCommittedAssistantFinalAnswer(entries []tui.TranscriptEntry) string {
-	answer := ""
-	for _, entry := range entries {
-		if entry.Transient && !entry.Committed {
-			break
-		}
-		if !transcriptEntryAffectsCommittedAssistantFinalAnswer(entry) {
-			continue
-		}
-		if entry.Role == tui.TranscriptRoleAssistant && string(entry.Phase) == clientui.ChatEntryPhaseFinalAnswer && strings.TrimSpace(entry.Text) != "" {
-			answer = entry.Text
-			continue
-		}
-		answer = ""
-	}
-	return answer
-}
-
-func transcriptEntryAffectsCommittedAssistantFinalAnswer(entry tui.TranscriptEntry) bool {
-	switch entry.Role {
-	case "", tui.TranscriptRoleSystem, tui.TranscriptRoleError, tui.TranscriptRoleWarning, tui.TranscriptRoleCacheWarning, tui.TranscriptRoleReviewerStatus, tui.TranscriptRoleReviewerSuggestions, tui.TranscriptRoleDeveloperFeedback:
-		return false
-	case tui.TranscriptRoleDeveloperErrorFeedback:
-		return false
-	default:
-		return true
-	}
-}
-
-func (m *uiModel) localRuntimeTranscript() clientui.TranscriptPage {
-	committedEntries := committedTranscriptEntriesForApp(m.transcriptEntries)
-	entries := make([]clientui.ChatEntry, 0, len(committedEntries))
-	for _, entry := range committedEntries {
-		entries = append(entries, clientui.ChatEntry{
-			Visibility:        entry.Visibility,
-			Role:              string(entry.Role),
-			Text:              entry.Text,
-			CondensedText:     entry.CondensedText,
-			Phase:             string(entry.Phase),
-			MessageType:       string(entry.MessageType),
-			SourcePath:        entry.SourcePath,
-			CompactLabel:      entry.CompactLabel,
-			ToolResultSummary: entry.ToolResultSummary,
-			ToolCallID:        entry.ToolCallID,
-		})
-	}
-	totalEntries := m.transcriptTotalEntries
-	if totalEntries < m.transcriptBaseOffset+len(entries) {
-		totalEntries = m.transcriptBaseOffset + len(entries)
-	}
-	return clientui.TranscriptPage{
-		SessionID:             m.sessionID,
-		SessionName:           m.sessionName,
+		ReviewerFrequency:     m.reviewerMode,
+		ReviewerEnabled:       m.reviewerEnabled,
+		AutoCompactionEnabled: m.autoCompactionEnabled,
+		QuestionsEnabled:      m.questionsEnabled,
+		FastModeAvailable:     m.fastModeAvailable,
+		FastModeEnabled:       m.fastModeEnabled,
 		ConversationFreshness: m.conversationFreshness,
-		Revision:              m.transcriptRevision,
-		TotalEntries:          totalEntries,
-		Offset:                m.transcriptBaseOffset,
-		Entries:               entries,
-		Streaming:             m.view.OngoingStreamingText(),
+		ThinkingLevel:         m.thinkingLevel,
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -151,7 +152,6 @@ type systemPromptRuntimeTemplateData struct {
 
 type defaultSystemPromptTemplateData struct {
 	LaunchCommand                                string
-	BuilderCommand                               string // deprecated alias of LaunchCommand; kept so migrated custom prompts render during the Builder->Kent window.
 	EstimatedToolCallsForContext                 int
 	EditingToolName                              string
 	DefaultSystemPromptPersonality               string
@@ -163,7 +163,6 @@ type defaultSystemPromptTemplateData struct {
 
 type systemPromptTemplateData struct {
 	LaunchCommand                                string
-	BuilderCommand                               string // deprecated alias of LaunchCommand; kept so migrated custom prompts render during the Builder->Kent window.
 	EstimatedToolCallsForContext                 int
 	EditingToolName                              string
 	DefaultSystemPrompt                          string
@@ -238,6 +237,14 @@ type workflowTaskInstructionsTemplateData struct {
 	TaskCommentListCommand     string
 }
 
+type workflowNudgeTemplateData struct {
+	LaunchCommand              string
+	RejectionReason            string
+	NodeCompletionInstructions string
+	GoalText                   string
+	GoalReminder               string
+}
+
 //go:embed *.md system_prompt/*.md goal/*.md workflow/*.md questions/*.md
 var promptFS embed.FS
 
@@ -278,12 +285,14 @@ var (
 	HeadlessModePrompt                               = mustPrompt("headless_mode_prompt.md")
 	HeadlessModeExitPrompt                           = mustPrompt("headless_mode_exit_prompt.md")
 	WorkflowTaskInstructionsPrompt                   = mustPrompt("workflow/workflow_task_instructions.md")
+	WorkflowNudgePrompt                              = mustPrompt("workflow/nudge.md")
 	WorkflowToolCompletionInstructionsPrompt         = mustPrompt("workflow/tool_completion_instructions.md")
 	WorkflowStructuredCompletionInstructionsPrompt   = mustPrompt("workflow/structured_completion_instructions.md")
 	WorkflowShellCompletionInstructionsPrompt        = mustPrompt("workflow/shell_completion_instructions.md")
 	WorkflowUnstructuredCompletionInstructionsPrompt = mustPrompt("workflow/unstructured_completion_instructions.md")
 	WorkflowFinalAnswerNudgePrompt                   = mustPrompt("workflow/final_answer_nudge.md")
 	WorkflowHumanOnlyTaskActionDeniedPrompt          = mustPrompt("workflow/human_only_task_action_denied.md")
+	WorkflowLiveControlSelfTargetDeniedPrompt        = mustPrompt("workflow/live_control_self_target_denied.md")
 	WorkflowTaskCompleteAgentOwnershipErrorPrompt    = strings.TrimSpace(mustPrompt("workflow/task_complete_agent_ownership_error.md"))
 	WorkflowTaskCompleteHumanSafetyWarningPrompt     = strings.TrimSpace(mustPrompt("workflow/task_complete_human_safety_warning.md"))
 	WorktreeModePrompt                               = mustPrompt("worktree_mode_prompt.md")
@@ -407,6 +416,12 @@ func RenderGoalCompleteConfirmRequiredPrompt(objective string) string {
 	return renderGoalPrompt("goal complete confirm required", GoalCompleteConfirmRequiredPrompt, objective, "")
 }
 
+func RenderLiveControlSelfTargetDeniedPrompt(commandText string) string {
+	return renderTemplatePlaceholders(WorkflowLiveControlSelfTargetDeniedPrompt, map[string]string{
+		"{{command}}": strings.TrimSpace(commandText),
+	})
+}
+
 func RenderWorktreeModePrompt(branch, cwd, worktreePath, workspaceRoot string) string {
 	return renderTemplatePlaceholders(WorktreeModePrompt, map[string]string{
 		"{{branch}}":         strings.TrimSpace(branch),
@@ -427,6 +442,24 @@ func RenderWorktreeModeExitPrompt(branch, cwd, worktreePath, workspaceRoot strin
 
 func RenderWorkflowTaskInstructions(args WorkflowNodeContextArgs, nodeCompletionInstructions string) (string, error) {
 	return renderNamedTemplate("workflow task instructions", WorkflowTaskInstructionsPrompt, newWorkflowTaskInstructionsTemplateData(args, nodeCompletionInstructions))
+}
+
+func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goalText, goalReminder string) (string, error) {
+	rejectionReason = strings.TrimSpace(rejectionReason)
+	if rejectionReason == "" {
+		return "", errors.New("render workflow nudge: rejection reason is required")
+	}
+	nodeCompletionInstructions = strings.TrimSpace(nodeCompletionInstructions)
+	if nodeCompletionInstructions == "" {
+		return "", errors.New("render workflow nudge: node completion instructions are required")
+	}
+	return renderNamedTemplate("workflow nudge", WorkflowNudgePrompt, workflowNudgeTemplateData{
+		LaunchCommand:              LaunchCommand(),
+		RejectionReason:            rejectionReason,
+		NodeCompletionInstructions: nodeCompletionInstructions,
+		GoalText:                   strings.TrimSpace(goalText),
+		GoalReminder:               strings.TrimSpace(goalReminder),
+	})
 }
 
 func newWorkflowTaskInstructionsTemplateData(args WorkflowNodeContextArgs, nodeCompletionInstructions string) workflowTaskInstructionsTemplateData {
@@ -703,7 +736,6 @@ func renderDefaultSystemPromptTemplateWithSections(text string, args SystemPromp
 	}
 	data := defaultSystemPromptTemplateData{
 		LaunchCommand:                                LaunchCommand(),
-		BuilderCommand:                               LaunchCommand(),
 		EstimatedToolCallsForContext:                 args.EstimatedToolCallsForContext,
 		EditingToolName:                              strings.TrimSpace(args.EditingToolName),
 		DefaultSystemPromptPersonality:               strings.TrimSpace(sections.personality),
@@ -725,7 +757,6 @@ func renderSystemPromptTemplateWithSections(text string, args SystemPromptTempla
 	}
 	data := systemPromptTemplateData{
 		LaunchCommand:                                LaunchCommand(),
-		BuilderCommand:                               LaunchCommand(),
 		EstimatedToolCallsForContext:                 args.EstimatedToolCallsForContext,
 		EditingToolName:                              strings.TrimSpace(args.EditingToolName),
 		DefaultSystemPrompt:                          strings.TrimSpace(defaultSystemPrompt),

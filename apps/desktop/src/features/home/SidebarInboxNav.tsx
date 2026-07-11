@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import type { SidebarDestination } from "../../app/sidebarContext";
 import { useSidebar } from "../../app/sidebarContext";
+import { taskDetailInitialFocusFromAttentionItem } from "../../app/taskDetailInitialFocus";
 import { IconTooltipButton } from "../../ui";
 import { inboxNavNeighbors, orderedInboxTaskIDs } from "./inboxNavNeighbors";
 import { useGlobalAttentionPages } from "./useHomeData";
@@ -24,10 +25,11 @@ export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDet
   // resolved and drops out of the live inbox; updated only while it is present.
   const [anchorIndex, setAnchorIndex] = useState(0);
 
-  const taskIDs = useMemo(
-    () => orderedInboxTaskIDs(attention.data?.pages.flatMap((page) => page.items) ?? []),
+  const attentionItems = useMemo(
+    () => attention.data?.pages.flatMap((page) => page.items) ?? [],
     [attention.data],
   );
+  const taskIDs = useMemo(() => orderedInboxTaskIDs(attentionItems), [attentionItems]);
 
   // Adjust the remembered anchor while rendering (the sanctioned alternative to a
   // ref read or an effect): whenever the open task is present, its current index
@@ -43,7 +45,13 @@ export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDet
     if (taskID === null) {
       return;
     }
-    void openSidebar({ ...destination, initialFocus: "firstQuestion", taskID });
+    void openSidebar({
+      ...destination,
+      initialFocus: taskDetailInitialFocusFromAttentionItem(
+        attentionItems.find((candidate) => candidate.taskID === taskID),
+      ),
+      taskID,
+    });
   };
 
   const previousTaskID = neighbors.previousTaskID;

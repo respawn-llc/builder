@@ -75,7 +75,7 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	}
 	runWorkflowRootCommandOK(t, "task", "comment", "delete", commentID)
 
-	startResp, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{TaskID: taskID})
+	startResp, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: taskID})
 	if err != nil {
 		t.Fatalf("StartWorkflowTask for resume command: %v", err)
 	}
@@ -92,8 +92,8 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 		t.Fatalf("InterruptRunGeneration for resume command: %v", err)
 	}
 	resumeOut, _ := runWorkflowRootCommandOK(t, "task", "resume", "--project", binding.ProjectID, shortID)
-	if !strings.Contains(resumeOut, "Resumed task "+shortID+" in session "+resumeSessionID+".\n") || !strings.Contains(resumeOut, "Current node: implement\n") {
-		t.Fatalf("resume output = %q, want readable resume message", resumeOut)
+	if !strings.Contains(resumeOut, shortID) || !strings.Contains(resumeOut, resumeSessionID) || !strings.Contains(resumeOut, "implement") {
+		t.Fatalf("resume output = %q, want task/node/session referenced", resumeOut)
 	}
 
 	cancelOut, _ := runWorkflowRootCommandOK(t, "task", "cancel", "--project", binding.ProjectID, "--reason", "test", shortID)

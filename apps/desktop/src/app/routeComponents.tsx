@@ -26,9 +26,6 @@ const LazyWorkflowLibraryRoute = lazy(async () => {
 const rootRouteApi = getRouteApi("__root__");
 const projectRouteApi = getRouteApi("/projects/$projectId");
 const workflowEditorRouteApi = getRouteApi("/workflows/$workflowId/editor");
-const legacyWorkflowEditorRouteApi = getRouteApi(
-  "/projects/$projectId/workflows/$workflowId/editor",
-);
 const taskRouteApi = getRouteApi("/tasks/$taskId");
 
 const routeRestoreSessionKey = "desktop.routeRestoreChecked";
@@ -74,7 +71,7 @@ function RoutePersistence() {
         void navigate({
           to: "/projects/$projectId",
           params: { projectId: restored.projectId },
-          search: { workflowId: restored.workflowId, taskId: "", resumeRunId: "" },
+          search: { workflowId: restored.workflowId, taskId: "" },
           replace: true,
         });
       }
@@ -119,7 +116,6 @@ export function ProjectRoute() {
   return (
     <BoardRoute
       projectId={params.projectId}
-      resumeRunId={search.resumeRunId}
       selectedTaskId={search.taskId}
       workflowId={search.workflowId}
     />
@@ -161,24 +157,6 @@ export function WorkflowLibraryShellRoute() {
       <LazyWorkflowLibraryRoute />
     </Suspense>
   );
-}
-
-export function LegacyWorkflowEditorRedirectRoute() {
-  const navigate = rootRouteApi.useNavigate();
-  const params = legacyWorkflowEditorRouteApi.useParams();
-
-  useEffect(() => {
-    // Canonical route redirects are not user-initiated destination changes, so they intentionally
-    // bypass the animated app navigation API.
-    void navigate({
-      to: "/workflows/$workflowId/editor",
-      params: { workflowId: params.workflowId },
-      search: { projectId: params.projectId },
-      replace: true,
-    });
-  }, [navigate, params.projectId, params.workflowId]);
-
-  return null;
 }
 
 export function TaskRoute() {

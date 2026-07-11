@@ -2,15 +2,17 @@ package runtimecontrol
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"core/server/llm"
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/clientui"
 	"core/shared/serverapi"
-	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
@@ -21,7 +23,7 @@ var runtimeControlOpenAICapabilities = llm.ProviderCapabilities{
 	IsOpenAIFirstParty:       true,
 }
 
-func TestServiceSetThinkingLevelReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
+func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
@@ -30,26 +32,78 @@ func TestServiceSetThinkingLevelReplaysSuccessfulRetryAfterLeaseInvalidation(t *
 	if err != nil {
 		t.Fatalf("create runtime engine: %v", err)
 	}
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithControllerLeaseVerifier(verifier)
-	req := serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Level: "high"}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Level: "high"}
 
 	if err := service.SetThinkingLevel(context.Background(), req); err != nil {
 		t.Fatalf("SetThinkingLevel first: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
 	if err := service.SetThinkingLevel(context.Background(), req); err != nil {
 		t.Fatalf("SetThinkingLevel replay: %v", err)
-	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
 	}
 	if got := engine.ThinkingLevel(); got != "high" {
 		t.Fatalf("thinking level = %q, want high", got)
 	}
 }
 
-func TestServiceSetFastModeEnabledReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
+type sequenceRuntimeActivityResolver struct {
+	snapshots []runtimeactivity.ResponseSnapshot
+	calls     int
+}
+
+func (r *sequenceRuntimeActivityResolver) Snapshot(context.Context, string, []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
+	if r.calls >= len(r.snapshots) {
+		return r.snapshots[len(r.snapshots)-1], nil
+	}
+	snapshot := r.snapshots[r.calls]
+	r.calls++
+	return snapshot, nil
+}
+
+func TestServiceInterruptRetryReturnsFreshActivitySnapshot(t *testing.T) {
+	runningVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}
+	idleVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 2}
+	resolver := &sequenceRuntimeActivityResolver{snapshots: []runtimeactivity.ResponseSnapshot{
+		{
+			Version: runningVersion,
+			Activity: clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
+				ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
+				RunID:      "run-1",
+				StepID:     "step-1",
+			}),
+			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(runningVersion),
+		},
+		{
+			Version: idleVersion,
+			Activity: clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{
+				QueueAccepting: true,
+			}),
+			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(idleVersion),
+		},
+	}}
+	service := NewService(stubRuntimeResolver{}).WithRuntimeActivityResolver(resolver)
+	req := serverapi.RuntimeInterruptRequest{ClientRequestID: "interrupt-retry", SessionID: "session-1"}
+
+	first, err := service.Interrupt(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Interrupt first: %v", err)
+	}
+	second, err := service.Interrupt(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Interrupt retry: %v", err)
+	}
+	if !first.Activity.ActiveForControl() {
+		t.Fatalf("first activity = %+v, want active", first.Activity)
+	}
+	if second.Activity.ActiveForControl() || second.Version != idleVersion {
+		t.Fatalf("retry activity/version = %+v/%+v, want fresh idle %+v", second.Activity, second.Version, idleVersion)
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("snapshot calls = %d, want fresh composition on retry", resolver.calls)
+	}
+}
+
+func TestServiceSetFastModeEnabledDedupesSuccessfulRetry(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
@@ -58,15 +112,13 @@ func TestServiceSetFastModeEnabledReplaysSuccessfulRetryAfterLeaseInvalidation(t
 	if err != nil {
 		t.Fatalf("create runtime engine: %v", err)
 	}
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithControllerLeaseVerifier(verifier)
-	req := serverapi.RuntimeSetFastModeEnabledRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Enabled: true}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeSetFastModeEnabledRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Enabled: true}
 
 	first, err := service.SetFastModeEnabled(context.Background(), req)
 	if err != nil {
 		t.Fatalf("SetFastModeEnabled first: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
 	second, err := service.SetFastModeEnabled(context.Background(), req)
 	if err != nil {
 		t.Fatalf("SetFastModeEnabled replay: %v", err)
@@ -74,15 +126,12 @@ func TestServiceSetFastModeEnabledReplaysSuccessfulRetryAfterLeaseInvalidation(t
 	if first != second {
 		t.Fatalf("responses = (%+v, %+v), want identical replay", first, second)
 	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
-	}
 	if !engine.FastModeEnabled() {
 		t.Fatal("expected fast mode to remain enabled")
 	}
 }
 
-func TestServiceSetReviewerEnabledReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
+func TestServiceSetReviewerEnabledDedupesSuccessfulRetry(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
@@ -91,15 +140,13 @@ func TestServiceSetReviewerEnabledReplaysSuccessfulRetryAfterLeaseInvalidation(t
 	if err != nil {
 		t.Fatalf("create runtime engine: %v", err)
 	}
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithControllerLeaseVerifier(verifier)
-	req := serverapi.RuntimeSetReviewerEnabledRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Enabled: true}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeSetReviewerEnabledRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Enabled: true}
 
 	first, err := service.SetReviewerEnabled(context.Background(), req)
 	if err != nil {
 		t.Fatalf("SetReviewerEnabled first: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
 	second, err := service.SetReviewerEnabled(context.Background(), req)
 	if err != nil {
 		t.Fatalf("SetReviewerEnabled replay: %v", err)
@@ -107,15 +154,12 @@ func TestServiceSetReviewerEnabledReplaysSuccessfulRetryAfterLeaseInvalidation(t
 	if first != second {
 		t.Fatalf("responses = (%+v, %+v), want identical replay", first, second)
 	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
-	}
 	if got := engine.ReviewerFrequency(); got != "edits" {
 		t.Fatalf("reviewer frequency = %q, want edits", got)
 	}
 }
 
-func TestServiceSetAutoCompactionEnabledReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
+func TestServiceSetAutoCompactionEnabledDedupesSuccessfulRetry(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
@@ -124,15 +168,13 @@ func TestServiceSetAutoCompactionEnabledReplaysSuccessfulRetryAfterLeaseInvalida
 	if err != nil {
 		t.Fatalf("create runtime engine: %v", err)
 	}
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithControllerLeaseVerifier(verifier)
-	req := serverapi.RuntimeSetAutoCompactionEnabledRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Enabled: false}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeSetAutoCompactionEnabledRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Enabled: false}
 
 	first, err := service.SetAutoCompactionEnabled(context.Background(), req)
 	if err != nil {
 		t.Fatalf("SetAutoCompactionEnabled first: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
 	second, err := service.SetAutoCompactionEnabled(context.Background(), req)
 	if err != nil {
 		t.Fatalf("SetAutoCompactionEnabled replay: %v", err)
@@ -140,29 +182,21 @@ func TestServiceSetAutoCompactionEnabledReplaysSuccessfulRetryAfterLeaseInvalida
 	if first != second {
 		t.Fatalf("responses = (%+v, %+v), want identical replay", first, second)
 	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
-	}
 	if engine.AutoCompactionEnabled() {
 		t.Fatal("expected auto compaction to remain disabled")
 	}
 }
 
-func TestServiceCompactContextReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
+func TestServiceCompactContextDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, client := newRuntimeControlCompactionFixture(t)
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithControllerLeaseVerifier(verifier)
-	req := serverapi.RuntimeCompactContextRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Args: "compact now"}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeCompactContextRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Args: "compact now", OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: "req-1"}}
 
 	if err := service.CompactContext(context.Background(), req); err != nil {
 		t.Fatalf("CompactContext first: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
 	if err := service.CompactContext(context.Background(), req); err != nil {
 		t.Fatalf("CompactContext replay: %v", err)
-	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
 	}
 	if client.compactionCalls != 1 {
 		t.Fatalf("compaction call count = %d, want 1", client.compactionCalls)
@@ -172,21 +206,16 @@ func TestServiceCompactContextReplaysSuccessfulRetryAfterLeaseInvalidation(t *te
 	}
 }
 
-func TestServiceCompactContextForPreSubmitReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
+func TestServiceCompactContextForPreSubmitDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, client := newRuntimeControlCompactionFixture(t)
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithControllerLeaseVerifier(verifier)
-	req := serverapi.RuntimeCompactContextForPreSubmitRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1"}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeCompactContextForPreSubmitRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: "req-1"}}
 
 	if err := service.CompactContextForPreSubmit(context.Background(), req); err != nil {
 		t.Fatalf("CompactContextForPreSubmit first: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
 	if err := service.CompactContextForPreSubmit(context.Background(), req); err != nil {
 		t.Fatalf("CompactContextForPreSubmit replay: %v", err)
-	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
 	}
 	if client.compactionCalls != 1 {
 		t.Fatalf("compaction call count = %d, want 1", client.compactionCalls)
@@ -196,7 +225,7 @@ func TestServiceCompactContextForPreSubmitReplaysSuccessfulRetryAfterLeaseInvali
 	}
 }
 
-func TestServiceInterruptReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
+func TestServiceInterruptDedupesSuccessfulRetry(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
@@ -205,24 +234,20 @@ func TestServiceInterruptReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing
 	if err != nil {
 		t.Fatalf("create runtime engine: %v", err)
 	}
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithControllerLeaseVerifier(verifier)
-	req := serverapi.RuntimeInterruptRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1"}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeInterruptRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID}
 
-	if err := service.Interrupt(context.Background(), req); err != nil {
+	if _, err := service.Interrupt(context.Background(), req); err != nil {
 		t.Fatalf("Interrupt first: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
-	if err := service.Interrupt(context.Background(), req); err != nil {
+	if _, err := service.Interrupt(context.Background(), req); err != nil {
 		t.Fatalf("Interrupt replay: %v", err)
-	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
 	}
 }
 
 func newRuntimeControlCompactionFixture(t *testing.T) (*session.Store, *runtime.Engine, *runtimeControlFakeClient) {
 	t.Helper()
+	trimmed := 1
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
@@ -238,7 +263,7 @@ func newRuntimeControlCompactionFixture(t *testing.T) (*session.Store, *runtime.
 				{Type: llm.ResponseItemTypeCompaction, EncryptedContent: "checkpoint"},
 			},
 			Usage:             llm.Usage{WindowTokens: 200000},
-			TrimmedItemsCount: 1,
+			TrimmedItemsCount: &trimmed,
 		}},
 	}
 	engine, err := runtime.New(store, client, tools.NewRegistry(), runtime.Config{Model: "gpt-5", ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities})
@@ -266,63 +291,24 @@ func countEventsByKind(t *testing.T, store *session.Store, kind string) int {
 	return count
 }
 
-func TestServiceSubmitUserMessageReplaysSuccessfulRetryAfterLeaseRotation(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
+func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
+	t.Helper()
+	events, err := sessiontest.CollectEvents(store)
 	if err != nil {
-		t.Fatalf("create session store: %v", err)
+		t.Fatalf("ReadEvents: %v", err)
 	}
-	client := &runtimeControlFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	engine, err := runtime.New(store, client, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("create runtime engine: %v", err)
+	entries := make([]runtime.ChatEntry, 0)
+	for _, evt := range events {
+		if evt.Kind != "local_entry" {
+			continue
+		}
+		var entry runtime.ChatEntry
+		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
+			t.Fatalf("decode local_entry: %v", err)
+		}
+		entries = append(entries, entry)
 	}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil)
-	first := serverapi.RuntimeSubmitUserMessageRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Text: "hello"}
-
-	firstResp, err := service.SubmitUserMessage(context.Background(), first)
-	if err != nil {
-		t.Fatalf("SubmitUserMessage first: %v", err)
-	}
-	second := first
-	second.ControllerLeaseID = "lease-2"
-	secondResp, err := service.SubmitUserMessage(context.Background(), second)
-	if err != nil {
-		t.Fatalf("SubmitUserMessage replay after lease rotation: %v", err)
-	}
-	if firstResp != secondResp {
-		t.Fatalf("responses = (%+v, %+v), want identical replay", firstResp, secondResp)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-}
-
-func TestServiceSubmitUserShellCommandReplaysSuccessfulRetryAfterLeaseRotation(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	engine, err := runtime.New(store, &runtimeControlFakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("create runtime engine: %v", err)
-	}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil)
-	first := serverapi.RuntimeSubmitUserShellCommandRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Command: "pwd"}
-
-	if err := service.SubmitUserShellCommand(context.Background(), first); err != nil {
-		t.Fatalf("SubmitUserShellCommand first: %v", err)
-	}
-	second := first
-	second.ControllerLeaseID = "lease-2"
-	if err := service.SubmitUserShellCommand(context.Background(), second); err != nil {
-		t.Fatalf("SubmitUserShellCommand replay after lease rotation: %v", err)
-	}
-	if got := countDirectShellCommandMessages(t, store, "pwd"); got != 1 {
-		t.Fatalf("direct shell message count = %d, want 1", got)
-	}
+	return entries
 }
 
 func TestServiceAppendCommittedEntryDedupesSuccessfulRetry(t *testing.T) {
@@ -334,8 +320,8 @@ func TestServiceAppendCommittedEntryDedupesSuccessfulRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create runtime engine: %v", err)
 	}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil)
-	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Role: "warning", Text: "be careful"}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "be careful"}
 
 	if err := service.AppendCommittedEntry(context.Background(), req); err != nil {
 		t.Fatalf("AppendCommittedEntry first: %v", err)
@@ -344,7 +330,7 @@ func TestServiceAppendCommittedEntryDedupesSuccessfulRetry(t *testing.T) {
 		t.Fatalf("AppendCommittedEntry replay: %v", err)
 	}
 	count := 0
-	for _, entry := range engine.RecentTailTranscriptWindow(1 << 20).Snapshot.Entries {
+	for _, entry := range localEntryEvents(t, store) {
 		if entry.Role == "warning" && entry.Text == "be careful" {
 			count++
 		}
@@ -363,8 +349,8 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create runtime engine: %v", err)
 	}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil)
-	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityAll)}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityOngoing)}
 
 	if err := service.AppendCommittedEntry(context.Background(), req); err != nil {
 		t.Fatalf("AppendCommittedEntry first: %v", err)
@@ -373,11 +359,11 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 		t.Fatalf("AppendCommittedEntry replay: %v", err)
 	}
 	count := 0
-	for _, entry := range engine.RecentTailTranscriptWindow(1 << 20).Snapshot.Entries {
+	for _, entry := range localEntryEvents(t, store) {
 		if entry.Role == "warning" && entry.Text == "visible warning" {
 			count++
-			if entry.Visibility != transcript.EntryVisibilityAll {
-				t.Fatalf("entry visibility = %q, want all", entry.Visibility)
+			if entry.Visibility != transcript.EntryVisibilityOngoing {
+				t.Fatalf("entry visibility = %q, want ongoing", entry.Visibility)
 			}
 		}
 	}
@@ -400,8 +386,8 @@ func TestServiceSubmitQueuedUserMessagesDedupesSuccessfulRetry(t *testing.T) {
 		t.Fatalf("create runtime engine: %v", err)
 	}
 	engine.QueueUserMessage("hello")
-	service := NewService(stubRuntimeResolver{engine: engine}, nil)
-	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1"}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "req-1"}}
 
 	first, err := service.SubmitQueuedUserMessages(context.Background(), req)
 	if err != nil {
@@ -434,8 +420,8 @@ func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	firstQueued := engine.QueueUserMessage("same")
 	otherQueued := engine.QueueUserMessage("other")
 	duplicateQueued := engine.QueueUserMessage("same")
-	service := NewService(stubRuntimeResolver{engine: engine}, nil)
-	req := serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", QueueItemID: duplicateQueued.ID}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	req := serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, QueueItemID: duplicateQueued.ID}
 
 	first, err := service.DiscardQueuedUserMessage(context.Background(), req)
 	if err != nil {
@@ -469,8 +455,8 @@ func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
 		t.Fatalf("create runtime engine: %v", err)
 	}
 	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithPromptHistoryStore(history)
-	req := serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, ControllerLeaseID: "lease-1", Text: "/resume"}
+	service := NewService(stubRuntimeResolver{engine: engine}).WithPromptHistoryStore(history)
+	req := serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Text: "/resume"}
 
 	if err := service.RecordPromptHistory(context.Background(), req); err != nil {
 		t.Fatalf("RecordPromptHistory first: %v", err)
@@ -481,22 +467,4 @@ func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
 	if got := countPromptHistoryEvents(t, store, "/resume"); got != 1 {
 		t.Fatalf("prompt history count = %d, want 1", got)
 	}
-}
-
-func countPromptHistoryEvents(t *testing.T, store *session.Store, text string) int {
-	t.Helper()
-	registered, ok := runtimeControlPromptHistoryStores.Load(store.Meta().SessionID)
-	if !ok {
-		return 0
-	}
-	history := registered.(*runtimeControlPromptHistoryStore)
-	history.mu.Lock()
-	defer history.mu.Unlock()
-	count := 0
-	for _, record := range history.records {
-		if record.Text == text {
-			count++
-		}
-	}
-	return count
 }

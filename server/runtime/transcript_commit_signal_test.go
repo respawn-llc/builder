@@ -267,7 +267,7 @@ func committedConversationUpdatedCountAfterLastUserFlush(events []Event) int {
 	}
 	count := 0
 	for _, evt := range events[start:] {
-		if evt.Kind == EventConversationUpdated && evt.CommittedTranscriptChanged {
+		if evt.Kind == EventConversationUpdated && evt.CommittedTranscriptChanged && len(TranscriptEntriesFromEvent(evt)) == 0 {
 			count++
 		}
 	}

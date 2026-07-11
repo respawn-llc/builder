@@ -26,7 +26,7 @@ func newOpenAIRequestPayloadBuilder(store bool, modelVerbosity string, capabilit
 	return openAIRequestPayloadBuilder{store: store, modelVerbosity: strings.ToLower(strings.TrimSpace(modelVerbosity)), capabilities: capabilities}
 }
 
-func (t *HTTPTransport) buildPayload(request OpenAIRequest, mode openAIAuthMode, capabilities ProviderCapabilities) (responses.ResponseNewParams, error) {
+func (t *HTTPTransport) buildPayload(request OpenAIRequest, mode OpenAIAuthMode, capabilities ProviderCapabilities) (responses.ResponseNewParams, error) {
 	builder := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, capabilities)
 	return builder.BuildResponse(request, mode)
 }
@@ -36,7 +36,7 @@ func (t *HTTPTransport) buildInputTokenCountParams(request OpenAIRequest, capabi
 	return builder.BuildInputTokenCount(request)
 }
 
-func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode openAIAuthMode) (responses.ResponseNewParams, error) {
+func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode OpenAIAuthMode) (responses.ResponseNewParams, error) {
 	input, err := buildResponsesInput(request.Items)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
@@ -73,7 +73,7 @@ func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode o
 	if request.Temperature != 0 && !mode.IsOAuth {
 		out.Temperature = openai.Float(request.Temperature)
 	}
-	textConfig, ok, err := buildResponseTextConfig(request.StructuredOutput, configuredTextVerbosity(request.Model, b.modelVerbosity))
+	textConfig, ok, err := buildResponseTextConfig(request.StructuredOutput, configuredTextVerbosity(request.Model, b.modelVerbosity, b.capabilities))
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -107,7 +107,7 @@ func (b openAIRequestPayloadBuilder) BuildInputTokenCount(request OpenAIRequest)
 	if shouldApplyReasoningEffort(request.SupportsReasoningEffort, request.Model, request.ReasoningEffort) {
 		out.Reasoning = buildReasoningParam(request.Model, request.ReasoningEffort)
 	}
-	textConfig, ok, err := buildInputTokenCountTextConfig(request.StructuredOutput, configuredTextVerbosity(request.Model, b.modelVerbosity))
+	textConfig, ok, err := buildInputTokenCountTextConfig(request.StructuredOutput, configuredTextVerbosity(request.Model, b.modelVerbosity, b.capabilities))
 	if err != nil {
 		return responses.InputTokenCountParams{}, err
 	}
@@ -272,17 +272,23 @@ func buildReasoningParam(model, effort string) shared.ReasoningParam {
 	return param
 }
 
-func configuredTextVerbosity(model, configured string) string {
+func configuredTextVerbosity(model, configured string, providerCaps ProviderCapabilities) string {
 	normalized := strings.ToLower(strings.TrimSpace(configured))
 	switch normalized {
 	case "low", "medium", "high":
 	default:
 		return ""
 	}
-	if !SupportsVerbosityModel(model) {
+	support := VerbositySupportForModelAndProvider(model, providerCaps)
+	if !support.Supported {
 		return ""
 	}
-	return normalized
+	for _, level := range support.Levels {
+		if level == normalized {
+			return normalized
+		}
+	}
+	return ""
 }
 
 func normalizeSchemaNode(node any) {

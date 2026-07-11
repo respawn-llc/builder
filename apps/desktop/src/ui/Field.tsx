@@ -1,4 +1,5 @@
 import { forwardRef, useId, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
+import { z } from "zod";
 
 import { cx } from "./classes";
 import { fieldInputClassName } from "./fieldInputStyles";
@@ -6,6 +7,8 @@ import { fieldLabelClassName } from "./fieldStyles";
 import { HelpHint } from "./HelpHint";
 
 export type FieldError = string | readonly string[];
+const fieldErrorListSchema = z.array(z.string());
+const fieldErrorMessageSchema = z.string();
 
 type FieldShellProps = Readonly<{
   label: string;
@@ -67,10 +70,11 @@ export type TextInputProps = Readonly<{
   labelHelp?: string | undefined;
   error?: FieldError | undefined;
   hint?: ReactNode | undefined;
+  trailingControl?: ReactNode | undefined;
 }> &
   InputHTMLAttributes<HTMLInputElement>;
 
-export function TextInput({ label, labelHelp, error, hint, className, ...props }: TextInputProps) {
+export function TextInput({ label, labelHelp, error, hint, className, trailingControl, ...props }: TextInputProps) {
   const generatedId = useId();
   const inputId = props.id ?? generatedId;
   const hintId = `${inputId}-hint`;
@@ -86,13 +90,23 @@ export function TextInput({ label, labelHelp, error, hint, className, ...props }
       label={label}
       labelHelp={labelHelp}
     >
-      <input
-        aria-describedby={`${hintId} ${errorId}`}
-        aria-invalid={error === undefined ? undefined : true}
-        className={cx(fieldInputClassName, className)}
-        {...props}
-        id={inputId}
-      />
+      <span className="relative block">
+        <input
+          aria-describedby={`${hintId} ${errorId}`}
+          aria-invalid={error === undefined ? undefined : true}
+          className={cx(fieldInputClassName, trailingControl === undefined ? undefined : "pr-12", className)}
+          {...props}
+          id={inputId}
+        />
+        {trailingControl === undefined ? null : (
+          <span
+            className="absolute top-1/2 right-[6px] -translate-y-1/2"
+            data-testid="text-input-trailing-control"
+          >
+            {trailingControl}
+          </span>
+        )}
+      </span>
     </FieldShell>
   );
 }
@@ -140,8 +154,14 @@ function normalizeErrors(error: FieldError | undefined): readonly string[] {
   if (error === undefined) {
     return [];
   }
-  if (typeof error === "string") {
-    return error.length > 0 ? [error] : [];
+  const messages = fieldErrorListSchema.safeParse(error);
+  if (messages.success) {
+    return messages.data.filter(nonEmptyString);
   }
-  return error.filter((message) => message.length > 0);
+  const message = fieldErrorMessageSchema.safeParse(error);
+  return message.success && message.data.length > 0 ? [message.data] : [];
+}
+
+function nonEmptyString(value: string): boolean {
+  return value.length > 0;
 }

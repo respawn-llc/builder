@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"core/server/primaryrun"
 )
 
 func TestMemoDoesNotReplayCanceledOrDeadlineExceededOutcome(t *testing.T) {
@@ -58,40 +56,6 @@ func TestMemoDoesNotReplayCanceledOrDeadlineExceededOutcome(t *testing.T) {
 				t.Fatalf("run calls = %d, want 2", calls)
 			}
 		})
-	}
-}
-
-func TestMemoDoesNotReplayActivePrimaryRunOutcome(t *testing.T) {
-	memo := New[string, string]()
-	calls := 0
-
-	first, err := memo.Do(context.Background(), "req-1", "same", func(a string, b string) bool {
-		return a == b
-	}, func(context.Context) (string, error) {
-		calls++
-		return "", primaryrun.ErrActivePrimaryRun
-	})
-	if !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("first error = %v, want ErrActivePrimaryRun", err)
-	}
-	if first != "" {
-		t.Fatalf("first response = %q, want empty", first)
-	}
-
-	second, err := memo.Do(context.Background(), "req-1", "same", func(a string, b string) bool {
-		return a == b
-	}, func(context.Context) (string, error) {
-		calls++
-		return "ok", nil
-	})
-	if err != nil {
-		t.Fatalf("second error = %v", err)
-	}
-	if second != "ok" {
-		t.Fatalf("second response = %q, want ok", second)
-	}
-	if calls != 2 {
-		t.Fatalf("run calls = %d, want 2", calls)
 	}
 }
 

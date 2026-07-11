@@ -1,7 +1,7 @@
 {
   "$schema": "./dependency-policy.schema.json",
   "minimumReleaseAgeMinutes": 10080,
-  "minimumReleaseAgeExclude": ["@types/node", "vite", "@rolldown/*"],
+  "minimumReleaseAgeExclude": ["@types/node", "vite", "typescript@7.0.2", "@typescript/typescript-*", "@rolldown/*"],
   "directDependencyAllowlist": {
     "@app/apps": {
       "devDependencies": ["postcss", "prettier"]
@@ -63,6 +63,7 @@
         "tailwindcss",
         "typescript",
         "typescript-eslint",
+        "typescript7",
         "vite",
         "vitest"
       ]
@@ -71,11 +72,13 @@
       "dependencies": [
         "@tauri-apps/api",
         "@tauri-apps/plugin-clipboard-manager",
+        "@tauri-apps/plugin-notification",
         "@tauri-apps/plugin-process",
         "@tauri-apps/plugin-store",
-        "@tauri-apps/plugin-updater"
+        "@tauri-apps/plugin-updater",
+        "zod"
       ],
-      "devDependencies": ["typescript", "vitest"]
+      "devDependencies": ["typescript", "typescript7", "vitest"]
     }
   }
 }

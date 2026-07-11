@@ -7,6 +7,7 @@ import (
 	"core/server/tools"
 	"core/shared/toolspec"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +15,26 @@ import (
 	"testing"
 	"time"
 )
+
+type webSearchProbeTool struct {
+	mu    sync.Mutex
+	calls int
+	name  toolspec.ID
+}
+
+func (t *webSearchProbeTool) Call(_ context.Context, c tools.Call) (tools.Result, error) {
+	t.mu.Lock()
+	t.calls++
+	t.mu.Unlock()
+	out, _ := json.Marshal(map[string]any{"tool": string(t.name)})
+	return tools.Result{CallID: c.ID, Name: c.Name, Output: out}, nil
+}
+
+func (t *webSearchProbeTool) Calls() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.calls
+}
 
 func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 	store := mustCreateTestSession(t)
@@ -73,6 +94,46 @@ func TestExecuteToolCallsRejectsWhitespaceWebSearchQuery(t *testing.T) {
 	}
 	if !results[0].IsError {
 		t.Fatalf("expected invalid web search query to fail, got %+v", results[0])
+	}
+	var output map[string]string
+	if err := json.Unmarshal(results[0].Output, &output); err != nil {
+		t.Fatalf("decode result output: %v", err)
+	}
+	if output["error"] != tools.InvalidWebSearchQueryMessage {
+		t.Fatalf("expected invalid query error, got %+v", output)
+	}
+	if completion, ok := eng.transcriptRuntimeState().ToolCompletionSnapshot("call-web"); !ok {
+		t.Fatal("expected tool completion to be recorded")
+	} else if !completion.IsError {
+		t.Fatalf("expected persisted completion to be error, got %+v", completion)
+	}
+}
+
+func TestExecuteToolCallsRejectsHallucinatedWebSearchQueryBeforeHandler(t *testing.T) {
+	store := mustCreateTestSession(t)
+
+	probe := &webSearchProbeTool{name: toolspec.ToolWebSearch}
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolWebSearch,
+		Handler: probe,
+	}), Config{Model: "gpt-5"})
+
+	results, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+		ID:    "call-web",
+		Name:  string(toolspec.ToolWebSearch),
+		Input: json.RawMessage(`{"query":"web search"}`),
+	}})
+	if err != nil {
+		t.Fatalf("execute tool calls: %v", err)
+	}
+	if probe.Calls() != 0 {
+		t.Fatalf("expected validation to reject before handler execution, got %d handler calls", probe.Calls())
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one result, got %d", len(results))
+	}
+	if !results[0].IsError {
+		t.Fatalf("expected hallucinated web search query to fail, got %+v", results[0])
 	}
 	var output map[string]string
 	if err := json.Unmarshal(results[0].Output, &output); err != nil {
@@ -477,6 +538,72 @@ func TestStreamingRetryResetsAttemptDeltas(t *testing.T) {
 	}
 }
 
+type fakeNonRetriableStreamClient struct{}
+
+func (fakeNonRetriableStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+	return llm.Response{}, errors.New("not implemented")
+}
+
+func (fakeNonRetriableStreamClient) GenerateStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
+	if onDelta != nil {
+		onDelta("partial")
+	}
+	return llm.Response{}, &llm.ProviderAPIError{
+		ProviderID: "openai-compatible",
+		Code:       llm.UnifiedErrorCodeProviderContract,
+		Message:    "stream ended before terminal event",
+	}
+}
+
+func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
+	store := mustCreateTestSession(t)
+
+	var (
+		mu     sync.Mutex
+		events []Event
+	)
+	eng := mustNewTestEngine(t, store, fakeNonRetriableStreamClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			mu.Lock()
+			events = append(events, evt)
+			mu.Unlock()
+		},
+	})
+
+	_, err := eng.SubmitUserMessage(context.Background(), "non-retriable stream")
+	if err == nil {
+		t.Fatal("expected non-retriable stream error")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var deltaIndex int
+	var hasDelta bool
+	var resetIndex int
+	var hasReset bool
+	for i, evt := range events {
+		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "partial" && !hasDelta {
+			deltaIndex = i
+			hasDelta = true
+		}
+		if evt.Kind == EventAssistantDeltaReset && !hasReset {
+			resetIndex = i
+			hasReset = true
+		}
+	}
+	if !hasDelta {
+		t.Fatalf("missing streamed delta before terminal error: %+v", events)
+	}
+	if !hasReset {
+		t.Fatalf("missing reset after terminal error: %+v", events)
+	}
+	if deltaIndex > resetIndex {
+		t.Fatalf("unexpected delta/reset ordering delta=%d reset=%d", deltaIndex, resetIndex)
+	}
+}
+
 func TestStreamingEmitsReasoningSummaryDeltaEvents(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -659,8 +786,10 @@ func TestChatSnapshotOngoingTracksStreamingAndClearsOnCommit(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	var (
-		mu             sync.Mutex
-		deltaSnapshots []string
+		mu               sync.Mutex
+		deltaSnapshots   []string
+		snapshotMetadata []AssistantStreamMetadata
+		eventMetadata    []AssistantStreamMetadata
 	)
 	var eng *Engine
 	eng = mustNewTestEngine(t, store, fakeSimpleStreamClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -669,8 +798,15 @@ func TestChatSnapshotOngoingTracksStreamingAndClearsOnCommit(t *testing.T) {
 			if evt.Kind != EventAssistantDelta || eng == nil {
 				return
 			}
+			snapshot := eng.ChatSnapshot()
 			mu.Lock()
-			deltaSnapshots = append(deltaSnapshots, eng.ChatSnapshot().Streaming)
+			deltaSnapshots = append(deltaSnapshots, snapshot.Streaming)
+			if snapshot.StreamingMetadata != nil {
+				snapshotMetadata = append(snapshotMetadata, *snapshot.StreamingMetadata)
+			}
+			if evt.AssistantStreamMetadata != nil {
+				eventMetadata = append(eventMetadata, *evt.AssistantStreamMetadata)
+			}
 			mu.Unlock()
 		},
 	})
@@ -689,10 +825,26 @@ func TestChatSnapshotOngoingTracksStreamingAndClearsOnCommit(t *testing.T) {
 		mu.Unlock()
 		t.Fatalf("unexpected ongoing snapshots during streaming: %+v", deltaSnapshots)
 	}
+	if len(snapshotMetadata) != 2 || len(eventMetadata) != 2 {
+		mu.Unlock()
+		t.Fatalf("expected streaming metadata on snapshots and events, snapshots=%+v events=%+v", snapshotMetadata, eventMetadata)
+	}
+	if snapshotMetadata[0] != snapshotMetadata[1] || eventMetadata[0] != eventMetadata[1] || snapshotMetadata[0] != eventMetadata[0] {
+		mu.Unlock()
+		t.Fatalf("streaming metadata changed within one stream segment, snapshots=%+v events=%+v", snapshotMetadata, eventMetadata)
+	}
+	if snapshotMetadata[0].StepID == "" || snapshotMetadata[0].BaseRevision <= 0 || snapshotMetadata[0].BaseCommittedEntryCount <= 0 {
+		mu.Unlock()
+		t.Fatalf("unexpected streaming metadata: %+v", snapshotMetadata[0])
+	}
 	mu.Unlock()
 
-	if ongoing := strings.TrimSpace(eng.ChatSnapshot().Streaming); ongoing != "" {
+	finalSnapshot := eng.ChatSnapshot()
+	if ongoing := strings.TrimSpace(finalSnapshot.Streaming); ongoing != "" {
 		t.Fatalf("expected ongoing cleared after commit, got %q", ongoing)
+	}
+	if finalSnapshot.StreamingMetadata != nil {
+		t.Fatalf("expected ongoing metadata cleared after commit, got %+v", finalSnapshot.StreamingMetadata)
 	}
 }
 

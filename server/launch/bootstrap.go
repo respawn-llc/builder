@@ -20,18 +20,28 @@ type BootstrapPlan struct {
 	WorkspaceRoot    string
 	OpenAIBaseURL    string
 	UseOpenAIBaseURL bool
+	SessionContext   *SessionCallerContext
 }
 
-func ResolveSessionAgentRole(persistenceRoot string, sessionID string) (string, error) {
+type SessionCallerContext struct {
+	WorkflowSession bool
+	AgentRole       *string
+}
+
+func sessionCallerContext(meta session.Meta) SessionCallerContext {
+	context := SessionCallerContext{WorkflowSession: meta.WorkflowSession != nil}
+	if meta.Continuation != nil {
+		context.AgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
+	}
+	return context
+}
+
+func ResolveSessionCallerContext(persistenceRoot string, sessionID string) (SessionCallerContext, error) {
 	store, err := openSessionByID(persistenceRoot, sessionID)
 	if err != nil {
-		return "", err
+		return SessionCallerContext{}, err
 	}
-	meta := store.Meta()
-	if meta.Continuation == nil {
-		return "", nil
-	}
-	return strings.TrimSpace(meta.Continuation.AgentRole), nil
+	return sessionCallerContext(store.Meta()), nil
 }
 
 func ResolveBootstrapPlan(persistenceRoot string, req BootstrapRequest) (BootstrapPlan, error) {
@@ -51,6 +61,8 @@ func ResolveBootstrapPlan(persistenceRoot string, req BootstrapRequest) (Bootstr
 		return BootstrapPlan{}, err
 	}
 	meta := store.Meta()
+	context := sessionCallerContext(meta)
+	plan.SessionContext = &context
 	if !req.WorkspaceRootExplicit && strings.TrimSpace(meta.WorkspaceRoot) != "" {
 		plan.WorkspaceRoot = strings.TrimSpace(meta.WorkspaceRoot)
 	}

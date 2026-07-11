@@ -52,21 +52,19 @@ func TestCoreZeroValueMethodsDoNotPanic(t *testing.T) {
 		{name: "ProcessControlClient", run: func(c *Core) { _ = c.ProcessControlClient() }},
 		{name: "ProcessOutputClient", run: func(c *Core) { _ = c.ProcessOutputClient() }},
 		{name: "SessionActivityClient", run: func(c *Core) { _ = c.SessionActivityClient() }},
+		{name: "SessionTranscriptClient", run: func(c *Core) { _ = c.SessionTranscriptClient() }},
 		{name: "SessionLaunchClient", run: func(c *Core) { _ = c.SessionLaunchClient() }},
 		{name: "SessionRuntimeClient", run: func(c *Core) { _ = c.SessionRuntimeClient() }},
 		{name: "SessionLifecycleClient", run: func(c *Core) { _ = c.SessionLifecycleClient() }},
 		{name: "WorktreeClient", run: func(c *Core) { _ = c.WorktreeClient() }},
 		{name: "RegisterSessionStore", run: func(c *Core) { c.RegisterSessionStore(nil) }},
 		{name: "ResolveSessionStore", run: func(c *Core) { _, _ = c.ResolveSessionStore("session") }},
-		{name: "RegisterRuntime", run: func(c *Core) { c.RegisterRuntime("session", nil) }},
-		{name: "UnregisterRuntime", run: func(c *Core) { c.UnregisterRuntime("session", nil) }},
 		{name: "PublishRuntimeEvent", run: func(c *Core) { c.PublishRuntimeEvent("session", runtime.Event{}) }},
 		{name: "BeginPendingPrompt", run: func(c *Core) { c.BeginPendingPrompt("session", askquestion.AskQuestionRequest{}) }},
 		{name: "CompletePendingPrompt", run: func(c *Core) { c.CompletePendingPrompt("session", "request") }},
 		{name: "AwaitPromptResponse", run: func(c *Core) {
 			_, _ = c.AwaitPromptResponse(context.Background(), "session", askquestion.AskQuestionRequest{})
 		}},
-		{name: "AcquirePrimaryRun", run: func(c *Core) { _, _ = c.AcquirePrimaryRun("session") }},
 		{name: "RunPromptClient", run: func(c *Core) { _ = c.RunPromptClient() }},
 	}
 

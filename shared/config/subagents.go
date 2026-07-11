@@ -80,9 +80,107 @@ func SubagentRoleCallable(role SubagentRole) bool {
 	return !role.AgentCallableSet || role.AgentCallable
 }
 
+func SubagentRoleWorkflowCallable(role SubagentRole) bool {
+	return !role.WorkflowSubagentSet || role.WorkflowSubagent
+}
+
+type SubagentInvocationContext string
+
+const (
+	SubagentInvocationContextOrdinary SubagentInvocationContext = "ordinary"
+	SubagentInvocationContextWorkflow SubagentInvocationContext = "workflow"
+)
+
+// SubagentRoleCallableInContext applies the model-originated subagent policy.
+// It intentionally does not decide whether a role exists for workflow nodes;
+// use LookupSubagentRole for identity resolution.
+func SubagentRoleCallableInContext(settings Settings, rawSelector string, context SubagentInvocationContext) bool {
+	switch context {
+	case SubagentInvocationContextOrdinary, SubagentInvocationContextWorkflow:
+	default:
+		panic("unknown subagent invocation context: " + string(context))
+	}
+
+	lookup := LookupSubagentRole(settings, rawSelector)
+	if lookup.Status != SubagentRoleLookupPresent {
+		return false
+	}
+	if !SubagentRoleCallable(lookup.Role) {
+		return false
+	}
+	if context == SubagentInvocationContextOrdinary || *lookup.NormalizedSelector == BuiltInSubagentRoleFast {
+		return true
+	}
+	return settings.Workflow.Subagents && SubagentRoleWorkflowCallable(lookup.Role)
+}
+
+type SubagentRoleLookupStatus string
+
+const (
+	SubagentRoleLookupInvalid SubagentRoleLookupStatus = "invalid"
+	SubagentRoleLookupMissing SubagentRoleLookupStatus = "missing"
+	SubagentRoleLookupPresent SubagentRoleLookupStatus = "present"
+)
+
+type SubagentRoleLookup struct {
+	Role               SubagentRole
+	NormalizedSelector *string
+	Status             SubagentRoleLookupStatus
+}
+
+// LookupSubagentRole resolves a subagent selector to configured role identity.
+// It treats built-in roles as present and does not apply presentation filters
+// such as meaningful-diff or callability checks.
+func LookupSubagentRole(settings Settings, rawSelector string) SubagentRoleLookup {
+	normalized := NormalizeSubagentSelector(rawSelector)
+	if normalized == "" {
+		return SubagentRoleLookup{Status: SubagentRoleLookupInvalid}
+	}
+	if normalized == BuiltInSubagentRoleFast {
+		return SubagentRoleLookup{
+			Role:               settings.Subagents[normalized],
+			NormalizedSelector: subagentRoleLookupSelector(normalized),
+			Status:             SubagentRoleLookupPresent,
+		}
+	}
+	role, ok := settings.Subagents[normalized]
+	if !ok {
+		return SubagentRoleLookup{
+			NormalizedSelector: subagentRoleLookupSelector(normalized),
+			Status:             SubagentRoleLookupMissing,
+		}
+	}
+	return SubagentRoleLookup{
+		Role:               role,
+		NormalizedSelector: subagentRoleLookupSelector(normalized),
+		Status:             SubagentRoleLookupPresent,
+	}
+}
+
+func subagentRoleLookupSelector(selector string) *string {
+	return &selector
+}
+
+// AvailableSubagentRoleNames returns presentation-ready role names. It filters
+// out configured roles that have no runtime diff from the base settings and can
+// optionally filter non-callable roles. Use LookupSubagentRole for existence.
 func AvailableSubagentRoleNames(settings Settings, agentCallableOnly bool) []string {
+	return availableSubagentRoleNames(settings, func(name string, _ SubagentRole) bool {
+		return !agentCallableOnly || SubagentRoleCallableInContext(settings, name, SubagentInvocationContextOrdinary)
+	})
+}
+
+// AvailableCallableSubagentRoleNames returns presentation-ready roles that a
+// model may invoke from the supplied context.
+func AvailableCallableSubagentRoleNames(settings Settings, context SubagentInvocationContext) []string {
+	return availableSubagentRoleNames(settings, func(name string, _ SubagentRole) bool {
+		return SubagentRoleCallableInContext(settings, name, context)
+	})
+}
+
+func availableSubagentRoleNames(settings Settings, include func(string, SubagentRole) bool) []string {
 	names := []string{}
-	if !agentCallableOnly || SubagentRoleCallable(settings.Subagents[BuiltInSubagentRoleFast]) {
+	if include(BuiltInSubagentRoleFast, settings.Subagents[BuiltInSubagentRoleFast]) {
 		names = append(names, BuiltInSubagentRoleFast)
 	}
 	for name, role := range settings.Subagents {
@@ -93,7 +191,7 @@ func AvailableSubagentRoleNames(settings Settings, agentCallableOnly bool) []str
 		if !SubagentRoleHasMeaningfulDiff(settings, role) {
 			continue
 		}
-		if agentCallableOnly && !SubagentRoleCallable(role) {
+		if !include(normalized, role) {
 			continue
 		}
 		names = append(names, normalized)
@@ -154,6 +252,8 @@ func subagentSourceDiffers(base Settings, role SubagentRole, key string) bool {
 		return base.ProviderCapabilities.SupportsReasoningEncrypted != role.Settings.ProviderCapabilities.SupportsReasoningEncrypted
 	case "provider_capabilities.supports_server_side_context_edit":
 		return base.ProviderCapabilities.SupportsServerSideContextEdit != role.Settings.ProviderCapabilities.SupportsServerSideContextEdit
+	case "provider_capabilities.supports_provider_verbosity":
+		return base.ProviderCapabilities.SupportsProviderVerbosity != role.Settings.ProviderCapabilities.SupportsProviderVerbosity
 	case "provider_capabilities.is_openai_first_party":
 		return base.ProviderCapabilities.IsOpenAIFirstParty != role.Settings.ProviderCapabilities.IsOpenAIFirstParty
 	case "web_search":
@@ -224,6 +324,8 @@ func subagentSourceDiffers(base Settings, role SubagentRole, key string) bool {
 		return base.Reviewer.ProviderCapabilities.SupportsReasoningEncrypted != role.Settings.Reviewer.ProviderCapabilities.SupportsReasoningEncrypted
 	case "reviewer.provider_capabilities.supports_server_side_context_edit":
 		return base.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit != role.Settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit
+	case "reviewer.provider_capabilities.supports_provider_verbosity":
+		return base.Reviewer.ProviderCapabilities.SupportsProviderVerbosity != role.Settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity
 	case "reviewer.provider_capabilities.is_openai_first_party":
 		return base.Reviewer.ProviderCapabilities.IsOpenAIFirstParty != role.Settings.Reviewer.ProviderCapabilities.IsOpenAIFirstParty
 	}

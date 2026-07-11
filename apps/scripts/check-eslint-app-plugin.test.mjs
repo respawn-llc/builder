@@ -157,6 +157,37 @@ test("app/no-useeffect-data-loading catches React.useEffect and aliased useEffec
   );
 });
 
+test("app/no-typeof-type-guards rejects runtime typeof checks except undefined globals", () => {
+  const tester = new RuleTester();
+
+  tester.run(
+    "app/no-typeof-type-guards",
+    appArchitecture.rules["no-typeof-type-guards"],
+    {
+      valid: [
+        "const runtimeType = typeof value;",
+        'function start() { if (typeof window === "undefined") return; }',
+        'if ("undefined" !== typeof document) start();',
+        'function read(value) { if (value === null) return; }',
+      ],
+      invalid: [
+        {
+          code: 'function read(value) { if (typeof value === "string") return value; }',
+          errors: [{ messageId: "typeGuard" }],
+        },
+        {
+          code: 'function read(value) { if ("number" !== typeof value) return; }',
+          errors: [{ messageId: "typeGuard" }],
+        },
+        {
+          code: 'const ready = typeof callback === "function";',
+          errors: [{ messageId: "typeGuard" }],
+        },
+      ],
+    },
+  );
+});
+
 test("app/no-mutable-exports rejects exported let and var", () => {
   const tester = new RuleTester();
 

@@ -51,7 +51,7 @@ type compactionResult struct {
 	engine            string
 	items             []llm.ResponseItem
 	usage             llm.Usage
-	trimmedItemsCount int
+	trimmedItemsCount *int
 	overflowRepair    compactionOverflowRepairStats
 	provider          string
 	summary           string
@@ -67,9 +67,19 @@ func (e *Engine) CompactContext(ctx context.Context, args string) error {
 	return e.compactionFlow.CompactContext(ctx, args)
 }
 
+func (e *Engine) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) error {
+	e.ensureOrchestrationCollaborators()
+	return e.compactionFlow.CompactContextWithActiveHook(ctx, args, onActive)
+}
+
 func (e *Engine) CompactContextForPreSubmit(ctx context.Context) error {
 	e.ensureOrchestrationCollaborators()
 	return e.compactionFlow.CompactContextForPreSubmit(ctx)
+}
+
+func (e *Engine) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) error {
+	e.ensureOrchestrationCollaborators()
+	return e.compactionFlow.CompactContextForPreSubmitWithActiveHook(ctx, onActive)
 }
 
 func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {
@@ -78,11 +88,19 @@ func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall l
 }
 
 func (c *defaultContextCompactor) CompactContext(ctx context.Context, args string) error {
-	return c.compactContext(ctx, compactionModeManual, args, true)
+	return c.CompactContextWithActiveHook(ctx, args, nil)
+}
+
+func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) error {
+	return c.compactContext(ctx, compactionModeManual, args, true, onActive)
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmit(ctx context.Context) error {
-	return c.compactContext(ctx, compactionModeManual, "", false)
+	return c.CompactContextForPreSubmitWithActiveHook(ctx, nil)
+}
+
+func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) error {
+	return c.compactContext(ctx, compactionModeManual, "", false, onActive)
 }
 
 func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {
@@ -108,9 +126,16 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, args string, includeManualCarryover bool) error {
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, args string, includeManualCarryover bool, onActive func()) error {
 	e := c.engine
-	return c.steps.Run(ctx, exclusiveStepOptions{}, func(stepCtx context.Context, stepID string) error {
+	activeKind := ActiveKindPreSubmitCompaction
+	if includeManualCarryover {
+		activeKind = ActiveKindCompaction
+	}
+	return c.steps.Run(ctx, exclusiveStepOptions{ActiveKind: activeKind}, func(stepCtx context.Context, stepID string) error {
+		if onActive != nil {
+			onActive()
+		}
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
 			return err
 		}
@@ -317,7 +342,7 @@ func (e *Engine) buildRequestWithoutPromptRefresh(ctx context.Context) (llm.Requ
 	req.FastMode = e.FastModeEnabled()
 	req.SessionID = e.SessionID()
 	if e.supportsPromptCacheKey(ctx) {
-		if cacheKey := conversationPromptCacheKey(e.SessionID(), e.compactionRuntimeState().Count()); cacheKey != "" {
+		if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
 			req.PromptCacheKey = cacheKey
 			req.PromptCacheScope = transcript.CacheWarningScopeConversation
 		}
@@ -562,7 +587,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		providerID = "unknown"
 	}
 
-	if err := newCompactionPersistence(e).emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, 0, 0, ""); err != nil {
+	if err := newCompactionPersistence(e).emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, nil, 0, ""); err != nil {
 		return compactionResult{}, err
 	}
 
@@ -593,7 +618,10 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 	}
 
 	compactionNumber := e.compactionRuntimeState().Count() + 1
-	result.items = withCompactionSummaryLabel(result.items, fmt.Sprintf("context compacted for the %s time", ordinal(compactionNumber)))
+	result.items = withCompactionSummaryLabel(
+		result.items,
+		fmt.Sprintf("Context compacted for the %s time.", ordinal(compactionNumber)),
+	)
 	postReplacementMeta, err := e.compactionReinjectedMetaMessages(ctx)
 	if err != nil {
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())

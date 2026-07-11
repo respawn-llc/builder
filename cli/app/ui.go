@@ -12,6 +12,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/transcriptdiag"
+	"core/shared/valuecopy"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -23,12 +24,6 @@ type uiLogger interface {
 func (m *uiModel) clearReviewerState() {
 	m.setReviewerRunning(false)
 	m.setReviewerBlocking(false)
-}
-
-type rollbackCandidate struct {
-	TranscriptIndex  int
-	RollbackTargetID string
-	Text             string
 }
 
 func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, askEvents <-chan askEvent, opts ...UIOption) tea.Model {
@@ -50,12 +45,12 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-c
 		})
 	}
 	if configurable, ok := m.engine.(interface {
-		SetLeaseRecoveryWarningObserver(func(string, clientui.EntryVisibility))
+		SetRuntimeReconnectWarningObserver(func(string, clientui.EntryVisibility))
 	}); ok {
-		runtimeLeaseRecoveryWarning := make(chan runtimeLeaseRecoveryWarningMsg, 1)
-		m.runtimeLeaseRecoveryWarning = runtimeLeaseRecoveryWarning
-		configurable.SetLeaseRecoveryWarningObserver(func(text string, visibility clientui.EntryVisibility) {
-			enqueueRuntimeLeaseRecoveryWarning(runtimeLeaseRecoveryWarning, text, visibility)
+		runtimeReconnectWarning := make(chan runtimeReconnectWarningMsg, 1)
+		m.runtimeReconnectWarning = runtimeReconnectWarning
+		configurable.SetRuntimeReconnectWarningObserver(func(text string, visibility clientui.EntryVisibility) {
+			enqueueRuntimeReconnectWarning(runtimeReconnectWarning, text, visibility)
 		})
 	}
 	mainView := m.runtimeMainView()
@@ -63,27 +58,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-c
 	m.applyRuntimeMainViewState(mainView)
 	if !m.hasRuntimeClient() {
 		m.reviewerEnabled = strings.TrimSpace(m.reviewerMode) != "" && strings.TrimSpace(m.reviewerMode) != "off"
-	}
-	if m.hasRuntimeClient() {
-		seedView := mainView.Session
-		_ = m.runtimeAdapter().applyProjectedSessionMetadata(seedView)
-		_ = m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, m.startupRuntimeTranscript(), clientui.TranscriptRecoveryCauseNone)
-		if startupCmd := m.requestRuntimeBootstrapTranscriptSync(); startupCmd != nil {
-			m.startupCmds = append(m.startupCmds, startupCmd)
-		}
-		m.runtimeTranscriptBusy = false
-	} else {
-		for _, entry := range m.initialTranscript {
-			if strings.TrimSpace(entry.Text) == "" {
-				continue
-			}
-			role := tui.TranscriptRoleFromWire(entry.Role)
-			m.transcriptEntries = append(m.transcriptEntries, tui.TranscriptEntry{Role: role, Text: entry.Text, RollbackTargetID: entry.RollbackTargetID})
-			m.forwardToView(tui.AppendTranscriptMsg{Role: role, Text: entry.Text})
-		}
-		m.transcriptBaseOffset = 0
-		m.transcriptTotalEntries = len(m.transcriptEntries)
-		m.refreshRollbackCandidates()
 	}
 	if gitStartupCmd := m.statusLineGitRefreshCmd(); gitStartupCmd != nil {
 		m.statusGitBackgroundInFlight = true
@@ -100,35 +74,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-c
 	}
 	m.layout().syncViewport()
 	return m
-}
-
-func (m *uiModel) handleRenderDiagnostic(diag tui.RenderDiagnostic) {
-	m.startupCmds = append(m.startupCmds, func() tea.Msg {
-		return renderDiagnosticMsg{diagnostic: diag}
-	})
-}
-
-func (m *uiModel) applyRenderDiagnostic(diag tui.RenderDiagnostic) tea.Cmd {
-	message := strings.TrimSpace(diag.Message)
-	if message == "" {
-		return nil
-	}
-	severity := strings.TrimSpace(string(diag.Severity))
-	if severity == "" {
-		severity = string(tui.RenderDiagnosticSeverityWarn)
-	}
-	m.logf("render.diagnostic severity=%s component=%s message=%q", severity, strings.TrimSpace(diag.Component), message)
-	if diag.Err != nil {
-		m.logf("render.diagnostic.err component=%s err=%q", strings.TrimSpace(diag.Component), diag.Err.Error())
-	}
-	kind := uiStatusNoticeNeutral
-	switch diag.Severity {
-	case tui.RenderDiagnosticSeverityError, tui.RenderDiagnosticSeverityFatal:
-		kind = uiStatusNoticeError
-	default:
-		kind = uiStatusNoticeNeutral
-	}
-	return m.sendTransientStatusWithNoticeID(message, kind, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (m *uiModel) applyRunLoggerDiagnostic(diag runLoggerDiagnostic) tea.Cmd {
@@ -206,15 +151,19 @@ func (m *uiModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.waitRuntimeEventCmd(),
 		waitAskEvent(m.askEvents),
+		waitOngoingTranscriptEvent(m.ongoingEvents),
 		waitPathReferenceSearchEvent(m.pathReferenceEvents),
 		tea.SetWindowTitle(sessionTitle(m.sessionName)),
 		tea.WindowSize(),
 	}
+	if !m.windowSizeKnown && m.nativeOngoingSurfaceActive() {
+		cmds = append(cmds, m.setOngoingNormalBufferOwned(false))
+	}
 	if m.runtimeConnectionEvents != nil {
 		cmds = append(cmds, waitRuntimeConnectionStateChange(m.runtimeConnectionEvents))
 	}
-	if m.runtimeLeaseRecoveryWarning != nil {
-		cmds = append(cmds, waitRuntimeLeaseRecoveryWarning(m.runtimeLeaseRecoveryWarning))
+	if m.runtimeReconnectWarning != nil {
+		cmds = append(cmds, waitRuntimeReconnectWarning(m.runtimeReconnectWarning))
 	}
 	cmds = append([]tea.Cmd{tea.ClearScreen}, cmds...)
 	if startupSubmitCmd := m.startupSubmitCmd(); startupSubmitCmd != nil {
@@ -223,6 +172,13 @@ func (m *uiModel) Init() tea.Cmd {
 	if len(m.startupCmds) > 0 {
 		cmds = append(cmds, m.startupCmds...)
 		m.startupCmds = nil
+	}
+	if m.windowSizeKnown && m.nativeOngoingSurfaceActive() {
+		if result, err := m.ongoingSurface.Render(m.ongoingFrameInput()); err != nil {
+			cmds = append(cmds, m.handleOngoingSurfaceError(err))
+		} else if cmd := m.handleOngoingResult(result); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -233,7 +189,7 @@ func (m *uiModel) startupSubmitCmd() tea.Cmd {
 		return nil
 	}
 	if m.startupSubmitPromptHistoryRecorded {
-		return m.inputController().startSubmissionWithPreSubmitQueuePosition(startupText, preSubmitQueueBack, "", true)
+		return m.inputController().startSubmissionWithPreSubmitQueuePosition(startupText, preSubmitQueueBack, "")
 	}
 	return m.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID(startupText, preSubmitQueueBack, "")
 }
@@ -260,9 +216,9 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout().syncViewport()
 		return m, nil
 	}
-	m.forwardToView(msg)
+	cmd := m.forwardToView(msg)
 	m.layout().syncViewport()
-	return m, m.maybeRequestDetailTranscriptPage()
+	return m, cmd
 }
 
 func (m *uiModel) setDebugKeyTransientStatus(raw tea.Msg, normalized tea.KeyMsg, source string) {
@@ -272,51 +228,45 @@ func (m *uiModel) setDebugKeyTransientStatus(raw tea.Msg, normalized tea.KeyMsg,
 	}
 	m.transientStatusToken++
 	m.transientStatus = fmt.Sprintf("key src=%s raw=%q norm=%q type=%d", source, rawString, normalized.String(), normalized.Type)
-	m.transientStatusKind = uiStatusNoticeNeutral
+	m.transientStatusKind = uiStatusNoticeInfo
 }
 
 func statusHasAuthData(snapshot uiStatusSnapshot) bool {
 	return snapshot.Auth.Visible || snapshot.Subscription.Applicable || strings.TrimSpace(snapshot.Subscription.Summary) != "" || len(snapshot.Subscription.Windows) > 0
 }
 
-func (m *uiModel) forwardToView(msg tea.Msg) {
+func (m *uiModel) forwardToView(msg tea.Msg) tea.Cmd {
 	prevMode := m.view.Mode()
-	next, _ := m.view.Update(msg)
+	prevSurface := m.surface()
+	next, cmd := m.view.Update(msg)
 	casted, ok := next.(tui.Model)
 	if ok {
 		m.view = casted
 	}
 	if prevMode != m.view.Mode() && m.surface().isTranscript() {
-		m.activeSurface = surfaceForTranscriptMode(m.view.Mode())
-		m.syncRendererOutputGate()
+		surfaceTransitionCmd := m.activateSurfaceFrom(prevSurface, surfaceForTranscriptMode(m.view.Mode()), false)
+		detailLoadCmd := m.detailLoadCmdForModeTransition(prevMode, m.view.Mode())
+		return sequenceCmds(
+			cmd,
+			surfaceTransitionCmd,
+			detailLoadCmd,
+		)
 	}
-	if prevMode != m.view.Mode() && m.view.Mode() == tui.ModeDetail && m.hasRuntimeClient() {
-		m.primeDetailTranscriptFromCurrentTail()
-		page := m.detailTranscript.page()
-		nextDetail, _ := m.view.Update(tui.SetConversationMsg{
-			BaseOffset:   page.Offset,
-			TotalEntries: page.TotalEntries,
-			Entries:      transcriptEntriesFromPage(page),
-			Ongoing:      page.Streaming,
-			OngoingError: page.StreamingError,
-		})
-		if castedDetail, ok := nextDetail.(tui.Model); ok {
-			m.view = castedDetail
-		}
-	}
+	return cmd
 }
 
 func (m *uiModel) Close() {
 	if m == nil {
 		return
 	}
-	m.closeNativeSurface()
+	m.dropNativeSurface()
 	m.syncRendererOutputGate()
 	if m.pathReferenceSearch != nil {
 		m.pathReferenceSearch.Stop()
 		m.pathReferenceSearch = nil
 		m.pathReferenceEvents = nil
 	}
+	_ = m.cancelPendingDetailTranscriptRequest()
 }
 
 func (m *uiModel) Transition() UITransition {
@@ -413,16 +363,18 @@ func (m *uiModel) showTransientStatusNotice(notice uiStatusNotice) tea.Cmd {
 	m.transientStatus = strings.TrimSpace(notice.Text)
 	m.transientStatusKind = notice.Kind
 	m.transientStatusNoticeID = strings.TrimSpace(notice.NoticeID)
-	if notice.Kind == uiStatusNoticeUpdateAvailable {
-		m.startupUpdateShown = true
+	m.transientStatusRequestID = valuecopy.Pointer(notice.RequestID)
+	if notice.Duration <= 0 {
+		return nil
 	}
 	return scheduleTransientStatusClear(notice.Duration, token)
 }
 
 func (m *uiModel) advanceTransientStatusQueue() tea.Cmd {
 	m.transientStatus = ""
-	m.transientStatusKind = uiStatusNoticeNeutral
+	m.transientStatusKind = uiStatusNoticeInfo
 	m.transientStatusNoticeID = ""
+	m.transientStatusRequestID = nil
 	if len(m.transientStatusQueue) == 0 {
 		m.layout().syncViewport()
 		return nil

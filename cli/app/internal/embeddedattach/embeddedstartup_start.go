@@ -6,11 +6,13 @@ import (
 	serverauth "core/server/auth"
 	"core/server/authservice"
 	serverstartup "core/server/startup"
+	"core/shared/client"
 	"core/shared/config"
 )
 
 type Server = serverstartup.EmbeddedServer
 type AuthManager = serverauth.Manager
+type StartupOptions = serverstartup.Options
 
 type AuthHandler interface {
 	WrapStore(base serverauth.Store) serverauth.Store
@@ -26,18 +28,20 @@ type StartupRequest struct {
 	OpenAIBaseURL         string
 	OpenAIBaseURLExplicit bool
 	LoadOptions           config.LoadOptions
+	StartupOptions        serverstartup.Options
 }
 
 type OnboardingRequest struct {
-	Config       config.App
-	AuthManager  *AuthManager
-	ReloadConfig func() (config.App, error)
+	Config                config.App
+	AuthManager           *AuthManager
+	CapabilityFactsClient client.CapabilityFactsClient
+	ReloadConfig          func() (config.App, error)
 }
 
 type OnboardingHandler func(ctx context.Context, req OnboardingRequest) (config.App, error)
 
 func Start(ctx context.Context, req StartupRequest, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*Server, error) {
-	return serverstartup.Start(ctx, buildStartupRequest(req), authHandler, adaptOnboardingHandler(onboardingHandler))
+	return serverstartup.StartWithOptions(ctx, buildStartupRequest(req), authHandler, adaptOnboardingHandler(onboardingHandler), req.StartupOptions)
 }
 
 func buildStartupRequest(req StartupRequest) serverstartup.Request {
@@ -57,9 +61,10 @@ func adaptOnboardingHandler(handler OnboardingHandler) serverstartup.OnboardingH
 	}
 	return func(ctx context.Context, req serverstartup.OnboardingRequest) (config.App, error) {
 		return handler(ctx, OnboardingRequest{
-			Config:       req.Config,
-			AuthManager:  req.AuthManager,
-			ReloadConfig: req.ReloadConfig,
+			Config:                req.Config,
+			AuthManager:           req.AuthManager,
+			CapabilityFactsClient: req.CapabilityFactsClient,
+			ReloadConfig:          req.ReloadConfig,
 		})
 	}
 }

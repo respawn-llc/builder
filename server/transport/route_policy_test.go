@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
 
@@ -19,144 +18,18 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestRouteScopeParamAccessorsCoverScopedRoutes(t *testing.T) {
-	for _, route := range rpccontract.Routes() {
-		if route.RequestType == nil {
-			continue
-		}
-		params := reflect.New(route.RequestType).Elem().Interface()
-		if _, err := routeScopeParamsFor(route, params); err != nil {
-			t.Fatalf("route %q scope params: %v", route.Method, err)
-		}
-	}
-}
-
-type routeAccessorKind string
-
-const (
-	routeAccessorNone         routeAccessorKind = "none"
-	routeAccessorProjectState routeAccessorKind = "active_project"
-	routeAccessorSessionID    routeAccessorKind = "SessionID"
-	routeAccessorProcessID    routeAccessorKind = "ProcessID"
-	routeAccessorOwnerSession routeAccessorKind = "OwnerSessionID"
-)
-
-func TestRouteScopeAccessorKindsMatchRouteContract(t *testing.T) {
-	expected := map[string]routeAccessorKind{}
-	for _, method := range []string{
-		protocol.MethodAttachSession,
-		protocol.MethodSessionGetMainView,
-		protocol.MethodSessionGetTranscriptPage,
-		protocol.MethodSessionGetCommittedTranscriptSuffix,
-		protocol.MethodSessionGetInitialInput,
-		protocol.MethodSessionPersistInputDraft,
-		protocol.MethodSessionRetargetWorkspace,
-		protocol.MethodSessionResolveTransition,
-		protocol.MethodSessionRuntimeActivate,
-		protocol.MethodSessionRuntimeRelease,
-		protocol.MethodWorktreeList,
-		protocol.MethodWorktreeCreateTargetResolve,
-		protocol.MethodWorktreeCreate,
-		protocol.MethodWorktreeSwitch,
-		protocol.MethodWorktreeDelete,
-		protocol.MethodRuntimeSetSessionName,
-		protocol.MethodRuntimeSetThinkingLevel,
-		protocol.MethodRuntimeSetFastModeEnabled,
-		protocol.MethodRuntimeSetReviewerEnabled,
-		protocol.MethodRuntimeSetAutoCompactionEnabled,
-		protocol.MethodRuntimeSetQuestionsEnabled,
-		protocol.MethodRuntimeAppendCommittedEntry,
-		protocol.MethodRuntimeShouldCompactBeforeUserMessage,
-		protocol.MethodRuntimeSubmitUserMessage,
-		protocol.MethodRuntimeSubmitUserTurn,
-		protocol.MethodRuntimeSubmitUserShellCommand,
-		protocol.MethodRuntimeCompactContext,
-		protocol.MethodRuntimeCompactContextForPreSubmit,
-		protocol.MethodRuntimeHasQueuedUserWork,
-		protocol.MethodRuntimeSubmitQueuedUserMessages,
-		protocol.MethodRuntimeInterrupt,
-		protocol.MethodRuntimeQueueUserMessage,
-		protocol.MethodRuntimeDiscardQueuedUserMessage,
-		protocol.MethodRuntimeRecordPromptHistory,
-		protocol.MethodRuntimeGoalShow,
-		protocol.MethodRuntimeGoalSet,
-		protocol.MethodRuntimeGoalPause,
-		protocol.MethodRuntimeGoalResume,
-		protocol.MethodRuntimeGoalComplete,
-		protocol.MethodRuntimeGoalClear,
-		protocol.MethodAskListPending,
-		protocol.MethodAskAnswer,
-		protocol.MethodApprovalListPending,
-		protocol.MethodApprovalAnswer,
-		protocol.MethodSessionSubscribeActivity,
-		protocol.MethodPromptSubscribeActivity,
-	} {
-		expected[method] = routeAccessorSessionID
-	}
-	for _, method := range []string{
-		protocol.MethodProcessGet,
-		protocol.MethodProcessKill,
-		protocol.MethodProcessInlineOutput,
-		protocol.MethodProcessSubscribeOutput,
-	} {
-		expected[method] = routeAccessorProcessID
-	}
-	expected[protocol.MethodProcessList] = routeAccessorOwnerSession
-	expected[protocol.MethodSessionPlan] = routeAccessorProjectState
-	expected[protocol.MethodRunPrompt] = routeAccessorProjectState
-
-	for _, route := range rpccontract.Routes() {
-		actual := routeAccessorKindForScope(route.Scope)
-		want, ok := expected[route.Method]
-		if !ok {
-			if actual != routeAccessorNone {
-				t.Fatalf("route %q scope %q uses accessor %q but is missing from explicit accessor table", route.Method, route.Scope, actual)
-			}
-			continue
-		}
-		if actual != want {
-			t.Fatalf("route %q accessor = %q, want %q", route.Method, actual, want)
-		}
-	}
-	for method := range expected {
-		if _, ok := rpccontract.RouteByMethod(method); !ok {
-			t.Fatalf("accessor table references missing route %q", method)
-		}
-	}
-}
-
-func routeAccessorKindForScope(scope rpccontract.ScopePolicy) routeAccessorKind {
-	switch scope {
-	case rpccontract.ScopeProjectWorkspace:
-		return routeAccessorProjectState
-	case rpccontract.ScopeAttachSession,
-		rpccontract.ScopeSessionActiveProject,
-		rpccontract.ScopeSessionActiveProjectIfSet,
-		rpccontract.ScopeSessionAttachedProject,
-		rpccontract.ScopeAttachedSession,
-		rpccontract.ScopeGoalSession:
-		return routeAccessorSessionID
-	case rpccontract.ScopeProcessActiveProject:
-		return routeAccessorProcessID
-	case rpccontract.ScopeProcessListActiveProject:
-		return routeAccessorOwnerSession
-	default:
-		return routeAccessorNone
-	}
-}
-
 func TestRoutePolicyAuthPolicyHandlesBlankAndUnknownMethods(t *testing.T) {
 	executor := newRoutePolicyExecutor(nil)
-	if err := executor.requireAuth(context.Background(), ""); err != nil {
+	if err := executor.requireAuth(context.Background(), nil, ""); err != nil {
 		t.Fatalf("blank method auth: %v", err)
 	}
-	if err := executor.requireAuth(context.Background(), protocol.MethodProjectList); err != nil {
+	if err := executor.requireAuth(context.Background(), nil, protocol.MethodProjectList); err != nil {
 		t.Fatalf("pre-auth method auth: %v", err)
 	}
-	if err := executor.requireAuth(context.Background(), protocol.MethodProjectAttachWorkspace); !errors.Is(err, serverapi.ErrServerAuthRequired) {
+	if err := executor.requireAuth(context.Background(), nil, protocol.MethodProjectAttachWorkspace); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("auth-required method error = %v, want server auth required", err)
 	}
-	if err := executor.requireAuth(context.Background(), "missing.method"); !errors.Is(err, serverapi.ErrServerAuthRequired) {
+	if err := executor.requireAuth(context.Background(), nil, "missing.method"); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("unknown method error = %v, want server auth required", err)
 	}
 }
@@ -193,7 +66,13 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, activeRoute, serverapi.SessionMainViewRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign session unexpectedly allowed")
 	}
-
+	transcriptPageRoute := routeForTest(t, protocol.MethodSessionGetTranscriptPage)
+	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, transcriptPageRoute, serverapi.SessionTranscriptPageRequest{SessionID: fixture.ownSessionID}); err != nil {
+		t.Fatalf("active project own transcript page: %v", err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, transcriptPageRoute, serverapi.SessionTranscriptPageRequest{SessionID: fixture.foreignSessionID}); err == nil {
+		t.Fatal("active project foreign transcript page unexpectedly allowed")
+	}
 	attachedRoute := routeForTest(t, protocol.MethodSessionRetargetWorkspace)
 	if err := executor.authorizeScope(ctx, &connectionState{}, attachedRoute, serverapi.SessionRetargetWorkspaceRequest{SessionID: fixture.foreignSessionID}); err != nil {
 		t.Fatalf("attached-project unscoped session: %v", err)
@@ -241,6 +120,40 @@ func TestRoutePolicyAuthorizesGoalExceptionWithoutWebSocket(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("active-project foreign goal scope unexpectedly allowed")
+	}
+}
+
+func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing.T) {
+	fixture := newRoutePolicyFixture(t)
+	executor := newRoutePolicyExecutor(fixture.gateway)
+	ctx := context.Background()
+	requiredRoute := routeForTest(t, protocol.MethodRuntimeLiveSteer)
+	waitRoute := routeForTest(t, protocol.MethodRuntimeLiveWait)
+	stopRoute := routeForTest(t, protocol.MethodRuntimeLiveStop)
+
+	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       fixture.ownSessionID,
+		Text:            "steer",
+	}); err != nil {
+		t.Fatalf("live steer root-scoped existing session: %v", err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{}, waitRoute, serverapi.RuntimeLiveWaitRequest{SessionID: fixture.ownSessionID}); err != nil {
+		t.Fatalf("live wait root-scoped existing session: %v", err)
+	}
+	missing := "6ff7ace4-e08b-43fc-b425-73242f0b3d26"
+	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       missing,
+		Text:            "steer",
+	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("missing required live session error = %v, want ErrRuntimeUnavailable", err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{}, stopRoute, serverapi.RuntimeLiveStopRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       missing,
+	}); err != nil {
+		t.Fatalf("optional live stop missing session: %v", err)
 	}
 }
 
@@ -347,6 +260,13 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	var routeErr gatewayRouteError
 	if !errors.As(err, &routeErr) || routeErr.code != protocol.ErrCodeInvalidRequest {
 		t.Fatalf("attached session mismatch error = %v, want invalid request route error", err)
+	}
+	transcriptRoute := routeForTest(t, protocol.MethodSessionSubscribeTranscript)
+	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.ownSessionID}); err != nil {
+		t.Fatalf("attached transcript subscription: %v", err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.foreignSessionID}); err == nil {
+		t.Fatal("attached transcript subscription mismatch unexpectedly allowed")
 	}
 	promptAttachedRoute := routeForTest(t, protocol.MethodPromptSubscribeActivity)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, promptAttachedRoute, serverapi.PromptActivitySubscribeRequest{SessionID: fixture.ownSessionID}); err != nil {

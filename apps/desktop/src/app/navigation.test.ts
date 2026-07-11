@@ -151,19 +151,18 @@ describe("navigation stack state", () => {
     await act(async () => {
       await navigation.openProject("project-1", "workflow-1");
     });
-    expectRoute(router, "/projects/project-1", { resumeRunId: "", taskId: "", workflowId: "workflow-1" });
+    expectRoute(router, "/projects/project-1", { taskId: "", workflowId: "workflow-1" });
     await act(async () => {
       await navigation.openProjectTask("project-1", "workflow-1", "task-1");
     });
     expectRoute(router, "/projects/project-1", {
-      resumeRunId: "",
       taskId: "task-1",
       workflowId: "workflow-1",
     });
     await act(async () => {
       await navigation.closeProjectTask("project-1", "workflow-1");
     });
-    expectRoute(router, "/projects/project-1", { resumeRunId: "", taskId: "", workflowId: "workflow-1" });
+    expectRoute(router, "/projects/project-1", { taskId: "", workflowId: "workflow-1" });
     await act(async () => {
       await navigation.openHome();
     });

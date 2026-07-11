@@ -42,7 +42,7 @@ func TestRecentTailTranscriptWindowCacheReflectsLiveStreamingOnHit(t *testing.T)
 		t.Fatalf("unexpected streaming before delta: %q", got)
 	}
 
-	newTranscriptPersistenceCoordinator(eng.transcriptRuntimeState()).AppendStreamingDelta("partial answer")
+	newTranscriptPersistenceCoordinator(eng.transcriptRuntimeState()).AppendStreamingDelta("step-1", eng.TranscriptRevision(), eng.CommittedTranscriptEntryCount(), "partial answer", llm.MessagePhaseFinal)
 	got := eng.RecentTailTranscriptWindow(50).Snapshot.Streaming
 	if strings.TrimSpace(got) != "partial answer" {
 		t.Fatalf("cache hit must overlay live streaming, got %q", got)

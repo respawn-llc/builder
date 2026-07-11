@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -155,13 +156,44 @@ func configureBindingCommandTestServerPort(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
+	reserveBindingCommandTestPort(t, listener)
 	t.Setenv("KENT_SERVER_PORT", fmt.Sprintf("%d", port))
+}
+
+var bindingCommandTestPortReservations = struct {
+	sync.Mutex
+	listeners map[string]net.Listener
+}{listeners: map[string]net.Listener{}}
+
+func reserveBindingCommandTestPort(t *testing.T, listener net.Listener) {
+	t.Helper()
+	addr := listener.Addr().String()
+	bindingCommandTestPortReservations.Lock()
+	if existing := bindingCommandTestPortReservations.listeners[addr]; existing != nil {
+		_ = existing.Close()
+	}
+	bindingCommandTestPortReservations.listeners[addr] = listener
+	bindingCommandTestPortReservations.Unlock()
+	t.Cleanup(func() { releaseBindingCommandTestPort(addr) })
+}
+
+func releaseBindingCommandTestPort(addr string) {
+	bindingCommandTestPortReservations.Lock()
+	listener := bindingCommandTestPortReservations.listeners[addr]
+	delete(bindingCommandTestPortReservations.listeners, addr)
+	bindingCommandTestPortReservations.Unlock()
+	if listener != nil {
+		_ = listener.Close()
+	}
+}
+
+func releaseBindingCommandTestPortForConfig(cfg config.App) {
+	releaseBindingCommandTestPort(net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)))
 }
 
 func registerBindingCommandWorkspace(t *testing.T, workspace string) metadata.Binding {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setBindingCommandTestHome(t)
 	configureBindingCommandTestServerPort(t)
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
@@ -176,7 +208,7 @@ func registerBindingCommandWorkspace(t *testing.T, workspace string) metadata.Bi
 
 func newBindingCommandSession(t *testing.T, workspace string) (*metadata.Store, metadata.Binding, *session.Store) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setBindingCommandTestHome(t)
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load oldWorkspace: %v", err)
@@ -212,7 +244,15 @@ func resetBindingCommandRetargetHooks(t *testing.T) {
 		bindingCommandSessionRetargeter = originalRetargeter
 		bindingCommandLocalSessionLifecycleClient = originalLocalClient
 	})
-	t.Setenv("HOME", t.TempDir())
+	setBindingCommandTestHome(t)
+}
+
+func setBindingCommandTestHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KENT_PERSISTENCE_ROOT", filepath.Join(home, ".kent"))
+	return home
 }
 
 func newBindingCommandWorkspaceConfig(t *testing.T) (string, config.App) {
@@ -231,7 +271,11 @@ func startBindingCommandServer(t *testing.T, workspace string) func() {
 	if err != nil {
 		t.Fatalf("config.Load server workspace: %v", err)
 	}
-	serverstartup.ReleaseTestListenReservation(net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)))
+	if !cfg.Source.SettingsFileExists {
+		if _, _, err := config.WriteDefaultSettingsFileAt(cfg.Source.HomeSettingsPath); err != nil {
+			t.Fatalf("write test settings: %v", err)
+		}
+	}
 	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, bindingCommandMemoryAuthHandler{state: auth.State{
 		Scope:     auth.ScopeGlobal,
 		Method:    auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
@@ -243,6 +287,7 @@ func startBindingCommandServer(t *testing.T, workspace string) func() {
 	serveCtx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseBindingCommandTestPortForConfig(srv.Config())
 		errCh <- srv.Serve(serveCtx)
 	}()
 	waitForBindingCommandServer(t, workspace)
@@ -421,10 +466,9 @@ func TestAttachSubcommandExplicitProjectOverridesCurrentWorkspace(t *testing.T) 
 }
 
 func TestAttachSubcommandWithoutProjectGuidanceFailsWhenCurrentWorkspaceUnregistered(t *testing.T) {
-	home := t.TempDir()
+	setBindingCommandTestHome(t)
 	working := t.TempDir()
 	target := t.TempDir()
-	t.Setenv("HOME", home)
 	configureBindingCommandTestServerPort(t)
 	cleanup := startBindingCommandServer(t, working)
 	defer cleanup()
@@ -452,9 +496,8 @@ func TestAttachSubcommandWithoutProjectGuidanceFailsWhenCurrentWorkspaceUnregist
 }
 
 func TestAttachSubcommandRejectsUnknownExplicitProjectIDCleanly(t *testing.T) {
-	home := t.TempDir()
+	setBindingCommandTestHome(t)
 	target := t.TempDir()
-	t.Setenv("HOME", home)
 	configureBindingCommandTestServerPort(t)
 	cleanup := startBindingCommandServer(t, target)
 	defer cleanup()

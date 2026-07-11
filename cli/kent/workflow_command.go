@@ -32,11 +32,12 @@ type workflowListOutput struct {
 
 // workflowNodeOutput is the machine-readable shape of `workflow node add/update --json`.
 type workflowNodeOutput struct {
-	WorkflowID string `json:"workflow_id"`
-	NodeID     string `json:"node_id"`
-	Key        string `json:"key"`
-	Kind       string `json:"kind,omitempty"`
-	Version    int64  `json:"version"`
+	WorkflowID string  `json:"workflow_id"`
+	NodeID     string  `json:"node_id"`
+	Key        string  `json:"key"`
+	Kind       string  `json:"kind,omitempty"`
+	ScriptPath *string `json:"script_path,omitempty"`
+	Version    int64   `json:"version"`
 }
 
 // workflowEdgeOutput is the machine-readable shape of `workflow edge add/update --json`.
@@ -204,11 +205,12 @@ func workflowNodeSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" workflow node add", stderr, workflowCommandUsage)
 	key := fs.String("key", "", "node model key")
-	kind := fs.String("kind", "", "node kind: start|agent|join|terminal")
+	kind := fs.String("kind", "", "node kind: start|agent|script|join|terminal")
 	displayName := fs.String("display-name", "", "node display name")
 	prompt := fs.String("prompt", "", "agent prompt template")
 	agent := fs.String("agent", "", "subagent role for agent nodes")
 	completionMode := fs.String("completion-mode", "", "completion mode for agent nodes: auto|structured_output|tool|shell_command|unstructured_output")
+	scriptPath := fs.String("script-path", "", "script executable path for script nodes")
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	workflowRef, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow node add requires <workflow>")
 	if !ok {
@@ -235,13 +237,14 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 	defer cancel()
-	resp, err := remote.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, DisplayName: *displayName, SubagentRole: *agent, PromptTemplate: *prompt, CompletionMode: *completionMode})
+	req := serverapi.WorkflowNodeAddRequest{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, DisplayName: *displayName, SubagentRole: *agent, PromptTemplate: *prompt, CompletionMode: *completionMode, ScriptPath: workflowScriptPathFlagValue(fs, "script-path", *scriptPath)}
+	resp, err := remote.AddWorkflowNode(ctx, req)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, workflowNodeOutput{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, Version: resp.Version})
+		return writeWorkflowJSON(stdout, stderr, workflowNodeOutput{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, ScriptPath: req.ScriptPath, Version: resp.Version})
 	}
 	fmt.Fprintf(stdout, "Added %s node `%s` (%s).\n", *kind, *key, nodeID)
 	return 0
@@ -250,11 +253,12 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" workflow node update", stderr, workflowCommandUsage)
 	key := fs.String("key", "", "node model key")
-	kind := fs.String("kind", "", "node kind: start|agent|join|terminal")
+	kind := fs.String("kind", "", "node kind: start|agent|script|join|terminal")
 	displayName := fs.String("display-name", "", "node display name")
 	prompt := fs.String("prompt", "", "agent prompt template")
 	agent := fs.String("agent", "", "subagent role for agent nodes")
 	completionMode := fs.String("completion-mode", "", "completion mode for agent nodes: auto|structured_output|tool|shell_command|unstructured_output")
+	scriptPath := fs.String("script-path", "", "script executable path for script nodes; pass an empty value to clear")
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow node update requires <workflow> <node-key>")
 	if !ok {
@@ -295,6 +299,9 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	if flagWasProvided(fs, "completion-mode") {
 		updated.CompletionMode = strings.TrimSpace(*completionMode)
 	}
+	if flagWasProvided(fs, "script-path") {
+		updated.ScriptPath = workflowScriptPathFlagValue(fs, "script-path", *scriptPath)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 	defer cancel()
 	resp, err := remote.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
@@ -307,6 +314,7 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		SubagentRole:       updated.SubagentRole,
 		PromptTemplate:     updated.PromptTemplate,
 		CompletionMode:     updated.CompletionMode,
+		ScriptPath:         updated.ScriptPath,
 		InputFields:        updated.InputFields,
 		JoinInputProviders: updated.JoinInputProviders,
 	})
@@ -315,10 +323,21 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, workflowNodeOutput{WorkflowID: def.Workflow.ID, NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, Version: resp.Version})
+		return writeWorkflowJSON(stdout, stderr, workflowNodeOutput{WorkflowID: def.Workflow.ID, NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, ScriptPath: updated.ScriptPath, Version: resp.Version})
 	}
 	fmt.Fprintf(stdout, "Updated node `%s`.\n", updated.Key)
 	return 0
+}
+
+func workflowScriptPathFlagValue(fs *flag.FlagSet, name string, value string) *string {
+	if !flagWasProvided(fs, name) {
+		return nil
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func workflowEdgeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -348,7 +367,7 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	edgeKey := fs.String("edge-key", "", "edge key")
 	toKey := fs.String("to", "", "target node key")
 	contextMode := fs.String("context", "", "context mode: new_session|continue_session|compact_and_continue_session")
-	contextSource := fs.String("context-source", "", "context source: immediate_source|node:<node-key>")
+	contextSource := fs.String("context-source", "", "context source: immediate_source|previous_target|previous_target_or_new|node:<node-key>")
 	requiresApproval := fs.Bool("requires-approval", false, "require approval before target runs")
 	prompt := fs.String("prompt", "", "branch prompt template for agent targets")
 	transitionDescription := fs.String("transition-description", "", "model-facing transition description explaining when to pick it")
@@ -462,7 +481,7 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	edgeKey := fs.String("edge-key", "", "edge key")
 	toKey := fs.String("to", "", "target node key")
 	contextMode := fs.String("context", "", "context mode: new_session|continue_session|compact_and_continue_session")
-	contextSource := fs.String("context-source", "", "context source: immediate_source|node:<node-key>")
+	contextSource := fs.String("context-source", "", "context source: immediate_source|previous_target|previous_target_or_new|node:<node-key>")
 	requiresApproval := fs.Bool("requires-approval", false, "require approval before target runs (use --requires-approval=false to clear)")
 	prompt := fs.String("prompt", "", "branch prompt template for agent targets")
 	var params repeatedStringFlag
@@ -611,7 +630,15 @@ func workflowLinkSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 	defer cancel()
-	resp, err := remote.LinkWorkflowToProject(ctx, serverapi.WorkflowLinkProjectRequest{ProjectID: projectID, WorkflowID: workflowID, Default: *defaultLink})
+	defaultPolicy := serverapi.WorkflowProjectLinkDefaultNever
+	if *defaultLink {
+		defaultPolicy = serverapi.WorkflowProjectLinkDefaultAlways
+	}
+	resp, err := remote.LinkWorkflowToProject(ctx, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     projectID,
+		WorkflowID:    workflowID,
+		DefaultPolicy: defaultPolicy,
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -739,7 +766,14 @@ func workflowValidateSubcommand(args []string, stdout io.Writer, stderr io.Write
 		return exit
 	}
 	if resp.Valid {
-		fmt.Fprintf(stdout, "Workflow %s is valid in %s mode.\n", workflowID, *mode)
+		if len(resp.Errors) == 0 {
+			fmt.Fprintf(stdout, "Workflow %s is valid in %s mode.\n", workflowID, *mode)
+			return 0
+		}
+		fmt.Fprintf(stdout, "Workflow %s is valid in %s mode with %d diagnostic(s).\n", workflowID, *mode, len(resp.Errors))
+		for _, validationErr := range resp.Errors {
+			writeWorkflowValidationError(stdout, validationErr)
+		}
 		return 0
 	}
 	fmt.Fprintf(stdout, "Workflow %s is invalid in %s mode: %d error(s).\n", workflowID, *mode, len(resp.Errors))
@@ -821,8 +855,8 @@ func writeWorkflowDefinitionNodes(stdout io.Writer, nodes []serverapi.WorkflowNo
 	}
 }
 
-// workflowNodeAttrs renders the agent-only attributes worth surfacing in a node
-// listing: its subagent role and explicit completion mode.
+// workflowNodeAttrs renders node-kind-specific execution attributes worth
+// surfacing in the compact node listing.
 func workflowNodeAttrs(node serverapi.WorkflowNode) string {
 	attrs := make([]string, 0, 2)
 	if role := strings.TrimSpace(node.SubagentRole); role != "" {
@@ -830,6 +864,11 @@ func workflowNodeAttrs(node serverapi.WorkflowNode) string {
 	}
 	if mode := strings.TrimSpace(node.CompletionMode); mode != "" {
 		attrs = append(attrs, "completion: "+mode)
+	}
+	if node.Kind == "script" && node.ScriptPath != nil {
+		if path := strings.TrimSpace(*node.ScriptPath); path != "" {
+			attrs = append(attrs, "script: "+path)
+		}
 	}
 	return strings.Join(attrs, ", ")
 }
@@ -878,6 +917,10 @@ func workflowEdgeContextDetail(contextMode string, requiresApproval bool, contex
 	}
 	if source := canonicalAPIContextSource(contextSource); source.Kind == "selected_node" && strings.TrimSpace(source.NodeKey) != "" {
 		detail += ", context from " + strings.TrimSpace(source.NodeKey)
+	} else if source.Kind == "previous_target" {
+		detail += ", context from previous target"
+	} else if source.Kind == "previous_target_or_new" {
+		detail += ", context from previous target or new session"
 	}
 	return detail
 }
@@ -902,6 +945,9 @@ func parseWorkflowContextSourceSelector(raw string) (serverapi.WorkflowContextSo
 	if trimmed == "" || trimmed == "immediate_source" {
 		return serverapi.WorkflowContextSource{Kind: "immediate_source"}, nil
 	}
+	if trimmed == "previous_target" || trimmed == "previous_target_or_new" {
+		return serverapi.WorkflowContextSource{Kind: trimmed}, nil
+	}
 	prefix := "node:"
 	if strings.HasPrefix(trimmed, prefix) {
 		nodeKey := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
@@ -910,7 +956,7 @@ func parseWorkflowContextSourceSelector(raw string) (serverapi.WorkflowContextSo
 		}
 		return serverapi.WorkflowContextSource{Kind: "selected_node", NodeKey: nodeKey}, nil
 	}
-	return serverapi.WorkflowContextSource{}, fmt.Errorf("context source selector must be immediate_source or node:<node-key>")
+	return serverapi.WorkflowContextSource{}, fmt.Errorf("context source selector must be immediate_source, previous_target, previous_target_or_new, or node:<node-key>")
 }
 
 // repeatedStringFlag collects a flag that may be supplied multiple times.

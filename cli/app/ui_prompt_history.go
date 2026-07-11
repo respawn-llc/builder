@@ -6,12 +6,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+const promptHistoryLimit = 100
+
 func (m *uiModel) loadPromptHistory(history []string) {
 	for _, raw := range history {
 		if text := preservePromptHistoryText(raw); text != "" {
 			m.promptHistory = append(m.promptHistory, text)
 		}
 	}
+	m.trimPromptHistory()
 }
 
 func preservePromptHistoryText(text string) string {
@@ -184,8 +187,16 @@ func (m *uiModel) rememberPromptHistoryLocally(text string) bool {
 		return false
 	}
 	m.promptHistory = append(m.promptHistory, text)
+	m.trimPromptHistory()
 	m.resetPromptHistoryNavigation()
 	return true
+}
+
+func (m *uiModel) trimPromptHistory() {
+	if len(m.promptHistory) <= promptHistoryLimit {
+		return
+	}
+	m.promptHistory = append([]string(nil), m.promptHistory[len(m.promptHistory)-promptHistoryLimit:]...)
 }
 
 func (m *uiModel) recordPromptHistory(text string) tea.Cmd {
@@ -207,7 +218,9 @@ func (m *uiModel) recordPromptHistory(text string) tea.Cmd {
 
 func ringBellCmd() tea.Cmd {
 	return func() tea.Msg {
-		writeTerminalSequence(terminalBell)
+		if err := writeTerminalSequence(terminalBell); err != nil {
+			return terminalSequenceWriteErrMsg{err: err}
+		}
 		return nil
 	}
 }

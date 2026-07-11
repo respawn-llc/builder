@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"core/server/llm"
@@ -19,30 +20,30 @@ type defaultToolExecutor struct {
 	engine *Engine
 }
 
+var ErrMissingProviderToolCallID = errors.New("provider tool call id is required")
+
 func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID string, calls []llm.ToolCall) ([]tools.Result, error) {
 	e := t.engine
 	results := make([]tools.Result, len(calls))
 	callErrs := make([]error, len(calls))
 	wg := sync.WaitGroup{}
 	runID := activeRunIDForStep(e, stepID)
+	workingDir := e.transcriptWorkingDir()
 	workflowActive := e.workflowRunActive()
 	serialGate := newSerialToolGate()
 	nextSerialOrdinal := 0
+	preparedCalls, err := prepareExecutorToolCalls(e, stepID, runID, workflowActive, calls)
+	if err != nil {
+		return results, err
+	}
 
-	for i := range calls {
-		call := calls[i]
-		if call.ID == "" {
-			call.ID = uuid.NewString()
-		}
-		toolID, knownTool := toolspec.ParseID(call.Name)
-		executableCall := call
-		if knownTool {
-			executableCall.Name = string(toolID)
-		}
-		if call.Custom && knownTool {
-			executableCall.Input = executorInputForCustomTool(toolID, call.CustomInput)
-		}
-		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
+	for i := range preparedCalls {
+		prepared := preparedCalls[i]
+		call := prepared.call
+		toolID := prepared.toolID
+		knownTool := prepared.knownTool
+		executableCall := prepared.call
+		transcriptCall := normalizeToolCallForTranscript(executableCall, workingDir)
 		started := Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
 			started.CommittedEntryStart = start
@@ -59,7 +60,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 			nextSerialOrdinal++
 		}
 		wg.Add(1)
-		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int) {
+		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata) {
 			defer wg.Done()
 			defer e.forgetPendingToolCallStart(tc.ID)
 			var callErr error
@@ -99,14 +100,13 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				}
 				return
 			}
-			res, err := h.Call(ctx, tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID})
+			res, err := h.Call(ctx, tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: e.cfg.AskQuestionBatchSkipped})
 			if err != nil {
 				callErr = err
 				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: err.Error()}
 			}
-			if res.Name == "" {
-				res.Name = toolID
-			}
+			res.CallID = tc.ID
+			res.Name = toolID
 			results[idx] = res
 			if err := e.steer(stepID, steerToolCompletionIntent(res)); err != nil {
 				persistErr := fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, res.Name, err)
@@ -114,7 +114,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				return
 			}
 			callErrs[idx] = callErr
-		}(executableCall, toolID, knownTool, serialOrdinal)
+		}(executableCall, toolID, knownTool, serialOrdinal, prepared.askQuestionBatch)
 	}
 
 	wg.Wait()
@@ -122,13 +122,78 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 	for _, err := range callErrs {
 		joined = errors.Join(joined, err)
 	}
-	if joined == nil {
-		joined = errors.Join(joined, e.drainActiveRunGoalMutations(stepID))
-	}
+	joined = errors.Join(joined, e.drainActiveStepGoalMutations(stepID))
 	if joined != nil {
 		return results, joined
 	}
 	return results, nil
+}
+
+type executorToolCall struct {
+	call             llm.ToolCall
+	toolID           toolspec.ID
+	knownTool        bool
+	askQuestionBatch *tools.AskQuestionBatchMetadata
+}
+
+func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workflowActive bool, calls []llm.ToolCall) ([]executorToolCall, error) {
+	prepared := make([]executorToolCall, 0, len(calls))
+	askCandidateIndexes := make([]int, 0)
+	askCandidatePromptIDs := make([]string, 0)
+	for i := range calls {
+		call := calls[i]
+		if strings.TrimSpace(call.ID) == "" {
+			return nil, fmt.Errorf("%w (tool=%s)", ErrMissingProviderToolCallID, call.Name)
+		}
+		toolID, knownTool := toolspec.ParseID(call.Name)
+		executableCall := call
+		if knownTool {
+			executableCall.Name = string(toolID)
+		}
+		if call.Custom && knownTool {
+			executableCall.Input = executorInputForCustomTool(toolID, call.CustomInput)
+		}
+		prepared = append(prepared, executorToolCall{call: executableCall, toolID: toolID, knownTool: knownTool})
+		if !knownTool || toolID != toolspec.ToolAskQuestion || !workflowActive || !askQuestionMaterializable(engine) {
+			continue
+		}
+		if _, err := tools.PrepareAskQuestionToolRequest(executableCall.ID, executableCall.Input); err != nil {
+			continue
+		}
+		askCandidateIndexes = append(askCandidateIndexes, len(prepared)-1)
+		askCandidatePromptIDs = append(askCandidatePromptIDs, executableCall.ID)
+	}
+	if len(askCandidateIndexes) == 0 {
+		return prepared, nil
+	}
+	batchID := uuid.NewString()
+	for ordinal, index := range askCandidateIndexes {
+		promptIDs := append([]string(nil), askCandidatePromptIDs...)
+		call := prepared[index].call
+		prepared[index].askQuestionBatch = &tools.AskQuestionBatchMetadata{
+			Origin:              tools.AskQuestionOriginModelTool,
+			RunID:               runID,
+			StepID:              stepID,
+			BatchID:             batchID,
+			PromptID:            call.ID,
+			BatchPromptIDs:      promptIDs,
+			CandidateOrdinal:    ordinal,
+			PreparedPromptCount: len(promptIDs),
+		}
+	}
+	return prepared, nil
+}
+
+func askQuestionMaterializable(engine *Engine) bool {
+	if engine == nil || engine.registry == nil {
+		return false
+	}
+	handler, ok := engine.registry.Get(toolspec.ToolAskQuestion)
+	if !ok {
+		return false
+	}
+	questions, ok := handler.(interface{ QuestionsEnabled() bool })
+	return !ok || questions.QuestionsEnabled()
 }
 
 type serialToolGate struct {

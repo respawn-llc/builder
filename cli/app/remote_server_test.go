@@ -191,7 +191,7 @@ func TestRemoteLoginTransitionWaitsForAuthChoiceWhenServerAuthAlreadyReady(t *te
 	server := newRemoteAppServerWithAuth(remote, cfg, nil, false)
 	done := make(chan error, 1)
 	go func() {
-		_, err := resolveSessionAction(context.Background(), server, interactor, "", "", UITransition{Action: UIActionLogout})
+		_, err := resolveSessionAction(context.Background(), server, interactor, "", UITransition{Action: UIActionLogout})
 		done <- err
 	}()
 

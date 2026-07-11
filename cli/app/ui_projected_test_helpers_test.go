@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
 	"core/server/runtimeview"
@@ -45,9 +47,7 @@ func newProjectedTestUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents
 	if askEvents == nil {
 		askEvents = make(chan askEvent)
 	}
-	m := NewProjectedUIModel(runtimeClient, runtimeEvents, askEvents, opts...).(*uiModel)
-	seedTestRollbackTargets(m)
-	return m
+	return NewProjectedUIModel(runtimeClient, runtimeEvents, askEvents, opts...).(*uiModel)
 }
 
 func newProjectedClosedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {
@@ -92,10 +92,24 @@ func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient
 	}
 	resolver := sessionview.NewStaticRuntimeResolver(engine)
 	reads := client.NewLoopbackSessionViewClient(sessionview.NewService(nil, resolver, nil))
-	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(resolver, nil))
+	controlRegistry := registry.NewRuntimeRegistry()
+	registerUIRuntime(controlRegistry, engine.SessionID(), engine)
+	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(controlRegistry))
 	runtimeClient := newUIRuntimeClientWithReads(engine.SessionID(), reads, controls).(*sessionRuntimeClient)
-	runtimeClient.storeMainView(runtimeview.MainViewFromRuntime(engine))
+	snapshot, err := controlRegistry.RuntimeReadModelSnapshot(context.Background(), engine.SessionID(), nil)
+	if err != nil {
+		panic(err)
+	}
+	runtimeClient.storeMainView(runtimeview.MainViewFromRuntimeActivity(engine, snapshot.Version, snapshot.Activity))
 	return runtimeClient
+}
+
+func registerUIRuntime(r *registry.RuntimeRegistry, sessionID string, engine *runtime.Engine) {
+	claim, _, _ := r.AcquireRuntimeClaim(sessionID, "test-owner")
+	if claim == nil {
+		return
+	}
+	claim.Resolve(engine, nil, nil)
 }
 
 func newUIRuntimeClient(engine *runtime.Engine) clientui.RuntimeClient {

@@ -5,8 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"core/cli/tui"
 	"core/shared/clientui"
+
+	"github.com/google/uuid"
 )
 
 type submitDoneMsg struct {
@@ -14,6 +15,7 @@ type submitDoneMsg struct {
 	message       string
 	submittedText string
 	silentFinal   bool
+	queued        clientui.QueuedUserMessage
 	err           error
 }
 
@@ -54,6 +56,7 @@ const (
 	goalRuntimeSet        goalRuntimeOperation = "set"
 	goalRuntimePause      goalRuntimeOperation = "pause"
 	goalRuntimeResume     goalRuntimeOperation = "resume"
+	goalRuntimeComplete   goalRuntimeOperation = "complete"
 	goalRuntimeClear      goalRuntimeOperation = "clear"
 )
 
@@ -116,14 +119,6 @@ type compactDoneMsg struct {
 	err error
 }
 
-type nativeSurfaceResumeMsg struct{}
-
-type nativeSurfaceResizeRehydrateMsg struct {
-	token  uint64
-	width  int
-	height int
-}
-
 // Active submit is the in-flight turn only. uiModel.queued stores future work;
 // never mirror active submit there or it can run again after completion.
 type activeSubmitState struct {
@@ -131,6 +126,7 @@ type activeSubmitState struct {
 	stepID             string
 	text               string
 	queuedID           string
+	operationRef       clientui.RuntimeOperationRef
 	restoreOnInterrupt bool
 	flushed            bool
 }
@@ -189,7 +185,7 @@ type runtimeConnectionStateChangedMsg struct {
 	err error
 }
 
-type runtimeLeaseRecoveryWarningMsg struct {
+type runtimeReconnectWarningMsg struct {
 	text       string
 	visibility clientui.EntryVisibility
 }
@@ -201,35 +197,6 @@ type runtimeMainViewRefreshedMsg struct {
 	err   error
 }
 
-type runtimeTranscriptRefreshedMsg struct {
-	token         uint64
-	req           clientui.TranscriptPageRequest
-	syncRequest   runtimeTranscriptSyncRequest
-	syncCause     runtimeTranscriptSyncCause
-	transcript    clientui.TranscriptPage
-	recoveryCause clientui.TranscriptRecoveryCause
-	err           error
-}
-
-type runtimeTranscriptRetryMsg struct {
-	syncCause     runtimeTranscriptSyncCause
-	token         uint64
-	recoveryCause clientui.TranscriptRecoveryCause
-	req           runtimeTranscriptSyncRequest
-}
-
-type runtimeTranscriptSyncCause string
-
-const (
-	runtimeTranscriptSyncCauseBootstrap               runtimeTranscriptSyncCause = "bootstrap"
-	runtimeTranscriptSyncCauseCommittedConversation   runtimeTranscriptSyncCause = "committed_conversation_updated"
-	runtimeTranscriptSyncCauseCommittedGap            runtimeTranscriptSyncCause = "committed_gap"
-	runtimeTranscriptSyncCauseQueuedDrain             runtimeTranscriptSyncCause = "queued_drain"
-	runtimeTranscriptSyncCauseDirtyFollowUp           runtimeTranscriptSyncCause = "dirty_follow_up"
-	runtimeTranscriptSyncCauseContinuityRecovery      runtimeTranscriptSyncCause = "continuity_recovery"
-	runtimeTranscriptSyncCauseManualTranscriptRefresh runtimeTranscriptSyncCause = "manual_transcript_refresh"
-)
-
 type runtimeMainViewRefreshCause string
 
 const (
@@ -238,18 +205,14 @@ const (
 	runtimeMainViewRefreshCauseStartupUpdate    runtimeMainViewRefreshCause = "startup_update"
 )
 
-type detailTranscriptLoadMsg struct{}
-
-type renderDiagnosticMsg struct {
-	diagnostic tui.RenderDiagnostic
+type detailTranscriptLoadMsg struct {
+	requestID uuid.UUID
+	page      clientui.TranscriptPage
+	err       error
 }
 
-type deferredProjectedTranscriptTail struct {
-	rangeStart int
-	rangeEnd   int
-	revision   int64
-	entries    []clientui.ChatEntry
-	pending    []string
+type terminalSequenceWriteErrMsg struct {
+	err error
 }
 
 type runLoggerDiagnosticMsg struct {
@@ -304,17 +267,18 @@ type askEventMsg struct {
 type uiStatusNoticeKind uint8
 
 const (
-	uiStatusNoticeNeutral uiStatusNoticeKind = iota
+	uiStatusNoticeInfo uiStatusNoticeKind = iota
 	uiStatusNoticeSuccess
+	uiStatusNoticeWarning
 	uiStatusNoticeError
-	uiStatusNoticeUpdateAvailable
 )
 
 type uiStatusNotice struct {
-	Text     string
-	Kind     uiStatusNoticeKind
-	Duration time.Duration
-	NoticeID string
+	Text      string
+	Kind      uiStatusNoticeKind
+	Duration  time.Duration
+	NoticeID  string
+	RequestID *uuid.UUID
 }
 
 type uiStatusNoticeDelivery uint8

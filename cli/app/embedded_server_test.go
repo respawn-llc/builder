@@ -44,6 +44,7 @@ type testEmbeddedServer struct {
 	boundWorkspaceID     string
 	askViewClient        client.AskViewClient
 	approvalViewClient   client.ApprovalViewClient
+	attentionClient      client.AttentionNotificationClient
 	promptControlClient  client.PromptControlClient
 	promptActivityClient client.PromptActivityClient
 	projectViewClient    client.ProjectViewClient
@@ -65,12 +66,6 @@ type testEmbeddedServer struct {
 	reauthenticate       func(ctx context.Context, interactor authInteractor) error
 }
 
-type noopEmbeddedSessionLifecycleLeaseVerifier struct{}
-
-func (noopEmbeddedSessionLifecycleLeaseVerifier) RequireControllerLease(context.Context, string, string) error {
-	return nil
-}
-
 type noOpSessionActivitySubscription struct{}
 
 func (noOpSessionActivitySubscription) Next(context.Context) (clientui.Event, error) {
@@ -88,7 +83,7 @@ func (c *recordingSessionRuntimeClient) ActivateSessionRuntime(ctx context.Conte
 	if c.activate != nil {
 		return c.activate(ctx, req)
 	}
-	return serverapi.SessionRuntimeActivateResponse{LeaseID: "lease-test"}, nil
+	return serverapi.SessionRuntimeActivateResponse{}, nil
 }
 
 func (c *recordingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
@@ -162,6 +157,7 @@ func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID s
 		boundWorkspaceID:     s.boundWorkspaceID,
 		askViewClient:        s.askViewClient,
 		approvalViewClient:   s.approvalViewClient,
+		attentionClient:      s.attentionClient,
 		promptControlClient:  s.promptControlClient,
 		promptActivityClient: s.promptActivityClient,
 		projectViewClient:    s.projectViewClient,
@@ -308,7 +304,7 @@ func (s *testEmbeddedServer) RuntimeControlClient() client.RuntimeControlClient 
 		return s.runtimeControlClient
 	}
 	registry := registry.NewRuntimeRegistry()
-	return client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry, registry))
+	return client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry))
 }
 
 func (s *testEmbeddedServer) sessionStoreRegistry() *registry.SessionStoreRegistry {
@@ -348,7 +344,7 @@ func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleCli
 			s.sessionStoreRegistry(),
 			s.authManager,
 			metadataStore.AuthoritativeSessionStoreOptions()...,
-		).WithPersistenceRoot(s.cfg.PersistenceRoot).WithControllerLeaseVerifier(noopEmbeddedSessionLifecycleLeaseVerifier{})
+		).WithPersistenceRoot(s.cfg.PersistenceRoot)
 		return client.NewLoopbackSessionLifecycleClient(service)
 	}
 	containerDir := strings.TrimSpace(s.containerDir)
@@ -359,7 +355,7 @@ func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleCli
 		}
 		containerDir = filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), projectID, "sessions")
 	}
-	service := sessionservice.NewSessionLifecycleService(containerDir, s.sessionStoreRegistry(), s.authManager).WithPersistenceRoot(s.cfg.PersistenceRoot).WithControllerLeaseVerifier(noopEmbeddedSessionLifecycleLeaseVerifier{})
+	service := sessionservice.NewSessionLifecycleService(containerDir, s.sessionStoreRegistry(), s.authManager).WithPersistenceRoot(s.cfg.PersistenceRoot)
 	return client.NewLoopbackSessionLifecycleClient(service)
 }
 
@@ -376,19 +372,26 @@ func (s *testEmbeddedServer) WorktreeClient() client.WorktreeClient {
 }
 
 func (s *testEmbeddedServer) RuntimeAttachmentClients() runtimeAttachmentClients {
+	attention := s.attentionClient
+	supported := attention != nil
+	if attention == nil {
+		attention = &recordingAttentionNotificationClient{}
+	}
 	return runtimeAttachmentClients{
-		ApprovalViews:   s.approvalViewClient,
-		AskViews:        s.askViewClient,
-		ProcessControls: s.processControlClient,
-		ProcessOutput:   s.processOutputClient,
-		ProcessViews:    s.processViewClient,
-		PromptActivity:  s.promptActivityClient,
-		PromptControl:   s.promptControlClient,
-		RuntimeControls: s.RuntimeControlClient(),
-		SessionActivity: s.sessionActivity,
-		SessionRuntime:  s.sessionRuntime,
-		SessionViews:    s.sessionViewClient,
-		Worktrees:       s.WorktreeClient(),
+		ApprovalViews:                   s.approvalViewClient,
+		AskViews:                        s.askViewClient,
+		Attention:                       attention,
+		AttentionNotificationsSupported: supported,
+		ProcessControls:                 s.processControlClient,
+		ProcessOutput:                   s.processOutputClient,
+		ProcessViews:                    s.processViewClient,
+		PromptActivity:                  s.promptActivityClient,
+		PromptControl:                   s.promptControlClient,
+		RuntimeControls:                 s.RuntimeControlClient(),
+		SessionActivity:                 s.sessionActivity,
+		SessionRuntime:                  s.sessionRuntime,
+		SessionViews:                    s.sessionViewClient,
+		Worktrees:                       s.WorktreeClient(),
 	}
 }
 
@@ -460,7 +463,7 @@ func TestEmbeddedAppServerPrepareRuntimeRegistersRuntimeForSessionViews(t *testi
 
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime")
 	defer runtimePlan.Close()
-	if err := runtimePlan.Wiring.runtimeControls.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, ControllerLeaseID: runtimePlan.ControllerLeaseID, Level: "high"}); err != nil {
+	if err := runtimePlan.Wiring.runtimeControls.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Level: "high"}); err != nil {
 		t.Fatalf("set thinking level: %v", err)
 	}
 
@@ -642,26 +645,9 @@ func TestEmbeddedAppServerPrepareRuntimeWiresSessionActivityForSharedClients(t *
 	if firstEvt.Kind != clientui.EventLocalEntryAdded || secondEvt.Kind != clientui.EventLocalEntryAdded {
 		t.Fatalf("unexpected activity events: first=%+v second=%+v", firstEvt, secondEvt)
 	}
-	if len(firstEvt.TranscriptEntries) != 1 || firstEvt.TranscriptEntries[0].Text != "hello from client one" {
-		t.Fatalf("unexpected first local entry event: %+v", firstEvt)
-	}
-	if len(secondEvt.TranscriptEntries) != 1 || secondEvt.TranscriptEntries[0].Text != "hello from client one" {
-		t.Fatalf("unexpected second local entry event: %+v", secondEvt)
-	}
 
 	if _, err := reads.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: plan.SessionID}); err != nil {
 		t.Fatalf("GetSessionMainView refreshed: %v", err)
-	}
-	page, err := reads.GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: plan.SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionTranscriptPage refreshed: %v", err)
-	}
-	if len(page.Transcript.Entries) == 0 {
-		t.Fatalf("expected hydrated transcript entries after activity: %+v", page.Transcript)
-	}
-	last := page.Transcript.Entries[len(page.Transcript.Entries)-1]
-	if last.Text != "hello from client one" {
-		t.Fatalf("unexpected hydrated entry: %+v", last)
 	}
 }
 
@@ -706,32 +692,10 @@ func TestEmbeddedAppServerPrepareRuntimeIsolatesSessionActivityBetweenSessions(t
 	if evtA.Kind != clientui.EventLocalEntryAdded {
 		t.Fatalf("unexpected session A event: %+v", evtA)
 	}
-	if len(evtA.TranscriptEntries) != 1 || evtA.TranscriptEntries[0].Text != "session-a-only" {
-		t.Fatalf("unexpected session A local entry payload: %+v", evtA)
-	}
 	ctxB, cancelB := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancelB()
 	if evtB, err := subB.Next(ctxB); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected session B stream to stay idle, got evt=%+v err=%v", evtB, err)
-	}
-
-	reads := server.SessionViewClient()
-	if reads == nil {
-		t.Fatal("expected session view client")
-	}
-	pageA, err := reads.GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: planA.SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionTranscriptPage A: %v", err)
-	}
-	if !transcriptPageContainsText(pageA.Transcript, "session-a-only") {
-		t.Fatalf("expected session A transcript to contain appended entry, got %+v", pageA.Transcript)
-	}
-	pageB, err := reads.GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: planB.SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionTranscriptPage B: %v", err)
-	}
-	if transcriptPageContainsText(pageB.Transcript, "session-a-only") {
-		t.Fatalf("session B transcript leaked session A entry: %+v", pageB.Transcript)
 	}
 
 	runtimePlanB.Wiring.runtimeClient.AppendCommittedEntry("assistant", "session-b-only")
@@ -745,29 +709,12 @@ func TestEmbeddedAppServerPrepareRuntimeIsolatesSessionActivityBetweenSessions(t
 	if evtB.Kind != clientui.EventLocalEntryAdded {
 		t.Fatalf("unexpected session B event: %+v", evtB)
 	}
-	if len(evtB.TranscriptEntries) != 1 || evtB.TranscriptEntries[0].Text != "session-b-only" {
-		t.Fatalf("unexpected session B local entry payload: %+v", evtB)
-	}
 	ctxA2, cancelA2 := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancelA2()
 	if evtA2, err := subA.Next(ctxA2); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected session A stream to stay idle after session B append, got evt=%+v err=%v", evtA2, err)
 	}
 
-	pageB, err = reads.GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: planB.SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionTranscriptPage B after append: %v", err)
-	}
-	if !transcriptPageContainsText(pageB.Transcript, "session-b-only") {
-		t.Fatalf("expected session B transcript to contain appended entry, got %+v", pageB.Transcript)
-	}
-	pageA, err = reads.GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: planA.SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionTranscriptPage A after session B append: %v", err)
-	}
-	if transcriptPageContainsText(pageA.Transcript, "session-b-only") {
-		t.Fatalf("session A transcript leaked session B entry: %+v", pageA.Transcript)
-	}
 }
 
 func TestEmbeddedAppServerRoutesBackgroundCompletionToOwningSessionOnly(t *testing.T) {
@@ -806,6 +753,7 @@ func TestEmbeddedAppServerRoutesBackgroundCompletionToOwningSessionOnly(t *testi
 		NoticeSuppressed: true,
 		Snapshot: shelltool.Snapshot{
 			ID:             processID,
+			ActivityID:     uuid.New(),
 			OwnerSessionID: planA.SessionID,
 			State:          "completed",
 			Command:        "sleep 1; printf done",
@@ -827,15 +775,6 @@ func TestEmbeddedAppServerRoutesBackgroundCompletionToOwningSessionOnly(t *testi
 	if evtB, err := subB.Next(ctxB); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected session B stream to stay idle for session A background completion, got evt=%+v err=%v", evtB, err)
 	}
-}
-
-func transcriptPageContainsText(page clientui.TranscriptPage, want string) bool {
-	for _, entry := range page.Entries {
-		if entry.Text == want {
-			return true
-		}
-	}
-	return false
 }
 
 func waitForSessionActivityEvent(t *testing.T, sub serverapi.SessionActivitySubscription, timeout time.Duration, match func(clientui.Event) bool) clientui.Event {

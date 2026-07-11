@@ -40,6 +40,9 @@ func (l uiViewLayout) calcChatLines() int {
 }
 
 func (l uiViewLayout) syncViewport() {
+	if l.model == nil {
+		return
+	}
 	width := l.effectiveWidth()
 	l.model.forwardToView(tui.SetViewportSizeMsg{
 		Lines: l.calcChatLines(),
@@ -49,9 +52,9 @@ func (l uiViewLayout) syncViewport() {
 
 func (l uiViewLayout) shouldRenderSoftCursor() bool {
 	inputState := l.model.inputModeState()
-	return !l.shouldUseRealTerminalCursor() && !inputState.InputLocked && inputState.ShowsMainInput
+	return !l.shouldUseRealTerminalCursor() && inputState.ShowsMainInput
 }
 
 func (l uiViewLayout) shouldUseRealTerminalCursor() bool {
-	return l.model.terminalCursor != nil || l.model.nativeSurfaceEnabled()
+	return l.model.terminalCursor != nil
 }

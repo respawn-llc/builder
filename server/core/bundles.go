@@ -5,6 +5,7 @@ import (
 
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
+	"core/server/capabilityfacts"
 	"core/server/metadata"
 
 	"core/server/processview"
@@ -30,6 +31,7 @@ import (
 
 type Bundles struct {
 	Auth        *AuthBundle
+	Capability  *CapabilityBundle
 	cleanup     []lifecycleResource
 	Persistence *PersistenceBundle
 	Processes   *ProcessBundle
@@ -48,6 +50,10 @@ type AuthBundle struct {
 	authStatus    client.AuthStatusClient
 	serverStatus  client.ServerStatusClient
 	authRequired  bool
+}
+
+type CapabilityBundle struct {
+	facts client.CapabilityFactsClient
 }
 
 type PersistenceBundle struct {
@@ -70,20 +76,25 @@ type ProjectBundle struct {
 }
 
 type PromptBundle struct {
-	askViews       client.AskViewClient
-	approvalViews  client.ApprovalViewClient
-	promptControl  client.PromptControlClient
-	promptActivity client.PromptActivityClient
+	askViews               client.AskViewClient
+	approvalViews          client.ApprovalViewClient
+	promptControl          client.PromptControlClient
+	promptActivity         client.PromptActivityClient
+	attentionNotifications client.AttentionNotificationClient
 }
 
 type RuntimeBundle struct {
-	fastModeState    *runtime.FastModeState
-	background       *shelltool.Manager
-	backgroundRouter *runtimewire.BackgroundEventRouter
-	runtimeRegistry  *registry.RuntimeRegistry
-	runtimeControls  client.RuntimeControlClient
-	sessionRuntime   client.SessionRuntimeClient
-	sessionActivity  client.SessionActivityClient
+	fastModeState       *runtime.FastModeState
+	background          *shelltool.Manager
+	backgroundRouter    *runtimewire.BackgroundEventRouter
+	runtimeRegistry     *registry.RuntimeRegistry
+	runtimeControls     client.RuntimeControlClient
+	runtimeLiveControls client.RuntimeLiveControlClient
+	sessionRuntime      client.SessionRuntimeClient
+	sessionActivity     client.SessionActivityClient
+	sessionTranscript   client.SessionTranscriptClient
+
+	sessionRuntimeService *sessionruntime.Service
 }
 
 type SessionBundle struct {
@@ -126,6 +137,9 @@ func (b *Bundles) withDefaults() *Bundles {
 	if withDefaults.Auth == nil {
 		withDefaults.Auth = &AuthBundle{}
 	}
+	if withDefaults.Capability == nil {
+		withDefaults.Capability = &CapabilityBundle{}
+	}
 	if withDefaults.Persistence == nil {
 		withDefaults.Persistence = &PersistenceBundle{}
 	}
@@ -137,6 +151,9 @@ func (b *Bundles) withDefaults() *Bundles {
 	}
 	if withDefaults.Prompts == nil {
 		withDefaults.Prompts = &PromptBundle{}
+	}
+	if withDefaults.Prompts.attentionNotifications == nil {
+		withDefaults.Prompts.attentionNotifications = unavailableAttentionNotificationClient{}
 	}
 	if withDefaults.Runtime == nil {
 		withDefaults.Runtime = &RuntimeBundle{}
@@ -168,6 +185,7 @@ type bundleCompositionInput struct {
 	cfg                     config.App
 	containerDir            string
 	authSupport             serverbootstrap.AuthSupport
+	capabilityFactsService  *capabilityfacts.Service
 	runtimeSupport          serverbootstrap.RuntimeSupport
 	rootLease               *RootLockLease
 	metadataStore           *metadata.Store
@@ -182,6 +200,7 @@ type bundleCompositionInput struct {
 	processOutputService    *processview.ProcessOutputService
 	promptControlService    *promptcontrol.PromptControlService
 	promptActivityService   *promptcontrol.PromptActivityService
+	attentionService        client.AttentionNotificationClient
 	runtimeControlService   *runtimecontrol.Service
 	serverStatusService     *serverstatus.ServerStatusService
 	sessionRuntimeService   *sessionruntime.Service
@@ -198,7 +217,8 @@ type bundleCompositionInput struct {
 
 func composeBundles(in bundleCompositionInput) *Bundles {
 	return &Bundles{
-		Auth: newAuthBundle(in.authSupport, in.authBootstrapService, in.authStatusService, in.serverStatusService, authservice.StartupAuthRequired(in.cfg.Settings)),
+		Auth:       newAuthBundle(in.authSupport, in.authBootstrapService, in.authStatusService, in.serverStatusService, authservice.StartupAuthRequired(in.cfg.Settings)),
+		Capability: newCapabilityBundle(in.capabilityFactsService),
 		cleanup: []lifecycleResource{
 			{name: "persistence root lock", close: in.rootLease.Close},
 			{name: "metadata store", close: in.metadataStore.Close},
@@ -225,7 +245,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore, in.sessionStoreRegistry),
 		Processes:   newProcessBundle(in.processService, in.processOutputService),
 		Projects:    newProjectBundle(in.cfg, in.containerDir, in.projectViews),
-		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.promptActivityService),
+		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.promptActivityService, in.attentionService),
 		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService, in.sessionActivityService),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
 		Updates:     &UpdateBundle{updateStatus: in.updateStatusService},
@@ -242,6 +262,10 @@ func newAuthBundle(authSupport serverbootstrap.AuthSupport, bootstrapService *au
 		serverStatus:  client.NewLoopbackServerStatusClient(serverStatusService),
 		authRequired:  authRequired,
 	}
+}
+
+func newCapabilityBundle(factsService *capabilityfacts.Service) *CapabilityBundle {
+	return &CapabilityBundle{facts: client.NewLoopbackCapabilityFactsClient(factsService)}
 }
 
 func newPersistenceBundle(rootLease *RootLockLease, metadataStore *metadata.Store, sessionStoreRegistry *registry.SessionStoreRegistry) *PersistenceBundle {
@@ -268,24 +292,32 @@ func newProjectBundle(cfg config.App, containerDir string, projectViews client.P
 	}
 }
 
-func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *promptcontrol.ApprovalViewService, promptControlService *promptcontrol.PromptControlService, promptActivityService *promptcontrol.PromptActivityService) *PromptBundle {
+func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *promptcontrol.ApprovalViewService, promptControlService *promptcontrol.PromptControlService, promptActivityService *promptcontrol.PromptActivityService, attentionService client.AttentionNotificationClient) *PromptBundle {
+	if attentionService == nil {
+		attentionService = unavailableAttentionNotificationClient{}
+	}
 	return &PromptBundle{
-		askViews:       client.NewLoopbackAskViewClient(askService),
-		approvalViews:  client.NewLoopbackApprovalViewClient(approvalService),
-		promptControl:  client.NewLoopbackPromptControlClient(promptControlService),
-		promptActivity: client.NewLoopbackPromptActivityClient(promptActivityService),
+		askViews:               client.NewLoopbackAskViewClient(askService),
+		approvalViews:          client.NewLoopbackApprovalViewClient(approvalService),
+		promptControl:          client.NewLoopbackPromptControlClient(promptControlService),
+		promptActivity:         client.NewLoopbackPromptActivityClient(promptActivityService),
+		attentionNotifications: attentionService,
 	}
 }
 
 func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegistry *registry.RuntimeRegistry, runtimeControlService *runtimecontrol.Service, sessionRuntimeService *sessionruntime.Service, sessionActivityService *sessionservice.SessionActivityService) *RuntimeBundle {
 	return &RuntimeBundle{
-		fastModeState:    runtimeSupport.FastModeState,
-		background:       runtimeSupport.Background,
-		backgroundRouter: runtimeSupport.BackgroundRouter,
-		runtimeRegistry:  runtimeRegistry,
-		runtimeControls:  client.NewLoopbackRuntimeControlClient(runtimeControlService),
-		sessionRuntime:   client.NewLoopbackSessionRuntimeClient(sessionRuntimeService),
-		sessionActivity:  client.NewLoopbackSessionActivityClient(sessionActivityService),
+		fastModeState:       runtimeSupport.FastModeState,
+		background:          runtimeSupport.Background,
+		backgroundRouter:    runtimeSupport.BackgroundRouter,
+		runtimeRegistry:     runtimeRegistry,
+		runtimeControls:     client.NewLoopbackRuntimeControlClient(runtimeControlService),
+		runtimeLiveControls: client.NewLoopbackRuntimeLiveControlClient(runtimeControlService),
+		sessionRuntime:      client.NewLoopbackSessionRuntimeClient(sessionRuntimeService),
+		sessionActivity:     client.NewLoopbackSessionActivityClient(sessionActivityService),
+		sessionTranscript:   client.NewLoopbackSessionTranscriptClient(runtimeRegistry),
+
+		sessionRuntimeService: sessionRuntimeService,
 	}
 }
 

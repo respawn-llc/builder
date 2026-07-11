@@ -16,7 +16,6 @@ describe("sidebar destination sizing", () => {
 function taskDetailDestination(): SidebarDestination {
   return {
     kind: "taskDetail",
-    resumeRunID: "",
     taskID: "task-1",
   };
 }

@@ -143,8 +143,8 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTargetByID(ctx, parent.Meta().SessionID, binding.WorkspaceID, "worktree-feature", "pkg"); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID parent: %v", err)
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-feature"}, CwdRelpath: "pkg"}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 	if err := parent.SetWorktreeReminderState(&session.WorktreeReminderState{
 		Mode:                  session.WorktreeReminderModeEnter,
@@ -248,8 +248,8 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 		t.Fatalf("result = %q, want %q", result.Result, "fast via role provider")
 	}
 	payload := <-requestBodies
-	if got := payload["model"]; got != "gpt-5.4-mini" {
-		t.Fatalf("model payload = %#v, want gpt-5.4-mini", got)
+	if got := payload["model"]; got != "gpt-5.6-terra" {
+		t.Fatalf("model payload = %#v, want gpt-5.6-terra", got)
 	}
 	store := openAuthoritativeWorkspaceSessionStore(t, workspace, server.URL, result.SessionID)
 	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != server.URL {
@@ -399,6 +399,28 @@ func newFakeResponsesServer(t *testing.T, assistantReplies []string) (*httptest.
 		}
 		if got := strings.TrimSpace(r.Header.Get("Authorization")); got == "" {
 			t.Fatal("expected authorization header")
+		}
+		index := int(hits.Add(1)) - 1
+		if index >= len(assistantReplies) {
+			t.Fatalf("unexpected response request index %d", index)
+		}
+		writeTestOpenAICompletedResponseStream(w, assistantReplies[index], 11, 7)
+	}))
+	return server, &hits
+}
+
+func newNoAuthFakeResponsesServer(t *testing.T, assistantReplies []string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleTestOpenAIInputTokenCount(w, r, 11) {
+			return
+		}
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		if got := strings.TrimSpace(r.Header.Get("Authorization")); got != "" {
+			t.Fatalf("unexpected authorization header %q", got)
 		}
 		index := int(hits.Add(1)) - 1
 		if index >= len(assistantReplies) {

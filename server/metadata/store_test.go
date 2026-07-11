@@ -256,9 +256,9 @@ VALUES (?, ?, ?, '{}', ?, ?)`, worktreeID, attached.WorkspaceID, filepath.Join(a
 	execSeed(t, store.db, "terminal source task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, worktreeID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
 	execSeed(t, store.db, "terminal source placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('placement-terminal-workspace', 'task-terminal-workspace', 'node-done', 'active', ?, ?)`, now, now)
-	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, in_flight_step, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
-VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', '', ?, ?, 0, 1, 0, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, worktreeID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
+VALUES ('placement-terminal-workspace', 'task-terminal-workspace', 'node-done', 'completed', ?, ?)`, now, now)
+	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
+VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', '', ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, worktreeID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
 
 	blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 	if err != nil {
@@ -526,8 +526,8 @@ func TestRetargetSessionWorkspaceAttachesTargetAndUpdatesSession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := store.UpdateSessionExecutionTargetByID(ctx, sess.Meta().SessionID, bindingA.WorkspaceID, "worktree-a", "pkg"); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID before retarget: %v", err)
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: bindingA.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget before retarget: %v", err)
 	}
 	if err := sess.SetWorktreeReminderState(&session.WorktreeReminderState{
 		Mode:          session.WorktreeReminderModeEnter,
@@ -572,14 +572,11 @@ func TestRetargetSessionWorkspaceAttachesTargetAndUpdatesSession(t *testing.T) {
 	if target.WorkspaceRoot != canonicalWorkspaceB {
 		t.Fatalf("target workspace root = %q, want %q", target.WorkspaceRoot, canonicalWorkspaceB)
 	}
-	if target.WorktreeID != "" {
-		t.Fatalf("target worktree id = %q, want empty after workspace retarget", target.WorktreeID)
+	if target.Worktree != nil {
+		t.Fatalf("target worktree = %+v, want nil after workspace retarget", target.Worktree)
 	}
 	if target.CwdRelpath != "." {
 		t.Fatalf("target cwd relpath = %q, want . after workspace retarget", target.CwdRelpath)
-	}
-	if target.WorktreeRoot != "" {
-		t.Fatalf("target worktree root = %q, want empty after workspace retarget", target.WorktreeRoot)
 	}
 	if target.EffectiveWorkdir != canonicalWorkspaceB {
 		t.Fatalf("target effective workdir = %q, want %q", target.EffectiveWorkdir, canonicalWorkspaceB)
@@ -597,6 +594,79 @@ func TestRetargetSessionWorkspaceAttachesTargetAndUpdatesSession(t *testing.T) {
 	}
 	if reopened.Meta().WorktreeReminder != nil {
 		t.Fatalf("expected stale worktree reminder cleared after workspace retarget, got %+v", reopened.Meta().WorktreeReminder)
+	}
+}
+
+func TestRetargetSessionWorkspaceClearsSameWorkspaceStaleWorktreeTarget(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if err := sess.SetName("stale worktree recovery"); err != nil {
+		t.Fatalf("SetName: %v", err)
+	}
+	worktreeRoot := filepath.Join(cfg.WorkspaceRoot, "deleted-task-worktree")
+	worktreeSubdir := filepath.Join(worktreeRoot, "pkg")
+	if err := os.MkdirAll(worktreeSubdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree subdir: %v", err)
+	}
+	canonicalWorktreeRoot := createMetadataTestWorktree(t, ctx, store, binding.WorkspaceID, "worktree-stale", worktreeRoot)
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{
+		SessionID:  sess.Meta().SessionID,
+		Workspace:  &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		Worktree:   &SessionExecutionTargetUpdateWorktree{ID: "worktree-stale"},
+		CwdRelpath: "pkg",
+	}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget before retarget: %v", err)
+	}
+	if err := sess.SetWorktreeReminderState(&session.WorktreeReminderState{
+		Mode:          session.WorktreeReminderModeEnter,
+		Branch:        "task/stale",
+		WorktreePath:  canonicalWorktreeRoot,
+		WorkspaceRoot: cfg.WorkspaceRoot,
+		EffectiveCwd:  filepath.Join(canonicalWorktreeRoot, "pkg"),
+	}); err != nil {
+		t.Fatalf("SetWorktreeReminderState before retarget: %v", err)
+	}
+	if err := os.RemoveAll(canonicalWorktreeRoot); err != nil {
+		t.Fatalf("RemoveAll stale worktree root: %v", err)
+	}
+
+	retargeted, err := store.RetargetSessionWorkspace(ctx, sess.Meta().SessionID, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("RetargetSessionWorkspace: %v", err)
+	}
+	if retargeted.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("retargeted workspace id = %q, want %q", retargeted.WorkspaceID, binding.WorkspaceID)
+	}
+	var storedWorktreeID sql.NullString
+	if err := store.db.QueryRowContext(ctx, "SELECT worktree_id FROM sessions WHERE id = ?", sess.Meta().SessionID).Scan(&storedWorktreeID); err != nil {
+		t.Fatalf("scan session worktree_id: %v", err)
+	}
+	if storedWorktreeID.Valid {
+		t.Fatalf("stored worktree_id = %+v, want SQL NULL", storedWorktreeID)
+	}
+	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.Worktree != nil {
+		t.Fatalf("target worktree = %+v, want nil", target.Worktree)
+	}
+	if target.CwdRelpath != "." {
+		t.Fatalf("target cwd_relpath = %q, want .", target.CwdRelpath)
+	}
+	if target.EffectiveWorkdir != retargeted.CanonicalRoot {
+		t.Fatalf("target effective workdir = %q, want %q", target.EffectiveWorkdir, retargeted.CanonicalRoot)
+	}
+	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.OpenByID: %v", err)
+	}
+	if reopened.Meta().WorkspaceRoot != retargeted.CanonicalRoot {
+		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, retargeted.CanonicalRoot)
+	}
+	if reopened.Meta().WorktreeReminder != nil {
+		t.Fatalf("reopened worktree reminder = %+v, want nil", reopened.Meta().WorktreeReminder)
 	}
 }
 
@@ -733,11 +803,11 @@ func TestRebindWorkspaceRetargetsDescendantWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if target.WorktreeID != worktreeID {
-		t.Fatalf("target worktree id = %q, want %q", target.WorktreeID, worktreeID)
+	if target.Worktree == nil || target.Worktree.ID != worktreeID {
+		t.Fatalf("target worktree = %+v, want %q", target.Worktree, worktreeID)
 	}
-	if target.WorktreeRoot != canonicalNewWorktree {
-		t.Fatalf("target worktree root = %q, want %q", target.WorktreeRoot, canonicalNewWorktree)
+	if target.Worktree == nil || target.Worktree.Root != canonicalNewWorktree {
+		t.Fatalf("target worktree root = %+v, want %q", target.Worktree, canonicalNewWorktree)
 	}
 	if target.EffectiveWorkdir != canonicalNewWorktree {
 		t.Fatalf("effective workdir = %q, want %q", target.EffectiveWorkdir, canonicalNewWorktree)
@@ -761,6 +831,7 @@ func TestRebindWorkspaceNormalizesUniqueConflictRace(t *testing.T) {
 		t.Fatalf("MkdirAll newWorkspace: %v", err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, ".kent-test"))
 
 	cfg, err := config.Load(oldWorkspace, config.LoadOptions{})
 	if err != nil {
@@ -890,6 +961,7 @@ func TestRegisterWorkspaceBindingConvergesUnderConcurrentFirstRegistration(t *te
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, ".kent-test"))
 
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {

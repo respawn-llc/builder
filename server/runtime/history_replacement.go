@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/valuecopy"
 )
 
 const legacyHistoryReplacementEngineReviewerRollback = "reviewer_rollback"
@@ -19,6 +20,7 @@ type historyReplacementEnvelope struct {
 	Mode                              string          `json:"mode"`
 	WorkflowRunID                     string          `json:"workflow_run_id"`
 	CompactionNumber                  int             `json:"compaction_number"`
+	CommittedEntryStart               *int            `json:"committed_entry_start"`
 	PendingHandoffFutureMessage       string          `json:"pending_handoff_future_message"`
 	LastCommittedAssistantFinalAnswer string          `json:"last_committed_assistant_final_answer"`
 	Items                             json.RawMessage `json:"items"`
@@ -46,6 +48,7 @@ func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacemen
 		Mode:                              strings.TrimSpace(envelope.Mode),
 		WorkflowRunID:                     strings.TrimSpace(envelope.WorkflowRunID),
 		CompactionNumber:                  envelope.CompactionNumber,
+		CommittedEntryStart:               valuecopy.Pointer(envelope.CommittedEntryStart),
 		PendingHandoffFutureMessage:       strings.TrimSpace(envelope.PendingHandoffFutureMessage),
 		LastCommittedAssistantFinalAnswer: envelope.LastCommittedAssistantFinalAnswer,
 	}

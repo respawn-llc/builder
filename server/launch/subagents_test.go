@@ -29,6 +29,32 @@ func TestApplyReviewerInheritanceRecomputesDefaultBaseURLWhenReviewerProviderExp
 	}
 }
 
+func TestApplySubagentRoleOverridesAppliesProviderVerbosityCapability(t *testing.T) {
+	settings := config.Settings{
+		ProviderCapabilities: config.ProviderCapabilitiesOverride{
+			ProviderID:                "main-provider",
+			SupportsProviderVerbosity: true,
+		},
+	}
+	role := config.SubagentRole{
+		Settings: config.Settings{
+			ProviderCapabilities: config.ProviderCapabilitiesOverride{
+				ProviderID:                "main-provider",
+				SupportsProviderVerbosity: false,
+			},
+		},
+		Sources: map[string]string{
+			"provider_capabilities.supports_provider_verbosity": "file",
+		},
+	}
+
+	applySubagentRoleOverrides(&settings, role, true)
+
+	if settings.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatalf("expected subagent verbosity capability override to apply, got %+v", settings.ProviderCapabilities)
+	}
+}
+
 func TestApplyReviewerInheritanceDoesNotCopyMainProviderCapabilitiesForExplicitReviewerEndpoint(t *testing.T) {
 	settings := config.Settings{
 		ProviderCapabilities: config.ProviderCapabilitiesOverride{
@@ -124,12 +150,14 @@ func TestApplyReviewerInheritanceMergesReviewerProviderCapabilitiesPerField(t *t
 			SupportsReasoningEncrypted:     true,
 			SupportsServerSideContextEdit:  true,
 			IsOpenAIFirstParty:             true,
+			SupportsProviderVerbosity:      true,
 		},
 		Reviewer: config.ReviewerSettings{
 			ProviderCapabilities: config.ProviderCapabilitiesOverride{
-				ProviderID:             "reviewer-provider",
-				SupportsResponsesAPI:   false,
-				SupportsPromptCacheKey: false,
+				ProviderID:                "reviewer-provider",
+				SupportsResponsesAPI:      false,
+				SupportsPromptCacheKey:    false,
+				SupportsProviderVerbosity: false,
 			},
 		},
 	}
@@ -137,6 +165,7 @@ func TestApplyReviewerInheritanceMergesReviewerProviderCapabilitiesPerField(t *t
 	sources["reviewer.provider_capabilities.provider_id"] = "subagent"
 	sources["reviewer.provider_capabilities.supports_responses_api"] = "subagent"
 	sources["reviewer.provider_capabilities.supports_prompt_cache_key"] = "subagent"
+	sources["reviewer.provider_capabilities.supports_provider_verbosity"] = "subagent"
 
 	applyReviewerInheritance(&settings, sources)
 
@@ -148,6 +177,9 @@ func TestApplyReviewerInheritanceMergesReviewerProviderCapabilitiesPerField(t *t
 	}
 	if settings.Reviewer.ProviderCapabilities.SupportsPromptCacheKey {
 		t.Fatalf("expected explicit reviewer prompt cache override to stay false")
+	}
+	if settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatalf("expected explicit reviewer verbosity override to stay false")
 	}
 	if !settings.Reviewer.ProviderCapabilities.SupportsResponsesCompact ||
 		!settings.Reviewer.ProviderCapabilities.SupportsRequestInputTokenCount ||
@@ -178,6 +210,7 @@ func reviewerInheritanceDefaultSources() map[string]string {
 		"reviewer.provider_capabilities.supports_native_web_search":         "default",
 		"reviewer.provider_capabilities.supports_reasoning_encrypted":       "default",
 		"reviewer.provider_capabilities.supports_server_side_context_edit":  "default",
+		"reviewer.provider_capabilities.supports_provider_verbosity":        "default",
 		"reviewer.provider_capabilities.is_openai_first_party":              "default",
 	}
 	return sources

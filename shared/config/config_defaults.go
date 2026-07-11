@@ -9,11 +9,11 @@ import (
 )
 
 const (
-	defaultModel                         = "gpt-5.5"
+	defaultModel                         = "gpt-5.6-sol"
 	defaultThinkingLevel                 = "medium"
-	defaultModelVerbosity                = ModelVerbosityMedium
+	defaultModelVerbosity                = ModelVerbosityLow
 	defaultTheme                         = theme.Auto
-	defaultModelContextWindow            = 272_000
+	defaultModelContextWindow            = 372_000
 	minimumModelContextWindow            = 40_000
 	defaultModelTimeoutSeconds           = 400
 	defaultMinimumExecToBgSec            = 15
@@ -24,6 +24,7 @@ const (
 	defaultWorkflowCompletionMode        = WorkflowCompletionModeAuto
 	defaultWorkflowConcurrency           = 5
 	defaultWorkflowInvalidCompletionCap  = 5
+	defaultWorkflowSubagents             = false
 	defaultCompactionThreshold           = defaultModelContextWindow * 95 / 100
 	defaultPreSubmitCompactionLeadTokens = DefaultPreSubmitRunwayTokens
 	defaultReviewerFrequency             = "edits"
@@ -31,6 +32,7 @@ const (
 	defaultCompactionMode                = "local"
 	defaultServerHost                    = "127.0.0.1"
 	defaultServerPort                    = 53082
+	defaultWorktreeSetupTimeoutSeconds   = 60
 )
 
 func settingsTOMLForOnboarding(settings Settings, preservedDefaults map[string]bool) string {
@@ -140,9 +142,14 @@ func writeBuiltInSubagentSections(builder *strings.Builder) {
 	builder.WriteString("# inherits all main settings unless overridden\n")
 	builder.WriteString("# agent_callable = true # set false to hide/block this role from Kent-session subagent calls\n")
 	builder.WriteString("# description = \"\" # model-visible role description for future/catalog uses\n")
-	builder.WriteString("# model = \"gpt-5.4-mini\" # built-in heuristic on exact OpenAI first-party setups\n")
+	builder.WriteString("# model = \"gpt-5.6-terra\" # built-in heuristic on exact OpenAI first-party setups\n")
+	builder.WriteString("# thinking_level = \"low\" # built-in heuristic on exact OpenAI first-party setups\n")
 	builder.WriteString("# priority_request_mode = true # built-in heuristic on exact OpenAI first-party setups\n")
-	builder.WriteString("# model_context_window = 272000 # conservative default; larger API-key windows can be added later\n")
+	builder.WriteString("# model_context_window = 372000 # built-in heuristic on exact OpenAI first-party setups\n")
+}
+
+func DefaultModel() string {
+	return defaultModel
 }
 
 func filterRenderedLines(lines []defaultConfigLine, omittedKeys map[string]bool) []defaultConfigLine {
@@ -226,7 +233,11 @@ func writeReviewerInheritanceLines(builder *strings.Builder, raw Settings, effec
 	modelCommented := !(preserved != nil && preserved["reviewer.model"]) && strings.TrimSpace(raw.Reviewer.Model) == ""
 	writeCommentedAssignment(builder, "model", effective.Reviewer.Model, modelCommented, "# inherited from main model unless overridden")
 	thinkingCommented := !(preserved != nil && preserved["reviewer.thinking_level"]) && strings.TrimSpace(raw.Reviewer.ThinkingLevel) == ""
-	writeCommentedAssignment(builder, "thinking_level", effective.Reviewer.ThinkingLevel, thinkingCommented, "# inherited from main thinking_level unless overridden")
+	thinkingValue := any(effective.Reviewer.ThinkingLevel)
+	if preserved != nil && preserved["reviewer.thinking_level"] && strings.TrimSpace(raw.Reviewer.ThinkingLevel) == "" {
+		thinkingValue = raw.Reviewer.ThinkingLevel
+	}
+	writeCommentedAssignment(builder, "thinking_level", thinkingValue, thinkingCommented, "# inherited from main thinking_level unless overridden")
 	verbosityCommented := !(preserved != nil && preserved["reviewer.model_verbosity"]) && strings.TrimSpace(string(raw.Reviewer.ModelVerbosity)) == ""
 	writeCommentedAssignment(builder, "model_verbosity", effective.Reviewer.ModelVerbosity, verbosityCommented, "# inherited from main model_verbosity unless overridden")
 	providerCommented := !(preserved != nil && preserved["reviewer.provider_override"]) && strings.TrimSpace(raw.Reviewer.ProviderOverride) == ""

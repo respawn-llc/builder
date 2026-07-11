@@ -12,9 +12,8 @@ import (
 
 	"core/server/auth"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/registry"
-	"core/server/runprompt"
+	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimeview"
 	"core/server/runtimewire"
@@ -23,13 +22,10 @@ import (
 	shelltool "core/server/tools/shell"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"core/shared/transcriptdiag"
-
-	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -45,67 +41,23 @@ type Service struct {
 	recoveredWarning         string
 	recoveredWarningProvider func() (string, bool, error)
 
-	mu      sync.Mutex
-	handles map[string]*runtimeHandle
+	mu sync.Mutex
 
 	idleUnloadDelay        time.Duration
 	runFinishedUnloadDelay time.Duration
 	idleTimers             map[string]*runtimeIdleTimer
+	options                ServiceOptions
 }
 
-type runtimeHandle struct {
-	controllerRequestID string
-	controllerLeaseID   string
-	ownerRefs           int
-	ownerIDs            map[string]struct{}
-	activationErr       error
-	closing             bool
-	takeover            *runtimeTakeover
-	ready               chan struct{}
-	closed              chan struct{}
-	closedOnce          sync.Once
-	rebind              func(string) error
-	close               func()
+type ServiceOptions struct {
+	RuntimeClientFactory runtimewire.RuntimeClientFactory
 }
-
-type runtimeIdleTimer struct {
-	generation uint64
-	timer      *time.Timer
-}
-
-type CollaborativeRuntimeGuard interface {
-	Engine() *runtime.Engine
-	Rebind(workdir string) error
-	Release()
-}
-
-const (
-	defaultRuntimeIdleUnloadDelay        = 5 * time.Second
-	defaultRunFinishedIdleUnloadDelay    = 3 * time.Minute
-	bestEffortRuntimeLeaseReleaseTimeout = 2 * time.Second
-	activationPrimaryRunRetryDelay       = 10 * time.Millisecond
-)
-
-type runtimeTakeover struct {
-	requestID string
-	leaseID   string
-	err       error
-	ready     chan struct{}
-	readyOnce sync.Once
-}
-
-type activationClaim int
-
-const (
-	activationClaimOwner activationClaim = iota
-	activationClaimReuse
-	activationClaimClosing
-	activationClaimTakeoverReuse
-	activationClaimTakeover
-	activationClaimMissing
-)
 
 func NewService(persistenceRoot string, metadataStore *metadata.Store, authManager *auth.Manager, fastModeState *runtime.FastModeState, background *shelltool.Manager, backgroundRouter *runtimewire.BackgroundEventRouter, runtimes *registry.RuntimeRegistry, sessionStores *registry.SessionStoreRegistry, storeOptions ...session.StoreOption) *Service {
+	return NewServiceWithOptions(persistenceRoot, metadataStore, authManager, fastModeState, background, backgroundRouter, runtimes, sessionStores, ServiceOptions{}, storeOptions...)
+}
+
+func NewServiceWithOptions(persistenceRoot string, metadataStore *metadata.Store, authManager *auth.Manager, fastModeState *runtime.FastModeState, background *shelltool.Manager, backgroundRouter *runtimewire.BackgroundEventRouter, runtimes *registry.RuntimeRegistry, sessionStores *registry.SessionStoreRegistry, options ServiceOptions, storeOptions ...session.StoreOption) *Service {
 	svc := &Service{
 		persistenceRoot:        strings.TrimSpace(persistenceRoot),
 		metadataStore:          metadataStore,
@@ -116,10 +68,10 @@ func NewService(persistenceRoot string, metadataStore *metadata.Store, authManag
 		runtimes:               runtimes,
 		sessionStores:          sessionStores,
 		storeOptions:           append([]session.StoreOption(nil), storeOptions...),
-		handles:                make(map[string]*runtimeHandle),
 		idleUnloadDelay:        defaultRuntimeIdleUnloadDelay,
 		runFinishedUnloadDelay: defaultRunFinishedIdleUnloadDelay,
 		idleTimers:             make(map[string]*runtimeIdleTimer),
+		options:                options,
 	}
 	if runtimes != nil {
 		runtimes.SetInterestObserver(svc.runtimeInterestChanged)
@@ -158,7 +110,7 @@ func (s *Service) appendRecoveredWarningIfNeeded(store *session.Store) error {
 		return nil
 	}
 	_, _, appendErr := store.AppendEvent("", "local_entry", recoveredWarningEntry{
-		Visibility: transcript.EntryVisibilityAll,
+		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       "warning",
 		Text:       warning,
 	})
@@ -185,88 +137,116 @@ func (s *Service) ActivateSessionRuntime(ctx context.Context, req serverapi.Sess
 		return serverapi.SessionRuntimeActivateResponse{}, err
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
-	requestID := strings.TrimSpace(req.ClientRequestID)
 	ownerID := strings.TrimSpace(req.OwnerID)
-	var handle *runtimeHandle
-	var takeover *runtimeTakeover
-	var claim activationClaim
-	var startupPrimaryLease primaryrun.Lease
-	var err error
+	if err := s.AcquireRuntime(ctx, sessionID, ownerID, s.interactiveRuntimeBuilder(req, sessionID)); err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
+	}
+	return activationResponse(), nil
+}
+
+type RuntimeBuildResult struct {
+	Engine       *runtime.Engine
+	LocalRebind  func(string) error
+	AfterResolve func()
+	Close        func()
+}
+
+var ErrSessionRunActive = errors.New("session has an active run")
+var ErrAcquiredRuntimeOvertaken = errors.New("acquired runtime was overtaken or closed before the operation completed")
+var ErrSessionRunsBlocked = errors.New("session runs are blocked while its worktree is being deleted")
+
+func (s *Service) RunOnAcquiredRuntime(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+	if s.runtimes == nil {
+		return ErrAcquiredRuntimeOvertaken
+	}
+	acquired, err := s.runtimes.WithAcquiredRuntime(ctx, strings.TrimSpace(sessionID), engine, func(runCtx context.Context, guardedEngine *runtime.Engine) error {
+		return fn(runCtx)
+	})
+	if err != nil {
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			return ErrAcquiredRuntimeOvertaken
+		}
+		return err
+	}
+	if !acquired {
+		return ErrAcquiredRuntimeOvertaken
+	}
+	return nil
+}
+
+func (s *Service) runOnAcquiredRuntimeWithClosedSignal(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context) error) error {
+	if s.runtimes == nil {
+		return ErrAcquiredRuntimeOvertaken
+	}
+	closed, ok := s.runtimes.AcquiredRuntimeClosed(strings.TrimSpace(sessionID), engine)
+	if !ok {
+		return ErrAcquiredRuntimeOvertaken
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-closed:
+			cancel()
+		case <-runCtx.Done():
+		}
+	}()
+	err := fn(runCtx)
+	select {
+	case <-closed:
+		return errors.Join(ErrAcquiredRuntimeOvertaken, err)
+	default:
+		return err
+	}
+}
+
+type RuntimeBuilder func(ctx context.Context) (RuntimeBuildResult, error)
+
+func (s *Service) AcquireRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) error {
+	sessionID = strings.TrimSpace(sessionID)
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return runtimeOwnerIDRequiredError()
+	}
+	if s.runtimes == nil {
+		return runtimeUnavailableErr(sessionID)
+	}
 	for {
-		if _, ok := s.confirmExternalSessionRuntimeActive(ctx, sessionID); ok {
-			return serverapi.SessionRuntimeActivateResponse{
-				Mode:              serverapi.SessionRuntimeAttachModeCollaborative,
-				AllowedOperations: serverapi.CollaborativeSessionRuntimeOperations(),
-				ReadOnly:          true,
-			}, nil
+		claim, reused, closing := s.runtimes.AcquireRuntimeClaim(sessionID, ownerID)
+		if claim == nil {
+			return runtimeUnavailableErr(sessionID)
 		}
-		startupPrimaryLease = nil
-		handle, takeover, claim, err = s.claimExistingActivation(sessionID, requestID, ownerID)
-		if err != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, err
+		if closing {
+			if err := claim.AwaitClosed(ctx); err != nil {
+				return err
+			}
+			continue
 		}
-		if claim == activationClaimMissing {
-			// Workflow/headless owners hold the primary-run gate before runtime
-			// registration, so a fresh controller must acquire the same gate
-			// before publishing a handle or wait for the owner to register.
-			startupPrimaryLease, err = s.acquirePrimaryRunLease(sessionID)
-			if errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-				if waitErr := waitForActivationPrimaryRunRetry(ctx); waitErr != nil {
-					return serverapi.SessionRuntimeActivateResponse{}, waitErr
-				}
-				continue
-			}
-			if err != nil {
-				return serverapi.SessionRuntimeActivateResponse{}, err
-			}
-			if _, ok := s.confirmExternalSessionRuntimeActive(ctx, sessionID); ok {
-				startupPrimaryLease.Release()
-				startupPrimaryLease = nil
-				return serverapi.SessionRuntimeActivateResponse{
-					Mode:              serverapi.SessionRuntimeAttachModeCollaborative,
-					AllowedOperations: serverapi.CollaborativeSessionRuntimeOperations(),
-					ReadOnly:          true,
-				}, nil
-			}
-			handle, takeover, claim, err = s.claimNewActivation(sessionID, requestID, ownerID)
-			if err != nil {
-				startupPrimaryLease.Release()
-				startupPrimaryLease = nil
-				return serverapi.SessionRuntimeActivateResponse{}, err
-			}
-			if claim != activationClaimOwner {
-				startupPrimaryLease.Release()
-				startupPrimaryLease = nil
-			}
+		if !reused {
+			return s.buildIntoClaim(ctx, sessionID, claim, build)
 		}
-		if claim != activationClaimClosing {
-			break
+		if _, err := claim.AwaitReady(ctx); err != nil {
+			return err
 		}
-		if startupPrimaryLease != nil {
-			startupPrimaryLease.Release()
-			startupPrimaryLease = nil
-		}
-		if err := waitForRuntimeHandleClosed(ctx, handle); err != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, err
+		outcome, activationErr := claim.JoinAsOwner(ownerID)
+		switch outcome {
+		case registry.ClaimJoined:
+			s.cancelScheduledIdleUnload(sessionID)
+			return nil
+		case registry.ClaimFailed:
+			return activationErr
+		case registry.ClaimClosing:
+			if err := claim.AwaitClosed(ctx); err != nil {
+				return err
+			}
 		}
 	}
-	if claim == activationClaimReuse {
-		if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, err
-		}
-		s.addRuntimeHandleOwnerRef(sessionID, handle, ownerID)
-		return activationResponseForHandle(handle)
-	}
-	if claim == activationClaimTakeoverReuse {
-		if err := waitForRuntimeTakeoverReady(ctx, takeover); err != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, err
-		}
-		return activationResponseForTakeover(takeover)
-	}
-	if claim == activationClaimTakeover {
-		return s.takeOverActivation(ctx, sessionID, requestID, ownerID, handle, takeover)
-	}
-	var leaseID string
+}
+
+func (s *Service) buildIntoClaim(ctx context.Context, sessionID string, claim *registry.RuntimeClaim, build RuntimeBuilder) (err error) {
 	var cleanup func()
 	defer func() {
 		if err == nil {
@@ -275,204 +255,278 @@ func (s *Service) ActivateSessionRuntime(ctx context.Context, req serverapi.Sess
 		if cleanup != nil {
 			cleanup()
 		}
-		if strings.TrimSpace(leaseID) != "" {
-			s.releaseRuntimeLeaseBestEffort(sessionID, leaseID)
-		}
-		if startupPrimaryLease != nil {
-			startupPrimaryLease.Release()
-			startupPrimaryLease = nil
-		}
-		s.failActivation(sessionID, handle, err)
+		claim.Fail(err)
 	}()
-	store, err := s.resolveStore(ctx, sessionID)
+	var built RuntimeBuildResult
+	built, err = build(ctx)
 	if err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
+		return err
 	}
-	if err := store.EnsureDurable(); err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
+	engine := built.Engine
+	if engine == nil {
+		if built.Close != nil {
+			cleanup = built.Close
+		}
+		return errors.New("runtime build produced no engine")
 	}
-	if err := s.appendRecoveredWarningIfNeeded(store); err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	lease, err := s.createRuntimeLease(ctx, sessionID, requestID)
-	if err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	leaseID = lease.LeaseID
-	target, err := s.resolveExecutionTarget(ctx, sessionID)
-	if err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	logger, err := runprompt.NewRunLogger(store.Dir(), nil)
-	if err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	logger.Logf("app.interactive.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, target.WorkspaceRoot, target.EffectiveWorkdir, req.ActiveSettings.Model)
-	logger.Logf("config.settings path=%s created=%t", req.Source.SettingsPath, req.Source.CreatedDefaultConfig)
-	for _, line := range configSourceLines(req.Source.Sources) {
-		logger.Logf("config.source %s", line)
-	}
-	enabledTools, err := parseToolIDs(req.EnabledToolIDs)
-	if err != nil {
-		_ = logger.Close()
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	wiring, err := runtimewire.NewRuntimeWiringWithBackground(store, req.ActiveSettings, enabledTools, target.EffectiveWorkdir, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
-		FastMode:        s.fastModeState,
-		Sources:         req.Source.Sources,
-		GlobalConfigDir: s.persistenceRoot,
-		OnEvent: func(evt runtime.Event) {
-			logger.Logf("%s", runprompt.FormatRuntimeEvent(evt))
-			if transcriptdiag.Enabled(req.ActiveSettings.Debug, os.Getenv) {
-				projected := runtimeview.EventFromRuntime(evt)
-				logger.Logf("%s", runprompt.FormatTranscriptProjectionDiagnostic(sessionID, projected))
-				logger.Logf("%s", runprompt.FormatTranscriptPublishDiagnostic(sessionID, projected))
-			}
-			if s.runtimes != nil {
-				s.runtimes.PublishRuntimeEvent(sessionID, evt)
-			}
-		},
-	})
-	if err != nil {
-		_ = logger.Close()
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	if wiring.AskBroker != nil && s.runtimes != nil {
-		wiring.AskBroker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-			return s.runtimes.AwaitPromptResponse(context.Background(), sessionID, req)
-		})
-	}
-	var runtimeRegistry runtimewire.RuntimeRegistry
-	if s.runtimes != nil {
-		runtimeRegistry = s.runtimes
-	}
-	var backgroundRouter runtimewire.BackgroundRouter
+	rebind := runtimeRebindFunc(built.LocalRebind, engine)
 	if s.backgroundRouter != nil {
-		backgroundRouter = s.backgroundRouter
+		s.backgroundRouter.SetActiveSession(sessionID, engine)
 	}
-	var localRebind func(string) error
-	if wiring.LocalTools != nil {
-		localRebind = wiring.LocalTools.Rebind
+	teardown := func() {
+		if s.backgroundRouter != nil {
+			s.backgroundRouter.ClearActiveSession(sessionID, engine)
+		}
+		if built.Close != nil {
+			built.Close()
+		}
 	}
-	handle.rebind = runtimeRebindFunc(localRebind, wiring.Engine)
-	registration := runtimewire.RegisterSessionRuntime(sessionID, wiring.Engine, runtimeRegistry, backgroundRouter, runtimewire.WithRuntimeRebind(handle.rebind))
-	cleanup = func() {
-		registration.Close()
-		_ = wiring.Close()
-		_ = logger.Close()
+	cleanup = teardown
+	if !claim.Resolve(engine, rebind, teardown) {
+		return runtimeUnavailableErr(sessionID)
 	}
-	s.completeActivation(handle, leaseID, cleanup)
-	if startupPrimaryLease != nil {
-		startupPrimaryLease.Release()
-		startupPrimaryLease = nil
+	if built.AfterResolve != nil {
+		built.AfterResolve()
 	}
 	s.cancelScheduledIdleUnload(sessionID)
 	cleanup = nil
-	return serverapi.SessionRuntimeActivateResponse{LeaseID: leaseID, Mode: serverapi.SessionRuntimeAttachModeController}, nil
+	return nil
 }
 
-func (s *Service) externalSessionRuntimeActive(sessionID string) bool {
-	if s == nil || s.runtimes == nil || !s.runtimes.IsSessionRuntimeActive(sessionID) {
-		return false
+type AcquiredRuntimeRelease func(ctx context.Context) error
+
+func (s *Service) RecreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
+	return s.recreateRuntime(ctx, sessionID, ownerID, build, nil, false)
+}
+
+func (s *Service) RecreateRuntimeRejectingActiveRun(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
+	return s.recreateRuntime(ctx, sessionID, ownerID, build, func(engine *runtime.Engine) error {
+		active, err := s.engineHasBlockingRuntimeActivity(sessionID, engine)
+		if err != nil {
+			return err
+		}
+		if engine != nil && (active || engine.HasQueuedUserWork()) {
+			return ErrSessionRunActive
+		}
+		return nil
+	}, true)
+}
+
+func (s *Service) beginRecreateRun(sessionID string, exclusive bool) (func(), error) {
+	if exclusive {
+		release, acquired, blocked := s.runtimes.BeginExclusiveSessionRun(sessionID)
+		if acquired {
+			return release, nil
+		}
+		if blocked {
+			return nil, errors.Join(ErrSessionRunsBlocked, fmt.Errorf("session %q runs are blocked", sessionID))
+		}
+		return nil, ErrSessionRunActive
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.handles[strings.TrimSpace(sessionID)] == nil
+	release, ok := s.runtimes.BeginSessionRun(sessionID)
+	if !ok {
+		return nil, errors.Join(ErrSessionRunsBlocked, fmt.Errorf("session %q runs are blocked", sessionID))
+	}
+	return release, nil
 }
 
-func (s *Service) WithCollaborativeRuntime(ctx context.Context, sessionID string, op serverapi.SessionRuntimeOperation, fn func(CollaborativeRuntimeGuard) error) error {
+func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder, beforeReplace func(*runtime.Engine) error, exclusive bool) (AcquiredRuntimeRelease, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	ownerID = strings.TrimSpace(ownerID)
+	if sessionID == "" {
+		return nil, errors.New("session id is required")
+	}
+	if ownerID == "" {
+		return nil, runtimeOwnerIDRequiredError()
+	}
+	if s.runtimes == nil {
+		return nil, runtimeUnavailableErr(sessionID)
+	}
+	releaseRun, err := s.beginRecreateRun(sessionID, exclusive)
+	if err != nil {
+		return nil, err
+	}
+	claim, err := s.runtimes.ClaimFreshRuntime(ctx, sessionID, ownerID, beforeReplace)
+	if err != nil {
+		releaseRun()
+		return nil, err
+	}
+	if claim == nil {
+		releaseRun()
+		return nil, runtimeUnavailableErr(sessionID)
+	}
+	if err := s.buildIntoClaim(ctx, sessionID, claim, build); err != nil {
+		releaseRun()
+		return nil, err
+	}
+	var releaseOnce sync.Once
+	return func(ctx context.Context) error {
+		defer releaseOnce.Do(releaseRun)
+		return s.closeAcquiredClaim(ctx, sessionID, claim)
+	}, nil
+}
+
+func (s *Service) closeAcquiredClaim(ctx context.Context, sessionID string, claim *registry.RuntimeClaim) error {
+	if claim == nil {
+		return nil
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if _, err := claim.AwaitReady(ctx); err != nil {
+		_, _ = claim.Close(ctx, nil)
+		return err
+	}
+	engine := claim.Engine()
+	_, drainErr := claim.Close(ctx, func(ctx context.Context) error {
+		if engine == nil {
+			return nil
+		}
+		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
+	})
+	s.clearScheduledIdleUnload(sessionID)
+	return drainErr
+}
+
+func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivateRequest, sessionID string) RuntimeBuilder {
+	return func(ctx context.Context) (RuntimeBuildResult, error) {
+		store, err := s.resolveStore(ctx, sessionID)
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		if err := store.EnsureDurable(); err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		if err := s.appendRecoveredWarningIfNeeded(store); err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		target, err := s.resolveExecutionTarget(ctx, sessionID)
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		logger, err := runlog.NewRunLogger(store.Dir(), nil)
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		logger.Logf("app.interactive.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, target.WorkspaceRoot, target.EffectiveWorkdir, req.ActiveSettings.Model)
+		logger.Logf("config.settings path=%s created=%t", req.Source.SettingsPath, req.Source.CreatedDefaultConfig)
+		for _, line := range configSourceLines(req.Source.Sources) {
+			logger.Logf("config.source %s", line)
+		}
+		enabledTools, err := parseToolIDs(req.EnabledToolIDs)
+		if err != nil {
+			_ = logger.Close()
+			return RuntimeBuildResult{}, err
+		}
+		runtimeEvents := runtimewire.NewOrderedRuntimeEventPublisher(sessionID, s.runtimes)
+		publishRuntimeEvent := func(evt runtime.Event) {
+			runtimeEvents.Publish(evt)
+		}
+		bindRuntimeEventEngine := func(engine *runtime.Engine) {
+			runtimeEvents.BindEngine(engine)
+		}
+		flushRuntimeEventsAfterResolve := func() {
+			runtimeEvents.FlushAfterResolve()
+		}
+		wiring, err := runtimewire.NewRuntimeWiringWithBackground(store, req.ActiveSettings, enabledTools, target.EffectiveWorkdir, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
+			Context:         ctx,
+			FastMode:        s.fastModeState,
+			Sources:         req.Source.Sources,
+			ClientFactory:   s.options.RuntimeClientFactory,
+			GlobalConfigDir: s.persistenceRoot,
+			StepLifecycle:   runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),
+			OnEvent: func(evt runtime.Event) {
+				logger.Logf("%s", runlog.FormatRuntimeEvent(evt))
+				if transcriptdiag.Enabled(req.ActiveSettings.Debug, os.Getenv) {
+					projected := runtimeview.EventFromRuntime(evt)
+					logger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
+					logger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
+				}
+				publishRuntimeEvent(evt)
+			},
+		})
+		if err != nil {
+			_ = logger.Close()
+			return RuntimeBuildResult{}, err
+		}
+		if wiring.AskBroker != nil && s.runtimes != nil {
+			wiring.AskBroker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+				return s.runtimes.AwaitPromptResponse(context.Background(), sessionID, req)
+			})
+		}
+		bindRuntimeEventEngine(wiring.Engine)
+		var localRebind func(string) error
+		if wiring.LocalTools != nil {
+			localRebind = wiring.LocalTools.Rebind
+		}
+		return RuntimeBuildResult{
+			Engine:       wiring.Engine,
+			LocalRebind:  localRebind,
+			AfterResolve: flushRuntimeEventsAfterResolve,
+			Close: func() {
+				_ = wiring.Close()
+				_ = logger.Close()
+			},
+		}, nil
+	}
+}
+
+func activationResponse() serverapi.SessionRuntimeActivateResponse {
+	return serverapi.SessionRuntimeActivateResponse{}
+}
+
+func (s *Service) runtimeBlockingActivity(ctx context.Context, sessionID string) (clientui.RuntimeActivity, error) {
+	if s == nil || s.runtimes == nil {
+		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
+	}
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
+	}
+	engine, err := s.runtimes.ResolveRuntime(ctx, id)
+	if err != nil {
+		return clientui.RuntimeActivity{}, err
+	}
+	return s.resolveBlockingRuntimeActivity(id, engine)
+}
+
+func (s *Service) engineHasBlockingRuntimeActivity(sessionID string, engine *runtime.Engine) (bool, error) {
+	activity, err := s.resolveBlockingRuntimeActivity(sessionID, engine)
+	if err != nil {
+		return false, err
+	}
+	return activity.ActiveForControl(), nil
+}
+
+func (s *Service) resolveBlockingRuntimeActivity(sessionID string, engine *runtime.Engine) (clientui.RuntimeActivity, error) {
+	if s == nil || s.runtimes == nil {
+		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
+	}
+	snapshot, err := s.runtimes.RuntimeReadModelSnapshot(context.Background(), strings.TrimSpace(sessionID), nil)
+	if err != nil {
+		return clientui.RuntimeActivity{}, err
+	}
+	return snapshot.Activity, nil
+}
+
+func (s *Service) WithRuntimeEngine(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) error {
 	if s == nil || s.runtimes == nil {
 		return runtimeUnavailableErr(sessionID)
 	}
 	id := strings.TrimSpace(sessionID)
-	if !s.externalSessionRuntimeActive(id) {
-		return runtimeUnavailableErr(id)
-	}
-	guard, err := s.runtimes.BeginRuntimeGuard(ctx, id)
+	engine, err := s.runtimes.ResolveRuntime(ctx, id)
 	if err != nil {
 		return err
 	}
-	defer guard.Release()
-	if !s.externalSessionRuntimeActive(id) {
+	if engine == nil {
 		return runtimeUnavailableErr(id)
 	}
-	if !collaborativeOperationAllowed(op) {
-		return controlUnavailableErr(op, id)
-	}
-	return fn(guard)
-}
-
-func (s *Service) WithCollaborativeRuntimeEngine(ctx context.Context, sessionID string, op serverapi.SessionRuntimeOperation, fn func(*runtime.Engine) error) error {
-	return s.WithCollaborativeRuntime(ctx, sessionID, op, func(guard CollaborativeRuntimeGuard) error {
-		return fn(guard.Engine())
-	})
-}
-
-func (s *Service) BeginCollaborativeRuntimeGuard(ctx context.Context, sessionID string, op serverapi.SessionRuntimeOperation) (interface {
-	Release()
-	Rebind(workdir string) error
-}, error) {
-	if s == nil || s.runtimes == nil {
-		return nil, runtimeUnavailableErr(sessionID)
-	}
-	id := strings.TrimSpace(sessionID)
-	if !s.externalSessionRuntimeActive(id) {
-		return nil, runtimeUnavailableErr(id)
-	}
-	guard, err := s.runtimes.BeginRuntimeGuard(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if !s.externalSessionRuntimeActive(id) {
-		guard.Release()
-		return nil, runtimeUnavailableErr(id)
-	}
-	if !collaborativeOperationAllowed(op) {
-		guard.Release()
-		return nil, controlUnavailableErr(op, id)
-	}
-	return guard, nil
-}
-
-func (s *Service) WithCollaborativePromptResponder(ctx context.Context, sessionID string, op serverapi.SessionRuntimeOperation, fn func(registry.GuardedPromptResponder) error) error {
-	return s.WithCollaborativeRuntime(ctx, sessionID, op, func(guard CollaborativeRuntimeGuard) error {
-		responder, ok := guard.(registry.GuardedPromptResponder)
-		if !ok {
-			return runtimeUnavailableErr(sessionID)
-		}
-		return fn(responder)
-	})
+	return fn(engine)
 }
 
 func runtimeUnavailableErr(sessionID string) error {
 	return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %q has no active runtime available", strings.TrimSpace(sessionID)))
-}
-
-func controlUnavailableErr(op serverapi.SessionRuntimeOperation, sessionID string) error {
-	return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("control %q is not available for session %q from a limited-control attach", op, strings.TrimSpace(sessionID)))
-}
-
-func collaborativeOperationAllowed(op serverapi.SessionRuntimeOperation) bool {
-	for _, allowed := range serverapi.CollaborativeSessionRuntimeOperations() {
-		if allowed == op {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Service) confirmExternalSessionRuntimeActive(ctx context.Context, sessionID string) (*runtime.Engine, bool) {
-	if !s.externalSessionRuntimeActive(sessionID) || s.runtimes == nil {
-		return nil, false
-	}
-	engine, err := s.runtimes.ResolveRuntime(ctx, sessionID)
-	if err != nil || engine == nil {
-		return nil, false
-	}
-	return engine, s.externalSessionRuntimeActive(sessionID)
 }
 
 func runtimeRebindFunc(localRebind func(string) error, engine *runtime.Engine) func(string) error {
@@ -494,923 +548,94 @@ func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.Sessi
 		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
-	leaseID := strings.TrimSpace(req.LeaseID)
-	leaseErr := error(nil)
-	if _, err := s.validateRuntimeLease(ctx, sessionID, leaseID); err != nil {
-		leaseErr = err
+	if strings.TrimSpace(req.OwnerID) == "" {
+		return serverapi.SessionRuntimeReleaseResponse{}, runtimeOwnerIDRequiredError()
 	}
-	s.mu.Lock()
-	handle := s.handles[sessionID]
-	if handle == nil {
-		s.mu.Unlock()
-		_, err := s.releaseRuntimeLease(ctx, sessionID, leaseID)
-		return serverapi.SessionRuntimeReleaseResponse{Released: err == nil}, err
+	if s.runtimes == nil {
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 	}
-	s.mu.Unlock()
-	if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-		if leaseErr == nil {
-			s.closeReleasedRuntimeHandle(sessionID, handle)
-		}
+	claim := s.runtimes.RuntimeClaimFor(sessionID)
+	if claim == nil {
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
+	}
+	if _, err := claim.AwaitReady(ctx); err != nil {
+		_, _ = claim.Close(ctx, nil)
 		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}
-	s.mu.Lock()
-	current := s.handles[sessionID]
-	if current == nil || current != handle || strings.TrimSpace(current.controllerLeaseID) != leaseID {
-		s.mu.Unlock()
-		return serverapi.SessionRuntimeReleaseResponse{}, errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(sessionID)))
+	if req.EffectiveClosePolicy() == serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
+		s.markClaimOrphaned(sessionID, claim, req.OwnerID)
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 	}
-	if leaseErr != nil {
-		s.mu.Unlock()
-		return serverapi.SessionRuntimeReleaseResponse{}, leaseErr
-	}
-	var primaryLease primaryrun.Lease
-	if req.OnlyIfIdle {
-		if req.DropOwner && current.ownerRefs > 1 {
-			current.ownerRefs--
-			s.mu.Unlock()
-			return serverapi.SessionRuntimeReleaseResponse{}, nil
-		}
-		s.mu.Unlock()
-		lease, err := s.acquirePrimaryRunLease(sessionID)
-		if errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-			if req.DropOwner {
-				s.markRuntimeHandleOrphaned(sessionID, handle, leaseID, req.OwnerID)
-			}
-			return serverapi.SessionRuntimeReleaseResponse{Active: true}, nil
-		}
+	closeIfIdle := req.EffectiveClosePolicy() == serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle
+	decision, expectedRefs := claim.BeginRelease(req.OwnerID, req.DropOwner, closeIfIdle)
+	switch decision {
+	case registry.RuntimeReleaseStale, registry.RuntimeReleaseDroppedRef:
+		return serverapi.SessionRuntimeReleaseResponse{}, nil
+	case registry.RuntimeReleaseClosing, registry.RuntimeReleaseNotOwner:
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
+	case registry.RuntimeReleaseIdleCheck:
+		active, err := s.runtimeHasBlockingActivity(ctx, sessionID)
 		if err != nil {
-			return serverapi.SessionRuntimeReleaseResponse{}, err
-		}
-		primaryLease = lease
-		active, err := s.runtimeHasActiveRun(ctx, sessionID)
-		if err != nil {
-			if primaryLease != nil {
-				primaryLease.Release()
-			}
 			return serverapi.SessionRuntimeReleaseResponse{}, err
 		}
 		if active {
-			if primaryLease != nil {
-				primaryLease.Release()
-			}
 			if req.DropOwner {
-				s.markRuntimeHandleOrphaned(sessionID, handle, leaseID, req.OwnerID)
+				s.markClaimOrphaned(sessionID, claim, req.OwnerID)
 			}
 			return serverapi.SessionRuntimeReleaseResponse{Active: true}, nil
 		}
 		if s.runtimeHasSubscribers(sessionID) {
-			if primaryLease != nil {
-				primaryLease.Release()
-			}
 			if req.DropOwner {
-				s.markRuntimeHandleOrphaned(sessionID, handle, leaseID, req.OwnerID)
+				s.markClaimOrphaned(sessionID, claim, req.OwnerID)
 			}
 			return serverapi.SessionRuntimeReleaseResponse{}, nil
 		}
-		s.mu.Lock()
-		current = s.handles[sessionID]
-		if current == nil || current != handle || strings.TrimSpace(current.controllerLeaseID) != leaseID {
-			s.mu.Unlock()
-			if primaryLease != nil {
-				primaryLease.Release()
-			}
-			return serverapi.SessionRuntimeReleaseResponse{}, errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(sessionID)))
+		closed, err := claim.CloseIfIdle(ctx, expectedRefs, s.drainBeforeClose(claim))
+		if err != nil {
+			return serverapi.SessionRuntimeReleaseResponse{}, err
 		}
-	}
-	current.closing = true
-	closeFn := current.close
-	takeover := current.takeover
-	s.mu.Unlock()
-	defer func() {
-		if primaryLease != nil {
-			primaryLease.Release()
+		if !closed {
+			return serverapi.SessionRuntimeReleaseResponse{}, nil
 		}
-	}()
-	finishRuntimeTakeover(takeover, "", errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(sessionID))))
-	if closeFn != nil {
-		closeFn()
+		s.clearScheduledIdleUnload(sessionID)
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
+	default:
+		if _, err := claim.Close(ctx, s.drainBeforeClose(claim)); err != nil {
+			return serverapi.SessionRuntimeReleaseResponse{}, err
+		}
+		s.clearScheduledIdleUnload(sessionID)
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 	}
-	s.mu.Lock()
-	if s.handles[sessionID] == current {
-		delete(s.handles, sessionID)
-		signalRuntimeHandleClosed(current)
-	}
-	s.mu.Unlock()
-	s.clearScheduledIdleUnload(sessionID)
-	_, err := s.releaseRuntimeLease(ctx, sessionID, leaseID)
-	return serverapi.SessionRuntimeReleaseResponse{Released: err == nil}, err
 }
 
-func (s *Service) acquirePrimaryRunLease(sessionID string) (primaryrun.Lease, error) {
-	if s == nil || s.runtimes == nil {
-		return primaryrun.LeaseFunc(func() {}), nil
+func (s *Service) drainBeforeClose(claim *registry.RuntimeClaim) func(context.Context) error {
+	engine := claim.Engine()
+	return func(ctx context.Context) error {
+		if engine == nil {
+			return nil
+		}
+		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
 	}
-	return s.runtimes.AcquirePrimaryRun(strings.TrimSpace(sessionID))
 }
 
-func (s *Service) runtimeHasActiveRun(ctx context.Context, sessionID string) (bool, error) {
-	if s == nil || s.runtimes == nil {
-		return false, nil
-	}
-	engine, err := s.runtimes.ResolveRuntime(ctx, strings.TrimSpace(sessionID))
-	if err != nil || engine == nil {
+func (s *Service) runtimeHasBlockingActivity(ctx context.Context, sessionID string) (bool, error) {
+	activity, err := s.runtimeBlockingActivity(ctx, sessionID)
+	if err != nil {
 		return false, err
 	}
-	return engine.ActiveRun() != nil, nil
+	return activity.ActiveForControl(), nil
 }
 
-func (s *Service) markRuntimeHandleOrphaned(sessionID string, handle *runtimeHandle, leaseID string, ownerID string) {
-	if s == nil || handle == nil {
+func (s *Service) markClaimOrphaned(sessionID string, claim *registry.RuntimeClaim, ownerID string) {
+	if s == nil || claim == nil {
 		return
 	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	if current == handle && strings.TrimSpace(current.controllerLeaseID) == trimmedLeaseID {
-		trimmedOwnerID := strings.TrimSpace(ownerID)
-		if trimmedOwnerID != "" && len(current.ownerIDs) > 0 {
-			if _, ok := current.ownerIDs[trimmedOwnerID]; ok {
-				delete(current.ownerIDs, trimmedOwnerID)
-				if current.ownerRefs > 0 {
-					current.ownerRefs--
-				}
-			}
-		} else if current.ownerRefs > 0 {
-			current.ownerRefs--
-		}
-	}
-	s.mu.Unlock()
-	s.scheduleIdleUnload(trimmedSessionID, s.defaultIdleUnloadDelay())
+	claim.DropOwner(ownerID)
+	s.scheduleIdleUnload(strings.TrimSpace(sessionID), s.defaultIdleUnloadDelay())
 }
 
-func (s *Service) addRuntimeHandleOwnerRef(sessionID string, handle *runtimeHandle, ownerID string) {
-	if s == nil || handle == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return
-	}
-	s.mu.Lock()
-	if current := s.handles[trimmedSessionID]; current == handle {
-		if trimmedOwnerID := strings.TrimSpace(ownerID); trimmedOwnerID != "" {
-			if current.ownerIDs == nil {
-				current.ownerIDs = make(map[string]struct{})
-			}
-			if _, exists := current.ownerIDs[trimmedOwnerID]; !exists {
-				current.ownerIDs[trimmedOwnerID] = struct{}{}
-				current.ownerRefs++
-			}
-		} else {
-			current.ownerRefs++
-		}
-	}
-	s.mu.Unlock()
-	s.cancelScheduledIdleUnload(trimmedSessionID)
-}
-
-func (s *Service) runtimeInterestChanged(sessionID string, reason registry.RuntimeInterestReason) {
-	delay := s.defaultIdleUnloadDelay()
-	if reason == registry.RuntimeInterestRunFinished {
-		delay = s.runFinishedIdleUnloadDelay()
-	}
-	s.scheduleIdleUnload(sessionID, delay)
-}
-
-func (s *Service) cancelScheduledIdleUnload(sessionID string) {
-	if s == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return
-	}
-	s.mu.Lock()
-	state := s.idleTimers[trimmedSessionID]
-	if state != nil {
-		state.generation++
-		if state.timer != nil {
-			state.timer.Stop()
-		}
-	}
-	s.mu.Unlock()
-}
-
-func (s *Service) clearScheduledIdleUnload(sessionID string) {
-	if s == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return
-	}
-	s.mu.Lock()
-	state := s.idleTimers[trimmedSessionID]
-	if state != nil && state.timer != nil {
-		state.timer.Stop()
-	}
-	delete(s.idleTimers, trimmedSessionID)
-	s.mu.Unlock()
-}
-
-func (s *Service) defaultIdleUnloadDelay() time.Duration {
-	if s == nil || s.idleUnloadDelay <= 0 {
-		return defaultRuntimeIdleUnloadDelay
-	}
-	return s.idleUnloadDelay
-}
-
-func (s *Service) runFinishedIdleUnloadDelay() time.Duration {
-	if s == nil || s.runFinishedUnloadDelay <= 0 {
-		return defaultRunFinishedIdleUnloadDelay
-	}
-	return s.runFinishedUnloadDelay
-}
-
-func (s *Service) scheduleIdleUnload(sessionID string, delay time.Duration) {
-	if s == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" || delay <= 0 {
-		return
-	}
-	s.mu.Lock()
-	if s.idleTimers == nil {
-		s.idleTimers = make(map[string]*runtimeIdleTimer)
-	}
-	state := s.idleTimers[trimmedSessionID]
-	if state == nil {
-		state = &runtimeIdleTimer{}
-		s.idleTimers[trimmedSessionID] = state
-	}
-	state.generation++
-	generation := state.generation
-	if state.timer != nil {
-		state.timer.Stop()
-	}
-	state.timer = time.AfterFunc(delay, func() {
-		s.runScheduledIdleUnload(trimmedSessionID, generation)
-	})
-	s.mu.Unlock()
-}
-
-func (s *Service) runScheduledIdleUnload(sessionID string, generation uint64) {
-	if s == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return
-	}
-	s.mu.Lock()
-	state := s.idleTimers[trimmedSessionID]
-	if state == nil || state.generation != generation {
-		s.mu.Unlock()
-		return
-	}
-	handle := s.handles[trimmedSessionID]
-	if handle == nil || handle.closing || handle.ownerRefs > 0 {
-		s.mu.Unlock()
-		return
-	}
-	leaseID := strings.TrimSpace(handle.controllerLeaseID)
-	s.mu.Unlock()
-	if leaseID == "" || s.runtimeHasSubscribers(trimmedSessionID) {
-		return
-	}
-	if active, err := s.runtimeHasActiveRun(context.Background(), trimmedSessionID); err != nil || active {
-		return
-	}
-	_, _ = s.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       trimmedSessionID,
-		LeaseID:         leaseID,
-		OnlyIfIdle:      true,
-		DropOwner:       true,
-	})
-}
-
-func (s *Service) runtimeHasSubscribers(sessionID string) bool {
-	if s == nil || s.runtimes == nil {
-		return false
-	}
-	return s.runtimes.HasRuntimeSubscribers(strings.TrimSpace(sessionID))
-}
-
-func (s *Service) closeReleasedRuntimeHandle(sessionID string, handle *runtimeHandle) {
-	if handle == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	if current == nil || current != handle {
-		s.mu.Unlock()
-		return
-	}
-	current.closing = true
-	closeFn := current.close
-	takeover := current.takeover
-	s.mu.Unlock()
-	finishRuntimeTakeover(takeover, "", errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(trimmedSessionID))))
-	if closeFn != nil {
-		closeFn()
-	}
-	s.mu.Lock()
-	if s.handles[trimmedSessionID] == current {
-		delete(s.handles, trimmedSessionID)
-		signalRuntimeHandleClosed(current)
-	}
-	s.mu.Unlock()
-	s.clearScheduledIdleUnload(trimmedSessionID)
-}
-
-func (s *Service) RequireControllerLease(ctx context.Context, sessionID string, leaseID string) error {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	if trimmedLeaseID == "" {
-		return errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is required", trimmedSessionID))
-	}
-	s.mu.Lock()
-	handle := s.handles[trimmedSessionID]
-	s.mu.Unlock()
-	if handle == nil {
-		return errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(trimmedSessionID)))
-	}
-	if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	if current == nil || current != handle {
-		s.mu.Unlock()
-		return errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(trimmedSessionID)))
-	}
-	activationErr := current.activationErr
-	controllerLeaseID := strings.TrimSpace(current.controllerLeaseID)
-	s.mu.Unlock()
-	if activationErr != nil {
-		return errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(trimmedSessionID)))
-	}
-	if controllerLeaseID != trimmedLeaseID {
-		return errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(trimmedSessionID)))
-	}
-	if s.metadataStore != nil {
-		if _, err := s.validateRuntimeLease(ctx, trimmedSessionID, trimmedLeaseID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) RebindLocalTools(ctx context.Context, sessionID string, leaseID string, workspaceRoot string) error {
-	trimmedRoot := strings.TrimSpace(workspaceRoot)
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	if trimmedRoot == "" {
-		return errors.New("workspace root is required")
-	}
-	if err := s.RequireControllerLease(ctx, sessionID, leaseID); err != nil {
-		return err
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	s.mu.Lock()
-	handle := s.handles[trimmedSessionID]
-	s.mu.Unlock()
-	if handle == nil {
-		return errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(trimmedSessionID)))
-	}
-	if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	if err := s.ensureCurrentControllerLeaseLocked(trimmedSessionID, trimmedLeaseID, handle); err != nil {
-		s.mu.Unlock()
-		return err
-	}
-	rebind := current.rebind
-	s.mu.Unlock()
-	if rebind == nil {
-		return nil
-	}
-	return rebind(trimmedRoot)
-}
-
-func (s *Service) RecordWorktreeTransition(ctx context.Context, sessionID string, leaseID string, state session.WorktreeReminderState) error {
-	if err := s.RequireControllerLease(ctx, sessionID, leaseID); err != nil {
-		return err
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	store, err := s.resolveStore(ctx, trimmedSessionID)
-	if err != nil {
-		return err
-	}
-	normalized, err := normalizeWorktreeReminderState(state)
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	if err := s.ensureCurrentControllerLeaseLocked(trimmedSessionID, trimmedLeaseID, nil); err != nil {
-		s.mu.Unlock()
-		return err
-	}
-	s.mu.Unlock()
-	return store.SetWorktreeReminderState(&normalized)
-}
-
-func (s *Service) ensureCurrentControllerLeaseLocked(sessionID string, leaseID string, handle *runtimeHandle) error {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	current := s.handles[trimmedSessionID]
-	if current == nil {
-		return errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(trimmedSessionID)))
-	}
-	if handle != nil && current != handle {
-		return errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(trimmedSessionID)))
-	}
-	if strings.TrimSpace(current.controllerLeaseID) != trimmedLeaseID {
-		return errors.Join(serverapi.ErrInvalidControllerLease, fmt.Errorf("controller lease for session %q is invalid or expired", strings.TrimSpace(trimmedSessionID)))
-	}
-	return nil
-}
-
-func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	trimmedWorkdir := strings.TrimSpace(target.EffectiveWorkdir)
-	if trimmedSessionID == "" {
-		return errors.New("session id is required")
-	}
-	if trimmedWorkdir == "" {
-		return errors.New("execution target effective workdir is required")
-	}
-	var normalizedReminder *session.WorktreeReminderState
-	if reminder != nil {
-		normalized, err := normalizeWorktreeReminderState(*reminder)
-		if err != nil {
-			return err
-		}
-		normalizedReminder = &normalized
-	}
-	handle, err := s.activeRuntimeHandle(ctx, trimmedSessionID)
-	if err != nil {
-		return err
-	}
-	if handle == nil || handle.rebind == nil {
-		if s.externalSessionRuntimeActive(trimmedSessionID) {
-			if err := s.WithCollaborativeRuntime(ctx, trimmedSessionID, serverapi.SessionRuntimeOperationWorktreeManage, func(guard CollaborativeRuntimeGuard) error {
-				return guard.Rebind(trimmedWorkdir)
-			}); err != nil {
-				return err
-			}
-		}
-		return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
-	}
-	if err := handle.rebind(trimmedWorkdir); err != nil {
-		return err
-	}
-	return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
-}
-
-func (s *Service) PersistWorktreeReminderState(ctx context.Context, sessionID string, reminder *session.WorktreeReminderState) error {
-	if s == nil {
-		return errors.New("session runtime service is required")
-	}
-	if reminder == nil {
-		return nil
-	}
-	normalized, err := normalizeWorktreeReminderState(*reminder)
-	if err != nil {
-		return err
-	}
-	return s.persistWorktreeReminderState(ctx, strings.TrimSpace(sessionID), &normalized)
-}
-
-func (s *Service) persistWorktreeReminderState(ctx context.Context, sessionID string, reminder *session.WorktreeReminderState) error {
-	if reminder == nil {
-		return nil
-	}
-	store, err := s.resolveStore(ctx, strings.TrimSpace(sessionID))
-	if err != nil {
-		return err
-	}
-	return store.SetWorktreeReminderState(reminder)
-}
-
-func normalizeWorktreeReminderState(state session.WorktreeReminderState) (session.WorktreeReminderState, error) {
-	state.Mode = session.WorktreeReminderMode(strings.TrimSpace(string(state.Mode)))
-	switch state.Mode {
-	case session.WorktreeReminderModeEnter, session.WorktreeReminderModeExit:
-	default:
-		return session.WorktreeReminderState{}, errors.New("worktree reminder mode is required")
-	}
-	state.Branch = strings.TrimSpace(state.Branch)
-	state.WorktreePath = strings.TrimSpace(state.WorktreePath)
-	state.WorkspaceRoot = strings.TrimSpace(state.WorkspaceRoot)
-	state.EffectiveCwd = strings.TrimSpace(state.EffectiveCwd)
-	if state.WorkspaceRoot == "" {
-		return session.WorktreeReminderState{}, errors.New("worktree reminder workspace root is required")
-	}
-	if state.EffectiveCwd == "" {
-		return session.WorktreeReminderState{}, errors.New("worktree reminder effective cwd is required")
-	}
-	if state.Mode == session.WorktreeReminderModeEnter && state.WorktreePath == "" {
-		return session.WorktreeReminderState{}, errors.New("worktree reminder worktree path is required for enter mode")
-	}
-	state.HasIssuedInGeneration = false
-	state.IssuedCompactionCount = 0
-	return state, nil
-}
-
-func (s *Service) resolveStore(ctx context.Context, sessionID string) (*session.Store, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if s.sessionStores != nil {
-		store, err := s.sessionStores.ResolveStore(ctx, sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if store != nil {
-			return store, nil
-		}
-	}
-	store, err := session.OpenByID(s.persistenceRoot, sessionID, s.storeOptions...)
-	if err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if s.sessionStores != nil {
-		s.sessionStores.RegisterStore(store)
-	}
-	return store, nil
-}
-
-func (s *Service) activeRuntimeHandle(ctx context.Context, sessionID string) (*runtimeHandle, error) {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	s.mu.Lock()
-	handle := s.handles[trimmedSessionID]
-	s.mu.Unlock()
-	if handle == nil {
-		return nil, nil
-	}
-	if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	s.mu.Unlock()
-	if current == nil || current != handle {
-		return nil, nil
-	}
-	if current.activationErr != nil {
-		return nil, current.activationErr
-	}
-	return current, nil
-}
-
-func waitForActivationPrimaryRunRetry(ctx context.Context) error {
-	timer := time.NewTimer(activationPrimaryRunRetryDelay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (s *Service) claimExistingActivation(sessionID string, requestID string, ownerID string) (*runtimeHandle, *runtimeTakeover, activationClaim, error) {
-	return s.claimActivationWithCreate(sessionID, requestID, ownerID, false)
-}
-
-func (s *Service) claimNewActivation(sessionID string, requestID string, ownerID string) (*runtimeHandle, *runtimeTakeover, activationClaim, error) {
-	return s.claimActivationWithCreate(sessionID, requestID, ownerID, true)
-}
-
-func (s *Service) claimActivation(sessionID string, requestID string, ownerID string) (*runtimeHandle, *runtimeTakeover, activationClaim, error) {
-	return s.claimActivationWithCreate(sessionID, requestID, ownerID, true)
-}
-
-// Phase 2 temporarily allows many attached readers, but exactly one controlling
-// client per session. A second activation must fail explicitly instead of
-// joining the active runtime.
-func (s *Service) claimActivationWithCreate(sessionID string, requestID string, ownerID string, allowCreate bool) (*runtimeHandle, *runtimeTakeover, activationClaim, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if current := s.handles[sessionID]; current != nil {
-		if current.closing {
-			return current, nil, activationClaimClosing, nil
-		}
-		if current.controllerRequestID == requestID {
-			return current, nil, activationClaimReuse, nil
-		}
-		if current.takeover != nil {
-			if current.takeover.requestID == requestID {
-				return current, current.takeover, activationClaimTakeoverReuse, nil
-			}
-			return nil, nil, activationClaimOwner, errors.Join(serverapi.ErrSessionAlreadyControlled, fmt.Errorf("session %q is already controlled by another client", sessionID))
-		}
-		if runtimeHandleReady(current) && current.activationErr == nil {
-			takeover := &runtimeTakeover{
-				requestID: requestID,
-				ready:     make(chan struct{}),
-			}
-			current.takeover = takeover
-			return current, takeover, activationClaimTakeover, nil
-		}
-		return nil, nil, activationClaimOwner, errors.Join(serverapi.ErrSessionAlreadyControlled, fmt.Errorf("session %q is already controlled by another client", sessionID))
-	}
-	if !allowCreate {
-		return nil, nil, activationClaimMissing, nil
-	}
-	handle := newRuntimeHandle(requestID, ownerID)
-	s.handles[sessionID] = handle
-	return handle, nil, activationClaimOwner, nil
-}
-
-func newRuntimeHandle(requestID string, ownerID string) *runtimeHandle {
-	handle := &runtimeHandle{
-		controllerRequestID: strings.TrimSpace(requestID),
-		ownerRefs:           1,
-		ready:               make(chan struct{}),
-		closed:              make(chan struct{}),
-	}
-	if trimmedOwnerID := strings.TrimSpace(ownerID); trimmedOwnerID != "" {
-		handle.ownerIDs = map[string]struct{}{trimmedOwnerID: {}}
-	}
-	return handle
-}
-
-func (s *Service) takeOverActivation(ctx context.Context, sessionID string, requestID string, ownerID string, handle *runtimeHandle, takeover *runtimeTakeover) (serverapi.SessionRuntimeActivateResponse, error) {
-	if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-		s.failTakeover(sessionID, handle, takeover, err)
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	if _, err := activationResponseForHandle(handle); err != nil {
-		s.failTakeover(sessionID, handle, takeover, err)
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	lease, err := s.createRuntimeLease(ctx, sessionID, requestID)
-	if err != nil {
-		s.failTakeover(sessionID, handle, takeover, err)
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	leaseID := strings.TrimSpace(lease.LeaseID)
-	ok, completeErr := s.completeTakeover(ctx, sessionID, handle, takeover, requestID, leaseID, ownerID)
-	if completeErr != nil {
-		if strings.TrimSpace(leaseID) != "" {
-			s.releaseRuntimeLeaseBestEffort(sessionID, leaseID)
-		}
-		return serverapi.SessionRuntimeActivateResponse{}, completeErr
-	}
-	if !ok {
-		if strings.TrimSpace(leaseID) != "" {
-			s.releaseRuntimeLeaseBestEffort(sessionID, leaseID)
-		}
-		err := errors.Join(serverapi.ErrSessionAlreadyControlled, fmt.Errorf("session %q is already controlled by another client", sessionID))
-		finishRuntimeTakeover(takeover, "", err)
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	return serverapi.SessionRuntimeActivateResponse{LeaseID: leaseID, Mode: serverapi.SessionRuntimeAttachModeController}, nil
-}
-
-func runtimeHandleReady(handle *runtimeHandle) bool {
-	if handle == nil || handle.ready == nil {
-		return true
-	}
-	select {
-	case <-handle.ready:
-		return true
-	default:
-		return false
-	}
-}
-
-func waitForRuntimeTakeoverReady(ctx context.Context, takeover *runtimeTakeover) error {
-	if takeover == nil || takeover.ready == nil {
-		return nil
-	}
-	select {
-	case <-takeover.ready:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (s *Service) completeActivation(handle *runtimeHandle, leaseID string, closeFn func()) {
-	if handle == nil {
-		return
-	}
-	handle.takeover = nil
-	handle.controllerLeaseID = strings.TrimSpace(leaseID)
-	handle.close = closeFn
-	if handle.ownerRefs <= 0 {
-		handle.ownerRefs = 1
-	}
-	close(handle.ready)
-}
-
-func (s *Service) completeTakeover(ctx context.Context, sessionID string, handle *runtimeHandle, takeover *runtimeTakeover, requestID string, leaseID string, ownerID string) (bool, error) {
-	if handle == nil || takeover == nil {
-		return false, nil
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	if current == nil || current != handle || current.takeover != takeover {
-		s.mu.Unlock()
-		return false, nil
-	}
-	previousLeaseID := strings.TrimSpace(current.controllerLeaseID)
-	s.mu.Unlock()
-	if previousLeaseID != "" {
-		if _, err := s.releaseRuntimeLease(ctx, trimmedSessionID, previousLeaseID); err != nil {
-			s.mu.Lock()
-			if s.handles[trimmedSessionID] == current && current.takeover == takeover {
-				current.takeover = nil
-			}
-			s.mu.Unlock()
-			finishRuntimeTakeover(takeover, "", err)
-			return false, err
-		}
-	}
-	s.mu.Lock()
-	current = s.handles[trimmedSessionID]
-	if current == nil || current != handle || current.takeover != takeover {
-		s.mu.Unlock()
-		return false, nil
-	}
-	current.controllerRequestID = strings.TrimSpace(requestID)
-	current.controllerLeaseID = trimmedLeaseID
-	current.ownerRefs = 1
-	current.ownerIDs = nil
-	if trimmedOwnerID := strings.TrimSpace(ownerID); trimmedOwnerID != "" {
-		current.ownerIDs = map[string]struct{}{trimmedOwnerID: {}}
-	}
-	current.takeover = nil
-	s.mu.Unlock()
-	s.cancelScheduledIdleUnload(trimmedSessionID)
-	finishRuntimeTakeover(takeover, trimmedLeaseID, nil)
-	return true, nil
-}
-
-func (s *Service) failTakeover(sessionID string, handle *runtimeHandle, takeover *runtimeTakeover, err error) {
-	if handle == nil || takeover == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	if current != nil && current == handle && current.takeover == takeover {
-		current.takeover = nil
-	}
-	s.mu.Unlock()
-	finishRuntimeTakeover(takeover, "", err)
-}
-
-func (s *Service) failActivation(sessionID string, handle *runtimeHandle, err error) {
-	if handle == nil {
-		return
-	}
-	handle.activationErr = err
-	close(handle.ready)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current := s.handles[strings.TrimSpace(sessionID)]
-	if current == nil || current != handle {
-		return
-	}
-	finishRuntimeTakeover(current.takeover, "", err)
-	delete(s.handles, strings.TrimSpace(sessionID))
-}
-
-func finishRuntimeTakeover(takeover *runtimeTakeover, leaseID string, err error) {
-	if takeover == nil {
-		return
-	}
-	takeover.readyOnce.Do(func() {
-		takeover.leaseID = strings.TrimSpace(leaseID)
-		takeover.err = err
-		if takeover.ready != nil {
-			close(takeover.ready)
-		}
-	})
-}
-
-func (s *Service) resolveExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
-	if s == nil || s.metadataStore == nil {
-		return clientui.SessionExecutionTarget{}, fmt.Errorf("metadata store is required")
-	}
-	return s.metadataStore.ResolveSessionExecutionTarget(ctx, sessionID)
-}
-
-func (s *Service) createRuntimeLease(ctx context.Context, sessionID string, requestID string) (metadata.RuntimeLeaseRecord, error) {
-	if s == nil || s.metadataStore == nil {
-		return metadata.RuntimeLeaseRecord{}, fmt.Errorf("metadata store is required")
-	}
-	return s.metadataStore.CreateRuntimeLease(ctx, sessionID)
-}
-
-func (s *Service) validateRuntimeLease(ctx context.Context, sessionID string, leaseID string) (metadata.RuntimeLeaseRecord, error) {
-	if s == nil || s.metadataStore == nil {
-		return metadata.RuntimeLeaseRecord{}, fmt.Errorf("metadata store is required")
-	}
-	record, err := s.metadataStore.ValidateRuntimeLease(ctx, sessionID, leaseID)
-	if err != nil {
-		if errors.Is(err, metadata.ErrInvalidRuntimeLease) {
-			return metadata.RuntimeLeaseRecord{}, errors.Join(serverapi.ErrInvalidControllerLease, err)
-		}
-		return metadata.RuntimeLeaseRecord{}, err
-	}
-	return record, nil
-}
-
-func (s *Service) releaseRuntimeLease(ctx context.Context, sessionID string, leaseID string) (metadata.RuntimeLeaseRecord, error) {
-	if s == nil || s.metadataStore == nil {
-		return metadata.RuntimeLeaseRecord{}, fmt.Errorf("metadata store is required")
-	}
-	record, err := s.metadataStore.ReleaseRuntimeLease(ctx, sessionID, leaseID)
-	if err != nil {
-		if errors.Is(err, metadata.ErrInvalidRuntimeLease) {
-			return metadata.RuntimeLeaseRecord{}, errors.Join(serverapi.ErrInvalidControllerLease, err)
-		}
-		return metadata.RuntimeLeaseRecord{}, err
-	}
-	return record, nil
-}
-
-func (s *Service) releaseRuntimeLeaseBestEffort(sessionID string, leaseID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), bestEffortRuntimeLeaseReleaseTimeout)
-	defer cancel()
-	_, _ = s.releaseRuntimeLease(ctx, sessionID, leaseID)
-}
-
-func waitForRuntimeHandleReady(ctx context.Context, handle *runtimeHandle) error {
-	if handle == nil || handle.ready == nil {
-		return nil
-	}
-	select {
-	case <-handle.ready:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func waitForRuntimeHandleClosed(ctx context.Context, handle *runtimeHandle) error {
-	if handle == nil || handle.closed == nil {
-		return nil
-	}
-	select {
-	case <-handle.closed:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func signalRuntimeHandleClosed(handle *runtimeHandle) {
-	if handle == nil || handle.closed == nil {
-		return
-	}
-	handle.closedOnce.Do(func() {
-		close(handle.closed)
-	})
-}
-
-func activationResponseForHandle(handle *runtimeHandle) (serverapi.SessionRuntimeActivateResponse, error) {
-	if handle == nil {
-		return serverapi.SessionRuntimeActivateResponse{}, fmt.Errorf("activate session runtime: missing runtime handle")
-	}
-	if handle.activationErr != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, handle.activationErr
-	}
-	leaseID := strings.TrimSpace(handle.controllerLeaseID)
-	if leaseID == "" {
-		return serverapi.SessionRuntimeActivateResponse{}, fmt.Errorf("activate session runtime: controller lease is unavailable")
-	}
-	return serverapi.SessionRuntimeActivateResponse{LeaseID: leaseID, Mode: serverapi.SessionRuntimeAttachModeController}, nil
-}
-
-func activationResponseForTakeover(takeover *runtimeTakeover) (serverapi.SessionRuntimeActivateResponse, error) {
-	if takeover == nil {
-		return serverapi.SessionRuntimeActivateResponse{}, fmt.Errorf("activate session runtime: missing takeover state")
-	}
-	if takeover.err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, takeover.err
-	}
-	leaseID := strings.TrimSpace(takeover.leaseID)
-	if leaseID == "" {
-		return serverapi.SessionRuntimeActivateResponse{}, fmt.Errorf("activate session runtime: takeover lease is unavailable")
-	}
-	return serverapi.SessionRuntimeActivateResponse{LeaseID: leaseID}, nil
+func (s *Service) HasBlockingRuntimeActivity(ctx context.Context, sessionID string) (bool, error) {
+	return s.runtimeHasBlockingActivity(ctx, sessionID)
 }
 
 // errUnknownToolID is returned when an enabled-tool id cannot be parsed into a known tool.
@@ -1444,18 +669,8 @@ func configSourceLines(src map[string]string) []string {
 	return lines
 }
 
-func NewActivateRequest(clientRequestID string, sessionID string, settings config.Settings, enabledToolIDs []string, source config.SourceReport) serverapi.SessionRuntimeActivateRequest {
-	id := strings.TrimSpace(clientRequestID)
-	if id == "" {
-		id = uuid.NewString()
-	}
-	return serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: id,
-		SessionID:       strings.TrimSpace(sessionID),
-		ActiveSettings:  settings,
-		EnabledToolIDs:  append([]string(nil), enabledToolIDs...),
-		Source:          source,
-	}
+func runtimeOwnerIDRequiredError() error {
+	return errors.Join(registry.ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
 }
 
 var _ servicecontract.SessionRuntimeService = (*Service)(nil)

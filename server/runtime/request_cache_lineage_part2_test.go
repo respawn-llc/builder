@@ -102,33 +102,6 @@ func testReviewerPromptCacheRequest(cacheKey string, messages ...string) llm.Req
 	return request
 }
 
-func mustMarshalOpenAIResponsesPayloadForLineage(t *testing.T, request llm.Request, options llm.OpenAIResponsesPayloadOptions) []byte {
-	t.Helper()
-	data, err := llm.MarshalOpenAIResponsesRequestJSON(request, options)
-	if err != nil {
-		t.Fatalf("marshal openai responses payload: %v", err)
-	}
-	return data
-}
-
-func mustDecodeJSONMap(t *testing.T, data []byte) map[string]any {
-	t.Helper()
-	var decoded map[string]any
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("decode json map: %v", err)
-	}
-	return decoded
-}
-
-func mustMarshalCanonicalJSONForLineage(t *testing.T, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatalf("marshal canonical json: %v", err)
-	}
-	return data
-}
-
 func stringValue(value any) string {
 	if text, ok := value.(string); ok {
 		return text

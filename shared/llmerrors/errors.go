@@ -8,6 +8,8 @@ import (
 	"core/shared/auth"
 )
 
+var ErrModelStreamStalled = errors.New("model stream stalled")
+
 type APIStatusError struct {
 	StatusCode int
 	Body       string
@@ -28,6 +30,8 @@ const (
 	UnifiedErrorCodeContextLengthOverflow UnifiedErrorCode = "context_length_overflow"
 	UnifiedErrorCodeProviderContract      UnifiedErrorCode = "provider_contract_error"
 )
+
+const providerTypeResponseIncomplete = "response.incomplete"
 
 type ProviderAPIError struct {
 	ProviderID    string
@@ -152,6 +156,9 @@ func IsNonRetriableModelError(err error) bool {
 	}
 	var providerErr *ProviderAPIError
 	if errors.As(err, &providerErr) {
+		if providerErr.ProviderType == providerTypeResponseIncomplete {
+			return true
+		}
 		if providerErr.Code == UnifiedErrorCodeProviderContract {
 			return true
 		}
@@ -202,6 +209,9 @@ func HasHTTPStatus(err error, statusCode int) bool {
 func UserFacingError(err error) string {
 	if err == nil {
 		return ""
+	}
+	if errors.Is(err, ErrModelStreamStalled) {
+		return "The model request stalled: no streaming activity within the timeout window (timeouts.model_request_seconds). The model may be overloaded; retry, or raise the timeout."
 	}
 	var providerSelectionErr *ProviderSelectionError
 	if errors.As(err, &providerSelectionErr) {

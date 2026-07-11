@@ -41,16 +41,16 @@ func TestParseHeredocRequiresExactEOFDelimiter(t *testing.T) {
 func TestRenderFallsBackToRawForUnparseablePatch(t *testing.T) {
 	rendered := Render("not a structured patch payload", "/workspace")
 
-	if got := rendered.SummaryText(); got != "Patch" {
+	if got := rendered.SummaryText(); got != "not a structured patch payload" {
 		t.Fatalf("unexpected raw summary: %q", got)
 	}
-	if got := rendered.DetailText(); got != "Patch\nnot a structured patch payload" {
+	if got := rendered.DetailText(); got != "not a structured patch payload" {
 		t.Fatalf("unexpected raw detail: %q", got)
 	}
 	if len(rendered.Files) != 0 {
 		t.Fatalf("expected raw fallback to omit file metadata, got %+v", rendered.Files)
 	}
-	if len(rendered.DetailLines) != 2 || rendered.DetailLines[1].Kind != RenderedLineKindRaw {
+	if len(rendered.DetailLines) != 1 || rendered.DetailLines[0].Kind != RenderedLineKindRaw {
 		t.Fatalf("expected raw detail line metadata, got %+v", rendered.DetailLines)
 	}
 }

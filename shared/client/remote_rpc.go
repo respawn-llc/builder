@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"core/shared/config"
+	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
@@ -208,6 +209,10 @@ func (c *Remote) openRPCConn(ctx context.Context) (rpcwire.Conn, func(), error) 
 		return nil, nil, err
 	}
 	if err := validateIdentityRoot(c.rootID(), identity); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if err := c.acknowledgeNoAuthOnConn(ctx, conn); err != nil {
 		cleanup()
 		return nil, nil, err
 	}
@@ -453,6 +458,12 @@ func protocolError(resp *protocol.ResponseError) error {
 		return nil
 	}
 	message := strings.TrimSpace(resp.Message)
+	if resp.Code == protocol.ErrCodeOnboardingFinalizeFailed && len(resp.Data) > 0 {
+		return serverapi.DecodeOnboardingFinalizeError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodeServerNotReady && len(resp.Data) > 0 {
+		return serverapi.DecodeServerNotReadyError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeRequestCanceled {
 		return requestCanceledError{message: message}
 	}
@@ -467,6 +478,10 @@ func protocolError(resp *protocol.ResponseError) error {
 			return serverapi.ErrServerAuthRequired
 		}
 		return errors.Join(serverapi.ErrServerAuthRequired, errors.New(message))
+	case protocol.ErrCodeModelStreamStalled:
+		return errors.Join(llmerrors.ErrModelStreamStalled, errors.New(message))
+	case protocol.ErrCodeUnsupportedProvider:
+		return errors.Join(serverapi.ErrUnsupportedProvider, errors.New(message))
 	case protocol.ErrCodeStreamGap:
 		return errors.Join(serverapi.ErrStreamGap, errors.New(message))
 	case protocol.ErrCodeWorkspaceNotRegistered:
@@ -475,14 +490,12 @@ func protocolError(resp *protocol.ResponseError) error {
 		return errors.Join(serverapi.ErrProjectNotFound, errors.New(message))
 	case protocol.ErrCodeProjectUnavailable:
 		return errors.Join(serverapi.ErrProjectUnavailable, errors.New(message))
-	case protocol.ErrCodeSessionAlreadyControlled:
-		return errors.Join(serverapi.ErrSessionAlreadyControlled, errors.New(message))
-	case protocol.ErrCodeInvalidControllerLease:
-		return errors.Join(serverapi.ErrInvalidControllerLease, errors.New(message))
 	case protocol.ErrCodeRuntimeUnavailable:
-		return errors.Join(serverapi.ErrRuntimeUnavailable, errors.New(message))
-	case protocol.ErrCodeActivePrimaryRun:
-		return errors.Join(serverapi.ErrActivePrimaryRun, errors.New(message))
+		return protocolSentinelError(serverapi.ErrRuntimeUnavailable, message)
+	case protocol.ErrCodeRuntimeNoActiveRun:
+		return protocolSentinelError(serverapi.ErrRuntimeNoActiveRun, message)
+	case protocol.ErrCodeRuntimeNoFinalAnswer:
+		return protocolSentinelError(serverapi.ErrRuntimeNoFinalAnswer, message)
 	case protocol.ErrCodeStreamUnavailable:
 		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:
@@ -502,4 +515,14 @@ func protocolError(resp *protocol.ResponseError) error {
 	default:
 		return errors.New(message)
 	}
+}
+
+func protocolSentinelError(sentinel error, message string) error {
+	if sentinel == nil {
+		return errors.New(message)
+	}
+	if strings.TrimSpace(message) == "" || message == sentinel.Error() {
+		return sentinel
+	}
+	return errors.Join(sentinel, errors.New(message))
 }

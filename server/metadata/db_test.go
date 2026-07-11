@@ -141,40 +141,7 @@ func TestOpenAllowsDatabaseAtRemovedMigrationVersion(t *testing.T) {
 	}
 }
 
-func TestOpenMigratesRuntimeLeaseLivenessColumnsAway(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 3)
-	if err != nil {
-		t.Fatalf("open test database at version 3: %v", err)
-	}
-	if _, err := db.Exec(metadataDBTestSQL(t, "version3_runtime_lease_liveness.sql")); err != nil {
-		t.Fatalf("seed version 3 runtime lease: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close version 3 db: %v", err)
-	}
-
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-	columns := runtimeLeaseColumns(t, store.db)
-	for _, removed := range []string{"state", "expires_at_unix_ms"} {
-		if columns[removed] {
-			t.Fatalf("runtime_leases column %q should have been removed; columns=%+v", removed, columns)
-		}
-	}
-	if !columns["released_at_unix_ms"] {
-		t.Fatalf("runtime_leases.released_at_unix_ms should exist after release-state migration; columns=%+v", columns)
-	}
-	if _, err := store.ValidateRuntimeLease(t.Context(), "session-1", "lease-1"); err != nil {
-		t.Fatalf("ValidateRuntimeLease after migration: %v", err)
-	}
-}
-
-func TestOpenMigratesCommentsAndRuntimeLeasesToMinimalStorage(t *testing.T) {
+func TestOpenMigratesCommentsToMinimalStorage(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
 	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 19)
@@ -198,14 +165,6 @@ func TestOpenMigratesCommentsAndRuntimeLeasesToMinimalStorage(t *testing.T) {
 			t.Fatalf("task_comments.%s should have been removed", column)
 		}
 	}
-	for _, column := range []string{"client_id", "request_id", "acquired_at_unix_ms", "metadata_json"} {
-		if columnExists(t, store.db, "runtime_leases", column) {
-			t.Fatalf("runtime_leases.%s should have been removed", column)
-		}
-	}
-	if !columnExists(t, store.db, "runtime_leases", "released_at_unix_ms") {
-		t.Fatal("runtime_leases.released_at_unix_ms should exist after release-state migration")
-	}
 	comments, err := store.DB().QueryContext(t.Context(), `SELECT id, body FROM task_comments ORDER BY updated_at_unix_ms DESC`)
 	if err != nil {
 		t.Fatalf("query migrated comments: %v", err)
@@ -226,9 +185,6 @@ func TestOpenMigratesCommentsAndRuntimeLeasesToMinimalStorage(t *testing.T) {
 	}
 	if err := comments.Err(); err != nil {
 		t.Fatalf("iterate migrated comments: %v", err)
-	}
-	if _, err := store.ValidateRuntimeLease(t.Context(), "session-minimal", "lease-minimal"); err != nil {
-		t.Fatalf("ValidateRuntimeLease after minimal storage migration: %v", err)
 	}
 }
 
@@ -403,6 +359,76 @@ VALUES ('node-a', 'workflow-a', 'start', 'start', 'Start A', '[]'),
 				t.Fatal("expected migration to reject inconsistent workflow graph denormalization")
 			}
 		})
+	}
+}
+
+func TestOpenMigratesHistoricalTerminalPlacementsToSuperseded(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 39)
+	if err != nil {
+		t.Fatalf("open test database at version 39: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES ('project-terminal-history', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-terminal-history", now)
+	execSeed(t, db, "workflow task", workflowSeedTaskSQL, "task-terminal-history", "link-1", 1, "TRM-1", now, now)
+	execSeed(t, db, "legacy terminal placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-terminal-history', 'task-terminal-history', 'node-done', 'completed', ?, ?)`, now+1, now+1)
+	execSeed(t, db, "same-timestamp active placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-active-after-terminal', 'task-terminal-history', 'node-start', 'active', ?, ?)`, now+1, now+1)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 39 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	var terminalState string
+	if err := store.db.QueryRowContext(t.Context(), `SELECT state FROM task_node_placements WHERE id = 'placement-terminal-history'`).Scan(&terminalState); err != nil {
+		t.Fatalf("query migrated terminal placement: %v", err)
+	}
+	if terminalState != "superseded" {
+		t.Fatalf("terminal placement state = %q, want superseded", terminalState)
+	}
+}
+
+func TestOpenMigratesWorkflowScriptNodesWithRuntimeReferences(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 42)
+	if err != nil {
+		t.Fatalf("open test database at version 42: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES ('project-script-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-script-migration", now)
+	execSeed(t, db, "workflow task", workflowSeedTaskSQL, "task-script-migration", "link-1", 1, "SCR-1", now, now)
+	execSeed(t, db, "workflow placement", workflowSeedPlacementSQL, "placement-script-migration", "task-script-migration", "node-start", now, now)
+	execSeed(t, db, "workflow run", `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('run-script-migration', 'placement-script-migration', 1, ?, ?)`, now, now)
+	execSeed(t, db, "workflow transition", `INSERT INTO task_transitions (id, task_id, source_run_id, source_placement_id, transition_id, workflow_revision_seen, actor, state, output_values_json, created_at_unix_ms)
+VALUES ('transition-script-migration', 'task-script-migration', 'run-script-migration', 'placement-script-migration', 'start', 1, 'system', 'applied', '{}', ?)`, now)
+	execSeed(t, db, "workflow transition edge", `INSERT INTO task_transition_edges (id, task_transition_id, workflow_edge_id, edge_key, target_node_id, state, input_bindings_json, output_requirements_json)
+VALUES ('transition-edge-script-migration', 'transition-script-migration', 'edge-start-1', 'start', 'node-agent', 'applied', '[]', '[]')`)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 42 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if !columnExists(t, store.db, "workflow_nodes", "script_path") {
+		t.Fatal("workflow_nodes.script_path should exist after migration")
+	}
+	var violations int
+	if err := store.db.QueryRow(`SELECT count(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil {
+		t.Fatalf("query foreign key check: %v", err)
+	}
+	if violations != 0 {
+		t.Fatalf("foreign key violations after workflow script node migration = %d, want 0", violations)
 	}
 }
 
@@ -664,32 +690,6 @@ func openDatabaseAtPathWithoutMigrationsForTest(root string, dbPath string) (*sq
 		return nil, err
 	}
 	return db, nil
-}
-
-func runtimeLeaseColumns(t *testing.T, db *sql.DB) map[string]bool {
-	t.Helper()
-	rows, err := db.Query("PRAGMA table_info(runtime_leases)")
-	if err != nil {
-		t.Fatalf("query runtime_leases columns: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	columns := map[string]bool{}
-	for rows.Next() {
-		var cid int
-		var name string
-		var typ string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			t.Fatalf("scan runtime_leases column: %v", err)
-		}
-		columns[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate runtime_leases columns: %v", err)
-	}
-	return columns
 }
 
 func primaryWorkspaceIDsByProject(t *testing.T, db *sql.DB) map[string]string {

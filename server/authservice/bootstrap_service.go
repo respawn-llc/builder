@@ -40,9 +40,14 @@ func (s *BootstrapService) GetBootstrapStatus(ctx context.Context, _ serverapi.A
 	if err != nil {
 		return serverapi.AuthGetBootstrapStatusResponse{}, err
 	}
+	stored, err := s.storedState(ctx)
+	if err != nil {
+		return serverapi.AuthGetBootstrapStatusResponse{}, err
+	}
 	return serverapi.AuthGetBootstrapStatusResponse{
 		AuthReady:              ready,
 		AuthRequired:           s.authRequired,
+		NoAuthSelected:         stored.IsNoAuthSelected(),
 		AuthBootstrapSupported: true,
 		AllowedPreAuthMethods:  append([]string(nil), s.allowedPreAuth...),
 		SupportedModes:         append([]serverapi.AuthBootstrapMode(nil), s.supportedModes...),
@@ -51,6 +56,28 @@ func (s *BootstrapService) GetBootstrapStatus(ctx context.Context, _ serverapi.A
 			ClientID: strings.TrimSpace(s.oauthOptions.ClientID),
 		},
 	}, nil
+}
+
+func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, _ serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+	if s == nil || s.manager == nil {
+		return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
+	}
+	stored, err := s.manager.StoredState(ctx)
+	if err != nil {
+		return serverapi.AuthAcknowledgeNoAuthResponse{}, err
+	}
+	current, err := s.manager.Load(ctx)
+	if err != nil {
+		return serverapi.AuthAcknowledgeNoAuthResponse{}, err
+	}
+	ready := !s.authRequired || auth.EvaluateStartupGate(current).Ready
+	if stored.IsNoAuthSelected() {
+		return serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: ready, NoAuthSelected: true}, nil
+	}
+	if ready {
+		return serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: true}, nil
+	}
+	return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
 }
 
 func (s *BootstrapService) CompleteBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
@@ -106,11 +133,21 @@ func (s *BootstrapService) authReady(ctx context.Context) (bool, error) {
 	if s == nil || s.manager == nil {
 		return false, nil
 	}
+	if !s.authRequired {
+		return true, nil
+	}
 	state, err := s.manager.Load(ctx)
 	if err != nil {
 		return false, err
 	}
 	return auth.EvaluateStartupGate(state).Ready, nil
+}
+
+func (s *BootstrapService) storedState(ctx context.Context) (auth.State, error) {
+	if s == nil || s.manager == nil {
+		return auth.EmptyState(), nil
+	}
+	return s.manager.StoredState(ctx)
 }
 
 func (s *BootstrapService) bootstrapResponseFromState(state auth.State) serverapi.AuthCompleteBootstrapResponse {
@@ -121,10 +158,11 @@ func (s *BootstrapService) bootstrapResponseFromState(state auth.State) serverap
 		email = strings.TrimSpace(state.Method.OAuth.Email)
 	}
 	return serverapi.AuthCompleteBootstrapResponse{
-		AuthReady:  !s.authRequired || auth.EvaluateStartupGate(state).Ready,
-		MethodType: strings.TrimSpace(string(state.Method.Type)),
-		AccountID:  accountID,
-		Email:      email,
+		AuthReady:      !s.authRequired || auth.EvaluateStartupGate(state).Ready,
+		NoAuthSelected: state.IsNoAuthSelected(),
+		MethodType:     strings.TrimSpace(string(state.Method.Type)),
+		AccountID:      accountID,
+		Email:          email,
 	}
 }
 

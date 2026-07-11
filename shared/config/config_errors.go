@@ -37,15 +37,16 @@ var (
 	errSubagentDescriptionTooLong = newConfigError("subagent description too long")
 
 	// Validation-rule sentinels for individual settings fields.
-	errProviderOverrideRequiresModel  = newConfigError("provider_override requires an explicit model override")
-	errInvalidProviderOverride        = newConfigError("invalid provider_override")
-	errOpenAIBaseURLConflict          = newConfigError("provider_override conflicts with openai_base_url")
-	errProviderCapabilitiesNeedID     = newConfigError("provider_capabilities.provider_id must not be empty when provider capability overrides are set")
-	errInvalidModelVerbosity          = newConfigError("invalid model_verbosity")
-	errInvalidReviewerProvider        = newConfigError("invalid reviewer.provider_override")
-	errReviewerContextWindowNegative  = newConfigError("reviewer.model_context_window must be >= 0")
-	errModelContextWindowBelowMinimum = newConfigError("model context window below minimum")
-	errInvalidCacheWarningMode        = newConfigError("invalid cache_warning_mode")
+	errProviderOverrideRequiresModel      = newConfigError("provider_override requires an explicit model override")
+	errInvalidProviderOverride            = newConfigError("invalid provider_override")
+	errOpenAIBaseURLConflict              = newConfigError("provider_override conflicts with openai_base_url")
+	errProviderCapabilitiesNeedID         = newConfigError("provider_capabilities.provider_id must not be empty when provider capability overrides are set")
+	errReviewerProviderCapabilitiesNeedID = newConfigError("reviewer.provider_capabilities.provider_id must not be empty when reviewer provider capability overrides are set")
+	errInvalidModelVerbosity              = newConfigError("invalid model_verbosity")
+	errInvalidReviewerProvider            = newConfigError("invalid reviewer.provider_override")
+	errReviewerContextWindowNegative      = newConfigError("reviewer.model_context_window must be >= 0")
+	errModelContextWindowBelowMinimum     = newConfigError("model context window below minimum")
+	errInvalidCacheWarningMode            = newConfigError("invalid cache_warning_mode")
 
 	// errCompactionThresholdBelowMinimum is returned when the configured
 	// compaction threshold falls below the minimum percentage of the model
@@ -77,6 +78,10 @@ func (e *configError) Error() string {
 
 func IsModelContextWindowBelowMinimum(err error) bool {
 	return errors.Is(err, errModelContextWindowBelowMinimum)
+}
+
+func IsSettingsFileAlreadyExists(err error) bool {
+	return errors.Is(err, errSettingsFileAlreadyExists)
 }
 
 // UnknownSettingsKeysError reports settings keys that are not recognized. The

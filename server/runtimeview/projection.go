@@ -3,34 +3,57 @@ package runtimeview
 import (
 	"strings"
 
-	"core/server/llm"
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/transcript"
-	patchformat "core/shared/transcript/patchformat"
+	"core/shared/valuecopy"
 )
 
 const runtimeNoopFinalToken = "NO_OP"
 
-func MainViewFromRuntime(engine *runtime.Engine) clientui.RuntimeMainView {
+func MainViewFromRuntimeActivity(engine *runtime.Engine, version clientui.ReadModelVersion, activity clientui.RuntimeActivity) clientui.RuntimeMainView {
 	if engine == nil {
 		return clientui.RuntimeMainView{}
 	}
 	sessionView := SessionViewFromRuntime(engine)
+	if err := activity.Validate(); err != nil {
+		activity = clientui.MustRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{DiagnosticRecovery: true})
+	}
 	return clientui.RuntimeMainView{
-		Status:    StatusFromRuntime(engine),
-		Session:   sessionView,
-		ActiveRun: RunViewFromRuntime(sessionView.SessionID, engine.ActiveRun()),
+		Version:             version,
+		Status:              StatusFromRuntime(engine),
+		Session:             sessionView,
+		Activity:            activity,
+		InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+	}
+}
+
+func RuntimeMainViewFromActivity(activity clientui.RuntimeActivity, status clientui.RuntimeStatus, sessionView clientui.RuntimeSessionView) clientui.RuntimeMainView {
+	version := runtimeactivity.NextReadModelVersion(sessionView.SessionID)
+	if err := activity.Validate(); err != nil {
+		activity = clientui.MustRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{DiagnosticRecovery: true})
+	}
+	return clientui.RuntimeMainView{
+		Version:             version,
+		Status:              status,
+		Session:             sessionView,
+		Activity:            activity,
+		InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
 	}
 }
 
 func StatusFromRuntime(engine *runtime.Engine) clientui.RuntimeStatus {
+	return clientui.RuntimeStatus(TranscriptSessionStatusFromRuntime(engine))
+}
+
+func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.TranscriptSessionStatus {
 	if engine == nil {
-		return clientui.RuntimeStatus{}
+		return clientui.TranscriptSessionStatus{}
 	}
 	usage := engine.ContextUsage()
-	status := clientui.RuntimeStatus{
+	status := clientui.TranscriptSessionStatus{
 		ReviewerFrequency:                 engine.ReviewerFrequency(),
 		ReviewerEnabled:                   engine.ReviewerEnabled(),
 		AutoCompactionEnabled:             engine.AutoCompactionEnabled(),
@@ -82,10 +105,6 @@ func SessionViewFromRuntime(engine *runtime.Engine) clientui.RuntimeSessionView 
 		SessionID:             engine.SessionID(),
 		SessionName:           engine.SessionName(),
 		ConversationFreshness: ConversationFreshnessFromSession(engine.ConversationFreshness()),
-		Transcript: clientui.TranscriptMetadata{
-			Revision:            engine.TranscriptRevision(),
-			CommittedEntryCount: engine.CommittedTranscriptEntryCount(),
-		},
 	}
 }
 
@@ -101,17 +120,12 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 		Kind:                         clientui.EventKind(evt.Kind),
 		StepID:                       evt.StepID,
 		CommittedTranscriptChanged:   evt.CommittedTranscriptChanged,
-		TranscriptRevision:           evt.TranscriptRevision,
-		CommittedEntryCount:          evt.CommittedEntryCount,
-		CommittedEntryStart:          evt.CommittedEntryStart,
-		CommittedEntryStartSet:       evt.CommittedEntryStartSet,
 		Error:                        evt.Error,
 		AssistantDelta:               evt.AssistantDelta,
 		AssistantDeltaPhase:          clientui.MessagePhase(evt.AssistantDeltaPhase),
 		UserMessage:                  evt.UserMessage,
 		UserMessageBatch:             append([]string(nil), evt.UserMessageBatch...),
 		UserMessageBatchQueueItemIDs: append([]string(nil), evt.UserMessageBatchQueueItemIDs...),
-		TranscriptEntries:            chatEntriesFromRuntime(runtime.TranscriptEntriesFromEvent(evt)),
 	}
 	if evt.ReasoningDelta != nil {
 		view.ReasoningDelta = &clientui.ReasoningDelta{
@@ -132,16 +146,8 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 	}
 	view.CacheWarningVisibility = clientui.EntryVisibility(evt.CacheWarningVisibility)
 	if evt.RunState != nil {
-		view.RunState = &clientui.RunState{
-			Lifecycle: clientui.MustRunLifecycle(
-				clientui.RunLifecyclePhase(evt.RunState.Lifecycle.Phase),
-				clientui.RunMode(evt.RunState.Lifecycle.Mode),
-			),
-			RunID:      evt.RunState.RunID,
-			Status:     clientui.RunStatus(evt.RunState.Status),
-			StartedAt:  evt.RunState.StartedAt,
-			FinishedAt: evt.RunState.FinishedAt,
-		}
+		state := runtimeRunStateToClient(*evt.RunState)
+		view.RunState = &state
 	}
 	if evt.ContextUsage != nil {
 		view.ContextUsage = &clientui.RuntimeContextUsage{
@@ -156,7 +162,7 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 	}
 	if evt.Background != nil {
 		view.Background = &clientui.BackgroundShellEvent{
-			Type:              evt.Background.Type,
+			Type:              string(evt.Background.Type),
 			ID:                evt.Background.ID,
 			State:             evt.Background.State,
 			Command:           evt.Background.Command,
@@ -165,7 +171,7 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 			NoticeText:        evt.Background.NoticeText,
 			CompactText:       evt.Background.CompactText,
 			Preview:           evt.Background.Preview,
-			Removed:           evt.Background.Removed,
+			Removed:           evt.Background.PreviewRemoved,
 			UserRequestedKill: evt.Background.UserRequestedKill,
 			NoticeSuppressed:  evt.Background.NoticeSuppressed,
 		}
@@ -185,6 +191,24 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 		}
 	}
 	return view
+}
+
+func runtimeRunStateToClient(state runtime.RunState) clientui.RunState {
+	activeKind := clientui.RuntimeActivityActiveKind("")
+	if state.ActiveKind.Valid() {
+		activeKind = ClientActiveKindFromRuntime(state.ActiveKind)
+	}
+	return clientui.RunState{
+		Lifecycle: clientui.MustRunLifecycle(
+			clientui.RunLifecyclePhase(state.Lifecycle.Phase),
+			clientui.RunMode(state.Lifecycle.Mode),
+		),
+		RunID:      state.RunID,
+		ActiveKind: activeKind,
+		Status:     clientui.RunStatus(state.Status),
+		StartedAt:  state.StartedAt,
+		FinishedAt: state.FinishedAt,
+	}
 }
 
 func goalStatusUpdateFromRuntime(update *runtime.GoalStatusUpdate) *clientui.RuntimeGoalStatusUpdate {
@@ -209,104 +233,23 @@ func copyCacheWarningView(in *transcript.CacheWarning) *transcript.CacheWarning 
 	return &copyWarning
 }
 
-func chatEntriesFromRuntime(entries []runtime.ChatEntry) []clientui.ChatEntry {
-	if len(entries) == 0 {
-		return nil
+func ActivityFromRuntimeSnapshot(snapshot *runtime.RunSnapshot, queueAccepting bool) clientui.RuntimeActivity {
+	var active *runtimeactivity.ActiveStepSnapshot
+	if snapshot != nil {
+		active = runtimeactivity.ActiveStepFromRuntimeSnapshot(snapshot)
 	}
-	out := make([]clientui.ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, clientui.ChatEntry{
-			Visibility:        clientui.EntryVisibility(entry.Visibility),
-			RollbackTargetID:  entry.RollbackTargetID,
-			Role:              entry.Role,
-			Text:              entry.Text,
-			CondensedText:     entry.CondensedText,
-			Phase:             string(entry.Phase),
-			MessageType:       string(entry.MessageType),
-			SourcePath:        entry.SourcePath,
-			CompactLabel:      entry.CompactLabel,
-			ToolResultSummary: entry.ToolResultSummary,
-			ToolCallID:        entry.ToolCallID,
-			NoticeID:          entry.NoticeID,
-			ToolCall:          cloneToolCallMeta(entry.ToolCall),
-		})
+	activity, err := runtimeactivity.ResolveRuntimeActivity(runtimeactivity.ResolverSnapshot{
+		Registry: runtimeactivity.RegistrySnapshot{Registered: true, QueueAccepting: queueAccepting},
+		Active:   active,
+	})
+	if err != nil {
+		panic(err)
 	}
-	return out
+	return activity
 }
 
-func RunViewFromRuntime(sessionID string, snapshot *runtime.RunSnapshot) *clientui.RunView {
-	if snapshot == nil {
-		return nil
-	}
-	mode := clientui.RunModeTurn
-	if snapshot.GoalLoop {
-		mode = clientui.RunModeGoalLoop
-	}
-	return &clientui.RunView{
-		RunID:      snapshot.RunID,
-		SessionID:  sessionID,
-		StepID:     snapshot.StepID,
-		Status:     clientui.RunStatus(snapshot.Status),
-		Lifecycle:  clientui.MustRunLifecycle(clientui.RunLifecycleRunning, mode),
-		StartedAt:  snapshot.StartedAt,
-		FinishedAt: snapshot.FinishedAt,
-	}
-}
-
-func RunViewFromSessionRecord(sessionID string, record *session.RunRecord) *clientui.RunView {
-	if record == nil {
-		return nil
-	}
-	lifecycle := clientui.MustRunLifecycle(clientui.RunLifecycleFinished, clientui.RunModeTurn)
-	if record.Status == session.RunStatusRunning {
-		lifecycle = clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)
-	}
-	return &clientui.RunView{
-		RunID:      record.RunID,
-		SessionID:  sessionID,
-		StepID:     record.StepID,
-		Status:     clientui.RunStatus(record.Status),
-		Lifecycle:  lifecycle,
-		StartedAt:  record.StartedAt,
-		FinishedAt: record.FinishedAt,
-	}
-}
-
-func ChatSnapshotFromRuntime(snapshot runtime.ChatSnapshot) clientui.ChatSnapshot {
-	entries := make([]clientui.ChatEntry, 0, len(snapshot.Entries))
-	for _, entry := range snapshot.Entries {
-		if isSuppressedNoopAssistantEntry(entry) {
-			continue
-		}
-		entries = append(entries, clientui.ChatEntry{
-			Visibility:        clientui.EntryVisibility(entry.Visibility),
-			RollbackTargetID:  entry.RollbackTargetID,
-			Role:              entry.Role,
-			Text:              entry.Text,
-			CondensedText:     entry.CondensedText,
-			Phase:             string(entry.Phase),
-			MessageType:       string(entry.MessageType),
-			SourcePath:        entry.SourcePath,
-			CompactLabel:      entry.CompactLabel,
-			ToolResultSummary: entry.ToolResultSummary,
-			ToolCallID:        entry.ToolCallID,
-			NoticeID:          entry.NoticeID,
-			ToolCall:          cloneToolCallMeta(entry.ToolCall),
-		})
-	}
-	streaming := snapshot.Streaming
-	if strings.TrimSpace(streaming) == runtimeNoopFinalToken {
-		streaming = ""
-	}
-	return clientui.ChatSnapshot{
-		Entries:        entries,
-		Streaming:      streaming,
-		StreamingError: snapshot.StreamingError,
-	}
-}
-
-func isSuppressedNoopAssistantEntry(entry runtime.ChatEntry) bool {
-	return strings.TrimSpace(entry.Role) == "assistant" && entry.Phase == llm.MessagePhaseFinal && strings.TrimSpace(entry.Text) == runtimeNoopFinalToken
+func ClientActiveKindFromRuntime(kind runtime.ActiveKind) clientui.RuntimeActivityActiveKind {
+	return runtimeactivity.MustClientActiveKindFromRuntime(kind)
 }
 
 func cloneToolCallMeta(meta *transcript.ToolCallMeta) *clientui.ToolCallMeta {
@@ -330,6 +273,7 @@ func cloneToolCallMeta(meta *transcript.ToolCallMeta) *clientui.ToolCallMeta {
 		OmitSuccessfulResult:   meta.OmitSuccessfulResult,
 		RawOutputRequested:     meta.RawOutputRequested,
 		OutputTruncated:        meta.OutputTruncated,
+		MovedToBackground:      meta.MovedToBackground,
 	}
 	if len(meta.Suggestions) > 0 {
 		copyMeta.Suggestions = append([]string(nil), meta.Suggestions...)
@@ -343,31 +287,7 @@ func cloneToolCallMeta(meta *transcript.ToolCallMeta) *clientui.ToolCallMeta {
 		}
 	}
 	if meta.PatchRender != nil {
-		copyMeta.PatchRender = cloneRenderedPatch(meta.PatchRender)
+		copyMeta.PatchRender = valuecopy.RenderedPatch(meta.PatchRender)
 	}
 	return copyMeta
-}
-
-func cloneRenderedPatch(in *patchformat.RenderedPatch) *patchformat.RenderedPatch {
-	if in == nil {
-		return nil
-	}
-	out := &patchformat.RenderedPatch{}
-	if len(in.Files) > 0 {
-		out.Files = make([]patchformat.RenderedFile, 0, len(in.Files))
-		for _, file := range in.Files {
-			copyFile := file
-			if len(file.Diff) > 0 {
-				copyFile.Diff = append([]string(nil), file.Diff...)
-			}
-			out.Files = append(out.Files, copyFile)
-		}
-	}
-	if len(in.SummaryLines) > 0 {
-		out.SummaryLines = append([]patchformat.RenderedLine(nil), in.SummaryLines...)
-	}
-	if len(in.DetailLines) > 0 {
-		out.DetailLines = append([]patchformat.RenderedLine(nil), in.DetailLines...)
-	}
-	return out
 }

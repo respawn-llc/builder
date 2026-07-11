@@ -1,9 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
+import { z } from "zod";
 
 import type { JsonValue } from "../../api/json";
 import { App } from "../../App";
 import { createTestServices, startupRoutes } from "../../testSupport/appServices";
+
+const jsonRecordSchema = z.record(z.string(), z.unknown());
 
 describe("HomeRoute", () => {
   beforeEach(() => {
@@ -302,7 +305,7 @@ function isPageToken(params: JsonValue, token: string): boolean {
 }
 
 function isJsonRecord(value: JsonValue): value is Readonly<Record<string, JsonValue>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return jsonRecordSchema.safeParse(value).success && !Array.isArray(value);
 }
 
 function projectPage(projects: readonly ReturnType<typeof projectSummary>[], nextPageToken: string) {
@@ -458,12 +461,8 @@ const taskDetailResponse = {
     actions: {
       can_start: false,
       can_interrupt: true,
-      interrupt_run_id: "run-1",
       can_resume: false,
-      resume_run_id: "",
       can_cancel: true,
-      needs_detail_for_interrupt: false,
-      needs_detail_for_resume: false,
       manual_move_target_node_ids: [],
     },
     attention: [],

@@ -46,10 +46,14 @@ export function classifyDrop(
   if (column.transitionOutputFields.length > 0) {
     return { kind: "missingInput" };
   }
-  if (column.kind === "agent") {
+  if (isExecutableAutomationColumn(column)) {
     return { kind: "move", allowMissingEdge: true, autoApprove: true };
   }
   return { kind: "move", allowMissingEdge: true };
+}
+
+export function isExecutableAutomationColumn(column: Pick<BoardColumn, "kind">): boolean {
+  return column.kind === "agent" || column.kind === "script";
 }
 
 export function missingInputValues(fields: readonly WorkflowOutputField[]): Readonly<Record<string, string>> {

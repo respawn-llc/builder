@@ -13,122 +13,40 @@ func TranscriptPageFromRuntime(engine *runtime.Engine, req clientui.TranscriptPa
 	}
 	var segment runtime.TranscriptSegmentPage
 	var err error
-	if req.NewerCursor > 0 {
-		segment, err = engine.TranscriptSegmentPageForward(req.NewerCursor)
+	if req.NewerCursor != nil {
+		segment, err = engine.TranscriptSegmentPageForward(*req.NewerCursor)
+	} else if req.Cursor != nil {
+		segment, err = engine.TranscriptSegmentPage(*req.Cursor)
 	} else {
-		segment, err = engine.TranscriptSegmentPage(req.Cursor)
+		segment, err = engine.TranscriptNewestSegmentPage()
 	}
 	if err != nil {
 		return clientui.TranscriptPage{}, err
 	}
-	page := TranscriptPageFromSegment(
+	return TranscriptPageFromSegment(
 		engine.SessionID(),
 		engine.SessionName(),
 		ConversationFreshnessFromSession(engine.ConversationFreshness()),
-		engine.TranscriptRevision(),
 		segment,
-	)
-	if req.NewerCursor <= 0 && req.Cursor <= 0 {
-		if page.HasMoreAbove {
-			total := engine.CommittedTranscriptEntryCount()
-			page.TotalEntries = total
-			if offset := total - len(page.Entries); offset >= 0 {
-				page.Offset = offset
-			}
-		} else {
-			page.Offset = 0
-			page.TotalEntries = len(page.Entries)
-		}
-	}
-	return page, nil
+	), nil
 }
 
-func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui.ConversationFreshness, revision int64, page runtime.TranscriptSegmentPage) clientui.TranscriptPage {
-	snapshot := ChatSnapshotFromRuntime(page.Snapshot)
+func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui.ConversationFreshness, page runtime.TranscriptSegmentPage) clientui.TranscriptPage {
 	return clientui.TranscriptPage{
 		SessionID:             sessionID,
 		SessionName:           sessionName,
 		ConversationFreshness: freshness,
-		Revision:              revision,
-		OlderCursor:           page.OlderCursor,
+		OlderCursor:           transcriptCursor(page.HasMoreAbove, page.OlderCursor),
 		HasMoreAbove:          page.HasMoreAbove,
-		NewerCursor:           page.NewerCursor,
+		NewerCursor:           transcriptCursor(page.HasMoreBelow, page.NewerCursor),
 		HasMoreBelow:          page.HasMoreBelow,
-		Entries:               cloneChatEntries(snapshot.Entries),
-		Streaming:             snapshot.Streaming,
-		StreamingError:        snapshot.StreamingError,
+		Entries:               transcriptRowsFromFacts(runtime.TranscriptCommittedRowFactsFromSnapshot(page.Snapshot)),
 	}
 }
 
-func CommittedTranscriptSuffixFromRuntime(engine *runtime.Engine, _ clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error) {
-	if engine == nil {
-		return clientui.CommittedTranscriptSuffix{}, nil
-	}
-	segment, err := engine.TranscriptSegmentPage(0)
-	if err != nil {
-		return clientui.CommittedTranscriptSuffix{}, err
-	}
-	suffix := CommittedTranscriptSuffixFromSegment(
-		engine.SessionID(),
-		engine.SessionName(),
-		ConversationFreshnessFromSession(engine.ConversationFreshness()),
-		engine.TranscriptRevision(),
-		segment,
-	)
-	if segment.HasMoreAbove {
-		total := engine.CommittedTranscriptEntryCount()
-		suffix.CommittedEntryCount = total
-		suffix.NextEntryCount = total
-		if start := total - len(suffix.Entries); start >= 0 {
-			suffix.StartEntryCount = start
-		}
-	}
-	return suffix, nil
-}
-
-func CommittedTranscriptSuffixFromSegment(sessionID, sessionName string, freshness clientui.ConversationFreshness, revision int64, page runtime.TranscriptSegmentPage) clientui.CommittedTranscriptSuffix {
-	snapshot := ChatSnapshotFromRuntime(page.Snapshot)
-	entries := cloneChatEntries(snapshot.Entries)
-	return clientui.CommittedTranscriptSuffix{
-		SessionID:             sessionID,
-		SessionName:           sessionName,
-		ConversationFreshness: freshness,
-		Revision:              revision,
-		CommittedEntryCount:   len(entries),
-		StartEntryCount:       0,
-		NextEntryCount:        len(entries),
-		HasMore:               false,
-		Entries:               entries,
-	}
-}
-
-func cloneChatEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
-	if len(entries) == 0 {
+func transcriptCursor(hasMore bool, cursor int64) *int64 {
+	if !hasMore {
 		return nil
 	}
-	cloned := make([]clientui.ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		copyEntry := entry
-		copyEntry.ToolCall = cloneClientToolCallMeta(entry.ToolCall)
-		cloned = append(cloned, copyEntry)
-	}
-	return cloned
-}
-
-func cloneClientToolCallMeta(meta *clientui.ToolCallMeta) *clientui.ToolCallMeta {
-	if meta == nil {
-		return nil
-	}
-	copyMeta := *meta
-	if len(meta.Suggestions) > 0 {
-		copyMeta.Suggestions = append([]string(nil), meta.Suggestions...)
-	}
-	if meta.RenderHint != nil {
-		renderHint := *meta.RenderHint
-		copyMeta.RenderHint = &renderHint
-	}
-	if meta.PatchRender != nil {
-		copyMeta.PatchRender = cloneRenderedPatch(meta.PatchRender)
-	}
-	return &copyMeta
+	return &cursor
 }

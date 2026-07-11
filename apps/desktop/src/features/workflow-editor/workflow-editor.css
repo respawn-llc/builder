@@ -37,6 +37,25 @@
   border-color: var(--workflow-editor-node-outline-color);
 }
 
+.workflow-editor-node[data-kind="script"]::before,
+.workflow-editor-node[data-kind="script"]::after {
+  background: var(--color-primary);
+  border-radius: var(--radius-s);
+  bottom: 4.57px;
+  content: "";
+  position: absolute;
+  top: 4.57px;
+  width: 2px;
+}
+
+.workflow-editor-node[data-kind="script"]::before {
+  left: 4.57px;
+}
+
+.workflow-editor-node[data-kind="script"]::after {
+  right: 4.57px;
+}
+
 .workflow-editor-handle {
   background: var(--color-island-1);
   border: 2px solid var(--color-outline);

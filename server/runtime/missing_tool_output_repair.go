@@ -74,7 +74,7 @@ func (e *Engine) repairMissingToolOutputsByAppending(stepID string) (int, error)
 		}))
 	}
 	intents = append(intents, steerLocalEntryIntent(storedLocalEntry{
-		Visibility: transcript.EntryVisibilityAll,
+		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 		Text:       fmt.Sprintf(missingToolOutputRepairWarningTemplate, len(dangling)),
 	}))

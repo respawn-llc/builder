@@ -6,7 +6,6 @@ describe("sidebarPopOutOptions", () => {
     const destination: SidebarDestination = {
       kind: "taskDetail",
       mode: "overlay",
-      resumeRunID: "",
       taskID: "task-123",
     };
     const options = sidebarPopOutOptions(destination, "Task title");

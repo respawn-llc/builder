@@ -12,7 +12,10 @@ const (
 	MethodServerReadinessGet                    = "server.readiness.get"
 	MethodAuthGetBootstrapStatus                = "auth.getBootstrapStatus"
 	MethodAuthCompleteBootstrap                 = "auth.completeBootstrap"
+	MethodAuthAcknowledgeNoAuth                 = "auth.acknowledgeNoAuth"
 	MethodAuthGetStatus                         = "auth.getStatus"
+	MethodCapabilityFactsGet                    = "capability.facts.get"
+	MethodOnboardingFinalize                    = "onboarding.finalize"
 	MethodAttachProject                         = "project.attach"
 	MethodAttachSession                         = "session.attach"
 	MethodProjectList                           = "project.list"
@@ -51,6 +54,7 @@ const (
 	MethodWorkflowDeletePreview                 = "workflow.deletePreview"
 	MethodWorkflowDelete                        = "workflow.delete"
 	MethodWorkflowValidate                      = "workflow.validate"
+	MethodWorkflowScriptPathValidate            = "workflow.scriptPath.validate"
 	MethodWorkflowGraphValidateDraft            = "workflow.graph.validateDraft"
 	MethodWorkflowGraphDeriveWiring             = "workflow.graph.deriveWiring"
 	MethodWorkflowGraphSavePreview              = "workflow.graph.savePreview"
@@ -86,7 +90,6 @@ const (
 	MethodSessionPlan                           = "session.plan"
 	MethodSessionGetMainView                    = "session.getMainView"
 	MethodSessionGetTranscriptPage              = "session.getTranscriptPage"
-	MethodSessionGetCommittedTranscriptSuffix   = "session.getCommittedTranscriptSuffix"
 	MethodSessionGetInitialInput                = "session.getInitialInput"
 	MethodSessionPersistInputDraft              = "session.persistInputDraft"
 	MethodSessionRetargetWorkspace              = "session.retargetWorkspace"
@@ -98,6 +101,9 @@ const (
 	MethodWorktreeCreate                        = "worktree.create"
 	MethodWorktreeSwitch                        = "worktree.switch"
 	MethodWorktreeDelete                        = "worktree.delete"
+	MethodWorktreeSetupSubscribe                = "worktree.setup.subscribe"
+	MethodWorktreeSetupEvent                    = "worktree.setup"
+	MethodWorktreeSetupComplete                 = "worktree.setup.complete"
 	MethodRuntimeSetSessionName                 = "runtime.setSessionName"
 	MethodRuntimeSetThinkingLevel               = "runtime.setThinkingLevel"
 	MethodRuntimeSetFastModeEnabled             = "runtime.setFastModeEnabled"
@@ -106,7 +112,6 @@ const (
 	MethodRuntimeSetQuestionsEnabled            = "runtime.setQuestionsEnabled"
 	MethodRuntimeAppendCommittedEntry           = "runtime.appendCommittedEntry"
 	MethodRuntimeShouldCompactBeforeUserMessage = "runtime.shouldCompactBeforeUserMessage"
-	MethodRuntimeSubmitUserMessage              = "runtime.submitUserMessage"
 	MethodRuntimeSubmitUserTurn                 = "runtime.submitUserTurn"
 	MethodRuntimeSubmitUserShellCommand         = "runtime.submitUserShellCommand"
 	MethodRuntimeCompactContext                 = "runtime.compactContext"
@@ -115,6 +120,9 @@ const (
 	MethodRuntimeSubmitQueuedUserMessages       = "runtime.submitQueuedUserMessages"
 	MethodRuntimeInterrupt                      = "runtime.interrupt"
 	MethodRuntimeQueueUserMessage               = "runtime.queueUserMessage"
+	MethodRuntimeLiveSteer                      = "runtime.liveSteer"
+	MethodRuntimeLiveStop                       = "runtime.liveStop"
+	MethodRuntimeLiveWait                       = "runtime.liveWait"
 	MethodRuntimeDiscardQueuedUserMessage       = "runtime.discardQueuedUserMessage"
 	MethodRuntimeRecordPromptHistory            = "runtime.recordPromptHistory"
 	MethodRuntimeGoalShow                       = "runtime.goal.show"
@@ -134,11 +142,20 @@ const (
 	MethodPromptSubscribeActivity               = "prompt.subscribeActivity"
 	MethodPromptActivityEvent                   = "prompt.activity"
 	MethodPromptActivityComplete                = "prompt.activity.complete"
+	MethodAttentionNotificationSubscribe        = "attention.notification.subscribe"
+	MethodAttentionNotificationEvent            = "attention.notification"
+	MethodAttentionNotificationComplete         = "attention.notification.complete"
+	MethodAttentionSessionNotificationSubscribe = "attention.sessionNotification.subscribe"
+	MethodAttentionSessionNotificationEvent     = "attention.sessionNotification"
+	MethodAttentionSessionNotificationComplete  = "attention.sessionNotification.complete"
 	MethodRunPrompt                             = "run.prompt"
 	MethodRunPromptProgress                     = "run.prompt.progress"
 	MethodSessionSubscribeActivity              = "session.subscribeActivity"
 	MethodSessionActivityEvent                  = "session.activity"
 	MethodSessionActivityComplete               = "session.activity.complete"
+	MethodSessionSubscribeTranscript            = "session.subscribeTranscript"
+	MethodSessionTranscriptEvent                = "session.transcript"
+	MethodSessionTranscriptComplete             = "session.transcript.complete"
 	MethodProcessSubscribeOutput                = "process.subscribeOutput"
 	MethodProcessOutputEvent                    = "process.output"
 	MethodProcessOutputComplete                 = "process.output.complete"
@@ -178,6 +195,10 @@ type SessionActivityEventParams struct {
 	Event clientui.Event `json:"event"`
 }
 
+type SessionTranscriptEventParams struct {
+	Message clientui.TranscriptMessage `json:"message"`
+}
+
 type ProcessOutputEventParams struct {
 	Chunk clientui.ProcessOutputChunk `json:"chunk"`
 }
@@ -186,8 +207,30 @@ type PromptActivityEventParams struct {
 	Event clientui.PendingPromptEvent `json:"event"`
 }
 
+type AttentionNotificationEventParams struct {
+	Event clientui.AttentionNotificationEvent `json:"event"`
+}
+
 type WorkflowProjectEventParams struct {
 	Event WorkflowProjectEvent `json:"event"`
+}
+
+type WorktreeSetupEventParams struct {
+	Event WorktreeSetupEvent `json:"event"`
+}
+
+type WorktreeSetupEvent struct {
+	SetupOperationID    string `json:"setup_operation_id"`
+	SourceWorkspaceRoot string `json:"source_workspace_root"`
+	WorktreeRoot        string `json:"worktree_root"`
+	ScriptPath          string `json:"script_path"`
+	Phase               string `json:"phase"`
+	Timeout             bool   `json:"timeout,omitempty"`
+	Canceled            bool   `json:"canceled,omitempty"`
+	ExitCode            *int   `json:"exit_code,omitempty"`
+	Stdout              string `json:"stdout,omitempty"`
+	Stderr              string `json:"stderr,omitempty"`
+	Error               string `json:"error,omitempty"`
 }
 
 type WorkflowProjectEvent struct {
@@ -200,8 +243,9 @@ type WorkflowProjectEvent struct {
 }
 
 type StreamCompleteParams struct {
-	Code    int    `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
+	Code                  int    `json:"code,omitempty"`
+	Message               string `json:"message,omitempty"`
+	TranscriptCloseReason string `json:"transcript_close_reason,omitempty"`
 }
 
 func (r HandshakeRequest) Validate() error {

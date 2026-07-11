@@ -26,6 +26,10 @@ export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject
           node.completionMode !== undefined && node.completionMode.length > 0
             ? node.completionMode
             : undefined,
+        script_path:
+          node.scriptPath !== undefined && node.scriptPath !== null && node.scriptPath.trim().length > 0
+            ? node.scriptPath
+            : undefined,
         input_fields: node.inputFields.map((field) => ({
           name: field.name,
           description: field.description,

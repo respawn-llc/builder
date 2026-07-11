@@ -75,7 +75,7 @@ func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUIDebug(true))
 	m.startupCmds = nil
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.input = "queued steering"
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -102,7 +102,7 @@ func TestTUIStrictIOCompactDoneChecksQueuedRuntimeWorkAsCommand(t *testing.T) {
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUIDebug(true))
 	m.startupCmds = nil
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 
@@ -117,27 +117,6 @@ func TestTUIStrictIOCompactDoneChecksQueuedRuntimeWorkAsCommand(t *testing.T) {
 	_, _ = applyQueuedRuntimeWorkCheckForTest(t, updated, cmd)
 	if client.hasQueuedUserWorkCalls != 1 {
 		t.Fatalf("HasQueuedUserWork calls after command = %d, want 1", client.hasQueuedUserWorkCalls)
-	}
-}
-
-func TestTUIStrictIORuntimeControlSlashRunsAsCommand(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUIDebug(true))
-	m.startupCmds = nil
-
-	handled, _, cmd := m.inputController().handleEnteredSlashCommandInput("/name New Name")
-	if !handled {
-		t.Fatal("expected /session slash command to be handled")
-	}
-	if cmd == nil {
-		t.Fatal("expected runtime-control command")
-	}
-	if client.setSessionNameArg != "" {
-		t.Fatalf("SetSessionName called during Update with %q", client.setSessionNameArg)
-	}
-	msgs := collectCmdMessages(t, cmd)
-	if client.setSessionNameArg != "New Name" {
-		t.Fatalf("SetSessionName after command = %q, want New Name; msgs=%+v", client.setSessionNameArg, msgs)
 	}
 }
 

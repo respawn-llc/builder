@@ -3,6 +3,7 @@ package transcript
 import (
 	"strings"
 
+	"core/shared/toolspec"
 	patchformat "core/shared/transcript/patchformat"
 )
 
@@ -64,13 +65,35 @@ type ToolCallMeta struct {
 	OmitSuccessfulResult   bool
 	RawOutputRequested     bool
 	OutputTruncated        bool
+	MovedToBackground      bool
+}
+
+// ToolResultPresentationDelta contains only presentation facts learned from a
+// tool result. Tool-call input metadata remains authoritative for every other
+// presentation field.
+type ToolResultPresentationDelta struct {
+	RawOutputRequested bool
+	OutputTruncated    bool
+	MovedToBackground  bool
+}
+
+func ApplyToolResultPresentationDelta(meta ToolCallMeta, delta *ToolResultPresentationDelta) ToolCallMeta {
+	if delta == nil {
+		return NormalizeToolCallMeta(meta)
+	}
+	meta.RawOutputRequested = meta.RawOutputRequested || delta.RawOutputRequested
+	meta.OutputTruncated = meta.OutputTruncated || delta.OutputTruncated
+	meta.MovedToBackground = meta.MovedToBackground || delta.MovedToBackground
+	return NormalizeToolCallMeta(meta)
 }
 
 func NormalizeToolCallMeta(in ToolCallMeta) ToolCallMeta {
 	out := in
+	toolID, knownTool := toolspec.ParseID(out.ToolName)
+	knownShellTool := knownTool && (toolID == toolspec.ToolExecCommand || toolID == toolspec.ToolWriteStdin)
 	if out.Presentation == "" {
 		switch {
-		case out.RenderBehavior == ToolCallRenderBehaviorShell || out.IsShell:
+		case out.RenderBehavior == ToolCallRenderBehaviorShell || out.IsShell || knownShellTool:
 			out.Presentation = ToolPresentationShell
 		case out.RenderBehavior == ToolCallRenderBehaviorAskQuestion || strings.TrimSpace(out.Question) != "" || len(out.Suggestions) > 0 || out.RecommendedOptionIndex > 0:
 			out.Presentation = ToolPresentationAskQuestion
@@ -94,7 +117,7 @@ func NormalizeToolCallMeta(in ToolCallMeta) ToolCallMeta {
 	if out.RenderBehavior == ToolCallRenderBehaviorShell {
 		out.IsShell = true
 	}
-	if out.RenderHint == nil && strings.TrimSpace(out.ToolName) == "write_stdin" && out.IsShell {
+	if out.RenderHint == nil && knownTool && toolID == toolspec.ToolWriteStdin && out.IsShell {
 		out.RenderHint = &ToolRenderHint{Kind: ToolRenderKindPlain}
 	}
 	if strings.TrimSpace(out.InlineMeta) == "" {
@@ -151,6 +174,23 @@ func (m *ToolCallMeta) UsesAskQuestionRendering() bool {
 
 func (m *ToolCallMeta) HasRenderHint() bool {
 	return m != nil && m.RenderHint != nil && m.RenderHint.Valid()
+}
+
+func (m *ToolCallMeta) Valid() bool {
+	if m == nil || strings.TrimSpace(m.ToolName) == "" {
+		return false
+	}
+	switch m.Presentation {
+	case ToolPresentationDefault, ToolPresentationShell, ToolPresentationAskQuestion:
+	default:
+		return false
+	}
+	switch m.RenderBehavior {
+	case "", ToolCallRenderBehaviorDefault, ToolCallRenderBehaviorShell, ToolCallRenderBehaviorAskQuestion:
+	default:
+		return false
+	}
+	return m.RenderHint == nil || m.RenderHint.Valid()
 }
 
 func (m *ToolCallMeta) HasCompactText() bool {

@@ -1,12 +1,34 @@
-import { type z } from "zod";
-
+import type { AttentionNotificationEventHandler } from "./attentionNotifications";
+import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
+import { parseRpcResponse as parse } from "./clientParse";
+import * as taskLifecycle from "./clientTaskLifecycle";
 import {
   workflowGraphDraftPayload,
   workflowGraphMetadataPayload,
   workflowGraphSaveConfirmationPayload,
 } from "./clientWorkflowGraph";
-import { ContractError } from "./errors";
+import type {
+  QuestionAnswerInput,
+  TaskEditInput,
+  TaskMoveInput,
+  TaskMutationInput,
+  WorkflowCreateAndLinkInput,
+  WorkflowCreateInput,
+  WorkflowDeleteInput,
+  WorkflowGraphDeriveWiringInput,
+  WorkflowGraphSaveInput,
+  WorkflowGraphSavePreviewInput,
+  WorkflowGraphValidateDraftInput,
+  WorkflowScriptPathValidateInput,
+  WorkflowListInput,
+  WorkflowProjectLinkInput,
+} from "./clientInputs";
 import { compactJsonObject, emptyJsonObject } from "./json";
+import type { SetupOperationID } from "./setupOperationID";
+import {
+  worktreeSetupRpcHandler,
+  type WorktreeSetupEventHandler,
+} from "./worktreeSetup";
 import type {
   ActivityPage,
   AttentionPage,
@@ -29,16 +51,12 @@ import type {
   WorkflowDeleteResponse,
   WorkflowDefinition,
   WorkflowDerivedWiring,
-  WorkflowGraphDraft,
-  WorkflowGraphSaveConfirmation,
-  WorkflowGraphMetadata,
   WorkflowGraphSavePreview,
   WorkflowGraphSaveResult,
   WorkflowGraphValidateDraftResult,
   WorkflowPage,
   WorkflowRecord,
   WorkflowValidation,
-  WorkflowValidationMode,
   WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "./models";
@@ -62,7 +80,6 @@ import {
   pendingAskListSchema,
   projectWorkflowLinksSchema,
   taskCreateResponseSchema,
-  taskMoveResponseSchema,
   taskDetailSchema,
   taskUpdateResponseSchema,
   workflowBoardSchema,
@@ -308,6 +325,21 @@ export class ApiClient {
     );
   }
 
+  async validateWorkflowScriptPath(input: WorkflowScriptPathValidateInput): Promise<WorkflowValidation> {
+    return parse(
+      "workflow.scriptPath.validate",
+      workflowValidationSchema,
+      await this.transport.call(
+        "workflow.scriptPath.validate",
+        compactJsonObject({
+          workflow_id: input.workflowID,
+          node_id: input.nodeID,
+          script_path: input.scriptPath,
+        }),
+      ),
+    );
+  }
+
   async validateWorkflowGraphDraft(
     input: WorkflowGraphValidateDraftInput,
   ): Promise<WorkflowGraphValidateDraftResult> {
@@ -480,44 +512,30 @@ export class ApiClient {
     return response.task.id;
   }
 
-  async startTask(taskID: string): Promise<void> {
-    await this.transport.call("workflow.task.start", { task_id: taskID });
+  async startTask(taskID: string, setupOperationID?: SetupOperationID): Promise<void> {
+    await taskLifecycle.startTask(this.transport, taskID, setupOperationID);
   }
 
   async moveTask(input: TaskMoveInput): Promise<TaskMoveResponse> {
-    const response = parse(
-      "workflow.task.move",
-      taskMoveResponseSchema,
-      await this.transport.call(
-        "workflow.task.move",
-        compactJsonObject({
-          task_id: input.taskID,
-          target_node_id: input.targetNodeID,
-          output_values: input.outputValues ?? {},
-          allow_missing_edge: input.allowMissingEdge,
-          auto_approve: input.autoApprove,
-        }),
-      ),
-    );
-    if (response.approvalError.length > 0) {
-      throw new Error(response.approvalError);
-    }
-    return response;
+    return taskLifecycle.moveTask(this.transport, input);
   }
 
-  async interruptTask(taskID: string, runID: string): Promise<void> {
+  async interruptTask(taskID: string, sessionID?: string): Promise<void> {
     await this.transport.call(
       "workflow.task.interrupt",
-      compactJsonObject({ task_id: taskID, run_id: runID }),
+      compactJsonObject({ task_id: taskID, session_id: sessionID }),
     );
   }
 
-  async resumeTask(taskID: string, runID: string): Promise<void> {
-    await this.transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID, run_id: runID }));
+  async resumeTask(taskID: string): Promise<void> {
+    await this.transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID }));
   }
 
-  async approveTransition(taskTransitionID: string): Promise<void> {
-    await this.transport.call("workflow.task.approve", { task_transition_id: taskTransitionID });
+  async approveTransition(
+    taskTransitionID: string,
+    setupOperationID?: SetupOperationID,
+  ): Promise<void> {
+    await taskLifecycle.approveTransition(this.transport, taskTransitionID, setupOperationID);
   }
 
   async cancelTask(taskID: string): Promise<void> {
@@ -581,6 +599,18 @@ export class ApiClient {
   }
 
   async answerQuestion(input: QuestionAnswerInput): Promise<void> {
+    const answer =
+      input.kind === "approval"
+        ? {
+            approval: {
+              decision: input.decision,
+              commentary: input.commentary,
+            },
+          }
+        : {
+            selected_option_number: input.selectedOptionNumber > 0 ? input.selectedOptionNumber : undefined,
+            freeform_answer: input.freeformAnswer,
+          };
     await this.transport.call(
       "workflow.task.question.answer",
       compactJsonObject({
@@ -588,8 +618,7 @@ export class ApiClient {
         task_id: input.taskID,
         run_id: input.runID,
         ask_id: input.askID,
-        selected_option_number: input.selectedOptionNumber > 0 ? input.selectedOptionNumber : undefined,
-        freeform_answer: input.freeformAnswer,
+        ...answer,
       }),
     );
   }
@@ -609,99 +638,20 @@ export class ApiClient {
   subscribeWorkflow(workflowID: string, handler: RpcEventHandler): RpcSubscription {
     return this.transport.subscribe("workflow.subscribe", { workflow_id: workflowID }, handler);
   }
-}
 
-export type TaskMutationInput = Readonly<{
-  projectID: string;
-  workflowID: string;
-  title: string;
-  body: string;
-  sourceWorkspaceID: string;
-}>;
-
-export type WorkflowListInput = Readonly<{
-  pageSize?: number | undefined;
-  pageToken?: string | undefined;
-  query?: string | undefined;
-}>;
-
-export type WorkflowCreateInput = Readonly<{
-  name: string;
-  description: string;
-}>;
-
-export type WorkflowCreateAndLinkInput = WorkflowCreateInput &
-  Readonly<{
-    projectID: string;
-  }>;
-
-export type WorkflowProjectLinkInput = Readonly<{
-  projectID: string;
-  workflowID: string;
-}>;
-
-export type WorkflowDeleteInput = Readonly<{
-  workflowID: string;
-  confirmed: boolean;
-  expectedVersion: number;
-  expectedProjectCount: number;
-  expectedLinkCount: number;
-  expectedTaskCount: number;
-  cleanupArtifacts?: boolean;
-}>;
-
-export type WorkflowGraphValidateDraftInput = Readonly<{
-  workflowID: string;
-  metadata?: WorkflowGraphMetadata | undefined;
-  graph: WorkflowGraphDraft;
-  modes: readonly WorkflowValidationMode[];
-}>;
-
-export type WorkflowGraphDeriveWiringInput = Readonly<{
-  workflowID: string;
-  graph: WorkflowGraphDraft;
-}>;
-
-export type WorkflowGraphSavePreviewInput = Readonly<{
-  workflowID: string;
-  expectedVersion: number;
-  metadata?: WorkflowGraphMetadata | undefined;
-  graph: WorkflowGraphDraft;
-}>;
-
-export type WorkflowGraphSaveInput = WorkflowGraphSavePreviewInput &
-  Readonly<{
-    confirmation?: WorkflowGraphSaveConfirmation | undefined;
-  }>;
-
-export type TaskEditInput = Readonly<{
-  taskID: string;
-  title: string;
-  body: string;
-  sourceWorkspaceID?: string | undefined;
-}>;
-
-export type TaskMoveInput = Readonly<{
-  taskID: string;
-  targetNodeID: string;
-  outputValues?: Readonly<Record<string, string>>;
-  allowMissingEdge?: boolean;
-  autoApprove?: boolean;
-}>;
-
-export type QuestionAnswerInput = Readonly<{
-  clientRequestID: string;
-  taskID: string;
-  runID: string;
-  askID: string;
-  selectedOptionNumber: number;
-  freeformAnswer: string;
-}>;
-
-function parse<T>(method: string, schema: z.ZodType<T>, value: unknown): T {
-  const result = schema.safeParse(value);
-  if (!result.success) {
-    throw new ContractError(`${method} response did not match GUI contract.`);
+  subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): RpcSubscription {
+    return this.transport.subscribe(
+      "attention.notification.subscribe",
+      emptyJsonObject,
+      attentionNotificationRpcHandler(handler),
+    );
   }
-  return result.data;
+
+  subscribeWorktreeSetup(setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler): RpcSubscription {
+    return this.transport.subscribe(
+      "worktree.setup.subscribe",
+      { setup_operation_id: setupOperationID.toJSONValue() },
+      worktreeSetupRpcHandler(handler),
+    );
+  }
 }

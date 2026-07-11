@@ -13,19 +13,18 @@ import (
 	"testing"
 	"time"
 
-	"core/prompts"
 	"core/server/auth"
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	shelltool "core/server/tools/shell"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
@@ -168,12 +167,6 @@ func TestStartBuildsEmbeddedServerAndRunsOnboarding(t *testing.T) {
 	workspace := t.TempDir()
 	registerEmbeddedWorkspace(t, workspace)
 	authHandler := readyEmbeddedAuthHandler()
-	generatedCalls := 0
-	restoreGeneratedSync := serverbootstrap.SetGeneratedSyncForTest(func(ctx context.Context, opts prompts.GeneratedSyncOptions) (prompts.GeneratedSyncResult, error) {
-		generatedCalls++
-		return prompts.GeneratedSync(ctx, opts)
-	})
-	defer restoreGeneratedSync()
 	onboardingCalled := false
 	onboarding := defaultEmbeddedOnboardingHandler(&onboardingCalled)
 
@@ -190,9 +183,6 @@ func TestStartBuildsEmbeddedServerAndRunsOnboarding(t *testing.T) {
 		t.Fatalf("expected embedded startup to seed generated skills through bootstrap: %v", err)
 	} else if len(entries) == 0 {
 		t.Fatal("expected embedded startup to seed at least one generated skill")
-	}
-	if generatedCalls != 1 {
-		t.Fatalf("generated sync calls = %d, want 1", generatedCalls)
 	}
 
 	if !onboardingCalled {
@@ -213,6 +203,103 @@ func TestStartBuildsEmbeddedServerAndRunsOnboarding(t *testing.T) {
 	}
 	if server.RunPromptClient() == nil {
 		t.Fatal("expected run prompt client")
+	}
+}
+
+func TestStartEmbeddedOnboardingReceivesCapabilityFactsClient(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	registerEmbeddedWorkspace(t, workspace)
+
+	seenFacts := false
+	onboarding := EmbeddedOnboardingHandler(func(ctx context.Context, req EmbeddedOnboardingRequest) (config.App, error) {
+		if req.CapabilityFactsClient == nil {
+			t.Fatal("capability facts client was not threaded into embedded onboarding")
+		}
+		facts, err := req.CapabilityFactsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{})
+		if err != nil {
+			t.Fatalf("GetCapabilityFacts: %v", err)
+		}
+		seenFacts = factsContainGeneratedSkillCandidate(facts)
+		return defaultEmbeddedOnboardingHandler(nil)(ctx, req)
+	})
+
+	server, err := StartEmbedded(context.Background(), serverbootstrap.Request{
+		WorkspaceRoot: workspace,
+		LookupEnv:     os.Getenv,
+	}, EmbeddedStartHooks{Auth: readyEmbeddedAuthHandler(), Onboarding: onboarding})
+	if err != nil {
+		t.Fatalf("start embedded server: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if !seenFacts {
+		t.Fatal("expected embedded generated skill facts before core startup")
+	}
+}
+
+func TestStartEmbeddedMissingConfigExposesBootstrapSurface(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+	workspace := t.TempDir()
+	registerEmbeddedWorkspace(t, workspace)
+
+	server, err := StartEmbeddedWithOptions(context.Background(), serverbootstrap.Request{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		LookupEnv: func(key string) string {
+			if key == "OPENAI_API_KEY" {
+				return "in-memory-test-key"
+			}
+			return ""
+		},
+	}, EmbeddedStartHooks{
+		Auth: readyEmbeddedAuthHandler(),
+	}, Options{})
+	if err != nil {
+		t.Fatalf("StartEmbeddedWithOptions: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if server.Core != nil {
+		t.Fatal("expected missing-config embedded startup to defer configured core construction")
+	}
+	settingsPath := filepath.Join(home, config.ConfigDirName, "config.toml")
+	if _, statErr := os.Stat(settingsPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
+	}
+	releaseServeTestPortForConfig(server.Config())
+	if err := server.ServeBackground(); err != nil {
+		t.Fatalf("ServeBackground: %v", err)
+	}
+
+	remote := dialEmbeddedRemote(t, server.Config())
+	defer func() { _ = remote.Close() }()
+	if identity := remote.Identity(); identity.ProtocolVersion != protocol.Version || !identity.Capabilities.OnboardingFinalize {
+		t.Fatalf("unexpected bootstrap identity: %+v", identity)
+	}
+	_, err = remote.ListProjects(context.Background(), serverapi.ProjectListRequest{})
+	if !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("ListProjects error = %v, want onboarding_required", err)
+	}
+}
+
+func dialEmbeddedRemote(t *testing.T, cfg config.App) *client.Remote {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var (
+		remote *client.Remote
+		err    error
+	)
+	for {
+		remote, err = client.DialConfiguredRemote(context.Background(), cfg)
+		if err == nil {
+			return remote
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("DialConfiguredRemote: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -419,9 +506,6 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if _, err := store.AppendRunStarted(session.RunRecord{RunID: "run-1", StepID: "step-1", StartedAt: time.Now().UTC().Add(-time.Minute)}); err != nil {
-		t.Fatalf("append run start: %v", err)
-	}
 
 	sessionPath := filepath.Join(store.Dir(), "session.json")
 	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
@@ -437,7 +521,7 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
-	if resp.MainView.Session.SessionName != "incident triage" || resp.MainView.ActiveRun == nil || resp.MainView.ActiveRun.RunID != "run-1" {
+	if resp.MainView.Session.SessionName != "incident triage" || resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
 		t.Fatalf("unexpected main view: %+v", resp.MainView)
 	}
 
@@ -450,38 +534,6 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 	}
 	if string(beforeEvents) != string(afterEvents) {
 		t.Fatalf("events file mutated during dormant read")
-	}
-}
-
-func TestSessionViewClientUsesRegisteredRuntimeByID(t *testing.T) {
-	workspace := newRegisteredEmbeddedWorkspace(t)
-
-	server := startReadyEmbeddedServer(t, serverbootstrap.Request{
-		WorkspaceRoot: workspace,
-	})
-
-	store := createEmbeddedProjectSession(t, server, workspace)
-	eng, err := runtime.New(store, &fakeEmbeddedClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("new engine: %v", err)
-	}
-	server.RegisterRuntime(store.Meta().SessionID, eng)
-	defer server.UnregisterRuntime(store.Meta().SessionID, eng)
-	eng.SetStreamingError("runtime-only")
-
-	resp, err := server.SessionViewClient().GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get session main view: %v", err)
-	}
-	if resp.MainView.Session.SessionID != store.Meta().SessionID {
-		t.Fatalf("unexpected session main view: %+v", resp.MainView)
-	}
-	page, err := server.SessionViewClient().GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get session transcript page: %v", err)
-	}
-	if page.Transcript.StreamingError != "runtime-only" {
-		t.Fatalf("expected registered runtime transcript, got %+v", page.Transcript)
 	}
 }
 

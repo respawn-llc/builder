@@ -73,7 +73,7 @@ func (l uiViewLayout) renderWorktreeList(width, height int, style uiStyles) []st
 	}
 	footer := []string{style.meta.Render(truncateQueuedMessageLine("Esc/q close | Enter switch | c create | d delete | x delete+branch | PgUp/PgDn/Home/End move | r refresh", width))}
 	lines := append(append(header, content...), footer...)
-	return l.renderChatContentLines(lines, nil, width, style)
+	return l.renderChatContentLines(lines, width, style)
 }
 
 func worktreeOverlaySummary(target clientui.SessionExecutionTarget) string {
@@ -259,6 +259,12 @@ func (l uiViewLayout) renderWorktreeCreateDialog(width, height int, style uiStyl
 	footer := make([]string, 0, 3)
 	if dialog.submitting {
 		footer = append(footer, style.meta.Render(truncateQueuedMessageLine(pendingToolSpinnerFrame(m.spinnerFrame)+" Creating worktree...", width)))
+		if dialog.setupEvent != nil && dialog.setupEvent.Phase == serverapi.WorktreeSetupPhaseStarted {
+			footer = append(footer,
+				style.meta.Render(truncateQueuedMessageLine("Setup script: "+dialog.setupEvent.ScriptPath, width)),
+				style.meta.Render(truncateQueuedMessageLine("Setup worktree: "+dialog.setupEvent.WorktreeRoot, width)),
+			)
+		}
 	}
 	if trimmed := strings.TrimSpace(dialog.errorText); trimmed != "" {
 		footer = append(footer, renderWorktreeErrorLines(trimmed, width, lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Error.Adaptive()).Bold(true), worktreeOverlayMaxErrorLines)...)
@@ -447,5 +453,5 @@ func (l uiViewLayout) renderWorktreeDialogLines(lines []string, width int, heigh
 	} else if len(lines) > height {
 		lines = lines[:height]
 	}
-	return l.renderChatContentLines(lines, nil, width, style)
+	return l.renderChatContentLines(lines, width, style)
 }

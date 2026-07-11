@@ -273,14 +273,14 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
 	manager.SetEventHandler(func(evt shelltool.Event) {
 		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-			Type:    string(evt.Type),
-			ID:      evt.Snapshot.ID,
-			State:   evt.Snapshot.State,
-			Command: evt.Snapshot.Command,
-			Workdir: evt.Snapshot.Workdir,
-			LogPath: evt.Snapshot.LogPath,
-			Preview: evt.Preview,
-			Removed: evt.Removed,
+			Type:           backgroundShellEventTypeForTest(evt.Type),
+			ID:             evt.Snapshot.ID,
+			State:          evt.Snapshot.State,
+			Command:        evt.Snapshot.Command,
+			Workdir:        evt.Snapshot.Workdir,
+			LogPath:        evt.Snapshot.LogPath,
+			Preview:        evt.Preview,
+			PreviewRemoved: evt.Removed,
 			ExitCode: func() *int {
 				if evt.Snapshot.ExitCode == nil {
 					return nil
@@ -362,7 +362,7 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 	}
 
 	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       "completed",
+		Type:       BackgroundShellEventCompleted,
 		ID:         "1000",
 		State:      "completed",
 		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
@@ -416,11 +416,45 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 	for _, evt := range events {
 		if evt.Kind == EventBackgroundUpdated && evt.Background != nil && evt.Background.ID == "1000" {
 			hasImmediateBackgroundUpdate = true
+			if evt.CommittedEntryCount != 0 || evt.CommittedEntryStartSet {
+				t.Fatalf("background update should not claim committed transcript range, got %+v", evt)
+			}
 			break
 		}
 	}
 	if !hasImmediateBackgroundUpdate {
 		t.Fatalf("expected immediate background_updated event, got %+v", events)
+	}
+}
+
+func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
+	store := mustCreateTestSession(t)
+	var events []Event
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			events = append(events, evt)
+		},
+	})
+
+	eng.emitRaw(Event{
+		Kind:                   EventBackgroundUpdated,
+		CommittedEntryCount:    99,
+		CommittedEntryStart:    42,
+		CommittedEntryStartSet: true,
+		Background: &BackgroundShellEvent{
+			Type:       BackgroundShellEventCompleted,
+			ID:         "bg-1",
+			State:      "completed",
+			NoticeText: "Background shell bg-1 completed (exit 0)",
+		},
+	})
+
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if got := events[0]; got.CommittedEntryCount != 0 || got.CommittedEntryStart != 0 || got.CommittedEntryStartSet {
+		t.Fatalf("background update committed range = count:%d start:%d set:%t, want zero unset", got.CommittedEntryCount, got.CommittedEntryStart, got.CommittedEntryStartSet)
 	}
 }
 
@@ -488,7 +522,7 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 	}
 
 	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       "completed",
+		Type:       BackgroundShellEventCompleted,
 		ID:         "1000",
 		State:      "completed",
 		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
@@ -694,6 +728,78 @@ func TestDeferredFinalWithQueuedUserInjectionAndTrailingNoopStillUsesDeferredFin
 	}
 }
 
+func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierContiguous(t *testing.T) {
+	dir := t.TempDir()
+	store := mustCreateTestSessionAt(t, dir)
+
+	var (
+		mu           sync.Mutex
+		events       []Event
+		queueOnce    sync.Once
+		eng          *Engine
+		backgroundID = "1000"
+	)
+	var client *hookClient
+	client = &hookClient{
+		response: llm.Response{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "foreground done", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		beforeReturn: func() error {
+			queueOnce.Do(func() {
+				eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+					Type:       BackgroundShellEventCompleted,
+					ID:         backgroundID,
+					State:      "completed",
+					NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
+				}, true)
+				client.mu.Lock()
+				client.response = llm.Response{
+					Assistant: llm.Message{Role: llm.RoleAssistant, Content: reviewerNoopToken, Phase: llm.MessagePhaseFinal},
+					Usage:     llm.Usage{WindowTokens: 200000},
+				}
+				client.mu.Unlock()
+			})
+			return nil
+		},
+	}
+	eng = mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			mu.Lock()
+			events = append(events, evt)
+			mu.Unlock()
+		},
+	})
+	if _, err := eng.SubmitUserMessage(context.Background(), "run task"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	committedEvents := committedTranscriptEventsWithEntries(events)
+	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedEvents)
+	assistantIdx := -1
+	backgroundIdx := -1
+	for idx, evt := range committedEvents {
+		if assistantIdx < 0 && evt.Kind == EventAssistantMessage && evt.Message.Content == "foreground done" {
+			assistantIdx = idx
+		}
+		if evt.Kind == EventConversationUpdated && evt.Message.MessageType == llm.MessageTypeBackgroundNotice {
+			backgroundIdx = idx
+		}
+	}
+	if assistantIdx < 0 {
+		t.Fatalf("expected foreground final assistant event, got %+v", committedEvents)
+	}
+	if backgroundIdx < 0 {
+		t.Fatalf("expected background notice committed event, got %+v", committedEvents)
+	}
+	if assistantIdx > backgroundIdx {
+		t.Fatalf("foreground final assistant must publish before background notice, assistant_idx=%d background_idx=%d events=%+v", assistantIdx, backgroundIdx, committedEvents)
+	}
+}
+
 func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
@@ -744,7 +850,7 @@ func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 	}
 
 	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       "completed",
+		Type:       BackgroundShellEventCompleted,
 		ID:         "1000",
 		State:      "completed",
 		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",

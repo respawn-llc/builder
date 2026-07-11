@@ -5,20 +5,24 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"core/prompts"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/primaryrun"
+	"core/server/registry"
 	"core/server/requestmemo"
 	"core/server/runtime"
+	"core/server/runtimeops"
 	"core/server/runtimeview"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
@@ -31,23 +35,71 @@ func (s stubRuntimeResolver) ResolveRuntime(context.Context, string) (*runtime.E
 	return s.engine, nil
 }
 
-type stubCollaborativeRuntimeResolver struct {
-	engine  *runtime.Engine
-	calls   int
-	session string
-	op      serverapi.SessionRuntimeOperation
-	err     error
+func (s stubRuntimeResolver) WithGuardedRuntime(_ context.Context, _ string, fn func(*runtime.Engine) error) (bool, error) {
+	if s.engine == nil {
+		return false, nil
+	}
+	return true, fn(s.engine)
 }
 
-func (s *stubCollaborativeRuntimeResolver) WithCollaborativeRuntimeEngine(ctx context.Context, sessionID string, op serverapi.SessionRuntimeOperation, fn func(*runtime.Engine) error) error {
-	s.calls++
-	s.session = sessionID
-	s.op = op
-	if s.err != nil {
-		return s.err
-	}
-	return fn(s.engine)
+func (s stubRuntimeResolver) BeginSessionRun(string) (func(), bool) { return func() {}, true }
+
+func (s stubRuntimeResolver) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
+	return context.Background(), func() {}, true
 }
+
+func (s stubRuntimeResolver) SessionRunsBlocked(string) bool { return false }
+
+type countingBeginRuntimeResolver struct {
+	stubRuntimeResolver
+	beginCount atomic.Int32
+}
+
+func (s *countingBeginRuntimeResolver) BeginSessionRun(string) (func(), bool) {
+	s.beginCount.Add(1)
+	return func() {}, true
+}
+
+func (s *countingBeginRuntimeResolver) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
+	s.beginCount.Add(1)
+	return context.Background(), func() {}, true
+}
+
+type cancelableStartRuntimeResolver struct {
+	started  chan struct{}
+	released chan struct{}
+	once     sync.Once
+}
+
+func (s *cancelableStartRuntimeResolver) ResolveRuntime(context.Context, string) (*runtime.Engine, error) {
+	return nil, nil
+}
+
+func (s *cancelableStartRuntimeResolver) WithGuardedRuntime(ctx context.Context, _ string, fn func(*runtime.Engine) error) (bool, error) {
+	_ = fn
+	s.once.Do(func() { close(s.started) })
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+func (s *cancelableStartRuntimeResolver) BeginSessionRun(string) (func(), bool) {
+	return func() {}, true
+}
+
+func (s *cancelableStartRuntimeResolver) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	release := func() {
+		cancel()
+		select {
+		case <-s.released:
+		default:
+			close(s.released)
+		}
+	}
+	return ctx, release, true
+}
+
+func (s *cancelableStartRuntimeResolver) SessionRunsBlocked(string) bool { return false }
 
 var runtimeControlPromptHistoryStores sync.Map
 
@@ -107,40 +159,43 @@ func (s *runtimeControlPromptHistoryStore) SetRecordContextError(err error) {
 	s.recordCtxErr = err
 }
 
-type stubRuntimeLeaseVerifier struct {
-	calls int
-	err   error
-}
-
-func (s *stubRuntimeLeaseVerifier) RequireControllerLease(context.Context, string, string) error {
-	s.calls++
-	return s.err
-}
-
-type stubPrimaryRunGate struct {
-	err      error
-	acquire  int
-	release  int
-	sessions []string
-}
-
-type stubShellTokenVerifier struct {
-	valid bool
-	calls int
-}
-
-func (v *stubShellTokenVerifier) VerifyShellToken(string, string) bool {
-	v.calls++
-	return v.valid
-}
-
-func (g *stubPrimaryRunGate) AcquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
-	g.acquire++
-	g.sessions = append(g.sessions, sessionID)
-	if g.err != nil {
-		return nil, g.err
+func (s *runtimeControlPromptHistoryStore) CountText(text string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, record := range s.records {
+		if record.Text == text {
+			count++
+		}
 	}
-	return primaryrun.LeaseFunc(func() { g.release++ }), nil
+	return count
+}
+
+func waitForRuntimeControlPromptHistoryCount(t *testing.T, store *runtimeControlPromptHistoryStore, text string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if got := store.CountText(text); got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("prompt history count for %q = %d, want %d", text, store.CountText(text), want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func countPromptHistoryEvents(t *testing.T, store *session.Store, text string) int {
+	t.Helper()
+	registered, ok := runtimeControlPromptHistoryStores.Load(store.Meta().SessionID)
+	if !ok {
+		return 0
+	}
+	history, ok := registered.(*runtimeControlPromptHistoryStore)
+	if !ok {
+		t.Fatalf("prompt history store type = %T, want *runtimeControlPromptHistoryStore", registered)
+	}
+	return history.CountText(text)
 }
 
 type staticRuntimeControlSessionResolver struct {
@@ -174,11 +229,6 @@ type cancelObservingRuntimeControlClient struct {
 	release     chan struct{}
 	ctxCanceled chan struct{}
 	cancelOnce  sync.Once
-}
-
-type runtimeControlActiveRun struct {
-	Snapshot *runtime.RunSnapshot
-	finish   func()
 }
 
 func newCancelObservingRuntimeControlClient() *cancelObservingRuntimeControlClient {
@@ -216,51 +266,59 @@ func (c *cancelObservingRuntimeControlClient) ProviderCapabilities(context.Conte
 	return llm.ProviderCapabilities{}, nil
 }
 
-func startRuntimeControlActiveRun(t *testing.T, engine *runtime.Engine, client *cancelObservingRuntimeControlClient) runtimeControlActiveRun {
-	t.Helper()
-	done := make(chan error, 1)
-	go func() {
-		_, err := engine.SubmitUserMessage(context.Background(), "active run")
-		done <- err
-	}()
-	select {
-	case <-client.started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for active runtime run")
+type restartableRuntimeControlClient struct {
+	call1Started chan struct{}
+	call2Started chan struct{}
+	release1     chan struct{}
+	release2     chan struct{}
+	release1Once sync.Once
+	release2Once sync.Once
+	mu           sync.Mutex
+	calls        int
+}
+
+func newRestartableRuntimeControlClient() *restartableRuntimeControlClient {
+	return &restartableRuntimeControlClient{
+		call1Started: make(chan struct{}),
+		call2Started: make(chan struct{}),
+		release1:     make(chan struct{}),
+		release2:     make(chan struct{}),
 	}
-	var snapshot *runtime.RunSnapshot
-	deadline := time.After(3 * time.Second)
-	for snapshot == nil {
-		snapshot = engine.ActiveRun()
-		if snapshot != nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for active runtime snapshot")
-		case <-time.After(10 * time.Millisecond):
-		}
+}
+
+func (c *restartableRuntimeControlClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+	_ = req
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.mu.Unlock()
+	switch call {
+	case 1:
+		close(c.call1Started)
+		<-c.release1
+	case 2:
+		close(c.call2Started)
+		<-c.release2
 	}
-	var finishOnce sync.Once
-	finish := func() {
-		t.Helper()
-		finishOnce.Do(func() {
-			close(client.release)
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatalf("active run: %v", err)
-				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("timed out waiting for active run cleanup")
-			}
-		})
+	if err := ctx.Err(); err != nil {
+		return llm.Response{}, err
 	}
-	t.Cleanup(func() {
-		t.Helper()
-		finish()
-	})
-	return runtimeControlActiveRun{Snapshot: snapshot, finish: finish}
+	return llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (c *restartableRuntimeControlClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{}, nil
+}
+
+func (c *restartableRuntimeControlClient) releaseFirst() {
+	c.release1Once.Do(func() { close(c.release1) })
+}
+
+func (c *restartableRuntimeControlClient) releaseSecond() {
+	c.release2Once.Do(func() { close(c.release2) })
 }
 
 type fakeShellHandler struct{}
@@ -296,8 +354,7 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 	t.Helper()
 	store, engine := newRuntimeControlTestEngine(t, client, registry, cfg, opts...)
 	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithPromptHistoryStore(history)
-	service.WithCollaborativeRuntimeResolver(&stubCollaborativeRuntimeResolver{engine: engine})
+	service := NewService(stubRuntimeResolver{engine: engine}).WithPromptHistoryStore(history)
 	return store, engine, service
 }
 
@@ -336,60 +393,12 @@ func (c *runtimeControlFakeClient) ProviderCapabilities(context.Context) (llm.Pr
 	return c.capabilities, nil
 }
 
-func TestServiceSubmitUserMessageReturnsTypedRuntimeUnavailable(t *testing.T) {
-	service := NewService(stubRuntimeResolver{}, nil)
-	req := serverapi.RuntimeSubmitUserMessageRequest{
-		ClientRequestID:   "req-1",
-		SessionID:         "session-1",
-		ControllerLeaseID: "lease-1",
-		Text:              "hello",
-	}
-
-	_, err := service.SubmitUserMessage(context.Background(), req)
-	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("SubmitUserMessage error = %v, want ErrRuntimeUnavailable", err)
-	}
-}
-
-func TestServiceSubmitUserMessageDetachesRunFromCallerCancellation(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserMessage(ctx, runtimeControlUserMessageRequest(store, "req-detached", "hello"))
-		done <- err
-	}()
-
-	select {
-	case <-client.started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for submit to start")
-	}
-	cancel()
-	select {
-	case <-client.ctxCanceled:
-		t.Fatal("runtime context was canceled by caller cancellation")
-	case <-time.After(50 * time.Millisecond):
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("submit returned before runtime was released: %v", err)
-	default:
-	}
-
-	close(client.release)
-	if err := <-done; err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-}
-
-func TestServiceSubmitUserMessageStillCancelsOnExplicitInterrupt(t *testing.T) {
+func TestServiceSubmitUserTurnStillCancelsOnExplicitInterrupt(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	done := make(chan error, 1)
 	go func() {
-		_, err := service.SubmitUserMessage(context.Background(), runtimeControlUserMessageRequest(store, "req-interrupt", "hello"))
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "req-interrupt", "hello"))
 		done <- err
 	}()
 
@@ -412,39 +421,197 @@ func TestServiceSubmitUserMessageStillCancelsOnExplicitInterrupt(t *testing.T) {
 	}
 }
 
-func TestServiceGoalMutationsRequireRuntimeAccess(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	verifier := &stubRuntimeLeaseVerifier{err: serverapi.ErrInvalidControllerLease}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithControllerLeaseVerifier(verifier)
+func TestServiceInterruptReturnsUnavailableActivityWithoutEngine(t *testing.T) {
+	service := NewService(stubRuntimeResolver{})
+	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID: "interrupt-1",
+		SessionID:       "session-1",
+	})
+	if err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if err := resp.Version.Validate(); err != nil {
+		t.Fatalf("response version invalid: %v", err)
+	}
+	if resp.Activity.State != clientui.RuntimeActivityUnavailable {
+		t.Fatalf("activity = %+v, want unavailable", resp.Activity)
+	}
+	if resp.InputReconciliation.Version != resp.Version {
+		t.Fatalf("reconciliation version = %+v, want %+v", resp.InputReconciliation.Version, resp.Version)
+	}
+}
 
-	_, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+func TestServiceLiveSteerRequiresActiveRun(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	_, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       store.Meta().SessionID,
+		Text:            "steer while idle",
+	})
+	if !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("LiveSteer idle error = %v, want ErrRuntimeNoActiveRun", err)
+	}
+	if countPromptHistoryEvents(t, store, "steer while idle") != 0 {
+		t.Fatal("idle LiveSteer recorded prompt history")
+	}
+}
+
+func TestServiceLiveSteerUnavailableRuntimeStaysUnavailable(t *testing.T) {
+	service := NewService(stubRuntimeResolver{})
+	_, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       "018fdd67-89ab-4cde-8123-456789abcdef",
+		Text:            "steer closed runtime",
+	})
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("LiveSteer unavailable runtime error = %v, want ErrRuntimeUnavailable", err)
+	}
+	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("LiveSteer unavailable runtime also returned ErrRuntimeNoActiveRun: %v", err)
+	}
+}
+
+func TestServiceLiveWaitUnavailableRuntimeStaysUnavailable(t *testing.T) {
+	service := NewService(stubRuntimeResolver{})
+	_, err := service.LiveWait(context.Background(), serverapi.RuntimeLiveWaitRequest{
+		SessionID: "018fdd67-89ab-4cde-8123-456789abcdef",
+	})
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("LiveWait unavailable runtime error = %v, want ErrRuntimeUnavailable", err)
+	}
+	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("LiveWait unavailable runtime also returned ErrRuntimeNoActiveRun: %v", err)
+	}
+}
+
+func TestServiceLiveSteerRecordsHistoryAfterActiveAdmission(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "keep running")
+		submitDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active runtime")
+	}
+	resp, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       store.Meta().SessionID,
+		Text:            " steer live ",
+	})
+	if err != nil {
+		t.Fatalf("LiveSteer: %v", err)
+	}
+	if resp.QueueItemID == "" || resp.Text != "steer live" || resp.ClientRequestID != "8b0364cc-5c6c-412e-a4e8-31380661d1e1" {
+		t.Fatalf("LiveSteer response = %+v", resp)
+	}
+	waitForRuntimeControlPromptHistoryCount(t, runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID), "steer live", 1)
+	_, _ = service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
+		ClientRequestID: "6859fdfa-6808-4109-a031-de3d432e88dd",
+		SessionID:       store.Meta().SessionID,
+	})
+	close(client.release)
+	<-submitDone
+}
+
+func TestServiceLiveSteerPreservesAdmittedPromptHistoryError(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "keep running")
+		submitDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active runtime")
+	}
+	historyErr := errors.New("prompt history failed")
+	runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID).SetRecordError(historyErr)
+	_, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       store.Meta().SessionID,
+		Text:            "steer live",
+	})
+	if !errors.Is(err, historyErr) {
+		t.Fatalf("LiveSteer error = %v, want prompt history failure", err)
+	}
+	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("LiveSteer mapped prompt history failure to no-active: %v", err)
+	}
+	_, _ = service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
+		ClientRequestID: "6859fdfa-6808-4109-a031-de3d432e88dd",
+		SessionID:       store.Meta().SessionID,
+	})
+	close(client.release)
+	<-submitDone
+}
+
+func TestServiceLiveStopIdleReturnsIdle(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	resp, err := service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("LiveStop idle: %v", err)
+	}
+	if resp.Status != serverapi.RuntimeLiveStopStatusIdle {
+		t.Fatalf("LiveStop idle status = %q", resp.Status)
+	}
+}
+
+func runtimeControlPromptHistoryStoresLoad(t *testing.T, sessionID string) *runtimeControlPromptHistoryStore {
+	t.Helper()
+	registered, ok := runtimeControlPromptHistoryStores.Load(sessionID)
+	if !ok {
+		t.Fatalf("prompt history store for %q not registered", sessionID)
+	}
+	store, ok := registered.(*runtimeControlPromptHistoryStore)
+	if !ok {
+		t.Fatalf("prompt history store type = %T", registered)
+	}
+	return store
+}
+
+func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
+	if err != nil {
+		t.Fatalf("create session store: %v", err)
+	}
+	engine, err := runtime.New(store, &runtimeControlFakeClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
+	if err != nil {
+		t.Fatalf("create runtime engine: %v", err)
+	}
+	service := NewService(stubRuntimeResolver{engine: engine})
+	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID: "interrupt-1",
+		SessionID:       store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if resp.Activity.State != clientui.RuntimeActivityRegisteredIdle {
+		t.Fatalf("activity = %+v, want idle", resp.Activity)
+	}
+	if resp.Version.Epoch == "" || resp.InputReconciliation.Version != resp.Version {
+		t.Fatalf("invalid versioned response: %+v", resp)
+	}
+}
+
+func TestServiceGoalMutationsSetShowComplete(t *testing.T) {
+	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	service := NewService(stubRuntimeResolver{engine: engine})
+
+	setResp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
 		ClientRequestID: "goal-set-1",
 		SessionID:       store.Meta().SessionID,
 		Objective:       "ship goal mode",
 		Actor:           "user",
-	})
-	if !errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		t.Fatalf("SetGoal without lease/collaborative access error = %v, want invalid controller lease", err)
-	}
-	if goal := engine.Goal(); goal != nil {
-		t.Fatalf("goal after rejected empty-lease mutation = %+v, want nil", goal)
-	}
-	if verifier.calls != 0 {
-		t.Fatalf("lease verifier calls = %d, want 0 for empty lease", verifier.calls)
-	}
-}
-
-func TestServiceGoalMutationsAllowControllerLease(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithControllerLeaseVerifier(verifier)
-
-	setResp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
-		ClientRequestID:   "goal-set-1",
-		SessionID:         store.Meta().SessionID,
-		ControllerLeaseID: "lease-1",
-		Objective:         "ship goal mode",
-		Actor:             "user",
 	})
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
@@ -460,317 +627,15 @@ func TestServiceGoalMutationsAllowControllerLease(t *testing.T) {
 		t.Fatalf("show goal response = %+v, want id %q", showResp.Goal, setResp.Goal.ID)
 	}
 	completeResp, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
-		ClientRequestID:   "goal-complete-1",
-		SessionID:         store.Meta().SessionID,
-		ControllerLeaseID: "lease-1",
-		Actor:             "agent",
+		ClientRequestID: "goal-complete-1",
+		SessionID:       store.Meta().SessionID,
+		Actor:           "agent",
 	})
 	if err != nil {
 		t.Fatalf("CompleteGoal: %v", err)
 	}
 	if completeResp.Goal == nil || completeResp.Goal.Status != "complete" {
 		t.Fatalf("complete goal response = %+v", completeResp.Goal)
-	}
-	if verifier.calls != 2 {
-		t.Fatalf("lease verifier calls = %d, want 2", verifier.calls)
-	}
-}
-
-func TestServiceGoalMutationsAllowCollaborativeGoalManageAccess(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	collaborative := &stubCollaborativeRuntimeResolver{engine: engine}
-	gate := &stubPrimaryRunGate{}
-	service.gate = gate
-	service.WithCollaborativeRuntimeResolver(collaborative)
-
-	setResp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
-		ClientRequestID: "goal-set-collaborative",
-		SessionID:       store.Meta().SessionID,
-		Objective:       "ship collaborative goal",
-		Actor:           "user",
-	})
-	if err != nil {
-		t.Fatalf("SetGoal collaborative: %v", err)
-	}
-	if setResp.Goal == nil || setResp.Goal.Objective != "ship collaborative goal" {
-		t.Fatalf("set goal response = %+v", setResp.Goal)
-	}
-	if collaborative.calls != 1 || collaborative.op != serverapi.SessionRuntimeOperationGoalManage {
-		t.Fatalf("collaborative calls=%d op=%q, want goal.manage", collaborative.calls, collaborative.op)
-	}
-	if gate.acquire != 1 || gate.release != 1 {
-		t.Fatalf("gate acquire/release = %d/%d, want 1/1", gate.acquire, gate.release)
-	}
-}
-
-func TestServiceAgentCompleteGoalAllowsCurrentTurnPrimaryRun(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	active := startRuntimeControlActiveRun(t, engine, client)
-	gate := &stubPrimaryRunGate{err: primaryrun.ErrActivePrimaryRun}
-	collaborative := &stubCollaborativeRuntimeResolver{engine: engine}
-	tokens := &stubShellTokenVerifier{valid: true}
-	service := NewService(stubRuntimeResolver{engine: engine}, gate).WithCollaborativeRuntimeResolver(collaborative).WithShellTokenVerifier(tokens)
-
-	resp, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
-		ClientRequestID: "goal-complete-agent-current-turn",
-		SessionID:       store.Meta().SessionID,
-		ShellToken:      "shell-token",
-		ShellRunID:      active.Snapshot.RunID,
-		ShellStepID:     active.Snapshot.StepID,
-		Actor:           "agent",
-	})
-	if err != nil {
-		t.Fatalf("CompleteGoal: %v", err)
-	}
-	if resp.Goal == nil || resp.Goal.Status != string(session.GoalStatusComplete) {
-		t.Fatalf("complete response = %+v, want complete goal", resp.Goal)
-	}
-	active.finish()
-	if goal := store.Meta().Goal; goal == nil || goal.Status != session.GoalStatusComplete {
-		t.Fatalf("persisted goal = %+v, want complete", goal)
-	} else if resp.Goal.ID != goal.ID {
-		t.Fatalf("complete response goal id = %q, want persisted id %q", resp.Goal.ID, goal.ID)
-	}
-	if gate.acquire != 0 || gate.release != 0 {
-		t.Fatalf("gate acquire/release = %d/%d, want 0/0", gate.acquire, gate.release)
-	}
-	if collaborative.calls != 0 {
-		t.Fatalf("collaborative calls = %d, want 0", collaborative.calls)
-	}
-	if tokens.calls != 1 {
-		t.Fatalf("token verifier calls = %d, want 1", tokens.calls)
-	}
-}
-
-func TestServiceAgentSetGoalAllowsCurrentTurnPrimaryRun(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	active := startRuntimeControlActiveRun(t, engine, client)
-	gate := &stubPrimaryRunGate{err: primaryrun.ErrActivePrimaryRun}
-	collaborative := &stubCollaborativeRuntimeResolver{engine: engine}
-	tokens := &stubShellTokenVerifier{valid: true}
-	service := NewService(stubRuntimeResolver{engine: engine}, gate).WithCollaborativeRuntimeResolver(collaborative).WithShellTokenVerifier(tokens)
-
-	resp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
-		ClientRequestID: "goal-set-agent-current-turn",
-		SessionID:       store.Meta().SessionID,
-		ShellToken:      "shell-token",
-		ShellRunID:      active.Snapshot.RunID,
-		ShellStepID:     active.Snapshot.StepID,
-		Objective:       "new current-turn goal",
-		Actor:           "agent",
-	})
-	if err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	if resp.Goal == nil || resp.Goal.Objective != "new current-turn goal" || resp.Goal.Status != string(session.GoalStatusActive) {
-		t.Fatalf("set response = %+v, want active current-turn goal", resp.Goal)
-	}
-	active.finish()
-	if goal := store.Meta().Goal; goal == nil || goal.Objective != "new current-turn goal" || goal.Status != session.GoalStatusActive {
-		t.Fatalf("persisted goal = %+v, want active current-turn goal", goal)
-	} else if resp.Goal.ID != goal.ID {
-		t.Fatalf("set response goal id = %q, want persisted id %q", resp.Goal.ID, goal.ID)
-	}
-	if gate.acquire != 0 || gate.release != 0 {
-		t.Fatalf("gate acquire/release = %d/%d, want 0/0", gate.acquire, gate.release)
-	}
-	if collaborative.calls != 0 {
-		t.Fatalf("collaborative calls = %d, want 0", collaborative.calls)
-	}
-	if tokens.calls != 1 {
-		t.Fatalf("token verifier calls = %d, want 1", tokens.calls)
-	}
-}
-
-func TestServiceAgentShellCompleteThenSetGoalUsesQueuedEffectiveGoal(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("finished current goal", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal initial: %v", err)
-	}
-	active := startRuntimeControlActiveRun(t, engine, client)
-	gate := &stubPrimaryRunGate{err: primaryrun.ErrActivePrimaryRun}
-	collaborative := &stubCollaborativeRuntimeResolver{engine: engine}
-	tokens := &stubShellTokenVerifier{valid: true}
-	service := NewService(stubRuntimeResolver{engine: engine}, gate).WithCollaborativeRuntimeResolver(collaborative).WithShellTokenVerifier(tokens)
-
-	complete, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
-		ClientRequestID: "goal-complete-agent-current-turn-chain",
-		SessionID:       store.Meta().SessionID,
-		ShellToken:      "shell-token",
-		ShellRunID:      active.Snapshot.RunID,
-		ShellStepID:     active.Snapshot.StepID,
-		Actor:           "agent",
-	})
-	if err != nil {
-		t.Fatalf("CompleteGoal: %v", err)
-	}
-	if complete.Goal == nil || complete.Goal.Status != string(session.GoalStatusComplete) {
-		t.Fatalf("complete response = %+v, want completed queued goal", complete.Goal)
-	}
-	set, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
-		ClientRequestID: "goal-set-agent-current-turn-chain",
-		SessionID:       store.Meta().SessionID,
-		ShellToken:      "shell-token",
-		ShellRunID:      active.Snapshot.RunID,
-		ShellStepID:     active.Snapshot.StepID,
-		Objective:       "follow-up queued goal",
-		Actor:           "agent",
-	})
-	if err != nil {
-		t.Fatalf("SetGoal after queued complete: %v", err)
-	}
-	if set.Goal == nil || set.Goal.Objective != "follow-up queued goal" || set.Goal.Status != string(session.GoalStatusActive) {
-		t.Fatalf("set response = %+v, want follow-up active goal", set.Goal)
-	}
-	active.finish()
-	if goal := store.Meta().Goal; goal == nil || goal.Objective != "follow-up queued goal" || goal.Status != session.GoalStatusActive {
-		t.Fatalf("persisted goal = %+v, want follow-up active goal", goal)
-	} else if set.Goal.ID != goal.ID {
-		t.Fatalf("set response goal id = %q, want persisted id %q", set.Goal.ID, goal.ID)
-	}
-	if gate.acquire != 0 || gate.release != 0 {
-		t.Fatalf("gate acquire/release = %d/%d, want 0/0", gate.acquire, gate.release)
-	}
-	if collaborative.calls != 0 {
-		t.Fatalf("collaborative calls = %d, want 0", collaborative.calls)
-	}
-	if tokens.calls != 2 {
-		t.Fatalf("token verifier calls = %d, want 2", tokens.calls)
-	}
-}
-
-func TestServiceAgentSetGoalWithStaleShellRunKeepsPrimaryRunGate(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	active := startRuntimeControlActiveRun(t, engine, client)
-	gate := &stubPrimaryRunGate{err: primaryrun.ErrActivePrimaryRun}
-	collaborative := &stubCollaborativeRuntimeResolver{engine: engine}
-	tokens := &stubShellTokenVerifier{valid: true}
-	service := NewService(stubRuntimeResolver{engine: engine}, gate).WithCollaborativeRuntimeResolver(collaborative).WithShellTokenVerifier(tokens)
-
-	_, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
-		ClientRequestID: "goal-set-agent-stale-turn",
-		SessionID:       store.Meta().SessionID,
-		ShellToken:      "shell-token",
-		ShellRunID:      active.Snapshot.RunID + "-stale",
-		ShellStepID:     active.Snapshot.StepID,
-		Objective:       "blocked stale goal",
-		Actor:           "agent",
-	})
-	if !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("SetGoal error = %v, want active primary run", err)
-	}
-	if goal := store.Meta().Goal; goal != nil {
-		t.Fatalf("persisted goal = %+v, want nil", goal)
-	}
-	if gate.acquire != 1 || gate.release != 0 {
-		t.Fatalf("gate acquire/release = %d/%d, want 1/0", gate.acquire, gate.release)
-	}
-	if collaborative.calls != 0 {
-		t.Fatalf("collaborative calls = %d, want 0", collaborative.calls)
-	}
-	if tokens.calls != 1 {
-		t.Fatalf("token verifier calls = %d, want 1", tokens.calls)
-	}
-}
-
-func TestServiceAgentSetGoalWithoutShellTokenKeepsPrimaryRunGate(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	gate := &stubPrimaryRunGate{err: primaryrun.ErrActivePrimaryRun}
-	collaborative := &stubCollaborativeRuntimeResolver{engine: engine}
-	tokens := &stubShellTokenVerifier{valid: false}
-	service := NewService(stubRuntimeResolver{engine: engine}, gate).WithCollaborativeRuntimeResolver(collaborative).WithShellTokenVerifier(tokens)
-
-	_, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
-		ClientRequestID: "goal-set-agent-no-token",
-		SessionID:       store.Meta().SessionID,
-		Objective:       "blocked goal",
-		Actor:           "agent",
-	})
-	if !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("SetGoal error = %v, want active primary run", err)
-	}
-	if goal := store.Meta().Goal; goal != nil {
-		t.Fatalf("persisted goal = %+v, want nil", goal)
-	}
-	if gate.acquire != 1 || gate.release != 0 {
-		t.Fatalf("gate acquire/release = %d/%d, want 1/0", gate.acquire, gate.release)
-	}
-	if collaborative.calls != 0 {
-		t.Fatalf("collaborative calls = %d, want 0", collaborative.calls)
-	}
-	if tokens.calls != 1 {
-		t.Fatalf("token verifier calls = %d, want 1", tokens.calls)
-	}
-}
-
-func TestServiceAgentCompleteGoalWithoutShellTokenKeepsPrimaryRunGate(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	gate := &stubPrimaryRunGate{err: primaryrun.ErrActivePrimaryRun}
-	collaborative := &stubCollaborativeRuntimeResolver{engine: engine}
-	tokens := &stubShellTokenVerifier{valid: false}
-	service := NewService(stubRuntimeResolver{engine: engine}, gate).WithCollaborativeRuntimeResolver(collaborative).WithShellTokenVerifier(tokens)
-
-	_, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
-		ClientRequestID: "goal-complete-agent-no-token",
-		SessionID:       store.Meta().SessionID,
-		Actor:           "agent",
-	})
-	if !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("CompleteGoal error = %v, want active primary run", err)
-	}
-	if goal := store.Meta().Goal; goal == nil || goal.Status != session.GoalStatusActive {
-		t.Fatalf("persisted goal = %+v, want active", goal)
-	}
-	if gate.acquire != 1 || gate.release != 0 {
-		t.Fatalf("gate acquire/release = %d/%d, want 1/0", gate.acquire, gate.release)
-	}
-	if collaborative.calls != 0 {
-		t.Fatalf("collaborative calls = %d, want 0", collaborative.calls)
-	}
-	if tokens.calls != 1 {
-		t.Fatalf("token verifier calls = %d, want 1", tokens.calls)
-	}
-}
-
-func TestServiceQueueUserMessageAllowsCollaborativeEmptyLease(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	leaseVerifier := &stubRuntimeLeaseVerifier{err: errors.New("lease should not be required")}
-	collaborative := &stubCollaborativeRuntimeResolver{engine: engine}
-	service.WithControllerLeaseVerifier(leaseVerifier).WithCollaborativeRuntimeResolver(collaborative)
-
-	req := runtimeControlQueueUserMessageRequest(store, "req-collab-queue", "collaborative steer")
-	req.ControllerLeaseID = ""
-	resp, err := service.QueueUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("QueueUserMessage: %v", err)
-	}
-	if resp.QueueItemID == "" || resp.Text != "collaborative steer" {
-		t.Fatalf("response = %+v, want queued collaborative steer", resp)
-	}
-	if leaseVerifier.calls != 0 {
-		t.Fatalf("lease verifier calls = %d, want none", leaseVerifier.calls)
-	}
-	if collaborative.calls != 1 || collaborative.op != serverapi.SessionRuntimeOperationQueueUserMessage {
-		t.Fatalf("collaborative calls=%d op=%q, want queue operation", collaborative.calls, collaborative.op)
-	}
-	if !engine.HasQueuedUserWork() {
-		t.Fatal("expected collaborative queue to enqueue on active runtime")
-	}
-}
-
-func TestRuntimeControlProtectedShellCommandStillRequiresLease(t *testing.T) {
-	if err := (serverapi.RuntimeSubmitUserShellCommandRequest{ClientRequestID: "req-shell", SessionID: "session-1", Command: "echo hi"}).Validate(); err == nil {
-		t.Fatal("expected shell command without controller lease to fail validation")
 	}
 }
 
@@ -799,16 +664,37 @@ func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 	}
 }
 
-func TestServiceWorkflowSessionGoalMutationSkipsPrimaryRunLease(t *testing.T) {
+func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
+		WorkflowRun: &workflowruntime.Config{
+			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+		},
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+
+	_, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "req-agent-step-goal",
+		SessionID:       store.Meta().SessionID,
+		Objective:       "queued by shell",
+		Actor:           string(session.GoalActorAgent),
+		StepID:          "step-from-shell",
+	})
+	if err == nil {
+		t.Fatal("agent step-scoped workflow goal set mutated directly without an active step")
+	}
+	if goal := engine.Goal(); goal != nil {
+		t.Fatalf("agent step-scoped workflow goal set bypassed queue and mutated goal: %+v", goal)
+	}
+}
+
+func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{
 		WorkflowRun: &workflowruntime.Config{
 			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
-	gate := &stubPrimaryRunGate{err: primaryrun.ErrActivePrimaryRun}
-	service := NewService(stubRuntimeResolver{engine: engine}, gate).
-		WithCollaborativeRuntimeResolver(&stubCollaborativeRuntimeResolver{engine: engine})
+	service := NewService(stubRuntimeResolver{engine: engine})
 
 	resp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
 		ClientRequestID: "req-goal-workflow-busy-gate",
@@ -817,13 +703,36 @@ func TestServiceWorkflowSessionGoalMutationSkipsPrimaryRunLease(t *testing.T) {
 		Actor:           "user",
 	})
 	if err != nil {
-		t.Fatalf("SetGoal in workflow with busy primary-run gate = %v, want allowed", err)
+		t.Fatalf("SetGoal in workflow runtime = %v, want allowed", err)
 	}
 	if resp.Goal == nil || resp.Goal.Status != string(session.GoalStatusActive) {
 		t.Fatalf("goal response = %+v, want active goal", resp.Goal)
 	}
-	if gate.acquire != 0 {
-		t.Fatalf("primary-run lease acquired %d times for workflow goal mutation, want 0", gate.acquire)
+}
+
+func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
+		WorkflowRun: &workflowruntime.Config{
+			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+		},
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	sessionID := store.Meta().SessionID
+	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{ClientRequestID: "set-user-goal", SessionID: sessionID, Objective: "workflow goal", Actor: "user"}); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+
+	_, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "complete-agent-step-goal",
+		SessionID:       sessionID,
+		Actor:           string(session.GoalActorAgent),
+		StepID:          "step-from-shell",
+	})
+	if err == nil {
+		t.Fatal("agent step-scoped workflow goal complete mutated directly without an active step")
+	}
+	if goal := engine.Goal(); goal == nil || goal.Status != session.GoalStatusActive {
+		t.Fatalf("agent step-scoped workflow goal complete bypassed queue; goal = %+v, want active", goal)
 	}
 }
 
@@ -878,10 +787,9 @@ func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T)
 	service = service.WithWorkflowSessionResolver(staticRuntimeControlSessionResolver{store: store})
 
 	_, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
-		ClientRequestID:   "req-auto-off-durable-workflow",
-		SessionID:         store.Meta().SessionID,
-		ControllerLeaseID: "lease-1",
-		Enabled:           false,
+		ClientRequestID: "req-auto-off-durable-workflow",
+		SessionID:       store.Meta().SessionID,
+		Enabled:         false,
 	})
 	if !errors.Is(err, errWorkflowTaskSessionAutoCompactionDisable) {
 		t.Fatalf("SetAutoCompactionEnabled error = %v, want workflow auto-compaction rejection", err)
@@ -983,32 +891,6 @@ func TestServiceSetGoalRejectsAgentOverwrite(t *testing.T) {
 				t.Fatalf("goal after rejected overwrite = %+v", goal)
 			}
 		})
-	}
-}
-
-func TestServiceSetGoalRejectsAgentOverwriteWhenCollaborativeRuntimeUnavailable(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, &blockingRuntimeControlClient{}, nil, runtime.Config{})
-	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).WithPromptHistoryStore(history)
-	collaborative := &stubCollaborativeRuntimeResolver{engine: engine, err: errors.New("collaborative runtime \"" + store.Meta().SessionID + "\" is unavailable")}
-	service.WithCollaborativeRuntimeResolver(collaborative)
-
-	if _, err := engine.SetGoal("existing goal", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal initial: %v", err)
-	}
-
-	_, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
-		ClientRequestID: "agent-goal-overwrite-collab-unavailable",
-		SessionID:       store.Meta().SessionID,
-		Objective:       "agent replacement",
-		Actor:           "agent",
-	})
-	var denied goalAgentOverwriteDeniedError
-	if !errors.As(err, &denied) {
-		t.Fatalf("agent overwrite error = %v, want goalAgentOverwriteDeniedError", err)
-	}
-	if collaborative.calls != 0 {
-		t.Fatalf("collaborative calls = %d, want 0 (overwrite denied before runtime access)", collaborative.calls)
 	}
 }
 
@@ -1153,7 +1035,7 @@ func TestServiceActiveGoalUpdatesEmitExactlyOneGoalStatusEventBeforeGoalLoopEven
 			if tt.prepare != nil {
 				tt.prepare(t, engine, resetEvents)
 			}
-			service := NewService(stubRuntimeResolver{engine: engine}, nil).WithCollaborativeRuntimeResolver(&stubCollaborativeRuntimeResolver{engine: engine})
+			service := NewService(stubRuntimeResolver{engine: engine})
 
 			if err := tt.call(context.Background(), service, store.Meta().SessionID); err != nil {
 				t.Fatalf("active goal update: %v", err)
@@ -1220,107 +1102,27 @@ func TestServiceResumeGoalPreflightFailureDoesNotMutateOrEmit(t *testing.T) {
 	}
 }
 
-func TestServiceCollaborativeGoalMutationsRejectActivePrimaryRun(t *testing.T) {
-	tests := []struct {
-		name    string
-		prepare func(t *testing.T, engine *runtime.Engine)
-		call    func(context.Context, *Service, string) error
-	}{
-		{
-			name: "set",
-			call: func(ctx context.Context, service *Service, sessionID string) error {
-				_, err := service.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{
-					ClientRequestID: "goal-set-busy",
-					SessionID:       sessionID,
-					Objective:       "ship goal mode",
-					Actor:           "user",
-				})
-				return err
-			},
-		},
-		{
-			name: "complete-user",
-			prepare: func(t *testing.T, engine *runtime.Engine) {
-				t.Helper()
-				if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-					t.Fatalf("SetGoal: %v", err)
-				}
-			},
-			call: func(ctx context.Context, service *Service, sessionID string) error {
-				_, err := service.CompleteGoal(ctx, serverapi.RuntimeGoalStatusRequest{
-					ClientRequestID: "goal-complete-user-busy",
-					SessionID:       sessionID,
-					Actor:           "user",
-				})
-				return err
-			},
-		},
-		{
-			name: "resume",
-			prepare: func(t *testing.T, engine *runtime.Engine) {
-				t.Helper()
-				if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-					t.Fatalf("SetGoal: %v", err)
-				}
-				if _, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
-					t.Fatalf("pause goal: %v", err)
-				}
-			},
-			call: func(ctx context.Context, service *Service, sessionID string) error {
-				_, err := service.ResumeGoal(ctx, serverapi.RuntimeGoalStatusRequest{
-					ClientRequestID: "goal-resume-busy",
-					SessionID:       sessionID,
-					Actor:           "user",
-				})
-				return err
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-			if tt.prepare != nil {
-				tt.prepare(t, engine)
-			}
-			before, err := sessiontest.CollectEvents(store)
-			if err != nil {
-				t.Fatalf("ReadEvents before: %v", err)
-			}
-			gate := &stubPrimaryRunGate{err: primaryrun.ErrActivePrimaryRun}
-			collaborative := &stubCollaborativeRuntimeResolver{engine: engine}
-			service := NewService(stubRuntimeResolver{engine: engine}, gate).WithCollaborativeRuntimeResolver(collaborative)
-
-			err = tt.call(context.Background(), service, store.Meta().SessionID)
-			if !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-				t.Fatalf("goal update while primary run active error = %v, want ErrActivePrimaryRun", err)
-			}
-			after, err := sessiontest.CollectEvents(store)
-			if err != nil {
-				t.Fatalf("ReadEvents after: %v", err)
-			}
-			if len(after) != len(before) {
-				t.Fatalf("events after rejected goal update = %d, want %d", len(after), len(before))
-			}
-			if collaborative.calls != 0 {
-				t.Fatalf("collaborative calls = %d, want 0 when primary run is active", collaborative.calls)
-			}
-			if gate.acquire != 1 || gate.release != 0 {
-				t.Fatalf("gate acquire/release = %d/%d, want 1/0", gate.acquire, gate.release)
-			}
-		})
-	}
-}
-
 func TestServiceShowGoalReportsRuntimeSuspension(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{})
+	client := newCancelObservingRuntimeControlClient()
+	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for goal loop to start")
 	}
 	if err := engine.Interrupt(); err != nil {
 		t.Fatalf("Interrupt: %v", err)
 	}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil)
+	defer func() {
+		close(client.release)
+	}()
+	service := NewService(stubRuntimeResolver{engine: engine})
 
 	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
@@ -1355,6 +1157,141 @@ func TestServiceCompleteGoalAlreadyCompleteDoesNotDuplicateAudit(t *testing.T) {
 	}
 }
 
+func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for running goal loop")
+	}
+	defer func() {
+		_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem)
+		close(client.release)
+	}()
+	before, err := sessiontest.CollectEvents(store)
+	if err != nil {
+		t.Fatalf("CollectEvents before: %v", err)
+	}
+	resp, err := service.ResumeGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "resume-active-1",
+		SessionID:       store.Meta().SessionID,
+		Actor:           "user",
+	})
+	if err != nil {
+		t.Fatalf("ResumeGoal: %v", err)
+	}
+	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != string(session.GoalStatusActive) {
+		t.Fatalf("resume active response = %+v, want existing active goal", resp.Goal)
+	}
+	after, err := sessiontest.CollectEvents(store)
+	if err != nil {
+		t.Fatalf("CollectEvents after: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("resume active appended %d events, want no duplicate goal status event", len(after)-len(before))
+	}
+}
+
+func TestServiceResumeOwnerlessActiveGoalRestartsLoopWithReminder(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	before := runtimeControlGoalDeveloperMessages(t, store)
+	if len(before) != 1 {
+		t.Fatalf("goal developer messages before resume = %d, want set only", len(before))
+	}
+
+	resp, err := service.ResumeGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "resume-ownerless-active-1",
+		SessionID:       store.Meta().SessionID,
+		Actor:           "user",
+	})
+	if err != nil {
+		t.Fatalf("ResumeGoal: %v", err)
+	}
+	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != string(session.GoalStatusActive) {
+		t.Fatalf("resume ownerless active response = %+v, want existing active goal", resp.Goal)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ownerless active goal loop restart")
+	}
+	defer func() {
+		_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem)
+		close(client.release)
+	}()
+	messages := runtimeControlGoalDeveloperMessages(t, store)
+	if len(messages) != 2 {
+		t.Fatalf("goal developer messages after resume = %d, want set+resume", len(messages))
+	}
+	if messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
+		t.Fatalf("resume reminder content = %q", messages[1].Content)
+	}
+}
+
+func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing.T) {
+	client := newRestartableRuntimeControlClient()
+	defer func() {
+		client.releaseFirst()
+		client.releaseSecond()
+	}()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	select {
+	case <-client.call1Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for initial goal loop call")
+	}
+	if err := engine.Interrupt(); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+
+	resp, err := service.ResumeGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "resume-suspending-active-1",
+		SessionID:       store.Meta().SessionID,
+		Actor:           "user",
+	})
+	if err != nil {
+		t.Fatalf("ResumeGoal: %v", err)
+	}
+	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != string(session.GoalStatusActive) {
+		t.Fatalf("resume suspending active response = %+v, want existing active goal", resp.Goal)
+	}
+	client.releaseFirst()
+	select {
+	case <-client.call2Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for resumed goal loop call after interrupted turn finished")
+	}
+	messages := runtimeControlGoalDeveloperMessages(t, store)
+	if len(messages) != 2 {
+		t.Fatalf("goal developer messages after interrupted turn drain = %d, want set+resume", len(messages))
+	}
+	if messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
+		t.Fatalf("resume reminder content = %q", messages[1].Content)
+	}
+	_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem)
+	client.releaseSecond()
+}
+
 func TestServiceCompleteGoalFeedbackIncludesCookDuration(t *testing.T) {
 	now := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}}, session.WithClock(func() time.Time {
@@ -1378,36 +1315,23 @@ func TestServiceCompleteGoalFeedbackIncludesCookDuration(t *testing.T) {
 	}
 }
 
-func TestServiceSetSessionNameReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
+func TestServiceSetSessionNameDedupesSuccessfulRetry(t *testing.T) {
 	store, engine := newRuntimeControlTestEngine(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	if err := store.SetName("before"); err != nil {
 		t.Fatalf("persist initial session name: %v", err)
 	}
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).
-		WithControllerLeaseVerifier(verifier)
+	service := NewService(stubRuntimeResolver{engine: engine})
 	req := serverapi.RuntimeSetSessionNameRequest{
-		ClientRequestID:   "req-1",
-		SessionID:         store.Meta().SessionID,
-		ControllerLeaseID: "lease-1",
-		Name:              "after",
+		ClientRequestID: "req-1",
+		SessionID:       store.Meta().SessionID,
+		Name:            "after",
 	}
 
 	if err := service.SetSessionName(context.Background(), req); err != nil {
 		t.Fatalf("SetSessionName first: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
 	if err := service.SetSessionName(context.Background(), req); err != nil {
 		t.Fatalf("SetSessionName replay: %v", err)
-	}
-	fresh := req
-	fresh.ClientRequestID = "req-2"
-	fresh.Name = "new name"
-	if err := service.SetSessionName(context.Background(), fresh); !errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		t.Fatalf("SetSessionName fresh request = %v, want ErrInvalidControllerLease", err)
-	}
-	if verifier.calls != 2 {
-		t.Fatalf("lease verifier call count = %d, want 2", verifier.calls)
 	}
 	if got := store.Meta().Name; got != "after" {
 		t.Fatalf("session name = %q, want after", got)
@@ -1416,157 +1340,6 @@ func TestServiceSetSessionNameReplaysSuccessfulRetryAfterLeaseInvalidation(t *te
 		t.Fatalf("reopen session store: %v", err)
 	} else if got := reopened.Meta().Name; got != "after" {
 		t.Fatalf("reopened session name = %q, want after", got)
-	}
-}
-
-func TestServiceSubmitUserMessageDedupesSuccessfulRetry(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	req := runtimeControlUserMessageRequest(store, "req-1", "hello")
-
-	first, err := service.SubmitUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitUserMessage first: %v", err)
-	}
-	second, err := service.SubmitUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitUserMessage retry: %v", err)
-	}
-	if first.Message != "done" || second.Message != "done" {
-		t.Fatalf("responses = (%q, %q), want both done", first.Message, second.Message)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-	if got := countPromptHistoryEvents(t, store, "hello"); got != 1 {
-		t.Fatalf("prompt history count = %d, want 1", got)
-	}
-}
-
-func TestServiceSubmitUserMessageReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).
-		WithControllerLeaseVerifier(verifier)
-	req := runtimeControlUserMessageRequest(store, "req-1", "hello")
-
-	first, err := service.SubmitUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitUserMessage first: %v", err)
-	}
-	verifier.err = serverapi.ErrInvalidControllerLease
-	second, err := service.SubmitUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitUserMessage replay: %v", err)
-	}
-	if first.Message != "done" || second.Message != "done" {
-		t.Fatalf("responses = (%q, %q), want both done", first.Message, second.Message)
-	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-}
-
-func TestServiceSubmitUserMessageRejectsClientRequestIDPayloadMismatch(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	first := runtimeControlUserMessageRequest(store, "req-1", "hello")
-	if _, err := service.SubmitUserMessage(context.Background(), first); err != nil {
-		t.Fatalf("SubmitUserMessage first: %v", err)
-	}
-	second := first
-	second.Text = "different"
-	if _, err := service.SubmitUserMessage(context.Background(), second); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("SubmitUserMessage mismatch error = %v, want request id payload mismatch", err)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-}
-
-func TestServiceSubmitUserTurnRecordsPromptHistoryAndSubmits(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-
-	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "req-1", "hello"))
-	if err != nil {
-		t.Fatalf("SubmitUserTurn: %v", err)
-	}
-	if resp.Message != "done" {
-		t.Fatalf("message = %q, want done", resp.Message)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-	if got := countPromptHistoryEvents(t, store, "hello"); got != 1 {
-		t.Fatalf("prompt history count = %d, want 1", got)
-	}
-}
-
-func TestServiceSubmitUserTurnRecordsPromptHistoryWithUncancelledRunContext(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	history := service.promptStore.(*runtimeControlPromptHistoryStore)
-	cancelledRecordCtx := errors.New("record context was cancelled")
-	history.SetRecordContextError(cancelledRecordCtx)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	resp, err := service.SubmitUserTurn(ctx, runtimeControlUserTurnRequest(store, "req-uncancelled-history", "hello after cancel"))
-	if err != nil {
-		t.Fatalf("SubmitUserTurn: %v", err)
-	}
-	if resp.Message != "done" {
-		t.Fatalf("message = %q, want done", resp.Message)
-	}
-	if got := countPromptHistoryEvents(t, store, "hello after cancel"); got != 1 {
-		t.Fatalf("prompt history count = %d, want 1", got)
-	}
-}
-
-func TestServiceSubmitUserTurnSkipsPromptHistoryWhenAlreadyRecorded(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	req := runtimeControlUserTurnRequest(store, "req-1", "expanded hidden prompt")
-	req.PromptHistoryRecorded = true
-
-	resp, err := service.SubmitUserTurn(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitUserTurn: %v", err)
-	}
-	if resp.Message != "done" {
-		t.Fatalf("response = %q, want done", resp.Message)
-	}
-	if got := countPromptHistoryEvents(t, store, "expanded hidden prompt"); got != 0 {
-		t.Fatalf("hidden expanded prompt history count = %d, want 0", got)
-	}
-	if got := countUserMessagesWithContent(t, store, "expanded hidden prompt"); got != 1 {
-		t.Fatalf("submitted user message count = %d, want 1", got)
-	}
-}
-
-func TestServiceSubmitUserTurnRejectsPromptHistoryRecordedMismatch(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	first := runtimeControlUserTurnRequest(store, "req-1", "expanded hidden prompt")
-	first.PromptHistoryRecorded = true
-	if _, err := service.SubmitUserTurn(context.Background(), first); err != nil {
-		t.Fatalf("SubmitUserTurn first: %v", err)
-	}
-	second := first
-	second.PromptHistoryRecorded = false
-	if _, err := service.SubmitUserTurn(context.Background(), second); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("SubmitUserTurn mismatch error = %v, want request id payload mismatch", err)
-	}
-	if got := countPromptHistoryEvents(t, store, "expanded hidden prompt"); got != 0 {
-		t.Fatalf("hidden expanded prompt history count = %d, want 0", got)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
 	}
 }
 
@@ -1589,9 +1362,444 @@ func TestServiceSubmitUserTurnDedupesSuccessfulRetry(t *testing.T) {
 	if client.calls != 1 {
 		t.Fatalf("generate call count = %d, want 1", client.calls)
 	}
-	if got := countPromptHistoryEvents(t, store, "hello"); got != 1 {
-		t.Fatalf("prompt history count = %d, want 1", got)
+}
+
+func TestServiceSubmitUserTurnDuplicateInFlightUsesSinglePreBeginAdmission(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
+	resolver := &countingBeginRuntimeResolver{stubRuntimeResolver: stubRuntimeResolver{engine: engine}}
+	service := NewService(resolver)
+	req := runtimeControlUserTurnRequest(store, "req-1", "hello")
+
+	firstErr := make(chan error, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), req)
+		firstErr <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("first submit did not reach generation")
 	}
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), req)
+		secondErr <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if got := resolver.beginCount.Load(); got != 1 {
+		t.Fatalf("BeginSessionRun count while duplicate is in flight = %d, want 1", got)
+	}
+	close(client.release)
+	for label, ch := range map[string]<-chan error{"first": firstErr, "second": secondErr} {
+		select {
+		case err := <-ch:
+			if err != nil {
+				t.Fatalf("%s SubmitUserTurn: %v", label, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s SubmitUserTurn", label)
+		}
+	}
+	if got := resolver.beginCount.Load(); got != 1 {
+		t.Fatalf("BeginSessionRun final count = %d, want 1", got)
+	}
+}
+
+func TestServiceSubmitUserTurnOperationTombstonePreventsPreActiveBegin(t *testing.T) {
+	client := finalResponseRuntimeControlClient()
+	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
+	resolver := &countingBeginRuntimeResolver{stubRuntimeResolver: stubRuntimeResolver{engine: engine}}
+	operations := runtimeops.NewCoordinator()
+	service := NewService(resolver).WithOperationCoordinator(operations)
+	req := runtimeControlUserTurnRequest(store, "req-canceled", "hello")
+	if err := operations.CancelOperation(store.Meta().SessionID, req.OperationRef); err != nil {
+		t.Fatalf("CancelOperation: %v", err)
+	}
+
+	if _, err := service.SubmitUserTurn(context.Background(), req); !errors.Is(err, runtimeops.ErrOperationCanceled) {
+		t.Fatalf("SubmitUserTurn after tombstone error = %v, want operation canceled", err)
+	}
+	if got := resolver.beginCount.Load(); got != 0 {
+		t.Fatalf("BeginCancellableSessionRun count = %d, want 0", got)
+	}
+	assertRuntimeControlReconciliation(t, operations, store.Meta().SessionID, req.OperationRef, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+}
+
+func TestServiceTargetCancelReleasesStartMarkerBeforeRuntimeAccessReturns(t *testing.T) {
+	resolver := &cancelableStartRuntimeResolver{started: make(chan struct{}), released: make(chan struct{})}
+	operations := runtimeops.NewCoordinator()
+	service := NewService(resolver).WithOperationCoordinator(operations)
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "cancel-start-marker"}
+	req := serverapi.RuntimeSubmitUserTurnRequest{
+		ClientRequestID: ref.ClientRequestID,
+		SessionID:       "session-start-marker",
+		Text:            "hello",
+		OperationRef:    ref,
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), req)
+		done <- err
+	}()
+	select {
+	case <-resolver.started:
+	case <-time.After(time.Second):
+		t.Fatal("submit did not reach guarded runtime access")
+	}
+	if err := operations.CancelOperation(req.SessionID, ref); err != nil {
+		t.Fatalf("CancelOperation: %v", err)
+	}
+	select {
+	case <-resolver.released:
+	case <-time.After(time.Second):
+		t.Fatal("start marker was not released by operation cancellation")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SubmitUserTurn error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled submit")
+	}
+	assertRuntimeControlReconciliation(t, operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+}
+
+func TestServiceSubmitUserTurnOperationTombstonePreventsPreFlushSubmittedReconciliation(t *testing.T) {
+	resolver := &cancelableStartRuntimeResolver{started: make(chan struct{}), released: make(chan struct{})}
+	operations := runtimeops.NewCoordinator()
+	service := NewService(resolver).WithOperationCoordinator(operations)
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "cancel-before-flush"}
+	req := serverapi.RuntimeSubmitUserTurnRequest{
+		ClientRequestID: ref.ClientRequestID,
+		SessionID:       "session-cancel-before-flush",
+		Text:            "restore me",
+		OperationRef:    ref,
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), req)
+		done <- err
+	}()
+	select {
+	case <-resolver.started:
+	case <-time.After(time.Second):
+		t.Fatal("submit did not reach guarded runtime access")
+	}
+	if err := operations.CancelOperation(req.SessionID, ref); err != nil {
+		t.Fatalf("CancelOperation: %v", err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SubmitUserTurn error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled submit")
+	}
+	assertRuntimeControlReconciliation(t, operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+}
+
+func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-flush-boundary"}
+	req := serverapi.RuntimeSubmitUserTurnRequest{
+		ClientRequestID: ref.ClientRequestID,
+		SessionID:       store.Meta().SessionID,
+		Text:            "flush before model completes",
+		OperationRef:    ref,
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), req)
+		done <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("submit did not reach model request after user-message flush")
+	}
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "interrupt-flushed-submit",
+		SessionID:          req.SessionID,
+		TargetOperationRef: &ref,
+	}); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	select {
+	case <-client.ctxCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("active submit interrupt did not reach engine interrupt path")
+	}
+	close(client.release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SubmitUserTurn error = %v, want context canceled after engine interrupt", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for interrupted submit")
+	}
+	assertRuntimeControlReconciliation(t, service.operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCommitted)
+}
+
+func TestServiceInterruptQueuedServerMessageDoesNotInterruptUnrelatedActiveRun(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	activeRef := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "active-submit"}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+			ClientRequestID: activeRef.ClientRequestID,
+			SessionID:       store.Meta().SessionID,
+			Text:            "keep running",
+			OperationRef:    activeRef,
+		})
+		done <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("active submit did not reach model request")
+	}
+	queued, err := service.QueueUserMessage(context.Background(), runtimeControlQueueUserMessageRequest(store, "queued-discard-only", "discard queued only"))
+	if err != nil {
+		t.Fatalf("QueueUserMessage: %v", err)
+	}
+	target := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: queued.QueueItemID}
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "interrupt-queued-discard-only",
+		SessionID:          store.Meta().SessionID,
+		TargetOperationRef: &target,
+	}); err != nil {
+		t.Fatalf("Interrupt queued target: %v", err)
+	}
+	select {
+	case <-client.ctxCanceled:
+		t.Fatal("queued-message discard interrupted unrelated active run")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(client.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SubmitUserTurn: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for active submit completion")
+	}
+	assertRuntimeControlReconciliation(t, service.operations, store.Meta().SessionID, target, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+}
+
+func TestServiceInterruptCancelsInFlightQueuedMessageCreateByClientRef(t *testing.T) {
+	resolver := &cancelableStartRuntimeResolver{started: make(chan struct{}), released: make(chan struct{})}
+	operations := runtimeops.NewCoordinator()
+	service := NewService(resolver).WithOperationCoordinator(operations)
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "queue-create-cancel"}
+	req := serverapi.RuntimeQueueUserMessageRequest{
+		ClientRequestID: ref.ClientRequestID,
+		SessionID:       "session-queue-create",
+		OperationRef:    ref,
+		Text:            "queued before server id",
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.QueueUserMessage(context.Background(), req)
+		done <- err
+	}()
+	select {
+	case <-resolver.started:
+	case <-time.After(time.Second):
+		t.Fatal("queue create did not reach guarded runtime access")
+	}
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:      "interrupt-queue-create",
+		SessionID:            req.SessionID,
+		TargetOperationRef:   &ref,
+		PendingOperationRefs: []clientui.RuntimeOperationRef{ref},
+	}); err != nil {
+		t.Fatalf("Interrupt queued create: %v", err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("QueueUserMessage error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled queue create")
+	}
+	assertRuntimeControlReconciliation(t, operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+}
+
+func TestServiceCanceledQueuedMessageCreateRejectsDuplicateRetries(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	operations := runtimeops.NewCoordinator()
+	service.WithOperationCoordinator(operations)
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "queue-create-canceled-retry"}
+	req := serverapi.RuntimeQueueUserMessageRequest{
+		ClientRequestID: ref.ClientRequestID,
+		SessionID:       store.Meta().SessionID,
+		OperationRef:    ref,
+		Text:            "must not enqueue after cancel",
+	}
+	if err := operations.CancelOperation(req.SessionID, ref); err != nil {
+		t.Fatalf("CancelOperation: %v", err)
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, err := service.QueueUserMessage(context.Background(), req); !errors.Is(err, runtimeops.ErrOperationCanceled) {
+			t.Fatalf("QueueUserMessage attempt %d error = %v, want operation canceled", attempt, err)
+		}
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("canceled queued-message create retry enqueued runtime work")
+	}
+	assertRuntimeControlReconciliation(t, operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+}
+
+func TestServiceInterruptWithTargetRecordsCancellationTombstoneWithoutRuntime(t *testing.T) {
+	operations := runtimeops.NewCoordinator()
+	service := NewService(stubRuntimeResolver{}).WithOperationCoordinator(operations)
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-target"}
+	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "interrupt-target",
+		SessionID:          "session-target",
+		TargetOperationRef: &ref,
+	})
+	if err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if resp.Activity.State != clientui.RuntimeActivityUnavailable {
+		t.Fatalf("activity = %+v, want unavailable", resp.Activity)
+	}
+	assertRuntimeControlReconciliation(t, operations, "session-target", ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+	if len(resp.InputReconciliation.Operations) != 1 || resp.InputReconciliation.Operations[0].OperationRef != ref || resp.InputReconciliation.Operations[0].State != clientui.RuntimeInputReconciliationCanceledNotCommitted {
+		t.Fatalf("response reconciliation = %+v, want canceled target", resp.InputReconciliation)
+	}
+}
+
+func TestServiceTargetedPreActiveInterruptDoesNotInterruptUnrelatedActiveRun(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
+	activeDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "active unrelated turn")
+		activeDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("active run did not start")
+	}
+	operations := runtimeops.NewCoordinator()
+	service := NewService(stubRuntimeResolver{engine: engine}).WithOperationCoordinator(operations)
+	target := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "pre-active-target"}
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "interrupt-pre-active-target",
+		SessionID:          store.Meta().SessionID,
+		TargetOperationRef: &target,
+	}); err != nil {
+		t.Fatalf("Interrupt targeted pre-active: %v", err)
+	}
+	select {
+	case <-client.ctxCanceled:
+		t.Fatal("targeted pre-active cancellation interrupted unrelated active run")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(client.release)
+	select {
+	case err := <-activeDone:
+		if err != nil {
+			t.Fatalf("active run after release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active run did not finish after release")
+	}
+	assertRuntimeControlReconciliation(t, operations, store.Meta().SessionID, target, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+}
+
+func TestServiceTargetedTerminalOperationDoesNotInterruptUnrelatedActiveRun(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
+	activeDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "active unrelated turn")
+		activeDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("active run did not start")
+	}
+	operations := runtimeops.NewCoordinator()
+	target := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "terminal-target"}
+	operations.RecordCommitted(store.Meta().SessionID, target)
+	service := NewService(stubRuntimeResolver{engine: engine}).WithOperationCoordinator(operations)
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "interrupt-terminal-target",
+		SessionID:          store.Meta().SessionID,
+		TargetOperationRef: &target,
+	}); err != nil {
+		t.Fatalf("Interrupt targeted terminal: %v", err)
+	}
+	select {
+	case <-client.ctxCanceled:
+		t.Fatal("targeted terminal cancellation interrupted unrelated active run")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(client.release)
+	select {
+	case err := <-activeDone:
+		if err != nil {
+			t.Fatalf("active run after release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active run did not finish after release")
+	}
+	assertRuntimeControlReconciliation(t, operations, store.Meta().SessionID, target, clientui.RuntimeInputReconciliationCommitted)
+}
+
+func TestServiceInterruptDoesNotExposeLongLivedStartReservationAsActivity(t *testing.T) {
+	reg := registry.NewRuntimeRegistry()
+	startCtx, release, ok := reg.BeginCancellableSessionRun("session-starting")
+	if !ok {
+		t.Fatal("BeginCancellableSessionRun rejected")
+	}
+	defer release()
+	service := NewService(reg)
+	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID: "interrupt-starting",
+		SessionID:       "session-starting",
+	})
+	if err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if resp.Activity.State != clientui.RuntimeActivityUnavailable {
+		t.Fatalf("activity = %+v, want unavailable because start reservation is admission-only", resp.Activity)
+	}
+	release()
+	if !errors.Is(startCtx.Err(), context.Canceled) {
+		t.Fatalf("start context error = %v, want canceled", startCtx.Err())
+	}
+}
+
+func assertRuntimeControlReconciliation(t *testing.T, operations *runtimeops.Coordinator, sessionID string, ref clientui.RuntimeOperationRef, want clientui.RuntimeInputReconciliationState) {
+	t.Helper()
+	version, err := clientui.NewReadModelVersion("test", 1, 1)
+	if err != nil {
+		t.Fatalf("NewReadModelVersion: %v", err)
+	}
+	snapshot := operations.Snapshot(sessionID, version, []clientui.RuntimeOperationRef{ref})
+	for _, record := range snapshot.Operations {
+		if record.OperationRef == ref {
+			if record.State != want {
+				t.Fatalf("reconciliation state = %q, want %q", record.State, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing reconciliation for %+v in %+v", ref, snapshot.Operations)
 }
 
 func TestServiceSubmitUserShellCommandDedupesSuccessfulRetry(t *testing.T) {
@@ -1614,25 +1822,19 @@ func TestServiceSubmitUserShellCommandDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitUserShellCommandReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).
-		WithControllerLeaseVerifier(verifier)
+func TestServiceSubmitUserShellCommandDoesNotRecordPromptHistory(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	req := runtimeControlShellCommandRequest(store, "req-1", "pwd")
 
 	if err := service.SubmitUserShellCommand(context.Background(), req); err != nil {
-		t.Fatalf("SubmitUserShellCommand first: %v", err)
+		t.Fatalf("SubmitUserShellCommand: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
+	history := service.promptStore.(*runtimeControlPromptHistoryStore)
 	if err := service.SubmitUserShellCommand(context.Background(), req); err != nil {
 		t.Fatalf("SubmitUserShellCommand replay: %v", err)
 	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
-	}
-	if got := countDirectShellCommandMessages(t, store, "pwd"); got != 1 {
-		t.Fatalf("direct shell message count = %d, want 1", got)
+	if got := history.CountText("$ pwd"); got != 0 {
+		t.Fatalf("shell prompt history count = %d, want 0", got)
 	}
 }
 
@@ -1668,6 +1870,10 @@ func TestServiceQueueUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	if firstQueue.QueueItemID == "" || secondQueue.QueueItemID != firstQueue.QueueItemID {
 		t.Fatalf("queue ids = (%q, %q), want stable non-empty id", firstQueue.QueueItemID, secondQueue.QueueItemID)
 	}
+	queueCreateSnapshot := service.operations.Snapshot(store.Meta().SessionID, clientui.ReadModelVersion{Epoch: "test", Generation: 1, Sequence: 1}, []clientui.RuntimeOperationRef{req.OperationRef})
+	if len(queueCreateSnapshot.Operations) != 1 || queueCreateSnapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
+		t.Fatalf("queue create reconciliation = %+v, want committed for UI-owned operation ref", queueCreateSnapshot.Operations)
+	}
 	if got := countPromptHistoryEvents(t, store, "hello"); got != 1 {
 		t.Fatalf("queued prompt history count = %d, want 1 immediately after queue acceptance", got)
 	}
@@ -1698,24 +1904,6 @@ func TestServiceQueueUserMessageDoesNotEnqueueWhenPromptHistoryRecordFails(t *te
 	}
 }
 
-func TestServiceQueueUserMessageDoesNotRecordPromptHistoryWhenAccessRejected(t *testing.T) {
-	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
-	verifier := &stubRuntimeLeaseVerifier{err: serverapi.ErrInvalidControllerLease}
-	service.WithControllerLeaseVerifier(verifier)
-	req := runtimeControlQueueUserMessageRequest(sessionStore, "req-invalid-lease", "rejected queue")
-	req.ControllerLeaseID = "invalid"
-
-	if _, err := service.QueueUserMessage(context.Background(), req); !errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		t.Fatalf("QueueUserMessage error = %v, want invalid controller lease", err)
-	}
-	if engine.HasQueuedUserWork() {
-		t.Fatal("did not expect runtime queue mutation after access rejection")
-	}
-	if got := countPromptHistoryEvents(t, sessionStore, "rejected queue"); got != 0 {
-		t.Fatalf("prompt history event count = %d, want 0 after access rejection", got)
-	}
-}
-
 func TestServiceDiscardQueuedUserMessageIsRuntimeOnly(t *testing.T) {
 	ctx := context.Background()
 	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
@@ -1724,10 +1912,9 @@ func TestServiceDiscardQueuedUserMessageIsRuntimeOnly(t *testing.T) {
 		t.Fatalf("QueueUserMessage: %v", err)
 	}
 	discardReq := serverapi.RuntimeDiscardQueuedUserMessageRequest{
-		ClientRequestID:   "req-discard-runtime",
-		SessionID:         sessionStore.Meta().SessionID,
-		ControllerLeaseID: "lease-1",
-		QueueItemID:       queued.QueueItemID,
+		ClientRequestID: "req-discard-runtime",
+		SessionID:       sessionStore.Meta().SessionID,
+		QueueItemID:     queued.QueueItemID,
 	}
 	discarded, err := service.DiscardQueuedUserMessage(ctx, discardReq)
 	if err != nil {
@@ -1744,35 +1931,28 @@ func TestServiceDiscardQueuedUserMessageIsRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestServiceQueueUserMessageReplaysSuccessfulRetryAfterLeaseInvalidation(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
-	verifier := &stubRuntimeLeaseVerifier{}
-	service := NewService(stubRuntimeResolver{engine: engine}, nil).
-		WithControllerLeaseVerifier(verifier)
-	req := runtimeControlQueueUserMessageRequest(store, "req-1", "hello")
+func TestServiceInterruptTargetQueuedServerMessageDiscardsRuntimeWork(t *testing.T) {
+	ctx := context.Background()
+	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	queued, err := service.QueueUserMessage(ctx, runtimeControlQueueUserMessageRequest(sessionStore, "req-interrupt-discard", "discard on interrupt"))
+	if err != nil {
+		t.Fatalf("QueueUserMessage: %v", err)
+	}
+	target := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: queued.QueueItemID}
 
-	firstQueue, err := service.QueueUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("QueueUserMessage first: %v", err)
+	if _, err := service.Interrupt(ctx, serverapi.RuntimeInterruptRequest{
+		ClientRequestID:      "interrupt-queued-server",
+		SessionID:            sessionStore.Meta().SessionID,
+		TargetOperationRef:   &target,
+		PendingOperationRefs: []clientui.RuntimeOperationRef{target},
+	}); err != nil {
+		t.Fatalf("Interrupt: %v", err)
 	}
-	verifier.err = serverapi.ErrInvalidControllerLease
-	secondQueue, err := service.QueueUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("QueueUserMessage replay: %v", err)
+
+	if engine.HasQueuedUserWork() {
+		t.Fatal("queued runtime work remained after interrupt targeted server queue item")
 	}
-	if firstQueue.QueueItemID == "" || secondQueue.QueueItemID != firstQueue.QueueItemID {
-		t.Fatalf("queue ids = (%q, %q), want stable non-empty id", firstQueue.QueueItemID, secondQueue.QueueItemID)
-	}
-	if verifier.calls != 1 {
-		t.Fatalf("lease verifier call count = %d, want 1", verifier.calls)
-	}
-	if _, err := engine.SubmitQueuedUserMessages(context.Background()); err != nil {
-		t.Fatalf("SubmitQueuedUserMessages: %v", err)
-	}
-	if got := countUserMessagesWithContent(t, store, "hello"); got != 1 {
-		t.Fatalf("queued user message count = %d, want 1", got)
-	}
+	assertRuntimeControlReconciliation(t, service.operations, sessionStore.Meta().SessionID, target, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
 func TestServiceQueueUserMessageRejectsClientRequestIDPayloadMismatch(t *testing.T) {
@@ -1882,38 +2062,29 @@ func countUserMessagesWithContent(t *testing.T, store *session.Store, content st
 	return count
 }
 
-func runtimeControlUserMessageRequest(store *session.Store, requestID string, text string) serverapi.RuntimeSubmitUserMessageRequest {
-	return serverapi.RuntimeSubmitUserMessageRequest{
-		ClientRequestID:   requestID,
-		SessionID:         store.Meta().SessionID,
-		ControllerLeaseID: "lease-1",
-		Text:              text,
-	}
-}
-
 func runtimeControlUserTurnRequest(store *session.Store, requestID string, text string) serverapi.RuntimeSubmitUserTurnRequest {
 	return serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID:   requestID,
-		SessionID:         store.Meta().SessionID,
-		ControllerLeaseID: "lease-1",
-		Text:              text,
+		ClientRequestID: requestID,
+		SessionID:       store.Meta().SessionID,
+		Text:            text,
+		OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: requestID},
 	}
 }
 
 func runtimeControlShellCommandRequest(store *session.Store, requestID string, command string) serverapi.RuntimeSubmitUserShellCommandRequest {
 	return serverapi.RuntimeSubmitUserShellCommandRequest{
-		ClientRequestID:   requestID,
-		SessionID:         store.Meta().SessionID,
-		ControllerLeaseID: "lease-1",
-		Command:           command,
+		ClientRequestID: requestID,
+		SessionID:       store.Meta().SessionID,
+		Command:         command,
+		OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: requestID},
 	}
 }
 
 func runtimeControlQueueUserMessageRequest(store *session.Store, requestID string, text string) serverapi.RuntimeQueueUserMessageRequest {
 	return serverapi.RuntimeQueueUserMessageRequest{
-		ClientRequestID:   requestID,
-		SessionID:         store.Meta().SessionID,
-		ControllerLeaseID: "lease-1",
-		Text:              text,
+		ClientRequestID: requestID,
+		SessionID:       store.Meta().SessionID,
+		OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: requestID},
+		Text:            text,
 	}
 }

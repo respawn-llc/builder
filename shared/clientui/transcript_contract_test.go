@@ -2,44 +2,59 @@ package clientui
 
 import (
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestTranscriptMessageContractWireValues(t *testing.T) {
-	phases := map[MessagePhase]string{
-		MessagePhaseCommentary: "commentary",
-		MessagePhaseFinal:      "final_answer",
+	messageKinds := map[TranscriptMessageKind]string{
+		TranscriptMessageHydration:                   "hydration",
+		TranscriptMessageCommittedRow:                "committed_row",
+		TranscriptMessageAssistantDelta:              "assistant_delta",
+		TranscriptMessageAssistantStreamAbort:        "assistant_stream_abort",
+		TranscriptMessageToolStart:                   "tool_start",
+		TranscriptMessageToolAbort:                   "tool_abort",
+		TranscriptMessageQueuedOrSteeredMessageState: "queued_or_steered_message_state",
+		TranscriptMessageRunState:                    "run_state",
+		TranscriptMessageRuntimeActivity:             "runtime_activity",
+		TranscriptMessageInputReconciliation:         "input_reconciliation",
+		TranscriptMessageSessionStatus:               "session_status",
+		TranscriptMessageSessionIdentity:             "session_identity",
+		TranscriptMessageCompactionStatus:            "compaction_status",
+		TranscriptMessageContextUsage:                "context_usage",
+		TranscriptMessageGoalStatus:                  "goal_status",
+		TranscriptMessageBackgroundActivity:          "background_activity",
+		TranscriptMessagePendingSessionPrompt:        "pending_session_prompt",
 	}
-	for phase, want := range phases {
-		if got := string(phase); got != want {
-			t.Fatalf("phase %q wire value = %q, want %q", phase, got, want)
+	for kind, want := range messageKinds {
+		if got := string(kind); got != want {
+			t.Fatalf("transcript message kind %q wire value = %q, want %q", kind, got, want)
 		}
 	}
 
-	messageTypes := map[MessageType]string{
-		MessageTypeAgentsMD:                  "agents.md",
-		MessageTypeSkills:                    "skills",
-		MessageTypeSubagents:                 "subagents",
-		MessageTypeEnvironment:               "environment",
-		MessageTypeCompactionSummary:         "compaction_summary",
-		MessageTypeInterruption:              "interruption",
-		MessageTypeErrorFeedback:             "error_feedback",
-		MessageTypeCompactionSoonReminder:    "compaction_soon_reminder",
-		MessageTypeHandoffFutureMessage:      "handoff_future_message",
-		MessageTypeReviewerFeedback:          "reviewer_feedback",
-		MessageTypeBackgroundNotice:          "background_notice",
-		MessageTypeCustomToolCallOutput:      "custom_tool_call_output",
-		MessageTypeManualCompactionCarryover: "manual_compaction_carryover",
-		MessageTypeHeadlessMode:              "headless_mode",
-		MessageTypeHeadlessModeExit:          "headless_mode_exit",
-		MessageTypeWorkflowMode:              "workflow_mode",
-		MessageTypeWorktreeMode:              "worktree_mode",
-		MessageTypeWorktreeModeExit:          "worktree_mode_exit",
-		MessageTypeGoal:                      "goal",
+	rowKinds := map[TranscriptRowKind]string{
+		TranscriptRowUser:      "user",
+		TranscriptRowAssistant: "assistant",
+		TranscriptRowTool:      "tool",
+		TranscriptRowNotice:    "notice",
 	}
-	for messageType, want := range messageTypes {
-		if got := string(messageType); got != want {
-			t.Fatalf("message type %q wire value = %q, want %q", messageType, got, want)
+	for kind, want := range rowKinds {
+		if got := string(kind); got != want {
+			t.Fatalf("transcript row kind %q wire value = %q, want %q", kind, got, want)
+		}
+	}
+
+	noticeSeverities := map[TranscriptNoticeSeverity]string{
+		TranscriptNoticeInfo:    "info",
+		TranscriptNoticeWarning: "warning",
+		TranscriptNoticeError:   "error",
+	}
+	for severity, want := range noticeSeverities {
+		if got := string(severity); got != want {
+			t.Fatalf("transcript notice severity %q wire value = %q, want %q", severity, got, want)
 		}
 	}
 }
@@ -62,25 +77,189 @@ func TestMessagePhaseNormalization(t *testing.T) {
 }
 
 func TestTranscriptMessageContractJSONRoundTrip(t *testing.T) {
-	type payload struct {
-		Phase       MessagePhase `json:"phase,omitempty"`
-		MessageType MessageType  `json:"message_type,omitempty"`
+	streamID := uuid.New()
+	input := TranscriptMessage{
+		Sequence: 2,
+		Kind:     TranscriptMessageAssistantDelta,
+		AssistantDelta: &TranscriptAssistantDelta{
+			StreamID: streamID,
+			Delta:    "hello",
+			Phase:    MessagePhaseFinal,
+		},
 	}
-
-	input := payload{Phase: MessagePhaseFinal, MessageType: MessageTypeReviewerFeedback}
 	encoded, err := json.Marshal(input)
 	if err != nil {
-		t.Fatalf("marshal transcript contract: %v", err)
-	}
-	if string(encoded) != `{"phase":"final_answer","message_type":"reviewer_feedback"}` {
-		t.Fatalf("encoded transcript contract = %s", encoded)
+		t.Fatalf("marshal transcript message: %v", err)
 	}
 
-	var decoded payload
+	var decoded TranscriptMessage
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("unmarshal transcript contract: %v", err)
+		t.Fatalf("unmarshal transcript message: %v", err)
 	}
-	if decoded != input {
-		t.Fatalf("decoded transcript contract = %#v, want %#v", decoded, input)
+	if decoded.AssistantDelta == nil || decoded.AssistantDelta.StreamID != streamID || decoded.AssistantDelta.Delta != "hello" {
+		t.Fatalf("decoded transcript message = %#v, want assistant delta with uuid stream", decoded)
 	}
+}
+
+func TestTranscriptMessageHasExactlyOnePayloadForKind(t *testing.T) {
+	valid := TranscriptMessage{
+		Kind:      TranscriptMessageHydration,
+		Hydration: &TranscriptHydration{},
+	}
+	if err := valid.ValidatePayload(); err != nil {
+		t.Fatalf("valid transcript message payload rejected: %v", err)
+	}
+
+	missing := TranscriptMessage{Kind: TranscriptMessageHydration}
+	if err := missing.ValidatePayload(); err == nil {
+		t.Fatal("missing transcript message payload accepted")
+	}
+
+	ambiguous := TranscriptMessage{
+		Kind:         TranscriptMessageHydration,
+		Hydration:    &TranscriptHydration{},
+		CommittedRow: &TranscriptCommittedRow{},
+	}
+	if err := ambiguous.ValidatePayload(); err == nil {
+		t.Fatal("transcript message with multiple payloads accepted")
+	}
+}
+
+func TestTranscriptDTOsDoNotReferenceLegacyShapes(t *testing.T) {
+	forbidden := map[reflect.Type]struct{}{
+		reflect.TypeOf(RuntimeMainView{}):            {},
+		reflect.TypeOf(PendingPromptEvent{}):         {},
+		reflect.TypeOf(AttentionNotificationEvent{}): {},
+	}
+	for _, typ := range transcriptContractTypes() {
+		walkType(t, typ, map[reflect.Type]struct{}{}, func(current reflect.Type, path string) {
+			if _, ok := forbidden[current]; ok {
+				t.Fatalf("transcript DTO %s references forbidden legacy shape %s", path, current)
+			}
+		})
+	}
+}
+
+func TestTranscriptDTOsDoNotExposeLegacyCoordinatesOrGenericEscapes(t *testing.T) {
+	for _, typ := range transcriptContractTypes() {
+		walkType(t, typ, map[reflect.Type]struct{}{}, func(current reflect.Type, path string) {
+			if current.Kind() == reflect.Map {
+				t.Fatalf("transcript DTO %s exposes generic map payload", path)
+			}
+			if current.Kind() != reflect.Struct {
+				return
+			}
+			for i := 0; i < current.NumField(); i++ {
+				field := current.Field(i)
+				if field.PkgPath != "" {
+					continue
+				}
+				name := strings.ToLower(field.Name)
+				switch {
+				case name == "role":
+					t.Fatalf("transcript DTO %s.%s exposes legacy role", path, field.Name)
+				case strings.Contains(name, "revision"),
+					strings.Contains(name, "cursor"),
+					strings.Contains(name, "offset"),
+					strings.Contains(name, "range"),
+					strings.Contains(name, "committedentrycount"),
+					strings.Contains(name, "totalentries"):
+					t.Fatalf("transcript DTO %s.%s exposes legacy transcript coordinate", path, field.Name)
+				case name == "message" || name == "displaymessage":
+					t.Fatalf("transcript DTO %s.%s exposes generic server display message", path, field.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestTranscriptAssistantStreamIdentityUsesUUIDValues(t *testing.T) {
+	uuidType := reflect.TypeOf(uuid.UUID{})
+	streamIDField, ok := reflect.TypeOf(TranscriptAssistantRow{}).FieldByName("StreamID")
+	if !ok {
+		t.Fatal("TranscriptAssistantRow.StreamID field not found")
+	}
+	tests := map[string]reflect.Type{
+		"TranscriptAssistantStream.StreamID":      reflect.TypeOf(TranscriptAssistantStream{}).Field(0).Type,
+		"TranscriptAssistantDelta.StreamID":       reflect.TypeOf(TranscriptAssistantDelta{}).Field(0).Type,
+		"TranscriptAssistantStreamAbort.StreamID": reflect.TypeOf(TranscriptAssistantStreamAbort{}).Field(0).Type,
+		"TranscriptAssistantRow.StreamID":         streamIDField.Type,
+	}
+	for name, typ := range tests {
+		if typ == uuidType {
+			continue
+		}
+		if typ.Kind() == reflect.Pointer && typ.Elem() == uuidType {
+			continue
+		}
+		t.Fatalf("%s type = %s, want uuid.UUID or *uuid.UUID", name, typ)
+	}
+}
+
+func transcriptContractTypes() []reflect.Type {
+	return []reflect.Type{
+		reflect.TypeOf(TranscriptMessage{}),
+		reflect.TypeOf(TranscriptHydration{}),
+		reflect.TypeOf(TranscriptCommittedRow{}),
+		reflect.TypeOf(TranscriptUserRow{}),
+		reflect.TypeOf(TranscriptAssistantRow{}),
+		reflect.TypeOf(TranscriptToolRow{}),
+		reflect.TypeOf(TranscriptNoticeRow{}),
+		reflect.TypeOf(TranscriptNoticeData{}),
+		reflect.TypeOf(TranscriptCacheWarningData{}),
+		reflect.TypeOf(TranscriptDiagnosticData{}),
+		reflect.TypeOf(TranscriptAssistantStream{}),
+		reflect.TypeOf(TranscriptAssistantDelta{}),
+		reflect.TypeOf(TranscriptAssistantStreamAbort{}),
+		reflect.TypeOf(TranscriptToolStart{}),
+		reflect.TypeOf(TranscriptToolAbort{}),
+		reflect.TypeOf(TranscriptQueuedOrSteeredMessageState{}),
+		reflect.TypeOf(TranscriptSessionStatus{}),
+		reflect.TypeOf(TranscriptSessionIdentity{}),
+		reflect.TypeOf(TranscriptCompactionStatus{}),
+		reflect.TypeOf(TranscriptGoalStatus{}),
+		reflect.TypeOf(TranscriptBackgroundActivity{}),
+		reflect.TypeOf(TranscriptPendingSessionPrompt{}),
+		reflect.TypeOf(TranscriptPendingSessionPromptData{}),
+	}
+}
+
+func walkType(t *testing.T, typ reflect.Type, seen map[reflect.Type]struct{}, visit func(reflect.Type, string)) {
+	t.Helper()
+	typ = dereferenceType(typ)
+	if typ == nil {
+		return
+	}
+	if _, ok := seen[typ]; ok {
+		return
+	}
+	seen[typ] = struct{}{}
+	visit(typ, typ.String())
+	if typ.Kind() != reflect.Struct {
+		return
+	}
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
+		fieldType := dereferenceType(field.Type)
+		visit(fieldType, typ.String()+"."+field.Name)
+		if fieldType == nil || fieldType.PkgPath() != "core/shared/clientui" {
+			continue
+		}
+		walkType(t, fieldType, seen, visit)
+	}
+}
+
+func dereferenceType(typ reflect.Type) reflect.Type {
+	for typ != nil {
+		switch typ.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Array:
+			typ = typ.Elem()
+		default:
+			return typ
+		}
+	}
+	return nil
 }

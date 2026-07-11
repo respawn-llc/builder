@@ -14,17 +14,16 @@ import (
 const fastRoleSameAsMainWarning = "Warning: user configuration for fast agents is the same as for other agents. Consider asking the user to edit their config to pick a faster, smaller model at the end of your task. More info at " + config.DocsURL
 
 func resolveSubagentSettingsWithValidation(base config.Settings, providerBase config.Settings, baseSources map[string]string, roleName string, authState auth.State, allowModelOverride bool, validate bool) (config.Settings, string, error) {
-	normalizedRole := config.NormalizeSubagentSelector(roleName)
-	if normalizedRole == "" {
+	lookup := config.LookupSubagentRole(base, roleName)
+	switch lookup.Status {
+	case config.SubagentRoleLookupInvalid:
 		return config.Settings{}, "", fmt.Errorf("invalid subagent role %q", roleName)
-	}
-	role, hasRole := base.Subagents[normalizedRole]
-	if !hasRole && normalizedRole != config.BuiltInSubagentRoleFast {
-		return config.Settings{}, "", fmt.Errorf("Unrecognized role %q. It may have been removed by the user during the session. Available roles: [%s]", normalizedRole, strings.Join(config.AvailableSubagentRoleNames(base, false), ", "))
+	case config.SubagentRoleLookupMissing:
+		return config.Settings{}, "", fmt.Errorf("Unrecognized role %q. It may have been removed by the user during the session. Available roles: [%s]", *lookup.NormalizedSelector, strings.Join(config.AvailableSubagentRoleNames(base, false), ", "))
 	}
 	providerSettings := cloneSettings(providerBase)
 	providerSettings.Subagents = nil
-	applySubagentProviderOverrides(&providerSettings, role)
+	applySubagentProviderOverrides(&providerSettings, lookup.Role)
 	providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
 	if err != nil {
 		return config.Settings{}, "", err
@@ -32,7 +31,7 @@ func resolveSubagentSettingsWithValidation(base config.Settings, providerBase co
 	resolved, _, warning, err := resolveSubagentSettingsWithProviderID(
 		base,
 		config.SourceReport{Sources: baseSources},
-		normalizedRole,
+		*lookup.NormalizedSelector,
 		strings.TrimSpace(providerCaps.ProviderID),
 		allowModelOverride,
 		validate,
@@ -44,28 +43,27 @@ func resolveSubagentSettingsWithValidation(base config.Settings, providerBase co
 }
 
 func resolveSubagentSettingsWithProviderID(base config.Settings, baseSource config.SourceReport, roleName string, providerID string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, string, error) {
-	normalizedRole := config.NormalizeSubagentSelector(roleName)
-	if normalizedRole == "" {
+	lookup := config.LookupSubagentRole(base, roleName)
+	switch lookup.Status {
+	case config.SubagentRoleLookupInvalid:
 		return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("invalid subagent role %q", roleName)
-	}
-	role, hasRole := base.Subagents[normalizedRole]
-	if !hasRole && normalizedRole != config.BuiltInSubagentRoleFast {
-		return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("Unrecognized role %q. It may have been removed by the user during the session. Available roles: [%s]", normalizedRole, strings.Join(config.AvailableSubagentRoleNames(base, false), ", "))
+	case config.SubagentRoleLookupMissing:
+		return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("Unrecognized role %q. It may have been removed by the user during the session. Available roles: [%s]", *lookup.NormalizedSelector, strings.Join(config.AvailableSubagentRoleNames(base, false), ", "))
 	}
 	resolved := cloneSettings(base)
-	_ = applyBuiltInRoleHeuristics(&resolved, normalizedRole, strings.TrimSpace(providerID), allowModelOverride)
-	applySubagentRoleOverrides(&resolved, role, allowModelOverride)
-	effectiveSource := sourceReportWithSubagentRoleSources(baseSource, base, normalizedRole, allowModelOverride)
+	_ = applyBuiltInRoleHeuristics(&resolved, *lookup.NormalizedSelector, strings.TrimSpace(providerID), allowModelOverride)
+	applySubagentRoleOverrides(&resolved, lookup.Role, allowModelOverride)
+	effectiveSource := sourceReportWithSubagentRoleSources(baseSource, base, *lookup.NormalizedSelector, allowModelOverride)
 	effectiveSources := cloneStringMap(effectiveSource.Sources)
 	applyReviewerInheritance(&resolved, effectiveSources)
 	effectiveSource.Sources = effectiveSources
 	if validate {
 		if err := config.ValidateSettingsWithSources(resolved, effectiveSources); err != nil {
-			return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("invalid subagent role %q: %w", normalizedRole, err)
+			return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("invalid subagent role %q: %w", *lookup.NormalizedSelector, err)
 		}
 	}
 	warning := ""
-	if normalizedRole == config.BuiltInSubagentRoleFast && sameResolvedSubagentSettings(base, resolved) {
+	if *lookup.NormalizedSelector == config.BuiltInSubagentRoleFast && sameResolvedSubagentSettings(base, resolved) {
 		warning = fastRoleSameAsMainWarning
 	}
 	return resolved, effectiveSource, warning, nil
@@ -82,7 +80,8 @@ func applyBuiltInRoleHeuristics(settings *config.Settings, roleName string, prov
 	if !allowModelOverride {
 		return true
 	}
-	settings.Model = "gpt-5.4-mini"
+	settings.Model = "gpt-5.6-terra"
+	settings.ThinkingLevel = "low"
 	llm.ApplyDerivedModelContextBudget(settings, settings.Model, settings.ModelContextWindow, settings.ContextCompactionThresholdTokens)
 	settings.PreSubmitCompactionLeadTokens = config.DefaultPreSubmitRunwayTokens
 	return true
@@ -146,6 +145,8 @@ func applySubagentRoleOverrides(settings *config.Settings, role config.SubagentR
 			settings.ProviderCapabilities.SupportsReasoningEncrypted = role.Settings.ProviderCapabilities.SupportsReasoningEncrypted
 		case "provider_capabilities.supports_server_side_context_edit":
 			settings.ProviderCapabilities.SupportsServerSideContextEdit = role.Settings.ProviderCapabilities.SupportsServerSideContextEdit
+		case "provider_capabilities.supports_provider_verbosity":
+			settings.ProviderCapabilities.SupportsProviderVerbosity = role.Settings.ProviderCapabilities.SupportsProviderVerbosity
 		case "provider_capabilities.is_openai_first_party":
 			settings.ProviderCapabilities.IsOpenAIFirstParty = role.Settings.ProviderCapabilities.IsOpenAIFirstParty
 		case "store":
@@ -228,6 +229,8 @@ func applySubagentProviderOverrides(settings *config.Settings, role config.Subag
 			settings.ProviderCapabilities.SupportsReasoningEncrypted = role.Settings.ProviderCapabilities.SupportsReasoningEncrypted
 		case "provider_capabilities.supports_server_side_context_edit":
 			settings.ProviderCapabilities.SupportsServerSideContextEdit = role.Settings.ProviderCapabilities.SupportsServerSideContextEdit
+		case "provider_capabilities.supports_provider_verbosity":
+			settings.ProviderCapabilities.SupportsProviderVerbosity = role.Settings.ProviderCapabilities.SupportsProviderVerbosity
 		case "provider_capabilities.is_openai_first_party":
 			settings.ProviderCapabilities.IsOpenAIFirstParty = role.Settings.ProviderCapabilities.IsOpenAIFirstParty
 		}
@@ -358,6 +361,9 @@ func applyReviewerProviderCapabilityInheritance(settings *config.Settings, sourc
 	if strings.TrimSpace(sources["reviewer.provider_capabilities.supports_server_side_context_edit"]) == "default" {
 		settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit = settings.ProviderCapabilities.SupportsServerSideContextEdit
 	}
+	if strings.TrimSpace(sources["reviewer.provider_capabilities.supports_provider_verbosity"]) == "default" {
+		settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity = settings.ProviderCapabilities.SupportsProviderVerbosity
+	}
 	if strings.TrimSpace(sources["reviewer.provider_capabilities.is_openai_first_party"]) == "default" {
 		settings.Reviewer.ProviderCapabilities.IsOpenAIFirstParty = settings.ProviderCapabilities.IsOpenAIFirstParty
 	}
@@ -417,6 +423,9 @@ var reviewerRoleOverrideApplicators = map[string]func(*config.Settings, config.S
 	},
 	"reviewer.provider_capabilities.supports_server_side_context_edit": func(settings *config.Settings, role config.Settings) {
 		settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit = role.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit
+	},
+	"reviewer.provider_capabilities.supports_provider_verbosity": func(settings *config.Settings, role config.Settings) {
+		settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity = role.Reviewer.ProviderCapabilities.SupportsProviderVerbosity
 	},
 	"reviewer.provider_capabilities.is_openai_first_party": func(settings *config.Settings, role config.Settings) {
 		settings.Reviewer.ProviderCapabilities.IsOpenAIFirstParty = role.Reviewer.ProviderCapabilities.IsOpenAIFirstParty

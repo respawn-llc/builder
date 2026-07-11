@@ -1,6 +1,7 @@
 import { ConnectionStore } from "./connectionStore";
 import { TransportError } from "./errors";
 import type { JsonValue } from "./json";
+import { z } from "zod";
 import {
   assertHandshakeRoot,
   delay,
@@ -17,16 +18,17 @@ import {
   subscriptionCompleteMethod,
   waitForSubscriptionEnd,
 } from "./jsonRpcSocket";
-import type { RpcEventHandler, RpcSubscription, RpcTransport } from "./transport";
+import type { RpcCallOptions, RpcEventHandler, RpcSubscription, RpcTransport } from "./transport";
 
 const socketOpenTimeoutMs = 10_000;
 const rpcRequestTimeoutMs = 30_000;
 const subscriptionReconnectBaseMs = 500;
 const subscriptionReconnectMaxMs = 5_000;
+const textFrameSchema = z.string();
 
 type PendingRequest = Readonly<{
   method: string;
-  timeout: ReturnType<typeof setTimeout>;
+  timeout: ReturnType<typeof setTimeout> | null;
   resolve(value: unknown): void;
   reject(error: Error): void;
 }>;
@@ -49,9 +51,9 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     this.#expectedRootId = expectedRootId;
   }
 
-  async call(method: string, params: JsonValue): Promise<unknown> {
+  async call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
     const socket = await this.#open();
-    return this.#send(socket, method, params);
+    return this.#send(socket, method, params, options);
   }
 
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription {
@@ -103,7 +105,7 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     return socket;
   }
 
-  async #send(socket: WebSocket, method: string, params: JsonValue): Promise<unknown> {
+  async #send(socket: WebSocket, method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
     if (socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new TransportError("WebSocket is not open."));
     }
@@ -111,17 +113,20 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     this.#nextID += 1;
     const frame = JSON.stringify({ jsonrpc: jsonRpcVersion, id, method, params });
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
+      const timeoutMs = options?.timeoutMs === undefined ? rpcRequestTimeoutMs : options.timeoutMs;
+      const timeout = timeoutMs === null ? null : setTimeout(() => {
         if (!this.#pending.delete(id)) {
           return;
         }
         reject(new TransportError(`${method} request timed out.`));
-      }, rpcRequestTimeoutMs);
+      }, timeoutMs);
       this.#pending.set(id, { method, timeout, resolve, reject });
       try {
         socket.send(frame);
       } catch (error) {
-        clearTimeout(timeout);
+        if (timeout !== null) {
+          clearTimeout(timeout);
+        }
         this.#pending.delete(id);
         reject(error instanceof Error ? error : new TransportError(`${method} request failed to send.`));
       }
@@ -129,11 +134,12 @@ class JsonRpcWebSocketTransport implements RpcTransport {
   }
 
   #handleControlMessage(event: MessageEvent<unknown>): void {
-    if (typeof event.data !== "string") {
+    const textFrame = textFrameSchema.safeParse(event.data);
+    if (!textFrame.success) {
       this.#rejectAll(new TransportError("Unsupported WebSocket frame type."));
       return;
     }
-    const parsed = parseFrame(event.data);
+    const parsed = parseFrame(textFrame.data);
     const response = responseSchema.safeParse(parsed);
     if (!response.success || response.data.id === undefined) {
       return;
@@ -147,7 +153,9 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       return;
     }
     this.#pending.delete(id);
-    clearTimeout(pending.timeout);
+    if (pending.timeout !== null) {
+      clearTimeout(pending.timeout);
+    }
     if (error !== undefined) {
       pending.reject(socketRequestError(pending.method, error));
       return;
@@ -171,7 +179,9 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     const pending = [...this.#pending.values()];
     this.#pending.clear();
     for (const request of pending) {
-      clearTimeout(request.timeout);
+      if (request.timeout !== null) {
+        clearTimeout(request.timeout);
+      }
       request.reject(error);
     }
   }
@@ -236,15 +246,28 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       await sendSocketRequest(socket, method, params, rpcRequestTimeoutMs);
       handler.onOpen?.();
       await waitForSubscriptionEnd(socket, signal);
+      this.#throwNonZeroComplete(method, terminalCompleteRef.current);
     } catch (error) {
       if (terminalCompleteRef.current?.code === 0) {
         return;
       }
+      this.#throwNonZeroComplete(method, terminalCompleteRef.current);
       throw error;
     } finally {
       socket.removeEventListener("message", subscriptionListener);
       socket.close();
     }
+  }
+
+  #throwNonZeroComplete(
+    method: string,
+    complete: Readonly<{ code: number; message: string }> | null,
+  ): void {
+    if (complete === null || complete.code === 0) {
+      return;
+    }
+    const suffix = complete.message.length === 0 ? "" : `: ${complete.message}`;
+    throw new TransportError(`${method} subscription completed with code ${complete.code.toString()}${suffix}`);
   }
 }
 

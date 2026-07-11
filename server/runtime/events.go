@@ -6,36 +6,61 @@ import (
 	"core/server/tools"
 	"core/shared/transcript"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type EventKind string
 
+type AssistantStreamAbortReason string
+
+type BackgroundShellEventType string
+
 const (
-	EventConversationUpdated     EventKind = "conversation_updated"
-	EventAssistantDelta          EventKind = "assistant_delta"
-	EventAssistantDeltaReset     EventKind = "assistant_delta_reset"
-	EventStreamingErrorUpdated   EventKind = "streaming_error_updated"
-	EventReasoningDelta          EventKind = "reasoning_delta"
-	EventReasoningDeltaReset     EventKind = "reasoning_delta_reset"
-	EventAssistantMessage        EventKind = "assistant_message"
-	EventModelResponse           EventKind = "model_response_received"
-	EventUserMessageFlushed      EventKind = "user_message_flushed"
-	EventToolCallStarted         EventKind = "tool_call_started"
-	EventToolCallCompleted       EventKind = "tool_call_completed"
-	EventReviewerStarted         EventKind = "reviewer_started"
-	EventReviewerCompleted       EventKind = "reviewer_completed"
-	EventInFlightClearFailed     EventKind = "in_flight_clear_failed"
-	EventCompactionStarted       EventKind = "context_compaction_started"
-	EventCompactionCompleted     EventKind = "context_compaction_completed"
-	EventCompactionFailed        EventKind = "context_compaction_failed"
-	EventCacheWarning            EventKind = "cache_warning"
-	EventLocalEntryAdded         EventKind = "local_entry_added"
-	EventRunStateChanged         EventKind = "run_state_changed"
-	EventBackgroundUpdated       EventKind = "background_updated"
-	EventSleepGuardFailed        EventKind = "sleep_guard_failed"
-	EventGoalStatusUpdated       EventKind = "goal_status_updated"
-	EventQueuedUserMessageStatus EventKind = "queued_user_message_status"
+	EventConversationUpdated        EventKind = "conversation_updated"
+	EventAssistantDelta             EventKind = "assistant_delta"
+	EventAssistantDeltaReset        EventKind = "assistant_delta_reset"
+	EventStreamingErrorUpdated      EventKind = "streaming_error_updated"
+	EventReasoningDelta             EventKind = "reasoning_delta"
+	EventReasoningDeltaReset        EventKind = "reasoning_delta_reset"
+	EventAssistantMessage           EventKind = "assistant_message"
+	EventModelResponse              EventKind = "model_response_received"
+	EventUserMessageFlushed         EventKind = "user_message_flushed"
+	EventToolCallStarted            EventKind = "tool_call_started"
+	EventToolCallCompleted          EventKind = "tool_call_completed"
+	EventToolCallAborted            EventKind = "tool_call_aborted"
+	EventReviewerStarted            EventKind = "reviewer_started"
+	EventReviewerCompleted          EventKind = "reviewer_completed"
+	EventInFlightClearFailed        EventKind = "in_flight_clear_failed"
+	EventCompactionStarted          EventKind = "context_compaction_started"
+	EventCompactionCompleted        EventKind = "context_compaction_completed"
+	EventCompactionFailed           EventKind = "context_compaction_failed"
+	EventCacheWarning               EventKind = "cache_warning"
+	EventLocalEntryAdded            EventKind = "local_entry_added"
+	EventRunStateChanged            EventKind = "run_state_changed"
+	EventBackgroundUpdated          EventKind = "background_updated"
+	EventSleepGuardFailed           EventKind = "sleep_guard_failed"
+	EventPromptHistoryPersistFailed EventKind = "prompt_history_persist_failed"
+	EventGoalStatusUpdated          EventKind = "goal_status_updated"
+	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
+
+	AssistantStreamAbortSuperseded AssistantStreamAbortReason = "superseded"
 )
+
+const (
+	BackgroundShellEventBackgrounded BackgroundShellEventType = "backgrounded"
+	BackgroundShellEventCompleted    BackgroundShellEventType = "completed"
+	BackgroundShellEventKilled       BackgroundShellEventType = "killed"
+)
+
+func (t BackgroundShellEventType) IsTerminal() bool {
+	switch t {
+	case BackgroundShellEventCompleted, BackgroundShellEventKilled:
+		return true
+	default:
+		return false
+	}
+}
 
 type QueuedUserMessageStatus string
 
@@ -52,6 +77,7 @@ const (
 	QueuedUserMessageFailureClosing                    QueuedUserMessageFailureReason = "closing"
 	QueuedUserMessageFailureTerminalWorkflowCompletion QueuedUserMessageFailureReason = "terminal_workflow_completion"
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
+	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
 )
 
 type QueuedUserMessageStatusEvent struct {
@@ -74,6 +100,9 @@ type Event struct {
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          llm.MessagePhase
+	AssistantStreamMetadata      *AssistantStreamMetadata
+	AssistantTranscriptStreamID  *uuid.UUID
+	AssistantStreamAbortReason   string
 	ReasoningDelta               *llm.ReasoningSummaryDelta
 	UserMessage                  string
 	UserMessageBatch             []string
@@ -82,11 +111,13 @@ type Event struct {
 	ModelResponse                *ModelResponseTrace
 	ToolCall                     *llm.ToolCall
 	ToolResult                   *tools.Result
+	ToolAbortReason              string
 	Reviewer                     *ReviewerStatus
 	Compaction                   *CompactionStatus
 	CacheWarning                 *transcript.CacheWarning
 	CacheWarningVisibility       transcript.EntryVisibility
 	LocalEntry                   *ChatEntry
+	LocalEntryProjected          bool
 	RunState                     *RunState
 	ContextUsage                 *ContextUsage
 	Background                   *BackgroundShellEvent
@@ -102,14 +133,16 @@ type GoalStatusUpdate struct {
 type RunState struct {
 	Lifecycle  RunLifecycle
 	RunID      string
+	ActiveKind ActiveKind
 	Status     RunStatus
 	StartedAt  time.Time
 	FinishedAt time.Time
 }
 
 type BackgroundShellEvent struct {
-	Type              string
+	Type              BackgroundShellEventType
 	ID                string
+	ActivityID        uuid.UUID
 	State             string
 	Command           string
 	Workdir           string
@@ -117,7 +150,7 @@ type BackgroundShellEvent struct {
 	NoticeText        string
 	CompactText       string
 	Preview           string
-	Removed           int
+	PreviewRemoved    int
 	ExitCode          *int
 	UserRequestedKill bool
 	NoticeSuppressed  bool
@@ -143,7 +176,7 @@ type CompactionStatus struct {
 	Mode              string
 	Engine            string
 	Provider          string
-	TrimmedItemsCount int
+	TrimmedItemsCount *int
 	Count             int
 	Error             string
 }

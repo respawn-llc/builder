@@ -464,7 +464,7 @@ func TestSetThinkingLevelRejectsInvalidValue(t *testing.T) {
 	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
 		ThinkingLevel: "high",
 	})
-	if err := eng.SetThinkingLevel("ultra"); err == nil {
+	if err := eng.SetThinkingLevel("unsupported"); err == nil {
 		t.Fatal("expected invalid thinking level error")
 	}
 	if got := eng.ThinkingLevel(); got != "high" {

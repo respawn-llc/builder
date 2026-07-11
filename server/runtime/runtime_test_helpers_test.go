@@ -8,9 +8,23 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/server/workflowruntime"
 	"core/shared/toolspec"
 )
+
+func backgroundShellEventTypeForTest(eventType shelltool.EventType) BackgroundShellEventType {
+	switch eventType {
+	case shelltool.EventBackgrounded:
+		return BackgroundShellEventBackgrounded
+	case shelltool.EventCompleted:
+		return BackgroundShellEventCompleted
+	case shelltool.EventKilled:
+		return BackgroundShellEventKilled
+	default:
+		panic("unknown shell event type in runtime test")
+	}
+}
 
 func userMessageSeqAt(t *testing.T, store *session.Store, n int) int64 {
 	t.Helper()

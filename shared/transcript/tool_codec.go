@@ -41,6 +41,7 @@ func isEmptyToolCallMeta(meta ToolCallMeta) bool {
 		meta.RecommendedOptionIndex == 0 &&
 		!meta.RawOutputRequested &&
 		!meta.OutputTruncated &&
+		!meta.MovedToBackground &&
 		meta.RenderHint == nil &&
 		meta.PatchRender == nil
 }

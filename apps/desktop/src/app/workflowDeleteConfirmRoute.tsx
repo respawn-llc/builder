@@ -6,10 +6,7 @@ import { workflowDeleteConfirmationWindowTargetFromSearch } from "../features/wo
 
 export const workflowDeleteConfirmNativeDialogPath = "/native-dialog/workflow-delete-confirm";
 
-const optionalSearchString = z.preprocess(
-  (value: unknown) => (typeof value === "string" ? value : ""),
-  z.string(),
-);
+const optionalSearchString = z.string().catch("");
 
 const workflowDeleteConfirmSearchSchema = z.object({
   edgeCount: optionalSearchString,

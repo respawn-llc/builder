@@ -50,7 +50,7 @@ export function viewTransitionScopeClass(scope: ViewTransitionScope): string {
 }
 
 function canStartViewTransition(): boolean {
-  if (typeof document === "undefined" || typeof document.startViewTransition !== "function") {
+  if (typeof document === "undefined" || !(document.startViewTransition instanceof Function)) {
     return false;
   }
   if (document.visibilityState === "hidden" || activeTransition !== null) {
@@ -61,7 +61,7 @@ function canStartViewTransition(): boolean {
 
 function prefersReducedMotion(): boolean {
   return (
-    typeof globalThis.matchMedia === "function" &&
+    globalThis.matchMedia instanceof Function &&
     globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
 }

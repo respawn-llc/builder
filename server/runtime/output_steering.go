@@ -1,14 +1,18 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 type steeringPriority int
@@ -26,15 +30,17 @@ type steeringIntent struct {
 }
 
 type steeringItem struct {
-	message          *steeringMessage
-	localEntry       *steeringLocalEntry
-	historyReplace   *steeringHistoryReplacement
-	toolCompletion   *tools.Result
-	queuedFlush      *steeringQueuedUserMessageFlush
-	event            *Event
-	streaming        *steeringStreamingOutput
-	cacheWarning     *steeringCacheWarning
-	cacheObservation *steeringCacheObservation
+	message            *steeringMessage
+	committedAssistant *steeringCommittedAssistantMessage
+	localEntry         *steeringLocalEntry
+	historyReplace     *steeringHistoryReplacement
+	toolCompletion     *tools.Result
+	queuedFlush        *steeringQueuedUserMessageFlush
+	event              *Event
+	streaming          *steeringStreamingOutput
+	cacheWarning       *steeringCacheWarning
+	cacheObservation   *steeringCacheObservation
+	liveToolAbort      *steeringLiveToolAbort
 }
 
 type steeringMessage struct {
@@ -47,6 +53,12 @@ type steeringLocalEntry struct {
 	entry storedLocalEntry
 }
 
+type steeringCommittedAssistantMessage struct {
+	message           llm.Message
+	committedStart    int
+	committedStartSet bool
+}
+
 type steeringHistoryReplacement struct {
 	payload          historyReplacementPayload
 	projectedEntries []ChatEntry
@@ -56,7 +68,9 @@ type steeringHistoryReplacement struct {
 type steeringStreamingOutput struct {
 	assistantDelta *llm.AssistantDelta
 	reasoningDelta *llm.ReasoningSummaryDelta
-	clear          bool
+	clearState     bool
+	resetEvents    bool
+	abortReason    AssistantStreamAbortReason
 }
 
 type steeringCacheWarning struct {
@@ -70,6 +84,10 @@ type steeringCacheObservation struct {
 	warning    transcript.CacheWarning
 	visibility transcript.EntryVisibility
 	emit       bool
+}
+
+type steeringLiveToolAbort struct {
+	reason string
 }
 
 type steeringQueuedUserMessageFlush struct {
@@ -156,6 +174,24 @@ func steerEventIntent(evt Event) steeringIntent {
 	}
 }
 
+func steerLiveToolAbortIntent(reason string) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{liveToolAbort: &steeringLiveToolAbort{reason: strings.TrimSpace(reason)}}},
+	}
+}
+
+func steerCommittedAssistantMessageIntent(msg llm.Message, committedStart int, committedStartSet bool) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items: []steeringItem{{committedAssistant: &steeringCommittedAssistantMessage{
+			message:           msg,
+			committedStart:    committedStart,
+			committedStartSet: committedStartSet,
+		}}},
+	}
+}
+
 func steerAssistantDeltaIntent(delta llm.AssistantDelta) steeringIntent {
 	copyDelta := delta
 	return steeringIntent{
@@ -175,7 +211,21 @@ func steerReasoningDeltaIntent(delta llm.ReasoningSummaryDelta) steeringIntent {
 func steerClearStreamingStateIntent() steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{clear: true}}},
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: AssistantStreamAbortSuperseded}}},
+	}
+}
+
+func steerClearStreamingStateStoreIntent() steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true}}},
+	}
+}
+
+func steerStreamingResetEventsIntent() steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{resetEvents: true}}},
 	}
 }
 
@@ -185,7 +235,7 @@ func steerCacheWarningIntent(warning transcript.CacheWarning, visibility transcr
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{cacheWarning: &steeringCacheWarning{
 			warning:    copyWarning,
-			visibility: transcript.NormalizeEntryVisibility(visibility),
+			visibility: normalizeRuntimeEntryVisibility(visibility),
 			emit:       emit,
 		}}},
 	}
@@ -200,13 +250,27 @@ func steerCacheObservationIntent(events []session.EventInput, warning transcript
 		items: []steeringItem{{cacheObservation: &steeringCacheObservation{
 			events:     copyEvents,
 			warning:    copyWarning,
-			visibility: transcript.NormalizeEntryVisibility(visibility),
+			visibility: normalizeRuntimeEntryVisibility(visibility),
 			emit:       emit,
 		}}},
 	}
 }
 
 func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
+	return e.steerOrdered(stepID, intents...)
+}
+
+func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) error {
+	if e == nil {
+		return nil
+	}
+	return e.steerOrdered(stepID, intents...)
+}
+
+func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	ordered := make([]steeringIntent, 0, len(intents))
 	for _, intent := range intents {
 		if len(intent.items) == 0 {
@@ -236,6 +300,9 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.message != nil {
 		return e.appendMessageRaw(stepID, item.message.message, item.message.eventPolicy, item.message.persist)
 	}
+	if item.committedAssistant != nil {
+		return e.emitCommittedAssistantMessageRaw(stepID, *item.committedAssistant)
+	}
 	if item.localEntry != nil {
 		return e.appendPersistedLocalEntryRecordRaw(stepID, item.localEntry.entry)
 	}
@@ -243,10 +310,12 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return e.replaceHistoryRaw(stepID, *item.historyReplace)
 	}
 	if item.toolCompletion != nil {
-		if err := e.persistToolCompletionRaw(stepID, *item.toolCompletion); err != nil {
+		result := e.finalizeLiveToolCompletion(*item.toolCompletion)
+		if err := e.persistToolCompletionRaw(stepID, result); err != nil {
 			return err
 		}
-		result := cloneToolResult(*item.toolCompletion)
+		result = cloneToolResult(result)
+		e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
 		e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true})
 		return nil
 	}
@@ -258,11 +327,16 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if evt.StepID == "" {
 			evt.StepID = stepID
 		}
+		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
+			if err := e.transcriptRuntimeState().RecordLiveToolStart(*evt.ToolCall); err != nil {
+				return err
+			}
+		}
 		e.emitRaw(evt)
 	}
 	if item.cacheWarning != nil {
 		warning := item.cacheWarning.warning
-		visibility := transcript.NormalizeEntryVisibility(item.cacheWarning.visibility)
+		visibility := normalizeRuntimeEntryVisibility(item.cacheWarning.visibility)
 		_, committed, appendErr := e.store.AppendEvent(stepID, sessionEventCacheWarning, warning)
 		if appendErr != nil && !committed {
 			return appendErr
@@ -284,18 +358,25 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			return err
 		}
 		warning := observation.warning
-		visibility := transcript.NormalizeEntryVisibility(observation.visibility)
+		visibility := normalizeRuntimeEntryVisibility(observation.visibility)
 		newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
 		if observation.emit {
 			e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true})
 		}
 		return nil
 	}
+	if item.liveToolAbort != nil {
+		e.emitLiveToolAbortsRaw(stepID, item.liveToolAbort.reason)
+		return nil
+	}
 	if item.streaming != nil {
 		if item.streaming.assistantDelta != nil {
 			delta := *item.streaming.assistantDelta
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(delta.Text)
-			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase})
+			if delta.Text == "" {
+				return nil
+			}
+			metadata, streamID := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(stepID, e.TranscriptRevision(), e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
+			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
 			return nil
 		}
 		if item.streaming.reasoningDelta != nil {
@@ -303,10 +384,15 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			e.emitRaw(Event{Kind: EventReasoningDelta, StepID: stepID, ReasoningDelta: &delta})
 			return nil
 		}
-		if item.streaming.clear {
-			e.clearStreamingAssistantStateRaw(stepID)
-			return nil
+		var clearedMetadata *AssistantStreamMetadata
+		var clearedStreamID *uuid.UUID
+		if item.streaming.clearState {
+			clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
 		}
+		if item.streaming.resetEvents {
+			e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, item.streaming.abortReason)
+		}
+		return nil
 	}
 	return nil
 }
@@ -314,6 +400,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryReplacement) error {
 	reminderIssued := false
 	projectedStart := e.CommittedTranscriptEntryCount()
+	replacement.payload.CommittedEntryStart = &projectedStart
 	preparedItems := llm.CloneResponseItems(replacement.payload.Items)
 	// Compaction reinjects base meta into the same replacement payload, so a
 	// non-empty replacement active list is born already carrying it. Mirror the
@@ -329,12 +416,17 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	e.compactionRuntimeState().SetLastWorkflowRunID(replacement.workflowRunID)
 	e.resetCurrentPreciseInputTracking()
 	e.resetLocalDiagnostics()
-	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistory(preparedItems)
+	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistoryAtCommittedEntryStart(preparedItems, &projectedStart)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	e.emitProjectedHistoryReplacementEntriesRaw(stepID, projectedStart, replacement.projectedEntries)
 	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
+	// The durable history replacement is the compaction boundary. Apply that
+	// committed replacement in memory before resetting workflow-adjacent state,
+	// so any reset failure cannot make the live engine diverge from restore.
+	budgetResetErr := e.resetWorkflowProtocolViolationBudget(context.Background())
 	return errors.Join(
 		appendErr,
+		budgetResetErr,
 		e.store.SetCompactionSoonReminderIssued(reminderIssued),
 		e.store.SetUsageState(nil),
 	)
@@ -356,6 +448,7 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(stepID string, start 
 			Kind:                       EventLocalEntryAdded,
 			StepID:                     stepID,
 			LocalEntry:                 &copyEntry,
+			LocalEntryProjected:        true,
 			CommittedTranscriptChanged: true,
 			CommittedEntryStart:        start + idx,
 			CommittedEntryStartSet:     true,

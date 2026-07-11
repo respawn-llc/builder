@@ -129,7 +129,9 @@ func (m *uiModel) scheduleSpinnerTick(token uint64, now time.Time) tea.Cmd {
 
 func (c uiInputController) interruptBusyRuntime() tea.Cmd {
 	m := c.model
+	preActive := !m.runtimeActivityBusy() && m.hasLocalDispatchPending()
 	m.setPendingInterrupt(true)
+	m.interruptPreActive = preActive
 	return m.runtimeControlCommand(runtimeControlInterrupt, "", false, "")
 }
 
@@ -158,9 +160,6 @@ func (m *uiModel) appendLocalEntryWithNoticeID(role, text, noticeID string) tea.
 	if !m.hasRuntimeClient() {
 		return m.sendTransientStatusWithNoticeID(text, statusKindForLocalEntryRole(role), transientStatusDuration, uiStatusNoticeReplace, noticeID)
 	}
-	if capability, ok := m.runtimeClient().(interface{ CanAppendCommittedEntries() bool }); ok && !capability.CanAppendCommittedEntries() {
-		return m.sendTransientStatusWithNoticeID(text, statusKindForLocalEntryRole(role), transientStatusDuration, uiStatusNoticeReplace, noticeID)
-	}
 	return m.persistLocalEntryCmd(role, text, noticeID)
 }
 
@@ -183,8 +182,8 @@ func statusKindForLocalEntryRole(role string) uiStatusNoticeKind {
 	case string(transcript.EntryRoleDeveloperErrorFeedback), "error":
 		return uiStatusNoticeError
 	case "warning":
-		return uiStatusNoticeNeutral
+		return uiStatusNoticeWarning
 	default:
-		return uiStatusNoticeNeutral
+		return uiStatusNoticeInfo
 	}
 }

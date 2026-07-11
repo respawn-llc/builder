@@ -162,8 +162,6 @@ function cardActionsEqual(left: KanbanCardVM, right: KanbanCardVM): boolean {
     left.actions.canInterrupt === right.actions.canInterrupt &&
     left.actions.canResume === right.actions.canResume &&
     left.actions.canStart === right.actions.canStart &&
-    left.actions.interruptRunID === right.actions.interruptRunID &&
-    left.actions.resumeRunID === right.actions.resumeRunID &&
     arrayEqual(left.actions.manualMoveTargetNodeIDs, right.actions.manualMoveTargetNodeIDs)
   );
 }

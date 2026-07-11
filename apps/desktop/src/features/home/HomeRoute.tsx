@@ -8,6 +8,7 @@ import { basename, formatRelativeTime, projectKeyFromName } from "../../app/form
 import { useAppNavigation } from "../../app/navigation";
 import { queryKeys } from "../../app/queryKeys";
 import { useSidebar } from "../../app/sidebarContext";
+import { taskDetailInitialFocusFromAttentionItem } from "../../app/taskDetailInitialFocus";
 import { useAppServices } from "../../app/useAppServices";
 import { useNativeDialogFallback } from "../../app/useNativeDialogFallback";
 import { useStatusController } from "../../app/useStatusController";
@@ -253,11 +254,10 @@ const AttentionRow = memo(function AttentionRow({
         if (item.taskID.length > 0) {
           void openSidebar({
             kind: "taskDetail",
-            initialFocus: item.kind === "question" ? "firstQuestion" : undefined,
+            initialFocus: taskDetailInitialFocusFromAttentionItem(item),
             inboxNav: true,
             mode: "overlay",
             onMutated: undefined,
-            resumeRunID: "",
             taskID: item.taskID,
           });
           return;
@@ -310,6 +310,8 @@ function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): bool
     previous.projectID === next.projectID &&
     previous.workflowID === next.workflowID &&
     previous.taskID === next.taskID &&
+    previous.askID === next.askID &&
+    previous.taskTransitionID === next.taskTransitionID &&
     previous.taskShortID === next.taskShortID &&
     previous.taskTitle === next.taskTitle &&
     previous.message === next.message &&

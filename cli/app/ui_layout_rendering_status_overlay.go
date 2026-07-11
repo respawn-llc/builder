@@ -99,9 +99,6 @@ func (l uiViewLayout) statusOverlayContentLines(width int) []string {
 	snapshot := m.status.snapshot
 
 	appendSectionTitle("Session")
-	if snapshot.OwnsServer {
-		appendWrapped("Server: owned by this CLI", lipgloss.Style{})
-	}
 	appendWrapped("CWD: "+statusValueOrFallback(snapshot.Workdir, "<unknown>"), boldStyle)
 	appendANSI(l.renderStatusModelLine(width, snapshot.Model.Summary))
 	if updateLine := l.renderStatusUpdateLine(width, snapshot.Update); updateLine != "" {

@@ -24,7 +24,7 @@ func TestPostCompactionSegmentRollbackTargetEncodesGlobalEventSeq(t *testing.T) 
 		t.Fatalf("append u2: %v", err)
 	}
 
-	page, err := TranscriptSegmentPageFromStore(store, 0, config.CacheWarningModeDefault)
+	page, err := TranscriptNewestSegmentPageFromStore(store, config.CacheWarningModeDefault)
 	if err != nil {
 		t.Fatalf("project newest segment: %v", err)
 	}

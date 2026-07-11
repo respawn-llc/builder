@@ -18,43 +18,58 @@ func Render(src, cwd string) RenderedPatch {
 	return rendered
 }
 
+func RenderEdit(path, oldText, newText, cwd string) RenderedPatch {
+	return Format(Document{Hunks: []any{UpdateFile{
+		Path:    path,
+		Changes: editChangeLines(oldText, newText),
+	}}}, cwd)
+}
+
+func editChangeLines(oldText, newText string) []ChangeLine {
+	oldLines := normalizedEditLines(oldText)
+	newLines := normalizedEditLines(newText)
+	commonPrefix := 0
+	for commonPrefix < len(oldLines) && commonPrefix < len(newLines) && oldLines[commonPrefix] == newLines[commonPrefix] {
+		commonPrefix++
+	}
+	oldSuffix := len(oldLines)
+	newSuffix := len(newLines)
+	for oldSuffix > commonPrefix && newSuffix > commonPrefix && oldLines[oldSuffix-1] == newLines[newSuffix-1] {
+		oldSuffix--
+		newSuffix--
+	}
+	out := make([]ChangeLine, 0, oldSuffix-commonPrefix+newSuffix-commonPrefix)
+	for _, line := range oldLines[commonPrefix:oldSuffix] {
+		out = append(out, ChangeLine{Kind: '-', Content: line})
+	}
+	for _, line := range newLines[commonPrefix:newSuffix] {
+		out = append(out, ChangeLine{Kind: '+', Content: line})
+	}
+	if len(out) == 0 && oldText != newText {
+		out = append(out, ChangeLine{Kind: '-', Content: oldText}, ChangeLine{Kind: '+', Content: newText})
+	}
+	return out
+}
+
+func normalizedEditLines(text string) []string {
+	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(text, "\r\n", "\n"), "\n"), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return nil
+	}
+	return lines
+}
+
 func Raw(src string) RenderedPatch {
-	summary := []RenderedLine{{Kind: RenderedLineKindHeader, Text: "Patch", FileIndex: -1}}
-	detail := []RenderedLine{{Kind: RenderedLineKindHeader, Text: "Patch", FileIndex: -1}}
 	trimmed := strings.TrimSpace(src)
 	if trimmed == "" {
-		return RenderedPatch{SummaryLines: summary, DetailLines: detail}
+		line := RenderedLine{Kind: RenderedLineKindRaw, Text: "empty patch input", FileIndex: -1}
+		return RenderedPatch{SummaryLines: []RenderedLine{line}, DetailLines: []RenderedLine{line}}
 	}
+	detail := make([]RenderedLine, 0, 8)
 	for _, line := range strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n") {
 		detail = append(detail, RenderedLine{Kind: RenderedLineKindRaw, Text: line, FileIndex: -1})
 	}
-	return RenderedPatch{SummaryLines: summary, DetailLines: detail}
-}
-
-func StripEditedLabel(text string) string {
-	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n"), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-	out := make([]string, 0, len(lines))
-	for idx, line := range lines {
-		if idx == 0 {
-			fields := strings.Fields(line)
-			if len(fields) == 1 && fields[0] == "Edited:" {
-				continue
-			}
-			if len(fields) > 1 && fields[0] == "Edited:" {
-				out = append(out, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), fields[0])))
-				continue
-			}
-		}
-		out = append(out, line)
-	}
-	stripped := strings.TrimSpace(strings.Join(out, "\n"))
-	if stripped == "" {
-		return "Patch"
-	}
-	return stripped
+	return RenderedPatch{SummaryLines: []RenderedLine{detail[0]}, DetailLines: detail}
 }
 
 func Format(doc Document, cwd string) RenderedPatch {

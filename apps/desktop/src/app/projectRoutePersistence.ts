@@ -1,10 +1,18 @@
+import { z } from "zod";
+
 const lastProjectRouteStorageKey = "desktop.lastProjectRoute";
-type StoredProjectRoute = Readonly<{ projectId: string; workflowId: string }>;
+const storedProjectRouteSchema = z.object({
+  projectId: z.string(),
+  workflowId: z.string(),
+});
+type StoredProjectRoute = z.output<typeof storedProjectRouteSchema>;
+
 export function readLastProjectRoute(): StoredProjectRoute | null {
   const raw = localStorageSafe()?.getItem(lastProjectRouteStorageKey) ?? "null";
   try {
     const parsed: unknown = JSON.parse(raw);
-    return isStoredProjectRoute(parsed) ? parsed : null;
+    const route = storedProjectRouteSchema.safeParse(parsed);
+    return route.success ? route.data : null;
   } catch {
     return null;
   }
@@ -18,13 +26,6 @@ export function clearLastProjectRoute(projectID: string): void {
     storage.removeItem(lastProjectRouteStorageKey);
   }
 }
-function isStoredProjectRoute(value: unknown): value is StoredProjectRoute {
-  if (typeof value !== "object" || value === null || !("projectId" in value) || !("workflowId" in value)) {
-    return false;
-  }
-  return typeof value.projectId === "string" && typeof value.workflowId === "string";
-}
-
 function localStorageSafe(): Storage | null {
   try {
     return globalThis.localStorage;

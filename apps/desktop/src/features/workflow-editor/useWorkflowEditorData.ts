@@ -6,6 +6,7 @@ import { queryKeys } from "../../app/queryKeys";
 import { useAppServices } from "../../app/useAppServices";
 import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
 import { useStatusController } from "../../app/useStatusController";
+import { workflowProjectEvent } from "../../app/workflowProjectEvents";
 
 export type WorkflowEditorData = ReturnType<typeof useWorkflowEditorData>;
 
@@ -190,40 +191,3 @@ const workflowDefinitionActions = new Set([
 ]);
 
 const workflowLinkActions = new Set(["linked", "default_changed", "unlinked"]);
-
-function workflowProjectEvent(params: unknown): Readonly<{
-  action: string;
-  changedIDs: readonly string[];
-  projectID: string;
-  resource: string;
-  workflowID: string;
-}> | null {
-  if (!isRecord(params) || !("event" in params)) {
-    return null;
-  }
-  const rawEvent = params.event;
-  if (!isRecord(rawEvent)) {
-    return null;
-  }
-  return {
-    action: stringField(rawEvent, "action"),
-    changedIDs: stringArrayField(rawEvent, "changed_ids"),
-    projectID: stringField(rawEvent, "project_id"),
-    resource: stringField(rawEvent, "resource"),
-    workflowID: stringField(rawEvent, "workflow_id"),
-  };
-}
-
-function stringField(value: Readonly<Record<string, unknown>>, key: string): string {
-  const raw = value[key];
-  return typeof raw === "string" ? raw : "";
-}
-
-function stringArrayField(value: Readonly<Record<string, unknown>>, key: string): readonly string[] {
-  const raw = value[key];
-  return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null;
-}

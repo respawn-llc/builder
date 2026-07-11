@@ -4,16 +4,10 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeview"
 	"core/shared/clientui"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func projectRuntimeEvent(evt runtime.Event) clientui.Event {
 	return runtimeview.EventFromRuntime(evt)
-}
-
-func projectChatSnapshot(snapshot runtime.ChatSnapshot) clientui.ChatSnapshot {
-	return runtimeview.ChatSnapshotFromRuntime(snapshot)
 }
 
 func projectedRuntimeEventMsg(evt runtime.Event) runtimeEventMsg {
@@ -61,10 +55,6 @@ func publishProjectedRuntimeEvent(stop <-chan struct{}, out chan<- clientui.Even
 	}
 }
 
-func (a uiRuntimeAdapter) handleRuntimeEvent(evt runtime.Event) tea.Cmd {
-	return a.applyProjectedRuntimeEvent(projectRuntimeEvent(evt)).cmd
-}
-
-func (a uiRuntimeAdapter) applyChatSnapshot(snapshot runtime.ChatSnapshot) tea.Cmd {
-	return a.applyProjectedChatSnapshot(projectChatSnapshot(snapshot))
+func (a uiRuntimeAdapter) handleRuntimeEvent(evt runtime.Event) {
+	a.applyProjectedRuntimeEvent(projectRuntimeEvent(evt))
 }
