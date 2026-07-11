@@ -10,6 +10,7 @@ import (
 
 	"core/server/tools"
 	"core/server/tools/shell/postprocess"
+	"core/shared/textutil"
 )
 
 type writeStdinInput struct {
@@ -75,7 +76,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 		BackgroundSessionID: in.SessionID,
 		BackgroundRunning:   result.Running,
 		Backgrounded:        result.Backgrounded,
-		BackgroundExitCode:  postprocess.CloneIntPtr(result.ExitCode),
+		BackgroundExitCode:  textutil.CloneInt(result.ExitCode),
 	})
 	if marshalErr != nil {
 		return tools.Result{}, marshalErr

@@ -66,21 +66,23 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				mu.Lock()
 				chunk := analyzer.NewChunk(len(chunks), time.Since(started), buffer[:n])
 				chunks = append(chunks, chunk)
-				mu.Unlock()
 				if feedErr := stream.FeedChunk(chunk); feedErr != nil {
+					mu.Unlock()
 					reportDispatcherError(feedErr)
 					return
 				}
 				analysis, snapshotErr := stream.Snapshot()
 				if snapshotErr != nil {
+					mu.Unlock()
 					reportDispatcherError(snapshotErr)
 					return
 				}
 				phasePayloads := phaseInputs.pending(analysis)
+				parseablePayloads := parseableInputs.pending(analysis)
+				mu.Unlock()
 				for _, payload := range phasePayloads {
 					_, _ = ptmx.Write(payload)
 				}
-				parseablePayloads := parseableInputs.pending(analysis)
 				for _, payload := range parseablePayloads {
 					_, _ = ptmx.Write(payload)
 				}
@@ -103,13 +105,25 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				_ = creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)})
 				mu.Lock()
+				if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)}); err != nil {
+					mu.Unlock()
+					reportDispatcherError(fmt.Errorf("resize PTY: %w", err))
+					return
+				}
 				placement := analyzer.BeforeFirstChunk()
+				source := analyzer.Chunk{Index: 0}
 				if len(chunks) > 0 {
 					placement = analyzer.AfterChunk(len(chunks) - 1)
+					source = chunks[len(chunks)-1]
 				}
-				resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: time.Since(started), Dimensions: resize.Dimensions})
+				at := time.Since(started)
+				resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: at, Dimensions: resize.Dimensions})
+				if err := stream.ResizeFrom(resize.Dimensions, source, at); err != nil {
+					mu.Unlock()
+					reportDispatcherError(fmt.Errorf("apply live PTY resize: %w", err))
+					return
+				}
 				mu.Unlock()
 			case <-ctx.Done():
 			}

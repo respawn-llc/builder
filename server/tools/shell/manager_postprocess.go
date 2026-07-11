@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"core/server/tools/shell/postprocess"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -26,7 +27,7 @@ func (m *Manager) applyPostprocessing(ctx context.Context, entry *processEntry, 
 		CommandText:     entry.command,
 		Workdir:         entry.workdir,
 		OwnerSessionID:  entry.ownerSessionID,
-		ExitCode:        postprocess.CloneIntPtr(exitCode),
+		ExitCode:        textutil.CloneInt(exitCode),
 		Raw:             entry.raw,
 		Output:          output,
 		MaxDisplayChars: maxOutputChars,

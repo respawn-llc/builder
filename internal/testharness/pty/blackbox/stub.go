@@ -8,10 +8,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"core/internal/testharness/pty/analyzer"
+	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -506,7 +509,7 @@ type modelRequest struct {
 
 type responseRequest struct {
 	Input          []responseInputItem `json:"input"`
-	PromptCacheKey *uuid.UUID          `json:"prompt_cache_key"`
+	PromptCacheKey *string             `json:"prompt_cache_key"`
 }
 
 func hasMatchingSessionCacheKey(body []byte, headers http.Header) bool {
@@ -514,7 +517,36 @@ func hasMatchingSessionCacheKey(body []byte, headers http.Header) bool {
 	if json.Unmarshal(body, &request) != nil || request.PromptCacheKey == nil {
 		return false
 	}
-	return headers.Get("session_id") == request.PromptCacheKey.String()
+	sessionID, err := runtimeids.ParseSessionID(headers.Get("session_id"))
+	if err != nil {
+		return false
+	}
+	cacheKey, err := parseSessionCacheKey(*request.PromptCacheKey)
+	return err == nil && cacheKey.SessionID.String() == sessionID.String()
+}
+
+type sessionCacheKey struct {
+	SessionID runtimeids.SessionID
+}
+
+func parseSessionCacheKey(raw string) (sessionCacheKey, error) {
+	sessionPart, suffix, compacted := strings.Cut(raw, "/")
+	sessionID, err := runtimeids.ParseSessionID(sessionPart)
+	if err != nil {
+		return sessionCacheKey{}, err
+	}
+	if !compacted {
+		return sessionCacheKey{SessionID: sessionID}, nil
+	}
+	prefix, sequence, valid := strings.Cut(suffix, "-")
+	if !valid || prefix != "compact" {
+		return sessionCacheKey{}, errors.New("invalid compacted session cache key")
+	}
+	count, err := strconv.Atoi(sequence)
+	if err != nil || count <= 0 {
+		return sessionCacheKey{}, errors.New("invalid compacted session cache key sequence")
+	}
+	return sessionCacheKey{SessionID: sessionID}, nil
 }
 
 type responseInputItem struct {

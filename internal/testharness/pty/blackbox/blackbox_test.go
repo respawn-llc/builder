@@ -93,11 +93,12 @@ func TestPredicateVocabularyAndCompositesUseStructuredObservation(t *testing.T) 
 		},
 	}
 	enabled := true
+	rows, cols, mode := 2, 8, 25
 	for _, predicate := range []blackbox.Predicate{
 		{Kind: blackbox.PredicateParseable},
 		{Kind: blackbox.PredicateBlank},
-		{Kind: blackbox.PredicateDimensions, Rows: 2, Cols: 8},
-		{Kind: blackbox.PredicatePrivateMode, Mode: 25, Enabled: &enabled},
+		{Kind: blackbox.PredicateDimensions, Rows: &rows, Cols: &cols},
+		{Kind: blackbox.PredicatePrivateMode, Mode: &mode, Enabled: &enabled},
 		{Kind: blackbox.PredicatePromptReady},
 		{Kind: blackbox.PredicateProcessExited},
 		{Kind: blackbox.PredicateServerReady},
@@ -113,6 +114,23 @@ func TestPredicateVocabularyAndCompositesUseStructuredObservation(t *testing.T) 
 	analysis.Screen.Cells[0][0] = analyzer.Cell{Content: "x"}
 	if !(&blackbox.Predicate{Kind: blackbox.PredicateNonBlank}).Matches(observation) {
 		t.Fatal("nonblank predicate did not inspect screen structure")
+	}
+}
+
+func TestDecodeScenarioDistinguishesAbsentAndInvalidZeroPredicateFields(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.New().String()
+	action := uuid.New().String()
+	for _, document := range []string{
+		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"dimensions","rows":0,"cols":8}}]}`,
+		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"dimensions","cols":8}}]}`,
+		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"private_mode","mode":0,"enabled":true}}]}`,
+		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"private_mode","enabled":true}}]}`,
+	} {
+		if _, err := blackbox.DecodeScenario([]byte(document)); err == nil {
+			t.Fatalf("DecodeScenario accepted invalid zero or absent required predicate field: %s", document)
+		}
 	}
 }
 
@@ -311,6 +329,34 @@ func TestResponsesStubAcceptsLosslessResponseDTOAndStaticAdaptiveDefaults(t *tes
 		t.Fatalf("NewRequest response: %v", err)
 	}
 	request.Header.Set("session_id", cacheKey)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("POST response: %v", err)
+	}
+	_ = response.Body.Close()
+	if err := stub.Verify(); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
+func TestResponsesStubAcceptsCompactedSessionCacheKey(t *testing.T) {
+	t.Parallel()
+
+	sessionID := uuid.New().String()
+	cacheKey := sessionID + "/compact-1"
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, SessionCacheKey: true, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+
+	request, err := http.NewRequest(http.MethodPost, stub.URL()+"/responses", bytes.NewBufferString(`{"input":[],"prompt_cache_key":"`+cacheKey+`"}`))
+	if err != nil {
+		t.Fatalf("NewRequest response: %v", err)
+	}
+	request.Header.Set("session_id", sessionID)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST response: %v", err)

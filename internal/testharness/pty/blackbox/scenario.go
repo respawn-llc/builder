@@ -84,10 +84,10 @@ const (
 
 type Predicate struct {
 	Kind     PredicateKind `json:"kind"`
-	Rows     int           `json:"rows,omitempty"`
-	Cols     int           `json:"cols,omitempty"`
+	Rows     *int          `json:"rows,omitempty"`
+	Cols     *int          `json:"cols,omitempty"`
 	Enabled  *bool         `json:"enabled,omitempty"`
-	Mode     int           `json:"mode,omitempty"`
+	Mode     *int          `json:"mode,omitempty"`
 	Children []Predicate   `json:"children,omitempty"`
 }
 
@@ -310,25 +310,28 @@ func (action *Action) UnmarshalJSON(data []byte) error {
 func (predicate Predicate) Validate() error {
 	switch predicate.Kind {
 	case PredicateParseable, PredicateBlank, PredicateNonBlank, PredicatePromptReady, PredicateProcessExited, PredicateServerReady, PredicateModelConsumed, PredicateNoActiveModels:
-		if predicate.Rows != 0 || predicate.Cols != 0 || predicate.Mode != 0 || predicate.Enabled != nil || len(predicate.Children) != 0 {
+		if predicate.Rows != nil || predicate.Cols != nil || predicate.Mode != nil || predicate.Enabled != nil || len(predicate.Children) != 0 {
 			return fmt.Errorf("predicate %s includes irrelevant fields", predicate.Kind)
 		}
 	case PredicateDimensions:
-		if predicate.Mode != 0 || predicate.Enabled != nil || len(predicate.Children) != 0 {
+		if predicate.Mode != nil || predicate.Enabled != nil || len(predicate.Children) != 0 {
 			return errors.New("dimensions predicate includes irrelevant fields")
 		}
-		if _, err := analyzer.NewDimensions(predicate.Rows, predicate.Cols); err != nil {
+		if predicate.Rows == nil || predicate.Cols == nil {
+			return errors.New("dimensions predicate requires rows and cols")
+		}
+		if _, err := analyzer.NewDimensions(*predicate.Rows, *predicate.Cols); err != nil {
 			return err
 		}
 	case PredicatePrivateMode:
-		if predicate.Rows != 0 || predicate.Cols != 0 || len(predicate.Children) != 0 {
+		if predicate.Rows != nil || predicate.Cols != nil || len(predicate.Children) != 0 {
 			return errors.New("private_mode predicate includes irrelevant fields")
 		}
-		if predicate.Mode <= 0 || predicate.Enabled == nil {
+		if predicate.Mode == nil || *predicate.Mode <= 0 || predicate.Enabled == nil {
 			return errors.New("private_mode requires positive mode and enabled")
 		}
 	case PredicateAll, PredicateAny:
-		if predicate.Rows != 0 || predicate.Cols != 0 || predicate.Mode != 0 || predicate.Enabled != nil {
+		if predicate.Rows != nil || predicate.Cols != nil || predicate.Mode != nil || predicate.Enabled != nil {
 			return errors.New("composite predicate includes irrelevant fields")
 		}
 		if len(predicate.Children) == 0 {
@@ -348,10 +351,10 @@ func (predicate Predicate) Validate() error {
 func (predicate *Predicate) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		Kind     PredicateKind `json:"kind"`
-		Rows     int           `json:"rows"`
-		Cols     int           `json:"cols"`
+		Rows     *int          `json:"rows"`
+		Cols     *int          `json:"cols"`
 		Enabled  *bool         `json:"enabled"`
-		Mode     int           `json:"mode"`
+		Mode     *int          `json:"mode"`
 		Children []Predicate   `json:"children"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {

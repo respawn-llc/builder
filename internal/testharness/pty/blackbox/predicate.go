@@ -18,13 +18,13 @@ func (p Predicate) Matches(observation RunObservation) bool {
 	case PredicateNonBlank:
 		return observation.Analysis != nil && !observation.Analysis.Screen.IsBlank()
 	case PredicateDimensions:
-		return observation.Analysis != nil && observation.Analysis.Dimensions.Rows == p.Rows && observation.Analysis.Dimensions.Cols == p.Cols
+		return observation.Analysis != nil && p.Rows != nil && p.Cols != nil && observation.Analysis.Dimensions.Rows == *p.Rows && observation.Analysis.Dimensions.Cols == *p.Cols
 	case PredicatePrivateMode:
-		if observation.Analysis == nil || p.Enabled == nil {
+		if observation.Analysis == nil || p.Mode == nil || p.Enabled == nil {
 			return false
 		}
 		for _, change := range observation.Analysis.PrivateModeChanges {
-			if change.Mode == p.Mode && change.Enabled == *p.Enabled {
+			if change.Mode == *p.Mode && change.Enabled == *p.Enabled {
 				return true
 			}
 		}
