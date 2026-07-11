@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/config"
 )
 
 func (s *Store) SaveTaskExecutionTarget(ctx context.Context, target workflow.ExecutionTarget) error {
@@ -94,6 +95,10 @@ func executionTargetLifecycleFieldsFromTarget(target workflow.ExecutionTarget) e
 }
 
 func (s *Store) UpdateTaskExecutionTargetLifecycle(ctx context.Context, target workflow.ExecutionTarget, expectedClaim workflow.ExecutionTargetClaim) error {
+	return updateTaskExecutionTargetLifecycle(ctx, s.queries, target, expectedClaim)
+}
+
+func updateTaskExecutionTargetLifecycle(ctx context.Context, q *sqlitegen.Queries, target workflow.ExecutionTarget, expectedClaim workflow.ExecutionTargetClaim) error {
 	if err := target.Validate(); err != nil {
 		return err
 	}
@@ -101,7 +106,7 @@ func (s *Store) UpdateTaskExecutionTargetLifecycle(ctx context.Context, target w
 		return err
 	}
 	lifecycle := executionTargetLifecycleFieldsFromTarget(target)
-	updated, err := s.queries.UpdateTaskExecutionTargetLifecycle(ctx, sqlitegen.UpdateTaskExecutionTargetLifecycleParams{
+	updated, err := q.UpdateTaskExecutionTargetLifecycle(ctx, sqlitegen.UpdateTaskExecutionTargetLifecycleParams{
 		State:                       string(target.State),
 		ProvisioningGeneration:      lifecycle.provisioningGeneration,
 		SetupProvisioningGeneration: lifecycle.setupProvisioningGeneration,
@@ -127,6 +132,85 @@ func (s *Store) UpdateTaskExecutionTargetLifecycle(ctx context.Context, target w
 		return ErrTaskExecutionTargetClaimChanged
 	}
 	return nil
+}
+
+type AttachManagedExecutionTargetWorktreeRequest struct {
+	Target        workflow.ExecutionTarget
+	ExpectedClaim workflow.ExecutionTargetClaim
+	WorkspaceID   string
+	WorktreeRoot  string
+	CreatedBranch bool
+}
+
+func (s *Store) AttachManagedExecutionTargetWorktree(ctx context.Context, req AttachManagedExecutionTargetWorktreeRequest) (workflow.ExecutionWorktree, error) {
+	if err := req.Target.Validate(); err != nil {
+		return workflow.ExecutionWorktree{}, err
+	}
+	if req.Target.Policy == workflow.ExecutionPolicyNone {
+		return workflow.ExecutionWorktree{}, errors.New("none execution target cannot attach a managed worktree")
+	}
+	if err := req.ExpectedClaim.Validate(); err != nil {
+		return workflow.ExecutionWorktree{}, err
+	}
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	if workspaceID == "" {
+		return workflow.ExecutionWorktree{}, errors.New("workspace id is required")
+	}
+	worktreeRoot, err := config.CanonicalWorkspaceRoot(req.WorktreeRoot)
+	if err != nil {
+		return workflow.ExecutionWorktree{}, err
+	}
+	now := s.now().UnixMilli()
+	worktreeID := prefixedID("worktree")
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workflow.ExecutionWorktree{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	task, err := q.GetTask(ctx, string(req.Target.TaskID))
+	if err != nil {
+		return workflow.ExecutionWorktree{}, err
+	}
+	if !task.SourceWorkspaceID.Valid || strings.TrimSpace(task.SourceWorkspaceID.String) != workspaceID {
+		return workflow.ExecutionWorktree{}, errors.New("managed worktree workspace must match the task source workspace")
+	}
+	if err := q.UpsertWorktree(ctx, sqlitegen.UpsertWorktreeParams{
+		ID:                worktreeID,
+		WorkspaceID:       workspaceID,
+		CanonicalRootPath: worktreeRoot,
+		Managed:           1,
+		CreatedBranch:     boolToInt64(req.CreatedBranch),
+		OriginSessionID:   "",
+		GitMetadataJson:   "{}",
+		CreatedAtUnixMs:   now,
+		UpdatedAtUnixMs:   now,
+	}); err != nil {
+		return workflow.ExecutionWorktree{}, err
+	}
+	if updated, err := q.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                string(req.Target.TaskID),
+		ManagedWorktreeID: nullableString(worktreeID),
+		UpdatedAtUnixMs:   now,
+	}); err != nil {
+		return workflow.ExecutionWorktree{}, err
+	} else if updated != 1 {
+		return workflow.ExecutionWorktree{}, sql.ErrNoRows
+	}
+	if err := updateTaskExecutionTargetLifecycle(ctx, q, req.Target, req.ExpectedClaim); err != nil {
+		return workflow.ExecutionWorktree{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return workflow.ExecutionWorktree{}, err
+	}
+	return workflow.ExecutionWorktree{ID: worktreeID, Root: worktreeRoot}, nil
+}
+
+func boolToInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) GetTaskExecutionTarget(ctx context.Context, taskID workflow.TaskID) (*workflow.ExecutionTarget, error) {

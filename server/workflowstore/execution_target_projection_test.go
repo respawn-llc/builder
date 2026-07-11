@@ -171,6 +171,65 @@ func TestStoreUpdateTaskExecutionTargetLifecycleUsesClaimFence(t *testing.T) {
 	}
 }
 
+func TestStoreAttachManagedExecutionTargetWorktreeLocksClaimedTarget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowID,
+		Title:      "Attach managed target",
+		Body:       "Body",
+	})
+	provisioningGeneration := "provisioning-1"
+	claimGeneration := "claim-1"
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID,
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: "deadbeef",
+		},
+		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: claimGeneration, Phase: workflow.ExecutionTargetClaimMaterializing},
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	locked := target
+	locked.State = workflow.ExecutionTargetStateLocked
+	worktree, err := store.AttachManagedExecutionTargetWorktree(ctx, AttachManagedExecutionTargetWorktreeRequest{
+		Target:        locked,
+		ExpectedClaim: *target.ActiveClaim,
+		WorkspaceID:   binding.WorkspaceID,
+		WorktreeRoot:  t.TempDir(),
+		CreatedBranch: true,
+	})
+	if err != nil {
+		t.Fatalf("AttachManagedExecutionTargetWorktree: %v", err)
+	}
+	if worktree.ID == "" || worktree.Root == "" {
+		t.Fatalf("attached worktree = %+v, want persisted worktree", worktree)
+	}
+	root, err := store.ResolveTaskExecutionRoot(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ResolveTaskExecutionRoot: %v", err)
+	}
+	if root.ManagedWorktree == nil || root.ManagedWorktree.ID != worktree.ID || root.EffectiveRoot != worktree.Root {
+		t.Fatalf("execution root = %+v, want attached managed root", root)
+	}
+	actual, err := store.GetTaskExecutionTarget(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if actual == nil || actual.State != workflow.ExecutionTargetStateLocked || actual.ActiveClaim == nil || actual.ActiveClaim.Generation != claimGeneration {
+		t.Fatalf("target = %+v, want locked target retaining materialization claim", actual)
+	}
+}
+
 func TestTaskExecutionTargetProjectionRoundTripsManagedTargetAndRoot(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
