@@ -11,6 +11,7 @@ import (
 	glamouransi "charm.land/glamour/v2/ansi"
 	glamourstyles "charm.land/glamour/v2/styles"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/cellbuf"
 )
 
 func RenderAskQuestionMarkdownLines(question string, themeName string, width int) []string {
@@ -160,10 +161,7 @@ func hardWrapAskQuestionMarkdown(rendered string, width int) string {
 	return strings.Join(out, "\n")
 }
 
-type askQuestionHyperlink struct {
-	parameters string
-	target     string
-}
+type askQuestionHyperlink = cellbuf.Link
 
 func wrapAskQuestionMarkdownLine(line string, width int) []string {
 	if width < 1 {
@@ -191,7 +189,7 @@ func wrapAskQuestionMarkdownLine(line string, width int) []string {
 		if sequenceWidth == 0 {
 			row.WriteString(sequence)
 			if hyperlink, isHyperlink := askQuestionHyperlinkFromParser(parser); isHyperlink {
-				if hyperlink.target == "" {
+				if hyperlink.Empty() {
 					active = nil
 				} else {
 					active = &hyperlink
@@ -207,7 +205,7 @@ func wrapAskQuestionMarkdownLine(line string, width int) []string {
 			row.Reset()
 			used = 0
 			if active != nil {
-				row.WriteString(xansi.SetHyperlink(active.target, active.parameters))
+				row.WriteString(xansi.SetHyperlink(active.URL, active.Params))
 			}
 		}
 		row.WriteString(sequence)
@@ -224,12 +222,9 @@ func askQuestionHyperlinkFromParser(parser *xansi.Parser) (askQuestionHyperlink,
 	if parser.Command() != 8 {
 		return askQuestionHyperlink{}, false
 	}
-	command, payload, hasPayload := strings.Cut(string(parser.Data()), ";")
-	parameters, target, hasTarget := strings.Cut(payload, ";")
-	if !hasPayload || !hasTarget || command != "8" {
-		return askQuestionHyperlink{}, false
-	}
-	return askQuestionHyperlink{parameters: parameters, target: target}, true
+	var hyperlink askQuestionHyperlink
+	cellbuf.ReadLink(parser.Data(), &hyperlink)
+	return hyperlink, true
 }
 
 func trimAskQuestionMarkdownEdgeLines(lines []string) []string {

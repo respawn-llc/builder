@@ -34,6 +34,20 @@ func TestResolveAskQuestionMarkdownLinesUsesVisibleRenderedOutput(t *testing.T) 
 	}
 }
 
+func TestAskQuestionHyperlinkDecoderReadsStructuredOSC8Metadata(t *testing.T) {
+	parser := xansi.NewParser()
+	sequence := xansi.SetHyperlink("https://example.com/pull/456", "id=456")
+	_, _, _, _ = xansi.GraphemeWidth.DecodeSequenceInString(sequence, 0, parser)
+
+	link, isHyperlink := askQuestionHyperlinkFromParser(parser)
+	if !isHyperlink {
+		t.Fatal("expected OSC 8 hyperlink event")
+	}
+	if link.URL != "https://example.com/pull/456" || link.Params != "id=456" {
+		t.Fatalf("decoded hyperlink=%+v", link)
+	}
+}
+
 func TestPlainAskQuestionMarkdownFallbackPreservesSourceAndBoundsRows(t *testing.T) {
 	source := "\x1b[31m**literal**\x1b[0m" +
 		xansi.SetHyperlink("https://example.com/unsafe", "id=unsafe") +
