@@ -25,12 +25,7 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	actor := strings.TrimSpace(req.Actor)
-	if actor == "" {
-		actor = "user"
-	}
 	now := s.now().UnixMilli()
-	transitionID := prefixedID("transition")
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ManualMoveResult{}, err
@@ -40,6 +35,66 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, q, req.TaskID); err != nil {
 		return ManualMoveResult{}, err
 	}
+	result, err := s.applyPreparedManualMove(ctx, q, req, prepared, now)
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ManualMoveResult{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) ManualMoveTaskWithExecutionTarget(ctx context.Context, target workflow.ExecutionTarget, req ManualMoveRequest) (ManualMoveResult, error) {
+	if err := target.Validate(); err != nil {
+		return ManualMoveResult{}, err
+	}
+	if target.Policy != workflow.ExecutionPolicyNone || target.TaskID != req.TaskID {
+		return ManualMoveResult{}, errors.New("manual move execution target must be the task's none target")
+	}
+	prepared, err := s.prepareManualMove(ctx, req)
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	if prepared.targetNode.Kind() == workflow.NodeKindScript {
+		workspaceID := strings.TrimSpace(prepared.task.SourceWorkspaceID.String)
+		workspace, err := s.metadata.GetWorkspaceByID(ctx, workspaceID)
+		if err != nil {
+			return ManualMoveResult{}, err
+		}
+		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.targetNode), workspace.CanonicalRootPath); err != nil {
+			return ManualMoveResult{}, err
+		}
+	}
+	now := s.now().UnixMilli()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
+		return ManualMoveResult{}, err
+	}
+	if err := insertValidatedTaskExecutionTarget(ctx, q, target); err != nil {
+		return ManualMoveResult{}, err
+	}
+	result, err := s.applyPreparedManualMove(ctx, q, req, prepared, now)
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ManualMoveResult{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) applyPreparedManualMove(ctx context.Context, q *sqlitegen.Queries, req ManualMoveRequest, prepared preparedManualMove, now int64) (ManualMoveResult, error) {
+	actor := strings.TrimSpace(req.Actor)
+	if actor == "" {
+		actor = "user"
+	}
+	transitionID := prefixedID("transition")
 	if err := rejectManualMoveDuringActiveRunWithQueries(ctx, q, req.TaskID); err != nil {
 		return ManualMoveResult{}, err
 	}
@@ -112,9 +167,6 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 		edgeMetadata.TargetRunStartSnapshot = &targetSnapshot
 	}
 	if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, transitionID, prepared.groupSnapshot.Edges[0], targetPlacementID, prepared.edgeState, edgeMetadata); err != nil {
-		return ManualMoveResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return ManualMoveResult{}, err
 	}
 	return result, nil
