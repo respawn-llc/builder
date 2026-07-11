@@ -15,12 +15,14 @@ export function ApprovalBox({
   currentVersion,
   disabled,
   mutations,
+  onApprove,
   transitions,
 }: Readonly<{
   attention: AttentionItem;
   currentVersion: number;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
+  onApprove: (taskTransitionID: string) => void;
   transitions: readonly TaskTransition[];
 }>) {
   const { t } = useTranslation();
@@ -53,7 +55,9 @@ export function ApprovalBox({
             <Button
               className="shrink-0"
               disabled={disabled || mutations.approve.isPending}
-              onClick={() => void mutations.approve.mutateAsync(attention.taskTransitionID)}
+              onClick={() => {
+                onApprove(attention.taskTransitionID);
+              }}
               variant="primary"
             >
               {t("task.approve")}
@@ -94,7 +98,9 @@ export function ApprovalBox({
           <p>{t("task.unavailableSnapshot")}</p>
           <Button
             disabled={disabled || mutations.approve.isPending}
-            onClick={() => void mutations.approve.mutateAsync(attention.taskTransitionID)}
+            onClick={() => {
+              onApprove(attention.taskTransitionID);
+            }}
             variant="primary"
           >
             {t("task.approve")}

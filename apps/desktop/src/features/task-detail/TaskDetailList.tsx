@@ -40,6 +40,7 @@ export function TaskDetailList({
   mutations,
   newCommentBody,
   onDraftChange,
+  onApprove,
   onNewCommentBodyChange,
   onEditingCommentChange,
   onQuestionSelectionChange,
@@ -61,6 +62,7 @@ export function TaskDetailList({
   mutations: ReturnType<typeof useTaskMutations>;
   newCommentBody: string;
   onDraftChange: (draft: TaskDraft) => void;
+  onApprove: (taskTransitionID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
@@ -138,6 +140,7 @@ export function TaskDetailList({
           noActivityTitle={t("task.noActivityTitle")}
           noCommentsTitle={t("task.noCommentsTitle")}
           onDraftChange={onDraftChange}
+          onApprove={onApprove}
           onNewCommentBodyChange={onNewCommentBodyChange}
           onEditingCommentChange={onEditingCommentChange}
           onQuestionSelectionChange={onQuestionSelectionChange}
@@ -171,6 +174,7 @@ type TaskDetailListRowProps = Readonly<{
   noActivityTitle: string;
   noCommentsTitle: string;
   onDraftChange: (draft: TaskDraft) => void;
+  onApprove: (taskTransitionID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
@@ -265,6 +269,7 @@ function InboxRow({
   initialFocus,
   mutations,
   onQuestionSelectionChange,
+  onApprove,
   questionSelections,
 }: TaskDetailListRowProps): ReactNode {
   return (
@@ -274,6 +279,7 @@ function InboxRow({
       disabled={disabled}
       initialFocus={initialFocus}
       mutations={mutations}
+      onApprove={onApprove}
       onQuestionSelectionChange={onQuestionSelectionChange}
       questionSelections={questionSelections}
     />

@@ -2,7 +2,7 @@ import { useId, useMemo, useState, type ReactNode } from "react";
 import { Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskDetail, TaskRun } from "../../api";
+import type { TaskDetail, TaskExecutionTarget, TaskRun } from "../../api";
 import { errorMessage } from "../../api/errors";
 import { useAppServices } from "../../app/useAppServices";
 import { useOpenExternalLink } from "../../app/nativeHooks";
@@ -174,6 +174,7 @@ export function PropertiesIsland({
 }>) {
   const { t } = useTranslation();
   const openExternalLink = useOpenExternalLink();
+  const { nativeBridge } = useAppServices();
   return (
     <Island
       aria-label={t("task.properties")}
@@ -192,11 +193,107 @@ export function PropertiesIsland({
         value={<TaskStatusText label={detail.status.label} tone={taskStatusTone(detail.status)} />}
       />
       <PropertyLine label={t("task.workspace")} value={detail.sourceWorkspace.name} />
+      <ExecutionTargetProperties detail={detail} nativeBridge={nativeBridge} />
       <PropertyLine label={t("task.workflow")} value={detail.workflowName} />
       <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
       <PropertyLine label={t("task.sessions")} value={detail.runs.length.toString()} />
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
+  );
+}
+
+function ExecutionTargetProperties({
+  detail,
+  nativeBridge,
+}: Readonly<{
+  detail: TaskDetail;
+  nativeBridge: ReturnType<typeof useAppServices>["nativeBridge"];
+}>) {
+  const { t } = useTranslation();
+  const target = detail.executionTarget;
+  if (target === null) {
+    return null;
+  }
+  const source = target.source;
+  const root = target.policy === "none" ? detail.sourceWorkspace.rootPath : detail.worktreePath;
+  return (
+    <>
+      <PropertyLine label={t("task.executionTarget")} value={executionTargetPolicyLabel(target.policy, t)} />
+      <CopyablePropertyLine label={t("task.executionRoot")} nativeBridge={nativeBridge} value={root} />
+      {source?.kind === "named_ref" ? (
+        <CopyablePropertyLine label={t("task.executionTargetSourceRef")} nativeBridge={nativeBridge} value={source.namedRef} />
+      ) : null}
+      {source === null ? null : (
+        <CopyablePropertyLine label={t("task.executionTargetCommit")} nativeBridge={nativeBridge} value={source.commit} />
+      )}
+      {target.policy === "custom_ref" ? (
+        <CopyablePropertyLine
+          label={t("task.executionTargetRequestedRef")}
+          nativeBridge={nativeBridge}
+          value={target.customRef}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function executionTargetPolicyLabel(
+  policy: TaskExecutionTarget["policy"],
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (policy === "none") {
+    return t("task.executionTargetNone");
+  }
+  if (policy === "head") {
+    return t("task.executionTargetHead");
+  }
+  if (policy === "default_branch") {
+    return t("task.executionTargetDefaultBranch");
+  }
+  return t("task.executionTargetCustomRef");
+}
+
+function CopyablePropertyLine({
+  label,
+  nativeBridge,
+  value,
+}: Readonly<{
+  label: string;
+  nativeBridge: ReturnType<typeof useAppServices>["nativeBridge"];
+  value: string;
+}>) {
+  const { t } = useTranslation();
+  return (
+    <PropertyLine
+      label={label}
+      value={
+        <button
+          className="-mx-[var(--space-1)] max-w-full truncate rounded-[var(--radius-s)] px-[var(--space-1)] font-mono text-left hover:bg-[var(--color-island-2)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+          onClick={() => {
+            void writeClipboardText(value, nativeBridge)
+              .then(() => {
+                showStatusToast({
+                  id: `task-property-copied-${label}`,
+                  title: t("task.executionTargetValueCopied", { label }),
+                  tone: "success",
+                });
+              })
+              .catch((error: unknown) => {
+                showStatusToast({
+                  body: errorMessage(error),
+                  id: `task-property-copy-failed-${label}`,
+                  title: t("task.executionTargetValueCopyFailed", { label }),
+                  tone: "danger",
+                });
+              });
+          }}
+          title={value}
+          type="button"
+        >
+          {value}
+        </button>
+      }
+    />
   );
 }
 

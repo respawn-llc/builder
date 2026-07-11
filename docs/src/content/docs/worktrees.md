@@ -3,7 +3,7 @@ title: Worktrees
 description: Create, switch, and delete git worktrees from Kent.
 ---
 
-Kent can manage git worktrees for you. Creating or switching a worktree moves that session into the selected checkout and gives the agent necessary context. Managed worktrees are created under `config.toml`'s `[worktrees].base_dir`, and Kent switches the session into the new worktree after creation and setup succeed. Run `/wt` to get started.
+Kent can manage git worktrees for you. Creating or switching a worktree moves that session into the selected checkout and gives the agent necessary context. Managed worktrees are created under `config.toml`'s `[worktrees].base_dir`, and Kent switches the session into the new worktree after creation and setup succeed. Workflow tasks use this setup only when their execution policy creates a managed target; the `None` policy runs from its source workspace and skips it. Run `/wt` to get started.
 
 ## Switch
 
@@ -35,7 +35,7 @@ base_dir = "~/.kent/worktrees"
 ```
 
 - `base_dir` sets the root directory for Kent-managed worktrees.
-- `setup_script` runs after Kent creates and records a new worktree, before Kent switches a session into it or starts a workflow run that uses it. Relative paths resolve from the source workspace root.
+- `setup_script` runs after Kent creates and records a new worktree, before Kent switches a session into it or starts a workflow run that uses a managed target. Relative paths resolve from the source workspace root.
 - `setup_timeout_seconds` sets the setup script timeout. The default is `60`; `0` or a negative value disables the timeout.
 
 Setup is blocking because worktree-local context can change what the agent sees. Files created by setup, including local skills under `.kent/skills` and workspace-local docs, are present before Kent locks the new session or workflow run context.

@@ -165,7 +165,7 @@ A previous-transition parameter is valid only when every path to the prompt pass
 
 Use a Script node when a workflow step should run a deterministic local executable instead of an agent. Script nodes can be used anywhere an agent node can be used in the workflow graph, including the first node after Backlog and branches inside parallel groups.
 
-Set the script path on the script node. Absolute paths are resolved on the Kent server. Relative paths resolve against the task's managed worktree. Workflow graph saves allow empty or invalid paths so you can draft the graph, but execution validation and task start require the selected script to exist, be a file, and be executable.
+Set the script path on the script node. Absolute paths are resolved on the Kent server. Relative paths resolve against the task execution root. Workflow graph saves allow empty or invalid paths so you can draft the graph, but execution validation and task start require the selected script to exist, be a file, and be executable.
 
 Kent executes the script directly, without a shell wrapper. Stdin is JSON:
 
@@ -277,9 +277,33 @@ Each task has a title, body, source workspace, and optional source URL. New task
 
 Choose the source workspace before starting automation. Agents run in the environment where the Kent server runs, so that environment must have the repository, toolchains, credentials, and local files the workflow needs.
 
+### Execution Targets
+
+Each workflow has one execution policy. Backlog tasks resolve that policy when an initiating action first needs automation, then retain the resulting target for every later node and retry.
+
+| Policy | Behavior |
+| --- | --- |
+| None | Runs from the source workspace root. The source may be non-Git; Kent creates no managed worktree or branch and skips the worktree setup script. |
+| HEAD | Creates the managed task worktree from the source workspace's checked-out commit. |
+| Default branch | Creates the managed task worktree from the local default-branch pointer for the source branch's upstream remote, or `origin` when no upstream is available. |
+| Custom ref | Creates the managed task worktree from a specified existing ref. Kent records both the requested ref and its resolved commit. |
+| Ask every time | Requires an operator to choose None, HEAD, Default branch, or Custom ref when automation is first requested. This is the default policy. |
+
+Kent locks a managed target to its resolved commit. Moving refs and later workflow-policy edits do not change an existing task target. If Kent cannot resolve a configured default branch or custom ref, it requests an explicit replacement target; it does not fetch or guess a branch.
+
+Desktop requests this choice only after the server requires it, including an executable drag or approval that starts an unlocked task. Closing the choice leaves the action unchanged. Task properties show the locked source ref or detached commit, custom ref when applicable, and execution root.
+
+The CLI can deliberately override a workflow policy when starting a task:
+
+```sh
+kent task start TASK --execution-target custom_ref --custom-ref refs/tags/v1.2.3
+```
+
+Use `none`, `head`, `default_branch`, or `custom_ref` as the target value. Move and approval commands use these fields only when retrying a selection request returned by Kent.
+
 ### Keep Tasks Shippable
 
-Starting a task creates a managed git worktree for that task and schedules the first agent node. Kent reuses the same task worktree across downstream agent nodes, so implementation, review fixes, QA, and shipping steps happen against one checkout.
+Managed execution policies create one task worktree and Kent reuses it across downstream agent nodes, so implementation, review fixes, QA, and shipping steps happen against one checkout.
 
 Because each started task has its own worktree, structure tasks as independently shippable branches. Do not split one feature into separate tasks that must share unmerged code in one checkout. If the work cannot ship independently, keep it as one task; if it can be sliced, make each slice feature-gated or isolated enough to merge separately before the next dependent task starts.
 

@@ -2,7 +2,16 @@ import type { DragEvent, SyntheticEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { BoardColumn, WorkflowBoard } from "../../api";
+import { newSetupOperationID } from "../../api";
+import type {
+  BoardColumn,
+  TaskMoveInput,
+  TaskStartInput,
+  WorkflowBoard,
+  WorkflowTaskExecutionTargetSelection,
+  WorkflowTaskExecutionTargetSelectionRequired,
+  WorkflowTaskInitiatingActionResult,
+} from "../../api";
 import { errorMessage } from "../../api/errors";
 import { useAppNavigation } from "../../app/navigation";
 import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
@@ -13,6 +22,7 @@ import { useStatusController } from "../../app/useStatusController";
 import { useWindowChromeTitle } from "../../app/windowChromeTitle";
 import { Button, EmptyState, ErrorState, FloatingNoticeIsland, LoadingState } from "../../ui";
 import { WorkflowValidationIssues } from "../workflow/WorkflowValidationIssues";
+import { ExecutionTargetSelectionDialog } from "../workflow/ExecutionTargetSelectionDialog";
 import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { useBoardMoveRunFeedback } from "./BoardMoveRunFeedback";
@@ -149,6 +159,9 @@ function BoardContent({
   >(() => ({ ids: new Set(), scope: "" }));
   const [rollbackDrop, setRollbackDrop] = useState<PendingDrop | null>(null);
   const [missingInputDrop, setMissingInputDrop] = useState<PendingMissingInputDrop | null>(null);
+  const [executionTargetSelection, setExecutionTargetSelection] = useState<PendingExecutionTargetSelection | null>(
+    null,
+  );
   const activeDragRef = useRef<BoardCardDragPayload | null>(null);
   const { push } = useStatusController();
   const { nativeBridge } = useAppServices();
@@ -250,18 +263,12 @@ function BoardContent({
     }
     const dropAction = classifyDrop(column, dragPayload, firstActive?.id);
     if (dropAction.kind === "start") {
-      const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
-      setPendingCardMove(pendingMove);
-      void actions.start
-        .mutateAsync(dragPayload.taskID)
-        .catch(reportStartError)
-        .finally(() => {
-          clearPendingCardMove(pendingMove);
-        });
+      void startTask({ setupOperationID: newSetupOperationID(), taskID: dragPayload.taskID }, column.id);
       return;
     }
     if (dropAction.kind === "move") {
       const moveInput = {
+        setupOperationID: newSetupOperationID(),
         taskID: dragPayload.taskID,
         targetNodeID: column.id,
         ...(dropAction.allowMissingEdge === undefined
@@ -269,15 +276,7 @@ function BoardContent({
           : { allowMissingEdge: dropAction.allowMissingEdge }),
         ...(dropAction.autoApprove === undefined ? {} : { autoApprove: dropAction.autoApprove }),
       };
-      const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
-      setPendingCardMove(pendingMove);
-      void actions.move
-        .mutateAsync(moveInput)
-        .then(moveRunFeedback.trackMoveRunIDs)
-        .catch(reportMoveError)
-        .finally(() => {
-          clearPendingCardMove(pendingMove);
-        });
+      void moveTask(moveInput, column.id);
       return;
     }
     if (dropAction.kind === "confirmRollback") {
@@ -386,15 +385,15 @@ function BoardContent({
     }
     const drop = rollbackDrop;
     setRollbackDrop(null);
-    const pendingMove = { taskID: drop.taskID, targetColumnID: drop.targetColumn.id };
-    setPendingCardMove(pendingMove);
-    void actions.move
-      .mutateAsync({ taskID: drop.taskID, targetNodeID: drop.targetColumn.id, autoApprove: true })
-      .then(moveRunFeedback.trackMoveRunIDs)
-      .catch(reportMoveError)
-      .finally(() => {
-        clearPendingCardMove(pendingMove);
-      });
+    void moveTask(
+      {
+        autoApprove: true,
+        setupOperationID: newSetupOperationID(),
+        taskID: drop.taskID,
+        targetNodeID: drop.targetColumn.id,
+      },
+      drop.targetColumn.id,
+    );
   }
 
   function submitMissingInputDrop(event: SyntheticEvent<HTMLFormElement>): void {
@@ -404,21 +403,88 @@ function BoardContent({
     }
     const drop = missingInputDrop;
     setMissingInputDrop(null);
-    const pendingMove = { taskID: drop.taskID, targetColumnID: drop.targetColumn.id };
-    setPendingCardMove(pendingMove);
-    void actions.move
-      .mutateAsync({
+    void moveTask(
+      {
         taskID: drop.taskID,
         targetNodeID: drop.targetColumn.id,
         outputValues: drop.values,
         allowMissingEdge: true,
         autoApprove: isExecutableAutomationColumn(drop.targetColumn),
-      })
-      .then(moveRunFeedback.trackMoveRunIDs)
-      .catch(reportMoveError)
-      .finally(() => {
-        clearPendingCardMove(pendingMove);
-      });
+        setupOperationID: newSetupOperationID(),
+      },
+      drop.targetColumn.id,
+    );
+  }
+
+  async function startTask(input: TaskStartInput, targetColumnID: string): Promise<void> {
+    try {
+      const result = await actions.start.mutateAsync(input);
+      await handleInitiatingActionResult({ action: { kind: "start", input, targetColumnID }, result });
+    } catch (error) {
+      reportStartError(error);
+    }
+  }
+
+  async function moveTask(input: TaskMoveInput, targetColumnID: string): Promise<void> {
+    try {
+      const result = await actions.move.mutateAsync(input);
+      await handleInitiatingActionResult({ action: { kind: "move", input, targetColumnID }, result });
+    } catch (error) {
+      reportMoveError(error);
+    }
+  }
+
+  async function handleInitiatingActionResult({
+    action,
+    result,
+  }: Readonly<{
+    action: PendingExecutionTargetAction;
+    result: WorkflowTaskInitiatingActionResult;
+  }>): Promise<void> {
+    if (result.outcome === "selection_required") {
+      setExecutionTargetSelection({ action, requirement: result.selectionRequired });
+      return;
+    }
+    if (result.outcome === "in_progress") {
+      return;
+    }
+    if (result.outcome === "conflict") {
+      setExecutionTargetSelection(null);
+      await actions.refresh();
+      return;
+    }
+    if (action.kind === "start" && result.outcome === "started") {
+      await refreshMovedCard(action);
+      return;
+    }
+    if (action.kind === "move" && result.outcome === "moved") {
+      moveRunFeedback.trackMoveRunIDs(result);
+      await refreshMovedCard(action);
+    }
+  }
+
+  async function refreshMovedCard(action: PendingExecutionTargetAction): Promise<void> {
+    const pendingMove = { taskID: action.input.taskID, targetColumnID: action.targetColumnID };
+    setPendingCardMove(pendingMove);
+    try {
+      await actions.refresh();
+    } finally {
+      clearPendingCardMove(pendingMove);
+    }
+  }
+
+  function submitExecutionTargetSelection(selection: WorkflowTaskExecutionTargetSelection): void {
+    if (executionTargetSelection === null) {
+      return;
+    }
+    const pending = executionTargetSelection;
+    const action = actionWithExecutionTargetSelection(pending.action, pending.requirement, selection);
+    setExecutionTargetSelection(null);
+    if (action.kind === "start") {
+      void startTask(action.input, action.targetColumnID);
+      return;
+    }
+    void moveTask(action.input, action.targetColumnID);
   }
 
   function clearPendingCardMove(pendingMove: PendingBoardCardMove): void {
@@ -516,6 +582,15 @@ function BoardContent({
           );
         }}
       />
+      {executionTargetSelection !== null ? (
+        <ExecutionTargetSelectionDialog
+          onClose={() => {
+            setExecutionTargetSelection(null);
+          }}
+          onSubmit={submitExecutionTargetSelection}
+          requirement={executionTargetSelection.requirement}
+        />
+      ) : null}
       {taskDeleteDialog.fallback}
       {!board.selectedWorkflow.validForTaskCreation ? (
         <FloatingNoticeIsland
@@ -540,6 +615,27 @@ function BoardContent({
       />
     </div>
   );
+}
+
+type PendingExecutionTargetAction =
+  | Readonly<{ kind: "start"; input: TaskStartInput; targetColumnID: string }>
+  | Readonly<{ kind: "move"; input: TaskMoveInput; targetColumnID: string }>;
+
+type PendingExecutionTargetSelection = Readonly<{
+  action: PendingExecutionTargetAction;
+  requirement: WorkflowTaskExecutionTargetSelectionRequired;
+}>;
+
+function actionWithExecutionTargetSelection(
+  action: PendingExecutionTargetAction,
+  requirement: WorkflowTaskExecutionTargetSelectionRequired,
+  selection: WorkflowTaskExecutionTargetSelection,
+): PendingExecutionTargetAction {
+  const selectionInput = { selection, selectionGeneration: requirement.generation };
+  if (action.kind === "start") {
+    return { ...action, input: { ...action.input, ...selectionInput } };
+  }
+  return { ...action, input: { ...action.input, ...selectionInput } };
 }
 
 function BoardNoWorkflowState({ projectID }: Readonly<{ projectID: string }>) {

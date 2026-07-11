@@ -3,6 +3,7 @@ export type {
   QuestionAnswerInput,
   TaskApproveInput,
   TaskEditInput,
+  TaskMoveInput,
   TaskMutationInput,
   TaskStartInput,
   WorkflowDeleteInput,
@@ -20,6 +21,8 @@ export type {
 } from "./attentionNotifications";
 export { emptyWorkflowDerivedWiring } from "./models";
 export { createJsonRpcTransport } from "./jsonRpc";
+export { newSetupOperationID } from "./setupOperationID";
+export type { SetupOperationID } from "./setupOperationID";
 export type {
   ActivityItem,
   ActivityPage,
@@ -40,6 +43,7 @@ export type {
   TaskComment,
   TaskApproveResponse,
   TaskDetail,
+  TaskExecutionTarget,
   TaskStartResponse,
   TaskRun,
   TaskStatus,

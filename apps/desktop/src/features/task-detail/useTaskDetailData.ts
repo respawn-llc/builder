@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import type { QuestionAnswerInput } from "../../api";
+import type { QuestionAnswerInput, TaskApproveInput } from "../../api";
 import { errorMessage } from "../../api/errors";
 import { queryKeys } from "../../app/queryKeys";
 import { useAppServices } from "../../app/useAppServices";
@@ -133,8 +133,12 @@ export function useTaskMutations(taskID: string, onChanged?: () => void) {
       onSuccess: refresh,
     }),
     approve: useMutation({
-      mutationFn: async (transitionID: string) => api.approveTransition({ taskTransitionID: transitionID }),
-      onSuccess: refresh,
+      mutationFn: async (input: TaskApproveInput) => api.approveTransition(input),
+      onSuccess: async (result) => {
+        if (result.outcome === "approved") {
+          await refresh();
+        }
+      },
     }),
     cancel: useMutation({
       mutationFn: async () => api.cancelTask(taskID),

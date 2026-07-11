@@ -20,6 +20,7 @@ export function TaskInbox({
   disabled,
   initialFocus,
   mutations,
+  onApprove,
   questionSelections,
   onQuestionSelectionChange,
 }: Readonly<{
@@ -28,6 +29,7 @@ export function TaskInbox({
   disabled: boolean;
   initialFocus?: TaskDetailInitialFocus | undefined;
   mutations: ReturnType<typeof useTaskMutations>;
+  onApprove: (taskTransitionID: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
 }>) {
@@ -59,6 +61,7 @@ export function TaskInbox({
           focusOnMount={item.id === focusedAttentionID}
           key={item.id}
           mutations={mutations}
+          onApprove={onApprove}
           onQuestionSelectionChange={onQuestionSelectionChange}
           questionSelection={questionSelections.get(item.askID) ?? emptyQuestionSelection(item.askID)}
           taskId={detail.id}
@@ -111,6 +114,7 @@ function InboxItem({
   disabled,
   focusOnMount,
   mutations,
+  onApprove,
   onQuestionSelectionChange,
   questionSelection,
   taskId,
@@ -121,6 +125,7 @@ function InboxItem({
   disabled: boolean;
   focusOnMount: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
+  onApprove: (taskTransitionID: string) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   questionSelection: QuestionSelectionState;
   taskId: string;
@@ -171,6 +176,7 @@ function InboxItem({
           currentVersion={currentVersion}
           disabled={disabled}
           mutations={mutations}
+          onApprove={onApprove}
           transitions={transitions}
         />
       </div>

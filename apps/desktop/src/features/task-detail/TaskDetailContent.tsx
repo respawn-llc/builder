@@ -1,6 +1,12 @@
 import { useState } from "react";
 
-import type { TaskDetail } from "../../api";
+import { newSetupOperationID } from "../../api";
+import type {
+  TaskApproveInput,
+  TaskDetail,
+  WorkflowTaskExecutionTargetSelection,
+  WorkflowTaskExecutionTargetSelectionRequired,
+} from "../../api";
 import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
 import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
 import { useUpdateTask } from "../tasks/useTaskMutations";
@@ -9,6 +15,7 @@ import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
 import type { useTaskActivity, useTaskComments } from "./useTaskDetailData";
+import { ExecutionTargetSelectionDialog } from "../workflow/ExecutionTargetSelectionDialog";
 
 // TaskDraftState tracks the editable title/body draft alongside the server
 // snapshot (`base`) the draft last synced to. Comparing the draft to `base`
@@ -48,6 +55,7 @@ export function TaskDetailContent({
   const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
     () => new Map(),
   );
+  const [approvalSelection, setApprovalSelection] = useState<PendingApprovalSelection | null>(null);
   // When the surface switches to a different task, drop the previous task's
   // in-progress comment edit, new-comment draft, and question selections so they
   // don't bleed into the newly loaded task. Reset during render (the React
@@ -59,6 +67,7 @@ export function TaskDetailContent({
     setEditingComment(null);
     setNewCommentBody("");
     setQuestionSelections(new Map());
+    setApprovalSelection(null);
   }
   const update = useUpdateTask(detail.id);
   const mutations = useTaskMutations(detail.id, onMutated);
@@ -86,35 +95,78 @@ export function TaskDetailContent({
     onMutated?.();
   }
 
+  async function approve(input: TaskApproveInput): Promise<void> {
+    const result = await mutations.approve.mutateAsync(input);
+    if (result.outcome === "selection_required") {
+      setApprovalSelection({ input, requirement: result.selectionRequired });
+      return;
+    }
+    if (result.outcome === "conflict") {
+      setApprovalSelection(null);
+    }
+  }
+
+  function submitApprovalSelection(selection: WorkflowTaskExecutionTargetSelection): void {
+    if (approvalSelection === null) {
+      return;
+    }
+    const pending = approvalSelection;
+    setApprovalSelection(null);
+    void approve({
+      ...pending.input,
+      selection,
+      selectionGeneration: pending.requirement.generation,
+    });
+  }
+
   return (
-    <TaskDetailList
-      activity={activity}
-      comments={comments}
-      detail={detail}
-      disabled={connection.phase !== "connected"}
-      draft={draft}
-      editingComment={editingComment}
-      initialFocus={initialFocus}
-      mutations={mutations}
-      newCommentBody={newCommentBody}
-      onDraftChange={(nextDraft) => {
-        setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
-      }}
-      onNewCommentBodyChange={setNewCommentBody}
-      onEditingCommentChange={setEditingComment}
-      onQuestionSelectionChange={(askID, selection) => {
-        setQuestionSelections((previous) => new Map(previous).set(askID, selection));
-      }}
-      onSaveDraft={saveDraft}
-      openLink={openLink}
-      questionSelections={questionSelections}
-      selectedTab={selectedTab}
-      setTab={setSelectedTab}
-      updateError={update.error}
-      updatePending={update.isPending}
-    />
+    <>
+      <TaskDetailList
+        activity={activity}
+        comments={comments}
+        detail={detail}
+        disabled={connection.phase !== "connected"}
+        draft={draft}
+        editingComment={editingComment}
+        initialFocus={initialFocus}
+        mutations={mutations}
+        newCommentBody={newCommentBody}
+        onDraftChange={(nextDraft) => {
+          setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
+        }}
+        onApprove={(taskTransitionID) => {
+          void approve({ setupOperationID: newSetupOperationID(), taskTransitionID });
+        }}
+        onNewCommentBodyChange={setNewCommentBody}
+        onEditingCommentChange={setEditingComment}
+        onQuestionSelectionChange={(askID, selection) => {
+          setQuestionSelections((previous) => new Map(previous).set(askID, selection));
+        }}
+        onSaveDraft={saveDraft}
+        openLink={openLink}
+        questionSelections={questionSelections}
+        selectedTab={selectedTab}
+        setTab={setSelectedTab}
+        updateError={update.error}
+        updatePending={update.isPending}
+      />
+      {approvalSelection !== null ? (
+        <ExecutionTargetSelectionDialog
+          onClose={() => {
+            setApprovalSelection(null);
+          }}
+          onSubmit={submitApprovalSelection}
+          requirement={approvalSelection.requirement}
+        />
+      ) : null}
+    </>
   );
 }
+
+type PendingApprovalSelection = Readonly<{
+  input: TaskApproveInput;
+  requirement: WorkflowTaskExecutionTargetSelectionRequired;
+}>;
 
 function taskDraft(detail: TaskDetail): TaskDraft {
   return { title: detail.title, body: detail.body };

@@ -5,6 +5,7 @@ import { queryKeys } from "../../app/queryKeys";
 import { useAppServices } from "../../app/useAppServices";
 import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
 import { workflowProjectEvent, workflowProjectQuestionTaskID } from "../../app/workflowProjectEvents";
+import type { TaskMoveInput, TaskStartInput } from "../../api";
 
 export function useBoard(projectID: string, workflowID: string) {
   const { api } = useAppServices();
@@ -172,22 +173,10 @@ export function useBoardTaskActions(
   }
   return {
     start: useMutation({
-      mutationFn: async (taskID: string) => api.startTask({ taskID }),
-      onSuccess: refresh,
+      mutationFn: async (input: TaskStartInput) => api.startTask(input),
     }),
     move: useMutation({
-      mutationFn: async (
-        input: Readonly<{
-          taskID: string;
-          targetNodeID: string;
-          outputValues?: Readonly<Record<string, string>>;
-          allowMissingEdge?: boolean;
-          autoApprove?: boolean;
-        }>,
-      ) => api.moveTask(input),
-      onSettled: async () => {
-        await refresh();
-      },
+      mutationFn: async (input: TaskMoveInput) => api.moveTask(input),
     }),
     interrupt: useMutation({
       mutationFn: async (taskID: string) => api.interruptTask(taskID),
@@ -203,5 +192,6 @@ export function useBoardTaskActions(
       mutationFn: async (taskID: string) => api.resumeTask(taskID),
       onSuccess: refresh,
     }),
+    refresh,
   };
 }
