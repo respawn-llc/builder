@@ -99,9 +99,36 @@ func TestReprovisionExecutionTargetWorktreeRecreatesMissingRootFromExactTaskBran
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
 	}
+	exact, err := env.service.InspectExecutionTargetWorktree(env.ctx, InspectExecutionTargetWorktreeRequest{
+		SourceWorkspaceRoot: env.workspaceRoot,
+		WorktreeRoot:        canonicalWorktreeRoot,
+		TaskShortID:         "WOR-100",
+		ResolvedCommit:      commit,
+	})
+	if err != nil {
+		t.Fatalf("InspectExecutionTargetWorktree exact: %v", err)
+	}
+	if exact.LinkedWorktreeOwnership == nil {
+		t.Fatalf("exact inspection = %+v, want linked-worktree ownership", exact)
+	}
+	expectedBranchTip := commit
 	movedRoot := filepath.Join(t.TempDir(), "missing-root")
 	if err := os.Rename(canonicalWorktreeRoot, movedRoot); err != nil {
 		t.Fatalf("rename managed worktree root: %v", err)
+	}
+	missing, err := env.service.InspectExecutionTargetWorktree(env.ctx, InspectExecutionTargetWorktreeRequest{
+		SourceWorkspaceRoot: env.workspaceRoot,
+		WorktreeRoot:        canonicalWorktreeRoot,
+		TaskShortID:         "WOR-100",
+		ResolvedCommit:      commit,
+		ExpectedOwnership:   exact.LinkedWorktreeOwnership,
+		ExpectedBranchTip:   &expectedBranchTip,
+	})
+	if err != nil {
+		t.Fatalf("InspectExecutionTargetWorktree missing root: %v", err)
+	}
+	if missing.Kind != ExecutionTargetWorktreeInspectionExactMissingRoot {
+		t.Fatalf("missing-root inspection = %+v, want exact missing-root ownership", missing)
 	}
 
 	reprovisioned, err := env.service.ReprovisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{

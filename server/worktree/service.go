@@ -140,9 +140,10 @@ type ProvisionExecutionTargetWorktreeResponse struct {
 type ExecutionTargetWorktreeInspectionKind string
 
 const (
-	ExecutionTargetWorktreeInspectionNoSideEffects ExecutionTargetWorktreeInspectionKind = "no_side_effects"
-	ExecutionTargetWorktreeInspectionExact         ExecutionTargetWorktreeInspectionKind = "exact"
-	ExecutionTargetWorktreeInspectionAmbiguous     ExecutionTargetWorktreeInspectionKind = "ambiguous"
+	ExecutionTargetWorktreeInspectionNoSideEffects    ExecutionTargetWorktreeInspectionKind = "no_side_effects"
+	ExecutionTargetWorktreeInspectionExact            ExecutionTargetWorktreeInspectionKind = "exact"
+	ExecutionTargetWorktreeInspectionExactMissingRoot ExecutionTargetWorktreeInspectionKind = "exact_missing_root"
+	ExecutionTargetWorktreeInspectionAmbiguous        ExecutionTargetWorktreeInspectionKind = "ambiguous"
 )
 
 type InspectExecutionTargetWorktreeRequest struct {
@@ -150,6 +151,8 @@ type InspectExecutionTargetWorktreeRequest struct {
 	WorktreeRoot        string
 	TaskShortID         string
 	ResolvedCommit      string
+	ExpectedOwnership   *workflow.ExecutionTargetLinkedWorktreeOwnership
+	ExpectedBranchTip   *string
 }
 
 type ExecutionTargetWorktreeInspection struct {
@@ -279,6 +282,16 @@ func (s *Service) InspectExecutionTargetWorktree(ctx context.Context, req Inspec
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ExecutionTargetWorktreeInspection{}, err
 	}
+	if !rootExists && req.ExpectedOwnership != nil && req.ExpectedBranchTip != nil {
+		if err := s.verifyMissingExecutionTargetWorktreeOwnership(ctx, workspaceRoot, canonicalWorktreeRoot, taskShortID, *req.ExpectedOwnership, *req.ExpectedBranchTip); err == nil {
+			return ExecutionTargetWorktreeInspection{
+				Kind:                    ExecutionTargetWorktreeInspectionExactMissingRoot,
+				BranchName:              taskShortID,
+				ExactBranchObservation:  *req.ExpectedBranchTip,
+				LinkedWorktreeOwnership: req.ExpectedOwnership,
+			}, nil
+		}
+	}
 	for _, entry := range entries {
 		if entry.Root != canonicalWorktreeRoot {
 			continue
@@ -304,6 +317,34 @@ func (s *Service) InspectExecutionTargetWorktree(ctx context.Context, req Inspec
 		return ExecutionTargetWorktreeInspection{Kind: ExecutionTargetWorktreeInspectionNoSideEffects}, nil
 	}
 	return ExecutionTargetWorktreeInspection{Kind: ExecutionTargetWorktreeInspectionAmbiguous}, nil
+}
+
+func (s *Service) verifyMissingExecutionTargetWorktreeOwnership(ctx context.Context, workspaceRoot string, worktreeRoot string, taskShortID string, ownership workflow.ExecutionTargetLinkedWorktreeOwnership, expectedBranchTip string) error {
+	if ownership.HeadRef != "refs/heads/"+taskShortID || strings.TrimSpace(expectedBranchTip) == "" || filepath.Clean(ownership.GitDir) != filepath.Join(worktreeRoot, ".git") {
+		return errors.New("recorded linked-worktree ownership does not match the task root")
+	}
+	commonDir, err := s.git.CommonDirectory(ctx, workspaceRoot)
+	if err != nil || commonDir != ownership.CommonDir {
+		return errors.New("recorded linked-worktree common directory does not match")
+	}
+	adminEntry := filepath.Clean(filepath.FromSlash(ownership.AdminEntry))
+	if adminEntry == "." || filepath.IsAbs(adminEntry) || adminEntry == ".." || strings.HasPrefix(adminEntry, ".."+string(filepath.Separator)) {
+		return errors.New("recorded linked-worktree administrative entry is invalid")
+	}
+	adminRoot := filepath.Join(commonDir, adminEntry)
+	head, err := os.ReadFile(filepath.Join(adminRoot, "HEAD"))
+	if err != nil || strings.TrimSpace(string(head)) != "ref: "+ownership.HeadRef {
+		return errors.New("recorded linked-worktree HEAD evidence does not match")
+	}
+	gitdir, err := os.ReadFile(filepath.Join(adminRoot, "gitdir"))
+	if err != nil || strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(gitdir)), "gitdir:")) != ownership.GitDir {
+		return errors.New("recorded linked-worktree gitdir evidence does not match")
+	}
+	branchTip, err := s.git.resolveCommit(ctx, workspaceRoot, ownership.HeadRef, workflow.ExecutionPolicyHead, ExecutionTargetResolutionFailureUnavailable, "")
+	if err != nil || branchTip != expectedBranchTip {
+		return errors.New("recorded task branch tip does not match")
+	}
+	return nil
 }
 
 // ProvisionExecutionTargetWorktree creates the task-derived branch from the
