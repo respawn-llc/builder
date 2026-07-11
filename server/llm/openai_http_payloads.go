@@ -26,7 +26,7 @@ func newOpenAIRequestPayloadBuilder(store bool, modelVerbosity string, capabilit
 	return openAIRequestPayloadBuilder{store: store, modelVerbosity: strings.ToLower(strings.TrimSpace(modelVerbosity)), capabilities: capabilities}
 }
 
-func (t *HTTPTransport) buildPayload(request OpenAIRequest, mode openAIAuthMode, capabilities ProviderCapabilities) (responses.ResponseNewParams, error) {
+func (t *HTTPTransport) buildPayload(request OpenAIRequest, mode OpenAIAuthMode, capabilities ProviderCapabilities) (responses.ResponseNewParams, error) {
 	builder := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, capabilities)
 	return builder.BuildResponse(request, mode)
 }
@@ -36,7 +36,7 @@ func (t *HTTPTransport) buildInputTokenCountParams(request OpenAIRequest, capabi
 	return builder.BuildInputTokenCount(request)
 }
 
-func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode openAIAuthMode) (responses.ResponseNewParams, error) {
+func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode OpenAIAuthMode) (responses.ResponseNewParams, error) {
 	input, err := buildResponsesInput(request.Items)
 	if err != nil {
 		return responses.ResponseNewParams{}, err

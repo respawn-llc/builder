@@ -40,7 +40,7 @@ type OpenAIAuthMetadataProvider interface {
 	OpenAIAuthMetadata(ctx context.Context) (method string, accountID string, err error)
 }
 
-type openAIAuthMode struct {
+type OpenAIAuthMode struct {
 	IsOAuth   bool
 	AccountID string
 }
@@ -425,26 +425,26 @@ func (t *HTTPTransport) ProviderCapabilities(ctx context.Context) (ProviderCapab
 	return t.providerCapabilitiesForMode(mode)
 }
 
-func (t *HTTPTransport) resolveAuth(ctx context.Context) (string, openAIAuthMode, error) {
+func (t *HTTPTransport) resolveAuth(ctx context.Context) (string, OpenAIAuthMode, error) {
 	if t.Auth == nil {
 		if t.BaseURLExplicit {
-			return "", openAIAuthMode{}, nil
+			return "", OpenAIAuthMode{}, nil
 		}
-		return "", openAIAuthMode{}, &AuthError{Err: auth.ErrAuthNotConfigured}
+		return "", OpenAIAuthMode{}, &AuthError{Err: auth.ErrAuthNotConfigured}
 	}
 	authHeader, err := t.Auth.AuthorizationHeader(ctx)
 	if err != nil {
 		if t.BaseURLExplicit && errors.Is(err, auth.ErrAuthNotConfigured) {
-			return "", openAIAuthMode{}, nil
+			return "", OpenAIAuthMode{}, nil
 		}
-		return "", openAIAuthMode{}, &AuthError{Err: err}
+		return "", OpenAIAuthMode{}, &AuthError{Err: err}
 	}
 
-	mode := openAIAuthMode{}
+	mode := OpenAIAuthMode{}
 	if provider, ok := t.Auth.(OpenAIAuthMetadataProvider); ok {
 		method, accountID, err := provider.OpenAIAuthMetadata(ctx)
 		if err != nil {
-			return "", openAIAuthMode{}, &AuthError{Err: err}
+			return "", OpenAIAuthMode{}, &AuthError{Err: err}
 		}
 		mode.IsOAuth = method == "oauth"
 		mode.AccountID = strings.TrimSpace(accountID)

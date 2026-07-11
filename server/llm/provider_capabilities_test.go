@@ -126,22 +126,22 @@ func TestProviderCapabilitiesForSettingsRejectsUnsupportedProviderOverride(t *te
 }
 
 func TestResolveOpenAITransportProviderVariant_DefaultLoopbackAndRemoteCompatibleBaseURL(t *testing.T) {
-	if got, err := resolveOpenAITransportProviderVariant("", openAIAuthMode{}); err != nil || got != "openai" {
+	if got, err := resolveOpenAITransportProviderVariant("", OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected default base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://api.openai.com/v1/", openAIAuthMode{}); err != nil || got != "openai" {
+	if got, err := resolveOpenAITransportProviderVariant("https://api.openai.com/v1/", OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected normalized default base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://api.openai.com", openAIAuthMode{}); err != nil || got != "openai" {
+	if got, err := resolveOpenAITransportProviderVariant("https://api.openai.com", OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected bare api.openai.com base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("http://127.0.0.1:8080/v1", openAIAuthMode{}); err != nil || got != "openai" {
+	if got, err := resolveOpenAITransportProviderVariant("http://127.0.0.1:8080/v1", OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected loopback base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://example.openai.azure.com/openai/v1", openAIAuthMode{}); err != nil || got != "openai-compatible" {
+	if got, err := resolveOpenAITransportProviderVariant("https://example.openai.azure.com/openai/v1", OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
 		t.Fatalf("expected remote compatible base url to resolve openai-compatible variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://ignored.example/v1", openAIAuthMode{IsOAuth: true}); err != nil || got != "chatgpt-codex" {
+	if got, err := resolveOpenAITransportProviderVariant("https://ignored.example/v1", OpenAIAuthMode{IsOAuth: true}); err != nil || got != "chatgpt-codex" {
 		t.Fatalf("expected oauth mode to resolve chatgpt-codex variant, got variant=%q err=%v", got, err)
 	}
 }

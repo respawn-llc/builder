@@ -13,7 +13,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-func (t *HTTPTransport) serviceBaseURL(mode openAIAuthMode) string {
+func (t *HTTPTransport) serviceBaseURL(mode OpenAIAuthMode) string {
 	if mode.IsOAuth && !t.BaseURLExplicit {
 		return strings.TrimSuffix(codexResponsesEndpoint, "/responses")
 	}
@@ -24,7 +24,7 @@ func (t *HTTPTransport) serviceBaseURL(mode openAIAuthMode) string {
 	return base
 }
 
-func (t *HTTPTransport) buildRequestOptions(authHeader string, mode openAIAuthMode, sessionID string) []option.RequestOption {
+func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMode, sessionID string) []option.RequestOption {
 	opts := []option.RequestOption{
 		option.WithHeader("originator", defaultOriginator),
 		option.WithHeader("User-Agent", defaultUserAgent),
@@ -55,7 +55,7 @@ func (t *HTTPTransport) resolveContextWindowFallback(ctx context.Context, model 
 	return 0
 }
 
-func (t *HTTPTransport) providerVariantForMode(mode openAIAuthMode) (ProviderVariantContract, error) {
+func (t *HTTPTransport) providerVariantForMode(mode OpenAIAuthMode) (ProviderVariantContract, error) {
 	provider := t.Provider
 	if provider == "" {
 		provider = ProviderOpenAI
@@ -71,7 +71,7 @@ func (t *HTTPTransport) providerVariantForMode(mode openAIAuthMode) (ProviderVar
 	return variant, nil
 }
 
-func (t *HTTPTransport) providerCapabilitiesForMode(mode openAIAuthMode) (ProviderCapabilities, error) {
+func (t *HTTPTransport) providerCapabilitiesForMode(mode OpenAIAuthMode) (ProviderCapabilities, error) {
 	if t.ProviderCapabilitiesOverride != nil {
 		return *t.ProviderCapabilitiesOverride, nil
 	}

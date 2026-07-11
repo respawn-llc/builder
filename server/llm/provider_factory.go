@@ -35,7 +35,7 @@ type ProviderErrorReducerFactory func(providerID string) ProviderErrorReducer
 
 type ProviderModelMatcher func(model string) bool
 
-type ProviderTransportVariantResolver func(baseURL string, mode openAIAuthMode) (string, error)
+type ProviderTransportVariantResolver func(baseURL string, mode OpenAIAuthMode) (string, error)
 
 type ProviderVariantContract struct {
 	ProviderID      string
@@ -238,6 +238,11 @@ func newOpenAIProviderClient(opts ProviderClientOptions) (Client, error) {
 	if opts.Auth == nil && !allowsAnonymousOpenAIBaseURL(opts.OpenAIBaseURL) {
 		return nil, fmt.Errorf("openai auth provider is required")
 	}
+	transport := newOpenAIHTTPTransport(opts)
+	return newIdleWatchdogClient(NewOpenAIClient(transport), transport.Client.Timeout), nil
+}
+
+func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
 	transport := NewHTTPTransport(opts.Auth)
 	if opts.Provider != "" {
 		transport.Provider = opts.Provider
@@ -259,7 +264,7 @@ func newOpenAIProviderClient(opts ProviderClientOptions) (Client, error) {
 		transport.ProviderCapabilitiesOverride = &caps
 	}
 	transport.Store = opts.Store
-	return newIdleWatchdogClient(NewOpenAIClient(transport), transport.Client.Timeout), nil
+	return transport
 }
 
 func allowsAnonymousOpenAIBaseURL(baseURL string) bool {

@@ -429,6 +429,40 @@ func TestNormalizePersistenceRootExpandsTildeAndAbsolutizes(t *testing.T) {
 	}
 }
 
+func TestResolvePersistenceRootUsesFlagThenEnvironmentThenDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	envRoot := filepath.Join(t.TempDir(), "env-root")
+	flagRoot := filepath.Join(t.TempDir(), "flag-root")
+
+	t.Setenv(PersistenceRootEnvName, envRoot)
+	got, err := ResolvePersistenceRoot(flagRoot)
+	if err != nil {
+		t.Fatalf("resolve flag root: %v", err)
+	}
+	if got != flagRoot {
+		t.Fatalf("flag root = %q, want %q", got, flagRoot)
+	}
+
+	got, err = ResolvePersistenceRoot("")
+	if err != nil {
+		t.Fatalf("resolve environment root: %v", err)
+	}
+	if got != envRoot {
+		t.Fatalf("environment root = %q, want %q", got, envRoot)
+	}
+
+	t.Setenv(PersistenceRootEnvName, "")
+	got, err = ResolvePersistenceRoot("")
+	if err != nil {
+		t.Fatalf("resolve default root: %v", err)
+	}
+	wantDefault := filepath.Join(home, ConfigDirName)
+	if got != wantDefault {
+		t.Fatalf("default root = %q, want %q", got, wantDefault)
+	}
+}
+
 func TestLoadSubagentRoleFromFile(t *testing.T) {
 	home, workspace, configPath := newConfigTestFile(t)
 	contents := strings.Join([]string{

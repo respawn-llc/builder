@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type stubPersistedSessionResolver struct {
@@ -123,6 +125,56 @@ func TestFilelessMetadataPersistenceSkipsSessionFileAndPublishesObserver(t *test
 	}
 	if observer.snapshot.Meta.Name != "incident triage" {
 		t.Fatalf("observer name = %q", observer.snapshot.Meta.Name)
+	}
+}
+
+func TestFilelessEventPersistenceDoesNotAppendToEventLog(t *testing.T) {
+	persisted := newSessionTestStore(t)
+	if _, _, err := persisted.AppendEvent(uuid.NewString(), "message", map[string]any{"role": "user", "content": "before inspection"}); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
+	eventsPath := filepath.Join(persisted.Dir(), eventsFile)
+	sessionPath := filepath.Join(persisted.Dir(), sessionFile)
+	before, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read event log before inspection: %v", err)
+	}
+	metaBefore, err := os.ReadFile(sessionPath)
+	if err != nil {
+		t.Fatalf("read session metadata before inspection: %v", err)
+	}
+
+	inspection, err := Open(
+		persisted.Dir(),
+		WithFilelessEventPersistence(),
+	)
+	if err != nil {
+		t.Fatalf("open inspection store: %v", err)
+	}
+	event, committed, err := inspection.AppendEvent(uuid.NewString(), "message", map[string]any{"role": "developer", "content": "ephemeral context"})
+	if err != nil {
+		t.Fatalf("append inspection event: %v", err)
+	}
+	if !committed {
+		t.Fatal("expected inspection event to apply to the in-memory store")
+	}
+	if event.Seq != 2 || inspection.Meta().LastSequence != 2 {
+		t.Fatalf("inspection sequence = %d / %d, want 2", event.Seq, inspection.Meta().LastSequence)
+	}
+
+	after, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read event log after inspection: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("inspection appended to the durable event log")
+	}
+	metaAfter, err := os.ReadFile(sessionPath)
+	if err != nil {
+		t.Fatalf("read session metadata after inspection: %v", err)
+	}
+	if string(metaAfter) != string(metaBefore) {
+		t.Fatal("inspection advanced durable session metadata")
 	}
 }
 

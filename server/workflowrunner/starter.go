@@ -501,11 +501,7 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 			return launch.SessionPlan{}, nil, err
 		}
 	}
-	warnings := []string{}
-	allowLockedRoleChange := allowLockedWorkflowContinuationRoleChange(plan, overrides)
-	plan, warnings, err = launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
-		AllowLockedAgentRoleChange: allowLockedRoleChange,
-	})
+	plan, warnings, err := applyWorkflowSessionPromptOverrides(plan, input)
 	if err != nil {
 		return launch.SessionPlan{}, nil, err
 	}
@@ -534,6 +530,13 @@ func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, override
 		currentRole = strings.TrimSpace(plan.Store.Meta().Continuation.AgentRole)
 	}
 	return currentRole != roleOverride.Role
+}
+
+func applyWorkflowSessionPromptOverrides(plan launch.SessionPlan, input workflowstore.RunStartContext) (launch.SessionPlan, []string, error) {
+	overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
+	return launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
+		AllowLockedAgentRoleChange: allowLockedWorkflowContinuationRoleChange(plan, overrides),
+	})
 }
 
 type sessionListingMetadata struct {
@@ -810,11 +813,6 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	for _, warning := range warnings {
 		logger.Logf("workflow.runtime.warning %s", warning)
 	}
-	instructions, instructionsErr := BuildWorkflowTaskInstructions(input)
-	if instructionsErr != nil {
-		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonRuntimeFailed, instructionsErr)
-		return
-	}
 	sessionID := plan.Store.Meta().SessionID
 	ownerID := uuid.NewString()
 	var engine *runtime.Engine
@@ -830,6 +828,16 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		flushRuntimeEventsAfterResolve := func() {
 			runtimeEvents.FlushAfterResolve()
 		}
+		workflowConfig, err := BuildWorkflowRuntimeConfig(
+			input,
+			effectiveMode,
+			s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
+			workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer},
+			s.store,
+		)
+		if err != nil {
+			return sessionruntime.RuntimeBuildResult{}, err
+		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), input.WorktreeRoot, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
 			Headless:                            true,
 			FastMode:                            nil,
@@ -839,15 +847,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 			GlobalConfigDir:                     s.cfg.PersistenceRoot,
 			SkipContinuationAgentRoleValidation: workflowRunPromptOverrides(input.Node.SubagentRole).HasAny(),
 			StepLifecycle:                       runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),
-			WorkflowRun: &workflowruntime.Config{
-				RunID:                        req.RunID,
-				Contract:                     workflowCompletionContract(req, input),
-				CompletionMode:               effectiveMode,
-				MaxInvalidCompletionAttempts: s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
-				Controller:                   workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer},
-				TaskCommentCounter:           s.store,
-				Instructions:                 instructions,
-			},
+			WorkflowRun:                         workflowConfig,
 			AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
 				if attention, ok := s.runtimes.(workflowattention.QuestionAttentionRegistry); ok {
 					if err := workflowattention.PrepareSkippedTaskQuestionBatch(attention, input, sessionID, req.RunID, batch, time.Now().UTC()); err != nil {
@@ -1071,10 +1071,10 @@ func workflowInstructionTransitions(options []workflowstore.TransitionOption, tr
 	return out
 }
 
-func workflowCompletionContract(req SchedulerStartRunRequest, input workflowstore.RunStartContext) workflowruntime.CompletionContract {
+func workflowCompletionContractForRun(run workflowstore.RunRecord, input workflowstore.RunStartContext) workflowruntime.CompletionContract {
 	return workflowruntime.CompletionContract{
-		RunID:              req.RunID,
-		ExpectedGeneration: req.Generation,
+		RunID:              run.ID,
+		ExpectedGeneration: run.Generation,
 		RequireGeneration:  true,
 		Transitions:        workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
 	}

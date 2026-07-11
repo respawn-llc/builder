@@ -1191,6 +1191,18 @@ func (s *Store) appendEventsAtomicLockedWithCommitStatus(events []Event) (*persi
 		return nil, false, err
 	}
 
+	if s.options.filelessEvents {
+		for _, e := range events {
+			s.meta.LastSequence = e.Seq
+		}
+		s.meta.UpdatedAt = time.Now().UTC()
+		snapshot, err := s.persistMetaLocked()
+		if err != nil {
+			return nil, false, err
+		}
+		return snapshot, true, nil
+	}
+
 	if _, err := s.appendEventsLogLocked(events); err != nil {
 		return nil, false, err
 	}
