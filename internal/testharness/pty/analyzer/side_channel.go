@@ -3,8 +3,6 @@ package analyzer
 import (
 	"fmt"
 
-	"core/internal/testharness/pty/checkpoint"
-
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/ansi/parser"
 )
@@ -116,7 +114,7 @@ func (s *sequenceSideChannel) handleOSC(cmd int, data []byte) {
 	if !ok {
 		return
 	}
-	marker, recognized, err := checkpoint.DecodeOSCData(data)
+	marker, recognized, err := DecodeOSCData(data)
 	if err != nil {
 		s.err = err
 		return

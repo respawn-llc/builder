@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
+	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
-	"core/internal/testharness/pty/checkpoint"
 	"core/shared/clientui"
 	"core/shared/transcript"
 

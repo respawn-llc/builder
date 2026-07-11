@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"time"
-
-	"core/internal/testharness/pty/checkpoint"
 )
 
 type Dimensions struct {
@@ -278,17 +276,17 @@ type PrivateModeChange struct {
 	CapturedAt time.Duration
 }
 
-type PhaseKind = checkpoint.Kind
+type PhaseKind = Kind
 
 const (
-	PhaseScenarioStart            = checkpoint.KindScenarioStart
-	PhaseWindowStart              = checkpoint.KindWindowStart
-	PhaseWindowEnd                = checkpoint.KindWindowEnd
-	PhaseReadyForQuit             = checkpoint.KindReadyForQuit
-	PhaseScenarioComplete         = checkpoint.KindScenarioComplete
-	PhaseInputApplied             = checkpoint.KindInputApplied
-	PhaseDetailInitialPageApplied = checkpoint.KindDetailInitialPageApplied
-	PhaseScenarioFinalApplied     = checkpoint.KindScenarioFinalApplied
+	PhaseScenarioStart            = KindScenarioStart
+	PhaseWindowStart              = KindWindowStart
+	PhaseWindowEnd                = KindWindowEnd
+	PhaseReadyForQuit             = KindReadyForQuit
+	PhaseScenarioComplete         = KindScenarioComplete
+	PhaseInputApplied             = KindInputApplied
+	PhaseDetailInitialPageApplied = KindDetailInitialPageApplied
+	PhaseScenarioFinalApplied     = KindScenarioFinalApplied
 )
 
 type ReadinessBoundaryKind uint8
@@ -310,10 +308,6 @@ type ReadinessBoundary struct {
 	ByteRange  ByteRange
 	CapturedAt time.Duration
 }
-
-type WindowID = checkpoint.WindowID
-
-var NewWindowID = checkpoint.NewWindowID
 
 type PhaseEvent struct {
 	Sequence   int

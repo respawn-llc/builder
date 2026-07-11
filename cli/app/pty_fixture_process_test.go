@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
-	"core/internal/testharness/pty/checkpoint"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

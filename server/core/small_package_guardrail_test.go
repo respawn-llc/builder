@@ -102,7 +102,6 @@ func listRepoPackages(t *testing.T, repoRoot string) []smallPackageInfo {
 
 var allowedSmallPackages = map[string]string{
 	"cli/app/internal/daemonlaunch":           "narrow process helper that intentionally isolates daemon process ownership and termination behavior from attachment policy",
-	"cli/app/internal/apphooks":               "internal-only app runner hook context for fixture dependency injection without exporting cli/app harness APIs",
 	"cli/app/internal/embeddedattach":         "narrow embedded-server attachment seam after absorbing embedded binding/startup helpers",
 	"cli/app/internal/onboarding":             "narrow onboarding readiness and temporary symlink execution seam; capability fact discovery/domain rules are server-owned",
 	"cli/app/internal/projectbinding":         "interactive project binding workflow seam after absorbing project picker behavior",
@@ -110,7 +109,6 @@ var allowedSmallPackages = map[string]string{
 	"cli/app/internal/remoteattach":           "narrow remote attachment seam after absorbing remote binding",
 	"cli/app/internal/runtimestate":           "DTO-only reducer boundary; package-level tests enforce stdlib plus shared/clientui imports only",
 	"cli/app/internal/startupconfig":          "narrow CLI startup config-resolution seam after absorbing serve-command env construction",
-	"cli/tui":                                 "temporary blank ongoing-mode stub retained as the app-owned TUI mode boundary while the #487 replacement surface is not implemented",
 	"internal/testharness/runtimewirefixture": "shared runtimewire event fixture package used by app/runtimewire tests without duplicating router-facing event construction",
 	"server/bootstrap":                        "composition support boundary shared by core and startup; merging into startup creates a cycle",
 	"server/attentionnotify":                  "transient attention notification broker and batch tracker owner kept separate from registry/workflow packages to avoid making them notification state owners",

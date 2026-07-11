@@ -1,4 +1,4 @@
-package checkpoint
+package analyzer
 
 import (
 	"encoding/base64"

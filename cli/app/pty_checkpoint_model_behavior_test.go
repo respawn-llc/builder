@@ -8,7 +8,6 @@ import (
 	"core/cli/tui/ongoing"
 	"core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
-	"core/internal/testharness/pty/checkpoint"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
@@ -18,7 +17,7 @@ import (
 )
 
 type ptyCheckpointOrderingModel struct {
-	output *checkpoint.Writer
+	output *analyzer.Writer
 }
 
 func (model ptyCheckpointOrderingModel) Init() tea.Cmd { return nil }
@@ -34,7 +33,7 @@ func (model ptyCheckpointOrderingModel) View() string { return "" }
 
 func TestPTYCheckpointModelEmitsInputAppliedAfterInnerUpdate(t *testing.T) {
 	var out bytes.Buffer
-	writer := checkpoint.NewWriter(&out)
+	writer := analyzer.NewWriter(&out)
 	model := newPTYCheckpointModel(
 		ptyCheckpointOrderingModel{output: writer},
 		writer,
@@ -57,7 +56,7 @@ func TestPTYCheckpointModelEmitsInputAppliedAfterInnerUpdate(t *testing.T) {
 
 func TestPTYCheckpointModelQueuesInitialDetailApplicationBeforeRendererWrite(t *testing.T) {
 	var out bytes.Buffer
-	writer := checkpoint.NewWriter(&out)
+	writer := analyzer.NewWriter(&out)
 	model, requestID := newPendingPTYDetailCheckpointModel(t)
 	wrapped := newPTYCheckpointModel(
 		model,
@@ -94,7 +93,7 @@ func TestPTYCheckpointModelQueuesInitialDetailApplicationBeforeRendererWrite(t *
 
 func TestPTYCheckpointModelDoesNotQueueInitialDetailApplicationForMalformedPage(t *testing.T) {
 	var out bytes.Buffer
-	writer := checkpoint.NewWriter(&out)
+	writer := analyzer.NewWriter(&out)
 	model, requestID := newPendingPTYDetailCheckpointModel(t)
 	wrapped := newPTYCheckpointModel(
 		model,
@@ -138,7 +137,7 @@ func TestPTYCheckpointModelDoesNotQueueInitialDetailApplicationForMalformedPage(
 
 func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterTerminalTransaction(t *testing.T) {
 	var out bytes.Buffer
-	writer := checkpoint.NewWriter(&out)
+	writer := analyzer.NewWriter(&out)
 	model := newPTYCheckpointOngoingModel(t, writer)
 	out.Reset()
 
@@ -178,7 +177,7 @@ func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterTerminalTransaction(t *
 
 func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterDeferredDetailTransaction(t *testing.T) {
 	var out bytes.Buffer
-	writer := checkpoint.NewWriter(&out)
+	writer := analyzer.NewWriter(&out)
 	model := newPTYCheckpointOngoingModel(t, writer)
 	if _, err := model.ongoingTranscript.SetNormalBufferOwned(false); err != nil {
 		t.Fatalf("mark normal buffer unowned: %v", err)
@@ -217,7 +216,7 @@ func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterDeferredDetailTransacti
 
 func TestPTYCheckpointModelCorrelatesScenarioFinalAppliedToTargetScriptFinalExactlyOnce(t *testing.T) {
 	var out bytes.Buffer
-	writer := checkpoint.NewWriter(&out)
+	writer := analyzer.NewWriter(&out)
 	model := newPTYCheckpointOngoingModel(t, writer)
 	out.Reset()
 
@@ -245,7 +244,7 @@ func TestPTYCheckpointModelCorrelatesScenarioFinalAppliedToTargetScriptFinalExac
 	}
 }
 
-func newPTYCheckpointOngoingModel(t *testing.T, writer *checkpoint.Writer) *uiModel {
+func newPTYCheckpointOngoingModel(t *testing.T, writer *analyzer.Writer) *uiModel {
 	t.Helper()
 	surface := ongoing.NewSurface(writer)
 	model := sizedTestUIModel(newProjectedStaticUIModel(

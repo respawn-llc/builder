@@ -52,9 +52,8 @@ func TestTerminalOutputFilePreservesTerminalFileDescriptor(t *testing.T) {
 
 func TestProductionAppAndTUICodeCannotDependOnPTYCheckpointProtocol(t *testing.T) {
 	forbiddenImports := map[string]struct{}{
-		"core/internal/testharness/pty":            {},
-		"core/internal/testharness/pty/analyzer":   {},
-		"core/internal/testharness/pty/checkpoint": {},
+		"core/internal/testharness/pty":          {},
+		"core/internal/testharness/pty/analyzer": {},
 	}
 	forbiddenIdentifiers := map[string]struct{}{
 		"TerminalPhase":                   {},
