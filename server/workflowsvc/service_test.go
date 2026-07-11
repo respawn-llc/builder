@@ -1223,6 +1223,90 @@ func TestExecutionTargetRecoveryCoordinatorResumesPendingSetupForAttachedLockedT
 	}
 }
 
+func TestExecutionTargetRecoveryCoordinatorReprovisionsExactMissingLockedRoot(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	provisioningGeneration := "recovery-provisioning"
+	queuedClaim := workflow.ExecutionTargetClaim{Generation: "queued-claim", Phase: workflow.ExecutionTargetClaimRecoveryQueued}
+	worktreeRoot := filepath.Join(t.TempDir(), "recovery-root")
+	branchTip := "deadbeef"
+	target := workflow.ExecutionTarget{
+		TaskID: workflow.TaskID(task.Task.ID),
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:     workflow.ExecutionTargetSourceNamedRef,
+			NamedRef: stringPtr("refs/heads/main"),
+			Commit:   branchTip,
+		},
+		State:                       workflow.ExecutionTargetStateLocked,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &queuedClaim,
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+		ExactBranchObservation:      &branchTip,
+		LinkedWorktreeOwnership: &workflow.ExecutionTargetLinkedWorktreeOwnership{
+			CommonDir:  "/test/common-dir",
+			AdminEntry: "worktrees/" + task.Task.ShortID,
+			GitDir:     filepath.Join(worktreeRoot, ".git"),
+			HeadRef:    "refs/heads/" + task.Task.ShortID,
+		},
+	}
+	if err := service.store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	attached, err := service.store.AttachManagedExecutionTargetWorktree(ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
+		Target:        target,
+		ExpectedClaim: queuedClaim,
+		WorkspaceID:   binding.WorkspaceID,
+		WorktreeRoot:  worktreeRoot,
+		CreatedBranch: true,
+	})
+	if err != nil {
+		t.Fatalf("AttachManagedExecutionTargetWorktree: %v", err)
+	}
+	materializer := &recordingTaskExecutionTargetWorktreeMaterializer{
+		worktreeRoot: worktreeRoot,
+		inspect: func(_ context.Context, _ worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error) {
+			return worktree.ExecutionTargetWorktreeInspection{
+				Kind:                    worktree.ExecutionTargetWorktreeInspectionExactMissingRoot,
+				BranchName:              task.Task.ShortID,
+				ExactBranchObservation:  branchTip,
+				LinkedWorktreeOwnership: target.LinkedWorktreeOwnership,
+			}, nil
+		},
+	}
+	service.targetWorktrees = materializer
+	coordinator, err := service.StartExecutionTargetRecovery(ctx)
+	if err != nil {
+		t.Fatalf("StartExecutionTargetRecovery: %v", err)
+	}
+	defer func() {
+		if err := coordinator.Close(); err != nil {
+			t.Fatalf("ExecutionTargetRecoveryCoordinator.Close: %v", err)
+		}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		recovered, getErr := service.store.GetTaskExecutionTarget(ctx, target.TaskID)
+		if getErr != nil {
+			t.Fatalf("GetTaskExecutionTarget: %v", getErr)
+		}
+		if recovered != nil && recovered.State == workflow.ExecutionTargetStateLocked && recovered.ActiveClaim == nil && recovered.SetupState == workflow.ExecutionTargetSetupSucceeded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recovered execution target = %+v, want reprovisioned locked target", recovered)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if materializer.provision.WorktreeRoot != worktreeRoot || materializer.setup.WorktreeRoot != attached.Root {
+		t.Fatalf("reprovision/setup = provision:%+v setup:%+v, want durable root", materializer.provision, materializer.setup)
+	}
+}
+
 func TestServiceStartHeadPolicyMissingScriptKeepsTargetWithoutStarting(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
@@ -3570,6 +3654,10 @@ func (m *recordingTaskExecutionTargetWorktreeMaterializer) ProvisionExecutionTar
 			HeadRef:    "refs/heads/" + req.TaskShortID,
 		},
 	}, nil
+}
+
+func (m *recordingTaskExecutionTargetWorktreeMaterializer) ReprovisionExecutionTargetWorktree(ctx context.Context, req worktree.ProvisionExecutionTargetWorktreeRequest) (worktree.ProvisionExecutionTargetWorktreeResponse, error) {
+	return m.ProvisionExecutionTargetWorktree(ctx, req)
 }
 
 func (m *recordingTaskExecutionTargetWorktreeMaterializer) InspectExecutionTargetWorktree(ctx context.Context, req worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error) {

@@ -54,6 +54,7 @@ type taskExecutionTargetResolver interface {
 type taskExecutionTargetWorktreeMaterializer interface {
 	PlanExecutionTargetWorktreeRoot(workspaceID string, taskShortID string) (string, error)
 	ProvisionExecutionTargetWorktree(context.Context, worktree.ProvisionExecutionTargetWorktreeRequest) (worktree.ProvisionExecutionTargetWorktreeResponse, error)
+	ReprovisionExecutionTargetWorktree(context.Context, worktree.ProvisionExecutionTargetWorktreeRequest) (worktree.ProvisionExecutionTargetWorktreeResponse, error)
 	InspectExecutionTargetWorktree(context.Context, worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error)
 	RunExecutionTargetSetup(context.Context, worktree.RunExecutionTargetSetupRequest) error
 }
@@ -462,6 +463,8 @@ func (c *executionTargetRecoveryCoordinator) recoverLockedTarget(recovery workfl
 		WorktreeRoot:        root.ManagedWorktree.Root,
 		TaskShortID:         recovery.TaskShortID,
 		ResolvedCommit:      recovery.Target.ResolvedSource.Commit,
+		ExpectedOwnership:   recovery.Target.LinkedWorktreeOwnership,
+		ExpectedBranchTip:   recovery.Target.ExactBranchObservation,
 	})
 	if err != nil {
 		if c.ctx.Err() == nil {
@@ -470,6 +473,9 @@ func (c *executionTargetRecoveryCoordinator) recoverLockedTarget(recovery workfl
 		return err
 	}
 	if inspection.Kind != worktree.ExecutionTargetWorktreeInspectionExact || inspection.BranchName != recovery.TaskShortID {
+		if inspection.Kind == worktree.ExecutionTargetWorktreeInspectionExactMissingRoot {
+			return c.reprovisionLockedTarget(recovery, claim, root.ManagedWorktree.Root)
+		}
 		cause := workflow.ExecutionTargetRecoveryCauseAmbiguousWorktree
 		if inspection.Kind == worktree.ExecutionTargetWorktreeInspectionNoSideEffects {
 			cause = workflow.ExecutionTargetRecoveryCauseMissingManagedRoot
@@ -477,6 +483,50 @@ func (c *executionTargetRecoveryCoordinator) recoverLockedTarget(recovery workfl
 		return c.markManualRecovery(recovery.Target, claim, cause)
 	}
 	return c.recoverAttachedSetup(recovery, recovery.Target, claim, *root.ManagedWorktree, recovery.TaskShortID)
+}
+
+func (c *executionTargetRecoveryCoordinator) reprovisionLockedTarget(recovery workflowstore.ExecutionTargetRecoveryContext, claim workflow.ExecutionTargetClaim, worktreeRoot string) error {
+	if recovery.Target.ExactBranchObservation == nil || recovery.Target.LinkedWorktreeOwnership == nil {
+		return c.markManualRecovery(recovery.Target, claim, workflow.ExecutionTargetRecoveryCauseAmbiguousWorktree)
+	}
+	provisioningGeneration := uuid.NewString()
+	target := recovery.Target
+	target.State = workflow.ExecutionTargetStateLockedReprovisioning
+	target.IntendedWorktreeRoot = stringPointer(worktreeRoot)
+	target.ProvisioningGeneration = &provisioningGeneration
+	target.SetupProvisioningGeneration = &provisioningGeneration
+	target.SetupState = workflow.ExecutionTargetSetupPending
+	if err := c.service.store.UpdateTaskExecutionTargetLifecycle(c.ctx, target, claim); err != nil {
+		return err
+	}
+	provisioned, err := c.service.targetWorktrees.ReprovisionExecutionTargetWorktree(c.ctx, worktree.ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         recovery.SourceWorkspace.ID,
+		SourceWorkspaceRoot: recovery.SourceWorkspace.Root,
+		TaskShortID:         recovery.TaskShortID,
+		ResolvedCommit:      *recovery.Target.ExactBranchObservation,
+		WorktreeRoot:        worktreeRoot,
+	})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(provisioned.ExactBranchObservation) == "" || provisioned.LinkedWorktreeOwnership == nil {
+		return c.markManualRecovery(target, claim, workflow.ExecutionTargetRecoveryCauseAmbiguousWorktree)
+	}
+	target.State = workflow.ExecutionTargetStateLocked
+	target.IntendedWorktreeRoot = nil
+	target.ExactBranchObservation = stringPointer(provisioned.ExactBranchObservation)
+	target.LinkedWorktreeOwnership = provisioned.LinkedWorktreeOwnership
+	attached, err := c.service.store.AttachManagedExecutionTargetWorktree(c.ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
+		Target:        target,
+		ExpectedClaim: claim,
+		WorkspaceID:   recovery.SourceWorkspace.ID,
+		WorktreeRoot:  provisioned.WorktreeRoot,
+		CreatedBranch: false,
+	})
+	if err != nil {
+		return err
+	}
+	return c.recoverAttachedSetup(recovery, target, claim, attached, recovery.TaskShortID)
 }
 
 func (c *executionTargetRecoveryCoordinator) markManualRecovery(target workflow.ExecutionTarget, claim workflow.ExecutionTargetClaim, cause workflow.ExecutionTargetRecoveryCause) error {

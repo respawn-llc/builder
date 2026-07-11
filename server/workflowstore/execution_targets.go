@@ -538,6 +538,15 @@ func (s *Store) AttachManagedExecutionTargetWorktree(ctx context.Context, req At
 	if !task.SourceWorkspaceID.Valid || strings.TrimSpace(task.SourceWorkspaceID.String) != workspaceID {
 		return workflow.ExecutionWorktree{}, errors.New("managed worktree workspace must match the task source workspace")
 	}
+	existingWorktree, err := q.GetWorktreeByCanonicalRoot(ctx, worktreeRoot)
+	if err == nil {
+		if existingWorktree.WorkspaceID != workspaceID {
+			return workflow.ExecutionWorktree{}, errors.New("managed worktree root belongs to another workspace")
+		}
+		worktreeID = existingWorktree.ID
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return workflow.ExecutionWorktree{}, err
+	}
 	if err := q.UpsertWorktree(ctx, sqlitegen.UpsertWorktreeParams{
 		ID:                worktreeID,
 		WorkspaceID:       workspaceID,
