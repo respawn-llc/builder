@@ -88,7 +88,24 @@ if [ "${#targets[@]}" -eq 0 ]; then
     fi
 fi
 
-server_test_args=(./...)
+server_package_parallelism=8
+if command -v getconf >/dev/null 2>&1; then
+    detected_cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+    case "$detected_cpu_count" in
+        ''|*[!0-9]*)
+            ;;
+        *)
+            if [ "$detected_cpu_count" -gt 0 ] && [ "$detected_cpu_count" -lt "$server_package_parallelism" ]; then
+                server_package_parallelism="$detected_cpu_count"
+            fi
+            ;;
+    esac
+fi
+
+# Full-suite packages launch PTYs, daemons, and test servers. Letting Go fan
+# those packages out across every logical CPU creates severe resource
+# contention and makes the suite slower, not faster.
+server_test_args=(-p="$server_package_parallelism" ./...)
 if [ "${#go_test_args[@]}" -gt 0 ]; then
     server_test_args=("${go_test_args[@]}")
 fi

@@ -94,7 +94,7 @@ func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
 		result, err := executeWorkflowScript(ctx, req, input)
 		done <- scriptResult{result: result, err: err}
 	}()
-	waitForFile(t, markerPath, time.Second)
+	waitForFile(t, markerPath, 5*time.Second)
 
 	cancel()
 
