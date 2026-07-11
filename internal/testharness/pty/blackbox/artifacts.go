@@ -22,11 +22,12 @@ type artifactStore struct {
 }
 
 type artifactRun struct {
-	store   artifactStore
-	id      uuid.UUID
-	staging string
-	final   string
-	lease   *fileLease
+	store     artifactStore
+	id        uuid.UUID
+	staging   string
+	final     string
+	lease     *fileLease
+	publisher *artifactPublisher
 }
 
 type artifactEvidence struct {
@@ -45,6 +46,44 @@ type artifactLatestPointer struct {
 type ArtifactPublicationIncomplete struct {
 	Run   string
 	Cause error
+}
+
+type artifactPublisher struct {
+	done    chan struct{}
+	outcome artifactPublicationOutcome
+}
+
+type artifactPublicationOutcome struct {
+	dir string
+	err error
+}
+
+func startArtifactPublisher(publish func() artifactPublicationOutcome) *artifactPublisher {
+	publisher := &artifactPublisher{done: make(chan struct{})}
+	go func() {
+		publisher.outcome = publish()
+		close(publisher.done)
+	}()
+	return publisher
+}
+
+func (p *artifactPublisher) Done() <-chan struct{} {
+	if p == nil {
+		return nil
+	}
+	return p.done
+}
+
+func (p *artifactPublisher) Outcome() artifactPublicationOutcome {
+	if p == nil {
+		return artifactPublicationOutcome{err: errors.New("artifact publisher is required")}
+	}
+	select {
+	case <-p.done:
+		return p.outcome
+	default:
+		panic("artifact publisher outcome requested before completion")
+	}
 }
 
 func (e *ArtifactPublicationIncomplete) Error() string {
@@ -177,6 +216,24 @@ func (s artifactStore) beginRun() (*artifactRun, error) {
 
 func beginArtifactRun() (*artifactRun, error) {
 	return newArtifactStore(artifactStoreRoot()).beginRun()
+}
+
+func (r *artifactRun) startFailurePublication(deadline time.Time, evidence artifactEvidence, runErr error, cleanup *IncompleteCleanup) *artifactPublisher {
+	if r.publisher != nil {
+		return r.publisher
+	}
+	r.publisher = startArtifactPublisher(func() artifactPublicationOutcome {
+		dir, err := publishFailureArtifacts(deadline, r, evidence, runErr, cleanup)
+		if releaseErr := r.release(); releaseErr != nil {
+			if err == nil {
+				err = releaseErr
+			} else {
+				err = fmt.Errorf("%w; release artifact lease: %v", err, releaseErr)
+			}
+		}
+		return artifactPublicationOutcome{dir: dir, err: err}
+	})
+	return r.publisher
 }
 
 func (r *artifactRun) discard(deadline time.Time) error {

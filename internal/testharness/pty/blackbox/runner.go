@@ -342,16 +342,19 @@ func (s cleanupSupervisor) finishUntil(result *RunResult, dimensions Dimensions,
 		if evidenceErr != nil {
 			incomplete = appendCleanupFailure(incomplete, "artifact_evidence", evidenceErr)
 		} else {
-			artifactDir, artifactErr := publishFailureArtifacts(deadline, s.artifacts, evidence, result.Err, incomplete)
-			if artifactDir != "" {
-				result.ArtifactDir = artifactDir
+			publisher := s.artifacts.startFailurePublication(deadline, evidence, result.Err, incomplete)
+			select {
+			case <-publisher.Done():
+				outcome := publisher.Outcome()
+				if outcome.dir != "" {
+					result.ArtifactDir = outcome.dir
+				}
+				if outcome.err != nil {
+					incomplete = appendCleanupFailure(incomplete, "artifact_publication", outcome.err)
+				}
+			case <-time.After(time.Until(deadline)):
+				incomplete = appendCleanupOwner(incomplete, "artifact_publisher")
 			}
-			if artifactErr != nil {
-				incomplete = appendCleanupFailure(incomplete, "artifact_publication", artifactErr)
-			}
-		}
-		if err := s.artifacts.release(); err != nil {
-			incomplete = appendCleanupFailure(incomplete, "artifact_lease", err)
 		}
 	} else if result.Err == nil && s.artifacts != nil {
 		if err := s.artifacts.discard(deadline); err != nil {

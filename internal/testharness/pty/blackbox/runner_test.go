@@ -164,6 +164,36 @@ func TestCleanupReportsNonReturningModelStubHandlerWithoutReplacingPrimaryFailur
 	}
 }
 
+func TestCleanupReportsStalledArtifactPublisherWithoutReplacingPrimaryFailure(t *testing.T) {
+	release := make(chan struct{})
+	publisher := startArtifactPublisher(func() artifactPublicationOutcome {
+		<-release
+		return artifactPublicationOutcome{}
+	})
+	artifacts := &artifactRun{publisher: publisher}
+	var session *driver.Session
+	var environment *IsolatedEnvironment
+	result := RunResult{Err: errors.New("primary scenario failure")}
+	(cleanupSupervisor{artifacts: artifacts, session: &session, environment: &environment}).finishUntil(
+		&result,
+		Dimensions{Rows: 2, Cols: 8},
+		time.Now().Add(20*time.Millisecond),
+	)
+	if result.Err == nil || result.Err.Error() != "primary scenario failure" {
+		t.Fatalf("cleanup replaced primary failure: %v", result.Err)
+	}
+	if result.Cleanup == nil || !slices.Contains(result.Cleanup.Owners, "artifact_publisher") {
+		t.Fatalf("cleanup did not report artifact publisher: %#v", result.Cleanup)
+	}
+
+	close(release)
+	select {
+	case <-publisher.Done():
+	case <-time.After(time.Second):
+		t.Fatal("artifact publisher did not complete after release")
+	}
+}
+
 func waitForVisibleCursor(t *testing.T, session *driver.Session) {
 	t.Helper()
 	deadline := time.NewTimer(5 * time.Second)
