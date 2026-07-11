@@ -107,6 +107,28 @@ func TestEmptyUnknownDeveloperMessageProjectsDetailDiagnosticFact(t *testing.T) 
 	}
 }
 
+func TestBackgroundNoticePreservesExitCodeAcrossPersistedProjection(t *testing.T) {
+	exitCode := 9
+	msg := llm.Message{
+		Role:               llm.RoleDeveloper,
+		MessageType:        llm.MessageTypeBackgroundNotice,
+		Content:            "background command failed",
+		BackgroundExitCode: &exitCode,
+	}
+
+	entries := VisibleChatEntriesFromMessage(msg)
+	if len(entries) != 1 || entries[0].BackgroundExitCode == nil || *entries[0].BackgroundExitCode != exitCode {
+		t.Fatalf("background entries = %+v, want exit code %d", entries, exitCode)
+	}
+	facts := transcriptCommittedRowFactsFromMessage(msg, nil, nil, nil)
+	if len(facts) != 1 ||
+		facts[0].Notice == nil ||
+		facts[0].Notice.BackgroundExitCode == nil ||
+		*facts[0].Notice.BackgroundExitCode != exitCode {
+		t.Fatalf("background facts = %+v, want exit code %d", facts, exitCode)
+	}
+}
+
 func TestCustomToolCallOutputProjectsAsCommittedToolRowFact(t *testing.T) {
 	msg := llm.Message{
 		Role:        llm.RoleTool,
