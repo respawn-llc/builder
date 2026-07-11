@@ -569,7 +569,7 @@ func TestWorkflowAskHandlerApprovalCancellationAfterDurableClearResolvesQuestion
 		getRun: workflowstore.RunRecord{
 			ID:            "run-1",
 			Generation:    7,
-			InterruptedAt: 123,
+			InterruptedAt: optionalUnixMillis(123),
 		},
 	}
 	starter := &Starter{store: store, runtimes: runtimes}

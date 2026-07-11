@@ -8283,8 +8283,8 @@ SET
     updated_at_unix_ms = ?1,
     invalid_completion_count = 0
 WHERE id = ?2
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
   AND (?3 = 0 OR run_generation = ?4)
 `
 

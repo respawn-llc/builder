@@ -4011,8 +4011,8 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
     invalid_completion_count = 0
 WHERE id = sqlc.arg(run_id)
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
   AND (sqlc.arg(require_generation) = 0 OR run_generation = sqlc.arg(expected_generation));
 
 -- name: ResolveActiveRunCompletionTargetByRunID :many
