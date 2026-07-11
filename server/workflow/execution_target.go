@@ -76,6 +76,7 @@ type ExecutionTarget struct {
 	RequestedCustomRef          *string
 	ResolvedSource              *ExecutionTargetResolvedSource
 	State                       ExecutionTargetState
+	IntendedWorktreeRoot        *string
 	ProvisioningGeneration      *string
 	SetupProvisioningGeneration *string
 	SetupState                  ExecutionTargetSetupState
@@ -155,7 +156,14 @@ func validateManagedExecutionTarget(target ExecutionTarget) error {
 		return err
 	}
 	switch target.State {
-	case ExecutionTargetStateInitialProvisioning, ExecutionTargetStateLocked, ExecutionTargetStateLockedReprovisioning:
+	case ExecutionTargetStateInitialProvisioning, ExecutionTargetStateLockedReprovisioning:
+		if err := validateRequiredExecutionTargetString("intended worktree root", target.IntendedWorktreeRoot); err != nil {
+			return err
+		}
+	case ExecutionTargetStateLocked:
+		if target.IntendedWorktreeRoot != nil {
+			return errors.New("locked execution target cannot retain an intended worktree root")
+		}
 	default:
 		return fmt.Errorf("invalid execution target state %q", target.State)
 	}

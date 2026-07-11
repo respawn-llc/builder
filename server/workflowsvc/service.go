@@ -51,6 +51,7 @@ type taskExecutionTargetResolver interface {
 }
 
 type taskExecutionTargetWorktreeMaterializer interface {
+	PlanExecutionTargetWorktreeRoot(workspaceID string, taskShortID string) (string, error)
 	ProvisionExecutionTargetWorktree(context.Context, worktree.ProvisionExecutionTargetWorktreeRequest) (worktree.ProvisionExecutionTargetWorktreeResponse, error)
 	RunExecutionTargetSetup(context.Context, worktree.RunExecutionTargetSetupRequest) error
 }
@@ -837,6 +838,10 @@ func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepare
 	if s.targetWorktrees == nil {
 		return errors.New("execution target worktree materializer is required")
 	}
+	intendedWorktreeRoot, err := s.targetWorktrees.PlanExecutionTargetWorktreeRoot(prepared.SourceWorkspace.ID, prepared.TaskShortID)
+	if err != nil {
+		return err
+	}
 	provisioningGeneration := uuid.NewString()
 	claim := workflow.ExecutionTargetClaim{Generation: uuid.NewString(), Phase: workflow.ExecutionTargetClaimMaterializing}
 	target := workflow.ExecutionTarget{
@@ -845,6 +850,7 @@ func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepare
 		RequestedCustomRef:          policy.CustomRef,
 		ResolvedSource:              &resolution.Source,
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &intendedWorktreeRoot,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,
@@ -862,11 +868,16 @@ func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepare
 		SourceWorkspaceRoot: prepared.SourceWorkspace.Root,
 		TaskShortID:         prepared.TaskShortID,
 		ResolvedCommit:      resolution.Source.Commit,
+		WorktreeRoot:        intendedWorktreeRoot,
 	})
 	if err != nil {
 		return err
 	}
+	if provisioned.WorktreeRoot != intendedWorktreeRoot {
+		return fmt.Errorf("provisioned execution target root %q does not match intended root %q", provisioned.WorktreeRoot, intendedWorktreeRoot)
+	}
 	target.State = workflow.ExecutionTargetStateLocked
+	target.IntendedWorktreeRoot = nil
 	attached, err := s.store.AttachManagedExecutionTargetWorktree(ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
 		Target:        target,
 		ExpectedClaim: claim,

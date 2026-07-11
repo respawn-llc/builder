@@ -126,6 +126,7 @@ type ProvisionExecutionTargetWorktreeRequest struct {
 	SourceWorkspaceRoot string
 	TaskShortID         string
 	ResolvedCommit      string
+	WorktreeRoot        string
 }
 
 type ProvisionExecutionTargetWorktreeResponse struct {
@@ -186,6 +187,28 @@ func (s *Service) ResolveExecutionTarget(ctx context.Context, workspaceRoot stri
 	return s.git.ResolveExecutionTarget(ctx, workspaceRoot, policy, customRef)
 }
 
+// PlanExecutionTargetWorktreeRoot deterministically allocates the intended
+// target root before any Git mutation. The workflow target persists this exact
+// path, so a recovery never selects a different collision suffix.
+func (s *Service) PlanExecutionTargetWorktreeRoot(workspaceID string, taskShortID string) (string, error) {
+	if s == nil {
+		return "", errors.New("worktree service is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	trimmedTaskShortID := strings.TrimSpace(taskShortID)
+	if trimmedWorkspaceID == "" {
+		return "", errors.New("workspace id is required")
+	}
+	if trimmedTaskShortID == "" {
+		return "", errors.New("task short id is required")
+	}
+	createSpec, err := normalizeCreateSpec(CreateSpec{BaseRef: "execution-target", CreateBranch: true, BranchName: trimmedTaskShortID})
+	if err != nil {
+		return "", err
+	}
+	return s.resolveRequestedWorktreeRoot("", trimmedWorkspaceID, createSpec)
+}
+
 // ProvisionExecutionTargetWorktree creates the task-derived branch from the
 // caller's immutable resolved commit. It owns only Git/filesystem effects;
 // workflow target and task-worktree metadata remain workflow-owned.
@@ -197,6 +220,7 @@ func (s *Service) ProvisionExecutionTargetWorktree(ctx context.Context, req Prov
 	workspaceRoot := strings.TrimSpace(req.SourceWorkspaceRoot)
 	taskShortID := strings.TrimSpace(req.TaskShortID)
 	resolvedCommit := strings.TrimSpace(req.ResolvedCommit)
+	worktreeRoot := strings.TrimSpace(req.WorktreeRoot)
 	if workspaceID == "" {
 		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("workspace id is required")
 	}
@@ -208,6 +232,9 @@ func (s *Service) ProvisionExecutionTargetWorktree(ctx context.Context, req Prov
 	}
 	if resolvedCommit == "" {
 		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("resolved commit is required")
+	}
+	if worktreeRoot == "" {
+		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("worktree root is required")
 	}
 	createSpec, err := normalizeCreateSpec(CreateSpec{BaseRef: resolvedCommit, CreateBranch: true, BranchName: taskShortID})
 	if err != nil {
@@ -225,7 +252,7 @@ func (s *Service) ProvisionExecutionTargetWorktree(ctx context.Context, req Prov
 	if resolution.Kind != CreateTargetResolutionKindNewBranch {
 		return ProvisionExecutionTargetWorktreeResponse{}, &TaskBranchCollisionError{BranchName: createSpec.BranchName, ResolvedRef: resolution.ResolvedRef}
 	}
-	worktreeRoot, err := s.resolveRequestedWorktreeRoot("", workspaceID, createSpec)
+	worktreeRoot, err = config.CanonicalWorkspaceRoot(worktreeRoot)
 	if err != nil {
 		return ProvisionExecutionTargetWorktreeResponse{}, err
 	}

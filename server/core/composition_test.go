@@ -128,6 +128,7 @@ func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *
 	}
 	provisioningGeneration := "orphaned-provisioning"
 	claimGeneration := "orphaned-claim"
+	intendedWorktreeRoot := t.TempDir()
 	target := workflow.ExecutionTarget{
 		TaskID: task.ID,
 		Policy: workflow.ExecutionPolicyHead,
@@ -136,6 +137,7 @@ func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *
 			Commit: "deadbeef",
 		},
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &intendedWorktreeRoot,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,
@@ -151,6 +153,7 @@ func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *
 	}
 	runningProvisioningGeneration := "running-provisioning"
 	runningClaimGeneration := "running-claim"
+	runningIntendedWorktreeRoot := t.TempDir()
 	runningTarget := workflow.ExecutionTarget{
 		TaskID: runningTask.ID,
 		Policy: workflow.ExecutionPolicyHead,
@@ -159,6 +162,7 @@ func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *
 			Commit: "cafebabe",
 		},
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &runningIntendedWorktreeRoot,
 		ProvisioningGeneration:      &runningProvisioningGeneration,
 		SetupProvisioningGeneration: &runningProvisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,
@@ -170,6 +174,7 @@ func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *
 	}
 	lockedRunningTarget := runningTarget
 	lockedRunningTarget.State = workflow.ExecutionTargetStateLocked
+	lockedRunningTarget.IntendedWorktreeRoot = nil
 	if _, err := workflowStore.AttachManagedExecutionTargetWorktree(ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
 		Target:        lockedRunningTarget,
 		ExpectedClaim: *runningTarget.ActiveClaim,
@@ -263,11 +268,16 @@ func TestNewWithContextFencesProvisionedUnattachedTargetWithoutMutatingGitState(
 	}
 	commit := runCoreTestGit(t, workspace, "rev-parse", "HEAD")
 	worktreeService := worktree.NewService(seedStore, nil, nil, nil, nil, nil, worktree.ServiceOptions{BaseDir: filepath.Join(t.TempDir(), "managed-worktrees")})
+	intendedRoot, err := worktreeService.PlanExecutionTargetWorktreeRoot(binding.WorkspaceID, task.ShortID)
+	if err != nil {
+		t.Fatalf("PlanExecutionTargetWorktreeRoot: %v", err)
+	}
 	provisioned, err := worktreeService.ProvisionExecutionTargetWorktree(ctx, worktree.ProvisionExecutionTargetWorktreeRequest{
 		WorkspaceID:         binding.WorkspaceID,
 		SourceWorkspaceRoot: workspace,
 		TaskShortID:         task.ShortID,
 		ResolvedCommit:      commit,
+		WorktreeRoot:        intendedRoot,
 	})
 	if err != nil {
 		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
@@ -282,6 +292,7 @@ func TestNewWithContextFencesProvisionedUnattachedTargetWithoutMutatingGitState(
 			Commit: commit,
 		},
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &intendedRoot,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,

@@ -1291,7 +1291,8 @@ SELECT
     linked_worktree_admin_entry,
     linked_worktree_gitdir,
     linked_worktree_head_ref,
-    expected_detachment_commit
+    expected_detachment_commit,
+    intended_worktree_root
 FROM task_execution_targets
 WHERE task_id = sqlc.arg(task_id)
 LIMIT 1;
@@ -1317,7 +1318,8 @@ SELECT
     linked_worktree_admin_entry,
     linked_worktree_gitdir,
     linked_worktree_head_ref,
-    expected_detachment_commit
+    expected_detachment_commit,
+    intended_worktree_root
 FROM task_execution_targets
 WHERE active_claim_generation IS NOT NULL
   AND (
@@ -1348,7 +1350,8 @@ SELECT
     linked_worktree_admin_entry,
     linked_worktree_gitdir,
     linked_worktree_head_ref,
-    expected_detachment_commit
+    expected_detachment_commit,
+    intended_worktree_root
 FROM task_execution_targets
 WHERE active_claim_phase = 'recovery_queued'
 ORDER BY task_id ASC
@@ -1363,6 +1366,7 @@ INSERT INTO task_execution_targets (
     resolved_source_ref,
     resolved_commit,
     state,
+    intended_worktree_root,
     provisioning_generation,
     setup_provisioning_generation,
     setup_state,
@@ -1384,6 +1388,7 @@ INSERT INTO task_execution_targets (
     sqlc.narg(resolved_source_ref),
     sqlc.narg(resolved_commit),
     sqlc.arg(state),
+    sqlc.narg(intended_worktree_root),
     sqlc.narg(provisioning_generation),
     sqlc.narg(setup_provisioning_generation),
     sqlc.arg(setup_state),
@@ -1403,6 +1408,7 @@ INSERT INTO task_execution_targets (
 UPDATE task_execution_targets
 SET
     state = sqlc.arg(state),
+    intended_worktree_root = sqlc.narg(intended_worktree_root),
     provisioning_generation = sqlc.narg(provisioning_generation),
     setup_provisioning_generation = sqlc.narg(setup_provisioning_generation),
     setup_state = sqlc.arg(setup_state),

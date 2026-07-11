@@ -55,17 +55,22 @@ func TestProvisionExecutionTargetWorktreeCreatesTaskBranchFromExactCommit(t *tes
 	}
 	runGit(t, env.workspaceRoot, "add", "later.txt")
 	runGit(t, env.workspaceRoot, "commit", "-q", "-m", "later")
+	worktreeRoot, err := env.service.PlanExecutionTargetWorktreeRoot(env.binding.WorkspaceID, "WOR-99")
+	if err != nil {
+		t.Fatalf("PlanExecutionTargetWorktreeRoot: %v", err)
+	}
 
 	provisioned, err := env.service.ProvisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
 		WorkspaceID:         env.binding.WorkspaceID,
 		SourceWorkspaceRoot: env.workspaceRoot,
 		TaskShortID:         "WOR-99",
 		ResolvedCommit:      baseCommit,
+		WorktreeRoot:        worktreeRoot,
 	})
 	if err != nil {
 		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
 	}
-	if !provisioned.CreatedBranch || provisioned.BranchName != "WOR-99" || provisioned.WorktreeRoot == "" {
+	if !provisioned.CreatedBranch || provisioned.BranchName != "WOR-99" || provisioned.WorktreeRoot != worktreeRoot {
 		t.Fatalf("provisioned worktree = %+v, want created task branch", provisioned)
 	}
 	if got := runGit(t, provisioned.WorktreeRoot, "rev-parse", "HEAD"); got != baseCommit {
@@ -78,11 +83,16 @@ func TestRunExecutionTargetSetupRunsFromProvisionedWorktree(t *testing.T) {
 	scriptRelpath := filepath.Join("scripts", "target-setup.sh")
 	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), "#!/bin/sh\nprintf setup > setup.marker\n")
 	env.service.setupScript = scriptRelpath
+	worktreeRoot, err := env.service.PlanExecutionTargetWorktreeRoot(env.binding.WorkspaceID, "WOR-100")
+	if err != nil {
+		t.Fatalf("PlanExecutionTargetWorktreeRoot: %v", err)
+	}
 	provisioned, err := env.service.ProvisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
 		WorkspaceID:         env.binding.WorkspaceID,
 		SourceWorkspaceRoot: env.workspaceRoot,
 		TaskShortID:         "WOR-100",
 		ResolvedCommit:      runGit(t, env.workspaceRoot, "rev-parse", "HEAD"),
+		WorktreeRoot:        worktreeRoot,
 	})
 	if err != nil {
 		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)

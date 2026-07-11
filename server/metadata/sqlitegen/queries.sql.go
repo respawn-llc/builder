@@ -2037,7 +2037,8 @@ SELECT
     linked_worktree_admin_entry,
     linked_worktree_gitdir,
     linked_worktree_head_ref,
-    expected_detachment_commit
+    expected_detachment_commit,
+    intended_worktree_root
 FROM task_execution_targets
 WHERE task_id = ?1
 LIMIT 1
@@ -2067,6 +2068,7 @@ func (q *Queries) GetTaskExecutionTarget(ctx context.Context, taskID string) (Ta
 		&i.LinkedWorktreeGitdir,
 		&i.LinkedWorktreeHeadRef,
 		&i.ExpectedDetachmentCommit,
+		&i.IntendedWorktreeRoot,
 	)
 	return i, err
 }
@@ -3091,6 +3093,7 @@ INSERT INTO task_execution_targets (
     resolved_source_ref,
     resolved_commit,
     state,
+    intended_worktree_root,
     provisioning_generation,
     setup_provisioning_generation,
     setup_state,
@@ -3124,7 +3127,8 @@ INSERT INTO task_execution_targets (
     ?17,
     ?18,
     ?19,
-    ?20
+    ?20,
+    ?21
 )
 `
 
@@ -3136,6 +3140,7 @@ type InsertTaskExecutionTargetParams struct {
 	ResolvedSourceRef           sql.NullString
 	ResolvedCommit              sql.NullString
 	State                       string
+	IntendedWorktreeRoot        sql.NullString
 	ProvisioningGeneration      sql.NullString
 	SetupProvisioningGeneration sql.NullString
 	SetupState                  string
@@ -3160,6 +3165,7 @@ func (q *Queries) InsertTaskExecutionTarget(ctx context.Context, arg InsertTaskE
 		arg.ResolvedSourceRef,
 		arg.ResolvedCommit,
 		arg.State,
+		arg.IntendedWorktreeRoot,
 		arg.ProvisioningGeneration,
 		arg.SetupProvisioningGeneration,
 		arg.SetupState,
@@ -5327,7 +5333,8 @@ SELECT
     linked_worktree_admin_entry,
     linked_worktree_gitdir,
     linked_worktree_head_ref,
-    expected_detachment_commit
+    expected_detachment_commit,
+    intended_worktree_root
 FROM task_execution_targets
 WHERE active_claim_phase = 'recovery_queued'
 ORDER BY task_id ASC
@@ -5364,6 +5371,7 @@ func (q *Queries) ListQueuedExecutionTargetRecoveries(ctx context.Context, limit
 			&i.LinkedWorktreeGitdir,
 			&i.LinkedWorktreeHeadRef,
 			&i.ExpectedDetachmentCommit,
+			&i.IntendedWorktreeRoot,
 		); err != nil {
 			return nil, err
 		}
@@ -5952,7 +5960,8 @@ SELECT
     linked_worktree_admin_entry,
     linked_worktree_gitdir,
     linked_worktree_head_ref,
-    expected_detachment_commit
+    expected_detachment_commit,
+    intended_worktree_root
 FROM task_execution_targets
 WHERE active_claim_generation IS NOT NULL
   AND (
@@ -5993,6 +6002,7 @@ func (q *Queries) ListTaskExecutionTargetsNeedingRecoveryFence(ctx context.Conte
 			&i.LinkedWorktreeGitdir,
 			&i.LinkedWorktreeHeadRef,
 			&i.ExpectedDetachmentCommit,
+			&i.IntendedWorktreeRoot,
 		); err != nil {
 			return nil, err
 		}
@@ -9482,26 +9492,28 @@ const updateTaskExecutionTargetLifecycle = `-- name: UpdateTaskExecutionTargetLi
 UPDATE task_execution_targets
 SET
     state = ?1,
-    provisioning_generation = ?2,
-    setup_provisioning_generation = ?3,
-    setup_state = ?4,
-    active_claim_generation = ?5,
-    active_claim_phase = ?6,
-    recovery_disposition = ?7,
-    recovery_cause = ?8,
-    exact_branch_observation = ?9,
-    linked_worktree_common_dir = ?10,
-    linked_worktree_admin_entry = ?11,
-    linked_worktree_gitdir = ?12,
-    linked_worktree_head_ref = ?13,
-    expected_detachment_commit = ?14
-WHERE task_id = ?15
-  AND active_claim_generation = ?16
-  AND active_claim_phase = ?17
+    intended_worktree_root = ?2,
+    provisioning_generation = ?3,
+    setup_provisioning_generation = ?4,
+    setup_state = ?5,
+    active_claim_generation = ?6,
+    active_claim_phase = ?7,
+    recovery_disposition = ?8,
+    recovery_cause = ?9,
+    exact_branch_observation = ?10,
+    linked_worktree_common_dir = ?11,
+    linked_worktree_admin_entry = ?12,
+    linked_worktree_gitdir = ?13,
+    linked_worktree_head_ref = ?14,
+    expected_detachment_commit = ?15
+WHERE task_id = ?16
+  AND active_claim_generation = ?17
+  AND active_claim_phase = ?18
 `
 
 type UpdateTaskExecutionTargetLifecycleParams struct {
 	State                       string
+	IntendedWorktreeRoot        sql.NullString
 	ProvisioningGeneration      sql.NullString
 	SetupProvisioningGeneration sql.NullString
 	SetupState                  string
@@ -9523,6 +9535,7 @@ type UpdateTaskExecutionTargetLifecycleParams struct {
 func (q *Queries) UpdateTaskExecutionTargetLifecycle(ctx context.Context, arg UpdateTaskExecutionTargetLifecycleParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateTaskExecutionTargetLifecycle,
 		arg.State,
+		arg.IntendedWorktreeRoot,
 		arg.ProvisioningGeneration,
 		arg.SetupProvisioningGeneration,
 		arg.SetupState,

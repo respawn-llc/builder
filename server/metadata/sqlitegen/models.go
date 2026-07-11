@@ -116,6 +116,7 @@ type TaskExecutionTarget struct {
 	LinkedWorktreeGitdir        sql.NullString
 	LinkedWorktreeHeadRef       sql.NullString
 	ExpectedDetachmentCommit    sql.NullString
+	IntendedWorktreeRoot        sql.NullString
 }
 
 type TaskExecutionTargetNegotiation struct {

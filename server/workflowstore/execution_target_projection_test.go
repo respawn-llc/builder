@@ -143,6 +143,7 @@ func TestStoreUpdateTaskExecutionTargetLifecycleUsesClaimFence(t *testing.T) {
 			Commit: "deadbeef",
 		},
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &provisioningGeneration,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,
@@ -154,6 +155,7 @@ func TestStoreUpdateTaskExecutionTargetLifecycleUsesClaimFence(t *testing.T) {
 	}
 	locked := target
 	locked.State = workflow.ExecutionTargetStateLocked
+	locked.IntendedWorktreeRoot = nil
 	locked.SetupState = workflow.ExecutionTargetSetupSucceeded
 	locked.ActiveClaim = nil
 	if err := store.UpdateTaskExecutionTargetLifecycle(ctx, locked, *target.ActiveClaim); err != nil {
@@ -192,6 +194,7 @@ func TestStoreFenceExecutionTargetRecoveryRequeuesOrphanedClaims(t *testing.T) {
 				Commit: "deadbeef",
 			},
 			State:                       workflow.ExecutionTargetStateInitialProvisioning,
+			IntendedWorktreeRoot:        &provisioningGeneration,
 			ProvisioningGeneration:      &provisioningGeneration,
 			SetupProvisioningGeneration: &provisioningGeneration,
 			SetupState:                  setupState,
@@ -272,6 +275,7 @@ func TestStoreClaimsQueuedExecutionTargetRecoveryWithGenerationFence(t *testing.
 			Commit: "deadbeef",
 		},
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &provisioningGeneration,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,
@@ -333,6 +337,7 @@ func TestStoreRequeuesOwnedExecutionTargetRecoveryWithGenerationFence(t *testing
 			Commit: "deadbeef",
 		},
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &provisioningGeneration,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,
@@ -376,6 +381,7 @@ func TestStoreAttachManagedExecutionTargetWorktreeLocksClaimedTarget(t *testing.
 			Commit: "deadbeef",
 		},
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &provisioningGeneration,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,
@@ -387,6 +393,7 @@ func TestStoreAttachManagedExecutionTargetWorktreeLocksClaimedTarget(t *testing.
 	}
 	locked := target
 	locked.State = workflow.ExecutionTargetStateLocked
+	locked.IntendedWorktreeRoot = nil
 	worktree, err := store.AttachManagedExecutionTargetWorktree(ctx, AttachManagedExecutionTargetWorktreeRequest{
 		Target:        locked,
 		ExpectedClaim: *target.ActiveClaim,
@@ -450,6 +457,7 @@ func TestStoreBeginManagedExecutionTargetMaterializationClearsNegotiation(t *tes
 			Commit: "deadbeef",
 		},
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &provisioningGeneration,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,
@@ -538,6 +546,7 @@ func TestTaskExecutionTargetProjectionRoundTripsManagedTargetAndRoot(t *testing.
 		"resolved_source_ref":           "refs/heads/release/2026.07",
 		"resolved_commit":               "deadbeef",
 		"state":                         "locked_reprovisioning",
+		"intended_worktree_root":        "/tmp/worktree-reprovisioning",
 		"provisioning_generation":       "target-provision-2",
 		"setup_provisioning_generation": "target-provision-2",
 		"setup_state":                   "failed",
@@ -569,6 +578,8 @@ func TestTaskExecutionTargetProjectionRoundTripsManagedTargetAndRoot(t *testing.
 		*target.ResolvedSource.NamedRef != "refs/heads/release/2026.07" ||
 		target.ResolvedSource.Commit != "deadbeef" ||
 		target.State != workflow.ExecutionTargetStateLockedReprovisioning ||
+		target.IntendedWorktreeRoot == nil ||
+		*target.IntendedWorktreeRoot != "/tmp/worktree-reprovisioning" ||
 		target.ProvisioningGeneration == nil ||
 		*target.ProvisioningGeneration != "target-provision-2" ||
 		target.SetupProvisioningGeneration == nil ||

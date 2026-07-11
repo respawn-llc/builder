@@ -72,6 +72,7 @@ func TestTaskExecutionTargetSchemaEnforcesMaterializedTargetInvariants(t *testin
 				"resolved_source_ref":           "refs/heads/release/2026.07",
 				"resolved_commit":               "01cafe",
 				"state":                         "initial_provisioning",
+				"intended_worktree_root":        "/tmp/kent-worktrees/workspace/task-1",
 				"provisioning_generation":       "target-provision-1",
 				"setup_provisioning_generation": "target-provision-1",
 				"setup_state":                   "pending",
@@ -106,6 +107,9 @@ func TestTaskExecutionTargetSchemaEnforcesMaterializedTargetInvariants(t *testin
 			"rejects missing resolved commit": func(values map[string]any) {
 				values["resolved_commit"] = nil
 			},
+			"rejects initial provisioning without intended worktree root": func(values map[string]any) {
+				values["intended_worktree_root"] = nil
+			},
 			"rejects detached source with named ref": func(values map[string]any) {
 				values["resolved_source_kind"] = "detached_commit"
 			},
@@ -133,6 +137,7 @@ func TestTaskExecutionTargetSchemaEnforcesMaterializedTargetInvariants(t *testin
 			"resolved_source_kind":          "detached_commit",
 			"resolved_commit":               "02cafe",
 			"state":                         "locked_reprovisioning",
+			"intended_worktree_root":        "/tmp/kent-worktrees/workspace/task-2",
 			"provisioning_generation":       "target-provision-2",
 			"setup_provisioning_generation": "target-provision-2",
 			"setup_state":                   "failed",
@@ -214,13 +219,13 @@ func executeTaskExecutionTargetInsert(ctx context.Context, store *Store, values 
 	_, err := store.db.ExecContext(ctx, `
 		INSERT INTO task_execution_targets (
 			task_id, policy, requested_custom_ref, resolved_source_kind,
-			resolved_source_ref, resolved_commit, state, provisioning_generation,
+			resolved_source_ref, resolved_commit, state, intended_worktree_root, provisioning_generation,
 			setup_provisioning_generation, setup_state, active_claim_generation,
 			active_claim_phase, recovery_disposition, recovery_cause,
 			exact_branch_observation, linked_worktree_common_dir,
 			linked_worktree_admin_entry, linked_worktree_gitdir,
 			linked_worktree_head_ref, expected_detachment_commit
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		values["task_id"],
 		values["policy"],
@@ -229,6 +234,7 @@ func executeTaskExecutionTargetInsert(ctx context.Context, store *Store, values 
 		values["resolved_source_ref"],
 		values["resolved_commit"],
 		values["state"],
+		values["intended_worktree_root"],
 		values["provisioning_generation"],
 		values["setup_provisioning_generation"],
 		values["setup_state"],

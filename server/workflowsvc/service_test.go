@@ -656,6 +656,7 @@ func TestServiceStartReturnsInProgressWhileManagedTargetMaterializes(t *testing.
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	provisioningGeneration := "provisioning-generation"
 	claimGeneration := "claim-generation"
+	intendedWorktreeRoot := t.TempDir()
 	target := workflow.ExecutionTarget{
 		TaskID: workflow.TaskID(task.Task.ID),
 		Policy: workflow.ExecutionPolicyHead,
@@ -665,6 +666,7 @@ func TestServiceStartReturnsInProgressWhileManagedTargetMaterializes(t *testing.
 			Commit:   "deadbeef",
 		},
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &intendedWorktreeRoot,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
 		SetupState:                  workflow.ExecutionTargetSetupPending,
@@ -2896,10 +2898,21 @@ type recordingTaskExecutionTargetResolver struct {
 
 type recordingTaskExecutionTargetWorktreeMaterializer struct {
 	worktreeRoot string
+	plannedRoot  string
 	provision    worktree.ProvisionExecutionTargetWorktreeRequest
 	setup        worktree.RunExecutionTargetSetupRequest
 	provisionErr error
 	setupErr     error
+}
+
+func (m *recordingTaskExecutionTargetWorktreeMaterializer) PlanExecutionTargetWorktreeRoot(_ string, _ string) (string, error) {
+	if m.plannedRoot != "" {
+		return m.plannedRoot, nil
+	}
+	if m.worktreeRoot != "" {
+		return m.worktreeRoot, nil
+	}
+	return "/planned-execution-target-root", nil
 }
 
 func (m *recordingTaskExecutionTargetWorktreeMaterializer) ProvisionExecutionTargetWorktree(_ context.Context, req worktree.ProvisionExecutionTargetWorktreeRequest) (worktree.ProvisionExecutionTargetWorktreeResponse, error) {

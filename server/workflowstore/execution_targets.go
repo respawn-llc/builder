@@ -98,6 +98,7 @@ func insertValidatedTaskExecutionTarget(ctx context.Context, q *sqlitegen.Querie
 		ResolvedSourceRef:           resolvedSourceRef,
 		ResolvedCommit:              resolvedCommit,
 		State:                       string(target.State),
+		IntendedWorktreeRoot:        nullableExecutionTargetString(target.IntendedWorktreeRoot),
 		ProvisioningGeneration:      lifecycle.provisioningGeneration,
 		SetupProvisioningGeneration: lifecycle.setupProvisioningGeneration,
 		SetupState:                  lifecycle.setupState,
@@ -345,6 +346,7 @@ func updateTaskExecutionTargetLifecycle(ctx context.Context, q *sqlitegen.Querie
 	lifecycle := executionTargetLifecycleFieldsFromTarget(target)
 	updated, err := q.UpdateTaskExecutionTargetLifecycle(ctx, sqlitegen.UpdateTaskExecutionTargetLifecycleParams{
 		State:                       string(target.State),
+		IntendedWorktreeRoot:        nullableExecutionTargetString(target.IntendedWorktreeRoot),
 		ProvisioningGeneration:      lifecycle.provisioningGeneration,
 		SetupProvisioningGeneration: lifecycle.setupProvisioningGeneration,
 		SetupState:                  lifecycle.setupState,
@@ -582,6 +584,7 @@ func taskExecutionTargetFromRow(row sqlitegen.TaskExecutionTarget) (workflow.Exe
 		RequestedCustomRef:          requestedCustomRef,
 		ResolvedSource:              resolvedSource,
 		State:                       workflow.ExecutionTargetState(row.State),
+		IntendedWorktreeRoot:        executionTargetOptionalString(row.IntendedWorktreeRoot),
 		ProvisioningGeneration:      executionTargetOptionalString(row.ProvisioningGeneration),
 		SetupProvisioningGeneration: executionTargetOptionalString(row.SetupProvisioningGeneration),
 		SetupState:                  workflow.ExecutionTargetSetupState(row.SetupState),
