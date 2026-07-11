@@ -259,6 +259,28 @@ func TestLockedProviderVerbosityPreservesExplicitFalseAndFallsBackOnlyWhenAbsent
 	}
 }
 
+func TestProviderCapabilitiesFromLockedOrOverridePrefersSessionContract(t *testing.T) {
+	lockedVerbosity := true
+	caps, ok := ProviderCapabilitiesFromLockedOrOverride(
+		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
+			ProviderID:                "locked-provider",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: &lockedVerbosity,
+		}},
+		config.ProviderCapabilitiesOverride{
+			ProviderID:                "configured-provider",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: false,
+		},
+	)
+	if !ok {
+		t.Fatal("expected resolved provider capabilities")
+	}
+	if caps.ProviderID != "locked-provider" || !caps.SupportsProviderVerbosity {
+		t.Fatalf("resolved capabilities = %+v, want locked contract", caps)
+	}
+}
+
 func TestSupportsFastModeProvider(t *testing.T) {
 	if !SupportsFastModeProvider(ProviderCapabilities{ProviderID: "chatgpt-codex", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}) {
 		t.Fatal("expected chatgpt-codex to support fast mode")

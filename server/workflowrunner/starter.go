@@ -648,6 +648,7 @@ func (s *Starter) workflowProviderCapabilities(ctx context.Context, plan launch.
 
 func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.SessionPlan) (llm.Client, error) {
 	active := plan.ActiveSettings
+	providerCapabilitiesOverride := workflowProviderCapabilitiesOverride(plan)
 	if s.runtimeClientFactory != nil {
 		client, err := s.runtimeClientFactory.NewRuntimeClient(ctx, runtimewire.RuntimeClientRequest{
 			Purpose:        runtimewire.RuntimeClientPurposeWorkflow,
@@ -664,7 +665,7 @@ func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.Ses
 				Store:                        active.Store,
 				ContextWindowTokens:          active.ModelContextWindow,
 				Auth:                         "inherit",
-				ProviderCapabilitiesOverride: workflowProviderCapabilitiesOverridePtr(active.ProviderCapabilities),
+				ProviderCapabilitiesOverride: providerCapabilitiesOverride,
 			},
 		})
 		if err != nil {
@@ -679,11 +680,6 @@ func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.Ses
 	if s.authManager != nil {
 		authProvider = s.authManager
 	}
-	override, _ := llm.ProviderCapabilitiesFromOverride(active.ProviderCapabilities)
-	var overridePtr *llm.ProviderCapabilities
-	if strings.TrimSpace(override.ProviderID) != "" {
-		overridePtr = &override
-	}
 	return llm.NewProviderClient(llm.ProviderClientOptions{
 		Provider:                     llm.Provider(strings.TrimSpace(active.ProviderOverride)),
 		Model:                        active.Model,
@@ -693,12 +689,12 @@ func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.Ses
 		ModelVerbosity:               string(active.ModelVerbosity),
 		Store:                        active.Store,
 		ContextWindowTokens:          active.ModelContextWindow,
-		ProviderCapabilitiesOverride: overridePtr,
+		ProviderCapabilitiesOverride: providerCapabilitiesOverride,
 	})
 }
 
-func workflowProviderCapabilitiesOverridePtr(override config.ProviderCapabilitiesOverride) *llm.ProviderCapabilities {
-	caps, ok := llm.ProviderCapabilitiesFromOverride(override)
+func workflowProviderCapabilitiesOverride(plan launch.SessionPlan) *llm.ProviderCapabilities {
+	caps, ok := llm.ProviderCapabilitiesFromLockedOrOverride(plan.Store.Meta().Locked, plan.ActiveSettings.ProviderCapabilities)
 	if !ok {
 		return nil
 	}
