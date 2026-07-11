@@ -220,7 +220,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	if *jsonOut {
 		progressStderr = io.Discard
 	}
-	outcome, reportProgress, err := runTaskInitiatingActionWithSelection(context.Background(), remote, progressStderr, selection, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	outcome, reportProgress, err := runTaskInitiatingActionWithSelection(context.Background(), remote, progressStderr, selection, taskInitiatingActionSelectionOverride, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 		return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 			SetupOperationID:    setupOperationID,
 			TaskID:              taskID,
@@ -469,7 +469,7 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		return 1
 	}
 	defer func() { _ = remote.Close() }()
-	outcome, reportProgress, err := runTaskInitiatingActionWithSelection(context.Background(), remote, stderr, selection, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	outcome, reportProgress, err := runTaskInitiatingActionWithSelection(context.Background(), remote, stderr, selection, taskInitiatingActionSelectionNegotiated, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
 			SetupOperationID:    setupOperationID,
 			TransitionID:        positionals[0],
@@ -541,7 +541,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	outcome, reportProgress, err := runTaskInitiatingActionWithSelection(context.Background(), remote, stderr, selection, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	outcome, reportProgress, err := runTaskInitiatingActionWithSelection(context.Background(), remote, stderr, selection, taskInitiatingActionSelectionNegotiated, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 		return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 			SetupOperationID:    setupOperationID,
 			TaskID:              taskID,
@@ -582,8 +582,18 @@ type worktreeSetupProgressSubscriber interface {
 
 type taskInitiatingAction func(context.Context, serverapi.WorktreeSetupOperationID, *string, *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error)
 
-func runTaskInitiatingActionWithSelection(ctx context.Context, remote workflowCommandRemote, stderr io.Writer, selection *serverapi.WorkflowTaskExecutionTargetSelection, action taskInitiatingAction) (serverapi.WorkflowTaskInitiatingActionResult, func(io.Writer), error) {
+type taskInitiatingActionSelectionStrategy uint8
+
+const (
+	taskInitiatingActionSelectionNegotiated taskInitiatingActionSelectionStrategy = iota
+	taskInitiatingActionSelectionOverride
+)
+
+func runTaskInitiatingActionWithSelection(ctx context.Context, remote workflowCommandRemote, stderr io.Writer, selection *serverapi.WorkflowTaskExecutionTargetSelection, strategy taskInitiatingActionSelectionStrategy, action taskInitiatingAction) (serverapi.WorkflowTaskInitiatingActionResult, func(io.Writer), error) {
 	outcome, reportProgress, err := runWorkflowMutationWithSetupProgress(ctx, remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+		if strategy == taskInitiatingActionSelectionOverride {
+			return action(ctx, setupOperationID, nil, selection)
+		}
 		return action(ctx, setupOperationID, nil, nil)
 	})
 	if err != nil || outcome.SelectionRequired == nil || selection == nil {

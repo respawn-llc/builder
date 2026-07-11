@@ -108,15 +108,15 @@ describe("WorkflowLibraryRoute", () => {
     );
 
     fireEvent.contextMenu(await screen.findByRole("button", { name: "Delivery rev 1" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
 
     const sidebar = await screen.findByRole("complementary", { name: "Workflow editor" });
-    fireEvent.click(await within(sidebar).findByRole("button", { name: "Inspect workflow" }));
+    await user.click(await within(sidebar).findByRole("button", { name: "Inspect workflow" }));
     const inspector = await within(sidebar).findByRole("complementary", { name: "Inspect workflow" });
     await user.clear(within(inspector).getByLabelText("Workflow name"));
     await user.type(within(inspector).getByLabelText("Workflow name"), "Delivery Updated");
-    fireEvent.click(within(inspector).getByRole("button", { name: "Close" }));
-    fireEvent.click(within(sidebar).getByRole("button", { name: "Save" }));
+    await user.click(within(inspector).getByRole("button", { name: "Close" }));
+    await user.click(within(sidebar).getByRole("button", { name: "Save" }));
 
     expect(await screen.findByRole("button", { name: "Delivery Updated rev 2" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delivery rev 1" })).not.toBeInTheDocument();

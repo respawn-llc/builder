@@ -152,6 +152,75 @@ func TestJoinWaitsForAllBranchesAndRoutesSelectedProvider(t *testing.T) {
 	}
 }
 
+func TestCompleteRunNoneTargetCompletesFanoutAndJoinSuccessor(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	if err := store.SaveTaskExecutionTarget(ctx, workflow.ExecutionTarget{
+		TaskID:              task.ID,
+		Policy:              workflow.ExecutionPolicyNone,
+		State:               workflow.ExecutionTargetStateLocked,
+		SetupState:          workflow.ExecutionTargetSetupNotApplicable,
+		RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
+	}); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget none: %v", err)
+	}
+
+	started := startTask(t, ctx, store, task.ID)
+	split := completeRun(t, ctx, store, CompleteRunRequest{
+		RunID:        started.RunID,
+		TransitionID: "split",
+		OutputValues: map[string]string{"summary": "plan"},
+	})
+	if len(split.RunIDs) != 2 {
+		t.Fatalf("split result = %+v, want two branch runs", split)
+	}
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	implA := nodeByKey(t, def, "impl_a")
+	implB := nodeByKey(t, def, "impl_b")
+	branchRuns := map[workflow.NodeID]workflow.RunID{}
+	for _, runID := range split.RunIDs {
+		run, err := store.GetRunStartContext(ctx, runID)
+		if err != nil {
+			t.Fatalf("GetRunStartContext %s: %v", runID, err)
+		}
+		if run.ExecutionRoot == nil || run.ExecutionRoot.ManagedWorktree != nil ||
+			run.ExecutionRoot.EffectiveRoot == "" {
+			t.Fatalf("branch execution root = %+v, want source-only root", run.ExecutionRoot)
+		}
+		branchRuns[run.Node.ID] = runID
+	}
+	if _, err := store.CompleteRun(ctx, CompleteRunRequest{
+		RunID:        branchRuns[workflow.NodeIDOf(implB)],
+		TransitionID: "join",
+	}); err != nil {
+		t.Fatalf("CompleteRun branch b: %v", err)
+	}
+	joined, err := store.CompleteRun(ctx, CompleteRunRequest{
+		RunID:        branchRuns[workflow.NodeIDOf(implA)],
+		TransitionID: "join",
+		OutputValues: map[string]string{"joined": "a"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteRun branch a: %v", err)
+	}
+	if len(joined.RunIDs) != 1 {
+		t.Fatalf("joined result = %+v, want executable successor", joined)
+	}
+	successor, err := store.GetRunStartContext(ctx, joined.RunIDs[0])
+	if err != nil {
+		t.Fatalf("GetRunStartContext successor: %v", err)
+	}
+	if successor.ExecutionRoot == nil || successor.ExecutionRoot.ManagedWorktree != nil ||
+		successor.ExecutionRoot.EffectiveRoot == "" {
+		t.Fatalf("successor execution root = %+v, want source-only root", successor.ExecutionRoot)
+	}
+}
+
 func TestJoinArrivalsKeepMultipleJoinEdgesForOneBranchPlacement(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)

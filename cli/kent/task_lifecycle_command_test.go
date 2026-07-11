@@ -471,8 +471,10 @@ func TestTaskStartExecutionTargetOverrideRetriesSelectionRequirement(t *testing.
 		t.Fatalf("start requests=%+v, want selection negotiation and retry", remote.startRequests)
 	}
 	first, second := remote.startRequests[0], remote.startRequests[1]
-	if first.Selection != nil || first.SelectionGeneration != nil {
-		t.Fatalf("initial start request=%+v, want no client-side override", first)
+	if first.SelectionGeneration != nil ||
+		first.Selection == nil || first.Selection.Mode != serverapi.WorkflowTaskExecutionTargetSelectionCustomRef ||
+		first.Selection.CustomRef == nil || *first.Selection.CustomRef != "refs/heads/release" {
+		t.Fatalf("initial start request=%+v, want explicit custom-ref override", first)
 	}
 	if second.SelectionGeneration == nil || *second.SelectionGeneration != "selection-1" ||
 		second.Selection == nil || second.Selection.Mode != serverapi.WorkflowTaskExecutionTargetSelectionCustomRef ||

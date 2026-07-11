@@ -468,17 +468,17 @@ func TestStoreRequeuesOwnedExecutionTargetRecoveryWithGenerationFence(t *testing
 		t.Fatalf("SaveTaskExecutionTarget: %v", err)
 	}
 
-	requeued, err := store.RequeueExecutionTargetRecovery(ctx, task.ID, recoveringClaim)
+	requeued, err := store.QueueExecutionTargetRecovery(ctx, task.ID, recoveringClaim)
 	if err != nil {
-		t.Fatalf("RequeueExecutionTargetRecovery: %v", err)
+		t.Fatalf("QueueExecutionTargetRecovery: %v", err)
 	}
 	if requeued.ActiveClaim == nil ||
 		requeued.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
 		requeued.ActiveClaim.Generation == recoveringClaim.Generation {
 		t.Fatalf("requeued recovery target = %+v, want a fresh queued claim", requeued)
 	}
-	if _, err := store.RequeueExecutionTargetRecovery(ctx, task.ID, recoveringClaim); !errors.Is(err, ErrTaskExecutionTargetClaimChanged) {
-		t.Fatalf("stale RequeueExecutionTargetRecovery error = %v, want %v", err, ErrTaskExecutionTargetClaimChanged)
+	if _, err := store.QueueExecutionTargetRecovery(ctx, task.ID, recoveringClaim); !errors.Is(err, ErrTaskExecutionTargetClaimChanged) {
+		t.Fatalf("stale QueueExecutionTargetRecovery error = %v, want %v", err, ErrTaskExecutionTargetClaimChanged)
 	}
 }
 

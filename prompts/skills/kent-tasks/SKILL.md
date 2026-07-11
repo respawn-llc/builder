@@ -14,7 +14,7 @@ A task is a durable user-facing unit of work moving through one workflow.
 
 ## Principles of task management
 - User will be asking you to create tasks, or you might decide to interact with tasks on your own. Both are fine, with the exception that you do **NOT** execute destructive (task delete, task edit with removal of information, task comment delete on others comments) or cost-incurring task moves and approvals without explicit user consent or request. Agents may start an authorized task with `kent task start`.
-- Because tasks are created off of main branch and **each task** has its own worktree, it is **required** to structure tasks such that each one is **shippable from a separate branch**. Tasks do NOT share code between them unless the worktree is explicitly merged before the next task starts, and there is no way to enforce sharing by the agent. For example, don't break big features into tasks that require all of the coding to be done on a single worktree; that should be ONE task or slices that are feature-gated/isolated enough to be merged separately instead.
+- Managed execution policies create one task worktree, so tasks that use them should be independently shippable branches. `none` tasks share the source workspace and may be non-Git; do not assume they have isolation from other source-root automation.
 - You can inspect the workflow with `kent workflow list` and `kent workflow inspect` for context on what will actually be done for any given task. Adapt the level of detail and how you write requirements in tasks to the workflow you're working with. More info in the `kent-workflows` skill.
 - Task titles should be under 40 characters of plain text.
 - Task bodies should avoid excessive fancy formatting, tables, LaTeX, file trees, verbatim code blocks, and H1 task-level headers like "My task" that duplicate the task title field. Task bodies are for **agents** first, and humans second.
@@ -51,7 +51,7 @@ kent task move <task> <target-node-id> --execution-target none
 kent task approve <transition-id> --execution-target default_branch
 ```
 
-Valid values are `none`, `head`, `default_branch`, and `custom_ref`; `custom_ref` requires `--custom-ref`. The CLI first sends the original start, move, or approval without a selection and retries that same action only if the server requires a selection. These flags therefore do not override a fixed workflow policy.
+Valid values are `none`, `head`, `default_branch`, and `custom_ref`; `custom_ref` requires `--custom-ref`. `kent task start` sends an explicit target on its first request and deliberately overrides a fixed workflow policy. `move` and `approve` first send the original action without a selection and retry it only after the server requires one.
 
 For automation, `kent task start --json` writes exactly one initiating-action object with an `outcome` discriminator to stdout and no stderr. `started` exits `0`, `selection_required` exits `3`, and `in_progress` exits `4`. Human-mode `selection_required` and `in_progress` return a concise stderr action line without polling task/session state or probing Git locally.
 

@@ -18,7 +18,7 @@ type joinArrival struct {
 	OutputValues  map[string]string
 }
 
-func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Queries, now int64, taskID string, sourcePlacementID string, sourceSnapshot runStartSnapshot, joinEdge edgeContractSnapshot) (CompleteRunResult, error) {
+func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Queries, now int64, taskID string, sourcePlacementID string, sourceSnapshot runStartSnapshot, joinEdge edgeContractSnapshot, executionRoot string) (CompleteRunResult, error) {
 	batchID, err := q.GetContextSourceBatchScope(ctx, sourcePlacementID)
 	if err != nil {
 		return CompleteRunResult{}, err
@@ -95,14 +95,6 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		return CompleteRunResult{}, err
 	}
 	if executableNodeKind(outEdge.TargetNode.Kind) {
-		task, err := q.GetTask(ctx, taskID)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		worktreeRoot, err := taskManagedWorktreeRoot(ctx, q, task)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
 		targetRunID := prefixedID("run")
 		targetSnapshot, foundSnapshot, err := joinSnapshot.forNode(outEdge.TargetNode)
 		if err != nil {
@@ -131,7 +123,7 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		interruptionReason, interruptionDetail, invalidScript, err := s.scriptNodeInterruption(ctx, q, outEdge.TargetNode.ID, worktreeRoot)
+		interruptionReason, interruptionDetail, invalidScript, err := s.scriptNodeInterruption(ctx, q, outEdge.TargetNode.ID, executionRoot)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}

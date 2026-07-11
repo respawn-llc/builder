@@ -552,18 +552,19 @@ func (s *Store) ClaimQueuedExecutionTargetRecovery(ctx context.Context, taskID w
 	return target, nil
 }
 
-// RequeueExecutionTargetRecovery releases a recovery worker's claim back to
-// durable queue ownership. Its recovering claim is an ABA fence, so a stopped
-// worker cannot requeue a replacement owner.
-func (s *Store) RequeueExecutionTargetRecovery(ctx context.Context, taskID workflow.TaskID, expectedClaim workflow.ExecutionTargetClaim) (workflow.ExecutionTarget, error) {
+// QueueExecutionTargetRecovery hands an active materialization or recovery
+// claim to durable queue ownership. Its active claim is an ABA fence, so a
+// stopped worker cannot queue a replacement owner.
+func (s *Store) QueueExecutionTargetRecovery(ctx context.Context, taskID workflow.TaskID, expectedClaim workflow.ExecutionTargetClaim) (workflow.ExecutionTarget, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
 		return workflow.ExecutionTarget{}, errors.New("task id is required")
 	}
 	if err := expectedClaim.Validate(); err != nil {
 		return workflow.ExecutionTarget{}, err
 	}
-	if expectedClaim.Phase != workflow.ExecutionTargetClaimRecovering {
-		return workflow.ExecutionTarget{}, errors.New("execution target recovery claim must be recovering")
+	if expectedClaim.Phase != workflow.ExecutionTargetClaimMaterializing &&
+		expectedClaim.Phase != workflow.ExecutionTargetClaimRecovering {
+		return workflow.ExecutionTarget{}, errors.New("execution target recovery claim must be materializing or recovering")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -580,7 +581,7 @@ func (s *Store) RequeueExecutionTargetRecovery(ctx context.Context, taskID workf
 	}
 	target, err := taskExecutionTargetFromRow(row)
 	if err != nil {
-		return workflow.ExecutionTarget{}, fmt.Errorf("decode recovering execution target: %w", err)
+		return workflow.ExecutionTarget{}, fmt.Errorf("decode active execution target recovery: %w", err)
 	}
 	if target.ActiveClaim == nil || *target.ActiveClaim != expectedClaim {
 		return workflow.ExecutionTarget{}, ErrTaskExecutionTargetClaimChanged

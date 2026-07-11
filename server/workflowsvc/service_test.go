@@ -38,6 +38,18 @@ func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscri
 	return event
 }
 
+func waitForWorkflowServiceCondition(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for workflow service condition")
+}
+
 func waitWorkflowProjectActions(t *testing.T, sub serverapi.WorkflowProjectSubscription, resource string, expected ...string) []serverapi.WorkflowProjectEvent {
 	t.Helper()
 	remaining := make(map[string]bool, len(expected))
@@ -655,6 +667,35 @@ func TestServiceStartHeadPolicyMaterializesManagedTargetBeforeStarting(t *testin
 	}
 }
 
+func TestServiceStartExplicitSelectionOverridesFixedPolicy(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyHead)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+
+	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		Selection:        &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone},
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
+	}
+	if started.Started == nil {
+		t.Fatalf("start result = %+v, want started", started)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if target == nil || target.Policy != workflow.ExecutionPolicyNone ||
+		target.State != workflow.ExecutionTargetStateLocked ||
+		target.SetupState != workflow.ExecutionTargetSetupNotApplicable {
+		t.Fatalf("target = %+v, want durable none override", target)
+	}
+}
+
 func TestServiceStartHeadPolicySetupFailureLocksTargetWithoutStarting(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -691,7 +732,7 @@ func TestServiceStartHeadPolicySetupFailureLocksTargetWithoutStarting(t *testing
 	}
 }
 
-func TestServiceStartHeadPolicyProvisionFailureLeavesRecoverableClaimWithoutStarting(t *testing.T) {
+func TestServiceStartHeadPolicyProvisionFailureQueuesRecoveryAndRetriesWithoutRestart(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyHead)
@@ -701,7 +742,11 @@ func TestServiceStartHeadPolicyProvisionFailureLeavesRecoverableClaimWithoutStar
 		namedExecutionTargetResolution("refs/heads/main", "deadbeef"),
 	}}
 	provisionErr := errors.New("worktree provision failed")
-	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{provisionErr: provisionErr}
+	materializer := &recordingTaskExecutionTargetWorktreeMaterializer{
+		provisionErr: provisionErr,
+		worktreeRoot: t.TempDir(),
+	}
+	service.targetWorktrees = materializer
 
 	_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           task.Task.ID,
@@ -716,8 +761,8 @@ func TestServiceStartHeadPolicyProvisionFailureLeavesRecoverableClaimWithoutStar
 	}
 	if target == nil || target.State != workflow.ExecutionTargetStateInitialProvisioning ||
 		target.SetupState != workflow.ExecutionTargetSetupPending ||
-		target.ActiveClaim == nil || target.ActiveClaim.Phase != workflow.ExecutionTargetClaimMaterializing {
-		t.Fatalf("target = %+v, want recoverable initial materialization claim", target)
+		target.ActiveClaim == nil || target.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued {
+		t.Fatalf("target = %+v, want queued initial materialization recovery", target)
 	}
 	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -726,7 +771,20 @@ func TestServiceStartHeadPolicyProvisionFailureLeavesRecoverableClaimWithoutStar
 	if len(runs) != 0 {
 		t.Fatalf("runs = %+v, want no start run after provision failure", runs)
 	}
-
+	materializer.provisionErr = nil
+	coordinator, err := service.StartExecutionTargetRecovery(ctx)
+	if err != nil {
+		t.Fatalf("StartExecutionTargetRecovery: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := coordinator.Close(); closeErr != nil {
+			t.Fatalf("ExecutionTargetRecoveryCoordinator.Close: %v", closeErr)
+		}
+	})
+	waitForWorkflowServiceCondition(t, func() bool {
+		recovered, getErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+		return getErr == nil && recovered == nil
+	})
 	retry, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
@@ -734,9 +792,8 @@ func TestServiceStartHeadPolicyProvisionFailureLeavesRecoverableClaimWithoutStar
 	if err != nil {
 		t.Fatalf("StartWorkflowTask retry: %v", err)
 	}
-	if retry.Outcome != serverapi.WorkflowTaskInitiatingActionOutcomeInProgress || retry.InProgress == nil ||
-		retry.InProgress.Phase != serverapi.WorkflowTaskExecutionTargetMaterializationPhaseMaterializing {
-		t.Fatalf("retry result = %+v, want materializing in_progress", retry)
+	if retry.Started == nil {
+		t.Fatalf("retry result = %+v, want started after live recovery", retry)
 	}
 }
 
@@ -1035,6 +1092,97 @@ func TestExecutionTargetRecoveryCoordinatorClaimsThenRequeuesOnClose(t *testing.
 		requeued.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
 		requeued.ActiveClaim.Generation == claimed.ActiveClaim.Generation {
 		t.Fatalf("requeued recovery target = %+v, want a fresh queued claim", requeued)
+	}
+}
+
+func TestExecutionTargetRecoveryCoordinatorContinuesAfterTargetLocalFailure(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	first := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	second := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	failedTask, recoveredTask := first, second
+	if first.Task.ID > second.Task.ID {
+		failedTask, recoveredTask = second, first
+	}
+	failedWorktreeRoot := filepath.Join(t.TempDir(), "failed-recovery-root")
+	failedBranchTip := "queued-recovery-commit"
+	failedClaim := workflow.ExecutionTargetClaim{
+		Generation: "queued-recovery-claim-" + failedTask.Task.ID,
+		Phase:      workflow.ExecutionTargetClaimRecoveryQueued,
+	}
+	failedGeneration := "queued-recovery-provisioning"
+	failedTarget := workflow.ExecutionTarget{
+		TaskID: workflow.TaskID(failedTask.Task.ID),
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:     workflow.ExecutionTargetSourceNamedRef,
+			NamedRef: stringPtr("refs/heads/main"),
+			Commit:   failedBranchTip,
+		},
+		State:                       workflow.ExecutionTargetStateLocked,
+		ProvisioningGeneration:      &failedGeneration,
+		SetupProvisioningGeneration: &failedGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &failedClaim,
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+		ExactBranchObservation:      &failedBranchTip,
+		LinkedWorktreeOwnership: &workflow.ExecutionTargetLinkedWorktreeOwnership{
+			CommonDir:  "/test/common-dir",
+			AdminEntry: "worktrees/" + failedTask.Task.ShortID,
+			GitDir:     filepath.Join(failedWorktreeRoot, ".git"),
+			HeadRef:    "refs/heads/" + failedTask.Task.ShortID,
+		},
+	}
+	if err := service.store.SaveTaskExecutionTarget(ctx, failedTarget); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget failed target: %v", err)
+	}
+	if _, err := service.store.AttachManagedExecutionTargetWorktree(ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
+		Target:        failedTarget,
+		ExpectedClaim: failedClaim,
+		WorkspaceID:   binding.WorkspaceID,
+		WorktreeRoot:  failedWorktreeRoot,
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("AttachManagedExecutionTargetWorktree failed target: %v", err)
+	}
+	saveQueuedInitialRecoveryTarget(t, ctx, service, recoveredTask.Task.ID)
+	recoveryFailure := errors.New("transient recovery failure")
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{
+		provisionErr: recoveryFailure,
+		worktreeRoot: failedWorktreeRoot,
+		inspect: func(_ context.Context, req worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error) {
+			if req.TaskShortID == failedTask.Task.ShortID {
+				return worktree.ExecutionTargetWorktreeInspection{
+					Kind:                    worktree.ExecutionTargetWorktreeInspectionExactMissingRoot,
+					BranchName:              failedTask.Task.ShortID,
+					ExactBranchObservation:  failedBranchTip,
+					LinkedWorktreeOwnership: failedTarget.LinkedWorktreeOwnership,
+				}, nil
+			}
+			return worktree.ExecutionTargetWorktreeInspection{Kind: worktree.ExecutionTargetWorktreeInspectionNoSideEffects}, nil
+		},
+	}
+	coordinator, err := service.StartExecutionTargetRecovery(ctx)
+	if err != nil {
+		t.Fatalf("StartExecutionTargetRecovery: %v", err)
+	}
+	defer func() {
+		if closeErr := coordinator.Close(); closeErr != nil {
+			t.Fatalf("ExecutionTargetRecoveryCoordinator.Close: %v", closeErr)
+		}
+	}()
+	waitForWorkflowServiceCondition(t, func() bool {
+		recovered, getErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(recoveredTask.Task.ID))
+		return getErr == nil && recovered == nil
+	})
+	failed, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(failedTask.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget failed target: %v", err)
+	}
+	if failed == nil || failed.ActiveClaim == nil ||
+		failed.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued {
+		t.Fatalf("failed target = %+v, want requeued target after local failure", failed)
 	}
 }
 
@@ -4703,6 +4851,31 @@ func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func saveQueuedInitialRecoveryTarget(t *testing.T, ctx context.Context, service *Service, taskID string) {
+	t.Helper()
+	provisioningGeneration := "queued-recovery-provisioning"
+	intendedWorktreeRoot := filepath.Join(t.TempDir(), "queued-recovery-root")
+	target := workflow.ExecutionTarget{
+		TaskID: workflow.TaskID(taskID),
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:     workflow.ExecutionTargetSourceNamedRef,
+			NamedRef: stringPtr("refs/heads/main"),
+			Commit:   "queued-recovery-commit",
+		},
+		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		IntendedWorktreeRoot:        &intendedWorktreeRoot,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: "queued-recovery-claim-" + taskID, Phase: workflow.ExecutionTargetClaimRecoveryQueued},
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := service.store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
 }
 
 func saveWorkflowServiceManualRecoveryTarget(t *testing.T, ctx context.Context, service *Service, taskID string) workflow.ExecutionTarget {

@@ -649,7 +649,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
-	worktreeRoot, err := taskManagedWorktreeRoot(ctx, s.queries, task)
+	worktreeRoot, err := s.taskExecutionEffectiveRoot(ctx, task)
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
@@ -774,7 +774,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 			if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, transitionID, edge, "", "applied", workflowRunMetadata{ContextSource: workflow.CanonicalContextSource(edge.ContextSource)}); err != nil {
 				return CompleteRunResult{}, err
 			}
-			joined, err := s.applyJoinIfReady(ctx, tx, q, now, run.TaskID, run.PlacementID, snapshot, edge)
+			joined, err := s.applyJoinIfReady(ctx, tx, q, now, run.TaskID, run.PlacementID, snapshot, edge, worktreeRoot)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
@@ -851,6 +851,20 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		return CompleteRunResult{}, err
 	}
 	return result, nil
+}
+
+// taskExecutionEffectiveRoot resolves the task's typed execution root when it
+// has an execution target. Legacy tasks retain their pre-target managed
+// worktree association until they are migrated or completed.
+func (s *Store) taskExecutionEffectiveRoot(ctx context.Context, task sqlitegen.TaskRecord) (string, error) {
+	root, err := s.runStartExecutionRoot(ctx, task)
+	if err != nil {
+		return "", err
+	}
+	if root != nil {
+		return root.EffectiveRoot, nil
+	}
+	return taskManagedWorktreeRoot(ctx, s.queries, task)
 }
 
 func runCompletedWorkflowEvent(ctx context.Context, q *sqlitegen.Queries, taskID string, transitionID string, runID string, now int64) (WorkflowEventRecord, error) {

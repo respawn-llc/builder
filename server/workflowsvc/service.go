@@ -124,6 +124,7 @@ type executionTargetRecoveryCoordinator struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 
+	deferred map[workflow.TaskID]struct{}
 	mu       sync.Mutex
 	closeErr error
 }
@@ -242,10 +243,11 @@ func (s *Service) StartExecutionTargetRecovery(ctx context.Context) (*executionT
 	}
 	recoveryContext, cancel := context.WithCancel(ctx)
 	coordinator := &executionTargetRecoveryCoordinator{
-		service: s,
-		ctx:     recoveryContext,
-		cancel:  cancel,
-		done:    make(chan struct{}),
+		service:  s,
+		ctx:      recoveryContext,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+		deferred: map[workflow.TaskID]struct{}{},
 	}
 	go coordinator.run()
 	return coordinator, nil
@@ -268,7 +270,7 @@ func (c *executionTargetRecoveryCoordinator) run() {
 		if err := c.ctx.Err(); err != nil {
 			return
 		}
-		targets, err := c.service.store.ListQueuedExecutionTargetRecoveries(c.ctx, executionTargetRecoveryWorkerCapacity)
+		targets, err := c.service.store.ListQueuedExecutionTargetRecoveries(c.ctx, executionTargetRecoveryFencePageSize)
 		if err != nil {
 			if c.ctx.Err() != nil {
 				return
@@ -276,7 +278,8 @@ func (c *executionTargetRecoveryCoordinator) run() {
 			c.recordCloseError(fmt.Errorf("list queued execution target recoveries: %w", err))
 			return
 		}
-		if len(targets) == 0 {
+		target, found := c.nextQueuedTarget(targets)
+		if !found {
 			timer := time.NewTimer(100 * time.Millisecond)
 			select {
 			case <-c.ctx.Done():
@@ -286,9 +289,9 @@ func (c *executionTargetRecoveryCoordinator) run() {
 				return
 			case <-timer.C:
 			}
+			clear(c.deferred)
 			continue
 		}
-		target := targets[0]
 		if target.ActiveClaim == nil {
 			c.recordCloseError(errors.New("queued execution target recovery is missing its claim"))
 			return
@@ -316,10 +319,19 @@ func (c *executionTargetRecoveryCoordinator) run() {
 			if errors.Is(err, workflowstore.ErrTaskExecutionTargetClaimChanged) {
 				continue
 			}
-			c.recordCloseError(err)
-			return
+			c.deferred[claimed.TaskID] = struct{}{}
+			continue
 		}
 	}
+}
+
+func (c *executionTargetRecoveryCoordinator) nextQueuedTarget(targets []workflow.ExecutionTarget) (workflow.ExecutionTarget, bool) {
+	for _, target := range targets {
+		if _, deferred := c.deferred[target.TaskID]; !deferred {
+			return target, true
+		}
+	}
+	return workflow.ExecutionTarget{}, false
 }
 
 func (c *executionTargetRecoveryCoordinator) recover(target workflow.ExecutionTarget, claim workflow.ExecutionTargetClaim) error {
@@ -639,7 +651,7 @@ func (s *Service) HandleMissingManagedTaskWorktree(ctx context.Context, record m
 func (c *executionTargetRecoveryCoordinator) requeue(taskID workflow.TaskID, claim workflow.ExecutionTargetClaim) error {
 	requeueContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := c.service.store.RequeueExecutionTargetRecovery(requeueContext, taskID, claim)
+	_, err := c.service.store.QueueExecutionTargetRecovery(requeueContext, taskID, claim)
 	if errors.Is(err, workflowstore.ErrTaskExecutionTargetClaimChanged) {
 		return nil
 	}
@@ -647,6 +659,15 @@ func (c *executionTargetRecoveryCoordinator) requeue(taskID workflow.TaskID, cla
 		return fmt.Errorf("requeue execution target recovery: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) queueFailedExecutionTargetMaterialization(taskID workflow.TaskID, claim workflow.ExecutionTargetClaim, cause error) error {
+	recoveryContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s.store.QueueExecutionTargetRecovery(recoveryContext, taskID, claim); err != nil {
+		return errors.Join(cause, fmt.Errorf("queue failed execution target materialization: %w", err))
+	}
+	return cause
 }
 
 func (c *executionTargetRecoveryCoordinator) recordCloseError(err error) {
@@ -1342,6 +1363,9 @@ func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepare
 	if err != nil {
 		return err
 	}
+	queueFailure := func(cause error) error {
+		return s.queueFailedExecutionTargetMaterialization(prepared.TaskID, claim, cause)
+	}
 	provisioned, err := s.targetWorktrees.ProvisionExecutionTargetWorktree(ctx, worktree.ProvisionExecutionTargetWorktreeRequest{
 		WorkspaceID:         prepared.SourceWorkspace.ID,
 		SourceWorkspaceRoot: prepared.SourceWorkspace.Root,
@@ -1350,13 +1374,13 @@ func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepare
 		WorktreeRoot:        intendedWorktreeRoot,
 	})
 	if err != nil {
-		return err
+		return queueFailure(err)
 	}
 	if provisioned.WorktreeRoot != intendedWorktreeRoot {
-		return fmt.Errorf("provisioned execution target root %q does not match intended root %q", provisioned.WorktreeRoot, intendedWorktreeRoot)
+		return queueFailure(fmt.Errorf("provisioned execution target root %q does not match intended root %q", provisioned.WorktreeRoot, intendedWorktreeRoot))
 	}
 	if strings.TrimSpace(provisioned.ExactBranchObservation) == "" || provisioned.LinkedWorktreeOwnership == nil {
-		return errors.New("provisioned execution target is missing exact linked-worktree ownership evidence")
+		return queueFailure(errors.New("provisioned execution target is missing exact linked-worktree ownership evidence"))
 	}
 	target.State = workflow.ExecutionTargetStateLocked
 	target.IntendedWorktreeRoot = nil
@@ -1370,11 +1394,11 @@ func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepare
 		CreatedBranch: provisioned.CreatedBranch,
 	})
 	if err != nil {
-		return err
+		return queueFailure(err)
 	}
 	target.SetupState = workflow.ExecutionTargetSetupRunning
 	if err := s.store.UpdateTaskExecutionTargetLifecycle(ctx, target, claim); err != nil {
-		return err
+		return queueFailure(err)
 	}
 	if err := s.targetWorktrees.RunExecutionTargetSetup(ctx, worktree.RunExecutionTargetSetupRequest{
 		SetupOperationID:    setupOperationID,

@@ -305,7 +305,7 @@ Use `none`, `head`, `default_branch`, or `custom_ref` as the target value. Move 
 
 Managed execution policies create one task worktree and Kent reuses it across downstream agent nodes, so implementation, review fixes, QA, and shipping steps happen against one checkout.
 
-Because each started task has its own worktree, structure tasks as independently shippable branches. Do not split one feature into separate tasks that must share unmerged code in one checkout. If the work cannot ship independently, keep it as one task; if it can be sliced, make each slice feature-gated or isolated enough to merge separately before the next dependent task starts.
+For managed execution policies, structure tasks as independently shippable branches. Do not split one feature into separate tasks that must share unmerged code in one checkout. `None` tasks run in the source workspace, so coordinate any shared-workspace automation separately.
 
 ![Kent Desktop task board and task detail view showing task actions, comments, and a pending question.](/desktop/desktop-workflow-tasks.webp)
 

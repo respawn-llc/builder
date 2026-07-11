@@ -314,7 +314,7 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 			if _, err := q.ApplyPendingTransitionEdgeToJoin(ctx, edge.ID); err != nil {
 				return CompleteRunResult{}, fmt.Errorf("update approved join edge snapshot: %w", err)
 			}
-			joined, err := s.applyJoinIfReady(ctx, tx, q, now, transition.TaskID, sourceRun.PlacementID, sourceSnapshot, targetEdge)
+			joined, err := s.applyJoinIfReady(ctx, tx, q, now, transition.TaskID, sourceRun.PlacementID, sourceSnapshot, targetEdge, worktreeRoot)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
