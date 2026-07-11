@@ -10,6 +10,9 @@ const EntryRoleSystem EntryRole = "system"
 // EntryRoleWarning marks non-error runtime warnings with typed message metadata.
 const EntryRoleWarning EntryRole = "warning"
 
+// EntryRoleCacheWarning marks typed prompt-cache continuity warnings.
+const EntryRoleCacheWarning EntryRole = "cache_warning"
+
 // EntryRoleCompactionSummary marks a persisted compaction or handoff summary.
 const EntryRoleCompactionSummary EntryRole = "compaction_summary"
 

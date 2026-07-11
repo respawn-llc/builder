@@ -21,7 +21,7 @@ const (
 	sessionEventCacheResponseObserved = "cache_response_observed"
 	sessionEventCacheWarning          = "cache_warning"
 	sessionEventHistoryReplaced       = "history_replaced"
-	cacheWarningTranscriptRole        = "cache_warning"
+	cacheWarningTranscriptRole        = string(transcript.EntryRoleCacheWarning)
 	requestCacheDigestVersion         = 1
 )
 

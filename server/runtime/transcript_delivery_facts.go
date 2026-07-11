@@ -385,6 +385,7 @@ func knownTranscriptNoticeRole(role string) bool {
 	switch transcript.EntryRole(role) {
 	case transcript.EntryRoleSystem,
 		transcript.EntryRoleWarning,
+		transcript.EntryRoleCacheWarning,
 		transcript.EntryRoleCompactionSummary,
 		transcript.EntryRoleManualCompactionCarryover,
 		transcript.EntryRoleDeveloperContext,

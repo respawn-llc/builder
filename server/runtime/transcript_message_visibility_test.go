@@ -129,6 +129,20 @@ func TestBackgroundNoticePreservesExitCodeAcrossPersistedProjection(t *testing.T
 	}
 }
 
+func TestCacheWarningSnapshotProjectionPreservesDetailVisibility(t *testing.T) {
+	facts := TranscriptCommittedRowFactsFromSnapshot(ChatSnapshot{Entries: []ChatEntry{{
+		Visibility: transcript.EntryVisibilityDetail,
+		Role:       cacheWarningTranscriptRole,
+		Text:       "cache warning",
+	}}})
+
+	if len(facts) != 1 ||
+		facts[0].Visibility != transcript.EntryVisibilityDetail ||
+		facts[0].Integrity != transcript.RowIntegrityValid {
+		t.Fatalf("cache warning facts = %+v, want one valid detail-only row", facts)
+	}
+}
+
 func TestCustomToolCallOutputProjectsAsCommittedToolRowFact(t *testing.T) {
 	msg := llm.Message{
 		Role:        llm.RoleTool,
