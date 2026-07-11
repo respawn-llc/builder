@@ -702,7 +702,7 @@ func (m *uiModel) handleClipboardPasteDone(msg clipboardPasteDoneMsg) tea.Cmd {
 		if !m.inputMode().showsMainInput() || msg.MainDraftToken == 0 || msg.MainDraftToken != m.mainInputDraftToken {
 			return m.discardStaleClipboardImageCmd(msg.Content)
 		}
-		m.insertInputRunes(chars)
+		return m.insertInputRunes(chars)
 	}
 	return nil
 }

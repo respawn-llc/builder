@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"core/server/auth"
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -98,6 +99,31 @@ func TestClipboardPasteInsertsMultilineUnicodeTextAtMainCursor(t *testing.T) {
 	}
 	if got, want := updated.inputCursor, len([]rune("beforeα\nβ")); got != want {
 		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
+func TestClipboardPasteMainReturnsAutocompleteRefreshCommand(t *testing.T) {
+	store := &countingAuthStore{}
+	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{
+		AuthManager: auth.NewManager(store, nil, nil),
+	}))
+	m.replaceMainInput("/l", -1)
+
+	next, cmd := m.Update(clipboardPasteDoneMsg{
+		Target:         uiClipboardPasteTargetMain,
+		MainDraftToken: m.mainInputDraftToken,
+		Content:        uiClipboardText{Text: "o"},
+	})
+	updated := next.(*uiModel)
+	if cmd == nil || !updated.authSlashLoading {
+		t.Fatal("expected main clipboard paste to return the auth slash refresh command")
+	}
+	for _, msg := range collectCmdMessages(t, cmd) {
+		next, _ = updated.Update(msg)
+		updated = next.(*uiModel)
+	}
+	if store.loads != 1 || updated.authSlashLoading {
+		t.Fatalf("auth refresh state = loads:%d loading:%v, want loads:1 loading:false", store.loads, updated.authSlashLoading)
 	}
 }
 
