@@ -20,7 +20,6 @@ const (
 	serviceDisplayName        = config.ServiceDisplayName
 	serviceLaunchdLabel       = config.ServiceLaunchdLabel
 	serviceSystemdUnitName    = config.ServiceSystemdUnitName
-	serviceWindowsTaskName    = config.ServiceWindowsTaskName
 	serviceWindowsServiceName = config.ServiceWindowsServiceName
 	serviceLogDirName         = "logs"
 	serviceStdoutLogName      = "server.log"

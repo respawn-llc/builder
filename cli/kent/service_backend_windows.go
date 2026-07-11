@@ -30,11 +30,10 @@ func (scmServiceBackend) Name() string {
 
 var serviceRecoveryResetPeriod = uint32((24 * time.Hour).Seconds())
 
-func (scmServiceBackend) Install(ctx context.Context, spec serviceSpec, force bool, start bool) error {
+func (scmServiceBackend) Install(_ context.Context, spec serviceSpec, force bool, start bool) error {
 	if err := ensureServiceLogDir(spec); err != nil {
 		return err
 	}
-	removeLegacyWindowsRegistration(ctx, spec)
 
 	m, err := mgr.Connect()
 	if err != nil {
@@ -105,7 +104,7 @@ func configureCreatedService(service *mgr.Service, spec serviceSpec) error {
 	return nil
 }
 
-func (scmServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop bool) error {
+func (scmServiceBackend) Uninstall(_ context.Context, spec serviceSpec, stop bool) error {
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("connect to the service manager (uninstalling requires Administrator): %w", err)
@@ -117,28 +116,18 @@ func (scmServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop b
 		if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 			return fmt.Errorf("open service: %w", err)
 		}
+	} else {
+		defer func() { _ = service.Close() }()
 		if stop {
-			endLegacyWindowsTask(ctx)
+			if err := stopServiceAndWait(service); err != nil {
+				return fmt.Errorf("stop service before uninstall: %w", err)
+			}
 		}
-		removeLegacyWindowsRegistration(ctx, spec)
-		_ = os.Remove(windowsServerPIDPath(spec))
-		return nil
-	}
-	defer func() { _ = service.Close() }()
-
-	if stop {
-		if err := stopServiceAndWait(service); err != nil {
-			return fmt.Errorf("stop service before uninstall: %w", err)
+		if err := service.Delete(); err != nil {
+			return fmt.Errorf("delete service: %w", err)
 		}
-		endLegacyWindowsTask(ctx)
 	}
-	if err := service.Delete(); err != nil {
-		return fmt.Errorf("delete service: %w", err)
-	}
-	removeLegacyWindowsRegistration(ctx, spec)
-	_ = os.Remove(windowsServerPIDPath(spec))
-	_ = os.Remove(installUserSIDPath(spec))
-	return nil
+	return removeWindowsRuntimeMetadata(spec)
 }
 
 func (scmServiceBackend) Start(ctx context.Context, spec serviceSpec) error {
@@ -230,6 +219,24 @@ func readWindowsServerPID(spec serviceSpec) int {
 
 func installUserSIDPath(spec serviceSpec) string {
 	return filepath.Join(windowsServiceDir(spec), "install_user.sid")
+}
+
+func removeWindowsRuntimeMetadata(spec serviceSpec) error {
+	type metadataFile struct {
+		name string
+		path string
+	}
+	files := []metadataFile{
+		{name: "server PID", path: windowsServerPIDPath(spec)},
+		{name: "install user SID", path: installUserSIDPath(spec)},
+	}
+	errs := make([]error, 0, len(files))
+	for _, file := range files {
+		if err := os.Remove(file.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("remove %s metadata: %w", file.name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func persistInstallUser(spec serviceSpec) error {
@@ -426,26 +433,4 @@ func waitForServiceAbsent(m *mgr.Mgr, timeout time.Duration) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-}
-
-func (scmServiceBackend) stopLegacyServer(ctx context.Context, spec serviceSpec) {
-	endLegacyWindowsTask(ctx)
-}
-
-func endLegacyWindowsTask(ctx context.Context) {
-	_, _ = runServiceCommand(ctx, "schtasks", "/End", "/TN", serviceWindowsTaskName)
-}
-
-func removeLegacyWindowsRegistration(ctx context.Context, spec serviceSpec) {
-	_, _ = runServiceCommand(ctx, "schtasks", "/Delete", "/F", "/TN", serviceWindowsTaskName)
-	_ = os.Remove(legacyWindowsStartupItemPath())
-	_ = os.Remove(filepath.Join(windowsServiceDir(spec), "server.cmd"))
-}
-
-func legacyWindowsStartupItemPath() string {
-	base := strings.TrimSpace(os.Getenv("APPDATA"))
-	if base == "" {
-		base = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming")
-	}
-	return filepath.Join(base, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", serviceWindowsTaskName+".cmd")
 }
