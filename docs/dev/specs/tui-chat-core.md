@@ -14,7 +14,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 ## Editing Model
 
-- Movement: `Left`/`Right` by grapheme cluster; `Ctrl+Left`/`Ctrl+Right` by word; `Home`/`Ctrl+A` to line start; `End`/`Ctrl+E`/`Ctrl+End` to line end. `Up`/`Down` move across wrapped/multiline content when the cursor is not at a whole-buffer boundary (boundary behavior is prompt history, below).
+- Movement: `Left`/`Right` by grapheme cluster; `Ctrl+Left`/`Ctrl+Right` and `Option+Left`/`Option+Right` by word; `Home`/`Ctrl+A` to line start; `End`/`Ctrl+E`/`Ctrl+End` to line end. At the typed terminal-input boundary, an Alt-modified single-rune `b`/`f` event is a compatibility encoding for previous-word/next-word movement rather than inserted text. `Up`/`Down` move across wrapped/multiline content when the cursor is not at a whole-buffer boundary (boundary behavior is prompt history, below).
 - Deletion: `Backspace`/`Ctrl+H` deletes backward; `Delete` deletes forward; `Ctrl+W` deletes the previous word.
 - Kill/yank: `Ctrl+K` kills to line end; `Ctrl+U` kills to line start (macOS: `Ctrl+U` deletes the current line); `Ctrl+Y` yanks the last killed text. One editor-local kill buffer.
 - `Shift+Enter` inserts a newline; known Shift+Enter/Ctrl+Enter CSI encodings normalize to their canonical actions (owner: tui-transcript :: Input And Queueing). `Ctrl+J` always inserts a newline as a universal fallback. Shift+Enter recognition follows the codex reference implementation; the Go TUI's recognition is known-broken drift.
