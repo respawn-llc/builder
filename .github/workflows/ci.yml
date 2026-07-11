@@ -355,7 +355,7 @@ jobs:
 
           mount_dir="$RUNNER_TEMP/kent-desktop-dmg"
           mkdir -p "$mount_dir"
-          hdiutil attach "${dmgs[0]}" -acceptlicense -nobrowse -readonly -mountpoint "$mount_dir"
+          printf 'Y\n' | hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir"
           trap 'hdiutil detach "$mount_dir"' EXIT
 
           app="$mount_dir/Kent.app"
