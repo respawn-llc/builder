@@ -2,6 +2,7 @@ package prompts
 
 import (
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -78,6 +79,30 @@ func TestGeneratedSkillsContainOnlyRegularFilesAndDirectories(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("walk generated skills: %v", err)
+	}
+}
+
+func TestGeneratedSkillsEmbedCommittedSources(t *testing.T) {
+	entries, err := fs.ReadDir(GeneratedSkillsFS, "skills")
+	if err != nil {
+		t.Fatalf("read generated skills: %v", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.ToSlash(filepath.Join("skills", entry.Name(), "SKILL.md"))
+		embedded, err := fs.ReadFile(GeneratedSkillsFS, path)
+		if err != nil {
+			t.Fatalf("read embedded %s: %v", path, err)
+		}
+		source, err := os.ReadFile(filepath.FromSlash(path))
+		if err != nil {
+			t.Fatalf("read committed %s: %v", path, err)
+		}
+		if string(embedded) != string(source) {
+			t.Fatalf("embedded skill %s does not match committed source", path)
+		}
 	}
 }
 

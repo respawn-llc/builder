@@ -1,8 +1,10 @@
 package prompts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +28,36 @@ func TestSyncSeedsMissingGeneratedRoot(t *testing.T) {
 	markerPath := filepath.Join(home, configDirName, ".generated", markerFileName)
 	if _, err := os.Stat(markerPath); err != nil {
 		t.Fatalf("expected marker: %v", err)
+	}
+}
+
+func TestGeneratedSyncProjectsCommittedSkillSources(t *testing.T) {
+	root := t.TempDir()
+	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{ConfigRoot: root, FS: GeneratedSkillsFS})
+	if err != nil {
+		t.Fatalf("GeneratedSync: %v", err)
+	}
+	if err := fs.WalkDir(GeneratedSkillsFS, "skills", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		source, err := os.ReadFile(filepath.FromSlash(path))
+		if err != nil {
+			return err
+		}
+		projected, err := os.ReadFile(filepath.Join(result.GeneratedRoot, filepath.FromSlash(path)))
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(projected, source) {
+			t.Fatalf("generated skill %s does not match committed source", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk generated skills: %v", err)
 	}
 }
 

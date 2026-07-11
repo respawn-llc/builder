@@ -1,10 +1,10 @@
 Usage of kent task:
   kent task create --title <title> (--body <body>|--body-file <path>) [--workflow <workflow>] [--project <project>] [--source-url <url>] [--source-workspace <id-or-path>] [--json]
   kent task edit <short-id-or-task-id> [--title <title>] [--body <body>|--body-file <path>] [--source-workspace <id-or-path>] [--project <project>] [--json]
-  kent task start <short-id-or-task-id>
+  kent task start <short-id-or-task-id> [--project <project>] [--execution-target <none|head|default_branch|custom_ref> [--custom-ref <ref>]] [--json]
   kent task resume <short-id-or-task-id>
-  kent task approve <transition-id>
-  kent task move <short-id-or-task-id> <target-node-id> [--output name=value]
+  kent task approve <transition-id> [--execution-target <none|head|default_branch|custom_ref> [--custom-ref <ref>]]
+  kent task move <short-id-or-task-id> <target-node-id> [--output name=value] [--execution-target <none|head|default_branch|custom_ref> [--custom-ref <ref>]]
   kent task complete [--transition <id>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
   kent task list [--project <project>] [--status <key>[,<key>...]] [--column <key>[,<key>...]] [--run-status <open|running|done|canceled>[,...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
   kent task show <short-id-or-task-id> [--json]
@@ -19,6 +19,9 @@ Usage of kent task:
 What This Does:
   Manage workflow tasks and comments through the Kent server API.
   Agents can complete their current workflow node with kent task complete from a shell command.
+  Agents can start an authorized task with kent task start.
   Outside Kent agent sessions, task completion requires --force plus one explicit selector.
   Short ids are resolved within the current project by default.
   kent task list filters workflow status keys with --status or --column, filters coarse run status with --run-status, and sorts by created, updated, status, run_count, or title. The default sort is status:asc,updated:desc.
+  A start, move, or approval may require a server-owned execution target selection. Supply one concrete --execution-target only to let the CLI retry that required action; it does not override a fixed workflow policy. custom_ref requires --custom-ref.
+  task start --json writes one initiating-action object to stdout and no stderr: started exits 0, selection_required exits 3, and in_progress exits 4.

@@ -115,7 +115,6 @@ func TestTaskHumanOnlyActionsAreDeniedInsideKentSession(t *testing.T) {
 	}()
 
 	for _, args := range [][]string{
-		{"task", "start", "TASK-1"},
 		{"task", "cancel", "TASK-1"},
 		{"task", "resume", "TASK-1"},
 		{"task", "approve", "transition-1"},
@@ -131,6 +130,31 @@ func TestTaskHumanOnlyActionsAreDeniedInsideKentSession(t *testing.T) {
 		}
 		if stderr != prompts.WorkflowHumanOnlyTaskActionDeniedPrompt+"\n" {
 			t.Fatalf("%v stderr = %q, want denied prompt", args, stderr)
+		}
+	}
+}
+
+func TestTaskExecutionTargetSelectionFlagsRequireConcreteValidSelection(t *testing.T) {
+	previous := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		t.Fatal("invalid execution-target flags opened workflow remote")
+		return config.App{}, nil, nil
+	}
+	defer func() {
+		workflowCommandRemoteOpener = previous
+	}()
+
+	for _, args := range [][]string{
+		{"task", "start", "--execution-target", "ask", "TASK-1"},
+		{"task", "start", "--execution-target", "custom_ref", "TASK-1"},
+		{"task", "start", "--execution-target", "head", "--custom-ref", "refs/heads/release", "TASK-1"},
+		{"task", "start", "--custom-ref", "refs/heads/release", "TASK-1"},
+		{"task", "move", "--execution-target", "custom_ref", "TASK-1", "node-1"},
+		{"task", "approve", "--custom-ref", "refs/heads/release", "transition-1"},
+	} {
+		stdout, stderr, code := runWorkflowRootCommand(args...)
+		if code != 2 || stdout != "" || strings.TrimSpace(stderr) == "" {
+			t.Fatalf("%v exit=%d stdout=%q stderr=%q, want validation failure", args, code, stdout, stderr)
 		}
 	}
 }
@@ -271,22 +295,12 @@ func TestTaskStartSessionPollingDoesNotWaitForScriptRunSession(t *testing.T) {
 	}
 }
 
-func TestTaskStartCommandPollsForSessionAndPrintsReadableOutput(t *testing.T) {
+func TestTaskStartCommandIsAvailableInsideKentSessionAndPollsForSession(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "session-agent")
 	restorePolling := replaceTaskStartSessionPolling(t, 50*time.Millisecond, time.Millisecond)
 	defer restorePolling()
 	cfg := config.App{WorkspaceRoot: t.TempDir()}
-	remote := &taskStartPollingRemote{
-		projectID:   "project-1",
-		taskID:      "task-1",
-		shortID:     "BLD-1",
-		workflowID:  "workflow-1",
-		workflow:    "Workflow",
-		placementID: "placement-1",
-		runID:       "run-1",
-		sessionID:   "session-1",
-		nodeID:      "node-1",
-		nodeKey:     "implement",
-	}
+	remote := newTaskStartPollingRemote()
 	restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restoreRemote()
 
@@ -303,6 +317,260 @@ func TestTaskStartCommandPollsForSessionAndPrintsReadableOutput(t *testing.T) {
 	}
 	if remote.taskIDDetailCalls < 2 {
 		t.Fatalf("task detail calls = %d, want polling before session assignment", remote.taskIDDetailCalls)
+	}
+}
+
+func TestTaskStartJSONWritesStartedOutcomeWithoutPollingTaskDetail(t *testing.T) {
+	cfg := config.App{WorkspaceRoot: t.TempDir()}
+	remote := newTaskStartPollingRemote()
+	restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restoreRemote()
+
+	stdout, stderr, code := runWorkflowRootCommand("task", "start", "--json", "--project", "project-1", "BLD-1")
+	if code != 0 || stderr != "" {
+		t.Fatalf("task start --json exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	var result serverapi.WorkflowTaskInitiatingActionResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("task start --json stdout=%q, want initiating-action JSON: %v", stdout, err)
+	}
+	if result.Outcome != serverapi.WorkflowTaskInitiatingActionOutcomeStarted || result.Started == nil || result.Started.RunID != "run-1" {
+		t.Fatalf("task start --json result=%+v, want started run", result)
+	}
+	if remote.taskIDDetailCalls != 0 {
+		t.Fatalf("task detail calls after JSON start=%d, want none", remote.taskIDDetailCalls)
+	}
+}
+
+func TestTaskStartNonStartedOutcomesDoNotPollTaskDetail(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		json    bool
+		outcome serverapi.WorkflowTaskInitiatingActionResult
+		want    serverapi.WorkflowTaskInitiatingActionOutcome
+		exit    int
+	}{
+		{
+			name:    "selection-required-human",
+			outcome: taskSelectionRequiredOutcome("task-1", serverapi.WorkflowTaskExecutionTargetSelectionNone),
+			want:    serverapi.WorkflowTaskInitiatingActionOutcomeSelectionRequired,
+			exit:    3,
+		},
+		{
+			name:    "selection-required-json",
+			json:    true,
+			outcome: taskSelectionRequiredOutcome("task-1", serverapi.WorkflowTaskExecutionTargetSelectionNone),
+			want:    serverapi.WorkflowTaskInitiatingActionOutcomeSelectionRequired,
+			exit:    3,
+		},
+		{
+			name: "in-progress-human",
+			outcome: serverapi.WorkflowTaskInitiatingActionResult{
+				Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeInProgress,
+				InProgress: &serverapi.WorkflowTaskExecutionTargetMaterializationProgress{
+					TaskID: "task-1",
+					Phase:  serverapi.WorkflowTaskExecutionTargetMaterializationPhaseMaterializing,
+				},
+			},
+			want: serverapi.WorkflowTaskInitiatingActionOutcomeInProgress,
+			exit: 4,
+		},
+		{
+			name: "in-progress-json",
+			json: true,
+			outcome: serverapi.WorkflowTaskInitiatingActionResult{
+				Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeInProgress,
+				InProgress: &serverapi.WorkflowTaskExecutionTargetMaterializationProgress{
+					TaskID: "task-1",
+					Phase:  serverapi.WorkflowTaskExecutionTargetMaterializationPhaseMaterializing,
+				},
+			},
+			want: serverapi.WorkflowTaskInitiatingActionOutcomeInProgress,
+			exit: 4,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.App{WorkspaceRoot: t.TempDir()}
+			remote := &taskStartOutcomeRemote{
+				taskStartPollingRemote: newTaskStartPollingRemote(),
+				outcomes:               []serverapi.WorkflowTaskInitiatingActionResult{tc.outcome},
+			}
+			restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+			defer restoreRemote()
+
+			args := []string{"task", "start", "--project", "project-1"}
+			if tc.json {
+				args = append(args, "--json")
+			}
+			args = append(args, "BLD-1")
+			stdout, stderr, code := runWorkflowRootCommand(args...)
+			if code != tc.exit {
+				t.Fatalf("task start exit=%d stdout=%q stderr=%q, want %d", code, stdout, stderr, tc.exit)
+			}
+			if tc.json {
+				if stderr != "" {
+					t.Fatalf("task start --json stderr=%q, want empty", stderr)
+				}
+				var result serverapi.WorkflowTaskInitiatingActionResult
+				if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+					t.Fatalf("task start --json stdout=%q, want initiating-action JSON: %v", stdout, err)
+				}
+				if result.Outcome != tc.want {
+					t.Fatalf("task start --json result=%+v, want outcome %q", result, tc.want)
+				}
+			} else {
+				if stdout != "" {
+					t.Fatalf("task start stdout=%q, want empty for non-start outcome", stdout)
+				}
+				if strings.Count(stderr, "\n") != 1 || strings.TrimSpace(stderr) == "" {
+					t.Fatalf("task start stderr=%q, want one concise actionable line", stderr)
+				}
+			}
+			if remote.taskIDDetailCalls != 0 {
+				t.Fatalf("task detail calls after %s=%d, want none", tc.want, remote.taskIDDetailCalls)
+			}
+			if len(remote.startRequests) != 1 || remote.startRequests[0].Selection != nil || remote.startRequests[0].SelectionGeneration != nil {
+				t.Fatalf("start requests=%+v, want one unselected request", remote.startRequests)
+			}
+		})
+	}
+}
+
+func TestTaskStartExecutionTargetOverrideRetriesSelectionRequirement(t *testing.T) {
+	restorePolling := replaceTaskStartSessionPolling(t, 50*time.Millisecond, time.Millisecond)
+	defer restorePolling()
+	cfg := config.App{WorkspaceRoot: t.TempDir()}
+	remote := &taskStartOutcomeRemote{
+		taskStartPollingRemote: newTaskStartPollingRemote(),
+		outcomes: []serverapi.WorkflowTaskInitiatingActionResult{
+			taskSelectionRequiredOutcome("task-1", serverapi.WorkflowTaskExecutionTargetSelectionCustomRef),
+			{
+				Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeStarted,
+				Started: &serverapi.WorkflowTaskStartResponse{
+					TransitionID: "transition-1",
+					PlacementID:  "placement-1",
+					RunID:        "run-1",
+				},
+			},
+		},
+	}
+	restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restoreRemote()
+
+	_, stderr, code := runWorkflowRootCommand(
+		"task", "start",
+		"--project", "project-1",
+		"--execution-target", "custom_ref",
+		"--custom-ref", "refs/heads/release",
+		"BLD-1",
+	)
+	if code != 0 || stderr != "" {
+		t.Fatalf("task start override exit=%d stderr=%q", code, stderr)
+	}
+	if len(remote.startRequests) != 2 {
+		t.Fatalf("start requests=%+v, want selection negotiation and retry", remote.startRequests)
+	}
+	first, second := remote.startRequests[0], remote.startRequests[1]
+	if first.Selection != nil || first.SelectionGeneration != nil {
+		t.Fatalf("initial start request=%+v, want no client-side override", first)
+	}
+	if second.SelectionGeneration == nil || *second.SelectionGeneration != "selection-1" ||
+		second.Selection == nil || second.Selection.Mode != serverapi.WorkflowTaskExecutionTargetSelectionCustomRef ||
+		second.Selection.CustomRef == nil || *second.Selection.CustomRef != "refs/heads/release" {
+		t.Fatalf("selection retry request=%+v, want negotiated custom-ref selection", second)
+	}
+}
+
+func TestTaskMoveAndApproveExecutionTargetOverrideRetryOriginalAction(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "move",
+			args: []string{
+				"task", "move",
+				"--project", "project-1",
+				"--execution-target", "head",
+				"--output", "result=done",
+				"--commentary", "manual move",
+				"BLD-1", "node-2",
+			},
+		},
+		{
+			name: "approve",
+			args: []string{
+				"task", "approve",
+				"--execution-target", "head",
+				"transition-1",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.App{WorkspaceRoot: t.TempDir()}
+			remote := &taskTransitionOutcomeRemote{
+				taskStartPollingRemote: newTaskStartPollingRemote(),
+				moveOutcomes: []serverapi.WorkflowTaskInitiatingActionResult{
+					taskSelectionRequiredOutcome("task-1", serverapi.WorkflowTaskExecutionTargetSelectionHead),
+					{
+						Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeMoved,
+						Moved:   &serverapi.WorkflowTaskMoveResponse{TransitionID: "transition-1"},
+					},
+				},
+				approveOutcomes: []serverapi.WorkflowTaskInitiatingActionResult{
+					taskSelectionRequiredOutcome("task-1", serverapi.WorkflowTaskExecutionTargetSelectionHead),
+					{
+						Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeApproved,
+						Approved: &serverapi.WorkflowTaskApproveResponse{
+							TaskID:       "task-1",
+							TransitionID: "transition-1",
+						},
+					},
+				},
+			}
+			restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+			defer restoreRemote()
+
+			_, stderr, code := runWorkflowRootCommand(tc.args...)
+			if code != 0 || stderr != "" {
+				t.Fatalf("task %s override exit=%d stderr=%q", tc.name, code, stderr)
+			}
+			switch tc.name {
+			case "move":
+				if len(remote.moveRequests) != 2 {
+					t.Fatalf("move requests=%+v, want selection negotiation and retry", remote.moveRequests)
+				}
+				first, second := remote.moveRequests[0], remote.moveRequests[1]
+				if first.Selection != nil || first.SelectionGeneration != nil {
+					t.Fatalf("initial move request=%+v, want no client-side override", first)
+				}
+				if first.TaskID != "task-1" || first.TargetNodeID != "node-2" || first.Commentary != "manual move" || first.OutputValues["result"] != "done" {
+					t.Fatalf("initial move request=%+v, want original move inputs", first)
+				}
+				if second.SelectionGeneration == nil || *second.SelectionGeneration != "selection-1" ||
+					second.Selection == nil || second.Selection.Mode != serverapi.WorkflowTaskExecutionTargetSelectionHead ||
+					second.TaskID != first.TaskID || second.TargetNodeID != first.TargetNodeID ||
+					second.Commentary != first.Commentary || second.OutputValues["result"] != first.OutputValues["result"] {
+					t.Fatalf("move retry request=%+v, want original action plus negotiated head selection", second)
+				}
+			case "approve":
+				if len(remote.approveRequests) != 2 {
+					t.Fatalf("approve requests=%+v, want selection negotiation and retry", remote.approveRequests)
+				}
+				first, second := remote.approveRequests[0], remote.approveRequests[1]
+				if first.Selection != nil || first.SelectionGeneration != nil {
+					t.Fatalf("initial approve request=%+v, want no client-side override", first)
+				}
+				if first.TransitionID != "transition-1" {
+					t.Fatalf("initial approve request=%+v, want original transition", first)
+				}
+				if second.SelectionGeneration == nil || *second.SelectionGeneration != "selection-1" ||
+					second.Selection == nil || second.Selection.Mode != serverapi.WorkflowTaskExecutionTargetSelectionHead ||
+					second.TransitionID != first.TransitionID {
+					t.Fatalf("approve retry request=%+v, want original action plus negotiated head selection", second)
+				}
+			}
+		})
 	}
 }
 
@@ -451,6 +719,21 @@ type taskStartPollingRemote struct {
 	taskIDDetailCalls int
 }
 
+func newTaskStartPollingRemote() *taskStartPollingRemote {
+	return &taskStartPollingRemote{
+		projectID:   "project-1",
+		taskID:      "task-1",
+		shortID:     "BLD-1",
+		workflowID:  "workflow-1",
+		workflow:    "Workflow",
+		placementID: "placement-1",
+		runID:       "run-1",
+		sessionID:   "session-1",
+		nodeID:      "node-1",
+		nodeKey:     "implement",
+	}
+}
+
 func (r *taskStartPollingRemote) Close() error { return nil }
 
 func (r *taskStartPollingRemote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
@@ -494,6 +777,66 @@ func (r *taskStartPollingRemote) taskDetail(sessionID string) serverapi.Workflow
 		},
 		Runs: []serverapi.WorkflowRun{
 			{ID: r.runID, TaskID: r.taskID, PlacementID: r.placementID, NodeID: r.nodeID, SessionID: sessionID},
+		},
+	}
+}
+
+type taskStartOutcomeRemote struct {
+	*taskStartPollingRemote
+	outcomes      []serverapi.WorkflowTaskInitiatingActionResult
+	startRequests []serverapi.WorkflowTaskStartRequest
+}
+
+func (r *taskStartOutcomeRemote) StartWorkflowTask(_ context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	r.startRequests = append(r.startRequests, req)
+	if len(r.outcomes) == 0 {
+		return serverapi.WorkflowTaskInitiatingActionResult{}, errors.New("no task-start outcome configured")
+	}
+	outcome := r.outcomes[0]
+	r.outcomes = r.outcomes[1:]
+	return outcome, nil
+}
+
+type taskTransitionOutcomeRemote struct {
+	*taskStartPollingRemote
+	moveOutcomes    []serverapi.WorkflowTaskInitiatingActionResult
+	approveOutcomes []serverapi.WorkflowTaskInitiatingActionResult
+	moveRequests    []serverapi.WorkflowTaskMoveRequest
+	approveRequests []serverapi.WorkflowTaskApproveRequest
+}
+
+func (r *taskTransitionOutcomeRemote) MoveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	r.moveRequests = append(r.moveRequests, req)
+	if len(r.moveOutcomes) == 0 {
+		return serverapi.WorkflowTaskInitiatingActionResult{}, errors.New("no task-move outcome configured")
+	}
+	outcome := r.moveOutcomes[0]
+	r.moveOutcomes = r.moveOutcomes[1:]
+	return outcome, nil
+}
+
+func (r *taskTransitionOutcomeRemote) ApproveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	r.approveRequests = append(r.approveRequests, req)
+	if len(r.approveOutcomes) == 0 {
+		return serverapi.WorkflowTaskInitiatingActionResult{}, errors.New("no task-approve outcome configured")
+	}
+	outcome := r.approveOutcomes[0]
+	r.approveOutcomes = r.approveOutcomes[1:]
+	return outcome, nil
+}
+
+func taskSelectionRequiredOutcome(taskID string, selection serverapi.WorkflowTaskExecutionTargetSelectionMode) serverapi.WorkflowTaskInitiatingActionResult {
+	return serverapi.WorkflowTaskInitiatingActionResult{
+		Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeSelectionRequired,
+		SelectionRequired: &serverapi.WorkflowTaskExecutionTargetSelectionRequired{
+			TaskID:            taskID,
+			Generation:        "selection-1",
+			SourceWorkspaceID: "workspace-1",
+			Source:            serverapi.WorkflowTaskExecutionTargetSource{Kind: serverapi.WorkflowTaskExecutionTargetSourceNonGit},
+			SupportedSelections: []serverapi.WorkflowTaskExecutionTargetSelectionMode{
+				selection,
+			},
+			ConfiguredPolicy: serverapi.WorkflowExecutionPolicy{Mode: serverapi.WorkflowExecutionPolicyAsk},
 		},
 	}
 }

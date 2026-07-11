@@ -8,12 +8,12 @@ A task is a durable user-facing unit of work moving through one workflow.
 
 - Tasks live under the intersection of a **Workflow**, which defines the Kanban board shape the user sees, and a **Project**, which defines the execution environment, workspaces, worktrees, rules, etc.
 - Projects are sets of workspace directories, with one primary workspace (e.g. `~/Kent`) and secondary ones (e.g. `~/Kent-Marketing`).
-- Tasks default to a **new git worktree** created off of **primary workspace**'s **main branch** and follow the **default workflow** unless specified otherwise.
+- A task's workflow policy determines its execution target when automation first runs. Managed targets use a task worktree; the `none` policy runs in the source workspace without Git or setup.
 - Every workflow runs in **the same environment as you do** - it may be the user's local machine, or if you are running on a server, there. You can generally assume that what you have available here in this environment will also be available for agents that work on tasks (such as main-workspace docs, git repos, committed files, system utilities or tools), but you should avoid leaking PII, credentials, or references to outside-workspace paths (e.g. ~/Desktop, ~/Documents) that are unstable and may be moved or deleted by the user.
 - Task body and comments are formatted as markdown.
 
 ## Principles of task management
-- User will be asking you to create tasks, or you might decide to interact with tasks on your own. Both are fine, with the exception that you do **NOT** execute destructive (task delete, task edit with removal of information, task comment delete on others comments) and cost-incurring (task start, task move, task approve) ops without explicit user consent or request.
+- User will be asking you to create tasks, or you might decide to interact with tasks on your own. Both are fine, with the exception that you do **NOT** execute destructive (task delete, task edit with removal of information, task comment delete on others comments) or cost-incurring task moves and approvals without explicit user consent or request. Agents may start an authorized task with `kent task start`.
 - Because tasks are created off of main branch and **each task** has its own worktree, it is **required** to structure tasks such that each one is **shippable from a separate branch**. Tasks do NOT share code between them unless the worktree is explicitly merged before the next task starts, and there is no way to enforce sharing by the agent. For example, don't break big features into tasks that require all of the coding to be done on a single worktree; that should be ONE task or slices that are feature-gated/isolated enough to be merged separately instead.
 - You can inspect the workflow with `kent workflow list` and `kent workflow inspect` for context on what will actually be done for any given task. Adapt the level of detail and how you write requirements in tasks to the workflow you're working with. More info in the `kent-workflows` skill.
 - Task titles should be under 40 characters of plain text.
@@ -39,6 +39,21 @@ kent task create [--project "path or id"] [--workflow "id"] --title "Fix flaky w
 kent task list [--project]
 kent task show <short-id-or-task-id>
 ```
+
+## Execution Target Selection
+
+When a task uses `Ask every time` or needs manual execution-target recovery, the server returns `selection_required`. Supply one concrete target to retry the server-required action:
+
+```bash
+kent task start <task> --execution-target head
+kent task start <task> --execution-target custom_ref --custom-ref refs/heads/release
+kent task move <task> <target-node-id> --execution-target none
+kent task approve <transition-id> --execution-target default_branch
+```
+
+Valid values are `none`, `head`, `default_branch`, and `custom_ref`; `custom_ref` requires `--custom-ref`. The CLI first sends the original start, move, or approval without a selection and retries that same action only if the server requires a selection. These flags therefore do not override a fixed workflow policy.
+
+For automation, `kent task start --json` writes exactly one initiating-action object with an `outcome` discriminator to stdout and no stderr. `started` exits `0`, `selection_required` exits `3`, and `in_progress` exits `4`. Human-mode `selection_required` and `in_progress` return a concise stderr action line without polling task/session state or probing Git locally.
 
 ## Approvals And Manual Moves
 Some workflow transitions wait for human approval before target runs start. Inspect the task before approving, rejecting, or moving it so you know which workflow transition is pending.

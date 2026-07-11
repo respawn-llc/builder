@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -187,6 +188,9 @@ func readTaskEditBody(body string, bodyFile string, bodyFileProvided bool) (stri
 func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task start", stderr, taskCommandUsage)
 	projectRef := fs.String("project", ".", "project id or path for short ids")
+	executionTarget := fs.String("execution-target", "", "one-time execution target: none|head|default_branch|custom_ref")
+	customRef := fs.String("custom-ref", "", "Git ref for custom_ref execution target")
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -196,8 +200,10 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, "task start requires <short-id-or-task-id>")
 		return 2
 	}
-	if denyAgentHumanOnlyTaskAction(stderr) {
-		return 1
+	selection, err := taskExecutionTargetSelectionFromFlags(fs, *executionTarget, *customRef)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
 	}
 	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
 	if err != nil {
@@ -210,17 +216,38 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	outcome, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskInitiatingActionResult, error) {
-		return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: setupOperationID, TaskID: taskID})
+	progressStderr := stderr
+	if *jsonOut {
+		progressStderr = io.Discard
+	}
+	outcome, reportProgress, err := runTaskInitiatingActionWithSelection(context.Background(), remote, progressStderr, selection, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+		return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+			SetupOperationID:    setupOperationID,
+			TaskID:              taskID,
+			SelectionGeneration: selectionGeneration,
+			Selection:           selection,
+		})
 	})
 	if err != nil {
+		reportProgress(stderr)
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if *jsonOut {
+		if writeWorkflowJSON(stdout, stderr, outcome) != 0 {
+			return 1
+		}
+		return taskInitiatingActionExitCode(outcome)
+	}
+	if exitCode, handled := writeTaskInitiatingActionDeferredOutcome(stderr, outcome); handled {
+		return exitCode
+	}
 	if outcome.Started == nil {
+		reportProgress(stderr)
 		fmt.Fprintln(stderr, "task start did not complete")
 		return 1
 	}
+	reportProgress(stderr)
 	resp := *outcome.Started
 	detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, resp.RunID, taskStartSessionPollTimeout, taskStartSessionPollInterval)
 	if err != nil {
@@ -229,6 +256,64 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	}
 	writeTaskStartResult(stdout, detail, resp)
 	return 0
+}
+
+func taskExecutionTargetSelectionFromFlags(fs *flag.FlagSet, rawTarget string, rawCustomRef string) (*serverapi.WorkflowTaskExecutionTargetSelection, error) {
+	targetProvided := flagWasProvided(fs, "execution-target")
+	customRefProvided := flagWasProvided(fs, "custom-ref")
+	if !targetProvided {
+		if customRefProvided {
+			return nil, errors.New("--custom-ref requires --execution-target custom_ref")
+		}
+		return nil, nil
+	}
+	selection := &serverapi.WorkflowTaskExecutionTargetSelection{
+		Mode: serverapi.WorkflowTaskExecutionTargetSelectionMode(strings.TrimSpace(rawTarget)),
+	}
+	switch selection.Mode {
+	case serverapi.WorkflowTaskExecutionTargetSelectionNone,
+		serverapi.WorkflowTaskExecutionTargetSelectionHead,
+		serverapi.WorkflowTaskExecutionTargetSelectionDefaultBranch:
+		if customRefProvided {
+			return nil, errors.New("--custom-ref is valid only with --execution-target custom_ref")
+		}
+		return selection, nil
+	case serverapi.WorkflowTaskExecutionTargetSelectionCustomRef:
+		customRef := strings.TrimSpace(rawCustomRef)
+		if !customRefProvided || customRef == "" {
+			return nil, errors.New("--execution-target custom_ref requires --custom-ref")
+		}
+		selection.CustomRef = &customRef
+		return selection, nil
+	default:
+		return nil, errors.New("--execution-target must be one of none, head, default_branch, or custom_ref")
+	}
+}
+
+func taskInitiatingActionExitCode(outcome serverapi.WorkflowTaskInitiatingActionResult) int {
+	switch outcome.Outcome {
+	case serverapi.WorkflowTaskInitiatingActionOutcomeStarted:
+		return 0
+	case serverapi.WorkflowTaskInitiatingActionOutcomeSelectionRequired:
+		return 3
+	case serverapi.WorkflowTaskInitiatingActionOutcomeInProgress:
+		return 4
+	default:
+		return 1
+	}
+}
+
+func writeTaskInitiatingActionDeferredOutcome(stderr io.Writer, outcome serverapi.WorkflowTaskInitiatingActionResult) (int, bool) {
+	switch outcome.Outcome {
+	case serverapi.WorkflowTaskInitiatingActionOutcomeSelectionRequired:
+		fmt.Fprintln(stderr, "Execution target selection is required; retry with --execution-target.")
+		return 3, true
+	case serverapi.WorkflowTaskInitiatingActionOutcomeInProgress:
+		fmt.Fprintln(stderr, "Execution target materialization is in progress; retry after it completes.")
+		return 4, true
+	default:
+		return 0, false
+	}
 }
 
 func taskCancelSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -359,6 +444,8 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 
 func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task approve", stderr, taskCommandUsage)
+	executionTarget := fs.String("execution-target", "", "one-time execution target: none|head|default_branch|custom_ref")
+	customRef := fs.String("custom-ref", "", "Git ref for custom_ref execution target")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -366,6 +453,11 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) != 1 {
 		fmt.Fprintln(stderr, "task approve requires <transition-id>")
+		return 2
+	}
+	selection, err := taskExecutionTargetSelectionFromFlags(fs, *executionTarget, *customRef)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	if denyAgentHumanOnlyTaskAction(stderr) {
@@ -377,17 +469,28 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		return 1
 	}
 	defer func() { _ = remote.Close() }()
-	outcome, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskInitiatingActionResult, error) {
-		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0]})
+	outcome, reportProgress, err := runTaskInitiatingActionWithSelection(context.Background(), remote, stderr, selection, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+			SetupOperationID:    setupOperationID,
+			TransitionID:        positionals[0],
+			SelectionGeneration: selectionGeneration,
+			Selection:           selection,
+		})
 	})
 	if err != nil {
+		reportProgress(stderr)
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if exitCode, handled := writeTaskInitiatingActionDeferredOutcome(stderr, outcome); handled {
+		return exitCode
+	}
 	if outcome.Approved == nil {
+		reportProgress(stderr)
 		fmt.Fprintln(stderr, "task approval did not complete")
 		return 1
 	}
+	reportProgress(stderr)
 	resp := *outcome.Approved
 	if strings.TrimSpace(resp.TaskID) == "" {
 		fmt.Fprintf(stderr, "approved transition %s but response did not include task id for output\n", resp.TransitionID)
@@ -406,6 +509,8 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task move", stderr, taskCommandUsage)
 	projectRef := fs.String("project", ".", "project id or path for short ids")
 	commentary := fs.String("commentary", "", "transition commentary")
+	executionTarget := fs.String("execution-target", "", "one-time execution target: none|head|default_branch|custom_ref")
+	customRef := fs.String("custom-ref", "", "Git ref for custom_ref execution target")
 	outputs := stringMapFlag{}
 	fs.Var(&outputs, "output", "output value as name=value; repeatable")
 	positionals, flagArgs := takeLeadingPositionals(args, 2)
@@ -415,6 +520,11 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) != 2 {
 		fmt.Fprintln(stderr, "task move requires <short-id-or-task-id> <target-node-id>")
+		return 2
+	}
+	selection, err := taskExecutionTargetSelectionFromFlags(fs, *executionTarget, *customRef)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	if denyAgentHumanOnlyTaskAction(stderr) {
@@ -431,17 +541,31 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	outcome, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskInitiatingActionResult, error) {
-		return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupOperationID, TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary})
+	outcome, reportProgress, err := runTaskInitiatingActionWithSelection(context.Background(), remote, stderr, selection, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+		return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+			SetupOperationID:    setupOperationID,
+			TaskID:              taskID,
+			TargetNodeID:        positionals[1],
+			OutputValues:        outputs.values,
+			Commentary:          *commentary,
+			SelectionGeneration: selectionGeneration,
+			Selection:           selection,
+		})
 	})
 	if err != nil {
+		reportProgress(stderr)
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if exitCode, handled := writeTaskInitiatingActionDeferredOutcome(stderr, outcome); handled {
+		return exitCode
+	}
 	if outcome.Moved == nil {
+		reportProgress(stderr)
 		fmt.Fprintln(stderr, "task move did not complete")
 		return 1
 	}
+	reportProgress(stderr)
 	resp := *outcome.Moved
 	detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
 	if err != nil {
@@ -456,18 +580,39 @@ type worktreeSetupProgressSubscriber interface {
 	SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error)
 }
 
-func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote workflowCommandRemote, stderr io.Writer, mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error)) (T, error) {
+type taskInitiatingAction func(context.Context, serverapi.WorktreeSetupOperationID, *string, *serverapi.WorkflowTaskExecutionTargetSelection) (serverapi.WorkflowTaskInitiatingActionResult, error)
+
+func runTaskInitiatingActionWithSelection(ctx context.Context, remote workflowCommandRemote, stderr io.Writer, selection *serverapi.WorkflowTaskExecutionTargetSelection, action taskInitiatingAction) (serverapi.WorkflowTaskInitiatingActionResult, func(io.Writer), error) {
+	outcome, reportProgress, err := runWorkflowMutationWithSetupProgress(ctx, remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+		return action(ctx, setupOperationID, nil, nil)
+	})
+	if err != nil || outcome.SelectionRequired == nil || selection == nil {
+		return outcome, reportProgress, err
+	}
+	generation := outcome.SelectionRequired.Generation
+	return runWorkflowMutationWithSetupProgress(ctx, remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+		return action(ctx, setupOperationID, &generation, selection)
+	})
+}
+
+func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote workflowCommandRemote, stderr io.Writer, mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error)) (T, func(io.Writer), error) {
+	var warnings []error
 	setupOperationID := serverapi.NewWorktreeSetupOperationID()
 	stopSetupProgress, err := subscribeWorktreeSetupProgress(ctx, remote, setupOperationID, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "warning: worktree setup progress subscription unavailable: %v\n", err)
+		warnings = append(warnings, fmt.Errorf("worktree setup progress subscription unavailable: %w", err))
 		stopSetupProgress = func() error { return nil }
 	}
 	resp, mutateErr := mutate(ctx, setupOperationID)
 	if setupProgressErr := stopSetupProgress(); setupProgressErr != nil {
-		fmt.Fprintf(stderr, "warning: worktree setup progress stream ended unexpectedly: %v\n", setupProgressErr)
+		warnings = append(warnings, fmt.Errorf("worktree setup progress stream ended unexpectedly: %w", setupProgressErr))
 	}
-	return resp, mutateErr
+	reportWarnings := func(writer io.Writer) {
+		for _, warning := range warnings {
+			fmt.Fprintf(writer, "warning: %v\n", warning)
+		}
+	}
+	return resp, reportWarnings, mutateErr
 }
 
 func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandRemote, setupOperationID serverapi.WorktreeSetupOperationID, stderr io.Writer) (func() error, error) {
