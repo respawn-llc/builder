@@ -1,4 +1,4 @@
-Plaintext `final_answer` responses or outputs that do not match the schema are **not** valid completions of tasks, so your response was rejected. Exact reason:
+Your response did not satisfy this workflow node's completion contract, so it was rejected. Exact reason:
 {{.RejectionReason}}.
 
 If the task you received is not yet fully done, **keep working**. Do not stop with `final_answer` until you're ready to submit your completed work. When you are, mark the task as completed:
