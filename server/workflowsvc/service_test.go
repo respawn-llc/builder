@@ -317,6 +317,57 @@ func TestServiceStartAskNoneSelectionWithMissingSourceScriptLeavesNoTargetOrRun(
 	}
 }
 
+func TestServiceStartAskHeadSelectionMaterializesManagedTargetBeforeStarting(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "deadbeef"),
+		namedExecutionTargetResolution("refs/heads/main", "deadbeef"),
+	}}
+	materializer := &recordingTaskExecutionTargetWorktreeMaterializer{worktreeRoot: t.TempDir()}
+	service.targetWorktrees = materializer
+
+	required, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("start result = %+v, want selection_required", required)
+	}
+	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:              task.Task.ID,
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SelectionGeneration: &required.SelectionRequired.Generation,
+		Selection:           &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionHead},
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask selection: %v", err)
+	}
+	if started.Started == nil {
+		t.Fatalf("start result = %+v, want started", started)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if target == nil || target.Policy != workflow.ExecutionPolicyHead || target.State != workflow.ExecutionTargetStateLocked || target.SetupState != workflow.ExecutionTargetSetupSucceeded || target.ActiveClaim != nil {
+		t.Fatalf("target = %+v, want locked setup-complete head target", target)
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(materializer.worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	if materializer.provision.TaskShortID != task.Task.ShortID || materializer.provision.ResolvedCommit != "deadbeef" || materializer.setup.WorktreeRoot != canonicalWorktreeRoot {
+		t.Fatalf("materializer calls = provision:%+v setup:%+v", materializer.provision, materializer.setup)
+	}
+}
+
 func TestServiceExecutableManualMoveAskPolicyRequiresSelectionWithoutMutatingTask(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -2112,6 +2163,26 @@ type recordingTaskExecutionTargetResolver struct {
 	resolutions []worktree.ExecutionTargetResolution
 	err         error
 	calls       int
+}
+
+type recordingTaskExecutionTargetWorktreeMaterializer struct {
+	worktreeRoot string
+	provision    worktree.ProvisionExecutionTargetWorktreeRequest
+	setup        worktree.RunExecutionTargetSetupRequest
+	err          error
+}
+
+func (m *recordingTaskExecutionTargetWorktreeMaterializer) ProvisionExecutionTargetWorktree(_ context.Context, req worktree.ProvisionExecutionTargetWorktreeRequest) (worktree.ProvisionExecutionTargetWorktreeResponse, error) {
+	m.provision = req
+	if m.err != nil {
+		return worktree.ProvisionExecutionTargetWorktreeResponse{}, m.err
+	}
+	return worktree.ProvisionExecutionTargetWorktreeResponse{WorktreeRoot: m.worktreeRoot, BranchName: req.TaskShortID, CreatedBranch: true}, nil
+}
+
+func (m *recordingTaskExecutionTargetWorktreeMaterializer) RunExecutionTargetSetup(_ context.Context, req worktree.RunExecutionTargetSetupRequest) error {
+	m.setup = req
+	return m.err
 }
 
 func (r *recordingTaskExecutionTargetResolver) ResolveExecutionTarget(_ context.Context, _ string, _ workflow.ExecutionPolicyMode, _ *string) (worktree.ExecutionTargetResolution, error) {

@@ -16,6 +16,7 @@ import (
 // execution target. It deliberately contains no mutable action result.
 type TaskExecutionTargetNegotiationPreparation struct {
 	TaskID              workflow.TaskID
+	TaskShortID         string
 	ProjectID           string
 	WorkflowID          workflow.WorkflowID
 	SourceWorkspace     workflow.ExecutionWorkspace
@@ -131,6 +132,7 @@ func (s *Store) taskExecutionTargetNegotiationPreparation(ctx context.Context, t
 	}
 	return TaskExecutionTargetNegotiationPreparation{
 		TaskID:              workflow.TaskID(task.ID),
+		TaskShortID:         task.ShortID,
 		ProjectID:           task.ProjectID,
 		WorkflowID:          workflow.WorkflowID(task.WorkflowID),
 		SourceWorkspace:     workflow.ExecutionWorkspace{ID: workspace.ID, Root: workspace.CanonicalRootPath},
