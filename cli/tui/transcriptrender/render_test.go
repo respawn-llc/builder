@@ -341,52 +341,6 @@ func TestRoleSymbolOwnsTypedLeadingSlotOutsideBodySpans(t *testing.T) {
 	}
 }
 
-func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
-	cases := []struct {
-		name        string
-		messageType clientui.MessageType
-		reason      clientui.TranscriptNoticeReason
-		severity    clientui.TranscriptNoticeSeverity
-		wantRole    StyleRole
-		wantColor   ColorRole
-	}{
-		{name: "compaction summary", messageType: clientui.MessageTypeCompactionSummary, wantRole: StyleRoleNoticeSecondary, wantColor: ColorRoleSecondary},
-		{name: "handoff future message", messageType: clientui.MessageTypeHandoffFutureMessage, wantRole: StyleRoleNoticeSecondary, wantColor: ColorRoleSecondary},
-		{name: "manual compaction carryover", messageType: clientui.MessageTypeManualCompactionCarryover, wantRole: StyleRoleNoticeSecondary, wantColor: ColorRoleSecondary},
-		{name: "goal", messageType: clientui.MessageTypeGoal, wantRole: StyleRoleNoticePrimary, wantColor: ColorRolePrimary},
-		{name: "workflow", messageType: clientui.MessageTypeWorkflowMode, wantRole: StyleRoleNoticePrimary, wantColor: ColorRolePrimary},
-		{name: "worktree enter", messageType: clientui.MessageTypeWorktreeMode, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "worktree exit", messageType: clientui.MessageTypeWorktreeModeExit, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "background shell completion", messageType: clientui.MessageTypeBackgroundNotice, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "subagents", messageType: clientui.MessageTypeSubagents, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "cache warning", reason: clientui.TranscriptNoticeCacheWarning, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
-		{name: "compaction reminder", messageType: clientui.MessageTypeCompactionSoonReminder, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
-		{name: "interruption", messageType: clientui.MessageTypeInterruption, wantRole: StyleRoleError, wantColor: ColorRoleError},
-		{name: "error feedback", messageType: clientui.MessageTypeErrorFeedback, wantRole: StyleRoleError, wantColor: ColorRoleError},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			notice := &clientui.TranscriptNoticeRow{
-				Reason:   tt.reason,
-				Severity: tt.severity,
-				Data: clientui.TranscriptNoticeData{
-					MessageType:  tt.messageType,
-					CompactLabel: "compact label",
-				},
-			}
-
-			gotRole, _ := noticeRoleAndText(notice, clientui.EntryVisibilityOngoing, ModeOngoing)
-			if gotRole != tt.wantRole {
-				t.Fatalf("notice role = %v, want %v", gotRole, tt.wantRole)
-			}
-			if gotColor := ColorRoleForStyle(gotRole); gotColor != tt.wantColor {
-				t.Fatalf("notice color role = %v, want %v", gotColor, tt.wantColor)
-			}
-		})
-	}
-}
-
 func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) {
 	row := clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowNotice,

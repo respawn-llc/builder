@@ -403,16 +403,17 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	case clientui.MessageTypeCompactionSoonReminder:
 		return StyleRoleWarning
 	case clientui.MessageTypeCompactionSummary,
-		clientui.MessageTypeHandoffFutureMessage,
 		clientui.MessageTypeManualCompactionCarryover:
 		return StyleRoleNoticeSecondary
+	case clientui.MessageTypeHandoffFutureMessage,
+		clientui.MessageTypeWorktreeMode,
+		clientui.MessageTypeSubagents:
+		return StyleRoleNotice
 	case clientui.MessageTypeGoal, clientui.MessageTypeWorkflowMode:
 		return StyleRoleNoticePrimary
 	case clientui.MessageTypeBackgroundNotice:
 		return StyleRoleNoticeForeground
-	case clientui.MessageTypeWorktreeMode,
-		clientui.MessageTypeWorktreeModeExit,
-		clientui.MessageTypeSubagents:
+	case clientui.MessageTypeWorktreeModeExit:
 		return StyleRoleNoticeForeground
 	default:
 		return StyleRoleNotice

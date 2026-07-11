@@ -136,11 +136,13 @@
 - Shell tool calls use the shared Chroma syntax projection, faint styling, and OS-dependent shell syntax selection.
 - Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.
 - Patch/edit tools use `⇄` in ongoing, detail, and native replay. Patch paths and neutral text use foreground; source lines use the shared Chroma syntax projection; diff add/remove counts use semantic add/remove colors. Diff-line backgrounds blend 20% of the Success/Error token over the active detail surface background.
-- Compaction-related rows use secondary text.
+- Compaction summaries and manual compaction carryover use secondary text.
+- Handoff future-agent context rows use the faint foreground system-notice style.
 - Goal-related rows use primary text.
 - Workflow-related rows use primary text and `OC` visibility.
-- Worktree rows use foreground text.
-- `subagents` developer-context rows use foreground text.
+- Worktree-enter rows use the faint foreground system-notice style.
+- Worktree-exit rows use full-strength foreground text.
+- `subagents` developer-context rows use the faint foreground system-notice style.
 - Supervisor/reviewer-related non-error rows use success text. Supervisor/reviewer error rows use error text.
 - Cache warnings and non-interrupting warnings use warning text.
 - Error rows use error text, including interruption rows.
