@@ -27,26 +27,7 @@ func insertValidatedTaskExecutionTarget(ctx context.Context, q *sqlitegen.Querie
 		resolvedSourceRef = nullableExecutionTargetString(target.ResolvedSource.NamedRef)
 		resolvedCommit = sql.NullString{String: target.ResolvedSource.Commit, Valid: true}
 	}
-	var claimGeneration sql.NullString
-	var claimPhase sql.NullString
-	if target.ActiveClaim != nil {
-		claimGeneration = sql.NullString{String: target.ActiveClaim.Generation, Valid: true}
-		claimPhase = sql.NullString{String: string(target.ActiveClaim.Phase), Valid: true}
-	}
-	var recoveryCause sql.NullString
-	if target.RecoveryCause != nil {
-		recoveryCause = sql.NullString{String: string(*target.RecoveryCause), Valid: true}
-	}
-	var commonDir sql.NullString
-	var adminEntry sql.NullString
-	var gitDir sql.NullString
-	var headRef sql.NullString
-	if target.LinkedWorktreeOwnership != nil {
-		commonDir = sql.NullString{String: target.LinkedWorktreeOwnership.CommonDir, Valid: true}
-		adminEntry = sql.NullString{String: target.LinkedWorktreeOwnership.AdminEntry, Valid: true}
-		gitDir = sql.NullString{String: target.LinkedWorktreeOwnership.GitDir, Valid: true}
-		headRef = sql.NullString{String: target.LinkedWorktreeOwnership.HeadRef, Valid: true}
-	}
+	lifecycle := executionTargetLifecycleFieldsFromTarget(target)
 	return q.InsertTaskExecutionTarget(ctx, sqlitegen.InsertTaskExecutionTargetParams{
 		TaskID:                      string(target.TaskID),
 		Policy:                      string(target.Policy),
@@ -55,20 +36,97 @@ func insertValidatedTaskExecutionTarget(ctx context.Context, q *sqlitegen.Querie
 		ResolvedSourceRef:           resolvedSourceRef,
 		ResolvedCommit:              resolvedCommit,
 		State:                       string(target.State),
-		ProvisioningGeneration:      nullableExecutionTargetString(target.ProvisioningGeneration),
-		SetupProvisioningGeneration: nullableExecutionTargetString(target.SetupProvisioningGeneration),
-		SetupState:                  string(target.SetupState),
-		ActiveClaimGeneration:       claimGeneration,
-		ActiveClaimPhase:            claimPhase,
-		RecoveryDisposition:         string(target.RecoveryDisposition),
-		RecoveryCause:               recoveryCause,
-		ExactBranchObservation:      nullableExecutionTargetString(target.ExactBranchObservation),
-		LinkedWorktreeCommonDir:     commonDir,
-		LinkedWorktreeAdminEntry:    adminEntry,
-		LinkedWorktreeGitdir:        gitDir,
-		LinkedWorktreeHeadRef:       headRef,
-		ExpectedDetachmentCommit:    nullableExecutionTargetString(target.ExpectedDetachmentCommit),
+		ProvisioningGeneration:      lifecycle.provisioningGeneration,
+		SetupProvisioningGeneration: lifecycle.setupProvisioningGeneration,
+		SetupState:                  lifecycle.setupState,
+		ActiveClaimGeneration:       lifecycle.activeClaimGeneration,
+		ActiveClaimPhase:            lifecycle.activeClaimPhase,
+		RecoveryDisposition:         lifecycle.recoveryDisposition,
+		RecoveryCause:               lifecycle.recoveryCause,
+		ExactBranchObservation:      lifecycle.exactBranchObservation,
+		LinkedWorktreeCommonDir:     lifecycle.linkedWorktreeCommonDir,
+		LinkedWorktreeAdminEntry:    lifecycle.linkedWorktreeAdminEntry,
+		LinkedWorktreeGitdir:        lifecycle.linkedWorktreeGitdir,
+		LinkedWorktreeHeadRef:       lifecycle.linkedWorktreeHeadRef,
+		ExpectedDetachmentCommit:    lifecycle.expectedDetachmentCommit,
 	})
+}
+
+type executionTargetLifecycleFields struct {
+	provisioningGeneration      sql.NullString
+	setupProvisioningGeneration sql.NullString
+	setupState                  string
+	activeClaimGeneration       sql.NullString
+	activeClaimPhase            sql.NullString
+	recoveryDisposition         string
+	recoveryCause               sql.NullString
+	exactBranchObservation      sql.NullString
+	linkedWorktreeCommonDir     sql.NullString
+	linkedWorktreeAdminEntry    sql.NullString
+	linkedWorktreeGitdir        sql.NullString
+	linkedWorktreeHeadRef       sql.NullString
+	expectedDetachmentCommit    sql.NullString
+}
+
+func executionTargetLifecycleFieldsFromTarget(target workflow.ExecutionTarget) executionTargetLifecycleFields {
+	fields := executionTargetLifecycleFields{
+		provisioningGeneration:      nullableExecutionTargetString(target.ProvisioningGeneration),
+		setupProvisioningGeneration: nullableExecutionTargetString(target.SetupProvisioningGeneration),
+		setupState:                  string(target.SetupState),
+		recoveryDisposition:         string(target.RecoveryDisposition),
+		exactBranchObservation:      nullableExecutionTargetString(target.ExactBranchObservation),
+		expectedDetachmentCommit:    nullableExecutionTargetString(target.ExpectedDetachmentCommit),
+	}
+	if target.ActiveClaim != nil {
+		fields.activeClaimGeneration = sql.NullString{String: target.ActiveClaim.Generation, Valid: true}
+		fields.activeClaimPhase = sql.NullString{String: string(target.ActiveClaim.Phase), Valid: true}
+	}
+	if target.RecoveryCause != nil {
+		fields.recoveryCause = sql.NullString{String: string(*target.RecoveryCause), Valid: true}
+	}
+	if target.LinkedWorktreeOwnership != nil {
+		fields.linkedWorktreeCommonDir = sql.NullString{String: target.LinkedWorktreeOwnership.CommonDir, Valid: true}
+		fields.linkedWorktreeAdminEntry = sql.NullString{String: target.LinkedWorktreeOwnership.AdminEntry, Valid: true}
+		fields.linkedWorktreeGitdir = sql.NullString{String: target.LinkedWorktreeOwnership.GitDir, Valid: true}
+		fields.linkedWorktreeHeadRef = sql.NullString{String: target.LinkedWorktreeOwnership.HeadRef, Valid: true}
+	}
+	return fields
+}
+
+func (s *Store) UpdateTaskExecutionTargetLifecycle(ctx context.Context, target workflow.ExecutionTarget, expectedClaim workflow.ExecutionTargetClaim) error {
+	if err := target.Validate(); err != nil {
+		return err
+	}
+	if err := expectedClaim.Validate(); err != nil {
+		return err
+	}
+	lifecycle := executionTargetLifecycleFieldsFromTarget(target)
+	updated, err := s.queries.UpdateTaskExecutionTargetLifecycle(ctx, sqlitegen.UpdateTaskExecutionTargetLifecycleParams{
+		State:                       string(target.State),
+		ProvisioningGeneration:      lifecycle.provisioningGeneration,
+		SetupProvisioningGeneration: lifecycle.setupProvisioningGeneration,
+		SetupState:                  lifecycle.setupState,
+		ActiveClaimGeneration:       lifecycle.activeClaimGeneration,
+		ActiveClaimPhase:            lifecycle.activeClaimPhase,
+		RecoveryDisposition:         lifecycle.recoveryDisposition,
+		RecoveryCause:               lifecycle.recoveryCause,
+		ExactBranchObservation:      lifecycle.exactBranchObservation,
+		LinkedWorktreeCommonDir:     lifecycle.linkedWorktreeCommonDir,
+		LinkedWorktreeAdminEntry:    lifecycle.linkedWorktreeAdminEntry,
+		LinkedWorktreeGitdir:        lifecycle.linkedWorktreeGitdir,
+		LinkedWorktreeHeadRef:       lifecycle.linkedWorktreeHeadRef,
+		ExpectedDetachmentCommit:    lifecycle.expectedDetachmentCommit,
+		TaskID:                      string(target.TaskID),
+		ExpectedClaimGeneration:     sql.NullString{String: expectedClaim.Generation, Valid: true},
+		ExpectedClaimPhase:          sql.NullString{String: string(expectedClaim.Phase), Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrTaskExecutionTargetClaimChanged
+	}
+	return nil
 }
 
 func (s *Store) GetTaskExecutionTarget(ctx context.Context, taskID workflow.TaskID) (*workflow.ExecutionTarget, error) {

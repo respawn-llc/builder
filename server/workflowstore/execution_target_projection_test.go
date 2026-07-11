@@ -124,6 +124,53 @@ func TestStoreSaveTaskExecutionTargetLocksImmutableNoneTarget(t *testing.T) {
 	}
 }
 
+func TestStoreUpdateTaskExecutionTargetLifecycleUsesClaimFence(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowID,
+		Title:      "Claimed managed target",
+		Body:       "Body",
+	})
+	provisioningGeneration := "provisioning-1"
+	claimGeneration := "claim-1"
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID,
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: "deadbeef",
+		},
+		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: claimGeneration, Phase: workflow.ExecutionTargetClaimMaterializing},
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	locked := target
+	locked.State = workflow.ExecutionTargetStateLocked
+	locked.SetupState = workflow.ExecutionTargetSetupSucceeded
+	locked.ActiveClaim = nil
+	if err := store.UpdateTaskExecutionTargetLifecycle(ctx, locked, *target.ActiveClaim); err != nil {
+		t.Fatalf("UpdateTaskExecutionTargetLifecycle: %v", err)
+	}
+	actual, err := store.GetTaskExecutionTarget(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if actual == nil || actual.State != workflow.ExecutionTargetStateLocked || actual.SetupState != workflow.ExecutionTargetSetupSucceeded || actual.ActiveClaim != nil {
+		t.Fatalf("updated target = %+v, want locked target with cleared claim", actual)
+	}
+	if err := store.UpdateTaskExecutionTargetLifecycle(ctx, locked, *target.ActiveClaim); !errors.Is(err, ErrTaskExecutionTargetClaimChanged) {
+		t.Fatalf("stale UpdateTaskExecutionTargetLifecycle error = %v, want %v", err, ErrTaskExecutionTargetClaimChanged)
+	}
+}
+
 func TestTaskExecutionTargetProjectionRoundTripsManagedTargetAndRoot(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

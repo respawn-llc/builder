@@ -59,6 +59,10 @@ type ExecutionTargetClaim struct {
 	Phase      ExecutionTargetClaimPhase
 }
 
+func (claim ExecutionTargetClaim) Validate() error {
+	return validateExecutionTargetClaim(&claim)
+}
+
 type ExecutionTargetLinkedWorktreeOwnership struct {
 	CommonDir  string
 	AdminEntry string

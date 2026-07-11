@@ -39,6 +39,7 @@ var (
 	ErrSourceWorkspaceNotInProject              = errors.New("source workspace does not belong to project")
 	ErrTaskExecutionTargetNotMaterialized       = errors.New("task execution target is not materialized")
 	ErrTaskExecutionRootUnavailable             = errors.New("task execution root is unavailable")
+	ErrTaskExecutionTargetClaimChanged          = errors.New("task execution target claim changed")
 	ErrTaskExecutionTargetNegotiationRequired   = errors.New("task execution target negotiation is required")
 	ErrTaskExecutionTargetNegotiationChanged    = errors.New("task execution target negotiation changed")
 	ErrTaskExecutionTargetNegotiationInProgress = errors.New("task execution target negotiation is in progress")

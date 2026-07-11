@@ -9194,6 +9194,74 @@ func (q *Queries) UpdateTaskEditableFields(ctx context.Context, arg UpdateTaskEd
 	return result.RowsAffected()
 }
 
+const updateTaskExecutionTargetLifecycle = `-- name: UpdateTaskExecutionTargetLifecycle :execrows
+UPDATE task_execution_targets
+SET
+    state = ?1,
+    provisioning_generation = ?2,
+    setup_provisioning_generation = ?3,
+    setup_state = ?4,
+    active_claim_generation = ?5,
+    active_claim_phase = ?6,
+    recovery_disposition = ?7,
+    recovery_cause = ?8,
+    exact_branch_observation = ?9,
+    linked_worktree_common_dir = ?10,
+    linked_worktree_admin_entry = ?11,
+    linked_worktree_gitdir = ?12,
+    linked_worktree_head_ref = ?13,
+    expected_detachment_commit = ?14
+WHERE task_id = ?15
+  AND active_claim_generation = ?16
+  AND active_claim_phase = ?17
+`
+
+type UpdateTaskExecutionTargetLifecycleParams struct {
+	State                       string
+	ProvisioningGeneration      sql.NullString
+	SetupProvisioningGeneration sql.NullString
+	SetupState                  string
+	ActiveClaimGeneration       sql.NullString
+	ActiveClaimPhase            sql.NullString
+	RecoveryDisposition         string
+	RecoveryCause               sql.NullString
+	ExactBranchObservation      sql.NullString
+	LinkedWorktreeCommonDir     sql.NullString
+	LinkedWorktreeAdminEntry    sql.NullString
+	LinkedWorktreeGitdir        sql.NullString
+	LinkedWorktreeHeadRef       sql.NullString
+	ExpectedDetachmentCommit    sql.NullString
+	TaskID                      string
+	ExpectedClaimGeneration     sql.NullString
+	ExpectedClaimPhase          sql.NullString
+}
+
+func (q *Queries) UpdateTaskExecutionTargetLifecycle(ctx context.Context, arg UpdateTaskExecutionTargetLifecycleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateTaskExecutionTargetLifecycle,
+		arg.State,
+		arg.ProvisioningGeneration,
+		arg.SetupProvisioningGeneration,
+		arg.SetupState,
+		arg.ActiveClaimGeneration,
+		arg.ActiveClaimPhase,
+		arg.RecoveryDisposition,
+		arg.RecoveryCause,
+		arg.ExactBranchObservation,
+		arg.LinkedWorktreeCommonDir,
+		arg.LinkedWorktreeAdminEntry,
+		arg.LinkedWorktreeGitdir,
+		arg.LinkedWorktreeHeadRef,
+		arg.ExpectedDetachmentCommit,
+		arg.TaskID,
+		arg.ExpectedClaimGeneration,
+		arg.ExpectedClaimPhase,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateTaskManagedWorktree = `-- name: UpdateTaskManagedWorktree :execrows
 UPDATE tasks
 SET

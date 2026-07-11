@@ -1341,6 +1341,27 @@ INSERT INTO task_execution_targets (
     sqlc.narg(expected_detachment_commit)
 );
 
+-- name: UpdateTaskExecutionTargetLifecycle :execrows
+UPDATE task_execution_targets
+SET
+    state = sqlc.arg(state),
+    provisioning_generation = sqlc.narg(provisioning_generation),
+    setup_provisioning_generation = sqlc.narg(setup_provisioning_generation),
+    setup_state = sqlc.arg(setup_state),
+    active_claim_generation = sqlc.narg(active_claim_generation),
+    active_claim_phase = sqlc.narg(active_claim_phase),
+    recovery_disposition = sqlc.arg(recovery_disposition),
+    recovery_cause = sqlc.narg(recovery_cause),
+    exact_branch_observation = sqlc.narg(exact_branch_observation),
+    linked_worktree_common_dir = sqlc.narg(linked_worktree_common_dir),
+    linked_worktree_admin_entry = sqlc.narg(linked_worktree_admin_entry),
+    linked_worktree_gitdir = sqlc.narg(linked_worktree_gitdir),
+    linked_worktree_head_ref = sqlc.narg(linked_worktree_head_ref),
+    expected_detachment_commit = sqlc.narg(expected_detachment_commit)
+WHERE task_id = sqlc.arg(task_id)
+  AND active_claim_generation = sqlc.arg(expected_claim_generation)
+  AND active_claim_phase = sqlc.arg(expected_claim_phase);
+
 -- name: GetTaskExecutionTargetNegotiation :one
 SELECT
     task_id,
