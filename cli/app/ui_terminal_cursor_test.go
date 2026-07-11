@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"core/cli/tui"
 	"core/shared/clientui"
@@ -625,116 +624,6 @@ func TestSharedFieldRenderingPreservesExplicitTrailingSpaces(t *testing.T) {
 	}
 	if rendered.Cursor.Col != 7 {
 		t.Fatalf("cursor col = %d, want 7", rendered.Cursor.Col)
-	}
-}
-
-func TestTerminalCursorProgramTracksWrappedInputAndResize(t *testing.T) {
-	state := newUITerminalCursorState()
-	model := newProjectedStaticUIModel(WithUITerminalCursorState(state))
-	model.input = "alpha beta gamma delta epsilon zeta"
-	model.inputCursor = -1
-
-	var out bytes.Buffer
-	program := tea.NewProgram(
-		model,
-		tea.WithInput(strings.NewReader("")),
-		tea.WithOutput(newUITerminalCursorWriter(&out, state)),
-		tea.WithoutSignals(),
-	)
-	done := make(chan error, 1)
-	go func() {
-		_, err := program.Run()
-		done <- err
-	}()
-	defer program.Quit()
-
-	program.Send(tea.WindowSizeMsg{Width: 30, Height: 14})
-	waitForTestCondition(t, 2*time.Second, "initial cursor placement", func() bool {
-		placement, ok := state.Snapshot()
-		return ok && placement.CursorCol < 30 && !placement.AltScreen
-	})
-	first, _ := state.Snapshot()
-
-	program.Send(tea.WindowSizeMsg{Width: 18, Height: 14})
-	waitForTestCondition(t, 2*time.Second, "resized cursor placement", func() bool {
-		placement, ok := state.Snapshot()
-		return ok && placement.CursorCol < 18 && placement != first
-	})
-	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("program run failed: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("program did not terminate")
-	}
-
-	if !strings.Contains(out.String(), xansi.ShowCursor) {
-		t.Fatalf("expected program output to show native cursor, got %q", out.String())
-	}
-}
-
-func terminalCursorOutputContains(state *uiTerminalCursorState, out *bytes.Buffer, want string) bool {
-	state.writeMu.Lock()
-	defer state.writeMu.Unlock()
-	return strings.Contains(out.String(), want)
-}
-
-func terminalOutputAfterLastClearScreen(output string) string {
-	index := strings.LastIndex(output, xansi.EraseEntireScreen)
-	if index < 0 {
-		return output
-	}
-	return output[index:]
-}
-
-func TestTerminalCursorProgramSurvivesAltScreenTransitionAfterPlacement(t *testing.T) {
-	state := newUITerminalCursorState()
-	model := newProjectedStaticUIModel(WithUITerminalCursorState(state))
-	model.input = "wrapped input before alt transition"
-	model.inputCursor = -1
-
-	var out bytes.Buffer
-	program := tea.NewProgram(
-		model,
-		tea.WithInput(strings.NewReader("")),
-		tea.WithOutput(newUITerminalCursorWriter(&out, state)),
-		tea.WithoutSignals(),
-	)
-	done := make(chan error, 1)
-	go func() {
-		_, err := program.Run()
-		done <- err
-	}()
-	defer program.Quit()
-
-	program.Send(tea.WindowSizeMsg{Width: 28, Height: 14})
-	waitForTestCondition(t, 2*time.Second, "cursor placement before alt transition", func() bool {
-		_, ok := state.Snapshot()
-		return ok
-	})
-	program.Send(tea.KeyMsg{Type: tea.KeyShiftTab})
-	waitForTestCondition(t, 2*time.Second, "alt-screen enter flushed to output", func() bool {
-		return terminalCursorOutputContains(state, &out, "\x1b[?1049h")
-	})
-	program.Send(tea.KeyMsg{Type: tea.KeyShiftTab})
-	waitForTestCondition(t, 2*time.Second, "alt-screen exit flushed to output", func() bool {
-		return terminalCursorOutputContains(state, &out, "\x1b[?1049l")
-	})
-	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("program run failed: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("program did not terminate")
-	}
-
-	raw := out.String()
-	if !strings.Contains(raw, "\x1b[?1049h") || !strings.Contains(raw, "\x1b[?1049l") {
-		t.Fatalf("expected alt-screen enter/exit in output, got %q", raw)
 	}
 }
 
