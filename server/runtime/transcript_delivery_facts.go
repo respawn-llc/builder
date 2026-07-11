@@ -132,7 +132,7 @@ func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []Transcript
 	facts := make([]TranscriptCommittedRowFact, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		if strings.TrimSpace(entry.Role) == "assistant" &&
-			strings.TrimSpace(entry.Text) == reviewerNoopToken {
+			transcript.IsNoopFinalText(entry.Text) {
 			continue
 		}
 		fact, ok := transcriptCommittedRowFactFromChatEntry(entry, transcriptBoundedDetailProjection)

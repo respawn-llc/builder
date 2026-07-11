@@ -1,15 +1,14 @@
 package app
 
 import (
-	"strings"
-
 	"core/shared/clientui"
+	"core/shared/transcript"
 )
 
-const uiNoopFinalToken = "NO_OP"
+const uiNoopFinalToken = transcript.NoopFinalToken
 
 func isNoopFinalText(text string) bool {
-	return strings.TrimSpace(text) == uiNoopFinalToken
+	return transcript.IsNoopFinalText(text)
 }
 
 func isNoopProjectedAssistantEvent(evt clientui.Event) bool {

@@ -102,6 +102,7 @@ type Surface struct {
 type activeAssistantState struct {
 	streamID               *uuid.UUID
 	source                 string
+	phase                  clientui.MessagePhase
 	promotedSourceBoundary int
 }
 
@@ -119,7 +120,7 @@ func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame
 		return s.applyHydration(message, frame)
 	}
 	if message.Kind == clientui.TranscriptMessageAssistantDelta && message.AssistantDelta != nil {
-		return s.applyAssistantDelta(message.AssistantDelta.StreamID, message.AssistantDelta.Delta, frame)
+		return s.applyAssistantDelta(message.AssistantDelta.StreamID, message.AssistantDelta.Delta, message.AssistantDelta.Phase, frame)
 	}
 	if message.Kind == clientui.TranscriptMessageAssistantStreamAbort && message.AssistantStreamAbort != nil {
 		return s.abortAssistantStream(message.AssistantStreamAbort.StreamID, frame)
@@ -140,7 +141,7 @@ func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame Frame
 	}
 	lines := s.hydrationImmutableLines(*message.Hydration, frame.Size.Width, frame.Theme)
 	activeStreamHydrated := s.hydrateActiveAssistantStream(message.Hydration.ActiveAssistantStream)
-	if activeStreamHydrated {
+	if activeStreamHydrated && !s.activeAssistantPromotionDeferred() {
 		projection := newMarkdownProjector(nil, frame.Theme).Project(markdownProjectionInput{
 			Source:           s.activeAssistant.source,
 			Width:            frameWidthOrDefault(frame),
@@ -172,11 +173,12 @@ func (s *Surface) hydrateActiveAssistantStream(stream *clientui.TranscriptAssist
 	s.activeAssistant = activeAssistantState{
 		streamID: &streamIDCopy,
 		source:   stream.Text,
+		phase:    stream.Phase,
 	}
 	return stream.Text != ""
 }
 
-func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, frame FrameInput) (Result, error) {
+func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, phase clientui.MessagePhase, frame FrameInput) (Result, error) {
 	if s.activeAssistant.streamID == nil {
 		streamIDCopy := streamID
 		s.activeAssistant.streamID = &streamIDCopy
@@ -188,7 +190,20 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, frame Fr
 			"height":            frame.Size.Height,
 		})
 	}
+	if s.activeAssistant.phase == "" {
+		s.activeAssistant.phase = phase
+	} else if phase != "" && s.activeAssistant.phase != phase {
+		panicOngoingDeveloperError("assistant_delta", "phase does not match active stream", map[string]any{
+			"active_phase":  s.activeAssistant.phase,
+			"message_phase": phase,
+			"width":         frame.Size.Width,
+			"height":        frame.Size.Height,
+		})
+	}
 	s.activeAssistant.source += delta
+	if s.activeAssistantPromotionDeferred() {
+		return s.writeFrameTransaction(frame, nil)
+	}
 	projection := newMarkdownProjector(nil, frame.Theme).Project(markdownProjectionInput{
 		Source:           s.activeAssistant.source,
 		Width:            frameWidthOrDefault(frame),
@@ -207,6 +222,11 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, frame Fr
 		return s.writeFrameTransaction(frame, nil)
 	}
 	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), frame.Theme))
+}
+
+func (s *Surface) activeAssistantPromotionDeferred() bool {
+	return s.activeAssistant.phase == clientui.MessagePhaseFinal &&
+		transcript.IsNoopFinalText(s.activeAssistant.source)
 }
 
 func (s *Surface) abortAssistantStream(streamID uuid.UUID, frame FrameInput) (Result, error) {

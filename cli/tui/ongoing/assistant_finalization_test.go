@@ -212,6 +212,20 @@ func TestAssistantAbortClearsVolatileTailWithoutImmutableAppend(t *testing.T) {
 	})
 }
 
+func TestNoopFinalStreamNeverPromotesIntoImmutableScrollback(t *testing.T) {
+	surface := NewSurface(&bytes.Buffer{})
+	streamID := uuid.New()
+	message := assistantDeltaMessage(streamID, "NO_OP\n\n")
+	message.AssistantDelta.Phase = clientui.MessagePhaseFinal
+
+	if _, err := surface.ApplyTerminalMessage(message, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+		t.Fatalf("apply no-op final delta: %v", err)
+	}
+	if got := surface.activeAssistant.promotedSourceBoundary; got != 0 {
+		t.Fatalf("promoted source boundary = %d, want no immutable no-op promotion", got)
+	}
+}
+
 func assistantDeltaMessage(streamID uuid.UUID, delta string) clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageAssistantDelta,
