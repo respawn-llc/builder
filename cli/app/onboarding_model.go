@@ -166,11 +166,11 @@ func (m *onboardingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case tea.KeyLeft:
-			if m.currentScreen.Kind != onboardingScreenInput {
+			if !typed.Alt {
 				return m.goBack()
 			}
 		case tea.KeyRight:
-			if m.currentScreen.Kind != onboardingScreenInput {
+			if !typed.Alt {
 				return m.submitCurrentScreen()
 			}
 		case tea.KeyEnter:

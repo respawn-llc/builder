@@ -148,6 +148,31 @@ func TestOnboardingEditorFieldDeleteCurrentLineUsesAppKeyAdapter(t *testing.T) {
 	}
 }
 
+func newOnboardingModelAtModelInput(t *testing.T) *onboardingModel {
+	t.Helper()
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{
+		settings: config.Settings{Model: "gpt-5.6-sol"},
+		theme:    "dark",
+	})
+	steps := model.workflow.visibleSteps(&model.state)
+	modelStepIndex := -1
+	for index, step := range steps {
+		if step.id == "model" {
+			modelStepIndex = index
+			break
+		}
+	}
+	if modelStepIndex < 1 {
+		t.Fatalf("model input step index = %d, want non-initial input step", modelStepIndex)
+	}
+	model.stepIndex = modelStepIndex
+	model.syncScreen(true)
+	if model.currentScreen.Kind != onboardingScreenInput {
+		t.Fatalf("screen kind = %q, want input", model.currentScreen.Kind)
+	}
+	return model
+}
+
 func TestOnboardingInputWordNavigationStaysInField(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -183,27 +208,7 @@ func TestOnboardingInputWordNavigationStaysInField(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{
-				settings: config.Settings{Model: "gpt-5.6-sol"},
-				theme:    "dark",
-			})
-			steps := model.workflow.visibleSteps(&model.state)
-			modelStepIndex := -1
-			for index, step := range steps {
-				if step.id == "model" {
-					modelStepIndex = index
-					break
-				}
-			}
-			if modelStepIndex < 1 {
-				t.Fatalf("model input step index = %d, want non-initial input step", modelStepIndex)
-			}
-			model.stepIndex = modelStepIndex
-			model.syncScreen(true)
-			if model.currentScreen.Kind != onboardingScreenInput {
-				t.Fatalf("screen kind = %q, want input", model.currentScreen.Kind)
-			}
-
+			model := newOnboardingModelAtModelInput(t)
 			const input = "alpha beta gamma"
 			model.input = newSingleLineEditor(input)
 			initialCursor := tt.initialCursor(input)
@@ -220,6 +225,29 @@ func TestOnboardingInputWordNavigationStaysInField(t *testing.T) {
 			}
 			if got, want := runeOffsetForByteCursor(updated.input.Text(), updated.input.Cursor()), tt.wantCursor(input, initialCursor); got != want {
 				t.Fatalf("cursor after %s = %d, want %d", tt.name, got, want)
+			}
+		})
+	}
+}
+
+func TestOnboardingInputPlainArrowsKeepStepNavigation(t *testing.T) {
+	cases := []struct {
+		name      string
+		key       tea.KeyMsg
+		stepDelta int
+	}{
+		{name: "left", key: tea.KeyMsg{Type: tea.KeyLeft}, stepDelta: -1},
+		{name: "right", key: tea.KeyMsg{Type: tea.KeyRight}, stepDelta: 1},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newOnboardingModelAtModelInput(t)
+			initialStepIndex := model.stepIndex
+
+			next, _ := model.Update(tt.key)
+			updated := next.(*onboardingModel)
+			if got, want := updated.stepIndex, initialStepIndex+tt.stepDelta; got != want {
+				t.Fatalf("step index after plain %s = %d, want %d", tt.name, got, want)
 			}
 		})
 	}
