@@ -272,6 +272,12 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(dir, 16_000, manager, "")})
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
 	manager.SetEventHandler(func(evt shelltool.Event) {
+		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
+		if summaryErr != nil {
+			t.Errorf("SummarizeBackgroundEvent: %v", summaryErr)
+			return
+		}
+		preview, previewRemoved := summary.RuntimePreview()
 		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
 			Type:           backgroundShellEventTypeForTest(evt.Type),
 			ID:             evt.Snapshot.ID,
@@ -279,8 +285,8 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 			Command:        evt.Snapshot.Command,
 			Workdir:        evt.Snapshot.Workdir,
 			LogPath:        evt.Snapshot.LogPath,
-			Preview:        evt.Preview,
-			PreviewRemoved: evt.Removed,
+			Preview:        preview,
+			PreviewRemoved: previewRemoved,
 			ExitCode: func() *int {
 				if evt.Snapshot.ExitCode == nil {
 					return nil

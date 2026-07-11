@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 
 	"core/server/tools/shell/postprocess"
@@ -14,6 +15,77 @@ import (
 )
 
 const noOutputText = "No output"
+
+type execPresentationKind uint8
+
+const (
+	execPresentationRunning execPresentationKind = iota
+	execPresentationForegroundCompleted
+	execPresentationBackgroundCompleted
+)
+
+type visibleShellOutput struct {
+	command string
+	warning postprocess.Warning
+}
+
+func newVisibleShellOutput(command string, warning postprocess.Warning) visibleShellOutput {
+	return visibleShellOutput{command: command, warning: warning}
+}
+
+func (o visibleShellOutput) Content() string {
+	sections := make([]string, 0, 2)
+	if o.warning != nil {
+		sections = append(sections, o.warning.Text())
+	}
+	if text := strings.TrimSpace(o.command); text != "" {
+		sections = append(sections, text)
+	}
+	return strings.Join(sections, "\n")
+}
+
+func (o visibleShellOutput) HasVisibleContent() bool {
+	return strings.TrimSpace(o.Content()) != ""
+}
+
+func (o visibleShellOutput) HasCommandContent() bool {
+	return strings.TrimSpace(o.command) != ""
+}
+
+func (o visibleShellOutput) Warning() postprocess.Warning {
+	return o.warning
+}
+
+type execPresentation struct {
+	kind              execPresentationKind
+	sessionID         string
+	wallTime          time.Duration
+	outputPath        string
+	output            visibleShellOutput
+	exitCode          int
+	movedToBackground bool
+}
+
+func projectExecResult(result ExecResult) execPresentation {
+	presentation := execPresentation{
+		sessionID:         strings.TrimSpace(result.SessionID),
+		wallTime:          result.WallTime,
+		outputPath:        strings.TrimSpace(result.OutputPath),
+		output:            newVisibleShellOutput(result.Output, result.Warning),
+		movedToBackground: result.MovedToBackground,
+	}
+	if result.ExitCode == nil {
+		presentation.kind = execPresentationRunning
+		return presentation
+	}
+	presentation.exitCode = *result.ExitCode
+	if result.Backgrounded {
+		presentation.kind = execPresentationBackgroundCompleted
+		return presentation
+	}
+	presentation.kind = execPresentationForegroundCompleted
+	return presentation
+}
 
 func NormalizeBackgroundOutputMode(raw string) BackgroundOutputMode {
 	switch BackgroundOutputMode(strings.ToLower(strings.TrimSpace(raw))) {
@@ -26,13 +98,67 @@ func NormalizeBackgroundOutputMode(raw string) BackgroundOutputMode {
 	}
 }
 
-func SummarizeBackgroundEvent(evt Event, opts BackgroundNoticeOptions) BackgroundNoticeSummary {
+type InvalidBackgroundEventError struct {
+	EventType EventType
+	ProcessID string
+	State     string
+}
+
+func (e *InvalidBackgroundEventError) Error() string {
+	return fmt.Sprintf("terminal background event %q for process %q in state %q is missing completion output", e.EventType, e.ProcessID, e.State)
+}
+
+type backgroundInlinePreview struct {
+	text string
+}
+
+type backgroundNoticeOutputKind uint8
+
+const (
+	backgroundNoticeOutputNormal backgroundNoticeOutputKind = iota + 1
+	backgroundNoticeOutputInvariantFailure
+)
+
+type invariantFailureNotice struct {
+	message string
+}
+
+type backgroundNoticeOutput struct {
+	kind                 backgroundNoticeOutputKind
+	source               completionOutputSource
+	visible              visibleShellOutput
+	inlinePreview        *backgroundInlinePreview
+	retainedLogHasOutput bool
+	logLineCount         *int
+	truncated            bool
+	previewRemoved       int
+	invariantFailure     *invariantFailureNotice
+}
+
+func (s BackgroundNoticeSummary) RuntimePreview() (string, int) {
+	if s.output.inlinePreview == nil {
+		return "", s.output.previewRemoved
+	}
+	return s.output.inlinePreview.text, s.output.previewRemoved
+}
+
+func SummarizeBackgroundEvent(evt Event, opts BackgroundNoticeOptions) (BackgroundNoticeSummary, error) {
+	if (evt.Type == EventCompleted || evt.Type == EventKilled) && evt.completion == nil {
+		return BackgroundNoticeSummary{}, &InvalidBackgroundEventError{
+			EventType: evt.Type,
+			ProcessID: evt.Snapshot.ID,
+			State:     evt.Snapshot.State,
+		}
+	}
 	maxChars := opts.MaxChars
 	if maxChars <= 0 {
 		maxChars = defaultOutputTokenCap * 4
 	}
 	mode := effectiveBackgroundOutputMode(evt.Snapshot.ExitCode, opts.SuccessOutputMode)
-	preview, lineCount, truncated := backgroundNoticePreview(evt, maxChars, mode)
+	output, err := projectBackgroundNoticeOutput(evt, maxChars, mode)
+	if err != nil {
+		return BackgroundNoticeSummary{}, err
+	}
 	state := strings.TrimSpace(evt.Snapshot.State)
 	if state == "" {
 		state = strings.TrimSpace(string(evt.Type))
@@ -44,20 +170,22 @@ func SummarizeBackgroundEvent(evt Event, opts BackgroundNoticeOptions) Backgroun
 	if evt.Snapshot.ExitCode != nil {
 		detail = append(detail, fmt.Sprintf("Exit code: %d", *evt.Snapshot.ExitCode))
 	}
-	if strings.TrimSpace(evt.Snapshot.LogPath) != "" && lineCount > 0 {
-		lineCountText := fmt.Sprintf("%d lines", lineCount)
-		if lineCount == 1 {
+	if strings.TrimSpace(evt.Snapshot.LogPath) != "" && output.logLineCount != nil {
+		lineCountText := fmt.Sprintf("%d lines", *output.logLineCount)
+		if *output.logLineCount == 1 {
 			lineCountText = "1 line"
 		}
 		detail = append(detail, fmt.Sprintf("Output file (%s): %s", lineCountText, evt.Snapshot.LogPath))
 	}
-	if mode != BackgroundOutputConcise {
-		if strings.TrimSpace(preview) == "" {
-			detail = append(detail, noOutputText)
-		} else {
-			detail = append(detail, "Output:")
-			detail = append(detail, preview)
-		}
+	if warning := output.visible.Warning(); warning != nil {
+		detail = append(detail, warning.Text())
+	}
+	if output.inlinePreview != nil {
+		detail = append(detail, "Output:")
+		detail = append(detail, output.inlinePreview.text)
+	}
+	if !output.visible.HasVisibleContent() && (output.source == completionOutputFinalized || !output.retainedLogHasOutput) && evt.Snapshot.ExitCode != nil {
+		detail = append(detail, fmt.Sprintf("Exit code %d, no output.", *evt.Snapshot.ExitCode))
 	}
 	summary := fmt.Sprintf("Background shell %s %s", evt.Snapshot.ID, state)
 	if evt.Snapshot.ExitCode != nil {
@@ -66,10 +194,11 @@ func SummarizeBackgroundEvent(evt Event, opts BackgroundNoticeOptions) Backgroun
 	return BackgroundNoticeSummary{
 		DetailText:    strings.Join(detail, "\n"),
 		CondensedText: summary,
-		LineCount:     lineCount,
-		Truncated:     truncated,
+		LineCount:     valueOrZero(output.logLineCount),
+		Truncated:     output.truncated,
 		LogPath:       evt.Snapshot.LogPath,
-	}
+		output:        output,
+	}, nil
 }
 
 func effectiveBackgroundOutputMode(exitCode *int, successMode BackgroundOutputMode) BackgroundOutputMode {
@@ -86,39 +215,98 @@ func effectiveBackgroundOutputMode(exitCode *int, successMode BackgroundOutputMo
 	return BackgroundOutputDefault
 }
 
-func backgroundNoticePreview(evt Event, maxChars int, mode BackgroundOutputMode) (string, int, bool) {
-	if evt.PreviewProcessed {
-		if mode == BackgroundOutputConcise {
-			return "", 0, false
-		}
-		preview := strings.TrimSpace(evt.Preview)
-		if preview == "" {
-			return "", 0, false
-		}
-		if mode == BackgroundOutputVerbose {
-			return preview, countOutputLines(preview), false
-		}
-		display, truncated, _ := truncateWithTemplate(preview, maxChars, backgroundTruncationBannerTemplate)
-		return display, countOutputLines(preview), truncated
+func projectBackgroundNoticeOutput(evt Event, maxChars int, mode BackgroundOutputMode) (backgroundNoticeOutput, error) {
+	if evt.completion == nil {
+		return backgroundNoticeOutput{}, nil
 	}
-	if strings.TrimSpace(evt.Snapshot.LogPath) != "" {
-		preview, lineCount, truncated, err := readBackgroundSummaryFromFile(evt.Snapshot.LogPath, maxChars, mode, !evt.Snapshot.RawOutput)
-		if err == nil {
-			return preview, lineCount, truncated
+	completion := evt.completion
+	output := backgroundNoticeOutput{
+		kind:           backgroundNoticeOutputNormal,
+		source:         completion.source,
+		visible:        completion.output,
+		truncated:      completion.removed > 0,
+		previewRemoved: completion.removed,
+	}
+	path := strings.TrimSpace(evt.Snapshot.LogPath)
+	if path != "" {
+		scanMode := mode
+		if completion.source == completionOutputFinalized {
+			scanMode = BackgroundOutputConcise
+		}
+		preview, lineCount, truncated, err := readBackgroundSummaryFromFile(path, maxChars, scanMode, !evt.Snapshot.RawOutput)
+		if err != nil {
+			warning, warningErr := postprocess.NewWarning(fmt.Sprintf("failed to read output preview: %v", err))
+			if warningErr != nil {
+				return backgroundNoticeOutput{}, warningErr
+			}
+			output.visible.warning = postprocess.MergeWarnings(output.visible.warning, warning)
+		} else {
+			if lineCount > 0 {
+				output.retainedLogHasOutput = true
+				output.logLineCount = &lineCount
+			}
+			if completion.source == completionOutputFallback {
+				output.visible.command = preview
+				output.truncated = output.truncated || truncated
+				if truncated && output.previewRemoved == 0 {
+					output.previewRemoved = 1
+				}
+			}
 		}
 	}
 	if mode == BackgroundOutputConcise {
-		return "", 0, false
+		return output, nil
 	}
-	preview := evt.Preview
-	if !evt.Snapshot.RawOutput {
-		preview = postprocess.SanitizeOutput(preview)
+	command := output.visible.command
+	if strings.TrimSpace(command) == "" {
+		return output, nil
 	}
-	truncated := evt.Removed > 0
-	if strings.TrimSpace(preview) == "" {
-		return "", 0, truncated
+	if mode == BackgroundOutputVerbose {
+		output.inlinePreview = &backgroundInlinePreview{text: strings.TrimSpace(command)}
+		return output, nil
 	}
-	return preview, countOutputLines(preview), truncated
+	preview, truncated, _ := truncateWithTemplate(strings.TrimSpace(command), maxChars, backgroundTruncationBannerTemplate)
+	output.inlinePreview = &backgroundInlinePreview{text: preview}
+	output.truncated = output.truncated || truncated
+	if truncated && output.previewRemoved == 0 {
+		output.previewRemoved = 1
+	}
+	return output, nil
+}
+
+func InvariantFailureBackgroundNotice(evt Event, cause error) BackgroundNoticeSummary {
+	state := strings.TrimSpace(evt.Snapshot.State)
+	if state == "" {
+		state = strings.TrimSpace(string(evt.Type))
+	}
+	message := fmt.Sprintf("Background shell completion internal error: %v", cause)
+	detail := []string{fmt.Sprintf("Background shell %s %s.", evt.Snapshot.ID, state)}
+	if evt.Snapshot.ExitCode != nil {
+		detail = append(detail, fmt.Sprintf("Exit code: %d", *evt.Snapshot.ExitCode))
+	}
+	detail = append(detail, message)
+	summary := fmt.Sprintf("Background shell %s %s", evt.Snapshot.ID, state)
+	if evt.Snapshot.ExitCode != nil {
+		summary = fmt.Sprintf("%s (exit %d)", summary, *evt.Snapshot.ExitCode)
+	}
+	return BackgroundNoticeSummary{
+		DetailText:    strings.Join(detail, "\n"),
+		CondensedText: summary,
+		LogPath:       evt.Snapshot.LogPath,
+		output: backgroundNoticeOutput{
+			kind: backgroundNoticeOutputInvariantFailure,
+			invariantFailure: &invariantFailureNotice{
+				message: message,
+			},
+		},
+	}
+}
+
+func valueOrZero(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func readBackgroundSummaryFromFile(path string, maxChars int, mode BackgroundOutputMode, sanitize bool) (string, int, bool, error) {
@@ -330,29 +518,56 @@ func utf8EncodeRune(dst []byte, r rune) int {
 }
 
 func formatExecResponse(result ExecResult) string {
-	sections := make([]string, 0, 6)
-	output := strings.TrimSpace(result.Output)
-	if strings.TrimSpace(result.Warning) != "" {
-		sections = append(sections, result.Warning)
-	}
-	if result.MovedToBackground {
-		sections = append(sections, formatBackgroundTransitionLine(result.SessionID, output != ""))
-	}
-	if result.ExitCode != nil && *result.ExitCode != 0 {
-		sections = append(sections, fmt.Sprintf("Exit code %d, output:", *result.ExitCode))
-	} else if result.Running && strings.TrimSpace(result.SessionID) != "" && !result.MovedToBackground {
-		sections = append(sections, fmt.Sprintf("Process running with session ID %s", result.SessionID))
-	}
-	if result.Backgrounded && result.ExitCode != nil {
-		sections = append(sections, fmt.Sprintf("Wall time: %.4f seconds", result.WallTime.Seconds()))
-	}
-	if result.Backgrounded && result.ExitCode != nil && strings.TrimSpace(result.OutputPath) != "" {
-		sections = append(sections, fmt.Sprintf("Log file: %s", result.OutputPath))
-	}
-	if output == "" {
-		sections = append(sections, noOutputText)
-	} else {
+	return renderExecPresentation(projectExecResult(result))
+}
+
+func renderExecPresentation(presentation execPresentation) string {
+	output := presentation.output.Content()
+	switch presentation.kind {
+	case execPresentationRunning:
+		sections := make([]string, 0, 2)
+		if presentation.movedToBackground {
+			sections = append(sections, formatBackgroundTransitionLine(presentation.sessionID, presentation.output.HasCommandContent()))
+		} else if presentation.sessionID != "" {
+			sections = append(sections, fmt.Sprintf("Process running with session ID %s", presentation.sessionID))
+		}
+		if output == "" {
+			sections = append(sections, noOutputText)
+		} else {
+			sections = append(sections, output)
+		}
+		return strings.Join(sections, "\n")
+	case execPresentationForegroundCompleted:
+		if output == "" {
+			return fmt.Sprintf("Exit code %d, no output.", presentation.exitCode)
+		}
+		if presentation.exitCode == 0 {
+			return output
+		}
+		return fmt.Sprintf("Exit code %d, output:\n%s", presentation.exitCode, output)
+	case execPresentationBackgroundCompleted:
+		if output == "" {
+			return fmt.Sprintf("Exit code %d, no output.", presentation.exitCode)
+		}
+		sections := []string{fmt.Sprintf("Exit code %d, output:", presentation.exitCode)}
+		sections = append(sections, fmt.Sprintf("Wall time: %.4f seconds", presentation.wallTime.Seconds()))
+		if presentation.outputPath != "" {
+			sections = append(sections, fmt.Sprintf("Log file: %s", presentation.outputPath))
+		}
 		sections = append(sections, output)
+		return strings.Join(sections, "\n")
+	default:
+		panic(fmt.Sprintf("unknown exec presentation kind %d", presentation.kind))
+	}
+}
+
+func formatToolError(warning postprocess.Warning, toolError string) string {
+	sections := make([]string, 0, 2)
+	if warning != nil {
+		sections = append(sections, warning.Text())
+	}
+	if text := strings.TrimSpace(toolError); text != "" {
+		sections = append(sections, text)
 	}
 	return strings.Join(sections, "\n")
 }

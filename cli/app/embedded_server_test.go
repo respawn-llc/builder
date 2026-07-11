@@ -748,6 +748,7 @@ func TestEmbeddedAppServerRoutesBackgroundCompletionToOwningSessionOnly(t *testi
 	defer func() { _ = subB.Close() }()
 
 	processID := "bg-owned-a"
+	exitCode := 0
 	server.inner.BackgroundRouter().Handle(shelltool.Event{
 		Type:             shelltool.EventCompleted,
 		NoticeSuppressed: true,
@@ -759,8 +760,8 @@ func TestEmbeddedAppServerRoutesBackgroundCompletionToOwningSessionOnly(t *testi
 			Command:        "sleep 1; printf done",
 			Workdir:        workspace,
 			LogPath:        "/tmp/bg-owned-a.log",
+			ExitCode:       &exitCode,
 		},
-		Preview: "done",
 	})
 
 	evtA := waitForSessionActivityEvent(t, subA, 5*time.Second, func(evt clientui.Event) bool {

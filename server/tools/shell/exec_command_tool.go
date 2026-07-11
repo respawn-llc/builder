@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"core/server/tools"
-	"core/server/tools/shell/postprocess"
 	"core/shared/transcript"
 )
 
@@ -106,7 +105,7 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		return tools.ErrorResultWith(c, formatToolCallError("exec_command", err), marshalNoHTMLEscape), nil
 	}
 	if strings.TrimSpace(result.ToolError) != "" {
-		return tools.ErrorResultWith(c, postprocess.JoinWarnings(result.Warning, result.ToolError), marshalNoHTMLEscape), nil
+		return tools.ErrorResultWith(c, formatToolError(result.Warning, result.ToolError), marshalNoHTMLEscape), nil
 	}
 	body, marshalErr := marshalNoHTMLEscape(formatExecResponse(result))
 	if marshalErr != nil {

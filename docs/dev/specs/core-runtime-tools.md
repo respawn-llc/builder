@@ -83,6 +83,15 @@
 
 - Large tool output is truncated for model consumption using standardized head/tail payloads with truncation metadata. Tool truncation threshold is not a tool post-processor, but a separate path that runs after the post-processor pipeline. 
 - Large output truncation threshold is configurable via a config file.
+- Foreground shell completion uses the final visible result after sanitization, postprocessing, warnings, truncation, and presentation trimming to determine whether output exists. Whitespace-only final content counts as no output.
+- A foreground shell command that exits successfully with output returns that output as plaintext without an exit-code header.
+- A foreground shell command that exits with no output returns exactly `Exit code N, no output.`, where `N` is its exit code.
+- A foreground shell command that exits unsuccessfully with output returns `Exit code N, output:` followed by the output.
+- A completed background shell always exposes its exit code in both polling results and automatic completion notices. When it has no output, its completion text is `Exit code N, no output.`
+- Background completion keeps shell identity and lifecycle state separate from its output summary. Polling retains its structured lifecycle fields.
+- Configured background-output verbosity continues to control inline previews. If concise presentation hides a preview for a command that produced output, completion still exposes the exit code and output-file location and does not claim that there was no output.
+- Recoverable shell-output warnings remain visible and count as output for completion wording. Background output-file metadata describes retained command output only; a warning does not add lines to or imply content in the command's log file.
+- An invalid internal background-completion event panics with diagnostic context in debug invariant mode. Production keeps the background-notice envelope and terminal process facts, records the invariant diagnostic, and presents an explicit internal error instead of fabricated successful or no-output content.
 - Model-step transient failures use exponential backoff retries with 5 attempts: `1s`, `2s`, `4s`, `8s`, `16s`.
 - Model/API errors in ongoing mode are shown as concise single-line errors; full details remain in detail/logs.
 - Kent implements tool repair infrastructure after a provider HTTP 400: Kent may repair tool calls that lack outputs (typically left dangling by an interruption) by appending a synthetic completion to each, then rebuilding the request and retrying. The repair is append-only: it never rewrites or removes persisted history, so the prompt-cache prefix through each repaired call stays intact, and the materialized output matches the original call kind. The synthetic result is an error stating the call was interrupted with no output, never a fabricated success. The repair defers to the resume path while interrupted calls still have pending re-execution starts, and no-ops when a 400 has no missing outputs (the original error then surfaces). Each repair appends one operator-only `developer_error_feedback` warning noting how many calls were closed.

@@ -38,6 +38,7 @@ func TestEmbeddedAppServerDeliversBackgroundCompletionWhileIdle(t *testing.T) {
 	defer func() { _ = sub.Close() }()
 
 	processID := "bg-1000"
+	exitCode := 0
 	server.inner.BackgroundRouter().Handle(shelltool.Event{
 		Type:             shelltool.EventCompleted,
 		NoticeSuppressed: true,
@@ -49,8 +50,8 @@ func TestEmbeddedAppServerDeliversBackgroundCompletionWhileIdle(t *testing.T) {
 			Command:        "sleep 1; printf done",
 			Workdir:        workspace,
 			LogPath:        "/tmp/bg-1000.log",
+			ExitCode:       &exitCode,
 		},
-		Preview: "done",
 	})
 
 	evt := waitForSessionActivityEvent(t, sub, 5*time.Second, func(evt clientui.Event) bool {
@@ -77,6 +78,7 @@ func TestPrepareRuntimeForwardsBackgroundCompletionIntoProjectedRuntimeEvents(t 
 	defer runtimePlan.Close()
 
 	processID := "bg-1001"
+	exitCode := 0
 	server.inner.BackgroundRouter().Handle(shelltool.Event{
 		Type:             shelltool.EventCompleted,
 		NoticeSuppressed: true,
@@ -88,8 +90,8 @@ func TestPrepareRuntimeForwardsBackgroundCompletionIntoProjectedRuntimeEvents(t 
 			Command:        "sleep 1; printf done",
 			Workdir:        workspace,
 			LogPath:        "/tmp/bg-1001.log",
+			ExitCode:       &exitCode,
 		},
-		Preview: "done",
 	})
 
 	select {

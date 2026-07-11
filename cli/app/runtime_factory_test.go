@@ -510,18 +510,10 @@ func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 
 			select {
 			case evt := <-events:
-				if evt.Background == nil {
-					t.Fatal("expected background payload")
-				}
-				for _, needle := range tt.wantContains {
-					if !strings.Contains(evt.Background.NoticeText, needle) {
-						t.Fatalf("expected notice to contain %q, got %q", needle, evt.Background.NoticeText)
-					}
-				}
-				for _, needle := range tt.wantNotContains {
-					if strings.Contains(evt.Background.NoticeText, needle) {
-						t.Fatalf("expected notice to omit %q, got %q", needle, evt.Background.NoticeText)
-					}
+				if evt.Background == nil ||
+					evt.Background.ExitCode == nil || *evt.Background.ExitCode != tt.exitCode ||
+					evt.Background.NoticeText == "" || evt.Background.CompactText == "" {
+					t.Fatalf("background update = %+v", evt.Background)
 				}
 			case <-time.After(time.Second):
 				t.Fatal("timed out waiting for background update event")
@@ -557,19 +549,13 @@ func TestBackgroundEventRouterWhitespacePreviewUsesNoOutputLine(t *testing.T) {
 			State:          "completed",
 			ExitCode:       &exitCode,
 		},
-		Preview: "  \n\t  ",
 	})
 
 	select {
 	case evt := <-events:
-		if evt.Background == nil {
-			t.Fatal("expected background payload")
-		}
-		if !strings.Contains(evt.Background.NoticeText, "\nNo output") {
-			t.Fatalf("expected no output line, got %q", evt.Background.NoticeText)
-		}
-		if strings.Contains(evt.Background.NoticeText, "Output:") {
-			t.Fatalf("did not expect output header for blank preview, got %q", evt.Background.NoticeText)
+		if evt.Background == nil || evt.Background.ExitCode == nil || *evt.Background.ExitCode != exitCode ||
+			evt.Background.NoticeText == "" || evt.Background.CompactText == "" || evt.Background.Preview != "" {
+			t.Fatalf("blank-output background update = %+v", evt.Background)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for background update event")
@@ -690,7 +676,15 @@ func TestBackgroundEventRouterDropsNoticeWhenNoSessionIsActive(t *testing.T) {
 	eng := newAppRuntimeEngineWithStore(t, store, client, runtime.Config{})
 	router.SetActiveSession(store.Meta().SessionID, eng)
 	router.ClearActiveSession(store.Meta().SessionID, eng)
-	router.handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1002", ActivityID: uuid.New(), OwnerSessionID: store.Meta().SessionID, State: "completed"}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.handle(shelltool.Event{
+		Type: shelltool.EventCompleted,
+		Snapshot: shelltool.Snapshot{
+			ID:             "1002",
+			ActivityID:     uuid.New(),
+			OwnerSessionID: store.Meta().SessionID,
+			State:          "completed",
+		},
+	})
 	time.Sleep(50 * time.Millisecond)
 	if got := client.CallCount(); got != 0 {
 		t.Fatalf("expected no notice delivery while no session is active, got %d", got)

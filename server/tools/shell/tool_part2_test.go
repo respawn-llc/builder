@@ -2,7 +2,7 @@ package shell
 
 import (
 	"context"
-	"strings"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -72,21 +72,15 @@ func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
 	}
-	text := decodeStringToolOutput(t, result)
-	if strings.Contains(text, "Process moved to background.") {
-		t.Fatalf("expected immediate completion with closed stdin, got %q", text)
+	var output string
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("exec_command result must be a JSON string: %v", err)
 	}
-	if strings.Contains(text, "Wall time:") {
-		t.Fatalf("did not expect wall time for foreground shell, got %q", text)
+	if output == "" {
+		t.Fatal("foreground EOF completion must have non-empty output")
 	}
-	if strings.Contains(text, "Log file:") {
-		t.Fatalf("did not expect log file for foreground shell, got %q", text)
-	}
-	if strings.Contains(text, "Exit code 0, output:") {
-		t.Fatalf("did not expect zero exit code in output, got %q", text)
-	}
-	if !strings.Contains(text, "eof") {
-		t.Fatalf("expected EOF branch output, got %q", text)
+	if result.PresentationDelta != nil && result.PresentationDelta.MovedToBackground {
+		t.Fatalf("foreground EOF completion must not be backgrounded: %+v", result.PresentationDelta)
 	}
 	waitForManagerCount(t, manager, 0, 3*time.Second)
 	select {

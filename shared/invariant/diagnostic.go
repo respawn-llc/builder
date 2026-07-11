@@ -10,6 +10,7 @@ type Scope string
 const (
 	ScopeTUIProjection        Scope = "tui_projection"
 	ScopeReadModelPublication Scope = "read_model_publication"
+	ScopeBackgroundEvent      Scope = "background_event"
 )
 
 type Field string
@@ -43,6 +44,8 @@ const (
 	FieldTranscriptState          Field = "transcript_state"
 	FieldLiveState                Field = "live_state"
 	FieldProposedStepID           Field = "proposed_step_id"
+	FieldProcessID                Field = "process_id"
+	FieldBackgroundState          Field = "background_state"
 )
 
 type Diagnostic struct {
@@ -101,6 +104,27 @@ func ReadModelPublicationDiagnostic(input ReadModelPublicationDiagnosticInput) D
 			FieldCachedActivity:           input.CachedLastPublishedActivity,
 			FieldResolvedActivity:         input.ResolvedProposedActivity,
 			FieldProviderError:            input.ProviderError,
+		}),
+	}
+}
+
+type BackgroundEventDiagnosticInput struct {
+	Operation string
+	EventType string
+	ProcessID string
+	State     string
+	Cause     string
+}
+
+func BackgroundEventDiagnostic(input BackgroundEventDiagnosticInput) Diagnostic {
+	return Diagnostic{
+		Scope: ScopeBackgroundEvent,
+		Fields: fields(map[Field]string{
+			FieldOperation:       input.Operation,
+			FieldEventKind:       input.EventType,
+			FieldProcessID:       input.ProcessID,
+			FieldBackgroundState: input.State,
+			FieldInvariantError:  input.Cause,
 		}),
 	}
 }

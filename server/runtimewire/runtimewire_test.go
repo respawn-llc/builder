@@ -22,8 +22,12 @@ import (
 	"core/server/tools"
 	askquestion "core/server/tools"
 	patchtool "core/server/tools/patch"
+	shelltool "core/server/tools/shell"
 	"core/shared/config"
+	"core/shared/invariant"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 func TestBuildToolRegistryAllowsHostedWebSearchWithoutLocalRuntimeBuilder(t *testing.T) {
@@ -527,6 +531,116 @@ func TestBackgroundEventRouterQueuesNoticeForActiveOwnerSession(t *testing.T) {
 	}
 	if got := client.CallCount(); got == 0 {
 		t.Fatal("expected active owner completion to queue a model notice")
+	}
+}
+
+func TestBackgroundEventRouterDropsOrphanedTerminalEventBeforeInvariantHandling(t *testing.T) {
+	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)))
+	exitCode := 7
+	router.Handle(shelltool.Event{
+		Type: shelltool.EventCompleted,
+		Snapshot: shelltool.Snapshot{
+			ID:             "1000",
+			ActivityID:     uuid.New(),
+			OwnerSessionID: "inactive-owner",
+			State:          "completed",
+			ExitCode:       &exitCode,
+		},
+	})
+}
+
+func TestBackgroundEventRouterPanicsForInvalidTerminalEventInPanicMode(t *testing.T) {
+	root := t.TempDir()
+	store := newRuntimeWireSession(t, root, "panic")
+	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)))
+	router.SetActiveSession(store.Meta().SessionID, newRuntimeWireEngine(t, store, &busyToggleFakeClient{}))
+	exitCode := 7
+
+	defer func() {
+		recovered := recover()
+		diagnostic, ok := recovered.(invariant.Diagnostic)
+		if !ok {
+			t.Fatalf("panic = %#v, want invariant diagnostic", recovered)
+		}
+		if diagnostic.Scope != invariant.ScopeBackgroundEvent ||
+			diagnostic.Fields[invariant.FieldEventKind] != string(shelltool.EventCompleted) ||
+			diagnostic.Fields[invariant.FieldProcessID] != "1000" ||
+			diagnostic.Fields[invariant.FieldBackgroundState] != "completed" ||
+			diagnostic.Fields[invariant.FieldInvariantError] == "" ||
+			diagnostic.Stack == "" {
+			t.Fatalf("diagnostic = %+v", diagnostic)
+		}
+	}()
+
+	router.Handle(shelltool.Event{
+		Type: shelltool.EventCompleted,
+		Snapshot: shelltool.Snapshot{
+			ID:             "1000",
+			ActivityID:     uuid.New(),
+			OwnerSessionID: store.Meta().SessionID,
+			State:          "completed",
+			ExitCode:       &exitCode,
+		},
+	})
+}
+
+func TestBackgroundEventRouterRecoversInvalidTerminalEventInDiagnosticMode(t *testing.T) {
+	root := t.TempDir()
+	store := newRuntimeWireSession(t, root, "diagnostic")
+	client := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "handled", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
+	var updates []runtime.BackgroundShellEvent
+	eng := newRuntimeWireEngine(t, store, client, runtime.Config{Model: "gpt-5", OnEvent: func(evt runtime.Event) {
+		if evt.Kind == runtime.EventBackgroundUpdated && evt.Background != nil {
+			updates = append(updates, *evt.Background)
+		}
+	}})
+	var diagnostics []invariant.Diagnostic
+	policy := invariant.NewPolicy(
+		invariant.WithMode(invariant.ModeDiagnostic),
+		invariant.WithSink(invariant.SinkFunc(func(d invariant.Diagnostic) {
+			diagnostics = append(diagnostics, d)
+		})),
+	)
+	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, policy)
+	router.SetActiveSession(store.Meta().SessionID, eng)
+	exitCode := 17
+	event := shelltool.Event{
+		Type: shelltool.EventCompleted,
+		Snapshot: shelltool.Snapshot{
+			ID:             "1000",
+			ActivityID:     uuid.New(),
+			OwnerSessionID: store.Meta().SessionID,
+			State:          "completed",
+			ExitCode:       &exitCode,
+			LogPath:        filepath.Join(root, "1000.log"),
+		},
+	}
+
+	router.Handle(event)
+
+	if len(diagnostics) != 1 {
+		t.Fatalf("diagnostics = %d, want 1", len(diagnostics))
+	}
+	diagnostic := diagnostics[0]
+	if diagnostic.Scope != invariant.ScopeBackgroundEvent ||
+		diagnostic.Fields[invariant.FieldProcessID] != event.Snapshot.ID ||
+		diagnostic.Fields[invariant.FieldBackgroundState] != event.Snapshot.State ||
+		diagnostic.Fields[invariant.FieldInvariantError] == "" ||
+		diagnostic.Stack == "" {
+		t.Fatalf("diagnostic = %+v", diagnostic)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("background updates = %d, want 1", len(updates))
+	}
+	update := updates[0]
+	if update.Type != runtime.BackgroundShellEventCompleted ||
+		update.ID != event.Snapshot.ID ||
+		update.State != event.Snapshot.State ||
+		update.ExitCode == nil || *update.ExitCode != exitCode ||
+		update.LogPath != event.Snapshot.LogPath ||
+		update.NoticeText == "" ||
+		update.CompactText == "" {
+		t.Fatalf("recovered background update = %+v", update)
 	}
 }
 

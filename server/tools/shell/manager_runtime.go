@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"core/server/tools/shell/postprocess"
 )
 
 func (m *Manager) List() []Snapshot {
@@ -154,33 +156,6 @@ func (m *Manager) waitForExit(entry *processEntry) {
 		return
 	}
 	snapshot := entry.closeOnExit(exitCode, state)
-	preview := ""
-	removed := 0
-	previewProcessed := false
-	fullOutput, readErr := readOutputFileLimited(entry.logPath, maxFullLogPostprocessBytes)
-	if readErr == nil {
-		processed, err := m.applyPostprocessing(context.Background(), entry, fullOutput, snapshot.ExitCode, true, defaultLimit)
-		if err == nil && processed.Processed {
-			preview = processed.Output
-			previewProcessed = true
-		} else {
-			var truncated bool
-			preview, _, truncated, err = readBackgroundSummaryFromFile(entry.logPath, defaultLimit, BackgroundOutputDefault, !snapshot.RawOutput)
-			if err != nil {
-				preview = fmt.Sprintf("failed to read output preview: %v", err)
-			} else if truncated {
-				removed = 1
-			}
-		}
-	} else {
-		var truncated bool
-		preview, _, truncated, readErr = readBackgroundSummaryFromFile(entry.logPath, defaultLimit, BackgroundOutputDefault, !snapshot.RawOutput)
-		if readErr != nil {
-			preview = fmt.Sprintf("failed to read output preview: %v", readErr)
-		} else if truncated {
-			removed = 1
-		}
-	}
 	eventType := EventCompleted
 	if state == "killed" {
 		eventType = EventKilled
@@ -188,8 +163,69 @@ func (m *Manager) waitForExit(entry *processEntry) {
 	entry.interactMu.Lock()
 	noticeSuppressed := entry.completionNoticeConsumed()
 	entry.interactMu.Unlock()
-	m.emitEvent(Event{Type: eventType, Snapshot: snapshot, Preview: preview, PreviewProcessed: previewProcessed, Removed: removed, NoticeSuppressed: noticeSuppressed})
+
+	fullOutput, readErr := readOutputFileLimited(entry.logPath, maxFullLogPostprocessBytes)
+	if readErr == nil {
+		processed, postprocessErr := m.applyPostprocessing(context.Background(), entry, fullOutput, snapshot.ExitCode, true, defaultLimit)
+		if postprocessErr == nil && processed.Processed && strings.TrimSpace(processed.UnrecoverableError) == "" {
+			m.emitEvent(newFinalizedBackgroundEvent(eventType, snapshot, processed.Output, processed.Warning, noticeSuppressed))
+			entry.finalizeClosedExit()
+			return
+		}
+		warning := processed.Warning
+		if postprocessErr != nil {
+			warning, postprocessErr = mergeOperationalWarning(warning, fmt.Sprintf("background postprocess failed: %v", postprocessErr))
+			if postprocessErr != nil {
+				m.emitEvent(Event{Type: eventType, Snapshot: snapshot, NoticeSuppressed: noticeSuppressed})
+				entry.finalizeClosedExit()
+				return
+			}
+		} else if strings.TrimSpace(processed.UnrecoverableError) != "" {
+			warning, postprocessErr = mergeOperationalWarning(warning, processed.UnrecoverableError)
+			if postprocessErr != nil {
+				m.emitEvent(Event{Type: eventType, Snapshot: snapshot, NoticeSuppressed: noticeSuppressed})
+				entry.finalizeClosedExit()
+				return
+			}
+		}
+		fallback, fallbackErr := m.fallbackBackgroundEvent(eventType, snapshot, warning, noticeSuppressed)
+		if fallbackErr != nil {
+			m.emitEvent(Event{Type: eventType, Snapshot: snapshot, NoticeSuppressed: noticeSuppressed})
+		} else {
+			m.emitEvent(fallback)
+		}
+		entry.finalizeClosedExit()
+		return
+	}
+	warning, warningErr := mergeOperationalWarning(nil, fmt.Sprintf("full output log skipped: %v", readErr))
+	if warningErr != nil {
+		m.emitEvent(Event{Type: eventType, Snapshot: snapshot, NoticeSuppressed: noticeSuppressed})
+		entry.finalizeClosedExit()
+		return
+	}
+	fallback, fallbackErr := m.fallbackBackgroundEvent(eventType, snapshot, warning, noticeSuppressed)
+	if fallbackErr != nil {
+		m.emitEvent(Event{Type: eventType, Snapshot: snapshot, NoticeSuppressed: noticeSuppressed})
+	} else {
+		m.emitEvent(fallback)
+	}
 	entry.finalizeClosedExit()
+}
+
+func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot, warning postprocess.Warning, noticeSuppressed bool) (Event, error) {
+	preview, _, truncated, err := readBackgroundSummaryFromFile(snapshot.LogPath, defaultLimit, BackgroundOutputDefault, !snapshot.RawOutput)
+	if err != nil {
+		warning, err = mergeOperationalWarning(warning, fmt.Sprintf("failed to read output preview: %v", err))
+		if err != nil {
+			return Event{}, err
+		}
+		preview = ""
+	}
+	removed := 0
+	if truncated {
+		removed = 1
+	}
+	return newFallbackBackgroundEvent(eventType, snapshot, preview, warning, removed, noticeSuppressed), nil
 }
 
 func (m *Manager) collectUntil(ctx context.Context, entry *processEntry, deadline time.Time) ([]byte, error) {

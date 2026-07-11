@@ -36,8 +36,83 @@ type Result struct {
 	Output             string
 	Processed          bool
 	ProcessorID        string
-	Warning            string
+	Warning            Warning
 	UnrecoverableError string
+}
+
+type warningMessage string
+
+// Warning is an opaque immutable aggregate of non-empty operational warnings.
+// Its unexported seal prevents callers outside this package from fabricating an
+// empty present warning.
+type Warning interface {
+	warningSeal()
+	Text() string
+}
+
+type warningAggregate struct {
+	messages []warningMessage
+}
+
+func NewWarning(message string) (Warning, error) {
+	normalized := strings.TrimSpace(message)
+	if normalized == "" {
+		return nil, errors.New("warning message is required")
+	}
+	return &warningAggregate{messages: []warningMessage{warningMessage(normalized)}}, nil
+}
+
+func (w *warningAggregate) warningSeal() {}
+
+func (w *warningAggregate) Text() string {
+	if w == nil || len(w.messages) == 0 {
+		panic("present warning aggregate has no messages")
+	}
+	values := make([]string, len(w.messages))
+	for index, message := range w.messages {
+		values[index] = string(message)
+	}
+	return strings.Join(values, "\n")
+}
+
+func MergeWarnings(existing Warning, next Warning) Warning {
+	if existing == nil {
+		return cloneWarning(next)
+	}
+	if next == nil {
+		return cloneWarning(existing)
+	}
+	existingAggregate := warningAggregateOf(existing)
+	nextAggregate := warningAggregateOf(next)
+	messages := make([]warningMessage, 0, len(existingAggregate.messages)+len(nextAggregate.messages))
+	messages = append(messages, existingAggregate.messages...)
+	messages = append(messages, nextAggregate.messages...)
+	return &warningAggregate{messages: messages}
+}
+
+func cloneWarning(warning Warning) Warning {
+	if warning == nil {
+		return nil
+	}
+	aggregate := warningAggregateOf(warning)
+	messages := append([]warningMessage(nil), aggregate.messages...)
+	return &warningAggregate{messages: messages}
+}
+
+func warningAggregateOf(warning Warning) *warningAggregate {
+	aggregate, ok := warning.(*warningAggregate)
+	if !ok || aggregate == nil || len(aggregate.messages) == 0 {
+		panic("present warning aggregate is invalid")
+	}
+	return aggregate
+}
+
+func mustWarning(message string) Warning {
+	warning, err := NewWarning(message)
+	if err != nil {
+		panic(err)
+	}
+	return warning
 }
 
 type Processor interface {
@@ -237,19 +312,6 @@ func resolveHookPath(raw string) (string, bool) {
 	return abs, true
 }
 
-func JoinWarnings(existing string, next string) string {
-	existing = strings.TrimSpace(existing)
-	next = strings.TrimSpace(next)
-	switch {
-	case existing == "":
-		return next
-	case next == "":
-		return existing
-	default:
-		return existing + "\n" + next
-	}
-}
-
 type Action string
 
 const (
@@ -262,7 +324,7 @@ type Envelope struct {
 	Request           Request
 	OriginalOutput    string
 	CurrentOutput     string
-	Warnings          []string
+	Warnings          []Warning
 	RecoverableErrors []ProcessorFailure
 }
 
@@ -280,9 +342,9 @@ func (e Envelope) WithOriginal(output string) Envelope {
 	return e
 }
 
-func (e Envelope) withWarning(warning string) Envelope {
-	if trimmed := strings.TrimSpace(warning); trimmed != "" {
-		e.Warnings = append(e.Warnings, trimmed)
+func (e Envelope) withWarning(warning Warning) Envelope {
+	if warning != nil {
+		e.Warnings = append(e.Warnings, cloneWarning(warning))
 	}
 	return e
 }
@@ -298,7 +360,7 @@ type Decision struct {
 	Action      Action
 	Next        Envelope
 	ProcessorID string
-	Warning     string
+	Warning     Warning
 	Failure     *ProcessorFailure
 }
 
@@ -464,12 +526,12 @@ func classifyProcessorFailure(processorID string, err error) ProcessorFailure {
 }
 
 func resultFromEnvelope(envelope Envelope, processed bool, processorID string, terminal ProcessorFailure) Result {
-	warning := ""
+	var warning Warning
 	for _, processorErr := range envelope.RecoverableErrors {
-		warning = JoinWarnings(warning, formatProcessorFailure(processorErr))
+		warning = MergeWarnings(warning, mustWarning(formatProcessorFailure(processorErr)))
 	}
 	for _, item := range envelope.Warnings {
-		warning = JoinWarnings(warning, item)
+		warning = MergeWarnings(warning, item)
 	}
 	result := Result{Output: envelope.CurrentOutput, Processed: processed, ProcessorID: processorID, Warning: warning}
 	if terminal.Severity == FailureUnrecoverable {
