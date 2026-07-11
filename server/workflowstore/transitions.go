@@ -187,7 +187,7 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	updatedCount, err := q.ApprovePendingTransition(ctx, sqlitegen.ApprovePendingTransitionParams{
-		AppliedAtUnixMs: now,
+		AppliedAtUnixMs: sql.NullInt64{Int64: now, Valid: true},
 		TransitionID:    id,
 	})
 	if err != nil {
@@ -295,7 +295,7 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 		if invalidScript {
 			interruptedAt = sql.NullInt64{Int64: now, Valid: true}
 		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: nullableString(interruptionReason), InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
+		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: nullableString(interruptionReason), InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
 			return CompleteRunResult{}, fmt.Errorf("insert approved target run: %w", err)
 		}
 		targetRun := workflow.RunID(targetRunID)

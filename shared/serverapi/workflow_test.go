@@ -646,6 +646,60 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 	}
 }
 
+func TestWorkflowLifecycleJSONOmitsAbsentFacts(t *testing.T) {
+	payload := struct {
+		Summary    WorkflowTaskSummary    `json:"summary"`
+		Run        WorkflowRun            `json:"run"`
+		Transition WorkflowTaskTransition `json:"transition"`
+	}{
+		Summary: WorkflowTaskSummary{
+			ID:         "task-1",
+			ProjectID:  "project-1",
+			WorkflowID: "workflow-1",
+			ShortID:    "KT-1",
+			Title:      "Task",
+		},
+		Run: WorkflowRun{
+			ID:          "run-1",
+			TaskID:      "task-1",
+			PlacementID: "placement-1",
+			NodeID:      "node-1",
+			Status:      "queued",
+		},
+		Transition: WorkflowTaskTransition{
+			ID:        "transition-1",
+			TaskID:    "task-1",
+			CreatedAt: 1,
+		},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal workflow lifecycle payload: %v", err)
+	}
+	var raw map[string]map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal workflow lifecycle payload: %v", err)
+	}
+	if _, ok := raw["summary"]["cancel_reason"]; ok {
+		t.Fatalf("absent task cancellation reason serialized: %s", data)
+	}
+	for _, key := range []string{
+		"started_at_unix_ms",
+		"completed_at_unix_ms",
+		"interrupted_at_unix_ms",
+		"interruption_reason",
+		"waiting_ask_id",
+	} {
+		if _, ok := raw["run"][key]; ok {
+			t.Fatalf("absent run lifecycle fact %q serialized: %s", key, data)
+		}
+	}
+	if _, ok := raw["transition"]["applied_at_unix_ms"]; ok {
+		t.Fatalf("absent transition applied fact serialized: %s", data)
+	}
+}
+
 func TestWorkflowTaskListScopeErrorRoundTrip(t *testing.T) {
 	for _, original := range []*WorkflowTaskListScopeError{
 		{

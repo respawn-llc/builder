@@ -129,7 +129,7 @@ WHERE id = ?2
 `
 
 type ApprovePendingTransitionParams struct {
-	AppliedAtUnixMs int64
+	AppliedAtUnixMs sql.NullInt64
 	TransitionID    string
 }
 
@@ -212,7 +212,7 @@ SET
     run_generation = run_generation + 1
 WHERE task_runs.id = ?3
   AND run_generation = ?4
-  AND automation_requested_at_unix_ms > 0
+  AND automation_requested_at_unix_ms IS NOT NULL
   AND started_at_unix_ms IS NULL
   AND completed_at_unix_ms IS NULL
   AND interrupted_at_unix_ms IS NULL
@@ -273,7 +273,7 @@ type ClaimWorkflowRunRow struct {
 	SessionID                   sql.NullString
 	RunGeneration               int64
 	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs int64
+	AutomationRequestedAtUnixMs sql.NullInt64
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	StartedAtUnixMs             sql.NullInt64
@@ -824,7 +824,7 @@ WHERE t.workflow_id = ?1
           AND r.interrupted_at_unix_ms IS NOT NULL
       )
       OR (
-          r.automation_requested_at_unix_ms > 0
+          r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
@@ -1348,7 +1348,7 @@ SELECT tr.output_values_json
 FROM task_transitions tr
 WHERE tr.task_id = ?1
   AND tr.transition_id = ?2
-  AND tr.applied_at_unix_ms > 0
+  AND tr.applied_at_unix_ms IS NOT NULL
   AND tr.applied_at_unix_ms <= ?3
   AND tr.state != 'rejected'
 ORDER BY tr.applied_at_unix_ms DESC, tr.created_at_unix_ms DESC, tr.rowid DESC
@@ -1358,7 +1358,7 @@ LIMIT 1
 type GetLatestTransitionOutputValuesParams struct {
 	TaskID       string
 	TransitionID string
-	BeforeUnixMs int64
+	BeforeUnixMs sql.NullInt64
 }
 
 func (q *Queries) GetLatestTransitionOutputValues(ctx context.Context, arg GetLatestTransitionOutputValuesParams) (string, error) {
@@ -1375,7 +1375,7 @@ JOIN task_node_placements p ON p.id = tr.source_placement_id
 WHERE tr.task_id = ?1
   AND tr.transition_id = ?2
   AND p.parallel_batch_transition_id = ?3
-  AND tr.applied_at_unix_ms > 0
+  AND tr.applied_at_unix_ms IS NOT NULL
   AND tr.applied_at_unix_ms <= ?4
   AND tr.state != 'rejected'
 ORDER BY tr.applied_at_unix_ms DESC, tr.created_at_unix_ms DESC, tr.rowid DESC
@@ -1386,7 +1386,7 @@ type GetLatestTransitionOutputValuesInBatchParams struct {
 	TaskID       string
 	TransitionID string
 	BatchID      sql.NullString
-	BeforeUnixMs int64
+	BeforeUnixMs sql.NullInt64
 }
 
 func (q *Queries) GetLatestTransitionOutputValuesInBatch(ctx context.Context, arg GetLatestTransitionOutputValuesInBatchParams) (string, error) {
@@ -1508,7 +1508,7 @@ SELECT
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.project_id = ?1
           AND t.canceled_at_unix_ms IS NULL
-          AND r.automation_requested_at_unix_ms > 0
+          AND r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
@@ -2214,7 +2214,7 @@ SELECT
         THEN r.id
     END) AS INTEGER) AS active_run_count,
     CAST(COUNT(DISTINCT CASE
-        WHEN r.automation_requested_at_unix_ms > 0
+        WHEN r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
@@ -2233,7 +2233,7 @@ SELECT
             AND n.kind IN ('agent', 'script')
         )
         OR (
-            r.automation_requested_at_unix_ms > 0
+            r.automation_requested_at_unix_ms IS NOT NULL
             AND r.started_at_unix_ms IS NULL
             AND r.completed_at_unix_ms IS NULL
             AND r.interrupted_at_unix_ms IS NULL
@@ -2394,7 +2394,7 @@ SELECT
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.workflow_id = ?1
           AND t.canceled_at_unix_ms IS NULL
-          AND r.automation_requested_at_unix_ms > 0
+          AND r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
@@ -3082,7 +3082,7 @@ type InsertTaskRunParams struct {
 	SessionID                   sql.NullString
 	RunGeneration               int64
 	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs int64
+	AutomationRequestedAtUnixMs sql.NullInt64
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	StartedAtUnixMs             sql.NullInt64
@@ -3170,7 +3170,7 @@ type InsertTaskTransitionParams struct {
 	Commentary            string
 	OutputValuesJson      string
 	CreatedAtUnixMs       int64
-	AppliedAtUnixMs       int64
+	AppliedAtUnixMs       sql.NullInt64
 }
 
 func (q *Queries) InsertTaskTransition(ctx context.Context, arg InsertTaskTransitionParams) error {
@@ -4584,7 +4584,7 @@ SELECT
             WHERE run_tasks.project_id = p.id
         ), 0),
         COALESCE((
-            SELECT MAX(MAX(tt.created_at_unix_ms, tt.applied_at_unix_ms))
+            SELECT MAX(COALESCE(tt.applied_at_unix_ms, tt.created_at_unix_ms))
             FROM task_transitions tt
             JOIN task_records transition_tasks ON transition_tasks.id = tt.task_id
             WHERE transition_tasks.project_id = p.id
@@ -5153,7 +5153,7 @@ FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.automation_requested_at_unix_ms > 0
+WHERE r.automation_requested_at_unix_ms IS NOT NULL
   AND r.started_at_unix_ms IS NULL
   AND r.completed_at_unix_ms IS NULL
   AND r.interrupted_at_unix_ms IS NULL
@@ -6522,7 +6522,7 @@ WITH attention_candidates(
         '' AS session_id,
         '' AS ask_id,
         tt.id AS task_transition_id,
-        '' AS interruption_reason,
+        NULL AS interruption_reason,
         '' AS interruption_detail_json,
         tt.created_at_unix_ms AS occurred_at_unix_ms
     FROM task_transitions tt
@@ -6549,7 +6549,7 @@ WITH attention_candidates(
         COALESCE(r.session_id, '') AS session_id,
         r.waiting_ask_id AS ask_id,
         '' AS task_transition_id,
-        '' AS interruption_reason,
+        NULL AS interruption_reason,
         '' AS interruption_detail_json,
         r.updated_at_unix_ms AS occurred_at_unix_ms
     FROM workflow_task_current_run_records r
@@ -6610,7 +6610,7 @@ WITH attention_candidates(
         '' AS session_id,
         '' AS ask_id,
         '' AS task_transition_id,
-        '' AS interruption_reason,
+        NULL AS interruption_reason,
         '' AS interruption_detail_json,
         updated_at_unix_ms AS occurred_at_unix_ms
     FROM project_workflow_links
@@ -6663,7 +6663,7 @@ type ListWorkflowAttentionCandidatesRow struct {
 	SessionID              string
 	AskID                  string
 	TaskTransitionID       string
-	InterruptionReason     string
+	InterruptionReason     interface{}
 	InterruptionDetailJson string
 	OccurredAtUnixMs       int64
 }
@@ -7044,7 +7044,7 @@ type ListWorkflowQuestionAttentionItemsParams struct {
 type ListWorkflowQuestionAttentionItemsRow struct {
 	RunID           string
 	SessionID       string
-	WaitingAskID    string
+	WaitingAskID    sql.NullString
 	ProjectID       string
 	WorkflowID      string
 	TaskID          string
@@ -7242,7 +7242,7 @@ WITH activity(
         'transition' AS kind,
         tt.id AS source_id,
         tt.created_at_unix_ms AS occurred_at_unix_ms,
-        tt.applied_at_unix_ms AS updated_at_unix_ms,
+        COALESCE(tt.applied_at_unix_ms, tt.created_at_unix_ms) AS updated_at_unix_ms,
         tt.actor AS actor
     FROM task_transitions tt
     WHERE tt.task_id = ?2

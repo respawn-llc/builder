@@ -67,7 +67,7 @@ func TestCompleteRunUsesRunStartSnapshotAfterGraphChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].CompletedAt == 0 {
+	if len(runs) != 1 || runs[0].CompletedAt == nil {
 		t.Fatalf("runs after completion = %+v", runs)
 	}
 }
@@ -304,7 +304,7 @@ func TestCompleteRunCreatesTargetRunForContinueSessionContextMode(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 2 || runs[0].CompletedAt == 0 || runs[1].CompletedAt != 0 || runs[1].InterruptedAt != 0 {
+	if len(runs) != 2 || runs[0].CompletedAt == nil || runs[1].CompletedAt != nil || runs[1].InterruptedAt != nil {
 		t.Fatalf("runs after continuation completion = %+v, want completed source and active target", runs)
 	}
 	edges, err := store.ListTransitionEdges(ctx, completed.TransitionID)

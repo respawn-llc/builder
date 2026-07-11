@@ -36,7 +36,7 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].AutomationRequestedAt == 0 {
+	if len(runs) != 1 || runs[0].AutomationRequestedAt == nil {
 		t.Fatalf("runs after start = %+v", runs)
 	}
 	transitions, err := store.ListTransitions(ctx, task.ID)
@@ -92,7 +92,7 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns after cancel: %v", err)
 	}
-	if runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != "task_canceled" {
+	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != "task_canceled" {
 		t.Fatalf("run not interrupted by cancel: %+v", runs[0])
 	}
 	placements, err = store.ListPlacements(ctx, task.ID)

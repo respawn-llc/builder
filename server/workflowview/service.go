@@ -924,7 +924,7 @@ type attentionCandidateRow struct {
 	sessionID              string
 	askID                  string
 	taskTransitionID       string
-	interruptionReason     string
+	interruptionReason     *string
 	interruptionDetailJSON string
 	occurredAtUnixMs       int64
 }
@@ -995,6 +995,10 @@ func (s *Service) attentionItemCandidates(ctx context.Context, projectID string,
 	}
 	items := make([]attentionCandidateRow, 0, len(rows))
 	for _, row := range rows {
+		interruptionReason, err := nullableAttentionInterruptionReason(row.InterruptionReason)
+		if err != nil {
+			return nil, err
+		}
 		items = append(items, attentionCandidateRow{
 			kind:                   row.Kind,
 			id:                     row.ID,
@@ -1007,7 +1011,7 @@ func (s *Service) attentionItemCandidates(ctx context.Context, projectID string,
 			sessionID:              row.SessionID,
 			askID:                  row.AskID,
 			taskTransitionID:       row.TaskTransitionID,
-			interruptionReason:     row.InterruptionReason,
+			interruptionReason:     interruptionReason,
 			interruptionDetailJSON: row.InterruptionDetailJson,
 			occurredAtUnixMs:       row.OccurredAtUnixMs,
 		})
@@ -1156,7 +1160,7 @@ func taskSummary(task sqlitegen.TaskRecord, status serverapi.WorkflowTaskStatus,
 		BodyPreview:       bodyPreview(task.Body),
 		SourceWorkspaceID: strings.TrimSpace(task.SourceWorkspaceID.String),
 		CanceledAt:        nullableUnixMillis(task.CanceledAtUnixMs),
-		CancelReason:      task.CancellationReason.String,
+		CancelReason:      nullableString(task.CancellationReason),
 		CreatedAtUnixMs:   task.CreatedAtUnixMs,
 		UpdatedAtUnixMs:   task.UpdatedAtUnixMs,
 		Done:              done,
@@ -1169,6 +1173,14 @@ func nullableUnixMillis(value sql.NullInt64) *int64 {
 		return nil
 	}
 	valueCopy := value.Int64
+	return &valueCopy
+}
+
+func nullableString(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	valueCopy := value.String
 	return &valueCopy
 }
 
@@ -1317,7 +1329,7 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 			case "run_completed":
 				item.Summary = "Run completed"
 			case "run_interrupted":
-				item.Summary = interruptedRunMessage(run.InterruptionReason.String, run.InterruptionDetailJson)
+				item.Summary = interruptedRunMessage(nullableString(run.InterruptionReason), run.InterruptionDetailJson)
 				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: task.WorkflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64}
 				item.Attention = &attention
 			}
@@ -1333,7 +1345,7 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 
 func runDTO(run sqlitegen.TaskRunRecord, nodes map[string]serverapi.WorkflowNode, sessionNames map[string]string) serverapi.WorkflowRun {
 	nodeID := nullableWorkflowViewNodeID(run.NodeID)
-	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: run.StartedAtUnixMs.Int64, CompletedAtUnixMs: run.CompletedAtUnixMs.Int64, InterruptedAtUnixMs: run.InterruptedAtUnixMs.Int64, InterruptionReason: run.InterruptionReason.String, InterruptionDetail: run.InterruptionDetailJson, WaitingAskID: run.WaitingAskID.String, Status: runStatus(run)}
+	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: nullableUnixMillis(run.StartedAtUnixMs), CompletedAtUnixMs: nullableUnixMillis(run.CompletedAtUnixMs), InterruptedAtUnixMs: nullableUnixMillis(run.InterruptedAtUnixMs), InterruptionReason: nullableString(run.InterruptionReason), InterruptionDetail: run.InterruptionDetailJson, WaitingAskID: nullableString(run.WaitingAskID), Status: runStatus(run)}
 	if node, ok := nodes[nodeID]; ok {
 		dto.NodeKind = node.Kind
 		if node.ScriptPath != nil {
@@ -1384,7 +1396,7 @@ func transitionDTO(transition sqlitegen.TaskTransitionRecord, edges []sqlitegen.
 		Commentary:            transition.Commentary,
 		OutputValues:          outputs,
 		CreatedAt:             transition.CreatedAtUnixMs,
-		AppliedAtUnixMs:       transition.AppliedAtUnixMs,
+		AppliedAtUnixMs:       nullableUnixMillis(transition.AppliedAtUnixMs),
 	}
 	for _, edge := range edges {
 		inputs := []serverapi.WorkflowInputBinding{}
@@ -1777,20 +1789,32 @@ func (s *Service) interruptedRunAttentionItems(ctx context.Context, projectID st
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(row.InterruptionReason.String, row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs.Int64})
+		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(nullableString(row.InterruptionReason), row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs.Int64})
 	}
 	return items, nil
 }
 
-func interruptedRunMessage(reason string, detailJSON string) string {
+func interruptedRunMessage(reason *string, detailJSON string) string {
 	message := "Run interrupted"
-	if trimmedReason := strings.TrimSpace(reason); trimmedReason != "" {
+	if reason != nil && strings.TrimSpace(*reason) != "" {
+		trimmedReason := strings.TrimSpace(*reason)
 		message += ": " + trimmedReason
 	}
 	if detail := interruptionErrorDetail(detailJSON); detail != "" {
 		message += ": " + detail
 	}
 	return message
+}
+
+func nullableAttentionInterruptionReason(value any) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	reason, ok := value.(string)
+	if !ok {
+		return nil, fmt.Errorf("attention interruption reason has unexpected type %T", value)
+	}
+	return &reason, nil
 }
 
 func interruptionErrorDetail(detailJSON string) string {

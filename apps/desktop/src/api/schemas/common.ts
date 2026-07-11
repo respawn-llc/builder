@@ -26,6 +26,8 @@ import type {
 
 export const emptyString = z.string().optional().default("");
 export const numberValue = z.number().default(0);
+export const nullableString = z.string().nullish().transform((value) => value ?? null);
+const nullableNumber = z.number().nullish().transform((value) => value ?? null);
 export const stringList = z
   .array(z.string())
   .nullish()
@@ -371,11 +373,11 @@ export const runSchema: z.ZodType<TaskRun> = z
     role: emptyString,
     status: z.string(),
     generation: z.number(),
-    waiting_ask_id: emptyString,
-    started_at_unix_ms: numberValue,
-    completed_at_unix_ms: numberValue,
-    interrupted_at_unix_ms: numberValue,
-    interruption_reason: emptyString,
+    waiting_ask_id: nullableString,
+    started_at_unix_ms: nullableNumber,
+    completed_at_unix_ms: nullableNumber,
+    interrupted_at_unix_ms: nullableNumber,
+    interruption_reason: nullableString,
     interruption_detail_json: emptyString,
   })
   .transform((value) => ({
@@ -437,7 +439,7 @@ export const transitionSchema: z.ZodType<TaskTransition> = z
       .transform((value) => value ?? []),
     workflow_revision_seen: z.number().optional().default(0),
     created_at_unix_ms: z.number(),
-    applied_at_unix_ms: numberValue,
+    applied_at_unix_ms: nullableNumber,
   })
   .transform((value) => ({
     id: value.id,

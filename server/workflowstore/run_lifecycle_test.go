@@ -32,7 +32,7 @@ func TestRecordProtocolViolationInterruptsAtCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InvalidCompletions != 2 || runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != "workflow_protocol_violation_limit" {
+	if len(runs) != 1 || runs[0].InvalidCompletions != 2 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != "workflow_protocol_violation_limit" {
 		t.Fatalf("run after cap = %+v", runs)
 	}
 }
@@ -208,8 +208,8 @@ func TestSetRunEffectiveCompletionModePersistsAndRefusesDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimRun: %v", err)
 	}
-	if claimed.EffectiveCompletionMode != "" {
-		t.Fatalf("claimed effective mode = %q, want empty before resolution", claimed.EffectiveCompletionMode)
+	if claimed.EffectiveCompletionMode != nil {
+		t.Fatalf("claimed effective mode = %v, want absent before resolution", claimed.EffectiveCompletionMode)
 	}
 	if err := store.SetRunEffectiveCompletionMode(ctx, started.RunID, claimed.Generation, "invalid"); !errors.Is(err, ErrInvalidEffectiveCompletionMode) {
 		t.Fatalf("SetRunEffectiveCompletionMode invalid error = %v, want ErrInvalidEffectiveCompletionMode", err)
@@ -221,7 +221,7 @@ func TestSetRunEffectiveCompletionModePersistsAndRefusesDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != "shell_command" {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode == nil || *runs[0].EffectiveCompletionMode != "shell_command" {
 		t.Fatalf("run effective mode = %+v, want shell_command", runs)
 	}
 	if err := store.SetRunEffectiveCompletionMode(ctx, started.RunID, claimed.Generation, "shell_command"); err != nil {
@@ -392,7 +392,7 @@ func TestSetAndClearRunWaitingAskGenerationGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWaitingAskRuns: %v", err)
 	}
-	if len(waiting) != 1 || waiting[0].ID != started.RunID || waiting[0].WaitingAskID != "ask-1" || waiting[0].SessionID != sessionID {
+	if len(waiting) != 1 || waiting[0].ID != started.RunID || waiting[0].WaitingAskID == nil || *waiting[0].WaitingAskID != "ask-1" || waiting[0].SessionID != sessionID {
 		t.Fatalf("waiting runs = %+v", waiting)
 	}
 	if _, err := store.ClaimRun(ctx, started.RunID, claimed.Generation); !errors.Is(err, sql.ErrNoRows) {
@@ -411,7 +411,7 @@ func TestSetAndClearRunWaitingAskGenerationGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if runs[0].WaitingAskID != "" || runs[0].CompletedAt != 0 || runs[0].InterruptedAt != 0 {
+	if runs[0].WaitingAskID != nil || runs[0].CompletedAt != nil || runs[0].InterruptedAt != nil {
 		t.Fatalf("run after clear = %+v", runs[0])
 	}
 }
@@ -475,7 +475,7 @@ func TestInterruptRunGenerationGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns stale: %v", err)
 	}
-	if runs[0].InterruptedAt != 0 {
+	if runs[0].InterruptedAt != nil {
 		t.Fatalf("stale generation interrupted run: %+v", runs[0])
 	}
 	if err := store.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, "current", "{}"); err != nil {
@@ -488,7 +488,7 @@ func TestInterruptRunGenerationGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns current: %v", err)
 	}
-	if runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != "current" {
+	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != "current" {
 		t.Fatalf("run after interrupt = %+v, want current interruption", runs[0])
 	}
 }
@@ -518,7 +518,7 @@ func TestResumeTaskRunRequeuesInterruptedRunWithSameSession(t *testing.T) {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
 	resumed := resumedRuns[0]
-	if resumed.ID != started.RunID || resumed.SessionID != sessionID || resumed.StartedAt != 0 || resumed.InterruptedAt != 0 || resumed.Generation <= claimed.Generation {
+	if resumed.ID != started.RunID || resumed.SessionID != sessionID || resumed.StartedAt != nil || resumed.InterruptedAt != nil || resumed.Generation <= claimed.Generation {
 		t.Fatalf("resumed run = %+v, want same run/session requeued with newer generation", resumed)
 	}
 	runnable, err := store.ListRunnableRuns(ctx, 10)
@@ -586,7 +586,7 @@ func TestResumeTaskRunAllowsDefaultAgentRoleWithoutResolver(t *testing.T) {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
 	resumed := resumedRuns[0]
-	if resumed.ID != started.RunID || resumed.InterruptedAt != 0 || resumed.StartedAt != 0 {
+	if resumed.ID != started.RunID || resumed.InterruptedAt != nil || resumed.StartedAt != nil {
 		t.Fatalf("resumed run = %+v, want default-role run requeued", resumed)
 	}
 }
@@ -619,7 +619,7 @@ func TestResumeTaskRunCanResumeInterruptedWaitingAskRun(t *testing.T) {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
 	resumed := resumedRuns[0]
-	if resumed.ID != started.RunID || resumed.WaitingAskID != "" || resumed.InterruptedAt != 0 || resumed.StartedAt != 0 {
+	if resumed.ID != started.RunID || resumed.WaitingAskID != nil || resumed.InterruptedAt != nil || resumed.StartedAt != nil {
 		t.Fatalf("resumed waiting ask run = %+v, want requeued same run without waiting ask", resumed)
 	}
 }
@@ -652,7 +652,7 @@ func TestInterruptTargetsBySessionAndResumeRequeuesAllRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InterruptTaskRuns by session: %v", err)
 	}
-	if len(interrupted) != 1 || interrupted[0].ID != runIDs[0] || interrupted[0].InterruptedAt == 0 {
+	if len(interrupted) != 1 || interrupted[0].ID != runIDs[0] || interrupted[0].InterruptedAt == nil {
 		t.Fatalf("interrupted = %+v, want only %s", interrupted, runIDs[0])
 	}
 	interruptedRest, err := store.InterruptTaskRuns(ctx, task.ID, "", "manual")
@@ -670,7 +670,7 @@ func TestInterruptTargetsBySessionAndResumeRequeuesAllRuns(t *testing.T) {
 		t.Fatalf("resumed = %+v, want both runs", resumed)
 	}
 	for _, run := range resumed {
-		if run.InterruptedAt != 0 || run.StartedAt != 0 {
+		if run.InterruptedAt != nil || run.StartedAt != nil {
 			t.Fatalf("resumed run = %+v, want reset", run)
 		}
 	}

@@ -440,7 +440,7 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 	if err := touchTaskUpdatedAt(ctx, q, string(taskID), now); err != nil {
 		return StartTaskResult{}, err
 	}
-	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: string(taskID), SourcePlacementID: sql.NullString{String: prepared.startPlacement.ID, Valid: true}, SourceNodeKey: string(workflow.NodeKey(prepared.start)), SourceNodeDisplayName: workflow.NodeDisplayName(prepared.start), TransitionID: string(prepared.group.TransitionID), TransitionDisplayName: prepared.group.DisplayName, WorkflowRevisionSeen: prepared.workflow.Version, Actor: "system", State: "applied", OutputValuesJson: "{}", CreatedAtUnixMs: now, AppliedAtUnixMs: now}); err != nil {
+	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: string(taskID), SourcePlacementID: sql.NullString{String: prepared.startPlacement.ID, Valid: true}, SourceNodeKey: string(workflow.NodeKey(prepared.start)), SourceNodeDisplayName: workflow.NodeDisplayName(prepared.start), TransitionID: string(prepared.group.TransitionID), TransitionDisplayName: prepared.group.DisplayName, WorkflowRevisionSeen: prepared.workflow.Version, Actor: "system", State: "applied", OutputValuesJson: "{}", CreatedAtUnixMs: now, AppliedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}}); err != nil {
 		return StartTaskResult{}, err
 	}
 	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: string(taskID), NodeID: nullableString(string(workflow.NodeIDOf(prepared.target))), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
@@ -467,7 +467,7 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: runID, PlacementID: targetPlacementID, WorkflowRevisionSeen: prepared.workflow.Version, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptionDetailJson: "{}", RunStartSnapshotJson: runSnapshotJSON, MetadataJson: runMetadataJSON}); err != nil {
+	if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: runID, PlacementID: targetPlacementID, WorkflowRevisionSeen: prepared.workflow.Version, AutomationRequestedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptionDetailJson: "{}", RunStartSnapshotJson: runSnapshotJSON, MetadataJson: runMetadataJSON}); err != nil {
 		return StartTaskResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -618,11 +618,11 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 	}
 	now := s.now().UnixMilli()
 	transitionState := "applied"
-	appliedAt := now
+	appliedAt := sql.NullInt64{Int64: now, Valid: true}
 	requiresApproval := transitionGroupRequiresApproval(group)
 	if requiresApproval {
 		transitionState = "pending_approval"
-		appliedAt = 0
+		appliedAt = sql.NullInt64{}
 	}
 	transitionID := prefixedID("transition")
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -743,7 +743,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		if invalidScript {
 			interruptedAt = sql.NullInt64{Int64: now, Valid: true}
 		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: nullableString(interruptionReason), InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
+		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: nullableString(interruptionReason), InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
 			return CompleteRunResult{}, fmt.Errorf("insert target run: %w", err)
 		}
 		targetRun := workflow.RunID(targetRunID)

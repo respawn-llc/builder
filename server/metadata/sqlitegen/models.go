@@ -144,7 +144,7 @@ type TaskRun struct {
 	SessionID                   sql.NullString
 	RunGeneration               int64
 	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs int64
+	AutomationRequestedAtUnixMs sql.NullInt64
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	StartedAtUnixMs             sql.NullInt64
@@ -167,7 +167,7 @@ type TaskRunRecord struct {
 	SessionID                   sql.NullString
 	RunGeneration               int64
 	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs int64
+	AutomationRequestedAtUnixMs sql.NullInt64
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	StartedAtUnixMs             sql.NullInt64
@@ -197,7 +197,7 @@ type TaskTransition struct {
 	Commentary            string
 	OutputValuesJson      string
 	CreatedAtUnixMs       int64
-	AppliedAtUnixMs       int64
+	AppliedAtUnixMs       sql.NullInt64
 }
 
 type TaskTransitionEdge struct {
@@ -254,7 +254,7 @@ type TaskTransitionRecord struct {
 	Commentary            string
 	OutputValuesJson      string
 	CreatedAtUnixMs       int64
-	AppliedAtUnixMs       int64
+	AppliedAtUnixMs       sql.NullInt64
 }
 
 type Workflow struct {
@@ -313,10 +313,10 @@ type WorkflowTaskCurrentRunRecord struct {
 	PlacementID         string
 	SessionID           sql.NullString
 	UpdatedAtUnixMs     int64
-	StartedAtUnixMs     int64
-	CompletedAtUnixMs   int64
-	InterruptedAtUnixMs int64
-	WaitingAskID        string
+	StartedAtUnixMs     sql.NullInt64
+	CompletedAtUnixMs   sql.NullInt64
+	InterruptedAtUnixMs sql.NullInt64
+	WaitingAskID        sql.NullString
 }
 
 type WorkflowTaskStatusRecord struct {
@@ -339,6 +339,7 @@ type WorkflowTaskStatusRunRecord struct {
 	StartedAtUnixMs     sql.NullInt64
 	CompletedAtUnixMs   sql.NullInt64
 	InterruptedAtUnixMs sql.NullInt64
+	InterruptionReason  sql.NullString
 	WaitingAskID        sql.NullString
 }
 

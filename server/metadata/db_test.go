@@ -466,14 +466,27 @@ INSERT INTO task_runs (
     id,
     placement_id,
     workflow_revision_seen,
+    automation_requested_at_unix_ms,
     created_at_unix_ms,
     updated_at_unix_ms,
     started_at_unix_ms,
     completed_at_unix_ms,
     interrupted_at_unix_ms,
     waiting_ask_id
-) VALUES ('run-lifecycle-null', 'placement-lifecycle-null', 1, ?, ?, 0, 0, 0, '');
-`, now, now, now, now)
+) VALUES ('run-lifecycle-null', 'placement-lifecycle-null', 1, 0, ?, ?, 0, 0, 0, '');
+INSERT INTO task_transitions (
+    id,
+    task_id,
+    source_placement_id,
+    source_node_key,
+    transition_id,
+    workflow_revision_seen,
+    actor,
+    state,
+    created_at_unix_ms,
+    applied_at_unix_ms
+) VALUES ('transition-lifecycle-null', 'task-lifecycle-null', 'placement-lifecycle-null', 'agent', 'done', 1, 'system', 'pending_approval', ?, 0);
+`, now, now, now, now, now)
 	if err := db.Close(); err != nil {
 		t.Fatalf("close version 45 db: %v", err)
 	}
@@ -484,24 +497,63 @@ INSERT INTO task_runs (
 	}
 	defer func() { _ = store.Close() }()
 
-	var canceledAt, startedAt, completedAt, interruptedAt sql.NullInt64
+	var canceledAt, automationRequestedAt, startedAt, completedAt, interruptedAt, appliedAt sql.NullInt64
 	var waitingAskID sql.NullString
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
     t.canceled_at_unix_ms,
+    r.automation_requested_at_unix_ms,
     r.started_at_unix_ms,
     r.completed_at_unix_ms,
     r.interrupted_at_unix_ms,
-    r.waiting_ask_id
+    r.waiting_ask_id,
+    tt.applied_at_unix_ms
 FROM tasks t
 JOIN task_node_placements p ON p.task_id = t.id
 JOIN task_runs r ON r.placement_id = p.id
+JOIN task_transitions tt ON tt.task_id = t.id
 WHERE t.id = 'task-lifecycle-null'
-`).Scan(&canceledAt, &startedAt, &completedAt, &interruptedAt, &waitingAskID); err != nil {
+`).Scan(&canceledAt, &automationRequestedAt, &startedAt, &completedAt, &interruptedAt, &waitingAskID, &appliedAt); err != nil {
 		t.Fatalf("query migrated lifecycle facts: %v", err)
 	}
-	if canceledAt.Valid || startedAt.Valid || completedAt.Valid || interruptedAt.Valid || waitingAskID.Valid {
-		t.Fatalf("migrated lifecycle facts = canceled=%+v started=%+v completed=%+v interrupted=%+v waiting_ask=%+v, want NULL absence", canceledAt, startedAt, completedAt, interruptedAt, waitingAskID)
+	if canceledAt.Valid || automationRequestedAt.Valid || startedAt.Valid || completedAt.Valid || interruptedAt.Valid || waitingAskID.Valid || appliedAt.Valid {
+		t.Fatalf("migrated lifecycle facts = canceled=%+v automation_requested=%+v started=%+v completed=%+v interrupted=%+v waiting_ask=%+v applied=%+v, want NULL absence", canceledAt, automationRequestedAt, startedAt, completedAt, interruptedAt, waitingAskID, appliedAt)
+	}
+	var status string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT kind
+FROM workflow_task_status_records
+WHERE task_id = 'task-lifecycle-null'
+`).Scan(&status); err != nil {
+		t.Fatalf("query canonical status after lifecycle migration: %v", err)
+	}
+	if status != "waiting_approval" {
+		t.Fatalf("canonical status after lifecycle migration = %q, want waiting_approval", status)
+	}
+	var currentRunID string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT id
+FROM workflow_task_current_run_records
+WHERE task_id = 'task-lifecycle-null'
+`).Scan(&currentRunID); err != nil {
+		t.Fatalf("query current run projection after lifecycle migration: %v", err)
+	}
+	if currentRunID != "run-lifecycle-null" {
+		t.Fatalf("current run projection after lifecycle migration = %q, want run-lifecycle-null", currentRunID)
+	}
+	if _, err := store.db.ExecContext(t.Context(), `
+UPDATE task_runs
+SET automation_requested_at_unix_ms = 0
+WHERE id = 'run-lifecycle-null'
+`); err == nil {
+		t.Fatal("zero automation request timestamp should be rejected after lifecycle migration")
+	}
+	if _, err := store.db.ExecContext(t.Context(), `
+UPDATE task_transitions
+SET applied_at_unix_ms = 0
+WHERE id = 'transition-lifecycle-null'
+`); err == nil {
+		t.Fatal("zero transition application timestamp should be rejected after lifecycle migration")
 	}
 }
 

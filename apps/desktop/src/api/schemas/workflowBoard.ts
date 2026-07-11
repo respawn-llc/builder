@@ -20,6 +20,7 @@ import {
   boardGroupSchema,
   commentSchema,
   emptyString,
+  nullableString,
   runSchema,
   stringList,
   taskActionsSchema,
@@ -175,6 +176,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
         updated_at_unix_ms: z.number(),
         done: z.boolean(),
         canceled_at_unix_ms: z.number().nullable().optional(),
+        cancel_reason: nullableString,
       }),
       project: z.object({
         display_name: z.string(),
@@ -224,6 +226,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     updatedAt: value.task.summary.updated_at_unix_ms,
     done: value.task.summary.done,
     canceledAt: value.task.summary.canceled_at_unix_ms ?? null,
+    cancelReason: value.task.summary.cancel_reason,
   }));
 
 export const activityPageSchema: z.ZodType<ActivityPage> = z

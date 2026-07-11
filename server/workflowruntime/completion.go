@@ -215,7 +215,7 @@ func (c StoreController) ObserveWorkflowRunCompletion(ctx context.Context, req C
 	if req.RequireGeneration && run.Generation != req.ExpectedGeneration {
 		return CompletionObservationResult{}, nil
 	}
-	return CompletionObservationResult{Completed: run.CompletedAt != 0}, nil
+	return CompletionObservationResult{Completed: run.CompletedAt != nil}, nil
 }
 
 func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, req ViolationRequest) (ViolationResult, error) {

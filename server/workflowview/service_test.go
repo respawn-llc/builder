@@ -1126,10 +1126,10 @@ func TestTaskDetailProjectsCancellationAndInterruptedRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Summary.CanceledAt == nil || *detail.Summary.CanceledAt == 0 || detail.Summary.CancelReason != "stop" {
+	if detail.Summary.CanceledAt == nil || *detail.Summary.CanceledAt == 0 || detail.Summary.CancelReason == nil || *detail.Summary.CancelReason != "stop" {
 		t.Fatalf("summary does not project cancellation: %+v", detail.Summary)
 	}
-	if len(detail.Runs) != 1 || detail.Runs[0].InterruptedAtUnixMs == 0 || detail.Runs[0].InterruptionReason != "task_canceled" {
+	if len(detail.Runs) != 1 || detail.Runs[0].InterruptedAtUnixMs == nil || detail.Runs[0].InterruptionReason == nil || *detail.Runs[0].InterruptionReason != "task_canceled" {
 		t.Fatalf("runs do not project interruption: %+v", detail.Runs)
 	}
 	if detail.Actions.CanResume {
@@ -1677,7 +1677,7 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if len(detail.Runs) != 1 || detail.Runs[0].WaitingAskID != "ask-view-1" || detail.Runs[0].SessionID != sessionID {
+	if len(detail.Runs) != 1 || detail.Runs[0].WaitingAskID == nil || *detail.Runs[0].WaitingAskID != "ask-view-1" || detail.Runs[0].SessionID != sessionID {
 		t.Fatalf("runs do not project waiting ask: %+v", detail.Runs)
 	}
 	if len(detail.Attention) != 1 || detail.Attention[0].Message != "Waiting ask?" || len(detail.Attention[0].Suggestions) != 3 || detail.Attention[0].Suggestions[1] != "Dark chocolate" || detail.Attention[0].RecommendedOptionIndex != 2 {
@@ -2002,7 +2002,7 @@ func TestTaskActivityProjectsApprovalSnapshots(t *testing.T) {
 	if !hasRunCompleted {
 		t.Fatalf("activity missing run_completed item: %+v", resp.Items)
 	}
-	if transition.ID == "" || transition.SourceNodeID == "" || transition.SourceNodeDisplayName != "Agent" || transition.TransitionDisplayName != "Done" || transition.WorkflowRevisionSeen == 0 || transition.Actor != "agent" || transition.Commentary != "needs approval" || transition.AppliedAtUnixMs != 0 {
+	if transition.ID == "" || transition.SourceNodeID == "" || transition.SourceNodeDisplayName != "Agent" || transition.TransitionDisplayName != "Done" || transition.WorkflowRevisionSeen == 0 || transition.Actor != "agent" || transition.Commentary != "needs approval" || transition.AppliedAtUnixMs != nil {
 		t.Fatalf("transition snapshot = %+v", transition)
 	}
 	if len(transition.Edges) != 1 || !transition.Edges[0].RequiresApproval || transition.Edges[0].TargetNodeDisplayName == "" || len(transition.Edges[0].OutputRequirements) != 0 || transition.Edges[0].WorkflowRevisionSeen == 0 {

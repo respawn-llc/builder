@@ -159,9 +159,9 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	if err := touchTaskUpdatedAt(ctx, q, string(req.TaskID), now); err != nil {
 		return ManualMoveResult{}, err
 	}
-	appliedAt := now
+	appliedAt := sql.NullInt64{Int64: now, Valid: true}
 	if transitionState == "pending_approval" {
-		appliedAt = 0
+		appliedAt = sql.NullInt64{}
 	}
 	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: string(req.TaskID), SourceRunID: sql.NullString{String: string(sourceRunID), Valid: sourceRunID != ""}, SourcePlacementID: sql.NullString{String: string(sourcePlacement), Valid: true}, SourceNodeKey: string(workflow.NodeKey(sourceNode)), SourceNodeDisplayName: workflow.NodeDisplayName(sourceNode), TransitionID: string(group.TransitionID), TransitionDisplayName: group.DisplayName, WorkflowRevisionSeen: task.WorkflowRevisionSeen, Actor: actor, State: transitionState, Commentary: strings.TrimSpace(req.Commentary), OutputValuesJson: outputValuesJSON, CreatedAtUnixMs: now, AppliedAtUnixMs: appliedAt}); err != nil {
 		return ManualMoveResult{}, err

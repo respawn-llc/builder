@@ -74,7 +74,7 @@ func TestManualMoveRejectsStartedRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].CompletedAt != 0 || runs[0].InterruptedAt != 0 {
+	if len(runs) != 1 || runs[0].CompletedAt != nil || runs[0].InterruptedAt != nil {
 		t.Fatalf("runs after rejected manual move = %+v, want original active run", runs)
 	}
 	placements, err := store.ListPlacements(ctx, task.ID)

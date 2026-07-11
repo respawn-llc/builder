@@ -979,7 +979,7 @@ WHERE t.workflow_id = sqlc.arg(workflow_id)
           AND r.interrupted_at_unix_ms IS NOT NULL
       )
       OR (
-          r.automation_requested_at_unix_ms > 0
+          r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
@@ -1047,7 +1047,7 @@ SELECT
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.workflow_id = sqlc.arg(workflow_id)
           AND t.canceled_at_unix_ms IS NULL
-          AND r.automation_requested_at_unix_ms > 0
+          AND r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
@@ -1082,7 +1082,7 @@ SELECT
         THEN r.id
     END) AS INTEGER) AS active_run_count,
     CAST(COUNT(DISTINCT CASE
-        WHEN r.automation_requested_at_unix_ms > 0
+        WHEN r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
@@ -1101,7 +1101,7 @@ SELECT
             AND n.kind IN ('agent', 'script')
         )
         OR (
-            r.automation_requested_at_unix_ms > 0
+            r.automation_requested_at_unix_ms IS NOT NULL
             AND r.started_at_unix_ms IS NULL
             AND r.completed_at_unix_ms IS NULL
             AND r.interrupted_at_unix_ms IS NULL
@@ -2028,7 +2028,7 @@ INSERT INTO task_runs (
     sqlc.narg(session_id),
     sqlc.arg(run_generation),
     sqlc.arg(workflow_revision_seen),
-    sqlc.arg(automation_requested_at_unix_ms),
+    sqlc.narg(automation_requested_at_unix_ms),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms),
     sqlc.narg(started_at_unix_ms),
@@ -2136,7 +2136,7 @@ FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.automation_requested_at_unix_ms > 0
+WHERE r.automation_requested_at_unix_ms IS NOT NULL
   AND r.started_at_unix_ms IS NULL
   AND r.completed_at_unix_ms IS NULL
   AND r.interrupted_at_unix_ms IS NULL
@@ -2156,7 +2156,7 @@ SET
     run_generation = run_generation + 1
 WHERE task_runs.id = sqlc.arg(id)
   AND run_generation = sqlc.arg(expected_generation)
-  AND automation_requested_at_unix_ms > 0
+  AND automation_requested_at_unix_ms IS NOT NULL
   AND started_at_unix_ms IS NULL
   AND completed_at_unix_ms IS NULL
   AND interrupted_at_unix_ms IS NULL
@@ -2357,7 +2357,7 @@ INSERT INTO task_transitions (
     sqlc.arg(commentary),
     sqlc.arg(output_values_json),
     sqlc.arg(created_at_unix_ms),
-    sqlc.arg(applied_at_unix_ms)
+    sqlc.narg(applied_at_unix_ms)
 );
 
 -- name: ListTaskTransitions :many
@@ -2542,7 +2542,7 @@ SELECT tr.output_values_json
 FROM task_transitions tr
 WHERE tr.task_id = sqlc.arg(task_id)
   AND tr.transition_id = sqlc.arg(transition_id)
-  AND tr.applied_at_unix_ms > 0
+  AND tr.applied_at_unix_ms IS NOT NULL
   AND tr.applied_at_unix_ms <= sqlc.arg(before_unix_ms)
   AND tr.state != 'rejected'
 ORDER BY tr.applied_at_unix_ms DESC, tr.created_at_unix_ms DESC, tr.rowid DESC
@@ -2555,7 +2555,7 @@ JOIN task_node_placements p ON p.id = tr.source_placement_id
 WHERE tr.task_id = sqlc.arg(task_id)
   AND tr.transition_id = sqlc.arg(transition_id)
   AND p.parallel_batch_transition_id = sqlc.arg(batch_id)
-  AND tr.applied_at_unix_ms > 0
+  AND tr.applied_at_unix_ms IS NOT NULL
   AND tr.applied_at_unix_ms <= sqlc.arg(before_unix_ms)
   AND tr.state != 'rejected'
 ORDER BY tr.applied_at_unix_ms DESC, tr.created_at_unix_ms DESC, tr.rowid DESC
@@ -3088,7 +3088,7 @@ SELECT
             WHERE run_tasks.project_id = p.id
         ), 0),
         COALESCE((
-            SELECT MAX(MAX(tt.created_at_unix_ms, tt.applied_at_unix_ms))
+            SELECT MAX(COALESCE(tt.applied_at_unix_ms, tt.created_at_unix_ms))
             FROM task_transitions tt
             JOIN task_records transition_tasks ON transition_tasks.id = tt.task_id
             WHERE transition_tasks.project_id = p.id
@@ -3240,7 +3240,7 @@ SELECT
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.project_id = sqlc.arg(delete_project_id)
           AND t.canceled_at_unix_ms IS NULL
-          AND r.automation_requested_at_unix_ms > 0
+          AND r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
@@ -3390,7 +3390,7 @@ WITH attention_candidates(
         '' AS session_id,
         '' AS ask_id,
         tt.id AS task_transition_id,
-        '' AS interruption_reason,
+        NULL AS interruption_reason,
         '' AS interruption_detail_json,
         tt.created_at_unix_ms AS occurred_at_unix_ms
     FROM task_transitions tt
@@ -3417,7 +3417,7 @@ WITH attention_candidates(
         COALESCE(r.session_id, '') AS session_id,
         r.waiting_ask_id AS ask_id,
         '' AS task_transition_id,
-        '' AS interruption_reason,
+        NULL AS interruption_reason,
         '' AS interruption_detail_json,
         r.updated_at_unix_ms AS occurred_at_unix_ms
     FROM workflow_task_current_run_records r
@@ -3478,7 +3478,7 @@ WITH attention_candidates(
         '' AS session_id,
         '' AS ask_id,
         '' AS task_transition_id,
-        '' AS interruption_reason,
+        NULL AS interruption_reason,
         '' AS interruption_detail_json,
         updated_at_unix_ms AS occurred_at_unix_ms
     FROM project_workflow_links
@@ -3587,7 +3587,7 @@ WITH activity(
         'transition' AS kind,
         tt.id AS source_id,
         tt.created_at_unix_ms AS occurred_at_unix_ms,
-        tt.applied_at_unix_ms AS updated_at_unix_ms,
+        COALESCE(tt.applied_at_unix_ms, tt.created_at_unix_ms) AS updated_at_unix_ms,
         tt.actor AS actor
     FROM task_transitions tt
     WHERE tt.task_id = sqlc.arg(task_id)

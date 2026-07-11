@@ -206,7 +206,7 @@ func latestTransitionParameterValue(ctx context.Context, q *sqlitegen.Queries, t
 
 func latestTransitionOutputValuesJSON(ctx context.Context, q *sqlitegen.Queries, taskID string, transitionKey string, beforeUnixMs int64, batchID string, batchScoped bool) (string, error) {
 	if batchScoped {
-		scopedOutputValuesJSON, err := q.GetLatestTransitionOutputValuesInBatch(ctx, sqlitegen.GetLatestTransitionOutputValuesInBatchParams{TaskID: taskID, TransitionID: transitionKey, BatchID: sql.NullString{String: batchID, Valid: true}, BeforeUnixMs: beforeUnixMs})
+		scopedOutputValuesJSON, err := q.GetLatestTransitionOutputValuesInBatch(ctx, sqlitegen.GetLatestTransitionOutputValuesInBatchParams{TaskID: taskID, TransitionID: transitionKey, BatchID: sql.NullString{String: batchID, Valid: true}, BeforeUnixMs: sql.NullInt64{Int64: beforeUnixMs, Valid: true}})
 		if err == nil {
 			return scopedOutputValuesJSON, nil
 		}
@@ -214,7 +214,7 @@ func latestTransitionOutputValuesJSON(ctx context.Context, q *sqlitegen.Queries,
 			return "", err
 		}
 	}
-	outputValuesJSON, err := q.GetLatestTransitionOutputValues(ctx, sqlitegen.GetLatestTransitionOutputValuesParams{TaskID: taskID, TransitionID: transitionKey, BeforeUnixMs: beforeUnixMs})
+	outputValuesJSON, err := q.GetLatestTransitionOutputValues(ctx, sqlitegen.GetLatestTransitionOutputValuesParams{TaskID: taskID, TransitionID: transitionKey, BeforeUnixMs: sql.NullInt64{Int64: beforeUnixMs, Valid: true}})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("prior transition %q has no completed output for task", transitionKey)
 	}

@@ -157,7 +157,7 @@ func workflowTaskAgentRun(task serverapi.WorkflowTaskDetail, sessionID string) (
 		}
 		score := workflowTaskAgentRunScore{
 			Current:       currentRunIDs[strings.TrimSpace(run.ID)],
-			Unfinished:    run.CompletedAtUnixMs == 0 && run.InterruptedAtUnixMs == 0,
+			Unfinished:    run.CompletedAtUnixMs == nil && run.InterruptedAtUnixMs == nil,
 			StartedAt:     run.StartedAtUnixMs,
 			CompletedAt:   run.CompletedAtUnixMs,
 			InterruptedAt: run.InterruptedAtUnixMs,
@@ -176,9 +176,9 @@ func workflowTaskAgentRun(task serverapi.WorkflowTaskDetail, sessionID string) (
 type workflowTaskAgentRunScore struct {
 	Current       bool
 	Unfinished    bool
-	StartedAt     int64
-	CompletedAt   int64
-	InterruptedAt int64
+	StartedAt     *int64
+	CompletedAt   *int64
+	InterruptedAt *int64
 	Generation    int64
 	ID            string
 }
@@ -189,16 +189,33 @@ func (s workflowTaskAgentRunScore) betterThan(other workflowTaskAgentRunScore) b
 		return s.Current
 	case s.Unfinished != other.Unfinished:
 		return s.Unfinished
-	case s.StartedAt != other.StartedAt:
-		return s.StartedAt > other.StartedAt
-	case s.CompletedAt != other.CompletedAt:
-		return s.CompletedAt > other.CompletedAt
-	case s.InterruptedAt != other.InterruptedAt:
-		return s.InterruptedAt > other.InterruptedAt
+	case compareOptionalUnixMillis(s.StartedAt, other.StartedAt) != 0:
+		return compareOptionalUnixMillis(s.StartedAt, other.StartedAt) > 0
+	case compareOptionalUnixMillis(s.CompletedAt, other.CompletedAt) != 0:
+		return compareOptionalUnixMillis(s.CompletedAt, other.CompletedAt) > 0
+	case compareOptionalUnixMillis(s.InterruptedAt, other.InterruptedAt) != 0:
+		return compareOptionalUnixMillis(s.InterruptedAt, other.InterruptedAt) > 0
 	case s.Generation != other.Generation:
 		return s.Generation > other.Generation
 	default:
 		return s.ID > other.ID
+	}
+}
+
+func compareOptionalUnixMillis(left *int64, right *int64) int {
+	switch {
+	case left == nil && right == nil:
+		return 0
+	case left == nil:
+		return -1
+	case right == nil:
+		return 1
+	case *left < *right:
+		return -1
+	case *left > *right:
+		return 1
+	default:
+		return 0
 	}
 }
 

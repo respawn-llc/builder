@@ -54,8 +54,8 @@ func TestTaskCommentAuthorForAddUsesDeterministicCurrentWorkflowRun(t *testing.T
 			{NodeID: "node-current", NodeKey: "current"},
 		},
 		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: 20},
-			{ID: "run-current", SessionID: "session-workflow", NodeID: "node-current", StartedAtUnixMs: 10},
+			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: optionalUnixMillis(20)},
+			{ID: "run-current", SessionID: "session-workflow", NodeID: "node-current", StartedAtUnixMs: optionalUnixMillis(10)},
 		},
 	}}
 	got := taskCommentAuthorForAdd(context.Background(), remote, "task-1", "", false)
@@ -72,8 +72,8 @@ func TestTaskCommentAuthorForAddUsesLatestWorkflowRunWhenNoneCurrent(t *testing.
 			{NodeID: "node-new", NodeKey: "new"},
 		},
 		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: 10},
-			{ID: "run-new", SessionID: "session-workflow", NodeID: "node-new", StartedAtUnixMs: 20},
+			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: optionalUnixMillis(10)},
+			{ID: "run-new", SessionID: "session-workflow", NodeID: "node-new", StartedAtUnixMs: optionalUnixMillis(20)},
 		},
 	}}
 	got := taskCommentAuthorForAdd(context.Background(), remote, "task-1", "", false)

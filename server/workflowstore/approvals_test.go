@@ -37,7 +37,7 @@ func TestCompleteRunCreatesPendingApprovalTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].CompletedAt == 0 {
+	if len(runs) != 1 || runs[0].CompletedAt == nil {
 		t.Fatalf("runs after pending approval = %+v, want source run completed", runs)
 	}
 }

@@ -1227,7 +1227,7 @@ type WorkflowTaskSummary struct {
 	BodyPreview       string   `json:"body_preview,omitempty"`
 	SourceWorkspaceID string   `json:"source_workspace_id,omitempty"`
 	CanceledAt        *int64   `json:"canceled_at_unix_ms,omitempty"`
-	CancelReason      string   `json:"cancel_reason,omitempty"`
+	CancelReason      *string  `json:"cancel_reason,omitempty"`
 	CreatedAtUnixMs   int64    `json:"created_at_unix_ms"`
 	UpdatedAtUnixMs   int64    `json:"updated_at_unix_ms"`
 	Done              bool     `json:"done"`
@@ -1264,23 +1264,23 @@ type WorkflowPlacement struct {
 }
 
 type WorkflowRun struct {
-	ID                  string `json:"id"`
-	TaskID              string `json:"task_id"`
-	PlacementID         string `json:"placement_id"`
-	NodeID              string `json:"node_id"`
-	NodeKind            string `json:"node_kind,omitempty"`
-	ScriptPath          string `json:"script_path,omitempty"`
-	SessionID           string `json:"session_id,omitempty"`
-	SessionName         string `json:"session_name,omitempty"`
-	Role                string `json:"role,omitempty"`
-	Status              string `json:"status"`
-	Generation          int64  `json:"generation"`
-	StartedAtUnixMs     int64  `json:"started_at_unix_ms"`
-	CompletedAtUnixMs   int64  `json:"completed_at_unix_ms"`
-	InterruptedAtUnixMs int64  `json:"interrupted_at_unix_ms"`
-	InterruptionReason  string `json:"interruption_reason,omitempty"`
-	InterruptionDetail  string `json:"interruption_detail_json,omitempty"`
-	WaitingAskID        string `json:"waiting_ask_id,omitempty"`
+	ID                  string  `json:"id"`
+	TaskID              string  `json:"task_id"`
+	PlacementID         string  `json:"placement_id"`
+	NodeID              string  `json:"node_id"`
+	NodeKind            string  `json:"node_kind,omitempty"`
+	ScriptPath          string  `json:"script_path,omitempty"`
+	SessionID           string  `json:"session_id,omitempty"`
+	SessionName         string  `json:"session_name,omitempty"`
+	Role                string  `json:"role,omitempty"`
+	Status              string  `json:"status"`
+	Generation          int64   `json:"generation"`
+	StartedAtUnixMs     *int64  `json:"started_at_unix_ms,omitempty"`
+	CompletedAtUnixMs   *int64  `json:"completed_at_unix_ms,omitempty"`
+	InterruptedAtUnixMs *int64  `json:"interrupted_at_unix_ms,omitempty"`
+	InterruptionReason  *string `json:"interruption_reason,omitempty"`
+	InterruptionDetail  string  `json:"interruption_detail_json,omitempty"`
+	WaitingAskID        *string `json:"waiting_ask_id,omitempty"`
 }
 
 type WorkflowTaskTransition struct {
@@ -1300,7 +1300,7 @@ type WorkflowTaskTransition struct {
 	Commentary            string                   `json:"commentary,omitempty"`
 	OutputValues          map[string]string        `json:"output_values,omitempty"`
 	CreatedAt             int64                    `json:"created_at_unix_ms"`
-	AppliedAtUnixMs       int64                    `json:"applied_at_unix_ms"`
+	AppliedAtUnixMs       *int64                   `json:"applied_at_unix_ms,omitempty"`
 	Edges                 []WorkflowTransitionEdge `json:"edges,omitempty"`
 }
 
