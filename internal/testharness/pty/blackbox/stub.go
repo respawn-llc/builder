@@ -521,36 +521,58 @@ func hasMatchingSessionCacheKey(body []byte, headers http.Header) bool {
 	if json.Unmarshal(body, &request) != nil || request.PromptCacheKey == nil {
 		return false
 	}
-	sessionID, err := runtimeids.ParseSessionID(headers.Get("session_id"))
+	session, err := parseSessionCacheKey(headers.Get("session_id"))
 	if err != nil {
 		return false
 	}
 	cacheKey, err := parseSessionCacheKey(*request.PromptCacheKey)
-	return err == nil && cacheKey.SessionID.String() == sessionID.String()
+	return err == nil && session.Compaction == nil && cacheKey.SessionID.String() == session.SessionID.String() && cacheKey.Supervisor == session.Supervisor
 }
 
 type sessionCacheKey struct {
-	SessionID runtimeids.SessionID
+	SessionID  runtimeids.SessionID
+	Supervisor bool
+	Compaction *int
 }
 
 func parseSessionCacheKey(raw string) (sessionCacheKey, error) {
-	sessionPart, suffix, compacted := strings.Cut(raw, "/")
+	sessionPart, suffix, hasSuffix := strings.Cut(raw, "/")
 	sessionID, err := runtimeids.ParseSessionID(sessionPart)
 	if err != nil {
 		return sessionCacheKey{}, err
 	}
-	if !compacted {
-		return sessionCacheKey{SessionID: sessionID}, nil
+	key := sessionCacheKey{SessionID: sessionID}
+	if !hasSuffix {
+		return key, nil
 	}
-	prefix, sequence, valid := strings.Cut(suffix, "-")
+	segment, tail, hasTail := strings.Cut(suffix, "/")
+	if segment == "supervisor" {
+		key.Supervisor = true
+		if !hasTail {
+			return key, nil
+		}
+		segment = tail
+	} else if hasTail {
+		return sessionCacheKey{}, errors.New("invalid session cache key suffix")
+	}
+	count, err := parseCompactionSegment(segment)
+	if err != nil {
+		return sessionCacheKey{}, err
+	}
+	key.Compaction = &count
+	return key, nil
+}
+
+func parseCompactionSegment(segment string) (int, error) {
+	prefix, sequence, valid := strings.Cut(segment, "-")
 	if !valid || prefix != "compact" {
-		return sessionCacheKey{}, errors.New("invalid compacted session cache key")
+		return 0, errors.New("invalid compacted session cache key")
 	}
 	count, err := strconv.Atoi(sequence)
 	if err != nil || count <= 0 {
-		return sessionCacheKey{}, errors.New("invalid compacted session cache key sequence")
+		return 0, errors.New("invalid compacted session cache key sequence")
 	}
-	return sessionCacheKey{SessionID: sessionID}, nil
+	return count, nil
 }
 
 type responseInputItem struct {
