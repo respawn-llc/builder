@@ -355,8 +355,8 @@ func (f WorktreeGitFacts) Validate() error {
 }
 
 func (f WorktreeKentFacts) Validate() error {
-	if _, err := ParseWorktreeOperationID(f.WorktreeID); err != nil {
-		return fmt.Errorf("worktree_id: %w", err)
+	if strings.TrimSpace(f.WorktreeID) == "" {
+		return errors.New("kent worktree_id is required")
 	}
 	if strings.TrimSpace(f.CanonicalRoot) == "" || strings.TrimSpace(f.DisplayName) == "" {
 		return errors.New("kent canonical_root and display_name are required")
