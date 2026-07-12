@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
+import {
+  defaultWorkflowExecutionTargetPolicy,
+  emptyWorkflowDerivedWiring,
+  type WorkflowDefinition,
+} from "../../api";
 import {
   workflowDeleteNeedsConfirmation,
   workflowDeletionConfirmationCounts,
@@ -108,5 +112,6 @@ const fanoutWorkflowDefinition: WorkflowDefinition = {
     id: "workflow-1",
     name: "Workflow",
     version: 1,
+    executionTargetPolicy: defaultWorkflowExecutionTargetPolicy,
   },
 };

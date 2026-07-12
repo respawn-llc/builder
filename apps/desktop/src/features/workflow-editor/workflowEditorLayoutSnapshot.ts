@@ -1,4 +1,5 @@
 import {
+  defaultWorkflowExecutionTargetPolicy,
   emptyWorkflowDerivedWiring,
   type WorkflowDefinition,
   type WorkflowValidation,
@@ -19,7 +20,13 @@ export function emptyWorkflowDefinition(workflowID: string): WorkflowDefinition 
     nodeGroups: [],
     nodes: [],
     transitionGroups: [],
-    workflow: { description: "", version: 1, id: workflowID, name: "" },
+    workflow: {
+      description: "",
+      version: 1,
+      id: workflowID,
+      name: "",
+      executionTargetPolicy: defaultWorkflowExecutionTargetPolicy,
+    },
     derivedWiring: emptyWorkflowDerivedWiring,
   };
 }

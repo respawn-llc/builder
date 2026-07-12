@@ -33,6 +33,10 @@
 - Backlog task creation can persist tasks for an invalid linked/default workflow so users can collect work while fixing the graph. Task start and runtime scheduling require project-context validation and reject invalid workflows with accumulated safe actionable errors.
 - A project can link multiple workflows and has one default workflow for task creation.
 - Invalid default workflows are allowed. Task creation against an invalid default creates Backlog tasks, while starting/running those tasks fails with accumulated validation errors until the workflow is fixed.
+- Every workflow has exactly one execution target policy: no managed worktree, source `HEAD`, repository default branch, custom Git ref, or operator selection when execution first begins.
+- New workflows default to `ask_on_first_execution`. Workflows created before execution target policy existed migrate to source `HEAD` so their established behavior continues.
+- Custom-ref policy stores one Git revision value. Other policies do not retain a custom-ref value.
+- A draft may save custom-ref policy without a value and reports a semantic validation issue. Saving validates presence only; Git resolution is authoritative against the task's source workspace when execution first begins.
 - Workflow creation auto-creates ordinary editable `backlog` and `done` nodes.
 - Workflows carry a monotonic `version` over persisted definition changes. This is traceability/stale-warning data, not immutable graph versioning.
 - Metadata-only changes and graph changes each increment workflow `version` once; combined metadata+graph saves also increment it once; no-op saves increment neither.
@@ -87,8 +91,8 @@
 
 - Script nodes are first-class executable workflow nodes. They can be Start targets, fan-out branches, join predecessors/successors, manual automation targets, and board columns anywhere agent nodes are accepted by graph semantics.
 - Script nodes store nullable `script_path`. Missing, nonexistent, directory, and non-executable paths do not block graph save or node add/update; they block execution validation, task start, or target run execution as appropriate.
-- Relative script paths resolve against the task managed worktree root. Absolute paths resolve on the Kent server host.
-- Script execution directly `exec`s the resolved file with the task managed worktree as cwd. It does not use a shell wrapper, retries, or a timeout.
+- Relative script paths resolve against the task execution root. Absolute paths resolve on the Kent server host.
+- Script execution directly `exec`s the resolved file with the task execution root as cwd. It does not use a shell wrapper, retries, or a timeout.
 - Script stdin is one JSON object. Incoming workflow parameter values are top-level properties. `_kent` is reserved for minimal runtime identifiers, including `run_id` and `placement_id`.
 - Script stdout is parsed as the workflow completion JSON using the same completion contract as agent nodes. Stderr is diagnostics only and is not mixed into completion parsing.
 - Script run failures, invalid stdout, invalid script path, cancellation, and execution errors interrupt the run with bounded structured details.
@@ -124,6 +128,7 @@
 - A task awaiting approval has no active placement; its live position is the pending transition's source node, surfaced as a synthesized `waiting_approval` placement.
 - Manually moving a task that is awaiting approval overrides the proposed transition: the pending approval is marked `rejected` (auditable, not deleted) and the task moves from the approval's source node to the chosen target. This is the operator path to reject a proposed transition (e.g. sending an awaiting-approval plan back to Backlog).
 - Missing-edge manual overrides cannot target executable nodes. Manual movement into an agent or script node requires a concrete workflow edge so the target run has a real prompt/contract.
+- Task start, manual movement into an executable node, and approval into an executable node apply no movement, approval, or scheduling when target selection is required. A valid selection retries and applies the original action once; dismissal leaves it unchanged.
 
 ## Context Preservation And Bindings
 
@@ -197,18 +202,39 @@
 - Explicit workflow selectors are workflow UUIDs. When both project and workflow are supplied, Kent validates their active link.
 - Task-list status sorting follows primary typed-status precedence; column sorting follows workflow column position.
 
-## Worktrees
+## Execution Targets And Worktrees
 
-- A task owns one managed worktree by default.
-- All executable nodes require and reuse the task managed worktree.
-- Kent creates and, when configured, runs setup for the managed worktree on task start before first executable run is scheduled. Blocking setup prevents runs from locking context before setup-provided local skills, docs, or other worktree files are present.
-- Managed worktree setup failure fails task start without scheduling an executable run. The created worktree stays available for inspection or manual repair.
-- Starting the task again trusts an existing managed worktree as manually repaired. If the managed worktree was removed, task start recreates it and runs setup again.
-- Task worktree branch name is the task short ID.
+- A workflow execution target policy is evaluated only when an unlocked task first reaches an executable node through task start, manual movement, or approval.
+- No managed worktree uses the source workspace as the execution root, supports non-Git workspaces, and creates no branch or worktree and runs no worktree setup.
+- A no-managed-worktree target follows the task's current source workspace. Changing that workspace intentionally changes later execution roots.
+- Source `HEAD`, repository default branch, and custom Git ref resolve server-side to an immutable commit before managed-worktree creation. Custom ref accepts any Git revision that resolves to a commit.
+- Repository default branch uses configured local remote-HEAD metadata: `origin` when configured, otherwise one unambiguous configured remote HEAD. Kent does not contact remotes or guess branch names; missing or ambiguous metadata makes the configured target unavailable.
+- `ask_on_first_execution` and an unavailable configured target use the same task-local selection flow. They offer no managed worktree, source `HEAD`, repository default branch, and custom Git ref.
+- For `ask_on_first_execution`, repository default branch is preselected. For an unavailable configured target, the configured mode and custom-ref input remain selected when useful; otherwise repository default branch is preselected.
+- An unresolvable configured target asks the operator to select a concrete target and explains which configured target failed and why.
+- Selection-required results distinguish exactly two interaction reasons: workflow policy requires selection or configured target is unavailable. Every selection flow offers all four concrete modes; the wire contract does not carry a dynamic allowed-mode list.
+- Failure to resolve an explicitly selected custom ref is a validation failure. It does not recursively request selection or fall back to another target.
+- A task locks target-selection provenance only when the initiating action successfully reaches its first executable placement. Later nodes and retries reuse the locked mode and managed requested/resolved facts despite workflow edits or Git ref movement.
+- Every pre-upgrade task with a recorded managed worktree and usable recorded HEAD metadata continues using that worktree after upgrade, regardless of whether it already has a run. Its observed commit is identified as legacy provenance and is not presented as a known original branch point.
+- Pre-upgrade tasks without a managed worktree remain unlocked and inherit their migrated workflow's source-`HEAD` policy.
+- Managed targets use the existing task-worktree creation, setup, and collision behavior. Before the first executable run is scheduled, setup either succeeds for the newly created candidate in that request or a later explicit request accepts the same available, base-compatible candidate as manually repaired.
+- Managed worktree setup failure leaves the initiating action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
+- Setup runs only when the current request creates or recreates a worktree root. A later retry trusts an already-existing compatible root and does not rerun setup; no durable setup-readiness state exists.
+- A managed target remains tied to its original source workspace, but its current root, metadata binding, branch history, and named branch may change.
+- Before execution Kent validates that the bound root is the exact worktree root for the source repository and has a named branch. It never compares current history or HEAD with the originally resolved commit, and it accepts any current named branch.
+- When a locked managed root or metadata binding is missing, the initiating action or workflow runner may synchronously invoke the single worktree materializer to conservatively restore an existing named branch at a collision-safe managed root, persist the relation, and run setup for the recreated root.
+- Conservative repair never recreates a missing branch from the old base commit, overwrites an existing directory, resets or renames a branch, accepts detached HEAD, repairs another repository, or infers ownership by scanning arbitrary roots. Unsafe or ambiguous states return one typed locked-target error with a small product-level cause.
+- There is no target-replacement flow. A locked target is never converted to no managed worktree.
+- Task detail always exposes the source workspace. After lock it exposes the current target mode and derived execution root, plus the requested revision and resolved commit. Managed targets show the current named branch only while the root is available and do not persist branch name in the target snapshot.
+- Human task detail shortens the resolved commit for readability. Structured JSON retains the full commit value.
+- Initial managed worktree creation uses the task short ID as the branch name.
 - Worktree creation reuses existing worktree branch/root collision handling.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.
 - Worktree deletion blocks if another session targeting the worktree has an active run, and holds a run-exclusion on all targeting sessions across the `git` removal so no new run can start mid-deletion; a run submitted during the window is rejected with `ErrSessionWorktreeDeleting` until the exclusion releases.
-- Workflow worktree creation uses lower-level primitives directly.
+- Initial materialization and conservative locked-target repair reuse one managed-worktree creation/setup implementation.
+- The CLI task-start command may select a concrete target for an unlocked task even when the workflow has a fixed policy. Task creation has no target override.
+- CLI target selection uses `--execution-target none|head|default-branch|ref:<revision>`; custom Git revisions require the explicit `ref:` namespace.
+- CLI task start never prompts interactively. Selection-required output identifies the reason and concrete rerun flags in human output and exposes the same typed outcome in JSON.
 
 ## Project Keys And Task IDs
 

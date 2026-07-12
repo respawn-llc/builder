@@ -217,7 +217,7 @@ func TestTaskMutationOutputRenderers(t *testing.T) {
 	}
 
 	var start bytes.Buffer
-	writeTaskStartResult(&start, task, serverapi.WorkflowTaskStartResponse{RunID: "run-1", PlacementID: "placement-1", TransitionID: "transition-start"})
+	writeTaskStartResult(&start, task, serverapi.WorkflowTaskStartApplied{RunID: "run-1", PlacementID: "placement-1", TransitionID: "transition-start"})
 	if got, want := start.String(), "Started task BLD-1 in session session-1 using workflow \"Workflow\" (workflow-1).\nFirst node: implement\n"; got != want {
 		t.Fatalf("start output = %q, want %q", got, want)
 	}
@@ -232,6 +232,123 @@ func TestTaskMutationOutputRenderers(t *testing.T) {
 	writeTaskTransitionResult(&move, "Moved task", task, "transition-1", nil)
 	if got, want := move.String(), "Moved task BLD-1 from `implement` to `done`.\n"; got != want {
 		t.Fatalf("move output = %q, want %q", got, want)
+	}
+}
+
+func TestTaskStartExecutionTargetOverrideAndSelectionRequiredOutput(t *testing.T) {
+	remote := &taskStartPollingRemote{
+		projectID:   "project-1",
+		taskID:      "task-1",
+		shortID:     "BLD-1",
+		workflowID:  "workflow-1",
+		workflow:    "Workflow",
+		placementID: "placement-1",
+		runID:       "run-1",
+		sessionID:   "session-1",
+		nodeID:      "node-1",
+		nodeKey:     "implement",
+		startResponse: &serverapi.WorkflowTaskStartResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+			SelectionRequired: &serverapi.WorkflowExecutionTargetSelectionRequirement{
+				Reason: serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
+			},
+		},
+	}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: "."}, remote)
+	defer restore()
+
+	stdout, stderr, code := runWorkflowRootCommand("task", "start", "--project", remote.projectID, remote.shortID)
+	if code != 1 || stdout != "" {
+		t.Fatalf("selection-required exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"Execution target selection is required: workflow policy requires selection.\n",
+		"  --execution-target none\n",
+		"  --execution-target head\n",
+		"  --execution-target default-branch\n",
+		"  --execution-target ref:<revision>\n",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("selection-required stderr = %q, want %q", stderr, want)
+		}
+	}
+
+	remote.taskIDDetailCalls = 0
+	stdout, stderr, code = runWorkflowRootCommand("task", "start", "--project", remote.projectID, "--json", remote.shortID)
+	if code != 1 || stderr != "" {
+		t.Fatalf("JSON selection-required exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	var response serverapi.WorkflowTaskStartResponse
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		t.Fatalf("decode JSON selection-required output %q: %v", stdout, err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired ||
+		response.SelectionRequired == nil ||
+		response.SelectionRequired.Reason != serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection {
+		t.Fatalf("JSON selection-required response = %+v", response)
+	}
+
+	configuredRef := "release/v1"
+	remote.startResponse = &serverapi.WorkflowTaskStartResponse{
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+		SelectionRequired: &serverapi.WorkflowExecutionTargetSelectionRequirement{
+			Reason: serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable,
+			ConfiguredTarget: &serverapi.WorkflowExecutionTargetConfiguredTarget{
+				Mode:         serverapi.WorkflowExecutionTargetModeCustomRef,
+				RequestedRef: &configuredRef,
+			},
+			UnavailableCause: serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision,
+		},
+	}
+	_, stderr, code = runWorkflowRootCommand("task", "start", "--project", remote.projectID, remote.shortID)
+	if code != 1 ||
+		!strings.Contains(stderr, "ref:"+configuredRef) ||
+		!strings.Contains(stderr, string(serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision)) {
+		t.Fatalf("configured-target-unavailable exit=%d stderr=%q", code, stderr)
+	}
+
+	remote.startResponse = nil
+	remote.taskIDDetailCalls = 0
+	stdout, stderr, code = runWorkflowRootCommand("task", "start", "--project", remote.projectID, "--execution-target", "ref:release/v1", remote.shortID)
+	if code != 0 || stderr != "" {
+		t.Fatalf("explicit target exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if remote.startRequest.ExecutionTarget == nil ||
+		remote.startRequest.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeCustomRef ||
+		remote.startRequest.ExecutionTarget.CustomRef == nil ||
+		*remote.startRequest.ExecutionTarget.CustomRef != "release/v1" {
+		t.Fatalf("start request execution target = %+v", remote.startRequest.ExecutionTarget)
+	}
+}
+
+func TestWorkflowExecutionTargetErrorsExposeTypedFacts(t *testing.T) {
+	for _, test := range []struct {
+		err   error
+		facts []string
+	}{
+		{
+			err: &serverapi.WorkflowExecutionTargetResolutionError{
+				Code:         serverapi.WorkflowExecutionTargetResolutionErrorInvalidRevision,
+				RequestedRef: "missing-ref",
+			},
+			facts: []string{"missing-ref", string(serverapi.WorkflowExecutionTargetResolutionErrorInvalidRevision)},
+		},
+		{
+			err: &serverapi.WorkflowLockedExecutionTargetError{
+				Cause: serverapi.WorkflowLockedExecutionTargetCauseMissingBranch,
+			},
+			facts: []string{string(serverapi.WorkflowLockedExecutionTargetCauseMissingBranch)},
+		},
+	} {
+		var output bytes.Buffer
+		if !writeWorkflowExecutionTargetError(&output, test.err) {
+			t.Fatalf("typed error %T was not handled", test.err)
+		}
+		for _, fact := range test.facts {
+			if !strings.Contains(output.String(), fact) {
+				t.Fatalf("typed error output %q omitted %q", output.String(), fact)
+			}
+		}
 	}
 }
 
@@ -265,7 +382,7 @@ func TestTaskStartSessionPollingDoesNotWaitForScriptRunSession(t *testing.T) {
 		t.Fatalf("waitForWorkflowTaskRunSession: %v", err)
 	}
 	var stdout bytes.Buffer
-	writeTaskStartResult(&stdout, detail, serverapi.WorkflowTaskStartResponse{RunID: "run-1", PlacementID: "placement-1", TransitionID: "transition-start"})
+	writeTaskStartResult(&stdout, detail, serverapi.WorkflowTaskStartApplied{RunID: "run-1", PlacementID: "placement-1", TransitionID: "transition-start"})
 	if got, want := stdout.String(), "Started task BLD-1 using workflow \"Workflow\" (workflow-1).\nFirst node: script\n"; got != want {
 		t.Fatalf("start output = %q, want %q", got, want)
 	}
@@ -449,6 +566,8 @@ type taskStartPollingRemote struct {
 	nodeID            string
 	nodeKey           string
 	taskIDDetailCalls int
+	startRequest      serverapi.WorkflowTaskStartRequest
+	startResponse     *serverapi.WorkflowTaskStartResponse
 }
 
 func (r *taskStartPollingRemote) Close() error { return nil }
@@ -478,8 +597,15 @@ func (r *taskStartPollingRemote) GetWorkflowTask(_ context.Context, req serverap
 	return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows
 }
 
-func (r *taskStartPollingRemote) StartWorkflowTask(context.Context, serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	return serverapi.WorkflowTaskStartResponse{TransitionID: "transition-1", PlacementID: r.placementID, RunID: r.runID}, nil
+func (r *taskStartPollingRemote) StartWorkflowTask(_ context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
+	r.startRequest = req
+	if r.startResponse != nil {
+		return *r.startResponse, nil
+	}
+	return serverapi.WorkflowTaskStartResponse{
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Applied: &serverapi.WorkflowTaskStartApplied{TransitionID: "transition-1", PlacementID: r.placementID, RunID: r.runID},
+	}, nil
 }
 
 func (r *taskStartPollingRemote) taskDetail(sessionID string) serverapi.WorkflowTaskDetail {
@@ -569,21 +695,30 @@ func (r *setupProgressLifecycleRemote) StartWorkflowTask(ctx context.Context, re
 	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
-	return serverapi.WorkflowTaskStartResponse{TransitionID: r.transitionID, PlacementID: r.placementID, RunID: r.runID}, nil
+	return serverapi.WorkflowTaskStartResponse{
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Applied: &serverapi.WorkflowTaskStartApplied{TransitionID: r.transitionID, PlacementID: r.placementID, RunID: r.runID},
+	}, nil
 }
 
 func (r *setupProgressLifecycleRemote) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
 	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
-	return serverapi.WorkflowTaskApproveResponse{TaskID: r.taskID, TransitionID: r.transitionID, RunIDs: []string{r.runID}}, nil
+	return serverapi.WorkflowTaskApproveResponse{
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Applied: &serverapi.WorkflowTaskApproveApplied{TaskID: r.taskID, TransitionID: r.transitionID, State: "applied", RunIDs: []string{r.runID}},
+	}, nil
 }
 
 func (r *setupProgressLifecycleRemote) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
 	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
-	return serverapi.WorkflowTaskMoveResponse{TransitionID: r.transitionID, RunIDs: []string{r.runID}}, nil
+	return serverapi.WorkflowTaskMoveResponse{
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Applied: &serverapi.WorkflowTaskMoveApplied{TransitionID: r.transitionID, State: "applied", RunIDs: []string{r.runID}},
+	}, nil
 }
 
 func (r *setupProgressLifecycleRemote) validateMutationContextAndSetupID(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) error {

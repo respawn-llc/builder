@@ -1,5 +1,6 @@
 import type {
   ApprovalDecision,
+  WorkflowExecutionTargetSelection,
   WorkflowGraphDraft,
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,
@@ -90,6 +91,7 @@ export type TaskMoveInput = Readonly<{
   allowMissingEdge?: boolean;
   autoApprove?: boolean;
   setupOperationID?: SetupOperationID | undefined;
+  executionTarget?: WorkflowExecutionTargetSelection | undefined;
 }>;
 
 export type OrdinaryQuestionAnswerInput = Readonly<{

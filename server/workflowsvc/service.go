@@ -18,6 +18,7 @@ import (
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
+	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -26,36 +27,53 @@ type Service struct {
 	store               *workflowstore.Store
 	view                *workflowview.Service
 	roleResolver        workflow.RoleResolver
-	taskWorktrees       taskWorktreeEnsurer
+	executionTargets    executionTargetInfrastructure
 	taskWorktreeCleanup taskWorktreeDeleter
 	runtimeCancel       taskRuntimeCanceler
 	schedulerWake       schedulerNotifier
 	events              *workflowProjectEventBroker
 	prompts             pendingPromptResponder
-	approve             transitionApprover
 	attentionFinalizer  workflowAttentionFinalizer
 	questionMemo        *requestmemo.Memo[taskQuestionAnswerMemoRequest, struct{}]
 }
 
-type taskWorktreeEnsurer interface {
-	EnsureTaskWorktree(ctx context.Context, req TaskWorktreeEnsureRequest) error
+type initiatingActionTargetDecision struct {
+	candidate         *workflowstore.ExecutionTargetCandidate
+	selectionRequired *serverapi.WorkflowExecutionTargetSelectionRequirement
 }
 
-type TaskWorktreeEnsureRequest struct {
+type initiatingActionRequest struct {
+	taskID                  workflow.TaskID
+	setupOperationID        serverapi.WorktreeSetupOperationID
+	explicitTarget          *serverapi.WorkflowExecutionTargetSelection
+	requiresExecutionTarget bool
+}
+
+type initiatingActionResult[T any] struct {
+	applied           *T
+	selectionRequired *serverapi.WorkflowExecutionTargetSelectionRequirement
+}
+
+type executionTargetInfrastructure interface {
+	ResolveExecutionTarget(context.Context, ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error)
+	MaterializeExecutionTarget(context.Context, ExecutionTargetMaterializeRequest) (workflowstore.ManagedExecutionRoot, error)
+	RestoreExecutionTarget(context.Context, ExecutionTargetRestoreRequest) error
+}
+
+type ExecutionTargetResolveRequest struct {
+	SourceWorkspaceRoot string
+	Selection           workflow.ExecutionTargetSelection
+}
+
+type ExecutionTargetMaterializeRequest struct {
 	TaskID           workflow.TaskID
 	SetupOperationID serverapi.WorktreeSetupOperationID
+	Snapshot         workflowstore.ExecutionTargetSnapshot
 }
 
-type taskWorktreeEnsureError struct {
-	err error
-}
-
-func (e taskWorktreeEnsureError) Error() string {
-	return e.err.Error()
-}
-
-func (e taskWorktreeEnsureError) Unwrap() error {
-	return e.err
+type ExecutionTargetRestoreRequest struct {
+	TaskID           workflow.TaskID
+	SetupOperationID serverapi.WorktreeSetupOperationID
 }
 
 type taskWorktreeDeleter interface {
@@ -78,8 +96,6 @@ type taskRuntimeRunCancelRequester interface {
 type schedulerNotifier interface {
 	Notify()
 }
-
-type transitionApprover func(ctx context.Context, transitionID workflow.TransitionID) (workflowstore.CompleteRunResult, error)
 
 type pendingPromptResponder interface {
 	SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error
@@ -111,9 +127,9 @@ type taskQuestionAnswerMemoRequest struct {
 
 type Option func(*Service)
 
-func WithTaskWorktreeEnsurer(ensurer taskWorktreeEnsurer) Option {
+func WithExecutionTargetInfrastructure(infrastructure executionTargetInfrastructure) Option {
 	return func(s *Service) {
-		s.taskWorktrees = ensurer
+		s.executionTargets = infrastructure
 	}
 }
 
@@ -156,7 +172,7 @@ func New(store *workflowstore.Store, view *workflowview.Service, roleResolver wo
 	}
 	events := newWorkflowProjectEventBroker()
 	store.SetWorkflowEventPublisher(events)
-	service := &Service{store: store, view: view, roleResolver: roleResolver, events: events, approve: store.ApproveTransition, questionMemo: requestmemo.New[taskQuestionAnswerMemoRequest, struct{}]()}
+	service := &Service{store: store, view: view, roleResolver: roleResolver, events: events, questionMemo: requestmemo.New[taskQuestionAnswerMemoRequest, struct{}]()}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -482,7 +498,7 @@ func (s *Service) ValidateWorkflow(ctx context.Context, req serverapi.WorkflowVa
 	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: mode, RoleResolver: s.roleResolver})
 	resp := workflowValidationResponse(def.ID, result)
 	if mode == workflow.ValidationContextExecution {
-		resp.Errors = append(resp.Errors, scriptPathValidationErrors(def, "")...)
+		resp.Errors = append(resp.Errors, scriptPathValidationErrors(def, nil)...)
 		resp.Valid = workflowValidationErrorsValid(resp.Errors)
 	}
 	return resp, nil
@@ -613,14 +629,238 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
-	started, err := s.startTaskAutomation(ctx, TaskAutomationStartRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
+	if err := s.store.ValidateTaskStart(ctx, workflow.TaskID(req.TaskID)); err != nil {
+		return serverapi.WorkflowTaskStartResponse{}, err
+	}
+	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
+		taskID:                  workflow.TaskID(req.TaskID),
+		setupOperationID:        req.SetupOperationID,
+		explicitTarget:          req.ExecutionTarget,
+		requiresExecutionTarget: true,
+	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error) {
+		return s.store.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
+	})
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
+	}
+	if coordinated.selectionRequired != nil {
+		return serverapi.WorkflowTaskStartResponse{
+			Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+			SelectionRequired: coordinated.selectionRequired,
+		}, nil
+	}
+	if coordinated.applied == nil {
+		return serverapi.WorkflowTaskStartResponse{}, errors.New("coordinated task start returned no applied result")
+	}
+	started := *coordinated.applied
+	if s.schedulerWake != nil {
+		s.schedulerWake.Notify()
 	}
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "started", req.TaskID, string(started.RunID))
 	}
-	return serverapi.WorkflowTaskStartResponse{TransitionID: started.TransitionID, PlacementID: string(started.PlacementID), RunID: string(started.RunID)}, nil
+	return serverapi.WorkflowTaskStartResponse{
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Applied: &serverapi.WorkflowTaskStartApplied{
+			TransitionID: started.TransitionID,
+			PlacementID:  string(started.PlacementID),
+			RunID:        string(started.RunID),
+		},
+	}, nil
+}
+
+func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (T, error)) (initiatingActionResult[T], error) {
+	var candidate *workflowstore.ExecutionTargetCandidate
+	if req.requiresExecutionTarget {
+		targetDecision, err := service.initiatingActionTarget(ctx, req.taskID, req.setupOperationID, req.explicitTarget)
+		if err != nil {
+			return initiatingActionResult[T]{}, err
+		}
+		if targetDecision.selectionRequired != nil {
+			return initiatingActionResult[T]{selectionRequired: targetDecision.selectionRequired}, nil
+		}
+		candidate = targetDecision.candidate
+	}
+	applied, err := apply(candidate)
+	if err != nil {
+		return initiatingActionResult[T]{}, err
+	}
+	return initiatingActionResult[T]{applied: &applied}, nil
+}
+
+func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID serverapi.WorktreeSetupOperationID, explicit *serverapi.WorkflowExecutionTargetSelection) (initiatingActionTargetDecision, error) {
+	targetContext, err := s.store.GetTaskExecutionTargetContext(ctx, taskID)
+	if err != nil {
+		return initiatingActionTargetDecision{}, err
+	}
+	if targetContext.Task.ExecutionTarget != nil {
+		if explicit != nil {
+			return initiatingActionTargetDecision{}, workflowstore.ErrExecutionTargetAlreadyLocked
+		}
+		if targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+			if s.executionTargets == nil {
+				return initiatingActionTargetDecision{}, errors.New("execution target infrastructure is required")
+			}
+			if err := s.executionTargets.RestoreExecutionTarget(ctx, ExecutionTargetRestoreRequest{
+				TaskID:           taskID,
+				SetupOperationID: setupOperationID,
+			}); err != nil {
+				return initiatingActionTargetDecision{}, workflowLockedExecutionTargetError(err)
+			}
+		}
+		return initiatingActionTargetDecision{}, nil
+	}
+	if explicit == nil && targetContext.Policy.Mode == workflow.ExecutionTargetModeAskOnFirstExecution {
+		return initiatingActionTargetDecision{
+			selectionRequired: &serverapi.WorkflowExecutionTargetSelectionRequirement{
+				Reason: serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
+			},
+		}, nil
+	}
+	selection := workflow.ExecutionTargetSelection{
+		Mode:      targetContext.Policy.Mode,
+		CustomRef: targetContext.Policy.CustomRef,
+	}
+	if explicit != nil {
+		selection = workflow.ExecutionTargetSelection{
+			Mode:      workflow.ExecutionTargetMode(explicit.Mode),
+			CustomRef: explicit.CustomRef,
+		}
+	}
+	if selection.Mode != workflow.ExecutionTargetModeNone {
+		if s.executionTargets == nil {
+			return initiatingActionTargetDecision{}, errors.New("execution target infrastructure is required")
+		}
+		snapshot, err := s.executionTargets.ResolveExecutionTarget(ctx, ExecutionTargetResolveRequest{
+			SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+			Selection:           selection,
+		})
+		if err != nil {
+			if explicit == nil {
+				if requirement, ok := configuredTargetSelectionRequirement(selection, err); ok {
+					return initiatingActionTargetDecision{selectionRequired: requirement}, nil
+				}
+			}
+			if selection.Mode == workflow.ExecutionTargetModeCustomRef {
+				if resolutionErr, ok := explicitExecutionTargetResolutionError(err); ok {
+					return initiatingActionTargetDecision{}, resolutionErr
+				}
+			}
+			return initiatingActionTargetDecision{}, err
+		}
+		if snapshot.Mode != selection.Mode {
+			return initiatingActionTargetDecision{}, errors.New("resolved execution target mode does not match selection")
+		}
+		if err := snapshot.Validate(); err != nil {
+			return initiatingActionTargetDecision{}, err
+		}
+		managedRoot, err := s.executionTargets.MaterializeExecutionTarget(ctx, ExecutionTargetMaterializeRequest{
+			TaskID:           taskID,
+			SetupOperationID: setupOperationID,
+			Snapshot:         snapshot,
+		})
+		if err != nil {
+			return initiatingActionTargetDecision{}, err
+		}
+		return initiatingActionTargetDecision{
+			candidate: &workflowstore.ExecutionTargetCandidate{
+				Snapshot: snapshot,
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   targetContext.SourceWorkspaceID,
+					SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+					Managed:             &managedRoot,
+				},
+			},
+		}, nil
+	}
+	return initiatingActionTargetDecision{
+		candidate: &workflowstore.ExecutionTargetCandidate{
+			Snapshot: workflowstore.ExecutionTargetSnapshot{
+				Mode:       workflow.ExecutionTargetModeNone,
+				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+			},
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   targetContext.SourceWorkspaceID,
+				SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+			},
+		},
+	}, nil
+}
+
+func configuredTargetSelectionRequirement(selection workflow.ExecutionTargetSelection, err error) (*serverapi.WorkflowExecutionTargetSelectionRequirement, bool) {
+	cause, ok := executionTargetUnavailableCause(err)
+	if !ok {
+		return nil, false
+	}
+	configured := &serverapi.WorkflowExecutionTargetConfiguredTarget{
+		Mode: serverapi.WorkflowExecutionTargetMode(selection.Mode),
+	}
+	if selection.Mode == workflow.ExecutionTargetModeCustomRef {
+		configured.RequestedRef = selection.CustomRef
+	}
+	return &serverapi.WorkflowExecutionTargetSelectionRequirement{
+		Reason:           serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable,
+		ConfiguredTarget: configured,
+		UnavailableCause: cause,
+	}, true
+}
+
+func executionTargetUnavailableCause(err error) (serverapi.WorkflowExecutionTargetUnavailableCause, bool) {
+	var revisionErr *worktree.GitRevisionResolutionError
+	if errors.As(err, &revisionErr) {
+		switch revisionErr.Kind {
+		case worktree.GitRevisionResolutionErrorInvalidRevision:
+			return serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision, true
+		case worktree.GitRevisionResolutionErrorNonCommit:
+			return serverapi.WorkflowExecutionTargetUnavailableCauseNonCommit, true
+		case worktree.GitRevisionResolutionErrorGitFailure:
+			return serverapi.WorkflowExecutionTargetUnavailableCauseGitFailure, true
+		}
+	}
+	var defaultBranchErr *worktree.GitDefaultBranchResolutionError
+	if errors.As(err, &defaultBranchErr) {
+		switch defaultBranchErr.Kind {
+		case worktree.GitDefaultBranchResolutionErrorMissing:
+			return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchMissing, true
+		case worktree.GitDefaultBranchResolutionErrorAmbiguous:
+			return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchAmbiguous, true
+		case worktree.GitDefaultBranchResolutionErrorGitFailure:
+			return serverapi.WorkflowExecutionTargetUnavailableCauseGitFailure, true
+		}
+	}
+	return "", false
+}
+
+func explicitExecutionTargetResolutionError(err error) (*serverapi.WorkflowExecutionTargetResolutionError, bool) {
+	var revisionErr *worktree.GitRevisionResolutionError
+	if !errors.As(err, &revisionErr) {
+		return nil, false
+	}
+	code := serverapi.WorkflowExecutionTargetResolutionErrorCode("")
+	switch revisionErr.Kind {
+	case worktree.GitRevisionResolutionErrorInvalidRevision:
+		code = serverapi.WorkflowExecutionTargetResolutionErrorInvalidRevision
+	case worktree.GitRevisionResolutionErrorNonCommit:
+		code = serverapi.WorkflowExecutionTargetResolutionErrorNonCommit
+	case worktree.GitRevisionResolutionErrorGitFailure:
+		code = serverapi.WorkflowExecutionTargetResolutionErrorGitFailure
+	default:
+		return nil, false
+	}
+	return &serverapi.WorkflowExecutionTargetResolutionError{
+		Code:         code,
+		RequestedRef: revisionErr.RequestedRef,
+	}, true
+}
+
+func workflowLockedExecutionTargetError(err error) error {
+	var lockedErr *worktree.LockedTaskWorktreeError
+	if !errors.As(err, &lockedErr) {
+		return err
+	}
+	return &serverapi.WorkflowLockedExecutionTargetError{
+		Cause: serverapi.WorkflowLockedExecutionTargetCause(lockedErr.Cause),
+	}
 }
 
 func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskInterruptRequest) (serverapi.WorkflowTaskInterruptResponse, error) {
@@ -704,18 +944,26 @@ func (s *Service) StartTaskAutomationWithSetup(ctx context.Context, req TaskAuto
 
 func (s *Service) startTaskAutomation(ctx context.Context, req TaskAutomationStartRequest) (workflowstore.StartTaskResult, error) {
 	taskID := strings.TrimSpace(req.TaskID)
-	if s.taskWorktrees != nil {
-		if err := s.store.ValidateTaskStart(ctx, workflow.TaskID(taskID)); err != nil {
-			return workflowstore.StartTaskResult{}, err
-		}
-		if err := s.taskWorktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: workflow.TaskID(taskID), SetupOperationID: req.SetupOperationID}); err != nil {
-			return workflowstore.StartTaskResult{}, err
-		}
+	if err := s.store.ValidateTaskStart(ctx, workflow.TaskID(taskID)); err != nil {
+		return workflowstore.StartTaskResult{}, err
 	}
-	started, err := s.store.StartTask(ctx, workflow.TaskID(taskID))
+	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
+		taskID:                  workflow.TaskID(taskID),
+		setupOperationID:        req.SetupOperationID,
+		requiresExecutionTarget: true,
+	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error) {
+		return s.store.StartTaskWithExecutionTarget(ctx, workflow.TaskID(taskID), candidate)
+	})
 	if err != nil {
 		return workflowstore.StartTaskResult{}, err
 	}
+	if coordinated.selectionRequired != nil {
+		return workflowstore.StartTaskResult{}, workflowstore.ErrExecutionTargetRequired
+	}
+	if coordinated.applied == nil {
+		return workflowstore.StartTaskResult{}, errors.New("coordinated task automation start returned no applied result")
+	}
+	started := *coordinated.applied
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
@@ -734,41 +982,85 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
-	approved, err := s.approveTransition(ctx, workflow.TransitionID(transitionID), taskID, req.SetupOperationID)
+	requiresExecutionTarget, err := s.store.PendingTransitionTargetsExecutableNode(ctx, workflow.TransitionID(transitionID))
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
+	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
+		taskID:                  workflow.TaskID(taskID),
+		setupOperationID:        req.SetupOperationID,
+		explicitTarget:          req.ExecutionTarget,
+		requiresExecutionTarget: requiresExecutionTarget,
+	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.CompleteRunResult, error) {
+		return s.store.ApproveTransitionWithExecutionTarget(ctx, workflow.TransitionID(transitionID), candidate)
+	})
+	if err != nil {
+		return serverapi.WorkflowTaskApproveResponse{}, err
+	}
+	if coordinated.selectionRequired != nil {
+		return serverapi.WorkflowTaskApproveResponse{
+			Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+			SelectionRequired: coordinated.selectionRequired,
+		}, nil
+	}
+	if coordinated.applied == nil {
+		return serverapi.WorkflowTaskApproveResponse{}, errors.New("coordinated task approval returned no applied result")
+	}
+	approved := *coordinated.applied
 	s.finalizeWorkflowAttention(ctx, approved)
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
 	s.publishWorkflowEvent(ctx, projectID, workflowID, "task", "approved", taskID, transitionID)
-	return serverapi.WorkflowTaskApproveResponse{TransitionID: string(approved.TransitionID), TaskID: taskID, State: approved.State, PlacementIDs: placementIDs(approved.PlacementIDs), RunIDs: runIDs(approved.RunIDs)}, nil
+	return serverapi.WorkflowTaskApproveResponse{
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Applied: &serverapi.WorkflowTaskApproveApplied{
+			TransitionID: string(approved.TransitionID),
+			TaskID:       taskID,
+			State:        approved.State,
+			PlacementIDs: placementIDs(approved.PlacementIDs),
+			RunIDs:       runIDs(approved.RunIDs),
+		},
+	}, nil
 }
 
 func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
-	moved, err := s.store.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{TaskID: workflow.TaskID(req.TaskID), TargetNodeID: workflow.NodeID(req.TargetNodeID), OutputValues: req.OutputValues, Commentary: req.Commentary, Actor: "user", AllowMissingEdge: req.AllowMissingEdge})
+	preparation, err := s.store.PrepareManualMove(ctx, workflowstore.ManualMoveRequest{
+		TaskID:           workflow.TaskID(req.TaskID),
+		TargetNodeID:     workflow.NodeID(req.TargetNodeID),
+		OutputValues:     req.OutputValues,
+		Commentary:       req.Commentary,
+		Actor:            "user",
+		AllowMissingEdge: req.AllowMissingEdge,
+		AutoApprove:      req.AutoApprove,
+	})
 	if err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
-	approvalError := ""
-	resolvedApprovals := append([]workflow.TransitionID(nil), moved.ResolvedApprovalTransitionIDs...)
-	if req.AutoApprove && moved.State == "pending_approval" && !moved.RequiresApproval {
-		approved, approveErr := s.approveTransition(ctx, moved.TransitionID, req.TaskID, req.SetupOperationID)
-		if approveErr != nil {
-			var ensureErr taskWorktreeEnsureError
-			if errors.As(approveErr, &ensureErr) {
-				return serverapi.WorkflowTaskMoveResponse{}, approveErr
-			}
-			approvalError = approveErr.Error()
-		} else {
-			approved.ResolvedApprovalTransitionIDs = append(resolvedApprovals, approved.ResolvedApprovalTransitionIDs...)
-			moved = approved
-		}
+	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
+		taskID:                  workflow.TaskID(req.TaskID),
+		setupOperationID:        req.SetupOperationID,
+		explicitTarget:          req.ExecutionTarget,
+		requiresExecutionTarget: preparation.RequiresExecutionTarget(),
+	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
+		return s.store.ApplyManualMove(ctx, preparation, candidate)
+	})
+	if err != nil {
+		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
+	if coordinated.selectionRequired != nil {
+		return serverapi.WorkflowTaskMoveResponse{
+			Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+			SelectionRequired: coordinated.selectionRequired,
+		}, nil
+	}
+	if coordinated.applied == nil {
+		return serverapi.WorkflowTaskMoveResponse{}, errors.New("coordinated task move returned no applied result")
+	}
+	moved := *coordinated.applied
 	s.finalizeWorkflowAttention(ctx, moved)
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
@@ -776,29 +1068,15 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "moved", req.TaskID, string(moved.TransitionID))
 	}
-	return serverapi.WorkflowTaskMoveResponse{TransitionID: string(moved.TransitionID), State: moved.State, PlacementIDs: placementIDs(moved.PlacementIDs), RunIDs: runIDs(moved.RunIDs), ApprovalError: approvalError}, nil
-}
-
-func (s *Service) approveTransition(ctx context.Context, transitionID workflow.TransitionID, taskID string, setupOperationID serverapi.WorktreeSetupOperationID) (workflowstore.CompleteRunResult, error) {
-	if s.taskWorktrees != nil {
-		requiresWorktree, err := s.store.PendingTransitionTargetsExecutableNode(ctx, transitionID)
-		if err != nil {
-			return workflowstore.CompleteRunResult{}, err
-		}
-		if requiresWorktree {
-			resolvedTaskID := strings.TrimSpace(taskID)
-			if resolvedTaskID == "" {
-				resolvedTaskID, _, _, err = s.store.TaskIdentityForTransition(ctx, transitionID)
-				if err != nil {
-					return workflowstore.CompleteRunResult{}, err
-				}
-			}
-			if err := s.taskWorktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: workflow.TaskID(resolvedTaskID), SetupOperationID: setupOperationID}); err != nil {
-				return workflowstore.CompleteRunResult{}, taskWorktreeEnsureError{err: err}
-			}
-		}
-	}
-	return s.approve(ctx, transitionID)
+	return serverapi.WorkflowTaskMoveResponse{
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Applied: &serverapi.WorkflowTaskMoveApplied{
+			TransitionID: string(moved.TransitionID),
+			State:        moved.State,
+			PlacementIDs: placementIDs(moved.PlacementIDs),
+			RunIDs:       runIDs(moved.RunIDs),
+		},
+	}, nil
 }
 
 func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
@@ -1353,7 +1631,13 @@ func (s *Service) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTas
 }
 
 func workflowRecord(row workflowstore.WorkflowRecord) serverapi.WorkflowRecord {
-	return serverapi.WorkflowRecord{ID: string(row.ID), Name: row.Name, Description: row.Description, Version: row.Version}
+	return serverapi.WorkflowRecord{
+		ID:                    string(row.ID),
+		Name:                  row.Name,
+		Description:           row.Description,
+		Version:               row.Version,
+		ExecutionTargetPolicy: workflowExecutionTargetPolicyToAPI(row.ExecutionTargetPolicy),
+	}
 }
 
 func workflowNodeGroup(row workflowstore.NodeGroupRecord) serverapi.WorkflowNodeGroup {
@@ -1424,7 +1708,7 @@ func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Defin
 		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: context, RoleResolver: s.roleResolver})
 		resp := workflowValidationResponse(def.ID, result)
 		if context == workflow.ValidationContextExecution {
-			resp.Errors = append(resp.Errors, scriptPathValidationErrors(def, "")...)
+			resp.Errors = append(resp.Errors, scriptPathValidationErrors(def, nil)...)
 			resp.Valid = workflowValidationErrorsValid(resp.Errors)
 		}
 		out[mode] = resp
@@ -1432,15 +1716,15 @@ func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Defin
 	return out
 }
 
-func scriptPathValidationErrors(def workflow.Definition, worktreeRoot string) []serverapi.WorkflowValidationError {
+func scriptPathValidationErrors(def workflow.Definition, rootPath *string) []serverapi.WorkflowValidationError {
 	out := []serverapi.WorkflowValidationError{}
 	for _, node := range def.Nodes {
 		if node.Kind() != workflow.NodeKindScript {
 			continue
 		}
 		diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{
-			RawPath:      workflow.NodeScriptPath(node).String(),
-			WorktreeRoot: worktreeRoot,
+			RawPath:  workflow.NodeScriptPath(node).String(),
+			RootPath: rootPath,
 		})
 		for _, diagnostic := range diagnostics {
 			out = append(out, scriptPathValidationError(def.ID, workflow.NodeIDOf(node), diagnostic))
@@ -1477,7 +1761,11 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID s
 	if metadata != nil {
 		displayName = metadata.Name
 	}
-	def := workflow.Definition{ID: workflow.WorkflowID(workflowID), DisplayName: displayName}
+	targetPolicy := current.ExecutionTargetPolicy
+	if metadata != nil && metadata.ExecutionTargetPolicy != nil {
+		targetPolicy = workflowExecutionTargetPolicyFromAPI(*metadata.ExecutionTargetPolicy)
+	}
+	def := workflow.Definition{ID: workflow.WorkflowID(workflowID), DisplayName: displayName, ExecutionTargetPolicy: targetPolicy}
 	groupMemberIDs := map[string][]workflow.NodeID{}
 	for _, group := range graph.NodeGroups {
 		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{
@@ -1563,6 +1851,10 @@ func workflowGraphStoreSaveRequest(workflowID string, expectedVersion int64, met
 	req := workflowstore.WorkflowGraphSaveRequest{WorkflowID: workflow.WorkflowID(workflowID), ExpectedVersion: expectedVersion}
 	if metadata != nil {
 		req.Metadata = &workflowstore.WorkflowGraphSaveMetadata{Name: metadata.Name, Description: metadata.Description}
+		if metadata.ExecutionTargetPolicy != nil {
+			policy := workflowExecutionTargetPolicyFromAPI(*metadata.ExecutionTargetPolicy)
+			req.Metadata.ExecutionTargetPolicy = &policy
+		}
 	}
 	if confirmation != nil {
 		req.Confirmed = true
@@ -1585,6 +1877,31 @@ func workflowGraphStoreSaveRequest(workflowID string, expectedVersion int64, met
 		req.Edges = append(req.Edges, workflowstore.EdgeRecord{ID: workflow.EdgeID(edge.ID), WorkflowID: workflow.WorkflowID(workflowID), TransitionGroupID: workflow.TransitionGroupID(edge.TransitionGroupID), Key: workflow.ModelKey(edge.Key), TargetNodeID: workflow.NodeID(edge.TargetNodeID), RequiresApproval: edge.RequiresApproval, ContextMode: workflow.ContextMode(edge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSource.Kind), NodeKey: workflow.ModelKey(edge.ContextSource.NodeKey)}), PromptTemplate: edge.PromptTemplate, Parameters: domainParameters(edge.Parameters)})
 	}
 	return req
+}
+
+func workflowExecutionTargetPolicyToAPI(policy workflow.ExecutionTargetPolicy) serverapi.WorkflowExecutionTargetConfiguration {
+	policy = policy.Canonical()
+	var customRef *string
+	if policy.CustomRef != nil {
+		value := *policy.CustomRef
+		customRef = &value
+	}
+	return serverapi.WorkflowExecutionTargetConfiguration{
+		Mode:      serverapi.WorkflowExecutionTargetMode(policy.Mode),
+		CustomRef: customRef,
+	}
+}
+
+func workflowExecutionTargetPolicyFromAPI(policy serverapi.WorkflowExecutionTargetConfiguration) workflow.ExecutionTargetPolicy {
+	var customRef *string
+	if policy.CustomRef != nil {
+		value := *policy.CustomRef
+		customRef = &value
+	}
+	return workflow.ExecutionTargetPolicy{
+		Mode:      workflow.ExecutionTargetMode(policy.Mode),
+		CustomRef: customRef,
+	}.Canonical()
 }
 
 func workflowGraphSavePreviewResponse(result workflowstore.WorkflowGraphSaveResult, validationResults map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse) serverapi.WorkflowGraphSavePreviewResponse {

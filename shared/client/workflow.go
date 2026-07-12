@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 
 	servicecontract "core/shared/apicontract"
 	"core/shared/serverapi"
@@ -129,7 +130,8 @@ func (c *loopbackWorkflowClient) UpdateWorkflowTask(ctx context.Context, req ser
 }
 
 func (c *loopbackWorkflowClient) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.StartWorkflowTask)
+	response, err := callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.StartWorkflowTask)
+	return validateWorkflowResponse("start workflow task", response, err)
 }
 
 func (c *loopbackWorkflowClient) InterruptWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskInterruptRequest) (serverapi.WorkflowTaskInterruptResponse, error) {
@@ -141,11 +143,13 @@ func (c *loopbackWorkflowClient) ResumeWorkflowTask(ctx context.Context, req ser
 }
 
 func (c *loopbackWorkflowClient) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
-	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.ApproveWorkflowTask)
+	response, err := callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.ApproveWorkflowTask)
+	return validateWorkflowResponse("approve workflow task", response, err)
 }
 
 func (c *loopbackWorkflowClient) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
-	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.MoveWorkflowTask)
+	response, err := callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.MoveWorkflowTask)
+	return validateWorkflowResponse("move workflow task", response, err)
 }
 
 func (c *loopbackWorkflowClient) CompleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
@@ -213,5 +217,21 @@ func (c *loopbackWorkflowClient) ListWorkflowBoardNodeCards(ctx context.Context,
 }
 
 func (c *loopbackWorkflowClient) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.GetWorkflowTask)
+	response, err := callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.GetWorkflowTask)
+	return validateWorkflowResponse("get workflow task", response, err)
+}
+
+type workflowResponse interface {
+	Validate() error
+}
+
+func validateWorkflowResponse[T workflowResponse](operation string, response T, err error) (T, error) {
+	if err != nil {
+		return response, err
+	}
+	if validationErr := response.Validate(); validationErr != nil {
+		var zero T
+		return zero, fmt.Errorf("%s returned an invalid response: %w", operation, validationErr)
+	}
+	return response, nil
 }

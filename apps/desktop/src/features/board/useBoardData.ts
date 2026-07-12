@@ -175,24 +175,7 @@ export function useBoardTaskActions(
     ]);
   }
   return {
-    start: useMutation({
-      mutationFn: async (taskID: string) => api.startTask(taskID),
-      onSuccess: refresh,
-    }),
-    move: useMutation({
-      mutationFn: async (
-        input: Readonly<{
-          taskID: string;
-          targetNodeID: string;
-          outputValues?: Readonly<Record<string, string>>;
-          allowMissingEdge?: boolean;
-          autoApprove?: boolean;
-        }>,
-      ) => api.moveTask(input),
-      onSettled: async () => {
-        await refresh();
-      },
-    }),
+    refresh,
     interrupt: useMutation({
       mutationFn: async (taskID: string) => api.interruptTask(taskID),
       onSuccess: refresh,

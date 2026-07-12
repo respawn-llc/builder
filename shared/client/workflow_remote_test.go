@@ -67,3 +67,98 @@ func TestRemoteWorkflowListRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRemoteWorkflowStartRejectsInvalidResponse(t *testing.T) {
+	handlerErr := make(chan error, 1)
+	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer func() { _ = ws.Close() }()
+		var req protocol.Request
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			handlerErr <- fmt.Errorf("receive handshake: %w", err)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
+			handlerErr <- fmt.Errorf("send handshake response: %w", err)
+			return
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			handlerErr <- fmt.Errorf("receive workflow start: %w", err)
+			return
+		}
+		if req.Method != protocol.MethodWorkflowTaskStart {
+			handlerErr <- fmt.Errorf("workflow start method = %q", req.Method)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorkflowTaskStartResponse{})); err != nil {
+			handlerErr <- fmt.Errorf("send workflow start response: %w", err)
+			return
+		}
+		handlerErr <- nil
+	}))
+	defer server.Close()
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	if _, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{
+		TaskID:           "task-1",
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	}); err == nil {
+		t.Fatal("StartWorkflowTask accepted an invalid response")
+	}
+	if err := <-handlerErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoteWorkflowTaskDetailRejectsInvalidResponse(t *testing.T) {
+	handlerErr := make(chan error, 1)
+	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer func() { _ = ws.Close() }()
+		var req protocol.Request
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			handlerErr <- fmt.Errorf("receive handshake: %w", err)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
+			handlerErr <- fmt.Errorf("send handshake response: %w", err)
+			return
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			handlerErr <- fmt.Errorf("receive workflow task get: %w", err)
+			return
+		}
+		if req.Method != protocol.MethodWorkflowTaskGet {
+			handlerErr <- fmt.Errorf("workflow task get method = %q", req.Method)
+			return
+		}
+		blankRoot := " "
+		response := serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
+			ExecutionTarget: &serverapi.WorkflowExecutionTarget{
+				Mode:          serverapi.WorkflowExecutionTargetModeNone,
+				EffectiveRoot: &blankRoot,
+				Provenance:    serverapi.WorkflowExecutionTargetProvenanceResolved,
+			},
+		}}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
+			handlerErr <- fmt.Errorf("send workflow task get response: %w", err)
+			return
+		}
+		handlerErr <- nil
+	}))
+	defer server.Close()
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	if _, err := remote.GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{TaskID: "task-1"}); err == nil {
+		t.Fatal("GetWorkflowTask accepted an invalid response")
+	}
+	if err := <-handlerErr; err != nil {
+		t.Fatal(err)
+	}
+}

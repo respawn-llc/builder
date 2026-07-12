@@ -15,6 +15,7 @@ export type DialogProps = Readonly<{
   contentPadding?: "none" | "chrome";
   surface?: "island" | "transparent";
   style?: CSSProperties;
+  closeDisabled?: boolean;
   onClose: () => void;
 }>;
 
@@ -28,11 +29,13 @@ export function Dialog({
   contentPadding = "none",
   surface = "island",
   style,
+  closeDisabled = false,
   onClose,
 }: DialogProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLElement | null>(null);
-  useModalDialogKeyboard(open, dialogRef, onClose);
+  const activeClose = dialogCloseHandler(closeDisabled, onClose);
+  useModalDialogKeyboard(open, dialogRef, activeClose);
 
   if (!open) {
     return null;
@@ -45,7 +48,7 @@ export function Dialog({
     >
       <div
         className="absolute inset-0 bg-black/35 backdrop-blur-[6px]"
-        onClick={onClose}
+        onClick={activeClose}
         role="presentation"
       />
       <section
@@ -67,7 +70,7 @@ export function Dialog({
             <h2 className="m-0 text-[1.15rem] font-bold" id={titleId}>
               {title}
             </h2>
-            <DialogCloseButton closeLabel={closeLabel} onClose={onClose} />
+            <DialogCloseButton closeLabel={closeLabel} disabled={closeDisabled} onClose={onClose} />
           </header>
         ) : (
           <>
@@ -77,6 +80,7 @@ export function Dialog({
             <DialogCloseButton
               className="absolute top-[var(--space-3)] right-[var(--space-3)] z-10 bg-[var(--color-island-1)]"
               closeLabel={closeLabel}
+              disabled={closeDisabled}
               onClose={onClose}
             />
           </>
@@ -180,8 +184,14 @@ function focusableDialogElements(dialog: HTMLElement): readonly HTMLElement[] {
 function DialogCloseButton({
   className,
   closeLabel,
+  disabled,
   onClose,
-}: Readonly<{ className?: string | undefined; closeLabel: string; onClose: () => void }>) {
+}: Readonly<{
+  className?: string | undefined;
+  closeLabel: string;
+  disabled: boolean;
+  onClose: () => void;
+}>) {
   return (
     <button
       aria-label={closeLabel}
@@ -189,10 +199,19 @@ function DialogCloseButton({
         "grid h-9 w-9 place-items-center rounded-full border border-transparent bg-transparent text-[var(--color-on-island)]",
         className,
       )}
+      disabled={disabled}
       onClick={onClose}
       type="button"
     >
       <X aria-hidden="true" size={18} strokeWidth={1.5} />
     </button>
   );
+}
+
+function ignoreDialogClose(): void {
+  return;
+}
+
+function dialogCloseHandler(disabled: boolean, onClose: () => void): () => void {
+  return disabled ? ignoreDialogClose : onClose;
 }

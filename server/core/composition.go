@@ -147,7 +147,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
 	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithOperationCoordinator(runtimeOperations).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
-	worktreeService := worktree.NewService(metadataStore, nil, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, runtimeControlService, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript, SetupTimeoutSeconds: cfg.Settings.Worktrees.SetupTimeoutSeconds})
+	gitInspector := worktree.NewGitInspector(nil)
+	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, runtimeControlService, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript, SetupTimeoutSeconds: cfg.Settings.Worktrees.SetupTimeoutSeconds})
 	projectViews := client.NewLoopbackProjectViewClient(projectService)
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
@@ -184,7 +185,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: view: %w", err)
 	}
 	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore, view: workflowViewService, roleResolver: workflowRoleResolver}, attentionBroker)
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeEnsurer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
@@ -195,7 +196,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: scheduler: %w", err)
 	}
 	workflowRuntimeStarter.SetRuntimeFinished(workflowScheduler.RuntimeFinished)
-	workflowService, err := workflowsvc.New(workflowStore, workflowViewService, workflowRoleResolver, workflowsvc.WithTaskWorktreeEnsurer(taskWorktreeEnsurer{service: worktreeService}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(runtimeRegistry), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	workflowService, err := workflowsvc.New(workflowStore, workflowViewService, workflowRoleResolver, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(runtimeRegistry), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -266,27 +267,99 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	return core, nil
 }
 
-type taskWorktreeEnsurer struct {
+type taskExecutionTargetInfrastructure struct {
 	service *worktree.Service
+	git     *worktree.GitInspector
 }
 
-func (e taskWorktreeEnsurer) EnsureTaskWorktree(ctx context.Context, req workflowsvc.TaskWorktreeEnsureRequest) error {
-	if e.service == nil {
-		return nil
+func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error) {
+	if i.git == nil {
+		return workflowstore.ExecutionTargetSnapshot{}, errors.New("git inspector is required")
 	}
-	_, err := e.service.EnsureTaskWorktree(ctx, worktree.EnsureTaskWorktreeRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
+	if err := req.Selection.Validate(); err != nil {
+		return workflowstore.ExecutionTargetSnapshot{}, err
+	}
+	var revision worktree.GitRevision
+	var err error
+	switch req.Selection.Mode {
+	case workflow.ExecutionTargetModeHead:
+		revision, err = i.git.ResolveHEAD(ctx, req.SourceWorkspaceRoot)
+	case workflow.ExecutionTargetModeDefaultBranch:
+		var defaultBranch worktree.GitDefaultBranch
+		defaultBranch, err = i.git.ResolveDefaultBranch(ctx, req.SourceWorkspaceRoot)
+		if err == nil {
+			revision, err = i.git.ResolveRevision(ctx, req.SourceWorkspaceRoot, defaultBranch.Ref)
+		}
+	case workflow.ExecutionTargetModeCustomRef:
+		if req.Selection.CustomRef == nil {
+			return workflowstore.ExecutionTargetSnapshot{}, errors.New("custom execution target ref is required")
+		}
+		revision, err = i.git.ResolveRevision(ctx, req.SourceWorkspaceRoot, *req.Selection.CustomRef)
+	default:
+		return workflowstore.ExecutionTargetSnapshot{}, fmt.Errorf("execution target mode %q is not managed", req.Selection.Mode)
+	}
+	if err != nil {
+		return workflowstore.ExecutionTargetSnapshot{}, err
+	}
+	requestedRef := revision.RequestedRef
+	commitOID := revision.CommitOID
+	return workflowstore.ExecutionTargetSnapshot{
+		Mode:         req.Selection.Mode,
+		RequestedRef: &requestedRef,
+		ResolvedRef:  revision.CanonicalRef,
+		CommitOID:    &commitOID,
+		Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+	}, nil
+}
+
+func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetMaterializeRequest) (workflowstore.ManagedExecutionRoot, error) {
+	if i.service == nil {
+		return workflowstore.ManagedExecutionRoot{}, errors.New("worktree service is required")
+	}
+	if err := req.Snapshot.Validate(); err != nil {
+		return workflowstore.ManagedExecutionRoot{}, err
+	}
+	if req.Snapshot.RequestedRef == nil || req.Snapshot.CommitOID == nil {
+		return workflowstore.ManagedExecutionRoot{}, errors.New("managed execution target snapshot is incomplete")
+	}
+	materialized, err := i.service.MaterializeInitialTaskWorktree(ctx, worktree.InitialTaskWorktreeMaterializationRequest{
+		TaskID:           req.TaskID,
+		SetupOperationID: req.SetupOperationID,
+		ResolvedTarget: worktree.GitRevision{
+			RequestedRef: *req.Snapshot.RequestedRef,
+			CommitOID:    *req.Snapshot.CommitOID,
+			CanonicalRef: req.Snapshot.ResolvedRef,
+		},
+	})
+	if err != nil {
+		return workflowstore.ManagedExecutionRoot{}, err
+	}
+	return workflowstore.ManagedExecutionRoot{
+		WorktreeID: materialized.Worktree.WorktreeID,
+		Root:       materialized.Worktree.CanonicalRoot,
+	}, nil
+}
+
+func (i taskExecutionTargetInfrastructure) RestoreExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetRestoreRequest) error {
+	if i.service == nil {
+		return errors.New("worktree service is required")
+	}
+	_, err := i.service.RestoreLockedTaskWorktree(ctx, worktree.LockedTaskWorktreeRestoreRequest{
+		TaskID:           req.TaskID,
+		SetupOperationID: req.SetupOperationID,
+	})
 	return err
 }
 
-type runtimeTaskWorktreeEnsurer struct {
+type runtimeTaskWorktreeRestorer struct {
 	service *worktree.Service
 }
 
-func (e runtimeTaskWorktreeEnsurer) EnsureTaskWorktree(ctx context.Context, req workflowrunner.TaskWorktreeEnsureRequest) error {
-	if e.service == nil {
+func (r runtimeTaskWorktreeRestorer) RestoreLockedTaskWorktree(ctx context.Context, req workflowrunner.LockedTaskWorktreeRestoreRequest) error {
+	if r.service == nil {
 		return nil
 	}
-	_, err := e.service.EnsureTaskWorktree(ctx, worktree.EnsureTaskWorktreeRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
+	_, err := r.service.RestoreLockedTaskWorktree(ctx, worktree.LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
 	return err
 }
 

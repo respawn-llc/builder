@@ -483,7 +483,23 @@ func attachManagedWorktree(t *testing.T, ctx context.Context, store *Store, work
 	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{ID: worktreeID, WorkspaceID: workspaceID, CanonicalRoot: worktreeRoot, Managed: true, CreatedBranch: true}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE tasks SET source_workspace_id = ?, managed_worktree_id = ? WHERE id = ?`, workspaceID, worktreeID, string(taskID)); err != nil {
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE tasks
+SET source_workspace_id = ?,
+    managed_worktree_id = ?,
+    execution_target_mode = ?,
+    execution_target_requested_ref = ?,
+    execution_target_commit_oid = ?,
+    execution_target_provenance = ?
+WHERE id = ?`,
+		workspaceID,
+		worktreeID,
+		string(workflow.ExecutionTargetModeHead),
+		"HEAD",
+		"fixture-commit",
+		string(ExecutionTargetProvenanceResolved),
+		string(taskID),
+	); err != nil {
 		t.Fatalf("attach managed worktree to task: %v", err)
 	}
 }

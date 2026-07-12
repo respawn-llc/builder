@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowValidation } from "../../api";
+import {
+  defaultWorkflowExecutionTargetPolicy,
+  emptyWorkflowDerivedWiring,
+  type WorkflowDefinition,
+  type WorkflowValidation,
+} from "../../api";
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
 import { layoutWorkflowGraph, workflowGraphLayoutWithDraftProjection } from "./workflowGraphLayout";
 import {
@@ -366,8 +371,18 @@ function expectRouteToHaveCorner(points: readonly Readonly<{ x: number; y: numbe
 
 const emptyValidation: WorkflowValidation = { valid: true, errors: [] };
 
+function workflowRecord(id: string, name: string): WorkflowDefinition["workflow"] {
+  return {
+    id,
+    name,
+    description: "",
+    version: 1,
+    executionTargetPolicy: defaultWorkflowExecutionTargetPolicy,
+  };
+}
+
 const groupedWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [
     {
@@ -403,7 +418,7 @@ const groupedWorkflow: WorkflowDefinition = {
 };
 
 const fanoutWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -419,7 +434,7 @@ const fanoutWorkflow: WorkflowDefinition = {
 };
 
 const singleTransitionWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -438,7 +453,7 @@ const singleTransitionWorkflow: WorkflowDefinition = {
 };
 
 const twoOutgoingTransitionWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -467,7 +482,7 @@ const twoOutgoingTransitionWorkflow: WorkflowDefinition = {
 };
 
 const reconnectWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -480,7 +495,7 @@ const reconnectWorkflow: WorkflowDefinition = {
 };
 
 const crossBoundaryWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [
     {
@@ -521,7 +536,7 @@ const crossBoundaryWorkflow: WorkflowDefinition = {
 };
 
 const alignedJoinWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [
     {
@@ -567,7 +582,7 @@ const alignedJoinWorkflow: WorkflowDefinition = {
 };
 
 const joinWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -607,7 +622,7 @@ const joinWorkflow: WorkflowDefinition = {
 };
 
 const joinChainWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -644,7 +659,7 @@ const joinChainWorkflow: WorkflowDefinition = {
 };
 
 const loopedWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Looped Delivery", description: "", version: 1 },
+  workflow: workflowRecord("workflow-1", "Looped Delivery"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -701,7 +716,7 @@ const loopedWorkflow: WorkflowDefinition = {
 };
 
 const mainSWEWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-main-swe", name: "Main SWE", description: "", version: 1 },
+  workflow: workflowRecord("workflow-main-swe", "Main SWE"),
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [
     {

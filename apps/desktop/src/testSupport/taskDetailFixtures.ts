@@ -64,7 +64,21 @@ export const taskDetailResponse = {
     workflow,
     body: "Need operator input",
     source_workspace: workspace,
-    managed_worktree: { canonical_root: "/tmp/worktree" },
+    execution_target: {
+      mode: "head",
+      effective_root: "/tmp/worktree",
+      requested_ref: "HEAD",
+      resolved_ref: "refs/heads/main",
+      commit_oid: "0123456789abcdef0123456789abcdef01234567",
+      provenance: "resolved",
+      current_branch: "T-1",
+      managed_worktree: {
+        worktree_id: "worktree-1",
+        display_name: "T-1",
+        canonical_root: "/tmp/worktree",
+        availability: "available",
+      },
+    },
     status: {
       kind: "running",
       native_state: "running",

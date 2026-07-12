@@ -312,10 +312,27 @@ func worktreeGitMetadataFromRecord(worktree metadata.WorktreeRecord) (GitWorktre
 	if metadataJSON == "" {
 		return GitWorktree{}, nil
 	}
-	var gitMetadata GitWorktree
-	if err := json.Unmarshal([]byte(metadataJSON), &gitMetadata); err != nil {
+	var persisted struct {
+		HeadOID        string `json:"head_oid"`
+		BranchRef      string `json:"branch_ref"`
+		BranchName     string `json:"branch_name"`
+		Detached       bool   `json:"detached"`
+		Bare           bool   `json:"bare"`
+		LockedReason   string `json:"locked_reason"`
+		PrunableReason string `json:"prunable_reason"`
+	}
+	if err := json.Unmarshal([]byte(metadataJSON), &persisted); err != nil {
 		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
 	}
-	gitMetadata.IsMain = worktree.IsMain
-	return gitMetadata, nil
+	return GitWorktree{
+		Root:           worktree.CanonicalRoot,
+		HeadOID:        persisted.HeadOID,
+		BranchRef:      persisted.BranchRef,
+		BranchName:     persisted.BranchName,
+		Detached:       persisted.Detached,
+		Bare:           persisted.Bare,
+		LockedReason:   persisted.LockedReason,
+		PrunableReason: persisted.PrunableReason,
+		IsMain:         worktree.IsMain,
+	}, nil
 }

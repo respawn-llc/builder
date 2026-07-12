@@ -6,6 +6,14 @@ import { useAppServices } from "../../app/useAppServices";
 import { Button, Island, showStatusToast } from "../../ui";
 import { writeClipboardText } from "../../ui/clipboard";
 import { WorkflowEdgeRouteGraphic } from "../workflow-editor/WorkflowEdgeRouteGraphic";
+import {
+  ExecutionTargetContinuationDialog,
+} from "../execution-target/ExecutionTargetContinuationDialog";
+import { useExecutionTargetContinuation } from "../execution-target/useExecutionTargetContinuation";
+import {
+  approveExecutionTargetAction,
+  executeExecutionTargetAction,
+} from "../execution-target/executionTargetContinuation";
 import type { useTaskMutations } from "./useTaskDetailData";
 
 export { QuestionBox } from "./TaskDetailQuestionForm";
@@ -24,19 +32,44 @@ export function ApprovalBox({
   transitions: readonly TaskTransition[];
 }>) {
   const { t } = useTranslation();
-  const { nativeBridge } = useAppServices();
+  const { api, nativeBridge } = useAppServices();
+  const executionTargetContinuation = useExecutionTargetContinuation({
+    execute: async (action, selection) => executeExecutionTargetAction(api, action, selection),
+    onApplied: mutations.refresh,
+    onAppliedError: (error) => {
+      showStatusToast({
+        body: errorMessage(error),
+        id: "task-approval-refresh-failed",
+        title: t("task.refreshFailed"),
+        tone: "danger",
+      });
+    },
+  });
   const transition = transitions.find((item) => item.id === attention.taskTransitionID);
   const stale = transition !== undefined && transition.version !== currentVersion;
+  function approve(): void {
+    void executionTargetContinuation
+      .run(approveExecutionTargetAction(attention.taskTransitionID))
+      .catch((error: unknown) => {
+        showStatusToast({
+          body: errorMessage(error),
+          id: "task-approval-failed",
+          title: t("task.approvalFailed"),
+          tone: "danger",
+        });
+      });
+  }
   return (
-    <Island
-      aria-label={t("task.approval")}
-      className="grid gap-[var(--space-2)] p-[var(--space-2)]"
-      level={1}
-      radius="l"
-      unpadded
-    >
-      {transition !== undefined ? (
-        <div className="grid gap-[var(--space-2)]">
+    <>
+      <Island
+        aria-label={t("task.approval")}
+        className="grid gap-[var(--space-2)] p-[var(--space-2)]"
+        level={1}
+        radius="l"
+        unpadded
+      >
+        {transition !== undefined ? (
+          <div className="grid gap-[var(--space-2)]">
           <div
             className="flex min-w-0 items-center gap-[var(--space-2)]"
             data-testid="task-approval-route-action-row"
@@ -52,8 +85,8 @@ export function ApprovalBox({
             <span className="min-w-0 flex-1" />
             <Button
               className="shrink-0"
-              disabled={disabled || mutations.approve.isPending}
-              onClick={() => void mutations.approve.mutateAsync(attention.taskTransitionID)}
+              disabled={disabled || executionTargetContinuation.pending !== null}
+              onClick={approve}
               variant="primary"
             >
               {t("task.approve")}
@@ -89,19 +122,21 @@ export function ApprovalBox({
             </p>
           ) : null}
         </div>
-      ) : (
-        <>
-          <p>{t("task.unavailableSnapshot")}</p>
-          <Button
-            disabled={disabled || mutations.approve.isPending}
-            onClick={() => void mutations.approve.mutateAsync(attention.taskTransitionID)}
-            variant="primary"
-          >
-            {t("task.approve")}
-          </Button>
-        </>
-      )}
-    </Island>
+        ) : (
+          <>
+            <p>{t("task.unavailableSnapshot")}</p>
+            <Button
+              disabled={disabled || executionTargetContinuation.pending !== null}
+              onClick={approve}
+              variant="primary"
+            >
+              {t("task.approve")}
+            </Button>
+          </>
+        )}
+      </Island>
+      <ExecutionTargetContinuationDialog continuation={executionTargetContinuation} />
+    </>
   );
 }
 

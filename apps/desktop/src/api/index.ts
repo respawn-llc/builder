@@ -16,7 +16,7 @@ export type {
   AttentionNotificationTaskDetailFocus,
   AttentionNotificationWorkflowTaskTarget,
 } from "./attentionNotifications";
-export { emptyWorkflowDerivedWiring } from "./models";
+export { defaultWorkflowExecutionTargetPolicy, emptyWorkflowDerivedWiring } from "./models";
 export { createJsonRpcTransport } from "./jsonRpc";
 export type {
   ActivityItem,
@@ -37,6 +37,12 @@ export type {
   ServerReadiness,
   TaskComment,
   TaskDetail,
+  TaskApproveApplied,
+  TaskApproveResponse,
+  TaskMoveApplied,
+  TaskMoveResponse,
+  TaskStartApplied,
+  TaskStartResponse,
   TaskRun,
   TaskStatus,
   TaskTransition,
@@ -49,6 +55,18 @@ export type {
   WorkflowDerivedTransitionGroupWiring,
   WorkflowDerivedWiring,
   WorkflowEdge,
+  WorkflowExecutionTargetMode,
+  WorkflowExecutionTargetPolicy,
+  WorkflowExecutionTarget,
+  WorkflowExecutionTargetProvenance,
+  WorkflowExecutionTargetSelection,
+  WorkflowExecutionTargetSelectionMode,
+  WorkflowExecutionTargetSelectionRequirement,
+  WorkflowExecutionTargetUnavailableCause,
+  WorkflowExecutionTargetWorktree,
+  WorkflowExecutionTargetWorktreeAvailability,
+  WorkflowManagedExecutionTarget,
+  WorkflowNoManagedExecutionTarget,
   WorkflowGraphDraft,
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,

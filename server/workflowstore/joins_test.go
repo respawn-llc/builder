@@ -23,7 +23,23 @@ func TestCompleteRunFanoutCreatesParallelBranchPlacements(t *testing.T) {
 	}
 	// Intentional direct fixture: the test needs an existing managed worktree
 	// association without exercising task creation/source-workspace behavior.
-	if _, err := store.db.ExecContext(ctx, `UPDATE tasks SET source_workspace_id = ?, managed_worktree_id = ? WHERE id = ?`, binding.WorkspaceID, worktreeID, string(task.ID)); err != nil {
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE tasks
+SET source_workspace_id = ?,
+    managed_worktree_id = ?,
+    execution_target_mode = ?,
+    execution_target_requested_ref = ?,
+    execution_target_commit_oid = ?,
+    execution_target_provenance = ?
+WHERE id = ?`,
+		binding.WorkspaceID,
+		worktreeID,
+		string(workflow.ExecutionTargetModeHead),
+		"HEAD",
+		"fixture-commit",
+		string(ExecutionTargetProvenanceResolved),
+		string(task.ID),
+	); err != nil {
 		t.Fatalf("attach managed worktree to task: %v", err)
 	}
 	started := startTask(t, ctx, store, task.ID)
@@ -40,8 +56,11 @@ func TestCompleteRunFanoutCreatesParallelBranchPlacements(t *testing.T) {
 		if !input.IsFanoutBranch {
 			t.Fatalf("branch run context %s IsFanoutBranch=false, want true", runID)
 		}
-		if input.WorktreeID != worktreeID || input.WorktreeRoot != worktreeRoot {
-			t.Fatalf("branch run context %s worktree id/root = %q/%q, want %q/%q", runID, input.WorktreeID, input.WorktreeRoot, worktreeID, worktreeRoot)
+		if input.ExecutionRoot == nil ||
+			input.ExecutionRoot.Managed == nil ||
+			input.ExecutionRoot.Managed.WorktreeID != worktreeID ||
+			input.ExecutionRoot.Managed.Root != worktreeRoot {
+			t.Fatalf("branch run context %s execution root = %+v, want managed worktree %q at %q", runID, input.ExecutionRoot, worktreeID, worktreeRoot)
 		}
 	}
 	rows, err := store.db.QueryContext(ctx, `

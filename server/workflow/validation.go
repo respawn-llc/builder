@@ -61,6 +61,7 @@ func (s *validationState) validateShape() {
 	if !validDisplayName(s.def.DisplayName) {
 		s.addHard(CodeInvalidDisplayName, "workflow display name must be non-empty and at most 120 characters", ValidationError{WorkflowID: s.def.ID})
 	}
+	s.validateExecutionTargetPolicy()
 
 	s.indexNodeGroups()
 	s.indexNodes()
@@ -70,6 +71,23 @@ func (s *validationState) validateShape() {
 	s.validateNodeGroups()
 	s.validateTransitionGroups()
 	s.validateEdges()
+}
+
+func (s *validationState) validateExecutionTargetPolicy() {
+	policy := s.def.ExecutionTargetPolicy.Canonical()
+	if !validExecutionTargetPolicyMode(policy.Mode) {
+		s.addHard(CodeInvalidExecutionTargetPolicy, "execution target policy mode is invalid", ValidationError{WorkflowID: s.def.ID})
+		return
+	}
+	if policy.Mode != ExecutionTargetModeCustomRef {
+		if policy.CustomRef != nil {
+			s.addHard(CodeInvalidExecutionTargetPolicy, "execution target custom ref is only valid for custom_ref policy", ValidationError{WorkflowID: s.def.ID})
+		}
+		return
+	}
+	if policy.CustomRef == nil || strings.TrimSpace(*policy.CustomRef) == "" {
+		s.addSemantic(CodeExecutionTargetCustomRefRequired, "custom_ref execution target policy requires a custom ref", ValidationError{WorkflowID: s.def.ID})
+	}
 }
 
 func (s *validationState) indexNodeGroups() {

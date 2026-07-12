@@ -119,6 +119,7 @@ export function useTaskMutations(taskID: string, onChanged?: () => void) {
     onChanged?.();
   }
   return {
+    refresh,
     addComment: useMutation({
       mutationFn: async (body: string) => api.addComment(taskID, body),
       onSuccess: refresh,
@@ -130,10 +131,6 @@ export function useTaskMutations(taskID: string, onChanged?: () => void) {
     }),
     deleteComment: useMutation({
       mutationFn: async (commentID: string) => api.deleteComment(commentID),
-      onSuccess: refresh,
-    }),
-    approve: useMutation({
-      mutationFn: async (transitionID: string) => api.approveTransition(transitionID),
       onSuccess: refresh,
     }),
     cancel: useMutation({

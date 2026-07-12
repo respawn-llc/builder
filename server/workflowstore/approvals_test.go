@@ -2,6 +2,7 @@ package workflowstore
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -112,6 +113,142 @@ func TestApprovePendingAgentTransitionRetryPreservesRunIDs(t *testing.T) {
 	}
 }
 
+func TestApproveTransitionWithExecutionTargetLocksNoneWithExecutableTarget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "next", OutputValues: map[string]string{"prior_summary": "done"}})
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
+
+	approved, err := store.ApproveTransitionWithExecutionTarget(ctx, pending.TransitionID, &candidate)
+	if err != nil {
+		t.Fatalf("ApproveTransitionWithExecutionTarget: %v", err)
+	}
+	if len(approved.RunIDs) != 1 {
+		t.Fatalf("approved = %+v, want executable target run", approved)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	snapshot, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
+	}
+	if snapshot == nil || snapshot.Mode != workflow.ExecutionTargetModeNone {
+		t.Fatalf("snapshot = %+v, want locked none", snapshot)
+	}
+}
+
+func TestApproveTransitionWithExecutionTargetLeavesPendingApprovalUnchangedWithoutCandidate(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "next", OutputValues: map[string]string{"prior_summary": "done"}})
+
+	_, err := store.ApproveTransitionWithExecutionTarget(ctx, pending.TransitionID, nil)
+	if !errors.Is(err, ErrExecutionTargetRequired) {
+		t.Fatalf("ApproveTransitionWithExecutionTarget error = %v, want ErrExecutionTargetRequired", err)
+	}
+	transitions, err := store.ListTransitions(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListTransitions: %v", err)
+	}
+	if len(transitions) != 2 || transitions[1].State != "pending_approval" {
+		t.Fatalf("transitions = %+v, want unchanged pending approval", transitions)
+	}
+}
+
+func TestApproveTransitionWithExecutionTargetRejectsCandidateAfterTargetIsLocked(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "next", OutputValues: map[string]string{"prior_summary": "done"}})
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE tasks
+SET execution_target_mode = ?, execution_target_provenance = ?
+WHERE id = ?`,
+		string(workflow.ExecutionTargetModeNone),
+		string(ExecutionTargetProvenanceResolved),
+		string(task.ID)); err != nil {
+		t.Fatalf("lock none target fixture: %v", err)
+	}
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
+
+	_, err := store.ApproveTransitionWithExecutionTarget(ctx, pending.TransitionID, &candidate)
+	if !errors.Is(err, ErrExecutionTargetAlreadyLocked) {
+		t.Fatalf("ApproveTransitionWithExecutionTarget error = %v, want ErrExecutionTargetAlreadyLocked", err)
+	}
+}
+
+func TestApproveTransitionWithExecutionTargetRejectsCandidateForLockedManagedTarget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "next", OutputValues: map[string]string{"prior_summary": "done"}})
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE tasks
+SET
+    execution_target_mode = ?,
+    execution_target_requested_ref = ?,
+    execution_target_commit_oid = ?,
+    execution_target_provenance = ?
+WHERE id = ?`,
+		string(workflow.ExecutionTargetModeHead),
+		"HEAD",
+		"0123456789abcdef",
+		string(ExecutionTargetProvenanceResolved),
+		string(task.ID)); err != nil {
+		t.Fatalf("lock managed target fixture: %v", err)
+	}
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
+
+	if _, err := store.ApproveTransitionWithExecutionTarget(ctx, pending.TransitionID, &candidate); !errors.Is(err, ErrExecutionTargetAlreadyLocked) {
+		t.Fatalf("ApproveTransitionWithExecutionTarget error = %v, want ErrExecutionTargetAlreadyLocked", err)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	snapshot, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
+	}
+	if snapshot == nil || snapshot.Mode != workflow.ExecutionTargetModeHead {
+		t.Fatalf("snapshot after rejected candidate = %+v, want original head target", snapshot)
+	}
+}
+
 func TestApprovePendingAgentTransitionUsesFrozenTargetSnapshotAfterSourceSnapshotMutation(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
@@ -216,6 +353,52 @@ func TestApprovePendingJoinEdgesProgressesJoin(t *testing.T) {
 	}
 	if transitions[len(transitions)-1].TransitionID != "done" || transitions[len(transitions)-1].OutputValues["joined"] != "branch a" {
 		t.Fatalf("transitions after approved join = %+v", transitions)
+	}
+}
+
+func TestApproveTransitionWithExecutionTargetLocksNoneForExecutableJoinContinuation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "join_a")
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "join_b")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task, branchRuns := startFanoutTask(t, ctx, store, binding.ProjectID, workflowID)
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	implA := nodeByKey(t, def, "impl_a")
+	implB := nodeByKey(t, def, "impl_b")
+	first := completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}})
+	second := completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implB)], TransitionID: "join"})
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
+
+	if _, err := store.ApproveTransitionWithExecutionTarget(ctx, first.TransitionID, &candidate); err != nil {
+		t.Fatalf("ApproveTransitionWithExecutionTarget first: %v", err)
+	}
+	secondApproved, err := store.ApproveTransitionWithExecutionTarget(ctx, second.TransitionID, nil)
+	if err != nil {
+		t.Fatalf("ApproveTransitionWithExecutionTarget second: %v", err)
+	}
+	if len(secondApproved.RunIDs) != 1 {
+		t.Fatalf("second approved = %+v, want joined executable run", secondApproved)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	snapshot, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
+	}
+	if snapshot == nil || snapshot.Mode != workflow.ExecutionTargetModeNone {
+		t.Fatalf("snapshot = %+v, want locked none", snapshot)
 	}
 }
 

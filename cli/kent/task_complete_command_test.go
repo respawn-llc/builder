@@ -378,20 +378,29 @@ func TestTaskCompleteAgentCrossSessionSelectorUsesServiceOwnershipError(t *testi
 	if err != nil {
 		t.Fatalf("CreateWorkflowTask: %v", err)
 	}
-	started, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: created.Task.ID})
+	started, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:           created.Task.ID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
 	if err != nil {
 		t.Fatalf("StartWorkflowTask: %v", err)
 	}
-	claimed, err := remote.store.ClaimRun(context.Background(), workflow.RunID(started.RunID), 0)
+	if started.Applied == nil {
+		t.Fatalf("StartWorkflowTask response = %+v, want applied payload", started)
+	}
+	claimed, err := remote.store.ClaimRun(context.Background(), workflow.RunID(started.Applied.RunID), 0)
 	if err != nil {
 		t.Fatalf("ClaimRun: %v", err)
 	}
 	ownerSessionID := createWorkflowCommandTestSession(t, cfg, binding, remote.metadataStore)
-	if err := remote.store.AttachRunSession(context.Background(), workflow.RunID(started.RunID), claimed.Generation, ownerSessionID); err != nil {
+	if err := remote.store.AttachRunSession(context.Background(), workflow.RunID(started.Applied.RunID), claimed.Generation, ownerSessionID); err != nil {
 		t.Fatalf("AttachRunSession: %v", err)
 	}
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--run", started.RunID)
+	stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--run", started.Applied.RunID)
 	if code != 1 {
 		t.Fatalf("task complete cross-session exit=%d stderr=%q", code, stderr)
 	}

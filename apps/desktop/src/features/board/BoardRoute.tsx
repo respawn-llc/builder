@@ -13,6 +13,16 @@ import { useStatusController } from "../../app/useStatusController";
 import { useWindowChromeTitle } from "../../app/windowChromeTitle";
 import { Button, EmptyState, ErrorState, FloatingNoticeIsland, LoadingState } from "../../ui";
 import { WorkflowValidationIssues } from "../workflow/WorkflowValidationIssues";
+import {
+  ExecutionTargetContinuationDialog,
+} from "../execution-target/ExecutionTargetContinuationDialog";
+import { useExecutionTargetContinuation } from "../execution-target/useExecutionTargetContinuation";
+import {
+  executeExecutionTargetAction,
+  moveExecutionTargetAction,
+  startExecutionTargetAction,
+  type ExecutionTargetContinuationAction,
+} from "../execution-target/executionTargetContinuation";
 import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { useBoardMoveRunFeedback } from "./BoardMoveRunFeedback";
@@ -151,7 +161,7 @@ function BoardContent({
   const [missingInputDrop, setMissingInputDrop] = useState<PendingMissingInputDrop | null>(null);
   const activeDragRef = useRef<BoardCardDragPayload | null>(null);
   const { push } = useStatusController();
-  const { nativeBridge } = useAppServices();
+  const { api, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const scrollportRef = useRef<HTMLDivElement | null>(null);
   const { openSidebar } = useSidebar();
@@ -159,6 +169,24 @@ function BoardContent({
   const actions = useBoardTaskActions(board.projectID, boardQueryWorkflowID, board.selectedWorkflow.id);
   const actionsDisabled = connection.phase !== "connected";
   const moveRunFeedback = useBoardMoveRunFeedback();
+  const executionTargetContinuation = useExecutionTargetContinuation({
+    execute: async (action, selection) => executeExecutionTargetAction(api, action, selection),
+    onApplied: async (result) => {
+      if (result.kind === "move" && result.response.outcome === "applied") {
+        moveRunFeedback.trackMoveRunIDs(result.response.applied);
+      }
+      await actions.refresh();
+    },
+    onAppliedError: (error) => {
+      push({
+        body: errorMessage(error),
+        durationMs: Infinity,
+        id: "board-action-refresh-error",
+        title: t("board.loadFailed"),
+        tone: "danger",
+      });
+    },
+  });
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),
@@ -251,13 +279,7 @@ function BoardContent({
     const dropAction = classifyDrop(column, dragPayload, firstActive?.id);
     if (dropAction.kind === "start") {
       const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
-      setPendingCardMove(pendingMove);
-      void actions.start
-        .mutateAsync(dragPayload.taskID)
-        .catch(reportStartError)
-        .finally(() => {
-          clearPendingCardMove(pendingMove);
-        });
+      runCardAction(startExecutionTargetAction(dragPayload.taskID), pendingMove);
       return;
     }
     if (dropAction.kind === "move") {
@@ -270,14 +292,7 @@ function BoardContent({
         ...(dropAction.autoApprove === undefined ? {} : { autoApprove: dropAction.autoApprove }),
       };
       const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
-      setPendingCardMove(pendingMove);
-      void actions.move
-        .mutateAsync(moveInput)
-        .then(moveRunFeedback.trackMoveRunIDs)
-        .catch(reportMoveError)
-        .finally(() => {
-          clearPendingCardMove(pendingMove);
-        });
+      runCardAction(moveExecutionTargetAction(moveInput), pendingMove);
       return;
     }
     if (dropAction.kind === "confirmRollback") {
@@ -387,14 +402,14 @@ function BoardContent({
     const drop = rollbackDrop;
     setRollbackDrop(null);
     const pendingMove = { taskID: drop.taskID, targetColumnID: drop.targetColumn.id };
-    setPendingCardMove(pendingMove);
-    void actions.move
-      .mutateAsync({ taskID: drop.taskID, targetNodeID: drop.targetColumn.id, autoApprove: true })
-      .then(moveRunFeedback.trackMoveRunIDs)
-      .catch(reportMoveError)
-      .finally(() => {
-        clearPendingCardMove(pendingMove);
-      });
+    runCardAction(
+      moveExecutionTargetAction({
+        taskID: drop.taskID,
+        targetNodeID: drop.targetColumn.id,
+        autoApprove: true,
+      }),
+      pendingMove,
+    );
   }
 
   function submitMissingInputDrop(event: SyntheticEvent<HTMLFormElement>): void {
@@ -405,17 +420,26 @@ function BoardContent({
     const drop = missingInputDrop;
     setMissingInputDrop(null);
     const pendingMove = { taskID: drop.taskID, targetColumnID: drop.targetColumn.id };
-    setPendingCardMove(pendingMove);
-    void actions.move
-      .mutateAsync({
+    runCardAction(
+      moveExecutionTargetAction({
         taskID: drop.taskID,
         targetNodeID: drop.targetColumn.id,
         outputValues: drop.values,
         allowMissingEdge: true,
         autoApprove: isExecutableAutomationColumn(drop.targetColumn),
-      })
-      .then(moveRunFeedback.trackMoveRunIDs)
-      .catch(reportMoveError)
+      }),
+      pendingMove,
+    );
+  }
+
+  function runCardAction(
+    action: ExecutionTargetContinuationAction,
+    pendingMove: PendingBoardCardMove,
+  ): void {
+    setPendingCardMove(pendingMove);
+    void executionTargetContinuation
+      .run(action)
+      .catch(action.kind === "start" ? reportStartError : reportMoveError)
       .finally(() => {
         clearPendingCardMove(pendingMove);
       });
@@ -516,6 +540,7 @@ function BoardContent({
           );
         }}
       />
+      <ExecutionTargetContinuationDialog continuation={executionTargetContinuation} />
       {taskDeleteDialog.fallback}
       {!board.selectedWorkflow.validForTaskCreation ? (
         <FloatingNoticeIsland

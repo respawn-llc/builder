@@ -1,5 +1,6 @@
 Usage of kent workflow:
   kent workflow create [--description <text>] [--json] <name>
+  kent workflow update <workflow> [--name <name>] [--description <text>] [--execution-target ask-on-first-execution|none|head|default-branch|ref:<revision>] [--json]
   kent workflow list [--page-size <n>] [--page-token <token>] [--json]
   kent workflow node add <workflow> --key <node-key> --kind start|agent|script|join|terminal [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
   kent workflow node update <workflow> <node-key> [--key <node-key>] [--kind start|agent|script|join|terminal] [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]

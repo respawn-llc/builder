@@ -1,4 +1,8 @@
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
+import {
+  defaultWorkflowExecutionTargetPolicy,
+  emptyWorkflowDerivedWiring,
+  type WorkflowDefinition,
+} from "../../api";
 import type { draftDefinitionFromSource } from "../../features/workflow-editor/workflowEditorDraft";
 
 export const workflowDefinition: WorkflowDefinition = {
@@ -7,6 +11,7 @@ export const workflowDefinition: WorkflowDefinition = {
     id: "workflow-1",
     name: "Workflow",
     version: 1,
+    executionTargetPolicy: defaultWorkflowExecutionTargetPolicy,
   },
   derivedWiring: emptyWorkflowDerivedWiring,
   edges: [

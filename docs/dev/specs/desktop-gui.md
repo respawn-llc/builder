@@ -119,12 +119,19 @@
 - Grouped workflows render through group-aware UI. Initial preferred shape is group islands wrapping related columns unless implementation evidence shows better.
 - Join nodes are internal and not board columns.
 - Cards show task ID, task title, backend-native status component, and workspace chip when useful.
+- Cards do not show execution-target policy or locked execution-target facts.
 - Card click opens task detail.
 - Resume appears only when resumable.
 - Interrupt appears in the same action slot when exactly one active run is interruptible and acts immediately.
 - Tasks with multiple active runs open detail for per-run controls.
 - Board visual states include Backlog/idle, queued, running, interrupted, approval-gated, question-gated, done/completed, and canceled.
 - Dragging Backlog task to first active node starts automation immediately with no confirmation.
+- When task start or an executable manual move requires an execution target, one reusable centered dialog continues the initiating action. It is not anchored to the card/control and does not use the global sidebar.
+- Desktop does not override a usable fixed workflow policy; it opens selection only for `ask_on_first_execution` or an unavailable configured target.
+- Closing the target dialog leaves the task and initiating action unchanged.
+- Normal selection offers no managed worktree, source `HEAD`, repository default branch, and custom Git ref, with repository default branch preselected.
+- An unresolvable configured target is identified with its failure reason before the concrete choices. The configured mode and custom-ref input remain selected when useful; otherwise repository default branch is preselected.
+- During target resolution, managed-worktree creation, and setup, the dialog remains open, uses shared loading/progress components, disables duplicate submission, and preserves the selection and custom-ref input. Failures stay in the dialog with the actionable server error and Retry/Cancel actions.
 - Dragging to Done is a user archive/manual move, not normal edge completion.
 - Manual move and Done drag targets are unavailable while a task has a started active run that is not completed or interrupted, including runs waiting on a question.
 - Agent and script drag targets are available only when the server exposes a concrete workflow edge to that executable target.
@@ -143,7 +150,7 @@
 - If project has exactly one workspace, show compact disabled workspace selector/chip.
 - Task creation creates a Backlog task. There is no Start button; users drag cards to start them.
 - Title/body/source workspace are editable only while task is still in Backlog.
-- Source workspace becomes immutable after start/worktree creation.
+- A locked managed target remains tied to its original source workspace. A no-managed-worktree target uses the task's current source workspace.
 - User can see validation error text when task create/edit fails.
 
 ## Task Detail
@@ -163,7 +170,8 @@
 - Activity tab is compact timeline with no mutation controls and no count badge.
 - Runs tab contains runs, worktree/session info, and telemetry when too dense for header; it has a run count badge.
 - Required identity/status fields: task ID, title, body rendered as Markdown, project, workflow, source workspace, current node/status, completion/done/cancel state, and server action flags.
-- Conditional fields: worktree path, agent role/run status, session ID/name, source URL, assignee/column ownership when server provides it.
+- Conditional fields: locked execution target mode and effective root; requested Git revision, resolved commit, current named branch when the managed root is available, and worktree path for managed targets; agent role/run status, session ID/name, source URL, and assignee/column ownership when server provides them.
+- Irrelevant execution-target fields are omitted. Resolved commits render as short monospaced hashes with a copy-full action.
 - Missing-field policy: hide expected-not-yet-created fields, show continuity fields empty/unassigned where useful, and render unexpected meaningful missing fields as unavailable/error states.
 - Task detail allows title/body edit only while still in Backlog. Source URL is shown read-only in Properties and is never editable: valid `http(s)`/`mailto` values render as a compact link labeled with the bare host (e.g. `github.com`) opening in the system browser, and other values fall back to plain `Source: <text>`.
 - Task detail self-refreshes live while open: it subscribes to its project's workflow events and refetches its own read models (detail, activity, comments, pending asks) whenever a server event mutates the task — status, runs, transitions/approvals, comments, questions, or title/body — independent of the hosting surface (board sidebar, Home inbox, or standalone window). Refreshes reuse cached data so the update is flicker-free and never collapses the surface to a loading state.
@@ -181,6 +189,7 @@
 - Question UI preserves ask functionality with options, blank commentary/freeform field, recommended marker, click or arrows plus Enter, and standard Tab focus. Do not show source-origin label.
 - Runtime approval prompts are surfaced as question attention in Home Inbox, notifications, and task detail. They use the real prompt text, show approval-specific choices, may preselect the primary approval choice, and do not show a `Neither` freeform-answer option. Deny is the negative approval choice and requires commentary.
 - Workflow transition approval UI exposes Approve only.
+- Approve uses the same centered execution-target dialog when the approved transition first requires selection; dismissal leaves the approval pending.
 - Workflow transition approval UI shows stored approval snapshot: source node, transition label/id, target nodes, required provision fields/values, commentary, workflow version, stale warning.
 - Cancel requires confirmation and no reason.
 - Interrupt acts immediately with no confirmation.

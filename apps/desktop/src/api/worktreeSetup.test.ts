@@ -34,14 +34,30 @@ describe("worktree setup API", () => {
 
   it("uses caller-provided setup operation ids and disables generic timeouts for workflow lifecycle mutations", async () => {
     const transport = new FakeRpcTransport([
-      { method: "workflow.task.start", result: {} },
+      {
+        method: "workflow.task.start",
+        result: {
+          outcome: "applied",
+          applied: {
+            transition_id: "transition-1",
+            placement_id: "placement-1",
+            run_id: "run-1",
+          },
+        },
+      },
       {
         method: "workflow.task.approve",
-        result: { transition_id: "transition-1", task_id: "task-1", state: "approved" },
+        result: {
+          outcome: "applied",
+          applied: { transition_id: "transition-1", task_id: "task-1", state: "approved" },
+        },
       },
       {
         method: "workflow.task.move",
-        result: { transition_id: "transition-1", state: "approved", run_ids: [] },
+        result: {
+          outcome: "applied",
+          applied: { transition_id: "transition-1", state: "approved", run_ids: [] },
+        },
       },
     ]);
     const client = new ApiClient(transport);

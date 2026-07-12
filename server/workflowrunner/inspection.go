@@ -53,11 +53,11 @@ func BuildPersistedWorkflowRuntimeConfig(ctx context.Context, store *workflowsto
 }
 
 // PersistedWorkflowInspection is the workflow-owned runtime reconstruction for
-// a persisted session, including the run's authoritative worktree root.
+// a persisted session, including the run's authoritative execution root.
 type PersistedWorkflowInspection struct {
-	Plan         launch.SessionPlan
-	Runtime      *workflowruntime.Config
-	WorktreeRoot string
+	Plan          launch.SessionPlan
+	Runtime       *workflowruntime.Config
+	ExecutionRoot string
 }
 
 func optionalRunCompletionMode(mode *string) string {
@@ -80,7 +80,11 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 	if err != nil {
 		return PersistedWorkflowInspection{}, err
 	}
-	app.WorkspaceRoot = strings.TrimSpace(input.WorkspaceRoot)
+	executionRoot, err := requireRunExecutionRoot(input)
+	if err != nil {
+		return PersistedWorkflowInspection{}, err
+	}
+	app.WorkspaceRoot = executionRoot.SourceWorkspaceRoot
 	overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
 	plan, err := launch.ResolvePromptFacingSnapshotPlan(app, sessionStore, overrides.HasAny())
 	if err != nil {
@@ -105,9 +109,9 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 		return PersistedWorkflowInspection{}, err
 	}
 	return PersistedWorkflowInspection{
-		Plan:         plan,
-		Runtime:      runtimeConfig,
-		WorktreeRoot: input.WorktreeRoot,
+		Plan:          plan,
+		Runtime:       runtimeConfig,
+		ExecutionRoot: executionRoot.EffectiveRoot(),
 	}, nil
 }
 

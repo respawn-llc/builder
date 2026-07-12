@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
+import {
+  defaultWorkflowExecutionTargetPolicy,
+  emptyWorkflowDerivedWiring,
+  type WorkflowDefinition,
+} from "../../api";
 import {
   initializeWorkflowEditorDraft,
   workflowDefinitionFromDraft,
   workflowEditorDirtyState,
   workflowEditorDraftGraph,
+  workflowEditorDraftMetadata,
   workflowEditorDraftReducer,
 } from "./workflowEditorDraft";
 
@@ -45,6 +50,32 @@ describe("workflowEditorDraft", () => {
     expect(workflowDefinitionFromDraft(graph.draft).nodes[0]?.outputFields).toEqual([
       { description: "Summary", name: "summary" },
     ]);
+  });
+
+  it("edits execution target policy as metadata and clears stale custom refs", () => {
+    const initial = initializeWorkflowEditorDraft(workflowDefinition);
+    const custom = workflowEditorDraftReducer(initial, {
+      policy: { mode: "custom_ref", customRef: "release/v1" },
+      type: "editWorkflowExecutionTargetPolicy",
+    });
+    expect(workflowEditorDirtyState(custom)).toEqual({
+      dirty: true,
+      graphDirty: false,
+      metadataDirty: true,
+    });
+    expect(workflowEditorDraftMetadata(custom).executionTargetPolicy).toEqual({
+      mode: "custom_ref",
+      customRef: "release/v1",
+    });
+
+    const head = workflowEditorDraftReducer(custom, {
+      policy: { mode: "head", customRef: "must-be-cleared" },
+      type: "editWorkflowExecutionTargetPolicy",
+    });
+    expect(head.draft.workflow.executionTargetPolicy).toEqual({
+      mode: "head",
+      customRef: null,
+    });
   });
 
   it("keeps draft versions stable when topology mutations are blocked", () => {
@@ -364,6 +395,7 @@ const workflowDefinition: WorkflowDefinition = {
     version: 1,
     id: "workflow-1",
     name: "Workflow",
+    executionTargetPolicy: defaultWorkflowExecutionTargetPolicy,
   },
   nodeGroups: [],
   nodes: [

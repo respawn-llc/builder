@@ -190,6 +190,8 @@ func readTaskEditBody(body string, bodyFile string, bodyFileProvided bool) (stri
 func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task start", stderr, taskStartUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
+	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	jsonOut := fs.Bool("json", false, "write the typed start outcome as JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -201,6 +203,15 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	}
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
+	}
+	var executionTarget *serverapi.WorkflowExecutionTargetSelection
+	if flagWasProvided(fs, "execution-target") {
+		parsed, err := parseTaskExecutionTargetSelector(*executionTargetRaw)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		executionTarget = &parsed
 	}
 	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
 	if err != nil {
@@ -214,19 +225,93 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		return 1
 	}
 	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
-		return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: setupOperationID, TaskID: taskID})
+		return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: setupOperationID, TaskID: taskID, ExecutionTarget: executionTarget})
 	})
 	if err != nil {
+		if !writeWorkflowExecutionTargetError(stderr, err) {
+			fmt.Fprintln(stderr, err)
+		}
+		return 1
+	}
+	if err := resp.Validate(); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, resp.RunID, taskStartSessionPollTimeout, taskStartSessionPollInterval)
+	if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		if *jsonOut {
+			if err := json.NewEncoder(stdout).Encode(resp); err != nil {
+				fmt.Fprintln(stderr, err)
+			}
+		} else {
+			writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
+		}
+		return 1
+	}
+	applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	writeTaskStartResult(stdout, detail, resp)
+	if *jsonOut {
+		if err := json.NewEncoder(stdout).Encode(resp); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+	detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.RunID, taskStartSessionPollTimeout, taskStartSessionPollInterval)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	writeTaskStartResult(stdout, detail, *applied)
 	return 0
+}
+
+func writeWorkflowExecutionTargetSelectionRequired(stderr io.Writer, requirement *serverapi.WorkflowExecutionTargetSelectionRequirement) {
+	switch {
+	case requirement == nil:
+		fmt.Fprintln(stderr, "Execution target selection is required.")
+	case requirement.Reason == serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection:
+		fmt.Fprintln(stderr, "Execution target selection is required: workflow policy requires selection.")
+	case requirement.Reason == serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable:
+		target := "configured target"
+		if requirement.ConfiguredTarget != nil {
+			target = workflowConfiguredExecutionTargetSelector(*requirement.ConfiguredTarget)
+		}
+		fmt.Fprintf(stderr, "Execution target selection is required: configured target %s is unavailable (%s).\n", target, requirement.UnavailableCause)
+	default:
+		fmt.Fprintf(stderr, "Execution target selection is required: %s.\n", requirement.Reason)
+	}
+	fmt.Fprintln(stderr, "Rerun with one of:")
+	fmt.Fprintln(stderr, "  --execution-target none")
+	fmt.Fprintln(stderr, "  --execution-target head")
+	fmt.Fprintln(stderr, "  --execution-target default-branch")
+	fmt.Fprintln(stderr, "  --execution-target ref:<revision>")
+}
+
+func workflowConfiguredExecutionTargetSelector(target serverapi.WorkflowExecutionTargetConfiguredTarget) string {
+	if target.Mode == serverapi.WorkflowExecutionTargetModeCustomRef {
+		if target.RequestedRef != nil {
+			return "ref:" + *target.RequestedRef
+		}
+		return "ref:<revision>"
+	}
+	return workflowExecutionTargetPolicySelector(serverapi.WorkflowExecutionTargetConfiguration{Mode: target.Mode})
+}
+
+func writeWorkflowExecutionTargetError(stderr io.Writer, err error) bool {
+	var resolutionErr *serverapi.WorkflowExecutionTargetResolutionError
+	if errors.As(err, &resolutionErr) {
+		fmt.Fprintf(stderr, "Execution target revision %q failed: %s.\n", resolutionErr.RequestedRef, resolutionErr.Code)
+		return true
+	}
+	var lockedErr *serverapi.WorkflowLockedExecutionTargetError
+	if errors.As(err, &lockedErr) {
+		fmt.Fprintf(stderr, "Locked execution target is unavailable: %s.\n", lockedErr.Cause)
+		return true
+	}
+	return false
 }
 
 func taskCancelSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -379,19 +464,30 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0]})
 	})
 	if err != nil {
+		if !writeWorkflowExecutionTargetError(stderr, err) {
+			fmt.Fprintln(stderr, err)
+		}
+		return 1
+	}
+	if err := resp.Validate(); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if strings.TrimSpace(resp.TaskID) == "" {
-		fmt.Fprintf(stderr, "approved transition %s but response did not include task id for output\n", resp.TransitionID)
-		return 1
-	}
-	detail, err := getWorkflowTaskByID(context.Background(), remote, resp.TaskID)
+	applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
 	if err != nil {
-		fmt.Fprintf(stderr, "approved transition %s but failed to load task detail for output: %v\n", resp.TransitionID, err)
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	writeTaskTransitionResult(stdout, "Approved transition of", detail, resp.TransitionID, resp.RunIDs)
+	if strings.TrimSpace(applied.TaskID) == "" {
+		fmt.Fprintf(stderr, "approved transition %s but response did not include task id for output\n", applied.TransitionID)
+		return 1
+	}
+	detail, err := getWorkflowTaskByID(context.Background(), remote, applied.TaskID)
+	if err != nil {
+		fmt.Fprintf(stderr, "approved transition %s but failed to load task detail for output: %v\n", applied.TransitionID, err)
+		return 1
+	}
+	writeTaskTransitionResult(stdout, "Approved transition of", detail, applied.TransitionID, applied.RunIDs)
 	return 0
 }
 
@@ -428,6 +524,17 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupOperationID, TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary})
 	})
 	if err != nil {
+		if !writeWorkflowExecutionTargetError(stderr, err) {
+			fmt.Fprintln(stderr, err)
+		}
+		return 1
+	}
+	if err := resp.Validate(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -436,8 +543,15 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "moved task %s but failed to load task detail for output: %v\n", taskID, err)
 		return 1
 	}
-	writeTaskTransitionResult(stdout, "Moved task", detail, resp.TransitionID, resp.RunIDs)
+	writeTaskTransitionResult(stdout, "Moved task", detail, applied.TransitionID, applied.RunIDs)
 	return 0
+}
+
+func requireAppliedWorkflowAction[T any](outcome serverapi.WorkflowExecutionTargetActionOutcome, applied *T) (*T, error) {
+	if outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || applied == nil {
+		return nil, errors.New("workflow action requires execution target selection")
+	}
+	return applied, nil
 }
 
 type worktreeSetupProgressSubscriber interface {

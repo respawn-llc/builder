@@ -112,6 +112,8 @@ type ManualMoveRequest struct {
 	Commentary       string
 	Actor            string
 	AllowMissingEdge bool
+	AutoApprove      bool
+	ExecutionTarget  *ExecutionTargetCandidate
 }
 
 type ManualMoveResult = CompleteRunResult
@@ -203,6 +205,13 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 		if task.CanceledAtUnixMs.Valid {
 			return TaskRecord{}, ErrSourceWorkspaceForCanceledTask
 		}
+		snapshot, err := executionTargetSnapshotFromTask(task)
+		if err != nil {
+			return TaskRecord{}, err
+		}
+		if snapshot != nil && snapshot.Mode != workflow.ExecutionTargetModeNone {
+			return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
+		}
 		if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
 			return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
 		}
@@ -242,7 +251,7 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	if err := tx.Commit(); err != nil {
 		return TaskRecord{}, err
 	}
-	return taskRecordFromTask(row), nil
+	return taskRecordFromTask(row)
 }
 
 func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (TaskRecord, error) {
@@ -273,7 +282,7 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (TaskRec
 	if err := tx.Commit(); err != nil {
 		return TaskRecord{}, err
 	}
-	return taskRecordFromTask(task), nil
+	return taskRecordFromTask(task)
 }
 
 func deleteTaskScopedChildren(ctx context.Context, q *sqlitegen.Queries, taskID string) error {
@@ -402,16 +411,34 @@ func workspaceSnapshotDisplayName(rootPath string) string {
 }
 
 func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTaskResult, error) {
+	return s.startTask(ctx, taskID, nil, false)
+}
+
+func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) (StartTaskResult, error) {
+	return s.startTask(ctx, taskID, candidate, true)
+}
+
+func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireExecutionTarget bool) (StartTaskResult, error) {
 	prepared, err := s.prepareTaskStart(ctx, taskID)
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	worktreeRoot, err := taskManagedWorktreeRoot(ctx, s.queries, prepared.task)
-	if err != nil {
-		return StartTaskResult{}, err
+	var executionRoot *ExecutionRoot
+	var targetMutation preparedExecutionTargetMutation
+	if requireExecutionTarget {
+		targetMutation, err = s.prepareExecutionTargetMutation(ctx, prepared.task, candidate)
+		if err != nil {
+			return StartTaskResult{}, err
+		}
+		executionRoot = &targetMutation.executionRoot
+	} else {
+		executionRoot, err = executionRootForLockedTaskIfPresent(ctx, s.queries, prepared.task)
+		if err != nil {
+			return StartTaskResult{}, err
+		}
 	}
 	if prepared.target.Kind() == workflow.NodeKindScript {
-		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), worktreeRoot); err != nil {
+		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), executionRoot); err != nil {
 			return StartTaskResult{}, err
 		}
 	}
@@ -425,6 +452,11 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	if requireExecutionTarget {
+		if err := applyPreparedExecutionTargetMutation(ctx, q, prepared.task, targetMutation, now); err != nil {
+			return StartTaskResult{}, err
+		}
+	}
 	updatedStart, err := q.StartTaskCompleteStartPlacement(ctx, sqlitegen.StartTaskCompleteStartPlacementParams{
 		State:           "completed",
 		UpdatedAtUnixMs: now,
@@ -561,7 +593,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
-	worktreeRoot, err := taskManagedWorktreeRoot(ctx, s.queries, task)
+	executionRoot, err := executionRootForLockedTaskIfPresent(ctx, s.queries, task)
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
@@ -707,17 +739,12 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		if !executableNodeKind(edge.TargetNode.Kind) {
 			continue
 		}
-		targetRunID := prefixedID("run")
 		targetSnapshot, foundSnapshot, err := snapshot.forNode(edge.TargetNode)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
 		if !foundSnapshot {
 			return CompleteRunResult{}, fmt.Errorf("target node %q missing from run-start snapshot", edge.TargetNode.ID)
-		}
-		targetSnapshotJSON, err := workflow.MarshalString(targetSnapshot)
-		if err != nil {
-			return CompleteRunResult{}, err
 		}
 		resolution, err := s.resolveContextInvocation(ctx, q, run.TaskID, now, run.PlacementID, &run, snapshot, edge)
 		if err != nil {
@@ -731,25 +758,20 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		targetMetadata.PromptTemplate = strings.TrimSpace(edge.PromptTemplate)
 		targetMetadata.Parameters = append([]workflow.Parameter(nil), edge.Parameters...)
 		targetMetadata.PriorParameterValues = clonePriorParameterValues(priorParameterValues)
-		targetMetadataJSON, err := workflow.MarshalString(targetMetadata)
+		createdRun, err := s.insertExecutableRun(ctx, q, executableRunRequest{
+			PlacementID:   targetPlacementID,
+			NodeID:        edge.TargetNode.ID,
+			Snapshot:      targetSnapshot,
+			Metadata:      targetMetadata,
+			ExecutionRoot: executionRoot,
+			Now:           now,
+		})
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		interruptionReason, interruptionDetail, invalidScript, err := s.scriptNodeInterruption(ctx, q, edge.TargetNode.ID, worktreeRoot)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		interruptedAt := sql.NullInt64{}
-		if invalidScript {
-			interruptedAt = sql.NullInt64{Int64: now, Valid: true}
-		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: nullableString(interruptionReason), InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
-			return CompleteRunResult{}, fmt.Errorf("insert target run: %w", err)
-		}
-		targetRun := workflow.RunID(targetRunID)
-		result.RunIDs = append(result.RunIDs, targetRun)
-		if invalidScript {
-			result.InterruptedRunIDs = append(result.InterruptedRunIDs, targetRun)
+		result.RunIDs = append(result.RunIDs, createdRun.RunID)
+		if createdRun.Interrupted {
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, createdRun.RunID)
 		}
 	}
 	event, err := runCompletedWorkflowEvent(ctx, q, run.TaskID, transitionID, run.ID, now)

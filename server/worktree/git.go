@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +61,123 @@ type CreateTargetResolution struct {
 	ResolvedRef string
 }
 
+type GitRevision struct {
+	RequestedRef string
+	CommitOID    string
+	CanonicalRef *string
+}
+
+type GitRevisionResolutionErrorKind string
+
+const (
+	GitRevisionResolutionErrorInvalidRevision GitRevisionResolutionErrorKind = "invalid_revision"
+	GitRevisionResolutionErrorNonCommit       GitRevisionResolutionErrorKind = "non_commit"
+	GitRevisionResolutionErrorGitFailure      GitRevisionResolutionErrorKind = "git_failure"
+)
+
+type GitRevisionResolutionError struct {
+	Kind         GitRevisionResolutionErrorKind
+	RequestedRef string
+	Cause        error
+}
+
+func (e *GitRevisionResolutionError) Error() string {
+	if e == nil {
+		return "git revision resolution failed"
+	}
+	return fmt.Sprintf("git revision resolution failed for %q: %s", e.RequestedRef, e.Kind)
+}
+
+func (e *GitRevisionResolutionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+type GitDefaultBranch struct {
+	RemoteName string
+	Ref        string
+}
+
+type GitDefaultBranchResolutionErrorKind string
+
+const (
+	GitDefaultBranchResolutionErrorMissing    GitDefaultBranchResolutionErrorKind = "missing"
+	GitDefaultBranchResolutionErrorAmbiguous  GitDefaultBranchResolutionErrorKind = "ambiguous"
+	GitDefaultBranchResolutionErrorGitFailure GitDefaultBranchResolutionErrorKind = "git_failure"
+)
+
+type GitDefaultBranchResolutionError struct {
+	Kind  GitDefaultBranchResolutionErrorKind
+	Cause error
+}
+
+func (e *GitDefaultBranchResolutionError) Error() string {
+	if e == nil {
+		return "git default branch resolution failed"
+	}
+	return "git default branch resolution failed: " + string(e.Kind)
+}
+
+func (e *GitDefaultBranchResolutionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+type ManagedWorktreeIdentitySpec struct {
+	SourceWorkspaceRoot  string
+	ExpectedWorktreeRoot string
+}
+
+type ManagedWorktreeIdentity struct {
+	SourceTopLevel    string
+	SourceCommonDir   string
+	WorktreeTopLevel  string
+	WorktreeCommonDir string
+	SymbolicHead      string
+}
+
+func (i ManagedWorktreeIdentity) NamedBranch() (string, bool) {
+	branchName, ok := strings.CutPrefix(strings.TrimSpace(i.SymbolicHead), "refs/heads/")
+	branchName = strings.TrimSpace(branchName)
+	return branchName, ok && branchName != ""
+}
+
+type ManagedWorktreeIdentityErrorKind string
+
+const (
+	ManagedWorktreeIdentityErrorRootMissing              ManagedWorktreeIdentityErrorKind = "root_missing"
+	ManagedWorktreeIdentityErrorRootInaccessible         ManagedWorktreeIdentityErrorKind = "root_inaccessible"
+	ManagedWorktreeIdentityErrorRootNotDirectory         ManagedWorktreeIdentityErrorKind = "root_not_directory"
+	ManagedWorktreeIdentityErrorNotGitWorktree           ManagedWorktreeIdentityErrorKind = "not_git_worktree"
+	ManagedWorktreeIdentityErrorTopLevelMismatch         ManagedWorktreeIdentityErrorKind = "top_level_mismatch"
+	ManagedWorktreeIdentityErrorSourceRepositoryMismatch ManagedWorktreeIdentityErrorKind = "source_repository_mismatch"
+	ManagedWorktreeIdentityErrorDetachedHead             ManagedWorktreeIdentityErrorKind = "detached_head"
+	ManagedWorktreeIdentityErrorGitInspectionFailed      ManagedWorktreeIdentityErrorKind = "git_inspection_failed"
+)
+
+type ManagedWorktreeIdentityError struct {
+	Kind  ManagedWorktreeIdentityErrorKind
+	Cause error
+}
+
+func (e *ManagedWorktreeIdentityError) Error() string {
+	if e == nil {
+		return "managed worktree identity validation failed"
+	}
+	return "managed worktree identity validation failed: " + string(e.Kind)
+}
+
+func (e *ManagedWorktreeIdentityError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 type gitCommandRunner interface {
 	Output(ctx context.Context, dir string, args ...string) ([]byte, error)
 	Run(ctx context.Context, dir string, args ...string) ([]byte, int, error)
@@ -74,6 +192,338 @@ func NewGitInspector(runner gitCommandRunner) *GitInspector {
 		runner = execGitCommandRunner{}
 	}
 	return &GitInspector{runner: runner}
+}
+
+func (i *GitInspector) ResolveHEAD(ctx context.Context, workspaceRoot string) (GitRevision, error) {
+	return i.ResolveRevision(ctx, workspaceRoot, "HEAD")
+}
+
+func (i *GitInspector) ResolveRevision(ctx context.Context, workspaceRoot string, revision string) (GitRevision, error) {
+	if i == nil {
+		return GitRevision{}, fmt.Errorf("git inspector is required")
+	}
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return GitRevision{}, err
+	}
+	requestedRef := strings.TrimSpace(revision)
+	if requestedRef == "" {
+		return GitRevision{}, &GitRevisionResolutionError{
+			Kind:         GitRevisionResolutionErrorInvalidRevision,
+			RequestedRef: requestedRef,
+		}
+	}
+
+	objectArgs := []string{"rev-parse", "--verify", "--quiet", requestedRef + "^{object}"}
+	if objectOutput, exitCode, err := i.runner.Run(ctx, canonicalRoot, objectArgs...); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return GitRevision{}, ctxErr
+		}
+		if exitCode == 1 {
+			return GitRevision{}, &GitRevisionResolutionError{
+				Kind:         GitRevisionResolutionErrorInvalidRevision,
+				RequestedRef: requestedRef,
+				Cause:        formatGitRunError(exitCode, err, objectOutput, objectArgs...),
+			}
+		}
+		return GitRevision{}, &GitRevisionResolutionError{
+			Kind:         GitRevisionResolutionErrorGitFailure,
+			RequestedRef: requestedRef,
+			Cause:        formatGitRunError(exitCode, err, objectOutput, objectArgs...),
+		}
+	}
+
+	commitArgs := []string{"rev-parse", "--verify", "--quiet", requestedRef + "^{commit}"}
+	commitOutput, exitCode, err := i.runner.Run(ctx, canonicalRoot, commitArgs...)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return GitRevision{}, ctxErr
+		}
+		kind := GitRevisionResolutionErrorNonCommit
+		if exitCode < 0 {
+			kind = GitRevisionResolutionErrorGitFailure
+		}
+		return GitRevision{}, &GitRevisionResolutionError{
+			Kind:         kind,
+			RequestedRef: requestedRef,
+			Cause:        formatGitRunError(exitCode, err, commitOutput, commitArgs...),
+		}
+	}
+	commitOID := strings.TrimSpace(string(commitOutput))
+	if commitOID == "" {
+		return GitRevision{}, &GitRevisionResolutionError{
+			Kind:         GitRevisionResolutionErrorGitFailure,
+			RequestedRef: requestedRef,
+			Cause:        fmt.Errorf("git %s returned no commit oid", strings.Join(commitArgs, " ")),
+		}
+	}
+
+	symbolicArgs := []string{"rev-parse", "--symbolic-full-name", "--verify", "--quiet", requestedRef}
+	symbolicOutput, exitCode, err := i.runner.Run(ctx, canonicalRoot, symbolicArgs...)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return GitRevision{}, ctxErr
+		}
+		return GitRevision{}, &GitRevisionResolutionError{
+			Kind:         GitRevisionResolutionErrorGitFailure,
+			RequestedRef: requestedRef,
+			Cause:        formatGitRunError(exitCode, err, symbolicOutput, symbolicArgs...),
+		}
+	}
+	canonicalRef := strings.TrimSpace(string(symbolicOutput))
+	var canonicalRefPointer *string
+	if strings.HasPrefix(canonicalRef, "refs/") {
+		canonicalRefPointer = &canonicalRef
+	}
+	return GitRevision{
+		RequestedRef: requestedRef,
+		CommitOID:    commitOID,
+		CanonicalRef: canonicalRefPointer,
+	}, nil
+}
+
+func (i *GitInspector) ResolveDefaultBranch(ctx context.Context, workspaceRoot string) (GitDefaultBranch, error) {
+	if i == nil {
+		return GitDefaultBranch{}, fmt.Errorf("git inspector is required")
+	}
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return GitDefaultBranch{}, err
+	}
+	remoteArgs := []string{"remote"}
+	remoteOutput, exitCode, err := i.runner.Run(ctx, canonicalRoot, remoteArgs...)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return GitDefaultBranch{}, ctxErr
+		}
+		return GitDefaultBranch{}, &GitDefaultBranchResolutionError{
+			Kind:  GitDefaultBranchResolutionErrorGitFailure,
+			Cause: formatGitRunError(exitCode, err, remoteOutput, remoteArgs...),
+		}
+	}
+	remoteNames := gitRemoteNames(remoteOutput)
+	candidates := make([]GitDefaultBranch, 0, len(remoteNames))
+	for _, remoteName := range remoteNames {
+		headRef := "refs/remotes/" + remoteName + "/HEAD"
+		symbolicArgs := []string{"symbolic-ref", "--quiet", headRef}
+		symbolicOutput, exitCode, err := i.runner.Run(ctx, canonicalRoot, symbolicArgs...)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return GitDefaultBranch{}, ctxErr
+			}
+			if exitCode == 1 {
+				continue
+			}
+			return GitDefaultBranch{}, &GitDefaultBranchResolutionError{
+				Kind:  GitDefaultBranchResolutionErrorGitFailure,
+				Cause: formatGitRunError(exitCode, err, symbolicOutput, symbolicArgs...),
+			}
+		}
+		ref := strings.TrimSpace(string(symbolicOutput))
+		if !strings.HasPrefix(ref, "refs/remotes/"+remoteName+"/") {
+			return GitDefaultBranch{}, &GitDefaultBranchResolutionError{
+				Kind:  GitDefaultBranchResolutionErrorGitFailure,
+				Cause: fmt.Errorf("git remote HEAD %q resolves outside remote %q", ref, remoteName),
+			}
+		}
+		candidate := GitDefaultBranch{RemoteName: remoteName, Ref: ref}
+		if remoteName == "origin" {
+			return candidate, nil
+		}
+		candidates = append(candidates, candidate)
+	}
+	switch len(candidates) {
+	case 0:
+		return GitDefaultBranch{}, &GitDefaultBranchResolutionError{Kind: GitDefaultBranchResolutionErrorMissing}
+	case 1:
+		return candidates[0], nil
+	default:
+		return GitDefaultBranch{}, &GitDefaultBranchResolutionError{Kind: GitDefaultBranchResolutionErrorAmbiguous}
+	}
+}
+
+func gitRemoteNames(output []byte) []string {
+	lines := strings.Split(strings.ReplaceAll(string(output), "\r\n", "\n"), "\n")
+	remotes := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if remoteName := strings.TrimSpace(line); remoteName != "" {
+			remotes = append(remotes, remoteName)
+		}
+	}
+	return remotes
+}
+
+func (i *GitInspector) ValidateManagedWorktreeIdentity(ctx context.Context, spec ManagedWorktreeIdentitySpec) (ManagedWorktreeIdentity, error) {
+	if i == nil {
+		return ManagedWorktreeIdentity{}, fmt.Errorf("git inspector is required")
+	}
+	expectedRoot, err := accessibleDirectory(spec.ExpectedWorktreeRoot)
+	if err != nil {
+		return ManagedWorktreeIdentity{}, err
+	}
+	sourceRoot, err := config.CanonicalWorkspaceRoot(spec.SourceWorkspaceRoot)
+	if err != nil {
+		return ManagedWorktreeIdentity{}, &ManagedWorktreeIdentityError{
+			Kind:  ManagedWorktreeIdentityErrorGitInspectionFailed,
+			Cause: err,
+		}
+	}
+	sourceTopLevel, err := i.gitPath(ctx, sourceRoot, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return ManagedWorktreeIdentity{}, identityInspectionError(err)
+	}
+	sourceCommonDir, err := i.gitPath(ctx, sourceRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return ManagedWorktreeIdentity{}, identityInspectionError(err)
+	}
+	worktreeTopLevel, err := i.gitPath(ctx, expectedRoot, "rev-parse", "--show-toplevel")
+	if err != nil {
+		var commandErr *gitCommandError
+		if errors.As(err, &commandErr) && commandErr.ExitCode == 128 {
+			return ManagedWorktreeIdentity{}, &ManagedWorktreeIdentityError{
+				Kind:  ManagedWorktreeIdentityErrorNotGitWorktree,
+				Cause: err,
+			}
+		}
+		return ManagedWorktreeIdentity{}, identityInspectionError(err)
+	}
+	if worktreeTopLevel != expectedRoot {
+		return ManagedWorktreeIdentity{}, &ManagedWorktreeIdentityError{
+			Kind:  ManagedWorktreeIdentityErrorTopLevelMismatch,
+			Cause: fmt.Errorf("git worktree top level %q does not match expected root %q", worktreeTopLevel, expectedRoot),
+		}
+	}
+	worktreeCommonDir, err := i.gitPath(ctx, expectedRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return ManagedWorktreeIdentity{}, identityInspectionError(err)
+	}
+	if sourceCommonDir != worktreeCommonDir {
+		return ManagedWorktreeIdentity{}, &ManagedWorktreeIdentityError{
+			Kind:  ManagedWorktreeIdentityErrorSourceRepositoryMismatch,
+			Cause: fmt.Errorf("source common git directory %q does not match worktree common git directory %q", sourceCommonDir, worktreeCommonDir),
+		}
+	}
+	symbolicHead, err := i.gitOutput(ctx, expectedRoot, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		var commandErr *gitCommandError
+		if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
+			return ManagedWorktreeIdentity{}, &ManagedWorktreeIdentityError{
+				Kind:  ManagedWorktreeIdentityErrorDetachedHead,
+				Cause: err,
+			}
+		}
+		return ManagedWorktreeIdentity{}, identityInspectionError(err)
+	}
+	return ManagedWorktreeIdentity{
+		SourceTopLevel:    sourceTopLevel,
+		SourceCommonDir:   sourceCommonDir,
+		WorktreeTopLevel:  worktreeTopLevel,
+		WorktreeCommonDir: worktreeCommonDir,
+		SymbolicHead:      symbolicHead,
+	}, nil
+}
+
+type gitCommandError struct {
+	ExitCode int
+	Cause    error
+}
+
+func (e *gitCommandError) Error() string {
+	if e == nil {
+		return "git command failed"
+	}
+	return e.Cause.Error()
+}
+
+func (e *gitCommandError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func (i *GitInspector) gitPath(ctx context.Context, directory string, args ...string) (string, error) {
+	path, err := i.gitOutput(ctx, directory, args...)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := config.CanonicalWorkspaceRoot(path)
+	if err != nil {
+		return "", &gitCommandError{ExitCode: -1, Cause: err}
+	}
+	return canonical, nil
+}
+
+func (i *GitInspector) gitOutput(ctx context.Context, directory string, args ...string) (string, error) {
+	output, exitCode, err := i.runner.Run(ctx, directory, args...)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", &gitCommandError{
+			ExitCode: exitCode,
+			Cause:    formatGitRunError(exitCode, err, output, args...),
+		}
+	}
+	path := strings.TrimSpace(string(output))
+	if path == "" {
+		return "", &gitCommandError{
+			ExitCode: -1,
+			Cause:    fmt.Errorf("git %s returned empty output", strings.Join(args, " ")),
+		}
+	}
+	return path, nil
+}
+
+func accessibleDirectory(root string) (string, error) {
+	trimmedRoot := strings.TrimSpace(root)
+	if trimmedRoot == "" {
+		return "", &ManagedWorktreeIdentityError{
+			Kind:  ManagedWorktreeIdentityErrorRootMissing,
+			Cause: errors.New("expected worktree root is required"),
+		}
+	}
+	info, err := os.Stat(trimmedRoot)
+	if err != nil {
+		kind := ManagedWorktreeIdentityErrorRootInaccessible
+		if errors.Is(err, os.ErrNotExist) {
+			kind = ManagedWorktreeIdentityErrorRootMissing
+		}
+		return "", &ManagedWorktreeIdentityError{Kind: kind, Cause: err}
+	}
+	if !info.IsDir() {
+		return "", &ManagedWorktreeIdentityError{
+			Kind:  ManagedWorktreeIdentityErrorRootNotDirectory,
+			Cause: fmt.Errorf("expected worktree root %q is not a directory", trimmedRoot),
+		}
+	}
+	dir, err := os.Open(trimmedRoot)
+	if err != nil {
+		return "", &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorRootInaccessible, Cause: err}
+	}
+	_, readErr := dir.Readdirnames(1)
+	closeErr := dir.Close()
+	if closeErr != nil {
+		return "", &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorRootInaccessible, Cause: closeErr}
+	}
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return "", &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorRootInaccessible, Cause: readErr}
+	}
+	canonical, err := config.CanonicalWorkspaceRoot(trimmedRoot)
+	if err != nil {
+		return "", &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorRootInaccessible, Cause: err}
+	}
+	return canonical, nil
+}
+
+func identityInspectionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorGitInspectionFailed, Cause: err}
 }
 
 func (i *GitInspector) List(ctx context.Context, workspaceRoot string) ([]GitWorktree, error) {
@@ -296,11 +746,15 @@ func defaultWorktreeRoot(baseDir string, workspaceID string, pathSeed string) (s
 	if trimmedSeed == "" {
 		return "", fmt.Errorf("worktree path seed is required")
 	}
+	canonicalBaseDir, err := config.CanonicalWorkspaceRoot(trimmedBaseDir)
+	if err != nil {
+		return "", err
+	}
 	relativeBranchPath := filepath.Clean(filepath.FromSlash(trimmedSeed))
 	if relativeBranchPath == "." || filepath.IsAbs(relativeBranchPath) || relativeBranchPath == ".." || strings.HasPrefix(relativeBranchPath, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("worktree path seed %q cannot be mapped to worktree path", trimmedSeed)
 	}
-	return config.CanonicalWorkspaceRoot(filepath.Join(trimmedBaseDir, trimmedWorkspaceID, relativeBranchPath))
+	return config.CanonicalWorkspaceRoot(filepath.Join(canonicalBaseDir, trimmedWorkspaceID, relativeBranchPath))
 }
 
 func normalizeCreateSpec(spec CreateSpec) (CreateSpec, error) {

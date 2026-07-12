@@ -22,9 +22,9 @@ const (
 const ReasonValidationFailed = "workflow_script_validation_failed"
 
 type ValidationRequest struct {
-	RawPath             string
-	WorktreeRoot        string
-	RequireWorktreeRoot bool
+	RawPath     string
+	RootPath    *string
+	RequireRoot bool
 }
 
 type Diagnostic struct {
@@ -54,7 +54,10 @@ func (e ValidationError) DetailJSON() string {
 
 func Validate(req ValidationRequest) []Diagnostic {
 	raw := strings.TrimSpace(req.RawPath)
-	root := strings.TrimSpace(req.WorktreeRoot)
+	root := ""
+	if req.RootPath != nil {
+		root = strings.TrimSpace(*req.RootPath)
+	}
 	if raw == "" {
 		return []Diagnostic{{
 			Code:     CodeMissingPath,
@@ -72,7 +75,7 @@ func Validate(req ValidationRequest) []Diagnostic {
 				Blocking: false,
 				Skipped:  true,
 			}
-			if req.RequireWorktreeRoot {
+			if req.RequireRoot {
 				diagnostic.Code = CodeWorktreeRootMissing
 				diagnostic.Message = fmt.Sprintf("relative script_path %q requires a task worktree root", raw)
 				diagnostic.Blocking = true
@@ -122,9 +125,9 @@ func Validate(req ValidationRequest) []Diagnostic {
 
 func ResolveExecutable(req ValidationRequest) (string, error) {
 	diagnostics := Validate(ValidationRequest{
-		RawPath:             req.RawPath,
-		WorktreeRoot:        req.WorktreeRoot,
-		RequireWorktreeRoot: true,
+		RawPath:     req.RawPath,
+		RootPath:    req.RootPath,
+		RequireRoot: true,
 	})
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Blocking {
@@ -135,5 +138,8 @@ func ResolveExecutable(req ValidationRequest) (string, error) {
 	if filepath.IsAbs(raw) {
 		return filepath.Clean(raw), nil
 	}
-	return filepath.Clean(filepath.Join(strings.TrimSpace(req.WorktreeRoot), raw)), nil
+	if req.RootPath == nil {
+		return "", errors.New("script execution root is required")
+	}
+	return filepath.Clean(filepath.Join(strings.TrimSpace(*req.RootPath), raw)), nil
 }

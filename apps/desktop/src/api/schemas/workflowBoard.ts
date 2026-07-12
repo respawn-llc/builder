@@ -9,7 +9,10 @@ import type {
   CommentPage,
   PendingAsk,
   TaskDetail,
+  TaskApproveResponse,
   TaskMoveResponse,
+  TaskStartResponse,
+  WorkflowExecutionTargetSelectionRequirement,
   WorkflowBoard,
   ProjectWorkflowLink,
 } from "../models";
@@ -29,7 +32,8 @@ import {
   workflowPickerItemSchema,
   workspaceSummarySchema,
 } from "./common";
-import { emptyArray, firstNonEmpty } from "./workflowHelpers";
+import { emptyArray } from "./workflowHelpers";
+import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
 
 const boardGroupsSchema = z
   .array(boardGroupSchema)
@@ -48,21 +52,135 @@ const workflowPickerSchema = z
   .nullish()
   .transform((value) => value ?? []);
 
-export const taskMoveResponseSchema = z
-  .object({
-    transition_id: emptyString,
-    state: emptyString,
-    placement_ids: stringList,
-    run_ids: stringList,
-    approval_error: emptyString,
-  })
+const unavailableCauseSchema = z.enum([
+  "invalid_revision",
+  "non_commit",
+  "default_branch_missing",
+  "default_branch_ambiguous",
+  "git_failure",
+]);
+
+const configuredTargetSchema = z
+  .discriminatedUnion("mode", [
+    z.object({ mode: z.literal("head") }).strict(),
+    z.object({ mode: z.literal("default_branch") }).strict(),
+    z.object({ mode: z.literal("custom_ref"), requested_ref: z.string().trim().min(1) }).strict(),
+  ])
   .transform((value) => ({
-    transitionID: value.transition_id,
-    state: value.state,
-    placementIDs: value.placement_ids,
-    runIDs: value.run_ids,
-    approvalError: value.approval_error,
-  })) satisfies z.ZodType<TaskMoveResponse>;
+    mode: value.mode,
+    requestedRef: value.mode === "custom_ref" ? value.requested_ref : null,
+  }));
+
+const selectionRequirementSchema: z.ZodType<WorkflowExecutionTargetSelectionRequirement> = z
+  .discriminatedUnion("reason", [
+    z.object({ reason: z.literal("policy_requires_selection") }).strict(),
+    z
+      .object({
+        reason: z.literal("configured_target_unavailable"),
+        configured_target: configuredTargetSchema,
+        unavailable_cause: unavailableCauseSchema,
+      })
+      .strict(),
+  ])
+  .transform((value): WorkflowExecutionTargetSelectionRequirement => {
+    if (value.reason === "policy_requires_selection") {
+      return { reason: value.reason };
+    }
+    return {
+      reason: value.reason,
+      configuredTarget: value.configured_target,
+      unavailableCause: value.unavailable_cause,
+    };
+  });
+
+const selectionRequiredResponseSchema = z
+  .object({
+    outcome: z.literal("selection_required"),
+    selection_required: selectionRequirementSchema,
+  })
+  .strict()
+  .transform((value) => ({
+    outcome: value.outcome,
+    selectionRequired: value.selection_required,
+  }) as const);
+
+export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("applied"),
+      applied: z
+        .object({
+          transition_id: z.string().trim().min(1),
+          placement_id: z.string().trim().min(1),
+          run_id: z.string().trim().min(1),
+        })
+        .strict(),
+    })
+    .strict()
+    .transform((value) => ({
+      outcome: value.outcome,
+      applied: {
+        transitionID: value.applied.transition_id,
+        placementID: value.applied.placement_id,
+        runID: value.applied.run_id,
+      },
+    }) as const),
+  selectionRequiredResponseSchema,
+]);
+
+export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("applied"),
+      applied: z
+        .object({
+          transition_id: z.string().trim().min(1),
+          state: z.string().trim().min(1),
+          placement_ids: stringList,
+          run_ids: stringList,
+        })
+        .strict(),
+    })
+    .strict()
+    .transform((value) => ({
+      outcome: value.outcome,
+      applied: {
+        transitionID: value.applied.transition_id,
+        state: value.applied.state,
+        placementIDs: value.applied.placement_ids,
+        runIDs: value.applied.run_ids,
+      },
+    }) as const),
+  selectionRequiredResponseSchema,
+]);
+
+export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("applied"),
+      applied: z
+        .object({
+          transition_id: z.string().trim().min(1),
+          task_id: z.string().trim().min(1),
+          state: z.string().trim().min(1),
+          placement_ids: stringList,
+          run_ids: stringList,
+        })
+        .strict(),
+    })
+    .strict()
+    .transform((value) => ({
+      outcome: value.outcome,
+      applied: {
+        transitionID: value.applied.transition_id,
+        taskID: value.applied.task_id,
+        state: value.applied.state,
+        placementIDs: value.applied.placement_ids,
+        runIDs: value.applied.run_ids,
+      },
+    }) as const),
+  selectionRequiredResponseSchema,
+]);
 
 export const projectWorkflowLinksSchema: z.ZodType<readonly ProjectWorkflowLink[]> = z
   .object({
@@ -185,12 +303,10 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       body: emptyString,
       source_url: emptyString,
       source_workspace: workspaceSummarySchema,
-      managed_worktree: z
-        .object({
-          canonical_root: z.string().optional().default(""),
-          root_path: z.string().optional().default(""),
-        })
-        .nullish(),
+      execution_target: workflowExecutionTargetSchema
+        .optional()
+        .transform((value) => value ?? null),
+      managed_worktree: z.never().optional(),
       status: taskStatusSchema,
       actions: taskActionsSchema,
       attention: z.array(attentionItemSchema).nullish().transform(emptyArray),
@@ -217,11 +333,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     comments: value.task.comments,
     runs: value.task.runs,
     transitions: value.task.transitions,
-    worktreePath: firstNonEmpty(
-      value.task.managed_worktree?.canonical_root,
-      value.task.managed_worktree?.root_path,
-      "",
-    ),
+    executionTarget: value.task.execution_target,
     createdAt: value.task.summary.created_at_unix_ms,
     updatedAt: value.task.summary.updated_at_unix_ms,
     done: value.task.summary.done,

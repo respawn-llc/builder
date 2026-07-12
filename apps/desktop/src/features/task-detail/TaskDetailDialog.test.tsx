@@ -10,6 +10,7 @@ import { vi } from "vitest";
 import { App } from "../../App";
 import { guiTaskCommentAuthor } from "../../api/client";
 import type { JsonValue } from "../../api/json";
+import { appI18n } from "../../i18n/setup";
 import { createTestServices, startupRoutes } from "../../testSupport/appServices";
 import {
   activityResponse,
@@ -65,7 +66,17 @@ describe("TaskDetailSurface", () => {
         { method: "workflow.task.activity.list", result: activityResponse },
         { method: "ask.listPendingBySession", result: pendingAskResponse },
         { method: "workflow.task.question.answer", result: {} },
-        { method: "workflow.task.approve", result: {} },
+        {
+          method: "workflow.task.approve",
+          result: {
+            outcome: "applied",
+            applied: {
+              transition_id: "transition-1",
+              task_id: "task-1",
+              state: "approved",
+            },
+          },
+        },
         { method: "workflow.task.comment.add", result: commentAddResponse },
         { method: "workflow.task.comment.replace", result: {} },
       ],
@@ -143,6 +154,76 @@ describe("TaskDetailSurface", () => {
     });
   });
 
+  it("continues the exact pending approval with a task-local execution target", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const services = createTestServices([
+      ...startupRoutes,
+      { method: "workflow.task.get", result: taskDetailResponseWithNewerActiveRun },
+      { method: "workflow.task.comment.list", result: commentListResponse },
+      { method: "workflow.task.activity.list", result: activityResponse },
+      { method: "ask.listPendingBySession", result: pendingAskResponse },
+      {
+        method: "workflow.task.approve",
+        handler: (_params, callIndex) =>
+          callIndex === 0
+            ? {
+                outcome: "selection_required",
+                selection_required: { reason: "policy_requires_selection" },
+              }
+            : {
+                outcome: "applied",
+                applied: {
+                  transition_id: "transition-1",
+                  task_id: "task-1",
+                  state: "approved",
+                },
+              },
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: appI18n.t("task.approve") }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: appI18n.t("executionTargetContinuation.title"),
+    });
+    expect(within(dialog).getAllByRole("radio")).toHaveLength(4);
+    expect(
+      within(dialog).getByRole("radio", {
+        name: new RegExp(appI18n.t("executionTargetContinuation.mode_default_branch"), "u"),
+      }),
+    ).toBeChecked();
+
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: appI18n.t("executionTargetContinuation.continue"),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", {
+          name: appI18n.t("executionTargetContinuation.title"),
+        }),
+      ).not.toBeInTheDocument();
+    });
+    const approvalCalls = services.transport.calls.filter(
+      (call) => call.method === "workflow.task.approve",
+    );
+    expect(approvalCalls).toHaveLength(2);
+    const initialParams = approvalCalls[0]?.params;
+    const continuationParams = approvalCalls[1]?.params;
+    if (!isJsonObject(initialParams) || !isJsonObject(continuationParams)) {
+      throw new Error("approval calls require object params");
+    }
+    expect(initialParams.execution_target).toBeUndefined();
+    expect(continuationParams.execution_target).toEqual({ mode: "default_branch" });
+    expect(continuationParams.setup_operation_id).toBe(initialParams.setup_operation_id);
+    expect(continuationParams.task_transition_id).toBe(initialParams.task_transition_id);
+  });
+
   it("renders queued task status from the typed server status", async () => {
     window.history.pushState(null, "", "/tasks/task-1");
     const services = createTestServices([
@@ -170,6 +251,101 @@ describe("TaskDetailSurface", () => {
     render(<App services={services} />);
 
     expect(await screen.findByText("Queued")).toBeInTheDocument();
+  });
+
+  it("renders source and managed execution target facts and copies the full commit", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const copied: string[] = [];
+    const services = createTestServices(
+      [
+        ...startupRoutes,
+        { method: "workflow.task.get", result: taskDetailNoInboxResponse },
+        { method: "workflow.task.comment.list", result: commentListResponse },
+        { method: "workflow.task.activity.list", result: activityResponse },
+      ],
+      nativeBridgeWithClipboard(copied),
+    );
+
+    render(<App services={services} />);
+
+    const properties = await screen.findByRole("region", {
+      name: appI18n.t("task.properties"),
+    });
+    expect(propertyDefinition(properties, appI18n.t("task.sourceWorkspace"))).toHaveTextContent("Main");
+    expect(propertyDefinition(properties, appI18n.t("task.sourceRoot"))).toHaveTextContent("/tmp/project");
+    expect(propertyDefinition(properties, appI18n.t("task.executionTarget"))).toHaveTextContent(
+      appI18n.t("task.executionTargetModes.head"),
+    );
+    expect(propertyDefinition(properties, appI18n.t("task.executionRoot"))).toHaveTextContent(
+      "/tmp/worktree",
+    );
+    expect(propertyDefinition(properties, appI18n.t("task.requestedRevision"))).toHaveTextContent("HEAD");
+    expect(propertyDefinition(properties, appI18n.t("task.currentBranch"))).toHaveTextContent("T-1");
+    expect(propertyDefinition(properties, appI18n.t("task.managedWorktree"))).toHaveTextContent(
+      "/tmp/worktree",
+    );
+    expect(propertyDefinition(properties, appI18n.t("task.resolvedCommit"))).toHaveTextContent(
+      "0123456789ab",
+    );
+    expect(properties).not.toHaveTextContent("0123456789abcdef0123456789abcdef01234567");
+
+    fireEvent.click(
+      within(properties).getByRole("button", {
+        name: appI18n.t("task.copyResolvedCommit"),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(copied).toEqual(["0123456789abcdef0123456789abcdef01234567"]);
+    });
+  });
+
+  it("omits unavailable current branch and identifies a legacy observed commit", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.task.get",
+        result: {
+          ...taskDetailNoInboxResponse,
+          task: {
+            ...taskDetailNoInboxResponse.task,
+            execution_target: {
+              mode: "head",
+              requested_ref: "0123456789abcdef0123456789abcdef01234567",
+              commit_oid: "0123456789abcdef0123456789abcdef01234567",
+              provenance: "legacy_observed",
+              managed_worktree: {
+                worktree_id: "worktree-1",
+                display_name: "T-1",
+                canonical_root: "/tmp/worktree",
+                availability: "missing",
+              },
+            },
+          },
+        },
+      },
+      { method: "workflow.task.comment.list", result: commentListResponse },
+      { method: "workflow.task.activity.list", result: activityResponse },
+    ]);
+
+    render(<App services={services} />);
+
+    const properties = await screen.findByRole("region", {
+      name: appI18n.t("task.properties"),
+    });
+    expect(propertyDefinition(properties, appI18n.t("task.executionRoot"))).toHaveTextContent(
+      appI18n.t("app.unavailable"),
+    );
+    expect(propertyDefinition(properties, appI18n.t("task.observedCommit"))).toHaveTextContent(
+      "0123456789ab",
+    );
+    expect(
+      within(properties).queryByRole("term", { name: appI18n.t("task.currentBranch") }),
+    ).not.toBeInTheDocument();
+    expect(propertyDefinition(properties, appI18n.t("task.managedWorktree"))).toHaveTextContent(
+      appI18n.t("app.unavailable"),
+    );
   });
 
   it("opens script files through native file capabilities without exposing CLI sessions", async () => {
@@ -675,6 +851,10 @@ function nativeBridgeWithClipboard(copied: string[]): NativeBridge {
       },
     },
   };
+}
+
+function propertyDefinition(region: HTMLElement, label: string): HTMLElement {
+  return within(region).getByRole("definition", { name: `${label} value` });
 }
 
 function nativeBridgeWithActivation(): Readonly<{
