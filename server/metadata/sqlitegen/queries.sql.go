@@ -396,6 +396,45 @@ func (q *Queries) ClearRunWaitingAsk(ctx context.Context, arg ClearRunWaitingAsk
 	return result.RowsAffected()
 }
 
+const compareAndSetWorktreeOperationLifecycle = `-- name: CompareAndSetWorktreeOperationLifecycle :execrows
+UPDATE worktree_operations
+SET
+    lifecycle_state = ?1,
+    lifecycle_version = lifecycle_version + 1,
+    terminal_result_json = ?2,
+    terminal_error_json = ?3,
+    updated_at_unix_ms = ?4
+WHERE operation_id = ?5
+  AND lifecycle_state = ?6
+  AND lifecycle_version = ?7
+`
+
+type CompareAndSetWorktreeOperationLifecycleParams struct {
+	NextLifecycleState       string
+	TerminalResultJson       sql.NullString
+	TerminalErrorJson        sql.NullString
+	UpdatedAtUnixMs          int64
+	OperationID              string
+	ExpectedLifecycleState   string
+	ExpectedLifecycleVersion int64
+}
+
+func (q *Queries) CompareAndSetWorktreeOperationLifecycle(ctx context.Context, arg CompareAndSetWorktreeOperationLifecycleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, compareAndSetWorktreeOperationLifecycle,
+		arg.NextLifecycleState,
+		arg.TerminalResultJson,
+		arg.TerminalErrorJson,
+		arg.UpdatedAtUnixMs,
+		arg.OperationID,
+		arg.ExpectedLifecycleState,
+		arg.ExpectedLifecycleVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const completeActiveManualMoveSourcePlacement = `-- name: CompleteActiveManualMoveSourcePlacement :execrows
 UPDATE task_node_placements
 SET state = 'completed',
@@ -2782,6 +2821,40 @@ func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeBy
 	return i, err
 }
 
+const getWorktreeOperationByID = `-- name: GetWorktreeOperationByID :one
+SELECT
+    operation_id,
+    payload_json,
+    expected_target_json,
+    execution_mode,
+    lifecycle_state,
+    lifecycle_version,
+    terminal_result_json,
+    terminal_error_json,
+    created_at_unix_ms,
+    updated_at_unix_ms
+FROM worktree_operations
+WHERE operation_id = ?1
+`
+
+func (q *Queries) GetWorktreeOperationByID(ctx context.Context, operationID string) (WorktreeOperation, error) {
+	row := q.db.QueryRowContext(ctx, getWorktreeOperationByID, operationID)
+	var i WorktreeOperation
+	err := row.Scan(
+		&i.OperationID,
+		&i.PayloadJson,
+		&i.ExpectedTargetJson,
+		&i.ExecutionMode,
+		&i.LifecycleState,
+		&i.LifecycleVersion,
+		&i.TerminalResultJson,
+		&i.TerminalErrorJson,
+		&i.CreatedAtUnixMs,
+		&i.UpdatedAtUnixMs,
+	)
+	return i, err
+}
+
 const incrementWorkflowVersion = `-- name: IncrementWorkflowVersion :one
 UPDATE workflows
 SET
@@ -3552,6 +3625,65 @@ func (q *Queries) InsertWorkspaceBinding(ctx context.Context, arg InsertWorkspac
 		arg.ProjectID,
 		arg.CanonicalRootPath,
 		arg.GitMetadataJson,
+		arg.CreatedAtUnixMs,
+		arg.UpdatedAtUnixMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertWorktreeOperation = `-- name: InsertWorktreeOperation :execrows
+INSERT INTO worktree_operations (
+    operation_id,
+    payload_json,
+    expected_target_json,
+    execution_mode,
+    lifecycle_state,
+    lifecycle_version,
+    terminal_result_json,
+    terminal_error_json,
+    created_at_unix_ms,
+    updated_at_unix_ms
+) VALUES (
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5,
+    ?6,
+    ?7,
+    ?8,
+    ?9,
+    ?10
+)
+ON CONFLICT(operation_id) DO NOTHING
+`
+
+type InsertWorktreeOperationParams struct {
+	OperationID        string
+	PayloadJson        string
+	ExpectedTargetJson string
+	ExecutionMode      string
+	LifecycleState     string
+	LifecycleVersion   int64
+	TerminalResultJson sql.NullString
+	TerminalErrorJson  sql.NullString
+	CreatedAtUnixMs    int64
+	UpdatedAtUnixMs    int64
+}
+
+func (q *Queries) InsertWorktreeOperation(ctx context.Context, arg InsertWorktreeOperationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertWorktreeOperation,
+		arg.OperationID,
+		arg.PayloadJson,
+		arg.ExpectedTargetJson,
+		arg.ExecutionMode,
+		arg.LifecycleState,
+		arg.LifecycleVersion,
+		arg.TerminalResultJson,
+		arg.TerminalErrorJson,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
@@ -5064,6 +5196,64 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 			&i.RootPath,
 			&i.SessionCount,
 			&i.LatestActivityUnixMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecoverableWorktreeOperations = `-- name: ListRecoverableWorktreeOperations :many
+SELECT
+    operation_id,
+    payload_json,
+    expected_target_json,
+    execution_mode,
+    lifecycle_state,
+    lifecycle_version,
+    terminal_result_json,
+    terminal_error_json,
+    created_at_unix_ms,
+    updated_at_unix_ms
+FROM worktree_operations
+WHERE lifecycle_state IN ('queued', 'running')
+  AND operation_id > ?1
+ORDER BY operation_id ASC
+LIMIT ?2
+`
+
+type ListRecoverableWorktreeOperationsParams struct {
+	AfterOperationID string
+	LimitCount       int64
+}
+
+func (q *Queries) ListRecoverableWorktreeOperations(ctx context.Context, arg ListRecoverableWorktreeOperationsParams) ([]WorktreeOperation, error) {
+	rows, err := q.db.QueryContext(ctx, listRecoverableWorktreeOperations, arg.AfterOperationID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WorktreeOperation
+	for rows.Next() {
+		var i WorktreeOperation
+		if err := rows.Scan(
+			&i.OperationID,
+			&i.PayloadJson,
+			&i.ExpectedTargetJson,
+			&i.ExecutionMode,
+			&i.LifecycleState,
+			&i.LifecycleVersion,
+			&i.TerminalResultJson,
+			&i.TerminalErrorJson,
+			&i.CreatedAtUnixMs,
+			&i.UpdatedAtUnixMs,
 		); err != nil {
 			return nil, err
 		}

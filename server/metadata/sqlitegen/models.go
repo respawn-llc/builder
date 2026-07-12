@@ -382,3 +382,16 @@ type Worktree struct {
 	CreatedAtUnixMs   int64
 	UpdatedAtUnixMs   int64
 }
+
+type WorktreeOperation struct {
+	OperationID        string
+	PayloadJson        string
+	ExpectedTargetJson string
+	ExecutionMode      string
+	LifecycleState     string
+	LifecycleVersion   int64
+	TerminalResultJson sql.NullString
+	TerminalErrorJson  sql.NullString
+	CreatedAtUnixMs    int64
+	UpdatedAtUnixMs    int64
+}
