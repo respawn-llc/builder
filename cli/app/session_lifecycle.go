@@ -172,6 +172,9 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 func resolveAndReleaseSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition, runtimePlan *runtimeLaunchPlan) (resolvedSessionAction, error) {
 	resolved, err := resolveSessionAction(ctx, server, interactor, sessionID, transition)
 	if err != nil {
+		if closeErr := runtimePlan.Close(); closeErr != nil {
+			return resolvedSessionAction{}, errors.Join(err, closeErr)
+		}
 		return resolvedSessionAction{}, err
 	}
 	if err := runtimePlan.Close(); err != nil {

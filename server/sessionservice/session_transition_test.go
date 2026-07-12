@@ -10,7 +10,7 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestInitialInputPrefersPersistedDraft(t *testing.T) {
+func TestInitialInputPrefersTransitionInput(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/work")
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
@@ -18,8 +18,8 @@ func TestInitialInputPrefersPersistedDraft(t *testing.T) {
 	if err := store.SetInputDraft("persisted"); err != nil {
 		t.Fatalf("set input draft: %v", err)
 	}
-	if got := initialSessionInput(store, "fallback"); got != "persisted" {
-		t.Fatalf("initial input = %q, want persisted", got)
+	if got := initialSessionInput(store, "fallback"); got != "fallback" {
+		t.Fatalf("initial input = %q, want transition input", got)
 	}
 }
 

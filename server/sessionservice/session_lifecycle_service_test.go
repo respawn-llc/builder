@@ -116,7 +116,7 @@ func TestMetadataBackedLoopbackClientOwnsMetadataStore(t *testing.T) {
 	}
 }
 
-func TestServiceGetInitialInputPrefersStoredDraft(t *testing.T) {
+func TestServiceGetInitialInputPrefersTransitionInput(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
 	if err := store.SetInputDraft("draft from store"); err != nil {
 		t.Fatalf("set input draft: %v", err)
@@ -130,8 +130,8 @@ func TestServiceGetInitialInputPrefersStoredDraft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
 	}
-	if resp.Input != "draft from store" {
-		t.Fatalf("input = %q, want %q", resp.Input, "draft from store")
+	if resp.Input != "transition input" {
+		t.Fatalf("input = %q, want %q", resp.Input, "transition input")
 	}
 }
 

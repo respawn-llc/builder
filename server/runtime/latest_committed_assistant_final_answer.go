@@ -40,6 +40,7 @@ func LatestCommittedAssistantFinalAnswerFromStore(store *session.Store) (*string
 			}
 			text := message.Content
 			answer = &text
+			matchErr = nil
 			return true
 		case "history_replaced":
 			_, ignoredLegacy, err := decodePersistedHistoryReplacementPayload(evt.Payload)
@@ -49,6 +50,7 @@ func LatestCommittedAssistantFinalAnswerFromStore(store *session.Store) (*string
 			}
 			if !ignoredLegacy {
 				answer = nil
+				matchErr = nil
 				return true
 			}
 			return false
