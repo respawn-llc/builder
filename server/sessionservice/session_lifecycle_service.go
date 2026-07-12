@@ -129,6 +129,9 @@ func (s *SessionLifecycleService) GetInitialInput(_ context.Context, req servera
 	if store == nil {
 		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
 	}
+	if req.OverrideStoredDraft {
+		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
+	}
 	meta := store.Meta()
 	return serverapi.SessionInitialInputResponse{
 		Input:           initialSessionInput(store, req.TransitionInput),
