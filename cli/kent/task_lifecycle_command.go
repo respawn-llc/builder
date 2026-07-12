@@ -204,14 +204,10 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	var executionTarget *serverapi.WorkflowExecutionTargetSelection
-	if flagWasProvided(fs, "execution-target") {
-		parsed, err := parseTaskExecutionTargetSelector(*executionTargetRaw)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 2
-		}
-		executionTarget = &parsed
+	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagWasProvided(fs, "execution-target"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
 	}
 	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
 	if err != nil {
@@ -442,6 +438,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 
 func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task approve", stderr, taskApproveUsage)
+	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -454,6 +451,11 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
+	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagWasProvided(fs, "execution-target"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -461,7 +463,7 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 	}
 	defer func() { _ = remote.Close() }()
 	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskApproveResponse, error) {
-		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0]})
+		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0], ExecutionTarget: executionTarget})
 	})
 	if err != nil {
 		if !writeWorkflowExecutionTargetError(stderr, err) {
@@ -471,6 +473,9 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 	}
 	if err := resp.Validate(); err != nil {
 		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
 		return 1
 	}
 	applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
@@ -495,6 +500,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task move", stderr, taskMoveUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	commentary := fs.String("commentary", "", "note recorded with the workflow transition")
+	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
 	outputs := stringMapFlag{}
 	fs.Var(&outputs, "output", "transition value as name=value; repeatable")
 	positionals, flagArgs := takeLeadingPositionals(args, 2)
@@ -509,6 +515,11 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
+	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagWasProvided(fs, "execution-target"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -521,7 +532,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
-		return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupOperationID, TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary})
+		return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupOperationID, TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary, ExecutionTarget: executionTarget})
 	})
 	if err != nil {
 		if !writeWorkflowExecutionTargetError(stderr, err) {
@@ -531,6 +542,9 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	if err := resp.Validate(); err != nil {
 		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
 		return 1
 	}
 	applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
@@ -545,6 +559,18 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	writeTaskTransitionResult(stdout, "Moved task", detail, applied.TransitionID, applied.RunIDs)
 	return 0
+}
+
+func workflowActionRequiresExecutionTargetSelection(
+	stderr io.Writer,
+	outcome serverapi.WorkflowExecutionTargetActionOutcome,
+	requirement *serverapi.WorkflowExecutionTargetSelectionRequirement,
+) bool {
+	if outcome != serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		return false
+	}
+	writeWorkflowExecutionTargetSelectionRequired(stderr, requirement)
+	return true
 }
 
 func requireAppliedWorkflowAction[T any](outcome serverapi.WorkflowExecutionTargetActionOutcome, applied *T) (*T, error) {

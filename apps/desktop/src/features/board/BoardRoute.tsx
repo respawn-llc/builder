@@ -169,7 +169,6 @@ function BoardContent({
   const { openSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions(board.projectID, boardQueryWorkflowID, board.selectedWorkflow.id);
-  const actionsDisabled = connection.phase !== "connected";
   const moveRunFeedback = useBoardMoveRunFeedback();
   const executionTargetContinuation = useExecutionTargetContinuation({
     execute: async (action, selection) => executeExecutionTargetAction(api, action, selection),
@@ -189,6 +188,10 @@ function BoardContent({
       });
     },
   });
+  const actionsDisabled =
+    connection.phase !== "connected" ||
+    executionTargetContinuation.running ||
+    executionTargetContinuation.pending !== null;
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),
@@ -273,7 +276,7 @@ function BoardContent({
     setActiveDrag(null);
     if (
       dragPayload === null ||
-      connection.phase !== "connected" ||
+      actionsDisabled ||
       !board.selectedWorkflow.validForTaskCreation
     ) {
       reportRejectedDrop();

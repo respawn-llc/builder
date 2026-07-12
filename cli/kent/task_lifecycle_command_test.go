@@ -321,6 +321,106 @@ func TestTaskStartExecutionTargetOverrideAndSelectionRequiredOutput(t *testing.T
 	}
 }
 
+func TestTaskApproveAndMoveExecutionTargetOverrideAndSelectionRequiredOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		args            []string
+		setResponse     func(*setupProgressLifecycleRemote, serverapi.WorkflowExecutionTargetActionOutcome)
+		executionTarget func(*setupProgressLifecycleRemote) *serverapi.WorkflowExecutionTargetSelection
+	}{
+		{
+			name: "approve",
+			args: []string{"task", "approve", "transition-1"},
+			setResponse: func(remote *setupProgressLifecycleRemote, outcome serverapi.WorkflowExecutionTargetActionOutcome) {
+				remote.approveResponse = &serverapi.WorkflowTaskApproveResponse{
+					Outcome: outcome,
+					SelectionRequired: &serverapi.WorkflowExecutionTargetSelectionRequirement{
+						Reason: serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
+					},
+				}
+			},
+			executionTarget: func(remote *setupProgressLifecycleRemote) *serverapi.WorkflowExecutionTargetSelection {
+				return remote.approveRequest.ExecutionTarget
+			},
+		},
+		{
+			name: "move",
+			args: []string{"task", "move", "--project", "project-1", "BLD-1", "node-1"},
+			setResponse: func(remote *setupProgressLifecycleRemote, outcome serverapi.WorkflowExecutionTargetActionOutcome) {
+				remote.moveResponse = &serverapi.WorkflowTaskMoveResponse{
+					Outcome: outcome,
+					SelectionRequired: &serverapi.WorkflowExecutionTargetSelectionRequirement{
+						Reason: serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
+					},
+				}
+			},
+			executionTarget: func(remote *setupProgressLifecycleRemote) *serverapi.WorkflowExecutionTargetSelection {
+				return remote.moveRequest.ExecutionTarget
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			remote := newSetupProgressLifecycleRemote()
+			tc.setResponse(remote, serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired)
+			restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: "."}, remote)
+			defer restore()
+
+			stdout, stderr, code := runWorkflowRootCommand(tc.args...)
+			if code != 1 || stdout != "" {
+				t.Fatalf("selection-required exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			for _, want := range []string{
+				"Execution target selection is required: workflow policy requires selection.\n",
+				"  --execution-target none\n",
+				"  --execution-target head\n",
+				"  --execution-target default-branch\n",
+				"  --execution-target ref:<revision>\n",
+			} {
+				if !strings.Contains(stderr, want) {
+					t.Fatalf("selection-required stderr = %q, want %q", stderr, want)
+				}
+			}
+
+			remote = newSetupProgressLifecycleRemote()
+			restore()
+			restore = replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: "."}, remote)
+			args := append([]string{"task", tc.name, "--execution-target", "ref:release/v1"}, tc.args[2:]...)
+			stdout, stderr, code = runWorkflowRootCommand(args...)
+			if code != 0 {
+				t.Fatalf("explicit target exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			selection := tc.executionTarget(remote)
+			if selection == nil ||
+				selection.Mode != serverapi.WorkflowExecutionTargetModeCustomRef ||
+				selection.CustomRef == nil ||
+				*selection.CustomRef != "release/v1" {
+				t.Fatalf("request execution target = %+v", selection)
+			}
+		})
+	}
+}
+
+func TestTaskApproveAndMoveRejectMalformedExecutionTargetBeforeOpeningRemote(t *testing.T) {
+	previous := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		t.Fatal("malformed execution target opened workflow remote")
+		return config.App{}, nil, nil
+	}
+	defer func() {
+		workflowCommandRemoteOpener = previous
+	}()
+
+	for _, args := range [][]string{
+		{"task", "approve", "transition-1", "--execution-target", "branch"},
+		{"task", "move", "BLD-1", "node-1", "--execution-target", "ref:"},
+	} {
+		stdout, stderr, code := runWorkflowRootCommand(args...)
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "execution target") {
+			t.Fatalf("%v exit=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+	}
+}
+
 func TestWorkflowExecutionTargetErrorsExposeTypedFacts(t *testing.T) {
 	for _, test := range []struct {
 		err   error
@@ -642,6 +742,10 @@ type setupProgressLifecycleRemote struct {
 	mutationCalled      bool
 	subscribeErr        error
 	streamErrAfterEvent error
+	approveRequest      serverapi.WorkflowTaskApproveRequest
+	approveResponse     *serverapi.WorkflowTaskApproveResponse
+	moveRequest         serverapi.WorkflowTaskMoveRequest
+	moveResponse        *serverapi.WorkflowTaskMoveResponse
 }
 
 func newSetupProgressLifecycleRemote() *setupProgressLifecycleRemote {
@@ -705,6 +809,10 @@ func (r *setupProgressLifecycleRemote) ApproveWorkflowTask(ctx context.Context, 
 	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
+	r.approveRequest = req
+	if r.approveResponse != nil {
+		return *r.approveResponse, nil
+	}
 	return serverapi.WorkflowTaskApproveResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskApproveApplied{TaskID: r.taskID, TransitionID: r.transitionID, State: "applied", RunIDs: []string{r.runID}},
@@ -714,6 +822,10 @@ func (r *setupProgressLifecycleRemote) ApproveWorkflowTask(ctx context.Context, 
 func (r *setupProgressLifecycleRemote) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
 	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
+	}
+	r.moveRequest = req
+	if r.moveResponse != nil {
+		return *r.moveResponse, nil
 	}
 	return serverapi.WorkflowTaskMoveResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,

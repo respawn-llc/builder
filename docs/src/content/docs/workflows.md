@@ -294,16 +294,18 @@ New workflows ask when execution starts. Kent Desktop offers all four concrete t
 
 Target selection occurs on the first executable start, manual move, or approval. The task locks the selected mode and managed requested/resolved commit facts only when that initiating action succeeds. Later workflow nodes reuse the locked target; a locked target cannot be replaced with another mode.
 
-Configure a workflow policy or select a concrete target for a CLI task start:
+Configure a workflow policy or select a concrete target when starting, approving, or manually moving a task:
 
 ```bash
 kent workflow update <workflow> --execution-target ask-on-first-execution
 kent workflow update <workflow> --execution-target none|head|default-branch|ref:<revision>
 
 kent task start <task> --execution-target none|head|default-branch|ref:<revision>
+kent task approve <transition-id> --execution-target none|head|default-branch|ref:<revision>
+kent task move <task> <target-node-id> --execution-target none|head|default-branch|ref:<revision>
 ```
 
-`kent task start` never prompts. Its override applies only to an unlocked task and does not edit the workflow. `kent task show` reports the source workspace and, after lock, the target mode, execution root, requested revision, resolved commit, current named branch when available, and managed worktree.
+These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the target mode, execution root, requested revision, resolved commit, current named branch when available, and managed worktree.
 
 ### Keep Tasks Shippable
 

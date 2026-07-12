@@ -24,7 +24,8 @@ export type PendingExecutionTargetContinuation = Readonly<{
 
 export type ExecutionTargetContinuationController = Readonly<{
   pending: PendingExecutionTargetContinuation | null;
-  run(action: ExecutionTargetContinuationAction): Promise<ExecutionTargetActionResult>;
+  running: boolean;
+  run(action: ExecutionTargetContinuationAction): Promise<void>;
   close(): void;
   submit(): Promise<void>;
   selectMode(mode: WorkflowExecutionTargetSelectionMode): void;
@@ -44,6 +45,8 @@ export function useExecutionTargetContinuation({
   onAppliedError: (error: unknown) => void;
 }>): ExecutionTargetContinuationController {
   const [pending, setPending] = useState<PendingExecutionTargetContinuation | null>(null);
+  const [running, setRunning] = useState(false);
+  const initialRunRef = useRef<Promise<void> | null>(null);
   const submittingRef = useRef(false);
 
   const handleResult = useCallback(
@@ -69,10 +72,25 @@ export function useExecutionTargetContinuation({
   );
 
   const run = useCallback(
-    async (action: ExecutionTargetContinuationAction): Promise<ExecutionTargetActionResult> => {
-      const result = await execute(action);
-      await handleResult(result);
-      return result;
+    async (action: ExecutionTargetContinuationAction): Promise<void> => {
+      if (initialRunRef.current !== null) {
+        await initialRunRef.current;
+        return;
+      }
+      setRunning(true);
+      const operation = (async () => {
+        const result = await execute(action);
+        await handleResult(result);
+      })();
+      initialRunRef.current = operation;
+      const settle = () => {
+        if (initialRunRef.current === operation) {
+          initialRunRef.current = null;
+          setRunning(false);
+        }
+      };
+      void operation.then(settle, settle);
+      await operation;
     },
     [execute, handleResult],
   );
@@ -139,5 +157,5 @@ export function useExecutionTargetContinuation({
     );
   }, []);
 
-  return { pending, run, close, submit, selectMode, setCustomRef };
+  return { pending, running, run, close, submit, selectMode, setCustomRef };
 }

@@ -3,8 +3,8 @@ Usage of kent task:
   kent task edit <short-id-or-task-id> [--title <title>] [--body <body>|--body-file <path>] [--source-workspace <id-or-path>] [--project <project>] [--json]
   kent task start <short-id-or-task-id> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--json]
   kent task resume <short-id-or-task-id> [--project <project>]
-  kent task approve <transition-id>
-  kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value]
+  kent task approve <transition-id> [--execution-target none|head|default-branch|ref:<revision>]
+  kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>]
   kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
   kent task list [--project <project>] [--workflow <uuid>] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
   kent task show <short-id-or-task-id> [--project <project>] [--json]
@@ -24,8 +24,9 @@ Task references:
   Short IDs use the project selected by `--project`, which defaults to the
   project attached to the current workspace.
 
-Starting tasks:
-  Task start never prompts. If a workflow requires target selection, rerun with
+Selecting an execution target:
+  Task start, approve, and move never prompt. If a workflow requires target
+  selection, rerun the action with
   `--execution-target none|head|default-branch|ref:<revision>`. The override
   applies only to an unlocked task and does not edit its workflow.
 

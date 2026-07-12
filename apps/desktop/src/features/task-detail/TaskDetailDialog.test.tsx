@@ -224,6 +224,61 @@ describe("TaskDetailSurface", () => {
     expect(continuationParams.task_transition_id).toBe(initialParams.task_transition_id);
   });
 
+  it("disables approval while the initial request is pending and submits it once", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    let resolveApproval:
+      | ((response: {
+          outcome: "applied";
+          applied: {
+            transition_id: string;
+            task_id: string;
+            state: string;
+          };
+        }) => void)
+      | undefined;
+    const approval = new Promise<{
+      outcome: "applied";
+      applied: {
+        transition_id: string;
+        task_id: string;
+        state: string;
+      };
+    }>((resolve) => {
+      resolveApproval = resolve;
+    });
+    const services = createTestServices([
+      ...startupRoutes,
+      { method: "workflow.task.get", result: taskDetailResponseWithNewerActiveRun },
+      { method: "workflow.task.comment.list", result: commentListResponse },
+      { method: "workflow.task.activity.list", result: activityResponse },
+      { method: "ask.listPendingBySession", result: pendingAskResponse },
+      { method: "workflow.task.approve", handler: async () => approval },
+    ]);
+
+    render(<App services={services} />);
+
+    const approve = await screen.findByRole("button", { name: appI18n.t("task.approve") });
+    fireEvent.click(approve);
+    fireEvent.click(approve);
+
+    expect(approve).toBeDisabled();
+    expect(
+      services.transport.calls.filter((call) => call.method === "workflow.task.approve"),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      resolveApproval?.({
+        outcome: "applied",
+        applied: {
+          transition_id: "transition-1",
+          task_id: "task-1",
+          state: "approved",
+        },
+      });
+      await approval;
+    });
+  });
+
   it("renders queued task status from the typed server status", async () => {
     window.history.pushState(null, "", "/tasks/task-1");
     const services = createTestServices([

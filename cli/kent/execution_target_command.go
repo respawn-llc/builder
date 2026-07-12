@@ -32,6 +32,17 @@ func parseTaskExecutionTargetSelector(raw string) (serverapi.WorkflowExecutionTa
 	return serverapi.WorkflowExecutionTargetSelection{}, errors.New("execution target must be " + executionTargetSelectorHelp)
 }
 
+func parseOptionalTaskExecutionTarget(raw string, provided bool) (*serverapi.WorkflowExecutionTargetSelection, error) {
+	if !provided {
+		return nil, nil
+	}
+	selection, err := parseTaskExecutionTargetSelector(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &selection, nil
+}
+
 func parseWorkflowExecutionTargetPolicySelector(raw string) (serverapi.WorkflowExecutionTargetConfiguration, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "ask-on-first-execution" {

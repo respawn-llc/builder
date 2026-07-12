@@ -232,9 +232,9 @@
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.
 - Worktree deletion blocks if another session targeting the worktree has an active run, and holds a run-exclusion on all targeting sessions across the `git` removal so no new run can start mid-deletion; a run submitted during the window is rejected with `ErrSessionWorktreeDeleting` until the exclusion releases.
 - Initial materialization and conservative locked-target repair reuse one managed-worktree creation/setup implementation.
-- The CLI task-start command may select a concrete target for an unlocked task even when the workflow has a fixed policy. Task creation has no target override.
+- The CLI task-start, task-approve, and task-move commands may select a concrete target for an unlocked task even when the workflow has a fixed policy. Task creation has no target override.
 - CLI target selection uses `--execution-target none|head|default-branch|ref:<revision>`; custom Git revisions require the explicit `ref:` namespace.
-- CLI task start never prompts interactively. Selection-required output identifies the reason and concrete rerun flags in human output and exposes the same typed outcome in JSON.
+- CLI task start, approve, and move never prompt interactively. Selection-required output identifies the reason and concrete rerun flags. Task start exposes the same typed outcome in JSON.
 
 ## Project Keys And Task IDs
 

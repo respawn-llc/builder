@@ -85,7 +85,11 @@ export function ApprovalBox({
             <span className="min-w-0 flex-1" />
             <Button
               className="shrink-0"
-              disabled={disabled || executionTargetContinuation.pending !== null}
+              disabled={
+                disabled ||
+                executionTargetContinuation.running ||
+                executionTargetContinuation.pending !== null
+              }
               onClick={approve}
               variant="primary"
             >
@@ -126,7 +130,11 @@ export function ApprovalBox({
           <>
             <p>{t("task.unavailableSnapshot")}</p>
             <Button
-              disabled={disabled || executionTargetContinuation.pending !== null}
+              disabled={
+                disabled ||
+                executionTargetContinuation.running ||
+                executionTargetContinuation.pending !== null
+              }
               onClick={approve}
               variant="primary"
             >

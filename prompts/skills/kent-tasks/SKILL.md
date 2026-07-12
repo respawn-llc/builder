@@ -45,7 +45,7 @@ kent task show <short-id-or-task-id>
 ## Execution targets
 `kent task show` always reports the source workspace. After target lock it also reports the target mode and execution root; managed targets include requested revision, resolved commit, current named branch when available, and managed worktree.
 
-`kent task start` never prompts. If it reports that selection is required, rerun the same start with one concrete selector:
+`kent task start`, `kent task approve`, and `kent task move` never prompt. If an action reports that selection is required, rerun the same action with one concrete selector:
 
 ```bash
 kent task start <task> --execution-target none
@@ -58,6 +58,13 @@ The override applies only to an unlocked task and does not edit the workflow. Do
 
 ## Approvals And Manual Moves
 Some workflow transitions wait for human approval before target runs start. Inspect the task before approving, rejecting, or moving it so you know which workflow transition is pending.
+
+When approval or movement requires an execution target, rerun it with the same concrete selectors:
+
+```bash
+kent task approve <transition-id> --execution-target none|head|default-branch|ref:<revision>
+kent task move <task> <target-node-id> --execution-target none|head|default-branch|ref:<revision>
+```
 
 ## Comments
 Task comments are task-local notes mostly for **agents**. They are useful for design discussion, decision logs, review notes, cross-agent comms, and work logs that should not be committed into a worktree but need to be preserved beyond your memory. Good candidates are notes about the approaches taken, discussion between agents, hacks, caveats, etc. that don't fit in the repository or project's existing documentation paradigms. Generally, feel free to comment under tasks as much as you want if there is no better explicit location specified for the info you're trying to save. Agents that work on the task may or may not read your comments.
