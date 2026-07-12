@@ -40,9 +40,6 @@ func initialSessionInput(store *session.Store, transitionInput string) string {
 	if store == nil {
 		return transitionInput
 	}
-	if transitionInput != "" {
-		return transitionInput
-	}
 	if draft := store.Meta().InputDraft; draft != "" {
 		return draft
 	}
