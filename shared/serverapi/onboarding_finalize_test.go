@@ -61,3 +61,38 @@ func TestOnboardingFinalizeRequestSortsUnknownTopLevelConfigKeys(t *testing.T) {
 		t.Fatalf("field errors = %+v, want sorted unknown fields", details.FieldErrors)
 	}
 }
+
+func TestOnboardingFinalizeRequestRejectsEmptyMainProviderValues(t *testing.T) {
+	var req serverapi.OnboardingFinalizeRequest
+	if err := json.Unmarshal([]byte(`{"main_provider":{"provider_override":"","openai_base_url":""}}`), &req); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	err := serverapi.ValidateOnboardingFinalizeRequest(req)
+	var finalizeErr *serverapi.OnboardingFinalizeError
+	if !errors.As(err, &finalizeErr) {
+		t.Fatalf("validation error = %T %v, want OnboardingFinalizeError", err, err)
+	}
+	details := finalizeErr.Details.(serverapi.OnboardingInvalidRequestDetails)
+	if len(details.FieldErrors) != 2 || details.FieldErrors[0].Field != "main_provider.provider_override" || details.FieldErrors[1].Field != "main_provider.openai_base_url" {
+		t.Fatalf("field errors = %+v", details.FieldErrors)
+	}
+}
+
+func TestOnboardingFinalizeRequestRejectsInvalidToolOverrides(t *testing.T) {
+	var req serverapi.OnboardingFinalizeRequest
+	if err := json.Unmarshal([]byte(`{"tool_overrides":[{"id":"shell","enabled":false},{"id":"ask_question","enabled":false},{"id":"patch","enabled":true},{"id":"patch","enabled":false}]}`), &req); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	err := serverapi.ValidateOnboardingFinalizeRequest(req)
+	var finalizeErr *serverapi.OnboardingFinalizeError
+	if !errors.As(err, &finalizeErr) {
+		t.Fatalf("validation error = %T %v, want OnboardingFinalizeError", err, err)
+	}
+	details := finalizeErr.Details.(serverapi.OnboardingInvalidRequestDetails)
+	if len(details.FieldErrors) != 3 ||
+		details.FieldErrors[0].Field != "tool_overrides.0.id" || details.FieldErrors[0].Code != "unsupported_value" ||
+		details.FieldErrors[1].Field != "tool_overrides.1.id" || details.FieldErrors[1].Code != "forbidden" ||
+		details.FieldErrors[2].Field != "tool_overrides.3.id" || details.FieldErrors[2].Code != "duplicate" {
+		t.Fatalf("field errors = %+v", details.FieldErrors)
+	}
+}

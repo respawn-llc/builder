@@ -23,7 +23,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
   7. **Follow-up questions** — enable/disable the ask-question tool.
   8. **Supervisor** — off / after edits / always; when enabled, sub-steps for supervisor model (pre-filled with the primary model) and supervisor thinking (mirrors primary until explicitly diverged; custom entry as above).
   9. **Compaction mode** — Local always offered; Native only when the provider supports it; Manual-only.
-  10. **Skills/commands import** — only when importable items are detected from other providers; skills enablement is a multi-select.
+  10. **Skills import** — only when importable items are detected from other providers; skills enablement is a multi-select. Remote onboarding does not offer slash-command import while prompt-command consumption remains client-local. (RATIFIED 2026-07-12)
   11. **Review** — finish, or start over (returns to the first step with all selections preserved).
 - Validation errors render inline on the current screen and block advancing; they never abort the wizard.
 
@@ -31,13 +31,13 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 - `Up`/`Down` (+`j`/`k`) move the cursor on choice/multi screens and scroll long content; `Enter`/`→` submit the screen; number keys `1-9` jump to an option (choice: select + submit; multi: toggle); `Space`/`Backspace` toggle on multi screens; `a` toggles all when a toggle-all exists.
 - `←` and `Esc` step back one step; `Esc` on the first step exits the wizard (cancel), per the navigation-stack rule (owner: tui-startup :: Surface Architecture).
-- While finalizing (spinner), only cancel keys are accepted.
+- Once finalization is submitted, the spinner remains active and input cannot cancel or dismiss the request; the wizard waits up to 30 seconds for the server's terminal result. (RATIFIED 2026-07-12)
 
 ## Finalize And Cancel
 
 - Finalizing shows a progress state (spinner + label). Custom path: imports execute first with rollback-on-failure, then the config is written; a failure returns to the wizard with the error displayed — never a silent exit, never partial state. Defaults path writes the default config.
 - Config is written exactly once, at finalize. No step writes settings incrementally.
-- Cancel aborts startup with a clear "setup canceled" error and writes nothing; the next launch re-enters first-time setup.
+- Cancel before finalization is submitted aborts startup with a clear "setup canceled" error and writes nothing; the next launch re-enters first-time setup. Finalization is non-cancelable after submission because the remote transport has no acknowledged server-operation cancellation contract; a submitted request's success or error within the 30-second terminal deadline remains authoritative. Deadline expiry or transport loss reports an indeterminate finalization outcome and never retries automatically or claims cancellation. (RATIFIED 2026-07-12)
 
 ## Server-Side Finalize (Thin Client)
 
@@ -47,7 +47,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - The model facts snapshot also includes one fallback fact for non-empty unknown model names, so thin clients do not duplicate runtime fallback rules.
 - Provider capability facts cover both the current effective provider and explicit provider choices.
 - Unknown explicit provider choices fail the facts request with an unsupported-provider RPC error; the server never falls back to the current provider for an explicit unsupported provider.
-- Importable skill and slash-command facts include server-host source paths when needed for identity, display, and finalize round-tripping. Generated Kent skill candidates are reported together with external provider candidates for the enablement multi-select.
+- Importable skill and slash-command facts include server-host source paths when needed for identity and API round-tripping. The TUI consumes skill facts during onboarding; slash-command facts remain available to API clients but are not offered by the remote TUI while prompt-command consumption is client-local. Generated Kent skill candidates are reported together with external provider candidates for the enablement multi-select. (RATIFIED 2026-07-12)
 - Onboarding facts are available before auth completion and before project or session attachment.
 - The model list is Kent's built-in known model list; the onboarding facts flow does not perform live provider model discovery.
 - A wizard-run facts snapshot includes import scanning. Import scanning failures are reported as facts that let setup continue without importing, not as silent skips or a hard failure of the whole facts request.

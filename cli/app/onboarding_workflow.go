@@ -336,18 +336,6 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 			},
 		},
 		onboardingStepDefinition{
-			id: "commands_import",
-			visible: func(state *onboardingFlowState) bool {
-				return state.imports.pending || state.imports.err != nil || (!state.imports.skipCommands && hasImportChoices(state.imports.commandChoices))
-			},
-			build: func(state *onboardingFlowState) onboardingScreen {
-				return buildCommandImportScreen(state)
-			},
-			apply: func(state *onboardingFlowState, choiceID string) error {
-				return applyImportChoice(&state.commandImport, choiceID, state.imports.commandChoices)
-			},
-		},
-		onboardingStepDefinition{
 			id: "review",
 			build: func(state *onboardingFlowState) onboardingScreen {
 				return onboardingScreen{ID: "review", Kind: onboardingScreenChoice, Title: "Review setup", Body: "Review your first-time setup choices.", Options: []onboardingOption{{ID: "finish", Title: "Finish setup"}, {ID: "restart", Title: "Start over"}}, DefaultOptionID: "finish"}

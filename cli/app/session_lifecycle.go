@@ -46,6 +46,8 @@ type sessionWorkspaceChangeServer interface {
 
 type interactiveProjectBindingServer interface {
 	Config() config.App
+	PresentationTheme() string
+	ClientPromptRoots() (commands.ClientPromptRoots, error)
 	ProjectViewClient() client.ProjectViewClient
 	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error)
 }
@@ -202,8 +204,12 @@ func prepareSessionUIRun(
 	if err != nil {
 		return nil, uiLoopRequest{}, err
 	}
-	cfg := server.Config()
-	commandRegistry, err := commands.NewDefaultRegistryWithFilePrompts(cfg.WorkspaceRoot, cfg.PersistenceRoot)
+	promptRoots, err := server.ClientPromptRoots()
+	if err != nil {
+		runtimePlan.Close()
+		return nil, uiLoopRequest{}, err
+	}
+	commandRegistry, err := commands.NewDefaultRegistryWithClientPromptRoots(promptRoots)
 	if err != nil {
 		if closeErr := runtimePlan.Close(); closeErr != nil {
 			return nil, uiLoopRequest{}, errors.Join(err, closeErr)

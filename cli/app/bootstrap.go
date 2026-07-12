@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"core/cli/app/internal/embeddedattach"
-	"core/cli/app/internal/onboarding"
 	"core/shared/config"
 )
 
@@ -30,29 +29,7 @@ func startEmbeddedServer(ctx context.Context, opts Options, interactor authInter
 			ConfigRoot:          opts.ConfigRoot,
 		},
 		StartupOptions: opts.startupOptions,
-	}, interactor, func(ctx context.Context, req embeddedattach.OnboardingRequest) (config.App, error) {
-		cfg, _, err := onboarding.Ensure(ctx, onboarding.Request{
-			Config:       req.Config,
-			AuthManager:  req.AuthManager,
-			Interactive:  interactive,
-			ReloadConfig: req.ReloadConfig,
-			Runner: func(ctx context.Context, cfg config.App, _ onboarding.AuthState) (onboarding.Result, error) {
-				result, err := runOnboardingFlow(ctx, cfg, req.CapabilityFactsClient)
-				if err != nil {
-					return onboarding.Result{}, err
-				}
-				return onboarding.Result{
-					Completed:            result.Completed,
-					CreatedDefaultConfig: result.CreatedDefaultConfig,
-					SettingsPath:         result.SettingsPath,
-				}, nil
-			},
-		})
-		if err != nil {
-			return config.App{}, err
-		}
-		return cfg, nil
-	})
+	}, interactor, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -91,6 +91,7 @@ type sessionViewReader interface {
 type launchPlannerServer interface {
 	OwnsServer() bool
 	Config() config.App
+	PresentationTheme() string
 	ProjectID() string
 	AuthStatusClient() client.AuthStatusClient
 	ProjectViewClient() client.ProjectViewClient
@@ -250,7 +251,7 @@ func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunc
 		return resolvedSessionPlanRequest{}, errors.New("session picker is required")
 	}
 	cfg := p.server.Config()
-	picked, err := p.pickSession(summaries, cfg.Settings.Theme, p.sessionPickerHeaderInfo(cfg))
+	picked, err := p.pickSession(summaries, p.server.PresentationTheme(), p.sessionPickerHeaderInfo(cfg))
 	if err != nil {
 		return resolvedSessionPlanRequest{}, err
 	}
@@ -272,16 +273,30 @@ func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunc
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {
 	workspaceRoot := strings.TrimSpace(cfg.WorkspaceRoot)
 	authState := launchPlannerAuthState(p.server)
+	settings := cfg.Settings
+	modelName := strings.TrimSpace(settings.Model)
+	thinkingLevel := strings.TrimSpace(settings.ThinkingLevel)
+	if !p.server.OwnsServer() {
+		// A configured server's persisted runtime settings are not client config
+		// state. The picker has no session plan yet, so omit those values until a
+		// server read model supplies them.
+		settings.Model = ""
+		settings.ThinkingLevel = ""
+		settings.ModelVerbosity = ""
+		settings.EnabledTools = nil
+		modelName = ""
+		thinkingLevel = ""
+	}
 	statusReq := populateStatusRequestCacheKeys(uiStatusRequest{
 		WorkspaceRoot:     workspaceRoot,
 		PersistenceRoot:   strings.TrimSpace(cfg.PersistenceRoot),
-		Settings:          cfg.Settings,
+		Settings:          settings,
 		Source:            cfg.Source,
 		AuthCacheIdentity: status.AuthCacheIdentity(authState.Resolver),
 		AuthStatus:        p.server.AuthStatusClient(),
 		AuthStatePath:     strings.TrimSpace(authState.Path),
-		ModelName:         strings.TrimSpace(cfg.Settings.Model),
-		ThinkingLevel:     strings.TrimSpace(cfg.Settings.ThinkingLevel),
+		ModelName:         modelName,
+		ThinkingLevel:     thinkingLevel,
 		OwnsServer:        p.server.OwnsServer(),
 	})
 	return sessionPickerHeaderInfo{

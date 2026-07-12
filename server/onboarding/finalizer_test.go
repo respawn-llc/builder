@@ -235,6 +235,56 @@ func TestFinalizerAcceptsProviderDefaultVerbosityForCustomOpenAIModel(t *testing
 	}
 }
 
+func TestFinalizerPersistsMainProviderChoice(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	providerOverride := "openai"
+	openAIBaseURL := "http://127.0.0.1:8080/v1"
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		MainProvider: &serverapi.OnboardingProviderChoice{
+			ProviderOverride: &providerOverride,
+			OpenAIBaseURL:    &openAIBaseURL,
+		},
+		Model: &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: "custom-openai-model"},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	if cfg.Settings.ProviderOverride != providerOverride || cfg.Settings.OpenAIBaseURL != openAIBaseURL {
+		t.Fatalf("provider settings = %q/%q, want %q/%q", cfg.Settings.ProviderOverride, cfg.Settings.OpenAIBaseURL, providerOverride, openAIBaseURL)
+	}
+}
+
+func TestFinalizerPersistsToolOverrides(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		AskQuestion: ptr(true),
+		ToolOverrides: []serverapi.OnboardingToolOverride{
+			{ID: toolspec.ToolEdit, Enabled: true},
+			{ID: toolspec.ToolPatch, Enabled: false},
+		},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	if !cfg.Settings.EnabledTools[toolspec.ToolAskQuestion] || !cfg.Settings.EnabledTools[toolspec.ToolEdit] || cfg.Settings.EnabledTools[toolspec.ToolPatch] {
+		t.Fatalf("enabled tools = %+v", cfg.Settings.EnabledTools)
+	}
+}
+
+func TestFinalizerPersistsModelTimeout(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	timeout := 123
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{ModelTimeoutSeconds: &timeout}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	if got := loadFinalizedConfig(t, root).Settings.Timeouts.ModelRequestSeconds; got != timeout {
+		t.Fatalf("model timeout = %d, want %d", got, timeout)
+	}
+}
+
 func TestFinalizerImportsSkillsAndCommandsBeforeConfigWrite(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()

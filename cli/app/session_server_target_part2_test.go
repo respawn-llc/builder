@@ -7,7 +7,6 @@ import (
 	"core/server/authservice"
 	serverstartup "core/server/startup"
 	askquestion "core/server/tools"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -15,9 +14,7 @@ import (
 	"core/shared/toolspec"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
-	goruntime "runtime"
 	"testing"
 	"time"
 )
@@ -164,205 +161,59 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 	}
 }
 
-func TestStartSessionServerRejectsIncompatibleDiscoveredDaemonAndFallsBack(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"embedded fallback reply"})
-	defer fakeResponses.Close()
-
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		JSONRPCWebSocket: true,
-		ProjectAttach:    true,
-		SessionAttach:    true,
-		RunPrompt:        true,
-		SessionActivity:  true,
-		ProcessOutput:    true,
-	})
-	defer cleanup()
-
-	server, err := startSessionServer(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-		OpenAIBaseURL:         fakeResponses.URL,
-		OpenAIBaseURLExplicit: true,
-	}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); ok {
-		t.Fatal("expected incompatible configured daemon to be rejected")
+func TestStartSessionServerRejectsMissingStartupControlSurfaceCapabilities(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags protocol.CapabilityFlags
+		issue startupRemoteCompatibilityIssue
+	}{
+		{
+			name: "auth bootstrap",
+			flags: protocol.CapabilityFlags{
+				JSONRPCWebSocket:   true,
+				OnboardingFinalize: true,
+			},
+			issue: startupRemoteAuthBootstrapUnavailable,
+		},
+		{
+			name: "onboarding finalization",
+			flags: protocol.CapabilityFlags{
+				JSONRPCWebSocket: true,
+				AuthBootstrap:    true,
+			},
+			issue: startupRemoteOnboardingFinalizeUnavailable,
+		},
 	}
 
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
-	defer runtimePlan.Close()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, workspace := newRegisteredAppWorkspace(t)
+			cleanup := publishConfiguredRemoteForWorkspace(t, workspace, test.flags)
+			defer cleanup()
 
-	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through embedded fallback")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "embedded fallback reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "embedded fallback reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected embedded fallback llm call once, got %d", hits.Load())
-	}
-}
-
-func TestStartSessionServerRejectsDiscoveredDaemonWithoutProcessOutputCapability(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"embedded fallback reply"})
-	defer fakeResponses.Close()
-
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		JSONRPCWebSocket: true,
-		ProjectAttach:    true,
-		SessionAttach:    true,
-		SessionPlan:      true,
-		SessionLifecycle: true,
-		SessionRuntime:   true,
-		RuntimeControl:   true,
-		PromptControl:    true,
-		PromptActivity:   true,
-		SessionActivity:  true,
-	})
-	defer cleanup()
-
-	server, err := startSessionServer(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-		OpenAIBaseURL:         fakeResponses.URL,
-		OpenAIBaseURLExplicit: true,
-	}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); ok {
-		t.Fatal("expected configured daemon without process capability to be rejected")
-	}
-
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
-	defer runtimePlan.Close()
-
-	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after capability fallback")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "embedded fallback reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "embedded fallback reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected embedded fallback llm call once, got %d", hits.Load())
-	}
-}
-
-func TestStartSessionServerRejectsDiscoveredDaemonWithoutAuthBootstrapCapability(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"embedded fallback reply"})
-	defer fakeResponses.Close()
-
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		JSONRPCWebSocket: true,
-		ProjectAttach:    true,
-		SessionAttach:    true,
-		SessionPlan:      true,
-		SessionLifecycle: true,
-		SessionRuntime:   true,
-		RuntimeControl:   true,
-		PromptControl:    true,
-		PromptActivity:   true,
-		SessionActivity:  true,
-		ProcessOutput:    true,
-	})
-	defer cleanup()
-
-	server, err := startSessionServer(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-		OpenAIBaseURL:         fakeResponses.URL,
-		OpenAIBaseURLExplicit: true,
-	}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); ok {
-		t.Fatal("expected configured daemon without auth bootstrap capability to be rejected")
-	}
-
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
-	defer runtimePlan.Close()
-
-	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after auth bootstrap fallback")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "embedded fallback reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "embedded fallback reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected embedded fallback llm call once, got %d", hits.Load())
-	}
-}
-
-func TestStartSessionServerRejectsDiscoveredDaemonWithoutProjectAttachCapability(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"embedded fallback reply"})
-	defer fakeResponses.Close()
-
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		JSONRPCWebSocket: true,
-		AuthBootstrap:    true,
-		SessionAttach:    true,
-		SessionPlan:      true,
-		SessionLifecycle: true,
-		SessionRuntime:   true,
-		RuntimeControl:   true,
-		PromptControl:    true,
-		PromptActivity:   true,
-		SessionActivity:  true,
-		ProcessOutput:    true,
-	})
-	defer cleanup()
-
-	server, err := startSessionServer(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-		OpenAIBaseURL:         fakeResponses.URL,
-		OpenAIBaseURLExplicit: true,
-	}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); ok {
-		t.Fatal("expected configured daemon without project attach capability to be rejected")
-	}
-
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test project attach fallback runtime")
-	defer runtimePlan.Close()
-
-	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after project attach fallback")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "embedded fallback reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "embedded fallback reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected embedded fallback llm call once, got %d", hits.Load())
+			server, err := startSessionServer(context.Background(), Options{
+				WorkspaceRoot:         workspace,
+				WorkspaceRootExplicit: true,
+			}, readyMemoryAuthHandler(), false)
+			if server != nil {
+				_ = server.Close()
+				t.Fatal("incompatible configured server must not start an interactive session server")
+			}
+			var preflight *configuredServerPreflightError
+			if !errors.As(err, &preflight) {
+				t.Fatalf("error = %v, want configured-server preflight error", err)
+			}
+			if preflight.operation != "validate compatibility" {
+				t.Fatalf("preflight operation = %q, want compatibility validation", preflight.operation)
+			}
+			var compatibility *startupRemoteCompatibilityError
+			if !errors.As(err, &compatibility) {
+				t.Fatalf("error = %v, want typed compatibility cause", err)
+			}
+			if compatibility.issue != test.issue {
+				t.Fatalf("compatibility issue = %d, want %d", compatibility.issue, test.issue)
+			}
+		})
 	}
 }
 
@@ -525,27 +376,6 @@ func TestStartSessionServerOwnsLaunchedDaemonCloser(t *testing.T) {
 	defer stopServing()
 	waitForConfiguredRemoteIdentity(t, workspace)
 
-	loadCfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-
-	called := false
-	originalLaunch := launchSessionServerDaemon
-	originalDial := dialConfiguredProjectViewRemote
-	t.Cleanup(func() { launchSessionServerDaemon = originalLaunch })
-	t.Cleanup(func() { dialConfiguredProjectViewRemote = originalDial })
-	dialConfiguredProjectViewRemote = func(context.Context, config.App) (configuredProjectViewRemote, error) {
-		return nil, errors.New("configured remote unavailable")
-	}
-	launchSessionServerDaemon = func(context.Context, Options) (*client.Remote, func() error, bool, error) {
-		remote, err := client.DialRemoteURL(context.Background(), config.ServerRPCURL(loadCfg))
-		if err != nil {
-			return nil, nil, false, err
-		}
-		return remote, func() error {
-			called = true
-			return remote.Close()
-		}, true, nil
-	}
-
 	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
 	if err != nil {
 		t.Fatalf("startSessionServer: %v", err)
@@ -556,56 +386,6 @@ func TestStartSessionServerOwnsLaunchedDaemonCloser(t *testing.T) {
 	if err := server.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !called {
-		t.Fatal("expected launched daemon closer to be invoked")
-	}
-}
-
-func TestStartSessionServerLaunchedDaemonCloseStopsProcess(t *testing.T) {
-	if goruntime.GOOS == "windows" {
-		t.Skip("helper daemon process signal probe is unix-only")
-	}
-	_, workspace := newRegisteredAppWorkspace(t)
-	t.Setenv("GO_WANT_HELPER_DAEMON", "1")
-	t.Setenv("GO_HELPER_WORKSPACE_ROOT", workspace)
-
-	originalExecPath := resolveDaemonExecutablePath
-	originalServeArgs := buildServeArgsFunc
-	t.Cleanup(func() {
-		resolveDaemonExecutablePath = originalExecPath
-		buildServeArgsFunc = originalServeArgs
-	})
-	resolveDaemonExecutablePath = func() (string, bool) {
-		path, err := os.Executable()
-		if err != nil {
-			t.Fatalf("os.Executable: %v", err)
-		}
-		return path, true
-	}
-	buildServeArgsFunc = func(string, Options) []string {
-		return []string{"-test.run=^TestStartSessionServerHelperDaemonProcess$"}
-	}
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	remote, ok := server.(*remoteAppServer)
-	if !ok {
-		t.Fatalf("expected remote app server, got %T", server)
-	}
-	if remote.identity.PID == 0 {
-		t.Fatal("expected launched daemon pid")
-	}
-	identity := waitForConfiguredRemoteIdentity(t, workspace)
-	if identity.PID != remote.identity.PID {
-		t.Fatalf("connected pid = %d, remote pid = %d", identity.PID, remote.identity.PID)
-	}
-
-	if err := server.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	waitForPIDExit(t, remote.identity.PID)
 }
 
 func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemon(t *testing.T) {

@@ -176,6 +176,70 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	}
 }
 
+func TestStartupReadinessAllowsActivatedNoAuthOnboarding(t *testing.T) {
+	_, workspace := newRegisteredAppWorkspaceWithoutSettings(t)
+	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
+
+	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		AllowUnauthenticated:  true,
+	}, memoryAuthHandler{}, nil)
+	if err != nil {
+		t.Fatalf("serve.Start: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+	stopServing := serveAppServer(t, srv)
+	defer stopServing()
+
+	var remote *client.Remote
+	deadline := time.Now().Add(5 * time.Second)
+	var attachErr error
+	for remote == nil && time.Now().Before(deadline) {
+		remote, attachErr = attachConfiguredStartupRemote(context.Background(), cfg)
+		if remote == nil {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if remote == nil {
+		t.Fatalf("attach configured startup remote: %v", attachErr)
+	}
+	defer func() { _ = remote.Close() }()
+	bootstrap, err := remote.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
+		Mode: serverapi.AuthBootstrapModeNone,
+	})
+	if err != nil {
+		t.Fatalf("CompleteAuthBootstrap: %v", err)
+	}
+	if !bootstrap.NoAuthSelected {
+		t.Fatalf("bootstrap response = %+v, want no-auth selection", bootstrap)
+	}
+	if err := remote.EnableNoAuthBootstrapAcknowledgement(context.Background()); err != nil {
+		t.Fatalf("EnableNoAuthBootstrapAcknowledgement: %v", err)
+	}
+
+	selectedTheme := serverapi.OnboardingThemeDark
+	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		Theme: &selectedTheme,
+		CommandsImport: &serverapi.OnboardingImportSelection{
+			Mode: serverapi.OnboardingImportModeNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	readiness, err := remote.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("GetServerReadiness: %v", err)
+	}
+	if readiness.Ready {
+		t.Fatal("no-auth startup readiness must remain false while server-managed auth is absent")
+	}
+	if !startupReadinessAllowsSession(remote, readiness) {
+		t.Fatalf("activated no-auth readiness must allow startup: %+v", readiness)
+	}
+}
+
 func TestConfiguredDaemonPlanSessionUsesSessionWorkspaceLocalConfig(t *testing.T) {
 	home := newAppTestHome(t)
 	workspace := t.TempDir()
@@ -218,7 +282,12 @@ func TestConfiguredDaemonPlanSessionUsesSessionWorkspaceLocalConfig(t *testing.T
 	if _, ok := server.(*remoteAppServer); !ok {
 		t.Fatalf("expected remote app server, got %T", server)
 	}
-	planner := newSessionLaunchPlanner(server)
+	bound, err := ensureInteractiveProjectBinding(context.Background(), server)
+	if err != nil {
+		t.Fatalf("ensureInteractiveProjectBinding: %v", err)
+	}
+	defer func() { _ = bound.Close() }()
+	planner := newSessionLaunchPlanner(bound)
 	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
@@ -599,79 +668,15 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *r
 	return fixture
 }
 
-func TestShouldBypassRemoteStartupForInteractiveOnboardingOnFirstRun(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspaceWithoutSettings(t)
-
-	cfg, err := startupconfig.ResolveSessionConfig(startupConfigRequest(Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}))
-	if err != nil {
-		t.Fatalf("loadSessionServerConfig: %v", err)
-	}
-	bypass := shouldBypassRemoteStartupForInteractiveOnboardingWithConfig(cfg, true)
-	if !bypass {
-		t.Fatal("expected first-run interactive startup to bypass remote onboarding paths")
-	}
-}
-
-func TestShouldBypassRemoteStartupForInteractiveOnboardingSkipsWhenConfigExists(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-	if _, _, err := config.WriteDefaultSettingsFile(); err != nil {
-		t.Fatalf("WriteDefaultSettingsFile: %v", err)
-	}
-
-	cfg, err := startupconfig.ResolveSessionConfig(startupConfigRequest(Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}))
-	if err != nil {
-		t.Fatalf("loadSessionServerConfig: %v", err)
-	}
-	bypass := shouldBypassRemoteStartupForInteractiveOnboardingWithConfig(cfg, true)
-	if bypass {
-		t.Fatal("expected configured interactive startup to keep remote onboarding paths enabled")
-	}
-}
-
 func TestStartSessionServerBypassesRemoteAndDaemonOnFirstInteractiveRun(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspaceWithoutSettings(t)
 
-	originalDial := dialConfiguredProjectViewRemote
-	originalLaunch := launchSessionServerDaemon
-	originalEmbedded := startInteractiveEmbeddedSessionServer
-	defer func() {
-		dialConfiguredProjectViewRemote = originalDial
-		launchSessionServerDaemon = originalLaunch
-		startInteractiveEmbeddedSessionServer = originalEmbedded
-	}()
-
-	remoteCalled := false
-	daemonCalled := false
-	embeddedCalled := false
-	startInteractiveEmbeddedSessionServer = func(_ context.Context, _ Options, _ authInteractor, _ bool) (*embeddedAppServer, error) {
-		embeddedCalled = true
-		return &embeddedAppServer{}, nil
-	}
-	dialConfiguredProjectViewRemote = func(context.Context, config.App) (configuredProjectViewRemote, error) {
-		remoteCalled = true
-		return nil, errors.New("configured remote should be skipped")
-	}
-	launchSessionServerDaemon = func(context.Context, Options) (*client.Remote, func() error, bool, error) {
-		daemonCalled = true
-		return nil, nil, false, nil
-	}
-
 	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, &stubAuthInteractor{}, true)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
+	if server != nil {
+		t.Cleanup(func() { _ = server.Close() })
 	}
-	defer func() { _ = server.Close() }()
-	if !embeddedCalled {
-		t.Fatal("expected embedded startup path to be used")
-	}
-	if remoteCalled {
-		t.Fatal("expected remote startup path to be skipped on first interactive run")
-	}
-	if daemonCalled {
-		t.Fatal("expected daemon launch path to be skipped on first interactive run")
-	}
-	if _, ok := server.(*embeddedAppServer); !ok {
-		t.Fatalf("expected embedded app server, got %T", server)
+	if err == nil {
+		t.Fatal("expected unavailable configured server to fail")
 	}
 }
 
@@ -684,19 +689,10 @@ func TestStartSessionServerUnregisteredWorkspaceStartsRegistrationCapableServer(
 	}
 
 	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
+	if server != nil {
+		t.Cleanup(func() { _ = server.Close() })
 	}
-	defer func() { _ = server.Close() }()
-
-	if got := server.ProjectID(); got != "" {
-		t.Fatalf("project id = %q, want empty for unregistered workspace", got)
-	}
-	resolved, err := server.ProjectViewClient().ResolveProjectPath(context.Background(), serverapi.ProjectResolvePathRequest{Path: workspace})
-	if err != nil {
-		t.Fatalf("ResolveProjectPath: %v", err)
-	}
-	if resolved.Binding != nil {
-		t.Fatalf("expected unknown workspace resolution, got %+v", resolved.Binding)
+	if err == nil {
+		t.Fatal("expected unavailable configured server to fail")
 	}
 }

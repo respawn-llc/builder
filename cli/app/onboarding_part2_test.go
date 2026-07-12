@@ -4,35 +4,12 @@ import (
 	tuiinput "core/cli/tui/input"
 	"core/shared/config"
 	"core/shared/serverapi"
-	"core/shared/theme"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-func TestOnboardingDefaultsPathPreservesAutoWhenUsingDetectedDefault(t *testing.T) {
-	newAppTestHome(t)
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{settings: config.Settings{Theme: theme.Auto}, theme: theme.Auto})
-	msg := model.finalizeCmd(true)()
-	done, ok := msg.(onboardingFinalizeDoneMsg)
-	if !ok {
-		t.Fatalf("expected onboarding finalize message, got %T", msg)
-	}
-	if done.err != nil {
-		t.Fatalf("finalize defaults path: %v", done.err)
-	}
-	contents, err := os.ReadFile(done.result.SettingsPath)
-	if err != nil {
-		t.Fatalf("read written settings: %v", err)
-	}
-	if !strings.Contains(string(contents), "theme = \"auto\"") {
-		t.Fatalf("expected defaults path to preserve auto theme, got %q", string(contents))
-	}
-}
 
 func TestOnboardingImportDiscoveryKeepsTypedInput(t *testing.T) {
 	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol"}})
@@ -50,7 +27,7 @@ func TestOnboardingImportDiscoveryKeepsTypedInput(t *testing.T) {
 	model.stepIndex = modelStepIndex
 	model.syncScreen(true)
 	model.input.Replace(strings.NewReplacer("\r", "", "\n", "").Replace("draft-model-alias"))
-	next, _ := model.Update(onboardingImportDiscoveryDoneMsg{discovery: onboardingImportDiscovery{skillSymlinkItems: map[onboardingImportProviderID][]onboardingSkillImportItem{}, commandSymlinkItems: map[onboardingImportProviderID][]onboardingCommandImportItem{}}})
+	next, _ := model.Update(onboardingImportDiscoveryDoneMsg{discovery: onboardingImportDiscovery{skillSymlinkItems: map[onboardingImportProviderID][]onboardingSkillImportItem{}}})
 	updated := next.(*onboardingModel)
 	if updated.currentScreen.ID != "model" {
 		t.Fatalf("expected to stay on model input screen, got %q", updated.currentScreen.ID)
@@ -298,143 +275,6 @@ func TestOnboardingSpinnerTickReschedulesWhileFinalizing(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected finalizing spinner tick to reschedule")
-	}
-}
-
-func TestOnboardingCustomPathPreservesAutoWhenUsingDetectedDefault(t *testing.T) {
-	newAppTestHome(t)
-	workspace := t.TempDir()
-	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{
-		settings:         cfg.Settings,
-		baselineSettings: cfg.Settings,
-		theme:            theme.Auto,
-		skillImport:      onboardingImportSelection{Mode: onboardingImportModeNone},
-		commandImport:    onboardingImportSelection{Mode: onboardingImportModeNone},
-	})
-	msg := model.finalizeCmd(false)()
-	done, ok := msg.(onboardingFinalizeDoneMsg)
-	if !ok {
-		t.Fatalf("expected onboarding finalize message, got %T", msg)
-	}
-	if done.err != nil {
-		t.Fatalf("finalize custom path: %v", done.err)
-	}
-	contents, err := os.ReadFile(done.result.SettingsPath)
-	if err != nil {
-		t.Fatalf("read written settings: %v", err)
-	}
-	if !strings.Contains(string(contents), "theme = \"auto\"") {
-		t.Fatalf("expected custom path to preserve auto theme, got %q", string(contents))
-	}
-}
-
-func TestOnboardingCustomPathPersistsExplicitReviewerOverrides(t *testing.T) {
-	newAppTestHome(t)
-	workspace := t.TempDir()
-	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	state := onboardingFlowState{
-		settings:               cfg.Settings,
-		baselineSettings:       cfg.Settings,
-		theme:                  theme.Auto,
-		skillImport:            onboardingImportSelection{Mode: onboardingImportModeNone},
-		commandImport:          onboardingImportSelection{Mode: onboardingImportModeNone},
-		reviewerCustomModel:    true,
-		reviewerCustomThinking: true,
-	}
-	state.settings.Reviewer.Model = "gpt-5.4-mini"
-	state.settings.Reviewer.ThinkingLevel = "high"
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", state)
-	msg := model.finalizeCmd(false)()
-	done, ok := msg.(onboardingFinalizeDoneMsg)
-	if !ok {
-		t.Fatalf("expected onboarding finalize message, got %T", msg)
-	}
-	if done.err != nil {
-		t.Fatalf("finalize custom path: %v", done.err)
-	}
-	contents, err := os.ReadFile(done.result.SettingsPath)
-	if err != nil {
-		t.Fatalf("read written settings: %v", err)
-	}
-	if !strings.Contains(string(contents), "model = \"gpt-5.4-mini\"") {
-		t.Fatalf("expected reviewer model override to be persisted, got %q", string(contents))
-	}
-	if !strings.Contains(string(contents), "thinking_level = \"high\"") {
-		t.Fatalf("expected reviewer thinking override to be persisted, got %q", string(contents))
-	}
-}
-
-func TestOnboardingCustomPathRollsBackImportsWhenSettingsWriteFails(t *testing.T) {
-	home := newAppTestHome(t)
-	globalRoot := t.TempDir()
-	workspace := t.TempDir()
-	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	sourceDir := filepath.Join(home, ".claude", "skills")
-	if err := os.MkdirAll(filepath.Join(sourceDir, "demo-skill"), 0o755); err != nil {
-		t.Fatalf("mkdir skill source: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sourceDir, "demo-skill", "SKILL.md"), []byte("---\nname: demo\ndescription: demo\n---\n"), 0o644); err != nil {
-		t.Fatalf("write skill source: %v", err)
-	}
-	configPath := filepath.Join(home, config.ConfigDirName, "config.toml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	if err := os.WriteFile(configPath, []byte("model = \"existing\"\n"), 0o644); err != nil {
-		t.Fatalf("write existing config: %v", err)
-	}
-	state := onboardingFlowState{
-		settings:      cfg.Settings,
-		skillImport:   testImportSelection(onboardingImportProviderClaudeCode, sourceDir),
-		commandImport: onboardingImportSelection{Mode: onboardingImportModeNone},
-	}
-	model := newOnboardingModelForWorkspace(globalRoot, "", state)
-	msg := model.finalizeCmd(false)()
-	done, ok := msg.(onboardingFinalizeDoneMsg)
-	if !ok {
-		t.Fatalf("expected onboarding finalize message, got %T", msg)
-	}
-	if done.err == nil {
-		t.Fatal("expected settings write failure when config file already exists")
-	}
-	if _, err := os.Lstat(filepath.Join(globalRoot, "skills")); !os.IsNotExist(err) {
-		t.Fatalf("expected symlinked skills root to be rolled back, got err=%v", err)
-	}
-}
-
-func TestExecuteOnboardingImportsRollsBackSkillsWhenCommandImportFails(t *testing.T) {
-	globalRoot := t.TempDir()
-	home := newAppTestHome(t)
-	skillSourceDir := filepath.Join(home, ".claude", "skills")
-	if err := os.MkdirAll(filepath.Join(skillSourceDir, "demo-skill"), 0o755); err != nil {
-		t.Fatalf("mkdir skill source: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(skillSourceDir, "demo-skill", "SKILL.md"), []byte("---\nname: demo\ndescription: demo\n---\n"), 0o644); err != nil {
-		t.Fatalf("write skill source: %v", err)
-	}
-	commandSourceDir := filepath.Join(home, ".claude", "commands")
-	if err := os.MkdirAll(commandSourceDir, 0o755); err != nil {
-		t.Fatalf("mkdir command source: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(commandSourceDir, "review.md"), []byte("review"), 0o644); err != nil {
-		t.Fatalf("write command source: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(globalRoot, "prompts"), 0o755); err != nil {
-		t.Fatalf("mkdir prompts target: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(globalRoot, "prompts", "review.md"), []byte("existing"), 0o644); err != nil {
-		t.Fatalf("write existing prompt: %v", err)
-	}
-	_, err := executeOnboardingImports(globalRoot, onboardingFlowState{
-		skillImport:   testImportSelection(onboardingImportProviderClaudeCode, skillSourceDir),
-		commandImport: testImportSelection(onboardingImportProviderClaudeCode, commandSourceDir),
-	})
-	if err == nil {
-		t.Fatal("expected command import failure")
-	}
-	if _, err := os.Lstat(filepath.Join(globalRoot, "skills")); !os.IsNotExist(err) {
-		t.Fatalf("expected symlinked skills root to be rolled back after command import failure, got err=%v", err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"core/shared/protocol"
+	"core/shared/toolspec"
 
 	"github.com/google/uuid"
 )
@@ -86,24 +87,37 @@ const (
 )
 
 type OnboardingFinalizeRequest struct {
-	Theme              *OnboardingTheme               `json:"theme,omitempty"`
-	Model              *OnboardingModelChoice         `json:"model,omitempty"`
-	ContextWindow      *OnboardingContextWindowChoice `json:"context_window,omitempty"`
-	Thinking           *OnboardingThinkingChoice      `json:"thinking,omitempty"`
-	Verbosity          *OnboardingVerbosity           `json:"verbosity,omitempty"`
-	AskQuestion        *bool                          `json:"ask_question,omitempty"`
-	Supervisor         *OnboardingSupervisorChoice    `json:"supervisor,omitempty"`
-	Compaction         *OnboardingCompactionMode      `json:"compaction,omitempty"`
-	SkillsImport       *OnboardingImportSelection     `json:"skills_import,omitempty"`
-	CommandsImport     *OnboardingImportSelection     `json:"commands_import,omitempty"`
-	DisabledSkillNames []string                       `json:"disabled_skill_names,omitempty"`
-	unknownFields      []string
+	Theme               *OnboardingTheme               `json:"theme,omitempty"`
+	MainProvider        *OnboardingProviderChoice      `json:"main_provider,omitempty"`
+	Model               *OnboardingModelChoice         `json:"model,omitempty"`
+	ContextWindow       *OnboardingContextWindowChoice `json:"context_window,omitempty"`
+	Thinking            *OnboardingThinkingChoice      `json:"thinking,omitempty"`
+	Verbosity           *OnboardingVerbosity           `json:"verbosity,omitempty"`
+	ModelTimeoutSeconds *int                           `json:"model_timeout_seconds,omitempty"`
+	AskQuestion         *bool                          `json:"ask_question,omitempty"`
+	ToolOverrides       []OnboardingToolOverride       `json:"tool_overrides,omitempty"`
+	Supervisor          *OnboardingSupervisorChoice    `json:"supervisor,omitempty"`
+	Compaction          *OnboardingCompactionMode      `json:"compaction,omitempty"`
+	SkillsImport        *OnboardingImportSelection     `json:"skills_import,omitempty"`
+	CommandsImport      *OnboardingImportSelection     `json:"commands_import,omitempty"`
+	DisabledSkillNames  []string                       `json:"disabled_skill_names,omitempty"`
+	unknownFields       []string
 }
 
 type OnboardingModelChoice struct {
 	Kind    OnboardingModelKind `json:"kind"`
 	ModelID string              `json:"model_id,omitempty"`
 	Alias   string              `json:"alias,omitempty"`
+}
+
+type OnboardingProviderChoice struct {
+	ProviderOverride *string `json:"provider_override,omitempty"`
+	OpenAIBaseURL    *string `json:"openai_base_url,omitempty"`
+}
+
+type OnboardingToolOverride struct {
+	ID      toolspec.ID `json:"id"`
+	Enabled bool        `json:"enabled"`
 }
 
 type OnboardingContextWindowChoice struct {
@@ -145,8 +159,8 @@ func (r *OnboardingFinalizeRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	allowed := map[string]bool{
-		"theme": true, "model": true, "context_window": true, "thinking": true, "verbosity": true,
-		"ask_question": true, "supervisor": true, "compaction": true, "skills_import": true,
+		"theme": true, "main_provider": true, "model": true, "context_window": true, "thinking": true, "verbosity": true, "model_timeout_seconds": true,
+		"ask_question": true, "tool_overrides": true, "supervisor": true, "compaction": true, "skills_import": true,
 		"commands_import": true, "disabled_skill_names": true,
 	}
 	for key := range raw {
@@ -498,12 +512,17 @@ func ValidateOnboardingFinalizeRequest(req OnboardingFinalizeRequest) error {
 	if req.Theme != nil && !oneOf(string(*req.Theme), "auto", "light", "dark") {
 		add("theme", "unsupported_value")
 	}
+	validateProviderChoice(req.MainProvider, "main_provider", add)
 	validateModelChoice(req.Model, "model", add)
 	validateContextWindowChoice(req.ContextWindow, "context_window", add)
 	validateThinkingChoice(req.Thinking, "thinking", add)
 	if req.Verbosity != nil && !oneOf(string(*req.Verbosity), "low", "medium", "high") {
 		add("verbosity", "unsupported_value")
 	}
+	if req.ModelTimeoutSeconds != nil && *req.ModelTimeoutSeconds <= 0 {
+		add("model_timeout_seconds", "positive_required")
+	}
+	validateToolOverrides(req.ToolOverrides, add)
 	if req.Supervisor != nil {
 		if !oneOf(string(req.Supervisor.Frequency), "off", "edits", "all") {
 			add("supervisor.frequency", "unsupported_value")
@@ -525,6 +544,63 @@ func ValidateOnboardingFinalizeRequest(req OnboardingFinalizeRequest) error {
 		return NewOnboardingFinalizeError(OnboardingFinalizeInvalidRequest, OnboardingInvalidRequestDetails{FieldErrors: fieldErrors}, nil)
 	}
 	return nil
+}
+
+func validateToolOverrides(overrides []OnboardingToolOverride, add func(string, string)) {
+	if overrides == nil {
+		return
+	}
+	if len(overrides) == 0 {
+		add("tool_overrides", "choice_required")
+		return
+	}
+	seen := map[toolspec.ID]struct{}{}
+	for index, override := range overrides {
+		field := fmt.Sprintf("tool_overrides.%d.id", index)
+		parsed, known := toolspec.ParseID(string(override.ID))
+		if !known || parsed != override.ID {
+			add(field, "unsupported_value")
+			continue
+		}
+		if override.ID == toolspec.ToolAskQuestion {
+			add(field, "forbidden")
+			continue
+		}
+		if _, duplicate := seen[override.ID]; duplicate {
+			add(field, "duplicate")
+			continue
+		}
+		seen[override.ID] = struct{}{}
+	}
+}
+
+func validateProviderChoice(choice *OnboardingProviderChoice, field string, add func(string, string)) {
+	if choice == nil {
+		return
+	}
+	if choice.ProviderOverride == nil && choice.OpenAIBaseURL == nil {
+		add(field, "choice_required")
+		return
+	}
+	provider := ""
+	if choice.ProviderOverride != nil {
+		provider = strings.ToLower(strings.TrimSpace(*choice.ProviderOverride))
+		switch provider {
+		case "":
+			add(field+".provider_override", "required")
+		case "openai", "anthropic":
+		default:
+			add(field+".provider_override", "unsupported_value")
+		}
+	}
+	if choice.OpenAIBaseURL != nil {
+		if strings.TrimSpace(*choice.OpenAIBaseURL) == "" {
+			add(field+".openai_base_url", "required")
+		}
+		if provider != "" && provider != "openai" {
+			add(field+".openai_base_url", "conflicts_with_provider_override")
+		}
+	}
 }
 
 func validateModelChoice(choice *OnboardingModelChoice, field string, add func(string, string)) {
