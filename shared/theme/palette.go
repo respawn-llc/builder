@@ -39,24 +39,22 @@ type AppPalette struct {
 	Border     AdaptiveColor
 	ModeBg     AdaptiveColor
 	ModeText   AdaptiveColor
-	ChatBg     AdaptiveColor
+	Background AdaptiveColor
 	InputBg    AdaptiveColor
 }
 
 type TranscriptPalette struct {
-	Foreground          AdaptiveColor
-	SelectionBackground AdaptiveColor
-	SelectionForeground AdaptiveColor
-	User                AdaptiveColor
-	Assistant           AdaptiveColor
-	Tool                AdaptiveColor
-	ToolSuccess         AdaptiveColor
-	ToolError           AdaptiveColor
-	System              AdaptiveColor
-	Success             AdaptiveColor
-	Warning             AdaptiveColor
-	Error               AdaptiveColor
-	Compaction          AdaptiveColor
+	Foreground  AdaptiveColor
+	User        AdaptiveColor
+	Assistant   AdaptiveColor
+	Tool        AdaptiveColor
+	ToolSuccess AdaptiveColor
+	ToolError   AdaptiveColor
+	System      AdaptiveColor
+	Success     AdaptiveColor
+	Warning     AdaptiveColor
+	Error       AdaptiveColor
+	Compaction  AdaptiveColor
 }
 
 type StatusPalette struct {
@@ -80,24 +78,22 @@ type ResolvedAppPalette struct {
 	Border     Color
 	ModeBg     Color
 	ModeText   Color
-	ChatBg     Color
+	Background Color
 	InputBg    Color
 }
 
 type ResolvedTranscriptPalette struct {
-	Foreground          Color
-	SelectionBackground Color
-	SelectionForeground Color
-	User                Color
-	Assistant           Color
-	Tool                Color
-	ToolSuccess         Color
-	ToolError           Color
-	System              Color
-	Success             Color
-	Warning             Color
-	Error               Color
-	Compaction          Color
+	Foreground  Color
+	User        Color
+	Assistant   Color
+	Tool        Color
+	ToolSuccess Color
+	ToolError   Color
+	System      Color
+	Success     Color
+	Warning     Color
+	Error       Color
+	Compaction  Color
 }
 
 type ResolvedStatusPalette struct {
@@ -134,23 +130,21 @@ func (p Palette) Resolve(themeName string) ResolvedPalette {
 			Border:     p.App.Border.Resolve(resolvedTheme),
 			ModeBg:     p.App.ModeBg.Resolve(resolvedTheme),
 			ModeText:   p.App.ModeText.Resolve(resolvedTheme),
-			ChatBg:     p.App.ChatBg.Resolve(resolvedTheme),
+			Background: p.App.Background.Resolve(resolvedTheme),
 			InputBg:    p.App.InputBg.Resolve(resolvedTheme),
 		},
 		Transcript: ResolvedTranscriptPalette{
-			Foreground:          p.Transcript.Foreground.Resolve(resolvedTheme),
-			SelectionBackground: p.Transcript.SelectionBackground.Resolve(resolvedTheme),
-			SelectionForeground: p.Transcript.SelectionForeground.Resolve(resolvedTheme),
-			User:                p.Transcript.User.Resolve(resolvedTheme),
-			Assistant:           p.Transcript.Assistant.Resolve(resolvedTheme),
-			Tool:                p.Transcript.Tool.Resolve(resolvedTheme),
-			ToolSuccess:         p.Transcript.ToolSuccess.Resolve(resolvedTheme),
-			ToolError:           p.Transcript.ToolError.Resolve(resolvedTheme),
-			System:              p.Transcript.System.Resolve(resolvedTheme),
-			Success:             p.Transcript.Success.Resolve(resolvedTheme),
-			Warning:             p.Transcript.Warning.Resolve(resolvedTheme),
-			Error:               p.Transcript.Error.Resolve(resolvedTheme),
-			Compaction:          p.Transcript.Compaction.Resolve(resolvedTheme),
+			Foreground:  p.Transcript.Foreground.Resolve(resolvedTheme),
+			User:        p.Transcript.User.Resolve(resolvedTheme),
+			Assistant:   p.Transcript.Assistant.Resolve(resolvedTheme),
+			Tool:        p.Transcript.Tool.Resolve(resolvedTheme),
+			ToolSuccess: p.Transcript.ToolSuccess.Resolve(resolvedTheme),
+			ToolError:   p.Transcript.ToolError.Resolve(resolvedTheme),
+			System:      p.Transcript.System.Resolve(resolvedTheme),
+			Success:     p.Transcript.Success.Resolve(resolvedTheme),
+			Warning:     p.Transcript.Warning.Resolve(resolvedTheme),
+			Error:       p.Transcript.Error.Resolve(resolvedTheme),
+			Compaction:  p.Transcript.Compaction.Resolve(resolvedTheme),
 		},
 		Status: ResolvedStatusPalette{
 			Success:      p.Status.Success.Resolve(resolvedTheme),
@@ -191,7 +185,7 @@ var defaultPalette = Palette{
 			Light: Color{ANSI: "0", ANSI256: "235", TrueColor: "#12100E"},
 			Dark:  Color{ANSI: "7", ANSI256: "231", TrueColor: "#FFFFFF"},
 		},
-		ChatBg: AdaptiveColor{
+		Background: AdaptiveColor{
 			Light: Color{ANSI: "7", ANSI256: "255", TrueColor: "#FFFFFF"},
 			Dark:  Color{ANSI: "0", ANSI256: "233", TrueColor: "#12100E"},
 		},
@@ -202,14 +196,6 @@ var defaultPalette = Palette{
 	},
 	Transcript: TranscriptPalette{
 		Foreground: AdaptiveColor{
-			Light: Color{ANSI: "0", ANSI256: "235", TrueColor: "#12100E"},
-			Dark:  Color{ANSI: "7", ANSI256: "231", TrueColor: "#FFFFFF"},
-		},
-		SelectionBackground: AdaptiveColor{
-			Light: Color{ANSI: "4", ANSI256: "111", TrueColor: "#D0E2FF"},
-			Dark:  Color{ANSI: "4", ANSI256: "25", TrueColor: "#1B3A5C"},
-		},
-		SelectionForeground: AdaptiveColor{
 			Light: Color{ANSI: "0", ANSI256: "235", TrueColor: "#12100E"},
 			Dark:  Color{ANSI: "7", ANSI256: "231", TrueColor: "#FFFFFF"},
 		},

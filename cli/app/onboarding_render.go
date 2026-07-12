@@ -258,9 +258,9 @@ func onboardingThemePreviewStyleSet(theme string, width int) onboardingThemePrev
 	palette := uiPalette(theme)
 	innerWidth := max(12, width-2)
 	return onboardingThemePreviewStyles{
-		status: lipgloss.NewStyle().Foreground(palette.foreground).Background(palette.chatBg).Padding(0, 1).Width(innerWidth),
+		status: lipgloss.NewStyle().Foreground(palette.foreground).Background(palette.background).Padding(0, 1).Width(innerWidth),
 		input:  lipgloss.NewStyle().Foreground(palette.foreground).Background(palette.inputBg).Padding(0, 1).Width(innerWidth),
-		help:   lipgloss.NewStyle().Foreground(palette.muted).Background(palette.chatBg).Padding(0, 1).Width(innerWidth).Faint(true),
+		help:   lipgloss.NewStyle().Foreground(palette.muted).Background(palette.background).Padding(0, 1).Width(innerWidth).Faint(true),
 	}
 }
 

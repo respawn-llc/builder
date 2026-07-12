@@ -2,17 +2,12 @@ package app
 
 import (
 	"fmt"
-	"time"
 
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-type ongoingWidthRehydrationDebounceMsg struct {
-	token uint64
-}
 
 type ongoingNormalBufferOwnedMsg struct {
 	owned bool
@@ -39,17 +34,6 @@ func WithUIOngoingTranscriptReopen(request func()) UIOption {
 
 func (m *uiModel) nativeOngoingSurfaceActive() bool {
 	return m != nil && m.ongoingSurface != nil && m.surface() == uiSurfaceOngoingTranscript
-}
-
-func (m *uiModel) scheduleOngoingWidthRehydration() tea.Cmd {
-	if m == nil {
-		return nil
-	}
-	m.ongoingWidthToken++
-	token := m.ongoingWidthToken
-	return tea.Tick(time.Second, func(time.Time) tea.Msg {
-		return ongoingWidthRehydrationDebounceMsg{token: token}
-	})
 }
 
 func (m *uiModel) handleOngoingSurfaceError(err error) tea.Cmd {
@@ -120,18 +104,12 @@ func (m *uiModel) setOngoingNormalBufferOwned(owned bool) tea.Cmd {
 	if m == nil || m.ongoingTranscript == nil {
 		return nil
 	}
-	var widthRehydrationCmd tea.Cmd
 	if owned {
 		if cmd := m.applyPendingOngoingScratchReset(); cmd != nil {
 			return cmd
 		}
-		if m.pendingOngoingWidthReset {
-			m.pendingOngoingWidthReset = false
-			m.pendingOngoingResizeRepaint = false
-			widthRehydrationCmd = m.scheduleOngoingWidthRehydration()
-		}
 	}
-	resizeRepaint := owned && m.pendingOngoingResizeRepaint && widthRehydrationCmd == nil
+	resizeRepaint := owned && m.pendingOngoingResizeRepaint
 	if resizeRepaint {
 		m.pendingOngoingResizeRepaint = false
 	}
@@ -145,9 +123,9 @@ func (m *uiModel) setOngoingNormalBufferOwned(owned bool) tea.Cmd {
 		if repaintErr != nil {
 			return m.handleOngoingSurfaceError(repaintErr)
 		}
-		return tea.Batch(resultCmd, widthRehydrationCmd, m.handleOngoingResult(repaintResult))
+		return tea.Batch(resultCmd, m.handleOngoingResult(repaintResult))
 	}
-	return tea.Batch(resultCmd, widthRehydrationCmd)
+	return resultCmd
 }
 
 func waitOngoingTranscriptEvent(events <-chan ongoingTranscriptEvent) tea.Cmd {
@@ -167,8 +145,6 @@ func (m *uiModel) handleOngoingResult(result ongoing.Result) tea.Cmd {
 	switch result.Action {
 	case ongoing.ResultNoop:
 		return nil
-	case ongoing.ResultScheduleWidthRehydration:
-		return m.scheduleOngoingWidthRehydration()
 	case ongoing.ResultRequestScratchRehydration:
 		if m != nil && m.ongoingSurface != nil && m.nativeOngoingSurfaceActive() {
 			if _, err := m.ongoingSurface.ResetForScratchHydration(result.Reason, m.ongoingFrameInput()); err != nil {

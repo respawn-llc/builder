@@ -135,9 +135,7 @@ type uiPresentationFeatureState struct {
 	ongoingTranscript           *ongoingTranscriptController
 	ongoingEvents               <-chan ongoingTranscriptEvent
 	requestOngoingOpen          func()
-	ongoingWidthToken           uint64
 	pendingOngoingScratchReset  *ongoing.RehydrateReason
-	pendingOngoingWidthReset    bool
 	pendingOngoingResizeRepaint bool
 	termWidth                   int
 	termHeight                  int

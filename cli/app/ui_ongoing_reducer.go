@@ -22,12 +22,6 @@ func (r uiOngoingFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		return handledUIFeatureUpdate(m, tea.Batch(cmd, waitOngoingTranscriptEvent(m.ongoingEvents)))
 	case ongoingNormalBufferOwnedMsg:
 		return handledUIFeatureUpdate(m, m.setOngoingNormalBufferOwned(msg.owned))
-	case ongoingWidthRehydrationDebounceMsg:
-		if msg.token != m.ongoingWidthToken {
-			return handledUIFeatureUpdate(m, nil)
-		}
-		result := ongoing.Result{Action: ongoing.ResultRequestScratchRehydration, Reason: ongoing.RehydrateReasonWidthChange}
-		return handledUIFeatureUpdate(m, m.handleOngoingResult(result))
 	}
 	return uiFeatureUpdateResult{}
 }

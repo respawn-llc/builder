@@ -93,6 +93,10 @@ func TestSelectedDetailAdapterPreservesSemanticStylesAcrossFullWidthFill(t *test
 	if selectedBackground == "" {
 		t.Fatal("selected rail has no background")
 	}
+	palette := theme.ResolvePalette("dark")
+	if !strings.EqualFold(selectedBackground, palette.App.Background.TrueColor) {
+		t.Fatalf("selected background = %q, want brand background %q", selectedBackground, palette.App.Background.TrueColor)
+	}
 	for index, cell := range cells {
 		if cell.Background != selectedBackground {
 			t.Fatalf("cell %d background = %q, want continuous selected fill %q", index, cell.Background, selectedBackground)
@@ -241,11 +245,11 @@ func TestSelectedStructuredPatchKeepsChromaStylesUnderDiffFill(t *testing.T) {
 
 	cells := analysis.Screen.Cells[0]
 	palette := theme.ResolvePalette("dark")
-	if !strings.EqualFold(cells[0].Background, palette.App.ModeBg.TrueColor) {
-		t.Fatalf("rail background = %q, want selected fill %q", cells[0].Background, palette.App.ModeBg.TrueColor)
+	if !strings.EqualFold(cells[0].Background, palette.App.Background.TrueColor) {
+		t.Fatalf("rail background = %q, want brand background fill %q", cells[0].Background, palette.App.Background.TrueColor)
 	}
 	diffBackground := cells[1].Background
-	if diffBackground == "" || strings.EqualFold(diffBackground, palette.App.ModeBg.TrueColor) {
+	if diffBackground == "" || strings.EqualFold(diffBackground, palette.App.Background.TrueColor) {
 		t.Fatalf("selected diff content background = %q, want tinted fill distinct from selection", diffBackground)
 	}
 	for index, cell := range cells[1:] {

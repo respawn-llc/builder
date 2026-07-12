@@ -79,7 +79,6 @@ type ResultAction string
 const (
 	ResultNoop                      ResultAction = ""
 	ResultRequestScratchRehydration ResultAction = "request_scratch_rehydration"
-	ResultScheduleWidthRehydration  ResultAction = "schedule_width_rehydration"
 )
 
 type RehydrateReason string
@@ -87,15 +86,13 @@ type RehydrateReason string
 const (
 	RehydrateReasonSequenceGap   RehydrateReason = "sequence_gap"
 	RehydrateReasonQueueOverflow RehydrateReason = "queue_overflow"
-	RehydrateReasonWidthChange   RehydrateReason = "width_change"
 )
 
 type Surface struct {
 	writer             io.Writer
 	previousBandHeight int
-	dividerGroup       *clientui.TranscriptRowKind
+	groupRegister      *clientui.TranscriptRowKind
 	activeAssistant    activeAssistantState
-	lastSize           Size
 }
 
 type activeAssistantState struct {
@@ -156,7 +153,7 @@ func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame Frame
 			})
 		}
 		s.activeAssistant.promotedSourceBoundary = projection.PromotedBoundary
-		lines = append(lines, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), frame.Theme)...)
+		lines = append(lines, s.renderAssistantPromotedRows(projection.PromotedRows)...)
 	}
 	if len(lines) == 0 && !activeStreamHydrated {
 		return Result{}, nil
@@ -216,7 +213,7 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, phase cl
 	if len(projection.PromotedRows) == 0 {
 		return s.writeFrameTransaction(frame, nil)
 	}
-	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), frame.Theme))
+	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(projection.PromotedRows))
 }
 
 func (s *Surface) activeAssistantPromotionDeferred() bool {
@@ -266,10 +263,10 @@ func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame
 	unpromoted := s.activeAssistant.source[s.activeAssistant.promotedSourceBoundary:]
 	var rows []string
 	if unpromoted != "" {
-		rows = newMarkdownProjector(nil, frame.Theme).renderer.Render(unpromoted, frameWidthOrDefault(frame))
+		rows = newMarkdownProjector(nil, frame.Theme).renderer.RenderStable(unpromoted, frameWidthOrDefault(frame))
 	}
 	s.activeAssistant = activeAssistantState{}
-	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(rows, frameWidthOrDefault(frame), frame.Theme))
+	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(rows))
 }
 
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
@@ -297,32 +294,16 @@ func (s *Surface) SetNormalBufferOwned(_ bool, _ FrameInput) (Result, error) {
 }
 
 func (s *Surface) Resize(size Size, frame FrameInput) (Result, error) {
-	if result := s.observeResizeForWidthRehydration(size); result.Action != ResultNoop {
-		return result, nil
-	}
 	frame.Size = size
 	return s.Render(frame)
 }
 
-func (s *Surface) ObserveResize(size Size) Result {
-	return s.observeResizeForWidthRehydration(size)
-}
-
-func (s *Surface) observeResizeForWidthRehydration(size Size) Result {
-	if s.widthChanged(size) && s.immutableScrollbackProduced() {
-		s.lastSize = size
-		return Result{Action: ResultScheduleWidthRehydration, Reason: RehydrateReasonWidthChange}
-	}
-	s.lastSize = size
+func (s *Surface) ObserveResize(_ Size) Result {
 	return Result{}
 }
 
-func (s *Surface) widthChanged(size Size) bool {
-	return s.lastSize.Width > 0 && size.Width > 0 && size.Width != s.lastSize.Width
-}
-
 func (s *Surface) immutableScrollbackProduced() bool {
-	return s.dividerGroup != nil || s.activeAssistant.promotedSourceBoundary > 0
+	return s.groupRegister != nil || s.activeAssistant.promotedSourceBoundary > 0
 }
 
 func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameInput) (Result, error) {
@@ -337,7 +318,7 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 	}
 	s.previousBandHeight = 0
 	s.activeAssistant = activeAssistantState{}
-	s.dividerGroup = nil
+	s.groupRegister = nil
 	return Result{Action: ResultRequestScratchRehydration, Reason: reason}, nil
 }
 
@@ -393,7 +374,7 @@ func (s *Surface) renderHydratedCommittedRow(row clientui.TranscriptCommittedRow
 
 func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow, width int, themeName string, mode transcriptrender.Mode) []string {
 	group, lines := committedRowLines(row, width, themeName, mode)
-	return s.renderGroupedRows(group, lines, width, themeName, false)
+	return s.renderGroupedRows(group, lines, false)
 }
 
 // ongoingRenderMode selects the renderer mode for a committed row in the
@@ -413,14 +394,14 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 
 func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
 	if row.Kind == clientui.TranscriptRowUser && row.User != nil {
-		return transcriptrender.ModeOngoingFull
+		return transcriptrender.ModeOngoingStable
 	}
 	if row.Kind != clientui.TranscriptRowAssistant || row.Assistant == nil {
 		return ongoingRenderMode(row)
 	}
 	switch row.Assistant.Phase {
 	case transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal:
-		return transcriptrender.ModeOngoingFull
+		return transcriptrender.ModeOngoingStable
 	case transcript.AssistantPhaseCommentary:
 		return ongoingRenderMode(row)
 	default:
@@ -428,20 +409,20 @@ func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrende
 	}
 }
 
-func (s *Surface) renderAssistantPromotedRows(rows []string, width int, themeName string) []string {
-	return s.renderGroupedRows(clientui.TranscriptRowAssistant, rows, width, themeName, true)
+func (s *Surface) renderAssistantPromotedRows(rows []string) []string {
+	return s.renderGroupedRows(clientui.TranscriptRowAssistant, rows, true)
 }
 
-func (s *Surface) renderGroupedRows(group clientui.TranscriptRowKind, rows []string, width int, themeName string, dividerWhenRegisterUnset bool) []string {
+func (s *Surface) renderGroupedRows(group clientui.TranscriptRowKind, rows []string, separatorWhenRegisterUnset bool) []string {
 	if len(rows) == 0 {
 		return nil
 	}
 	var output []string
-	if (s.dividerGroup == nil && dividerWhenRegisterUnset) || (s.dividerGroup != nil && *s.dividerGroup != group) {
-		output = append(output, dividerLine(group, width, themeName))
+	if (s.groupRegister == nil && separatorWhenRegisterUnset) || (s.groupRegister != nil && *s.groupRegister != group) {
+		output = append(output, "")
 	}
 	groupCopy := group
-	s.dividerGroup = &groupCopy
+	s.groupRegister = &groupCopy
 	output = append(output, rows...)
 	return output
 }
@@ -454,10 +435,6 @@ func committedRowLines(row clientui.TranscriptCommittedRow, width int, themeName
 	default:
 		panic(fmt.Sprintf("ongoing render unknown committed row kind %q", row.Kind))
 	}
-}
-
-func dividerLine(group clientui.TranscriptRowKind, width int, themeName string) string {
-	return encodeTranscriptLine(transcriptrender.RenderDivider(group, width), themeName)
 }
 
 func encodeTranscriptLines(lines []transcriptrender.Line, themeName string) []string {
@@ -586,7 +563,6 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 		return Result{}, err
 	}
 	s.previousBandHeight = len(liveLines)
-	s.lastSize = frame.Size
 	return Result{}, nil
 }
 

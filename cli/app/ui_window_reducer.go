@@ -27,11 +27,8 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		m.layout().syncViewport()
 		if !m.nativeOngoingSurfaceActive() {
 			if m.ongoingSurface != nil {
-				result := m.ongoingSurface.ObserveResize(ongoing.Size{Width: msg.Width, Height: msg.Height})
-				if result.Action == ongoing.ResultScheduleWidthRehydration {
-					m.pendingOngoingWidthReset = true
-					m.pendingOngoingResizeRepaint = false
-				} else if !previousKnown || previousWidth != msg.Width || previousHeight != msg.Height {
+				m.ongoingSurface.ObserveResize(ongoing.Size{Width: msg.Width, Height: msg.Height})
+				if !previousKnown || previousWidth != msg.Width || previousHeight != msg.Height {
 					m.pendingOngoingResizeRepaint = true
 				}
 			}

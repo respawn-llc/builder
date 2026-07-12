@@ -1,6 +1,7 @@
 package transcriptrender
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -261,7 +262,7 @@ func TestMovedToBackgroundShellRowKeepsMovedToBackgroundSuffixAtNarrowWidth(t *t
 		t.Fatalf("backgrounded shell lines = %+v, want one line", rendered.Lines)
 	}
 	line := rendered.Lines[0]
-	if got, want := line.Plain(), "$ sleep … • backgrounded"; got != want {
+	if got, want := line.Plain(), "$ sleep…  · backgrounded"; got != want {
 		t.Fatalf("backgrounded shell line = %q, want %q", got, want)
 	}
 	if line.LeadingSymbol == nil {
@@ -395,6 +396,9 @@ func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) 
 
 	for _, mode := range []Mode{ModeOngoingCollapsed, ModeDetailCollapsed, ModeDetailExpanded} {
 		rendered := RenderCommittedRow(row, 80, "", mode)
+		if rendered.Group != clientui.TranscriptRowTool {
+			t.Fatalf("mode %v background notice group = %q, want tool activity", mode, rendered.Group)
+		}
 		if len(rendered.Lines) != 1 || rendered.Lines[0].LeadingSymbol == nil {
 			t.Fatalf("mode %v background notice = %+v, want one line with typed symbol", mode, rendered)
 		}
@@ -883,15 +887,60 @@ func TestCollapsedToolResultSummaryRendersAsFaintInlineMetadata(t *testing.T) {
 		t.Fatalf("result summary span = %+v, want faint notice metadata", meta)
 	}
 	gap := spans[len(spans)-2]
-	if gap.Text == "" || gap.Style.SemanticRole != StyleRoleToolShell {
-		t.Fatalf("result summary gap span = %+v, want shell-role spacing before metadata", gap)
+	if gap.Text != "  · " || gap.Style.SemanticRole != StyleRoleNotice || !gap.Style.Has(SpanAttributeFaint) {
+		t.Fatalf("result summary separator span = %+v, want faint inline separator", gap)
+	}
+}
+
+func TestNonZeroShellExitUsesErrorDollarAndReservedStatusSuffix(t *testing.T) {
+	exitCode := 7
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "printf a-very-long-command", false)
+	row.Tool.ToolPresentation.ShellExitCode = &exitCode
+
+	rendered := RenderCommittedRow(row, 22, "", ModeOngoing)
+	if len(rendered.Lines) != 1 {
+		t.Fatalf("non-zero shell lines = %+v, want one compact line", rendered.Lines)
+	}
+	line := rendered.Lines[0]
+	if line.LeadingSymbol == nil || line.LeadingSymbol.Text != "$" {
+		t.Fatalf("non-zero shell symbol = %+v, want dollar", line.LeadingSymbol)
+	}
+	if line.LeadingSymbol.Style.SemanticRole != StyleRoleToolError {
+		t.Fatalf("non-zero shell symbol style = %+v, want tool error", line.LeadingSymbol.Style)
+	}
+	if got := lipgloss.Width(line.Plain()); got > 22 {
+		t.Fatalf("non-zero shell width = %d, want <= 22: %q", got, line.Plain())
+	}
+	spans := line.Spans
+	if len(spans) < 3 || spans[len(spans)-2].Text != "  · " || spans[len(spans)-1].Text != "exit 7" {
+		t.Fatalf("non-zero shell spans = %+v, want reserved exit suffix", spans)
+	}
+}
+
+func TestZeroShellExitDoesNotRenderStatusSuffix(t *testing.T) {
+	exitCode := 0
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
+	row.Tool.ToolPresentation.ShellExitCode = &exitCode
+
+	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
+	line := rendered.Lines[0]
+	if line.LeadingSymbol == nil || line.LeadingSymbol.Text != "$" {
+		t.Fatalf("zero shell symbol = %+v, want dollar", line.LeadingSymbol)
+	}
+	if line.LeadingSymbol.Style.SemanticRole != StyleRoleToolSuccess {
+		t.Fatalf("zero shell symbol style = %+v, want tool success", line.LeadingSymbol.Style)
+	}
+	for _, span := range line.Spans {
+		if span.Text == "exit 0" {
+			t.Fatalf("zero shell rendered status suffix: %+v", line.Spans)
+		}
 	}
 }
 
 func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.T) {
 	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw output text", false)
 	row.Tool.CondensedText = "passed"
-	row.Tool.ResultSummary = "exit 0"
+	row.Tool.ResultSummary = "passed"
 	row.Tool.ToolPresentation.Command = "go test ./..."
 	row.Tool.ToolPresentation.CompactText = "go test ./..."
 
@@ -909,20 +958,20 @@ func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.
 			t.Fatalf("mode %v command = %q, want typed input", mode, command)
 		}
 		meta := spans[len(spans)-1]
-		if meta.Text != "exit 0" {
-			t.Fatalf("mode %v result metadata = %q, want exit 0", mode, meta.Text)
+		if meta.Text != "passed" {
+			t.Fatalf("mode %v result metadata = %q, want passed", mode, meta.Text)
 		}
 	}
 }
 
 func TestExpandedToolRowsKeepTypedInputAheadOfOutput(t *testing.T) {
 	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw output text", false)
-	row.Tool.ResultSummary = "exit 0"
+	row.Tool.ResultSummary = "passed"
 	row.Tool.ToolPresentation.Command = "go test ./..."
 	row.Tool.ToolPresentation.CompactText = "run tests"
 
 	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	if got, want := PlainLines(rendered.Lines), []string{"$ go test ./...", "│ ", "│ raw output text", "└ exit 0"}; !slices.Equal(got, want) {
+	if got, want := PlainLines(rendered.Lines), []string{"$ go test ./...", "│ ", "│ raw output text", "└ passed"}; !slices.Equal(got, want) {
 		t.Fatalf("expanded tool lines = %q, want %q", got, want)
 	}
 }
@@ -941,7 +990,7 @@ func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
 func TestToolErrorRowsKeepAuthoritativeInputFirstAndErrorClassification(t *testing.T) {
 	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw failure output", true)
 	row.Tool.CondensedText = "permission denied"
-	row.Tool.ResultSummary = "exit 1"
+	row.Tool.ResultSummary = "permission denied"
 	row.Tool.ToolPresentation.Command = "cat /root/secret"
 	row.Tool.ToolPresentation.CompactText = "cat /root/secret"
 
@@ -951,7 +1000,7 @@ func TestToolErrorRowsKeepAuthoritativeInputFirstAndErrorClassification(t *testi
 	}{
 		{mode: ModeOngoing},
 		{mode: ModeOngoingCollapsed},
-		{mode: ModeDetailCollapsed, wantSummary: "exit 1"},
+		{mode: ModeDetailCollapsed, wantSummary: "permission denied"},
 	}
 	for _, test := range tests {
 		rendered := RenderCommittedRow(row, 80, "", test.mode)
@@ -961,7 +1010,7 @@ func TestToolErrorRowsKeepAuthoritativeInputFirstAndErrorClassification(t *testi
 		line := rendered.Lines[0]
 		assertFailedToolClassification(t, test.mode, line)
 		if test.wantSummary == "" {
-			if got, want := line.Plain(), "! cat /root/secret"; got != want {
+			if got, want := line.Plain(), "$ cat /root/secret"; got != want {
 				t.Fatalf("mode %v failed tool line = %q, want %q", test.mode, got, want)
 			}
 			continue
@@ -1021,6 +1070,75 @@ func TestUserAssistantMarkdownCodeUsesPrimaryFullStrengthRole(t *testing.T) {
 		}
 		if span.Style.Has(SpanAttributeFaint) {
 			t.Fatalf("markdown code span is faint: %+v", span)
+		}
+	}
+}
+
+func TestStableMarkdownCollapsesSoftBreaksAndPreservesHardBreaks(t *testing.T) {
+	row := clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowAssistant,
+		Assistant: &clientui.TranscriptAssistantRow{
+			Text: "alpha\nbeta  \ngamma",
+		},
+	}
+
+	rendered := RenderCommittedRow(row, 8, "", ModeOngoingStable)
+	if got, want := PlainLines(rendered.Lines), []string{"❮ alpha beta", "  gamma"}; !slices.Equal(got, want) {
+		t.Fatalf("stable markdown lines = %q, want %q", got, want)
+	}
+}
+
+func TestStableMarkdownTableUsesLibraryWidthLayout(t *testing.T) {
+	for _, width := range []int{8, 12, 24} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			row := clientui.TranscriptCommittedRow{
+				Kind: clientui.TranscriptRowAssistant,
+				Assistant: &clientui.TranscriptAssistantRow{
+					Text: "| Name | Result |\n| --- | ---: |\n| alpha | very long value |",
+				},
+			}
+
+			rendered := RenderCommittedRow(row, width, "", ModeOngoingStable)
+			if len(rendered.Lines) < 3 {
+				t.Fatalf("stable table lines = %q, want a multi-row table", PlainLines(rendered.Lines))
+			}
+			for index, line := range rendered.Lines {
+				if got := lipgloss.Width(line.Plain()); got > width {
+					t.Fatalf("stable table line %d width = %d, want <= %d: %q", index, got, width, line.Plain())
+				}
+			}
+			if width < 24 {
+				return
+			}
+			plain := strings.Join(PlainLines(rendered.Lines), "\n")
+			for _, content := range []string{"Name", "Result", "alpha", "very", "long", "value"} {
+				if !strings.Contains(plain, content) {
+					t.Fatalf("stable table = %q, want content %q", plain, content)
+				}
+			}
+		})
+	}
+}
+
+func TestStableMarkdownOnlyWidthFormatsTableBlocks(t *testing.T) {
+	lines := RenderMarkdownStableLines(
+		StyleRoleAssistant,
+		"before alpha beta gamma delta\n\n| Name | Result |\n| --- | ---: |\n| alpha | very long value |\n\nafter alpha beta gamma delta",
+		18,
+	)
+	plain := PlainLines(lines)
+	if len(plain) < 7 {
+		t.Fatalf("stable mixed markdown lines = %q, want prose, table, and prose blocks", plain)
+	}
+	if plain[0] != "before alpha beta gamma delta" {
+		t.Fatalf("leading prose = %q, want one width-independent logical line", plain[0])
+	}
+	if plain[len(plain)-1] != "after alpha beta gamma delta" {
+		t.Fatalf("trailing prose = %q, want one width-independent logical line", plain[len(plain)-1])
+	}
+	for index, line := range plain[2 : len(plain)-2] {
+		if got := lipgloss.Width(line); got > 18 {
+			t.Fatalf("table line %d width = %d, want <= 18: %q", index, got, line)
 		}
 	}
 }
@@ -1161,71 +1279,6 @@ func TestCacheWarningNoticeRendersStructuredPayload(t *testing.T) {
 	}
 	if got, want := text, transcript.CacheWarningText(warning); got != want {
 		t.Fatalf("cache warning notice text = %q, want shared formatter output %q", got, want)
-	}
-}
-
-func TestRenderDividerStaysWithinFrameWidth(t *testing.T) {
-	cases := []struct {
-		name  string
-		group clientui.TranscriptRowKind
-		width int
-	}{
-		{name: "negative", group: clientui.TranscriptRowAssistant, width: -1},
-		{name: "zero", group: clientui.TranscriptRowAssistant, width: 0},
-		{name: "single cell", group: clientui.TranscriptRowAssistant, width: 1},
-		{name: "narrow", group: clientui.TranscriptRowAssistant, width: 4},
-		{name: "wide", group: clientui.TranscriptRowUser, width: 120},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			line := RenderDivider(tt.group, tt.width)
-			plainWidth := lipgloss.Width(line.Plain())
-			if tt.width <= 0 {
-				if plainWidth != 0 {
-					t.Fatalf("divider width = %d, want empty for nonpositive frame width %d", plainWidth, tt.width)
-				}
-				return
-			}
-			if plainWidth > tt.width {
-				t.Fatalf("divider width = %d, want <= frame width %d", plainWidth, tt.width)
-			}
-			if plainWidth == 0 {
-				t.Fatalf("divider unexpectedly empty for positive frame width %d", plainWidth)
-			}
-			for _, span := range line.Spans {
-				if span.Style.SemanticRole != StyleRoleNotice || !span.Style.Has(SpanAttributeFaint) {
-					t.Fatalf("divider span has invalid style metadata: %+v", span)
-				}
-			}
-		})
-	}
-}
-
-// A divider is a plain horizontal rule: every visible rune is the box-drawing
-// horizontal "─" (or the ellipsis fallback at width 1), with no embedded
-// group-kind label, letters, or digits. Group kind only selects presence, not text.
-func TestRenderDividerIsPlainRuleWithoutLabel(t *testing.T) {
-	for _, group := range []clientui.TranscriptRowKind{
-		clientui.TranscriptRowUser,
-		clientui.TranscriptRowAssistant,
-		clientui.TranscriptRowTool,
-		clientui.TranscriptRowNotice,
-	} {
-		line := RenderDivider(group, 80)
-		plain := line.Plain()
-		if plain == "" {
-			t.Fatalf("group %q: divider empty", group)
-		}
-		for _, r := range plain {
-			if r == '─' || r == '…' {
-				continue
-			}
-			t.Fatalf("group %q: divider contains non-rule rune %q in %q", group, r, plain)
-		}
-		if w := lipgloss.Width(plain); w != 80 {
-			t.Fatalf("group %q: divider width %d, want full frame width 80", group, w)
-		}
 	}
 }
 

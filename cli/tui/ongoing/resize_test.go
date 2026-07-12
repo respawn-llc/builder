@@ -27,7 +27,7 @@ func TestWidthChangeBeforeImmutableScrollbackRepaintsOnly(t *testing.T) {
 	}
 }
 
-func TestWidthChangeAfterCommittedRowRequestsDebouncedRehydration(t *testing.T) {
+func TestWidthChangeAfterCommittedRowRepaintsWithoutRehydration(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
 	if _, err := surface.Render(FrameInput{Size: Size{Width: 20, Height: 3}}); err != nil {
@@ -42,15 +42,15 @@ func TestWidthChangeAfterCommittedRowRequestsDebouncedRehydration(t *testing.T) 
 	if err != nil {
 		t.Fatalf("width resize after immutable: %v", err)
 	}
-	if result.Action != ResultScheduleWidthRehydration {
-		t.Fatalf("resize action = %q, want width rehydration", result.Action)
+	if result.Action != ResultNoop {
+		t.Fatalf("resize action = %q, want repaint-only noop", result.Action)
 	}
-	if got := out.String(); got != "" {
-		t.Fatalf("width resize after immutable wrote %q, want debounce-only request", got)
+	if got := out.String(); got == "" {
+		t.Fatal("width resize after immutable did not repaint mutable band")
 	}
 }
 
-func TestWidthChangeAfterAssistantPromotionRequestsDebouncedRehydration(t *testing.T) {
+func TestWidthChangeAfterAssistantPromotionRepaintsWithoutRehydration(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
 	if _, err := surface.Render(FrameInput{Size: Size{Width: 20, Height: 3}}); err != nil {
@@ -65,7 +65,7 @@ func TestWidthChangeAfterAssistantPromotionRequestsDebouncedRehydration(t *testi
 	if err != nil {
 		t.Fatalf("width resize after assistant promotion: %v", err)
 	}
-	if result.Action != ResultScheduleWidthRehydration {
-		t.Fatalf("resize action = %q, want width rehydration", result.Action)
+	if result.Action != ResultNoop {
+		t.Fatalf("resize action = %q, want repaint-only noop", result.Action)
 	}
 }

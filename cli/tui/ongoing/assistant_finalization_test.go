@@ -25,9 +25,9 @@ func TestAssistantFinalizationEqualSourceFlushesUnpromotedTailAndClearsStream(t 
 		t.Fatalf("finalize equal source: %v", err)
 	}
 
-	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
-		{divider: true},
-		{content: "hello", divider: false},
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+		{separator: true},
+		{content: "hello"},
 	})
 	if surface.activeAssistant.streamID != nil {
 		t.Fatalf("active stream after finalization = %+v, want cleared", surface.activeAssistant)
@@ -166,10 +166,9 @@ func TestHydrationRestoresActiveAssistantStreamAndFinalizes(t *testing.T) {
 		t.Fatalf("apply hydration: %v", err)
 	}
 
-	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
-		{divider: true},
-		{content: "Stable paragraph.", divider: false},
-		{content: "open tail", divider: false},
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+		{separator: true},
+		{content: "Stable paragraph."},
 	})
 	out.Reset()
 

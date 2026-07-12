@@ -90,11 +90,10 @@ func TestOngoingRenderedWidthFollowsTerminalWidth(t *testing.T) {
 	}
 
 	t.Logf("max rendered append width at 150 cols = %d sample=%q", maxWidth, widestSample)
-	// A full-width divider rule at 150 cols is 150 cells; the seeded 140-char user
-	// message renders at 142 cells. Either proves the surface follows the 150-col
-	// terminal. The legacy fallback (effectiveWidth=120) caps both at 120.
+	// The seeded 140-character logical line proves the surface follows the
+	// 150-column terminal. The legacy fallback capped it at 120.
 	if maxWidth < 140 {
-		t.Fatalf("ongoing content capped at width %d in a 150-col terminal; want content to follow terminal width (>=140, divider=150)", maxWidth)
+		t.Fatalf("ongoing content capped at width %d in a 150-col terminal; want content to follow terminal width (>=140)", maxWidth)
 	}
 }
 

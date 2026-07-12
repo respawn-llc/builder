@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -10,20 +11,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-func TestOngoingWidthRehydrationDebounceTokenRestarts(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	if cmd := m.scheduleOngoingWidthRehydration(); cmd == nil {
-		t.Fatal("first width rehydration schedule returned nil command")
-	}
-	first := m.ongoingWidthToken
-	if cmd := m.scheduleOngoingWidthRehydration(); cmd == nil {
-		t.Fatal("second width rehydration schedule returned nil command")
-	}
-	if m.ongoingWidthToken == first {
-		t.Fatalf("width debounce token did not advance: %d", m.ongoingWidthToken)
-	}
-}
 
 func TestWindowResizeDoesNotWriteOngoingSurfaceWhileDetailOwnsTerminal(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
@@ -44,120 +31,62 @@ func TestWindowResizeDoesNotWriteOngoingSurfaceWhileDetailOwnsTerminal(t *testin
 	}
 }
 
-func TestWindowResizeWhileDetailOwnsTerminalRequestsWidthRehydrationOnReturn(t *testing.T) {
-	var raw bytes.Buffer
-	nativeSurface := ongoing.NewSurface(&raw)
-	if _, err := nativeSurface.ApplyTerminalMessage(committedMessageForOngoingResizeTest(), ongoing.FrameInput{
-		Size: ongoing.Size{Width: 80, Height: 24},
-	}); err != nil {
-		t.Fatalf("prime immutable ongoing scrollback: %v", err)
-	}
-	raw.Reset()
-	surface := &ongoingSurfaceSpy{}
-	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
-	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
-		t.Fatalf("accept hydration: %v", err)
-	}
-	reopenCount := 0
-	m := newProjectedStaticUIModel(
-		WithUIOngoingSurface(nativeSurface),
-		withUIOngoingTranscriptController(controller),
-		WithUIOngoingTranscriptReopen(func() { reopenCount++ }),
-	)
+func TestWindowResizeWhileDetailOwnsTerminalRepaintsOnReturn(t *testing.T) {
+	for _, target := range []ongoing.Size{
+		{Width: 100, Height: 24},
+		{Width: 80, Height: 30},
+	} {
+		t.Run(fmt.Sprintf("%dx%d", target.Width, target.Height), func(t *testing.T) {
+			var raw bytes.Buffer
+			nativeSurface := ongoing.NewSurface(&raw)
+			surface := &ongoingSurfaceSpy{}
+			m := sizedTestUIModel(newProjectedStaticUIModel(
+				WithUIOngoingSurface(nativeSurface),
+			), 80, 24)
+			controller := newOngoingTranscriptController(surface, m.ongoingFrameInput)
+			m.ongoingTranscript = controller
+			if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+				t.Fatalf("accept hydration: %v", err)
+			}
 
-	if cmd := m.activateSurface(uiSurfaceTranscriptDetail); cmd == nil {
-		t.Fatal("expected detail activation command")
-	}
-	result := m.windowReducer().Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	if !result.handled {
-		t.Fatal("window resize was not handled")
-	}
-	if raw.Len() != 0 {
-		t.Fatalf("ongoing surface wrote raw bytes while detail owned terminal: %q", raw.String())
-	}
-	if !m.pendingOngoingWidthReset {
-		t.Fatal("off-surface width change did not mark pending ongoing width rehydration")
-	}
+			if cmd := m.activateSurface(uiSurfaceTranscriptDetail); cmd == nil {
+				t.Fatal("expected detail activation command")
+			}
+			surface.calls = nil
+			raw.Reset()
 
-	if cmd := m.activateSurface(uiSurfaceOngoingTranscript); cmd == nil {
-		t.Fatal("expected ongoing activation command")
-	}
-	if raw.Len() != 0 {
-		t.Fatalf("ongoing surface wrote raw bytes before normal buffer ownership restored: %q", raw.String())
-	}
-	if _, cmd := m.Update(ongoingNormalBufferOwnedMsg{owned: true}); cmd == nil {
-		t.Fatal("post-exit ownership update did not schedule width debounce")
-	}
-	if raw.Len() != 0 {
-		t.Fatalf("ongoing surface wrote raw bytes before width debounce elapsed: %q", raw.String())
-	}
-	if m.pendingOngoingWidthReset {
-		t.Fatal("pending width rehydration marker was not cleared")
-	}
-	if got, want := surface.callKinds(), []string{"apply"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("transcript controller calls = %v, want %v", got, want)
-	}
+			result := m.windowReducer().Update(tea.WindowSizeMsg{Width: target.Width, Height: target.Height})
+			if !result.handled {
+				t.Fatal("window resize was not handled")
+			}
+			if raw.Len() != 0 {
+				t.Fatalf("ongoing surface wrote raw bytes while detail owned terminal: %q", raw.String())
+			}
+			if !m.pendingOngoingResizeRepaint {
+				t.Fatal("off-surface resize did not mark pending ongoing repaint")
+			}
 
-	token := m.ongoingWidthToken
-	if _, cmd := m.Update(ongoingWidthRehydrationDebounceMsg{token: token}); cmd != nil {
-		t.Fatalf("debounced width rehydration returned command, want nil")
-	}
-	if raw.Len() == 0 {
-		t.Fatal("expected width scratch reset after debounce")
-	}
-	if reopenCount != 1 {
-		t.Fatalf("reopen count = %d, want 1", reopenCount)
-	}
-}
+			if cmd := m.activateSurface(uiSurfaceOngoingTranscript); cmd == nil {
+				t.Fatal("expected ongoing activation command")
+			}
+			if len(surface.calls) != 0 {
+				t.Fatalf("surface calls before ownership restore = %v, want none", surface.calls)
+			}
 
-func TestHeightOnlyWindowResizeWhileDetailOwnsTerminalRepaintsOnReturn(t *testing.T) {
-	var raw bytes.Buffer
-	nativeSurface := ongoing.NewSurface(&raw)
-	surface := &ongoingSurfaceSpy{}
-	m := sizedTestUIModel(newProjectedStaticUIModel(
-		WithUIOngoingSurface(nativeSurface),
-	), 80, 24)
-	controller := newOngoingTranscriptController(surface, m.ongoingFrameInput)
-	m.ongoingTranscript = controller
-	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
-		t.Fatalf("accept hydration: %v", err)
-	}
-
-	if cmd := m.activateSurface(uiSurfaceTranscriptDetail); cmd == nil {
-		t.Fatal("expected detail activation command")
-	}
-	surface.calls = nil
-	raw.Reset()
-
-	result := m.windowReducer().Update(tea.WindowSizeMsg{Width: 80, Height: 30})
-	if !result.handled {
-		t.Fatal("window resize was not handled")
-	}
-	if raw.Len() != 0 {
-		t.Fatalf("ongoing surface wrote raw bytes while detail owned terminal: %q", raw.String())
-	}
-	if !m.pendingOngoingResizeRepaint {
-		t.Fatal("height-only off-surface resize did not mark pending ongoing repaint")
-	}
-
-	if cmd := m.activateSurface(uiSurfaceOngoingTranscript); cmd == nil {
-		t.Fatal("expected ongoing activation command")
-	}
-	if len(surface.calls) != 0 {
-		t.Fatalf("surface calls before ownership restore = %v, want none", surface.calls)
-	}
-
-	if _, cmd := m.Update(ongoingNormalBufferOwnedMsg{owned: true}); cmd != nil {
-		t.Fatalf("post-exit ownership update returned command, want nil")
-	}
-	if got, want := surface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("surface calls after ongoing restore = %v, want %v", got, want)
-	}
-	if got, want := surface.calls[len(surface.calls)-1].frame.Size.Height, 30; got != want {
-		t.Fatalf("repaint frame height = %d, want %d", got, want)
-	}
-	if m.pendingOngoingResizeRepaint {
-		t.Fatal("pending height repaint marker was not cleared")
+			if _, cmd := m.Update(ongoingNormalBufferOwnedMsg{owned: true}); cmd != nil {
+				t.Fatalf("post-exit ownership update returned command, want nil")
+			}
+			if got, want := surface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("surface calls after ongoing restore = %v, want %v", got, want)
+			}
+			frame := surface.calls[len(surface.calls)-1].frame
+			if frame.Size != target {
+				t.Fatalf("repaint frame size = %+v, want %+v", frame.Size, target)
+			}
+			if m.pendingOngoingResizeRepaint {
+				t.Fatal("pending resize repaint marker was not cleared")
+			}
+		})
 	}
 }
 

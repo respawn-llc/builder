@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithGroupDividers(t *testing.T) {
+func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithBlankGroupSeparators(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
 
@@ -30,19 +30,19 @@ func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithGroupDividers(
 		t.Fatalf("apply hydration: %v", err)
 	}
 
-	rows := visibleTextRows(parseTerminalOps(out.String()))
-	// Two consecutive user rows form one group: no divider between them.
+	rows := immutableAppendedRows(parseTerminalOps(out.String()))
+	// Two consecutive user rows form one group: no separator between them.
 	// Each group transition (user->assistant, assistant->tool, tool->notice)
-	// emits exactly one plain-rule divider line immediately before the new group.
+	// emits exactly one blank line immediately before the new group.
 	wantStructure := []rowKind{
-		{content: "❯ first user", divider: false},
-		{content: "❯ second user", divider: false},
-		{divider: true},
-		{content: "❮ assistant answer", divider: false},
-		{divider: true},
-		{content: "• tool result", divider: false},
-		{divider: true},
-		{content: "ℹ notice", divider: false},
+		{content: "❯ first user"},
+		{content: "❯ second user"},
+		{separator: true},
+		{content: "❮ assistant answer"},
+		{separator: true},
+		{content: "• tool result"},
+		{separator: true},
+		{content: "ℹ notice"},
 	}
 	assertRowStructure(t, rows, wantStructure)
 	if out.String() == ansi.Strip(out.String()) {
@@ -50,7 +50,7 @@ func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithGroupDividers(
 	}
 }
 
-func TestApplyTerminalMessageDoesNotEmitDividerForConsecutiveSameGroup(t *testing.T) {
+func TestApplyTerminalMessageDoesNotEmitSeparatorForConsecutiveSameGroup(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
 	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("first")), testFrame()); err != nil {
@@ -61,17 +61,41 @@ func TestApplyTerminalMessageDoesNotEmitDividerForConsecutiveSameGroup(t *testin
 	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("second")), testFrame()); err != nil {
 		t.Fatalf("apply second row: %v", err)
 	}
-	rows := visibleTextRows(parseTerminalOps(out.String()))
-	// Same-group append (user->user): no divider before the second row.
-	assertRowStructure(t, rows, []rowKind{{content: "❯ second", divider: false}})
+	rows := immutableAppendedRows(parseTerminalOps(out.String()))
+	// Same-group append (user->user): no separator before the second row.
+	assertRowStructure(t, rows, []rowKind{{content: "❯ second"}})
 	out.Reset()
 
 	if _, err := surface.ApplyTerminalMessage(committedMessage(assistantRow("answer")), testFrame()); err != nil {
 		t.Fatalf("apply assistant row: %v", err)
 	}
-	rows = visibleTextRows(parseTerminalOps(out.String()))
-	// Group transition (user->assistant): one divider before the assistant row.
-	assertRowStructure(t, rows, []rowKind{{divider: true}, {content: "❮ answer", divider: false}})
+	rows = immutableAppendedRows(parseTerminalOps(out.String()))
+	// Group transition (user->assistant): one blank line before the assistant row.
+	assertRowStructure(t, rows, []rowKind{{separator: true}, {content: "❮ answer"}})
+}
+
+func TestBackgroundShellCompletionStaysFlushWithToolActivity(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
+		Kind: clientui.TranscriptMessageHydration,
+		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
+			toolRow("backgrounded command"),
+			backgroundNoticeRow("background complete"),
+			noticeRow("ordinary notice"),
+		}},
+	}, testFrame())
+	if err != nil {
+		t.Fatalf("apply hydration: %v", err)
+	}
+
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+		{content: "• backgrounded command"},
+		{content: "ℹ background complete"},
+		{separator: true},
+		{content: "ℹ ordinary notice"},
+	})
 }
 
 func TestCommittedAssistantFinalWithoutStreamRendersFullAnswer(t *testing.T) {
@@ -84,9 +108,24 @@ func TestCommittedAssistantFinalWithoutStreamRendersFullAnswer(t *testing.T) {
 		t.Fatalf("apply final assistant row: %v", err)
 	}
 
-	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
-		{content: "❮ first final line", divider: false},
-		{content: "  second final line", divider: false},
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+		{content: "❮ first final line second final line"},
+	})
+}
+
+func TestCommittedUserParagraphAppendsOneLogicalLineAtNarrowWidth(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	if _, err := surface.ApplyTerminalMessage(
+		committedMessage(userRow("alpha beta gamma delta")),
+		FrameInput{Size: Size{Width: 10, Height: 6}},
+	); err != nil {
+		t.Fatalf("apply committed user row: %v", err)
+	}
+
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+		{content: "❯ alpha beta gamma delta"},
 	})
 }
 
@@ -148,16 +187,15 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 		t.Fatalf("apply malicious hydration: %v", err)
 	}
 
-	rows := visibleTextRows(parseTerminalOps(out.String()))
+	rows := immutableAppendedRows(parseTerminalOps(out.String()))
 	wantStructure := []rowKind{
-		{content: "❯ user[2J", divider: false},
-		{content: "  next lineafter", divider: false},
-		{divider: true},
-		{content: "❮ assistant]0;spoof answer", divider: false},
-		{divider: true},
-		{content: "• tool[3;1H result", divider: false},
-		{divider: true},
-		{content: "ℹ notice value", divider: false},
+		{content: "❯ user[2J next lineafter"},
+		{separator: true},
+		{content: "❮ assistant]0;spoof answer"},
+		{separator: true},
+		{content: "• tool[3;1H result"},
+		{separator: true},
+		{content: "ℹ notice value"},
 	}
 	assertRowStructure(t, rows, wantStructure)
 }
@@ -229,7 +267,7 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 			rows := visibleTextRows(parseTerminalOps(out.String()))
 			contentRows := 0
 			for _, r := range rows {
-				if isDividerRule(r) {
+				if r == "" {
 					continue
 				}
 				contentRows++
@@ -272,9 +310,7 @@ func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
 			}
 
 			assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
-				"❮ first line",
-				"  second line",
-				"  third line",
+				"❮ first line second line third line",
 			})
 		})
 	}
@@ -300,9 +336,7 @@ func TestHydrationRendersFullUserPrompt(t *testing.T) {
 	}
 
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
-		"❯ /review",
-		"  Inspect every changed file.",
-		"  Report architectural regressions.",
+		"❯ /review Inspect every changed file. Report architectural regressions.",
 	})
 }
 
@@ -339,6 +373,20 @@ func noticeRow(text string) clientui.TranscriptCommittedRow {
 		Visibility: clientui.EntryVisibilityOngoing,
 		Kind:       clientui.TranscriptRowNotice,
 		Notice:     &clientui.TranscriptNoticeRow{Data: clientui.TranscriptNoticeData{LegacyText: &legacyText}},
+	}
+}
+
+func backgroundNoticeRow(text string) clientui.TranscriptCommittedRow {
+	return clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityOngoingCollapsed,
+		Kind:       clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: clientui.TranscriptNoticeInfo,
+			Data: clientui.TranscriptNoticeData{
+				MessageType:  clientui.MessageTypeBackgroundNotice,
+				CompactLabel: text,
+			},
+		},
 	}
 }
 
@@ -448,27 +496,11 @@ func assertVisibleTextOps(t *testing.T, ops []terminalOp, want []string) {
 	}
 }
 
-// isDividerRule reports whether a visible row is a plain horizontal rule made
-// only of the box-drawing "─" rune (the divider line shape), with no label text.
-func isDividerRule(row string) bool {
-	if row == "" {
-		return false
-	}
-	for _, r := range row {
-		if r != '─' && r != '…' {
-			return false
-		}
-	}
-	return true
-}
-
-// rowKind describes one visible terminal row by structural role: either a plain
-// divider rule, or a content row carrying the visible text. Tests assert
-// structure (divider placement and content presence) rather than literal text,
-// so divider content/style changes do not break them.
+// rowKind describes one immutable terminal row by structural role: either a
+// blank group separator or a content row carrying the visible text.
 type rowKind struct {
-	divider bool
-	content string
+	separator bool
+	content   string
 }
 
 func assertRowStructure(t *testing.T, rows []string, want []rowKind) {
@@ -478,17 +510,60 @@ func assertRowStructure(t *testing.T, rows []string, want []rowKind) {
 	}
 	for idx, wantRow := range want {
 		got := rows[idx]
-		if wantRow.divider {
-			if !isDividerRule(got) {
-				t.Fatalf("row %d = %q, want a plain divider rule", idx, got)
+		if wantRow.separator {
+			if got != "" {
+				t.Fatalf("row %d = %q, want a blank group separator", idx, got)
 			}
 			continue
 		}
-		if isDividerRule(got) {
-			t.Fatalf("row %d = %q, want content %q (not a divider)", idx, got, wantRow.content)
+		if got == "" {
+			t.Fatalf("row %d is blank, want content %q", idx, wantRow.content)
 		}
 		if got != wantRow.content {
 			t.Fatalf("row %d = %q, want content %q", idx, got, wantRow.content)
 		}
 	}
+}
+
+func immutableAppendedRows(ops []terminalOp) []string {
+	var candidate []string
+	rows := make([]string, 0)
+	current := ""
+	started := false
+	finishBlock := func() {
+		if !started {
+			return
+		}
+		rows = append(rows, strings.TrimRight(current, " "))
+		for _, row := range rows {
+			if row != "" {
+				candidate = append([]string(nil), rows...)
+				break
+			}
+		}
+		rows = rows[:0]
+		current = ""
+		started = false
+	}
+	for _, op := range ops {
+		switch op.kind {
+		case terminalOpCRLF:
+			if started {
+				rows = append(rows, strings.TrimRight(current, " "))
+				current = ""
+			} else {
+				started = true
+			}
+		case terminalOpCSI:
+			if started && op.value == resetScrollRegionAndOriginMode()[:3] {
+				finishBlock()
+			}
+		case terminalOpText:
+			if started {
+				current += ansi.Strip(op.value)
+			}
+		}
+	}
+	finishBlock()
+	return candidate
 }

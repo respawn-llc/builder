@@ -42,6 +42,7 @@ func isEmptyToolCallMeta(meta ToolCallMeta) bool {
 		!meta.RawOutputRequested &&
 		!meta.OutputTruncated &&
 		!meta.MovedToBackground &&
+		meta.ShellExitCode == nil &&
 		meta.RenderHint == nil &&
 		meta.PatchRender == nil
 }
