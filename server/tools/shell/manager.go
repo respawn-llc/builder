@@ -323,11 +323,15 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 	}
 	snapshot := entry.snapshot()
 	consumedCompletion := false
+	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil && !entry.completionNoticeConsumed()
+	if harvestingCompletion {
+		entry.markCompletionNoticeConsumed()
+	}
 	var warning postprocess.Warning
 	var warningErr error
 	sourceTruncated := false
 	var processed postprocess.Result
-	if snapshot.Backgrounded && snapshot.ExitCode != nil && !entry.completionNoticeConsumed() {
+	if harvestingCompletion {
 		fullOutput, readErr := readOutputFileLimited(snapshot.LogPath, maxFullLogPostprocessBytes)
 		if readErr == nil {
 			processed, err = m.applyPostprocessing(ctx, entry, fullOutput, snapshot.ExitCode, true, maxOutputChars)
@@ -361,9 +365,6 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		}
 	}
 	display, displayTruncated, _ := truncateWithTemplate(processed.Output, maxOutputChars, backgroundTruncationBannerTemplate)
-	if snapshot.Backgrounded && snapshot.ExitCode != nil && consumedCompletion {
-		entry.markCompletionNoticeConsumed()
-	}
 	return ExecResult{
 		SessionID:          id,
 		WallTime:           time.Since(start),
