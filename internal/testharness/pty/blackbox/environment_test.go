@@ -194,7 +194,7 @@ func TestServerFailureSignalWakesAQuietActionLoopOnLogOverflow(t *testing.T) {
 		if !errors.As(runErr, &overflow) {
 			t.Fatalf("runActions error = %T %v, want EvidenceLimitExceeded", runErr, runErr)
 		}
-	case <-time.After(fixedWait):
+	case <-time.After(cleanupRetryWait):
 		t.Fatal("quiet action loop did not wake for server log overflow")
 	}
 }
