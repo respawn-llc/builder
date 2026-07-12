@@ -501,13 +501,12 @@ type WorktreeView struct {
 }
 
 type WorktreeListRequest struct {
-	SessionID         string `json:"session_id"`
-	IncludeDirtyCount bool   `json:"include_dirty_count,omitempty"`
+	SessionID string `json:"session_id"`
 }
 
 type WorktreeListResponse struct {
 	Target    clientui.SessionExecutionTarget `json:"target"`
-	Worktrees []WorktreeView                  `json:"worktrees"`
+	Worktrees []WorktreeListEntry             `json:"worktrees"`
 }
 
 type WorktreeCreateTargetResolutionKind string

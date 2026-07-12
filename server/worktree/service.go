@@ -525,24 +525,19 @@ func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListR
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
-	release, workspaceCtx, err := s.beginMutation(ctx, req.SessionID)
+	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
-	defer release()
-	synced, err := s.syncWorkspace(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot, req.IncludeDirtyCount)
+	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
-	workspaceCtx.target, err = s.metadata.ResolveSessionExecutionTarget(ctx, req.SessionID)
+	worktrees, err := projectWorktreeList(topology, workspaceCtx.target)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
-	views, err := mapSyncedWorktrees(synced, workspaceCtx.target)
-	if err != nil {
-		return serverapi.WorktreeListResponse{}, err
-	}
-	return serverapi.WorktreeListResponse{Target: workspaceCtx.target, Worktrees: views}, nil
+	return serverapi.WorktreeListResponse{Target: workspaceCtx.target, Worktrees: worktrees}, nil
 }
 
 func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {

@@ -5,24 +5,22 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/serverapi"
+	"core/cli/app/internal/worktreeui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func worktreeDeleteControllerTarget() serverapi.WorktreeView {
-	return serverapi.WorktreeView{
-		WorktreeID:    "wt-feature",
-		DisplayName:   "feature",
-		CanonicalRoot: "/wt/feature",
-		BranchName:    "feature",
-	}
+func worktreeDeleteControllerTarget(t *testing.T) worktreeui.Item {
+	t.Helper()
+	return mustProjectWorktreeItem(t, testRegisteredWorktreeListEntry(
+		"wt-feature", "feature", "/wt/feature", "feature", false, false, true, true,
+	))
 }
 
 func newWorktreeDeleteControllerTestModel(t *testing.T, client *worktreeCommandTestClient) *uiModel {
 	t.Helper()
 	model := newWorktreeControllerTestModel(t, client, uiWorktreeOverlayPhaseDeleteConfirm)
-	model.worktrees.deleteConfirm = uiWorktreeDeleteDialogState{target: worktreeDeleteControllerTarget()}
+	model.worktrees.deleteConfirm = uiWorktreeDeleteDialogState{target: worktreeDeleteControllerTarget(t)}
 	model.worktrees.deleteConfirm.clampSelection()
 	model.setInputMode(uiInputModeWorktree)
 	return model

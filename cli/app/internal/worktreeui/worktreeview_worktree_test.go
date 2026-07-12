@@ -7,22 +7,27 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestResolveTokenUsesMatcherPrecedence(t *testing.T) {
-	entries := []serverapi.WorktreeView{
-		{WorktreeID: "wt-1", DisplayName: "feature", CanonicalRoot: "/wt/feature-display"},
-		{WorktreeID: "wt-2", DisplayName: "other", BranchName: "feature", CanonicalRoot: "/wt/feature-branch"},
+func TestProjectItemPreservesServerSelectorAndTopologyFacts(t *testing.T) {
+	item := testWorktreeItem(t, "wt-1", "feature", "/wt/feature", "feature", false, true)
+	if item.Entry.Projection.Selector != "feature" || WorktreeID(item) != "wt-1" || BranchName(item) != "feature" || !item.IsCurrent {
+		t.Fatalf("item = %+v", item)
 	}
-	resolved, err := ResolveToken(entries, "feature")
-	if err != nil {
-		t.Fatalf("resolve token: %v", err)
+}
+
+func TestResolveTokenUsesOnlyServerProjectedSelector(t *testing.T) {
+	item := testWorktreeItem(t, "wt-1", "feature", "/wt/feature", "feature", false, false)
+	if _, err := ResolveToken([]Item{item}, "wt-1"); err == nil {
+		t.Fatal("client-local ID lookup succeeded, want server-projected selector only")
 	}
-	if resolved.WorktreeID != "wt-1" {
-		t.Fatalf("resolved worktree id = %q, want wt-1", resolved.WorktreeID)
+	resolved, err := ResolveToken([]Item{item}, "feature")
+	if err != nil || WorktreeID(resolved) != "wt-1" {
+		t.Fatalf("ResolveToken = %+v, %v", resolved, err)
 	}
 }
 
 func TestResolveDeletionTargetRejectsCurrentMainWorkspace(t *testing.T) {
-	_, err := ResolveDeletionTarget([]serverapi.WorktreeView{{WorktreeID: "main", IsMain: true, IsCurrent: true}}, "")
+	item := testWorktreeItem(t, "wt-main", "main", "/repo", "main", true, true)
+	_, err := ResolveDeletionTarget([]Item{item}, "")
 	if err == nil || !errors.Is(err, ErrMainWorkspaceNotDeletable) {
 		t.Fatalf("expected main workspace rejection, got %v", err)
 	}
@@ -41,17 +46,35 @@ func TestSanitizeBranchSuggestion(t *testing.T) {
 	}
 }
 
-func TestDisplayNameFallbacks(t *testing.T) {
-	if got := DisplayName(serverapi.WorktreeView{CanonicalRoot: "/tmp/worktree-name", WorktreeID: "wt-1"}); got != "worktree-name" {
-		t.Fatalf("display name = %q, want worktree-name", got)
+func testWorktreeItem(t *testing.T, id, name, root, branch string, main, current bool) Item {
+	t.Helper()
+	branchValue := branch
+	entry := serverapi.WorktreeListEntry{
+		Topology: serverapi.WorktreeTopologyEntry{
+			Variant: serverapi.WorktreeTopologyVariantRegistered,
+			Registered: &serverapi.WorktreeRegisteredFacts{
+				Git: serverapi.WorktreeGitFacts{
+					CanonicalRoot: root,
+					HeadObject:    "deadbeef",
+					BranchRef:     stringPointer("refs/heads/" + branch),
+					BranchName:    &branchValue,
+					IsMain:        main,
+					PathAvailable: true,
+				},
+				Kent: serverapi.WorktreeKentFacts{
+					WorktreeID:    id,
+					CanonicalRoot: root,
+					DisplayName:   name,
+					Managed:       true,
+					CreatedBranch: !main,
+				},
+			},
+		},
+		Projection: serverapi.WorktreeListProjection{Selector: branch, IsCurrent: current},
 	}
-}
-
-func TestDeleteCanAutoDeleteBranchRequiresManagedCreatedBranch(t *testing.T) {
-	if !DeleteCanAutoDeleteBranch(serverapi.WorktreeView{Managed: true, CreatedBranch: true, BranchName: "feature"}) {
-		t.Fatal("expected auto delete branch")
+	item, err := ProjectItem(entry)
+	if err != nil {
+		t.Fatalf("ProjectItem: %v", err)
 	}
-	if DeleteCanAutoDeleteBranch(serverapi.WorktreeView{Managed: true, CreatedBranch: false, BranchName: "feature"}) {
-		t.Fatal("did not expect auto delete branch")
-	}
+	return item
 }

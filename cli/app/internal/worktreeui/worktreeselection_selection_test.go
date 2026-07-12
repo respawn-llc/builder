@@ -1,55 +1,26 @@
 package worktreeui
 
-import (
-	"testing"
+import "testing"
 
-	"core/shared/serverapi"
-)
-
-func TestClampUsesCreateRowPlusEntries(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}}
+func TestSelectionUsesCreateRowAndServerSelectors(t *testing.T) {
+	entries := []Item{
+		testWorktreeItem(t, "wt-1", "one", "/wt/one", "one", false, false),
+		testWorktreeItem(t, "wt-2", "two", "/wt/two", "two", false, false),
+	}
 	if got := Clamp(-1, entries); got != 0 {
-		t.Fatalf("negative selection = %d, want 0", got)
+		t.Fatalf("negative selection = %d", got)
 	}
-	if got := Clamp(9, entries); got != 1 {
-		t.Fatalf("overflow selection = %d, want last row", got)
+	if got := Clamp(9, entries); got != 2 {
+		t.Fatalf("overflow selection = %d", got)
 	}
-}
-
-func TestSelectedWorktreeMapsSelectionAfterCreateRow(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}, {WorktreeID: "wt-2"}}
 	item, ok := SelectedWorktree(entries, 2)
-	if !ok || item.WorktreeID != "wt-2" {
-		t.Fatalf("selected = %+v ok=%v, want wt-2", item, ok)
+	if !ok || WorktreeID(item) != "wt-2" {
+		t.Fatalf("selected = %+v ok=%v", item, ok)
 	}
-	if _, ok := SelectedWorktree(entries, 0); ok {
-		t.Fatal("create row should not select worktree")
+	if got := SelectedID(entries, 0); got != CreateRowID {
+		t.Fatalf("create selection id = %q", got)
 	}
-}
-
-func TestSelectedIDReturnsCreateRowForCreateSelection(t *testing.T) {
-	if got := SelectedID([]serverapi.WorktreeView{{WorktreeID: "wt-1"}}, 0); got != CreateRowID {
-		t.Fatalf("selected id = %q, want create row id", got)
-	}
-}
-
-func TestRestoreFindsRecordedWorktreeID(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}, {WorktreeID: "wt-2"}}
-	if got := Restore(entries, 0, " wt-2 "); got != 2 {
-		t.Fatalf("selection = %d, want 2", got)
-	}
-}
-
-func TestRestoreFallsBackToClampedCurrentSelection(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}}
-	if got := Restore(entries, 7, "missing"); got != 1 {
-		t.Fatalf("selection = %d, want clamped current", got)
-	}
-}
-
-func TestRestoreUsesCreateRowWhenRecordedWorktreeDisappearsAndCurrentSelectionIsCreateRow(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}}
-	if got := Restore(entries, 0, "missing"); got != 0 {
-		t.Fatalf("selection = %d, want create row", got)
+	if got := Restore(entries, 0, "two"); got != 2 {
+		t.Fatalf("restored selection = %d", got)
 	}
 }

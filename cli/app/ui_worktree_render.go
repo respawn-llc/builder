@@ -110,7 +110,7 @@ func renderWorktreeCreateRow(selected bool, width int, theme string, style uiSty
 	}
 }
 
-func renderWorktreeEntry(item serverapi.WorktreeView, selected bool, width int, theme string, style uiStyles) []string {
+func renderWorktreeEntry(item worktreeui.Item, selected bool, width int, theme string, style uiStyles) []string {
 	p := uiPalette(theme)
 	line := lipgloss.NewStyle().Foreground(p.foreground)
 	if selected {
@@ -137,7 +137,7 @@ func renderWorktreeEntry(item serverapi.WorktreeView, selected bool, width int, 
 	}
 }
 
-func renderWorktreeBadges(item serverapi.WorktreeView, selected bool, theme string) []string {
+func renderWorktreeBadges(item worktreeui.Item, selected bool, theme string) []string {
 	p := uiPalette(theme)
 	badges := make([]string, 0, 4)
 	base := lipgloss.NewStyle()
@@ -155,7 +155,7 @@ func renderWorktreeBadges(item serverapi.WorktreeView, selected bool, theme stri
 	}
 	if item.Detached {
 		badges = append(badges, badge("detached", sharedtheme.DefaultPalette().Status.Warning.Adaptive()))
-	} else if branch := strings.TrimSpace(item.BranchName); branch != "" {
+	} else if branch := worktreeui.BranchName(item); branch != "" {
 		badges = append(badges, badge("branch:"+branch, p.foreground))
 	}
 	if !item.Managed && !item.IsMain {

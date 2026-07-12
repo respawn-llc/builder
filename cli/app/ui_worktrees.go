@@ -81,7 +81,7 @@ const (
 )
 
 type uiWorktreeDeleteDialogState struct {
-	target             serverapi.WorktreeView
+	target             worktreeui.Item
 	selectedAction     uiWorktreeDeleteAction
 	preferDeleteBranch bool
 	errorText          string
@@ -94,7 +94,7 @@ type uiWorktreeOverlayState struct {
 	phase         uiWorktreeOverlayPhase
 	selection     int
 	target        clientui.SessionExecutionTarget
-	entries       []serverapi.WorktreeView
+	entries       []worktreeui.Item
 	errorText     string
 	refreshToken  uint64
 	mutationToken uint64
@@ -206,12 +206,11 @@ func (m *uiModel) requestWorktreeListCmd() tea.Cmd {
 	}
 	m.worktrees.refreshToken++
 	token := m.worktrees.refreshToken
-	includeDirtyCount := m.worktrees.intent.OpenDelete || m.worktrees.phase == uiWorktreeOverlayPhaseDeleteConfirm
 	m.worktrees.loading = true
 	m.worktrees.errorText = ""
 	service := m.worktreeMutationService()
 	return func() tea.Msg {
-		resp, err := service.List(includeDirtyCount)
+		resp, err := service.List()
 		return worktreeListDoneMsg{token: token, resp: resp, err: err}
 	}
 }
@@ -226,7 +225,7 @@ func (m *uiModel) openCreateWorktreeDialog() tea.Cmd {
 	return m.scheduleWorktreeCreateTargetResolution()
 }
 
-func (m *uiModel) openDeleteWorktreeDialog(target serverapi.WorktreeView, preferDeleteBranch bool) {
+func (m *uiModel) openDeleteWorktreeDialog(target worktreeui.Item, preferDeleteBranch bool) {
 	if m == nil {
 		return
 	}
@@ -255,17 +254,23 @@ func (m *uiModel) applyWorktreeListResponse(resp serverapi.WorktreeListResponse)
 	}
 	m.recordWorktreeSelection()
 	m.worktrees.target = resp.Target
-	m.worktrees.entries = append([]serverapi.WorktreeView(nil), resp.Worktrees...)
+	entries, err := worktreeui.ProjectItems(resp.Worktrees)
+	if err != nil {
+		m.worktrees.entries = nil
+		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		return
+	}
+	m.worktrees.entries = entries
 	m.restoreWorktreeSelection()
 	m.clampWorktreeSelection()
 	if m.worktrees.phase == uiWorktreeOverlayPhaseDeleteConfirm {
-		targetID := strings.TrimSpace(m.worktrees.deleteConfirm.target.WorktreeID)
-		if targetID == "" {
+		targetSelector := m.worktrees.deleteConfirm.target.Entry.Projection.Selector
+		if targetSelector == "" {
 			m.closeWorktreeDialog()
 			return
 		}
 		for _, item := range m.worktrees.entries {
-			if strings.TrimSpace(item.WorktreeID) == targetID {
+			if item.Entry.Projection.Selector == targetSelector {
 				m.worktrees.deleteConfirm.target = item
 				m.worktrees.deleteConfirm.clampSelection()
 				return
@@ -294,7 +299,7 @@ func (m *uiModel) applyWorktreeIntent() tea.Cmd {
 	}
 	m.recordWorktreeSelection()
 	for idx, item := range m.worktrees.entries {
-		if strings.TrimSpace(item.WorktreeID) == strings.TrimSpace(target.WorktreeID) {
+		if item.Entry.Projection.Selector == target.Entry.Projection.Selector {
 			m.worktrees.selection = idx + 1
 			break
 		}
@@ -386,11 +391,11 @@ func worktreeSetupEventCmd(events <-chan worktreeSetupEventMsg) tea.Cmd {
 	}
 }
 
-func (m *uiModel) worktreeSwitchCmd(target serverapi.WorktreeView) tea.Cmd {
+func (m *uiModel) worktreeSwitchCmd(target worktreeui.Item) tea.Cmd {
 	if m == nil {
 		return nil
 	}
-	worktreeID := strings.TrimSpace(target.WorktreeID)
+	worktreeID := worktreeui.WorktreeID(target)
 	if m.worktrees.switchPending {
 		m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{WorktreeID: worktreeID}
 		return nil
@@ -412,7 +417,7 @@ func (m *uiModel) takeQueuedWorktreeSwitchCmd() tea.Cmd {
 	return m.worktreeSwitchCommandForTarget(queued.TargetToken, queued.WorktreeID)
 }
 
-func (m *uiModel) worktreeDeleteCmd(target serverapi.WorktreeView, deleteBranch bool) tea.Cmd {
+func (m *uiModel) worktreeDeleteCmd(target worktreeui.Item, deleteBranch bool) tea.Cmd {
 	if m == nil {
 		return nil
 	}
@@ -422,7 +427,7 @@ func (m *uiModel) worktreeDeleteCmd(target serverapi.WorktreeView, deleteBranch 
 	m.worktrees.deleteConfirm.submitting = true
 	service := m.worktreeMutationService()
 	return func() tea.Msg {
-		resp, err := service.Delete(target.WorktreeID, deleteBranch)
+		resp, err := service.Delete(worktreeui.WorktreeID(target), deleteBranch)
 		return worktreeDeleteDoneMsg{token: token, resp: resp, err: err}
 	}
 }

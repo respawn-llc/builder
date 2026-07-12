@@ -56,7 +56,7 @@ func TestDeleteWorktreeRebindsCurrentSessionToMainBeforeRemoval(t *testing.T) {
 	}
 	worktrees := mustListWorktrees(t, env).Worktrees
 	for _, worktree := range worktrees {
-		if worktree.WorktreeID == created.WorktreeID {
+		if worktreeIDFromListEntry(worktree) == created.WorktreeID {
 			t.Fatalf("expected deleted worktree to disappear from list, got %+v", worktree)
 		}
 	}
@@ -532,24 +532,79 @@ func mustListWorktrees(t *testing.T, env *serviceTestEnv) serverapi.WorktreeList
 	return resp
 }
 
-func findWorktreeByID(t *testing.T, worktrees []serverapi.WorktreeView, worktreeID string) serverapi.WorktreeView {
+func findWorktreeByID(t *testing.T, worktrees []serverapi.WorktreeListEntry, worktreeID string) serverapi.WorktreeView {
 	t.Helper()
-	for _, worktree := range worktrees {
-		if worktree.WorktreeID == worktreeID {
-			return worktree
+	for _, entry := range worktrees {
+		if worktreeIDFromListEntry(entry) == worktreeID {
+			return worktreeViewFromListEntryForTest(entry)
 		}
 	}
 	t.Fatalf("worktree %q not found in %+v", worktreeID, worktrees)
 	return serverapi.WorktreeView{}
 }
 
-func findMainWorktreeView(t *testing.T, worktrees []serverapi.WorktreeView) serverapi.WorktreeView {
+func findMainWorktreeView(t *testing.T, worktrees []serverapi.WorktreeListEntry) serverapi.WorktreeView {
 	t.Helper()
-	for _, worktree := range worktrees {
+	for _, entry := range worktrees {
+		worktree := worktreeViewFromListEntryForTest(entry)
 		if worktree.IsMain {
 			return worktree
 		}
 	}
 	t.Fatalf("main worktree not found in %+v", worktrees)
 	return serverapi.WorktreeView{}
+}
+
+func worktreeIDFromListEntry(entry serverapi.WorktreeListEntry) string {
+	switch entry.Topology.Variant {
+	case serverapi.WorktreeTopologyVariantRegistered:
+		return entry.Topology.Registered.Kent.WorktreeID
+	case serverapi.WorktreeTopologyVariantMissing:
+		return entry.Topology.Missing.Kent.WorktreeID
+	default:
+		return ""
+	}
+}
+
+func worktreeViewFromListEntryForTest(entry serverapi.WorktreeListEntry) serverapi.WorktreeView {
+	view := serverapi.WorktreeView{IsCurrent: entry.Projection.IsCurrent}
+	switch entry.Topology.Variant {
+	case serverapi.WorktreeTopologyVariantRegistered:
+		git := entry.Topology.Registered.Git
+		kent := entry.Topology.Registered.Kent
+		view.WorktreeID = kent.WorktreeID
+		view.DisplayName = kent.DisplayName
+		view.CanonicalRoot = git.CanonicalRoot
+		view.BranchRef = pointerValue(git.BranchRef)
+		view.BranchName = pointerValue(git.BranchName)
+		view.Detached = git.Detached
+		view.IsMain = git.IsMain
+		view.Managed = kent.Managed
+		view.CreatedBranch = kent.CreatedBranch
+		view.OriginSessionID = pointerValue(kent.OriginSessionID)
+	case serverapi.WorktreeTopologyVariantExternal:
+		git := entry.Topology.External.Git
+		view.CanonicalRoot = git.CanonicalRoot
+		view.DisplayName = filepath.Base(git.CanonicalRoot)
+		view.BranchRef = pointerValue(git.BranchRef)
+		view.BranchName = pointerValue(git.BranchName)
+		view.Detached = git.Detached
+		view.IsMain = git.IsMain
+	case serverapi.WorktreeTopologyVariantMissing:
+		kent := entry.Topology.Missing.Kent
+		view.WorktreeID = kent.WorktreeID
+		view.DisplayName = kent.DisplayName
+		view.CanonicalRoot = kent.CanonicalRoot
+		view.Managed = kent.Managed
+		view.CreatedBranch = kent.CreatedBranch
+		view.OriginSessionID = pointerValue(kent.OriginSessionID)
+	}
+	return view
+}
+
+func pointerValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

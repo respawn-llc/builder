@@ -8,7 +8,6 @@ import (
 
 	"core/cli/app/internal/status"
 	"core/shared/clientui"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -172,9 +171,9 @@ func TestTUIStrictIOStatusOpenDefersCollectorBaseToCommand(t *testing.T) {
 
 func TestTUIStrictIOWorktreeSwitchRunsAsCommand(t *testing.T) {
 	resp := testMainWorktreeListResponse()
-	resp.Worktrees = append(resp.Worktrees, serverapi.WorktreeView{
-		WorktreeID: "wt-feature", DisplayName: "feature", CanonicalRoot: "/repo-feature", BranchName: "feature",
-	})
+	resp.Worktrees = append(resp.Worktrees, testRegisteredWorktreeListEntry(
+		"wt-feature", "feature", "/repo-feature", "feature", false, false, true, true,
+	))
 	client := &worktreeCommandTestClient{listResp: resp}
 	m := newWorktreeTestModel(t, client, WithUIDebug(true))
 

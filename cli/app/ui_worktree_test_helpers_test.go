@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/cli/app/internal/worktreeui"
 	sharedclient "core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -162,14 +163,9 @@ func testMainWorktreeListResponse() serverapi.WorktreeListResponse {
 			WorkspaceRoot:    "/repo",
 			EffectiveWorkdir: "/repo",
 		},
-		Worktrees: []serverapi.WorktreeView{{
-			WorktreeID:    "wt-main",
-			DisplayName:   "main",
-			CanonicalRoot: "/repo",
-			BranchName:    "main",
-			IsMain:        true,
-			IsCurrent:     true,
-		}},
+		Worktrees: []serverapi.WorktreeListEntry{
+			testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, true, true, false),
+		},
 	}
 }
 
@@ -180,29 +176,17 @@ func worktreeListResponseForRoots(mainRoot string, featureRoot string) serverapi
 			WorkspaceRoot:    mainRoot,
 			EffectiveWorkdir: mainRoot,
 		},
-		Worktrees: []serverapi.WorktreeView{{
-			WorktreeID:    "wt-main",
-			DisplayName:   "main",
-			CanonicalRoot: mainRoot,
-			BranchName:    "main",
-			IsMain:        true,
-			IsCurrent:     featureRoot == "",
-		}},
+		Worktrees: []serverapi.WorktreeListEntry{
+			testRegisteredWorktreeListEntry("wt-main", "main", mainRoot, "main", true, featureRoot == "", true, false),
+		},
 	}
 	if strings.TrimSpace(featureRoot) != "" {
 		resp.Target.Worktree = &clientui.SessionExecutionWorktreeTarget{ID: "wt-feature", Root: featureRoot}
 		resp.Target.EffectiveWorkdir = featureRoot
-		resp.Worktrees[0].IsCurrent = false
-		resp.Worktrees = append(resp.Worktrees, serverapi.WorktreeView{
-			WorktreeID:      "wt-feature",
-			DisplayName:     "feature",
-			CanonicalRoot:   featureRoot,
-			BranchName:      "feature",
-			IsCurrent:       true,
-			Managed:         true,
-			CreatedBranch:   true,
-			OriginSessionID: "session-1",
-		})
+		resp.Worktrees[0].Projection.IsCurrent = false
+		resp.Worktrees = append(resp.Worktrees, testRegisteredWorktreeListEntry(
+			"wt-feature", "feature", featureRoot, "feature", false, true, true, true,
+		))
 	}
 	return resp
 }
@@ -215,24 +199,51 @@ func testLinkedWorktreeListResponse() serverapi.WorktreeListResponse {
 			Worktree:         &clientui.SessionExecutionWorktreeTarget{ID: "wt-feature", Root: "/wt/feature-a"},
 			EffectiveWorkdir: "/wt/feature-a/pkg",
 		},
-		Worktrees: []serverapi.WorktreeView{
-			{
-				WorktreeID:    "wt-main",
-				DisplayName:   "main",
-				CanonicalRoot: "/repo",
-				BranchName:    "main",
-				IsMain:        true,
-			},
-			{
-				WorktreeID:      "wt-feature",
-				DisplayName:     "feature-a",
-				CanonicalRoot:   "/wt/feature-a",
-				BranchName:      "feature/a",
-				IsCurrent:       true,
-				Managed:         true,
-				CreatedBranch:   true,
-				OriginSessionID: "session-1",
-			},
+		Worktrees: []serverapi.WorktreeListEntry{
+			testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, false, true, false),
+			testRegisteredWorktreeListEntry("wt-feature", "feature-a", "/wt/feature-a", "feature/a", false, true, true, true),
 		},
 	}
+}
+
+func testRegisteredWorktreeListEntry(id, name, root, branch string, main, current, managed, createdBranch bool) serverapi.WorktreeListEntry {
+	branchRef := "refs/heads/" + branch
+	branchName := branch
+	originSessionID := "session-1"
+	kent := serverapi.WorktreeKentFacts{
+		WorktreeID:    id,
+		CanonicalRoot: root,
+		DisplayName:   name,
+		Managed:       managed,
+		CreatedBranch: createdBranch,
+	}
+	if createdBranch {
+		kent.OriginSessionID = &originSessionID
+	}
+	return serverapi.WorktreeListEntry{
+		Topology: serverapi.WorktreeTopologyEntry{
+			Variant: serverapi.WorktreeTopologyVariantRegistered,
+			Registered: &serverapi.WorktreeRegisteredFacts{
+				Git: serverapi.WorktreeGitFacts{
+					CanonicalRoot: root,
+					HeadObject:    "deadbeef",
+					BranchRef:     &branchRef,
+					BranchName:    &branchName,
+					IsMain:        main,
+					PathAvailable: true,
+				},
+				Kent: kent,
+			},
+		},
+		Projection: serverapi.WorktreeListProjection{Selector: branch, IsCurrent: current},
+	}
+}
+
+func mustProjectWorktreeItem(t *testing.T, entry serverapi.WorktreeListEntry) worktreeui.Item {
+	t.Helper()
+	item, err := worktreeui.ProjectItem(entry)
+	if err != nil {
+		t.Fatalf("ProjectItem: %v", err)
+	}
+	return item
 }

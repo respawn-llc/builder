@@ -34,15 +34,14 @@ type Service struct {
 	NewClientRequestID func() string
 }
 
-func (s Service) List(includeDirtyCount bool) (serverapi.WorktreeListResponse, error) {
+func (s Service) List() (serverapi.WorktreeListResponse, error) {
 	ctx, cancel, err := s.resolveMutationContext(false)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
 	defer cancel()
 	return s.Client.ListWorktrees(ctx, serverapi.WorktreeListRequest{
-		SessionID:         s.SessionID,
-		IncludeDirtyCount: includeDirtyCount,
+		SessionID: s.SessionID,
 	})
 }
 

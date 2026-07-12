@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"core/shared/serverapi"
+	"core/cli/app/internal/worktreeui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -11,9 +11,9 @@ import (
 func newWorktreeListControllerTestModel(t *testing.T, client *worktreeCommandTestClient) *uiModel {
 	t.Helper()
 	model := newWorktreeControllerTestModel(t, client, uiWorktreeOverlayPhaseList)
-	model.worktrees.entries = []serverapi.WorktreeView{
-		{WorktreeID: "wt-feature", DisplayName: "feature", CanonicalRoot: "/wt/feature", BranchName: "feature"},
-		{WorktreeID: "wt-current", DisplayName: "current", CanonicalRoot: "/wt/current", IsCurrent: true},
+	model.worktrees.entries = []worktreeui.Item{
+		mustProjectWorktreeItem(t, testRegisteredWorktreeListEntry("wt-feature", "feature", "/wt/feature", "feature", false, false, true, true)),
+		mustProjectWorktreeItem(t, testRegisteredWorktreeListEntry("wt-current", "current", "/wt/current", "current", false, true, true, true)),
 	}
 	model.setInputMode(uiInputModeWorktree)
 	return model
@@ -77,7 +77,7 @@ func TestWorktreeListControllerDeleteKeysSetIntent(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected refresh command for delete intent")
 	}
-	if !updated.worktrees.intent.OpenDelete || updated.worktrees.intent.ConfirmDeleteTarget != "wt-feature" || !updated.worktrees.intent.PreferDeleteBranch {
-		t.Fatalf("intent = %+v, want delete+branch for wt-feature", updated.worktrees.intent)
+	if !updated.worktrees.intent.OpenDelete || updated.worktrees.intent.ConfirmDeleteTarget != "feature" || !updated.worktrees.intent.PreferDeleteBranch {
+		t.Fatalf("intent = %+v, want delete+branch for selector feature", updated.worktrees.intent)
 	}
 }

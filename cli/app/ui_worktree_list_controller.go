@@ -4,8 +4,6 @@ import (
 	"strings"
 
 	"core/cli/app/internal/worktreeui"
-	"core/shared/serverapi"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -49,9 +47,9 @@ func (m *uiModel) selectLastWorktreeRow() {
 	m.worktrees.selection = max(0, m.worktreeRowCount()-1)
 }
 
-func (m *uiModel) selectedWorktreeRow() (serverapi.WorktreeView, bool) {
+func (m *uiModel) selectedWorktreeRow() (worktreeui.Item, bool) {
 	if m == nil {
-		return serverapi.WorktreeView{}, false
+		return worktreeui.Item{}, false
 	}
 	return worktreeui.SelectedWorktree(m.worktrees.entries, m.worktrees.selection)
 }
@@ -145,7 +143,7 @@ func (c uiInputController) handleWorktreeOverlayKey(msg tea.KeyMsg) (tea.Model, 
 		if target.IsMain {
 			return m, c.model.sendTransientStatusWithNoticeID("Main workspace is not deletable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		m.worktrees.intent = uiWorktreeOpenIntent{OpenDelete: true, ConfirmDeleteTarget: target.WorktreeID}
+		m.worktrees.intent = uiWorktreeOpenIntent{OpenDelete: true, ConfirmDeleteTarget: target.Entry.Projection.Selector}
 		return m, tea.Batch(m.requestWorktreeListCmd(), m.reconcileSpinnerTicking(false))
 	case "x":
 		target, ok := m.selectedWorktreeRow()
@@ -155,7 +153,7 @@ func (c uiInputController) handleWorktreeOverlayKey(msg tea.KeyMsg) (tea.Model, 
 		if target.IsMain {
 			return m, c.model.sendTransientStatusWithNoticeID("Main workspace is not deletable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		m.worktrees.intent = uiWorktreeOpenIntent{OpenDelete: true, ConfirmDeleteTarget: target.WorktreeID, PreferDeleteBranch: true}
+		m.worktrees.intent = uiWorktreeOpenIntent{OpenDelete: true, ConfirmDeleteTarget: target.Entry.Projection.Selector, PreferDeleteBranch: true}
 		return m, tea.Batch(m.requestWorktreeListCmd(), m.reconcileSpinnerTicking(false))
 	case "enter":
 		if m.worktrees.selection == 0 {

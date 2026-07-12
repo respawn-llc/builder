@@ -1,18 +1,12 @@
 package worktreeui
 
-import (
-	"strings"
-
-	"core/shared/serverapi"
-)
-
 const CreateRowID = "__create__"
 
-func RowCount(entries []serverapi.WorktreeView) int {
+func RowCount(entries []Item) int {
 	return len(entries) + 1
 }
 
-func Clamp(selection int, entries []serverapi.WorktreeView) int {
+func Clamp(selection int, entries []Item) int {
 	rowCount := RowCount(entries)
 	if rowCount <= 0 {
 		return 0
@@ -26,31 +20,31 @@ func Clamp(selection int, entries []serverapi.WorktreeView) int {
 	return selection
 }
 
-func SelectedWorktree(entries []serverapi.WorktreeView, selection int) (serverapi.WorktreeView, bool) {
+func SelectedWorktree(entries []Item, selection int) (Item, bool) {
 	if selection <= 0 {
-		return serverapi.WorktreeView{}, false
+		return Item{}, false
 	}
 	index := selection - 1
 	if index < 0 || index >= len(entries) {
-		return serverapi.WorktreeView{}, false
+		return Item{}, false
 	}
 	return entries[index], true
 }
 
-func SelectedID(entries []serverapi.WorktreeView, selection int) string {
+func SelectedID(entries []Item, selection int) string {
 	if item, ok := SelectedWorktree(entries, selection); ok {
-		return strings.TrimSpace(item.WorktreeID)
+		return item.Entry.Projection.Selector
 	}
 	return CreateRowID
 }
 
-func Restore(entries []serverapi.WorktreeView, currentSelection int, selectedID string) int {
-	trimmed := strings.TrimSpace(selectedID)
+func Restore(entries []Item, currentSelection int, selectedID string) int {
+	trimmed := selectedID
 	if trimmed == "" || trimmed == CreateRowID {
 		return 0
 	}
 	for idx, item := range entries {
-		if strings.TrimSpace(item.WorktreeID) == trimmed {
+		if item.Entry.Projection.Selector == trimmed {
 			return idx + 1
 		}
 	}

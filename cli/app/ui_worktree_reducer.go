@@ -1,6 +1,8 @@
 package app
 
 import (
+	"strings"
+
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
 	"core/shared/serverapi"
@@ -60,7 +62,7 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			overlayCmd = m.restoreTranscriptSurface()
 			m.closeWorktreeOverlay()
 		}
-		status := "Created worktree " + worktreeui.DisplayName(msg.resp.Worktree)
+		status := "Created worktree " + strings.TrimSpace(msg.resp.Worktree.DisplayName)
 		feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, m.reconcileSpinnerTicking(false)))
@@ -104,7 +106,7 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			overlayCmd = m.restoreTranscriptSurface()
 			m.closeWorktreeOverlay()
 		}
-		status := "Switched to " + worktreeui.DisplayName(msg.resp.Worktree)
+		status := "Switched to " + strings.TrimSpace(msg.resp.Worktree.DisplayName)
 		feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 		followUp = m.takeQueuedWorktreeSwitchCmd()
 		m.layout().syncViewport()

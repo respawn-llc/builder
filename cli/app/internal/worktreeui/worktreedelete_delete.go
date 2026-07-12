@@ -1,10 +1,6 @@
 package worktreeui
 
-import (
-	"core/shared/serverapi"
-	"fmt"
-	"strings"
-)
+import "strings"
 
 type DeleteAction uint8
 
@@ -27,15 +23,15 @@ type PreviewLine struct {
 	Text string
 }
 
-func DeleteActions(target serverapi.WorktreeView) []DeleteAction {
+func DeleteActions(target Item) []DeleteAction {
 	actions := []DeleteAction{DeleteActionCancel, DeleteActionDelete}
-	if DeleteCanAutoDeleteBranch(target) || strings.TrimSpace(target.BranchName) != "" {
+	if DeleteCanAutoDeleteBranch(target) || target.BranchName != nil {
 		actions = append(actions, DeleteActionDeleteBranch)
 	}
 	return actions
 }
 
-func ClampDeleteAction(target serverapi.WorktreeView, selected DeleteAction, preferDeleteBranch bool) DeleteAction {
+func ClampDeleteAction(target Item, selected DeleteAction, preferDeleteBranch bool) DeleteAction {
 	actions := DeleteActions(target)
 	if selected != DeleteActionCancel {
 		for _, action := range actions {
@@ -57,7 +53,7 @@ func ClampDeleteAction(target serverapi.WorktreeView, selected DeleteAction, pre
 	return DeleteActionDelete
 }
 
-func MoveDeleteAction(target serverapi.WorktreeView, selected DeleteAction, delta int) DeleteAction {
+func MoveDeleteAction(target Item, selected DeleteAction, delta int) DeleteAction {
 	actions := DeleteActions(target)
 	if len(actions) == 0 {
 		return selected
@@ -79,29 +75,17 @@ func MoveDeleteAction(target serverapi.WorktreeView, selected DeleteAction, delt
 	return actions[index]
 }
 
-func PreviewLines(target serverapi.WorktreeView, selected DeleteAction) []PreviewLine {
+func PreviewLines(target Item, selected DeleteAction) []PreviewLine {
 	items := make([]PreviewLine, 0, 5)
-	if strings.TrimSpace(target.BranchName) != "" && selected == DeleteActionDeleteBranch {
-		items = append(items, PreviewLine{Kind: PreviewLineKindBullet, Text: "• Local branch " + strings.TrimSpace(target.BranchName)})
+	if target.BranchName != nil && selected == DeleteActionDeleteBranch {
+		items = append(items, PreviewLine{Kind: PreviewLineKindBullet, Text: "• Local branch " + BranchName(target)})
 	}
 	if root := strings.TrimSpace(target.CanonicalRoot); root != "" {
 		items = append(items, PreviewLine{Kind: PreviewLineKindBullet, Text: "• Workspace folder at " + root})
 	}
 	items = append(items, PreviewLine{Kind: PreviewLineKindBullet, Text: "• Git worktree " + DisplayName(target)})
-	if target.DirtyFileCount < 0 {
-		items = append(items, PreviewLine{Kind: PreviewLineKindWarning, Text: "• Dirty file count unavailable; delete will force removal"})
-	} else if target.DirtyFileCount > 0 {
-		items = append(items, PreviewLine{Kind: PreviewLineKindWarning, Text: "• Drop " + pluralizeCount(target.DirtyFileCount, "modified/untracked file")})
-	}
 	if len(items) == 0 {
 		return nil
 	}
 	return append([]PreviewLine{{Kind: PreviewLineKindHeader, Text: "Will delete:"}}, items...)
-}
-
-func pluralizeCount(count int, singular string) string {
-	if count == 1 {
-		return fmt.Sprintf("%d %s", count, singular)
-	}
-	return fmt.Sprintf("%d %ss", count, singular)
 }

@@ -635,7 +635,7 @@ func TestCreateWorktreeAllowsExistingRefWithoutCreatingBranch(t *testing.T) {
 	}
 }
 
-func TestSyncWorkspaceClearsStaleManagedProvenanceWhenRootIsReused(t *testing.T) {
+func TestListWorktreesDoesNotResetManagedProvenanceWhenRootIsReused(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/provenance-stale")
 
@@ -643,12 +643,13 @@ func TestSyncWorkspaceClearsStaleManagedProvenanceWhenRootIsReused(t *testing.T)
 	runGit(t, env.workspaceRoot, "worktree", "add", "--detach", created.CanonicalRoot, "HEAD")
 
 	worktrees := mustListWorktrees(t, env).Worktrees
-	for _, worktree := range worktrees {
+	for _, entry := range worktrees {
+		worktree := worktreeViewFromListEntryForTest(entry)
 		if strings.TrimSpace(worktree.CanonicalRoot) != strings.TrimSpace(created.CanonicalRoot) {
 			continue
 		}
-		if worktree.Managed || worktree.CreatedBranch || strings.TrimSpace(worktree.OriginSessionID) != "" {
-			t.Fatalf("expected stale managed provenance cleared for reused root, got %+v", worktree)
+		if !worktree.Managed || !worktree.CreatedBranch || strings.TrimSpace(worktree.OriginSessionID) == "" {
+			t.Fatalf("list mutated managed provenance for reused root: %+v", worktree)
 		}
 		return
 	}
@@ -828,15 +829,12 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 	}
 }
 
-func TestListWorktreesRetargetsMissingCurrentWorktreeBeforePruning(t *testing.T) {
+func TestListWorktreesReportsMissingCurrentWorktreeWithoutRetargeting(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/missing-current")
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	if err := os.MkdirAll(filepath.Join(created.CanonicalRoot, "pkg"), 0o755); err != nil {
-		t.Fatalf("MkdirAll pkg: %v", err)
-	}
-	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, "pkg")
-	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, "pkg")
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
 	env.runtime.rebindCalls = nil
 	env.runtime.reminderCalls = nil
 	runGit(t, env.workspaceRoot, "worktree", "remove", "--force", created.CanonicalRoot)
@@ -845,62 +843,37 @@ func TestListWorktreesRetargetsMissingCurrentWorktreeBeforePruning(t *testing.T)
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}
-	if sessionTargetWorktreeID(resp.Target) != "" {
-		t.Fatalf("response target worktree id = %q, want main workspace", sessionTargetWorktreeID(resp.Target))
+	if sessionTargetWorktreeID(resp.Target) != created.WorktreeID {
+		t.Fatalf("response target worktree id = %q, want %q", sessionTargetWorktreeID(resp.Target), created.WorktreeID)
 	}
-	if resp.Target.CwdRelpath != "." {
-		t.Fatalf("response target cwd_relpath = %q, want .", resp.Target.CwdRelpath)
-	}
-	if resp.Target.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("response effective workdir = %q, want %q", resp.Target.EffectiveWorkdir, env.workspaceRoot)
-	}
-	for _, worktree := range resp.Worktrees {
-		if worktree.WorktreeID == created.WorktreeID {
-			t.Fatalf("expected missing worktree pruned from list, got %+v", worktree)
+	foundMissing := false
+	for _, entry := range resp.Worktrees {
+		if worktreeIDFromListEntry(entry) == created.WorktreeID {
+			foundMissing = entry.Topology.Variant == serverapi.WorktreeTopologyVariantMissing && entry.Projection.IsCurrent
 		}
+	}
+	if !foundMissing {
+		t.Fatalf("missing current worktree not projected: %+v", resp.Worktrees)
 	}
 	resolved, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if sessionTargetWorktreeID(resolved) != "" {
-		t.Fatalf("stored target worktree id = %q, want main workspace", sessionTargetWorktreeID(resolved))
-	}
-	if sessionTargetWorktreeRoot(resolved) != "" {
-		t.Fatalf("stored target worktree root = %q, want empty", sessionTargetWorktreeRoot(resolved))
-	}
-	if resolved.CwdRelpath != "." {
-		t.Fatalf("stored target cwd_relpath = %q, want .", resolved.CwdRelpath)
-	}
-	if resolved.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("stored effective workdir = %q, want %q", resolved.EffectiveWorkdir, env.workspaceRoot)
+	if sessionTargetWorktreeID(resolved) != created.WorktreeID {
+		t.Fatalf("stored target worktree id = %q, want %q", sessionTargetWorktreeID(resolved), created.WorktreeID)
 	}
 	otherTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, otherSession.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget other session: %v", err)
 	}
-	if sessionTargetWorktreeID(otherTarget) != "" || otherTarget.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("expected other session retargeted to main workspace, got %+v", otherTarget)
+	if sessionTargetWorktreeID(otherTarget) != created.WorktreeID {
+		t.Fatalf("other session was retargeted during list: %+v", otherTarget)
 	}
-	if len(env.runtime.rebindCalls) != 1 {
-		t.Fatalf("expected exactly one active-runtime rebind, got %+v", env.runtime.rebindCalls)
+	if len(env.runtime.rebindCalls) != 0 {
+		t.Fatalf("list rebound runtimes: %+v", env.runtime.rebindCalls)
 	}
-	if got := env.runtime.rebindCalls[0]; got.sessionID != env.session.Meta().SessionID || got.root != env.workspaceRoot {
-		t.Fatalf("unexpected active-runtime rebind call: %+v", got)
-	}
-	if len(env.runtime.reminderCalls) != 2 {
-		t.Fatalf("expected reminder for each retargeted session, got %+v", env.runtime.reminderCalls)
-	}
-	for _, reminder := range env.runtime.reminderCalls {
-		if reminder.Mode != session.WorktreeReminderModeExit {
-			t.Fatalf("reminder mode = %q, want exit", reminder.Mode)
-		}
-		if reminder.WorktreePath != created.CanonicalRoot {
-			t.Fatalf("reminder worktree path = %q, want %q", reminder.WorktreePath, created.CanonicalRoot)
-		}
-		if reminder.EffectiveCwd != env.workspaceRoot {
-			t.Fatalf("reminder effective cwd = %q, want %q", reminder.EffectiveCwd, env.workspaceRoot)
-		}
+	if len(env.runtime.reminderCalls) != 0 {
+		t.Fatalf("list emitted reminders: %+v", env.runtime.reminderCalls)
 	}
 }
 
@@ -1171,38 +1144,6 @@ func TestDeleteWorktreeIgnoresDormantSessionsTargetingIt(t *testing.T) {
 	}
 	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected worktree root removed, stat err=%v", err)
-	}
-}
-
-func TestListWorktreesReportsDirtyFileCount(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/dirty-count")
-	if err := os.WriteFile(filepath.Join(created.CanonicalRoot, "untracked.txt"), []byte("dirty"), 0o644); err != nil {
-		t.Fatalf("write untracked file: %v", err)
-	}
-
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, IncludeDirtyCount: true})
-	if err != nil {
-		t.Fatalf("ListWorktrees: %v", err)
-	}
-	listed := findWorktreeByID(t, resp.Worktrees, created.WorktreeID)
-	if listed.DirtyFileCount != 1 {
-		t.Fatalf("dirty file count = %d, want 1", listed.DirtyFileCount)
-	}
-}
-
-func TestListWorktreesDirtyCountProbeFailureIsBestEffort(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/dirty-probe-failure")
-	env.service.git = NewGitInspector(&dirtyCountFailingGitRunner{base: execGitCommandRunner{}, dirtyRoot: created.CanonicalRoot})
-
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, IncludeDirtyCount: true})
-	if err != nil {
-		t.Fatalf("ListWorktrees: %v", err)
-	}
-	listed := findWorktreeByID(t, resp.Worktrees, created.WorktreeID)
-	if listed.DirtyFileCount != -1 {
-		t.Fatalf("dirty file count after failed probe = %d, want -1", listed.DirtyFileCount)
 	}
 }
 

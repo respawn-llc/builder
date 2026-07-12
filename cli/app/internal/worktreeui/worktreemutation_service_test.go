@@ -92,11 +92,11 @@ func (c *testWorktreeClient) nextErr() error {
 	return err
 }
 
-func TestListUsesSessionAndDirtyFlag(t *testing.T) {
+func TestListUsesSession(t *testing.T) {
 	client := &testWorktreeClient{listResp: serverapi.WorktreeListResponse{Target: clientui.SessionExecutionTarget{EffectiveWorkdir: "/repo"}}}
 	service := newTestService(client)
 
-	resp, err := service.List(true)
+	resp, err := service.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -113,8 +113,8 @@ func TestListUsesSessionAndDirtyFlag(t *testing.T) {
 		t.Fatalf("list requests = %+v, want one", client.listRequests)
 	}
 	got := client.listRequests[0]
-	if got.SessionID != "session-1" || !got.IncludeDirtyCount {
-		t.Fatalf("list request = %+v, want session/dirty", got)
+	if got.SessionID != "session-1" {
+		t.Fatalf("list request = %+v, want session", got)
 	}
 }
 

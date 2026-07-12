@@ -3,6 +3,7 @@ package worktree
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,4 +59,81 @@ func TestResolveWorktreeSelectorUsesReadOnlyTopology(t *testing.T) {
 	if response.Worktree.Variant != serverapi.WorktreeTopologyVariantExternal || response.Selector == "" {
 		t.Fatalf("selector preview = %+v", response)
 	}
+}
+
+func TestListWorktreesProjectsSelectorsAndCurrentStateWithoutReconcilingMissingMetadata(t *testing.T) {
+	env := newServiceTestEnv(t)
+	missingRoot := filepath.Join(t.TempDir(), "missing")
+	record := metadata.WorktreeRecord{
+		ID:            "legacy-missing",
+		WorkspaceID:   env.binding.WorkspaceID,
+		CanonicalRoot: missingRoot,
+		DisplayName:   "missing",
+		CreatedAt:     time.Now().UTC(),
+	}
+	if err := env.store.UpsertWorktreeRecord(env.ctx, record); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+
+	response, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{
+		SessionID: env.session.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("ListWorktrees: %v", err)
+	}
+	if len(response.Worktrees) != 2 {
+		t.Fatalf("worktrees = %+v, want live main and missing metadata", response.Worktrees)
+	}
+	if !response.Worktrees[0].Projection.IsCurrent {
+		t.Fatalf("main projection = %+v, want current", response.Worktrees[0].Projection)
+	}
+	if response.Worktrees[1].Topology.Variant != serverapi.WorktreeTopologyVariantMissing {
+		t.Fatalf("missing topology = %+v", response.Worktrees[1].Topology)
+	}
+	for index, entry := range response.Worktrees {
+		match, err := resolveTopologySelector(topologies(response.Worktrees), entry.Projection.Selector)
+		if err != nil {
+			t.Fatalf("selector %q: %v", entry.Projection.Selector, err)
+		}
+		if match.index != index {
+			t.Fatalf("selector %q resolved to %d, want %d", entry.Projection.Selector, match.index, index)
+		}
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, record.ID); err != nil {
+		t.Fatalf("missing metadata was reconciled during list: %v", err)
+	}
+}
+
+func TestProjectTopologyRejectsDuplicateGitAndKentRoots(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "worktree")
+	gitEntry := GitWorktree{Root: root, HeadOID: strings.Repeat("a", 40)}
+	record := metadata.WorktreeRecord{
+		ID:            "worktree-a",
+		WorkspaceID:   "workspace-a",
+		CanonicalRoot: root,
+		DisplayName:   "worktree",
+	}
+	tests := []struct {
+		name    string
+		git     []GitWorktree
+		records []metadata.WorktreeRecord
+	}{
+		{name: "git", git: []GitWorktree{gitEntry, gitEntry}, records: []metadata.WorktreeRecord{record}},
+		{name: "kent", git: []GitWorktree{gitEntry}, records: []metadata.WorktreeRecord{record, record}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := projectTopologyEntries(test.git, test.records); err == nil {
+				t.Fatal("projectTopologyEntries succeeded, want duplicate-root invariant error")
+			}
+		})
+	}
+}
+
+func topologies(entries []serverapi.WorktreeListEntry) []serverapi.WorktreeTopologyEntry {
+	out := make([]serverapi.WorktreeTopologyEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.Topology)
+	}
+	return out
 }

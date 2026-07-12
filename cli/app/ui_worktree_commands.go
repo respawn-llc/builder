@@ -76,39 +76,47 @@ func (m *uiModel) worktreeSwitchCommandForTarget(targetToken, worktreeID string)
 	return func() tea.Msg {
 		resolvedID := worktreeID
 		if resolvedID == "" {
-			list, err := service.List(false)
+			list, err := service.List()
 			if err != nil {
 				return worktreeSwitchDoneMsg{token: switchToken, err: err}
 			}
-			resolved, err := worktreeui.ResolveToken(list.Worktrees, targetToken)
+			items, err := worktreeui.ProjectItems(list.Worktrees)
 			if err != nil {
 				return worktreeSwitchDoneMsg{token: switchToken, err: err}
 			}
-			resolvedID = resolved.WorktreeID
+			resolved, err := worktreeui.ResolveToken(items, targetToken)
+			if err != nil {
+				return worktreeSwitchDoneMsg{token: switchToken, err: err}
+			}
+			resolvedID = worktreeui.WorktreeID(resolved)
 		}
 		resp, err := service.Switch(resolvedID)
 		return worktreeSwitchDoneMsg{token: switchToken, resp: resp, err: err}
 	}
 }
 
-func (m *uiModel) listWorktreesForCurrentSession(includeDirtyCount bool) (serverapi.WorktreeListResponse, error) {
+func (m *uiModel) listWorktreesForCurrentSession() (serverapi.WorktreeListResponse, error) {
 	if m == nil {
 		return serverapi.WorktreeListResponse{}, worktreeui.ErrClientUnavailable
 	}
 	m.checkTUIBlockingOperation("worktree service read", "list worktrees")
-	return m.worktreeMutationService().List(includeDirtyCount)
+	return m.worktreeMutationService().List()
 }
 
-func (m *uiModel) resolveWorktreeToken(token string) (serverapi.WorktreeView, error) {
+func (m *uiModel) resolveWorktreeToken(token string) (worktreeui.Item, error) {
 	if m == nil {
-		return serverapi.WorktreeView{}, worktreeui.ErrClientUnavailable
+		return worktreeui.Item{}, worktreeui.ErrClientUnavailable
 	}
 	m.checkTUIBlockingOperation("worktree service read", "resolve worktree")
-	list, err := m.worktreeMutationService().List(false)
+	list, err := m.worktreeMutationService().List()
 	if err != nil {
-		return serverapi.WorktreeView{}, err
+		return worktreeui.Item{}, err
 	}
-	return worktreeui.ResolveToken(list.Worktrees, token)
+	items, err := worktreeui.ProjectItems(list.Worktrees)
+	if err != nil {
+		return worktreeui.Item{}, err
+	}
+	return worktreeui.ResolveToken(items, token)
 }
 
 func (m *uiModel) suggestedWorktreeSessionName() string {
