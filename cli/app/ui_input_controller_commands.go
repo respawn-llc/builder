@@ -18,7 +18,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 			return m, disconnectCmd
 		}
 	}
-	if commandResult.SubmitUser && commandResult.FreshConversation && m.currentConversationFreshness() != clientui.ConversationFreshnessFresh {
+	if commandResult.SubmitUser && commandResult.FreshConversation && (m.isBusy() || m.currentConversationFreshness() != clientui.ConversationFreshnessFresh) {
 		m.nextSessionInitialPrompt = commandResult.User
 		m.nextSessionInitialPromptHistoryRecorded = true
 		m.nextParentSessionID = m.sessionID
