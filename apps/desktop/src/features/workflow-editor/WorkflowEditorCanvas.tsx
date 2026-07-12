@@ -305,10 +305,11 @@ function graphSelectionRequestForDraft(
   request: PendingGraphSelectionRequest | null,
   draftState: WorkflowEditorDraftState | null,
 ): PendingGraphSelectionRequest | null {
+  const conflictVersion = draftState?.conflict?.workflow.version ?? null;
   if (
     request === null ||
     draftState === null ||
-    draftState.conflict?.workflow.version !== request.conflictVersion ||
+    conflictVersion !== request.conflictVersion ||
     draftState.graphVersion !== request.expectedGraphVersion ||
     !draftState.draft.edges.some((edge) => edge.id === request.edgeID)
   ) {

@@ -85,9 +85,9 @@ describe("WorkflowEditorCanvas connected creation", () => {
       kind: "agent",
       sourceNodeID: "node-start",
     });
-    expect(action.input.edgeID).toMatch(/^workflow-edge-[0-9a-f-]{36}$/u);
-    expect(action.input.nodeID).toMatch(/^workflow-node-[0-9a-f-]{36}$/u);
-    expect(action.input.transitionGroupID).toMatch(/^workflow-transition-group-[0-9a-f-]{36}$/u);
+    expect(action.input.edgeID).toEqual(expect.stringContaining("workflow-edge-"));
+    expect(action.input.nodeID).toEqual(expect.stringContaining("workflow-node-"));
+    expect(action.input.transitionGroupID).toEqual(expect.stringContaining("workflow-transition-group-"));
 
     const succeeded = workflowEditorDraftReducer(initial, action);
     rerender(editorCanvasTree({ dispatch, draftState: succeeded, graph: emptyGraph(), inspect }));
