@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"core/internal/testharness/worktreesetup"
 	"core/server/metadata"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
@@ -10,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -362,36 +362,12 @@ func createServiceTestSession(t *testing.T, store *metadata.Store, cfg config.Ap
 
 func initGitRepo(t *testing.T, root string) {
 	t.Helper()
-	runGit(t, root, "init", "-q")
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("root\n"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
-	runGit(t, root, "add", "README.md")
-	runGit(t, root, "commit", "-q", "-m", "init")
-	canonicalRoot, err := config.CanonicalWorkspaceRoot(root)
-	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
-	}
-	if got, want := currentGitTopLevel(t, root), canonicalRoot; got != want {
-		t.Fatalf("git top-level = %q, want %q", got, want)
-	}
+	worktreesetup.InitializeGitRepository(t, root)
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = appendTestGitCommitIdentityEnv(sanitizeTestGitEnv(os.Environ()))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
-	}
-	return strings.TrimSpace(string(output))
-}
-
-func currentGitTopLevel(t *testing.T, dir string) string {
-	t.Helper()
-	return runGit(t, dir, "rev-parse", "--show-toplevel")
+	return worktreesetup.RunGit(t, dir, args...)
 }
 
 func writeExecutableFile(t *testing.T, path string, body string) {

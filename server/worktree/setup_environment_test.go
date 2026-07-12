@@ -48,23 +48,23 @@ func TestBuildSetupEnvironmentReplacesReservedValuesWithPlatformKeyPolicy(t *tes
 			if err != nil {
 				t.Fatalf("buildSetupEnvironment: %v", err)
 			}
-			if got := setupEnvironmentValue(t, env, setupEnvironmentKeyWorktreeRoot, tt.canonicalize); got != payload.WorktreeRoot {
-				t.Fatalf("worktree root = %q, want %q", got, payload.WorktreeRoot)
+			if got, found := setupEnvironmentEntry(t, env, setupEnvironmentKeyWorktreeRoot, tt.canonicalize); !found || got != payload.WorktreeRoot {
+				t.Fatalf("worktree root = %q, present=%t, want %q", got, found, payload.WorktreeRoot)
 			}
-			if got := setupEnvironmentValue(t, env, setupEnvironmentKeySessionID, tt.canonicalize); got != sessionID {
-				t.Fatalf("session id = %q, want %q", got, sessionID)
+			if got, found := setupEnvironmentEntry(t, env, setupEnvironmentKeySessionID, tt.canonicalize); !found || got != sessionID {
+				t.Fatalf("session id = %q, present=%t, want %q", got, found, sessionID)
 			}
-			if got := setupEnvironmentValue(t, env, "UNRELATED", tt.canonicalize); got != "value" {
-				t.Fatalf("unrelated value = %q, want value", got)
+			if got, found := setupEnvironmentEntry(t, env, "UNRELATED", tt.canonicalize); !found || got != "value" {
+				t.Fatalf("unrelated value = %q, present=%t, want value", got, found)
 			}
-			if got := setupEnvironmentValue(t, env, "KENT_WORKTREE_NOT_RESERVED", tt.canonicalize); got != "preserve" {
-				t.Fatalf("non-reserved Kent value = %q, want preserve", got)
+			if got, found := setupEnvironmentEntry(t, env, "KENT_WORKTREE_NOT_RESERVED", tt.canonicalize); !found || got != "preserve" {
+				t.Fatalf("non-reserved Kent value = %q, present=%t, want preserve", got, found)
 			}
-			mixedCase := setupEnvironmentValue(t, env, "Kent_Worktree_Session_Id", caseSensitiveSetupEnvironmentKey)
-			if tt.wantMixedCaseSessionPreserved && mixedCase != "mixed-case-stale-session" {
-				t.Fatalf("mixed-case session = %q, want preserved value", mixedCase)
+			mixedCase, mixedCaseFound := setupEnvironmentEntry(t, env, "Kent_Worktree_Session_Id", caseSensitiveSetupEnvironmentKey)
+			if tt.wantMixedCaseSessionPreserved && (!mixedCaseFound || mixedCase != "mixed-case-stale-session") {
+				t.Fatalf("mixed-case session = %q, present=%t, want preserved value", mixedCase, mixedCaseFound)
 			}
-			if !tt.wantMixedCaseSessionPreserved && mixedCase != "" {
+			if !tt.wantMixedCaseSessionPreserved && mixedCaseFound {
 				t.Fatalf("mixed-case session = %q, want removed", mixedCase)
 			}
 		})
@@ -99,33 +99,41 @@ func TestBuildSetupEnvironmentOmitsAbsentSessionAcrossPlatformPolicies(t *testin
 			if err != nil {
 				t.Fatalf("buildSetupEnvironment: %v", err)
 			}
-			if got := setupEnvironmentValue(t, env, setupEnvironmentKeySessionID, tt.canonicalize); got != "" {
+			if got, found := setupEnvironmentEntry(t, env, setupEnvironmentKeySessionID, tt.canonicalize); found {
 				t.Fatalf("session id = %q, want absent", got)
 			}
-			mixedCase := setupEnvironmentValue(t, env, "Kent_Worktree_Session_Id", caseSensitiveSetupEnvironmentKey)
-			if tt.wantMixedCaseSessionPreserved && mixedCase != "mixed-case-stale-session" {
-				t.Fatalf("mixed-case session = %q, want preserved value", mixedCase)
+			mixedCase, mixedCaseFound := setupEnvironmentEntry(t, env, "Kent_Worktree_Session_Id", caseSensitiveSetupEnvironmentKey)
+			if tt.wantMixedCaseSessionPreserved && (!mixedCaseFound || mixedCase != "mixed-case-stale-session") {
+				t.Fatalf("mixed-case session = %q, present=%t, want preserved value", mixedCase, mixedCaseFound)
 			}
-			if !tt.wantMixedCaseSessionPreserved && mixedCase != "" {
+			if !tt.wantMixedCaseSessionPreserved && mixedCaseFound {
 				t.Fatalf("mixed-case session = %q, want removed", mixedCase)
 			}
-			if got := setupEnvironmentValue(t, env, "PATH", tt.canonicalize); got != "/bin" {
-				t.Fatalf("PATH = %q, want /bin", got)
+			if got, found := setupEnvironmentEntry(t, env, "PATH", tt.canonicalize); !found || got != "/bin" {
+				t.Fatalf("PATH = %q, present=%t, want /bin", got, found)
 			}
 		})
 	}
 }
 
-func setupEnvironmentValue(t *testing.T, env []string, key string, canonicalize setupEnvironmentKeyCanonicalizer) string {
+func TestNormalizeSetupSessionIDRejectsEmptyPresentIdentity(t *testing.T) {
+	for _, sessionID := range []string{"", " \t "} {
+		if _, err := normalizeSetupSessionID(&sessionID); err == nil {
+			t.Fatalf("normalizeSetupSessionID accepted invalid present identity %q", sessionID)
+		}
+	}
+}
+
+func setupEnvironmentEntry(t *testing.T, env []string, key string, canonicalize setupEnvironmentKeyCanonicalizer) (string, bool) {
 	t.Helper()
 	values := setupEnvironmentValues(env, key, canonicalize)
 	if len(values) > 1 {
 		t.Fatalf("environment key %q has duplicate values %q", key, values)
 	}
 	if len(values) == 0 {
-		return ""
+		return "", false
 	}
-	return values[0]
+	return values[0], true
 }
 
 func setupEnvironmentValues(env []string, key string, canonicalize setupEnvironmentKeyCanonicalizer) []string {

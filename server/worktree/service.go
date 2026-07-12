@@ -110,19 +110,15 @@ type setupScriptPayload struct {
 	CreatedBranch       bool    `json:"created_branch"`
 }
 
-func optionalSetupSessionID(sessionID string) *string {
-	normalized := strings.TrimSpace(sessionID)
-	if normalized == "" {
-		return nil
-	}
-	return &normalized
-}
-
-func normalizeOptionalSetupSessionID(sessionID *string) *string {
+func normalizeSetupSessionID(sessionID *string) (*string, error) {
 	if sessionID == nil {
-		return nil
+		return nil, nil
 	}
-	return optionalSetupSessionID(*sessionID)
+	normalized := strings.TrimSpace(*sessionID)
+	if normalized == "" {
+		return nil, errors.New("setup session_id must be non-empty when present")
+	}
+	return &normalized, nil
 }
 
 type EnsureTaskWorktreeRequest struct {
@@ -639,6 +635,10 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err := s.metadata.UpsertWorktreeRecord(ctx, created.record); err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
+	setupSessionID, err := normalizeSetupSessionID(&workspaceCtx.sessionID)
+	if err != nil {
+		return serverapi.WorktreeCreateResponse{}, err
+	}
 	cleanup.active = false
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
 		SetupOperationID:    req.SetupOperationID,
@@ -646,7 +646,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		BranchName:          strings.TrimSpace(created.git.BranchName),
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
-			SessionID:   optionalSetupSessionID(workspaceCtx.sessionID),
+			SessionID:   setupSessionID,
 			ProjectID:   workspaceCtx.projectID,
 			WorkspaceID: workspaceCtx.workspaceID,
 			WorktreeID:  created.record.ID,
@@ -1215,11 +1215,15 @@ func (s *Service) runSetupForWorktree(ctx context.Context, req setupExecutionReq
 		})
 		return fmt.Errorf("resolve worktree setup script: %w", err)
 	}
+	sessionID, err := normalizeSetupSessionID(req.ScriptPayload.SessionID)
+	if err != nil {
+		return err
+	}
 	payload := setupScriptPayload{
 		SourceWorkspaceRoot: strings.TrimSpace(req.SourceWorkspaceRoot),
 		BranchName:          strings.TrimSpace(req.BranchName),
 		WorktreeRoot:        strings.TrimSpace(req.WorktreeRoot),
-		SessionID:           normalizeOptionalSetupSessionID(req.ScriptPayload.SessionID),
+		SessionID:           sessionID,
 		ProjectID:           strings.TrimSpace(req.ScriptPayload.ProjectID),
 		WorkspaceID:         strings.TrimSpace(req.ScriptPayload.WorkspaceID),
 		WorktreeID:          strings.TrimSpace(req.ScriptPayload.WorktreeID),
