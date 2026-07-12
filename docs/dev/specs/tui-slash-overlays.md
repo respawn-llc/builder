@@ -42,7 +42,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - Domain semantics — smart-target create dialog, field order (`Branch or ref` before `Base ref`), async ref resolution with `new branch`/`existing branch`/`detached ref` outcomes, aliases, main-workspace protection, delete blocking on running processes, conservative branch cleanup — are all owned by tui-transcript :: Worktree Management.
 - List phase: first row is the create-new entry (`Enter` on it opens the create dialog, as do `c`/`n`); `Enter` on a worktree row switches to it (`Already current worktree` notice on the current row); `d` opens delete confirmation, `x` opens it with the delete-branch action preselected; `r` refreshes. Main-workspace rows reject deletion with an error notice.
 - Create dialog: `Tab`/`Down` and `Shift+Tab`/`Up` cycle fields; `Enter` on a text field advances focus; `Enter` on the action row submits (or cancels); typed `Branch or ref` input resolves asynchronously with a short debounce, never per-keystroke blocking; `Esc` returns to the list.
-- Delete confirmation: shows a preview of what will be removed with warnings; button group is Cancel / Delete / Delete + Branch (the branch action present only when branch provenance allows); `Esc` returns to the list.
+- Delete confirmation: shows a preview of what will be removed with warnings; button group is Cancel / Delete / Delete + Branch (the branch action is present for every branch-backed worktree); `Esc` returns to the list.
 
 ## Rollback Picker
 
