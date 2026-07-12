@@ -17,8 +17,16 @@ func NewLoopbackWorktreeClient(service servicecontract.WorktreeService) Worktree
 	return &loopbackWorktreeClient{loopbackClient: newLoopbackClient(service)}
 }
 
+func (c *loopbackWorktreeClient) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
+	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.GetWorktreeStatus)
+}
+
 func (c *loopbackWorktreeClient) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
 	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.ListWorktrees)
+}
+
+func (c *loopbackWorktreeClient) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.ResolveWorktreeSelector)
 }
 
 func (c *loopbackWorktreeClient) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {

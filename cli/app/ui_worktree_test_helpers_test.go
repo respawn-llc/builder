@@ -38,10 +38,18 @@ type worktreeCommandTestClient struct {
 	reconnectFailures map[string]int
 }
 
+func (c *worktreeCommandTestClient) GetWorktreeStatus(context.Context, serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
+	return serverapi.WorktreeStatusResponse{}, nil
+}
+
 func (c *worktreeCommandTestClient) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
 	c.listCtx = ctx
 	c.listRequests = append(c.listRequests, req)
 	return c.listResp, c.listErr
+}
+
+func (c *worktreeCommandTestClient) ResolveWorktreeSelector(context.Context, serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	return serverapi.WorktreeSelectorPreviewResponse{}, nil
 }
 
 func (c *worktreeCommandTestClient) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {

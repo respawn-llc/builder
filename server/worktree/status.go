@@ -9,7 +9,7 @@ import (
 	"core/shared/serverapi"
 )
 
-func (s *Service) WorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
+func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
 	if s == nil || s.metadata == nil || s.git == nil {
 		return serverapi.WorktreeStatusResponse{}, errors.New("worktree service dependencies are required")
 	}

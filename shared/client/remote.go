@@ -508,6 +508,16 @@ func (c *Remote) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRe
 	return resp, c.call(ctx, protocol.MethodWorktreeList, req, &resp)
 }
 
+func (c *Remote) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
+	var resp serverapi.WorktreeStatusResponse
+	return resp, c.call(ctx, protocol.MethodWorktreeStatus, req, &resp)
+}
+
+func (c *Remote) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	var resp serverapi.WorktreeSelectorPreviewResponse
+	return resp, c.call(ctx, protocol.MethodWorktreeSelectorResolve, req, &resp)
+}
+
 func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
 	var resp serverapi.WorktreeCreateTargetResolveResponse
 	return resp, c.call(ctx, protocol.MethodWorktreeCreateTargetResolve, req, &resp)

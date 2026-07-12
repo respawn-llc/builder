@@ -12,9 +12,9 @@ func TestWorktreeStatusInspectsOnlyTheRecordedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget before: %v", err)
 	}
-	status, err := env.service.WorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{SessionID: env.session.Meta().SessionID})
+	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{SessionID: env.session.Meta().SessionID})
 	if err != nil {
-		t.Fatalf("WorktreeStatus: %v", err)
+		t.Fatalf("GetWorktreeStatus: %v", err)
 	}
 	if len(status.Problems) != 0 {
 		t.Fatalf("status problems = %+v", status.Problems)

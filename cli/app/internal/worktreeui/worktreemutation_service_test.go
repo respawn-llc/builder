@@ -30,10 +30,18 @@ type testWorktreeClient struct {
 	errs            []error
 }
 
+func (c *testWorktreeClient) GetWorktreeStatus(context.Context, serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
+	return serverapi.WorktreeStatusResponse{}, c.nextErr()
+}
+
 func (c *testWorktreeClient) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
 	c.listCtx = ctx
 	c.listRequests = append(c.listRequests, req)
 	return c.listResp, c.listErr
+}
+
+func (c *testWorktreeClient) ResolveWorktreeSelector(context.Context, serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	return serverapi.WorktreeSelectorPreviewResponse{}, c.nextErr()
 }
 
 func (c *testWorktreeClient) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
