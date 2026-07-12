@@ -33,4 +33,11 @@ func TestInsertWorktreeOperationIsInsertOnce(t *testing.T) {
 	if err != nil || inserted {
 		t.Fatalf("duplicate insert = %t, %v", inserted, err)
 	}
+	stored, err := store.GetWorktreeOperation(context.Background(), operationID)
+	if err != nil {
+		t.Fatalf("GetWorktreeOperation: %v", err)
+	}
+	if stored.OperationID != operationID || !stored.Payload.Equal(record.Payload) || stored.LifecycleVersion != 1 {
+		t.Fatalf("stored record = %+v", stored)
+	}
 }

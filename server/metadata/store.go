@@ -489,6 +489,59 @@ func validateWorktreeOperationRecord(record WorktreeOperationRecord) error {
 	return nil
 }
 
+func (s *Store) GetWorktreeOperation(ctx context.Context, operationID serverapi.WorktreeOperationID) (WorktreeOperationRecord, error) {
+	if s == nil || s.queries == nil {
+		return WorktreeOperationRecord{}, errors.New("metadata store is required")
+	}
+	if err := operationID.Validate(); err != nil {
+		return WorktreeOperationRecord{}, err
+	}
+	row, err := s.queries.GetWorktreeOperationByID(ctx, operationID.String())
+	if err != nil {
+		return WorktreeOperationRecord{}, fmt.Errorf("get worktree operation: %w", err)
+	}
+	return worktreeOperationRecordFromRow(row)
+}
+
+func worktreeOperationRecordFromRow(row sqlitegen.WorktreeOperation) (WorktreeOperationRecord, error) {
+	operationID, err := serverapi.ParseWorktreeOperationID(row.OperationID)
+	if err != nil {
+		return WorktreeOperationRecord{}, err
+	}
+	var payload serverapi.WorktreeOperationPayload
+	if err := json.Unmarshal([]byte(row.PayloadJson), &payload); err != nil {
+		return WorktreeOperationRecord{}, fmt.Errorf("decode worktree operation payload: %w", err)
+	}
+	var target serverapi.WorktreeOperationExpectedTarget
+	if err := json.Unmarshal([]byte(row.ExpectedTargetJson), &target); err != nil {
+		return WorktreeOperationRecord{}, fmt.Errorf("decode worktree operation expected target: %w", err)
+	}
+	record := WorktreeOperationRecord{
+		OperationID:      operationID,
+		Payload:          payload,
+		ExpectedTarget:   target,
+		ExecutionMode:    serverapi.WorktreeOperationExecutionMode(row.ExecutionMode),
+		LifecycleState:   serverapi.WorktreeOperationLifecycleState(row.LifecycleState),
+		LifecycleVersion: row.LifecycleVersion,
+		TerminalResult:   rawMessagePointer(row.TerminalResultJson),
+		TerminalError:    rawMessagePointer(row.TerminalErrorJson),
+		CreatedAt:        time.UnixMilli(row.CreatedAtUnixMs).UTC(),
+		UpdatedAt:        time.UnixMilli(row.UpdatedAtUnixMs).UTC(),
+	}
+	if err := validateWorktreeOperationRecord(record); err != nil {
+		return WorktreeOperationRecord{}, err
+	}
+	return record, nil
+}
+
+func rawMessagePointer(value sql.NullString) *json.RawMessage {
+	if !value.Valid {
+		return nil
+	}
+	raw := json.RawMessage(value.String)
+	return &raw
+}
+
 func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update SessionExecutionTargetUpdate) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
