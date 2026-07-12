@@ -112,6 +112,9 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
 			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
 		}
+		if s.engine.scheduleWorktreeTransitionsIfIdle() {
+			return err
+		}
 		if status != RunStatusFailed {
 			if !s.engine.scheduleQueuedUserInjectionsIfIdle() && s.background != nil {
 				s.background.ScheduleIfIdle()

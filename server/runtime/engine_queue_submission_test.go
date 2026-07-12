@@ -181,6 +181,23 @@ func TestRunWhenIdleRunsImmediatelyWhenIdle(t *testing.T) {
 	}
 }
 
+func TestEnqueueWorktreeTransitionRunsThroughEngineLifecycle(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	ran := make(chan struct{})
+	if err := eng.EnqueueWorktreeTransition(func(context.Context) error {
+		close(ran)
+		return nil
+	}); err != nil {
+		t.Fatalf("EnqueueWorktreeTransition: %v", err)
+	}
+	select {
+	case <-ran:
+	case <-time.After(time.Second):
+		t.Fatal("queued worktree transition did not run")
+	}
+}
+
 func TestRunWhenIdleRetriesUntilBetweenSteps(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})

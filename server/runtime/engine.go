@@ -173,14 +173,17 @@ type Engine struct {
 	outputMutationMu sync.Mutex
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
-	queuedUserWorkMu           sync.Mutex
-	queuedUserWorkScheduled    bool
-	queuedUserWorkPauseCount   int
-	queuedUserWorkAutoDrainIDs map[string]struct{}
-	liveRun                    *liveRunCoordinator
-	activeStepGoalMutationsMu  sync.Mutex
-	activeStepGoalMutations    map[string][]activeStepGoalMutation
-	pendingGoalLoopStart       bool
+	queuedUserWorkMu            sync.Mutex
+	queuedUserWorkScheduled     bool
+	queuedUserWorkPauseCount    int
+	queuedUserWorkAutoDrainIDs  map[string]struct{}
+	worktreeTransitionMu        sync.Mutex
+	worktreeTransitionScheduled bool
+	worktreeTransitions         []func(context.Context) error
+	liveRun                     *liveRunCoordinator
+	activeStepGoalMutationsMu   sync.Mutex
+	activeStepGoalMutations     map[string][]activeStepGoalMutation
+	pendingGoalLoopStart        bool
 	// userInjectionScopeMu guards activeUserInjectionScope, the queued
 	// user-injection IDs the in-flight top-level step should flush. The engine
 	// owns this scope so the step executor derives it directly and reviewer
