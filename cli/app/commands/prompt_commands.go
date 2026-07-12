@@ -20,7 +20,11 @@ func registerPromptCommands(r *Registry, specs []promptCommandSpec) {
 		commandDescription := spec.Description
 		commandPrompt := spec.Prompt
 		freshSession := spec.FreshSession
-		r.RegisterWithOptions(commandName, commandDescription, RegisterOptions{ActiveRunPolicy: activeRunPolicyForFreshConversation(freshSession), PreservePromptHistoryDraft: true}, func(args string) Result {
+		activeRunPolicy := ActiveRunPolicyRequiresIdle
+		if freshSession {
+			activeRunPolicy = ActiveRunPolicyAllowed
+		}
+		r.RegisterWithOptions(commandName, commandDescription, RegisterOptions{ActiveRunPolicy: activeRunPolicy, PreservePromptHistoryDraft: true}, func(args string) Result {
 			return Result{
 				Handled:           true,
 				Action:            ActionNone,
@@ -30,13 +34,6 @@ func registerPromptCommands(r *Registry, specs []promptCommandSpec) {
 			}
 		})
 	}
-}
-
-func activeRunPolicyForFreshConversation(fresh bool) ActiveRunPolicy {
-	if fresh {
-		return ActiveRunPolicyAllowed
-	}
-	return ActiveRunPolicyRequiresIdle
 }
 
 func buildPromptSubmission(prompt, args string) string {

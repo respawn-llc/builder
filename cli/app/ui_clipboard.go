@@ -744,10 +744,6 @@ func clipboardContentRunes(content uiClipboardContent) ([]rune, error) {
 	}
 }
 
-func (m *uiModel) copyClipboardTextCmd(text string) tea.Cmd {
-	return m.copyClipboardTextCmdForOperation(0, text)
-}
-
 func (m *uiModel) copyClipboardTextCmdForOperation(token uint64, text string) tea.Cmd {
 	copier := m.clipboardTextCopier
 	copyText := text
