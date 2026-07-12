@@ -1,11 +1,13 @@
+import type { NativePlatform } from "@app/native-bridge";
 import type { CSSProperties } from "react";
 
-// Contrast scrim behind the top window chrome. On macOS the chrome reads against
-// the native window glass (blur+tint); platforms without that glass (Linux,
-// Windows, browser) get this gradient instead so the chrome controls/title stay
-// legible over arbitrary content scrolling beneath them. Starts at a partial
-// background-token fill at the very top and fades to transparent over the chrome.
-export const appChromeContrastScrimClassNames = [
+export type AppChromeTopTreatment = Readonly<{
+  classNames: readonly string[];
+  effect: "blur" | "fade";
+  style: CSSProperties;
+}>;
+
+const appChromeContrastFadeClassNames = [
     "pointer-events-none",
     "fixed",
     "inset-x-0",
@@ -14,13 +16,43 @@ export const appChromeContrastScrimClassNames = [
     "h-[calc(var(--native-titlebar-height)*1.5)]",
 ] as const;
 
-// The bare `66%` between the two color stops is a color interpolation hint: it
-// places the 50% midpoint of the fade at 66% of the height, so the alpha follows
-// a smooth non-linear (power) curve rather than a straight linear ramp.
-export const appChromeContrastScrimStyle = {
+const appChromeContrastFadeStyle = {
     background:
         "linear-gradient(to bottom, color-mix(in srgb, var(--background) 50%, transparent) 0%, 66%, transparent 100%)",
 } satisfies CSSProperties;
+
+const appChromeProgressiveBlurClassNames = [
+    "pointer-events-none",
+    "fixed",
+    "inset-x-0",
+    "top-0",
+    "z-10",
+    "h-[calc(var(--native-titlebar-height)*2)]",
+] as const;
+
+const appChromeProgressiveBlurStyle = {
+    WebkitBackdropFilter: "blur(16px) saturate(0.8) brightness(0.78)",
+    WebkitMaskImage: "linear-gradient(to bottom, black 0%, black 30%, transparent 100%)",
+    background: "color-mix(in srgb, var(--window-glass-tint) 65%, transparent)",
+    backdropFilter: "blur(16px) saturate(0.8) brightness(0.78)",
+    maskImage: "linear-gradient(to bottom, black 0%, black 30%, transparent 100%)",
+} satisfies CSSProperties;
+
+const appChromeContrastFadeTreatment: AppChromeTopTreatment = {
+    classNames: appChromeContrastFadeClassNames,
+    effect: "fade",
+    style: appChromeContrastFadeStyle,
+};
+
+const appChromeProgressiveBlurTreatment: AppChromeTopTreatment = {
+    classNames: appChromeProgressiveBlurClassNames,
+    effect: "blur",
+    style: appChromeProgressiveBlurStyle,
+};
+
+export function appChromeTopTreatmentForPlatform(platform: NativePlatform): AppChromeTopTreatment {
+    return platform === "windows" ? appChromeProgressiveBlurTreatment : appChromeContrastFadeTreatment;
+}
 
 export const appChromeTitleClassNames = [
     "pointer-events-none",

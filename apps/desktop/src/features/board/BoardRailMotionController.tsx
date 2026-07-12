@@ -78,6 +78,7 @@ export type BoardRailMotionControllerProps = Readonly<{
   onExpandColumn: (columnID: string) => void;
   onInterruptedRunObserved: (input: Readonly<{ runID: string; taskID: string }>) => void;
   onInterruptTask: (taskID: string) => void;
+  onRegisterColumnScrollport: (columnID: string, element: HTMLElement | null) => void;
   onResumeTask: (taskID: string) => void;
   pendingCardMove: PendingBoardCardMove | null;
   scrollportRef: RefObject<HTMLDivElement | null>;
@@ -102,6 +103,7 @@ export function BoardRailMotionController({
   onExpandColumn,
   onInterruptedRunObserved,
   onInterruptTask,
+  onRegisterColumnScrollport,
   onResumeTask,
   pendingCardMove,
   scrollportRef,
@@ -418,6 +420,7 @@ export function BoardRailMotionController({
                   onInterruptTask={onInterruptTask}
                   onReportColumnSnapshot={reportColumnSnapshot}
                   onRegisterColumn={registerColumn}
+                  onRegisterColumnScrollport={onRegisterColumnScrollport}
                   onResumeTask={onResumeTask}
                   scrollportRef={scrollportRef}
                 />
@@ -445,6 +448,7 @@ export function BoardRailMotionController({
               onInterruptTask={onInterruptTask}
               onReportColumnSnapshot={reportColumnSnapshot}
               onRegisterColumn={registerColumn}
+              onRegisterColumnScrollport={onRegisterColumnScrollport}
               onResumeTask={onResumeTask}
               scrollportRef={scrollportRef}
             />
@@ -475,6 +479,7 @@ function BoardColumnMotionBoundary({
   onInterruptTask,
   onReportColumnSnapshot,
   onRegisterColumn,
+  onRegisterColumnScrollport,
   onResumeTask,
   scrollportRef,
 }: Readonly<{
@@ -497,6 +502,7 @@ function BoardColumnMotionBoundary({
   onInterruptTask: (taskID: string) => void;
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
   onRegisterColumn: (columnID: string, element: HTMLElement | null) => void;
+  onRegisterColumnScrollport: (columnID: string, element: HTMLElement | null) => void;
   onResumeTask: (taskID: string) => void;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }>) {
@@ -516,9 +522,19 @@ function BoardColumnMotionBoundary({
     () => cardsQuery.data?.pages.flatMap((page) => page.cards) ?? [],
     [cardsQuery.data?.pages],
   );
+  const workspaceContext = useMemo(
+    () => ({
+      attachedWorkspaceCount: board.attachedWorkspaceCount,
+      defaultWorkspaceID: board.defaultWorkspaceID,
+    }),
+    [board.attachedWorkspaceCount, board.defaultWorkspaceID],
+  );
   const cardVMs = useMemo(
-    () => queryCards.map(toKanbanCardVM).filter((card) => cardBelongsToColumn(column, card)),
-    [column, queryCards],
+    () =>
+      queryCards
+        .map((card) => toKanbanCardVM(card, workspaceContext))
+        .filter((card) => cardBelongsToColumn(column, card)),
+    [column, queryCards, workspaceContext],
   );
   const renderedCards = displayedCards ?? cardVMs;
   const columnVM = useMemo(() => toKanbanColumnVM(column), [column]);
@@ -549,6 +565,9 @@ function BoardColumnMotionBoundary({
       cards={renderedCards}
       column={columnVM}
       columnRef={setRegisteredColumnElement}
+      scrollportRef={(element) => {
+        onRegisterColumnScrollport(column.id, element);
+      }}
       dropState={dropState}
       hasMoreCards={cardsQuery.hasNextPage}
       isCollapsed={isCollapsed}

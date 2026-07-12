@@ -15,6 +15,7 @@ import { Button, EmptyState, ErrorState, FloatingNoticeIsland, LoadingState } fr
 import { WorkflowValidationIssues } from "../workflow/WorkflowValidationIssues";
 import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
+import { useBoardDragAutoScroll } from "./BoardDragAutoScroll";
 import { useBoardMoveRunFeedback } from "./BoardMoveRunFeedback";
 import { BoardRailMotionController } from "./BoardRailMotionController";
 import { TaskDeleteConfirmationFallbackDialog } from "./TaskDeleteConfirmation";
@@ -154,6 +155,7 @@ function BoardContent({
   const { nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const scrollportRef = useRef<HTMLDivElement | null>(null);
+  const dragAutoScroll = useBoardDragAutoScroll({ active: activeDrag !== null, rootRef: scrollportRef });
   const { openSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions(board.projectID, boardQueryWorkflowID, board.selectedWorkflow.id);
@@ -237,6 +239,7 @@ function BoardContent({
 
   function dropTask(event: DragEvent<HTMLElement>, column: BoardColumn): void {
     event.preventDefault();
+    dragAutoScroll.stop("document-drop");
     const dragPayload = activeDragRef.current ?? dragPayloadFromDataTransfer(event.dataTransfer);
     activeDragRef.current = null;
     setActiveDrag(null);
@@ -467,6 +470,8 @@ function BoardContent({
       <div
         className="h-full min-h-0 min-w-0 w-full overflow-x-auto hide-scrollbar"
         data-testid="board-scrollport"
+        onDragLeave={dragAutoScroll.onBoardDragLeave}
+        onDragOver={dragAutoScroll.onBoardDragOver}
         ref={scrollportRef}
         role="list"
       >
@@ -478,6 +483,7 @@ function BoardContent({
           firstActiveID={firstActive?.id}
           onCardClick={openTask}
           onCardDragEnd={() => {
+            dragAutoScroll.stop("card-end");
             activeDragRef.current = null;
             setActiveDrag(null);
           }}
@@ -491,6 +497,7 @@ function BoardContent({
           onExpandColumn={expandColumn}
           onInterruptedRunObserved={moveRunFeedback.observeInterruptedRun}
           onInterruptTask={interruptTask}
+          onRegisterColumnScrollport={dragAutoScroll.registerColumnScrollport}
           pendingCardMove={pendingCardMove}
           onResumeTask={resumeTask}
           scrollportRef={scrollportRef}

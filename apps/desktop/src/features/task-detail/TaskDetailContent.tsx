@@ -4,6 +4,10 @@ import type { TaskDetail } from "../../api";
 import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
 import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
 import { useUpdateTask } from "../tasks/useTaskMutations";
+import {
+  initialDescriptionPresentationState,
+  type DescriptionPresentationState,
+} from "./TaskDetailDescriptionPresentation";
 import { TaskDetailList } from "./TaskDetailList";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { TaskDraft } from "./TaskDetailRows";
@@ -44,6 +48,9 @@ export function TaskDetailContent({
   }));
   const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(null);
   const [newCommentBody, setNewCommentBody] = useState("");
+  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(
+    initialDescriptionPresentationState,
+  );
   const [selectedTab, setSelectedTab] = useState<"comments" | "activity">("comments");
   const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
     () => new Map(),
@@ -58,6 +65,7 @@ export function TaskDetailContent({
     setLoadedTaskID(detail.id);
     setEditingComment(null);
     setNewCommentBody("");
+    setDescriptionPresentation(initialDescriptionPresentationState);
     setQuestionSelections(new Map());
   }
   const update = useUpdateTask(detail.id);
@@ -93,6 +101,7 @@ export function TaskDetailContent({
       detail={detail}
       disabled={connection.phase !== "connected"}
       draft={draft}
+      descriptionPresentation={descriptionPresentation}
       editingComment={editingComment}
       initialFocus={initialFocus}
       mutations={mutations}
@@ -100,6 +109,7 @@ export function TaskDetailContent({
       onDraftChange={(nextDraft) => {
         setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
       }}
+      onDescriptionPresentationChange={setDescriptionPresentation}
       onNewCommentBodyChange={setNewCommentBody}
       onEditingCommentChange={setEditingComment}
       onQuestionSelectionChange={(askID, selection) => {

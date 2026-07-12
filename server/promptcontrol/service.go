@@ -9,6 +9,7 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type PendingPromptResponder interface {
@@ -26,7 +27,7 @@ type askAnswerMemoRequest struct {
 	AskID                string
 	ErrorMessage         string
 	Answer               string
-	SelectedOptionNumber int
+	SelectedOptionNumber *int
 	FreeformAnswer       string
 }
 
@@ -62,7 +63,7 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 		AskID:                req.AskID,
 		ErrorMessage:         req.ErrorMessage,
 		Answer:               req.Answer,
-		SelectedOptionNumber: req.SelectedOptionNumber,
+		SelectedOptionNumber: textutil.CloneInt(req.SelectedOptionNumber),
 		FreeformAnswer:       req.FreeformAnswer,
 	}
 	_, err := s.asks.Do(ctx, req.ClientRequestID, memoReq, sameAskAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
@@ -73,7 +74,7 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 			return prompts.SubmitPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
 				RequestID:            req.AskID,
 				Answer:               req.Answer,
-				SelectedOptionNumber: req.SelectedOptionNumber,
+				SelectedOptionNumber: textutil.CloneInt(req.SelectedOptionNumber),
 				FreeformAnswer:       req.FreeformAnswer,
 			}, nil)
 		})
@@ -117,7 +118,7 @@ func sameAskAnswerMemoRequest(a askAnswerMemoRequest, b askAnswerMemoRequest) bo
 		a.AskID == b.AskID &&
 		a.ErrorMessage == b.ErrorMessage &&
 		a.Answer == b.Answer &&
-		a.SelectedOptionNumber == b.SelectedOptionNumber &&
+		textutil.EqualOptionalInt(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
 		a.FreeformAnswer == b.FreeformAnswer
 }
 

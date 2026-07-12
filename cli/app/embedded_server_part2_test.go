@@ -8,6 +8,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"errors"
 	"io"
 	"strings"
@@ -168,13 +169,13 @@ func TestEmbeddedAppServerPromptActivityStreamsAndHydratesPendingResources(t *te
 	if askEvt.req.PromptID != "ask-embedded-1" || askEvt.req.Question != "Pick one" {
 		t.Fatalf("unexpected ask event: %+v", askEvt.req)
 	}
-	askEvt.reply <- askReply{response: clientui.PromptAnswer{PromptID: askEvt.req.PromptID, SelectedOptionNumber: 2}}
+	askEvt.reply <- askReply{response: clientui.PromptAnswer{PromptID: askEvt.req.PromptID, SelectedOptionNumber: textutil.Int(2)}}
 	select {
 	case result := <-askDone:
 		if result.err != nil {
 			t.Fatalf("AwaitPromptResponse ask: %v", result.err)
 		}
-		if result.resp.RequestID != "ask-embedded-1" || result.resp.SelectedOptionNumber != 2 {
+		if result.resp.RequestID != "ask-embedded-1" || result.resp.SelectedOptionNumber == nil || *result.resp.SelectedOptionNumber != 2 {
 			t.Fatalf("unexpected ask response: %+v", result.resp)
 		}
 	case <-time.After(5 * time.Second):

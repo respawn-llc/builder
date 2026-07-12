@@ -5,6 +5,7 @@ import {
   virtualizedInitialScrollIndex,
 } from "./virtualizedInfiniteListInitialScroll";
 import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
+import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolicy";
 
 const atBottom = {
   atBottom: true,
@@ -125,5 +126,12 @@ describe("virtualizedInitialScrollIndex", () => {
         lastRequestKey: "task-1",
       }),
     ).toEqual({ requestKey: "task-2", scrollIndex: 2 });
+  });
+});
+
+describe("shouldAdjustScrollForVirtualizedResize", () => {
+  it("preserves a keyed row's viewport anchor while retaining normal compensation for other rows", () => {
+    expect(shouldAdjustScrollForVirtualizedResize("body", "body")).toBe(false);
+    expect(shouldAdjustScrollForVirtualizedResize("body", "header")).toBe(true);
   });
 });

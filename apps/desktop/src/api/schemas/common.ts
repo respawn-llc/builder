@@ -21,6 +21,7 @@ import type {
   WorkflowPickerItem,
   WorkflowValidationError,
   WorkspaceSummary,
+  WorkspaceAvailability,
   OrdinaryQuestionPrompt,
 } from "../models";
 
@@ -68,12 +69,19 @@ export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z
     }
   });
 
+export const workspaceAvailabilitySchema: z.ZodType<WorkspaceAvailability> = z.enum([
+  "available",
+  "missing",
+  "inaccessible",
+  "unlinked",
+]);
+
 export const workspaceSummarySchema: z.ZodType<WorkspaceSummary> = z
   .object({
     workspace_id: z.string(),
     display_name: z.string(),
     root_path: z.string(),
-    availability: z.string(),
+    availability: workspaceAvailabilitySchema,
     is_primary: z.boolean(),
     updated_at_unix_ms: z.number(),
   })
@@ -281,7 +289,7 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     task_id: z.string(),
     short_id: z.string(),
     title: z.string(),
-    body_preview: emptyString,
+    body: z.string(),
     workflow_id: z.string(),
     active_node_ids: stringList,
     source_workspace: workspaceSummarySchema,
@@ -289,11 +297,12 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     actions: taskActionsSchema,
     updated_at_unix_ms: z.number(),
   })
+  .strict()
   .transform((value) => ({
     id: value.task_id,
     shortID: value.short_id,
     title: value.title,
-    bodyPreview: value.body_preview,
+    body: value.body,
     workflowID: value.workflow_id,
     activeNodeIDs: value.active_node_ids,
     sourceWorkspace: value.source_workspace,

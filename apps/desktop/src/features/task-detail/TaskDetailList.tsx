@@ -8,8 +8,14 @@ import { taskDetailInitialFocusRequestKey } from "../../app/taskDetailInitialFoc
 import { useSidebarHeaderOffset } from "../../app/sidebarHeaderOffset";
 import { ErrorState, LoadingState, VirtualizedInfiniteList } from "../../ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
+import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { TaskInbox } from "./TaskDetailInbox";
-import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
+import {
+  DescriptionIsland,
+  PropertiesIsland,
+  TaskHeaderIsland,
+  type TaskDraft,
+} from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { useTaskActivity, useTaskComments, useTaskMutations } from "./useTaskDetailData";
@@ -35,11 +41,13 @@ export function TaskDetailList({
   detail,
   disabled,
   draft,
+  descriptionPresentation,
   editingComment,
   initialFocus,
   mutations,
   newCommentBody,
   onDraftChange,
+  onDescriptionPresentationChange,
   onNewCommentBodyChange,
   onEditingCommentChange,
   onQuestionSelectionChange,
@@ -56,11 +64,13 @@ export function TaskDetailList({
   detail: TaskDetail;
   disabled: boolean;
   draft: TaskDraft;
+  descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
   initialFocus?: TaskDetailInitialFocus | undefined;
   mutations: ReturnType<typeof useTaskMutations>;
   newCommentBody: string;
   onDraftChange: (draft: TaskDraft) => void;
+  onDescriptionPresentationChange: (presentation: DescriptionPresentationState) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
@@ -118,6 +128,7 @@ export function TaskDetailList({
       items={listItems}
       loadingLabel={t("app.loadingMore")}
       loadMoreKey={paging.loadMoreKey}
+      nonAdjustingResizeItemKey="body"
       onLoadMore={paging.loadMore}
       paddingStart={headerOffset}
       rowSpacing="compact"
@@ -128,6 +139,7 @@ export function TaskDetailList({
           detail={detail}
           disabled={disabled}
           draft={draft}
+          descriptionPresentation={descriptionPresentation}
           editingComment={editingComment}
           errorTitle={t("states.error")}
           initialFocus={initialFocus}
@@ -138,6 +150,7 @@ export function TaskDetailList({
           noActivityTitle={t("task.noActivityTitle")}
           noCommentsTitle={t("task.noCommentsTitle")}
           onDraftChange={onDraftChange}
+          onDescriptionPresentationChange={onDescriptionPresentationChange}
           onNewCommentBodyChange={onNewCommentBodyChange}
           onEditingCommentChange={onEditingCommentChange}
           onQuestionSelectionChange={onQuestionSelectionChange}
@@ -161,6 +174,7 @@ type TaskDetailListRowProps = Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   draft: TaskDraft;
+  descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
   errorTitle: string;
   initialFocus?: TaskDetailInitialFocus | undefined;
@@ -171,6 +185,7 @@ type TaskDetailListRowProps = Readonly<{
   noActivityTitle: string;
   noCommentsTitle: string;
   onDraftChange: (draft: TaskDraft) => void;
+  onDescriptionPresentationChange: (presentation: DescriptionPresentationState) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
@@ -236,6 +251,8 @@ function BodyRow({
   draft,
   mutations,
   onDraftChange,
+  onDescriptionPresentationChange,
+  descriptionPresentation,
   updateError,
   updatePending,
 }: TaskDetailListRowProps): ReactNode {
@@ -249,6 +266,8 @@ function BodyRow({
         draft={draft}
         error={updateError}
         onDraftChange={onDraftChange}
+        onPresentationChange={onDescriptionPresentationChange}
+        presentation={descriptionPresentation}
       />
       <PropertiesIsland
         detail={detail}
