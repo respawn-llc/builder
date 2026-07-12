@@ -306,6 +306,13 @@ func TestTruncateBannerUsesByteWording(t *testing.T) {
 	}
 }
 
+func TestTruncateWhitespaceOnlyOutputDoesNotCreateBanner(t *testing.T) {
+	output, truncated, removed := truncateWithTemplate(strings.Repeat(" ", 4096), 80, truncationBannerTemplate)
+	if output != "" || truncated || removed != 0 {
+		t.Fatalf("whitespace-only output truncation = (%q, %t, %d), want empty untruncated output", output, truncated, removed)
+	}
+}
+
 func TestManagerSubscribeOutputStreamsTailAndEndsAtEOF(t *testing.T) {
 	manager := newBackgroundTestManager(t)
 	workspace := t.TempDir()
