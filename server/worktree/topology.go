@@ -51,6 +51,29 @@ func (s *Service) projectTopology(ctx context.Context, workspaceID string, works
 	return out, nil
 }
 
+func (s *Service) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorktreeSelectorPreviewResponse{}, err
+	}
+	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
+	if err != nil {
+		return serverapi.WorktreeSelectorPreviewResponse{}, err
+	}
+	entries, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
+	if err != nil {
+		return serverapi.WorktreeSelectorPreviewResponse{}, err
+	}
+	match, err := resolveTopologySelector(entries, req.Selector)
+	if err != nil {
+		return serverapi.WorktreeSelectorPreviewResponse{}, err
+	}
+	selector, err := topologySelectorFor(entries, match.index)
+	if err != nil {
+		return serverapi.WorktreeSelectorPreviewResponse{}, err
+	}
+	return serverapi.WorktreeSelectorPreviewResponse{Worktree: match.entry, Selector: selector}, nil
+}
+
 func gitFactsFromEntry(entry GitWorktree) serverapi.WorktreeGitFacts {
 	return serverapi.WorktreeGitFacts{CanonicalRoot: entry.Root, HeadObject: entry.HeadOID, Detached: entry.Detached, Bare: entry.Bare, IsMain: entry.IsMain, PathAvailable: pathAvailability(entry.Root) == "available"}
 }

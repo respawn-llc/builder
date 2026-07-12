@@ -210,6 +210,11 @@ type WorktreeSelectorPreviewRequest struct {
 	Selector  string `json:"selector"`
 }
 
+type WorktreeSelectorPreviewResponse struct {
+	Worktree WorktreeTopologyEntry `json:"worktree"`
+	Selector string                `json:"selector"`
+}
+
 type WorktreeEnterRequest struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/server/metadata"
+	"core/shared/serverapi"
 )
 
 func TestProjectTopologyReturnsRegisteredExternalAndMissingInRequiredOrder(t *testing.T) {
@@ -35,5 +36,19 @@ func TestProjectTopologyReturnsRegisteredExternalAndMissingInRequiredOrder(t *te
 	}
 	if entries[0].Variant != "registered" || entries[1].Variant != "external" || entries[2].Variant != "missing" {
 		t.Fatalf("topology variants = %+v", entries)
+	}
+}
+
+func TestResolveWorktreeSelectorUsesReadOnlyTopology(t *testing.T) {
+	env := newServiceTestEnv(t)
+	response, err := env.service.ResolveWorktreeSelector(env.ctx, serverapi.WorktreeSelectorPreviewRequest{
+		SessionID: env.session.Meta().SessionID,
+		Selector:  env.workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("ResolveWorktreeSelector: %v", err)
+	}
+	if response.Worktree.Variant != serverapi.WorktreeTopologyVariantExternal || response.Selector == "" {
+		t.Fatalf("selector preview = %+v", response)
 	}
 }
