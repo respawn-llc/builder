@@ -14,6 +14,21 @@ import (
 	"core/shared/serverapi"
 )
 
+func taskWorktreeID(entry serverapi.WorktreeTopologyEntry) string {
+	return entry.Registered.Kent.WorktreeID
+}
+
+func taskWorktreeRoot(entry serverapi.WorktreeTopologyEntry) string {
+	return entry.Registered.Git.CanonicalRoot
+}
+
+func taskWorktreeBranch(entry serverapi.WorktreeTopologyEntry) string {
+	if entry.Registered.Git.BranchName == nil {
+		return ""
+	}
+	return *entry.Registered.Git.BranchName
+}
+
 func TestEnsureTaskWorktreeCreatesShortIDBranchWithoutControllerLease(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
@@ -22,17 +37,17 @@ func TestEnsureTaskWorktreeCreatesShortIDBranchWithoutControllerLease(t *testing
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree: %v", err)
 	}
-	if resp.Worktree.WorktreeID == "" {
+	if taskWorktreeID(resp.Worktree) == "" {
 		t.Fatalf("worktree response = %+v", resp.Worktree)
 	}
 	if !resp.Created || !resp.CreatedBranch {
 		t.Fatalf("created flags = created:%t branch:%t, want true/true", resp.Created, resp.CreatedBranch)
 	}
-	if !resp.Worktree.Managed || !resp.Worktree.CreatedBranch {
+	if !resp.Worktree.Registered.Kent.Managed || !resp.Worktree.Registered.Kent.CreatedBranch {
 		t.Fatalf("worktree provenance = %+v, want managed created branch", resp.Worktree)
 	}
-	if resp.Worktree.BranchName != task.ShortID {
-		t.Fatalf("branch name = %q, want task short id %q", resp.Worktree.BranchName, task.ShortID)
+	if taskWorktreeBranch(resp.Worktree) != task.ShortID {
+		t.Fatalf("branch name = %q, want task short id %q", taskWorktreeBranch(resp.Worktree), task.ShortID)
 	}
 	if got := runGit(t, env.workspaceRoot, "branch", "--list", task.ShortID); !strings.Contains(got, task.ShortID) {
 		t.Fatalf("branch list = %q, want task branch %q", got, task.ShortID)
@@ -41,8 +56,8 @@ func TestEnsureTaskWorktreeCreatesShortIDBranchWithoutControllerLease(t *testing
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != resp.Worktree.WorktreeID {
-		t.Fatalf("task managed worktree id = %+v, want %q", row.ManagedWorktreeID, resp.Worktree.WorktreeID)
+	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != taskWorktreeID(resp.Worktree) {
+		t.Fatalf("task managed worktree id = %+v, want %q", row.ManagedWorktreeID, taskWorktreeID(resp.Worktree))
 	}
 }
 
@@ -103,8 +118,8 @@ func TestEnsureTaskWorktreeRunsSetupAndPublishesProgressBeforeReturning(t *testi
 		t.Fatalf("setup marker = %q, want marker", got)
 	}
 	payload := waitForSetupPayload(t, payloadPath)
-	if payload.SourceWorkspaceRoot != env.workspaceRoot || payload.WorktreeRoot != result.resp.Worktree.CanonicalRoot {
-		t.Fatalf("setup payload = %+v, want source %q worktree %q", payload, env.workspaceRoot, result.resp.Worktree.CanonicalRoot)
+	if payload.SourceWorkspaceRoot != env.workspaceRoot || payload.WorktreeRoot != taskWorktreeRoot(result.resp.Worktree) {
+		t.Fatalf("setup payload = %+v, want source %q worktree %q", payload, env.workspaceRoot, taskWorktreeRoot(result.resp.Worktree))
 	}
 }
 
@@ -123,8 +138,8 @@ func TestEnsureTaskWorktreeReturnsExistingManagedWorktree(t *testing.T) {
 	if second.Created || second.CreatedBranch {
 		t.Fatalf("second ensure created flags = created:%t branch:%t, want false/false", second.Created, second.CreatedBranch)
 	}
-	if first.Worktree.WorktreeID != second.Worktree.WorktreeID {
-		t.Fatalf("second worktree id = %q, want %q", second.Worktree.WorktreeID, first.Worktree.WorktreeID)
+	if taskWorktreeID(first.Worktree) != taskWorktreeID(second.Worktree) {
+		t.Fatalf("second worktree id = %q, want %q", taskWorktreeID(second.Worktree), taskWorktreeID(first.Worktree))
 	}
 }
 
@@ -201,7 +216,7 @@ func TestEnsureTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree: %v", err)
 	}
-	if resp.Worktree.WorktreeID == "" || !strings.Contains(resp.Worktree.CanonicalRoot, source.WorkspaceID) {
+	if taskWorktreeID(resp.Worktree) == "" || !strings.Contains(taskWorktreeRoot(resp.Worktree), source.WorkspaceID) {
 		t.Fatalf("worktree = %+v, want root under source workspace id %q", resp.Worktree, source.WorkspaceID)
 	}
 	if got := runGit(t, sourceRoot, "branch", "--list", task.ShortID); !strings.Contains(got, task.ShortID) {
@@ -227,11 +242,11 @@ func TestEnsureTaskWorktreeHandlesRootCollisionAndReportsBranchCollision(t *test
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree root collision: %v", err)
 	}
-	if resp.Worktree.CanonicalRoot == baseRoot {
-		t.Fatalf("worktree root = %q, want suffixed root because base exists", resp.Worktree.CanonicalRoot)
+	if taskWorktreeRoot(resp.Worktree) == baseRoot {
+		t.Fatalf("worktree root = %q, want suffixed root because base exists", taskWorktreeRoot(resp.Worktree))
 	}
-	if !strings.HasSuffix(resp.Worktree.CanonicalRoot, filepath.Base(baseRoot)+"-2") {
-		t.Fatalf("worktree root = %q, want -2 suffix from existing collision behavior", resp.Worktree.CanonicalRoot)
+	if !strings.HasSuffix(taskWorktreeRoot(resp.Worktree), filepath.Base(baseRoot)+"-2") {
+		t.Fatalf("worktree root = %q, want -2 suffix from existing collision behavior", taskWorktreeRoot(resp.Worktree))
 	}
 
 	otherTask, _ := createTaskWorktreeTestTask(t, env)
@@ -254,7 +269,7 @@ func TestDeleteWorktreeBlocksNonTerminalTaskManagedWorktree(t *testing.T) {
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
 		ClientRequestID: "req-delete-task-worktree",
 		SessionID:       env.session.Meta().SessionID,
-		WorktreeID:      created.Worktree.WorktreeID,
+		WorktreeID:      taskWorktreeID(created.Worktree),
 	})
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
@@ -279,12 +294,12 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
 		ClientRequestID: "req-delete-terminal-task-worktree",
 		SessionID:       env.session.Meta().SessionID,
-		WorktreeID:      created.Worktree.WorktreeID,
+		WorktreeID:      taskWorktreeID(created.Worktree),
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree terminal task worktree: %v", err)
 	}
-	if _, err := os.Stat(created.Worktree.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(taskWorktreeRoot(created.Worktree)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected task worktree removed, stat err=%v", err)
 	}
 }
@@ -301,10 +316,10 @@ func TestDeleteTaskWorktreeRemovesManagedWorktreeAndBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteTaskWorktree: %v", err)
 	}
-	if !resp.Deleted || resp.WorktreeID != created.Worktree.WorktreeID || !resp.BranchDeleted {
+	if !resp.Deleted || resp.WorktreeID != taskWorktreeID(created.Worktree) || !resp.BranchDeleted {
 		t.Fatalf("DeleteTaskWorktree response = %+v, want deleted worktree and branch", resp)
 	}
-	if _, err := os.Stat(created.Worktree.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(taskWorktreeRoot(created.Worktree)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected task worktree removed, stat err=%v", err)
 	}
 	if got := runGit(t, env.workspaceRoot, "branch", "--list", task.ShortID); strings.Contains(got, task.ShortID) {

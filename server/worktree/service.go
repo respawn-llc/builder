@@ -33,6 +33,12 @@ type runtimeController interface {
 	SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error
 	ClearWorktreeReminder(ctx context.Context, sessionID string) error
 	HasBlockingRuntimeActivity(ctx context.Context, sessionID string) (bool, error)
+	RunWorktreeTransition(
+		ctx context.Context,
+		sessionID string,
+		fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+	) error
+	PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome)
 }
 
 type activeRuntimeSource interface {
@@ -69,6 +75,12 @@ type Service struct {
 
 	workspaceMu    sync.Mutex
 	workspaceLocks map[string]*workspaceMutationLock
+
+	transitionCtx     context.Context
+	cancelTransitions context.CancelFunc
+	transitionMu      sync.Mutex
+	transitions       map[string]pendingWorktreeTransition
+	transitionWG      sync.WaitGroup
 }
 
 type workspaceMutationLock struct {
@@ -116,7 +128,7 @@ type EnsureTaskWorktreeRequest struct {
 }
 
 type EnsureTaskWorktreeResponse struct {
-	Worktree      serverapi.WorktreeView
+	Worktree      serverapi.WorktreeTopologyEntry
 	Created       bool
 	CreatedBranch bool
 }
@@ -140,6 +152,7 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, activ
 			active = source
 		}
 	}
+	transitionCtx, cancelTransitions := context.WithCancel(context.Background())
 	return &Service{
 		metadata:            metadataStore,
 		git:                 gitInspector,
@@ -152,7 +165,21 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, activ
 		setupTimeoutSeconds: opts.SetupTimeoutSeconds,
 		setupBroker:         newSetupEventBroker(),
 		workspaceLocks:      make(map[string]*workspaceMutationLock),
+		transitionCtx:       transitionCtx,
+		cancelTransitions:   cancelTransitions,
+		transitions:         make(map[string]pendingWorktreeTransition),
 	}
+}
+
+func (s *Service) Close() error {
+	if s == nil {
+		return nil
+	}
+	if s.cancelTransitions != nil {
+		s.cancelTransitions()
+	}
+	s.transitionWG.Wait()
+	return nil
 }
 
 func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktreeRequest) (resp EnsureTaskWorktreeResponse, err error) {
@@ -168,7 +195,7 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 		return EnsureTaskWorktreeResponse{}, err
 	}
 	if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
-		view, err := s.taskManagedWorktreeView(ctx, strings.TrimSpace(task.ManagedWorktreeID.String))
+		view, err := s.taskManagedWorktreeTopology(ctx, strings.TrimSpace(task.ManagedWorktreeID.String))
 		if err == nil {
 			return EnsureTaskWorktreeResponse{Worktree: view}, nil
 		}
@@ -187,7 +214,7 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 		return EnsureTaskWorktreeResponse{}, err
 	}
 	if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
-		view, err := s.taskManagedWorktreeView(ctx, strings.TrimSpace(task.ManagedWorktreeID.String))
+		view, err := s.taskManagedWorktreeTopology(ctx, strings.TrimSpace(task.ManagedWorktreeID.String))
 		if err == nil {
 			return EnsureTaskWorktreeResponse{Worktree: view}, nil
 		}
@@ -247,21 +274,24 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 		return EnsureTaskWorktreeResponse{}, err
 	}
 	cleanup.worktreeRoot = worktreeRoot
-	synced, err := s.syncWorkspace(ctx, workspace.WorkspaceID, workspace.RootPath, false)
+	preferredID := ""
+	if task.ManagedWorktreeID.Valid {
+		preferredID = strings.TrimSpace(task.ManagedWorktreeID.String)
+	}
+	created, err := s.registerCreatedWorktree(
+		ctx,
+		workspace.WorkspaceID,
+		workspace.RootPath,
+		worktreeRoot,
+		preferredID,
+		true,
+		createdBranch || preferredID != "",
+		"",
+	)
 	if err != nil {
 		return EnsureTaskWorktreeResponse{}, err
 	}
-	created, ok := findSyncedWorktreeByRoot(synced, worktreeRoot)
-	if !ok {
-		return EnsureTaskWorktreeResponse{}, fmt.Errorf("created task worktree %q was not discovered after git sync: %w", worktreeRoot, serverapi.ErrWorktreeNotFound)
-	}
-	created.record.Managed = true
-	created.record.CreatedBranch = createdBranch || (task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "")
-	created.record.UpdatedAt = time.Now().UTC()
 	cleanup.worktreeID = strings.TrimSpace(created.record.ID)
-	if err := s.metadata.UpsertWorktreeRecord(ctx, created.record); err != nil {
-		return EnsureTaskWorktreeResponse{}, err
-	}
 	if updated, err := s.metadata.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{ID: taskID, ManagedWorktreeID: sql.NullString{String: created.record.ID, Valid: true}, UpdatedAtUnixMs: time.Now().UTC().UnixMilli()}); err != nil {
 		return EnsureTaskWorktreeResponse{}, err
 	} else if updated != 1 {
@@ -282,11 +312,7 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 	}); err != nil {
 		return EnsureTaskWorktreeResponse{}, err
 	}
-	worktreeView, err := worktreeViewFromSynced(created, clientui.SessionExecutionTarget{})
-	if err != nil {
-		return EnsureTaskWorktreeResponse{}, err
-	}
-	return EnsureTaskWorktreeResponse{Worktree: worktreeView, Created: true, CreatedBranch: createdBranch}, nil
+	return EnsureTaskWorktreeResponse{Worktree: registeredTopologyEntry(created), Created: true, CreatedBranch: createdBranch}, nil
 }
 
 func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktreeRequest) (DeleteTaskWorktreeResponse, error) {
@@ -344,36 +370,42 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		return DeleteTaskWorktreeResponse{}, err
 	}
 	defer releaseDeletionSessionLeases()
-	if err := s.git.Prune(ctx, workspaceRoot); err != nil {
-		return DeleteTaskWorktreeResponse{}, err
-	}
-	synced, err := s.syncWorkspace(ctx, record.WorkspaceID, workspaceRoot, false)
+	topology, err := s.projectTopology(ctx, record.WorkspaceID, workspaceRoot)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
-	target, found := findSyncedWorktreeByID(synced, worktreeID)
-	if found {
-		if err := s.retargetActiveSessionsFromDeletedWorktree(ctx, record.WorkspaceID, workspaceRoot, target.record, ""); err != nil {
+	entry, found := topologyEntryByWorktreeID(topology, worktreeID)
+	if !found {
+		return DeleteTaskWorktreeResponse{}, fmt.Errorf("managed worktree %q is absent from projected topology: %w", worktreeID, serverapi.ErrWorktreeNotFound)
+	}
+	var target syncedWorktree
+	targetFound := entry.Variant == serverapi.WorktreeTopologyVariantRegistered
+	if targetFound {
+		target = syncedWorktree{record: record, git: gitWorktreeFromFacts(entry.Registered.Git)}
+	}
+	if err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
+		workspaceID:   record.WorkspaceID,
+		workspaceRoot: workspaceRoot,
+	}, record, nil); err != nil {
+		return DeleteTaskWorktreeResponse{}, err
+	}
+	if targetFound {
+		dirtyState, err := s.git.ProbeDirtyState(ctx, target.record.CanonicalRoot)
+		if err != nil {
 			return DeleteTaskWorktreeResponse{}, err
 		}
-		dirtyCount, dirtyErr := s.git.DirtyFileCount(ctx, target.record.CanonicalRoot)
-		force := dirtyCount > 0 || dirtyErr != nil
+		force := dirtyState.Kind != serverapi.WorktreeDirtyStateClean
 		if err := s.git.Remove(ctx, workspaceRoot, target.record.CanonicalRoot, force); err != nil {
 			return DeleteTaskWorktreeResponse{}, err
 		}
-	} else if err := s.retargetActiveSessionsFromDeletedWorktree(ctx, record.WorkspaceID, workspaceRoot, record, ""); err != nil {
-		return DeleteTaskWorktreeResponse{}, err
 	}
 	// The worktree itself is already removed by this point, so a branch-cleanup
 	// failure must not abort the remaining metadata cleanup; otherwise the record
 	// is left pointing at a removed worktree. Treat branch deletion as best-effort
 	// and report the outcome via BranchDeleted.
-	branchDeleted, branchErr := s.deleteTaskWorktreeBranch(ctx, workspaceRoot, record, target, found)
+	branchDeleted, branchErr := s.deleteTaskWorktreeBranch(ctx, workspaceRoot, record, target, targetFound)
 	if branchErr != nil {
 		branchDeleted = false
-	}
-	if _, err := s.syncWorkspace(ctx, record.WorkspaceID, workspaceRoot, false); err != nil {
-		return DeleteTaskWorktreeResponse{}, err
 	}
 	if err := s.metadata.DeleteWorktreeRecordByID(ctx, worktreeID); err != nil {
 		return DeleteTaskWorktreeResponse{}, err
@@ -457,7 +489,7 @@ func (s *Service) deleteTaskWorktreeBranch(ctx context.Context, workspaceRoot st
 	if branchName == "" {
 		return false, nil
 	}
-	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, true); err != nil {
+	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, false); err != nil {
 		return false, fmt.Errorf("delete task worktree branch %q: %w", branchName, err)
 	}
 	return true, nil
@@ -500,25 +532,25 @@ func (s *Service) taskSourceWorkspace(ctx context.Context, projectID string, sou
 	return taskSourceWorkspace{}, fmt.Errorf("project %q has no workspace for task worktree", strings.TrimSpace(projectID))
 }
 
-func (s *Service) taskManagedWorktreeView(ctx context.Context, worktreeID string) (serverapi.WorktreeView, error) {
+func (s *Service) taskManagedWorktreeTopology(ctx context.Context, worktreeID string) (serverapi.WorktreeTopologyEntry, error) {
 	record, err := s.metadata.GetWorktreeRecordByID(ctx, worktreeID)
 	if err != nil {
-		return serverapi.WorktreeView{}, err
+		return serverapi.WorktreeTopologyEntry{}, err
 	}
 	if strings.TrimSpace(record.CanonicalRoot) == "" {
-		return serverapi.WorktreeView{}, fmt.Errorf("managed worktree %q has no canonical root: %w", worktreeID, serverapi.ErrWorktreeNotFound)
+		return serverapi.WorktreeTopologyEntry{}, fmt.Errorf("managed worktree %q has no canonical root: %w", worktreeID, serverapi.ErrWorktreeNotFound)
 	}
 	if _, err := os.Stat(record.CanonicalRoot); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return serverapi.WorktreeView{}, fmt.Errorf("managed worktree %q root %q is missing: %w", worktreeID, record.CanonicalRoot, serverapi.ErrWorktreeNotFound)
+			return serverapi.WorktreeTopologyEntry{}, fmt.Errorf("managed worktree %q root %q is missing: %w", worktreeID, record.CanonicalRoot, serverapi.ErrWorktreeNotFound)
 		}
-		return serverapi.WorktreeView{}, err
+		return serverapi.WorktreeTopologyEntry{}, err
 	}
 	gitMetadata, err := worktreeGitMetadataFromRecord(record)
 	if err != nil {
-		return serverapi.WorktreeView{}, err
+		return serverapi.WorktreeTopologyEntry{}, err
 	}
-	return worktreeViewFromSynced(syncedWorktree{record: record, git: gitMetadata}, clientui.SessionExecutionTarget{})
+	return registeredTopologyEntry(syncedWorktree{record: record, git: gitMetadata}), nil
 }
 
 func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
@@ -603,22 +635,20 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	cleanup.worktreeRoot = strings.TrimSpace(worktreeRoot)
-	synced, err := s.syncWorkspace(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot, false)
+	created, err := s.registerCreatedWorktree(
+		ctx,
+		workspaceCtx.workspaceID,
+		workspaceCtx.workspaceRoot,
+		worktreeRoot,
+		"",
+		true,
+		createdBranch,
+		workspaceCtx.sessionID,
+	)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	created, ok := findSyncedWorktreeByRoot(synced, worktreeRoot)
-	if !ok {
-		return serverapi.WorktreeCreateResponse{}, fmt.Errorf("created worktree %q was not discovered after git sync: %w", worktreeRoot, serverapi.ErrWorktreeNotFound)
-	}
-	created.record.Managed = true
-	created.record.CreatedBranch = createdBranch
-	created.record.OriginSessionID = workspaceCtx.sessionID
-	created.record.UpdatedAt = time.Now().UTC()
 	cleanup.worktreeID = strings.TrimSpace(created.record.ID)
-	if err := s.metadata.UpsertWorktreeRecord(ctx, created.record); err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
-	}
 	cleanup.active = false
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
 		SetupOperationID:    req.SetupOperationID,
@@ -645,14 +675,74 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 			err,
 		)
 	}
-	createdView, err := worktreeViewFromSynced(created, workspaceCtx.target)
+	createdEntry, err := s.createdWorktreeListEntry(ctx, workspaceCtx, created.record.ID)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	createdView.Managed = true
-	createdView.CreatedBranch = createdBranch
-	createdView.OriginSessionID = workspaceCtx.sessionID
-	return serverapi.WorktreeCreateResponse{Target: workspaceCtx.target, Worktree: createdView, CreatedBranch: createdBranch}, nil
+	return serverapi.WorktreeCreateResponse{Target: workspaceCtx.target, Worktree: createdEntry}, nil
+}
+
+func (s *Service) createdWorktreeListEntry(ctx context.Context, workspaceCtx sessionWorkspaceContext, worktreeID string) (serverapi.WorktreeListEntry, error) {
+	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
+	if err != nil {
+		return serverapi.WorktreeListEntry{}, err
+	}
+	entries, err := projectWorktreeList(topology, workspaceCtx.target)
+	if err != nil {
+		return serverapi.WorktreeListEntry{}, err
+	}
+	for _, entry := range entries {
+		id := topologyWorktreeID(entry.Topology)
+		if id != nil && strings.TrimSpace(*id) == strings.TrimSpace(worktreeID) {
+			return entry, nil
+		}
+	}
+	return serverapi.WorktreeListEntry{}, fmt.Errorf("created worktree %q is absent from projected topology: %w", strings.TrimSpace(worktreeID), serverapi.ErrWorktreeNotFound)
+}
+
+func (s *Service) registerCreatedWorktree(
+	ctx context.Context,
+	workspaceID string,
+	workspaceRoot string,
+	worktreeRoot string,
+	preferredID string,
+	managed bool,
+	createdBranch bool,
+	originSessionID string,
+) (syncedWorktree, error) {
+	gitEntry, found, err := s.git.FindCreatedWorktree(ctx, workspaceRoot, worktreeRoot)
+	if err != nil {
+		return syncedWorktree{}, err
+	}
+	if !found {
+		return syncedWorktree{}, fmt.Errorf("created worktree %q was not discovered in Git topology: %w", worktreeRoot, serverapi.ErrWorktreeNotFound)
+	}
+	id := strings.TrimSpace(preferredID)
+	if id == "" {
+		id = uuid.NewString()
+	}
+	now := time.Now().UTC()
+	record := metadata.WorktreeRecord{
+		ID:              id,
+		WorkspaceID:     strings.TrimSpace(workspaceID),
+		CanonicalRoot:   strings.TrimSpace(gitEntry.Root),
+		DisplayName:     filepath.Base(strings.TrimSpace(gitEntry.Root)),
+		Availability:    pathAvailability(gitEntry.Root),
+		IsMain:          gitEntry.IsMain,
+		Managed:         managed,
+		CreatedBranch:   createdBranch,
+		OriginSessionID: strings.TrimSpace(originSessionID),
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	record.GitMetadataJSON, err = marshalGitMetadata(gitEntry)
+	if err != nil {
+		return syncedWorktree{}, err
+	}
+	if err := s.metadata.UpsertWorktreeRecord(ctx, record); err != nil {
+		return syncedWorktree{}, err
+	}
+	return syncedWorktree{record: record, git: gitEntry}, nil
 }
 
 func (s *Service) cleanupFailedCreate(ctx context.Context, cleanup failedCreateCleanup) error {
@@ -828,6 +918,13 @@ func (s *Service) beginMutation(ctx context.Context, sessionID string) (func(), 
 	}
 	if s.runtime == nil {
 		return nil, sessionWorkspaceContext{}, errors.New("worktree service runtime controller is required")
+	}
+	return s.beginWorkspaceMutation(ctx, sessionID)
+}
+
+func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) (func(), sessionWorkspaceContext, error) {
+	if s == nil || s.metadata == nil {
+		return nil, sessionWorkspaceContext{}, errors.New("worktree service metadata store is required")
 	}
 	for {
 		workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)

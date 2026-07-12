@@ -223,6 +223,12 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 			{name: "persistence root lock", close: in.rootLease.Close},
 			{name: "metadata store", close: in.metadataStore.Close},
 			{name: "background manager", close: in.runtimeSupport.Background.Close},
+			{name: "worktree transitions", close: func() error {
+				if in.worktreeService == nil {
+					return nil
+				}
+				return in.worktreeService.Close()
+			}},
 			{name: "workflow runtime starter", close: func() error {
 				if in.workflowRuntimeStarter == nil {
 					return nil

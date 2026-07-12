@@ -102,6 +102,8 @@ const (
 	MethodWorktreeSelectorResolve                       = "worktree.selector.resolve"
 	MethodWorktreeCreateTargetResolve                   = "worktree.create_target.resolve"
 	MethodWorktreeCreate                                = "worktree.create"
+	MethodWorktreeEnter                                 = "worktree.enter"
+	MethodWorktreeLeave                                 = "worktree.leave"
 	MethodWorktreeSwitch                                = "worktree.switch"
 	MethodWorktreeDelete                                = "worktree.delete"
 	MethodWorktreeSetupSubscribe                        = "worktree.setup.subscribe"

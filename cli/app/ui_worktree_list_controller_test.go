@@ -65,8 +65,8 @@ func TestWorktreeListControllerEnterWorktreeSubmitsSwitch(t *testing.T) {
 	if _, ok := result.(worktreeSwitchDoneMsg); !ok {
 		t.Fatalf("command message type = %T, want worktreeSwitchDoneMsg", result)
 	}
-	if len(client.switchRequests) != 1 || client.switchRequests[0].WorktreeID != "wt-feature" {
-		t.Fatalf("switch requests = %+v, want wt-feature", client.switchRequests)
+	if len(client.enterRequests) != 1 || client.enterRequests[0].Selector != "feature" {
+		t.Fatalf("enter requests = %+v, want selector feature", client.enterRequests)
 	}
 }
 

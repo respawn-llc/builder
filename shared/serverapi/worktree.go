@@ -114,12 +114,12 @@ type WorktreeStatusResponse struct {
 	Problems []WorktreeStatusProblem         `json:"problems"`
 }
 
-type WorktreeBranchCleanupPolicy string
+type WorktreeBranchCleanupMode string
 
 const (
-	WorktreeBranchCleanupPolicyRetain            WorktreeBranchCleanupPolicy = "retain"
-	WorktreeBranchCleanupPolicyAutoIfKentCreated WorktreeBranchCleanupPolicy = "auto_if_kent_created"
-	WorktreeBranchCleanupPolicyDeleteSafe        WorktreeBranchCleanupPolicy = "delete_safe"
+	WorktreeBranchCleanupModeRetain            WorktreeBranchCleanupMode = "retain"
+	WorktreeBranchCleanupModeAutoIfKentCreated WorktreeBranchCleanupMode = "auto_if_kent_created"
+	WorktreeBranchCleanupModeDeleteSafe        WorktreeBranchCleanupMode = "delete_safe"
 )
 
 type WorktreeBranchCleanupOutcomeKind string
@@ -172,11 +172,11 @@ type WorktreeLeaveRequest struct {
 // alongside the legacy delete request. The service cutover replaces the
 // legacy request after all clients move to this contract.
 type WorktreeDeleteOperationRequest struct {
-	OperationID         WorktreeOperationID         `json:"operation_id"`
-	SessionID           string                      `json:"session_id"`
-	Selector            string                      `json:"selector"`
-	ForceFolderRemoval  bool                        `json:"force_folder_removal"`
-	BranchCleanupPolicy WorktreeBranchCleanupPolicy `json:"branch_cleanup_policy"`
+	OperationID         WorktreeOperationID       `json:"operation_id"`
+	SessionID           string                    `json:"session_id"`
+	Selector            string                    `json:"selector"`
+	ForceFolderRemoval  bool                      `json:"force_folder_removal"`
+	BranchCleanupPolicy WorktreeBranchCleanupMode `json:"branch_cleanup_policy"`
 }
 
 type WorktreeScheduledAcknowledgement struct {
@@ -346,11 +346,11 @@ func (problem WorktreeStatusProblem) Validate() error {
 	return nil
 }
 
-func (policy WorktreeBranchCleanupPolicy) Validate() error {
+func (policy WorktreeBranchCleanupMode) Validate() error {
 	switch policy {
-	case WorktreeBranchCleanupPolicyRetain,
-		WorktreeBranchCleanupPolicyAutoIfKentCreated,
-		WorktreeBranchCleanupPolicyDeleteSafe:
+	case WorktreeBranchCleanupModeRetain,
+		WorktreeBranchCleanupModeAutoIfKentCreated,
+		WorktreeBranchCleanupModeDeleteSafe:
 		return nil
 	default:
 		return errors.New("worktree branch cleanup policy is invalid")
@@ -543,9 +543,8 @@ type WorktreeCreateRequest struct {
 }
 
 type WorktreeCreateResponse struct {
-	Target        clientui.SessionExecutionTarget `json:"target"`
-	Worktree      WorktreeView                    `json:"worktree"`
-	CreatedBranch bool                            `json:"created_branch"`
+	Target   clientui.SessionExecutionTarget `json:"target"`
+	Worktree WorktreeListEntry               `json:"worktree"`
 }
 
 type WorktreeSwitchRequest struct {

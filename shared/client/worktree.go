@@ -37,6 +37,18 @@ func (c *loopbackWorktreeClient) CreateWorktree(ctx context.Context, req servera
 	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.CreateWorktree)
 }
 
+func (c *loopbackWorktreeClient) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.EnterWorktree)
+}
+
+func (c *loopbackWorktreeClient) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.LeaveWorktree)
+}
+
+func (c *loopbackWorktreeClient) DeleteWorktreeOperation(ctx context.Context, req serverapi.WorktreeDeleteOperationRequest) (serverapi.WorktreeDeleteResult, error) {
+	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.DeleteWorktreeOperation)
+}
+
 func (c *loopbackWorktreeClient) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwitchRequest) (serverapi.WorktreeSwitchResponse, error) {
 	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.SwitchWorktree)
 }

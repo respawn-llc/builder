@@ -73,6 +73,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 		a.applyRuntimeEventReduction(reduction),
 		a.reconcileInterruptFromRunState(evt),
 		a.reconcileInterruptFromRuntimeActivity(evt),
+		a.reconcileWorktreeTransitionOutcome(evt),
 	}
 	return runtimeEventApplyResult{cmd: batchCmds(cmds...)}
 }

@@ -148,10 +148,10 @@ func TestWorktreeDeleteResultAndCleanupPoliciesAreDiscriminated(t *testing.T) {
 	}).Validate(); err == nil {
 		t.Fatal("delete result with both payloads validated")
 	}
-	for _, policy := range []WorktreeBranchCleanupPolicy{
-		WorktreeBranchCleanupPolicyRetain,
-		WorktreeBranchCleanupPolicyAutoIfKentCreated,
-		WorktreeBranchCleanupPolicyDeleteSafe,
+	for _, policy := range []WorktreeBranchCleanupMode{
+		WorktreeBranchCleanupModeRetain,
+		WorktreeBranchCleanupModeAutoIfKentCreated,
+		WorktreeBranchCleanupModeDeleteSafe,
 	} {
 		if err := policy.Validate(); err != nil {
 			t.Fatalf("cleanup policy %q rejected: %v", policy, err)
@@ -178,7 +178,7 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 			OperationID:         operationID,
 			SessionID:           "session",
 			Selector:            "feature",
-			BranchCleanupPolicy: WorktreeBranchCleanupPolicyRetain,
+			BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
 		},
 	}
 	for _, request := range valid {

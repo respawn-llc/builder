@@ -51,6 +51,63 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 	}
 }
 
+func (s *Service) RunWorktreeTransition(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+) error {
+	if fn == nil {
+		return nil
+	}
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return errors.New("session id is required")
+	}
+	for {
+		guard, err := s.activeRuntimeGuard(ctx, trimmedSessionID)
+		if errors.Is(err, ErrAcquiredRuntimeOvertaken) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if guard == nil {
+			return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+				if err := s.syncInactiveExecutionTarget(syncCtx, trimmedSessionID, target, reminder); err != nil {
+					return err
+				}
+				if s.runtimes != nil {
+					s.runtimes.PublishSessionIdentity(trimmedSessionID, &target)
+				}
+				return nil
+			})
+		}
+		defer guard.Release()
+		engine := guard.Engine()
+		if engine == nil {
+			return runtimeUnavailableErr(trimmedSessionID)
+		}
+		return engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, func() error {
+			return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+				if err := s.syncGuardedExecutionTarget(syncCtx, trimmedSessionID, target, guard, reminder); err != nil {
+					return err
+				}
+				if s.runtimes != nil {
+					s.runtimes.PublishSessionIdentity(trimmedSessionID, &target)
+				}
+				return nil
+			})
+		})
+	}
+}
+
+func (s *Service) PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome) {
+	if s == nil || s.runtimes == nil {
+		return
+	}
+	s.runtimes.PublishWorktreeTransitionOutcome(strings.TrimSpace(sessionID), outcome)
+}
+
 func (s *Service) syncActiveExecutionTarget(ctx context.Context, sessionID string, workdir string, guard registry.RuntimeGuard, reminder *session.WorktreeReminderState) error {
 	defer guard.Release()
 	engine := guard.Engine()
@@ -58,20 +115,57 @@ func (s *Service) syncActiveExecutionTarget(ctx context.Context, sessionID strin
 		return runtimeUnavailableErr(sessionID)
 	}
 	return engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, func() error {
-		previousWorkdir := engine.TranscriptWorkingDir()
-		previousReminder := engine.WorktreeReminderState()
-		if err := guard.Rebind(workdir); err != nil {
+		target := clientui.SessionExecutionTarget{EffectiveWorkdir: workdir}
+		return s.syncGuardedExecutionTarget(ctx, sessionID, target, guard, reminder)
+	})
+}
+
+func (s *Service) syncInactiveExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+	if strings.TrimSpace(target.EffectiveWorkdir) == "" {
+		return errors.New("execution target effective workdir is required")
+	}
+	if err := s.persistWorktreeReminderState(ctx, sessionID, reminder); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) syncGuardedExecutionTarget(
+	_ context.Context,
+	sessionID string,
+	target clientui.SessionExecutionTarget,
+	guard registry.RuntimeGuard,
+	reminder *session.WorktreeReminderState,
+) error {
+	workdir := strings.TrimSpace(target.EffectiveWorkdir)
+	if workdir == "" {
+		return errors.New("execution target effective workdir is required")
+	}
+	var normalizedReminder *session.WorktreeReminderState
+	if reminder != nil {
+		normalized, err := normalizeWorktreeReminderState(*reminder)
+		if err != nil {
 			return err
 		}
-		if err := engine.SetWorktreeReminderState(reminder); err != nil {
-			rollbackErr := rollbackActiveExecutionTarget(engine, guard, previousWorkdir, previousReminder)
-			if rollbackErr != nil {
-				return errors.Join(err, rollbackErr, guard.Retire(runtime.QueuedUserMessageFailureRuntimeUnavailable))
-			}
-			return errors.Join(err, rollbackErr)
+		normalizedReminder = &normalized
+	}
+	engine := guard.Engine()
+	if engine == nil {
+		return runtimeUnavailableErr(sessionID)
+	}
+	previousWorkdir := engine.TranscriptWorkingDir()
+	previousReminder := engine.WorktreeReminderState()
+	if err := guard.Rebind(workdir); err != nil {
+		return err
+	}
+	if err := engine.SetWorktreeReminderState(normalizedReminder); err != nil {
+		rollbackErr := rollbackActiveExecutionTarget(engine, guard, previousWorkdir, previousReminder)
+		if rollbackErr != nil {
+			return errors.Join(err, rollbackErr, guard.Retire(runtime.QueuedUserMessageFailureRuntimeUnavailable))
 		}
-		return nil
-	})
+		return errors.Join(err, rollbackErr)
+	}
+	return nil
 }
 
 func (s *Service) ClearWorktreeReminder(ctx context.Context, sessionID string) error {

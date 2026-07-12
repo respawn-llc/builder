@@ -86,6 +86,7 @@ type uiWorktreeDeleteDialogState struct {
 	preferDeleteBranch bool
 	errorText          string
 	submitting         bool
+	forceFolderRemoval bool
 }
 
 type uiWorktreeOverlayState struct {
@@ -110,7 +111,6 @@ type uiWorktreeOverlayState struct {
 
 type uiWorktreeQueuedSwitch struct {
 	TargetToken string
-	WorktreeID  string
 }
 
 type worktreeListDoneMsg struct {
@@ -133,15 +133,17 @@ type worktreeSetupEventMsg struct {
 }
 
 type worktreeSwitchDoneMsg struct {
-	token uint64
-	resp  serverapi.WorktreeSwitchResponse
-	err   error
+	token  uint64
+	target string
+	ack    serverapi.WorktreeScheduledAcknowledgement
+	err    error
 }
 
 type worktreeDeleteDoneMsg struct {
-	token uint64
-	resp  serverapi.WorktreeDeleteResponse
-	err   error
+	token  uint64
+	target string
+	resp   serverapi.WorktreeDeleteResult
+	err    error
 }
 
 func newWorktreeCreateDialog(suggestedBranch string) uiWorktreeCreateDialogState {
@@ -395,13 +397,13 @@ func (m *uiModel) worktreeSwitchCmd(target worktreeui.Item) tea.Cmd {
 	if m == nil {
 		return nil
 	}
-	worktreeID := worktreeui.WorktreeID(target)
+	selector := target.Entry.Projection.Selector
 	if m.worktrees.switchPending {
-		m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{WorktreeID: worktreeID}
+		m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{TargetToken: selector}
 		return nil
 	}
 	m.worktrees.errorText = ""
-	return m.worktreeSwitchCommandForTarget("", worktreeID)
+	return m.worktreeSwitchCommandForTarget(selector)
 }
 
 func (m *uiModel) takeQueuedWorktreeSwitchCmd() tea.Cmd {
@@ -410,11 +412,11 @@ func (m *uiModel) takeQueuedWorktreeSwitchCmd() tea.Cmd {
 	}
 	queued := m.worktrees.queuedSwitch
 	m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{}
-	if strings.TrimSpace(queued.WorktreeID) == "" && strings.TrimSpace(queued.TargetToken) == "" {
+	if strings.TrimSpace(queued.TargetToken) == "" {
 		return nil
 	}
 	m.worktrees.switchPending = false
-	return m.worktreeSwitchCommandForTarget(queued.TargetToken, queued.WorktreeID)
+	return m.worktreeSwitchCommandForTarget(queued.TargetToken)
 }
 
 func (m *uiModel) worktreeDeleteCmd(target worktreeui.Item, deleteBranch bool) tea.Cmd {
@@ -426,9 +428,13 @@ func (m *uiModel) worktreeDeleteCmd(target worktreeui.Item, deleteBranch bool) t
 	m.worktrees.deleteConfirm.errorText = ""
 	m.worktrees.deleteConfirm.submitting = true
 	service := m.worktreeMutationService()
+	cleanupPolicy := serverapi.WorktreeBranchCleanupModeAutoIfKentCreated
+	if deleteBranch {
+		cleanupPolicy = serverapi.WorktreeBranchCleanupModeDeleteSafe
+	}
 	return func() tea.Msg {
-		resp, err := service.Delete(worktreeui.WorktreeID(target), deleteBranch)
-		return worktreeDeleteDoneMsg{token: token, resp: resp, err: err}
+		resp, err := service.Delete(target.Entry.Projection.Selector, m.worktrees.deleteConfirm.forceFolderRemoval, cleanupPolicy)
+		return worktreeDeleteDoneMsg{token: token, target: worktreeui.DisplayName(target), resp: resp, err: err}
 	}
 }
 

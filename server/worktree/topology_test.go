@@ -130,6 +130,37 @@ func TestProjectTopologyRejectsDuplicateGitAndKentRoots(t *testing.T) {
 	}
 }
 
+func TestCreateRegistersOnlyTheCreatedWorktreeWithoutReconcilingOtherTopology(t *testing.T) {
+	env := newServiceTestEnv(t)
+	response, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		ClientRequestID:  "create-without-reconcile",
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SessionID:        env.session.Meta().SessionID,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/explicit-register",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	records, err := env.store.ListWorktreeRecordsByWorkspaceID(env.ctx, env.binding.WorkspaceID)
+	if err != nil {
+		t.Fatalf("ListWorktreeRecordsByWorkspaceID: %v", err)
+	}
+	if len(records) != 1 || records[0].ID != worktreeIDFromListEntry(response.Worktree) {
+		t.Fatalf("records = %+v, want only created worktree", records)
+	}
+	list, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("ListWorktrees: %v", err)
+	}
+	if len(list.Worktrees) != 2 ||
+		list.Worktrees[0].Topology.Variant != serverapi.WorktreeTopologyVariantExternal ||
+		list.Worktrees[1].Topology.Variant != serverapi.WorktreeTopologyVariantRegistered {
+		t.Fatalf("topology = %+v, want external main followed by registered created worktree", list.Worktrees)
+	}
+}
+
 func topologies(entries []serverapi.WorktreeListEntry) []serverapi.WorktreeTopologyEntry {
 	out := make([]serverapi.WorktreeTopologyEntry, 0, len(entries))
 	for _, entry := range entries {

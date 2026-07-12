@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"core/cli/app/internal/worktreeui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -138,8 +139,12 @@ func TestWorktreeDeleteControllerSubmitSchedulesSpinnerTick(t *testing.T) {
 			if len(client.deleteRequests) != 1 {
 				t.Fatalf("delete requests = %d, want 1", len(client.deleteRequests))
 			}
-			if got := client.deleteRequests[0]; got.WorktreeID != "wt-feature" || got.DeleteBranch != tt.deleteBranch {
-				t.Fatalf("delete request = %+v, want deleteBranch=%t for wt-feature", got, tt.deleteBranch)
+			wantPolicy := serverapi.WorktreeBranchCleanupModeAutoIfKentCreated
+			if tt.deleteBranch {
+				wantPolicy = serverapi.WorktreeBranchCleanupModeDeleteSafe
+			}
+			if got := client.deleteRequests[0]; got.Selector != "feature" || got.BranchCleanupPolicy != wantPolicy {
+				t.Fatalf("delete request = %+v, want policy=%s for selector feature", got, wantPolicy)
 			}
 		})
 	}
@@ -265,7 +270,7 @@ func TestWorktreeDeleteControllerSubmitsDelete(t *testing.T) {
 	if len(client.deleteRequests) != 1 {
 		t.Fatalf("delete requests = %d, want 1", len(client.deleteRequests))
 	}
-	if got := client.deleteRequests[0]; got.WorktreeID != "wt-feature" || got.DeleteBranch {
+	if got := client.deleteRequests[0]; got.Selector != "feature" || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeAutoIfKentCreated || got.ForceFolderRemoval {
 		t.Fatalf("delete request = %+v, want worktree-only delete", got)
 	}
 	deadline, ok := client.deleteCtx.Deadline()
@@ -295,7 +300,7 @@ func TestWorktreeDeleteControllerSubmitsDeleteBranch(t *testing.T) {
 	if len(client.deleteRequests) != 1 {
 		t.Fatalf("delete requests = %d, want 1", len(client.deleteRequests))
 	}
-	if got := client.deleteRequests[0]; got.WorktreeID != "wt-feature" || !got.DeleteBranch {
+	if got := client.deleteRequests[0]; got.Selector != "feature" || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 		t.Fatalf("delete request = %+v, want delete branch", got)
 	}
 }
@@ -319,8 +324,8 @@ func TestWorktreeDeleteControllerUpdateRoutesToDeleteDialog(t *testing.T) {
 	if !hasWorktreeDeleteDoneMsg(msgs) {
 		t.Fatalf("expected worktreeDeleteDoneMsg, got %+v", msgs)
 	}
-	if len(client.deleteRequests) != 1 || client.deleteRequests[0].WorktreeID != "wt-feature" {
-		t.Fatalf("delete requests = %+v, want wt-feature delete", client.deleteRequests)
+	if len(client.deleteRequests) != 1 || client.deleteRequests[0].Selector != "feature" {
+		t.Fatalf("delete requests = %+v, want feature selector delete", client.deleteRequests)
 	}
 }
 

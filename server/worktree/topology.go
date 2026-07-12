@@ -164,3 +164,23 @@ func kentFactsFromRecord(record metadata.WorktreeRecord) serverapi.WorktreeKentF
 	}
 	return facts
 }
+
+func registeredTopologyEntry(item syncedWorktree) serverapi.WorktreeTopologyEntry {
+	return serverapi.WorktreeTopologyEntry{
+		Variant: serverapi.WorktreeTopologyVariantRegistered,
+		Registered: &serverapi.WorktreeRegisteredFacts{
+			Git:  gitFactsFromEntry(item.git),
+			Kent: kentFactsFromRecord(item.record),
+		},
+	}
+}
+
+func topologyEntryByWorktreeID(entries []serverapi.WorktreeTopologyEntry, worktreeID string) (serverapi.WorktreeTopologyEntry, bool) {
+	for _, entry := range entries {
+		id := topologyWorktreeID(entry)
+		if id != nil && strings.TrimSpace(*id) == strings.TrimSpace(worktreeID) {
+			return entry, true
+		}
+	}
+	return serverapi.WorktreeTopologyEntry{}, false
+}

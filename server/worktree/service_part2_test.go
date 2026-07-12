@@ -5,6 +5,7 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"encoding/json"
@@ -480,6 +481,15 @@ func assertServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, worktreeI
 	}
 }
 
+func mustResolveServiceTestTarget(t *testing.T, env *serviceTestEnv) clientui.SessionExecutionTarget {
+	t.Helper()
+	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	return target
+}
+
 func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) serverapi.WorktreeView {
 	t.Helper()
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
@@ -493,7 +503,7 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 	if err != nil {
 		t.Fatalf("CreateWorktree(%s): %v", branchName, err)
 	}
-	return resp.Worktree
+	return worktreeViewFromListEntryForTest(resp.Worktree)
 }
 
 func worktreeSwitchRequest(env *serviceTestEnv, clientRequestID string, worktreeID string) serverapi.WorktreeSwitchRequest {

@@ -272,6 +272,12 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.WorktreeCreateRequest:
 		return p.SessionID, true
+	case serverapi.WorktreeEnterRequest:
+		return p.SessionID, true
+	case serverapi.WorktreeLeaveRequest:
+		return p.SessionID, true
+	case serverapi.WorktreeDeleteOperationRequest:
+		return p.SessionID, true
 	case serverapi.WorktreeSwitchRequest:
 		return p.SessionID, true
 	case serverapi.WorktreeDeleteRequest:

@@ -21,12 +21,15 @@ type testWorktreeClient struct {
 	createCtx       context.Context
 	createResp      serverapi.WorktreeCreateResponse
 	createRequests  []serverapi.WorktreeCreateRequest
+	enterCtx        context.Context
+	enterResp       serverapi.WorktreeScheduledAcknowledgement
+	enterRequests   []serverapi.WorktreeEnterRequest
 	switchCtx       context.Context
 	switchResp      serverapi.WorktreeSwitchResponse
 	switchRequests  []serverapi.WorktreeSwitchRequest
 	deleteCtx       context.Context
-	deleteResp      serverapi.WorktreeDeleteResponse
-	deleteRequests  []serverapi.WorktreeDeleteRequest
+	deleteResp      serverapi.WorktreeDeleteResult
+	deleteRequests  []serverapi.WorktreeDeleteOperationRequest
 	errs            []error
 }
 
@@ -56,6 +59,16 @@ func (c *testWorktreeClient) CreateWorktree(ctx context.Context, req serverapi.W
 	return c.createResp, c.nextErr()
 }
 
+func (c *testWorktreeClient) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	c.enterCtx = ctx
+	c.enterRequests = append(c.enterRequests, req)
+	return c.enterResp, c.nextErr()
+}
+
+func (c *testWorktreeClient) LeaveWorktree(context.Context, serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	return serverapi.WorktreeScheduledAcknowledgement{}, c.nextErr()
+}
+
 func (c *testWorktreeClient) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwitchRequest) (serverapi.WorktreeSwitchResponse, error) {
 	c.switchCtx = ctx
 	c.switchRequests = append(c.switchRequests, req)
@@ -63,6 +76,10 @@ func (c *testWorktreeClient) SwitchWorktree(ctx context.Context, req serverapi.W
 }
 
 func (c *testWorktreeClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResponse, error) {
+	return serverapi.WorktreeDeleteResponse{}, c.nextErr()
+}
+
+func (c *testWorktreeClient) DeleteWorktreeOperation(ctx context.Context, req serverapi.WorktreeDeleteOperationRequest) (serverapi.WorktreeDeleteResult, error) {
 	c.deleteCtx = ctx
 	c.deleteRequests = append(c.deleteRequests, req)
 	return c.deleteResp, c.nextErr()
@@ -120,8 +137,7 @@ func TestListUsesSession(t *testing.T) {
 
 func TestMutationRetriesAfterRecoverableError(t *testing.T) {
 	client := &testWorktreeClient{
-		errs:       []error{serverapi.ErrRuntimeUnavailable, nil},
-		switchResp: serverapi.WorktreeSwitchResponse{Worktree: serverapi.WorktreeView{WorktreeID: "wt-1"}},
+		errs: []error{serverapi.ErrRuntimeUnavailable, nil},
 	}
 	recoverCalls := 0
 	service := newTestService(client)
@@ -130,41 +146,38 @@ func TestMutationRetriesAfterRecoverableError(t *testing.T) {
 		return nil
 	}
 
-	resp, err := service.Switch("wt-1")
+	_, err := service.Enter("feature")
 	if err != nil {
-		t.Fatalf("Switch: %v", err)
-	}
-	if resp.Worktree.WorktreeID != "wt-1" {
-		t.Fatalf("worktree id = %q, want wt-1", resp.Worktree.WorktreeID)
+		t.Fatalf("Enter: %v", err)
 	}
 	if recoverCalls != 1 {
 		t.Fatalf("recover calls = %d, want 1", recoverCalls)
 	}
-	if len(client.switchRequests) != 2 {
-		t.Fatalf("switch requests = %+v, want retry", client.switchRequests)
+	if len(client.enterRequests) != 2 || client.enterRequests[0] != client.enterRequests[1] {
+		t.Fatalf("enter requests = %+v, want identical retry", client.enterRequests)
 	}
 }
 
-func TestCreateSwitchDeletePopulateRequests(t *testing.T) {
+func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	client := &testWorktreeClient{}
 	service := newTestService(client)
 
 	if _, err := service.Create(serverapi.WorktreeCreateRequest{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/a"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := service.Switch(" wt-2 "); err != nil {
-		t.Fatalf("Switch: %v", err)
+	if _, err := service.Enter(" feature/a "); err != nil {
+		t.Fatalf("Enter: %v", err)
 	}
-	if _, err := service.Delete(" wt-3 ", true); err != nil {
+	if _, err := service.Delete(" wt-3 ", true, serverapi.WorktreeBranchCleanupModeDeleteSafe); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if got := client.createRequests[0]; got.ClientRequestID != "request-1" || got.SessionID != "session-1" || got.BranchName != "feature/a" {
 		t.Fatalf("create request = %+v", got)
 	}
-	if got := client.switchRequests[0]; got.ClientRequestID != "request-1" || got.SessionID != "session-1" || got.WorktreeID != "wt-2" {
-		t.Fatalf("switch request = %+v", got)
+	if got := client.enterRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "feature/a" {
+		t.Fatalf("enter request = %+v", got)
 	}
-	if got := client.deleteRequests[0]; got.ClientRequestID != "request-1" || got.SessionID != "session-1" || got.WorktreeID != "wt-3" || !got.DeleteBranch {
+	if got := client.deleteRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "wt-3" || !got.ForceFolderRemoval || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 		t.Fatalf("delete request = %+v", got)
 	}
 }
@@ -176,7 +189,7 @@ func TestMutationsUseDedicatedMutationContext(t *testing.T) {
 		return context.WithTimeout(context.Background(), 10*time.Second)
 	}
 
-	if _, err := service.Delete("wt-1", false); err != nil {
+	if _, err := service.Delete("wt-1", false, serverapi.WorktreeBranchCleanupModeRetain); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if client.deleteCtx == nil {
@@ -239,5 +252,14 @@ func newTestService(client *testWorktreeClient) Service {
 			RecoverRuntimeConnection: func(context.Context, error, bool) error { return nil },
 		},
 		NewClientRequestID: func() string { return "request-1" },
+		NewOperationID:     func() serverapi.WorktreeOperationID { return testWorktreeOperationID(nil) },
 	}
+}
+
+func testWorktreeOperationID(t *testing.T) serverapi.WorktreeOperationID {
+	id, err := serverapi.ParseWorktreeOperationID("11111111-1111-4111-8111-111111111111")
+	if err != nil && t != nil {
+		t.Fatalf("ParseWorktreeOperationID: %v", err)
+	}
+	return id
 }

@@ -181,11 +181,11 @@ func TestTUIStrictIOWorktreeSwitchRunsAsCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected worktree switch command")
 	}
-	if len(client.listRequests) != 0 || len(client.switchRequests) != 0 {
-		t.Fatalf("worktree client called before command: list=%d switch=%d", len(client.listRequests), len(client.switchRequests))
+	if len(client.enterRequests) != 0 {
+		t.Fatalf("worktree client called before command: enter=%d", len(client.enterRequests))
 	}
 	_ = collectCmdMessages(t, cmd)
-	if len(client.listRequests) == 0 || len(client.switchRequests) == 0 {
-		t.Fatalf("expected worktree list/switch after command, list=%d switch=%d", len(client.listRequests), len(client.switchRequests))
+	if len(client.enterRequests) != 1 {
+		t.Fatalf("expected worktree enter after command, enter=%d", len(client.enterRequests))
 	}
 }
