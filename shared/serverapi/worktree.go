@@ -273,6 +273,21 @@ func (state WorktreeOperationLifecycleState) Validate() error {
 	}
 }
 
+type WorktreeOperationExpectedTarget struct {
+	WorktreeID    *WorktreeOperationID `json:"worktree_id,omitempty"`
+	CanonicalRoot string               `json:"canonical_root"`
+}
+
+func (target WorktreeOperationExpectedTarget) Validate() error {
+	if strings.TrimSpace(target.CanonicalRoot) == "" {
+		return errors.New("worktree operation expected canonical_root is required")
+	}
+	if target.WorktreeID != nil {
+		return target.WorktreeID.Validate()
+	}
+	return nil
+}
+
 type WorktreeDeleteResultKind string
 
 const (

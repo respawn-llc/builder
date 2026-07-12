@@ -55,6 +55,19 @@ type WorktreeSessionBlocker struct {
 	UpdatedAt   time.Time
 }
 
+type WorktreeOperationRecord struct {
+	OperationID      serverapi.WorktreeOperationID
+	Payload          serverapi.WorktreeOperationPayload
+	ExpectedTarget   serverapi.WorktreeOperationExpectedTarget
+	ExecutionMode    serverapi.WorktreeOperationExecutionMode
+	LifecycleState   serverapi.WorktreeOperationLifecycleState
+	LifecycleVersion int64
+	TerminalResult   *json.RawMessage
+	TerminalError    *json.RawMessage
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 type Store struct {
 	persistenceRoot string
 	db              *sql.DB
@@ -401,6 +414,77 @@ func (s *Store) DeleteWorktreeRecordByID(ctx context.Context, worktreeID string)
 	}
 	if _, err := s.queries.DeleteWorktreeByID(ctx, strings.TrimSpace(worktreeID)); err != nil {
 		return fmt.Errorf("delete worktree by id: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) InsertWorktreeOperation(ctx context.Context, record WorktreeOperationRecord) (bool, error) {
+	if s == nil || s.queries == nil {
+		return false, errors.New("metadata store is required")
+	}
+	if err := validateWorktreeOperationRecord(record); err != nil {
+		return false, err
+	}
+	payloadJSON, err := json.Marshal(record.Payload)
+	if err != nil {
+		return false, fmt.Errorf("marshal worktree operation payload: %w", err)
+	}
+	targetJSON, err := json.Marshal(record.ExpectedTarget)
+	if err != nil {
+		return false, fmt.Errorf("marshal worktree operation expected target: %w", err)
+	}
+	now := time.Now().UTC()
+	createdAt := record.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	updatedAt := record.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = createdAt
+	}
+	inserted, err := s.queries.InsertWorktreeOperation(ctx, sqlitegen.InsertWorktreeOperationParams{
+		OperationID:        record.OperationID.String(),
+		PayloadJson:        string(payloadJSON),
+		ExpectedTargetJson: string(targetJSON),
+		ExecutionMode:      string(record.ExecutionMode),
+		LifecycleState:     string(record.LifecycleState),
+		LifecycleVersion:   record.LifecycleVersion,
+		TerminalResultJson: rawMessageNullString(record.TerminalResult),
+		TerminalErrorJson:  rawMessageNullString(record.TerminalError),
+		CreatedAtUnixMs:    createdAt.UnixMilli(),
+		UpdatedAtUnixMs:    updatedAt.UnixMilli(),
+	})
+	if err != nil {
+		return false, fmt.Errorf("insert worktree operation: %w", err)
+	}
+	return inserted == 1, nil
+}
+
+func rawMessageNullString(value *json.RawMessage) sql.NullString {
+	if value == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: string(*value), Valid: true}
+}
+
+func validateWorktreeOperationRecord(record WorktreeOperationRecord) error {
+	if err := record.OperationID.Validate(); err != nil {
+		return err
+	}
+	if err := record.Payload.Validate(); err != nil {
+		return err
+	}
+	if err := record.ExpectedTarget.Validate(); err != nil {
+		return err
+	}
+	if err := record.ExecutionMode.Validate(); err != nil {
+		return err
+	}
+	if err := record.LifecycleState.Validate(); err != nil {
+		return err
+	}
+	if record.LifecycleVersion <= 0 {
+		return errors.New("worktree operation lifecycle version must be positive")
 	}
 	return nil
 }
