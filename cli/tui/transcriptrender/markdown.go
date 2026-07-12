@@ -133,9 +133,15 @@ func markdownNodeSourceStart(node ast.Node, source []byte) int {
 func renderMarkdownTable(source string, role StyleRole, width int) []Line {
 	style := glamourstyles.ASCIIStyleConfig
 	zero := uint(0)
+	centerSeparator := "┼"
+	columnSeparator := "│"
+	rowSeparator := "─"
 	style.Document.Margin = &zero
 	style.Document.BlockPrefix = ""
 	style.Document.BlockSuffix = ""
+	style.Table.CenterSeparator = &centerSeparator
+	style.Table.ColumnSeparator = &columnSeparator
+	style.Table.RowSeparator = &rowSeparator
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithWordWrap(max(1, width)),
 		glamour.WithTableWrap(true),

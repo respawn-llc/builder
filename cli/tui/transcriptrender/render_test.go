@@ -1120,6 +1120,25 @@ func TestStableMarkdownTableUsesLibraryWidthLayout(t *testing.T) {
 	}
 }
 
+func TestStableMarkdownTableUsesContinuousUnicodeSeparators(t *testing.T) {
+	lines := RenderMarkdownStableLines(
+		StyleRoleAssistant,
+		"| Name | Result |\n| --- | ---: |\n| alpha | pass |",
+		24,
+	)
+	plain := strings.Join(PlainLines(lines), "\n")
+	for _, separator := range []string{"│", "─", "┼"} {
+		if !strings.Contains(plain, separator) {
+			t.Fatalf("stable table = %q, want Unicode separator %q", plain, separator)
+		}
+	}
+	for _, asciiSeparator := range []string{"|", "-"} {
+		if strings.Contains(plain, asciiSeparator) {
+			t.Fatalf("stable table = %q, contains ASCII separator %q", plain, asciiSeparator)
+		}
+	}
+}
+
 func TestStableMarkdownOnlyWidthFormatsTableBlocks(t *testing.T) {
 	lines := RenderMarkdownStableLines(
 		StyleRoleAssistant,
