@@ -55,9 +55,10 @@ func BindProjectWorkspace(ctx context.Context, req ProjectWorkspaceBindingReques
 			return ProjectWorkspaceBinding{}, errors.Join(err, nextRemote.Close())
 		}
 	}
-	if err := req.Current.Close(); err != nil {
-		return ProjectWorkspaceBinding{}, errors.Join(err, nextRemote.Close())
-	}
+	// The successor is fully established at this point. Remote.Close marks the
+	// superseded connection closed before its transport teardown can fail, so a
+	// teardown error cannot roll the binding back to a usable current remote.
+	_ = req.Current.Close()
 	var closeFn func() error
 	if req.OwnsServer && req.OwnedClose != nil {
 		closeFn = func() error {
