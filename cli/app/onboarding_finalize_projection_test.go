@@ -233,13 +233,14 @@ func TestOnboardingFinalizationJoinsSubmittedResultAfterParentCancellation(t *te
 	<-started
 	cancelParent()
 
-	joined := make(chan onboardingFinalizeDoneMsg, 1)
+	type joinedFinalization struct {
+		outcome   onboardingFinalizeDoneMsg
+		submitted bool
+	}
+	joined := make(chan joinedFinalization, 1)
 	go func() {
 		outcome, submitted := finalization.waitIfSubmitted()
-		if !submitted {
-			t.Fatal("expected submitted finalization")
-		}
-		joined <- outcome
+		joined <- joinedFinalization{outcome: outcome, submitted: submitted}
 	}()
 	select {
 	case <-joined:
@@ -247,7 +248,11 @@ func TestOnboardingFinalizationJoinsSubmittedResultAfterParentCancellation(t *te
 	case <-time.After(20 * time.Millisecond):
 	}
 	close(release)
-	outcome := <-joined
+	completed := <-joined
+	if !completed.submitted {
+		t.Fatal("expected submitted finalization")
+	}
+	outcome := completed.outcome
 	if outcome.err != nil || !outcome.result.Completed {
 		t.Fatalf("joined outcome = %+v", outcome)
 	}
