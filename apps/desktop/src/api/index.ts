@@ -60,6 +60,7 @@ export type {
   WorkflowInputBinding,
   WorkflowJoinInputProvider,
   WorkflowNode,
+  WorkflowNodeKind,
   WorkflowNodeGroup,
   WorkflowOutputField,
   WorkflowOutputRequirement,

@@ -198,6 +198,9 @@ export type WorkflowNodeGroup = Readonly<{
   nodeIDs: readonly string[];
 }>;
 
+export const workflowNodeKinds = ["agent", "join", "script", "start", "terminal"] as const;
+export type WorkflowNodeKind = (typeof workflowNodeKinds)[number];
+
 export type WorkflowNode = Readonly<{
   id: string;
   workflowID: string;

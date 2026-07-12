@@ -2,7 +2,7 @@ import { MarkerType, type Edge, type Node } from "@xyflow/react";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ElkNode } from "elkjs/lib/elk-api";
 
-import type { WorkflowDefinition, WorkflowValidation } from "../../api";
+import type { WorkflowDefinition, WorkflowNodeKind, WorkflowValidation } from "../../api";
 import { workflowEdgeColor } from "./workflowGraphColors";
 import { visibleWorkflowGraphEdgeModels, type WorkflowGraphEdgeModel } from "./workflowGraphEdges";
 import {
@@ -29,7 +29,7 @@ export type WorkflowGraphNodeData = Readonly<{
   endpointPorts?: readonly WorkflowGraphEndpointPort[] | undefined;
   creationHandleID?: string | undefined;
   key: string;
-  kind: string;
+  kind: WorkflowNodeKind;
   label: string;
   role: string;
   hasError: boolean;
@@ -210,7 +210,7 @@ export function workflowGraphLayoutWithDraftProjection(
               groupID: model.groupID,
               hasError: errorMarkers.nodeIDs.has(model.id) || errorMarkers.relatedIDs.has(model.id),
               key: model.key,
-              kind: model.kind,
+              kind: workflowNodeKind(model.kind),
               label: model.name,
               role: model.subagentRole,
             },
@@ -269,6 +269,13 @@ export function workflowGraphLayoutWithDraftProjection(
       ];
     }),
   };
+}
+
+function workflowNodeKind(kind: string): WorkflowNodeKind {
+  if (kind === "agent" || kind === "join" || kind === "script" || kind === "start" || kind === "terminal") {
+    return kind;
+  }
+  throw new Error(`Unsupported workflow node kind in graph layout: ${kind}`);
 }
 
 function elkWorkflowNode(

@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act } from "react";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { initializeI18n } from "../../i18n/setup";
+import type { WorkflowNodeKind } from "../../api";
+import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
 import { WorkflowGraphCanvas } from "./WorkflowGraphCanvas";
 import type { WorkflowGraphEdge, WorkflowGraphNode, WorkflowGraphNodeData } from "./workflowGraphLayout";
 
@@ -21,9 +24,10 @@ describe("WorkflowGraphCanvas edge interactions", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps node and handle inspection available with a crossing edge route in the canvas graph", () => {
+  it("keeps node and handle quick-add available with a crossing edge route in the canvas graph", async () => {
     const onEdgeInspect = vi.fn();
     const onNodeInspect = vi.fn();
+    const onAddConnectedNode = vi.fn();
     render(
       <WorkflowGraphCanvas
         graph={{
@@ -45,6 +49,7 @@ describe("WorkflowGraphCanvas edge interactions", () => {
           ],
         }}
         onEdgeInspect={onEdgeInspect}
+        onAddConnectedNode={onAddConnectedNode}
         onGroupInspect={() => undefined}
         onNodeInspect={onNodeInspect}
         onWorkflowInspect={() => undefined}
@@ -56,9 +61,9 @@ describe("WorkflowGraphCanvas edge interactions", () => {
     expect(onNodeInspect).toHaveBeenCalledExactlyOnceWith("agent");
     expect(onEdgeInspect).not.toHaveBeenCalled();
 
-    fireEvent.click(within(agent).getByTestId("workflow-node-source-handle"));
-    expect(onNodeInspect).toHaveBeenCalledTimes(2);
-    expect(onNodeInspect).toHaveBeenLastCalledWith("agent");
+    fireEvent.click(within(agent).getByTestId("workflow-node-source-handle"), { detail: 1 });
+    fireEvent.click(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }), { detail: 1 });
+    expect(onAddConnectedNode).toHaveBeenCalledWith("agent", "agent", "pointer");
     expect(onEdgeInspect).not.toHaveBeenCalled();
   });
 
@@ -81,6 +86,7 @@ describe("WorkflowGraphCanvas edge interactions", () => {
           ],
         }}
         onEdgeInspect={() => undefined}
+        onAddConnectedNode={() => undefined}
         onGroupInspect={() => undefined}
         onNodeInspect={() => undefined}
         onWorkflowInspect={() => undefined}
@@ -93,6 +99,105 @@ describe("WorkflowGraphCanvas edge interactions", () => {
     expect(within(agent).queryAllByTestId("workflow-node-target-handle")).toHaveLength(0);
     expect(within(agent).getAllByTestId("workflow-node-endpoint-handle")).toHaveLength(2);
   });
+
+  it("delivers an external edge selection only after its layout edge appears and never after cancellation", async () => {
+    const onGraphSelectionConsumed = vi.fn();
+    const request = { edgeID: "edge-delayed", requestID: "request-delayed" };
+    const props = {
+      onEdgeInspect: () => undefined,
+      onGraphSelectionConsumed,
+      onGroupInspect: () => undefined,
+      onNodeInspect: () => undefined,
+      onWorkflowInspect: () => undefined,
+    };
+    const { rerender } = render(
+      <WorkflowGraphCanvas
+        {...props}
+        graph={{ edges: [], nodes: [] }}
+        graphSelectionRequest={request}
+      />,
+    );
+
+    expect(onGraphSelectionConsumed).not.toHaveBeenCalled();
+
+    rerender(
+      <WorkflowGraphCanvas
+        {...props}
+        graph={{
+          edges: [workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" })],
+          nodes: [],
+        }}
+        graphSelectionRequest={request}
+      />,
+    );
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        queueMicrotask(resolve);
+      });
+    });
+    expect(onGraphSelectionConsumed).toHaveBeenCalledExactlyOnceWith("request-delayed");
+
+    onGraphSelectionConsumed.mockClear();
+    rerender(
+      <WorkflowGraphCanvas
+        {...props}
+        graph={{ edges: [], nodes: [] }}
+        graphSelectionRequest={null}
+      />,
+    );
+    rerender(
+      <WorkflowGraphCanvas
+        {...props}
+        graph={{
+          edges: [workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" })],
+          nodes: [],
+        }}
+        graphSelectionRequest={null}
+      />,
+    );
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        queueMicrotask(resolve);
+      });
+    });
+    expect(onGraphSelectionConsumed).not.toHaveBeenCalled();
+
+    const canceledAfterLayoutRequest = { edgeID: "edge-delayed", requestID: "request-canceled-after-layout" };
+    rerender(
+      <WorkflowGraphCanvas
+        {...props}
+        graph={{ edges: [], nodes: [] }}
+        graphSelectionRequest={canceledAfterLayoutRequest}
+      />,
+    );
+    rerender(
+      <WorkflowGraphCanvas
+        {...props}
+        graph={{
+          edges: [workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" })],
+          nodes: [],
+        }}
+        graphSelectionRequest={canceledAfterLayoutRequest}
+      />,
+    );
+    rerender(
+      <WorkflowGraphCanvas
+        {...props}
+        graph={{
+          edges: [workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" })],
+          nodes: [],
+        }}
+        graphSelectionRequest={null}
+      />,
+    );
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        queueMicrotask(resolve);
+      });
+    });
+    expect(onGraphSelectionConsumed).not.toHaveBeenCalled();
+  });
+
 });
 
 class MockResizeObserver implements ResizeObserver {
@@ -118,7 +223,7 @@ function workflowGraphNode({
 }: Readonly<{
   endpointPorts?: WorkflowGraphNodeData["endpointPorts"];
   id: string;
-  kind: string;
+  kind: WorkflowNodeKind;
   label: string;
   x: number;
 }>): WorkflowGraphNode {

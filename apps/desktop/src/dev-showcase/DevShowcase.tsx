@@ -4,7 +4,7 @@ import { AlertTriangle, Pin } from "lucide-react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
 
-import { ApiClient } from "../api";
+import { ApiClient, type WorkflowNodeKind } from "../api";
 import { FakeRpcTransport } from "../api/fakeTransport";
 import { applyConfiguredTheme, readEffectiveTheme, type AppTheme } from "../appEnvironment";
 import { createGuiLogger } from "../app/logging";
@@ -190,7 +190,7 @@ function workflowGraphPreviewNode({
   y = 0,
 }: Readonly<{
   id: string;
-  kind: string;
+  kind: WorkflowNodeKind;
   label: string;
   role: string;
   size?: number | undefined;

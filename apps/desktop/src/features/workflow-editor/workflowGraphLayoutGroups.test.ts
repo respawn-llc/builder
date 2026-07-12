@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowValidation } from "../../api";
+import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowNode, type WorkflowValidation } from "../../api";
 import type { WorkflowGraphEdge, WorkflowGraphNode, WorkflowGraphPoint } from "./workflowGraphLayout";
 import { layoutWorkflowGraph } from "./workflowGraphLayout";
 import {
@@ -177,7 +177,7 @@ const threeBranchGroupJoinWorkflow: WorkflowDefinition = {
   ],
 };
 
-function workflowNode(id: string, name: string, kind: string, groupID: string) {
+function workflowNode(id: string, name: string, kind: WorkflowNode["kind"], groupID: string) {
   return {
     groupID,
     groupKey: groupID.length > 0 ? "parallel" : "",

@@ -9,18 +9,8 @@ import type {
 } from "../../api";
 import { z } from "zod";
 import {
-  addWorkflowNode,
-  addWorkflowNodeToGroup,
-  connectWorkflowNodes,
-  createWorkflowNodeGroupFromNode,
-  deleteWorkflowEdge,
-  deleteWorkflowNode,
-  deleteWorkflowNodeGroup,
-  editWorkflowEdgeRoute,
-  extractWorkflowNodeFromGroup,
-  reconnectWorkflowEdge,
-  removeWorkflowNodeFromGroup,
   type AddWorkflowNodeInput,
+  type AddConnectedWorkflowNodeInput,
   type AddWorkflowNodeToGroupInput,
   type ConnectWorkflowNodesInput,
   type CreateWorkflowNodeGroupInput,
@@ -32,36 +22,23 @@ import {
   type WorkflowEditorSelection,
 } from "./workflowEditorGraphMutations";
 import { workflowGraphsEqual } from "./workflowDraftEquality";
+import { workflowEditorTopologyMutation } from "./workflowEditorTopologyReducer";
+import type {
+  DraftWorkflowDefinition,
+  DraftWorkflowEdge,
+  DraftWorkflowNode,
+  DraftWorkflowParameter,
+} from "./workflowEditorDraftTypes";
+
+export type {
+  DraftInputField,
+  DraftWorkflowDefinition,
+  DraftWorkflowEdge,
+  DraftWorkflowNode,
+  DraftWorkflowParameter,
+} from "./workflowEditorDraftTypes";
 
 const workflowParameterRowIDSchema = z.string();
-
-export type DraftInputField = Readonly<{
-  rowID: string;
-  name: string;
-  description: string;
-}>;
-
-export type DraftWorkflowParameter = WorkflowParameter &
-  Readonly<{
-    rowID?: string;
-  }>;
-
-export type DraftWorkflowNode = Omit<WorkflowNode, "completionMode" | "inputFields"> &
-  Readonly<{
-    completionMode: string;
-    inputFields: readonly DraftInputField[];
-  }>;
-
-export type DraftWorkflowEdge = Omit<WorkflowEdge, "parameters"> &
-  Readonly<{
-    parameters: readonly DraftWorkflowParameter[];
-  }>;
-
-export type DraftWorkflowDefinition = Omit<WorkflowDefinition, "edges" | "nodes"> &
-  Readonly<{
-    edges: readonly DraftWorkflowEdge[];
-    nodes: readonly DraftWorkflowNode[];
-  }>;
 
 export type WorkflowEditorDraftState = Readonly<{
   acknowledgedConflictVersion: number;
@@ -121,6 +98,7 @@ export type WorkflowEditorDraftAction =
   | Readonly<{ type: "deleteEdgeParameter"; edgeID: string; parameterRowID: string }>
   | Readonly<{ type: "reorderEdgeParameter"; edgeID: string; activeRowID: string; overRowID: string }>
   | Readonly<{ type: "addNode"; input: AddWorkflowNodeInput }>
+  | Readonly<{ type: "addConnectedNode"; input: AddConnectedWorkflowNodeInput }>
   | Readonly<{ type: "deleteNode"; nodeID: string }>
   | Readonly<{ type: "connectNodes"; input: ConnectWorkflowNodesInput }>
   | Readonly<{ type: "reconnectEdge"; input: ReconnectWorkflowEdgeInput }>
@@ -187,6 +165,7 @@ type TopologyAction = Extract<
   {
     type:
       | "addNode"
+      | "addConnectedNode"
       | "deleteNode"
       | "connectNodes"
       | "reconnectEdge"
@@ -408,30 +387,8 @@ function reduceTopologyAction(
   state: WorkflowEditorDraftState,
   action: TopologyAction,
 ): WorkflowEditorDraftState {
-  switch (action.type) {
-    case "addNode":
-      return applyTopologyMutation(state, addWorkflowNode(state.draft, action.input));
-    case "deleteNode":
-      return applyTopologyMutation(state, deleteWorkflowNode(state.draft, action.nodeID));
-    case "connectNodes":
-      return applyTopologyMutation(state, connectWorkflowNodes(state.draft, action.input));
-    case "reconnectEdge":
-      return applyTopologyMutation(state, reconnectWorkflowEdge(state.draft, action.input));
-    case "deleteEdge":
-      return applyTopologyMutation(state, deleteWorkflowEdge(state.draft, action.edgeID));
-    case "editEdgeRoute":
-      return applyTopologyMutation(state, editWorkflowEdgeRoute(state.draft, action.input), false);
-    case "createNodeGroupFromNode":
-      return applyTopologyMutation(state, createWorkflowNodeGroupFromNode(state.draft, action.input));
-    case "addNodeToGroup":
-      return applyTopologyMutation(state, addWorkflowNodeToGroup(state.draft, action.input));
-    case "deleteNodeGroup":
-      return applyTopologyMutation(state, deleteWorkflowNodeGroup(state.draft, action.groupID));
-    case "extractNodeFromGroup":
-      return applyTopologyMutation(state, extractWorkflowNodeFromGroup(state.draft, action.input));
-    case "removeNodeFromGroup":
-      return applyTopologyMutation(state, removeWorkflowNodeFromGroup(state.draft, action.nodeID));
-  }
+  const operation = workflowEditorTopologyMutation(state.draft, action);
+  return applyTopologyMutation(state, operation.mutation, operation.graphChanged);
 }
 
 export function draftDefinitionFromSource(source: WorkflowDefinition): DraftWorkflowDefinition {

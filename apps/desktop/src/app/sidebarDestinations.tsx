@@ -55,6 +55,7 @@ export function SidebarDestinationView({
   if (destination.kind === "workflowInspect") {
     return (
       <WorkflowInspectorSidebar
+        initialFocus={destination.initialFocus}
         onMissingSelectedNode={() => {
           closeSidebar("closed");
         }}

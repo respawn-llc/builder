@@ -150,7 +150,7 @@ describe("workflowEditorDraft", () => {
     if (baseNode === undefined) {
       throw new Error("Expected workflow fixture to include a node.");
     }
-    const withJoin = {
+    const withJoin: WorkflowDefinition = {
       ...workflowDefinition,
       nodes: [...workflowDefinition.nodes, { ...baseNode, id: "node-join", kind: "join" }],
     };
@@ -177,7 +177,7 @@ describe("workflowEditorDraft", () => {
     if (baseNode === undefined) {
       throw new Error("Expected workflow fixture to include a node.");
     }
-    const source = {
+    const source: WorkflowDefinition = {
       ...workflowDefinition,
       nodes: [
         {
@@ -328,13 +328,42 @@ describe("workflowEditorDraft", () => {
       removedTransitionGroupIDs: ["workflow-transition-group-review"],
     });
   });
+
+  it("adds a connected node in one graph version increment", () => {
+    const initial = initializeWorkflowEditorDraft(workflowDefinition);
+
+    const added = workflowEditorDraftReducer(initial, {
+      input: {
+        edgeID: "workflow-edge-review",
+        kind: "agent",
+        nodeID: "workflow-node-review",
+        sourceNodeID: "node-agent",
+        transitionGroupID: "workflow-transition-group-review",
+      },
+      type: "addConnectedNode",
+    });
+
+    expect(added.version).toBe(initial.version + 1);
+    expect(added.graphVersion).toBe(initial.graphVersion + 1);
+    expect(added.draft.nodes.some((node) => node.id === "workflow-node-review")).toBe(true);
+    expect(added.draft.edges.some((edge) => edge.id === "workflow-edge-review")).toBe(true);
+    expect(added.lastTopologyMutation?.nextSelection).toEqual({
+      edgeID: "workflow-edge-review",
+      kind: "edge",
+    });
+  });
 });
 
 function withVersion(source: WorkflowDefinition, version: number): WorkflowDefinition {
   return { ...source, workflow: { ...source.workflow, version } };
 }
 
-function fixedWorkflowNode(id: string, key: string, name: string, kind: "start" | "terminal") {
+function fixedWorkflowNode(
+  id: string,
+  key: string,
+  name: string,
+  kind: "start" | "terminal",
+): WorkflowDefinition["nodes"][number] {
   const source = workflowDefinition.nodes[0];
   if (source === undefined) throw new Error("Expected workflow fixture to include a node.");
   return {
