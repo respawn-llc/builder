@@ -6,9 +6,37 @@ import (
 	"strings"
 	"testing"
 
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
+
+func TestOpenWorktreeCommandRemoteAttachesCurrentProjectWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	binding := registerBindingCommandWorkspace(t, workspace)
+	cleanup := startBindingCommandServer(t, workspace)
+	defer cleanup()
+	t.Chdir(workspace)
+
+	remoteClient, err := openWorktreeCommandRemote(context.Background())
+	if err != nil {
+		t.Fatalf("openWorktreeCommandRemote: %v", err)
+	}
+	defer func() { _ = remoteClient.Close() }()
+	remote, ok := remoteClient.(*client.Remote)
+	if !ok {
+		t.Fatalf("remote type = %T, want *client.Remote", remoteClient)
+	}
+	if remote.ProjectID() != binding.ProjectID || remote.WorkspaceID() != binding.WorkspaceID {
+		t.Fatalf(
+			"attachment = project %q workspace %q, want %q %q",
+			remote.ProjectID(),
+			remote.WorkspaceID(),
+			binding.ProjectID,
+			binding.WorkspaceID,
+		)
+	}
+}
 
 type worktreeCommandTestRemote struct {
 	statusRequest serverapi.WorktreeStatusRequest
@@ -20,7 +48,7 @@ type worktreeCommandTestRemote struct {
 	create        serverapi.WorktreeCreateResponse
 	enterRequest  serverapi.WorktreeEnterRequest
 	leaveRequest  serverapi.WorktreeLeaveRequest
-	deleteRequest serverapi.WorktreeDeleteOperationRequest
+	deleteRequest serverapi.WorktreeDeleteRequest
 	deleteResult  serverapi.WorktreeDeleteResult
 }
 
@@ -53,7 +81,7 @@ func (r *worktreeCommandTestRemote) LeaveWorktree(_ context.Context, req servera
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: req.OperationID}, nil
 }
 
-func (r *worktreeCommandTestRemote) DeleteWorktreeOperation(_ context.Context, req serverapi.WorktreeDeleteOperationRequest) (serverapi.WorktreeDeleteResult, error) {
+func (r *worktreeCommandTestRemote) DeleteWorktree(_ context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
 	r.deleteRequest = req
 	return r.deleteResult, nil
 }

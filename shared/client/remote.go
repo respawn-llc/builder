@@ -543,18 +543,8 @@ func (c *Remote) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveR
 	return resp, c.call(ctx, protocol.MethodWorktreeLeave, req, &resp)
 }
 
-func (c *Remote) DeleteWorktreeOperation(ctx context.Context, req serverapi.WorktreeDeleteOperationRequest) (serverapi.WorktreeDeleteResult, error) {
+func (c *Remote) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
 	var resp serverapi.WorktreeDeleteResult
-	return resp, c.call(ctx, protocol.MethodWorktreeDelete, req, &resp)
-}
-
-func (c *Remote) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwitchRequest) (serverapi.WorktreeSwitchResponse, error) {
-	var resp serverapi.WorktreeSwitchResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeSwitch, req, &resp)
-}
-
-func (c *Remote) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResponse, error) {
-	var resp serverapi.WorktreeDeleteResponse
 	return resp, c.call(ctx, protocol.MethodWorktreeDelete, req, &resp)
 }
 

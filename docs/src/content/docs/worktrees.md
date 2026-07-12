@@ -1,27 +1,44 @@
 ---
 title: Worktrees
-description: Create, switch, and delete git worktrees from Kent.
+description: Create, enter, and delete Git worktrees from Kent.
 ---
 
-Kent can manage git worktrees for you. Creating or switching a worktree moves that session into the selected checkout and gives the agent necessary context. Managed worktrees are created under `config.toml`'s `[worktrees].base_dir`, and Kent switches the session into the new worktree after creation and setup succeed. Run `/wt` to get started.
+Kent manages Git worktrees together with each session's execution target. Use `/wt` in the TUI or the server-backed CLI:
 
-## Switch
+```bash
+kent worktree status
+kent worktree list
+kent worktree create <branch-or-ref> [path]
+kent worktree enter <selector>
+kent worktree leave
+kent worktree delete <selector>
+```
 
-`<target>` must resolve uniquely. Kent matches, in order:
+Inside a Kent shell command, the CLI targets `KENT_SESSION_ID`. Outside an agent shell, pass `--session <id>`. Every command supports `--json`.
 
-- worktree id
-- canonical path
-- display name
-- branch name
-- `main` for the main workspace worktree
+## Selectors and topology
+
+Selectors resolve exactly in this order: Kent worktree ID, branch, display name, then component-aware path. Ambiguous selectors fail.
+
+`list` reports Git and Kent metadata without repairing either source:
+
+- **registered**: present in Git and Kent metadata
+- **external**: present only in Git; entering it adopts it into Kent
+- **missing**: present only in Kent metadata
+
+`status` inspects the session's recorded target and reports typed drift problems without changing it.
+
+## Create and enter
+
+`create` creates the Git checkout, records Kent metadata, and runs setup synchronously. It does not change the session target; the CLI prints the corresponding `kent worktree enter` command, while the TUI composes entry after a successful create.
+
+`enter`, `leave`, and deletion of the current worktree are scheduled at the next between-step boundary. Their command acknowledgement means accepted, not completed. Attached clients receive completion or failure through session activity. A server restart cancels a pending transition; reconnecting clients refresh status.
 
 ## Delete
 
-The main workspace worktree cannot be deleted. Deletion is blocked when another session targets that worktree or when background processes are running inside it.
+The main workspace worktree cannot be deleted. Deletion blocks while another targeting session has active runtime work or while a background process uses the worktree. Idle targeting sessions move to the main workspace before removal.
 
-:::tip
-If you delete the active worktree, Kent moves the session back to the main workspace without preserving file edits or commits.
-:::
+Dirty or indeterminate worktrees require `--force`, which authorizes `git worktree remove --force` for the folder only. Agent-shell deletion always retains branches. Human CLI deletion can pass `--delete-branch` for safe `git branch -d` cleanup.
 
 ## Configuration
 
@@ -35,12 +52,12 @@ base_dir = "~/.kent/worktrees"
 ```
 
 - `base_dir` sets the root directory for Kent-managed worktrees.
-- `setup_script` runs after Kent creates and records a new worktree, before Kent switches a session into it or starts a workflow run that uses it. Relative paths resolve from the source workspace root.
+- `setup_script` runs after Kent creates and records a new worktree, before create completes or a workflow run uses it. Relative paths resolve from the source workspace root.
 - `setup_timeout_seconds` sets the setup script timeout. The default is `60`; `0` or a negative value disables the timeout.
 
-Setup is blocking because worktree-local context can change what the agent sees. Files created by setup, including local skills under `.kent/skills` and workspace-local docs, are present before Kent locks the new session or workflow run context.
+Setup is blocking because worktree-local context can change what the agent sees. Files created by setup, including local skills under `.kent/skills` and workspace-local docs, are present before create returns or a workflow run starts.
 
-While setup is running, Kent reports live setup progress with the resolved script path and worktree path. If setup fails, times out, or is canceled, the foreground create/start operation fails and Kent does not switch the session or start the workflow run against that worktree. The created worktree and Kent metadata remain available so you can inspect, repair, or delete them.
+While setup is running, Kent reports live setup progress with the resolved script path and worktree path. If setup fails, times out, or is canceled, the foreground create/start operation fails. The created worktree and Kent metadata remain available so you can inspect, repair, or delete them.
 
 The script receives environment variables as input:
 
@@ -50,7 +67,7 @@ The script receives environment variables as input:
 - `KENT_WORKTREE_SESSION_ID` - Kent session id that requested the worktree, e.g. `b31234ab-78ce-43d1-8f4c-2d6c6d4adbc1`.
 - `KENT_WORKTREE_PROJECT_ID` - Kent project id for the workspace/project, e.g. `project-94b18685-19ed-4513-96bb-bcffa10410ff`.
 - `KENT_WORKTREE_WORKSPACE_ID` - Kent workspace binding id for the source workspace, e.g. `workspace-2f7b6d4a`.
-- `KENT_WORKTREE_WORKTREE_ID` - Kent metadata id for the created worktree, e.g. `worktree-8c9a0e3f`.
+- `KENT_WORKTREE_WORKTREE_ID` - Kent metadata UUID for the created worktree, e.g. `c4aaf0cf-4c50-4560-b6a2-6c294d0b1495`.
 - `KENT_WORKTREE_CREATED_BRANCH` - Whether Kent created a new branch for this worktree, e.g. `true` or `false`.
 - `KENT_WORKTREE_PAYLOAD_JSON` - Full setup payload as one JSON string containing all fields above, e.g. `{"source_workspace_root":"/repo","branch_name":"feature/x","worktree_root":"/repo-wt","session_id":"...","project_id":"...","workspace_id":"...","worktree_id":"...","created_branch":true}`.
 

@@ -115,6 +115,29 @@ func TestCloseCancelsPendingWorktreeTransitionWithoutPublishingOutcome(t *testin
 	}
 }
 
+func TestScheduledWorktreeTransitionFailurePublishesAndSteersTypedOutcome(t *testing.T) {
+	env := newServiceTestEnv(t)
+	operationID := serverapi.NewWorktreeOperationID()
+	if _, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
+		OperationID: operationID,
+		SessionID:   env.session.Meta().SessionID,
+		Selector:    "missing-worktree",
+	}); err != nil {
+		t.Fatalf("EnterWorktree: %v", err)
+	}
+	outcome := waitForWorktreeTransitionOutcome(t, env.runtime)
+	if outcome.OperationID != operationID ||
+		outcome.State != clientui.WorktreeTransitionFailed ||
+		outcome.Failure == nil {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	env.runtime.mu.Lock()
+	defer env.runtime.mu.Unlock()
+	if len(env.runtime.steeredFailures) != 1 || env.runtime.steeredFailures[0] != outcome {
+		t.Fatalf("steered failures = %+v, want %+v", env.runtime.steeredFailures, outcome)
+	}
+}
+
 func createExternalWorktree(t *testing.T, env *serviceTestEnv, branch string) string {
 	t.Helper()
 	root := env.baseDir + "-external"

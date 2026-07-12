@@ -257,7 +257,7 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 		Workflow:        serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		Body:            "Do the work.",
 		SourceWorkspace: serverapi.ProjectWorkspaceSummary{RootPath: "/workspace"},
-		ManagedWorktree: &serverapi.WorktreeView{CanonicalRoot: "/workspace-task"},
+		ManagedWorktree: &serverapi.WorktreeKentFacts{CanonicalRoot: "/workspace-task"},
 		SourceURL:       "https://example.test/source",
 		Status:          serverapi.WorkflowTaskStatus{Kind: "backlog"},
 		Runs: []serverapi.WorkflowRun{

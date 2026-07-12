@@ -382,7 +382,8 @@ func (l uiViewLayout) renderWorktreeDeleteDialog(width, height int, style uiStyl
 		}
 		lines = append(lines, lineStyle.Render(truncateQueuedMessageLine(line.Text, width)))
 	}
-	lines = append(lines, "", renderWorktreeDeleteButtons(width, l.model.theme, dialog))
+	lines = append(lines, "")
+	lines = append(lines, renderWorktreeDeleteButtons(width, l.model.theme, dialog)...)
 	if dialog.submitting {
 		lines = append(lines, "", style.meta.Render(pendingToolSpinnerFrame(m.spinnerFrame)+" Deleting worktree..."))
 	}
@@ -400,7 +401,7 @@ func renderWorktreeErrorLines(text string, width int, lineStyle lipgloss.Style, 
 	}
 	wrapped := make([]string, 0, maxLines)
 	for _, line := range splitPlainLines(strings.TrimRight(trimmed, "\n")) {
-		parts := wrapLine(line, width)
+		parts := wrapANSIText(line, width)
 		if len(parts) == 0 {
 			parts = []string{""}
 		}

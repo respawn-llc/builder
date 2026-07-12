@@ -233,8 +233,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorktreeCreate:                                gatewayClientCall[client.WorktreeClient, serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](GatewayDependencies.WorktreeClient, client.WorktreeClient.CreateWorktree),
 	protocol.MethodWorktreeEnter:                                 gatewayClientCall[client.WorktreeClient, serverapi.WorktreeEnterRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, client.WorktreeClient.EnterWorktree),
 	protocol.MethodWorktreeLeave:                                 gatewayClientCall[client.WorktreeClient, serverapi.WorktreeLeaveRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, client.WorktreeClient.LeaveWorktree),
-	protocol.MethodWorktreeSwitch:                                gatewayClientCall[client.WorktreeClient, serverapi.WorktreeSwitchRequest, serverapi.WorktreeSwitchResponse](GatewayDependencies.WorktreeClient, client.WorktreeClient.SwitchWorktree),
-	protocol.MethodWorktreeDelete:                                gatewayClientCall[client.WorktreeClient, serverapi.WorktreeDeleteOperationRequest, serverapi.WorktreeDeleteResult](GatewayDependencies.WorktreeClient, client.WorktreeClient.DeleteWorktreeOperation),
+	protocol.MethodWorktreeDelete:                                gatewayClientCall[client.WorktreeClient, serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResult](GatewayDependencies.WorktreeClient, client.WorktreeClient.DeleteWorktree),
 	protocol.MethodSessionRuntimeActivate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 			params.OwnerID = state.runtimeOwnerID

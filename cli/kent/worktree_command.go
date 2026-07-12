@@ -28,7 +28,7 @@ type worktreeCommandRemote interface {
 	CreateWorktree(context.Context, serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error)
 	EnterWorktree(context.Context, serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error)
 	LeaveWorktree(context.Context, serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error)
-	DeleteWorktreeOperation(context.Context, serverapi.WorktreeDeleteOperationRequest) (serverapi.WorktreeDeleteResult, error)
+	DeleteWorktree(context.Context, serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error)
 	Close() error
 }
 
@@ -284,7 +284,7 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	return withWorktreeCommandRemote(stderr, func(remote worktreeCommandRemote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), worktreeMutationTimeout)
 		defer cancel()
-		result, err := remote.DeleteWorktreeOperation(ctx, serverapi.WorktreeDeleteOperationRequest{
+		result, err := remote.DeleteWorktree(ctx, serverapi.WorktreeDeleteRequest{
 			OperationID:         serverapi.NewWorktreeOperationID(),
 			SessionID:           sessionID,
 			Selector:            strings.TrimSpace(fs.Args()[0]),
@@ -375,5 +375,26 @@ func openWorktreeCommandRemote(ctx context.Context) (worktreeCommandRemote, erro
 		_ = remote.Close()
 		return nil, err
 	}
-	return remote, nil
+	binding, err := resolveWorkspaceBinding(dialCtx, remote, cfg.WorkspaceRoot)
+	if err != nil {
+		_ = remote.Close()
+		return nil, err
+	}
+	if err := remote.Close(); err != nil {
+		return nil, err
+	}
+	attached, err := client.DialConfiguredRemoteForProjectWorkspaceID(
+		dialCtx,
+		cfg,
+		binding.ProjectID,
+		binding.WorkspaceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := attached.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
+		_ = attached.Close()
+		return nil, err
+	}
+	return attached, nil
 }

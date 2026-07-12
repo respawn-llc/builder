@@ -168,10 +168,7 @@ type WorktreeLeaveRequest struct {
 	SessionID   string              `json:"session_id"`
 }
 
-// WorktreeDeleteOperationRequest is the typed transition request introduced
-// alongside the legacy delete request. The service cutover replaces the
-// legacy request after all clients move to this contract.
-type WorktreeDeleteOperationRequest struct {
+type WorktreeDeleteRequest struct {
 	OperationID         WorktreeOperationID       `json:"operation_id"`
 	SessionID           string                    `json:"session_id"`
 	Selector            string                    `json:"selector"`
@@ -407,7 +404,7 @@ func (request WorktreeLeaveRequest) Validate() error {
 	return validateRequiredSessionID(request.SessionID)
 }
 
-func (request WorktreeDeleteOperationRequest) Validate() error {
+func (request WorktreeDeleteRequest) Validate() error {
 	if err := request.OperationID.Validate(); err != nil {
 		return err
 	}
@@ -482,24 +479,6 @@ func validateWorktreeUUIDV4(value uuid.UUID, field string) error {
 	return nil
 }
 
-type WorktreeView struct {
-	WorktreeID      string `json:"worktree_id"`
-	DisplayName     string `json:"display_name"`
-	CanonicalRoot   string `json:"canonical_root"`
-	Availability    string `json:"availability"`
-	BranchRef       string `json:"branch_ref,omitempty"`
-	BranchName      string `json:"branch_name,omitempty"`
-	Detached        bool   `json:"detached,omitempty"`
-	LockedReason    string `json:"locked_reason,omitempty"`
-	PrunableReason  string `json:"prunable_reason,omitempty"`
-	DirtyFileCount  int    `json:"dirty_file_count,omitempty"`
-	IsMain          bool   `json:"is_main,omitempty"`
-	IsCurrent       bool   `json:"is_current,omitempty"`
-	Managed         bool   `json:"managed,omitempty"`
-	CreatedBranch   bool   `json:"created_branch,omitempty"`
-	OriginSessionID string `json:"origin_session_id,omitempty"`
-}
-
 type WorktreeListRequest struct {
 	SessionID string `json:"session_id"`
 }
@@ -547,31 +526,6 @@ type WorktreeCreateResponse struct {
 	Worktree WorktreeListEntry               `json:"worktree"`
 }
 
-type WorktreeSwitchRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	WorktreeID      string `json:"worktree_id"`
-}
-
-type WorktreeSwitchResponse struct {
-	Target   clientui.SessionExecutionTarget `json:"target"`
-	Worktree WorktreeView                    `json:"worktree"`
-}
-
-type WorktreeDeleteRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	WorktreeID      string `json:"worktree_id"`
-	DeleteBranch    bool   `json:"delete_branch,omitempty"`
-}
-
-type WorktreeDeleteResponse struct {
-	Target               clientui.SessionExecutionTarget `json:"target"`
-	Worktree             WorktreeView                    `json:"worktree"`
-	BranchDeleted        bool                            `json:"branch_deleted,omitempty"`
-	BranchCleanupMessage string                          `json:"branch_cleanup_message,omitempty"`
-}
-
 func (r WorktreeListRequest) Validate() error {
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
@@ -613,32 +567,6 @@ func (r WorktreeCreateRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.BranchName) != "" {
 		return errors.New("branch_name must be empty when create_branch=false")
-	}
-	return nil
-}
-
-func (r WorktreeSwitchRequest) Validate() error {
-	if err := validateClientRequestID(r.ClientRequestID); err != nil {
-		return err
-	}
-	if err := validateRequiredSessionID(r.SessionID); err != nil {
-		return err
-	}
-	if strings.TrimSpace(r.WorktreeID) == "" {
-		return errors.New("worktree_id is required")
-	}
-	return nil
-}
-
-func (r WorktreeDeleteRequest) Validate() error {
-	if err := validateClientRequestID(r.ClientRequestID); err != nil {
-		return err
-	}
-	if err := validateRequiredSessionID(r.SessionID); err != nil {
-		return err
-	}
-	if strings.TrimSpace(r.WorktreeID) == "" {
-		return errors.New("worktree_id is required")
 	}
 	return nil
 }

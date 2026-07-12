@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"core/server/tools"
 	"core/shared/toolspec"
 
 	xansi "github.com/charmbracelet/x/ansi"
@@ -14,6 +15,28 @@ type sanitizerProcessor struct{}
 
 func (sanitizerProcessor) ID() string {
 	return "builtin/sanitize-output"
+}
+
+type gitWorktreeAdvisoryProcessor struct{}
+
+func (gitWorktreeAdvisoryProcessor) ID() string {
+	return "builtin/git-worktree-advisory"
+}
+
+func (p gitWorktreeAdvisoryProcessor) Process(_ context.Context, envelope Envelope) (Decision, error) {
+	for _, invocation := range envelope.Request.Invocations {
+		if len(invocation.Args) < 2 ||
+			tools.NormalizeShellCommandName(invocation.Args[0]) != "git" ||
+			invocation.Args[1] != "worktree" {
+			continue
+		}
+		warning, err := NewWarning("Use `kent worktree` commands instead of `git worktree` so Kent keeps session targets and metadata consistent.")
+		if err != nil {
+			return Decision{}, err
+		}
+		return Decision{Action: ActionSkip, Next: envelope, Warning: warning}, nil
+	}
+	return Skip(envelope), nil
 }
 
 func (p sanitizerProcessor) Process(_ context.Context, envelope Envelope) (Decision, error) {

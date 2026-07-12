@@ -24,12 +24,9 @@ type testWorktreeClient struct {
 	enterCtx        context.Context
 	enterResp       serverapi.WorktreeScheduledAcknowledgement
 	enterRequests   []serverapi.WorktreeEnterRequest
-	switchCtx       context.Context
-	switchResp      serverapi.WorktreeSwitchResponse
-	switchRequests  []serverapi.WorktreeSwitchRequest
 	deleteCtx       context.Context
 	deleteResp      serverapi.WorktreeDeleteResult
-	deleteRequests  []serverapi.WorktreeDeleteOperationRequest
+	deleteRequests  []serverapi.WorktreeDeleteRequest
 	errs            []error
 }
 
@@ -69,17 +66,7 @@ func (c *testWorktreeClient) LeaveWorktree(context.Context, serverapi.WorktreeLe
 	return serverapi.WorktreeScheduledAcknowledgement{}, c.nextErr()
 }
 
-func (c *testWorktreeClient) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwitchRequest) (serverapi.WorktreeSwitchResponse, error) {
-	c.switchCtx = ctx
-	c.switchRequests = append(c.switchRequests, req)
-	return c.switchResp, c.nextErr()
-}
-
-func (c *testWorktreeClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResponse, error) {
-	return serverapi.WorktreeDeleteResponse{}, c.nextErr()
-}
-
-func (c *testWorktreeClient) DeleteWorktreeOperation(ctx context.Context, req serverapi.WorktreeDeleteOperationRequest) (serverapi.WorktreeDeleteResult, error) {
+func (c *testWorktreeClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
 	c.deleteCtx = ctx
 	c.deleteRequests = append(c.deleteRequests, req)
 	return c.deleteResp, c.nextErr()

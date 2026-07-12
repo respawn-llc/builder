@@ -174,7 +174,7 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 		WorktreeSelectorPreviewRequest{SessionID: "session", Selector: "feature"},
 		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature"},
 		WorktreeLeaveRequest{OperationID: operationID, SessionID: "session"},
-		WorktreeDeleteOperationRequest{
+		WorktreeDeleteRequest{
 			OperationID:         operationID,
 			SessionID:           "session",
 			Selector:            "feature",
@@ -190,7 +190,7 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 		WorktreeSelectorPreviewRequest{SessionID: "session"},
 		WorktreeEnterRequest{SessionID: "session", Selector: "feature"},
 		WorktreeLeaveRequest{OperationID: operationID},
-		WorktreeDeleteOperationRequest{OperationID: operationID, SessionID: "session", Selector: "feature"},
+		WorktreeDeleteRequest{OperationID: operationID, SessionID: "session", Selector: "feature"},
 	}
 	for _, request := range invalid {
 		if err := request.Validate(); err == nil {

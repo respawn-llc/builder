@@ -24,45 +24,9 @@ func TestDeleteWorktreeBlocksWhenBackgroundProcessUsesDescendantPath(t *testing.
 	created := mustCreateWorktree(t, env, "feature/delete-blocked-process")
 	env.processes.snapshots = []shelltool.Snapshot{{ID: "proc-1", Command: "sleep 30", Workdir: filepath.Join(created.CanonicalRoot, "tmp"), Running: true}}
 
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-blocked-process", created.WorktreeID))
+	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, created.WorktreeID))
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
-	}
-}
-
-func TestDeleteWorktreeRebindsCurrentSessionToMainBeforeRemoval(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-current")
-	if _, err := env.service.SwitchWorktree(env.ctx, worktreeSwitchRequest(env, "req-switch-delete-target", created.WorktreeID)); err != nil {
-		t.Fatalf("SwitchWorktree: %v", err)
-	}
-	env.localNotes = &serviceTestLocalNotes{}
-	env.service.localNotes = env.localNotes
-
-	resp, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-current", created.WorktreeID))
-	if err != nil {
-		t.Fatalf("DeleteWorktree: %v", err)
-	}
-	if sessionTargetWorktreeID(resp.Target) != "" || resp.Target.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("unexpected final delete target: %+v", resp.Target)
-	}
-	if len(env.runtime.rebindCalls) < 2 {
-		t.Fatalf("expected switch to worktree and delete-time rebind back to main, got %+v", env.runtime.rebindCalls)
-	}
-	if got := env.runtime.rebindCalls[len(env.runtime.rebindCalls)-1].root; got != env.workspaceRoot {
-		t.Fatalf("final rebind root = %q, want %q", got, env.workspaceRoot)
-	}
-	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected worktree root removed, stat err=%v", err)
-	}
-	worktrees := mustListWorktrees(t, env).Worktrees
-	for _, worktree := range worktrees {
-		if worktreeIDFromListEntry(worktree) == created.WorktreeID {
-			t.Fatalf("expected deleted worktree to disappear from list, got %+v", worktree)
-		}
-	}
-	if notes := env.localNotes.snapshot(); len(notes) != 0 {
-		t.Fatalf("expected delete path not to append transcript notes, got %+v", notes)
 	}
 }
 
@@ -70,7 +34,7 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
 
-	firstRelease, _, err := env.service.beginMutation(env.ctx, env.session.Meta().SessionID)
+	firstRelease, _, err := env.service.beginWorkspaceMutation(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("beginMutation first: %v", err)
 	}
@@ -87,7 +51,7 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	}
 	resultCh := make(chan mutationResult, 1)
 	go func() {
-		release, _, err := env.service.beginMutation(env.ctx, otherSession.Meta().SessionID)
+		release, _, err := env.service.beginWorkspaceMutation(env.ctx, otherSession.Meta().SessionID)
 		resultCh <- mutationResult{release: release, err: err}
 	}()
 
@@ -146,7 +110,7 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}
 	firstCh := make(chan mutationResult, 1)
 	go func() {
-		release, workspaceCtx, err := env.service.beginMutation(env.ctx, env.session.Meta().SessionID)
+		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, env.session.Meta().SessionID)
 		firstCh <- mutationResult{release: release, workspaceCtx: workspaceCtx, err: err}
 	}()
 
@@ -173,7 +137,7 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 
 	secondCh := make(chan mutationResult, 1)
 	go func() {
-		release, workspaceCtx, err := env.service.beginMutation(env.ctx, secondSession.Meta().SessionID)
+		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, secondSession.Meta().SessionID)
 		secondCh <- mutationResult{release: release, workspaceCtx: workspaceCtx, err: err}
 	}()
 	select {
@@ -329,8 +293,7 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	runtime := &serviceTestRuntime{}
 	runtime.activeSessions = map[string]bool{sess.Meta().SessionID: true}
 	processes := &serviceTestProcessSource{}
-	localNotes := &serviceTestLocalNotes{}
-	service := NewService(store, nil, runtime, runtime, processes, localNotes, ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir})
+	service := NewService(store, nil, runtime, runtime, processes, ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir})
 	return &serviceTestEnv{
 		t:             t,
 		ctx:           ctx,
@@ -340,7 +303,6 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 		session:       sess,
 		runtime:       runtime,
 		processes:     processes,
-		localNotes:    localNotes,
 		service:       service,
 		leaseID:       "lease-1",
 		workspaceRoot: canonicalWorkspaceRoot,
@@ -490,7 +452,21 @@ func mustResolveServiceTestTarget(t *testing.T, env *serviceTestEnv) clientui.Se
 	return target
 }
 
-func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) serverapi.WorktreeView {
+type serviceTestWorktree struct {
+	WorktreeID      string
+	DisplayName     string
+	CanonicalRoot   string
+	BranchRef       string
+	BranchName      string
+	Detached        bool
+	IsMain          bool
+	IsCurrent       bool
+	Managed         bool
+	CreatedBranch   bool
+	OriginSessionID string
+}
+
+func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) serviceTestWorktree {
 	t.Helper()
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
@@ -506,19 +482,12 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 	return worktreeViewFromListEntryForTest(resp.Worktree)
 }
 
-func worktreeSwitchRequest(env *serviceTestEnv, clientRequestID string, worktreeID string) serverapi.WorktreeSwitchRequest {
-	return serverapi.WorktreeSwitchRequest{
-		ClientRequestID: clientRequestID,
-		SessionID:       env.session.Meta().SessionID,
-		WorktreeID:      worktreeID,
-	}
-}
-
-func worktreeDeleteRequest(env *serviceTestEnv, clientRequestID string, worktreeID string) serverapi.WorktreeDeleteRequest {
+func worktreeDeleteRequest(env *serviceTestEnv, worktreeID string) serverapi.WorktreeDeleteRequest {
 	return serverapi.WorktreeDeleteRequest{
-		ClientRequestID: clientRequestID,
-		SessionID:       env.session.Meta().SessionID,
-		WorktreeID:      worktreeID,
+		OperationID:         serverapi.NewWorktreeOperationID(),
+		SessionID:           env.session.Meta().SessionID,
+		Selector:            worktreeID,
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	}
 }
 
@@ -542,7 +511,7 @@ func mustListWorktrees(t *testing.T, env *serviceTestEnv) serverapi.WorktreeList
 	return resp
 }
 
-func findWorktreeByID(t *testing.T, worktrees []serverapi.WorktreeListEntry, worktreeID string) serverapi.WorktreeView {
+func findWorktreeByID(t *testing.T, worktrees []serverapi.WorktreeListEntry, worktreeID string) serviceTestWorktree {
 	t.Helper()
 	for _, entry := range worktrees {
 		if worktreeIDFromListEntry(entry) == worktreeID {
@@ -550,19 +519,7 @@ func findWorktreeByID(t *testing.T, worktrees []serverapi.WorktreeListEntry, wor
 		}
 	}
 	t.Fatalf("worktree %q not found in %+v", worktreeID, worktrees)
-	return serverapi.WorktreeView{}
-}
-
-func findMainWorktreeView(t *testing.T, worktrees []serverapi.WorktreeListEntry) serverapi.WorktreeView {
-	t.Helper()
-	for _, entry := range worktrees {
-		worktree := worktreeViewFromListEntryForTest(entry)
-		if worktree.IsMain {
-			return worktree
-		}
-	}
-	t.Fatalf("main worktree not found in %+v", worktrees)
-	return serverapi.WorktreeView{}
+	return serviceTestWorktree{}
 }
 
 func worktreeIDFromListEntry(entry serverapi.WorktreeListEntry) string {
@@ -576,8 +533,8 @@ func worktreeIDFromListEntry(entry serverapi.WorktreeListEntry) string {
 	}
 }
 
-func worktreeViewFromListEntryForTest(entry serverapi.WorktreeListEntry) serverapi.WorktreeView {
-	view := serverapi.WorktreeView{IsCurrent: entry.Projection.IsCurrent}
+func worktreeViewFromListEntryForTest(entry serverapi.WorktreeListEntry) serviceTestWorktree {
+	view := serviceTestWorktree{IsCurrent: entry.Projection.IsCurrent}
 	switch entry.Topology.Variant {
 	case serverapi.WorktreeTopologyVariantRegistered:
 		git := entry.Topology.Registered.Git

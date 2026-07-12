@@ -368,7 +368,8 @@ func TestRemoteSessionTranscriptSubscriptionPreservesTypedCloseReason(t *testing
 	}
 }
 
-func TestRemoteDeleteWorktreeCarriesDeleteBranchFlagAndResponseFields(t *testing.T) {
+func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
+	operationID := serverapi.NewWorktreeOperationID()
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -381,17 +382,20 @@ func TestRemoteDeleteWorktreeCarriesDeleteBranchFlagAndResponseFields(t *testing
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			t.Fatalf("unmarshal delete params: %v", err)
 		}
-		if !params.DeleteBranch {
-			t.Fatalf("expected delete_branch=true in params, got %+v", params)
-		}
-		if params.WorktreeID != "wt-1" {
+		if params.OperationID != operationID ||
+			params.Selector != "wt-1" ||
+			params.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 			t.Fatalf("unexpected delete params: %+v", params)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeDeleteResponse{
-			Target:               clientui.SessionExecutionTarget{EffectiveWorkdir: "/repo"},
-			Worktree:             serverapi.WorktreeView{WorktreeID: "wt-1", DisplayName: "feature-a"},
-			BranchDeleted:        true,
-			BranchCleanupMessage: "Deleted branch feature-a",
+		branchName := "feature-a"
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeDeleteResult{
+			Kind: serverapi.WorktreeDeleteResultKindCompleted,
+			Completed: &serverapi.WorktreeDeleteCompletedResult{
+				Cleanup: serverapi.WorktreeBranchCleanupOutcome{
+					Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
+					BranchName: &branchName,
+				},
+			},
 		})); err != nil {
 			t.Fatalf("send delete response: %v", err)
 		}
@@ -404,15 +408,15 @@ func TestRemoteDeleteWorktreeCarriesDeleteBranchFlagAndResponseFields(t *testing
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.DeleteWorktree(context.Background(), serverapi.WorktreeDeleteRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		WorktreeID:      "wt-1",
-		DeleteBranch:    true,
+		OperationID:         operationID,
+		SessionID:           "session-1",
+		Selector:            "wt-1",
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if !resp.BranchDeleted || resp.BranchCleanupMessage != "Deleted branch feature-a" {
+	if resp.Completed == nil || resp.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
 		t.Fatalf("unexpected delete response: %+v", resp)
 	}
 }

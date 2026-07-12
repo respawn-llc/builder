@@ -16,7 +16,7 @@ import (
 	"core/shared/serverapi"
 )
 
-func (s *Service) DeleteWorktreeOperation(ctx context.Context, req serverapi.WorktreeDeleteOperationRequest) (serverapi.WorktreeDeleteResult, error) {
+func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
 	}
@@ -73,7 +73,7 @@ func (s *Service) DeleteWorktreeOperation(ctx context.Context, req serverapi.Wor
 
 func (s *Service) executeScheduledDelete(
 	ctx context.Context,
-	req serverapi.WorktreeDeleteOperationRequest,
+	req serverapi.WorktreeDeleteRequest,
 	sync transitionTargetSync,
 ) (serverapi.WorktreeDeleteCompletedResult, error) {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
@@ -96,7 +96,7 @@ func (s *Service) executeDeleteLocked(
 	ctx context.Context,
 	workspaceCtx sessionWorkspaceContext,
 	entry serverapi.WorktreeTopologyEntry,
-	req serverapi.WorktreeDeleteOperationRequest,
+	req serverapi.WorktreeDeleteRequest,
 	currentSync transitionTargetSync,
 ) (serverapi.WorktreeDeleteCompletedResult, error) {
 	if topologyIsMain(entry) {

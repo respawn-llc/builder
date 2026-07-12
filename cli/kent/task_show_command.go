@@ -20,7 +20,7 @@ type taskShowOutput struct {
 	Project         serverapi.ProjectBoardProject     `json:"project"`
 	Workflow        serverapi.WorkflowPickerItem      `json:"workflow"`
 	SourceWorkspace serverapi.ProjectWorkspaceSummary `json:"source_workspace"`
-	ManagedWorktree *serverapi.WorktreeView           `json:"managed_worktree,omitempty"`
+	ManagedWorktree *serverapi.WorktreeKentFacts      `json:"managed_worktree,omitempty"`
 	Status          serverapi.WorkflowTaskStatus      `json:"status"`
 	Actions         serverapi.WorkflowTaskActions     `json:"actions"`
 	AttentionCount  int                               `json:"attention_count"`

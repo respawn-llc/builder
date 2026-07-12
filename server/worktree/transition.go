@@ -117,13 +117,8 @@ func (s *Service) runWorktreeTransition(request worktreeTransitionRequest, execu
 			outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
 		}
 		s.runtime.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
-		if err != nil && s.localNotes != nil {
-			_ = s.localNotes.AppendSessionEntry(
-				context.Background(),
-				request.sessionID,
-				"developer",
-				fmt.Sprintf("Worktree %s transition %s failed: %v", request.kind, request.operationID.String(), err),
-			)
+		if err != nil {
+			_ = s.runtime.SteerWorktreeTransitionFailure(s.transitionCtx, request.sessionID, outcome)
 		}
 	}
 	s.transitionMu.Lock()

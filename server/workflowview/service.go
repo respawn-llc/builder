@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -741,8 +740,8 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.Workflo
 	detail := serverapi.WorkflowTaskDetail{Summary: summary, Project: projectBoardProject(project), Workflow: workflowPickerItem(def, linkByWorkflowID[task.WorkflowID], nil), Body: task.Body, SourceURL: task.SourceUrl, SourceWorkspace: sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace), Status: status, Actions: actions}
 	if strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
 		if worktree, err := s.queries.GetWorktreeByID(ctx, strings.TrimSpace(task.ManagedWorktreeID.String)); err == nil {
-			view := worktreeView(worktree)
-			detail.ManagedWorktree = &view
+			facts := worktreeKentFacts(worktree)
+			detail.ManagedWorktree = &facts
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return serverapi.WorkflowTaskDetail{}, err
 		}
@@ -1223,8 +1222,18 @@ func workflowPickerItem(def serverapi.WorkflowDefinition, link sqlitegen.Project
 	return item
 }
 
-func worktreeView(row sqlitegen.GetWorktreeByIDRow) serverapi.WorktreeView {
-	return serverapi.WorktreeView{WorktreeID: row.ID, DisplayName: displayNameForPath(row.CanonicalRootPath), CanonicalRoot: row.CanonicalRootPath, Availability: availabilityForPath(row.CanonicalRootPath), IsMain: row.IsMain != 0, Managed: row.Managed != 0, CreatedBranch: row.CreatedBranch != 0, OriginSessionID: row.OriginSessionID}
+func worktreeKentFacts(row sqlitegen.GetWorktreeByIDRow) serverapi.WorktreeKentFacts {
+	facts := serverapi.WorktreeKentFacts{
+		WorktreeID:    row.ID,
+		DisplayName:   displayNameForPath(row.CanonicalRootPath),
+		CanonicalRoot: row.CanonicalRootPath,
+		Managed:       row.Managed != 0,
+		CreatedBranch: row.CreatedBranch != 0,
+	}
+	if originSessionID := strings.TrimSpace(row.OriginSessionID); originSessionID != "" {
+		facts.OriginSessionID = &originSessionID
+	}
+	return facts
 }
 
 func displayNameForPath(path string) string {
@@ -1237,20 +1246,6 @@ func displayNameForPath(path string) string {
 		return ""
 	}
 	return base
-}
-
-func availabilityForPath(path string) string {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return ""
-	}
-	if _, err := os.Stat(trimmed); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "missing"
-		}
-		return "inaccessible"
-	}
-	return "available"
 }
 
 type taskActivityRow struct {

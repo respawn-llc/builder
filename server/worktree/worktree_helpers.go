@@ -10,58 +10,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
 )
-
-func mapSyncedWorktrees(items []syncedWorktree, target clientui.SessionExecutionTarget) ([]serverapi.WorktreeView, error) {
-	out := make([]serverapi.WorktreeView, 0, len(items))
-	for _, item := range items {
-		view, err := worktreeViewFromSynced(item, target)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, view)
-	}
-	return out, nil
-}
-
-func worktreeViewFromSynced(item syncedWorktree, target clientui.SessionExecutionTarget) (serverapi.WorktreeView, error) {
-	if err := validatePresentExecutionTargetWorktreeID(target); err != nil {
-		return serverapi.WorktreeView{}, err
-	}
-	isCurrent := item.git.IsMain && target.Worktree == nil
-	if target.Worktree != nil {
-		targetWorktreeID := strings.TrimSpace(target.Worktree.ID)
-		isCurrent = targetWorktreeID == strings.TrimSpace(item.record.ID)
-	}
-	return serverapi.WorktreeView{
-		WorktreeID:      item.record.ID,
-		DisplayName:     item.record.DisplayName,
-		CanonicalRoot:   item.record.CanonicalRoot,
-		Availability:    item.record.Availability,
-		BranchRef:       item.git.BranchRef,
-		BranchName:      item.git.BranchName,
-		Detached:        item.git.Detached,
-		LockedReason:    item.git.LockedReason,
-		PrunableReason:  item.git.PrunableReason,
-		DirtyFileCount:  item.git.DirtyFileCount,
-		IsMain:          item.git.IsMain,
-		IsCurrent:       isCurrent,
-		Managed:         item.record.Managed,
-		CreatedBranch:   item.record.CreatedBranch,
-		OriginSessionID: item.record.OriginSessionID,
-	}, nil
-}
-
-func findSyncedWorktreeByID(items []syncedWorktree, worktreeID string) (syncedWorktree, bool) {
-	trimmedID := strings.TrimSpace(worktreeID)
-	for _, item := range items {
-		if strings.TrimSpace(item.record.ID) == trimmedID {
-			return item, true
-		}
-	}
-	return syncedWorktree{}, false
-}
 
 func findSyncedWorktreeByRoot(items []syncedWorktree, worktreeRoot string) (syncedWorktree, bool) {
 	trimmedRoot := strings.TrimSpace(worktreeRoot)
@@ -71,31 +20,6 @@ func findSyncedWorktreeByRoot(items []syncedWorktree, worktreeRoot string) (sync
 		}
 	}
 	return syncedWorktree{}, false
-}
-
-func findMainWorktree(items []syncedWorktree) (syncedWorktree, bool) {
-	for _, item := range items {
-		if item.git.IsMain {
-			return item, true
-		}
-	}
-	return syncedWorktree{}, false
-}
-
-func currentSyncedWorktree(items []syncedWorktree, target clientui.SessionExecutionTarget) (*syncedWorktree, error) {
-	if err := validatePresentExecutionTargetWorktreeID(target); err != nil {
-		return nil, err
-	}
-	if target.Worktree == nil {
-		return nil, nil
-	}
-	trimmedID := strings.TrimSpace(target.Worktree.ID)
-	for idx := range items {
-		if strings.TrimSpace(items[idx].record.ID) == trimmedID {
-			return &items[idx], nil
-		}
-	}
-	return nil, nil
 }
 
 func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTarget) error {

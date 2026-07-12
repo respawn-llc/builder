@@ -31,13 +31,9 @@ type worktreeCommandTestClient struct {
 	deleteCtx         context.Context
 	deleteResp        serverapi.WorktreeDeleteResult
 	deleteErr         error
-	switchCtx         context.Context
-	switchResp        serverapi.WorktreeSwitchResponse
-	switchErr         error
 	resolveRequests   []serverapi.WorktreeCreateTargetResolveRequest
 	createRequests    []serverapi.WorktreeCreateRequest
-	deleteRequests    []serverapi.WorktreeDeleteOperationRequest
-	switchRequests    []serverapi.WorktreeSwitchRequest
+	deleteRequests    []serverapi.WorktreeDeleteRequest
 	reconnectFailures map[string]int
 }
 
@@ -88,20 +84,7 @@ func (c *worktreeCommandTestClient) LeaveWorktree(context.Context, serverapi.Wor
 	return serverapi.WorktreeScheduledAcknowledgement{}, nil
 }
 
-func (c *worktreeCommandTestClient) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwitchRequest) (serverapi.WorktreeSwitchResponse, error) {
-	c.switchCtx = ctx
-	c.switchRequests = append(c.switchRequests, req)
-	if c.consumeReconnectFailure("switch") {
-		return serverapi.WorktreeSwitchResponse{}, serverapi.ErrRuntimeUnavailable
-	}
-	return c.switchResp, c.switchErr
-}
-
-func (c *worktreeCommandTestClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResponse, error) {
-	return serverapi.WorktreeDeleteResponse{}, c.deleteErr
-}
-
-func (c *worktreeCommandTestClient) DeleteWorktreeOperation(ctx context.Context, req serverapi.WorktreeDeleteOperationRequest) (serverapi.WorktreeDeleteResult, error) {
+func (c *worktreeCommandTestClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
 	c.deleteCtx = ctx
 	c.deleteRequests = append(c.deleteRequests, req)
 	if c.consumeReconnectFailure("delete") {

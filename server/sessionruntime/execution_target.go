@@ -108,6 +108,28 @@ func (s *Service) PublishWorktreeTransitionOutcome(sessionID string, outcome cli
 	s.runtimes.PublishWorktreeTransitionOutcome(strings.TrimSpace(sessionID), outcome)
 }
 
+func (s *Service) SteerWorktreeTransitionFailure(ctx context.Context, sessionID string, outcome clientui.WorktreeTransitionOutcome) error {
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return errors.New("session id is required")
+	}
+	for {
+		guard, err := s.activeRuntimeGuard(ctx, trimmedSessionID)
+		if errors.Is(err, ErrAcquiredRuntimeOvertaken) {
+			continue
+		}
+		if err != nil || guard == nil {
+			return err
+		}
+		defer guard.Release()
+		engine := guard.Engine()
+		if engine == nil {
+			return runtimeUnavailableErr(trimmedSessionID)
+		}
+		return engine.SteerWorktreeTransitionFailure(outcome)
+	}
+}
+
 func (s *Service) syncActiveExecutionTarget(ctx context.Context, sessionID string, workdir string, guard registry.RuntimeGuard, reminder *session.WorktreeReminderState) error {
 	defer guard.Release()
 	engine := guard.Engine()

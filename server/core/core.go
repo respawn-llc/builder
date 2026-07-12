@@ -81,7 +81,12 @@ func (s *Core) SessionBelongsToProject(ctx context.Context, sessionID string, pr
 	}
 	belongs, err := s.safeBundles().Persistence.metadataStore.SessionBelongsToProject(ctx, trimmedSessionID, trimmedProjectID)
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"resolve project membership for session %q in project %q: %w",
+			trimmedSessionID,
+			trimmedProjectID,
+			err,
+		)
 	}
 	if !belongs {
 		return fmt.Errorf("session %q not available", trimmedSessionID)

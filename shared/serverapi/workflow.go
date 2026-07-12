@@ -1278,7 +1278,7 @@ type WorkflowTaskDetail struct {
 	Body            string                   `json:"body"`
 	SourceURL       string                   `json:"source_url,omitempty"`
 	SourceWorkspace ProjectWorkspaceSummary  `json:"source_workspace"`
-	ManagedWorktree *WorktreeView            `json:"managed_worktree,omitempty"`
+	ManagedWorktree *WorktreeKentFacts       `json:"managed_worktree,omitempty"`
 	Status          WorkflowTaskStatus       `json:"status"`
 	Actions         WorkflowTaskActions      `json:"actions"`
 	Attention       []WorkflowAttentionItem  `json:"attention,omitempty"`

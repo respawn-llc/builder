@@ -267,9 +267,10 @@ func TestDeleteWorktreeBlocksNonTerminalTaskManagedWorktree(t *testing.T) {
 	}
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		ClientRequestID: "req-delete-task-worktree",
-		SessionID:       env.session.Meta().SessionID,
-		WorktreeID:      taskWorktreeID(created.Worktree),
+		OperationID:         serverapi.NewWorktreeOperationID(),
+		SessionID:           env.session.Meta().SessionID,
+		Selector:            taskWorktreeID(created.Worktree),
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
@@ -292,9 +293,10 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	}
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		ClientRequestID: "req-delete-terminal-task-worktree",
-		SessionID:       env.session.Meta().SessionID,
-		WorktreeID:      taskWorktreeID(created.Worktree),
+		OperationID:         serverapi.NewWorktreeOperationID(),
+		SessionID:           env.session.Meta().SessionID,
+		Selector:            taskWorktreeID(created.Worktree),
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree terminal task worktree: %v", err)

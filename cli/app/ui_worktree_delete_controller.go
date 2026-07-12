@@ -32,10 +32,13 @@ const (
 
 type worktreeDeletePreviewLine = worktreeui.PreviewLine
 
-func renderWorktreeDeleteButtons(width int, theme string, dialog uiWorktreeDeleteDialogState) string {
+func renderWorktreeDeleteButtons(width int, theme string, dialog uiWorktreeDeleteDialogState) []string {
 	actions := worktreeui.DeleteActions(dialog.target)
-	options := make([]uiChoiceOption, 0, len(actions))
-	selectedIndex := 0
+	type deleteButton struct {
+		action uiWorktreeDeleteAction
+		option uiChoiceOption
+	}
+	buttons := make([]deleteButton, 0, len(actions))
 	for _, action := range actions {
 		label := ""
 		switch action {
@@ -46,12 +49,39 @@ func renderWorktreeDeleteButtons(width int, theme string, dialog uiWorktreeDelet
 		case uiWorktreeDeleteActionDeleteBranch:
 			label = "Delete + Branch"
 		}
-		if action == dialog.selectedAction {
-			selectedIndex = len(options)
-		}
-		options = append(options, uiChoiceOption{Label: label})
+		buttons = append(buttons, deleteButton{action: action, option: uiChoiceOption{Label: label}})
 	}
-	return renderUIChoiceGroupLine(width, theme, uiChoiceGroupKindButton, options, selectedIndex)
+	rows := make([][]deleteButton, 0, len(buttons))
+	for _, button := range buttons {
+		if len(rows) == 0 {
+			rows = append(rows, []deleteButton{button})
+			continue
+		}
+		last := rows[len(rows)-1]
+		options := make([]uiChoiceOption, 0, len(last)+1)
+		for _, existing := range last {
+			options = append(options, existing.option)
+		}
+		options = append(options, button.option)
+		if uiChoiceGroupWidth(uiChoiceGroupKindButton, options, " ") <= width {
+			rows[len(rows)-1] = append(last, button)
+			continue
+		}
+		rows = append(rows, []deleteButton{button})
+	}
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		options := make([]uiChoiceOption, 0, len(row))
+		selectedIndex := -1
+		for _, button := range row {
+			if button.action == dialog.selectedAction {
+				selectedIndex = len(options)
+			}
+			options = append(options, button.option)
+		}
+		lines = append(lines, renderUIChoiceGroupLine(width, theme, uiChoiceGroupKindButton, options, selectedIndex))
+	}
+	return lines
 }
 
 func (c uiInputController) handleWorktreeDeleteDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

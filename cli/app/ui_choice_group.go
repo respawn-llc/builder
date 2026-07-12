@@ -25,6 +25,10 @@ func renderUIChoiceGroupLine(width int, theme string, kind uiChoiceGroupKind, op
 }
 
 func renderUIChoiceGroupLineStyled(width int, kind uiChoiceGroupKind, options []uiChoiceOption, selectedIndex int, selectedStyle lipgloss.Style, defaultStyle lipgloss.Style) string {
+	separator := "   "
+	if uiChoiceGroupWidth(kind, options, separator) > width {
+		separator = " "
+	}
 	b := strings.Builder{}
 	used := 0
 	for index, option := range options {
@@ -33,7 +37,7 @@ func renderUIChoiceGroupLineStyled(width int, kind uiChoiceGroupKind, options []
 			continue
 		}
 		if used > 0 {
-			b.WriteString(defaultStyle.Render("   "))
+			b.WriteString(defaultStyle.Render(separator))
 		}
 		selected := index == selectedIndex
 		style := defaultStyle
@@ -58,4 +62,26 @@ func renderUIChoiceGroupLineStyled(width int, kind uiChoiceGroupKind, options []
 		line += defaultStyle.Render(strings.Repeat(" ", remaining))
 	}
 	return line
+}
+
+func uiChoiceGroupWidth(kind uiChoiceGroupKind, options []uiChoiceOption, separator string) int {
+	width := 0
+	used := 0
+	for _, option := range options {
+		label := strings.TrimSpace(option.Label)
+		if label == "" {
+			continue
+		}
+		if used > 0 {
+			width += lipgloss.Width(separator)
+		}
+		switch kind {
+		case uiChoiceGroupKindButton:
+			width += lipgloss.Width("[ " + label + " ]")
+		default:
+			width += lipgloss.Width("(●) " + label)
+		}
+		used++
+	}
+	return width
 }

@@ -3,6 +3,7 @@ package worktree
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -18,7 +19,11 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeS
 	}
 	target, err := s.metadata.ResolveSessionExecutionTarget(ctx, req.SessionID)
 	if err != nil {
-		return serverapi.WorktreeStatusResponse{}, err
+		return serverapi.WorktreeStatusResponse{}, fmt.Errorf(
+			"resolve worktree status target for session %q: %w",
+			strings.TrimSpace(req.SessionID),
+			err,
+		)
 	}
 	root := strings.TrimSpace(target.EffectiveWorkdir)
 	if root == "" {

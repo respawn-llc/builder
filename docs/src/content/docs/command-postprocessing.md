@@ -7,6 +7,10 @@ Kent post-processes shell command output before it is shown to the model to norm
 
 Successful commands with visible output return that output. A completed command without visible output reports its exit code and explicit no-output completion.
 
+Built-in processing warns when a statically identifiable shell invocation uses `git worktree`; use `kent worktree` so Kent can keep session targets and metadata consistent. Output aggregation, such as collapsing a successful `go test` result, applies only when the output belongs to one standalone invocation.
+
+Raw shell output bypasses sanitization, built-in processors, advisories, and user hooks.
+
 ## Config
 
 Configure command post-processing under `[shell]` in `~/.kent/config.toml`:

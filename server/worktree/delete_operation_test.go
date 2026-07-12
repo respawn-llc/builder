@@ -10,13 +10,13 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestDeleteWorktreeOperationRequiresExplicitForceForDirtyTarget(t *testing.T) {
+func TestDeleteWorktreeRequiresExplicitForceForDirtyTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-precondition")
 	if err := os.WriteFile(filepath.Join(created.CanonicalRoot, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	_, err := env.service.DeleteWorktreeOperation(env.ctx, serverapi.WorktreeDeleteOperationRequest{
+	_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
 		OperationID:         serverapi.NewWorktreeOperationID(),
 		SessionID:           env.session.Meta().SessionID,
 		Selector:            created.WorktreeID,
@@ -31,17 +31,17 @@ func TestDeleteWorktreeOperationRequiresExplicitForceForDirtyTarget(t *testing.T
 	}
 }
 
-func TestDeleteWorktreeOperationCompletesNonCurrentDeletionAndRetainsBranch(t *testing.T) {
+func TestDeleteWorktreeCompletesNonCurrentDeletionAndRetainsBranch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-completed")
-	result, err := env.service.DeleteWorktreeOperation(env.ctx, serverapi.WorktreeDeleteOperationRequest{
+	result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
 		OperationID:         serverapi.NewWorktreeOperationID(),
 		SessionID:           env.session.Meta().SessionID,
 		Selector:            created.WorktreeID,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
 	if err != nil {
-		t.Fatalf("DeleteWorktreeOperation: %v", err)
+		t.Fatalf("DeleteWorktree: %v", err)
 	}
 	if result.Kind != serverapi.WorktreeDeleteResultKindCompleted ||
 		result.Completed == nil ||
@@ -64,14 +64,14 @@ func TestDeleteCurrentWorktreeSchedulesRetargetAndRemoval(t *testing.T) {
 	gate := make(chan struct{})
 	env.runtime.transitionGate = gate
 	operationID := serverapi.NewWorktreeOperationID()
-	result, err := env.service.DeleteWorktreeOperation(env.ctx, serverapi.WorktreeDeleteOperationRequest{
+	result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
 		OperationID:         operationID,
 		SessionID:           env.session.Meta().SessionID,
 		Selector:            created.WorktreeID,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
 	if err != nil {
-		t.Fatalf("DeleteWorktreeOperation: %v", err)
+		t.Fatalf("DeleteWorktree: %v", err)
 	}
 	if result.Kind != serverapi.WorktreeDeleteResultKindScheduled ||
 		result.Scheduled == nil ||
@@ -107,13 +107,13 @@ func TestDeleteBlocksActiveOtherSessionAndRetargetsIdleOtherSession(t *testing.T
 	}
 	env.runtime.runningSessions[activeSession.Meta().SessionID] = true
 	env.runtime.mu.Unlock()
-	request := serverapi.WorktreeDeleteOperationRequest{
+	request := serverapi.WorktreeDeleteRequest{
 		OperationID:         serverapi.NewWorktreeOperationID(),
 		SessionID:           env.session.Meta().SessionID,
 		Selector:            created.WorktreeID,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	}
-	if _, err := env.service.DeleteWorktreeOperation(env.ctx, request); !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+	if _, err := env.service.DeleteWorktree(env.ctx, request); !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("active-session delete error = %v", err)
 	}
 	if env.runtime.runsBlocked(activeSession.Meta().SessionID) || env.runtime.runsBlocked(idleSession.Meta().SessionID) {
@@ -123,7 +123,7 @@ func TestDeleteBlocksActiveOtherSessionAndRetargetsIdleOtherSession(t *testing.T
 	env.runtime.runningSessions[activeSession.Meta().SessionID] = false
 	env.runtime.mu.Unlock()
 	request.OperationID = serverapi.NewWorktreeOperationID()
-	if _, err := env.service.DeleteWorktreeOperation(env.ctx, request); err != nil {
+	if _, err := env.service.DeleteWorktree(env.ctx, request); err != nil {
 		t.Fatalf("idle-session delete: %v", err)
 	}
 	for _, sessionID := range []string{activeSession.Meta().SessionID, idleSession.Meta().SessionID} {
