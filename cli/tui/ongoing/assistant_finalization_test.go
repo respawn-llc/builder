@@ -206,7 +206,9 @@ func TestAssistantAbortClearsVolatileTailWithoutImmutableAppend(t *testing.T) {
 	assertTerminalPrefix(t, parseTerminalOps(out.String()), []terminalOp{
 		{kind: terminalOpCSI, value: "\x1b[r"},
 		{kind: terminalOpCSI, value: "\x1b[?6l"},
+		{kind: terminalOpOSC, value: "\x1b]133;C\x1b\\"},
 		{kind: terminalOpCSI, value: "\x1b[3;1H"},
+		{kind: terminalOpOSC, value: "\x1b]133;C\x1b\\"},
 		{kind: terminalOpCSI, value: "\x1b[2K"},
 	})
 }

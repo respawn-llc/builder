@@ -404,6 +404,7 @@ type terminalOpKind string
 
 const (
 	terminalOpCSI  terminalOpKind = "csi"
+	terminalOpOSC  terminalOpKind = "osc"
 	terminalOpCRLF terminalOpKind = "crlf"
 	terminalOpText terminalOpKind = "text"
 )
@@ -425,6 +426,23 @@ func parseTerminalOps(raw string) []terminalOp {
 				end++
 			}
 			ops = append(ops, terminalOp{kind: terminalOpCSI, value: raw[i:end]})
+			i = end
+			continue
+		}
+		if raw[i] == '\x1b' && i+1 < len(raw) && raw[i+1] == ']' {
+			end := i + 2
+			for end < len(raw) {
+				if raw[end] == '\a' {
+					end++
+					break
+				}
+				if raw[end] == '\x1b' && end+1 < len(raw) && raw[end+1] == '\\' {
+					end += 2
+					break
+				}
+				end++
+			}
+			ops = append(ops, terminalOp{kind: terminalOpOSC, value: raw[i:end]})
 			i = end
 			continue
 		}
@@ -478,6 +496,8 @@ func visibleTextRows(ops []terminalOp) []string {
 					flush()
 				}
 			}
+		case terminalOpOSC:
+			continue
 		case terminalOpText:
 			current += ansi.Strip(op.value)
 		default:
@@ -558,6 +578,8 @@ func immutableAppendedRows(ops []terminalOp) []string {
 			if started && op.value == resetScrollRegionAndOriginMode()[:3] {
 				finishBlock()
 			}
+		case terminalOpOSC:
+			continue
 		case terminalOpText:
 			if started {
 				current += ansi.Strip(op.value)

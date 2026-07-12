@@ -23,6 +23,7 @@
 - The ongoing surface is a single normal-buffer frame split by an immutable boundary.
 - Immutable-area writes are fire-and-forget. After bytes are emitted, the client must not store, remember, hash, digest, diff, compare against, acknowledge, or reconcile them in any form: not as lines, blocks, ANSI bytes, rendered text, entry identities, counts, or any terminal-visible equivalent. Emitted output is unavailable state.
 - The mutable band is an absolute-positioned viewport anchored to the visible terminal bottom. Every render and erase establishes geometry, resets origin mode and scroll margins, and derives the band top from the submitted frame height. It must not depend on the current cursor position.
+- Immutable writes use OSC 133 output semantics. The mutable band is one OSC 133 redrawable semantic-prompt region, so supporting terminals clear it before resize reflow and the resize event repaints it from mutable frame state. Retired mutable rows return to output semantics before erase, so semantic-prompt marking never survives into immutable rows or permits history replay.
 - On each received event, streaming chunk, or status change, ongoing performs one frame transaction: erase the mutable band line by line at absolute coordinates, append newly stable rows to the immutable area, repaint the mutable band from fresh state. The erase never targets rows above the immutable boundary.
 - There is no clock-based repainting. Animations produce state changes and those changes schedule renders. When no state changes exist, the surface stops rendering.
 
