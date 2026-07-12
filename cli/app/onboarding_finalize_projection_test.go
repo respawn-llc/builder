@@ -170,6 +170,39 @@ func TestOnboardingFinalizationJoinsSubmittedResultAfterParentCancellation(t *te
 	}
 }
 
+func TestOnboardingTerminalActivationFailureKeepsCommittedOutcomeContext(t *testing.T) {
+	activationFailure := serverapi.NewServerNotReadyError(
+		serverapi.ServerNotReadyActivationFailed,
+		serverapi.ServerNotReadyDetails{OnboardingCompleted: true},
+		errors.New("activation failed"),
+	)
+	finalization := newOnboardingFinalization(
+		&recordingOnboardingFinalizer{err: activationFailure},
+		context.Background(),
+	)
+	model := newOnboardingModel(finalization, onboardingFlowState{settings: config.Settings{Theme: theme.Light}})
+
+	done := model.finalizeCmd(true)().(onboardingFinalizeDoneMsg)
+	next, _ := model.Update(done)
+	finalized := next.(*onboardingModel)
+	if finalized.terminalErr == nil {
+		t.Fatal("expected a terminal activation failure")
+	}
+	outcome, submitted := finalization.waitIfSubmitted()
+	if !submitted {
+		t.Fatal("expected submitted finalization")
+	}
+	if !errors.Is(outcome.err, activationFailure) {
+		t.Fatalf("finalization outcome = %v, want activation failure", outcome.err)
+	}
+	if !errors.Is(finalized.terminalErr, activationFailure) {
+		t.Fatalf("terminal error = %v, want activation failure", finalized.terminalErr)
+	}
+	if got := finalized.terminalErr.Error(); got == activationFailure.Error() {
+		t.Fatalf("terminal error = %q, want committed-onboarding context", got)
+	}
+}
+
 func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 	modelID := "gpt-5"
 	state := onboardingFlowState{

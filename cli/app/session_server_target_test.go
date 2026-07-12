@@ -176,6 +176,70 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	}
 }
 
+func TestStartupReadinessAllowsActivatedNoAuthOnboarding(t *testing.T) {
+	_, workspace := newRegisteredAppWorkspaceWithoutSettings(t)
+	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
+
+	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		AllowUnauthenticated:  true,
+	}, memoryAuthHandler{}, nil)
+	if err != nil {
+		t.Fatalf("serve.Start: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+	stopServing := serveAppServer(t, srv)
+	defer stopServing()
+
+	var remote *client.Remote
+	deadline := time.Now().Add(5 * time.Second)
+	var attachErr error
+	for remote == nil && time.Now().Before(deadline) {
+		remote, attachErr = attachConfiguredStartupRemote(context.Background(), cfg)
+		if remote == nil {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if remote == nil {
+		t.Fatalf("attach configured startup remote: %v", attachErr)
+	}
+	defer func() { _ = remote.Close() }()
+	bootstrap, err := remote.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
+		Mode: serverapi.AuthBootstrapModeNone,
+	})
+	if err != nil {
+		t.Fatalf("CompleteAuthBootstrap: %v", err)
+	}
+	if !bootstrap.NoAuthSelected {
+		t.Fatalf("bootstrap response = %+v, want no-auth selection", bootstrap)
+	}
+	if err := remote.EnableNoAuthBootstrapAcknowledgement(context.Background()); err != nil {
+		t.Fatalf("EnableNoAuthBootstrapAcknowledgement: %v", err)
+	}
+
+	selectedTheme := serverapi.OnboardingThemeDark
+	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		Theme: &selectedTheme,
+		CommandsImport: &serverapi.OnboardingImportSelection{
+			Mode: serverapi.OnboardingImportModeNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	readiness, err := remote.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("GetServerReadiness: %v", err)
+	}
+	if readiness.Ready {
+		t.Fatal("no-auth startup readiness must remain false while server-managed auth is absent")
+	}
+	if !startupReadinessAllowsSession(remote, readiness) {
+		t.Fatalf("activated no-auth readiness must allow startup: %+v", readiness)
+	}
+}
+
 func TestConfiguredDaemonPlanSessionUsesSessionWorkspaceLocalConfig(t *testing.T) {
 	home := newAppTestHome(t)
 	workspace := t.TempDir()

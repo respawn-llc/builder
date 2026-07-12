@@ -42,25 +42,29 @@ func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient client.C
 	terminalCursor := newUITerminalCursorState()
 	model.terminalCursor = terminalCursor
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithOutput(newUITerminalCursorWriter(os.Stdout, terminalCursor)))
-	finalModel, err := program.Run()
-	if err != nil {
-		if outcome, submitted := finalization.waitIfSubmitted(); submitted {
+	finalModel, runErr := program.Run()
+	outcome, submitted := finalization.waitIfSubmitted()
+	if runErr != nil {
+		if submitted {
 			return onboardingFlowOutcome(outcome)
 		}
-		return onboardingResult{}, err
+		return onboardingResult{}, runErr
 	}
 	finalized, ok := finalModel.(*onboardingModel)
 	if !ok {
+		if submitted {
+			return onboardingFlowOutcome(outcome)
+		}
 		return onboardingResult{}, fmt.Errorf("unexpected onboarding model type %T", finalModel)
-	}
-	if finalized.canceled {
-		return onboardingResult{}, errors.New("first-time setup canceled")
-	}
-	if outcome, submitted := finalization.waitIfSubmitted(); submitted {
-		return onboardingFlowOutcome(outcome)
 	}
 	if finalized.terminalErr != nil {
 		return onboardingResult{}, finalized.terminalErr
+	}
+	if submitted {
+		return onboardingFlowOutcome(outcome)
+	}
+	if finalized.canceled {
+		return onboardingResult{}, errors.New("first-time setup canceled")
 	}
 	return finalized.result, nil
 }
