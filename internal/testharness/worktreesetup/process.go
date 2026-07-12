@@ -79,8 +79,8 @@ func writeWorktreeEffects(worktreeRoot string, config helperConfig) error {
 	if err := os.WriteFile(countPath, []byte(strconv.Itoa(count)), 0o644); err != nil {
 		return err
 	}
-	if config.MarkerRelativePath != "" {
-		markerPath := filepath.Join(worktreeRoot, config.MarkerRelativePath)
+	if config.MarkerRelativePath != nil {
+		markerPath := filepath.Join(worktreeRoot, *config.MarkerRelativePath)
 		if err := os.MkdirAll(filepath.Dir(markerPath), 0o755); err != nil {
 			return err
 		}
@@ -88,12 +88,12 @@ func writeWorktreeEffects(worktreeRoot string, config helperConfig) error {
 			return err
 		}
 	}
-	if config.SkillName != "" {
-		skillPath := filepath.Join(worktreeRoot, ".kent", "skills", config.SkillName, "SKILL.md")
+	if config.Skill != nil {
+		skillPath := filepath.Join(worktreeRoot, ".kent", "skills", config.Skill.Name, "SKILL.md")
 		if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
 			return err
 		}
-		contents := "---\nname: " + config.SkillName + "\ndescription: " + config.SkillDescription + "\n---\n"
+		contents := "---\nname: " + config.Skill.Name + "\ndescription: " + config.Skill.Description + "\n---\n"
 		if err := os.WriteFile(skillPath, []byte(contents), 0o644); err != nil {
 			return err
 		}

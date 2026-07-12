@@ -159,13 +159,17 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	observation := make(chan error, 1)
 	const skillName = "setup-created-workflow-skill"
 	const skillDescription = "created before the first workflow model request"
+	markerRelativePath := filepath.Join(".kent", "setup-marker")
+	invocationCountRelativePath := filepath.Join(".kent", "setup-invocations")
 	setup := worktreesetup.New(t, worktreesetup.Options{
-		MarkerRelativePath:          filepath.Join(".kent", "setup-marker"),
-		InvocationCountRelativePath: filepath.Join(".kent", "setup-invocations"),
-		SkillName:                   skillName,
-		SkillDescription:            skillDescription,
+		MarkerRelativePath:          &markerRelativePath,
+		InvocationCountRelativePath: &invocationCountRelativePath,
+		Skill: &worktreesetup.Skill{
+			Name:        skillName,
+			Description: skillDescription,
+		},
 	})
-	resolved.Config.Settings.Worktrees.SetupScript = setup.Executable()
+	resolved.Config.Settings.Worktrees.SetupScript = setup.InstallInSourceWorkspace(t, workspace)
 	observerClient := &firstGenerateObserverClient{
 		delegate: scriptedllm.NewLegacyOnlyClient(
 			llm.ProviderCapabilities{ProviderID: "scripted-workflow", SupportsResponsesAPI: true},

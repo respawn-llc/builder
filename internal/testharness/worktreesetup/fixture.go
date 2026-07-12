@@ -3,6 +3,7 @@ package worktreesetup
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,10 +15,14 @@ import (
 const helperConfigEnvironmentKey = "KENT_TEST_WORKTREE_SETUP_CONFIG"
 
 type Options struct {
-	MarkerRelativePath          string
-	InvocationCountRelativePath string
-	SkillName                   string
-	SkillDescription            string
+	MarkerRelativePath          *string
+	InvocationCountRelativePath *string
+	Skill                       *Skill
+}
+
+type Skill struct {
+	Name        string
+	Description string
 }
 
 type Payload struct {
@@ -40,31 +45,30 @@ type Invocation struct {
 
 type Fixture struct {
 	invocationPath              string
-	markerRelativePath          string
+	markerRelativePath          *string
 	invocationCountRelativePath string
-	skillName                   string
+	skill                       *Skill
 }
 
 type helperConfig struct {
-	InvocationPath              string `json:"invocation_path"`
-	MarkerRelativePath          string `json:"marker_relative_path"`
-	InvocationCountRelativePath string `json:"invocation_count_relative_path"`
-	SkillName                   string `json:"skill_name"`
-	SkillDescription            string `json:"skill_description"`
+	InvocationPath              string  `json:"invocation_path"`
+	MarkerRelativePath          *string `json:"marker_relative_path"`
+	InvocationCountRelativePath string  `json:"invocation_count_relative_path"`
+	Skill                       *Skill  `json:"skill"`
 }
 
 func New(t *testing.T, options Options) Fixture {
 	t.Helper()
+	validated, err := validateOptions(options)
+	if err != nil {
+		t.Fatalf("validate worktree setup fixture options: %v", err)
+	}
 	root := t.TempDir()
 	config := helperConfig{
 		InvocationPath:              filepath.Join(root, "invocation.json"),
-		MarkerRelativePath:          options.MarkerRelativePath,
-		InvocationCountRelativePath: options.InvocationCountRelativePath,
-		SkillName:                   options.SkillName,
-		SkillDescription:            options.SkillDescription,
-	}
-	if config.InvocationCountRelativePath == "" {
-		config.InvocationCountRelativePath = filepath.Join(".kent", "setup-invocations")
+		MarkerRelativePath:          validated.markerRelativePath,
+		InvocationCountRelativePath: validated.invocationCountRelativePath,
+		Skill:                       validated.skill,
 	}
 	configPath := filepath.Join(root, "helper-config.json")
 	body, err := json.Marshal(config)
@@ -79,12 +83,47 @@ func New(t *testing.T, options Options) Fixture {
 		invocationPath:              config.InvocationPath,
 		markerRelativePath:          config.MarkerRelativePath,
 		invocationCountRelativePath: config.InvocationCountRelativePath,
-		skillName:                   config.SkillName,
+		skill:                       config.Skill,
 	}
 }
 
 func (Fixture) Executable() string {
 	return os.Args[0]
+}
+
+func (Fixture) InstallInSourceWorkspace(t *testing.T, sourceWorkspaceRoot string) string {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve worktree setup helper executable: %v", err)
+	}
+	info, err := os.Stat(executable)
+	if err != nil {
+		t.Fatalf("stat worktree setup helper executable: %v", err)
+	}
+	relativePath := filepath.Join("scripts", "worktree-setup-helper"+filepath.Ext(executable))
+	destination := filepath.Join(sourceWorkspaceRoot, relativePath)
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatalf("create worktree setup helper directory: %v", err)
+	}
+	source, err := os.Open(executable)
+	if err != nil {
+		t.Fatalf("open worktree setup helper executable: %v", err)
+	}
+	defer source.Close()
+	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	if err != nil {
+		t.Fatalf("create worktree setup helper executable: %v", err)
+	}
+	_, copyErr := io.Copy(destinationFile, source)
+	closeErr := destinationFile.Close()
+	if copyErr != nil {
+		t.Fatalf("copy worktree setup helper executable: %v", copyErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("close worktree setup helper executable: %v", closeErr)
+	}
+	return relativePath
 }
 
 func (f Fixture) Invocation() (Invocation, error) {
@@ -100,7 +139,10 @@ func (f Fixture) Invocation() (Invocation, error) {
 }
 
 func (f Fixture) MarkerPath(worktreeRoot string) string {
-	return filepath.Join(worktreeRoot, f.markerRelativePath)
+	if f.markerRelativePath == nil {
+		panic("worktree setup fixture marker effect is not configured")
+	}
+	return filepath.Join(worktreeRoot, *f.markerRelativePath)
 }
 
 func (f Fixture) InvocationCount(worktreeRoot string) (int, error) {
@@ -116,7 +158,72 @@ func (f Fixture) InvocationCount(worktreeRoot string) (int, error) {
 }
 
 func (f Fixture) SkillPath(worktreeRoot string) string {
-	return filepath.Join(worktreeRoot, ".kent", "skills", f.skillName, "SKILL.md")
+	if f.skill == nil {
+		panic("worktree setup fixture skill effect is not configured")
+	}
+	return filepath.Join(worktreeRoot, ".kent", "skills", f.skill.Name, "SKILL.md")
+}
+
+type validatedOptions struct {
+	markerRelativePath          *string
+	invocationCountRelativePath string
+	skill                       *Skill
+}
+
+func validateOptions(options Options) (validatedOptions, error) {
+	invocationCountRelativePath := filepath.Join(".kent", "setup-invocations")
+	if options.InvocationCountRelativePath != nil {
+		validated, err := validateRelativePath("invocation count", *options.InvocationCountRelativePath)
+		if err != nil {
+			return validatedOptions{}, err
+		}
+		invocationCountRelativePath = validated
+	}
+	var markerRelativePath *string
+	if options.MarkerRelativePath != nil {
+		validated, err := validateRelativePath("marker", *options.MarkerRelativePath)
+		if err != nil {
+			return validatedOptions{}, err
+		}
+		markerRelativePath = &validated
+	}
+	var skill *Skill
+	if options.Skill != nil {
+		validated, err := validateSkill(*options.Skill)
+		if err != nil {
+			return validatedOptions{}, err
+		}
+		skill = &validated
+	}
+	return validatedOptions{
+		markerRelativePath:          markerRelativePath,
+		invocationCountRelativePath: invocationCountRelativePath,
+		skill:                       skill,
+	}, nil
+}
+
+func validateRelativePath(label string, path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("%s relative path must be non-empty when present", label)
+	}
+	cleaned := filepath.Clean(trimmed)
+	if filepath.IsAbs(cleaned) || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s relative path = %q, want a descendant path", label, path)
+	}
+	return cleaned, nil
+}
+
+func validateSkill(skill Skill) (Skill, error) {
+	name := strings.TrimSpace(skill.Name)
+	if name == "" {
+		return Skill{}, fmt.Errorf("setup skill name must be non-empty when present")
+	}
+	description := strings.TrimSpace(skill.Description)
+	if description == "" {
+		return Skill{}, fmt.Errorf("setup skill description must be non-empty when present")
+	}
+	return Skill{Name: name, Description: description}, nil
 }
 
 func (i Invocation) Payload() (Payload, error) {
