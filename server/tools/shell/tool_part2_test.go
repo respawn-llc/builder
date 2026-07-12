@@ -98,6 +98,68 @@ func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
 	waitForManagerCount(t, manager, 0, 3*time.Second)
 }
 
+func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
+	workspace := t.TempDir()
+	manager := newBackgroundTestManager(t)
+	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	terminalHandlerStarted := make(chan struct{})
+	releaseTerminalHandler := make(chan struct{})
+	events := make(chan Event, 1)
+	manager.SetEventHandler(func(evt Event) {
+		if evt.Type != EventCompleted && evt.Type != EventKilled {
+			return
+		}
+		close(terminalHandlerStarted)
+		<-releaseTerminalHandler
+		events <- evt
+	})
+
+	result := callExecCommand(t, execTool, "bg-lock-1", map[string]any{
+		"cmd":           "sleep 0.3; echo done",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 250,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
+	}
+
+	select {
+	case <-terminalHandlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal event handler")
+	}
+	pollDone := make(chan struct{})
+	go func() {
+		_, _ = manager.WriteStdin(context.Background(), WriteRequest{
+			SessionID:      "1000",
+			YieldTime:      250 * time.Millisecond,
+			MaxOutputChars: 16_000,
+		})
+		close(pollDone)
+	}()
+	select {
+	case <-pollDone:
+		t.Fatal("poll acquired the interaction lock while terminal event delivery was in progress")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseTerminalHandler)
+	select {
+	case evt := <-events:
+		if evt.NoticeSuppressed {
+			t.Fatalf("terminal event claimed notice suppression before polling could acquire the lock: %+v", evt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal event")
+	}
+	select {
+	case <-pollDone:
+	case <-time.After(time.Second):
+		t.Fatal("poll did not complete after terminal event delivery")
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
+}
+
 func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
