@@ -87,6 +87,7 @@ const (
 
 type OnboardingFinalizeRequest struct {
 	Theme              *OnboardingTheme               `json:"theme,omitempty"`
+	MainProvider       *OnboardingProviderChoice      `json:"main_provider,omitempty"`
 	Model              *OnboardingModelChoice         `json:"model,omitempty"`
 	ContextWindow      *OnboardingContextWindowChoice `json:"context_window,omitempty"`
 	Thinking           *OnboardingThinkingChoice      `json:"thinking,omitempty"`
@@ -104,6 +105,11 @@ type OnboardingModelChoice struct {
 	Kind    OnboardingModelKind `json:"kind"`
 	ModelID string              `json:"model_id,omitempty"`
 	Alias   string              `json:"alias,omitempty"`
+}
+
+type OnboardingProviderChoice struct {
+	ProviderOverride *string `json:"provider_override,omitempty"`
+	OpenAIBaseURL    *string `json:"openai_base_url,omitempty"`
 }
 
 type OnboardingContextWindowChoice struct {
@@ -145,7 +151,7 @@ func (r *OnboardingFinalizeRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	allowed := map[string]bool{
-		"theme": true, "model": true, "context_window": true, "thinking": true, "verbosity": true,
+		"theme": true, "main_provider": true, "model": true, "context_window": true, "thinking": true, "verbosity": true,
 		"ask_question": true, "supervisor": true, "compaction": true, "skills_import": true,
 		"commands_import": true, "disabled_skill_names": true,
 	}
@@ -498,6 +504,7 @@ func ValidateOnboardingFinalizeRequest(req OnboardingFinalizeRequest) error {
 	if req.Theme != nil && !oneOf(string(*req.Theme), "auto", "light", "dark") {
 		add("theme", "unsupported_value")
 	}
+	validateProviderChoice(req.MainProvider, "main_provider", add)
 	validateModelChoice(req.Model, "model", add)
 	validateContextWindowChoice(req.ContextWindow, "context_window", add)
 	validateThinkingChoice(req.Thinking, "thinking", add)
@@ -525,6 +532,35 @@ func ValidateOnboardingFinalizeRequest(req OnboardingFinalizeRequest) error {
 		return NewOnboardingFinalizeError(OnboardingFinalizeInvalidRequest, OnboardingInvalidRequestDetails{FieldErrors: fieldErrors}, nil)
 	}
 	return nil
+}
+
+func validateProviderChoice(choice *OnboardingProviderChoice, field string, add func(string, string)) {
+	if choice == nil {
+		return
+	}
+	if choice.ProviderOverride == nil && choice.OpenAIBaseURL == nil {
+		add(field, "choice_required")
+		return
+	}
+	provider := ""
+	if choice.ProviderOverride != nil {
+		provider = strings.ToLower(strings.TrimSpace(*choice.ProviderOverride))
+		switch provider {
+		case "":
+			add(field+".provider_override", "required")
+		case "openai", "anthropic":
+		default:
+			add(field+".provider_override", "unsupported_value")
+		}
+	}
+	if choice.OpenAIBaseURL != nil {
+		if strings.TrimSpace(*choice.OpenAIBaseURL) == "" {
+			add(field+".openai_base_url", "required")
+		}
+		if provider != "" && provider != "openai" {
+			add(field+".openai_base_url", "conflicts_with_provider_override")
+		}
+	}
 }
 
 func validateModelChoice(choice *OnboardingModelChoice, field string, add func(string, string)) {

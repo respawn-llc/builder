@@ -21,6 +21,7 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (server
 		CommandsImport: onboardingNoneImportSelection(),
 	}
 	if !defaults {
+		mainProvider := onboardingMainProviderChoice(state.settings)
 		model, err := onboardingModelChoice(state, state.settings.Model)
 		if err != nil {
 			return serverapi.OnboardingFinalizeRequest{}, err
@@ -46,6 +47,7 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (server
 			return serverapi.OnboardingFinalizeRequest{}, err
 		}
 		req.Model = &model
+		req.MainProvider = mainProvider
 		req.ContextWindow = &contextWindow
 		req.Thinking = &thinking
 		req.Supervisor = &supervisor
@@ -63,6 +65,22 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (server
 		return serverapi.OnboardingFinalizeRequest{}, err
 	}
 	return req, nil
+}
+
+func onboardingMainProviderChoice(settings config.Settings) *serverapi.OnboardingProviderChoice {
+	providerOverride := strings.TrimSpace(settings.ProviderOverride)
+	openAIBaseURL := strings.TrimSpace(settings.OpenAIBaseURL)
+	if providerOverride == "" && openAIBaseURL == "" {
+		return nil
+	}
+	choice := serverapi.OnboardingProviderChoice{}
+	if providerOverride != "" {
+		choice.ProviderOverride = &providerOverride
+	}
+	if openAIBaseURL != "" {
+		choice.OpenAIBaseURL = &openAIBaseURL
+	}
+	return &choice
 }
 
 func onboardingTheme(value string) (serverapi.OnboardingTheme, error) {

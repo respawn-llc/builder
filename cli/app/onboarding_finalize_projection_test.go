@@ -297,6 +297,8 @@ func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 		settings: config.Settings{
 			Theme:              theme.Light,
 			Model:              modelID,
+			ProviderOverride:   "openai",
+			OpenAIBaseURL:      "http://127.0.0.1:8080/v1",
 			ModelContextWindow: 1_000_000,
 			ThinkingLevel:      "high",
 			ModelVerbosity:     config.ModelVerbosityHigh,
@@ -329,6 +331,9 @@ func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 	}
 	if request.Model == nil || request.Model.Kind != serverapi.OnboardingModelKnown {
 		t.Fatalf("model = %+v", request.Model)
+	}
+	if request.MainProvider == nil || request.MainProvider.ProviderOverride == nil || *request.MainProvider.ProviderOverride != "openai" || request.MainProvider.OpenAIBaseURL == nil || *request.MainProvider.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
+		t.Fatalf("main provider = %+v", request.MainProvider)
 	}
 	if request.ContextWindow == nil || request.ContextWindow.Kind != serverapi.OnboardingContextWindowLarge {
 		t.Fatalf("context window = %+v", request.ContextWindow)
