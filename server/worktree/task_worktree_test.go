@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,56 @@ func TestEnsureTaskWorktreeRunsSetupAndPublishesProgressBeforeReturning(t *testi
 	}
 }
 
+func TestEnsureTaskWorktreeSetupOmitsStaleParentSessionEnvironment(t *testing.T) {
+	env := newServiceTestEnv(t)
+	t.Setenv(setupEnvironmentKeySessionID, "stale-parent-session")
+	t.Setenv(setupEnvironmentKeyWorktreeRoot, "stale-parent-worktree")
+	task, _ := createTaskWorktreeTestTask(t, env)
+	capture := writeSetupProcessCaptureScript(t, filepath.Join(env.workspaceRoot, "scripts", "task-contract.sh"))
+	env.service.setupScript = filepath.Join("scripts", "task-contract.sh")
+
+	resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("EnsureTaskWorktree: %v", err)
+	}
+	payload := waitForSetupPayload(t, capture.payloadPath)
+	if payload.SessionID != nil {
+		t.Fatalf("workflow setup session_id = %q, want nil", *payload.SessionID)
+	}
+	assertSetupProcessCapture(t, capture, payload, env.workspaceRoot, task.ShortID, resp.Worktree.CanonicalRoot)
+	environment := waitForSetupEnvironment(t, capture.environmentPath)
+	assertSetupEnvironmentAbsent(t, environment, setupEnvironmentKeySessionID)
+	assertSetupEnvironmentValue(t, environment, setupEnvironmentKeyWorktreeRoot, resp.Worktree.CanonicalRoot)
+}
+
+func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T) {
+	env := newServiceTestEnv(t)
+	t.Setenv(setupEnvironmentKeySessionID, "stale-parent-session")
+	t.Setenv(setupEnvironmentKeyWorktreeRoot, "stale-parent-worktree")
+	capture := writeSetupProcessCaptureScript(t, filepath.Join(env.workspaceRoot, "scripts", "session-contract.sh"))
+	env.service.setupScript = filepath.Join("scripts", "session-contract.sh")
+
+	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "req-session-contract",
+		SessionID:        env.session.Meta().SessionID,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/session-contract",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	payload := waitForSetupPayload(t, capture.payloadPath)
+	if payload.SessionID == nil || *payload.SessionID != env.session.Meta().SessionID {
+		t.Fatalf("session setup session_id = %v, want %q", payload.SessionID, env.session.Meta().SessionID)
+	}
+	assertSetupProcessCapture(t, capture, payload, env.workspaceRoot, "feature/session-contract", resp.Worktree.CanonicalRoot)
+	environment := waitForSetupEnvironment(t, capture.environmentPath)
+	assertSetupEnvironmentValue(t, environment, setupEnvironmentKeySessionID, env.session.Meta().SessionID)
+	assertSetupEnvironmentValue(t, environment, setupEnvironmentKeyWorktreeRoot, resp.Worktree.CanonicalRoot)
+}
+
 func TestEnsureTaskWorktreeReturnsExistingManagedWorktree(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
@@ -125,6 +176,64 @@ func TestEnsureTaskWorktreeReturnsExistingManagedWorktree(t *testing.T) {
 	}
 	if first.Worktree.WorktreeID != second.Worktree.WorktreeID {
 		t.Fatalf("second worktree id = %q, want %q", second.Worktree.WorktreeID, first.Worktree.WorktreeID)
+	}
+}
+
+type setupProcessCapture struct {
+	payloadPath     string
+	stdinPath       string
+	argsPath        string
+	cwdPath         string
+	environmentPath string
+}
+
+func writeSetupProcessCaptureScript(t *testing.T, scriptPath string) setupProcessCapture {
+	t.Helper()
+	captureRoot := t.TempDir()
+	capture := setupProcessCapture{
+		payloadPath:     filepath.Join(captureRoot, "payload.json"),
+		stdinPath:       filepath.Join(captureRoot, "stdin.json"),
+		argsPath:        filepath.Join(captureRoot, "args.txt"),
+		cwdPath:         filepath.Join(captureRoot, "cwd.txt"),
+		environmentPath: filepath.Join(captureRoot, "environment.txt"),
+	}
+	writeExecutableFile(t, scriptPath, fmt.Sprintf("#!/bin/sh\npwd > %q\nprintf '%%s\\n%%s\\n%%s\\n' \"$1\" \"$2\" \"$3\" > %q\ncat > %q\nprintf '%%s' \"$KENT_WORKTREE_PAYLOAD_JSON\" > %q\nenv > %q\n", capture.cwdPath, capture.argsPath, capture.stdinPath, capture.payloadPath, capture.environmentPath))
+	return capture
+}
+
+func assertSetupProcessCapture(t *testing.T, capture setupProcessCapture, payload setupScriptPayload, sourceWorkspaceRoot string, branchName string, worktreeRoot string) {
+	t.Helper()
+	if payload.SourceWorkspaceRoot != sourceWorkspaceRoot || payload.BranchName != branchName || payload.WorktreeRoot != worktreeRoot {
+		t.Fatalf("setup payload = %+v, want source=%q branch=%q worktree=%q", payload, sourceWorkspaceRoot, branchName, worktreeRoot)
+	}
+	if got := waitForFileText(t, capture.cwdPath); got != worktreeRoot {
+		t.Fatalf("setup cwd = %q, want %q", got, worktreeRoot)
+	}
+	if got := waitForFileLines(t, capture.argsPath); !reflect.DeepEqual(got, []string{sourceWorkspaceRoot, branchName, worktreeRoot}) {
+		t.Fatalf("setup args = %q, want [%q %q %q]", got, sourceWorkspaceRoot, branchName, worktreeRoot)
+	}
+	if stdinPayload := waitForSetupPayload(t, capture.stdinPath); !reflect.DeepEqual(stdinPayload, payload) {
+		t.Fatalf("setup stdin = %+v, want %+v", stdinPayload, payload)
+	}
+}
+
+func waitForSetupEnvironment(t *testing.T, path string) []string {
+	t.Helper()
+	return waitForFileLines(t, path)
+}
+
+func assertSetupEnvironmentAbsent(t *testing.T, environment []string, key string) {
+	t.Helper()
+	if values := setupEnvironmentValues(environment, key, platformSetupEnvironmentKeyCanonicalizer); len(values) != 0 {
+		t.Fatalf("setup environment %q = %q, want absent", key, values)
+	}
+}
+
+func assertSetupEnvironmentValue(t *testing.T, environment []string, key string, want string) {
+	t.Helper()
+	values := setupEnvironmentValues(environment, key, platformSetupEnvironmentKeyCanonicalizer)
+	if !reflect.DeepEqual(values, []string{want}) {
+		t.Fatalf("setup environment %q = %q, want [%q]", key, values, want)
 	}
 }
 

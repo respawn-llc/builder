@@ -3,10 +3,18 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"core/internal/testharness/scriptedllm"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/llm"
@@ -18,6 +26,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
@@ -120,6 +129,115 @@ func TestNewWithContextOptionsAcceptsRuntimeClientFactory(t *testing.T) {
 	if appCore.bundles == nil || appCore.bundles.Runtime == nil || appCore.bundles.Runtime.sessionRuntimeService == nil {
 		t.Fatal("expected runtime bundle with session runtime service")
 	}
+}
+
+func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KENT_WORKTREE_SESSION_ID", "stale-parent-session")
+	initializeCoreGitWorkspace(t, workspace)
+	sourceWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspace)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+
+	capture := coreSetupProcessCapture{
+		argumentsPath:   filepath.Join(t.TempDir(), "arguments"),
+		cwdPath:         filepath.Join(t.TempDir(), "cwd"),
+		stdinPath:       filepath.Join(t.TempDir(), "stdin.json"),
+		payloadPath:     filepath.Join(t.TempDir(), "payload.json"),
+		environmentPath: filepath.Join(t.TempDir(), "environment"),
+	}
+	writeCoreWorkflowSetupScript(t, filepath.Join(workspace, "scripts", "workflow-setup.sh"), capture)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	resolved.Config.Settings.Worktrees.SetupScript = filepath.Join("scripts", "workflow-setup.sh")
+	resolved.Config.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeStructuredOutput
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildAuthSupport: %v", err)
+	}
+	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
+	if err != nil {
+		t.Fatalf("BuildRuntimeSupport: %v", err)
+	}
+
+	observation := make(chan error, 1)
+	const skillName = "setup-created-workflow-skill"
+	const skillDescription = "created before the first workflow model request"
+	observerClient := &firstGenerateObserverClient{
+		delegate: scriptedllm.NewLegacyOnlyClient(
+			llm.ProviderCapabilities{ProviderID: "scripted-workflow", SupportsResponsesAPI: true},
+			scriptedllm.FinalAnswer(`{"commentary":"done"}`),
+		),
+		observation:      observation,
+		markerPath:       filepath.Join(".kent", "setup-marker"),
+		invocationPath:   filepath.Join(".kent", "setup-invocations"),
+		skillName:        skillName,
+		skillDescription: skillDescription,
+	}
+	appCore, err := NewWithContextOptions(ctx, resolved.Config, authSupport, runtimeSupport, Options{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return observerClient, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewWithContextOptions: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+
+	project, err := appCore.ProjectViewClient().CreateProject(ctx, serverapi.ProjectCreateRequest{
+		DisplayName:   "Workflow setup composition",
+		ProjectKey:    "SETUP",
+		WorkspaceRoot: workspace,
+	})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	workflowStore, err := workflowstore.New(appCore.bundles.Persistence.metadataStore)
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	workflowID := createCoreValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, project.Binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := appCore.WorkflowClient().CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID:         project.Binding.ProjectID,
+		WorkflowID:        string(workflowID),
+		Title:             "Provision task worktree",
+		SourceWorkspaceID: project.Binding.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowTask: %v", err)
+	}
+	started, err := appCore.WorkflowClient().StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
+	}
+	if started.RunID == "" {
+		t.Fatal("StartWorkflowTask returned an empty run id")
+	}
+
+	select {
+	case err := <-observation:
+		if err != nil {
+			t.Fatalf("first workflow model request observed setup violation: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first workflow model request")
+	}
+
+	assertCoreWorkflowSetupCapture(t, capture, sourceWorkspaceRoot, task.Task.ShortID)
+	waitForCoreWorkflowTaskDone(t, appCore, task.Task.ID)
 }
 
 func TestRuntimePendingAskResolverUsesPendingPromptSource(t *testing.T) {
@@ -427,6 +545,249 @@ type fakePendingPromptSource struct {
 	items map[string][]registry.PendingPromptSnapshot
 }
 
+type coreSetupProcessCapture struct {
+	argumentsPath   string
+	cwdPath         string
+	stdinPath       string
+	payloadPath     string
+	environmentPath string
+}
+
+type coreSetupPayload struct {
+	SourceWorkspaceRoot string  `json:"source_workspace_root"`
+	BranchName          string  `json:"branch_name"`
+	WorktreeRoot        string  `json:"worktree_root"`
+	SessionID           *string `json:"session_id"`
+	ProjectID           string  `json:"project_id"`
+	WorkspaceID         string  `json:"workspace_id"`
+	WorktreeID          string  `json:"worktree_id"`
+	CreatedBranch       bool    `json:"created_branch"`
+}
+
+func initializeCoreGitWorkspace(t *testing.T, workspace string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "core-test@example.invalid"},
+		{"config", "user.name", "Core Test"},
+	} {
+		runCoreGit(t, workspace, args...)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("workspace\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile README: %v", err)
+	}
+	runCoreGit(t, workspace, "add", "README.md")
+	runCoreGit(t, workspace, "commit", "-m", "initial")
+}
+
+func runCoreGit(t *testing.T, workspace string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", workspace}, args...)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+}
+
+func writeCoreWorkflowSetupScript(t *testing.T, path string, capture coreSetupProcessCapture) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll setup script: %v", err)
+	}
+	body := fmt.Sprintf(`#!/bin/sh
+pwd > %q
+printf '%%s\n%%s\n%%s\n' "$1" "$2" "$3" > %q
+cat > %q
+printf '%%s' "$KENT_WORKTREE_PAYLOAD_JSON" > %q
+env > %q
+mkdir -p "$3/.kent"
+printf '1\n' >> "$3/.kent/setup-invocations"
+printf marker > "$3/.kent/setup-marker"
+mkdir -p "$3/.kent/skills/setup-created-workflow-skill"
+cat > "$3/.kent/skills/setup-created-workflow-skill/SKILL.md" <<'EOF'
+---
+name: setup-created-workflow-skill
+description: created before the first workflow model request
+---
+EOF
+`, capture.cwdPath, capture.argumentsPath, capture.stdinPath, capture.payloadPath, capture.environmentPath)
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("WriteFile setup script: %v", err)
+	}
+}
+
+func assertCoreWorkflowSetupCapture(t *testing.T, capture coreSetupProcessCapture, sourceWorkspaceRoot string, branchName string) {
+	t.Helper()
+	payload := readCoreSetupPayload(t, capture.payloadPath)
+	if payload.SourceWorkspaceRoot != sourceWorkspaceRoot {
+		t.Fatalf("setup source workspace root = %q, want %q", payload.SourceWorkspaceRoot, sourceWorkspaceRoot)
+	}
+	if payload.BranchName != branchName {
+		t.Fatalf("setup branch = %q, want %q", payload.BranchName, branchName)
+	}
+	if payload.WorktreeRoot == "" {
+		t.Fatal("setup worktree root is empty")
+	}
+	if payload.SessionID != nil {
+		t.Fatalf("workflow setup session_id = %q, want nil", *payload.SessionID)
+	}
+	if got := readCoreSetupLines(t, capture.argumentsPath); len(got) != 3 || got[0] != sourceWorkspaceRoot || got[1] != branchName || got[2] != payload.WorktreeRoot {
+		t.Fatalf("setup argv = %q, want [%q %q %q]", got, sourceWorkspaceRoot, branchName, payload.WorktreeRoot)
+	}
+	if got := readCoreSetupText(t, capture.cwdPath); got != payload.WorktreeRoot {
+		t.Fatalf("setup cwd = %q, want %q", got, payload.WorktreeRoot)
+	}
+	if stdin := readCoreSetupPayload(t, capture.stdinPath); !reflect.DeepEqual(stdin, payload) {
+		t.Fatalf("setup stdin payload = %+v, want %+v", stdin, payload)
+	}
+	environment := coreSetupEnvironment(t, capture.environmentPath)
+	assertCoreSetupEnvironmentValue(t, environment, "KENT_WORKTREE_SOURCE_WORKSPACE_ROOT", payload.SourceWorkspaceRoot)
+	assertCoreSetupEnvironmentValue(t, environment, "KENT_WORKTREE_BRANCH_NAME", payload.BranchName)
+	assertCoreSetupEnvironmentValue(t, environment, "KENT_WORKTREE_ROOT", payload.WorktreeRoot)
+	assertCoreSetupEnvironmentAbsent(t, environment, "KENT_WORKTREE_SESSION_ID")
+	assertCoreSetupEnvironmentValue(t, environment, "KENT_WORKTREE_PROJECT_ID", payload.ProjectID)
+	assertCoreSetupEnvironmentValue(t, environment, "KENT_WORKTREE_WORKSPACE_ID", payload.WorkspaceID)
+	assertCoreSetupEnvironmentValue(t, environment, "KENT_WORKTREE_WORKTREE_ID", payload.WorktreeID)
+	assertCoreSetupEnvironmentValue(t, environment, "KENT_WORKTREE_CREATED_BRANCH", fmt.Sprintf("%t", payload.CreatedBranch))
+	var payloadFromEnvironment coreSetupPayload
+	if err := json.Unmarshal([]byte(environment["KENT_WORKTREE_PAYLOAD_JSON"]), &payloadFromEnvironment); err != nil {
+		t.Fatalf("unmarshal KENT_WORKTREE_PAYLOAD_JSON: %v", err)
+	}
+	if !reflect.DeepEqual(payloadFromEnvironment, payload) {
+		t.Fatalf("KENT_WORKTREE_PAYLOAD_JSON = %+v, want %+v", payloadFromEnvironment, payload)
+	}
+}
+
+func readCoreSetupPayload(t *testing.T, path string) coreSetupPayload {
+	t.Helper()
+	var payload coreSetupPayload
+	if err := json.Unmarshal([]byte(readCoreSetupText(t, path)), &payload); err != nil {
+		t.Fatalf("unmarshal setup payload %s: %v", path, err)
+	}
+	return payload
+}
+
+func readCoreSetupText(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile %s: %v", path, err)
+	}
+	return strings.TrimSpace(string(body))
+}
+
+func readCoreSetupLines(t *testing.T, path string) []string {
+	t.Helper()
+	text := readCoreSetupText(t, path)
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "\n")
+}
+
+func coreSetupEnvironment(t *testing.T, path string) map[string]string {
+	t.Helper()
+	environment := map[string]string{}
+	for _, line := range readCoreSetupLines(t, path) {
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			t.Fatalf("invalid environment entry %q", line)
+		}
+		if _, exists := environment[key]; exists {
+			t.Fatalf("duplicate environment key %q", key)
+		}
+		environment[key] = value
+	}
+	return environment
+}
+
+func assertCoreSetupEnvironmentValue(t *testing.T, environment map[string]string, key string, want string) {
+	t.Helper()
+	if got, found := environment[key]; !found || got != want {
+		t.Fatalf("setup environment %q = %q, present=%t, want %q", key, got, found, want)
+	}
+}
+
+func assertCoreSetupEnvironmentAbsent(t *testing.T, environment map[string]string, key string) {
+	t.Helper()
+	if value, found := environment[key]; found {
+		t.Fatalf("setup environment %q = %q, want absent", key, value)
+	}
+}
+
+func waitForCoreWorkflowTaskDone(t *testing.T, appCore *Core, taskID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		detail, err := appCore.WorkflowClient().GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{TaskID: taskID})
+		if err != nil {
+			t.Fatalf("GetWorkflowTask: %v", err)
+		}
+		if detail.Task.Summary.Done {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("workflow task %q did not complete", taskID)
+}
+
+type firstGenerateObserverClient struct {
+	delegate         *scriptedllm.LegacyClient
+	observation      chan<- error
+	markerPath       string
+	invocationPath   string
+	skillName        string
+	skillDescription string
+	once             sync.Once
+}
+
+func (c *firstGenerateObserverClient) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
+	c.once.Do(func() {
+		c.observation <- c.observe(request)
+	})
+	return c.delegate.Generate(ctx, request)
+}
+
+func (c *firstGenerateObserverClient) ProviderCapabilities(ctx context.Context) (llm.ProviderCapabilities, error) {
+	return c.delegate.ProviderCapabilities(ctx)
+}
+
+func (c *firstGenerateObserverClient) observe(request llm.Request) error {
+	worktreeRoot := ""
+	for _, item := range request.Items {
+		if item.MessageType != llm.MessageTypeWorktreeMode {
+			continue
+		}
+		worktreeRoot = strings.TrimSpace(item.SourcePath)
+	}
+	if worktreeRoot == "" {
+		return errors.New("first request has no worktree mode source path")
+	}
+	if _, err := os.Stat(filepath.Join(worktreeRoot, c.markerPath)); err != nil {
+		return fmt.Errorf("setup marker before first request: %w", err)
+	}
+	invocations, err := os.ReadFile(filepath.Join(worktreeRoot, c.invocationPath))
+	if err != nil {
+		return fmt.Errorf("read setup invocation count: %w", err)
+	}
+	if string(invocations) != "1\n" {
+		return fmt.Errorf("setup invocation count = %q, want exactly one", invocations)
+	}
+	skillPath := filepath.ToSlash(filepath.Join(worktreeRoot, ".kent", "skills", c.skillName, "SKILL.md"))
+	wantSkillLine := "- " + c.skillName + ": " + skillPath + " . " + c.skillDescription
+	for _, item := range request.Items {
+		if item.Role != llm.RoleDeveloper || item.MessageType != llm.MessageTypeSkills {
+			continue
+		}
+		for _, line := range strings.Split(item.Content, "\n") {
+			if line == wantSkillLine {
+				return nil
+			}
+		}
+		return fmt.Errorf("structured skills item does not include setup-created skill %q", wantSkillLine)
+	}
+	return errors.New("first request has no structured skills item")
+}
+
 func (f fakePendingPromptSource) ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot {
 	return append([]registry.PendingPromptSnapshot(nil), f.items[sessionID]...)
 }
@@ -444,7 +805,7 @@ func createCoreValidWorkflow(t *testing.T, ctx context.Context, store *workflows
 	start := coreWorkflowNodeByKind(t, def, workflow.NodeKindStart)
 	done := coreWorkflowNodeByKind(t, def, workflow.NodeKindTerminal)
 	agentID := workflow.NodeID("node-agent-" + string(created.ID))
-	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: "coder"}); err != nil {
+	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: workflow.DefaultAgentRole}); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
 	startGroupID := workflow.TransitionGroupID("group-start-" + string(created.ID))

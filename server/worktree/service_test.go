@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -269,8 +270,8 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	if payload.WorkspaceID != env.binding.WorkspaceID {
 		t.Fatalf("setup payload workspace_id = %q, want %q", payload.WorkspaceID, env.binding.WorkspaceID)
 	}
-	if payload.SessionID != env.session.Meta().SessionID {
-		t.Fatalf("setup payload session_id = %q, want %q", payload.SessionID, env.session.Meta().SessionID)
+	if payload.SessionID == nil || *payload.SessionID != env.session.Meta().SessionID {
+		t.Fatalf("setup payload session_id = %v, want %q", payload.SessionID, env.session.Meta().SessionID)
 	}
 	if payload.WorktreeID != resp.Worktree.WorktreeID {
 		t.Fatalf("setup payload worktree_id = %q, want %q", payload.WorktreeID, resp.Worktree.WorktreeID)
@@ -284,7 +285,7 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	if got := waitForFileLines(t, argsPath); len(got) != 3 || got[0] != env.workspaceRoot || got[1] != "feature/create-provenance" || got[2] != resp.Worktree.CanonicalRoot {
 		t.Fatalf("setup args = %+v, want [%q %q %q]", got, env.workspaceRoot, "feature/create-provenance", resp.Worktree.CanonicalRoot)
 	}
-	if stdinPayload := waitForSetupPayload(t, stdinPath); stdinPayload != payload {
+	if stdinPayload := waitForSetupPayload(t, stdinPath); !reflect.DeepEqual(stdinPayload, payload) {
 		t.Fatalf("stdin payload = %+v, want %+v", stdinPayload, payload)
 	}
 	if len(env.runtime.rebindCalls) != 1 || env.runtime.rebindCalls[0].root != resp.Worktree.CanonicalRoot {

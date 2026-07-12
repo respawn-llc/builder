@@ -100,14 +100,29 @@ type failedCreateCleanup struct {
 }
 
 type setupScriptPayload struct {
-	SourceWorkspaceRoot string `json:"source_workspace_root"`
-	BranchName          string `json:"branch_name"`
-	WorktreeRoot        string `json:"worktree_root"`
-	SessionID           string `json:"session_id"`
-	ProjectID           string `json:"project_id"`
-	WorkspaceID         string `json:"workspace_id"`
-	WorktreeID          string `json:"worktree_id"`
-	CreatedBranch       bool   `json:"created_branch"`
+	SourceWorkspaceRoot string  `json:"source_workspace_root"`
+	BranchName          string  `json:"branch_name"`
+	WorktreeRoot        string  `json:"worktree_root"`
+	SessionID           *string `json:"session_id"`
+	ProjectID           string  `json:"project_id"`
+	WorkspaceID         string  `json:"workspace_id"`
+	WorktreeID          string  `json:"worktree_id"`
+	CreatedBranch       bool    `json:"created_branch"`
+}
+
+func optionalSetupSessionID(sessionID string) *string {
+	normalized := strings.TrimSpace(sessionID)
+	if normalized == "" {
+		return nil
+	}
+	return &normalized
+}
+
+func normalizeOptionalSetupSessionID(sessionID *string) *string {
+	if sessionID == nil {
+		return nil
+	}
+	return optionalSetupSessionID(*sessionID)
 }
 
 type EnsureTaskWorktreeRequest struct {
@@ -631,7 +646,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		BranchName:          strings.TrimSpace(created.git.BranchName),
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
-			SessionID:   workspaceCtx.sessionID,
+			SessionID:   optionalSetupSessionID(workspaceCtx.sessionID),
 			ProjectID:   workspaceCtx.projectID,
 			WorkspaceID: workspaceCtx.workspaceID,
 			WorktreeID:  created.record.ID,
@@ -1204,7 +1219,7 @@ func (s *Service) runSetupForWorktree(ctx context.Context, req setupExecutionReq
 		SourceWorkspaceRoot: strings.TrimSpace(req.SourceWorkspaceRoot),
 		BranchName:          strings.TrimSpace(req.BranchName),
 		WorktreeRoot:        strings.TrimSpace(req.WorktreeRoot),
-		SessionID:           strings.TrimSpace(req.ScriptPayload.SessionID),
+		SessionID:           normalizeOptionalSetupSessionID(req.ScriptPayload.SessionID),
 		ProjectID:           strings.TrimSpace(req.ScriptPayload.ProjectID),
 		WorkspaceID:         strings.TrimSpace(req.ScriptPayload.WorkspaceID),
 		WorktreeID:          strings.TrimSpace(req.ScriptPayload.WorktreeID),
@@ -1255,17 +1270,10 @@ func (s *Service) runSetupScript(ctx context.Context, scriptPath string, payload
 	cmd := exec.CommandContext(setupCtx, scriptPath, payload.SourceWorkspaceRoot, payload.BranchName, payload.WorktreeRoot)
 	cmd.Dir = payload.WorktreeRoot
 	cmd.Stdin = strings.NewReader(string(body))
-	cmd.Env = append(os.Environ(),
-		"KENT_WORKTREE_SOURCE_WORKSPACE_ROOT="+payload.SourceWorkspaceRoot,
-		"KENT_WORKTREE_BRANCH_NAME="+payload.BranchName,
-		"KENT_WORKTREE_ROOT="+payload.WorktreeRoot,
-		"KENT_WORKTREE_SESSION_ID="+payload.SessionID,
-		"KENT_WORKTREE_PROJECT_ID="+payload.ProjectID,
-		"KENT_WORKTREE_WORKSPACE_ID="+payload.WorkspaceID,
-		"KENT_WORKTREE_WORKTREE_ID="+payload.WorktreeID,
-		fmt.Sprintf("KENT_WORKTREE_CREATED_BRANCH=%t", payload.CreatedBranch),
-		"KENT_WORKTREE_PAYLOAD_JSON="+string(body),
-	)
+	cmd.Env, err = buildSetupEnvironment(os.Environ(), payload, platformSetupEnvironmentKeyCanonicalizer)
+	if err != nil {
+		return &setupScriptError{Message: fmt.Sprintf("build setup environment: %v", err), ScriptPath: scriptPath, WorktreeRoot: payload.WorktreeRoot}
+	}
 	stdout := shelltool.NewBoundedOutput(setupDiagnosticLimitBytes)
 	stderr := shelltool.NewBoundedOutput(setupDiagnosticLimitBytes)
 	cmd.Stdout = stdout
