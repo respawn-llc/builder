@@ -100,13 +100,17 @@ func cancelOnboardingLifecycleWhenFileExists(ctx context.Context, cancel context
 }
 
 type onboardingRPCGate struct {
-	backendURL  string
-	started     chan struct{}
-	release     chan struct{}
-	closed      chan struct{}
-	startOnce   sync.Once
-	releaseOnce sync.Once
-	closeOnce   sync.Once
+	backendURL     string
+	started        chan struct{}
+	release        chan struct{}
+	finalized      chan struct{}
+	closed         chan struct{}
+	finalizationMu sync.Mutex
+	finalizationID string
+	startOnce      sync.Once
+	releaseOnce    sync.Once
+	finalizedOnce  sync.Once
+	closeOnce      sync.Once
 }
 
 func newOnboardingRPCGate(backendURL string) *onboardingRPCGate {
@@ -114,6 +118,7 @@ func newOnboardingRPCGate(backendURL string) *onboardingRPCGate {
 		backendURL: backendURL,
 		started:    make(chan struct{}),
 		release:    make(chan struct{}),
+		finalized:  make(chan struct{}),
 		closed:     make(chan struct{}),
 	}
 }
@@ -137,6 +142,9 @@ func (g *onboardingRPCGate) Handler(conn *websocket.Conn) {
 			if err := websocket.JSON.Receive(backend, &response); err != nil {
 				return
 			}
+			if g.isFinalizationResponse(response.ID) {
+				g.finalizedOnce.Do(func() { close(g.finalized) })
+			}
 			if err := websocket.JSON.Send(conn, response); err != nil {
 				return
 			}
@@ -148,6 +156,9 @@ func (g *onboardingRPCGate) Handler(conn *websocket.Conn) {
 			return
 		}
 		if request.Method == protocol.MethodOnboardingFinalize {
+			g.finalizationMu.Lock()
+			g.finalizationID = request.ID
+			g.finalizationMu.Unlock()
 			g.startOnce.Do(func() { close(g.started) })
 			<-g.release
 		}
@@ -155,6 +166,12 @@ func (g *onboardingRPCGate) Handler(conn *websocket.Conn) {
 			return
 		}
 	}
+}
+
+func (g *onboardingRPCGate) isFinalizationResponse(id string) bool {
+	g.finalizationMu.Lock()
+	defer g.finalizationMu.Unlock()
+	return g.finalizationID != "" && g.finalizationID == id
 }
 
 type gatedOnboardingServer struct {
@@ -321,6 +338,7 @@ func TestOnboardingFinalizationRemoteDeadlineIsIndeterminateUntilCallerClosesRem
 	default:
 	}
 	server.gate.Release()
+	waitForOnboardingFinalizationCompletion(t, server.gate.finalized)
 	if err := remote.Close(); err != nil {
 		t.Fatalf("close caller-owned remote: %v", err)
 	}
@@ -356,6 +374,15 @@ func readOnboardingRemoteLifecycleProcessResult(t *testing.T, path string) onboa
 		t.Fatalf("decode onboarding lifecycle process result: %v", err)
 	}
 	return result
+}
+
+func waitForOnboardingFinalizationCompletion(t *testing.T, finalized <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-finalized:
+	case <-time.After(5 * time.Second):
+		t.Fatal("onboarding finalization did not complete after release")
+	}
 }
 
 func waitForOnboardingGateClose(t *testing.T, closed <-chan struct{}) {
