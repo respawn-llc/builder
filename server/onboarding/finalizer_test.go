@@ -255,6 +255,24 @@ func TestFinalizerPersistsMainProviderChoice(t *testing.T) {
 	}
 }
 
+func TestFinalizerPersistsToolOverrides(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		AskQuestion: ptr(true),
+		ToolOverrides: []serverapi.OnboardingToolOverride{
+			{ID: toolspec.ToolEdit, Enabled: true},
+			{ID: toolspec.ToolPatch, Enabled: false},
+		},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	if !cfg.Settings.EnabledTools[toolspec.ToolAskQuestion] || !cfg.Settings.EnabledTools[toolspec.ToolEdit] || cfg.Settings.EnabledTools[toolspec.ToolPatch] {
+		t.Fatalf("enabled tools = %+v", cfg.Settings.EnabledTools)
+	}
+}
+
 func TestFinalizerImportsSkillsAndCommandsBeforeConfigWrite(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()

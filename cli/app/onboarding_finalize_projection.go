@@ -55,6 +55,7 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (server
 		req.SkillsImport = skillsImport
 		askQuestion := state.settings.EnabledTools[toolspec.ToolAskQuestion]
 		req.AskQuestion = &askQuestion
+		req.ToolOverrides = onboardingToolOverrides(state.settings.EnabledTools)
 		if state.settings.ModelVerbosity != "" {
 			verbosity := serverapi.OnboardingVerbosity(state.settings.ModelVerbosity)
 			req.Verbosity = &verbosity
@@ -81,6 +82,27 @@ func onboardingMainProviderChoice(settings config.Settings) *serverapi.Onboardin
 		choice.OpenAIBaseURL = &openAIBaseURL
 	}
 	return &choice
+}
+
+func onboardingToolOverrides(enabledTools map[toolspec.ID]bool) []serverapi.OnboardingToolOverride {
+	defaults := config.DefaultOnboardingSettings().EnabledTools
+	overrides := make([]serverapi.OnboardingToolOverride, 0)
+	for _, id := range toolspec.CatalogIDs() {
+		if id == toolspec.ToolAskQuestion {
+			continue
+		}
+		enabled, configured := enabledTools[id]
+		if !configured {
+			enabled = defaults[id]
+		}
+		if enabled != defaults[id] {
+			overrides = append(overrides, serverapi.OnboardingToolOverride{ID: id, Enabled: enabled})
+		}
+	}
+	if len(overrides) == 0 {
+		return nil
+	}
+	return overrides
 }
 
 func onboardingTheme(value string) (serverapi.OnboardingTheme, error) {

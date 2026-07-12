@@ -303,7 +303,11 @@ func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 			ThinkingLevel:      "high",
 			ModelVerbosity:     config.ModelVerbosityHigh,
 			CompactionMode:     config.CompactionModeNative,
-			EnabledTools:       map[toolspec.ID]bool{toolspec.ToolAskQuestion: true},
+			EnabledTools: map[toolspec.ID]bool{
+				toolspec.ToolAskQuestion: true,
+				toolspec.ToolEdit:        true,
+				toolspec.ToolPatch:       false,
+			},
 			Reviewer: config.ReviewerSettings{
 				Frequency:     "all",
 				Model:         "custom-reviewer",
@@ -334,6 +338,13 @@ func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 	}
 	if request.MainProvider == nil || request.MainProvider.ProviderOverride == nil || *request.MainProvider.ProviderOverride != "openai" || request.MainProvider.OpenAIBaseURL == nil || *request.MainProvider.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
 		t.Fatalf("main provider = %+v", request.MainProvider)
+	}
+	toolOverrides := map[toolspec.ID]bool{}
+	for _, override := range request.ToolOverrides {
+		toolOverrides[override.ID] = override.Enabled
+	}
+	if len(toolOverrides) != 2 || !toolOverrides[toolspec.ToolEdit] || toolOverrides[toolspec.ToolPatch] {
+		t.Fatalf("tool overrides = %+v", request.ToolOverrides)
 	}
 	if request.ContextWindow == nil || request.ContextWindow.Kind != serverapi.OnboardingContextWindowLarge {
 		t.Fatalf("context window = %+v", request.ContextWindow)

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"core/shared/protocol"
+	"core/shared/toolspec"
 
 	"github.com/google/uuid"
 )
@@ -93,6 +94,7 @@ type OnboardingFinalizeRequest struct {
 	Thinking           *OnboardingThinkingChoice      `json:"thinking,omitempty"`
 	Verbosity          *OnboardingVerbosity           `json:"verbosity,omitempty"`
 	AskQuestion        *bool                          `json:"ask_question,omitempty"`
+	ToolOverrides      []OnboardingToolOverride       `json:"tool_overrides,omitempty"`
 	Supervisor         *OnboardingSupervisorChoice    `json:"supervisor,omitempty"`
 	Compaction         *OnboardingCompactionMode      `json:"compaction,omitempty"`
 	SkillsImport       *OnboardingImportSelection     `json:"skills_import,omitempty"`
@@ -110,6 +112,11 @@ type OnboardingModelChoice struct {
 type OnboardingProviderChoice struct {
 	ProviderOverride *string `json:"provider_override,omitempty"`
 	OpenAIBaseURL    *string `json:"openai_base_url,omitempty"`
+}
+
+type OnboardingToolOverride struct {
+	ID      toolspec.ID `json:"id"`
+	Enabled bool        `json:"enabled"`
 }
 
 type OnboardingContextWindowChoice struct {
@@ -152,7 +159,7 @@ func (r *OnboardingFinalizeRequest) UnmarshalJSON(data []byte) error {
 	}
 	allowed := map[string]bool{
 		"theme": true, "main_provider": true, "model": true, "context_window": true, "thinking": true, "verbosity": true,
-		"ask_question": true, "supervisor": true, "compaction": true, "skills_import": true,
+		"ask_question": true, "tool_overrides": true, "supervisor": true, "compaction": true, "skills_import": true,
 		"commands_import": true, "disabled_skill_names": true,
 	}
 	for key := range raw {
@@ -511,6 +518,7 @@ func ValidateOnboardingFinalizeRequest(req OnboardingFinalizeRequest) error {
 	if req.Verbosity != nil && !oneOf(string(*req.Verbosity), "low", "medium", "high") {
 		add("verbosity", "unsupported_value")
 	}
+	validateToolOverrides(req.ToolOverrides, add)
 	if req.Supervisor != nil {
 		if !oneOf(string(req.Supervisor.Frequency), "off", "edits", "all") {
 			add("supervisor.frequency", "unsupported_value")
@@ -532,6 +540,34 @@ func ValidateOnboardingFinalizeRequest(req OnboardingFinalizeRequest) error {
 		return NewOnboardingFinalizeError(OnboardingFinalizeInvalidRequest, OnboardingInvalidRequestDetails{FieldErrors: fieldErrors}, nil)
 	}
 	return nil
+}
+
+func validateToolOverrides(overrides []OnboardingToolOverride, add func(string, string)) {
+	if overrides == nil {
+		return
+	}
+	if len(overrides) == 0 {
+		add("tool_overrides", "choice_required")
+		return
+	}
+	seen := map[toolspec.ID]struct{}{}
+	for index, override := range overrides {
+		field := fmt.Sprintf("tool_overrides.%d.id", index)
+		parsed, known := toolspec.ParseID(string(override.ID))
+		if !known || parsed != override.ID {
+			add(field, "unsupported_value")
+			continue
+		}
+		if override.ID == toolspec.ToolAskQuestion {
+			add(field, "forbidden")
+			continue
+		}
+		if _, duplicate := seen[override.ID]; duplicate {
+			add(field, "duplicate")
+			continue
+		}
+		seen[override.ID] = struct{}{}
+	}
 }
 
 func validateProviderChoice(choice *OnboardingProviderChoice, field string, add func(string, string)) {

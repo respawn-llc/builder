@@ -161,6 +161,9 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 		}
 		settings.EnabledTools[toolspec.ToolAskQuestion] = *req.AskQuestion
 	}
+	for _, override := range req.ToolOverrides {
+		settings.EnabledTools[override.ID] = override.Enabled
+	}
 	if req.Supervisor != nil {
 		if err := applySupervisor(&settings, preserved, *req.Supervisor); err != nil {
 			return config.Settings{}, nil, err
