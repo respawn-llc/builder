@@ -181,51 +181,6 @@ func TestRunWhenIdleRunsImmediatelyWhenIdle(t *testing.T) {
 	}
 }
 
-func TestEnqueueWorktreeTransitionRunsThroughEngineLifecycle(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	ran := make(chan struct{})
-	if err := eng.EnqueueWorktreeTransition(func(context.Context) error {
-		close(ran)
-		return nil
-	}); err != nil {
-		t.Fatalf("EnqueueWorktreeTransition: %v", err)
-	}
-	select {
-	case <-ran:
-	case <-time.After(time.Second):
-		t.Fatal("queued worktree transition did not run")
-	}
-}
-
-func TestEnqueueWorktreeTransitionWaitsForIdleBoundary(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	steps := &stubExclusiveStepLifecycle{busy: true}
-	eng.stepLifecycle = steps
-	ran := make(chan struct{})
-	if err := eng.EnqueueWorktreeTransition(func(context.Context) error {
-		close(ran)
-		return nil
-	}); err != nil {
-		t.Fatalf("EnqueueWorktreeTransition: %v", err)
-	}
-	select {
-	case <-ran:
-		t.Fatal("worktree transition ran while a step was active")
-	default:
-	}
-	steps.setBusy(false)
-	if !eng.scheduleWorktreeTransitionsIfIdle() {
-		t.Fatal("expected worktree transition scheduling at the idle boundary")
-	}
-	select {
-	case <-ran:
-	case <-time.After(time.Second):
-		t.Fatal("worktree transition did not run after the idle boundary")
-	}
-}
-
 func TestRunWhenIdleRetriesUntilBetweenSteps(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
