@@ -40,4 +40,32 @@ func TestInsertWorktreeOperationIsInsertOnce(t *testing.T) {
 	if stored.OperationID != operationID || !stored.Payload.Equal(record.Payload) || stored.LifecycleVersion != 1 {
 		t.Fatalf("stored record = %+v", stored)
 	}
+	updated, err := store.CompareAndSetWorktreeOperationLifecycle(
+		context.Background(),
+		operationID,
+		serverapi.WorktreeOperationLifecycleStateQueued,
+		1,
+		serverapi.WorktreeOperationLifecycleStateRunning,
+		nil,
+		nil,
+	)
+	if err != nil || !updated {
+		t.Fatalf("CompareAndSetWorktreeOperationLifecycle = %t, %v", updated, err)
+	}
+	updated, err = store.CompareAndSetWorktreeOperationLifecycle(
+		context.Background(),
+		operationID,
+		serverapi.WorktreeOperationLifecycleStateQueued,
+		1,
+		serverapi.WorktreeOperationLifecycleStateRunning,
+		nil,
+		nil,
+	)
+	if err != nil || updated {
+		t.Fatalf("stale CompareAndSetWorktreeOperationLifecycle = %t, %v", updated, err)
+	}
+	stored, err = store.GetWorktreeOperation(context.Background(), operationID)
+	if err != nil || stored.LifecycleState != serverapi.WorktreeOperationLifecycleStateRunning || stored.LifecycleVersion != 2 {
+		t.Fatalf("updated stored record = %+v err=%v", stored, err)
+	}
 }

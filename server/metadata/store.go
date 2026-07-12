@@ -542,6 +542,45 @@ func rawMessagePointer(value sql.NullString) *json.RawMessage {
 	return &raw
 }
 
+func (s *Store) CompareAndSetWorktreeOperationLifecycle(
+	ctx context.Context,
+	operationID serverapi.WorktreeOperationID,
+	expectedState serverapi.WorktreeOperationLifecycleState,
+	expectedVersion int64,
+	nextState serverapi.WorktreeOperationLifecycleState,
+	terminalResult *json.RawMessage,
+	terminalError *json.RawMessage,
+) (bool, error) {
+	if s == nil || s.queries == nil {
+		return false, errors.New("metadata store is required")
+	}
+	if err := operationID.Validate(); err != nil {
+		return false, err
+	}
+	if err := expectedState.Validate(); err != nil {
+		return false, err
+	}
+	if err := nextState.Validate(); err != nil {
+		return false, err
+	}
+	if expectedVersion <= 0 {
+		return false, errors.New("expected worktree operation lifecycle version must be positive")
+	}
+	updated, err := s.queries.CompareAndSetWorktreeOperationLifecycle(ctx, sqlitegen.CompareAndSetWorktreeOperationLifecycleParams{
+		NextLifecycleState:       string(nextState),
+		TerminalResultJson:       rawMessageNullString(terminalResult),
+		TerminalErrorJson:        rawMessageNullString(terminalError),
+		UpdatedAtUnixMs:          time.Now().UTC().UnixMilli(),
+		OperationID:              operationID.String(),
+		ExpectedLifecycleState:   string(expectedState),
+		ExpectedLifecycleVersion: expectedVersion,
+	})
+	if err != nil {
+		return false, fmt.Errorf("compare-and-set worktree operation lifecycle: %w", err)
+	}
+	return updated == 1, nil
+}
+
 func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update SessionExecutionTargetUpdate) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
