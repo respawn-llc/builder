@@ -640,22 +640,14 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	}); err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	previous, err := currentSyncedWorktree(synced, workspaceCtx.target)
-	if err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
-	}
-	nextTarget, err := s.switchSessionTarget(ctx, workspaceCtx, previous, created)
-	if err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
-	}
-	createdView, err := worktreeViewFromSynced(created, nextTarget)
+	createdView, err := worktreeViewFromSynced(created, workspaceCtx.target)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	createdView.Managed = true
 	createdView.CreatedBranch = createdBranch
 	createdView.OriginSessionID = workspaceCtx.sessionID
-	return serverapi.WorktreeCreateResponse{Target: nextTarget, Worktree: createdView, CreatedBranch: createdBranch}, nil
+	return serverapi.WorktreeCreateResponse{Target: workspaceCtx.target, Worktree: createdView, CreatedBranch: createdBranch}, nil
 }
 
 func (s *Service) cleanupFailedCreate(ctx context.Context, cleanup failedCreateCleanup) error {

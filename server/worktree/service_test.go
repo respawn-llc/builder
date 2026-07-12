@@ -243,11 +243,11 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	if !resp.Worktree.Managed {
 		t.Fatal("expected worktree managed=true")
 	}
-	if sessionTargetWorktreeID(resp.Target) != resp.Worktree.WorktreeID {
-		t.Fatalf("create target worktree id = %q, want %q", sessionTargetWorktreeID(resp.Target), resp.Worktree.WorktreeID)
+	if sessionTargetWorktreeID(resp.Target) != "" {
+		t.Fatalf("create changed session target to %q", sessionTargetWorktreeID(resp.Target))
 	}
-	if resp.Target.EffectiveWorkdir != resp.Worktree.CanonicalRoot {
-		t.Fatalf("create effective workdir = %q, want %q", resp.Target.EffectiveWorkdir, resp.Worktree.CanonicalRoot)
+	if resp.Target.EffectiveWorkdir != env.workspaceRoot {
+		t.Fatalf("create effective workdir = %q, want %q", resp.Target.EffectiveWorkdir, env.workspaceRoot)
 	}
 	if !resp.Worktree.CreatedBranch {
 		t.Fatal("expected worktree created_branch=true")
@@ -287,14 +287,14 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	if stdinPayload := waitForSetupPayload(t, stdinPath); stdinPayload != payload {
 		t.Fatalf("stdin payload = %+v, want %+v", stdinPayload, payload)
 	}
-	if len(env.runtime.rebindCalls) != 1 || env.runtime.rebindCalls[0].root != resp.Worktree.CanonicalRoot {
-		t.Fatalf("expected create-time rebind to created worktree, got %+v", env.runtime.rebindCalls)
+	if len(env.runtime.rebindCalls) != 0 {
+		t.Fatalf("create rebounded the runtime, got %+v", env.runtime.rebindCalls)
 	}
 	if notes := env.localNotes.snapshot(); len(notes) != 0 {
 		t.Fatalf("expected no synthetic create-time switch notes, got %+v", notes)
 	}
-	if len(env.runtime.reminderCalls) == 0 {
-		t.Fatal("expected create-time pending worktree reminder")
+	if len(env.runtime.reminderCalls) != 0 {
+		t.Fatalf("create issued a worktree reminder, got %+v", env.runtime.reminderCalls)
 	}
 	worktrees := mustListWorktrees(t, env)
 	created := findWorktreeByID(t, worktrees.Worktrees, resp.Worktree.WorktreeID)
@@ -376,8 +376,8 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget after: %v", err)
 	}
-	if sessionTargetWorktreeID(target) != result.resp.Worktree.WorktreeID {
-		t.Fatalf("session target after setup = %+v, want worktree %q", target, result.resp.Worktree.WorktreeID)
+	if sessionTargetWorktreeID(target) != "" || target.EffectiveWorkdir != env.workspaceRoot {
+		t.Fatalf("session target after setup = %+v, want unchanged main target", target)
 	}
 }
 
@@ -1017,7 +1017,7 @@ func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 	}
 	env.runtime.rebindErr = errors.New("boom")
 
-	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		ClientRequestID:  "req-create-rollback",
 		SessionID:        env.session.Meta().SessionID,
@@ -1025,8 +1025,11 @@ func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 		CreateBranch:     true,
 		BranchName:       "feature/create-rollback",
 	})
-	if err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("CreateWorktree error = %v, want rebind failure", err)
+	if err != nil {
+		t.Fatalf("CreateWorktree error = %v, want successful create without switching", err)
+	}
+	if sessionTargetWorktreeID(resp.Target) != "" || len(env.runtime.rebindCalls) != 0 {
+		t.Fatalf("create changed target despite no-enter contract: target=%+v rebinds=%+v", resp.Target, env.runtime.rebindCalls)
 	}
 	if _, statErr := os.Stat(expectedRoot); statErr != nil {
 		t.Fatalf("expected failed create worktree root kept, stat err=%v", statErr)
