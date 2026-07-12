@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"core/shared/serverapi"
@@ -68,8 +69,25 @@ func TestInsertWorktreeOperationIsInsertOnce(t *testing.T) {
 	if err != nil || stored.LifecycleState != serverapi.WorktreeOperationLifecycleStateRunning || stored.LifecycleVersion != 2 {
 		t.Fatalf("updated stored record = %+v err=%v", stored, err)
 	}
+	result := json.RawMessage(`{"target":{"workspace_id":"workspace"}}`)
+	updated, err = store.CompareAndSetWorktreeOperationLifecycle(
+		context.Background(),
+		operationID,
+		serverapi.WorktreeOperationLifecycleStateRunning,
+		2,
+		serverapi.WorktreeOperationLifecycleStateCompleted,
+		&result,
+		nil,
+	)
+	if err != nil || !updated {
+		t.Fatalf("terminal CompareAndSetWorktreeOperationLifecycle = %t, %v", updated, err)
+	}
+	stored, err = store.GetWorktreeOperation(context.Background(), operationID)
+	if err != nil || stored.LifecycleState != serverapi.WorktreeOperationLifecycleStateCompleted || stored.LifecycleVersion != 3 || stored.TerminalResult == nil {
+		t.Fatalf("terminal stored record = %+v err=%v", stored, err)
+	}
 	recoverable, err := store.ListRecoverableWorktreeOperations(context.Background(), nil, 1)
-	if err != nil || len(recoverable) != 1 || recoverable[0].OperationID != operationID {
+	if err != nil || len(recoverable) != 0 {
 		t.Fatalf("ListRecoverableWorktreeOperations = %+v err=%v", recoverable, err)
 	}
 }
