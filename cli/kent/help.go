@@ -91,6 +91,8 @@ var (
 	goalResumeUsage         = leafCommandUsage(config.Command+" goal resume [--session <id>]", "Resume a paused session goal.", "", "User-only; unavailable inside Kent shell commands.")
 	goalCompleteUsage       = leafCommandUsage(config.Command+" goal complete [--session <id>] [--confirm]", "Mark a session goal complete.", "", "Agents must pass `--confirm`; user invocations do not require it.")
 	goalClearUsage          = leafCommandUsage(config.Command+" goal clear [--session <id>]", "Remove a session goal.", "", "User-only; unavailable inside Kent shell commands.")
+	worktreeUsage           = leafCommandUsage(config.Command+" worktree [status] [--session <id>] [--json]", "Inspect the selected session's recorded worktree target.")
+	worktreeStatusUsage     = leafCommandUsage(config.Command+" worktree status [--session <id>] [--json]", "Inspect the selected session's recorded worktree target.")
 	workflowUsage           = commandUsage{helpFile: "workflow.txt"}
 	workflowCreateUsage     = leafCommandUsage(config.Command+" workflow create [--description <text>] [--json] <name>", "Create a workflow with `backlog` start and `done` terminal nodes.")
 	workflowListUsage       = leafCommandUsage(config.Command+" workflow list [--page-size <n>] [--page-token <token>] [--json]", "List workflow definitions.")
