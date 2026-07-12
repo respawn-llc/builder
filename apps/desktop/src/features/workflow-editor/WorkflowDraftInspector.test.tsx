@@ -56,6 +56,55 @@ describe("WorkflowDraftInspectorContent", () => {
     expect(screen.getByLabelText(workflowEditorEnglish.transitionText)).toHaveFocus();
   });
 
+  it("does not force pointer-origin focus or refocus after an ordinary rerender", () => {
+    const controller = workflowDraftController(workflowDefinition);
+    const services = createTestServices(defaultInspectorRoutes(), createBrowserNativeBridge());
+    const selection: Readonly<{ edgeID: string; kind: "edge" }> = { edgeID: "edge-start", kind: "edge" };
+    const { unmount } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppServicesProvider services={services}>
+          <button data-testid="ordinary-inspector-rerender-focus-target" type="button" />
+          <WorkflowDraftInspectorContent controller={controller} selection={selection} />
+        </AppServicesProvider>
+      </QueryClientProvider>,
+    );
+
+    const transitionText = screen.getByLabelText(workflowEditorEnglish.transitionText);
+    expect(transitionText).not.toHaveFocus();
+
+    unmount();
+    const view = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppServicesProvider services={services}>
+          <button data-testid="ordinary-inspector-rerender-focus-target" type="button" />
+          <WorkflowDraftInspectorContent
+            controller={controller}
+            initialFocus="firstEditableControl"
+            selection={selection}
+          />
+        </AppServicesProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByLabelText(workflowEditorEnglish.transitionText)).toHaveFocus();
+
+    const ordinaryRerenderFocusTarget = screen.getByTestId("ordinary-inspector-rerender-focus-target");
+    ordinaryRerenderFocusTarget.focus();
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppServicesProvider services={services}>
+          <button data-testid="ordinary-inspector-rerender-focus-target" type="button" />
+          <WorkflowDraftInspectorContent
+            controller={controller}
+            initialFocus="firstEditableControl"
+            selection={selection}
+          />
+        </AppServicesProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(ordinaryRerenderFocusTarget).toHaveFocus();
+  });
+
   it("edits script node path without showing agent controls", () => {
     const controller = workflowDraftController(withScriptNode(workflowDefinition));
 

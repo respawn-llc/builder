@@ -1,4 +1,4 @@
-import type { DraftWorkflowDefinition } from "./workflowEditorDraft";
+import type { DraftWorkflowDefinition } from "./workflowEditorDraftTypes";
 import { connectWorkflowNodes } from "./workflowEditorGraphEdgeMutations";
 import { addWorkflowNode } from "./workflowEditorGraphNodeMutations";
 import type {

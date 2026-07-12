@@ -1,5 +1,5 @@
 import type { WorkflowContextSource, WorkflowNode, WorkflowNodeKind } from "../../api";
-import type { DraftWorkflowDefinition } from "./workflowEditorDraft";
+import type { DraftWorkflowDefinition } from "./workflowEditorDraftTypes";
 
 export type WorkflowEditorSelection =
   | Readonly<{ kind: "workflow" }>

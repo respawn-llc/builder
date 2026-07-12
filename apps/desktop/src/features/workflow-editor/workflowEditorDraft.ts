@@ -23,36 +23,22 @@ import {
 } from "./workflowEditorGraphMutations";
 import { workflowGraphsEqual } from "./workflowDraftEquality";
 import { workflowEditorTopologyMutation } from "./workflowEditorTopologyReducer";
+import type {
+  DraftWorkflowDefinition,
+  DraftWorkflowEdge,
+  DraftWorkflowNode,
+  DraftWorkflowParameter,
+} from "./workflowEditorDraftTypes";
+
+export type {
+  DraftInputField,
+  DraftWorkflowDefinition,
+  DraftWorkflowEdge,
+  DraftWorkflowNode,
+  DraftWorkflowParameter,
+} from "./workflowEditorDraftTypes";
 
 const workflowParameterRowIDSchema = z.string();
-
-export type DraftInputField = Readonly<{
-  rowID: string;
-  name: string;
-  description: string;
-}>;
-
-export type DraftWorkflowParameter = WorkflowParameter &
-  Readonly<{
-    rowID?: string;
-  }>;
-
-export type DraftWorkflowNode = Omit<WorkflowNode, "completionMode" | "inputFields"> &
-  Readonly<{
-    completionMode: string;
-    inputFields: readonly DraftInputField[];
-  }>;
-
-export type DraftWorkflowEdge = Omit<WorkflowEdge, "parameters"> &
-  Readonly<{
-    parameters: readonly DraftWorkflowParameter[];
-  }>;
-
-export type DraftWorkflowDefinition = Omit<WorkflowDefinition, "edges" | "nodes"> &
-  Readonly<{
-    edges: readonly DraftWorkflowEdge[];
-    nodes: readonly DraftWorkflowNode[];
-  }>;
 
 export type WorkflowEditorDraftState = Readonly<{
   acknowledgedConflictVersion: number;

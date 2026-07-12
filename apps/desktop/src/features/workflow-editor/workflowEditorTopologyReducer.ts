@@ -21,7 +21,7 @@ import {
   type ReconnectWorkflowEdgeInput,
   type WorkflowEditorGraphMutationResult,
 } from "./workflowEditorGraphMutations";
-import type { DraftWorkflowDefinition } from "./workflowEditorDraft";
+import type { DraftWorkflowDefinition } from "./workflowEditorDraftTypes";
 
 type TopologyAction = Extract<
   | Readonly<{ type: "addNode"; input: AddWorkflowNodeInput }>

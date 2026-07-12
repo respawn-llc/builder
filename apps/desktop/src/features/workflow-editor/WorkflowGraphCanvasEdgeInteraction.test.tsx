@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act } from "react";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { initializeI18n } from "../../i18n/setup";
@@ -129,9 +130,12 @@ describe("WorkflowGraphCanvas edge interactions", () => {
         graphSelectionRequest={request}
       />,
     );
-    await waitFor(() => {
-      expect(onGraphSelectionConsumed).toHaveBeenCalledExactlyOnceWith("request-delayed");
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        queueMicrotask(resolve);
+      });
     });
+    expect(onGraphSelectionConsumed).toHaveBeenCalledExactlyOnceWith("request-delayed");
 
     onGraphSelectionConsumed.mockClear();
     rerender(
@@ -151,6 +155,11 @@ describe("WorkflowGraphCanvas edge interactions", () => {
         graphSelectionRequest={null}
       />,
     );
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        queueMicrotask(resolve);
+      });
+    });
     expect(onGraphSelectionConsumed).not.toHaveBeenCalled();
 
     const canceledAfterLayoutRequest = { edgeID: "edge-delayed", requestID: "request-canceled-after-layout" };
@@ -181,8 +190,10 @@ describe("WorkflowGraphCanvas edge interactions", () => {
         graphSelectionRequest={null}
       />,
     );
-    await new Promise<void>((resolve) => {
-      queueMicrotask(resolve);
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        queueMicrotask(resolve);
+      });
     });
     expect(onGraphSelectionConsumed).not.toHaveBeenCalled();
   });

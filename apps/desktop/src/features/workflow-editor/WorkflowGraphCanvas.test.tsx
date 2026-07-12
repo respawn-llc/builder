@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { initializeI18n } from "../../i18n/setup";
@@ -173,6 +174,83 @@ describe("WorkflowGraphCanvas", () => {
     expect(onDeleteSelection).toHaveBeenCalledWith({ kind: "node", nodeID: "agent" });
     expect(within(screen.getByTestId("workflow-graph-node-agent")).queryAllByTestId("workflow-node-source-handle")).toHaveLength(1);
     expect(within(screen.getByTestId("workflow-graph-node-terminal")).queryAllByTestId("workflow-node-source-handle")).toHaveLength(0);
+  });
+
+  it("opens handle quick-add from every editable source kind with keyboard selection", async () => {
+    const user = userEvent.setup();
+    const onAddConnectedNode = vi.fn();
+    render(
+      <WorkflowGraphCanvas
+        graph={{
+          edges: [],
+          nodes: [
+            workflowGraphNode({ hasError: false, id: "start", kind: "start", label: "Start", x: 0 }),
+            workflowGraphNode({ hasError: false, id: "agent", kind: "agent", label: "Agent", x: 160 }),
+            workflowGraphNode({ hasError: false, id: "script", kind: "script", label: "Script", x: 320 }),
+            workflowGraphNode({
+              hasError: false,
+              id: "join",
+              kind: "join",
+              label: "Join",
+              type: "workflowJoin",
+              x: 480,
+            }),
+            workflowGraphNode({ hasError: false, id: "terminal", kind: "terminal", label: "Done", x: 640 }),
+          ],
+        }}
+        onAddConnectedNode={onAddConnectedNode}
+        onEdgeInspect={() => undefined}
+        onGroupInspect={() => undefined}
+        onNodeInspect={() => undefined}
+        onWorkflowInspect={() => undefined}
+      />,
+    );
+
+    for (const nodeID of ["start", "agent", "script", "join"]) {
+      const handle = creationHandleForNode(nodeID);
+      await focusWithAct(handle);
+      await user.keyboard("{Enter}");
+      expect(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode })).toHaveFocus();
+      await user.keyboard("{Escape}");
+      expect(handle).toHaveFocus();
+    }
+    expect(
+      within(screen.getByTestId("workflow-graph-node-terminal")).queryByTestId("workflow-node-source-handle"),
+    ).toBeNull();
+
+    const startHandle = creationHandleForNode("start");
+    await focusWithAct(startHandle);
+    await user.keyboard("{Enter}{Enter}");
+
+    expect(onAddConnectedNode).toHaveBeenCalledExactlyOnceWith("start", "agent", "keyboard");
+  });
+
+  it("does not render quick-add handles when topology editing is unavailable", () => {
+    render(
+      <WorkflowGraphCanvas
+        graph={{
+          edges: [],
+          nodes: [
+            workflowGraphNode({ hasError: false, id: "start", kind: "start", label: "Start", x: 0 }),
+            workflowGraphNode({ hasError: false, id: "agent", kind: "agent", label: "Agent", x: 160 }),
+            workflowGraphNode({
+              hasError: false,
+              id: "join",
+              kind: "join",
+              label: "Join",
+              type: "workflowJoin",
+              x: 320,
+            }),
+          ],
+        }}
+        onEdgeInspect={() => undefined}
+        onGroupInspect={() => undefined}
+        onNodeInspect={() => undefined}
+        onWorkflowInspect={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByTestId("workflow-node-source-handle")).toBeNull();
   });
 
   it("renders real plus icons for non-terminal creation handles on workflow and join nodes", () => {
@@ -438,4 +516,20 @@ function workflowGroupGraphNode({
     style: { height: 140, width: 260 },
     type: "workflowGroup",
   };
+}
+
+function creationHandleForNode(nodeID: string): HTMLElement {
+  const icon = screen
+    .getAllByTestId("workflow-node-source-handle-icon")
+    .find((candidate) => candidate.dataset.workflowNodeId === nodeID);
+  if (icon?.parentElement === undefined || icon.parentElement === null) {
+    throw new Error(`Expected a creation-handle rail for ${nodeID}`);
+  }
+  return within(icon.parentElement).getByTestId("workflow-node-source-handle");
+}
+
+async function focusWithAct(element: HTMLElement): Promise<void> {
+  await act(async () => {
+    element.focus();
+  });
 }
