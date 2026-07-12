@@ -5224,13 +5224,16 @@ SELECT
     updated_at_unix_ms
 FROM worktree_operations
 WHERE lifecycle_state IN ('queued', 'running')
-  AND operation_id > ?1
+  AND (
+      CAST(?1 AS TEXT) IS NULL
+      OR operation_id > CAST(?1 AS TEXT)
+  )
 ORDER BY operation_id ASC
 LIMIT ?2
 `
 
 type ListRecoverableWorktreeOperationsParams struct {
-	AfterOperationID string
+	AfterOperationID sql.NullString
 	LimitCount       int64
 }
 

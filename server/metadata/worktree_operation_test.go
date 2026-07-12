@@ -68,4 +68,8 @@ func TestInsertWorktreeOperationIsInsertOnce(t *testing.T) {
 	if err != nil || stored.LifecycleState != serverapi.WorktreeOperationLifecycleStateRunning || stored.LifecycleVersion != 2 {
 		t.Fatalf("updated stored record = %+v err=%v", stored, err)
 	}
+	recoverable, err := store.ListRecoverableWorktreeOperations(context.Background(), nil, 1)
+	if err != nil || len(recoverable) != 1 || recoverable[0].OperationID != operationID {
+		t.Fatalf("ListRecoverableWorktreeOperations = %+v err=%v", recoverable, err)
+	}
 }

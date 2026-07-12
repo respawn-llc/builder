@@ -581,6 +581,42 @@ func (s *Store) CompareAndSetWorktreeOperationLifecycle(
 	return updated == 1, nil
 }
 
+func (s *Store) ListRecoverableWorktreeOperations(
+	ctx context.Context,
+	after *serverapi.WorktreeOperationID,
+	limit int,
+) ([]WorktreeOperationRecord, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("metadata store is required")
+	}
+	if limit <= 0 {
+		return nil, errors.New("worktree operation recovery limit must be positive")
+	}
+	afterOperationID := sql.NullString{}
+	if after != nil {
+		if err := after.Validate(); err != nil {
+			return nil, err
+		}
+		afterOperationID = sql.NullString{String: after.String(), Valid: true}
+	}
+	rows, err := s.queries.ListRecoverableWorktreeOperations(ctx, sqlitegen.ListRecoverableWorktreeOperationsParams{
+		AfterOperationID: afterOperationID,
+		LimitCount:       int64(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list recoverable worktree operations: %w", err)
+	}
+	records := make([]WorktreeOperationRecord, 0, len(rows))
+	for _, row := range rows {
+		record, err := worktreeOperationRecordFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
+}
+
 func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update SessionExecutionTargetUpdate) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")

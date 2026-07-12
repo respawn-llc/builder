@@ -3078,7 +3078,10 @@ SELECT
     updated_at_unix_ms
 FROM worktree_operations
 WHERE lifecycle_state IN ('queued', 'running')
-  AND operation_id > sqlc.arg(after_operation_id)
+  AND (
+      CAST(sqlc.narg(after_operation_id) AS TEXT) IS NULL
+      OR operation_id > CAST(sqlc.narg(after_operation_id) AS TEXT)
+  )
 ORDER BY operation_id ASC
 LIMIT sqlc.arg(limit_count);
 
