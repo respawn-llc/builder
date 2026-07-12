@@ -84,7 +84,7 @@ type AskQuestionApprovalPayload struct {
 type AskQuestionResponse struct {
 	RequestID            string                      `json:"request_id"`
 	Answer               string                      `json:"answer,omitempty"`
-	SelectedOptionNumber int                         `json:"selected_option_number,omitempty"`
+	SelectedOptionNumber *int                        `json:"selected_option_number,omitempty"`
 	FreeformAnswer       string                      `json:"freeform_answer,omitempty"`
 	Approval             *AskQuestionApprovalPayload `json:"approval,omitempty"`
 }
@@ -293,12 +293,15 @@ func ValidateAskQuestionResponse(req AskQuestionRequest, resp AskQuestionRespons
 		if resp.Approval != nil {
 			return ErrAskQuestionNonApprovalForbidsApproval
 		}
-		if resp.SelectedOptionNumber > 0 {
+		if resp.SelectedOptionNumber != nil {
+			if *resp.SelectedOptionNumber <= 0 {
+				return fmt.Errorf("selected option number must be positive when present")
+			}
 			if len(req.Suggestions) == 0 {
 				return ErrAskQuestionSelectedOptionRequiresSuggest
 			}
-			if resp.SelectedOptionNumber > len(req.Suggestions) {
-				return fmt.Errorf("selected option number %d is out of range", resp.SelectedOptionNumber)
+			if *resp.SelectedOptionNumber > len(req.Suggestions) {
+				return fmt.Errorf("selected option number %d is out of range", *resp.SelectedOptionNumber)
 			}
 			return nil
 		}
@@ -310,7 +313,7 @@ func ValidateAskQuestionResponse(req AskQuestionRequest, resp AskQuestionRespons
 	if resp.Approval == nil {
 		return ErrAskQuestionApprovalRequiresResponse
 	}
-	if resp.SelectedOptionNumber != 0 || strings.TrimSpace(resp.Answer) != "" || strings.TrimSpace(resp.FreeformAnswer) != "" {
+	if resp.SelectedOptionNumber != nil || strings.TrimSpace(resp.Answer) != "" || strings.TrimSpace(resp.FreeformAnswer) != "" {
 		return ErrAskQuestionApprovalForbidsOrdinaryAnswer
 	}
 	if err := validateApprovalDecision(resp.Approval.Decision); err != nil {
@@ -333,8 +336,8 @@ func normalizedFreeformAnswer(resp AskQuestionResponse) string {
 
 func buildToolOutputSummary(resp AskQuestionResponse) (string, error) {
 	freeform := normalizedFreeformAnswer(resp)
-	if resp.SelectedOptionNumber > 0 {
-		return selectedOptionToolOutputSummary(resp.SelectedOptionNumber, freeform), nil
+	if resp.SelectedOptionNumber != nil {
+		return selectedOptionToolOutputSummary(*resp.SelectedOptionNumber, freeform), nil
 	}
 	if freeform == "" {
 		return "", ErrAskQuestionNonApprovalRequiresAnswer
@@ -352,11 +355,11 @@ func selectedOptionToolOutputSummary(optionNumber int, freeform string) string {
 
 func buildCondensedToolOutputText(req AskQuestionRequest, resp AskQuestionResponse) string {
 	freeform := normalizedFreeformAnswer(resp)
-	if resp.SelectedOptionNumber <= 0 {
+	if resp.SelectedOptionNumber == nil {
 		return freeform
 	}
 	suggestions := normalizedSuggestions(req.Suggestions)
-	optionIndex := resp.SelectedOptionNumber - 1
+	optionIndex := *resp.SelectedOptionNumber - 1
 	if optionIndex < 0 || optionIndex >= len(suggestions) {
 		return ""
 	}

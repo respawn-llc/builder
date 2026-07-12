@@ -1,10 +1,11 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { type VirtualItem, useVirtualizer } from "@tanstack/react-virtual";
 
 import { cx } from "./classes";
 import { Spinner } from "./Spinner";
 import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitialScroll";
 import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
+import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolicy";
 
 export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   items: readonly TItem[];
@@ -26,6 +27,7 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   paddingEnd?: number | undefined;
   paddingStart?: number | undefined;
   className?: string | undefined;
+  nonAdjustingResizeItemKey?: string | undefined;
 }>;
 
 export function VirtualizedInfiniteList<TItem>({
@@ -48,6 +50,7 @@ export function VirtualizedInfiniteList<TItem>({
   paddingEnd = 0,
   paddingStart = 0,
   className,
+  nonAdjustingResizeItemKey,
 }: VirtualizedInfiniteListProps<TItem>) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const lastInitialScrollKeyRef = useRef("");
@@ -78,6 +81,10 @@ export function VirtualizedInfiniteList<TItem>({
     },
     overscan: 6,
   });
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange =
+    nonAdjustingResizeItemKey === undefined
+      ? undefined
+      : (item: VirtualItem) => shouldAdjustScrollForVirtualizedResize(nonAdjustingResizeItemKey, String(item.key));
   const virtualItems = virtualizer.getVirtualItems();
   const renderRow = (virtualIndex: number): ReactNode =>
     renderVirtualRow({

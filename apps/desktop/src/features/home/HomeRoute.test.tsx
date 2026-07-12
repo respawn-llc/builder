@@ -421,7 +421,12 @@ const workspace = {
 const boardResponse = {
   board: {
     project_id: "project-1",
-    project: { project_key: "PRO", display_name: "Project" },
+    project: {
+      project_key: "PRO",
+      display_name: "Project",
+      default_workspace_id: "workspace-1",
+      attached_workspace_count: 1,
+    },
     selected_workflow: workflow,
     workflows: [workflow],
     groups: [],

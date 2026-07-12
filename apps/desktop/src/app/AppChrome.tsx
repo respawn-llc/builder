@@ -9,9 +9,8 @@ import { AttentionNotificationController } from "./AttentionNotificationControll
 import { AppUpdateChip } from "./AppUpdateChip";
 import { useDesktopUpdate, type DesktopUpdateState } from "./useDesktopUpdate";
 import {
-  appChromeContrastScrimClassNames,
-  appChromeContrastScrimStyle,
   appChromeInlineTitleClassNames,
+  appChromeTopTreatmentForPlatform,
   appChromeTitleClassNames,
   appChromeTitlePlacementClassNames,
 } from "./appChromeStyles";
@@ -36,6 +35,7 @@ export function AppChrome({ children }: AppChromeProps) {
   const navigation = useAppNavigation();
   const stack = useNavigationStackState();
   const macOS = nativeBridge.capabilities.platform === "macos";
+  const topTreatment = appChromeTopTreatmentForPlatform(nativeBridge.capabilities.platform);
   const title = useCurrentWindowChromeTitle();
   const update = useDesktopUpdate(nativeBridge, logger);
 
@@ -43,9 +43,10 @@ export function AppChrome({ children }: AppChromeProps) {
     <main className="window-glass-fill grid h-screen w-screen overflow-hidden pt-[var(--native-titlebar-height)]">
       <div
         aria-hidden="true"
-        className={appChromeContrastScrimClassNames.join(" ")}
-        data-testid="app-chrome-contrast-scrim"
-        style={appChromeContrastScrimStyle}
+        className={topTreatment.classNames.join(" ")}
+        data-effect={topTreatment.effect}
+        data-testid="app-chrome-top-treatment"
+        style={topTreatment.style}
       />
       <div
         className="app-region-drag fixed inset-x-0 top-0 z-20 h-[var(--native-titlebar-height)]"

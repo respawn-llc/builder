@@ -56,7 +56,7 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	resp := <-reply
-	if resp.response.SelectedOptionNumber != 1 {
+	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 1 {
 		t.Fatalf("expected first option selected by default, got %+v", resp.response)
 	}
 }
@@ -102,7 +102,7 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	resp := <-reply
-	if resp.response.SelectedOptionNumber != 1 {
+	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 1 {
 		t.Fatalf("expected first option selected by default, got %+v", resp.response)
 	}
 }

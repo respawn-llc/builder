@@ -94,6 +94,8 @@ export const workflowBoardSchema: z.ZodType<WorkflowBoard> = z
       project: z.object({
         project_key: z.string(),
         display_name: z.string(),
+        default_workspace_id: z.string().min(1),
+        attached_workspace_count: z.number().int().positive(),
       }),
       selected_workflow: workflowPickerItemSchema,
       workflows: workflowPickerSchema,
@@ -108,6 +110,8 @@ export const workflowBoardSchema: z.ZodType<WorkflowBoard> = z
       projectID: value.board.project_id,
       projectKey: value.board.project.project_key,
       projectName: value.board.project.display_name,
+      defaultWorkspaceID: value.board.project.default_workspace_id,
+      attachedWorkspaceCount: value.board.project.attached_workspace_count,
       selectedWorkflow: value.board.selected_workflow,
       workflows: value.board.workflows,
       groups: visibleBoardGroups(value.board.groups, columns),

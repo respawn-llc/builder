@@ -11,6 +11,7 @@ import (
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"errors"
 	"io"
@@ -534,13 +535,13 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 	if askEvt.req.PromptID != "ask-1" || askEvt.req.Question != "Pick one" {
 		t.Fatalf("unexpected ask event: %+v", askEvt.req)
 	}
-	askEvt.reply <- askReply{response: clientui.PromptAnswer{PromptID: askEvt.req.PromptID, SelectedOptionNumber: 2}}
+	askEvt.reply <- askReply{response: clientui.PromptAnswer{PromptID: askEvt.req.PromptID, SelectedOptionNumber: textutil.Int(2)}}
 	select {
 	case result := <-askDone:
 		if result.err != nil {
 			t.Fatalf("AwaitPromptResponse ask: %v", result.err)
 		}
-		if result.resp.RequestID != "ask-1" || result.resp.SelectedOptionNumber != 2 {
+		if result.resp.RequestID != "ask-1" || result.resp.SelectedOptionNumber == nil || *result.resp.SelectedOptionNumber != 2 {
 			t.Fatalf("unexpected ask response: %+v", result.resp)
 		}
 	case <-time.After(5 * time.Second):

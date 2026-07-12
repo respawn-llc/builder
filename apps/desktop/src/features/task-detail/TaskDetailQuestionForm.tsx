@@ -10,6 +10,7 @@ import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetai
 import { usePendingAsks, type useTaskMutations } from "./useTaskDetailData";
 
 const emptySuggestions: readonly string[] = [];
+const neitherRadioValue = "neither";
 
 export function QuestionBox({
   attention,
@@ -127,12 +128,12 @@ function OrdinaryQuestionForm({
   const selectedOption = selection.userSelected ? selection.selectedOption : recommendedOption;
   const answer = selection.answer;
   const answerID = useId();
-  // A real option (>0) can submit on its own; otherwise any typed freeform answer
-  // is submittable, including freeform-only asks where no option is ever selected
-  // (selectedOption stays null). submit() coerces a null/none selection to 0.
+  // A real option can submit on its own; otherwise any typed freeform answer is
+  // submittable, including freeform-only asks where no option is selected.
   const canSubmit = (selectedOption !== null && selectedOption > 0) || answer.trim().length > 0;
   const interactionDisabled = disabled || answerQuestion.isPending || selection.submitted;
-  const radioValue = selectedOption === null ? "" : selectedOption.toString();
+  const selectedNeither = selection.userSelected && selectedOption === null;
+  const radioValue = selectedNeither ? neitherRadioValue : selectedOption === null ? "" : suggestionRadioValue(selectedOption);
 
   async function submit(): Promise<void> {
     await answerQuestion.mutateAsync({
@@ -141,7 +142,7 @@ function OrdinaryQuestionForm({
       taskID: taskId,
       runID: attention.runID,
       askID: attention.askID,
-      selectedOptionNumber: selectedOption ?? 0,
+      selectedOptionNumber: selectedOption,
       freeformAnswer: answer,
     });
     onSelectionStateChange({
@@ -175,34 +176,54 @@ function OrdinaryQuestionForm({
           answer,
           approvalDecision: null,
           askID: attention.askID,
-          selectedOption: Number(value),
+          selectedOption: selectedOptionFromRadioValue(value, suggestions),
           submitted: false,
           userSelected: true,
         });
       }}
       onSubmit={submit}
+      optionGroup={
+        suggestions.length > 0 ? (
+          <>
+            {suggestions.map((suggestion, optionIndex) => (
+              <QuestionOption
+                disabled={interactionDisabled}
+                key={`${optionIndex.toString()}:${suggestion}`}
+                onOpenLink={openLink}
+                recommended={recommendedOption === optionIndex + 1}
+                text={suggestion}
+                value={suggestionRadioValue(optionIndex + 1)}
+              />
+            ))}
+            <QuestionOption
+              disabled={interactionDisabled}
+              onOpenLink={openLink}
+              recommended={false}
+              text={t("task.neitherOption")}
+              value={neitherRadioValue}
+            />
+          </>
+        ) : undefined
+      }
       question={question}
       radioValue={radioValue}
-    >
-      {suggestions.map((suggestion, optionIndex) => (
-        <QuestionOption
-          disabled={interactionDisabled}
-          key={`${optionIndex.toString()}:${suggestion}`}
-          onOpenLink={openLink}
-          recommended={recommendedOption === optionIndex + 1}
-          text={suggestion}
-          value={(optionIndex + 1).toString()}
-        />
-      ))}
-      <QuestionOption
-        disabled={interactionDisabled}
-        onOpenLink={openLink}
-        recommended={false}
-        text={t("task.neitherOption")}
-        value="0"
-      />
-    </QuestionFormFrame>
+    />
   );
+}
+
+function suggestionRadioValue(optionNumber: number): string {
+  return `suggestion:${optionNumber.toString()}`;
+}
+
+function selectedOptionFromRadioValue(value: string, suggestions: readonly string[]): number | null {
+  if (value === neitherRadioValue) {
+    return null;
+  }
+  const optionIndex = suggestions.findIndex((_suggestion, index) => suggestionRadioValue(index + 1) === value);
+  if (optionIndex < 0) {
+    throw new Error(`Unknown ordinary-question radio value: ${value}`);
+  }
+  return optionIndex + 1;
 }
 
 function ApprovalQuestionForm({
@@ -283,10 +304,7 @@ function ApprovalQuestionForm({
         });
       }}
       onSubmit={submit}
-      question={question}
-      radioValue={selectedDecision ?? ""}
-    >
-      {approvalDecisions.map((decision) => (
+      optionGroup={approvalDecisions.map((decision) => (
         <QuestionOption
           disabled={interactionDisabled}
           key={decision}
@@ -296,7 +314,9 @@ function ApprovalQuestionForm({
           value={decision}
         />
       ))}
-    </QuestionFormFrame>
+      question={question}
+      radioValue={selectedDecision ?? ""}
+    />
   );
 }
 
@@ -304,22 +324,22 @@ function QuestionFormFrame({
   answer,
   answerID,
   canSubmit,
-  children,
   interactionDisabled,
   onAnswerChange,
   onRadioValueChange,
   onSubmit,
+  optionGroup,
   question,
   radioValue,
 }: Readonly<{
   answer: string;
   answerID: string;
   canSubmit: boolean;
-  children: ReactNode;
   interactionDisabled: boolean;
   onAnswerChange: (answer: string) => void;
   onRadioValueChange: (value: string) => void;
   onSubmit: () => Promise<void>;
+  optionGroup?: ReactNode;
   question: string | undefined;
   radioValue: string;
 }>) {
@@ -341,17 +361,19 @@ function QuestionFormFrame({
           <MarkdownText onOpenLink={openLink} value={question} />
         </div>
       ) : null}
-      <fieldset className="m-0 border-0 p-0">
-        <legend className="sr-only">{t("task.optionNumber")}</legend>
-        <RadioGroup
-          aria-label={t("task.optionNumber")}
-          disabled={interactionDisabled}
-          onValueChange={onRadioValueChange}
-          value={radioValue}
-        >
-          {children}
-        </RadioGroup>
-      </fieldset>
+      {optionGroup === undefined ? null : (
+        <fieldset className="m-0 border-0 p-0">
+          <legend className="sr-only">{t("task.optionNumber")}</legend>
+          <RadioGroup
+            aria-label={t("task.optionNumber")}
+            disabled={interactionDisabled}
+            onValueChange={onRadioValueChange}
+            value={radioValue}
+          >
+            {optionGroup}
+          </RadioGroup>
+        </fieldset>
+      )}
       <textarea
         aria-label={t("task.commentary")}
         className={cx(fieldInputClassName, "min-h-24")}

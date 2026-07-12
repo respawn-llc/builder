@@ -2,10 +2,23 @@ import { ApiClient } from "./client";
 import { FakeRpcTransport } from "./fakeTransport";
 
 describe("ApiClient task question answers", () => {
-  it("serializes ordinary and approval payloads", async () => {
-    const transport = new FakeRpcTransport([{ method: "workflow.task.question.answer", result: {} }]);
+  it("serializes explicit nullable ordinary selections and approval payloads", async () => {
+    const transport = new FakeRpcTransport([
+      { method: "workflow.task.question.answer", result: {} },
+      { method: "workflow.task.question.answer", result: {} },
+      { method: "workflow.task.question.answer", result: {} },
+    ]);
     const client = new ApiClient(transport);
 
+    await client.answerQuestion({
+      kind: "ordinary",
+      clientRequestID: "req-freeform",
+      taskID: "task-1",
+      runID: "run-1",
+      askID: "ask-freeform",
+      selectedOptionNumber: null,
+      freeformAnswer: "because",
+    });
     await client.answerQuestion({
       kind: "ordinary",
       clientRequestID: "req-ordinary",
@@ -25,6 +38,17 @@ describe("ApiClient task question answers", () => {
       commentary: "trusted",
     });
 
+    expect(transport.calls).toContainEqual({
+      method: "workflow.task.question.answer",
+      params: {
+        client_request_id: "req-freeform",
+        task_id: "task-1",
+        run_id: "run-1",
+        ask_id: "ask-freeform",
+        selected_option_number: null,
+        freeform_answer: "because",
+      },
+    });
     expect(transport.calls).toContainEqual({
       method: "workflow.task.question.answer",
       params: {

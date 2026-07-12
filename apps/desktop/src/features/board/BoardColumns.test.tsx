@@ -163,6 +163,59 @@ describe("KanbanColumn", () => {
     expect(within(questionCard).queryByTestId("task-card-active-run-spinner")).not.toBeInTheDocument();
   });
 
+  it("renders complete card bodies, workspace chips only when present, and distinct question/approval border tones", () => {
+    render(
+      <I18nextProvider i18n={appI18n}>
+        <KanbanColumn
+          actionsDisabled={false}
+          cards={[
+            {
+              ...card,
+              body: "Complete body beyond the old preview boundary: **semantic source remains intact**",
+              id: "task-question",
+              borderTone: "primary",
+              statusKind: "waiting_question",
+              title: "Question task",
+              workspaceChipLabel: null,
+            },
+            {
+              ...card,
+              id: "task-approval",
+              borderTone: "secondary",
+              statusKind: "waiting_approval",
+              title: "Approval task",
+              workspaceChipLabel: "Other workspace",
+            },
+          ]}
+          column={column}
+          dropState="idle"
+          hasMoreCards={false}
+          isFirstActive={false}
+          isLoadingMoreCards={false}
+          onCardClick={() => undefined}
+          onCardDragEnd={() => undefined}
+          onCardDragStart={() => undefined}
+          onDeleteTask={() => undefined}
+          onDropTask={() => undefined}
+          onInterruptTask={() => undefined}
+          onLoadMoreCards={() => undefined}
+          onResumeTask={() => undefined}
+        />
+      </I18nextProvider>,
+    );
+
+    const questionCard = screen.getByRole("article", { name: "Question task" });
+    const approvalCard = screen.getByRole("article", { name: "Approval task" });
+
+    expect(within(questionCard).getByTestId("task-card-body")).toHaveTextContent(
+      "Complete body beyond the old preview boundary: semantic source remains intact",
+    );
+    expect(within(questionCard).queryByTestId("task-card-chip-slot")).not.toBeInTheDocument();
+    expect(within(approvalCard).getByTestId("task-card-chip-slot")).toHaveTextContent("Other workspace");
+    expect(questionCard).toHaveAttribute("data-task-card-border-tone", "primary");
+    expect(approvalCard).toHaveAttribute("data-task-card-border-tone", "secondary");
+  });
+
   it("shows an active run spinner only for running cards", () => {
     render(
       <I18nextProvider i18n={appI18n}>
@@ -409,10 +462,11 @@ const card: KanbanCardVM = {
     canStart: true,
     manualMoveTargetNodeIDs: [],
   },
-  bodyPreview: "Body",
+  body: "Body",
   id: "task-1",
   shortID: "T-1",
-  sourceWorkspaceName: "Main",
+  workspaceChipLabel: null,
+  borderTone: "default",
   statusKind: "backlog",
   statusRunIDs: [],
   title: "Task",

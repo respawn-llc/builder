@@ -148,11 +148,12 @@ function cardContentEqual(left: KanbanCardVM, right: KanbanCardVM): boolean {
   return (
     left.shortID === right.shortID &&
     left.title === right.title &&
-    left.bodyPreview === right.bodyPreview &&
+    left.body === right.body &&
     left.updatedAt === right.updatedAt &&
     left.statusKind === right.statusKind &&
     arrayEqual(left.statusRunIDs, right.statusRunIDs) &&
-    left.sourceWorkspaceName === right.sourceWorkspaceName &&
+    left.workspaceChipLabel === right.workspaceChipLabel &&
+    left.borderTone === right.borderTone &&
     arrayEqual(left.activeNodeIDs, right.activeNodeIDs)
   );
 }

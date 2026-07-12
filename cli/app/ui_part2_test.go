@@ -234,7 +234,7 @@ func TestAskEventsQueueUntilCurrentQuestionAnswered(t *testing.T) {
 	updated = next.(*uiModel)
 
 	first := <-reply1
-	if first.response.SelectedOptionNumber != 1 || first.response.Answer != "" || first.response.FreeformAnswer != "" {
+	if first.response.SelectedOptionNumber == nil || *first.response.SelectedOptionNumber != 1 || first.response.Answer != "" || first.response.FreeformAnswer != "" {
 		t.Fatalf("unexpected first answer: %+v", first.response)
 	}
 	if testActiveAsk(updated) == nil || testActiveAsk(updated).req.Question != "Second" {
@@ -245,7 +245,7 @@ func TestAskEventsQueueUntilCurrentQuestionAnswered(t *testing.T) {
 	updated = next.(*uiModel)
 
 	second := <-reply2
-	if second.response.SelectedOptionNumber != 1 || second.response.Answer != "" || second.response.FreeformAnswer != "" {
+	if second.response.SelectedOptionNumber == nil || *second.response.SelectedOptionNumber != 1 || second.response.Answer != "" || second.response.FreeformAnswer != "" {
 		t.Fatalf("unexpected second answer: %+v", second.response)
 	}
 	if testActiveAsk(updated) != nil {

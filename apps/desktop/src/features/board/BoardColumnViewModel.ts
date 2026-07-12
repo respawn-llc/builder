@@ -1,4 +1,4 @@
-import type { BoardCard, BoardColumn, BoardGroup } from "../../api";
+import type { BoardCard, BoardColumn, BoardGroup, TaskStatusKind } from "../../api";
 
 export type KanbanGroupVM = Readonly<{
   id: string;
@@ -17,12 +17,13 @@ export type KanbanCardVM = Readonly<{
   id: string;
   shortID: string;
   title: string;
-  bodyPreview: string;
+  body: string;
   updatedAt: number;
   activeNodeIDs: readonly string[];
-  statusKind: string;
+  statusKind: TaskStatusKind;
   statusRunIDs: readonly string[];
-  sourceWorkspaceName: string;
+  workspaceChipLabel: string | null;
+  borderTone: BoardCardBorderTone;
   actions: Readonly<{
     canInterrupt: boolean;
     canResume: boolean;
@@ -30,6 +31,13 @@ export type KanbanCardVM = Readonly<{
     manualMoveTargetNodeIDs: readonly string[];
   }>;
 }>;
+
+export type BoardWorkspaceContext = Readonly<{
+  defaultWorkspaceID: string;
+  attachedWorkspaceCount: number;
+}>;
+
+export type BoardCardBorderTone = "default" | "primary" | "secondary";
 
 export function toKanbanGroupVM(group: BoardGroup): KanbanGroupVM {
   return {
@@ -48,17 +56,18 @@ export function toKanbanColumnVM(column: BoardColumn): KanbanColumnVM {
   };
 }
 
-export function toKanbanCardVM(card: BoardCard): KanbanCardVM {
+export function toKanbanCardVM(card: BoardCard, workspaceContext: BoardWorkspaceContext): KanbanCardVM {
   return {
     id: card.id,
     shortID: card.shortID,
     title: card.title,
-    bodyPreview: card.bodyPreview,
+    body: card.body,
     updatedAt: card.updatedAt,
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.status.kind,
     statusRunIDs: card.status.runIDs,
-    sourceWorkspaceName: card.sourceWorkspace.name,
+    workspaceChipLabel: workspaceChipLabel(card, workspaceContext),
+    borderTone: boardCardBorderTone(card.status.kind),
     actions: {
       canInterrupt: card.actions.canInterrupt,
       canResume: card.actions.canResume,
@@ -66,4 +75,32 @@ export function toKanbanCardVM(card: BoardCard): KanbanCardVM {
       manualMoveTargetNodeIDs: card.actions.manualMoveTargetNodeIDs,
     },
   };
+}
+
+function workspaceChipLabel(card: BoardCard, context: BoardWorkspaceContext): string | null {
+  if (
+    context.attachedWorkspaceCount <= 1 ||
+    card.sourceWorkspace.availability === "unlinked" ||
+    card.sourceWorkspace.id === context.defaultWorkspaceID
+  ) {
+    return null;
+  }
+  return card.sourceWorkspace.name;
+}
+
+function boardCardBorderTone(statusKind: TaskStatusKind): BoardCardBorderTone {
+  switch (statusKind) {
+    case "waiting_question":
+      return "primary";
+    case "waiting_approval":
+      return "secondary";
+    case "backlog":
+    case "active":
+    case "done":
+    case "canceled":
+    case "interrupted":
+    case "running":
+    case "queued":
+      return "default";
+  }
 }

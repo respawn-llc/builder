@@ -9,6 +9,7 @@ import (
 	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type stubPromptResponder struct {
@@ -45,6 +46,63 @@ func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
 	}
 	if responder.sessionID != "session-1" || responder.response.RequestID != "ask-1" || responder.response.Answer != "hello" {
 		t.Fatalf("unexpected stored response: session=%q response=%+v", responder.sessionID, responder.response)
+	}
+}
+
+func TestServiceAnswerAskPreservesAbsentSelectedOption(t *testing.T) {
+	responder := &stubPromptResponder{}
+	service := NewPromptControlService(responder)
+	req := serverapi.AskAnswerRequest{
+		ClientRequestID: "req-freeform",
+		SessionID:       "session-1",
+		AskID:           "ask-1",
+		FreeformAnswer:  "typed",
+	}
+
+	if err := service.AnswerAsk(context.Background(), req); err != nil {
+		t.Fatalf("AnswerAsk: %v", err)
+	}
+	if responder.response.SelectedOptionNumber != nil {
+		t.Fatalf("selected option = %v, want nil", *responder.response.SelectedOptionNumber)
+	}
+}
+
+func TestServiceAnswerAskMemoizesSelectedOptionByValue(t *testing.T) {
+	responder := &stubPromptResponder{}
+	service := NewPromptControlService(responder)
+	request := serverapi.AskAnswerRequest{
+		ClientRequestID:      "req-option",
+		SessionID:            "session-1",
+		AskID:                "ask-1",
+		SelectedOptionNumber: textutil.Int(1),
+	}
+	if err := service.AnswerAsk(context.Background(), request); err != nil {
+		t.Fatalf("AnswerAsk first: %v", err)
+	}
+	request.SelectedOptionNumber = textutil.Int(1)
+	if err := service.AnswerAsk(context.Background(), request); err != nil {
+		t.Fatalf("AnswerAsk equivalent replay: %v", err)
+	}
+	if responder.calls != 1 {
+		t.Fatalf("responder calls = %d, want 1", responder.calls)
+	}
+}
+
+func TestServiceAnswerAskDistinguishesAbsentAndPresentSelectedOption(t *testing.T) {
+	responder := &stubPromptResponder{}
+	service := NewPromptControlService(responder)
+	request := serverapi.AskAnswerRequest{
+		ClientRequestID: "req-presence",
+		SessionID:       "session-1",
+		AskID:           "ask-1",
+		FreeformAnswer:  "typed",
+	}
+	if err := service.AnswerAsk(context.Background(), request); err != nil {
+		t.Fatalf("AnswerAsk absent selection: %v", err)
+	}
+	request.SelectedOptionNumber = textutil.Int(1)
+	if err := service.AnswerAsk(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+		t.Fatalf("AnswerAsk present selection replay error = %v, want payload mismatch", err)
 	}
 }
 
