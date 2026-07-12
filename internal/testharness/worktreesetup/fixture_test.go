@@ -3,6 +3,7 @@ package worktreesetup
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -70,7 +71,10 @@ func TestInstallInSourceWorkspaceReturnsRelativeExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat installed helper: %v", err)
 	}
-	if info.IsDir() || info.Mode()&0o111 == 0 {
+	if !info.Mode().IsRegular() {
+		t.Fatalf("installed helper mode = %v, want regular file", info.Mode())
+	}
+	if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 		t.Fatalf("installed helper mode = %v, want executable file", info.Mode())
 	}
 }

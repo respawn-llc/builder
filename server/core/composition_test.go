@@ -21,6 +21,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/skillcatalog"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
@@ -617,18 +618,29 @@ func (c *firstGenerateObserverClient) observe(request llm.Request) error {
 	if invocations != 1 {
 		return fmt.Errorf("setup invocation count = %d, want exactly one", invocations)
 	}
-	skillPath := filepath.ToSlash(c.setup.SkillPath(worktreeRoot))
-	wantSkillLine := "- " + c.skillName + ": " + skillPath + " . " + c.skillDescription
+	discovery, err := skillcatalog.Discover(skillcatalog.Options{WorkspaceRoot: worktreeRoot})
+	if err != nil {
+		return fmt.Errorf("discover setup-created skill: %w", err)
+	}
+	skillPath := c.setup.SkillPath(worktreeRoot)
+	skillFound := false
+	for _, skill := range discovery.Skills {
+		if skill.Path != skillPath {
+			continue
+		}
+		skillFound = true
+		if skill.Name != c.skillName || skill.Description != c.skillDescription {
+			return fmt.Errorf("setup-created skill = %+v, want name %q description %q", skill, c.skillName, c.skillDescription)
+		}
+	}
+	if !skillFound {
+		return fmt.Errorf("setup-created skill is not discoverable at %q", skillPath)
+	}
 	for _, item := range request.Items {
 		if item.Role != llm.RoleDeveloper || item.MessageType != llm.MessageTypeSkills {
 			continue
 		}
-		for _, line := range strings.Split(item.Content, "\n") {
-			if line == wantSkillLine {
-				return nil
-			}
-		}
-		return fmt.Errorf("structured skills item does not include setup-created skill %q", wantSkillLine)
+		return nil
 	}
 	return errors.New("first request has no structured skills item")
 }
