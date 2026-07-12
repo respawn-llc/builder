@@ -11,7 +11,6 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
 )
 
@@ -72,15 +71,6 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 }
 
 func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string, opts sessionLifecycleOptions) error {
-	return runSessionLifecycleWithRunner(ctx, server, interactor, initialSessionID, opts, runUILoop)
-}
-
-type sessionLifecycleUIRunner func(uiLoopRequest) (tea.Model, error)
-
-func runSessionLifecycleWithRunner(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string, opts sessionLifecycleOptions, runUI sessionLifecycleUIRunner) error {
-	if runUI == nil {
-		return errors.New("session UI runner is required")
-	}
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
 	if err != nil {
@@ -138,7 +128,7 @@ func runSessionLifecycleWithRunner(ctx context.Context, server interactiveSessio
 		if err != nil {
 			return err
 		}
-		finalModel, runErr := runUI(request)
+		finalModel, runErr := runUILoop(request)
 		showStartupUpdateNotice = shouldRetryStartupUpdateNotice(finalModel, showStartupUpdateNotice)
 		nextSessionInitialPrompt = ""
 		nextSessionInitialPromptHistoryRecorded = false

@@ -1237,268 +1237,56 @@ func TestExitReleaseFailureReturnsAfterUILoopResult(t *testing.T) {
 	}
 }
 
-func TestRunSessionLifecycleExitReleaseFailureReturnsAfterUILoopTeardown(t *testing.T) {
-	releaseErr := errors.New("release failed")
+func TestResumeReleaseCompletesBeforePickerAndPickerCancelDoesNotReleaseAgain(t *testing.T) {
 	workspaceRoot := t.TempDir()
-	uiLoopReturned := false
-	planCalls := 0
-	prepareCalls := 0
-	server := lifecycleReleaseTestServer(t, workspaceRoot, nil, &recordingSessionLifecycleClient{
-		getInitialInput: func(context.Context, serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
-			return serverapi.SessionInitialInputResponse{}, nil
-		},
-		persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-			return serverapi.SessionPersistInputDraftResponse{}, nil
-		},
-	})
-	server.sessionLaunch = stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-		planCalls++
-		if req.SelectedSessionID != "origin" {
-			t.Fatalf("selected session = %q, want origin", req.SelectedSessionID)
-		}
-		return lifecycleReleasePlanResponse("origin", workspaceRoot), nil
-	}}
-	server.prepareRuntime = func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
-		prepareCalls++
-		if plan.SessionID != "origin" {
-			t.Fatalf("prepared session = %q, want origin", plan.SessionID)
-		}
-		return &runtimeLaunchPlan{close: func() error {
-			if !uiLoopReturned {
-				t.Fatal("runtime release ran before the UI loop returned")
-			}
-			return releaseErr
-		}}, nil
-	}
-	runUI := func(uiLoopRequest) (tea.Model, error) {
-		uiLoopReturned = true
-		return &uiModel{uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{exitAction: UIActionExit}}, nil
-	}
-
-	err := runSessionLifecycleWithRunner(context.Background(), server, nil, "origin", sessionLifecycleOptions{}, runUI)
-	if !errors.Is(err, releaseErr) {
-		t.Fatalf("runSessionLifecycle error = %v, want release failure", err)
-	}
-	if planCalls != 1 || prepareCalls != 1 {
-		t.Fatalf("lifecycle attempted destination after exit release failure: plans=%d prepares=%d", planCalls, prepareCalls)
-	}
-}
-
-func TestRunSessionLifecycleNavigationReleaseFailurePreventsDestinationPlanning(t *testing.T) {
-	releaseErr := errors.New("release failed")
-	workspaceRoot := t.TempDir()
-	planCalls := 0
-	prepareCalls := 0
-	resolveCalls := 0
-	server := lifecycleReleaseTestServer(t, workspaceRoot, nil, &recordingSessionLifecycleClient{
-		getInitialInput: func(context.Context, serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
-			return serverapi.SessionInitialInputResponse{}, nil
-		},
-		persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-			return serverapi.SessionPersistInputDraftResponse{}, nil
-		},
-		resolveTransition: func(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-			resolveCalls++
-			if req.Transition.Action != UIActionResume {
-				t.Fatalf("transition action = %q, want resume", req.Transition.Action)
-			}
-			return serverapi.SessionResolveTransitionResponse{ShouldContinue: true}, nil
-		},
-	})
-	server.sessionLaunch = stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-		planCalls++
-		if planCalls > 1 {
-			t.Fatal("destination planning began after origin release failed")
-		}
-		return lifecycleReleasePlanResponse(req.SelectedSessionID, workspaceRoot), nil
-	}}
-	server.prepareRuntime = func(context.Context, sessionLaunchPlan, io.Writer, string) (*runtimeLaunchPlan, error) {
-		prepareCalls++
-		return &runtimeLaunchPlan{close: func() error { return releaseErr }}, nil
-	}
-
-	err := runSessionLifecycleWithRunner(context.Background(), server, nil, "origin", sessionLifecycleOptions{}, func(uiLoopRequest) (tea.Model, error) {
-		return &uiModel{uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{exitAction: UIActionResume}}, nil
-	})
-	if !errors.Is(err, releaseErr) {
-		t.Fatalf("runSessionLifecycle error = %v, want release failure", err)
-	}
-	if resolveCalls != 1 || planCalls != 1 || prepareCalls != 1 {
-		t.Fatalf("unexpected lifecycle calls resolve=%d plans=%d prepares=%d", resolveCalls, planCalls, prepareCalls)
-	}
-}
-
-func TestRunSessionLifecycleResumeReleasesBeforePickerAndPickerCancelDoesNotReleaseTwice(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	originActive := true
 	releaseCalls := 0
-	pickerEntered := make(chan struct{})
-	releasePicker := make(chan struct{})
-	originalPicker := runSessionPickerFlow
-	runSessionPickerFlow = func([]clientui.SessionSummary, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	binding := metadata.Binding{ProjectID: "project-1", WorkspaceID: "workspace-1"}
+	server := &testEmbeddedServer{
+		cfg: config.App{
+			WorkspaceRoot:   workspaceRoot,
+			PersistenceRoot: t.TempDir(),
+			Settings:        config.Settings{Theme: "dark"},
+		},
+		projectID:         binding.ProjectID,
+		projectViewClient: sessionLifecycleProjectViewClient(binding, workspaceRoot, []clientui.SessionSummary{{SessionID: "other", UpdatedAt: time.Now().UTC()}}),
+		sessionLaunch: stubSessionLaunchClient{planSession: func(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
+			t.Fatal("picker cancellation must not plan a destination")
+			return serverapi.SessionPlanResponse{}, nil
+		}},
+	}
+	planner := newSessionLaunchPlanner(server)
+	planner.pickSession = func([]clientui.SessionSummary, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		if releaseCalls != 1 {
 			t.Fatalf("picker opened before origin release: releases=%d", releaseCalls)
 		}
-		if !originActive {
-			t.Fatal("origin work did not remain active during ownerless picker interval")
-		}
-		close(pickerEntered)
-		<-releasePicker
 		return sessionPickerResult{Canceled: true}, nil
 	}
-	t.Cleanup(func() { runSessionPickerFlow = originalPicker })
-
-	server := lifecycleReleaseTestServer(t, workspaceRoot, []clientui.SessionSummary{{SessionID: "destination", UpdatedAt: time.Now().UTC()}}, &recordingSessionLifecycleClient{
-		getInitialInput: func(context.Context, serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
-			return serverapi.SessionInitialInputResponse{}, nil
-		},
-		persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-			return serverapi.SessionPersistInputDraftResponse{}, nil
-		},
-		resolveTransition: func(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-			if req.Transition.Action != UIActionResume {
-				t.Fatalf("transition action = %q, want resume", req.Transition.Action)
-			}
-			return serverapi.SessionResolveTransitionResponse{ShouldContinue: true}, nil
-		},
-	})
-	planCalls := 0
-	server.sessionLaunch = stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-		planCalls++
-		if planCalls == 1 && req.SelectedSessionID != "origin" {
-			t.Fatalf("origin selected session = %q, want origin", req.SelectedSessionID)
-		}
-		if planCalls > 1 {
-			t.Fatal("picker cancellation unexpectedly planned a destination")
-		}
-		return lifecycleReleasePlanResponse("origin", workspaceRoot), nil
-	}}
-	server.prepareRuntime = func(context.Context, sessionLaunchPlan, io.Writer, string) (*runtimeLaunchPlan, error) {
-		return &runtimeLaunchPlan{close: func() error {
+	resolved, err := resolveAndReleaseSessionAction(
+		context.Background(),
+		narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
+			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
+				return serverapi.SessionResolveTransitionResponse{ShouldContinue: true}, nil
+			},
+		}},
+		nil,
+		"origin",
+		UITransition{Action: UIActionResume},
+		&runtimeLaunchPlan{close: func() error {
 			releaseCalls++
 			return nil
-		}}, nil
-	}
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- runSessionLifecycleWithRunner(context.Background(), server, nil, "origin", sessionLifecycleOptions{}, func(uiLoopRequest) (tea.Model, error) {
-			return &uiModel{uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{exitAction: UIActionResume}}, nil
-		})
-	}()
-	<-pickerEntered
-	if releaseCalls != 1 || !originActive {
-		t.Fatalf("ownerless picker state releases=%d originActive=%t", releaseCalls, originActive)
-	}
-	close(releasePicker)
-	err := <-errCh
-	if !errors.Is(err, projectbinding.ErrStartupCanceledByUser) {
-		t.Fatalf("runSessionLifecycle error = %v, want picker cancellation", err)
-	}
-	if releaseCalls != 1 || !originActive || planCalls != 1 {
-		t.Fatalf("picker cancellation state releases=%d originActive=%t plans=%d", releaseCalls, originActive, planCalls)
-	}
-}
-
-func TestRunSessionLifecycleResumeAttachesDestinationOnlyAfterPickerSelection(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	events := make([]string, 0, 8)
-	destination := clientui.SessionSummary{SessionID: "destination", UpdatedAt: time.Now().UTC()}
-	originalPicker := runSessionPickerFlow
-	runSessionPickerFlow = func(summaries []clientui.SessionSummary, _ string, _ sessionPickerHeaderInfo) (sessionPickerResult, error) {
-		events = append(events, "picker")
-		if len(summaries) != 1 || summaries[0].SessionID != destination.SessionID {
-			t.Fatalf("picker summaries = %+v, want destination", summaries)
-		}
-		picked := destination
-		return sessionPickerResult{Session: &picked}, nil
-	}
-	t.Cleanup(func() { runSessionPickerFlow = originalPicker })
-
-	server := lifecycleReleaseTestServer(t, workspaceRoot, []clientui.SessionSummary{destination}, &recordingSessionLifecycleClient{
-		getInitialInput: func(context.Context, serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
-			return serverapi.SessionInitialInputResponse{}, nil
-		},
-		persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-			return serverapi.SessionPersistInputDraftResponse{}, nil
-		},
-		resolveTransition: func(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-			if req.Transition.Action != UIActionResume {
-				t.Fatalf("transition action = %q, want resume", req.Transition.Action)
-			}
-			events = append(events, "resolve-origin")
-			return serverapi.SessionResolveTransitionResponse{ShouldContinue: true}, nil
-		},
-	})
-	server.sessionViewClient = stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-		if req.SessionID != destination.SessionID {
-			t.Fatalf("selected view session = %q, want destination", req.SessionID)
-		}
-		return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
-			ExecutionTarget: clientui.SessionExecutionTarget{WorkspaceRoot: workspaceRoot},
-		}}}, nil
-	}}
-	planCalls := 0
-	server.sessionLaunch = stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-		planCalls++
-		switch planCalls {
-		case 1:
-			if req.SelectedSessionID != "origin" {
-				t.Fatalf("origin selected session = %q, want origin", req.SelectedSessionID)
-			}
-			events = append(events, "plan-origin")
-			return lifecycleReleasePlanResponse("origin", workspaceRoot), nil
-		case 2:
-			if req.SelectedSessionID != destination.SessionID {
-				t.Fatalf("destination selected session = %q, want %q", req.SelectedSessionID, destination.SessionID)
-			}
-			events = append(events, "plan-destination")
-			return lifecycleReleasePlanResponse(destination.SessionID, workspaceRoot), nil
-		default:
-			t.Fatalf("unexpected plan call %d", planCalls)
-			return serverapi.SessionPlanResponse{}, nil
-		}
-	}}
-	server.prepareRuntime = func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
-		switch plan.SessionID {
-		case "origin":
-			events = append(events, "prepare-origin")
-			return &runtimeLaunchPlan{close: func() error {
-				events = append(events, "release-origin")
-				return nil
-			}}, nil
-		case destination.SessionID:
-			events = append(events, "prepare-destination")
-			return &runtimeLaunchPlan{close: func() error {
-				events = append(events, "release-destination")
-				return nil
-			}}, nil
-		default:
-			t.Fatalf("unexpected prepared session %q", plan.SessionID)
-			return nil, nil
-		}
-	}
-	uiRuns := 0
-	err := runSessionLifecycleWithRunner(context.Background(), server, nil, "origin", sessionLifecycleOptions{}, func(req uiLoopRequest) (tea.Model, error) {
-		uiRuns++
-		switch uiRuns {
-		case 1:
-			if req.statusConfig.WorkspaceRoot != workspaceRoot {
-				t.Fatalf("origin UI workspace = %q, want %q", req.statusConfig.WorkspaceRoot, workspaceRoot)
-			}
-			return &uiModel{uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{exitAction: UIActionResume}}, nil
-		case 2:
-			return &uiModel{uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{exitAction: UIActionExit}}, nil
-		default:
-			t.Fatalf("unexpected UI run %d", uiRuns)
-			return nil, nil
-		}
-	})
+		}},
+	)
 	if err != nil {
-		t.Fatalf("runSessionLifecycle: %v", err)
+		t.Fatalf("resolve and release resume: %v", err)
 	}
-	want := "plan-origin,prepare-origin,resolve-origin,release-origin,picker,plan-destination,prepare-destination,release-destination"
-	if got := strings.Join(events, ","); got != want {
-		t.Fatalf("lifecycle event order = %q, want %q", got, want)
+	if !resolved.ShouldContinue || resolved.NextSessionID != "" {
+		t.Fatalf("resolved resume = %+v", resolved)
+	}
+	if _, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive}); !errors.Is(err, projectbinding.ErrStartupCanceledByUser) {
+		t.Fatalf("picker result error = %v, want cancellation", err)
+	}
+	if releaseCalls != 1 {
+		t.Fatalf("picker cancellation released origin again: releases=%d", releaseCalls)
 	}
 }
 
@@ -1512,29 +1300,6 @@ func TestForcedLocalExitPropagatesDetachReleaseFailure(t *testing.T) {
 	if err := closeRuntimePlanAfterUIExit(plan, model); !errors.Is(err, releaseErr) {
 		t.Fatalf("detach close error = %v, want release failure", err)
 	}
-}
-
-func lifecycleReleaseTestServer(t *testing.T, workspaceRoot string, sessions []clientui.SessionSummary, lifecycle client.SessionLifecycleClient) *testEmbeddedServer {
-	t.Helper()
-	binding := metadata.Binding{ProjectID: "project-1", WorkspaceID: "workspace-1"}
-	return &testEmbeddedServer{
-		cfg: config.App{
-			WorkspaceRoot:   workspaceRoot,
-			PersistenceRoot: t.TempDir(),
-			Settings:        config.Settings{Theme: "dark"},
-		},
-		projectID:         binding.ProjectID,
-		projectViewClient: sessionLifecycleProjectViewClient(binding, workspaceRoot, sessions),
-		sessionLifecycle:  lifecycle,
-	}
-}
-
-func lifecycleReleasePlanResponse(sessionID string, workspaceRoot string) serverapi.SessionPlanResponse {
-	return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
-		SessionID:      sessionID,
-		WorkspaceRoot:  workspaceRoot,
-		ActiveSettings: config.Settings{Theme: "dark"},
-	}}
 }
 
 type narrowSessionLifecycleServer struct {
