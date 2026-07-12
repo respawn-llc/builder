@@ -58,6 +58,15 @@ func callWriteStdin(t *testing.T, tool *WriteStdinTool, id string, input map[str
 	return callShellTestTool(t, tool, id, toolspec.ToolWriteStdin, input)
 }
 
+func decodeWriteStdinToolOutput(t *testing.T, result tools.Result) writeStdinOutput {
+	t.Helper()
+	var output writeStdinOutput
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("decode write_stdin output: %v", err)
+	}
+	return output
+}
+
 func waitForManagerCount(t *testing.T, manager *Manager, want int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -104,6 +113,33 @@ func newBackgroundTestManager(t *testing.T) *Manager {
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 	return manager
+}
+
+func TestExecCommandSilentSuccessIsTerminalAndUnambiguous(t *testing.T) {
+	workspace := t.TempDir()
+	manager := newBackgroundTestManager(t)
+	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+
+	result := callExecCommand(t, execTool, "silent-success", map[string]any{
+		"cmd":           "true",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 1_000,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
+	}
+	var rendered string
+	if err := json.Unmarshal(result.Output, &rendered); err != nil {
+		t.Fatalf("exec_command result must be a JSON string: %v", err)
+	}
+	if rendered == "" {
+		t.Fatal("silent terminal completion must render non-empty content")
+	}
+	if result.PresentationDelta != nil && result.PresentationDelta.MovedToBackground {
+		t.Fatalf("silent foreground completion must not be marked backgrounded: %+v", result.PresentationDelta)
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
 }
 
 func envSliceToMap(t *testing.T, in []string) map[string]string {
@@ -267,6 +303,13 @@ func TestTruncateBannerUsesByteWording(t *testing.T) {
 	}
 	if !strings.Contains(out, "omitted ") || !strings.Contains(out, " bytes.") {
 		t.Fatalf("expected byte-based truncation banner, output = %q", out)
+	}
+}
+
+func TestTruncateWhitespaceOnlyOutputDoesNotCreateBanner(t *testing.T) {
+	output, truncated, removed := truncateWithTemplate(strings.Repeat(" ", 4096), 80, truncationBannerTemplate)
+	if output != "" || truncated || removed != 0 {
+		t.Fatalf("whitespace-only output truncation = (%q, %t, %d), want empty untruncated output", output, truncated, removed)
 	}
 }
 
@@ -539,6 +582,13 @@ func TestExecCommandMovesToBackgroundAndPollsToCompletion(t *testing.T) {
 	if result.PresentationDelta == nil || !result.PresentationDelta.MovedToBackground {
 		t.Fatalf("expected backgrounded presentation delta, got %+v", result.PresentationDelta)
 	}
+	snapshots := manager.List()
+	if len(snapshots) != 1 {
+		t.Fatalf("background snapshot count = %d, want 1", len(snapshots))
+	}
+	if _, err := manager.Snapshot(snapshots[0].ID); err != nil {
+		t.Fatalf("background session must be pollable: %v", err)
+	}
 
 	pollResult := callWriteStdin(t, pollTool, "bg-2", map[string]any{
 		"session_id":    1000,
@@ -547,20 +597,91 @@ func TestExecCommandMovesToBackgroundAndPollsToCompletion(t *testing.T) {
 	if pollResult.IsError {
 		t.Fatalf("unexpected write_stdin error: %s", string(pollResult.Output))
 	}
-	pollText := decodeStringToolOutput(t, pollResult)
-	if strings.Contains(pollText, "Exit code 0, output:") {
-		t.Fatalf("did not expect zero exit code in poll output, got %q", pollText)
+	pollOutput := decodeWriteStdinToolOutput(t, pollResult)
+	if pollOutput.BackgroundSessionID != 1000 {
+		t.Fatalf("background session ID = %d, want 1000", pollOutput.BackgroundSessionID)
 	}
-	if !strings.Contains(pollText, "Wall time:") {
-		t.Fatalf("expected wall time once backgrounded shell completed, got %q", pollText)
+	if pollOutput.BackgroundRunning {
+		t.Fatal("expected completed background process")
 	}
-	if !strings.Contains(pollText, "Log file:") {
-		t.Fatalf("expected log file once backgrounded shell completed, got %q", pollText)
+	if !pollOutput.Backgrounded {
+		t.Fatal("expected terminal polling result to retain background lifecycle")
 	}
-	if !strings.Contains(pollText, "done") {
-		t.Fatalf("expected command output in poll output, got %q", pollText)
+	if pollOutput.BackgroundExitCode == nil || *pollOutput.BackgroundExitCode != 0 {
+		t.Fatalf("background exit code = %v, want 0", pollOutput.BackgroundExitCode)
+	}
+	if pollOutput.Output == "" {
+		t.Fatal("completed polling output must be non-empty")
 	}
 	waitForManagerCount(t, manager, 0, time.Second)
+}
+
+func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *testing.T) {
+	tests := []struct {
+		name         string
+		command      string
+		wantExitCode int
+	}{
+		{name: "zero silent", command: "sleep 0.3", wantExitCode: 0},
+		{name: "zero with output", command: "sleep 0.3; printf visible", wantExitCode: 0},
+		{name: "non-zero silent", command: "sleep 0.3; exit 7", wantExitCode: 7},
+		{name: "non-zero with output", command: "sleep 0.3; printf visible; exit 7", wantExitCode: 7},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			manager := newBackgroundTestManager(t)
+			execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+			pollTool := NewWriteStdinTool(16_000, manager)
+
+			start := callExecCommand(t, execTool, "poll-start", map[string]any{
+				"cmd":           tt.command,
+				"shell":         "/bin/sh",
+				"login":         false,
+				"yield_time_ms": 250,
+			})
+			if start.IsError {
+				t.Fatalf("unexpected exec_command error: %s", string(start.Output))
+			}
+			if start.PresentationDelta == nil || !start.PresentationDelta.MovedToBackground {
+				t.Fatalf("expected background transition, got %+v", start.PresentationDelta)
+			}
+			snapshots := manager.List()
+			if len(snapshots) != 1 {
+				t.Fatalf("background snapshot count = %d, want 1", len(snapshots))
+			}
+			sessionID, err := strconv.Atoi(snapshots[0].ID)
+			if err != nil {
+				t.Fatalf("background session ID must be numeric: %v", err)
+			}
+
+			poll := callWriteStdin(t, pollTool, "poll-complete", map[string]any{
+				"session_id":    sessionID,
+				"yield_time_ms": 800,
+			})
+			if poll.IsError {
+				t.Fatalf("unexpected write_stdin error: %s", string(poll.Output))
+			}
+			output := decodeWriteStdinToolOutput(t, poll)
+			if output.BackgroundSessionID != sessionID {
+				t.Fatalf("background session ID = %d, want %d", output.BackgroundSessionID, sessionID)
+			}
+			if output.BackgroundRunning {
+				t.Fatal("expected terminal polling response")
+			}
+			if !output.Backgrounded {
+				t.Fatal("expected terminal polling response to preserve backgrounded lifecycle")
+			}
+			if output.BackgroundExitCode == nil || *output.BackgroundExitCode != tt.wantExitCode {
+				t.Fatalf("background exit code = %v, want %d", output.BackgroundExitCode, tt.wantExitCode)
+			}
+			if output.Output == "" {
+				t.Fatal("terminal polling response must contain non-empty presentation")
+			}
+			waitForManagerCount(t, manager, 0, time.Second)
+		})
+	}
 }
 
 func TestWriteStdinCancellationReportsActiveProcess(t *testing.T) {
@@ -690,8 +811,8 @@ func TestExecCommandBackgroundProcessExportsAgentEnv(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
 	}
-	if got := decodeStringToolOutput(t, result); !strings.Contains(got, "Process moved to background with ID 1000.") {
-		t.Fatalf("expected background transition, got %q", got)
+	if result.PresentationDelta == nil || !result.PresentationDelta.MovedToBackground {
+		t.Fatalf("expected background transition, got %+v", result.PresentationDelta)
 	}
 
 	pollResult := callWriteStdin(t, pollTool, "agent-env-bg-poll", map[string]any{
@@ -769,9 +890,6 @@ func TestExecCommandFileReadPostprocessorHandlesDirectCommandOnly(t *testing.T) 
 	if strings.Contains(pipelineOutput, "[Total line count:") {
 		t.Fatalf("pipeline output should not include file-read context marker, got %q", pipelineOutput)
 	}
-	if strings.Contains(pipelineOutput, "Exit code 0, output:") {
-		t.Fatalf("pipeline output should not include zero exit code header, got %q", pipelineOutput)
-	}
 	if !strings.Contains(pipelineOutput, "alpha") {
 		t.Fatalf("pipeline output missing command output, got %q", pipelineOutput)
 	}
@@ -791,12 +909,17 @@ func TestExecCommandReportsNonZeroExitCode(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
 	}
-	text := decodeStringToolOutput(t, result)
-	if !strings.Contains(text, "Exit code 7, output:") {
-		t.Fatalf("expected non-zero exit code in output, got %q", text)
+	var output string
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("exec_command result must be a JSON string: %v", err)
 	}
-	if !strings.Contains(text, "bad") {
-		t.Fatalf("expected command output, got %q", text)
+	if output == "" {
+		t.Fatal("non-zero completion with output must render non-empty content")
+	}
+	exitCode := 7
+	presentation := projectExecResult(ExecResult{ExitCode: &exitCode, Output: "bad"})
+	if presentation.kind != execPresentationForegroundCompleted || presentation.exitCode != exitCode || !presentation.output.HasVisibleContent() {
+		t.Fatalf("non-zero presentation = %+v", presentation)
 	}
 }
 
@@ -889,12 +1012,6 @@ func TestExecCommandClampsShortYieldTimeSilently(t *testing.T) {
 	text := decodeStringToolOutput(t, result)
 	if strings.Contains(text, "Warning: yield_time_ms below the minimum exec-to-background time") {
 		t.Fatalf("did not expect clamp warning, got %q", text)
-	}
-	if strings.Contains(text, "Process moved to background.") {
-		t.Fatalf("expected command to stay foreground after clamp, got %q", text)
-	}
-	if strings.Contains(text, "Exit code 0, output:") {
-		t.Fatalf("did not expect zero exit code in output, got %q", text)
 	}
 	if !strings.Contains(text, "done") {
 		t.Fatalf("expected command output, got %q", text)
@@ -1013,12 +1130,6 @@ func TestExecCommandForegroundTruncationUsesForegroundBanner(t *testing.T) {
 	if strings.Contains(text, "read log file for details") {
 		t.Fatalf("did not expect background truncation guidance in foreground output, got %q", text)
 	}
-	if strings.Contains(text, "Log file:") {
-		t.Fatalf("did not expect log file in foreground output, got %q", text)
-	}
-	if strings.Contains(text, "Process moved to background.") {
-		t.Fatalf("expected immediate completion, got %q", text)
-	}
 	if result.PresentationDelta == nil || !result.PresentationDelta.OutputTruncated {
 		t.Fatalf("expected foreground truncation presentation delta, got %+v", result.PresentationDelta)
 	}
@@ -1107,18 +1218,10 @@ func TestWriteStdinSendsInputToInteractiveProcess(t *testing.T) {
 	if stdinResult.IsError {
 		t.Fatalf("unexpected write_stdin error: %s", string(stdinResult.Output))
 	}
-	stdinText := decodeStringToolOutput(t, stdinResult)
-	if strings.Contains(stdinText, "Exit code 0, output:") {
-		t.Fatalf("did not expect zero exit code in stdin output, got %q", stdinText)
-	}
-	if !strings.Contains(stdinText, "Wall time:") {
-		t.Fatalf("expected wall time once interactive background shell completed, got %q", stdinText)
-	}
-	if !strings.Contains(stdinText, "Log file:") {
-		t.Fatalf("expected log file once interactive background shell completed, got %q", stdinText)
-	}
-	if !strings.Contains(stdinText, "hello app") {
-		t.Fatalf("expected echoed stdin in output, got %q", stdinText)
+	stdinOutput := decodeWriteStdinToolOutput(t, stdinResult)
+	if stdinOutput.BackgroundSessionID != 1000 || stdinOutput.BackgroundRunning || !stdinOutput.Backgrounded ||
+		stdinOutput.BackgroundExitCode == nil || *stdinOutput.BackgroundExitCode != 0 || stdinOutput.Output == "" {
+		t.Fatalf("completed interactive write_stdin output = %+v", stdinOutput)
 	}
 	waitForManagerCount(t, manager, 0, time.Second)
 }
@@ -1158,9 +1261,6 @@ func TestWriteStdinUsesBackgroundTruncationBannerOnCompletion(t *testing.T) {
 	}
 	if strings.Contains(stdinText, "Consider using more targeted commands") {
 		t.Fatalf("did not expect foreground truncation guidance in background output, got %q", stdinText)
-	}
-	if !strings.Contains(stdinText, "Log file:") {
-		t.Fatalf("expected completed background shell response to include log file, got %q", stdinText)
 	}
 	if stdinResult.PresentationDelta == nil || !stdinResult.PresentationDelta.OutputTruncated {
 		t.Fatalf("expected write_stdin truncation presentation delta, got %+v", stdinResult.PresentationDelta)

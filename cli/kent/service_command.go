@@ -230,16 +230,6 @@ func serviceRunSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	return serviceHostRun(spec, stdout, stderr)
 }
 
-type legacyServerStopper interface {
-	stopLegacyServer(ctx context.Context, spec serviceSpec)
-}
-
-func stopLegacyManagedServer(ctx context.Context, backend serviceBackend, spec serviceSpec) {
-	if stopper, ok := backend.(legacyServerStopper); ok {
-		stopper.stopLegacyServer(ctx, spec)
-	}
-}
-
 func runServiceCommandAction(ctx context.Context, action serviceAction, opts serviceCommandOptions, stdout io.Writer, stderr io.Writer) int {
 	if err := ensureServiceLifecycleAllowed(action, opts); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -273,10 +263,6 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 		writeServiceStatus(stdout, status)
 		return 0
 	case serviceActionInstall:
-
-		if serviceLifecycleGuardApplies(serviceActionInstall, opts) {
-			stopLegacyManagedServer(ctx, backend, spec)
-		}
 		if err := ensureNoUnmanagedServerConflictForAction(ctx, backend, spec, serviceActionInstall); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -344,7 +330,6 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 			if code, handled := elevateServiceAction(serviceActionRestart); handled {
 				return code
 			}
-			stopLegacyManagedServer(ctx, backend, spec)
 			if err := ensureNoUnmanagedServerConflictForAction(ctx, backend, spec, action); err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1

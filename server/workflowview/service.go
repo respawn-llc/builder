@@ -140,7 +140,7 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 	if err != nil {
 		return serverapi.WorkflowBoard{}, err
 	}
-	primaryWorkspace, workspacesByID := boardProjectWorkspaceSummaries(project)
+	workspaceContext := boardProjectWorkspaceContext(project)
 	requestedWorkflowID := strings.TrimSpace(req.WorkflowID)
 	if requestedWorkflowID == "" && strings.TrimSpace(req.PageToken) != "" {
 		tokenWorkflowID, err := workflowBoardPageTokenWorkflowID(req.PageToken, projectID)
@@ -154,7 +154,7 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 		if strings.TrimSpace(req.PageToken) != "" {
 			return serverapi.WorkflowBoard{}, errors.New("page_token is invalid")
 		}
-		return serverapi.WorkflowBoard{ProjectID: projectID, Project: projectBoardProject(project), WorkflowPicker: picker, GeneratedAtUnixMs: time.Now().UTC().UnixMilli()}, nil
+		return serverapi.WorkflowBoard{ProjectID: projectID, Project: projectBoardProject(project, workspaceContext), WorkflowPicker: picker, GeneratedAtUnixMs: time.Now().UTC().UnixMilli()}, nil
 	}
 	cursor, err := parseWorkflowBoardPageToken(req.PageToken, projectID, selected.WorkflowID)
 	if err != nil {
@@ -207,7 +207,7 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(candidates))
 	for _, task := range candidates {
 		cardPlacements := pagePlacementsByTaskID[task.ID]
-		card, done := s.taskCard(task, statusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, cardPlacements, def, nodeKinds), pageRunsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace))
+		card, done := s.taskCard(task, statusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, cardPlacements, def, nodeKinds), pageRunsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary))
 		if done {
 			continue
 		}
@@ -245,14 +245,14 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 	}
 	donePreview := make([]serverapi.WorkflowBoardTaskCard, 0, len(doneTasks))
 	for _, task := range doneTasks {
-		card, done := s.taskCard(task, doneStatusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, donePlacementsByTaskID[task.ID], def, nodeKinds), doneRunsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace))
+		card, done := s.taskCard(task, doneStatusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, donePlacementsByTaskID[task.ID], def, nodeKinds), doneRunsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary))
 		if done {
 			donePreview = append(donePreview, card)
 		}
 	}
 	board := serverapi.WorkflowBoard{
 		ProjectID:          projectID,
-		Project:            projectBoardProject(project),
+		Project:            projectBoardProject(project, workspaceContext),
 		SelectedWorkflow:   selected,
 		WorkflowPicker:     picker,
 		Groups:             groups,
@@ -567,7 +567,7 @@ func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	primaryWorkspace, workspacesByID := boardProjectWorkspaceSummaries(project)
+	workspaceContext := boardProjectWorkspaceContext(project)
 	placementsByTaskID, err := s.boardPlacementsByTask(ctx, tasks)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
@@ -591,7 +591,7 @@ func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.Workflow
 	}
 	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(candidates))
 	for _, task := range candidates {
-		card, _ := s.taskCard(task, statusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, placementsByTaskID[task.ID], def, nodeKinds), runsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace))
+		card, _ := s.taskCard(task, statusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, placementsByTaskID[task.ID], def, nodeKinds), runsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary))
 		cards = append(cards, card)
 	}
 	nextPageToken := ""
@@ -725,15 +725,7 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	primaryWorkspace := serverapi.ProjectWorkspaceSummary{}
-	workspacesByID := map[string]serverapi.ProjectWorkspaceSummary{}
-	for _, workspace := range project.Workspaces {
-		dto := projectWorkspaceSummary(workspace)
-		workspacesByID[dto.WorkspaceID] = dto
-		if workspace.IsPrimary {
-			primaryWorkspace = dto
-		}
-	}
+	workspaceContext := boardProjectWorkspaceContext(project)
 	linkByWorkflowID := map[string]sqlitegen.ProjectWorkflowLinkRecord{}
 	links, err := s.queries.ListProjectWorkflowLinks(ctx, task.ProjectID)
 	if err != nil {
@@ -752,12 +744,12 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.Workflo
 	status := statusFact.Status
 	summary := taskSummary(task, status, statusFact.Done)
 	actions := taskActions(task, summary, placements, runs, def, nodeKinds)
-	sourceWorkspace := sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace)
+	sourceWorkspace := sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary)
 	executionTarget, err := s.executionTargetForTask(ctx, task, sourceWorkspace)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	detail := serverapi.WorkflowTaskDetail{Summary: summary, Project: projectBoardProject(project), Workflow: workflowPickerItem(def, linkByWorkflowID[task.WorkflowID], nil), Body: task.Body, SourceURL: task.SourceUrl, SourceWorkspace: sourceWorkspace, ExecutionTarget: executionTarget, Status: status, Actions: actions}
+	detail := serverapi.WorkflowTaskDetail{Summary: summary, Project: projectBoardProject(project, workspaceContext), Workflow: workflowPickerItem(def, linkByWorkflowID[task.WorkflowID], nil), Body: task.Body, SourceURL: task.SourceUrl, SourceWorkspace: sourceWorkspace, ExecutionTarget: executionTarget, Status: status, Actions: actions}
 	attention, err := s.attentionItems(ctx, task.ProjectID, task.ID, nil)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -1960,25 +1952,41 @@ func parseOffsetPageToken(token string) (int, error) {
 	return offset, nil
 }
 
-func projectBoardProject(project clientui.ProjectOverview) serverapi.ProjectBoardProject {
-	return serverapi.ProjectBoardProject{ProjectID: project.Project.ProjectID, ProjectKey: project.Project.ProjectKey, DisplayName: project.Project.DisplayName}
+type boardProjectWorkspaceFacts struct {
+	primary   serverapi.ProjectWorkspaceSummary
+	byID      map[string]serverapi.ProjectWorkspaceSummary
+	count     int
+	defaultID string
+}
+
+func projectBoardProject(project clientui.ProjectOverview, workspaceContext boardProjectWorkspaceFacts) serverapi.ProjectBoardProject {
+	return serverapi.ProjectBoardProject{
+		ProjectID:              project.Project.ProjectID,
+		ProjectKey:             project.Project.ProjectKey,
+		DisplayName:            project.Project.DisplayName,
+		DefaultWorkspaceID:     workspaceContext.defaultID,
+		AttachedWorkspaceCount: workspaceContext.count,
+	}
 }
 
 func projectWorkspaceSummary(workspace clientui.ProjectWorkspaceSummary) serverapi.ProjectWorkspaceSummary {
 	return serverapi.ProjectWorkspaceSummary{WorkspaceID: workspace.WorkspaceID, DisplayName: workspace.DisplayName, RootPath: workspace.RootPath, Availability: string(workspace.Availability), IsPrimary: workspace.IsPrimary, UpdatedAtUnixMs: workspace.UpdatedAt.UnixMilli()}
 }
 
-func boardProjectWorkspaceSummaries(project clientui.ProjectOverview) (serverapi.ProjectWorkspaceSummary, map[string]serverapi.ProjectWorkspaceSummary) {
-	primaryWorkspace := serverapi.ProjectWorkspaceSummary{}
-	workspacesByID := map[string]serverapi.ProjectWorkspaceSummary{}
+func boardProjectWorkspaceContext(project clientui.ProjectOverview) boardProjectWorkspaceFacts {
+	context := boardProjectWorkspaceFacts{
+		byID:  make(map[string]serverapi.ProjectWorkspaceSummary, len(project.Workspaces)),
+		count: len(project.Workspaces),
+	}
 	for _, workspace := range project.Workspaces {
 		dto := projectWorkspaceSummary(workspace)
-		workspacesByID[dto.WorkspaceID] = dto
+		context.byID[dto.WorkspaceID] = dto
 		if workspace.IsPrimary {
-			primaryWorkspace = dto
+			context.primary = dto
+			context.defaultID = dto.WorkspaceID
 		}
 	}
-	return primaryWorkspace, workspacesByID
+	return context
 }
 
 func sourceWorkspaceForTask(task sqlitegen.TaskRecord, workspacesByID map[string]serverapi.ProjectWorkspaceSummary, fallback serverapi.ProjectWorkspaceSummary) serverapi.ProjectWorkspaceSummary {
@@ -1998,7 +2006,7 @@ func sourceWorkspaceForTask(task sqlitegen.TaskRecord, workspacesByID map[string
 				WorkspaceID:  strings.TrimSpace(snapshot.SourceWorkspaceSnapshot.WorkspaceID),
 				DisplayName:  strings.TrimSpace(snapshot.SourceWorkspaceSnapshot.DisplayName),
 				RootPath:     strings.TrimSpace(snapshot.SourceWorkspaceSnapshot.RootPath),
-				Availability: "unlinked",
+				Availability: string(clientui.ProjectAvailabilityUnlinked),
 			}
 		}
 	}
@@ -2213,7 +2221,7 @@ func boardVisibleNodeKind(kind string) bool {
 func (s *Service) taskCard(task sqlitegen.TaskRecord, statusFact workflowTaskStatusFact, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
 	summary := taskSummary(task, statusFact.Status, statusFact.Done || hasActiveTerminalPlacement(placements, nodeKinds))
 	actions := taskActions(task, summary, placements, runs, def, nodeKinds)
-	return serverapi.WorkflowBoardTaskCard{TaskID: task.ID, ShortID: task.ShortID, Title: task.Title, BodyPreview: summary.BodyPreview, WorkflowID: task.WorkflowID, ActiveNodeIDs: summary.ActiveNodeIDs, SourceWorkspace: sourceWorkspace, Status: statusFact.Status, Actions: actions, UpdatedAtUnixMs: task.UpdatedAtUnixMs}, summary.Done
+	return serverapi.WorkflowBoardTaskCard{TaskID: task.ID, ShortID: task.ShortID, Title: task.Title, Body: strings.TrimSpace(task.Body), WorkflowID: task.WorkflowID, ActiveNodeIDs: summary.ActiveNodeIDs, SourceWorkspace: sourceWorkspace, Status: statusFact.Status, Actions: actions, UpdatedAtUnixMs: task.UpdatedAtUnixMs}, summary.Done
 }
 
 func hasActiveTerminalPlacement(placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) bool {

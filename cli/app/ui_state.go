@@ -96,32 +96,32 @@ type uiInputFeatureState struct {
 	completedRunID     string
 	completedStepID    string
 
-	modelName             string
-	configuredModelName   string
-	thinkingLevel         string
-	fastModeAvailable     bool
-	fastModeEnabled       bool
-	modelContractLocked   bool
-	spinnerFrame          int
-	spinnerClock          frameAnimationClock
-	spinnerTickDue        time.Time
-	spinnerGeneration     uint64
-	spinnerTickToken      uint64
-	commandRegistry       *commands.Registry
-	hasOtherSessions      bool
-	hasOtherSessionsKnown bool
-	authSlashCommand      authSlashCommandKind
-	authSlashCommandErr   string
-	authSlashSessionOpen  bool
-	authSlashLoading      bool
-	authSlashToken        uint64
-	authSlashGeneration   uint64
-	authSlashResolved     uint64
-	slashCommandFilter    string
-	slashCommandFilterSet bool
-	slashCommandSelection int
-	pathReferenceSearch   uiPathReferenceSearch
-	pathReference         uiPathReferenceState
+	modelName                 string
+	configuredModelName       string
+	thinkingLevel             string
+	fastModeAvailable         bool
+	fastModeEnabled           bool
+	modelContractLocked       bool
+	spinnerFrame              int
+	spinnerClock              frameAnimationClock
+	spinnerTickDue            time.Time
+	spinnerGeneration         uint64
+	spinnerTickToken          uint64
+	commandRegistry           *commands.Registry
+	finalAnswerOperation      *uiFinalAnswerOperation
+	finalAnswerOperationToken uint64
+	authSlashCommand          authSlashCommandKind
+	authSlashCommandErr       string
+	authSlashSessionOpen      bool
+	authSlashLoading          bool
+	authSlashToken            uint64
+	authSlashGeneration       uint64
+	authSlashResolved         uint64
+	slashCommandFilter        string
+	slashCommandFilterSet     bool
+	slashCommandSelection     int
+	pathReferenceSearch       uiPathReferenceSearch
+	pathReference             uiPathReferenceState
 }
 
 type uiPresentationFeatureState struct {
@@ -180,7 +180,7 @@ type uiStatusFeatureState struct {
 	goalRuntimeMutationSerial   uint64
 	goalRuntimePending          goalRuntimePendingState
 	statusGitBackgroundInFlight bool
-	clipboardImagePaster        uiClipboardImagePaster
+	clipboardPaster             uiClipboardPaster
 	clipboardTextCopier         uiClipboardTextCopier
 
 	transientStatus          string

@@ -73,6 +73,13 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, transcriptPageRoute, serverapi.SessionTranscriptPageRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign transcript page unexpectedly allowed")
 	}
+	latestFinalRoute := routeForTest(t, protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer)
+	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, latestFinalRoute, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: fixture.ownSessionID}); err != nil {
+		t.Fatalf("active project own latest final answer: %v", err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, latestFinalRoute, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: fixture.foreignSessionID}); err == nil {
+		t.Fatal("active project foreign latest final answer unexpectedly allowed")
+	}
 	attachedRoute := routeForTest(t, protocol.MethodSessionRetargetWorkspace)
 	if err := executor.authorizeScope(ctx, &connectionState{}, attachedRoute, serverapi.SessionRetargetWorkspaceRequest{SessionID: fixture.foreignSessionID}); err != nil {
 		t.Fatalf("attached-project unscoped session: %v", err)

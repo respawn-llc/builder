@@ -133,13 +133,6 @@ func WithUICommandRegistry(registry *commands.Registry) UIOption {
 	}
 }
 
-func WithUIHasOtherSessions(known bool, available bool) UIOption {
-	return func(m *uiModel) {
-		m.hasOtherSessionsKnown = known
-		m.hasOtherSessions = available
-	}
-}
-
 func WithUIStartupSubmit(text string) UIOption {
 	return func(m *uiModel) {
 		m.startupSubmit = text
@@ -218,9 +211,9 @@ func WithUIStartupUpdateNotice(enabled bool) UIOption {
 	}
 }
 
-func WithUIClipboardImagePaster(paster uiClipboardImagePaster) UIOption {
+func WithUIClipboardPaster(paster uiClipboardPaster) UIOption {
 	return func(m *uiModel) {
-		m.clipboardImagePaster = paster
+		m.clipboardPaster = paster
 	}
 }
 

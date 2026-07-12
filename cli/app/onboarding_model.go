@@ -7,15 +7,16 @@ import (
 	"time"
 
 	tuiinput "core/cli/tui/input"
-	"core/shared/config"
+	"core/shared/serverapi"
 	"core/shared/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type onboardingFinalizeDoneMsg struct {
-	result onboardingResult
-	err    error
+	result    onboardingResult
+	err       error
+	submitted bool
 }
 
 type onboardingSpinnerTickMsg struct {
@@ -28,9 +29,7 @@ type onboardingModel struct {
 	workflow         onboardingWorkflow
 	state            onboardingFlowState
 	result           onboardingResult
-	globalRoot       string
-	workspaceRoot    string
-	settingsPath     string
+	finalization     *onboardingFinalization
 	width            int
 	height           int
 	styles           onboardingStyles
@@ -49,19 +48,19 @@ type onboardingModel struct {
 	finalizing       bool
 	finalizingLabel  string
 	canceled         bool
+	terminalErr      error
 }
 
-func newOnboardingModelForWorkspace(globalRoot string, workspaceRoot string, state onboardingFlowState) *onboardingModel {
+func newOnboardingModel(finalization *onboardingFinalization, state onboardingFlowState) *onboardingModel {
 	input := newSingleLineEditor("")
 	m := &onboardingModel{
-		workflow:      newOnboardingWorkflow(&state),
-		state:         state,
-		globalRoot:    globalRoot,
-		workspaceRoot: workspaceRoot,
-		width:         defaultPickerWidth,
-		height:        defaultPickerHeight,
-		styles:        newOnboardingStyles(state.theme),
-		input:         input,
+		workflow:     newOnboardingWorkflow(&state),
+		state:        state,
+		finalization: finalization,
+		width:        defaultPickerWidth,
+		height:       defaultPickerHeight,
+		styles:       newOnboardingStyles(state.theme),
+		input:        input,
 	}
 	m.spinnerClock.Start(uiAnimationNow())
 	m.syncScreen(true)
@@ -116,14 +115,25 @@ func (m *onboardingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state.imports.skipSkills {
 			m.state.skillImport = onboardingImportSelection{Mode: onboardingImportModeNone}
 		}
-		if m.state.imports.skipCommands {
-			m.state.commandImport = onboardingImportSelection{Mode: onboardingImportModeNone}
-		}
 		m.syncScreen(false)
 		return m, nil
 	case onboardingFinalizeDoneMsg:
 		m.finalizing = false
 		if typed.err != nil {
+			if typed.submitted && onboardingCommittedActivationFailed(typed.err) {
+				m.terminalErr = fmt.Errorf("onboarding completed but server activation failed: %w", typed.err)
+				return m, tea.Quit
+			}
+			if typed.submitted && onboardingFinalizationIndeterminate(typed.err) {
+				m.terminalErr = typed.err
+				return m, tea.Quit
+			}
+			if typed.submitted {
+				if err := m.finalization.releaseRecoverableAttempt(); err != nil {
+					m.terminalErr = err
+					return m, tea.Quit
+				}
+			}
 			m.errorText = typed.err.Error()
 			m.syncScreen(false)
 			return m, nil
@@ -138,11 +148,6 @@ func (m *onboardingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickOnboardingSpinner(m.spinnerClock.NextDelay(typed.at, spinnerTickInterval))
 	case tea.KeyMsg:
 		if m.shouldAnimateSpinner() {
-			switch typed.Type {
-			case tea.KeyCtrlC, tea.KeyEsc:
-				m.canceled = true
-				return m, tea.Quit
-			}
 			return m, nil
 		}
 		switch typed.Type {
@@ -166,9 +171,13 @@ func (m *onboardingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case tea.KeyLeft:
-			return m.goBack()
+			if !typed.Alt {
+				return m.goBack()
+			}
 		case tea.KeyRight:
-			return m.submitCurrentScreen()
+			if !typed.Alt {
+				return m.submitCurrentScreen()
+			}
 		case tea.KeyEnter:
 			return m.submitCurrentScreen()
 		case tea.KeySpace:
@@ -274,61 +283,34 @@ func (m *onboardingModel) submitCurrentScreen() (tea.Model, tea.Cmd) {
 
 func (m *onboardingModel) finalizeCmd(writeDefaults bool) tea.Cmd {
 	state := m.state
-	globalRoot := m.globalRoot
-	settingsPath := strings.TrimSpace(m.settingsPath)
 	return func() tea.Msg {
-		if writeDefaults {
-			path, _, err := writeOnboardingDefaultSettings(settingsPath, state.settings.Theme)
-			return onboardingFinalizeDoneMsg{result: onboardingResult{Completed: err == nil, CreatedDefaultConfig: err == nil, SettingsPath: path}, err: err}
-		}
-		rollback, err := executeOnboardingImports(globalRoot, state)
+		request, err := onboardingFinalizeRequest(state, writeDefaults)
 		if err != nil {
 			return onboardingFinalizeDoneMsg{err: err}
 		}
-		path, err := writeOnboardingCustomSettings(settingsPath, state.settings, config.OnboardingWriteOptions{
-			PreservedDefaults: onboardingPreservedDefaults(state),
-		})
-		if err != nil {
-			if rollbackErr := rollback(); rollbackErr != nil {
-				err = errors.Join(err, rollbackErr)
-			}
+		if m.finalization == nil {
+			return onboardingFinalizeDoneMsg{err: errors.New("onboarding finalization is required")}
 		}
-		return onboardingFinalizeDoneMsg{result: onboardingResult{Completed: err == nil, SettingsPath: path}, err: err}
+		return m.finalization.submit(request, writeDefaults, state.settings.Theme)()
 	}
 }
 
-// writeOnboardingDefaultSettings writes onboarding defaults into the resolved
-// config root when a settings path was threaded in, otherwise it falls back to
-// the default ~/.kent resolution.
-func writeOnboardingDefaultSettings(settingsPath string, selectedTheme string) (string, bool, error) {
-	if settingsPath != "" {
-		return config.WriteDefaultSettingsFileWithThemeAt(settingsPath, selectedTheme)
+func onboardingFinalizationIndeterminate(err error) bool {
+	var finalizeErr *serverapi.OnboardingFinalizeError
+	if errors.As(err, &finalizeErr) {
+		return false
 	}
-	return config.WriteDefaultSettingsFileWithTheme(selectedTheme)
+	var readinessErr *serverapi.ServerNotReadyError
+	return !errors.As(err, &readinessErr)
 }
 
-// writeOnboardingCustomSettings persists onboarding settings into the resolved
-// config root when a settings path was threaded in, otherwise it falls back to
-// the default ~/.kent resolution.
-func writeOnboardingCustomSettings(settingsPath string, settings config.Settings, options config.OnboardingWriteOptions) (string, error) {
-	if settingsPath != "" {
-		return config.WriteSettingsFileForOnboardingWithOptionsAt(settingsPath, settings, options)
+func onboardingCommittedActivationFailed(err error) bool {
+	var readinessErr *serverapi.ServerNotReadyError
+	if !errors.As(err, &readinessErr) {
+		return false
 	}
-	return config.WriteSettingsFileForOnboardingWithOptions(settings, options)
-}
-
-func onboardingPreservedDefaults(state onboardingFlowState) map[string]bool {
-	preserved := map[string]bool{}
-	if state.reviewerCustomModel {
-		preserved["reviewer.model"] = true
-	}
-	if state.reviewerCustomThinking {
-		preserved["reviewer.thinking_level"] = true
-	}
-	if len(preserved) == 0 {
-		return nil
-	}
-	return preserved
+	details, ok := readinessErr.Details.(serverapi.ServerNotReadyDetails)
+	return ok && details.OnboardingCompleted
 }
 
 func (m *onboardingModel) currentStep() *onboardingStepDefinition {

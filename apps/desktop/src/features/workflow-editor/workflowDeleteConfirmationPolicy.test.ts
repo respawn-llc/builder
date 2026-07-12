@@ -4,6 +4,7 @@ import {
   defaultWorkflowExecutionTargetPolicy,
   emptyWorkflowDerivedWiring,
   type WorkflowDefinition,
+  type WorkflowNode,
 } from "../../api";
 import {
   workflowDeleteNeedsConfirmation,
@@ -47,7 +48,18 @@ describe("workflowDeleteConfirmationPolicy", () => {
   });
 });
 
-const agentNode = {
+const agentNode: Pick<
+  WorkflowNode,
+  | "groupID"
+  | "groupKey"
+  | "inputFields"
+  | "joinInputProviders"
+  | "kind"
+  | "outputFields"
+  | "promptTemplate"
+  | "subagentRole"
+  | "workflowID"
+> = {
   groupID: "",
   groupKey: "",
   inputFields: [],

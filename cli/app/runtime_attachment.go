@@ -76,17 +76,13 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	return &runtimeLaunchPlan{
 		Logger: logger,
 		Wiring: wiring,
-		close: func() {
+		close: func() error {
 			stopStreams()
-			if err := runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID); err != nil {
-				logger.Logf("runtime.release err=%q close_policy=%q session_id=%s", err.Error(), serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle, plan.SessionID)
-			}
+			return runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
 		},
-		detachClose: func() {
+		detachClose: func() error {
 			stopStreams()
-			if err := runtimeattach.ReleaseWithClosePolicy(clients.SessionRuntime, plan.SessionID, ownerID, serverapi.SessionRuntimeReleaseClosePolicyDetachOnly); err != nil {
-				logger.Logf("runtime.release err=%q close_policy=%q session_id=%s", err.Error(), serverapi.SessionRuntimeReleaseClosePolicyDetachOnly, plan.SessionID)
-			}
+			return runtimeattach.ReleaseWithClosePolicy(clients.SessionRuntime, plan.SessionID, ownerID, serverapi.SessionRuntimeReleaseClosePolicyDetachOnly)
 		},
 	}, nil
 }
@@ -169,8 +165,6 @@ func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentCl
 		sessionTranscript:     clients.SessionTranscript,
 		sessionViews:          clients.SessionViews,
 		promptHistory:         append([]string(nil), plan.PromptHistory...),
-		hasOtherSessions:      plan.HasOtherSessions,
-		hasOtherSessionsKnown: plan.HasOtherSessionsKnown,
 	}
 	return wiring, stopRuntimeEvents, stopAskEvents, stopAttentionEvents, stopTranscriptEvents
 }

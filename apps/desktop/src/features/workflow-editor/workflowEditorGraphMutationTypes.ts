@@ -1,5 +1,5 @@
-import type { WorkflowContextSource, WorkflowNode } from "../../api";
-import type { DraftWorkflowDefinition } from "./workflowEditorDraft";
+import type { WorkflowContextSource, WorkflowNode, WorkflowNodeKind } from "../../api";
+import type { DraftWorkflowDefinition } from "./workflowEditorDraftTypes";
 
 export type WorkflowEditorSelection =
   | Readonly<{ kind: "workflow" }>
@@ -27,6 +27,16 @@ export type AddWorkflowNodeInput = Readonly<{
   key?: string | undefined;
   subagentRole?: string | undefined;
   promptTemplate?: string | undefined;
+}>;
+
+export type CreatableWorkflowNodeKind = Extract<WorkflowNodeKind, "agent" | "script" | "terminal">;
+
+export type AddConnectedWorkflowNodeInput = Readonly<{
+  edgeID: string;
+  kind: CreatableWorkflowNodeKind;
+  nodeID: string;
+  sourceNodeID: string;
+  transitionGroupID: string;
 }>;
 
 export type ConnectWorkflowNodesInput = Readonly<{

@@ -106,6 +106,13 @@ type ImportCapabilityFacts struct {
 	Recommendations ImportRecommendationFacts       `json:"recommendations"`
 }
 
+type ImportErrorItemKind string
+
+const (
+	ImportErrorItemKindSkill   ImportErrorItemKind = "skill"
+	ImportErrorItemKindCommand ImportErrorItemKind = "command"
+)
+
 type ImportWorkspaceFact struct {
 	Root *string `json:"root,omitempty"`
 }
@@ -172,12 +179,13 @@ type SkillEnablementProjectionFact struct {
 }
 
 type ImportErrorFact struct {
-	Code             string  `json:"code"`
-	Scope            string  `json:"scope"`
-	ImportProviderID *string `json:"import_provider_id,omitempty"`
-	Path             *string `json:"path,omitempty"`
-	Operation        string  `json:"operation"`
-	Message          string  `json:"message"`
+	Code             string               `json:"code"`
+	Scope            string               `json:"scope"`
+	ItemKind         *ImportErrorItemKind `json:"item_kind,omitempty"`
+	ImportProviderID *string              `json:"import_provider_id,omitempty"`
+	Path             *string              `json:"path,omitempty"`
+	Operation        string               `json:"operation"`
+	Message          string               `json:"message"`
 }
 
 type ImportRecommendationFacts struct {

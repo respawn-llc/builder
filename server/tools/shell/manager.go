@@ -268,7 +268,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	result.Truncated = truncated
 	result.Warning = processed.Warning
 	result.ToolError = processed.UnrecoverableError
-	m.emitEvent(Event{Type: EventBackgrounded, Snapshot: snapshot})
+	m.emitEvent(newBackgroundedEvent(snapshot))
 	return result, nil
 }
 
@@ -323,10 +323,12 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 	}
 	snapshot := entry.snapshot()
 	consumedCompletion := false
-	warning := ""
+	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil && !entry.completionNoticeConsumed()
+	var warning postprocess.Warning
+	var warningErr error
 	sourceTruncated := false
 	var processed postprocess.Result
-	if snapshot.Backgrounded && snapshot.ExitCode != nil && !entry.completionNoticeConsumed() {
+	if harvestingCompletion {
 		fullOutput, readErr := readOutputFileLimited(snapshot.LogPath, maxFullLogPostprocessBytes)
 		if readErr == nil {
 			processed, err = m.applyPostprocessing(ctx, entry, fullOutput, snapshot.ExitCode, true, maxOutputChars)
@@ -341,11 +343,20 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 				processed = postprocess.Result{Output: preview}
 				consumedCompletion = true
 				sourceTruncated = previewTruncated
-				warning = postprocess.JoinWarnings(warning, fmt.Sprintf("full output log skipped: %v", readErr))
+				warning, warningErr = mergeOperationalWarning(warning, fmt.Sprintf("full output log skipped: %v", readErr))
+				if warningErr != nil {
+					return ExecResult{}, warningErr
+				}
 			} else {
-				warning = postprocess.JoinWarnings(warning, fmt.Sprintf("failed to read full output log: %v", readErr))
+				warning, warningErr = mergeOperationalWarning(warning, fmt.Sprintf("failed to read full output log: %v", readErr))
+				if warningErr != nil {
+					return ExecResult{}, warningErr
+				}
 			}
 		}
+	}
+	if consumedCompletion {
+		entry.markCompletionNoticeConsumed()
 	}
 	if !consumedCompletion {
 		processed, err = m.applyPostprocessing(ctx, entry, string(output), snapshot.ExitCode, snapshot.Backgrounded, maxOutputChars)
@@ -354,13 +365,10 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		}
 	}
 	display, displayTruncated, _ := truncateWithTemplate(processed.Output, maxOutputChars, backgroundTruncationBannerTemplate)
-	if snapshot.Backgrounded && snapshot.ExitCode != nil && consumedCompletion {
-		entry.markCompletionNoticeConsumed()
-	}
 	return ExecResult{
 		SessionID:          id,
 		WallTime:           time.Since(start),
-		Warning:            postprocess.JoinWarnings(warning, processed.Warning),
+		Warning:            postprocess.MergeWarnings(warning, processed.Warning),
 		ToolError:          processed.UnrecoverableError,
 		Output:             display,
 		OutputPath:         snapshot.LogPath,

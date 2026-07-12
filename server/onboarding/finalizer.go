@@ -116,6 +116,9 @@ func (f *Finalizer) FinalizeOnboarding(ctx context.Context, req serverapi.Onboar
 func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, map[string]bool, error) {
 	settings := config.DefaultOnboardingSettings()
 	preserved := map[string]bool{}
+	if req.MainProvider != nil {
+		applyMainProvider(&settings, *req.MainProvider)
+	}
 	effectiveModel := settings.Model
 	if req.Model != nil {
 		model, err := modelChoiceValue(*req.Model)
@@ -152,11 +155,17 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 		}
 		settings.ModelVerbosity = config.ModelVerbosity(*req.Verbosity)
 	}
+	if req.ModelTimeoutSeconds != nil {
+		settings.Timeouts.ModelRequestSeconds = *req.ModelTimeoutSeconds
+	}
 	if req.AskQuestion != nil {
 		if settings.EnabledTools == nil {
 			settings.EnabledTools = map[toolspec.ID]bool{}
 		}
 		settings.EnabledTools[toolspec.ToolAskQuestion] = *req.AskQuestion
+	}
+	for _, override := range req.ToolOverrides {
+		settings.EnabledTools[override.ID] = override.Enabled
 	}
 	if req.Supervisor != nil {
 		if err := applySupervisor(&settings, preserved, *req.Supervisor); err != nil {
@@ -186,6 +195,15 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 		preserved = nil
 	}
 	return settings, preserved, nil
+}
+
+func applyMainProvider(settings *config.Settings, choice serverapi.OnboardingProviderChoice) {
+	if choice.ProviderOverride != nil {
+		settings.ProviderOverride = strings.ToLower(strings.TrimSpace(*choice.ProviderOverride))
+	}
+	if choice.OpenAIBaseURL != nil {
+		settings.OpenAIBaseURL = strings.TrimSpace(*choice.OpenAIBaseURL)
+	}
 }
 
 func modelChoiceValue(choice serverapi.OnboardingModelChoice) (string, error) {

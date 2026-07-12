@@ -1,5 +1,5 @@
 import type { WorkflowEdge } from "../../api";
-import type { DraftWorkflowDefinition, DraftWorkflowNode } from "./workflowEditorDraft";
+import type { DraftWorkflowDefinition, DraftWorkflowNode } from "./workflowEditorDraftTypes";
 import {
   type WorkflowEditorGraphMutationResult,
   type WorkflowEditorSelection,

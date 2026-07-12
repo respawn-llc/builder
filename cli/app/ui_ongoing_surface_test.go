@@ -163,7 +163,7 @@ func TestNativeOngoingRepaintKeepsControllerLiveFrameSections(t *testing.T) {
 	}
 }
 
-func TestNativeOngoingClipboardImagePasteRepaintsInput(t *testing.T) {
+func TestNativeOngoingClipboardPasteRepaintsInput(t *testing.T) {
 	var out bytes.Buffer
 	nativeSurface := ongoing.NewSurface(&out)
 	spySurface := &ongoingSurfaceSpy{}
@@ -173,10 +173,10 @@ func TestNativeOngoingClipboardImagePasteRepaintsInput(t *testing.T) {
 	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
 	m.mainInputDraftToken = 3
 
-	next, _ := m.Update(clipboardImagePasteDoneMsg{
+	next, _ := m.Update(clipboardPasteDoneMsg{
 		Target:         uiClipboardPasteTargetMain,
 		MainDraftToken: 3,
-		Path:           "/tmp/kent-clipboard.png",
+		Content:        retainedClipboardImage("/tmp/kent-clipboard.png"),
 	})
 	updated := next.(*uiModel)
 
@@ -195,7 +195,7 @@ func TestNativeOngoingClipboardImagePasteRepaintsInput(t *testing.T) {
 	}
 }
 
-func TestNativeOngoingClipboardImagePasteErrorRepaintsStatus(t *testing.T) {
+func TestNativeOngoingClipboardPasteErrorRepaintsStatus(t *testing.T) {
 	var out bytes.Buffer
 	nativeSurface := ongoing.NewSurface(&out)
 	spySurface := &ongoingSurfaceSpy{}
@@ -204,9 +204,9 @@ func TestNativeOngoingClipboardImagePasteErrorRepaintsStatus(t *testing.T) {
 	), 40, 8)
 	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
 
-	next, _ := m.Update(clipboardImagePasteDoneMsg{
+	next, _ := m.Update(clipboardPasteDoneMsg{
 		Target: uiClipboardPasteTargetMain,
-		Err:    &uiClipboardPasteError{Kind: uiClipboardPasteErrorNoImage, Message: "Clipboard does not contain an image"},
+		Err:    &uiClipboardPasteError{Kind: uiClipboardPasteErrorNoContent, Message: "Clipboard does not contain supported content"},
 	})
 	updated := next.(*uiModel)
 

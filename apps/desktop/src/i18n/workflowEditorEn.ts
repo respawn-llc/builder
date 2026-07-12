@@ -18,6 +18,7 @@ export const workflowEditorEnglish = {
   addAgentNode: "Agent node",
   addScriptNode: "Script node",
   addTerminalNode: "Terminal node",
+  createOutgoingTransition: "Create outgoing transition",
   createNodeGroup: "Create node group",
   ungroupNode: "Ungroup",
   deleteNode: "Delete node",

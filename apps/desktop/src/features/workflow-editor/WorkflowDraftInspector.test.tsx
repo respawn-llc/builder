@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
 import { AppServicesProvider } from "../../app/servicesContext";
 import { initializeI18n } from "../../i18n/setup";
+import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
 import { createTestServices, type TestAppServices } from "../../testSupport/appServices";
 import type { WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 import { initializeWorkflowEditorDraft, workflowEditorDirtyState } from "./workflowEditorDraft";
@@ -83,6 +84,63 @@ describe("WorkflowDraftInspectorContent", () => {
     expect(fallbackOption).toHaveAttribute("aria-disabled", "true");
     await user.hover(fallbackOption);
     expect(await screen.findByRole("tooltip")).toHaveTextContent("N/A for current configuration");
+  });
+
+  it("focuses the first transition control only when requested", () => {
+    const controller = workflowDraftController(workflowDefinition);
+
+    mountInspector(controller, { edgeID: "edge-start", kind: "edge" }, undefined, "firstEditableControl");
+
+    expect(screen.getByLabelText(workflowEditorEnglish.transitionText)).toHaveFocus();
+  });
+
+  it("does not force pointer-origin focus or refocus after an ordinary rerender", () => {
+    const controller = workflowDraftController(workflowDefinition);
+    const services = createTestServices(defaultInspectorRoutes(), createBrowserNativeBridge());
+    const selection: Readonly<{ edgeID: string; kind: "edge" }> = { edgeID: "edge-start", kind: "edge" };
+    const { unmount } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppServicesProvider services={services}>
+          <button data-testid="ordinary-inspector-rerender-focus-target" type="button" />
+          <WorkflowDraftInspectorContent controller={controller} selection={selection} />
+        </AppServicesProvider>
+      </QueryClientProvider>,
+    );
+
+    const transitionText = screen.getByLabelText(workflowEditorEnglish.transitionText);
+    expect(transitionText).not.toHaveFocus();
+
+    unmount();
+    const view = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppServicesProvider services={services}>
+          <button data-testid="ordinary-inspector-rerender-focus-target" type="button" />
+          <WorkflowDraftInspectorContent
+            controller={controller}
+            initialFocus="firstEditableControl"
+            selection={selection}
+          />
+        </AppServicesProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByLabelText(workflowEditorEnglish.transitionText)).toHaveFocus();
+
+    const ordinaryRerenderFocusTarget = screen.getByTestId("ordinary-inspector-rerender-focus-target");
+    ordinaryRerenderFocusTarget.focus();
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppServicesProvider services={services}>
+          <button data-testid="ordinary-inspector-rerender-focus-target" type="button" />
+          <WorkflowDraftInspectorContent
+            controller={controller}
+            initialFocus="firstEditableControl"
+            selection={selection}
+          />
+        </AppServicesProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(ordinaryRerenderFocusTarget).toHaveFocus();
   });
 
   it("edits script node path without showing agent controls", () => {
@@ -174,13 +232,17 @@ function mountInspector(
   controller: WorkflowEditorDraftController,
   selection: Parameters<typeof WorkflowDraftInspectorContent>[0]["selection"],
   nativeBridge: NativeBridge = createBrowserNativeBridge(),
-  routes: Parameters<typeof createTestServices>[0] = defaultInspectorRoutes(),
+  routesOrInitialFocus:
+    | Parameters<typeof createTestServices>[0]
+    | Parameters<typeof WorkflowDraftInspectorContent>[0]["initialFocus"] = defaultInspectorRoutes(),
 ): TestAppServices {
+  const routes = Array.isArray(routesOrInitialFocus) ? routesOrInitialFocus : defaultInspectorRoutes();
+  const initialFocus = routesOrInitialFocus === "firstEditableControl" ? routesOrInitialFocus : undefined;
   const services = createTestServices(routes, nativeBridge);
   render(
     <QueryClientProvider client={new QueryClient()}>
       <AppServicesProvider services={services}>
-        <WorkflowDraftInspectorContent controller={controller} selection={selection} />
+        <WorkflowDraftInspectorContent controller={controller} initialFocus={initialFocus} selection={selection} />
       </AppServicesProvider>
     </QueryClientProvider>,
   );

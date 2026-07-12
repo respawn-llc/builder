@@ -1,20 +1,36 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
+import { afterEach, vi } from "vitest";
 
 import { App } from "../../App";
+import type { TaskDetail } from "../../api";
 import type { JsonValue } from "../../api/json";
+import { taskDetailSchema } from "../../api/schemas/workflowBoard";
+import { AppProviders } from "../../app/AppProviders";
 import { createTestServices, startupRoutes } from "../../testSupport/appServices";
 import {
   activityResponse,
   getCallCount,
   questionAttention,
   taskDetailNoInboxResponse,
+  taskDetailResponse,
   taskQuestionWaitingEvent,
   taskUpdateParamsSchema,
   taskUpdateResponse,
   taskUpdatedEvent,
 } from "../../testSupport/taskDetailFixtures";
+import { TaskDetailContent } from "./TaskDetailContent";
+import { initialDescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
+import { DescriptionIsland, type TaskDraft } from "./TaskDetailRows";
+import { useTaskActivity, useTaskComments } from "./useTaskDetailData";
 
 describe("TaskDetailSurface editing", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   it("edits active task title and description", async () => {
     window.history.pushState(null, "", "/tasks/task-1");
     let currentTitle = taskDetailNoInboxResponse.task.summary.title;
@@ -116,6 +132,153 @@ describe("TaskDetailSurface editing", () => {
         },
       });
     });
+  });
+
+  it("expands an overflowing description for the mounted surface and keeps it expanded after editing", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.task.get",
+        result: {
+          task: {
+            ...taskDetailNoInboxResponse.task,
+            body: "Long description",
+          },
+        },
+      },
+      { method: "workflow.task.activity.list", result: activityResponse },
+    ]);
+
+    render(<App services={services} />);
+
+    const description = await screen.findByRole("textbox", { name: "Description" });
+    Object.defineProperties(description, {
+      clientHeight: { configurable: true, value: 120 },
+      scrollHeight: { configurable: true, value: 240 },
+    });
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+
+    const expand = await screen.findByRole("button", { name: "Expand" });
+    vi.useFakeTimers();
+    fireEvent.click(expand);
+    expect(screen.getByTestId("task-description-expand")).toHaveAttribute("data-state", "exiting");
+    expect(screen.getByTestId("task-description-fade")).toHaveAttribute("data-state", "exiting");
+    act(() => {
+      vi.advanceTimersByTime(140);
+    });
+    expect(screen.queryByRole("button", { name: "Expand" })).not.toBeInTheDocument();
+
+    fireEvent.focus(description);
+    expect(screen.getByRole("textbox", { name: "Description" })).toBeInstanceOf(HTMLTextAreaElement);
+    fireEvent.blur(screen.getByRole("textbox", { name: "Description" }));
+    expect(screen.queryByRole("button", { name: "Expand" })).not.toBeInTheDocument();
+  });
+
+  it("removes the description affordance immediately when reduced motion is requested", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    installReducedMotionMatchMedia();
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.task.get",
+        result: {
+          task: {
+            ...taskDetailNoInboxResponse.task,
+            body: "Long description",
+          },
+        },
+      },
+      { method: "workflow.task.activity.list", result: activityResponse },
+    ]);
+
+    render(<App services={services} />);
+
+    const description = await screen.findByRole("textbox", { name: "Description" });
+    Object.defineProperties(description, {
+      clientHeight: { configurable: true, value: 120 },
+      scrollHeight: { configurable: true, value: 240 },
+    });
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Expand" }));
+    expect(screen.queryByTestId("task-description-expand")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("task-description-fade")).not.toBeInTheDocument();
+  });
+
+  it("resets description presentation when a mounted detail surface switches tasks", async () => {
+    const taskOne: TaskDetail = taskDetailSchema.parse(taskDetailResponse);
+    const taskTwo: TaskDetail = {
+      ...taskOne,
+      id: "task-2",
+      shortID: "T-2",
+      title: "Second task",
+      body: "Second long description",
+    };
+    const services = createTestServices(startupRoutes);
+    const { rerender } = render(
+      <AppProviders services={services}>
+        <TaskDetailContentHarness detail={taskOne} />
+      </AppProviders>,
+    );
+
+    fireEvent.focus(await screen.findByRole("textbox", { name: "Description" }));
+    expect(screen.getByRole("textbox", { name: "Description" })).toBeInstanceOf(HTMLTextAreaElement);
+
+    rerender(
+      <AppProviders services={services}>
+        <TaskDetailContentHarness detail={taskTwo} />
+      </AppProviders>,
+    );
+
+    const description = await screen.findByRole("textbox", { name: "Description" });
+    expect(description).not.toBeInstanceOf(HTMLTextAreaElement);
+    Object.defineProperties(description, {
+      clientHeight: { configurable: true, value: 120 },
+      scrollHeight: { configurable: true, value: 240 },
+    });
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(await screen.findByRole("button", { name: "Expand" })).toBeInTheDocument();
+  });
+
+  it("retains expanded description presentation when the virtualized body row remounts", async () => {
+    const services = createTestServices(startupRoutes);
+    const { rerender } = render(
+      <AppProviders services={services}>
+        <VirtualizedDescriptionHarness bodyVisible />
+      </AppProviders>,
+    );
+
+    const description = screen.getByRole("textbox", { name: "Description" });
+    Object.defineProperties(description, {
+      clientHeight: { configurable: true, value: 120 },
+      scrollHeight: { configurable: true, value: 240 },
+    });
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Expand" }));
+
+    rerender(
+      <AppProviders services={services}>
+        <VirtualizedDescriptionHarness bodyVisible={false} />
+      </AppProviders>,
+    );
+    expect(screen.queryByTestId("task-description-input-frame")).not.toBeInTheDocument();
+
+    rerender(
+      <AppProviders services={services}>
+        <VirtualizedDescriptionHarness bodyVisible />
+      </AppProviders>,
+    );
+    expect(screen.getByRole("textbox", { name: "Description" })).not.toBeInstanceOf(HTMLTextAreaElement);
+    expect(screen.queryByRole("button", { name: "Expand" })).not.toBeInTheDocument();
   });
 
   it("refreshes the standalone task surface when a server event mutates the task", async () => {
@@ -233,3 +396,47 @@ describe("TaskDetailSurface editing", () => {
     expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
   });
 });
+
+function TaskDetailContentHarness({ detail }: Readonly<{ detail: TaskDetail }>) {
+  const activity = useTaskActivity(detail.id, false);
+  const comments = useTaskComments(detail.id, false);
+  return (
+    <TaskDetailContent
+      activity={activity}
+      comments={comments}
+      detail={detail}
+      openLink={() => undefined}
+    />
+  );
+}
+
+function VirtualizedDescriptionHarness({ bodyVisible }: Readonly<{ bodyVisible: boolean }>) {
+  const [presentation, setPresentation] = useState(initialDescriptionPresentationState);
+  const draft: TaskDraft = { body: "Long description", title: "Task" };
+  return bodyVisible ? (
+    <DescriptionIsland
+      disabled={false}
+      draft={draft}
+      error={null}
+      onDraftChange={() => undefined}
+      onPresentationChange={setPresentation}
+      presentation={presentation}
+    />
+  ) : null;
+}
+
+function installReducedMotionMatchMedia(): void {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      addEventListener: vi.fn(),
+      addListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      matches: true,
+      media: "(prefers-reduced-motion: reduce)",
+      onchange: null,
+      removeEventListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  );
+}

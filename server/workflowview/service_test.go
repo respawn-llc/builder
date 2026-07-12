@@ -188,7 +188,9 @@ func TestBoardAndTaskDetailProjectTaskSourceWorkspaceAndBody(t *testing.T) {
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: strings.Repeat("a", 120), SourceWorkspaceID: source.WorkspaceID})
+	body := "\n  x" + strings.Repeat("界", 40) + " complete board body  \n"
+	wantBody := strings.TrimSpace(body)
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: body, SourceWorkspaceID: source.WorkspaceID})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -202,14 +204,17 @@ func TestBoardAndTaskDetailProjectTaskSourceWorkspaceAndBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards backlog: %v", err)
 	}
-	if len(backlogPage.Cards) != 1 || backlogPage.Cards[0].SourceWorkspace.WorkspaceID != source.WorkspaceID || backlogPage.Cards[0].BodyPreview == "" {
-		t.Fatalf("node cards = %+v, want source workspace %q and body preview", backlogPage.Cards, source.WorkspaceID)
+	if len(board.Cards) != 1 || board.Cards[0].Body != wantBody {
+		t.Fatalf("board cards = %+v, want complete trimmed body %q", board.Cards, wantBody)
+	}
+	if len(backlogPage.Cards) != 1 || backlogPage.Cards[0].SourceWorkspace.WorkspaceID != source.WorkspaceID || backlogPage.Cards[0].Body != wantBody {
+		t.Fatalf("node cards = %+v, want source workspace %q and complete trimmed body %q", backlogPage.Cards, source.WorkspaceID, wantBody)
 	}
 	detail, err := view.GetTask(ctx, string(task.ID))
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Summary.SourceWorkspaceID != source.WorkspaceID || detail.SourceWorkspace.WorkspaceID != source.WorkspaceID || detail.Body != strings.Repeat("a", 120) {
+	if detail.Summary.SourceWorkspaceID != source.WorkspaceID || detail.SourceWorkspace.WorkspaceID != source.WorkspaceID || detail.Body != wantBody {
 		t.Fatalf("detail = %+v, want source workspace %q and body", detail, source.WorkspaceID)
 	}
 	if detail.Summary.BodyPreview == "" || detail.Summary.CreatedAtUnixMs == 0 || detail.Summary.UpdatedAtUnixMs == 0 {
@@ -509,6 +514,74 @@ func TestTaskDetailProjectsUnavailableLegacyObservedManagedTarget(t *testing.T) 
 	}
 	if target.EffectiveRoot != nil || target.CurrentBranch != nil {
 		t.Fatalf("unavailable legacy target exposed usable root or branch: %+v", target)
+	}
+}
+
+func TestBoardProjectsCurrentWorkspaceFactsAndDetachedHistoricalSource(t *testing.T) {
+	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+
+	oneWorkspaceBoard, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("GetBoard with one workspace: %v", err)
+	}
+	if oneWorkspaceBoard.Project.DefaultWorkspaceID != binding.WorkspaceID || oneWorkspaceBoard.Project.AttachedWorkspaceCount != 1 {
+		t.Fatalf("one-workspace project facts = %+v, want default %q and count 1", oneWorkspaceBoard.Project, binding.WorkspaceID)
+	}
+
+	historicalSource, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject historical source: %v", err)
+	}
+	if _, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir()); err != nil {
+		t.Fatalf("AttachWorkspaceToProject remaining attached workspace: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:         binding.ProjectID,
+		Title:             "Historical source",
+		Body:              "Body",
+		SourceWorkspaceID: historicalSource.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if _, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"}); err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	if blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, historicalSource.WorkspaceID); err != nil {
+		t.Fatalf("UnlinkProjectWorkspace: %v", err)
+	} else if len(blockers) != 0 {
+		t.Fatalf("unlink blockers = %+v, want none", blockers)
+	}
+
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("GetBoard with detached source: %v", err)
+	}
+	if board.Project.DefaultWorkspaceID != binding.WorkspaceID || board.Project.AttachedWorkspaceCount != 2 {
+		t.Fatalf("multi-workspace project facts = %+v, want default %q and count 2", board.Project, binding.WorkspaceID)
+	}
+	if len(board.DonePreview) != 1 || board.DonePreview[0].SourceWorkspace.Availability != string(clientui.ProjectAvailabilityUnlinked) {
+		t.Fatalf("done preview = %+v, want detached historical source availability", board.DonePreview)
+	}
+	doneColumn := workflowViewColumnByKind(t, board, workflow.NodeKindTerminal)
+	donePage, err := view.ListBoardNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: string(workflowID),
+		NodeID:     doneColumn.Node.NodeID,
+	}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("ListBoardNodeCards done: %v", err)
+	}
+	if len(donePage.Cards) != 1 || donePage.Cards[0].SourceWorkspace.Availability != string(clientui.ProjectAvailabilityUnlinked) {
+		t.Fatalf("done node cards = %+v, want detached historical source availability", donePage.Cards)
 	}
 }
 

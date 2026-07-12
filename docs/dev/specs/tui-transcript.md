@@ -168,7 +168,7 @@
 - In-turn user messaging queues typed steering intents for later safe-boundary delivery and supports queued post-turn send.
 - Queue/send hotkey is `Tab`; `Ctrl+Enter` is a compatibility alias.
 - Known `Ctrl+Enter` CSI encodings normalize to the same queue action.
-- Clipboard image paste hotkeys are `Ctrl+V` and `Ctrl+D`; they save clipboard images to temp image files and insert the path. The on-disk image format is OS/tool-specific, not a contract.
+- Clipboard paste hotkeys are `Ctrl+V`, `Ctrl+D`, `Alt+V`, and `Alt+D`; explicit system clipboard reads save images to temporary PNG files and insert the path, or insert text at the active cursor. Terminal bracketed paste remains ordinary text input and never causes a system clipboard read.
 - Mid-run steering is soft-insert only at safe boundaries after current tool completion.
 - Steering submissions never lock the input box; each `Enter` while busy queues another steering message.
 - Pending steering and pending user messages are strict FIFO.
@@ -236,11 +236,15 @@
 - Unknown slash commands are sent to the model as normal user prompts.
 - Built-ins: `/logout`, `/login`, `/exit`, `/new`, `/resume`, `/compact`, `/name`, `/thinking`, `/fast`, `/review`, `/init`, `/supervisor`, `/autocompaction`, `/questions`, `/status`, `/goal`, `/ps`, `/worktree` (alias `/wt`), `/copy`, `/back`.
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
-- Run-safe commands execute immediately while busy.
+- Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` are run-safe navigation commands: they detach this TUI from the current session without interrupting its server-owned run.
 - Non-run-safe known commands while busy are rejected with transient status-line error.
-- `/copy` copies latest committed assistant `final_answer` and stays hidden until one exists.
+- `/resume` always enters the session picker, including when no other session exists. The originating attachment is released before the picker opens. A picker `Ctrl+C` leaves that run ownerless; it issues no second release and no interrupt.
+- `/copy` is always visible and obtains the newest committed assistant final answer through the server's durable active-segment read. It never uses a client runtime-status or rendered-transcript fallback.
+- The durable final-answer read walks backward only within the active transcript segment and stops at the newest committed assistant final answer or a valid compaction boundary, whichever appears first. A valid boundary returns true absence and its carried pre-compaction answer is not reused.
+- `/copy` and `/back` share one correlated operation. Lookup is bounded to one second; while lookup is owned, the main input consumes user keys and no duplicate lookup or navigation starts. A stale, duplicate, wrong-purpose, wrong-session, or wrong-parent result is ignored without a state change.
+- A `/copy` success retains operation ownership through its bounded clipboard write. The matching clipboard completion is the only event that releases that ownership, so writes cannot overlap or reorder. Lookup, clipboard, and transport failures are surfaced distinctly.
 - `/review` auto-submits embedded review rubric; it stays in-place for empty sessions and forks fresh child session after a visible user prompt.
-- `/back` reopens parent session when available.
+- `/back` reads the child session's durable final answer before reopening its parent. A present answer pre-fills the parent input byte-for-byte; true absence opens the parent with an empty prefill; lookup failure leaves the child session open.
 - `/supervisor` toggles current-session reviewer invocation and does not persist to config.
 - `/autocompaction` toggles runtime auto-compaction for current session and does not persist to config.
 - `/fast`, `/supervisor`, and `/questions` toggle feedback is a committed runtime transcript entry in runtime-backed sessions.

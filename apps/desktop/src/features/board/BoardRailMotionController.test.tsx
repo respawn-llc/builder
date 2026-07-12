@@ -84,6 +84,8 @@ function board(backlogCount: number, reconCount: number): WorkflowBoard {
     projectID: "p1",
     projectKey: "P",
     projectName: "Project",
+    defaultWorkspaceID: "w",
+    attachedWorkspaceCount: 1,
     selectedWorkflow: workflow,
     workflows: [workflow],
     groups: [],
@@ -100,7 +102,7 @@ function card(over: Partial<BoardCard>): BoardCard {
     id: "task-1",
     shortID: "T-1",
     title: "Task",
-    bodyPreview: "Body",
+    body: "Body",
     workflowID: "wf1",
     activeNodeIDs: ["backlog"],
     sourceWorkspace: { id: "w", name: "Main", rootPath: "", availability: "available", isPrimary: true, updatedAt: 0 },
@@ -151,6 +153,7 @@ function Harness() {
       onExpandColumn={() => undefined}
       onInterruptedRunObserved={() => undefined}
       onInterruptTask={() => undefined}
+      onRegisterColumnScrollport={() => undefined}
       onResumeTask={() => undefined}
       pendingCardMove={state.pending}
       scrollportRef={{ current: null }}

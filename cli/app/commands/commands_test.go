@@ -7,29 +7,21 @@ import (
 
 func TestExecuteBuiltins(t *testing.T) {
 	r := NewDefaultRegistry()
-	if command, ok := r.Command("/name"); !ok || !command.RunWhileBusy {
-		t.Fatalf("expected /name command to be runnable while busy, got %+v, ok=%v", command, ok)
+	for _, name := range []string{
+		"exit", "new", "resume", "back", "review", "init",
+		"name", "thinking", "fast", "supervisor", "autocompaction",
+		"status", "goal", "ps", "copy",
+	} {
+		command, ok := r.Command("/" + name)
+		if !ok || command.ActiveRunPolicy != ActiveRunPolicyAllowed {
+			t.Fatalf("expected /%s to be allowed while active, got %+v, ok=%v", name, command, ok)
+		}
 	}
-	if command, ok := r.Command("/thinking"); !ok || !command.RunWhileBusy {
-		t.Fatalf("expected /thinking command to be runnable while busy, got %+v, ok=%v", command, ok)
-	}
-	if command, ok := r.Command("/fast"); !ok || !command.RunWhileBusy {
-		t.Fatalf("expected /fast command to be runnable while busy, got %+v, ok=%v", command, ok)
-	}
-	if command, ok := r.Command("/supervisor"); !ok || !command.RunWhileBusy {
-		t.Fatalf("expected /supervisor command to be runnable while busy, got %+v, ok=%v", command, ok)
-	}
-	if command, ok := r.Command("/autocompaction"); !ok || !command.RunWhileBusy {
-		t.Fatalf("expected /autocompaction command to be runnable while busy, got %+v, ok=%v", command, ok)
-	}
-	if command, ok := r.Command("/status"); !ok || !command.RunWhileBusy {
-		t.Fatalf("expected /status command to be runnable while busy, got %+v, ok=%v", command, ok)
-	}
-	if command, ok := r.Command("/copy"); !ok || !command.RunWhileBusy {
-		t.Fatalf("expected /copy command to be runnable while busy, got %+v, ok=%v", command, ok)
-	}
-	if command, ok := r.Command("/compact"); !ok || command.RunWhileBusy {
-		t.Fatalf("expected /compact command to require idle, got %+v, ok=%v", command, ok)
+	for _, name := range []string{"compact", "worktree"} {
+		command, ok := r.Command("/" + name)
+		if !ok || command.ActiveRunPolicy != ActiveRunPolicyRequiresIdle {
+			t.Fatalf("expected /%s to require idle, got %+v, ok=%v", name, command, ok)
+		}
 	}
 	if got := r.Execute("/new"); got.Action != ActionNew {
 		t.Fatalf("expected ActionNew, got %+v", got)
@@ -97,9 +89,6 @@ func TestExecuteBuiltins(t *testing.T) {
 	if got := r.Execute("/status"); got.Action != ActionStatus {
 		t.Fatalf("expected ActionStatus, got %+v", got)
 	}
-	if command, ok := r.Command("/goal"); !ok || !command.RunWhileBusy {
-		t.Fatalf("expected /goal command to be runnable while busy, got %+v, ok=%v", command, ok)
-	}
 	if got := r.Execute("/goal"); got.Action != ActionGoal || got.GoalMode != GoalModeShow {
 		t.Fatalf("expected ActionGoal show, got %+v", got)
 	}
@@ -121,7 +110,7 @@ func TestExecuteBuiltins(t *testing.T) {
 	if got := r.Execute("/copy"); got.Action != ActionCopy {
 		t.Fatalf("expected ActionCopy, got %+v", got)
 	}
-	if command, ok := r.Command("/wt"); !ok || command.Name != "worktree" || command.RunWhileBusy {
+	if command, ok := r.Command("/wt"); !ok || command.Name != "worktree" || command.ActiveRunPolicy != ActiveRunPolicyRequiresIdle {
 		t.Fatalf("expected /wt alias to resolve to /worktree, got %+v, ok=%v", command, ok)
 	}
 	if got := r.Execute("/wt list"); got.Action != ActionWorktree || got.Args != "list" {

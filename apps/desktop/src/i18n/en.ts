@@ -154,7 +154,7 @@ export const englishResources = {
       done: "Done",
       noWorkflowTitle: "No workflows yet",
       noWorkflowBody: "Set up a valid project workflow from CLI, agent, or API before creating tasks.",
-      dropToStart: "Drop here to start automation",
+      dropToStart: "Drag here to start automation",
       expandColumn: "Expand {{name}}",
       taskCount: "{{count}} tasks",
       workspace: "Workspace",

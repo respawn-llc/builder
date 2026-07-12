@@ -24,7 +24,5 @@ type runtimeWiring struct {
 	sessionActivity       client.SessionActivityClient
 	sessionTranscript     client.SessionTranscriptClient
 	sessionViews          client.SessionViewClient
-	hasOtherSessions      bool
-	hasOtherSessionsKnown bool
 	promptHistory         []string
 }

@@ -10,7 +10,7 @@ import {
   type NodeProps,
   type NodeTypes,
 } from "@xyflow/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { TooltipProvider } from "../../ui";
 import {
@@ -37,6 +37,8 @@ import type { CopyText } from "./WorkflowGraphNodeMetadata";
 import { WorkflowGraphToolbar } from "./WorkflowGraphToolbar";
 import { workflowGraphRenderEdges, workflowGraphRenderNodes } from "./workflowGraphRenderLayers";
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
+import type { CreatableWorkflowNodeKind } from "./workflowEditorGraphMutationTypes";
+import type { WorkflowNodeKindSelectionModality } from "./WorkflowNodeKindPicker";
 import type {
   WorkflowGraphEdge,
   WorkflowGraphGroupNode,
@@ -54,7 +56,10 @@ export type WorkflowGraphCanvasProps = Readonly<{
   keyboardScope?: "focused" | "global" | undefined;
   toolbarPositionStrategy?: "absolute" | "fixed" | undefined;
   onCopyText?: ((value: string) => Promise<void> | void) | undefined;
-  onAddNode?: ((kind: "agent" | "script" | "terminal") => void) | undefined;
+  onAddNode?: ((kind: CreatableWorkflowNodeKind) => void) | undefined;
+  onAddConnectedNode?:
+    | ((sourceNodeID: string, kind: CreatableWorkflowNodeKind, modality: WorkflowNodeKindSelectionModality) => void)
+    | undefined;
   onAddNodeToGroup?: ((nodeID: string, groupID: string) => void) | undefined;
   onConnectNodes?: ((sourceNodeID: string, targetNodeID: string) => void) | undefined;
   onCreateNodeGroup?: ((nodeID: string) => void) | undefined;
@@ -66,6 +71,8 @@ export type WorkflowGraphCanvasProps = Readonly<{
   onGroupInspect: (groupID: string) => void;
   onNodeInspect: (nodeID: string) => void;
   onWorkflowInspect: () => void;
+  graphSelectionRequest?: Readonly<{ requestID: string; edgeID: string }> | null | undefined;
+  onGraphSelectionConsumed?: ((requestID: string) => void) | undefined;
 }>;
 
 type RenderNodesState = Readonly<{
@@ -78,12 +85,17 @@ type WorkflowGraphReconnectEndpointState = Readonly<{
   endpoint: WorkflowGraphReconnectEndpoint;
 }>;
 
+type ConnectionGesturePoint = Readonly<{ x: number; y: number }>;
+
+const connectionDragThreshold = 6;
+
 export function WorkflowGraphCanvas({
   graph,
   keyboardScope = "global",
   toolbarPositionStrategy = "fixed",
   onCopyText = copyTextWithNavigator,
   onAddNode,
+  onAddConnectedNode,
   onAddNodeToGroup,
   onConnectNodes,
   onCreateNodeGroup,
@@ -95,6 +107,8 @@ export function WorkflowGraphCanvas({
   onGroupInspect,
   onNodeInspect,
   onWorkflowInspect,
+  graphSelectionRequest = null,
+  onGraphSelectionConsumed,
 }: WorkflowGraphCanvasProps) {
   return (
     <TooltipProvider delayDuration={0}>
@@ -102,6 +116,7 @@ export function WorkflowGraphCanvas({
         <WorkflowGraphCanvasInner
           edges={graph.edges}
           onAddNode={onAddNode}
+          onAddConnectedNode={onAddConnectedNode}
           onAddNodeToGroup={onAddNodeToGroup}
           onConnectNodes={onConnectNodes}
           onCreateNodeGroup={onCreateNodeGroup}
@@ -114,6 +129,8 @@ export function WorkflowGraphCanvas({
           keyboardScope={keyboardScope}
           onNodeInspect={onNodeInspect}
           onWorkflowInspect={onWorkflowInspect}
+          graphSelectionRequest={graphSelectionRequest}
+          onGraphSelectionConsumed={onGraphSelectionConsumed}
           onCopyText={onCopyText}
           nodes={graph.nodes}
           toolbarPositionStrategy={toolbarPositionStrategy}
@@ -127,6 +144,7 @@ function WorkflowGraphCanvasInner({
   edges,
   keyboardScope,
   onAddNode,
+  onAddConnectedNode,
   onAddNodeToGroup,
   onConnectNodes,
   onCopyText,
@@ -139,12 +157,17 @@ function WorkflowGraphCanvasInner({
   onReconnectEdge,
   onRemoveNodeFromGroup,
   onWorkflowInspect,
+  graphSelectionRequest,
+  onGraphSelectionConsumed,
   nodes,
   toolbarPositionStrategy,
 }: Readonly<{
   edges: readonly WorkflowGraphEdge[];
   keyboardScope: "focused" | "global";
-  onAddNode: ((kind: "agent" | "script" | "terminal") => void) | undefined;
+  onAddNode: ((kind: CreatableWorkflowNodeKind) => void) | undefined;
+  onAddConnectedNode:
+    | ((sourceNodeID: string, kind: CreatableWorkflowNodeKind, modality: WorkflowNodeKindSelectionModality) => void)
+    | undefined;
   onAddNodeToGroup: ((nodeID: string, groupID: string) => void) | undefined;
   onConnectNodes: ((sourceNodeID: string, targetNodeID: string) => void) | undefined;
   onCopyText: CopyText;
@@ -157,12 +180,21 @@ function WorkflowGraphCanvasInner({
   onReconnectEdge: ((input: WorkflowGraphReconnectEdgeInput) => void) | undefined;
   onRemoveNodeFromGroup: ((nodeID: string) => void) | undefined;
   onWorkflowInspect: () => void;
+  graphSelectionRequest: Readonly<{ requestID: string; edgeID: string }> | null;
+  onGraphSelectionConsumed: ((requestID: string) => void) | undefined;
   nodes: readonly WorkflowGraphNode[];
   toolbarPositionStrategy: "absolute" | "fixed";
 }>) {
   const instance = useReactFlow();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const reconnectEndpointRef = useRef<WorkflowGraphReconnectEndpointState | null>(null);
+  const connectionGestureRef = useRef<Readonly<{ nodeID: string; start: ConnectionGesturePoint }> | null>(null);
+  const suppressedCreationHandleRef = useRef<string | null>(null);
+  const consumedGraphSelectionRequestIDRef = useRef<string | null>(null);
+  const graphSelectionRequestRef = useRef(graphSelectionRequest);
+  useLayoutEffect(() => {
+    graphSelectionRequestRef.current = graphSelectionRequest;
+  }, [graphSelectionRequest]);
   const [selection, setSelection] = useState<WorkflowGraphSelection | null>(null);
   // React Flow owns the drag gesture, but workflow layout stays ELK/server-authored.
   // This transient snapshot lets cards move during drag without persisting canvas positions.
@@ -177,7 +209,35 @@ function WorkflowGraphCanvasInner({
     () => relaxActiveGroupedNodeClamp(renderNodes, groupDrag?.nodeID ?? null),
     [groupDrag?.nodeID, renderNodes],
   );
-  const renderEdges = useMemo(() => workflowGraphRenderEdges(edges), [edges]);
+  const selectedRenderNodes = useMemo(
+    () => dragAwareRenderNodes.map((node) => ({
+      ...node,
+      selected:
+        selection?.kind === "node" && node.data.entityKind === "node"
+          ? selection.nodeID === node.data.entityID
+          : false,
+    })),
+    [dragAwareRenderNodes, selection],
+  );
+  const renderEdges = useMemo(() => workflowGraphRenderEdges(edges, selection), [edges, selection]);
+  const consumeCreationHandleActivation = (nodeID: string): boolean => {
+    if (suppressedCreationHandleRef.current !== nodeID) {
+      return true;
+    }
+    suppressedCreationHandleRef.current = null;
+    return false;
+  };
+  const suppressCreationHandleActivation = (nodeID: string | null): void => {
+    if (nodeID === null) {
+      return;
+    }
+    suppressedCreationHandleRef.current = nodeID;
+    window.requestAnimationFrame(() => {
+      if (suppressedCreationHandleRef.current === nodeID) {
+        suppressedCreationHandleRef.current = null;
+      }
+    });
+  };
   const edgeTypes = useMemo(
     () => ({
       workflow: (props: EdgeProps<WorkflowGraphEdge>) => (
@@ -205,6 +265,8 @@ function WorkflowGraphCanvasInner({
         <WorkflowJoinNode
           {...props}
           onCopyText={onCopyText}
+          onAddConnectedNode={onAddConnectedNode}
+          onCreationHandleActivate={consumeCreationHandleActivation}
           onDeleteSelection={onDeleteSelection}
           onInspectNode={(nodeID) => {
             setSelection({ kind: "node", nodeID });
@@ -219,6 +281,8 @@ function WorkflowGraphCanvasInner({
         <WorkflowNode
           {...props}
           onCopyText={onCopyText}
+          onAddConnectedNode={onAddConnectedNode}
+          onCreationHandleActivate={consumeCreationHandleActivation}
           onCreateNodeGroup={onCreateNodeGroup}
           onDeleteSelection={onDeleteSelection}
           onInspectNode={(nodeID) => {
@@ -232,8 +296,47 @@ function WorkflowGraphCanvasInner({
         />
       ),
     }) satisfies NodeTypes,
-    [groupDrag?.targetGroupID, onCopyText, onCreateNodeGroup, onDeleteSelection, onNodeInspect, onRemoveNodeFromGroup],
+    [
+      groupDrag?.targetGroupID,
+      onAddConnectedNode,
+      onCopyText,
+      onCreateNodeGroup,
+      onDeleteSelection,
+      onNodeInspect,
+      onRemoveNodeFromGroup,
+    ],
   );
+  useEffect(() => {
+    if (graphSelectionRequest === null) {
+      consumedGraphSelectionRequestIDRef.current = null;
+      return;
+    }
+    if (consumedGraphSelectionRequestIDRef.current === graphSelectionRequest.requestID) {
+      return;
+    }
+    if (!edges.some((edge) => edge.data?.entityID === graphSelectionRequest.edgeID)) {
+      return;
+    }
+    queueMicrotask(() => {
+      const currentRequest = graphSelectionRequestRef.current;
+      if (
+        currentRequest?.requestID !== graphSelectionRequest.requestID ||
+        currentRequest.edgeID !== graphSelectionRequest.edgeID
+      ) {
+        return;
+      }
+      consumedGraphSelectionRequestIDRef.current = currentRequest.requestID;
+      setSelection({ edgeID: currentRequest.edgeID, kind: "edge" });
+      onGraphSelectionConsumed?.(currentRequest.requestID);
+    });
+  }, [edges, graphSelectionRequest, onGraphSelectionConsumed]);
+  useEffect(() => {
+    if (selection !== null && !workflowGraphSelectionExists(selection, nodes, edges)) {
+      queueMicrotask(() => {
+        setSelection(null);
+      });
+    }
+  }, [edges, nodes, selection]);
   const didFitInitialView = useRef(false);
   useEffect(() => {
     if (didFitInitialView.current) {
@@ -289,12 +392,29 @@ function WorkflowGraphCanvasInner({
         maxZoom={2}
         minZoom={0.15}
         nodeDragThreshold={6}
-        nodes={dragAwareRenderNodes}
+        connectionDragThreshold={connectionDragThreshold}
+        connectOnClick={false}
+        nodes={selectedRenderNodes}
         nodesConnectable={onConnectNodes !== undefined || onReconnectEdge !== undefined}
         nodesDraggable={false}
         nodeTypes={nodeTypes}
         onConnect={(connection) => {
+          suppressCreationHandleActivation(connection.source);
           connectWorkflowGraphNodes(connection, onConnectNodes);
+        }}
+        onConnectEnd={(event) => {
+          const gesture = connectionGestureRef.current;
+          if (gesture !== null && connectionDragDistance(event, gesture) >= connectionDragThreshold) {
+            suppressCreationHandleActivation(gesture.nodeID);
+          }
+          connectionGestureRef.current = null;
+        }}
+        onConnectStart={(event, params) => {
+          const start = connectionGesturePoint(event);
+          connectionGestureRef.current =
+            params.handleType === "source" && params.nodeId !== null && start !== null
+              ? { nodeID: params.nodeId, start }
+              : null;
         }}
         onEdgeClick={(_event, edge) => {
           setSelection(selectionFromEdge(edge));
@@ -303,6 +423,9 @@ function WorkflowGraphCanvasInner({
         onNodeClick={(_event, node) => {
           setSelection(selectionFromNode(node));
           inspectNode(node, onGroupInspect, onNodeInspect);
+        }}
+        onPaneClick={() => {
+          setSelection(null);
         }}
         onNodeDrag={(event, node) => {
           if (!isWorkflowAgentGraphNode(node)) {
@@ -392,6 +515,25 @@ function WorkflowGraphCanvasInner({
       </ReactFlow>
     </div>
   );
+}
+
+function connectionDragDistance(event: unknown, gesture: Readonly<{ start: ConnectionGesturePoint }>): number {
+  const end = connectionGesturePoint(event);
+  if (end === null) {
+    return 0;
+  }
+  return Math.hypot(end.x - gesture.start.x, end.y - gesture.start.y);
+}
+
+function connectionGesturePoint(event: unknown): ConnectionGesturePoint | null {
+  if (event instanceof MouseEvent) {
+    return { x: event.clientX, y: event.clientY };
+  }
+  if (event instanceof TouchEvent) {
+    const touch = event.changedTouches.item(0) ?? event.touches.item(0);
+    return touch === null ? null : { x: touch.clientX, y: touch.clientY };
+  }
+  return null;
 }
 
 function copyTextWithNavigator(value: string): void {

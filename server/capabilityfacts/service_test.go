@@ -9,9 +9,24 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/server/onboardingimports"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
+
+func TestImportErrorFactsPreserveItemKind(t *testing.T) {
+	command := onboardingimports.ItemKindCommand
+	facts := importErrorFacts([]onboardingimports.Error{{
+		Code:     "provider_discovery_failed",
+		ItemKind: &command,
+	}})
+	if len(facts) != 1 || facts[0].ItemKind == nil {
+		t.Fatalf("import error facts = %+v, want command item kind", facts)
+	}
+	if *facts[0].ItemKind != serverapi.ImportErrorItemKindCommand {
+		t.Fatalf("item kind = %q, want command", *facts[0].ItemKind)
+	}
+}
 
 func TestServiceProjectsModelCatalogAndUnknownFallback(t *testing.T) {
 	service := NewService(Options{Config: testConfig(t, config.Settings{Model: "gpt-5.6-sol"})})

@@ -23,7 +23,8 @@ func disableTransientStatusClearForTest(t *testing.T) {
 }
 
 type stubSessionViewClient struct {
-	getSessionMainView func(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
+	getSessionMainView   func(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
+	getLatestFinalAnswer func(context.Context, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
 }
 
 func (s stubSessionViewClient) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -35,6 +36,13 @@ func (s stubSessionViewClient) GetSessionMainView(ctx context.Context, req serve
 
 func (s stubSessionViewClient) GetSessionTranscriptPage(context.Context, serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
 	return serverapi.SessionTranscriptPageResponse{}, nil
+}
+
+func (s stubSessionViewClient) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	if s.getLatestFinalAnswer == nil {
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errors.New("latest final answer stub is required")
+	}
+	return s.getLatestFinalAnswer(ctx, req)
 }
 
 func updateUIModel(t *testing.T, m *uiModel, msg tea.Msg) *uiModel {

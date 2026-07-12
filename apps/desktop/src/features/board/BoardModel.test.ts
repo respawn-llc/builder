@@ -93,6 +93,8 @@ const board: WorkflowBoard = {
   projectID: "project-1",
   projectKey: "PROJ",
   projectName: "Project",
+  defaultWorkspaceID: "workspace-1",
+  attachedWorkspaceCount: 1,
   selectedWorkflow: {
     description: "",
     version: 1,

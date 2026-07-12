@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"core/internal/testharness/runtimewirefixture"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"errors"
 	"io"
 	"strings"
@@ -38,20 +40,9 @@ func TestEmbeddedAppServerDeliversBackgroundCompletionWhileIdle(t *testing.T) {
 	defer func() { _ = sub.Close() }()
 
 	processID := "bg-1000"
-	server.inner.BackgroundRouter().Handle(shelltool.Event{
-		Type:             shelltool.EventCompleted,
-		NoticeSuppressed: true,
-		Snapshot: shelltool.Snapshot{
-			ID:             processID,
-			ActivityID:     uuid.New(),
-			OwnerSessionID: plan.SessionID,
-			State:          "completed",
-			Command:        "sleep 1; printf done",
-			Workdir:        workspace,
-			LogPath:        "/tmp/bg-1000.log",
-		},
-		Preview: "done",
-	})
+	event := runtimewirefixture.BackgroundCompletionEvent(processID, plan.SessionID, workspace)
+	event.NoticeSuppressed = true
+	server.inner.BackgroundRouter().Handle(event)
 
 	evt := waitForSessionActivityEvent(t, sub, 5*time.Second, func(evt clientui.Event) bool {
 		return evt.Kind == clientui.EventBackgroundUpdated && evt.Background != nil && evt.Background.ID == processID && evt.Background.Type == "completed"
@@ -77,20 +68,9 @@ func TestPrepareRuntimeForwardsBackgroundCompletionIntoProjectedRuntimeEvents(t 
 	defer runtimePlan.Close()
 
 	processID := "bg-1001"
-	server.inner.BackgroundRouter().Handle(shelltool.Event{
-		Type:             shelltool.EventCompleted,
-		NoticeSuppressed: true,
-		Snapshot: shelltool.Snapshot{
-			ID:             processID,
-			ActivityID:     uuid.New(),
-			OwnerSessionID: plan.SessionID,
-			State:          "completed",
-			Command:        "sleep 1; printf done",
-			Workdir:        workspace,
-			LogPath:        "/tmp/bg-1001.log",
-		},
-		Preview: "done",
-	})
+	event := runtimewirefixture.BackgroundCompletionEvent(processID, plan.SessionID, workspace)
+	event.NoticeSuppressed = true
+	server.inner.BackgroundRouter().Handle(event)
 
 	select {
 	case evt := <-runtimePlan.Wiring.runtimeEvents:
@@ -189,13 +169,13 @@ func TestEmbeddedAppServerPromptActivityStreamsAndHydratesPendingResources(t *te
 	if askEvt.req.PromptID != "ask-embedded-1" || askEvt.req.Question != "Pick one" {
 		t.Fatalf("unexpected ask event: %+v", askEvt.req)
 	}
-	askEvt.reply <- askReply{response: clientui.PromptAnswer{PromptID: askEvt.req.PromptID, SelectedOptionNumber: 2}}
+	askEvt.reply <- askReply{response: clientui.PromptAnswer{PromptID: askEvt.req.PromptID, SelectedOptionNumber: textutil.Int(2)}}
 	select {
 	case result := <-askDone:
 		if result.err != nil {
 			t.Fatalf("AwaitPromptResponse ask: %v", result.err)
 		}
-		if result.resp.RequestID != "ask-embedded-1" || result.resp.SelectedOptionNumber != 2 {
+		if result.resp.RequestID != "ask-embedded-1" || result.resp.SelectedOptionNumber == nil || *result.resp.SelectedOptionNumber != 2 {
 			t.Fatalf("unexpected ask response: %+v", result.resp)
 		}
 	case <-time.After(5 * time.Second):

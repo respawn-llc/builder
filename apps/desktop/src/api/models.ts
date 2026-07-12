@@ -51,11 +51,13 @@ export type ServerReadiness = Readonly<{
   causes: readonly ServerCause[];
 }>;
 
+export type WorkspaceAvailability = "available" | "missing" | "inaccessible" | "unlinked";
+
 export type WorkspaceSummary = Readonly<{
   id: string;
   name: string;
   rootPath: string;
-  availability: string;
+  availability: WorkspaceAvailability;
   isPrimary: boolean;
   updatedAt: number;
 }>;
@@ -226,6 +228,9 @@ export type WorkflowNodeGroup = Readonly<{
   sortOrder: number;
   nodeIDs: readonly string[];
 }>;
+
+export const workflowNodeKinds = ["agent", "join", "script", "start", "terminal"] as const;
+export type WorkflowNodeKind = (typeof workflowNodeKinds)[number];
 
 export type WorkflowNode = Readonly<{
   id: string;
@@ -510,7 +515,7 @@ export type BoardCard = Readonly<{
   id: string;
   shortID: string;
   title: string;
-  bodyPreview: string;
+  body: string;
   workflowID: string;
   activeNodeIDs: readonly string[];
   sourceWorkspace: WorkspaceSummary;
@@ -546,6 +551,8 @@ export type WorkflowBoard = Readonly<{
   projectID: string;
   projectKey: string;
   projectName: string;
+  defaultWorkspaceID: string;
+  attachedWorkspaceCount: number;
   selectedWorkflow: WorkflowPickerItem;
   workflows: readonly WorkflowPickerItem[];
   groups: readonly BoardGroup[];

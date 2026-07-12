@@ -14,7 +14,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 ## Editing Model
 
-- Movement: `Left`/`Right` by grapheme cluster; `Ctrl+Left`/`Ctrl+Right` by word; `Home`/`Ctrl+A` to line start; `End`/`Ctrl+E`/`Ctrl+End` to line end. `Up`/`Down` move across wrapped/multiline content when the cursor is not at a whole-buffer boundary (boundary behavior is prompt history, below).
+- Movement: `Left`/`Right` by grapheme cluster; `Ctrl+Left`/`Ctrl+Right` and `Option+Left`/`Option+Right` by word; `Home`/`Ctrl+A` to line start; `End`/`Ctrl+E`/`Ctrl+End` to line end. At the typed terminal-input boundary, an Alt-modified single-rune `b`/`f` event is a compatibility encoding for previous-word/next-word movement rather than inserted text. `Up`/`Down` move across wrapped/multiline content when the cursor is not at a whole-buffer boundary (boundary behavior is prompt history, below).
 - Deletion: `Backspace`/`Ctrl+H` deletes backward; `Delete` deletes forward; `Ctrl+W` deletes the previous word.
 - Kill/yank: `Ctrl+K` kills to line end; `Ctrl+U` kills to line start (macOS: `Ctrl+U` deletes the current line); `Ctrl+Y` yanks the last killed text. One editor-local kill buffer.
 - `Shift+Enter` inserts a newline; known Shift+Enter/Ctrl+Enter CSI encodings normalize to their canonical actions (owner: tui-transcript :: Input And Queueing). `Ctrl+J` always inserts a newline as a universal fallback. Shift+Enter recognition follows the codex reference implementation; the Go TUI's recognition is known-broken drift.
@@ -46,13 +46,17 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - The interrupt also drains pending messages: queued and steering queue contents populate the main input, so nothing typed is lost and the user can edit or resend.
 - `Ctrl+C` while idle exits the TUI.
 - Exiting the TUI (Ctrl+C or `/exit`) persists the current main-input draft to the server before release; opening the session later seeds the input from that draft verbatim (owner: tui-startup.md :: Session Picker).
+- `/exit` is a client detach, not a runtime interrupt. An active server-owned run continues after this TUI releases its attachment.
+- Session-navigation commands persist the outgoing draft, resolve the typed transition, release the originating attachment, and only then plan or attach the destination. A release failure aborts navigation before destination attachment; an `/exit` release failure is reported after terminal teardown and exits nonzero.
+- A busy main-transcript `Ctrl+C` remains the distinct turn-local interrupt control; picker `Ctrl+C` exits only the picker and does not interrupt or reattach the originating run.
 - `Shift+Tab`/`Ctrl+T` toggle ongoing↔detail transcript mode; mode-toggle ephemerality is owned by tui-transcript :: Modes.
 - Arming the rollback flow requires two consecutive `Esc` presses on empty idle input within a short window (Esc-Esc); a single `Esc` does nothing visible. Rollback behavior itself is owned by its own family spec.
 
-## Clipboard Image Paste
+## Clipboard Paste
 
-- `Ctrl+V` and `Ctrl+D` save clipboard images to temp image files and insert the path; the on-disk image format is OS/tool-specific, not a contract. (owner: tui-transcript :: Input And Queueing)
-- Paste failures (no image, missing host tool) surface as a transient status-line error naming the missing capability; never a silent no-op.
+- `Ctrl+V`, `Ctrl+D`, `Alt+V`, and `Alt+D` explicitly read the system clipboard. Images save to temporary PNG files and insert the path; text inserts unchanged at the active cursor. (owner: tui-transcript :: Input And Queueing)
+- Terminal bracketed paste follows ordinary text-input handling and never causes a system clipboard read.
+- Paste failures (unsupported or empty clipboard content, missing host tool) surface as a transient status-line error naming the missing capability; never a silent no-op.
 
 ## Known Drift (Go TUI, frozen)
 

@@ -219,10 +219,16 @@ func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", FreeformAnswer: "answer"}).Validate(); err != nil {
 		t.Fatalf("valid task question answer rejected: %v", err)
 	}
-	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", SelectedOptionNumber: 1, FreeformAnswer: "because"}).Validate(); err != nil {
+	selectedOption := 1
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", SelectedOptionNumber: &selectedOption, FreeformAnswer: "because"}).Validate(); err != nil {
 		t.Fatalf("valid selected option plus freeform rejected: %v", err)
 	}
-	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", SelectedOptionNumber: -1}).Validate(); !isWorkflowFieldError(err, "selected_option_number", WorkflowRequestErrorInvalidMode) {
+	zeroOption := 0
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", SelectedOptionNumber: &zeroOption}).Validate(); !isWorkflowFieldError(err, "selected_option_number", WorkflowRequestErrorInvalidMode) {
+		t.Fatalf("zero selected option error = %#v, want invalid_mode on selected_option_number", err)
+	}
+	negativeOption := -1
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", SelectedOptionNumber: &negativeOption}).Validate(); !isWorkflowFieldError(err, "selected_option_number", WorkflowRequestErrorInvalidMode) {
 		t.Fatalf("negative selected option error = %#v, want invalid_mode on selected_option_number", err)
 	}
 	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", ErrorMessage: "err", FreeformAnswer: "answer"}).Validate(); !isWorkflowFieldError(err, "error_message", WorkflowRequestErrorInvalidMode) {
@@ -233,6 +239,9 @@ func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	}
 	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce, Commentary: "trusted"}}).Validate(); err != nil {
 		t.Fatalf("valid task approval question answer rejected: %v", err)
+	}
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", SelectedOptionNumber: &selectedOption, Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce}}).Validate(); !isWorkflowFieldError(err, "approval", WorkflowRequestErrorInvalidMode) {
+		t.Fatalf("approval plus selected option error = %#v, want invalid_mode on approval", err)
 	}
 	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce}, FreeformAnswer: "also"}).Validate(); !isWorkflowFieldError(err, "approval", WorkflowRequestErrorInvalidMode) {
 		t.Fatalf("approval plus ordinary answer error = %#v, want invalid_mode on approval", err)
@@ -328,6 +337,133 @@ func TestWorkflowTaskQuestionAnswerApprovalJSON(t *testing.T) {
 	}
 	if err := decoded.Validate(); err != nil {
 		t.Fatalf("decoded request rejected: %v", err)
+	}
+}
+
+func TestWorkflowTaskQuestionAnswerSelectedOptionJSONUsesNullableValue(t *testing.T) {
+	const omittedSelection = `{
+		"client_request_id":"req-1",
+		"task_id":"task-1",
+		"ask_id":"ask-1",
+		"freeform_answer":"typed"
+	}`
+	var omitted WorkflowTaskQuestionAnswerRequest
+	if err := json.Unmarshal([]byte(omittedSelection), &omitted); err != nil {
+		t.Fatalf("unmarshal omitted selection: %v", err)
+	}
+	if omitted.SelectedOptionNumber != nil {
+		t.Fatalf("omitted selected option = %v, want nil", *omitted.SelectedOptionNumber)
+	}
+	if err := omitted.Validate(); err != nil {
+		t.Fatalf("omitted selection with freeform answer rejected: %v", err)
+	}
+
+	const malformedZeroSelection = `{
+		"client_request_id":"req-1",
+		"task_id":"task-1",
+		"ask_id":"ask-1",
+		"selected_option_number":0,
+		"freeform_answer":"typed"
+	}`
+	var malformed WorkflowTaskQuestionAnswerRequest
+	if err := json.Unmarshal([]byte(malformedZeroSelection), &malformed); err != nil {
+		t.Fatalf("unmarshal zero selection: %v", err)
+	}
+	if malformed.SelectedOptionNumber == nil || *malformed.SelectedOptionNumber != 0 {
+		t.Fatalf("decoded zero selection = %v, want present zero", malformed.SelectedOptionNumber)
+	}
+	if err := malformed.Validate(); !isWorkflowFieldError(err, "selected_option_number", WorkflowRequestErrorInvalidMode) {
+		t.Fatalf("present zero selection error = %#v, want invalid_mode on selected_option_number", err)
+	}
+}
+
+func TestWorkflowBoardJSONUsesTruthfulProjectFactsAndCardBody(t *testing.T) {
+	board := WorkflowBoard{
+		ProjectID: "project-1",
+		Project: ProjectBoardProject{
+			ProjectID:              "project-1",
+			ProjectKey:             "KNT",
+			DisplayName:            "Kent",
+			DefaultWorkspaceID:     "workspace-default",
+			AttachedWorkspaceCount: 2,
+		},
+		Cards: []WorkflowBoardTaskCard{{
+			TaskID:     "task-1",
+			ShortID:    "KNT-1",
+			Title:      "Task",
+			Body:       "Complete body, including UTF-8 界",
+			WorkflowID: "workflow-1",
+		}},
+	}
+
+	raw, err := json.Marshal(board)
+	if err != nil {
+		t.Fatalf("marshal board: %v", err)
+	}
+	var shape map[string]any
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		t.Fatalf("unmarshal board JSON shape: %v", err)
+	}
+	project, ok := shape["project"].(map[string]any)
+	if !ok || project["default_workspace_id"] != "workspace-default" || project["attached_workspace_count"] != float64(2) {
+		t.Fatalf("project JSON = %#v, want workspace facts", shape["project"])
+	}
+	cards, ok := shape["cards"].([]any)
+	if !ok || len(cards) != 1 {
+		t.Fatalf("cards JSON = %#v, want one card", shape["cards"])
+	}
+	card, ok := cards[0].(map[string]any)
+	if !ok || card["body"] != "Complete body, including UTF-8 界" {
+		t.Fatalf("card JSON = %#v, want full body", cards[0])
+	}
+	if _, ok := card["body_preview"]; ok {
+		t.Fatalf("card JSON retains obsolete body_preview: %#v", card)
+	}
+
+	var decoded WorkflowBoard
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal board: %v", err)
+	}
+	if decoded.Project.DefaultWorkspaceID != "workspace-default" || decoded.Project.AttachedWorkspaceCount != 2 || len(decoded.Cards) != 1 || decoded.Cards[0].Body != "Complete body, including UTF-8 界" {
+		t.Fatalf("decoded board = %+v, want project facts and full body", decoded)
+	}
+}
+
+func TestAskAnswerRequestValidatesNullableSelectedOption(t *testing.T) {
+	base := AskAnswerRequest{ClientRequestID: "req-1", SessionID: "session-1", AskID: "ask-1"}
+	freeform := base
+	freeform.FreeformAnswer = "typed"
+	if err := freeform.Validate(); err != nil {
+		t.Fatalf("nil selected option plus freeform answer rejected: %v", err)
+	}
+	selected := 1
+	withSelected := base
+	withSelected.SelectedOptionNumber = &selected
+	if err := withSelected.Validate(); err != nil {
+		t.Fatalf("positive selected option rejected: %v", err)
+	}
+	zero := 0
+	withZero := base
+	withZero.SelectedOptionNumber = &zero
+	if err := withZero.Validate(); err == nil {
+		t.Fatal("present zero selected option accepted")
+	}
+	negative := -1
+	withNegative := base
+	withNegative.SelectedOptionNumber = &negative
+	if err := withNegative.Validate(); err == nil {
+		t.Fatal("present negative selected option accepted")
+	}
+	if err := base.Validate(); err == nil {
+		t.Fatal("nil selected option without another answer accepted")
+	}
+
+	var legacy AskAnswerRequest
+	if err := json.Unmarshal([]byte(`{"client_request_id":"req-1","session_id":"session-1","ask_id":"ask-1","freeform_answer":"typed"}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy omitted selection: %v", err)
+	}
+	if legacy.SelectedOptionNumber != nil {
+		t.Fatalf("legacy omitted selected option = %v, want nil", *legacy.SelectedOptionNumber)
 	}
 }
 

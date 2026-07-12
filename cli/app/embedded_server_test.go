@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"core/cli/app/commands"
 	"core/cli/app/internal/status"
+	"core/internal/testharness/runtimewirefixture"
 	"core/server/auth"
 	"core/server/authservice"
 	"core/server/launch"
@@ -139,6 +141,12 @@ func (s *testEmbeddedServer) Close() error {
 func (s *testEmbeddedServer) OwnsServer() bool { return true }
 
 func (s *testEmbeddedServer) Config() config.App { return s.cfg }
+
+func (s *testEmbeddedServer) PresentationTheme() string { return "dark" }
+
+func (s *testEmbeddedServer) ClientPromptRoots() (commands.ClientPromptRoots, error) {
+	return commands.NewClientPromptRoots()
+}
 
 func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID string, workspaceID string) (interactiveSessionServer, error) {
 	if s == nil {
@@ -748,20 +756,9 @@ func TestEmbeddedAppServerRoutesBackgroundCompletionToOwningSessionOnly(t *testi
 	defer func() { _ = subB.Close() }()
 
 	processID := "bg-owned-a"
-	server.inner.BackgroundRouter().Handle(shelltool.Event{
-		Type:             shelltool.EventCompleted,
-		NoticeSuppressed: true,
-		Snapshot: shelltool.Snapshot{
-			ID:             processID,
-			ActivityID:     uuid.New(),
-			OwnerSessionID: planA.SessionID,
-			State:          "completed",
-			Command:        "sleep 1; printf done",
-			Workdir:        workspace,
-			LogPath:        "/tmp/bg-owned-a.log",
-		},
-		Preview: "done",
-	})
+	event := runtimewirefixture.BackgroundCompletionEvent(processID, planA.SessionID, workspace)
+	event.NoticeSuppressed = true
+	server.inner.BackgroundRouter().Handle(event)
 
 	evtA := waitForSessionActivityEvent(t, subA, 5*time.Second, func(evt clientui.Event) bool {
 		return evt.Kind == clientui.EventBackgroundUpdated && evt.Background != nil && evt.Background.ID == processID && evt.Background.Type == "completed"

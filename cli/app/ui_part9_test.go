@@ -367,7 +367,7 @@ func TestHelpSectionsUseCompactBindingsWithoutStandaloneTranscriptSection(t *tes
 	}
 
 	assertHelpEntryBindings(t, sections, "toggle keyboard help", []string{shortcutLabelsForGOOS(goruntime.GOOS).helpToggleBinding()})
-	assertHelpEntryBindings(t, sections, "paste a clipboard screenshot as a file path", []string{"Ctrl + V/D"})
+	assertHelpEntryBindings(t, sections, "paste clipboard image path or text at the cursor", []string{"Ctrl/Alt + V/D"})
 	assertHelpEntryBindings(t, sections, "delete the current input line", deleteCurrentLineBindingsForGOOS(goruntime.GOOS))
 	assertHelpEntryBindings(t, sections, "move the cursor by word", []string{"Alt/Ctrl + ←/→"})
 }

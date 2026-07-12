@@ -1,3 +1,26 @@
+.board-task-card {
+  --board-card-height: 18rem;
+
+  height: var(--board-card-height);
+  grid-template-rows: auto minmax(0, 2lh) minmax(0, 3lh) minmax(0, 1fr);
+}
+
+.board-task-card[data-task-card-border-tone="primary"] {
+  border-color: var(--color-primary);
+}
+
+.board-task-card[data-task-card-border-tone="secondary"] {
+  border-color: var(--color-secondary);
+}
+
+.task-card-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
 .task-card-chip-row {
   /* Matches current board action button height so wrapped chip rows align to the button box. */
   --task-card-action-row-height: 30px;
@@ -13,6 +36,10 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   line-clamp: 3;
+}
+
+.task-card-footer {
+  align-self: end;
 }
 
 .board-card-drag-image {

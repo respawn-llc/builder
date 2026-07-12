@@ -100,7 +100,7 @@ export type OrdinaryQuestionAnswerInput = Readonly<{
   taskID: string;
   runID: string;
   askID: string;
-  selectedOptionNumber: number;
+  selectedOptionNumber: number | null;
   freeformAnswer: string;
 }>;
 

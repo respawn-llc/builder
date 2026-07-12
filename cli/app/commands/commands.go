@@ -61,10 +61,17 @@ type Result struct {
 
 type Handler func(args string) Result
 
+type ActiveRunPolicy uint8
+
+const (
+	ActiveRunPolicyRequiresIdle ActiveRunPolicy = iota
+	ActiveRunPolicyAllowed
+)
+
 type Command struct {
 	Name                       string
 	Description                string
-	RunWhileBusy               bool
+	ActiveRunPolicy            ActiveRunPolicy
 	PreservePromptHistoryDraft bool
 }
 
@@ -84,13 +91,13 @@ func NewRegistry() *Registry {
 
 func NewDefaultRegistry() *Registry {
 	r := NewRegistry()
-	r.RegisterWithOptions("exit", "Exit Kent", RegisterOptions{PreservePromptHistoryDraft: true}, func(string) Result {
+	r.RegisterWithOptions("exit", "Exit Kent", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(string) Result {
 		return Result{Handled: true, Action: ActionExit}
 	})
-	r.RegisterWithOptions("new", "Create a new session", RegisterOptions{PreservePromptHistoryDraft: true}, func(string) Result {
+	r.RegisterWithOptions("new", "Create a new session", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(string) Result {
 		return Result{Handled: true, Action: ActionNew}
 	})
-	r.RegisterWithOptions("resume", "Go to startup screen (session picker)", RegisterOptions{PreservePromptHistoryDraft: true}, func(string) Result {
+	r.RegisterWithOptions("resume", "Go to startup screen (session picker)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(string) Result {
 		return Result{Handled: true, Action: ActionResume}
 	})
 	r.RegisterWithOptions("logout", "Open auth options", RegisterOptions{PreservePromptHistoryDraft: true}, func(string) Result {
@@ -102,28 +109,28 @@ func NewDefaultRegistry() *Registry {
 	r.RegisterWithOptions("compact", "Compact the current context (optional: /compact <instructions>)", RegisterOptions{PreservePromptHistoryDraft: true}, func(args string) Result {
 		return Result{Handled: true, Action: ActionCompact, Args: strings.TrimSpace(args)}
 	})
-	r.RegisterWithOptions("name", "Set session title and terminal title (usage: /name <title>; empty resets)", RegisterOptions{RunWhileBusy: true, PreservePromptHistoryDraft: true}, func(args string) Result {
+	r.RegisterWithOptions("name", "Set session title and terminal title (usage: /name <title>; empty resets)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(args string) Result {
 		return Result{Handled: true, Action: ActionSetName, SessionName: strings.TrimSpace(args)}
 	})
-	r.RegisterWithOptions("thinking", "Set or show thinking level (usage: /thinking <low|medium|high|xhigh|max|ultra>; empty shows current)", RegisterOptions{RunWhileBusy: true}, func(args string) Result {
+	r.RegisterWithOptions("thinking", "Set or show thinking level (usage: /thinking <low|medium|high|xhigh|max|ultra>; empty shows current)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed}, func(args string) Result {
 		return Result{Handled: true, Action: ActionSetThinking, ThinkingLevel: strings.ToLower(strings.TrimSpace(args))}
 	})
-	r.RegisterWithOptions("fast", "Toggle Fast mode to request priority inference (usage: /fast [on|off|status]; empty toggles)", RegisterOptions{RunWhileBusy: true}, func(args string) Result {
+	r.RegisterWithOptions("fast", "Toggle Fast mode to request priority inference (usage: /fast [on|off|status]; empty toggles)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed}, func(args string) Result {
 		return Result{Handled: true, Action: ActionSetFast, FastMode: strings.ToLower(strings.TrimSpace(args))}
 	})
-	r.RegisterWithOptions("supervisor", "Toggle reviewer invocation (usage: /supervisor [on|off]; empty toggles)", RegisterOptions{RunWhileBusy: true}, func(args string) Result {
+	r.RegisterWithOptions("supervisor", "Toggle reviewer invocation (usage: /supervisor [on|off]; empty toggles)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed}, func(args string) Result {
 		return Result{Handled: true, Action: ActionSetSupervisor, SupervisorMode: strings.ToLower(strings.TrimSpace(args))}
 	})
-	r.RegisterWithOptions("autocompaction", "Toggle auto-compaction (usage: /autocompaction [on|off]; empty toggles)", RegisterOptions{RunWhileBusy: true}, func(args string) Result {
+	r.RegisterWithOptions("autocompaction", "Toggle auto-compaction (usage: /autocompaction [on|off]; empty toggles)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed}, func(args string) Result {
 		return Result{Handled: true, Action: ActionSetAutoCompaction, AutoCompactionMode: strings.ToLower(strings.TrimSpace(args))}
 	})
-	r.RegisterWithOptions("questions", "Toggle ask_question tool (usage: /questions [on|off]; empty toggles)", RegisterOptions{RunWhileBusy: true}, func(args string) Result {
+	r.RegisterWithOptions("questions", "Toggle ask_question tool (usage: /questions [on|off]; empty toggles)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed}, func(args string) Result {
 		return Result{Handled: true, Action: ActionSetQuestions, QuestionsMode: strings.ToLower(strings.TrimSpace(args))}
 	})
-	r.RegisterWithOptions("status", "Open a detailed status overlay for the current session/runtime", RegisterOptions{RunWhileBusy: true, PreservePromptHistoryDraft: true}, func(string) Result {
+	r.RegisterWithOptions("status", "Open a detailed status overlay for the current session/runtime", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(string) Result {
 		return Result{Handled: true, Action: ActionStatus}
 	})
-	r.RegisterWithOptions("goal", "Set or manage the current session goal (usage: /goal [show|pause|resume|clear|<objective>])", RegisterOptions{RunWhileBusy: true, PreservePromptHistoryDraft: true}, func(args string) Result {
+	r.RegisterWithOptions("goal", "Set or manage the current session goal (usage: /goal [show|pause|resume|clear|<objective>])", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(args string) Result {
 		mode := GoalModeShow
 		objective := strings.TrimSpace(args)
 		switch strings.ToLower(objective) {
@@ -146,17 +153,17 @@ func NewDefaultRegistry() *Registry {
 		}
 		return Result{Handled: true, Action: ActionGoal, GoalMode: mode, GoalObjective: objective}
 	})
-	r.RegisterWithOptions("ps", "List background processes or manage one (usage: /ps [kill|inline|logs] <id>)", RegisterOptions{RunWhileBusy: true, PreservePromptHistoryDraft: true}, func(args string) Result {
+	r.RegisterWithOptions("ps", "List background processes or manage one (usage: /ps [kill|inline|logs] <id>)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(args string) Result {
 		return Result{Handled: true, Action: ActionProcesses, Args: strings.TrimSpace(args)}
 	})
 	r.RegisterWithOptions("worktree", "Manage git worktrees (usage: /worktree [create|switch|delete] ...)", RegisterOptions{PreservePromptHistoryDraft: true}, func(args string) Result {
 		return Result{Handled: true, Action: ActionWorktree, Args: strings.TrimSpace(args)}
 	})
 	r.RegisterAlias("wt", "worktree")
-	r.RegisterWithOptions("copy", "Copy the last model final answer to the system clipboard", RegisterOptions{RunWhileBusy: true, PreservePromptHistoryDraft: true}, func(string) Result {
+	r.RegisterWithOptions("copy", "Copy the last model final answer to the system clipboard", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(string) Result {
 		return Result{Handled: true, Action: ActionCopy}
 	})
-	r.RegisterWithOptions("back", "Jump to parent session if current session was spawned from another", RegisterOptions{PreservePromptHistoryDraft: true}, func(string) Result {
+	r.RegisterWithOptions("back", "Jump to parent session if current session was spawned from another", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(string) Result {
 		return Result{Handled: true, Action: ActionBack}
 	})
 	registerPromptCommands(r, []promptCommandSpec{
@@ -177,7 +184,7 @@ func NewDefaultRegistry() *Registry {
 }
 
 type RegisterOptions struct {
-	RunWhileBusy               bool
+	ActiveRunPolicy            ActiveRunPolicy
 	PreservePromptHistoryDraft bool
 }
 
@@ -190,7 +197,7 @@ func (r *Registry) RegisterWithOptions(name string, description string, options 
 		return
 	}
 	r.handlers[k] = registeredCommand{
-		command: Command{Name: k, Description: strings.TrimSpace(description), RunWhileBusy: options.RunWhileBusy, PreservePromptHistoryDraft: options.PreservePromptHistoryDraft},
+		command: Command{Name: k, Description: strings.TrimSpace(description), ActiveRunPolicy: options.ActiveRunPolicy, PreservePromptHistoryDraft: options.PreservePromptHistoryDraft},
 		handler: h,
 	}
 }

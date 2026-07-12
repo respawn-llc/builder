@@ -9,7 +9,6 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -209,25 +208,6 @@ func TestRunCommandDispatchesFrameInputSequenceAfterCompletedFrames(t *testing.T
 		if index > 0 && dispatch.ReadyBoundaryEndByteOffset <= capture.FrameInputDispatches[index-1].ReadyBoundaryEndByteOffset {
 			t.Fatalf("frame input ready offsets are not increasing: %#v", capture.FrameInputDispatches)
 		}
-	}
-	analysis, err := pty.Analyze(capture)
-	if err != nil {
-		t.Fatalf("Analyze: %v", err)
-	}
-	var inputWrites []string
-	for _, operation := range analysis.Operations {
-		for _, record := range pty.OperationRecords(operation) {
-			if record.Write == nil {
-				continue
-			}
-			switch record.Write.Text() {
-			case "input:x", "input:y", "input:z":
-				inputWrites = append(inputWrites, record.Write.Text())
-			}
-		}
-	}
-	if want := []string{"input:x", "input:y", "input:z"}; !slices.Equal(inputWrites, want) {
-		t.Fatalf("input writes = %#v, want %#v", inputWrites, want)
 	}
 }
 

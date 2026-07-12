@@ -122,9 +122,9 @@ func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
 		t.Skip("shell fixture uses POSIX signal handling")
 	}
 	dir := t.TempDir()
-	markerPath := filepath.Join(dir, "started")
+	identityPath := filepath.Join(dir, "process-identity.json")
 	scriptPath := filepath.Join(dir, "ignore-term.sh")
-	script := "#!/bin/sh\ntrap '' TERM\nprintf started > " + shellQuote(markerPath) + "\nwhile true; do sleep 1; done\n"
+	script := "#!/bin/sh\ntrap '' TERM\nidentity_path=" + shellQuote(identityPath) + "\nidentity_tmp=\"${identity_path}.$$\"\nprintf '{\"process_group_id\":%s}\\n' \"$$\" > \"$identity_tmp\"\nmv \"$identity_tmp\" \"$identity_path\"\nwhile true; do sleep 1; done\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
 		result, err := executeWorkflowScript(ctx, req, input)
 		done <- scriptResult{result: result, err: err}
 	}()
-	waitForFile(t, markerPath, 5*time.Second)
+	identity := waitForWorkflowScriptProcessIdentity(t, identityPath, 5*time.Second)
 
 	cancel()
 
@@ -162,21 +162,38 @@ func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
 		if !got.result.Canceled {
 			t.Fatalf("result canceled = false, want true")
 		}
+		assertScriptProcessGroupGone(t, identity.ProcessGroupID)
 	case <-time.After(3 * time.Second):
 		t.Fatal("script cancellation did not kill TERM-ignoring process")
 	}
 }
 
-func waitForFile(t *testing.T, path string, timeout time.Duration) {
+type workflowScriptProcessIdentity struct {
+	ProcessGroupID int `json:"process_group_id"`
+}
+
+func waitForWorkflowScriptProcessIdentity(t *testing.T, path string, timeout time.Duration) workflowScriptProcessIdentity {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return
+		body, err := os.ReadFile(path)
+		if err == nil {
+			var identity workflowScriptProcessIdentity
+			if err := json.Unmarshal(body, &identity); err != nil {
+				t.Fatalf("decode process identity %s: %v", path, err)
+			}
+			if identity.ProcessGroupID <= 0 {
+				t.Fatalf("process identity = %+v, want positive process group id", identity)
+			}
+			return identity
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read process identity %s: %v", path, err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", path)
+	return workflowScriptProcessIdentity{}
 }
 
 func shellQuote(value string) string {

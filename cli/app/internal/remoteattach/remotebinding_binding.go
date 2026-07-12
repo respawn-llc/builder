@@ -48,15 +48,16 @@ func BindProjectWorkspace(ctx context.Context, req ProjectWorkspaceBindingReques
 		return ProjectWorkspaceBinding{}, err
 	}
 	if err := nextRemote.RequireRoot(req.RootID); err != nil {
-		_ = nextRemote.Close()
-		return ProjectWorkspaceBinding{}, err
+		return ProjectWorkspaceBinding{}, errors.Join(err, nextRemote.Close())
 	}
 	if req.Current.NoAuthBootstrapAcknowledgementEnabled() {
 		if err := nextRemote.EnableNoAuthBootstrapAcknowledgement(ctx); err != nil {
-			_ = nextRemote.Close()
-			return ProjectWorkspaceBinding{}, err
+			return ProjectWorkspaceBinding{}, errors.Join(err, nextRemote.Close())
 		}
 	}
+	// The successor is fully established at this point. Remote.Close marks the
+	// superseded connection closed before its transport teardown can fail, so a
+	// teardown error cannot roll the binding back to a usable current remote.
 	_ = req.Current.Close()
 	var closeFn func() error
 	if req.OwnsServer && req.OwnedClose != nil {

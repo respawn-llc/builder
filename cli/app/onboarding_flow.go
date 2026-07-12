@@ -89,7 +89,6 @@ type onboardingFlowState struct {
 	reviewerCustomThinkingInput bool
 	reviewerThinkingDisabled    bool
 	skillImport                 onboardingImportSelection
-	commandImport               onboardingImportSelection
 	skillSelection              map[string]bool
 	imports                     onboardingImportDiscovery
 }
@@ -98,6 +97,7 @@ type onboardingResult struct {
 	Completed            bool
 	CreatedDefaultConfig bool
 	SettingsPath         string
+	EffectiveTheme       string
 }
 
 func applyOnboardingModel(state *onboardingFlowState, value string) error {
@@ -232,9 +232,6 @@ func reviewSummaryLines(state *onboardingFlowState) []string {
 	}
 	if enabled, disabled := selectedSkillCounts(state); enabled > 0 || disabled > 0 {
 		lines = append(lines, fmt.Sprintf("- Enabled skills: `%d enabled, %d disabled`", enabled, disabled))
-	}
-	if summary := commandImportSummary(state); summary != "" {
-		lines = append(lines, "- Slash commands: `"+summary+"`")
 	}
 	return lines
 }

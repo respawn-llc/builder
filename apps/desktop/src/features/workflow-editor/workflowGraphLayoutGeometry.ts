@@ -1,3 +1,4 @@
+import type { WorkflowNodeKind } from "../../api";
 import type { WorkflowGraphNode } from "./workflowGraphLayout";
 import { z } from "zod";
 
@@ -7,7 +8,7 @@ const layoutNumberSchema = z.union([z.number(), z.string().transform((value) => 
 export type WorkflowGraphNodeRect = Readonly<{
   groupID: string;
   height: number;
-  kind: string;
+  kind: WorkflowNodeKind;
   width: number;
   x: number;
   y: number;

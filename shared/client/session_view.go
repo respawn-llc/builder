@@ -10,6 +10,7 @@ import (
 type SessionViewClient interface {
 	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
 	GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error)
+	GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
 }
 
 type loopbackSessionViewClient struct {
@@ -26,4 +27,8 @@ func (c *loopbackSessionViewClient) GetSessionMainView(ctx context.Context, req 
 
 func (c *loopbackSessionViewClient) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
 	return callLoopbackClient(c, "session view service is required", ctx, req, servicecontract.SessionViewService.GetSessionTranscriptPage)
+}
+
+func (c *loopbackSessionViewClient) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	return callLoopbackClient(c, "session view service is required", ctx, req, servicecontract.SessionViewService.GetLatestCommittedAssistantFinalAnswer)
 }

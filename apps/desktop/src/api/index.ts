@@ -45,6 +45,7 @@ export type {
   TaskStartResponse,
   TaskRun,
   TaskStatus,
+  TaskStatusKind,
   TaskTransition,
   WorkflowBoard,
   WorkflowContextSource,
@@ -78,6 +79,7 @@ export type {
   WorkflowInputBinding,
   WorkflowJoinInputProvider,
   WorkflowNode,
+  WorkflowNodeKind,
   WorkflowNodeGroup,
   WorkflowOutputField,
   WorkflowOutputRequirement,
@@ -89,6 +91,7 @@ export type {
   WorkflowValidation,
   WorkflowValidationError,
   WorkspaceSummary,
+  WorkspaceAvailability,
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
 } from "./models";

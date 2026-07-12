@@ -239,7 +239,7 @@ func TestAskQuestionTabFreeformFlow(t *testing.T) {
 	if resp.response.FreeformAnswer != "custom" {
 		t.Fatalf("unexpected freeform answer: %q", resp.response.FreeformAnswer)
 	}
-	if resp.response.SelectedOptionNumber != 1 {
+	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 1 {
 		t.Fatalf("expected selected option 1 preserved when switching to freeform, got %+v", resp.response)
 	}
 	if testActiveAsk(updated) != nil {
@@ -291,7 +291,7 @@ func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 	updated = next.(*uiModel)
 
 	resp := <-reply
-	if resp.response.SelectedOptionNumber != 2 {
+	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 2 {
 		t.Fatalf("expected selected option number 2, got %+v", resp.response)
 	}
 	if resp.response.FreeformAnswer != "custom" {
@@ -342,7 +342,7 @@ func TestAskQuestionTabRoundTripRestoresPendingFreeformDraftAndCursor(t *testing
 	updated = next.(*uiModel)
 
 	resp := <-reply
-	if resp.response.SelectedOptionNumber != 2 {
+	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 2 {
 		t.Fatalf("expected selected option number 2 after round-trip, got %+v", resp.response)
 	}
 	if resp.response.FreeformAnswer != "custoXm" {
@@ -366,7 +366,7 @@ func TestAskQuestionPickerSubmitReturnsSelectedOptionNumber(t *testing.T) {
 	updated = next.(*uiModel)
 
 	resp := <-reply
-	if resp.response.SelectedOptionNumber != 2 {
+	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 2 {
 		t.Fatalf("expected selected option number 2, got %+v", resp.response)
 	}
 	if resp.response.Answer != "" || resp.response.FreeformAnswer != "" {
@@ -464,7 +464,7 @@ func TestAskQuestionFreeformSelectionSubmitsFreeformOnly(t *testing.T) {
 	updated = next.(*uiModel)
 
 	resp := <-reply
-	if resp.response.SelectedOptionNumber != 0 {
+	if resp.response.SelectedOptionNumber != nil {
 		t.Fatalf("expected freeform selection to submit without selected option number, got %+v", resp.response)
 	}
 	if resp.response.Answer != "custom" || resp.response.FreeformAnswer != "custom" {

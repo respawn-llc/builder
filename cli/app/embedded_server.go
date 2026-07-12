@@ -5,12 +5,25 @@ import (
 	"errors"
 	"strings"
 
+	"core/cli/app/commands"
 	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/status"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/theme"
 )
+
+func (s *embeddedAppServer) PresentationTheme() string {
+	if s == nil || s.inner == nil {
+		panic("embedded startup presentation theme is required")
+	}
+	return theme.Resolve(s.Config().Settings.Theme)
+}
+
+func (s *embeddedAppServer) ClientPromptRoots() (commands.ClientPromptRoots, error) {
+	return commands.NewClientPromptRoots()
+}
 
 type appServerCore interface {
 	Close() error

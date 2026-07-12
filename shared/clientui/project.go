@@ -8,6 +8,7 @@ const (
 	ProjectAvailabilityAvailable    ProjectAvailability = "available"
 	ProjectAvailabilityMissing      ProjectAvailability = "missing"
 	ProjectAvailabilityInaccessible ProjectAvailability = "inaccessible"
+	ProjectAvailabilityUnlinked     ProjectAvailability = "unlinked"
 )
 
 type ProjectSummary struct {

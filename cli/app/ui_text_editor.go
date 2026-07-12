@@ -100,32 +100,32 @@ func updateSingleLineEditorWithAppKeys(editor *tuiinput.Editor, msg tea.Msg) tea
 	}, runtime.GOOS) {
 		return nil
 	}
+	if handleSharedInputMovementKey(key, uiSharedInputMovementActions{
+		MoveLeft: func() {
+			editor.SetCursor(byteOffsetForRuneCursor(text, moveBufferCursorLeft(text, cursor)))
+		},
+		MoveRight: func() {
+			editor.SetCursor(byteOffsetForRuneCursor(text, moveBufferCursorRight(text, cursor)))
+		},
+		MoveWordLeft: func() {
+			editor.SetCursor(byteOffsetForRuneCursor(text, moveBufferCursorWordLeft(text, cursor)))
+		},
+		MoveWordRight: func() {
+			editor.SetCursor(byteOffsetForRuneCursor(text, moveBufferCursorWordRight(text, cursor)))
+		},
+	}) {
+		return nil
+	}
 	switch key.Type {
 	case tea.KeySpace:
 		updated, nextCursor, changed := insertBufferRunes(text, cursor, []rune{' '})
 		if changed {
 			apply(updated, nextCursor, killBuffer)
 		}
-	case tea.KeyLeft:
-		if key.Alt {
-			editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), moveBufferCursorWordLeft(text, cursor)))
-		} else {
-			editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), moveBufferCursorLeft(text, cursor)))
-		}
-	case tea.KeyRight:
-		if key.Alt {
-			editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), moveBufferCursorWordRight(text, cursor)))
-		} else {
-			editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), moveBufferCursorRight(text, cursor)))
-		}
 	case tea.KeyHome, tea.KeyCtrlA:
 		editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), 0))
 	case tea.KeyEnd, tea.KeyCtrlE, tea.KeyCtrlEnd:
 		editor.SetCursor(len(editor.Text()))
-	case tea.KeyCtrlLeft:
-		editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), moveBufferCursorWordLeft(text, cursor)))
-	case tea.KeyCtrlRight:
-		editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), moveBufferCursorWordRight(text, cursor)))
 	case tea.KeyRunes:
 		updated, nextCursor, changed := insertBufferRunes(text, cursor, singleLineRunes(key.Runes))
 		if changed {

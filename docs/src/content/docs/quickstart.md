@@ -93,7 +93,7 @@ Anthropic or Gemini subscriptions/models will not be supported until these compa
 - Type `$ <command>` to execute a shell command and show its output to the model.
 - Press `Esc` twice to enter Edit mode, which lets you go back in time, edit a previous message, and fork the session starting with it. Use `Up`/`Down` to walk through user messages. File edits are **not** rolled back.
 - Use the `Up`/`Down` arrow keys to select and resend previous prompts.
-- Press `Ctrl+V/D` to paste a clipboard screenshot into the prompt as an image file path.
+- Press `Ctrl+V`, `Ctrl+D`, `Alt+V`, or `Alt+D` to paste clipboard content: images become temporary file paths and text is inserted at the cursor. Terminal-native bracketed paste remains normal text input.
 - Use `/review` to start a code review. In a non-empty session, Kent opens that review in a fresh child session. After the review finishes, you can use `/back` to teleport to the original session.
 - `/name <new-name>` will set your session name in the picker and terminal title.
 - `/autocompaction` will toggle compaction, and `/compact` will trigger one. If autocompact is off, you can go above 100% context usage if model allows it. **Going above 100% will cost more and degrade model performance**.

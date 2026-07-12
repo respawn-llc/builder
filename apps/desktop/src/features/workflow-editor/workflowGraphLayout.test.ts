@@ -5,6 +5,7 @@ import {
   defaultWorkflowExecutionTargetPolicy,
   emptyWorkflowDerivedWiring,
   type WorkflowDefinition,
+  type WorkflowNode,
   type WorkflowValidation,
 } from "../../api";
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
@@ -829,7 +830,7 @@ const mainSWEWorkflow: WorkflowDefinition = {
   ],
 };
 
-function workflowNode(id: string, name: string, kind: string, groupID: string) {
+function workflowNode(id: string, name: string, kind: WorkflowNode["kind"], groupID: string) {
   return {
     id,
     workflowID: "workflow-1",

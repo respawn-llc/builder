@@ -3,6 +3,7 @@ import { Maximize2, Minus } from "lucide-react";
 
 import { cx } from "./classes";
 import { islandSurfaceClassName, type IslandLevel } from "./islandSurfaceStyles";
+import { motionDurationFromCSSVar } from "./motion";
 
 export type FloatingNoticeTone = "danger" | "neutral";
 
@@ -137,36 +138,6 @@ export function FloatingNoticeIsland({
       </button>
     </aside>
   );
-}
-
-function motionDurationFromCSSVar(name: string, fallbackMs: number): number {
-  if (prefersReducedMotion()) {
-    return 0;
-  }
-  const root = document.documentElement;
-  const raw = window.getComputedStyle(root).getPropertyValue(name);
-  return firstDurationMs(raw) ?? fallbackMs;
-}
-
-function firstDurationMs(value: string): number | null {
-  const token =
-    value
-      .trim()
-      .split(" ")
-      .find((part) => part.length > 0) ?? "";
-  if (token.endsWith("ms")) {
-    const parsed = Number.parseFloat(token.slice(0, -2));
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  if (token.endsWith("s")) {
-    const parsed = Number.parseFloat(token.slice(0, -1));
-    return Number.isFinite(parsed) ? parsed * 1000 : null;
-  }
-  return null;
-}
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia instanceof Function && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 function floatingNoticeShellClassName({

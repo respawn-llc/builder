@@ -2,7 +2,7 @@ package shell
 
 import (
 	"context"
-	"strings"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -51,6 +51,115 @@ func TestWriteStdinCompletionSuppressesBackgroundNoticeEvent(t *testing.T) {
 	waitForManagerCount(t, manager, 0, time.Second)
 }
 
+func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
+	workspace := t.TempDir()
+	manager := newBackgroundTestManager(t)
+	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	pollTool := NewWriteStdinTool(16_000, manager)
+	events := make(chan Event, 2)
+	manager.SetEventHandler(func(evt Event) {
+		if evt.Type == EventCompleted || evt.Type == EventKilled {
+			select {
+			case events <- evt:
+			default:
+			}
+		}
+	})
+
+	result := callExecCommand(t, execTool, "bg-large-1", map[string]any{
+		"cmd":           "sleep 0.3; dd if=/dev/zero bs=1048576 count=3 2>/dev/null | tr '\\000' x",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 250,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
+	}
+
+	pollResult := callWriteStdin(t, pollTool, "bg-large-2", map[string]any{
+		"session_id":    1000,
+		"yield_time_ms": 1_500,
+	})
+	if pollResult.IsError {
+		t.Fatalf("unexpected write_stdin error: %s", string(pollResult.Output))
+	}
+
+	select {
+	case evt := <-events:
+		if evt.completion == nil || evt.completion.source != completionOutputFallback {
+			t.Fatalf("expected fallback completion event, got %+v", evt)
+		}
+		if !evt.NoticeSuppressed {
+			t.Fatalf("expected fallback completion event notice to be suppressed after write_stdin harvest, got %+v", evt)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for fallback completion event")
+	}
+	waitForManagerCount(t, manager, 0, 3*time.Second)
+}
+
+func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
+	workspace := t.TempDir()
+	manager := newBackgroundTestManager(t)
+	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	terminalHandlerStarted := make(chan struct{})
+	releaseTerminalHandler := make(chan struct{})
+	events := make(chan Event, 1)
+	manager.SetEventHandler(func(evt Event) {
+		if evt.Type != EventCompleted && evt.Type != EventKilled {
+			return
+		}
+		close(terminalHandlerStarted)
+		<-releaseTerminalHandler
+		events <- evt
+	})
+
+	result := callExecCommand(t, execTool, "bg-lock-1", map[string]any{
+		"cmd":           "sleep 0.3; echo done",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 250,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
+	}
+
+	select {
+	case <-terminalHandlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal event handler")
+	}
+	pollDone := make(chan struct{})
+	go func() {
+		_, _ = manager.WriteStdin(context.Background(), WriteRequest{
+			SessionID:      "1000",
+			YieldTime:      250 * time.Millisecond,
+			MaxOutputChars: 16_000,
+		})
+		close(pollDone)
+	}()
+	select {
+	case <-pollDone:
+		t.Fatal("poll acquired the interaction lock while terminal event delivery was in progress")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseTerminalHandler)
+	select {
+	case evt := <-events:
+		if evt.NoticeSuppressed {
+			t.Fatalf("terminal event claimed notice suppression before polling could acquire the lock: %+v", evt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal event")
+	}
+	select {
+	case <-pollDone:
+	case <-time.After(time.Second):
+		t.Fatal("poll did not complete after terminal event delivery")
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
+}
+
 func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
@@ -72,21 +181,15 @@ func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
 	}
-	text := decodeStringToolOutput(t, result)
-	if strings.Contains(text, "Process moved to background.") {
-		t.Fatalf("expected immediate completion with closed stdin, got %q", text)
+	var output string
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("exec_command result must be a JSON string: %v", err)
 	}
-	if strings.Contains(text, "Wall time:") {
-		t.Fatalf("did not expect wall time for foreground shell, got %q", text)
+	if output == "" {
+		t.Fatal("foreground EOF completion must have non-empty output")
 	}
-	if strings.Contains(text, "Log file:") {
-		t.Fatalf("did not expect log file for foreground shell, got %q", text)
-	}
-	if strings.Contains(text, "Exit code 0, output:") {
-		t.Fatalf("did not expect zero exit code in output, got %q", text)
-	}
-	if !strings.Contains(text, "eof") {
-		t.Fatalf("expected EOF branch output, got %q", text)
+	if result.PresentationDelta != nil && result.PresentationDelta.MovedToBackground {
+		t.Fatalf("foreground EOF completion must not be backgrounded: %+v", result.PresentationDelta)
 	}
 	waitForManagerCount(t, manager, 0, 3*time.Second)
 	select {

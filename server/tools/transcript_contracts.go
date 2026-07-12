@@ -216,7 +216,7 @@ func formatAskQuestionToolOutput(raw json.RawMessage) (string, bool) {
 	var payload struct {
 		Summary              string `json:"summary"`
 		Answer               string `json:"answer,omitempty"`
-		SelectedOptionNumber int    `json:"selected_option_number,omitempty"`
+		SelectedOptionNumber *int   `json:"selected_option_number,omitempty"`
 		FreeformAnswer       string `json:"freeform_answer,omitempty"`
 		Approval             *struct {
 			Decision   string `json:"decision"`
@@ -243,8 +243,11 @@ func formatAskQuestionToolOutput(raw json.RawMessage) (string, bool) {
 	if freeform == "" {
 		freeform = strings.TrimSpace(payload.Answer)
 	}
-	if payload.SelectedOptionNumber > 0 {
-		base := fmt.Sprintf("User answered and picked option %d.", payload.SelectedOptionNumber)
+	if payload.SelectedOptionNumber != nil {
+		if *payload.SelectedOptionNumber <= 0 {
+			return "", false
+		}
+		base := fmt.Sprintf("User answered and picked option %d.", *payload.SelectedOptionNumber)
 		if freeform == "" {
 			return base, true
 		}
