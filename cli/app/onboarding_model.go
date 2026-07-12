@@ -128,6 +128,12 @@ func (m *onboardingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.terminalErr = typed.err
 				return m, tea.Quit
 			}
+			if typed.submitted {
+				if err := m.finalization.releaseRecoverableAttempt(); err != nil {
+					m.terminalErr = err
+					return m, tea.Quit
+				}
+			}
 			m.errorText = typed.err.Error()
 			m.syncScreen(false)
 			return m, nil

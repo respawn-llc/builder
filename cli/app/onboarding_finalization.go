@@ -21,10 +21,13 @@ type onboardingFinalization struct {
 	flowCtx   context.Context
 	timeout   time.Duration
 
-	mu        sync.Mutex
-	submitted bool
-	outcome   onboardingFinalizeDoneMsg
-	done      chan struct{}
+	mu      sync.Mutex
+	attempt *onboardingFinalizationAttempt
+}
+
+type onboardingFinalizationAttempt struct {
+	outcome onboardingFinalizeDoneMsg
+	done    chan struct{}
 }
 
 func newOnboardingFinalization(finalizer client.OnboardingFinalizeClient, flowCtx context.Context) *onboardingFinalization {
@@ -51,21 +54,21 @@ func (f *onboardingFinalization) start(request serverapi.OnboardingFinalizeReque
 	if f == nil || f.finalizer == nil {
 		return errors.New("onboarding finalization client is required")
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.flowCtx.Err(); err != nil {
 		return err
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.submitted {
+	if f.attempt != nil {
 		return errors.New("onboarding finalization has already been submitted")
 	}
-	f.submitted = true
-	f.done = make(chan struct{})
-	go f.run(request, writeDefaults, selectedTheme)
+	attempt := &onboardingFinalizationAttempt{done: make(chan struct{})}
+	f.attempt = attempt
+	go f.run(attempt, request, writeDefaults, selectedTheme)
 	return nil
 }
 
-func (f *onboardingFinalization) run(request serverapi.OnboardingFinalizeRequest, writeDefaults bool, selectedTheme string) {
+func (f *onboardingFinalization) run(attempt *onboardingFinalizationAttempt, request serverapi.OnboardingFinalizeRequest, writeDefaults bool, selectedTheme string) {
 	timeout := f.timeout
 	if timeout <= 0 {
 		timeout = onboardingFinalizationTimeout
@@ -93,23 +96,19 @@ func (f *onboardingFinalization) run(request serverapi.OnboardingFinalizeRequest
 		outcome.err = err
 	}
 
-	f.mu.Lock()
-	f.outcome = outcome
-	close(f.done)
-	f.mu.Unlock()
+	attempt.outcome = outcome
+	close(attempt.done)
 }
 
 func (f *onboardingFinalization) wait() onboardingFinalizeDoneMsg {
 	f.mu.Lock()
-	done := f.done
+	attempt := f.attempt
 	f.mu.Unlock()
-	if done == nil {
+	if attempt == nil {
 		return onboardingFinalizeDoneMsg{err: errors.New("onboarding finalization was not submitted")}
 	}
-	<-done
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.outcome
+	<-attempt.done
+	return attempt.outcome
 }
 
 func (f *onboardingFinalization) waitIfSubmitted() (onboardingFinalizeDoneMsg, bool) {
@@ -117,10 +116,29 @@ func (f *onboardingFinalization) waitIfSubmitted() (onboardingFinalizeDoneMsg, b
 		return onboardingFinalizeDoneMsg{}, false
 	}
 	f.mu.Lock()
-	submitted := f.submitted
+	attempt := f.attempt
 	f.mu.Unlock()
-	if !submitted {
+	if attempt == nil {
 		return onboardingFinalizeDoneMsg{}, false
 	}
-	return f.wait(), true
+	<-attempt.done
+	return attempt.outcome, true
+}
+
+func (f *onboardingFinalization) releaseRecoverableAttempt() error {
+	if f == nil {
+		return errors.New("onboarding finalization is required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.attempt == nil {
+		return errors.New("recoverable onboarding finalization attempt is required")
+	}
+	select {
+	case <-f.attempt.done:
+		f.attempt = nil
+		return nil
+	default:
+		return errors.New("cannot release an in-flight onboarding finalization attempt")
+	}
 }

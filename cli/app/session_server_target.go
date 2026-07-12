@@ -99,15 +99,44 @@ func attachConfiguredStartupRemote(ctx context.Context, cfg config.App) (remote 
 
 func validateStartupRemoteIdentity(identity protocol.ServerIdentity) error {
 	if identity.ProtocolVersion != protocol.Version {
-		return fmt.Errorf("server protocol version %q is incompatible with client protocol version %q", identity.ProtocolVersion, protocol.Version)
+		return &startupRemoteCompatibilityError{
+			issue:         startupRemoteProtocolVersionMismatch,
+			serverVersion: identity.ProtocolVersion,
+		}
 	}
 	if !identity.Capabilities.AuthBootstrap {
-		return errors.New("server does not advertise auth bootstrap support")
+		return &startupRemoteCompatibilityError{issue: startupRemoteAuthBootstrapUnavailable}
 	}
 	if !identity.Capabilities.OnboardingFinalize {
-		return errors.New("server does not advertise onboarding finalization support")
+		return &startupRemoteCompatibilityError{issue: startupRemoteOnboardingFinalizeUnavailable}
 	}
 	return nil
+}
+
+type startupRemoteCompatibilityIssue uint8
+
+const (
+	startupRemoteProtocolVersionMismatch startupRemoteCompatibilityIssue = iota + 1
+	startupRemoteAuthBootstrapUnavailable
+	startupRemoteOnboardingFinalizeUnavailable
+)
+
+type startupRemoteCompatibilityError struct {
+	issue         startupRemoteCompatibilityIssue
+	serverVersion string
+}
+
+func (e *startupRemoteCompatibilityError) Error() string {
+	switch e.issue {
+	case startupRemoteProtocolVersionMismatch:
+		return fmt.Sprintf("server protocol version %q is incompatible with client protocol version %q", e.serverVersion, protocol.Version)
+	case startupRemoteAuthBootstrapUnavailable:
+		return "server does not advertise auth bootstrap support"
+	case startupRemoteOnboardingFinalizeUnavailable:
+		return "server does not advertise onboarding finalization support"
+	default:
+		return "server startup control surface is incompatible"
+	}
 }
 
 type configuredServerPreflightError struct {

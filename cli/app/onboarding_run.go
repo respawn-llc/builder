@@ -29,6 +29,9 @@ func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient client.C
 	if err != nil {
 		return onboardingResult{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return onboardingResult{}, err
+	}
 	state := onboardingFlowState{
 		settings:         cfg.Settings,
 		baselineSettings: cfg.Settings,
@@ -41,7 +44,12 @@ func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient client.C
 	model := newOnboardingModel(finalization, state)
 	terminalCursor := newUITerminalCursorState()
 	model.terminalCursor = terminalCursor
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithOutput(newUITerminalCursorWriter(os.Stdout, terminalCursor)))
+	program := tea.NewProgram(
+		model,
+		tea.WithAltScreen(),
+		tea.WithContext(ctx),
+		tea.WithOutput(newUITerminalCursorWriter(os.Stdout, terminalCursor)),
+	)
 	finalModel, runErr := program.Run()
 	outcome, submitted := finalization.waitIfSubmitted()
 	if runErr != nil {

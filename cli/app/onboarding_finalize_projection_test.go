@@ -28,6 +28,14 @@ func (f *recordingOnboardingFinalizer) FinalizeOnboarding(_ context.Context, req
 
 var _ client.OnboardingFinalizeClient = (*recordingOnboardingFinalizer)(nil)
 
+type onboardingCapabilityFactsClientFunc func(context.Context, serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error)
+
+func (fn onboardingCapabilityFactsClientFunc) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
+	return fn(ctx, req)
+}
+
+var _ client.CapabilityFactsClient = onboardingCapabilityFactsClientFunc(nil)
+
 func TestOnboardingDefaultsFinalizeThroughServerAPI(t *testing.T) {
 	finalizer := &recordingOnboardingFinalizer{response: serverapi.OnboardingFinalizeResponse{
 		Completed:    true,
@@ -92,6 +100,26 @@ func TestOnboardingFinalizationRejectsPreSubmissionCancellation(t *testing.T) {
 	}
 }
 
+func TestRunOnboardingFlowHonorsPreSubmissionParentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	finalizer := &recordingOnboardingFinalizer{}
+	_, err := runOnboardingFlow(
+		ctx,
+		config.App{},
+		onboardingCapabilityFactsClientFunc(func(context.Context, serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
+			return serverapi.CapabilityFactsResponse{}, nil
+		}),
+		finalizer,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run onboarding error = %v, want context canceled", err)
+	}
+	if len(finalizer.requests) != 0 {
+		t.Fatalf("finalize requests = %d, want no pre-submission write", len(finalizer.requests))
+	}
+}
+
 func TestOnboardingFinalizationIgnoresEscapeAfterSubmission(t *testing.T) {
 	model := newOnboardingModel(nil, onboardingFlowState{})
 	model.finalizing = true
@@ -130,6 +158,61 @@ func TestOnboardingFinalizationTimeoutIsTerminalAndIndeterminate(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected terminal quit command")
+	}
+}
+
+func TestOnboardingFinalizationTypedFailureCanBeRetried(t *testing.T) {
+	typedFailure := serverapi.NewOnboardingFinalizeError(
+		serverapi.OnboardingFinalizeConfigWriteFailed,
+		serverapi.OnboardingConfigWriteFailedDetails{SettingsPath: "/server/config.toml", Operation: "write"},
+		errors.New("write failed"),
+	)
+	finalizer := &recordingOnboardingFinalizer{err: typedFailure}
+	finalization := newOnboardingFinalization(finalizer, context.Background())
+	model := newOnboardingModel(finalization, onboardingFlowState{settings: config.Settings{Theme: theme.Light}})
+
+	first := model.finalizeCmd(true)().(onboardingFinalizeDoneMsg)
+	next, _ := model.Update(first)
+	model = next.(*onboardingModel)
+	if model.errorText == "" {
+		t.Fatal("typed finalization failure must be rendered in the wizard")
+	}
+	if _, submitted := finalization.waitIfSubmitted(); submitted {
+		t.Fatal("typed finalization failure must not retain a submitted lifecycle")
+	}
+
+	finalizer.err = nil
+	finalizer.response = serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/server/config.toml"}
+	second := model.finalizeCmd(true)().(onboardingFinalizeDoneMsg)
+	if second.err != nil {
+		t.Fatalf("retry finalization: %v", second.err)
+	}
+	if len(finalizer.requests) != 2 {
+		t.Fatalf("finalize requests = %d, want retry to invoke server twice", len(finalizer.requests))
+	}
+}
+
+func TestOnboardingTypedFailureReturnsToCancelableWizard(t *testing.T) {
+	typedFailure := serverapi.NewOnboardingFinalizeError(
+		serverapi.OnboardingFinalizeConfigWriteFailed,
+		serverapi.OnboardingConfigWriteFailedDetails{SettingsPath: "/server/config.toml", Operation: "write"},
+		errors.New("write failed"),
+	)
+	finalization := newOnboardingFinalization(
+		&recordingOnboardingFinalizer{err: typedFailure},
+		context.Background(),
+	)
+	model := newOnboardingModel(finalization, onboardingFlowState{settings: config.Settings{Theme: theme.Light}})
+
+	done := model.finalizeCmd(true)().(onboardingFinalizeDoneMsg)
+	next, _ := model.Update(done)
+	model = next.(*onboardingModel)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if !next.(*onboardingModel).canceled {
+		t.Fatal("escape after a recoverable finalization failure must cancel setup")
+	}
+	if _, submitted := finalization.waitIfSubmitted(); submitted {
+		t.Fatal("canceled retry-ready wizard must not retain a submitted finalization")
 	}
 }
 
