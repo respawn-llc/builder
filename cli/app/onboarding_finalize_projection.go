@@ -56,6 +56,10 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (server
 		askQuestion := state.settings.EnabledTools[toolspec.ToolAskQuestion]
 		req.AskQuestion = &askQuestion
 		req.ToolOverrides = onboardingToolOverrides(state.settings.EnabledTools)
+		if state.settings.Timeouts.ModelRequestSeconds != config.DefaultOnboardingSettings().Timeouts.ModelRequestSeconds {
+			modelTimeoutSeconds := state.settings.Timeouts.ModelRequestSeconds
+			req.ModelTimeoutSeconds = &modelTimeoutSeconds
+		}
 		if state.settings.ModelVerbosity != "" {
 			verbosity := serverapi.OnboardingVerbosity(state.settings.ModelVerbosity)
 			req.Verbosity = &verbosity

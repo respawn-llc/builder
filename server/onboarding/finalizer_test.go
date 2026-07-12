@@ -273,6 +273,18 @@ func TestFinalizerPersistsToolOverrides(t *testing.T) {
 	}
 }
 
+func TestFinalizerPersistsModelTimeout(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	timeout := 123
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{ModelTimeoutSeconds: &timeout}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	if got := loadFinalizedConfig(t, root).Settings.Timeouts.ModelRequestSeconds; got != timeout {
+		t.Fatalf("model timeout = %d, want %d", got, timeout)
+	}
+}
+
 func TestFinalizerImportsSkillsAndCommandsBeforeConfigWrite(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()

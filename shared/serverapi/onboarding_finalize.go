@@ -87,20 +87,21 @@ const (
 )
 
 type OnboardingFinalizeRequest struct {
-	Theme              *OnboardingTheme               `json:"theme,omitempty"`
-	MainProvider       *OnboardingProviderChoice      `json:"main_provider,omitempty"`
-	Model              *OnboardingModelChoice         `json:"model,omitempty"`
-	ContextWindow      *OnboardingContextWindowChoice `json:"context_window,omitempty"`
-	Thinking           *OnboardingThinkingChoice      `json:"thinking,omitempty"`
-	Verbosity          *OnboardingVerbosity           `json:"verbosity,omitempty"`
-	AskQuestion        *bool                          `json:"ask_question,omitempty"`
-	ToolOverrides      []OnboardingToolOverride       `json:"tool_overrides,omitempty"`
-	Supervisor         *OnboardingSupervisorChoice    `json:"supervisor,omitempty"`
-	Compaction         *OnboardingCompactionMode      `json:"compaction,omitempty"`
-	SkillsImport       *OnboardingImportSelection     `json:"skills_import,omitempty"`
-	CommandsImport     *OnboardingImportSelection     `json:"commands_import,omitempty"`
-	DisabledSkillNames []string                       `json:"disabled_skill_names,omitempty"`
-	unknownFields      []string
+	Theme               *OnboardingTheme               `json:"theme,omitempty"`
+	MainProvider        *OnboardingProviderChoice      `json:"main_provider,omitempty"`
+	Model               *OnboardingModelChoice         `json:"model,omitempty"`
+	ContextWindow       *OnboardingContextWindowChoice `json:"context_window,omitempty"`
+	Thinking            *OnboardingThinkingChoice      `json:"thinking,omitempty"`
+	Verbosity           *OnboardingVerbosity           `json:"verbosity,omitempty"`
+	ModelTimeoutSeconds *int                           `json:"model_timeout_seconds,omitempty"`
+	AskQuestion         *bool                          `json:"ask_question,omitempty"`
+	ToolOverrides       []OnboardingToolOverride       `json:"tool_overrides,omitempty"`
+	Supervisor          *OnboardingSupervisorChoice    `json:"supervisor,omitempty"`
+	Compaction          *OnboardingCompactionMode      `json:"compaction,omitempty"`
+	SkillsImport        *OnboardingImportSelection     `json:"skills_import,omitempty"`
+	CommandsImport      *OnboardingImportSelection     `json:"commands_import,omitempty"`
+	DisabledSkillNames  []string                       `json:"disabled_skill_names,omitempty"`
+	unknownFields       []string
 }
 
 type OnboardingModelChoice struct {
@@ -158,7 +159,7 @@ func (r *OnboardingFinalizeRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	allowed := map[string]bool{
-		"theme": true, "main_provider": true, "model": true, "context_window": true, "thinking": true, "verbosity": true,
+		"theme": true, "main_provider": true, "model": true, "context_window": true, "thinking": true, "verbosity": true, "model_timeout_seconds": true,
 		"ask_question": true, "tool_overrides": true, "supervisor": true, "compaction": true, "skills_import": true,
 		"commands_import": true, "disabled_skill_names": true,
 	}
@@ -517,6 +518,9 @@ func ValidateOnboardingFinalizeRequest(req OnboardingFinalizeRequest) error {
 	validateThinkingChoice(req.Thinking, "thinking", add)
 	if req.Verbosity != nil && !oneOf(string(*req.Verbosity), "low", "medium", "high") {
 		add("verbosity", "unsupported_value")
+	}
+	if req.ModelTimeoutSeconds != nil && *req.ModelTimeoutSeconds <= 0 {
+		add("model_timeout_seconds", "positive_required")
 	}
 	validateToolOverrides(req.ToolOverrides, add)
 	if req.Supervisor != nil {

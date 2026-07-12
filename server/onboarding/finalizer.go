@@ -155,6 +155,9 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 		}
 		settings.ModelVerbosity = config.ModelVerbosity(*req.Verbosity)
 	}
+	if req.ModelTimeoutSeconds != nil {
+		settings.Timeouts.ModelRequestSeconds = *req.ModelTimeoutSeconds
+	}
 	if req.AskQuestion != nil {
 		if settings.EnabledTools == nil {
 			settings.EnabledTools = map[toolspec.ID]bool{}

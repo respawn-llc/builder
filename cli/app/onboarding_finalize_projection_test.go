@@ -302,6 +302,7 @@ func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 			ModelContextWindow: 1_000_000,
 			ThinkingLevel:      "high",
 			ModelVerbosity:     config.ModelVerbosityHigh,
+			Timeouts:           config.Timeouts{ModelRequestSeconds: 123},
 			CompactionMode:     config.CompactionModeNative,
 			EnabledTools: map[toolspec.ID]bool{
 				toolspec.ToolAskQuestion: true,
@@ -345,6 +346,9 @@ func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 	}
 	if len(toolOverrides) != 2 || !toolOverrides[toolspec.ToolEdit] || toolOverrides[toolspec.ToolPatch] {
 		t.Fatalf("tool overrides = %+v", request.ToolOverrides)
+	}
+	if request.ModelTimeoutSeconds == nil || *request.ModelTimeoutSeconds != 123 {
+		t.Fatalf("model timeout = %+v", request.ModelTimeoutSeconds)
 	}
 	if request.ContextWindow == nil || request.ContextWindow.Kind != serverapi.OnboardingContextWindowLarge {
 		t.Fatalf("context window = %+v", request.ContextWindow)
