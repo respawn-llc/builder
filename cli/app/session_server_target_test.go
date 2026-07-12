@@ -672,10 +672,10 @@ func TestStartSessionServerBypassesRemoteAndDaemonOnFirstInteractiveRun(t *testi
 	_, workspace := newRegisteredAppWorkspaceWithoutSettings(t)
 
 	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, &stubAuthInteractor{}, true)
+	if server != nil {
+		t.Cleanup(func() { _ = server.Close() })
+	}
 	if err == nil {
-		if server != nil {
-			_ = server.Close()
-		}
 		t.Fatal("expected unavailable configured server to fail")
 	}
 }
@@ -689,10 +689,10 @@ func TestStartSessionServerUnregisteredWorkspaceStartsRegistrationCapableServer(
 	}
 
 	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
+	if server != nil {
+		t.Cleanup(func() { _ = server.Close() })
+	}
 	if err == nil {
-		if server != nil {
-			_ = server.Close()
-		}
 		t.Fatal("expected unavailable configured server to fail")
 	}
 }

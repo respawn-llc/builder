@@ -63,7 +63,7 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 	return server, nil
 }
 
-func attachConfiguredStartupRemote(ctx context.Context, cfg config.App) (remote *client.Remote, returnErr error) {
+func attachConfiguredStartupRemote(ctx context.Context, cfg config.App) (attached *client.Remote, returnErr error) {
 	remote, err := client.DialConfiguredRemote(ctx, cfg)
 	if err != nil {
 		return nil, newConfiguredServerPreflightError(cfg, "attach", err)
