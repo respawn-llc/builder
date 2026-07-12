@@ -14,6 +14,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+var ErrOnboardingCanceled = errors.New("first-time setup canceled")
+
 func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient client.CapabilityFactsClient, finalizer client.OnboardingFinalizeClient) (onboardingResult, error) {
 	if factsClient == nil {
 		return onboardingResult{}, errors.New("capability facts client is required")
@@ -72,7 +74,7 @@ func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient client.C
 		return onboardingFlowOutcome(outcome)
 	}
 	if finalized.canceled {
-		return onboardingResult{}, errors.New("first-time setup canceled")
+		return onboardingResult{}, ErrOnboardingCanceled
 	}
 	return finalized.result, nil
 }

@@ -13,6 +13,13 @@ import (
 
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv(config.PersistenceRootEnvName)
+	if configPath, helperProcess := os.LookupEnv(onboardingRemoteLifecycleConfigEnv); helperProcess {
+		if err := runOnboardingRemoteLifecycleHelper(configPath); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if configPath, fixtureProcess := os.LookupEnv(appfixture.ProcessConfigEnvName); fixtureProcess {
 		processConfig, err := appfixture.ReadProcessConfig(configPath)
 		if err == nil {
@@ -31,5 +38,11 @@ func TestMain(m *testing.M) {
 	transientStatusDuration = 30 * time.Millisecond
 	code := m.Run()
 	transientStatusDuration = previousDuration
+	if err := cleanupOnboardingRemoteLifecycleTestBinary(); err != nil {
+		log.Print(err)
+		if code == 0 {
+			code = 1
+		}
+	}
 	os.Exit(code)
 }
