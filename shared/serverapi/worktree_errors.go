@@ -182,10 +182,22 @@ func (e *WorktreeOperationIDConflictError) Validate() error {
 type WorktreeSetupRetainedError struct {
 	Worktree   WorktreeTopologyEntry `json:"worktree"`
 	Diagnostic string                `json:"diagnostic"`
+	cause      error
+}
+
+func NewWorktreeSetupRetainedError(worktree WorktreeTopologyEntry, diagnostic string, cause error) *WorktreeSetupRetainedError {
+	return &WorktreeSetupRetainedError{Worktree: worktree, Diagnostic: diagnostic, cause: cause}
 }
 
 func (e *WorktreeSetupRetainedError) Error() string {
 	return ErrWorktreeSetupRetained.Error()
+}
+
+func (e *WorktreeSetupRetainedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
 }
 
 func (e *WorktreeSetupRetainedError) Is(target error) bool {

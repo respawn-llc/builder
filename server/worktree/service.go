@@ -638,7 +638,17 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		},
 		CreatedBranch: createdBranch,
 	}); err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
+		return serverapi.WorktreeCreateResponse{}, serverapi.NewWorktreeSetupRetainedError(
+			serverapi.WorktreeTopologyEntry{
+				Variant: serverapi.WorktreeTopologyVariantRegistered,
+				Registered: &serverapi.WorktreeRegisteredFacts{
+					Git:  gitFactsFromEntry(created.git),
+					Kent: kentFactsFromRecord(created.record),
+				},
+			},
+			err.Error(),
+			err,
+		)
 	}
 	createdView, err := worktreeViewFromSynced(created, workspaceCtx.target)
 	if err != nil {

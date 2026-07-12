@@ -408,6 +408,10 @@ func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("CreateWorktree succeeded, want setup failure")
 	}
+	var retained *serverapi.WorktreeSetupRetainedError
+	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
+		t.Fatalf("CreateWorktree error = %T %v, want retained worktree facts", err, err)
+	}
 	if _, statErr := os.Stat(expectedRoot); statErr != nil {
 		t.Fatalf("expected setup-failed worktree kept, stat err=%v", statErr)
 	}
