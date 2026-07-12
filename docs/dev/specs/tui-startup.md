@@ -13,7 +13,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - Text entry on startup surfaces uses the native/hardware terminal cursor positioned by the render adapter; never a drawn cursor glyph.
 - Startup surfaces do not enable terminal mouse capture.
 - Every asynchronous gate renders its surface immediately with a loading affordance; startup never leaves the terminal blank or frozen while waiting on the server.
-- Startup surfaces form an explicit navigation stack with owned UI lifecycles (Compose/Decompose-style component model): surfaces are pushed/popped, `Esc` pops, and navigation state is owned by the pure model layer, never by render widgets.
+- Startup surfaces form an explicit navigation stack with owned UI lifecycles (Compose/Decompose-style component model): surfaces are pushed/popped, `Esc` pops except where a surface owns a different explicit key contract, and navigation state is owned by the pure model layer, never by render widgets.
 
 ## Startup Sequence
 
@@ -27,7 +27,7 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 6. **Workspace-change prompt** when the picked session's stored root differs from the current root. (owner: tui-transcript :: Startup And Session Selection)
 7. **Lazy open and handoff.** Session creation/initialization is lazy — first user message or loop trigger. (owner: core-runtime-tools :: Sessions And Persistence)
 
-- `Esc` on a startup surface navigates back one gate where a previous gate exists; on the first visible surface it exits the TUI cleanly.
+- `Esc` on a startup surface navigates back one gate where a previous gate exists; on the first visible surface it exits the TUI cleanly. The session picker is an explicit exception: its `Esc` key is a no-op.
 
 ## Auth Gate
 
@@ -42,7 +42,7 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 - Shows recent sessions, pick-or-new; scrollable with no cap; empty state goes directly to new-session setup. (owner: tui-transcript :: Startup And Session Selection)
 - The list is served as a recency-ordered window with infinite scroll; the client never holds or requests the full session set.
 - Each row shows session title and relative age. Detail facts for the selected session (workspace path, git branch, auth method, model) load asynchronously with loading placeholders; selection is never blocked on them.
-- Keys: `Up`/`Down` and `j`/`k` move selection; `PgUp`/`PgDn` page; `Enter` opens; `n` starts a new session; `Esc`/`q` exits per the back-navigation rule.
+- Keys: `Up`/`Down` and `j`/`k` move selection; `PgUp`/`PgDn` page; `Enter` opens; `n` starts a new session. `Esc` is a no-op, `q` has no binding, and `Ctrl+C` is the sole picker exit key.
 - Opening a session seeds the next main input from the session's persisted draft verbatim (byte-for-byte, including whitespace and newlines).
 
 ## Project Binding Flow

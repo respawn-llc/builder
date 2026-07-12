@@ -100,21 +100,20 @@ func TestSlashCommandPickerHighlightTracksFilteredVisibleCommands(t *testing.T) 
 		hidden  []string
 	}{
 		{
-			name:    "no auth hides logout fast resume",
-			visible: []string{"login"},
-			hidden:  []string{"logout", "fast", "resume"},
+			name:    "no auth hides logout and fast",
+			visible: []string{"login", "resume"},
+			hidden:  []string{"logout", "fast"},
 		},
 		{
-			name:    "oauth hides login fast resume",
+			name:    "oauth hides login and fast",
 			opts:    []UIOption{WithUIStatusConfig(uiStatusConfig{AuthManager: oauthManager})},
-			visible: []string{"logout"},
-			hidden:  []string{"login", "fast", "resume"},
+			visible: []string{"logout", "resume"},
+			hidden:  []string{"login", "fast"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := append([]UIOption{WithUIHasOtherSessions(true, false)}, tc.opts...)
-			m := newProjectedStaticUIModel(opts...)
+			m := newProjectedStaticUIModel(tc.opts...)
 			m.input = "/"
 			refreshSlashCommandFilterForTest(t, m)
 
@@ -217,54 +216,19 @@ func TestBusyTabBackWithoutParentShowsLocalErrorAndDoesNotQueue(t *testing.T) {
 	}
 }
 
-func TestSlashCommandPickerHidesResumeWithoutOtherSessions(t *testing.T) {
-	m := newProjectedStaticUIModel(WithUIHasOtherSessions(true, false))
-	m.input = "/re"
-	refreshSlashCommandFilterForTest(t, m)
-
-	state := m.slashCommandPicker()
-	if slashPickerContainsCommand(state, "resume") {
-		t.Fatalf("did not expect /resume without other sessions, got %+v", slashPickerCommandNames(state))
-	}
-}
-
-func TestSlashCommandPickerShowsResumeWhenOtherSessionAvailabilityIsUnknown(t *testing.T) {
-	m := newProjectedStaticUIModel(WithUIHasOtherSessions(false, false))
+func TestSlashCommandPickerShowsResumeWhenCurrentSessionIsOnlyKnownSession(t *testing.T) {
+	m := newProjectedStaticUIModel()
 	m.input = "/re"
 	refreshSlashCommandFilterForTest(t, m)
 
 	state := m.slashCommandPicker()
 	if !slashPickerContainsCommand(state, "resume") {
-		t.Fatalf("expected /resume when other session availability is unknown, got %+v", slashPickerCommandNames(state))
+		t.Fatalf("expected /resume without another known session, got %+v", slashPickerCommandNames(state))
 	}
 }
 
-func TestResumeSlashCommandShowsErrorWithoutOtherSessions(t *testing.T) {
-	m := newProjectedStaticUIModel(WithUIHasOtherSessions(true, false))
-	m.input = "/resume"
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected transient status cmd for unavailable /resume")
-	}
-	if updated.exitAction != UIActionNone {
-		t.Fatalf("did not expect session transition action, got %q", updated.exitAction)
-	}
-	if updated.input != "" {
-		t.Fatalf("expected input cleared for unavailable /resume, got %q", updated.input)
-	}
-	if !strings.Contains(updated.transientStatus, resumeCommandUnavailableMessage) {
-		t.Fatalf("expected unavailable /resume status, got %q", updated.transientStatus)
-	}
-	status := stripANSIAndTrimRight(updated.layout().renderStatusLine(120, uiThemeStyles("dark")))
-	if !strings.Contains(status, resumeCommandUnavailableMessage) {
-		t.Fatalf("expected unavailable /resume status line, got %q", status)
-	}
-}
-
-func TestResumeSlashCommandAllowsUnknownOtherSessionAvailability(t *testing.T) {
-	m := newProjectedStaticUIModel(WithUIHasOtherSessions(false, false))
+func TestResumeSlashCommandOpensPickerWhenCurrentSessionIsOnlyKnownSession(t *testing.T) {
+	m := newProjectedStaticUIModel()
 	m.input = "/resume"
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -582,29 +546,7 @@ func (s *countingAuthStore) Save(_ context.Context, state auth.State) error {
 	return nil
 }
 
-func TestSlashCommandPickerShowsCopyOnlyWhenFinalAnswerIsAvailable(t *testing.T) {
-	hidden := newProjectedStaticUIModel()
-	hidden.input = "/co"
-	hidden.refreshSlashCommandFilterFromInputWithAuth(true)
-	if state := hidden.slashCommandPicker(); slashPickerContainsCommand(state, "copy") {
-		t.Fatalf("did not expect /copy without a final answer, got %+v", slashPickerCommandNames(state))
-	}
-
-	visible := newProjectedTestUIModel(&runtimeControlFakeClient{
-		status: clientui.RuntimeStatus{LastCommittedAssistantFinalAnswer: "done"},
-	}, closedProjectedRuntimeEvents(), closedAskEvents())
-	visible.input = "/co"
-	visible.refreshSlashCommandFilterFromInputWithAuth(true)
-	state := visible.slashCommandPicker()
-	if !state.visible {
-		t.Fatal("expected slash picker visible")
-	}
-	if !slashPickerContainsCommand(state, "copy") {
-		t.Fatalf("expected /copy in slash picker, got %+v", slashPickerCommandNames(state))
-	}
-}
-
-func TestSlashCommandPickerUsesCachedRuntimeStatusForCopy(t *testing.T) {
+func TestSlashCommandPickerAlwaysShowsCopyWithoutReadingCachedRuntimeStatus(t *testing.T) {
 	client := &runtimeControlFakeClient{
 		status: clientui.RuntimeStatus{LastCommittedAssistantFinalAnswer: "done"},
 	}

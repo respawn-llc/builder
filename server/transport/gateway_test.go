@@ -509,7 +509,7 @@ func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "1"})
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "46"})
 	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch ||
 		!strings.Contains(respErr.Message, "unsupported protocol version") ||
 		!strings.Contains(respErr.Message, "server requires "+strconv.Quote(protocol.Version)) ||
@@ -949,6 +949,9 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 
 	if _, err := remote.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: foreignSession.Meta().SessionID}); err == nil {
 		t.Fatal("expected foreign-project session view access to be rejected")
+	}
+	if _, err := remote.GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: foreignSession.Meta().SessionID}); err == nil {
+		t.Fatal("expected foreign-project final answer access to be rejected")
 	}
 	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: "persist-foreign", SessionID: foreignSession.Meta().SessionID, Input: "should fail"}); err == nil {
 		t.Fatal("expected foreign-project session mutation to be rejected")

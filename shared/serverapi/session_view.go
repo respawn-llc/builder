@@ -30,6 +30,14 @@ type SessionTranscriptPageResponse struct {
 	Transcript clientui.TranscriptPage `json:"transcript"`
 }
 
+type SessionLatestCommittedAssistantFinalAnswerRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type SessionLatestCommittedAssistantFinalAnswerResponse struct {
+	Answer *string `json:"answer"`
+}
+
 func (r SessionMainViewRequest) Validate() error {
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
@@ -56,4 +64,8 @@ func (r SessionTranscriptPageRequest) Validate() error {
 		return ErrTranscriptCursorInvalid
 	}
 	return nil
+}
+
+func (r SessionLatestCommittedAssistantFinalAnswerRequest) Validate() error {
+	return validateRequiredSessionID(r.SessionID)
 }

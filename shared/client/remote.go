@@ -484,6 +484,11 @@ func (c *Remote) GetSessionTranscriptPage(ctx context.Context, req serverapi.Ses
 	return resp, c.call(ctx, protocol.MethodSessionGetTranscriptPage, req, &resp)
 }
 
+func (c *Remote) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	var resp serverapi.SessionLatestCommittedAssistantFinalAnswerResponse
+	return resp, c.call(ctx, protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, req, &resp)
+}
+
 func (c *Remote) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
 	var resp serverapi.SessionInitialInputResponse
 	return resp, c.call(ctx, protocol.MethodSessionGetInitialInput, req, &resp)

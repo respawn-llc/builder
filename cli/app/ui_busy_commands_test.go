@@ -5,33 +5,34 @@ import (
 	"testing"
 
 	"core/cli/app/commands"
+	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestDefaultRegistryBusyContract(t *testing.T) {
 	r := commands.NewDefaultRegistry()
-	want := map[string]bool{
-		"exit":           false,
-		"login":          false,
-		"new":            false,
-		"resume":         false,
-		"logout":         false,
-		"compact":        false,
-		"name":           true,
-		"thinking":       true,
-		"fast":           true,
-		"supervisor":     true,
-		"autocompaction": true,
-		"questions":      true,
-		"status":         true,
-		"goal":           true,
-		"ps":             true,
-		"worktree":       false,
-		"copy":           true,
-		"back":           false,
-		"review":         false,
-		"init":           false,
+	want := map[string]commands.ActiveRunPolicy{
+		"exit":           commands.ActiveRunPolicyAllowed,
+		"login":          commands.ActiveRunPolicyRequiresIdle,
+		"new":            commands.ActiveRunPolicyAllowed,
+		"resume":         commands.ActiveRunPolicyAllowed,
+		"logout":         commands.ActiveRunPolicyRequiresIdle,
+		"compact":        commands.ActiveRunPolicyRequiresIdle,
+		"name":           commands.ActiveRunPolicyAllowed,
+		"thinking":       commands.ActiveRunPolicyAllowed,
+		"fast":           commands.ActiveRunPolicyAllowed,
+		"supervisor":     commands.ActiveRunPolicyAllowed,
+		"autocompaction": commands.ActiveRunPolicyAllowed,
+		"questions":      commands.ActiveRunPolicyAllowed,
+		"status":         commands.ActiveRunPolicyAllowed,
+		"goal":           commands.ActiveRunPolicyAllowed,
+		"ps":             commands.ActiveRunPolicyAllowed,
+		"worktree":       commands.ActiveRunPolicyRequiresIdle,
+		"copy":           commands.ActiveRunPolicyAllowed,
+		"back":           commands.ActiveRunPolicyAllowed,
+		"review":         commands.ActiveRunPolicyAllowed,
+		"init":           commands.ActiveRunPolicyAllowed,
 	}
 
 	for _, command := range r.Commands() {
@@ -39,8 +40,8 @@ func TestDefaultRegistryBusyContract(t *testing.T) {
 		if !ok {
 			t.Fatalf("unexpected built-in command in registry: %q", command.Name)
 		}
-		if command.RunWhileBusy != wantBusy {
-			t.Fatalf("command %q RunWhileBusy=%t, want %t", command.Name, command.RunWhileBusy, wantBusy)
+		if command.ActiveRunPolicy != wantBusy {
+			t.Fatalf("command %q active-run policy=%v, want %v", command.Name, command.ActiveRunPolicy, wantBusy)
 		}
 		delete(want, command.Name)
 	}
@@ -118,14 +119,14 @@ func TestBusyEnterCommandBehavior(t *testing.T) {
 			wantStatusContains: "cannot run /compact while model is working",
 		},
 		{
-			name:               "review is blocked on enter while busy",
-			input:              "/review cli/app",
-			wantStatusContains: "cannot run /review while model is working",
+			name:      "review starts fresh session while busy",
+			input:     "/review cli/app",
+			wantInput: "",
 		},
 		{
-			name:               "init is blocked on enter while busy",
-			input:              "/init starter repo",
-			wantStatusContains: "cannot run /init while model is working",
+			name:      "init starts fresh session while busy",
+			input:     "/init starter repo",
+			wantInput: "",
 		},
 		{
 			name:               "worktree is blocked on enter while busy",
@@ -136,7 +137,7 @@ func TestBusyEnterCommandBehavior(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newProjectedStaticUIModel()
+			m := newProjectedStaticUIModel(WithUIConversationFreshness(clientui.ConversationFreshnessEstablished))
 			m.setRuntimeActivityBusyForTest(true)
 			m.activity = uiActivityRunning
 			m.input = tt.input
@@ -187,6 +188,36 @@ func TestBusyEnterCommandBehavior(t *testing.T) {
 				if strings.Contains(status, tt.wantStatusOmits) {
 					t.Fatalf("did not expect status line to contain %q, got %q", tt.wantStatusOmits, status)
 				}
+			}
+		})
+	}
+}
+
+func TestBusyNavigationCommandsStartTheirExistingTransitions(t *testing.T) {
+	tests := []struct {
+		input      string
+		wantAction UIAction
+	}{
+		{input: "/exit", wantAction: UIActionExit},
+		{input: "/new", wantAction: UIActionNewSession},
+		{input: "/resume", wantAction: UIActionResume},
+		{input: "/review", wantAction: UIActionNewSession},
+		{input: "/init", wantAction: UIActionNewSession},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			m := newProjectedStaticUIModel(WithUIConversationFreshness(clientui.ConversationFreshnessEstablished))
+			m.setRuntimeActivityBusyForTest(true)
+			m.activity = uiActivityRunning
+			m.input = tt.input
+
+			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatalf("expected transition command for %s", tt.input)
+			}
+			updated := next.(*uiModel)
+			if updated.exitAction != tt.wantAction {
+				t.Fatalf("action = %q, want %q", updated.exitAction, tt.wantAction)
 			}
 		})
 	}

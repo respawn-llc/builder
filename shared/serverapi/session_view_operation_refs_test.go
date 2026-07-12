@@ -51,3 +51,12 @@ func TestSessionMainViewRequestRejectsInvalidPendingOperationRefs(t *testing.T) 
 		t.Fatal("expected invalid pending ref to be rejected")
 	}
 }
+
+func TestSessionLatestCommittedAssistantFinalAnswerRequestRequiresSessionID(t *testing.T) {
+	if err := (SessionLatestCommittedAssistantFinalAnswerRequest{}).Validate(); !errors.Is(err, ErrSessionIDRequired) {
+		t.Fatalf("Validate error = %v, want ErrSessionIDRequired", err)
+	}
+	if err := (SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: "session-1"}).Validate(); err != nil {
+		t.Fatalf("Validate valid request: %v", err)
+	}
+}

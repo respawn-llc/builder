@@ -85,6 +85,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 	nextSessionInitialPrompt := ""
 	nextSessionInitialPromptHistoryRecorded := false
 	nextSessionInitialInput := ""
+	nextSessionInitialInputOverride := false
 	nextSessionParentID := ""
 	forceNewSession := opts.ForceNewSession
 	nextSessionOverrides := opts.Overrides
@@ -123,6 +124,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			nextSessionInitialPrompt,
 			nextSessionInitialPromptHistoryRecorded,
 			nextSessionInitialInput,
+			nextSessionInitialInputOverride,
 			showStartupUpdateNotice,
 		)
 		if err != nil {
@@ -133,22 +135,28 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		nextSessionInitialPrompt = ""
 		nextSessionInitialPromptHistoryRecorded = false
 		nextSessionInitialInput = ""
+		nextSessionInitialInputOverride = false
 		if runErr != nil {
-			runtimePlan.Close()
+			if closeErr := runtimePlan.Close(); closeErr != nil {
+				return errors.Join(runErr, closeErr)
+			}
 			return runErr
 		}
 		if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
-			runtimePlan.Close()
+			if closeErr := runtimePlan.Close(); closeErr != nil {
+				return errors.Join(err, closeErr)
+			}
 			return err
 		}
 
 		transition := extractUITransition(finalModel)
 		if transition.Exit {
-			closeRuntimePlanAfterUIExit(runtimePlan, finalModel)
+			if err := closeRuntimePlanAfterUIExit(runtimePlan, finalModel); err != nil {
+				return err
+			}
 			return nil
 		}
-		resolved, err := resolveSessionAction(ctx, server, interactor, plan.SessionID, transition)
-		runtimePlan.Close()
+		resolved, err := resolveAndReleaseSessionAction(ctx, server, interactor, plan.SessionID, transition, runtimePlan)
 		if err != nil {
 			return err
 		}
@@ -159,9 +167,24 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		nextSessionInitialPrompt = resolved.InitialPrompt
 		nextSessionInitialPromptHistoryRecorded = resolved.InitialPromptHistoryRecorded
 		nextSessionInitialInput = resolved.InitialInput
+		nextSessionInitialInputOverride = transition.Action == UIActionOpenSession
 		nextSessionParentID = resolved.ParentSessionID
 		forceNewSession = resolved.ForceNewSession
 	}
+}
+
+func resolveAndReleaseSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition, runtimePlan *runtimeLaunchPlan) (resolvedSessionAction, error) {
+	resolved, err := resolveSessionAction(ctx, server, interactor, sessionID, transition)
+	if err != nil {
+		if closeErr := runtimePlan.Close(); closeErr != nil {
+			return resolvedSessionAction{}, errors.Join(err, closeErr)
+		}
+		return resolvedSessionAction{}, err
+	}
+	if err := runtimePlan.Close(); err != nil {
+		return resolvedSessionAction{}, err
+	}
+	return resolved, nil
 }
 
 func prepareSessionUIRun(
@@ -172,6 +195,7 @@ func prepareSessionUIRun(
 	initialPrompt string,
 	initialPromptHistoryRecorded bool,
 	transitionInput string,
+	overrideStoredDraft bool,
 	startupUpdateNotice bool,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
 	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.WorkspaceRoot+" model="+plan.ActiveSettings.Model)
@@ -181,10 +205,12 @@ func prepareSessionUIRun(
 	cfg := server.Config()
 	commandRegistry, err := commands.NewDefaultRegistryWithFilePrompts(cfg.WorkspaceRoot, cfg.PersistenceRoot)
 	if err != nil {
-		runtimePlan.Close()
+		if closeErr := runtimePlan.Close(); closeErr != nil {
+			return nil, uiLoopRequest{}, errors.Join(err, closeErr)
+		}
 		return nil, uiLoopRequest{}, err
 	}
-	initialState := sessionLaunchInitialStateFromServer(ctx, server, plan.SessionID, transitionInput)
+	initialState := sessionLaunchInitialStateFromServer(ctx, server, plan.SessionID, transitionInput, overrideStoredDraft)
 	return runtimePlan, uiLoopRequest{
 		wiring:                       runtimePlan.Wiring,
 		active:                       plan.ActiveSettings,
@@ -202,12 +228,11 @@ func prepareSessionUIRun(
 	}, nil
 }
 
-func closeRuntimePlanAfterUIExit(runtimePlan *runtimeLaunchPlan, finalModel any) {
+func closeRuntimePlanAfterUIExit(runtimePlan *runtimeLaunchPlan, finalModel any) error {
 	if ui, ok := finalModel.(*uiModel); ok && ui != nil && ui.forcedLocalExit {
-		runtimePlan.DetachOnlyClose()
-		return
+		return runtimePlan.DetachOnlyClose()
 	}
-	runtimePlan.Close()
+	return runtimePlan.Close()
 }
 
 func shouldRetryStartupUpdateNotice(model any, enabled bool) bool {
@@ -231,7 +256,7 @@ func shouldCloseReboundServer(original appServerCore, rebound appServerCore) boo
 }
 
 func sessionLaunchInitialInputFromServer(ctx context.Context, server sessionInitialInputServer, sessionID string, transitionInput string) string {
-	return sessionLaunchInitialStateFromServer(ctx, server, sessionID, transitionInput).Input
+	return sessionLaunchInitialStateFromServer(ctx, server, sessionID, transitionInput, false).Input
 }
 
 type sessionLaunchInitialState struct {
@@ -239,13 +264,14 @@ type sessionLaunchInitialState struct {
 	RecoveryBuffers []serverapi.SessionDraftRecoveryBuffer
 }
 
-func sessionLaunchInitialStateFromServer(ctx context.Context, server sessionInitialInputServer, sessionID string, transitionInput string) sessionLaunchInitialState {
+func sessionLaunchInitialStateFromServer(ctx context.Context, server sessionInitialInputServer, sessionID string, transitionInput string, overrideStoredDraft bool) sessionLaunchInitialState {
 	if server == nil || server.SessionLifecycleClient() == nil {
 		return sessionLaunchInitialState{Input: transitionInput}
 	}
 	resp, err := server.SessionLifecycleClient().GetInitialInput(ctx, serverapi.SessionInitialInputRequest{
-		SessionID:       strings.TrimSpace(sessionID),
-		TransitionInput: transitionInput,
+		SessionID:           strings.TrimSpace(sessionID),
+		TransitionInput:     transitionInput,
+		OverrideStoredDraft: overrideStoredDraft,
 	})
 	if err != nil {
 		return sessionLaunchInitialState{Input: transitionInput}

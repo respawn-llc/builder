@@ -18,6 +18,9 @@ type countingSessionViewClient struct {
 	mainViewCount   atomic.Int32
 	lastMainViewReq serverapi.SessionMainViewRequest
 	lastPageReq     serverapi.SessionTranscriptPageRequest
+	lastFinalReq    serverapi.SessionLatestCommittedAssistantFinalAnswerRequest
+	finalAnswer     *string
+	finalAnswerErr  error
 }
 
 func (c *countingSessionViewClient) GetSessionMainView(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -32,6 +35,14 @@ func (c *countingSessionViewClient) GetSessionTranscriptPage(_ context.Context, 
 	return serverapi.SessionTranscriptPageResponse{Transcript: c.page}, nil
 }
 
+func (c *countingSessionViewClient) GetLatestCommittedAssistantFinalAnswer(_ context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	c.lastFinalReq = req
+	if c.finalAnswerErr != nil {
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, c.finalAnswerErr
+	}
+	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{Answer: c.finalAnswer}, nil
+}
+
 type blockingSessionViewClient struct{}
 
 func (blockingSessionViewClient) GetSessionMainView(ctx context.Context, _ serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -42,6 +53,11 @@ func (blockingSessionViewClient) GetSessionMainView(ctx context.Context, _ serve
 func (blockingSessionViewClient) GetSessionTranscriptPage(ctx context.Context, _ serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
 	<-ctx.Done()
 	return serverapi.SessionTranscriptPageResponse{}, ctx.Err()
+}
+
+func (blockingSessionViewClient) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, _ serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	<-ctx.Done()
+	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, ctx.Err()
 }
 
 type controlledTranscriptPageResult struct {
@@ -75,6 +91,10 @@ func (c *controlledTranscriptPageClient) GetSessionTranscriptPage(ctx context.Co
 	}
 }
 
+func (c *controlledTranscriptPageClient) GetLatestCommittedAssistantFinalAnswer(context.Context, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, nil
+}
+
 type flakySessionViewClient struct {
 	mu        sync.Mutex
 	responses []serverapi.SessionMainViewResponse
@@ -101,6 +121,10 @@ func (c *flakySessionViewClient) GetSessionMainView(context.Context, serverapi.S
 
 func (c *flakySessionViewClient) GetSessionTranscriptPage(context.Context, serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
 	return serverapi.SessionTranscriptPageResponse{}, nil
+}
+
+func (c *flakySessionViewClient) GetLatestCommittedAssistantFinalAnswer(context.Context, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, nil
 }
 
 type mutableRuntimeResolver struct {

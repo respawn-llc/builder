@@ -18,7 +18,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 			return m, disconnectCmd
 		}
 	}
-	if commandResult.SubmitUser && commandResult.FreshConversation && m.currentConversationFreshness() != clientui.ConversationFreshnessFresh {
+	if commandResult.SubmitUser && commandResult.FreshConversation && (m.isBusy() || m.currentConversationFreshness() != clientui.ConversationFreshnessFresh) {
 		m.nextSessionInitialPrompt = commandResult.User
 		m.nextSessionInitialPromptHistoryRecorded = true
 		m.nextParentSessionID = m.sessionID
@@ -97,16 +97,8 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 	return m, prefixCmd
 }
 
-const resumeCommandUnavailableMessage = "No other sessions available"
-
 func (c uiInputController) handleResumeCommand() (tea.Model, tea.Cmd) {
 	m := c.model
-	if !m.resumeCommandAvailable() {
-		return m, sequenceCmds(
-			c.model.appendLocalEntryWithNoticeID("error", resumeCommandUnavailableMessage, ""),
-			c.model.sendTransientStatusWithNoticeID(resumeCommandUnavailableMessage, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""),
-		)
-	}
 	m.exitAction = UIActionResume
 	return m, tea.Quit
 }
@@ -114,37 +106,22 @@ func (c uiInputController) handleResumeCommand() (tea.Model, tea.Cmd) {
 func (c uiInputController) handleBackCommand() (tea.Model, tea.Cmd) {
 	m := c.model
 	status := m.cachedRuntimeStatus()
-	if strings.TrimSpace(status.ParentSessionID) == "" {
+	parentSessionID := strings.TrimSpace(status.ParentSessionID)
+	if parentSessionID == "" {
 		return m, c.model.appendLocalEntryWithNoticeID("system", "No parent session available", "")
 	}
-	m.nextSessionInitialInput = m.latestAssistantFinalAnswerFromStatus()
-	m.nextSessionID = strings.TrimSpace(status.ParentSessionID)
-	m.exitAction = UIActionOpenSession
-	return m, tea.Quit
-}
-
-func (m *uiModel) latestAssistantFinalAnswerFromStatus() string {
-	if m.hasRuntimeClient() {
-		status := m.cachedRuntimeStatus()
-		if answer := strings.TrimSpace(status.LastCommittedAssistantFinalAnswer); answer != "" {
-			return status.LastCommittedAssistantFinalAnswer
-		}
-		return ""
+	if m.finalAnswerOperation != nil {
+		return m, nil
 	}
-	return ""
-}
-
-func (m *uiModel) hasAssistantFinalAnswerToCopy() bool {
-	return strings.TrimSpace(m.latestAssistantFinalAnswerFromStatus()) != ""
+	return m, m.startFinalAnswerOperation(uiFinalAnswerOperationBack, parentSessionID)
 }
 
 func (c uiInputController) handleCopyCommand() (tea.Model, tea.Cmd) {
 	m := c.model
-	text := m.latestAssistantFinalAnswerFromStatus()
-	if strings.TrimSpace(text) == "" {
-		return m, c.model.sendTransientStatusWithNoticeID("No final answer available to copy", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	if m.finalAnswerOperation != nil {
+		return m, nil
 	}
-	return m, m.copyClipboardTextCmd(text)
+	return m, m.startFinalAnswerOperation(uiFinalAnswerOperationCopy, "")
 }
 
 func (c uiInputController) handleSessionNameCommand(sessionName string) (tea.Model, tea.Cmd) {
