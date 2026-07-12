@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,9 +27,9 @@ import (
 const onboardingRemoteLifecycleConfigEnv = "KENT_ONBOARDING_REMOTE_LIFECYCLE_CONFIG"
 
 type onboardingRemoteLifecycleProcessConfig struct {
-	Endpoint   string `json:"endpoint"`
-	CancelPath string `json:"cancel_path,omitempty"`
-	ResultPath string `json:"result_path"`
+	Endpoint   string  `json:"endpoint"`
+	CancelPath *string `json:"cancel_path,omitempty"`
+	ResultPath string  `json:"result_path"`
 }
 
 type onboardingRemoteLifecycleProcessResult struct {
@@ -45,10 +46,19 @@ func runOnboardingRemoteLifecycleHelper(configPath string) error {
 	if err := json.Unmarshal(data, &processConfig); err != nil {
 		return fmt.Errorf("decode onboarding lifecycle process config: %w", err)
 	}
+	if strings.TrimSpace(processConfig.Endpoint) == "" {
+		return errors.New("onboarding lifecycle endpoint is required")
+	}
+	if strings.TrimSpace(processConfig.ResultPath) == "" {
+		return errors.New("onboarding lifecycle result path is required")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if processConfig.CancelPath != "" {
-		go cancelOnboardingLifecycleWhenFileExists(ctx, cancel, processConfig.CancelPath)
+	if processConfig.CancelPath != nil {
+		if strings.TrimSpace(*processConfig.CancelPath) == "" {
+			return errors.New("onboarding lifecycle cancellation path must not be empty")
+		}
+		go cancelOnboardingLifecycleWhenFileExists(ctx, cancel, *processConfig.CancelPath)
 	}
 	remote, err := client.DialRemoteURL(ctx, processConfig.Endpoint)
 	if err != nil {
@@ -203,7 +213,7 @@ func TestOnboardingRemoteLifecycleKeepsSubmittedRPCAliveAfterParentCancellation(
 	resultPath := filepath.Join(root, "result.json")
 	processConfigPath := writeOnboardingRemoteLifecycleProcessConfig(t, root, onboardingRemoteLifecycleProcessConfig{
 		Endpoint:   server.endpoint(),
-		CancelPath: cancelPath,
+		CancelPath: &cancelPath,
 		ResultPath: resultPath,
 	})
 	parentResult := make(chan error, 1)
@@ -359,8 +369,8 @@ func waitForOnboardingGateClose(t *testing.T, closed <-chan struct{}) {
 
 var onboardingRemoteLifecycleTestBinary struct {
 	once sync.Once
-	root string
-	path string
+	root *string
+	path *string
 	err  error
 }
 
@@ -372,21 +382,25 @@ func buildOnboardingRemoteLifecycleTestBinary(t *testing.T) string {
 			onboardingRemoteLifecycleTestBinary.err = err
 			return
 		}
-		onboardingRemoteLifecycleTestBinary.root = root
-		onboardingRemoteLifecycleTestBinary.path = filepath.Join(root, "app.test")
+		binary := filepath.Join(root, "app.test")
+		onboardingRemoteLifecycleTestBinary.root = &root
+		onboardingRemoteLifecycleTestBinary.path = &binary
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		onboardingRemoteLifecycleTestBinary.err = pty.BuildTestBinary(ctx, "core/cli/app", onboardingRemoteLifecycleTestBinary.path)
+		onboardingRemoteLifecycleTestBinary.err = pty.BuildTestBinary(ctx, "core/cli/app", binary)
 	})
 	if onboardingRemoteLifecycleTestBinary.err != nil {
 		t.Fatalf("build onboarding lifecycle test binary: %v", onboardingRemoteLifecycleTestBinary.err)
 	}
-	return onboardingRemoteLifecycleTestBinary.path
+	if onboardingRemoteLifecycleTestBinary.path == nil {
+		t.Fatal("onboarding lifecycle test binary path is required")
+	}
+	return *onboardingRemoteLifecycleTestBinary.path
 }
 
 func cleanupOnboardingRemoteLifecycleTestBinary() error {
-	if onboardingRemoteLifecycleTestBinary.root == "" {
+	if onboardingRemoteLifecycleTestBinary.root == nil {
 		return nil
 	}
-	return os.RemoveAll(onboardingRemoteLifecycleTestBinary.root)
+	return os.RemoveAll(*onboardingRemoteLifecycleTestBinary.root)
 }
