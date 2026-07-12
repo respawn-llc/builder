@@ -24,8 +24,9 @@
 - Immutable-area writes are fire-and-forget. After bytes are emitted, the client must not store, remember, hash, digest, diff, compare against, acknowledge, or reconcile them in any form: not as lines, blocks, ANSI bytes, rendered text, entry identities, counts, or any terminal-visible equivalent. Emitted output is unavailable state.
 - The mutable band is an absolute-positioned viewport anchored to the visible terminal bottom. Every render and erase establishes geometry, resets origin mode and scroll margins, and derives the band top from the submitted frame height. It must not depend on the current cursor position.
 - Immutable writes use OSC 133 output semantics. The mutable band is one OSC 133 redrawable semantic-prompt region, so supporting terminals clear it before resize reflow and the resize event repaints it from mutable frame state. Retired mutable rows return to output semantics before erase, so semantic-prompt marking never survives into immutable rows or permits history replay.
+- The client resolves one terminal-resize policy at startup. Exact `TERM_PROGRAM=ghostty` or a non-empty `KITTY_WINDOW_ID` selects OSC 133 repaint unless non-empty `TMUX` is present; tmux, every other identity, and absent identity select legacy width rehydration. Terminal identity matching is exact, with no substring inference from `TERM` or process names.
 - On each received event, streaming chunk, or status change, ongoing performs one frame transaction: erase the mutable band line by line at absolute coordinates, append newly stable rows to the immutable area, repaint the mutable band from fresh state. The erase never targets rows above the immutable boundary.
-- There is no clock-based repainting. Animations produce state changes and those changes schedule renders. When no state changes exist, the surface stops rendering.
+- There is no clock-based repainting. Animations produce state changes and those changes schedule renders. When no state changes exist, the surface stops rendering. The legacy resize fallback uses a one-second debounce to coalesce width changes before scratch rehydration; it is not a repaint timer.
 
 ## Mutable Band Height
 
@@ -89,7 +90,8 @@
 - Scratch rehydration is the only path that re-issues already-shown content. The trigger list is exhaustive:
   - The received event seq is discontiguous with the last received seq, or the connection/subscription was lost. The emitted history may misrepresent the conversation and appending cannot repair it.
   - The arrival-order queue exceeded 1000 events.
-- Terminal size changes repaint the mutable band. Width changes leave immutable history to terminal-native reflow and never reopen hydration or replay stable history.
+  - A width change under the legacy terminal-resize fallback policy, after the one-second debounce.
+- Height changes always repaint the mutable band. Width changes use OSC 133 repaint only for exact Ghostty or kitty capability evidence outside tmux; all other environments use the legacy fallback.
 - Never triggers. Each of these is an ordinary append or a bug to fix at its cause, and re-emitting in response to any of them is banned:
   - New content arrived: a delta, a tool call, a notice, any addition.
   - The needed change is addition-only.
@@ -100,7 +102,7 @@
   - Correct concurrency is inconvenient to implement.
   - The cursor is not where erasing would be convenient.
   - A large paste filled the screen.
-- A bug is never resolved by re-emitting committed state, in any code path, under any severity.
+- Outside the exhaustive trigger list, a bug is never resolved by re-emitting committed state, in any code path, under any severity.
 - Rehydration erases only the mutable band, reopens the subscription through the same session-open hydration path, and appends the received active segment below existing scrollback. It never clears scrollback, reaches into emitted content, or compares the hydrated segment against anything. Duplicate-looking output after rehydration is acceptable and must not be suppressed.
 - Only operator-owned UI-local state survives rehydration. Transcript, queue, running, status, tool, and steering state come from the hydration payload. If hydration fails, the TUI exits with a clear error; it does not fabricate empty state or continue on stale state.
 

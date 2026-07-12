@@ -69,3 +69,49 @@ func TestWidthChangeAfterAssistantPromotionRepaintsWithoutRehydration(t *testing
 		t.Fatalf("resize action = %q, want repaint-only noop", result.Action)
 	}
 }
+
+func TestAppleTerminalWidthChangeSchedulesRehydrationAfterImmutableScrollback(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurfaceWithTerminalResizePolicy(&out, TerminalResizeWidthRehydration)
+	if _, err := surface.ApplyTerminalMessage(
+		committedMessage(userRow("immutable")),
+		FrameInput{Size: Size{Width: 20, Height: 3}},
+	); err != nil {
+		t.Fatalf("append committed row: %v", err)
+	}
+	out.Reset()
+
+	result, err := surface.Resize(Size{Width: 30, Height: 3}, FrameInput{})
+	if err != nil {
+		t.Fatalf("resize fallback surface: %v", err)
+	}
+	if result.Action != ResultScheduleWidthRehydration {
+		t.Fatalf("resize action = %q, want width rehydration schedule", result.Action)
+	}
+	if result.Reason != RehydrateReasonWidthChange {
+		t.Fatalf("resize reason = %q, want width change", result.Reason)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("fallback resize wrote before debounce: %q", out.String())
+	}
+}
+
+func TestAppleTerminalWidthChangeBeforeImmutableScrollbackRepaints(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurfaceWithTerminalResizePolicy(&out, TerminalResizeWidthRehydration)
+	if _, err := surface.Render(FrameInput{Size: Size{Width: 20, Height: 3}}); err != nil {
+		t.Fatalf("render initial frame: %v", err)
+	}
+	out.Reset()
+
+	result, err := surface.Resize(Size{Width: 30, Height: 3}, FrameInput{})
+	if err != nil {
+		t.Fatalf("resize fallback surface: %v", err)
+	}
+	if result.Action != ResultNoop {
+		t.Fatalf("resize action = %q, want repaint before immutable scrollback", result.Action)
+	}
+	if out.Len() == 0 {
+		t.Fatal("fallback resize before immutable scrollback did not repaint")
+	}
+}

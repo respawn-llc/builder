@@ -79,6 +79,7 @@ type ResultAction string
 const (
 	ResultNoop                      ResultAction = ""
 	ResultRequestScratchRehydration ResultAction = "request_scratch_rehydration"
+	ResultScheduleWidthRehydration  ResultAction = "schedule_width_rehydration"
 )
 
 type RehydrateReason string
@@ -86,6 +87,14 @@ type RehydrateReason string
 const (
 	RehydrateReasonSequenceGap   RehydrateReason = "sequence_gap"
 	RehydrateReasonQueueOverflow RehydrateReason = "queue_overflow"
+	RehydrateReasonWidthChange   RehydrateReason = "width_change"
+)
+
+type TerminalResizePolicy uint8
+
+const (
+	TerminalResizeSemanticPrompt TerminalResizePolicy = iota + 1
+	TerminalResizeWidthRehydration
 )
 
 type Surface struct {
@@ -93,6 +102,8 @@ type Surface struct {
 	previousBandHeight int
 	groupRegister      *clientui.TranscriptRowKind
 	activeAssistant    activeAssistantState
+	terminalResize     TerminalResizePolicy
+	lastSize           Size
 }
 
 type activeAssistantState struct {
@@ -108,7 +119,19 @@ func NewSurface(writers ...io.Writer) *Surface {
 	if len(writers) > 0 && writers[0] != nil {
 		writer = writers[0]
 	}
-	return &Surface{writer: writer}
+	return NewSurfaceWithTerminalResizePolicy(writer, TerminalResizeSemanticPrompt)
+}
+
+func NewSurfaceWithTerminalResizePolicy(writer io.Writer, policy TerminalResizePolicy) *Surface {
+	if writer == nil {
+		writer = io.Discard
+	}
+	switch policy {
+	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration:
+	default:
+		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", policy))
+	}
+	return &Surface{writer: writer, terminalResize: policy}
 }
 
 func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
@@ -294,11 +317,26 @@ func (s *Surface) SetNormalBufferOwned(_ bool, _ FrameInput) (Result, error) {
 }
 
 func (s *Surface) Resize(size Size, frame FrameInput) (Result, error) {
+	if result := s.observeResize(size); result.Action != ResultNoop {
+		return result, nil
+	}
 	frame.Size = size
 	return s.Render(frame)
 }
 
-func (s *Surface) ObserveResize(_ Size) Result {
+func (s *Surface) ObserveResize(size Size) Result {
+	return s.observeResize(size)
+}
+
+func (s *Surface) observeResize(size Size) Result {
+	if s.terminalResize != TerminalResizeWidthRehydration {
+		return Result{}
+	}
+	if s.lastSize.Width > 0 && size.Width > 0 && size.Width != s.lastSize.Width && s.immutableScrollbackProduced() {
+		s.lastSize = size
+		return Result{Action: ResultScheduleWidthRehydration, Reason: RehydrateReasonWidthChange}
+	}
+	s.lastSize = size
 	return Result{}
 }
 
@@ -565,6 +603,7 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 		return Result{}, err
 	}
 	s.previousBandHeight = len(liveLines)
+	s.lastSize = frame.Size
 	return Result{}, nil
 }
 
