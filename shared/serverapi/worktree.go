@@ -236,6 +236,43 @@ type WorktreeScheduledAcknowledgement struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 }
 
+type WorktreeOperationExecutionMode string
+
+const (
+	WorktreeOperationExecutionModeSynchronous         WorktreeOperationExecutionMode = "synchronous"
+	WorktreeOperationExecutionModeScheduledTransition WorktreeOperationExecutionMode = "scheduled_transition"
+)
+
+type WorktreeOperationLifecycleState string
+
+const (
+	WorktreeOperationLifecycleStateQueued    WorktreeOperationLifecycleState = "queued"
+	WorktreeOperationLifecycleStateRunning   WorktreeOperationLifecycleState = "running"
+	WorktreeOperationLifecycleStateCompleted WorktreeOperationLifecycleState = "completed"
+	WorktreeOperationLifecycleStateFailed    WorktreeOperationLifecycleState = "failed"
+)
+
+func (mode WorktreeOperationExecutionMode) Validate() error {
+	switch mode {
+	case WorktreeOperationExecutionModeSynchronous, WorktreeOperationExecutionModeScheduledTransition:
+		return nil
+	default:
+		return errors.New("worktree operation execution mode is invalid")
+	}
+}
+
+func (state WorktreeOperationLifecycleState) Validate() error {
+	switch state {
+	case WorktreeOperationLifecycleStateQueued,
+		WorktreeOperationLifecycleStateRunning,
+		WorktreeOperationLifecycleStateCompleted,
+		WorktreeOperationLifecycleStateFailed:
+		return nil
+	default:
+		return errors.New("worktree operation lifecycle state is invalid")
+	}
+}
+
 type WorktreeDeleteResultKind string
 
 const (
