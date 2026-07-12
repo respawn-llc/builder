@@ -157,6 +157,17 @@ func TestBackgroundNoticeWhitespaceLogRendersNoOutputCompletion(t *testing.T) {
 	}
 }
 
+func TestBackgroundPreviewOmitsTruncationForWhitespaceOnlyOutput(t *testing.T) {
+	builder := newBackgroundPreviewBuilder(80, BackgroundOutputDefault, false)
+	builder.WriteRaw([]byte(strings.Repeat(" ", 200)))
+	if !builder.Truncated() {
+		t.Fatal("expected whitespace-only preview source to be truncated")
+	}
+	if preview := builder.Preview(); preview != "" {
+		t.Fatalf("whitespace-only preview must not surface generated truncation content: %q", preview)
+	}
+}
+
 func TestBackgroundNoticeFallbackCarriesTruncationWithoutFinalizedState(t *testing.T) {
 	exitCode := 1
 	event := newFallbackBackgroundEvent(EventCompleted, Snapshot{

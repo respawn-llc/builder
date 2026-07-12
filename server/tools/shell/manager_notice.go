@@ -338,19 +338,20 @@ func readBackgroundSummaryFromFile(path string, maxChars int, mode BackgroundOut
 }
 
 type backgroundPreviewBuilder struct {
-	maxChars    int
-	mode        BackgroundOutputMode
-	sanitize    bool
-	carry       []byte
-	prevCR      bool
-	totalBytes  int
-	lineCount   int
-	hasContent  bool
-	lastNewline bool
-	fullMode    bool
-	full        []byte
-	head        []byte
-	tail        []byte
+	maxChars          int
+	mode              BackgroundOutputMode
+	sanitize          bool
+	carry             []byte
+	prevCR            bool
+	totalBytes        int
+	lineCount         int
+	hasContent        bool
+	hasVisibleContent bool
+	lastNewline       bool
+	fullMode          bool
+	full              []byte
+	head              []byte
+	tail              []byte
 }
 
 func newBackgroundPreviewBuilder(maxChars int, mode BackgroundOutputMode, sanitize bool) *backgroundPreviewBuilder {
@@ -435,6 +436,9 @@ func (b *backgroundPreviewBuilder) emitBytes(data []byte) {
 		return
 	}
 	b.hasContent = true
+	if !b.hasVisibleContent && strings.TrimSpace(string(data)) != "" {
+		b.hasVisibleContent = true
+	}
 	b.totalBytes += len(data)
 	if b.fullMode {
 		b.full = append(b.full, data...)
@@ -468,6 +472,9 @@ func (b *backgroundPreviewBuilder) emitBytes(data []byte) {
 
 func (b *backgroundPreviewBuilder) Preview() string {
 	if b.mode == BackgroundOutputConcise {
+		return ""
+	}
+	if !b.hasVisibleContent {
 		return ""
 	}
 	if b.fullMode {
