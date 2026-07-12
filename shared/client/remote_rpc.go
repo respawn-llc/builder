@@ -467,6 +467,15 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeWorkflowTaskListScope && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskListScopeError(resp.Data, message)
 	}
+	switch resp.Code {
+	case protocol.ErrCodeWorktreeSelector,
+		protocol.ErrCodeWorktreeOperationIDConflict,
+		protocol.ErrCodeWorktreeSetupRetained,
+		protocol.ErrCodeWorktreeDeletePrecondition:
+		if len(resp.Data) > 0 {
+			return serverapi.DecodeWorktreeRPCError(resp.Data, message)
+		}
+	}
 	if resp.Code == protocol.ErrCodeRequestCanceled {
 		return requestCanceledError{message: message}
 	}

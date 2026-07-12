@@ -668,6 +668,133 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesWorktreeStructuredErrors(t *testing.T) {
+	operationID := serverapi.NewWorktreeOperationID()
+	for _, source := range remoteTestWorktreeStructuredErrors(operationID) {
+		t.Run(source.Error(), func(t *testing.T) {
+			err := protocolError(&protocol.ResponseError{
+				Code:    source.RPCErrorCode(),
+				Message: source.Error(),
+				Data:    source.RPCErrorData(),
+			})
+			assertRemoteWorktreeStructuredError(t, err, source, operationID)
+		})
+	}
+}
+
+func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
+	operationID := serverapi.NewWorktreeOperationID()
+	for _, source := range remoteTestWorktreeStructuredErrors(operationID) {
+		t.Run(source.Error(), func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				req := acceptRemoteHandshake(t, ws)
+				if err := websocket.JSON.Receive(ws, &req); err != nil {
+					t.Fatalf("receive worktree request: %v", err)
+				}
+				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData())); err != nil {
+					t.Fatalf("send structured worktree error: %v", err)
+				}
+			})
+			defer server.Close()
+
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+
+			_, err = remote.ListWorktrees(context.Background(), serverapi.WorktreeListRequest{SessionID: "session"})
+			assertRemoteWorktreeStructuredError(t, err, source, operationID)
+		})
+	}
+}
+
+func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationID) []protocol.StructuredRPCError {
+	return []protocol.StructuredRPCError{
+		&serverapi.WorktreeSelectorError{
+			Kind:  serverapi.WorktreeSelectorErrorKindAmbiguous,
+			Input: "feature",
+			Candidates: []serverapi.WorktreeSelectorCandidate{{
+				Variant:          serverapi.WorktreeTopologyVariantExternal,
+				Selector:         "feature",
+				FallbackIdentity: "/repo/feature",
+			}},
+		},
+		&serverapi.WorktreeOperationIDConflictError{
+			OperationID: operationID,
+			Existing: serverapi.WorktreeOperationPayload{
+				Version:             serverapi.WorktreeOperationPayloadVersion1,
+				SessionID:           "session",
+				Kind:                serverapi.WorktreeOperationKindLeave,
+				BranchCleanupPolicy: serverapi.WorktreeBranchCleanupPolicyRetain,
+			},
+			Incoming: serverapi.WorktreeOperationPayload{
+				Version:             serverapi.WorktreeOperationPayloadVersion1,
+				SessionID:           "session",
+				Kind:                serverapi.WorktreeOperationKindDelete,
+				Selector:            remoteTestStringPointer("feature"),
+				BranchCleanupPolicy: serverapi.WorktreeBranchCleanupPolicyRetain,
+			},
+		},
+		&serverapi.WorktreeSetupRetainedError{
+			Worktree: serverapi.WorktreeTopologyEntry{
+				Variant: serverapi.WorktreeTopologyVariantRegistered,
+				Registered: &serverapi.WorktreeRegisteredFacts{
+					Git: serverapi.WorktreeGitFacts{CanonicalRoot: "/repo/feature", HeadObject: "abc123", PathAvailable: true},
+					Kent: serverapi.WorktreeKentFacts{
+						WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+						CanonicalRoot: "/repo/feature",
+						DisplayName:   "feature",
+					},
+				},
+			},
+			Diagnostic: "setup failed",
+		},
+		&serverapi.WorktreeDeletePreconditionError{
+			DirtyState: serverapi.WorktreeDirtyState{
+				Kind:           serverapi.WorktreeDirtyStateDirty,
+				DirtyFileCount: remoteTestIntPointer(2),
+			},
+		},
+	}
+}
+
+func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protocol.StructuredRPCError, operationID serverapi.WorktreeOperationID) {
+	t.Helper()
+	switch source.(type) {
+	case *serverapi.WorktreeSelectorError:
+		var decoded *serverapi.WorktreeSelectorError
+		if !errors.As(err, &decoded) || len(decoded.Candidates) != 1 || decoded.Candidates[0].FallbackIdentity != "/repo/feature" {
+			t.Fatalf("decoded selector error = %+v (%v)", decoded, err)
+		}
+	case *serverapi.WorktreeOperationIDConflictError:
+		var decoded *serverapi.WorktreeOperationIDConflictError
+		if !errors.As(err, &decoded) || decoded.OperationID != operationID {
+			t.Fatalf("decoded operation conflict = %+v (%v)", decoded, err)
+		}
+	case *serverapi.WorktreeSetupRetainedError:
+		var decoded *serverapi.WorktreeSetupRetainedError
+		if !errors.As(err, &decoded) || decoded.Worktree.Registered == nil || decoded.Worktree.Registered.Kent.DisplayName != "feature" {
+			t.Fatalf("decoded retained setup = %+v (%v)", decoded, err)
+		}
+	case *serverapi.WorktreeDeletePreconditionError:
+		var decoded *serverapi.WorktreeDeletePreconditionError
+		if !errors.As(err, &decoded) || decoded.DirtyState.DirtyFileCount == nil || *decoded.DirtyState.DirtyFileCount != 2 {
+			t.Fatalf("decoded delete precondition = %+v (%v)", decoded, err)
+		}
+	default:
+		t.Fatalf("unsupported structured worktree error %T", source)
+	}
+}
+
+func remoteTestIntPointer(value int) *int {
+	return &value
+}
+
+func remoteTestStringPointer(value string) *string {
+	return &value
+}
+
 func TestProtocolErrorMapsAuthRequiredCode(t *testing.T) {
 	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeAuthRequired, Message: "auth required"}); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("expected server auth required, got %v", err)

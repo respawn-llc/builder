@@ -42,6 +42,10 @@ const (
 	ErrCodeServerNotReady                = -32032
 	ErrCodeOnboardingFinalizeFailed      = -32033
 	ErrCodeWorkflowTaskListScope         = -32034
+	ErrCodeWorktreeSelector              = -32035
+	ErrCodeWorktreeOperationIDConflict   = -32036
+	ErrCodeWorktreeSetupRetained         = -32037
+	ErrCodeWorktreeDeletePrecondition    = -32038
 )
 
 type Request struct {

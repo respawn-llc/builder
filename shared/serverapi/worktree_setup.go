@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -17,15 +16,11 @@ func NewWorktreeSetupOperationID() WorktreeSetupOperationID {
 }
 
 func ParseWorktreeSetupOperationID(value string) (WorktreeSetupOperationID, error) {
-	parsed, err := uuid.Parse(strings.TrimSpace(value))
+	parsed, err := parseWorktreeUUIDV4(value, "setup_operation_id")
 	if err != nil {
-		return WorktreeSetupOperationID{}, fmt.Errorf("setup_operation_id must be a UUID v4: %w", err)
-	}
-	id := WorktreeSetupOperationID(parsed)
-	if err := id.Validate(); err != nil {
 		return WorktreeSetupOperationID{}, err
 	}
-	return id, nil
+	return WorktreeSetupOperationID(parsed), nil
 }
 
 func (id WorktreeSetupOperationID) String() string {
@@ -37,14 +32,7 @@ func (id WorktreeSetupOperationID) String() string {
 }
 
 func (id WorktreeSetupOperationID) Validate() error {
-	value := uuid.UUID(id)
-	if value == uuid.Nil {
-		return errors.New("setup_operation_id is required")
-	}
-	if value.Version() != 4 {
-		return errors.New("setup_operation_id must be a UUID v4")
-	}
-	return nil
+	return validateWorktreeUUIDV4(uuid.UUID(id), "setup_operation_id")
 }
 
 func (id WorktreeSetupOperationID) MarshalJSON() ([]byte, error) {

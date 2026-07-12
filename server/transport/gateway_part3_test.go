@@ -8,6 +8,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"encoding/json"
+	"errors"
 	"golang.org/x/net/websocket"
 	"net/http/httptest"
 	"path/filepath"
@@ -163,6 +164,35 @@ func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 	decoded, ok := serverapi.DecodeWorkflowTaskListScopeError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskListScopeError)
 	if !ok || decoded.Kind != source.Kind || decoded.MissingScope == nil || *decoded.MissingScope != missing || len(decoded.WorkflowIDs) != 2 {
 		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
+	}
+}
+
+func TestDecodeAndHandlePreservesWorktreeStructuredErrors(t *testing.T) {
+	source := &serverapi.WorktreeSelectorError{
+		Kind:  serverapi.WorktreeSelectorErrorKindAmbiguous,
+		Input: "feature",
+		Candidates: []serverapi.WorktreeSelectorCandidate{{
+			Variant:          serverapi.WorktreeTopologyVariantRegistered,
+			Selector:         "feature-a",
+			FallbackIdentity: "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+		}},
+	}
+	response := decodeAndHandle[serverapi.WorktreeSelectorPreviewRequest, struct{}](
+		protocol.Request{
+			ID:     "worktree-selector-error",
+			Params: mustJSON(t, serverapi.WorktreeSelectorPreviewRequest{SessionID: "session", Selector: "feature"}),
+		},
+		func(serverapi.WorktreeSelectorPreviewRequest) (struct{}, error) {
+			return struct{}{}, source
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorktreeSelector {
+		t.Fatalf("response error = %+v, want structured worktree selector error", response.Error)
+	}
+	decoded := serverapi.DecodeWorktreeRPCError(response.Error.Data, response.Error.Message)
+	var selector *serverapi.WorktreeSelectorError
+	if !errors.As(decoded, &selector) || selector.Input != source.Input || len(selector.Candidates) != 1 || selector.Candidates[0].FallbackIdentity != source.Candidates[0].FallbackIdentity {
+		t.Fatalf("decoded selector error = %+v (%v), want %+v", selector, decoded, source)
 	}
 }
 
