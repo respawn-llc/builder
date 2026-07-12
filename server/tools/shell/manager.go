@@ -324,9 +324,6 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 	snapshot := entry.snapshot()
 	consumedCompletion := false
 	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil && !entry.completionNoticeConsumed()
-	if harvestingCompletion {
-		entry.markCompletionNoticeConsumed()
-	}
 	var warning postprocess.Warning
 	var warningErr error
 	sourceTruncated := false
@@ -357,6 +354,9 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 				}
 			}
 		}
+	}
+	if consumedCompletion {
+		entry.markCompletionNoticeConsumed()
 	}
 	if !consumedCompletion {
 		processed, err = m.applyPostprocessing(ctx, entry, string(output), snapshot.ExitCode, snapshot.Backgrounded, maxOutputChars)
