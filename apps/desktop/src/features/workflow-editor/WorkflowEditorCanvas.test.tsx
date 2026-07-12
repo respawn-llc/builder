@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppServicesProvider } from "../../app/servicesContext";
 import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
@@ -66,7 +66,15 @@ describe("WorkflowEditorCanvas connected creation", () => {
     graphCanvasHarness.props = null;
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("opens the keyboard inspector from the successful draft before layout resolves and selects only after layout", async () => {
+    vi.spyOn(globalThis.crypto, "randomUUID")
+      .mockReturnValueOnce("11111111-1111-4111-8111-111111111111")
+      .mockReturnValueOnce("22222222-2222-4222-8222-222222222222")
+      .mockReturnValueOnce("33333333-3333-4333-8333-333333333333");
     const initial = initializeWorkflowEditorDraft(workflowDefinition);
     const dispatched: WorkflowEditorDraftAction[] = [];
     const inspections: Inspection[] = [];
@@ -85,9 +93,11 @@ describe("WorkflowEditorCanvas connected creation", () => {
       kind: "agent",
       sourceNodeID: "node-start",
     });
-    expect(action.input.edgeID).toEqual(expect.stringContaining("workflow-edge-"));
-    expect(action.input.nodeID).toEqual(expect.stringContaining("workflow-node-"));
-    expect(action.input.transitionGroupID).toEqual(expect.stringContaining("workflow-transition-group-"));
+    expect(action.input.edgeID).toBe("workflow-edge-11111111-1111-4111-8111-111111111111");
+    expect(action.input.nodeID).toBe("workflow-node-22222222-2222-4222-8222-222222222222");
+    expect(action.input.transitionGroupID).toBe(
+      "workflow-transition-group-33333333-3333-4333-8333-333333333333",
+    );
 
     const succeeded = workflowEditorDraftReducer(initial, action);
     rerender(editorCanvasTree({ dispatch, draftState: succeeded, graph: emptyGraph(), inspect }));
