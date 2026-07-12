@@ -75,9 +75,39 @@ func (s *Service) ResolveWorktreeSelector(ctx context.Context, req serverapi.Wor
 }
 
 func gitFactsFromEntry(entry GitWorktree) serverapi.WorktreeGitFacts {
-	return serverapi.WorktreeGitFacts{CanonicalRoot: entry.Root, HeadObject: entry.HeadOID, Detached: entry.Detached, Bare: entry.Bare, IsMain: entry.IsMain, PathAvailable: pathAvailability(entry.Root) == "available"}
+	facts := serverapi.WorktreeGitFacts{
+		CanonicalRoot: strings.TrimSpace(entry.Root),
+		HeadObject:    strings.TrimSpace(entry.HeadOID),
+		Detached:      entry.Detached,
+		Bare:          entry.Bare,
+		IsMain:        entry.IsMain,
+		PathAvailable: pathAvailability(entry.Root) == "available",
+	}
+	if value := strings.TrimSpace(entry.BranchRef); value != "" {
+		facts.BranchRef = &value
+	}
+	if value := strings.TrimSpace(entry.BranchName); value != "" {
+		facts.BranchName = &value
+	}
+	if value := strings.TrimSpace(entry.LockedReason); value != "" {
+		facts.LockedReason = &value
+	}
+	if value := strings.TrimSpace(entry.PrunableReason); value != "" {
+		facts.PrunableReason = &value
+	}
+	return facts
 }
 
 func kentFactsFromRecord(record metadata.WorktreeRecord) serverapi.WorktreeKentFacts {
-	return serverapi.WorktreeKentFacts{WorktreeID: record.ID, CanonicalRoot: record.CanonicalRoot, DisplayName: record.DisplayName, Managed: record.Managed, CreatedBranch: record.CreatedBranch}
+	facts := serverapi.WorktreeKentFacts{
+		WorktreeID:    strings.TrimSpace(record.ID),
+		CanonicalRoot: strings.TrimSpace(record.CanonicalRoot),
+		DisplayName:   strings.TrimSpace(record.DisplayName),
+		Managed:       record.Managed,
+		CreatedBranch: record.CreatedBranch,
+	}
+	if value := strings.TrimSpace(record.OriginSessionID); value != "" {
+		facts.OriginSessionID = &value
+	}
+	return facts
 }

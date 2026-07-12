@@ -20,7 +20,7 @@ func TestProjectTopologyReturnsRegisteredExternalAndMissingInRequiredOrder(t *te
 		t.Fatalf("MkdirAll missing root: %v", err)
 	}
 	for _, record := range []metadata.WorktreeRecord{
-		{ID: "legacy-main", WorkspaceID: env.binding.WorkspaceID, CanonicalRoot: env.workspaceRoot, DisplayName: "main", CreatedAt: time.Now().UTC()},
+		{ID: "legacy-main", WorkspaceID: env.binding.WorkspaceID, CanonicalRoot: env.workspaceRoot, DisplayName: "main", OriginSessionID: "origin-session", CreatedAt: time.Now().UTC()},
 		{ID: "legacy-missing", WorkspaceID: env.binding.WorkspaceID, CanonicalRoot: missingRoot, DisplayName: "missing", CreatedAt: time.Now().UTC()},
 	} {
 		if err := env.store.UpsertWorktreeRecord(env.ctx, record); err != nil {
@@ -36,6 +36,13 @@ func TestProjectTopologyReturnsRegisteredExternalAndMissingInRequiredOrder(t *te
 	}
 	if entries[0].Variant != "registered" || entries[1].Variant != "external" || entries[2].Variant != "missing" {
 		t.Fatalf("topology variants = %+v", entries)
+	}
+	registered := entries[0].Registered
+	if registered == nil || registered.Git.BranchRef == nil || registered.Git.BranchName == nil {
+		t.Fatalf("registered Git facts = %+v, want branch ref and name", registered)
+	}
+	if registered.Kent.OriginSessionID == nil || *registered.Kent.OriginSessionID != "origin-session" {
+		t.Fatalf("registered Kent facts = %+v, want origin session", registered.Kent)
 	}
 }
 
