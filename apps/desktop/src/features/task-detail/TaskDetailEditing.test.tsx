@@ -426,9 +426,9 @@ function VirtualizedDescriptionHarness({ bodyVisible }: Readonly<{ bodyVisible: 
 }
 
 function installReducedMotionMatchMedia(): void {
-  Object.defineProperty(globalThis, "matchMedia", {
-    configurable: true,
-    value: vi.fn(() => ({
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
       addEventListener: vi.fn(),
       addListener: vi.fn(),
       dispatchEvent: vi.fn(),
@@ -438,5 +438,5 @@ function installReducedMotionMatchMedia(): void {
       removeEventListener: vi.fn(),
       removeListener: vi.fn(),
     })),
-  });
+  );
 }
