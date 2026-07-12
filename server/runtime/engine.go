@@ -179,6 +179,7 @@ type Engine struct {
 	queuedUserWorkAutoDrainIDs  map[string]struct{}
 	worktreeTransitionMu        sync.Mutex
 	worktreeTransitionScheduled bool
+	worktreeTransitionsPaused   bool
 	worktreeTransitions         []func(context.Context) error
 	liveRun                     *liveRunCoordinator
 	activeStepGoalMutationsMu   sync.Mutex

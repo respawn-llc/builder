@@ -54,7 +54,12 @@ func (e *Engine) EnqueueWorktreeTransition(fn func(context.Context) error) error
 		return ErrEngineClosed
 	}
 	e.worktreeTransitions = append(e.worktreeTransitions, fn)
+	pauseQueuedUserWork := !e.worktreeTransitionsPaused
+	e.worktreeTransitionsPaused = true
 	e.worktreeTransitionMu.Unlock()
+	if pauseQueuedUserWork {
+		e.pauseQueuedUserAutoDrain()
+	}
 	e.scheduleWorktreeTransitionsIfIdle()
 	return nil
 }
@@ -87,7 +92,14 @@ func (e *Engine) processWorktreeTransitions(ctx context.Context) {
 	defer func() {
 		e.worktreeTransitionMu.Lock()
 		e.worktreeTransitionScheduled = false
+		resumeQueuedUserWork := len(e.worktreeTransitions) == 0 && e.worktreeTransitionsPaused
+		if resumeQueuedUserWork {
+			e.worktreeTransitionsPaused = false
+		}
 		e.worktreeTransitionMu.Unlock()
+		if resumeQueuedUserWork {
+			e.resumeQueuedUserAutoDrain()
+		}
 		e.scheduleWorktreeTransitionsIfIdle()
 	}()
 	for {
