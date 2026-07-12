@@ -2,14 +2,15 @@ package patch
 
 import (
 	"context"
-	patchformat "core/shared/transcript/patchformat"
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+
+	"core/internal/testharness/filemode"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 func TestDeleteFile(t *testing.T) {
@@ -237,7 +238,7 @@ func TestUpdateFilePreservesExecutableMode(t *testing.T) {
 	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
 		t.Fatalf("updated content = %q, want %q", got, want)
 	}
-	assertUnixFileMode(t, target, 0o755)
+	filemode.AssertUnixPermissionMode(t, target, 0o755)
 }
 
 func TestUpdateAndMoveFilePreservesExecutableMode(t *testing.T) {
@@ -267,7 +268,7 @@ func TestUpdateAndMoveFilePreservesExecutableMode(t *testing.T) {
 	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
 		t.Fatalf("moved content = %q, want %q", got, want)
 	}
-	assertUnixFileMode(t, destination, 0o755)
+	filemode.AssertUnixPermissionMode(t, destination, 0o755)
 }
 
 func TestUpdateFileUsesCodexStyleContextHeader(t *testing.T) {
@@ -464,21 +465,7 @@ func TestAddFileUsesDefaultNonExecutableMode(t *testing.T) {
 	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
 		t.Fatalf("added content = %q, want %q", got, want)
 	}
-	assertUnixFileMode(t, target, 0o644)
-}
-
-func assertUnixFileMode(t *testing.T, path string, want os.FileMode) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		return
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	if got := info.Mode().Perm(); got != want {
-		t.Fatalf("mode for %s = %04o, want %04o", path, got, want)
-	}
+	filemode.AssertUnixPermissionMode(t, target, 0o644)
 }
 
 func TestUpdateAnchorsToHeaderInRepeatedBlocks(t *testing.T) {

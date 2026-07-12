@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
+	"core/internal/testharness/filemode"
 	"core/server/tools"
 	"core/shared/toolspec"
 )
@@ -101,15 +101,7 @@ func TestEditReplacementPreservesExecutableMode(t *testing.T) {
 	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
 		t.Fatalf("edited content = %q, want %q", got, want)
 	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(target)
-		if err != nil {
-			t.Fatalf("stat edited file: %v", err)
-		}
-		if got, want := info.Mode().Perm(), os.FileMode(0o755); got != want {
-			t.Fatalf("edited mode = %04o, want %04o", got, want)
-		}
-	}
+	filemode.AssertUnixPermissionMode(t, target, 0o755)
 }
 
 func TestInputAliasesAndConflicts(t *testing.T) {
