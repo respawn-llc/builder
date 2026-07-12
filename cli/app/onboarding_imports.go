@@ -57,8 +57,8 @@ func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) o
 		existingSkillNames:      map[string]bool{},
 	}
 	discovery.skipSkills = facts.Skills.Target.Skip
-	if len(facts.Errors) > 0 {
-		discovery.err = errors.New(facts.Errors[0].Message)
+	if importErr, ok := skillImportError(facts.Errors); ok {
+		discovery.err = errors.New(importErr.Message)
 	}
 	discovery.skillChoices = importChoicesFromFacts(facts.Skills.Choices)
 	discovery.skillChoices = ensureNoneImportChoice(discovery.skillChoices)
@@ -87,6 +87,15 @@ func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) o
 		discovery.skillEnablementByChoice[id] = items
 	}
 	return discovery
+}
+
+func skillImportError(errors []serverapi.ImportErrorFact) (serverapi.ImportErrorFact, bool) {
+	for _, importErr := range errors {
+		if importErr.ItemKind == nil || *importErr.ItemKind == serverapi.ImportErrorItemKindSkill {
+			return importErr, true
+		}
+	}
+	return serverapi.ImportErrorFact{}, false
 }
 
 func importChoiceIDFromRecommendation(recommendation *serverapi.ImportModeRecommendationFact, choices []onboardingImportChoice) (string, bool) {

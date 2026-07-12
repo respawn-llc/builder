@@ -341,6 +341,21 @@ func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 	}
 }
 
+func TestOnboardingPrimaryThinkingChoicePreservesSeededOverride(t *testing.T) {
+	state := onboardingFlowState{
+		settings:         config.Settings{ThinkingLevel: "high"},
+		baselineSettings: config.Settings{ThinkingLevel: "high"},
+	}
+
+	choice, err := onboardingPrimaryThinkingChoice(state)
+	if err != nil {
+		t.Fatalf("project thinking choice: %v", err)
+	}
+	if choice.Kind != serverapi.OnboardingThinkingLevel || choice.Level != "high" {
+		t.Fatalf("thinking choice = %+v, want explicit high level", choice)
+	}
+}
+
 func ptr(value int) *int { return &value }
 
 type onboardingFinalizeClientFunc func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)

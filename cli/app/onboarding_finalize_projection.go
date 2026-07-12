@@ -118,7 +118,7 @@ func onboardingThinkingChoice(value string, custom bool) (serverapi.OnboardingTh
 }
 
 func onboardingPrimaryThinkingChoice(state onboardingFlowState) (serverapi.OnboardingThinkingChoice, error) {
-	if !state.customThinking && strings.TrimSpace(state.settings.ThinkingLevel) == strings.TrimSpace(state.baselineSettings.ThinkingLevel) {
+	if !state.customThinking && strings.TrimSpace(state.settings.ThinkingLevel) == strings.TrimSpace(config.DefaultOnboardingSettings().ThinkingLevel) {
 		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDefault}, nil
 	}
 	return onboardingThinkingChoice(state.settings.ThinkingLevel, state.customThinking)

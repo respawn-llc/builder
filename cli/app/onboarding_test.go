@@ -136,6 +136,29 @@ func TestOnboardingImportErrorsDoNotHideValidServerChoices(t *testing.T) {
 	}
 }
 
+func TestOnboardingCommandImportErrorsDoNotSurfaceInSkillsFlow(t *testing.T) {
+	commandKind := serverapi.ImportErrorItemKindCommand
+	facts := serverapi.ImportCapabilityFacts{
+		Errors: []serverapi.ImportErrorFact{{
+			Code:      "provider_discovery_failed",
+			Scope:     "provider",
+			ItemKind:  &commandKind,
+			Operation: "discover_commands",
+			Message:   "unreadable commands",
+		}},
+	}
+	discovery := onboardingImportDiscoveryFromFacts(facts)
+	if discovery.err != nil {
+		t.Fatalf("command-only import error must not become a skill error: %v", discovery.err)
+	}
+	state := &onboardingFlowState{imports: discovery}
+	for _, step := range newOnboardingWorkflow(state).steps {
+		if step.id == "skills_import" && step.visible(state) {
+			t.Fatal("command-only import error must not make the skills import step visible")
+		}
+	}
+}
+
 func TestOnboardingImportTargetSkipFactsHideImportSteps(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "skills")
 	facts := serverapi.ImportCapabilityFacts{
