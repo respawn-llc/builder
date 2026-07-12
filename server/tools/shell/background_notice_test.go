@@ -180,6 +180,31 @@ func TestBackgroundNoticeFallbackCarriesTruncationWithoutFinalizedState(t *testi
 	}
 }
 
+func TestBackgroundNoticeConciseFallbackRetainsVisibleCompletion(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "1000.log")
+	if err := os.WriteFile(logPath, []byte("output\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	exitCode := 0
+	event := newFallbackBackgroundEvent(EventCompleted, Snapshot{
+		ID:       "1000",
+		State:    "completed",
+		LogPath:  logPath,
+		ExitCode: &exitCode,
+	}, "output", nil, 0, false)
+
+	summary, err := SummarizeBackgroundEvent(event, BackgroundNoticeOptions{SuccessOutputMode: BackgroundOutputConcise})
+	if err != nil {
+		t.Fatalf("SummarizeBackgroundEvent: %v", err)
+	}
+	if summary.output.inlinePreview != nil {
+		t.Fatal("concise mode must suppress the fallback inline preview")
+	}
+	if !summary.output.visible.HasCommandContent() || summary.output.shouldRenderNoOutputCompletion(&exitCode) {
+		t.Fatalf("concise fallback must retain semantic output while suppressing its preview: %+v", summary.output)
+	}
+}
+
 func TestInvariantFailureBackgroundNoticeUsesDistinctTypedProjection(t *testing.T) {
 	exitCode := 17
 	summary := InvariantFailureBackgroundNotice(Event{

@@ -249,7 +249,7 @@ func projectBackgroundNoticeOutput(evt Event, maxChars int, mode BackgroundOutpu
 				output.retainedLogHasOutput = true
 				output.logLineCount = &lineCount
 			}
-			if completion.source == completionOutputFallback {
+			if completion.source == completionOutputFallback && mode != BackgroundOutputConcise {
 				output.visible.command = preview
 				output.truncated = output.truncated || truncated
 				if truncated && output.previewRemoved == 0 {
