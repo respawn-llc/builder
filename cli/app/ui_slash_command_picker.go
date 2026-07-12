@@ -147,13 +147,7 @@ func (m *uiModel) filterSlashCommandMatches(matches []commands.Command) []comman
 	}
 	filtered := make([]commands.Command, 0, len(matches))
 	for _, command := range matches {
-		if command.Name == "resume" && !m.resumeCommandAvailable() {
-			continue
-		}
 		if command.Name == "fast" && !m.fastModeAvailable {
-			continue
-		}
-		if command.Name == "copy" && !m.hasAssistantFinalAnswerToCopy() {
 			continue
 		}
 		if isAuthSlashCommand(command.Name) && command.Name != m.authSlashCommand.commandName() {
@@ -213,13 +207,6 @@ func (m *uiModel) applyAuthSlashCommandRefreshed(msg authSlashCommandRefreshedMs
 	m.authSlashCommand = authSlashCommandFromName(msg.name)
 	m.authSlashCommandErr = ""
 	m.clampSlashCommandSelection()
-}
-
-func (m *uiModel) resumeCommandAvailable() bool {
-	if !m.hasOtherSessionsKnown {
-		return true
-	}
-	return m.hasOtherSessions
 }
 
 func (m *uiModel) hasParentSession() bool {

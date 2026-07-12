@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"core/internal/testharness/pty"
-	"core/internal/testharness/pty/appfixture"
+	"core/internal/testharness/pty/blackbox"
 )
 
 func TestProductionKentBinaryPTYSmoke(t *testing.T) {
@@ -20,16 +20,27 @@ func TestProductionKentBinaryPTYSmoke(t *testing.T) {
 	if err := pty.BuildPackage(ctx, "core/cli/kent", bin); err != nil {
 		t.Fatalf("build production kent: %v", err)
 	}
-	workspace := t.TempDir()
-	persistenceRoot := t.TempDir()
-	if err := appfixture.PrepareConfigAndBinding(ctx, persistenceRoot, workspace); err != nil {
-		t.Fatalf("prepare isolated config: %v", err)
+	environment, err := blackbox.NewIsolatedEnvironment(bin, nil)
+	if err != nil {
+		t.Fatalf("start isolated configured server: %v", err)
+	}
+	defer func() { _ = environment.Server.ForceKill() }()
+	if err := environment.WaitReady(); err != nil {
+		t.Fatalf("wait for isolated server readiness: %v", err)
+	}
+	if err := environment.BindProject(); err != nil {
+		t.Fatalf("bind isolated server workspace: %v", err)
+	}
+	clientEnv, err := environment.ClientEnvironment()
+	if err != nil {
+		t.Fatalf("build isolated client environment: %v", err)
 	}
 
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path:       bin,
-		Args:       []string{"--force-interactive", "--persistence-root", persistenceRoot},
-		Dir:        workspace,
+		Args:       []string{"--force-interactive", "--persistence-root", environment.Root},
+		Dir:        environment.Workspace,
+		Env:        clientEnv,
 		Dimensions: pty.MustDimensions(24, 80),
 		ParseableInputs: []pty.ParseableInputEvent{
 			{Bytes: []byte{0x03, 0x03}},

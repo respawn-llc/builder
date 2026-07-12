@@ -1,5 +1,5 @@
 import type { ComponentType, CSSProperties, ReactNode } from "react";
-import type { MouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent } from "react";
 
 // Version-locked lightweight declaration shim for @xyflow/react 12.10.x.
 // On @xyflow/react upgrades, verify the node-drag API surface below against upstream before bumping.
@@ -51,6 +51,12 @@ export type Connection = Readonly<{
   targetHandle?: string | null;
 }>;
 
+export type ConnectionStartParams = Readonly<{
+  handleId: string | null;
+  handleType: "source" | "target" | null;
+  nodeId: string | null;
+}>;
+
 export type NodeProps<NodeType extends Node = Node> = Readonly<{
   data: NodeType["data"];
   dragging?: boolean;
@@ -85,10 +91,15 @@ export declare const ReactFlow: ComponentType<
     nodesConnectable?: boolean;
     nodesDraggable?: boolean;
     nodeDragThreshold?: number;
+    connectionDragThreshold?: number;
+    connectOnClick?: boolean;
     nodeTypes?: NodeTypes;
     onConnect?: (connection: Connection) => void;
+    onConnectStart?: (event: unknown, params: ConnectionStartParams) => void;
+    onConnectEnd?: (event: unknown) => void;
     onEdgeClick?: (event: unknown, edge: Edge) => void;
     onNodeClick?: (event: unknown, node: Node) => void;
+    onPaneClick?: (event: unknown) => void;
     onNodeContextMenu?: (event: MouseEvent, node: Node) => void;
     onNodeDrag?: (event: MouseEvent, node: Node, nodes: readonly Node[]) => void;
     onNodeDragStart?: (event: MouseEvent, node: Node, nodes: readonly Node[]) => void;
@@ -119,8 +130,11 @@ export declare const Handle: ComponentType<
     "data-testid"?: string;
     id?: string;
     onClick?: (event: MouseEvent) => void;
+    onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
     position: PositionValue;
+    role?: string;
     style?: CSSProperties;
+    tabIndex?: number;
     type: "source" | "target";
   }>
 >;

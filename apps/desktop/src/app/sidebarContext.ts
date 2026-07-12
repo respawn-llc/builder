@@ -34,6 +34,8 @@ export type WorkflowInspectorSelection =
   | Readonly<{ kind: "group"; groupID: string }>
   | Readonly<{ kind: "edge"; edgeID: string }>;
 
+export type WorkflowInspectorInitialFocus = "firstEditableControl";
+
 export type TaskDetailInitialFocus =
   | Readonly<{ kind: "question"; askIDs: readonly string[] }>
   | Readonly<{ kind: "approval"; taskTransitionID: string }>
@@ -80,6 +82,7 @@ export type SidebarDestination =
       mode?: SidebarMode;
       workflowID: string;
       selection: WorkflowInspectorSelection;
+      initialFocus?: WorkflowInspectorInitialFocus | undefined;
     }>
   | Readonly<{
       kind: "workflowEditor";

@@ -33,8 +33,9 @@ type SessionTransition struct {
 }
 
 type SessionInitialInputRequest struct {
-	SessionID       string `json:"session_id,omitempty"`
-	TransitionInput string `json:"transition_input,omitempty"`
+	SessionID           string `json:"session_id,omitempty"`
+	TransitionInput     string `json:"transition_input,omitempty"`
+	OverrideStoredDraft bool   `json:"override_stored_draft,omitempty"`
 }
 
 type SessionInitialInputResponse struct {

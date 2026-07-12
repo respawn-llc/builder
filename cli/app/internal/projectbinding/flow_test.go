@@ -18,6 +18,8 @@ type testServer struct {
 }
 
 func (s *testServer) Config() config.App { return s.cfg }
+
+func (s *testServer) PresentationTheme() string { return "dark" }
 func (s *testServer) ProjectViewClient() client.ProjectViewClient {
 	return s.client
 }

@@ -337,6 +337,7 @@ func importErrorFacts(errs []onboardingimports.Error) []serverapi.ImportErrorFac
 		out = append(out, serverapi.ImportErrorFact{
 			Code:             err.Code,
 			Scope:            string(err.Scope),
+			ItemKind:         importErrorItemKind(err.ItemKind),
 			ImportProviderID: providerIDPtr(err.ProviderID),
 			Path:             valuecopy.Pointer(err.Path),
 			Operation:        err.Operation,
@@ -344,6 +345,14 @@ func importErrorFacts(errs []onboardingimports.Error) []serverapi.ImportErrorFac
 		})
 	}
 	return out
+}
+
+func importErrorItemKind(value *onboardingimports.ItemKind) *serverapi.ImportErrorItemKind {
+	if value == nil {
+		return nil
+	}
+	raw := serverapi.ImportErrorItemKind(*value)
+	return &raw
 }
 
 func importRecommendationFacts(recommendations onboardingimports.Recommendations) serverapi.ImportRecommendationFacts {

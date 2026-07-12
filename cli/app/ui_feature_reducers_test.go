@@ -103,14 +103,14 @@ func TestProcessRefreshSingleFlightSchedulesOneDirtyFollowUp(t *testing.T) {
 	}
 }
 
-func TestUIUpdateRoutesClipboardMessagesThroughReducer(t *testing.T) {
+func TestUIUpdateRoutesClipboardPasteMessagesThroughReducer(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.mainInputDraftToken = 3
 
-	next, cmd := m.Update(clipboardImagePasteDoneMsg{
+	next, cmd := m.Update(clipboardPasteDoneMsg{
 		Target:         uiClipboardPasteTargetMain,
 		MainDraftToken: 3,
-		Path:           "/tmp/image.png",
+		Content:        retainedClipboardImage("/tmp/image.png"),
 	})
 	updated := next.(*uiModel)
 

@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import type { WorkflowDefinition, WorkflowValidation } from "../../api";
-import type { WorkflowInspectorSelection } from "../../app/sidebarContext";
+import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
 import {
   DisabledInteractionGuard,
   identifierInputAttributes,
@@ -51,9 +51,11 @@ import { ScriptNodeDraftDetails } from "./WorkflowScriptNodeDraftDetails";
 
 export function WorkflowDraftInspectorContent({
   controller,
+  initialFocus,
   selection,
 }: Readonly<{
   controller: WorkflowEditorDraftController;
+  initialFocus?: WorkflowInspectorInitialFocus | undefined;
   selection: WorkflowInspectorSelection;
 }>) {
   const definition = {
@@ -88,7 +90,14 @@ export function WorkflowDraftInspectorContent({
   return edge === undefined ? (
     <MissingEntity entityID={selection.edgeID} />
   ) : (
-    <EdgeDraftDetails controller={controller} definition={definition} edge={edge} validation={validation} />
+    <EdgeDraftDetails
+      controller={controller}
+      definition={definition}
+      edge={edge}
+      initialFocus={initialFocus}
+      key={edge.id}
+      validation={validation}
+    />
   );
 }
 
@@ -147,11 +156,13 @@ function EdgeDraftDetails({
   controller,
   definition,
   edge,
+  initialFocus,
   validation,
 }: Readonly<{
   controller: WorkflowEditorDraftController;
   definition: WorkflowDefinition;
   edge: DraftWorkflowEdge;
+  initialFocus?: WorkflowInspectorInitialFocus | undefined;
   validation: WorkflowValidation;
 }>) {
   const { t } = useTranslation();
@@ -180,6 +191,7 @@ function EdgeDraftDetails({
         title={t("workflowEditor.route")}
       >
         <TextInput
+          autoFocus={initialFocus === "firstEditableControl"}
           label={t("workflowEditor.transitionText")}
           onChange={(event) => {
             controller.dispatch({

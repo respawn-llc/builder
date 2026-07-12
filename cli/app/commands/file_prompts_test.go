@@ -6,6 +6,32 @@ import (
 	"testing"
 )
 
+func TestClientPromptRootsUseOnlyClientHomeDefaultKentDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	roots, err := NewClientPromptRoots()
+	if err != nil {
+		t.Fatalf("NewClientPromptRoots: %v", err)
+	}
+	if want := filepath.Join(home, configDirName); roots.GlobalRoot != want {
+		t.Fatalf("GlobalRoot = %q, want %q", roots.GlobalRoot, want)
+	}
+	globalPrompt := filepath.Join(roots.GlobalRoot, promptsDirName, "global.md")
+	if err := os.MkdirAll(filepath.Dir(globalPrompt), 0o755); err != nil {
+		t.Fatalf("mkdir global prompts: %v", err)
+	}
+	if err := os.WriteFile(globalPrompt, []byte("global command"), 0o644); err != nil {
+		t.Fatalf("write global prompt: %v", err)
+	}
+	registry, err := NewDefaultRegistryWithClientPromptRoots(roots)
+	if err != nil {
+		t.Fatalf("NewDefaultRegistryWithClientPromptRoots: %v", err)
+	}
+	if _, ok := registry.Command("/prompt:global"); !ok {
+		t.Fatal("expected client-home prompt command")
+	}
+}
+
 func TestLoadFilePromptCommandsPrecedence(t *testing.T) {
 	workspace := t.TempDir()
 	globalRoot := t.TempDir()

@@ -219,16 +219,21 @@ type runLoggerDiagnosticMsg struct {
 	diagnostic runLoggerDiagnostic
 }
 
-type clipboardImagePasteDoneMsg struct {
+type clipboardPasteDoneMsg struct {
 	Target         uiClipboardPasteTarget
 	MainDraftToken uint64
 	AskToken       uint64
-	Path           string
+	Content        uiClipboardContent
 	Err            error
 }
 
-type clipboardTextCopyDoneMsg struct {
+type clipboardImageDiscardDoneMsg struct {
 	Err error
+}
+
+type clipboardTextCopyDoneMsg struct {
+	operationToken *uint64
+	Err            error
 }
 
 type askEvent struct {

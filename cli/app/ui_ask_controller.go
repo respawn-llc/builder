@@ -124,8 +124,8 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inputController().clearPendingCSIShiftEnter()
 	}
 	req := m.ask.current.req
-	if m.ask.freeform && isClipboardImagePasteKey(msg) {
-		return m, m.pasteClipboardImageCmd(uiClipboardPasteTargetAsk)
+	if m.ask.freeform && isClipboardPasteKey(msg) {
+		return m, m.pasteClipboardCmd(uiClipboardPasteTargetAsk)
 	}
 	if m.ask.freeform && handleSharedInputEditKeyForGOOS(msg, uiSharedInputEditActions{
 		Backspace:          m.backspaceAskInput,
@@ -137,6 +137,22 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		Yank:               m.yankAskInput,
 		DeleteCurrentLine:  m.deleteCurrentAskInputLine,
 	}, runtime.GOOS) {
+		return m, nil
+	}
+	if m.ask.freeform && handleSharedInputMovementKey(msg, uiSharedInputMovementActions{
+		MoveLeft: func() {
+			m.ask.inputCursor = moveBufferCursorLeft(m.ask.input, m.ask.inputCursor)
+		},
+		MoveRight: func() {
+			m.ask.inputCursor = moveBufferCursorRight(m.ask.input, m.ask.inputCursor)
+		},
+		MoveWordLeft: func() {
+			m.ask.inputCursor = moveBufferCursorWordLeft(m.ask.input, m.ask.inputCursor)
+		},
+		MoveWordRight: func() {
+			m.ask.inputCursor = moveBufferCursorWordRight(m.ask.input, m.ask.inputCursor)
+		},
+	}) {
 		return m, nil
 	}
 
@@ -289,26 +305,6 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.insertAskInputRunes([]rune{' '})
 		}
 		return m, nil
-	case tea.KeyLeft:
-		if !m.ask.freeform {
-			return m, nil
-		}
-		if msg.Alt {
-			m.ask.inputCursor = moveBufferCursorWordLeft(m.ask.input, m.ask.inputCursor)
-			return m, nil
-		}
-		m.ask.inputCursor = moveBufferCursorLeft(m.ask.input, m.ask.inputCursor)
-		return m, nil
-	case tea.KeyRight:
-		if !m.ask.freeform {
-			return m, nil
-		}
-		if msg.Alt {
-			m.ask.inputCursor = moveBufferCursorWordRight(m.ask.input, m.ask.inputCursor)
-			return m, nil
-		}
-		m.ask.inputCursor = moveBufferCursorRight(m.ask.input, m.ask.inputCursor)
-		return m, nil
 	case tea.KeyHome, tea.KeyCtrlA:
 		if m.ask.freeform {
 			m.ask.inputCursor = 0
@@ -317,16 +313,6 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnd, tea.KeyCtrlE, tea.KeyCtrlEnd:
 		if m.ask.freeform {
 			m.ask.inputCursor = -1
-		}
-		return m, nil
-	case tea.KeyCtrlLeft:
-		if m.ask.freeform {
-			m.ask.inputCursor = moveBufferCursorWordLeft(m.ask.input, m.ask.inputCursor)
-		}
-		return m, nil
-	case tea.KeyCtrlRight:
-		if m.ask.freeform {
-			m.ask.inputCursor = moveBufferCursorWordRight(m.ask.input, m.ask.inputCursor)
 		}
 		return m, nil
 	default:

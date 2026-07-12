@@ -1,4 +1,4 @@
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
+import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowNode } from "../../api";
 import type { draftDefinitionFromSource } from "../../features/workflow-editor/workflowEditorDraft";
 
 export const workflowDefinition: WorkflowDefinition = {
@@ -213,7 +213,7 @@ export function edgesForTransition(
   return draft.edges.filter((edge) => edge.transitionGroupID === transitionGroupID);
 }
 
-function workflowNode(id: string, key: string, kind: string, name: string) {
+function workflowNode(id: string, key: string, kind: WorkflowNode["kind"], name: string) {
   return {
     groupID: "",
     groupKey: "",

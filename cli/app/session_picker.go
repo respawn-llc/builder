@@ -120,9 +120,6 @@ func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 'n':
 					m.result = sessionPickerResult{CreateNew: true}
 					return m, tea.Quit
-				case 'q':
-					m.result = sessionPickerResult{Canceled: true}
-					return m, tea.Quit
 				}
 			}
 		case tea.KeyEnter:
@@ -133,7 +130,7 @@ func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			picked := m.sessions[m.cursor-1]
 			m.result = sessionPickerResult{Session: &picked}
 			return m, tea.Quit
-		case tea.KeyEsc, tea.KeyCtrlC:
+		case tea.KeyCtrlC:
 			m.result = sessionPickerResult{Canceled: true}
 			return m, tea.Quit
 		}

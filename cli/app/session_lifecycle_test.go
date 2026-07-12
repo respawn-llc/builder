@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1104,8 +1105,8 @@ func TestForcedLocalExitUsesDetachOnlyRuntimePlanClose(t *testing.T) {
 	normalClosed := false
 	detachClosed := false
 	plan := &runtimeLaunchPlan{
-		close:       func() { normalClosed = true },
-		detachClose: func() { detachClosed = true },
+		close:       func() error { normalClosed = true; return nil },
+		detachClose: func() error { detachClosed = true; return nil },
 	}
 	model := &uiModel{uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{forcedLocalExit: true}}
 
@@ -1182,14 +1183,122 @@ func TestNormalExitUsesNormalRuntimePlanClose(t *testing.T) {
 	normalClosed := false
 	detachClosed := false
 	plan := &runtimeLaunchPlan{
-		close:       func() { normalClosed = true },
-		detachClose: func() { detachClosed = true },
+		close:       func() error { normalClosed = true; return nil },
+		detachClose: func() error { detachClosed = true; return nil },
 	}
 
 	closeRuntimePlanAfterUIExit(plan, &uiModel{})
 
 	if !normalClosed || detachClosed {
 		t.Fatalf("close state normal=%t detach=%t, want normal close", normalClosed, detachClosed)
+	}
+}
+
+func TestResolveAndReleaseSessionActionReturnsReleaseFailureBeforeDestinationCanPlan(t *testing.T) {
+	releaseErr := errors.New("release failed")
+	events := make([]string, 0, 2)
+	server := narrowSessionLifecycleServer{
+		lifecycle: &recordingSessionLifecycleClient{
+			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
+				events = append(events, "resolve")
+				return serverapi.SessionResolveTransitionResponse{ShouldContinue: true, NextSessionID: "destination"}, nil
+			},
+		},
+	}
+	plan := &runtimeLaunchPlan{close: func() error {
+		events = append(events, "release")
+		return releaseErr
+	}}
+
+	resolved, err := resolveAndReleaseSessionAction(context.Background(), server, nil, "origin", UITransition{Action: UIActionResume}, plan)
+	if !errors.Is(err, releaseErr) {
+		t.Fatalf("error = %v, want release failure", err)
+	}
+	if resolved.ShouldContinue || resolved.NextSessionID != "" {
+		t.Fatalf("release failure returned destination %+v", resolved)
+	}
+	if got := strings.Join(events, ","); got != "resolve,release" {
+		t.Fatalf("event order = %q, want resolve,release", got)
+	}
+}
+
+func TestExitReleaseFailureReturnsAfterUILoopResult(t *testing.T) {
+	releaseErr := errors.New("release failed")
+	uiLoopReturned := false
+	plan := &runtimeLaunchPlan{close: func() error {
+		if !uiLoopReturned {
+			t.Fatal("runtime release ran before UI loop returned")
+		}
+		return releaseErr
+	}}
+	uiLoopReturned = true
+	if err := closeRuntimePlanAfterUIExit(plan, &uiModel{}); !errors.Is(err, releaseErr) {
+		t.Fatalf("close error = %v, want release failure", err)
+	}
+}
+
+func TestResumeReleaseCompletesBeforePickerAndPickerCancelDoesNotReleaseAgain(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	releaseCalls := 0
+	binding := metadata.Binding{ProjectID: "project-1", WorkspaceID: "workspace-1"}
+	server := &testEmbeddedServer{
+		cfg: config.App{
+			WorkspaceRoot:   workspaceRoot,
+			PersistenceRoot: t.TempDir(),
+			Settings:        config.Settings{Theme: "dark"},
+		},
+		projectID:         binding.ProjectID,
+		projectViewClient: sessionLifecycleProjectViewClient(binding, workspaceRoot, []clientui.SessionSummary{{SessionID: "other", UpdatedAt: time.Now().UTC()}}),
+		sessionLaunch: stubSessionLaunchClient{planSession: func(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
+			t.Fatal("picker cancellation must not plan a destination")
+			return serverapi.SessionPlanResponse{}, nil
+		}},
+	}
+	planner := newSessionLaunchPlanner(server)
+	planner.pickSession = func([]clientui.SessionSummary, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+		if releaseCalls != 1 {
+			t.Fatalf("picker opened before origin release: releases=%d", releaseCalls)
+		}
+		return sessionPickerResult{Canceled: true}, nil
+	}
+	resolved, err := resolveAndReleaseSessionAction(
+		context.Background(),
+		narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
+			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
+				return serverapi.SessionResolveTransitionResponse{ShouldContinue: true}, nil
+			},
+		}},
+		nil,
+		"origin",
+		UITransition{Action: UIActionResume},
+		&runtimeLaunchPlan{close: func() error {
+			releaseCalls++
+			return nil
+		}},
+	)
+	if err != nil {
+		t.Fatalf("resolve and release resume: %v", err)
+	}
+	if !resolved.ShouldContinue || resolved.NextSessionID != "" {
+		t.Fatalf("resolved resume = %+v", resolved)
+	}
+	if _, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive}); !errors.Is(err, projectbinding.ErrStartupCanceledByUser) {
+		t.Fatalf("picker result error = %v, want cancellation", err)
+	}
+	if releaseCalls != 1 {
+		t.Fatalf("picker cancellation released origin again: releases=%d", releaseCalls)
+	}
+}
+
+func TestForcedLocalExitPropagatesDetachReleaseFailure(t *testing.T) {
+	releaseErr := errors.New("detach failed")
+	plan := &runtimeLaunchPlan{
+		close:       func() error { t.Fatal("normal close must not run"); return nil },
+		detachClose: func() error { return releaseErr },
+	}
+	model := &uiModel{uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{forcedLocalExit: true}}
+	if err := closeRuntimePlanAfterUIExit(plan, model); !errors.Is(err, releaseErr) {
+		t.Fatalf("detach close error = %v, want release failure", err)
 	}
 }
 

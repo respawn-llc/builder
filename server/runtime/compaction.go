@@ -30,8 +30,8 @@ const (
 
 	additionalCompactionInstructionsHeader = "# Additional user instructions or commentary for this task:"
 	manualCompactionCarryoverHeader        = "# Last user message before handoff (work may have been done after it was sent):"
-	handoffDisabledByUserMessage           = "User disabled the handoff manually for now. They do not want you to hand off at this time, so please keep working or retry this tool later"
-	handoffTooEarlyMessage                 = "trigger_handoff is not enabled yet. Keep working until you receive the reminder that this tool is now enabled, then retry it."
+	handoffDisabledByUserMessage           = "User disabled the handoff manually for now. They do not want you to hand off at this time, so please keep working or retry this tool later."
+	handoffTooEarlyMessage                 = "It's too early to handoff right now. Don't worry, you still have plenty of time and memory to finish your work, so continue the current task for now. Only retry trigger_handoff after an explicit developer message says handoff is enabled."
 	handoffCompactionToolsDisabledMessage  = "Tools are disabled during handoff. Do NOT attempt to call any tools. Produce only the requested summary."
 	handoffCompactionToolCallRetries       = 3
 )

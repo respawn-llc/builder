@@ -1,5 +1,5 @@
 import type { WorkflowEdge } from "../../api";
-import type { DraftWorkflowDefinition } from "./workflowEditorDraft";
+import type { DraftWorkflowDefinition } from "./workflowEditorDraftTypes";
 import { uniqueWorkflowModelKey } from "./workflowEditorGraphKeys";
 import {
   edgesForTransitionGroup,

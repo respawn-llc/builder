@@ -141,6 +141,105 @@ func TestReleaseOnlyIfIdleKeepsActiveRun(t *testing.T) {
 	}
 }
 
+func TestClientNavigationReleasesDoNotInterruptActiveServerRun(t *testing.T) {
+	navigations := []string{
+		"new",
+		"resume selected session",
+		"resume create session",
+		"back",
+		"review",
+		"init",
+		"exit",
+	}
+	for _, navigation := range navigations {
+		t.Run(navigation, func(t *testing.T) {
+			fixture, reg := newRuntimeServiceFixture(t)
+			sessionID := fixture.store.Meta().SessionID
+			client := &releaseObservingLLMClient{
+				entered:  make(chan struct{}),
+				release:  make(chan struct{}),
+				canceled: make(chan struct{}, 1),
+			}
+			engine, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
+			if err != nil {
+				t.Fatalf("runtime.New: %v", err)
+			}
+			t.Cleanup(func() { _ = engine.Close() })
+			claim, _, _ := reg.AcquireRuntimeClaim(sessionID, "origin-client")
+			claim.Resolve(engine, nil, nil)
+
+			runDone := make(chan error, 1)
+			go func() {
+				_, runErr := engine.SubmitUserMessage(context.Background(), "run")
+				runDone <- runErr
+			}()
+			select {
+			case <-client.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("active run did not start")
+			}
+
+			resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "origin-client", true, true))
+			if err != nil {
+				t.Fatalf("release origin client: %v", err)
+			}
+			if !resp.Active || resp.Released {
+				t.Fatalf("release response = %+v, want active origin run retained", resp)
+			}
+			if !reg.IsSessionRuntimeActive(sessionID) {
+				t.Fatal("navigation release removed the active server runtime")
+			}
+			if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "independent-client", func(context.Context) (RuntimeBuildResult, error) {
+				t.Fatal("independent owner must attach to the live origin runtime")
+				return RuntimeBuildResult{}, nil
+			}); err != nil {
+				t.Fatalf("acquire independent owner: %v", err)
+			}
+			select {
+			case <-client.canceled:
+				t.Fatal("navigation release interrupted the active model run")
+			default:
+			}
+
+			close(client.release)
+			select {
+			case err := <-runDone:
+				if err != nil {
+					t.Fatalf("active run finished with %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("active run did not finish")
+			}
+			if _, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "independent-client", true, true)); err != nil {
+				t.Fatalf("release independent owner: %v", err)
+			}
+		})
+	}
+}
+
+type releaseObservingLLMClient struct {
+	entered  chan struct{}
+	release  chan struct{}
+	canceled chan struct{}
+}
+
+func (c *releaseObservingLLMClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	close(c.entered)
+	select {
+	case <-c.release:
+		return llm.Response{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		}, nil
+	case <-ctx.Done():
+		select {
+		case c.canceled <- struct{}{}:
+		default:
+		}
+		return llm.Response{}, ctx.Err()
+	}
+}
+
 func TestReleaseCloseIfIdlePolicyKeepsActiveRunWithoutLegacyOnlyIfIdle(t *testing.T) {
 	fixture, reg := newRuntimeServiceFixture(t)
 	sessionID := fixture.store.Meta().SessionID

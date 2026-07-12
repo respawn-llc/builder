@@ -5,20 +5,29 @@ import (
 	"errors"
 	"strings"
 
+	"core/cli/app/commands"
 	"core/cli/app/internal/remoteattach"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/theme"
 )
 
 type remoteAppServer struct {
-	remote    *client.Remote
-	identity  protocol.ServerIdentity
-	projectID string
-	cfg       config.App
-	closeFn   func() error
-	owns      bool
+	remote       *client.Remote
+	identity     protocol.ServerIdentity
+	projectID    string
+	cfg          config.App
+	closeFn      func() error
+	owns         bool
+	presentation startupPresentation
+	promptRoots  commands.ClientPromptRoots
+	promptErr    error
+}
+
+type startupPresentation struct {
+	Theme string
 }
 
 func newRemoteAppServerWithAuth(remote *client.Remote, cfg config.App, closeFn func() error, ownsServer bool) *remoteAppServer {
@@ -28,7 +37,38 @@ func newRemoteAppServerWithAuth(remote *client.Remote, cfg config.App, closeFn f
 	if closeFn == nil {
 		closeFn = remote.Close
 	}
-	return &remoteAppServer{remote: remote, identity: remote.Identity(), projectID: remote.ProjectID(), cfg: cfg, closeFn: closeFn, owns: ownsServer}
+	promptRoots, promptErr := commands.NewClientPromptRoots()
+	return &remoteAppServer{
+		remote:       remote,
+		identity:     remote.Identity(),
+		projectID:    remote.ProjectID(),
+		cfg:          cfg,
+		closeFn:      closeFn,
+		owns:         ownsServer,
+		presentation: startupPresentation{Theme: theme.Resolve(cfg.Settings.Theme)},
+		promptRoots:  promptRoots,
+		promptErr:    promptErr,
+	}
+}
+
+func newRemoteAppServerWithAuthAndPromptRoots(remote *client.Remote, cfg config.App, closeFn func() error, ownsServer bool, roots commands.ClientPromptRoots) *remoteAppServer {
+	server := newRemoteAppServerWithAuth(remote, cfg, closeFn, ownsServer)
+	if server != nil {
+		server.promptRoots = roots
+		server.promptErr = nil
+	}
+	return server
+}
+
+func (s *remoteAppServer) PresentationTheme() string {
+	return s.presentation.Theme
+}
+
+func (s *remoteAppServer) ClientPromptRoots() (commands.ClientPromptRoots, error) {
+	if s.promptErr != nil {
+		return commands.ClientPromptRoots{}, s.promptErr
+	}
+	return s.promptRoots, nil
 }
 
 func (s *remoteAppServer) Close() error {
@@ -72,7 +112,13 @@ func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID st
 	if err != nil {
 		return nil, err
 	}
-	return newRemoteAppServerWithAuth(bound.Remote, s.cfg, bound.CloseFn, s.owns), nil
+	next := newRemoteAppServerWithAuth(bound.Remote, s.cfg, bound.CloseFn, s.owns)
+	next.presentation = s.presentation
+	next.promptRoots = s.promptRoots
+	next.promptErr = s.promptErr
+	s.remote = nil
+	s.closeFn = nil
+	return next, nil
 }
 
 func (s *remoteAppServer) AuthStatusClient() client.AuthStatusClient {

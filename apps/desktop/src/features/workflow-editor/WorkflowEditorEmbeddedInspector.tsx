@@ -1,16 +1,18 @@
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 
-import type { WorkflowInspectorSelection } from "../../app/sidebarContext";
+import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
 import { Button, IslandSurface } from "../../ui";
 import { WorkflowInspectorSidebar } from "./WorkflowInspectorSidebar";
 
 export function WorkflowEditorEmbeddedInspector({
   onClose,
+  initialFocus,
   selection,
   workflowID,
 }: Readonly<{
   onClose: () => void;
+  initialFocus?: WorkflowInspectorInitialFocus | undefined;
   selection: WorkflowInspectorSelection | null;
   workflowID: string;
 }>) {
@@ -34,6 +36,7 @@ export function WorkflowEditorEmbeddedInspector({
       </header>
       <div className="min-h-0 overflow-y-auto p-[var(--space-3)]">
         <WorkflowInspectorSidebar
+          initialFocus={initialFocus}
           onMissingSelectedNode={onClose}
           selection={selection}
           workflowID={workflowID}

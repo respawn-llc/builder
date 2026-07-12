@@ -22,8 +22,6 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/shared/config"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 type stubTriggerHandoffController struct{}
@@ -407,69 +405,46 @@ func TestBackgroundEventRouterQueuesNoticeForActiveOwnerSession(t *testing.T) {
 
 func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 	tests := []struct {
-		name            string
-		mode            shelltool.BackgroundOutputMode
-		exitCode        int
-		maxChars        int
-		content         string
-		wantContains    []string
-		wantNotContains []string
+		name              string
+		mode              shelltool.BackgroundOutputMode
+		exitCode          int
+		maxChars          int
+		content           string
+		wantInlinePreview bool
+		wantTruncated     bool
 	}{
 		{
-			name:     "concise success omits output section",
-			mode:     shelltool.BackgroundOutputConcise,
-			exitCode: 0,
-			maxChars: 16,
-			content:  "alpha\nbeta\ngamma\n",
-			wantContains: []string{
-				"Output file (3 lines):",
-			},
-			wantNotContains: []string{
-				"Output:",
-				"alpha",
-			},
+			name:              "concise success suppresses inline preview",
+			mode:              shelltool.BackgroundOutputConcise,
+			exitCode:          0,
+			maxChars:          16,
+			content:           "alpha\nbeta\ngamma\n",
+			wantInlinePreview: false,
 		},
 		{
-			name:     "verbose success keeps full output",
-			mode:     shelltool.BackgroundOutputVerbose,
-			exitCode: 0,
-			maxChars: 5,
-			content:  "alpha\nbeta\ngamma\n",
-			wantContains: []string{
-				"Output:",
-				"alpha\nbeta\ngamma",
-			},
-			wantNotContains: []string{
-				"omitted",
-			},
+			name:              "verbose success keeps inline preview",
+			mode:              shelltool.BackgroundOutputVerbose,
+			exitCode:          0,
+			maxChars:          5,
+			content:           "alpha\nbeta\ngamma\n",
+			wantInlinePreview: true,
 		},
 		{
-			name:     "concise non-zero falls back to default truncation",
-			mode:     shelltool.BackgroundOutputConcise,
-			exitCode: 17,
-			maxChars: 32,
-			content:  "alpha line\n" + strings.Repeat("middle-noise-", 40) + "\nomega line\n",
-			wantContains: []string{
-				"Output:",
-				"alpha line",
-				"omega line",
-				"Omitted ",
-				"read log file for details",
-			},
+			name:              "concise non-zero uses default preview",
+			mode:              shelltool.BackgroundOutputConcise,
+			exitCode:          17,
+			maxChars:          32,
+			content:           "alpha line\n" + strings.Repeat("middle-noise-", 40) + "\nomega line\n",
+			wantInlinePreview: true,
+			wantTruncated:     true,
 		},
 		{
-			name:     "verbose non-zero keeps full output",
-			mode:     shelltool.BackgroundOutputVerbose,
-			exitCode: 17,
-			maxChars: 5,
-			content:  "alpha\nbeta\ngamma\n",
-			wantContains: []string{
-				"Output:",
-				"alpha\nbeta\ngamma",
-			},
-			wantNotContains: []string{
-				"omitted",
-			},
+			name:              "verbose non-zero keeps inline preview",
+			mode:              shelltool.BackgroundOutputVerbose,
+			exitCode:          17,
+			maxChars:          5,
+			content:           "alpha\nbeta\ngamma\n",
+			wantInlinePreview: true,
 		},
 	}
 
@@ -488,40 +463,24 @@ func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 			})
 			t.Cleanup(func() { _ = eng.Close() })
 
-			logPath := filepath.Join(root, "1000.log")
-			if err := os.WriteFile(logPath, []byte(tt.content), 0o644); err != nil {
-				t.Fatalf("write log: %v", err)
-			}
-
 			router := newBackgroundEventRouter(nil, tt.maxChars, tt.mode)
 			router.SetActiveSession(store.Meta().SessionID, eng)
-			router.handle(shelltool.Event{
-				Type:             shelltool.EventCompleted,
-				NoticeSuppressed: true,
-				Snapshot: shelltool.Snapshot{
-					ID:             "1000",
-					ActivityID:     uuid.New(),
-					OwnerSessionID: store.Meta().SessionID,
-					State:          "completed",
-					LogPath:        logPath,
-					ExitCode:       &tt.exitCode,
-				},
-			})
+			event := runtimewirefixture.BackgroundCompletionEventWithOutput("1000", store.Meta().SessionID, root, tt.content, tt.exitCode)
+			event.NoticeSuppressed = true
+			router.handle(event)
 
 			select {
 			case evt := <-events:
-				if evt.Background == nil {
-					t.Fatal("expected background payload")
+				if evt.Background == nil ||
+					evt.Background.ExitCode == nil || *evt.Background.ExitCode != tt.exitCode ||
+					evt.Background.NoticeText == "" || evt.Background.CompactText == "" {
+					t.Fatalf("background update = %+v", evt.Background)
 				}
-				for _, needle := range tt.wantContains {
-					if !strings.Contains(evt.Background.NoticeText, needle) {
-						t.Fatalf("expected notice to contain %q, got %q", needle, evt.Background.NoticeText)
-					}
+				if got := evt.Background.Preview != ""; got != tt.wantInlinePreview {
+					t.Fatalf("inline preview = %t, want %t", got, tt.wantInlinePreview)
 				}
-				for _, needle := range tt.wantNotContains {
-					if strings.Contains(evt.Background.NoticeText, needle) {
-						t.Fatalf("expected notice to omit %q, got %q", needle, evt.Background.NoticeText)
-					}
+				if got := evt.Background.PreviewRemoved > 0; got != tt.wantTruncated {
+					t.Fatalf("preview truncation = %t, want %t", got, tt.wantTruncated)
 				}
 			case <-time.After(time.Second):
 				t.Fatal("timed out waiting for background update event")
@@ -530,7 +489,7 @@ func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 	}
 }
 
-func TestBackgroundEventRouterWhitespacePreviewUsesNoOutputLine(t *testing.T) {
+func TestBackgroundEventRouterRoutesValidCompletion(t *testing.T) {
 	root := t.TempDir()
 	store := createAppRuntimeSessionAt(t, root, "ws", root)
 	client := &busyToggleFakeClient{}
@@ -547,29 +506,15 @@ func TestBackgroundEventRouterWhitespacePreviewUsesNoOutputLine(t *testing.T) {
 	router := newBackgroundEventRouter(nil, 80, shelltool.BackgroundOutputDefault)
 	router.SetActiveSession(store.Meta().SessionID, eng)
 	exitCode := 0
-	router.handle(shelltool.Event{
-		Type:             shelltool.EventCompleted,
-		NoticeSuppressed: true,
-		Snapshot: shelltool.Snapshot{
-			ID:             "1000",
-			ActivityID:     uuid.New(),
-			OwnerSessionID: store.Meta().SessionID,
-			State:          "completed",
-			ExitCode:       &exitCode,
-		},
-		Preview: "  \n\t  ",
-	})
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", store.Meta().SessionID, root)
+	event.NoticeSuppressed = true
+	router.handle(event)
 
 	select {
 	case evt := <-events:
-		if evt.Background == nil {
-			t.Fatal("expected background payload")
-		}
-		if !strings.Contains(evt.Background.NoticeText, "\nNo output") {
-			t.Fatalf("expected no output line, got %q", evt.Background.NoticeText)
-		}
-		if strings.Contains(evt.Background.NoticeText, "Output:") {
-			t.Fatalf("did not expect output header for blank preview, got %q", evt.Background.NoticeText)
+		if evt.Background == nil || evt.Background.ExitCode == nil || *evt.Background.ExitCode != exitCode ||
+			evt.Background.NoticeText == "" || evt.Background.CompactText == "" || evt.Background.Preview == "" {
+			t.Fatalf("valid background completion update = %+v", evt.Background)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for background update event")
@@ -690,7 +635,7 @@ func TestBackgroundEventRouterDropsNoticeWhenNoSessionIsActive(t *testing.T) {
 	eng := newAppRuntimeEngineWithStore(t, store, client, runtime.Config{})
 	router.SetActiveSession(store.Meta().SessionID, eng)
 	router.ClearActiveSession(store.Meta().SessionID, eng)
-	router.handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1002", ActivityID: uuid.New(), OwnerSessionID: store.Meta().SessionID, State: "completed"}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.handle(runtimewirefixture.BackgroundCompletionEvent("1002", store.Meta().SessionID, root))
 	time.Sleep(50 * time.Millisecond)
 	if got := client.CallCount(); got != 0 {
 		t.Fatalf("expected no notice delivery while no session is active, got %d", got)

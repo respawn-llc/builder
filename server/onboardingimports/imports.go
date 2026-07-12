@@ -132,6 +132,7 @@ type SkillEnablementProjection struct {
 type Error struct {
 	Code       string
 	Scope      ErrorScope
+	ItemKind   *ItemKind
 	ProviderID *ProviderID
 	Path       *string
 	Operation  string
@@ -183,7 +184,7 @@ func Discover(opts Options) (Result, error) {
 
 	generated, err := generatedSkillItems(opts.ConfigRoot, opts.DisabledSkills)
 	if err != nil {
-		result.Errors = append(result.Errors, Error{Code: "generated_discovery_failed", Scope: ErrorScopeGenerated, Operation: "discover_generated_skills", Message: err.Error()})
+		result.Errors = append(result.Errors, Error{Code: "generated_discovery_failed", Scope: ErrorScopeGenerated, ItemKind: itemKindPointer(ItemKindSkill), Operation: "discover_generated_skills", Message: err.Error()})
 	}
 	result.Skills.Items = append(result.Skills.Items, generated...)
 
@@ -196,8 +197,8 @@ func Discover(opts Options) (Result, error) {
 	}
 	result.Skills.Choices = append(result.Skills.Choices, choicesForItems(result.Skills.Items, ItemKindSkill)...)
 	result.Commands.Choices = append(result.Commands.Choices, choicesForItems(result.Commands.Items, ItemKindCommand)...)
-	skillTarget, skillTargetErrors := targetState([]string{filepath.Join(opts.ConfigRoot, skillcatalog.SkillsDirName)})
-	commandTarget, commandTargetErrors := targetState([]string{filepath.Join(opts.ConfigRoot, "commands"), filepath.Join(opts.ConfigRoot, "prompts")})
+	skillTarget, skillTargetErrors := targetState(ItemKindSkill, []string{filepath.Join(opts.ConfigRoot, skillcatalog.SkillsDirName)})
+	commandTarget, commandTargetErrors := targetState(ItemKindCommand, []string{filepath.Join(opts.ConfigRoot, "commands"), filepath.Join(opts.ConfigRoot, "prompts")})
 	result.Skills.Target = skillTarget
 	result.Commands.Target = commandTarget
 	result.Errors = append(result.Errors, skillTargetErrors...)
@@ -249,7 +250,7 @@ func discoverProviderSkills(result *Result, provider Provider, base string) {
 		root := filepath.Join(base, candidate)
 		exists, err := pathExists(root)
 		if err != nil {
-			addProviderError(result, provider.ID, root, "inspect_skill_root", err)
+			addProviderError(result, provider.ID, root, ItemKindSkill, "inspect_skill_root", err)
 			continue
 		}
 		result.Skills.Roots = append(result.Skills.Roots, Root{SourceKind: SourceKindExternalProvider, ProviderID: &provider.ID, Path: root, Exists: exists})
@@ -258,7 +259,7 @@ func discoverProviderSkills(result *Result, provider Provider, base string) {
 		}
 		items, err := discoverDirectSkills(provider.ID, root)
 		if err != nil {
-			addProviderError(result, provider.ID, root, "discover_skills", err)
+			addProviderError(result, provider.ID, root, ItemKindSkill, "discover_skills", err)
 			continue
 		}
 		if len(items) > 0 {
@@ -275,7 +276,7 @@ func discoverProviderCommands(result *Result, provider Provider, base string) {
 	for _, root := range []string{filepath.Join(base, "commands"), filepath.Join(base, "prompts")} {
 		exists, err := pathExists(root)
 		if err != nil {
-			addProviderError(result, provider.ID, root, "inspect_command_root", err)
+			addProviderError(result, provider.ID, root, ItemKindCommand, "inspect_command_root", err)
 			continue
 		}
 		result.Commands.Roots = append(result.Commands.Roots, Root{SourceKind: SourceKindExternalProvider, ProviderID: &provider.ID, Path: root, Exists: exists})
@@ -284,7 +285,7 @@ func discoverProviderCommands(result *Result, provider Provider, base string) {
 		}
 		items, err := discoverDirectCommands(provider.ID, root)
 		if err != nil {
-			addProviderError(result, provider.ID, root, "discover_commands", err)
+			addProviderError(result, provider.ID, root, ItemKindCommand, "discover_commands", err)
 			continue
 		}
 		if len(items) > 0 {
@@ -493,7 +494,7 @@ func existingSkillNames(configRoot string, workspaceRoot *string) (map[string]bo
 				continue
 			}
 			path := root
-			errs = append(errs, Error{Code: "existing_skill_read_failed", Scope: ErrorScopeWorkspace, Path: &path, Operation: "read_existing_skills", Message: err.Error()})
+			errs = append(errs, Error{Code: "existing_skill_read_failed", Scope: ErrorScopeWorkspace, ItemKind: itemKindPointer(ItemKindSkill), Path: &path, Operation: "read_existing_skills", Message: err.Error()})
 			continue
 		}
 		for _, entry := range entries {
@@ -506,11 +507,11 @@ func existingSkillNames(configRoot string, workspaceRoot *string) (map[string]bo
 	return names, errs
 }
 
-func targetState(globalPaths []string) (Target, []Error) {
+func targetState(itemKind ItemKind, globalPaths []string) (Target, []Error) {
 	conflicts := make([]Conflict, 0)
 	errs := make([]Error, 0)
 	for _, path := range globalPaths {
-		hasContent, probeErr := targetHasExistingContent(path)
+		hasContent, probeErr := targetHasExistingContent(itemKind, path)
 		cleaned := filepath.Clean(path)
 		if probeErr != nil {
 			errs = append(errs, *probeErr)
@@ -522,21 +523,21 @@ func targetState(globalPaths []string) (Target, []Error) {
 	return Target{Skip: len(conflicts) > 0, Conflicts: conflicts}, errs
 }
 
-func targetHasExistingContent(path string) (bool, *Error) {
+func targetHasExistingContent(itemKind ItemKind, path string) (bool, *Error) {
 	cleaned := filepath.Clean(path)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
-		return true, &Error{Code: "target_stat_failed", Scope: ErrorScopeTarget, Path: &cleaned, Operation: "inspect_import_target", Message: err.Error()}
+		return true, &Error{Code: "target_stat_failed", Scope: ErrorScopeTarget, ItemKind: itemKindPointer(itemKind), Path: &cleaned, Operation: "inspect_import_target", Message: err.Error()}
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return true, nil
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return true, &Error{Code: "target_read_failed", Scope: ErrorScopeTarget, Path: &cleaned, Operation: "read_import_target", Message: err.Error()}
+		return true, &Error{Code: "target_read_failed", Scope: ErrorScopeTarget, ItemKind: itemKindPointer(itemKind), Path: &cleaned, Operation: "read_import_target", Message: err.Error()}
 	}
 	return len(entries) > 0, nil
 }
@@ -549,8 +550,12 @@ func pathExists(path string) (bool, error) {
 	return err == nil, err
 }
 
-func addProviderError(result *Result, providerID ProviderID, path string, operation string, err error) {
-	result.Errors = append(result.Errors, Error{Code: "provider_discovery_failed", Scope: ErrorScopeProvider, ProviderID: &providerID, Path: &path, Operation: operation, Message: err.Error()})
+func addProviderError(result *Result, providerID ProviderID, path string, itemKind ItemKind, operation string, err error) {
+	result.Errors = append(result.Errors, Error{Code: "provider_discovery_failed", Scope: ErrorScopeProvider, ItemKind: itemKindPointer(itemKind), ProviderID: &providerID, Path: &path, Operation: operation, Message: err.Error()})
+}
+
+func itemKindPointer(value ItemKind) *ItemKind {
+	return &value
 }
 
 func choiceRefEqual(left, right ChoiceRef) bool {

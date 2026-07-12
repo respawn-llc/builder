@@ -25,7 +25,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 - `Up`/`Down` move the option cursor; `Enter` submits the selection (option number, approval decision, or freeform text).
 - `Tab` toggles between the option picker and freeform text entry; for approvals, freeform is commentary for the currently selected decision. Toggling back preserves the typed draft (non-approval prompts), shown dimmed under the options.
-- Freeform entry uses the shared editing key set (owner: tui-chat-core :: Editing Model) and supports clipboard image paste (owner: tui-chat-core :: Clipboard Image Paste).
+- Freeform entry uses the shared editing key set (owner: tui-chat-core :: Editing Model) and supports the shared clipboard-paste contract (owner: tui-chat-core :: Clipboard Paste).
 - Choosing the "Freeform answer" option with empty text enters freeform mode; submitting it with empty text is rejected with an error notice + bell.
 - `Esc` cancels the prompt (the agent receives a typed cancellation); `Ctrl+C` cancels it AND routes to global runtime Ctrl+C handling (interrupt while busy).
 - There is no digit-jump on prompt options.

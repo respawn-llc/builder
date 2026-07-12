@@ -43,3 +43,19 @@ func TestTranscriptSubscriptionRequestHasNoCursor(t *testing.T) {
 		t.Fatalf("session activity request type changed to %v", activity.RequestType)
 	}
 }
+
+func TestLatestCommittedAssistantFinalAnswerRouteContract(t *testing.T) {
+	route, ok := RouteByMethod(protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer)
+	if !ok {
+		t.Fatal("latest committed assistant final answer route missing")
+	}
+	if route.Kind != KindUnary || route.Auth != AuthPreServerAuth || route.Scope != ScopeSessionActiveProject || route.Connection != ConnectionControl || route.Dependency != DependencySessionView {
+		t.Fatalf("route = %+v", route)
+	}
+	if route.RequestType != reflect.TypeOf(serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{}) || route.ResponseType != reflect.TypeOf(serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}) {
+		t.Fatalf("route request/response = %v / %v", route.RequestType, route.ResponseType)
+	}
+	if !route.ValidatesRequest {
+		t.Fatal("latest committed assistant final answer route must validate its request")
+	}
+}

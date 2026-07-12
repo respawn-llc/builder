@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"core/server/tools"
-	"core/server/tools/shell/postprocess"
 	"core/shared/textutil"
 )
 
@@ -69,7 +68,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 		return tools.ErrorResultWith(c, formatToolCallError("write_stdin", err), marshalNoHTMLEscape), nil
 	}
 	if strings.TrimSpace(result.ToolError) != "" {
-		return tools.ErrorResultWith(c, postprocess.JoinWarnings(result.Warning, result.ToolError), marshalNoHTMLEscape), nil
+		return tools.ErrorResultWith(c, formatToolError(result.Warning, result.ToolError), marshalNoHTMLEscape), nil
 	}
 	body, marshalErr := marshalNoHTMLEscape(writeStdinOutput{
 		Output:              formatExecResponse(result),

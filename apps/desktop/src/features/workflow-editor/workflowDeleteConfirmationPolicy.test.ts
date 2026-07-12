@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
+import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowNode } from "../../api";
 import {
   workflowDeleteNeedsConfirmation,
   workflowDeletionConfirmationCounts,
@@ -43,7 +43,18 @@ describe("workflowDeleteConfirmationPolicy", () => {
   });
 });
 
-const agentNode = {
+const agentNode: Pick<
+  WorkflowNode,
+  | "groupID"
+  | "groupKey"
+  | "inputFields"
+  | "joinInputProviders"
+  | "kind"
+  | "outputFields"
+  | "promptTemplate"
+  | "subagentRole"
+  | "workflowID"
+> = {
   groupID: "",
   groupKey: "",
   inputFields: [],

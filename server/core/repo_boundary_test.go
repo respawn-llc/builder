@@ -659,20 +659,28 @@ func TestCLIAppStartupEntrypointsUseServerAttach(t *testing.T) {
 			t.Fatalf("parse %s: %v", relPath, err)
 		}
 		importsServerAttach := false
+		importsClient := false
 		violations := make([]string, 0)
 		for _, spec := range file.Imports {
 			importPath := strings.Trim(spec.Path.Value, "\"")
 			switch importPath {
 			case "core/cli/app/internal/serverattach":
 				importsServerAttach = true
+			case "core/shared/client":
+				importsClient = true
 			case "core/cli/app/internal/targetstartup", "core/cli/app/internal/targetresolve":
 				violations = append(violations, relPath+": startup entrypoint must use serverattach instead of "+importPath)
 			}
 		}
-		if !importsServerAttach {
+		if relPath == filepath.Join("cli", "app", "session_server_target.go") {
+			if !importsClient {
+				violations = append(violations, relPath+": pure-client startup must import the remote client")
+			}
+		} else if !importsServerAttach {
 			violations = append(violations, relPath+": startup entrypoint must import serverattach")
 		}
 		usesResolve := false
+		usesConfiguredDial := false
 		ast.Inspect(file, func(node ast.Node) bool {
 			selector, ok := node.(*ast.SelectorExpr)
 			if !ok {
@@ -685,13 +693,19 @@ func TestCLIAppStartupEntrypointsUseServerAttach(t *testing.T) {
 			if ident.Name == "serverattach" && selector.Sel.Name == "Resolve" {
 				usesResolve = true
 			}
+			if ident.Name == "client" && selector.Sel.Name == "DialConfiguredRemote" {
+				usesConfiguredDial = true
+			}
 			if ident.Name == "remoteattach" && (selector.Sel.Name == "DialHeadless" || selector.Sel.Name == "DialInteractive") {
 				violations = append(violations, relPath+": startup entrypoint must not call remoteattach."+selector.Sel.Name+" directly")
 			}
 			return true
 		})
-		if !usesResolve {
+		if relPath != filepath.Join("cli", "app", "session_server_target.go") && !usesResolve {
 			violations = append(violations, relPath+": startup entrypoint must resolve targets through serverattach.Resolve")
+		}
+		if relPath == filepath.Join("cli", "app", "session_server_target.go") && !usesConfiguredDial {
+			violations = append(violations, relPath+": pure-client startup must dial the configured remote")
 		}
 		if len(violations) > 0 {
 			t.Fatalf("startup server attach boundary violations:\n%s", strings.Join(violations, "\n"))

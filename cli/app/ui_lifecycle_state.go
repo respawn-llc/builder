@@ -129,7 +129,7 @@ func (m *uiModel) hasLocalDispatchPending() bool {
 }
 
 func (m *uiModel) blocksRuntimeInput() bool {
-	return m != nil && (m.isBusy() || m.runtimeActivityBlocksInput() || m.hasLocalDispatchPending())
+	return m != nil && (m.finalAnswerOperation != nil || m.isBusy() || m.runtimeActivityBlocksInput() || m.hasLocalDispatchPending())
 }
 
 func (m *uiModel) setPendingInterrupt(pending bool) {

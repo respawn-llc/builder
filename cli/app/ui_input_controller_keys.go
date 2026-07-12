@@ -131,8 +131,16 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	if isClipboardImagePasteKey(msg) {
-		return m, m.pasteClipboardImageCmd(uiClipboardPasteTargetMain)
+	if isClipboardPasteKey(msg) {
+		return m, m.pasteClipboardCmd(uiClipboardPasteTargetMain)
+	}
+	if handleSharedInputMovementKey(msg, uiSharedInputMovementActions{
+		MoveLeft:      m.moveCursorLeft,
+		MoveRight:     m.moveCursorRight,
+		MoveWordLeft:  m.moveCursorWordLeft,
+		MoveWordRight: m.moveCursorWordRight,
+	}) {
+		return m, nil
 	}
 
 	switch msg.Type {
@@ -214,31 +222,11 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeySpace:
 		m.insertInputRunes([]rune{' '})
 		return m, nil
-	case tea.KeyLeft:
-		if msg.Alt {
-			m.moveCursorWordLeft()
-			return m, nil
-		}
-		m.moveCursorLeft()
-		return m, nil
-	case tea.KeyRight:
-		if msg.Alt {
-			m.moveCursorWordRight()
-			return m, nil
-		}
-		m.moveCursorRight()
-		return m, nil
 	case tea.KeyHome, tea.KeyCtrlA:
 		m.moveCursorStart()
 		return m, nil
 	case tea.KeyEnd, tea.KeyCtrlE, tea.KeyCtrlEnd:
 		m.moveCursorEnd()
-		return m, nil
-	case tea.KeyCtrlLeft:
-		m.moveCursorWordLeft()
-		return m, nil
-	case tea.KeyCtrlRight:
-		m.moveCursorWordRight()
 		return m, nil
 	case tea.KeyUp:
 		m.moveCursorUpLine()

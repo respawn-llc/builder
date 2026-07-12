@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -44,6 +45,9 @@ func cancellationMessage(err error) string {
 }
 
 func truncateWithTemplate(s string, maxLen int, bannerTemplate string) (string, bool, int) {
+	if strings.TrimSpace(s) == "" {
+		return "", false, 0
+	}
 	if len(s) <= maxLen {
 		return s, false, 0
 	}

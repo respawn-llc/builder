@@ -105,6 +105,36 @@ func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 	}
 }
 
+func TestRemoteGetsLatestCommittedAssistantFinalAnswer(t *testing.T) {
+	answer := "durable answer"
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive final-answer request: %v", err)
+		}
+		if req.Method != protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer {
+			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{Answer: &answer})); err != nil {
+			t.Fatalf("send final-answer response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	resp, err := remote.GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("GetLatestCommittedAssistantFinalAnswer: %v", err)
+	}
+	if resp.Answer == nil || *resp.Answer != answer {
+		t.Fatalf("answer = %v, want %q", resp.Answer, answer)
+	}
+}
+
 func TestRemoteSessionActivitySubscriptionNextHonorsCanceledContext(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		var req protocol.Request

@@ -118,6 +118,14 @@ func (m *uiModel) inputAsyncReducer() uiInputAsyncFeatureReducer {
 func (r uiInputAsyncFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	m := r.model
 	switch msg := msg.(type) {
+	case latestFinalAnswerDoneMsg:
+		cmd := m.handleLatestFinalAnswerDone(msg)
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(m, cmd)
+	case latestFinalAnswerTimeoutMsg:
+		cmd := m.handleLatestFinalAnswerTimeout(msg)
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(m, cmd)
 	case authSlashCommandRefreshedMsg:
 		m.applyAuthSlashCommandRefreshed(msg)
 		m.layout().syncViewport()
@@ -247,8 +255,12 @@ func (m *uiModel) clipboardReducer() uiClipboardFeatureReducer {
 func (r uiClipboardFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	m := r.model
 	switch msg := msg.(type) {
-	case clipboardImagePasteDoneMsg:
-		cmd := m.handleClipboardImagePasteDone(msg)
+	case clipboardPasteDoneMsg:
+		cmd := m.handleClipboardPasteDone(msg)
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(cmd))
+	case clipboardImageDiscardDoneMsg:
+		cmd := m.handleClipboardImageDiscardDone(msg)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(cmd))
 	case clipboardTextCopyDoneMsg:

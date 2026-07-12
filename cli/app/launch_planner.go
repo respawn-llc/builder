@@ -40,8 +40,6 @@ type sessionLaunchPlan struct {
 	SelectedViaPicker                    bool
 	SelectedSessionWorkspaceRoot         string
 	SelectedSessionWorkspaceLookupFailed bool
-	HasOtherSessions                     bool
-	HasOtherSessionsKnown                bool
 	ActiveSettings                       config.Settings
 	EnabledTools                         []toolspec.ID
 	ConfiguredModelName                  string
@@ -63,26 +61,25 @@ type resolvedSessionPlanRequest struct {
 type runtimeLaunchPlan struct {
 	Logger      *runLogger
 	Wiring      *runtimeWiring
-	close       func()
-	detachClose func()
+	close       func() error
+	detachClose func() error
 }
 
-func (p *runtimeLaunchPlan) Close() {
+func (p *runtimeLaunchPlan) Close() error {
 	if p == nil || p.close == nil {
-		return
+		return nil
 	}
-	p.close()
+	return p.close()
 }
 
-func (p *runtimeLaunchPlan) DetachOnlyClose() {
+func (p *runtimeLaunchPlan) DetachOnlyClose() error {
 	if p == nil {
-		return
+		return nil
 	}
 	if p.detachClose != nil {
-		p.detachClose()
-		return
+		return p.detachClose()
 	}
-	p.Close()
+	return p.Close()
 }
 
 type sessionPickerRunner func([]clientui.SessionSummary, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
@@ -94,6 +91,7 @@ type sessionViewReader interface {
 type launchPlannerServer interface {
 	OwnsServer() bool
 	Config() config.App
+	PresentationTheme() string
 	ProjectID() string
 	AuthStatusClient() client.AuthStatusClient
 	ProjectViewClient() client.ProjectViewClient
@@ -157,15 +155,12 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 			selectedSessionWorkspaceLookupFailed = true
 		}
 	}
-	hasOtherSessions, hasOtherSessionsKnown := p.resolveHasOtherSessions(ctx, resolved, resp.Plan.SessionID)
 	return sessionLaunchPlan{
 		Mode:                                 req.Mode,
 		SessionID:                            resp.Plan.SessionID,
 		SelectedViaPicker:                    resolved.selectedViaPicker,
 		SelectedSessionWorkspaceRoot:         selectedSessionWorkspaceRoot,
 		SelectedSessionWorkspaceLookupFailed: selectedSessionWorkspaceLookupFailed,
-		HasOtherSessions:                     hasOtherSessions,
-		HasOtherSessionsKnown:                hasOtherSessionsKnown,
 		ActiveSettings:                       resp.Plan.ActiveSettings,
 		EnabledTools:                         enabledTools,
 		ConfiguredModelName:                  resp.Plan.ConfiguredModelName,
@@ -256,7 +251,7 @@ func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunc
 		return resolvedSessionPlanRequest{}, errors.New("session picker is required")
 	}
 	cfg := p.server.Config()
-	picked, err := p.pickSession(summaries, cfg.Settings.Theme, p.sessionPickerHeaderInfo(cfg))
+	picked, err := p.pickSession(summaries, p.server.PresentationTheme(), p.sessionPickerHeaderInfo(cfg))
 	if err != nil {
 		return resolvedSessionPlanRequest{}, err
 	}
@@ -278,16 +273,30 @@ func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunc
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {
 	workspaceRoot := strings.TrimSpace(cfg.WorkspaceRoot)
 	authState := launchPlannerAuthState(p.server)
+	settings := cfg.Settings
+	modelName := strings.TrimSpace(settings.Model)
+	thinkingLevel := strings.TrimSpace(settings.ThinkingLevel)
+	if !p.server.OwnsServer() {
+		// A configured server's persisted runtime settings are not client config
+		// state. The picker has no session plan yet, so omit those values until a
+		// server read model supplies them.
+		settings.Model = ""
+		settings.ThinkingLevel = ""
+		settings.ModelVerbosity = ""
+		settings.EnabledTools = nil
+		modelName = ""
+		thinkingLevel = ""
+	}
 	statusReq := populateStatusRequestCacheKeys(uiStatusRequest{
 		WorkspaceRoot:     workspaceRoot,
 		PersistenceRoot:   strings.TrimSpace(cfg.PersistenceRoot),
-		Settings:          cfg.Settings,
+		Settings:          settings,
 		Source:            cfg.Source,
 		AuthCacheIdentity: status.AuthCacheIdentity(authState.Resolver),
 		AuthStatus:        p.server.AuthStatusClient(),
 		AuthStatePath:     strings.TrimSpace(authState.Path),
-		ModelName:         strings.TrimSpace(cfg.Settings.Model),
-		ThinkingLevel:     strings.TrimSpace(cfg.Settings.ThinkingLevel),
+		ModelName:         modelName,
+		ThinkingLevel:     thinkingLevel,
 		OwnsServer:        p.server.OwnsServer(),
 	})
 	return sessionPickerHeaderInfo{
@@ -315,27 +324,6 @@ func (p *launchPlanner) listSessionSummaries(ctx context.Context) ([]clientui.Se
 		return nil, err
 	}
 	return append([]clientui.SessionSummary(nil), resp.Overview.Sessions...), nil
-}
-
-func (p *launchPlanner) resolveHasOtherSessions(ctx context.Context, resolved resolvedSessionPlanRequest, sessionID string) (bool, bool) {
-	if strings.TrimSpace(sessionID) == "" {
-		return false, false
-	}
-	summaries := resolved.sessionSummaries
-	if !resolved.hasSessionSummaries {
-		var err error
-		summaries, err = p.listSessionSummaries(ctx)
-		if err != nil {
-			return false, false
-		}
-	}
-	for _, summary := range summaries {
-		if strings.TrimSpace(summary.SessionID) == strings.TrimSpace(sessionID) {
-			continue
-		}
-		return true, true
-	}
-	return false, true
 }
 
 func sessionPlanOverridesFromConfig(cfg config.App) serverapi.RunPromptOverrides {

@@ -1,2 +1,1 @@
-The previous agent started working, but ran out of context window, handing off its work to you. You are to continue the work. Here is the summary produced by the other agent:
-
+You are continuing an existing task after a handoff from the previous agent. Use the summary below and the shared workspace to identify the next unfinished step toward the original user goal. Preserve prior user decisions and completed work; do not repeat work unless verification shows it is incomplete or incorrect. Here is the handoff summary:
