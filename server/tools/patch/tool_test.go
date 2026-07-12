@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -236,13 +237,7 @@ func TestUpdateFilePreservesExecutableMode(t *testing.T) {
 	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
 		t.Fatalf("updated content = %q, want %q", got, want)
 	}
-	info, err := os.Stat(target)
-	if err != nil {
-		t.Fatalf("stat updated file: %v", err)
-	}
-	if got, want := info.Mode().Perm(), os.FileMode(0o755); got != want {
-		t.Fatalf("updated mode = %04o, want %04o", got, want)
-	}
+	assertUnixFileMode(t, target, 0o755)
 }
 
 func TestUpdateAndMoveFilePreservesExecutableMode(t *testing.T) {
@@ -272,13 +267,7 @@ func TestUpdateAndMoveFilePreservesExecutableMode(t *testing.T) {
 	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
 		t.Fatalf("moved content = %q, want %q", got, want)
 	}
-	info, err := os.Stat(destination)
-	if err != nil {
-		t.Fatalf("stat moved file: %v", err)
-	}
-	if got, want := info.Mode().Perm(), os.FileMode(0o755); got != want {
-		t.Fatalf("moved mode = %04o, want %04o", got, want)
-	}
+	assertUnixFileMode(t, destination, 0o755)
 }
 
 func TestUpdateFileUsesCodexStyleContextHeader(t *testing.T) {
@@ -475,12 +464,20 @@ func TestAddFileUsesDefaultNonExecutableMode(t *testing.T) {
 	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
 		t.Fatalf("added content = %q, want %q", got, want)
 	}
-	info, err := os.Stat(target)
-	if err != nil {
-		t.Fatalf("stat added file: %v", err)
+	assertUnixFileMode(t, target, 0o644)
+}
+
+func assertUnixFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
 	}
-	if got, want := info.Mode().Perm(), os.FileMode(0o644); got != want {
-		t.Fatalf("added mode = %04o, want %04o", got, want)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode for %s = %04o, want %04o", path, got, want)
 	}
 }
 
