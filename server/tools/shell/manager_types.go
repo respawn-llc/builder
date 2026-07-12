@@ -41,10 +41,62 @@ const (
 type Event struct {
 	Type             EventType
 	Snapshot         Snapshot
-	Preview          string
-	PreviewProcessed bool
-	Removed          int
 	NoticeSuppressed bool
+	completion       *completionOutput
+}
+
+type completionOutputSource uint8
+
+const (
+	completionOutputFinalized completionOutputSource = iota + 1
+	completionOutputFallback
+)
+
+type completionOutput struct {
+	source  completionOutputSource
+	output  visibleShellOutput
+	removed int
+}
+
+func newBackgroundedEvent(snapshot Snapshot) Event {
+	return Event{Type: EventBackgrounded, Snapshot: snapshot}
+}
+
+func newFinalizedBackgroundEvent(eventType EventType, snapshot Snapshot, output string, warning postprocess.Warning, noticeSuppressed bool) Event {
+	return newTerminalBackgroundEvent(eventType, snapshot, completionOutput{
+		source: completionOutputFinalized,
+		output: newVisibleShellOutput(output, warning),
+	}, noticeSuppressed)
+}
+
+func newFallbackBackgroundEvent(eventType EventType, snapshot Snapshot, output string, warning postprocess.Warning, removed int, noticeSuppressed bool) Event {
+	if removed < 0 {
+		panic("background fallback removal count must not be negative")
+	}
+	return newTerminalBackgroundEvent(eventType, snapshot, completionOutput{
+		source:  completionOutputFallback,
+		output:  newVisibleShellOutput(output, warning),
+		removed: removed,
+	}, noticeSuppressed)
+}
+
+func newTerminalBackgroundEvent(eventType EventType, snapshot Snapshot, output completionOutput, noticeSuppressed bool) Event {
+	switch eventType {
+	case EventCompleted, EventKilled:
+	default:
+		panic(fmt.Sprintf("terminal background event requires completed or killed type, got %q", eventType))
+	}
+	switch output.source {
+	case completionOutputFinalized, completionOutputFallback:
+	default:
+		panic(fmt.Sprintf("terminal background event requires known output source, got %d", output.source))
+	}
+	return Event{
+		Type:             eventType,
+		Snapshot:         snapshot,
+		NoticeSuppressed: noticeSuppressed,
+		completion:       &output,
+	}
 }
 
 type Snapshot struct {
@@ -89,7 +141,7 @@ type ExecRequest struct {
 type ExecResult struct {
 	SessionID          string
 	WallTime           time.Duration
-	Warning            string
+	Warning            postprocess.Warning
 	ToolError          string
 	Output             string
 	OutputPath         string
@@ -107,6 +159,7 @@ type BackgroundNoticeSummary struct {
 	LineCount     int
 	Truncated     bool
 	LogPath       string
+	output        backgroundNoticeOutput
 }
 
 type OutputChunk struct {

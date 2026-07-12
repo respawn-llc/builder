@@ -8,6 +8,7 @@ import (
 
 	"core/server/runtime"
 	shelltool "core/server/tools/shell"
+	"core/shared/invariant"
 	"core/shared/valuecopy"
 
 	"github.com/google/uuid"
@@ -18,6 +19,7 @@ type BackgroundEventRouter struct {
 	active      map[string]activeRuntime
 	outputLimit int
 	outputMode  shelltool.BackgroundOutputMode
+	policy      invariant.Policy
 }
 
 type activeRuntime struct {
@@ -26,7 +28,16 @@ type activeRuntime struct {
 }
 
 func NewBackgroundEventRouter(background *shelltool.Manager, outputLimit int, outputMode shelltool.BackgroundOutputMode) *BackgroundEventRouter {
-	router := &BackgroundEventRouter{active: make(map[string]activeRuntime), outputLimit: outputLimit, outputMode: outputMode}
+	return NewBackgroundEventRouterWithInvariantPolicy(background, outputLimit, outputMode, invariant.NewPolicy())
+}
+
+func NewBackgroundEventRouterWithInvariantPolicy(background *shelltool.Manager, outputLimit int, outputMode shelltool.BackgroundOutputMode, policy invariant.Policy) *BackgroundEventRouter {
+	router := &BackgroundEventRouter{
+		active:      make(map[string]activeRuntime),
+		outputLimit: outputLimit,
+		outputMode:  outputMode,
+		policy:      policy,
+	}
 	if background != nil {
 		background.SetEventHandler(router.handle)
 	}
@@ -81,10 +92,21 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 	}
 	summary := shelltool.BackgroundNoticeSummary{}
 	if evt.Type == shelltool.EventCompleted || evt.Type == shelltool.EventKilled {
-		summary = shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{
+		var summaryErr error
+		summary, summaryErr = shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{
 			MaxChars:          outputLimit,
 			SuccessOutputMode: outputMode,
 		})
+		if summaryErr != nil {
+			r.policy.Check(false, invariant.BackgroundEventDiagnostic(invariant.BackgroundEventDiagnosticInput{
+				Operation: "route_background_shell_event",
+				EventType: string(evt.Type),
+				ProcessID: evt.Snapshot.ID,
+				State:     evt.Snapshot.State,
+				Cause:     summaryErr.Error(),
+			}))
+			summary = shelltool.InvariantFailureBackgroundNotice(evt, summaryErr)
+		}
 	}
 	shouldNotify := !evt.NoticeSuppressed
 	if shouldNotify && !evt.Snapshot.FinishedAt.IsZero() && evt.Snapshot.FinishedAt.Before(activeRuntime.activatedAt) {
@@ -97,6 +119,7 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 	case shelltool.EventKilled:
 		eventType = runtime.BackgroundShellEventKilled
 	}
+	preview, previewRemoved := summary.RuntimePreview()
 	activeRuntime.engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
 		Type:              eventType,
 		ID:                evt.Snapshot.ID,
@@ -107,8 +130,8 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 		LogPath:           evt.Snapshot.LogPath,
 		NoticeText:        summary.DetailText,
 		CompactText:       summary.CondensedText,
-		Preview:           evt.Preview,
-		PreviewRemoved:    evt.Removed,
+		Preview:           preview,
+		PreviewRemoved:    previewRemoved,
 		ExitCode:          valuecopy.Pointer(evt.Snapshot.ExitCode),
 		UserRequestedKill: evt.Snapshot.KillRequested,
 		NoticeSuppressed:  evt.NoticeSuppressed,

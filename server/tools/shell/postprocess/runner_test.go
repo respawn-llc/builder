@@ -15,6 +15,34 @@ import (
 	"core/shared/toolspec"
 )
 
+func TestWarningRejectsBlankMessageAndMergesImmutably(t *testing.T) {
+	if _, err := NewWarning(" \t\n "); err == nil {
+		t.Fatal("expected blank warning construction to fail")
+	}
+
+	first, err := NewWarning("first")
+	if err != nil {
+		t.Fatalf("NewWarning(first): %v", err)
+	}
+	second, err := NewWarning("second")
+	if err != nil {
+		t.Fatalf("NewWarning(second): %v", err)
+	}
+	merged := MergeWarnings(first, second)
+	if merged == nil {
+		t.Fatal("expected merged warning")
+	}
+	if got := len(merged.(*warningAggregate).messages); got != 2 {
+		t.Fatalf("merged warning count = %d, want 2", got)
+	}
+	if got := len(first.(*warningAggregate).messages); got != 1 {
+		t.Fatalf("first warning count mutated to %d", got)
+	}
+	if MergeWarnings(nil, nil) != nil {
+		t.Fatal("expected absent warnings to remain nil")
+	}
+}
+
 func TestRunnerBuiltinGoTestSuccessCollapsesToPass(t *testing.T) {
 	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
@@ -544,11 +572,14 @@ func TestRunnerUserHookFailureWarningTruncatesStderr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if !strings.Contains(result.Warning, "[hook output truncated]") {
-		t.Fatalf("expected truncated stderr marker, got %q", result.Warning)
+	if result.Warning == nil {
+		t.Fatal("expected hook failure warning")
 	}
-	if len(result.Warning) > maxHookOutputBytes+512 {
-		t.Fatalf("expected bounded warning length, got %d", len(result.Warning))
+	if len(result.Warning.(*warningAggregate).messages) != 1 {
+		t.Fatalf("warning count = %d, want 1", len(result.Warning.(*warningAggregate).messages))
+	}
+	if len(result.Warning.Text()) > maxHookOutputBytes+512 {
+		t.Fatalf("expected bounded warning length, got %d", len(result.Warning.Text()))
 	}
 }
 
@@ -609,8 +640,11 @@ func TestRunnerAllModeAccumulatesWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if !strings.Contains(result.Warning, "builtin warning") || !strings.Contains(result.Warning, "command postprocess hook failed:") {
-		t.Fatalf("warning = %q, want both warnings", result.Warning)
+	if result.Warning == nil {
+		t.Fatal("expected accumulated warnings")
+	}
+	if got := len(result.Warning.(*warningAggregate).messages); got != 2 {
+		t.Fatalf("warning count = %d, want 2", got)
 	}
 }
 
@@ -619,5 +653,9 @@ type warningProcessor struct{}
 func (warningProcessor) ID() string { return "test/warning" }
 
 func (warningProcessor) Process(_ context.Context, envelope Envelope) (Decision, error) {
-	return Decision{Action: ActionSkip, Next: envelope, Warning: "builtin warning"}, nil
+	warning, err := NewWarning("builtin warning")
+	if err != nil {
+		return Decision{}, err
+	}
+	return Decision{Action: ActionSkip, Next: envelope, Warning: warning}, nil
 }

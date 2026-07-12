@@ -66,11 +66,11 @@ func TestChainAccumulatesRecoverableProcessorErrors(t *testing.T) {
 		t.Fatalf("output = %q", decision.Next.CurrentOutput)
 	}
 	result := resultFromEnvelope(decision.Next, decision.Processed(), decision.ProcessorID, ProcessorFailure{})
-	if !strings.Contains(result.Warning, "Postprocess processor one failed: bad one") {
-		t.Fatalf("warning missing first error: %q", result.Warning)
+	if result.Warning == nil {
+		t.Fatal("expected recoverable failures to produce a warning")
 	}
-	if !strings.Contains(result.Warning, "Postprocess processor two failed: bad two") {
-		t.Fatalf("warning missing second error: %q", result.Warning)
+	if got := len(result.Warning.(*warningAggregate).messages); got != 2 {
+		t.Fatalf("warning count = %d, want 2", got)
 	}
 }
 

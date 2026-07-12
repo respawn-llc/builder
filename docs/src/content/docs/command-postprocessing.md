@@ -5,6 +5,8 @@ description: Configure Kent's shell command post-processing and ship your own ho
 
 Kent post-processes shell command output before it is shown to the model to normalize output, reduce command noise, and add useful execution context.
 
+Successful commands with visible output return that output. A completed command without visible output reports its exit code and explicit no-output completion.
+
 ## Config
 
 Configure command post-processing under `[shell]` in `~/.kent/config.toml`:

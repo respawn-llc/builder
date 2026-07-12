@@ -153,6 +153,12 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 	)
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
 	manager.SetEventHandler(func(evt shelltool.Event) {
+		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
+		if summaryErr != nil {
+			t.Errorf("SummarizeBackgroundEvent: %v", summaryErr)
+			return
+		}
+		preview, previewRemoved := summary.RuntimePreview()
 		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
 			Type:           backgroundShellEventTypeForTest(evt.Type),
 			ID:             evt.Snapshot.ID,
@@ -160,8 +166,8 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			Command:        evt.Snapshot.Command,
 			Workdir:        evt.Snapshot.Workdir,
 			LogPath:        evt.Snapshot.LogPath,
-			Preview:        evt.Preview,
-			PreviewRemoved: evt.Removed,
+			Preview:        preview,
+			PreviewRemoved: previewRemoved,
 			ExitCode: func() *int {
 				if evt.Snapshot.ExitCode == nil {
 					return nil

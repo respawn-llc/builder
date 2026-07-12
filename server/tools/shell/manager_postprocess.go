@@ -35,6 +35,14 @@ func (m *Manager) applyPostprocessing(ctx context.Context, entry *processEntry, 
 	})
 }
 
+func mergeOperationalWarning(existing postprocess.Warning, message string) (postprocess.Warning, error) {
+	warning, err := postprocess.NewWarning(message)
+	if err != nil {
+		return nil, err
+	}
+	return postprocess.MergeWarnings(existing, warning), nil
+}
+
 func readOutputFileLimited(path string, maxBytes int64) (string, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
