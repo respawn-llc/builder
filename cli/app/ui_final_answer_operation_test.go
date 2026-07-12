@@ -225,7 +225,7 @@ func TestClipboardOwnershipSerializesCopies(t *testing.T) {
 	doneB := make(chan tea.Msg, 1)
 	go func() { doneB <- cmdB() }()
 	<-copier.started
-	next, _ = m.Update(clipboardTextCopyDoneMsg{token: opA.token})
+	next, _ = m.Update(clipboardTextCopyDoneMsg{operationToken: &opA.token})
 	m = next.(*uiModel)
 	if m.finalAnswerOperation == nil || m.finalAnswerOperation.token != opB.token {
 		t.Fatal("stale clipboard completion released newer ownership")

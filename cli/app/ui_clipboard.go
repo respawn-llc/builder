@@ -750,7 +750,7 @@ func (m *uiModel) copyClipboardTextCmdForOperation(token uint64, text string) te
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), clipboardTextCopyTimeout)
 		defer cancel()
-		return clipboardTextCopyDoneMsg{token: token, Err: copyClipboardText(ctx, copier, copyText)}
+		return clipboardTextCopyDoneMsg{operationToken: &token, Err: copyClipboardText(ctx, copier, copyText)}
 	}
 }
 
@@ -762,9 +762,9 @@ func copyClipboardText(ctx context.Context, copier uiClipboardTextCopier, text s
 }
 
 func (m *uiModel) handleClipboardTextCopyDone(msg clipboardTextCopyDoneMsg) tea.Cmd {
-	if msg.token != 0 {
+	if msg.operationToken != nil {
 		op := m.finalAnswerOperation
-		if op == nil || op.token != msg.token || op.phase != uiFinalAnswerOperationClipboard {
+		if op == nil || op.token != *msg.operationToken || op.phase != uiFinalAnswerOperationClipboard {
 			return nil
 		}
 		m.finalAnswerOperation = nil
