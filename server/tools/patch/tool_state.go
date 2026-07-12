@@ -113,12 +113,13 @@ func (s *applyState) getState(path string) (*patchFileState, error) {
 	if existing, ok := s.state[resolved]; ok {
 		return existing, nil
 	}
-	fileState := &patchFileState{NewPath: resolved, Original: resolved}
-	data, err := os.ReadFile(resolved)
-	if err == nil {
+	fileState := &patchFileState{Mode: 0o644, NewPath: resolved, Original: resolved}
+	snapshot, err := captureSnapshot(resolved)
+	if err == nil && snapshot.Exists {
 		fileState.Exists = true
-		fileState.Content = splitLines(string(data))
-	} else if !errors.Is(err, os.ErrNotExist) {
+		fileState.Content = splitLines(string(snapshot.Data))
+		fileState.Mode = snapshot.Mode
+	} else if err != nil {
 		return nil, internalFailure(path, fmt.Sprintf("read file failed: %v", err))
 	}
 	s.state[resolved] = fileState
@@ -147,6 +148,7 @@ func (s *applyState) addFile(op patchformat.AddFile) error {
 	s.state[target] = &patchFileState{
 		Exists:   true,
 		Content:  append([]string(nil), op.Content...),
+		Mode:     0o644,
 		NewPath:  target,
 		Original: target,
 	}
@@ -229,7 +231,7 @@ func (s *applyState) prepareCommitStates() ([]*patchFileState, error) {
 		if len(fileState.Content) > 0 && !strings.HasSuffix(text, "\n") {
 			text += "\n"
 		}
-		staged, err := createStagedFile(fileState.NewPath, []byte(text))
+		staged, err := createStagedFile(fileState.NewPath, []byte(text), fileState.Mode)
 		if err != nil {
 			return nil, internalFailure(fileState.NewPath, fmt.Sprintf("stage write failed: %v", err))
 		}

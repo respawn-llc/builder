@@ -12,6 +12,7 @@ import (
 type patchFileState struct {
 	Exists     bool
 	Content    []string
+	Mode       os.FileMode
 	NewPath    string
 	Original   string
 	StagedPath string
@@ -149,7 +150,7 @@ func commitStagedFiles(states []*patchFileState, deleteTargets map[string]struct
 	return nil
 }
 
-func createStagedFile(targetPath string, data []byte) (string, error) {
+func createStagedFile(targetPath string, data []byte, mode os.FileMode) (string, error) {
 	stageDir, err := nearestExistingDirectory(filepath.Dir(targetPath))
 	if err != nil {
 		return "", err
@@ -168,7 +169,7 @@ func createStagedFile(targetPath string, data []byte) (string, error) {
 		_ = os.Remove(path)
 		return "", err
 	}
-	if err := file.Chmod(0o644); err != nil {
+	if err := file.Chmod(mode); err != nil {
 		_ = file.Close()
 		_ = os.Remove(path)
 		return "", err
