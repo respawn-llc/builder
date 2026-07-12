@@ -73,6 +73,42 @@ func TestExactReplaceAndReplaceAll(t *testing.T) {
 	}
 }
 
+func TestEditReplacementPreservesExecutableMode(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
+		t.Fatalf("seed executable file: %v", err)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatalf("mark seed file executable: %v", err)
+	}
+	tool := newTestTool(t, dir)
+
+	result := callEdit(t, tool, map[string]any{
+		"path":       "script.sh",
+		"old_string": "echo old",
+		"new_string": "echo new",
+	})
+	if result.IsError {
+		t.Fatalf("expected success, got %s", string(result.Output))
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read edited file: %v", err)
+	}
+	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
+		t.Fatalf("edited content = %q, want %q", got, want)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat edited file: %v", err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o755); got != want {
+		t.Fatalf("edited mode = %04o, want %04o", got, want)
+	}
+}
+
 func TestInputAliasesAndConflicts(t *testing.T) {
 	dir := t.TempDir()
 	tool := newTestTool(t, dir)
