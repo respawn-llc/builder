@@ -43,7 +43,7 @@ const (
 	ErrCodeOnboardingFinalizeFailed      = -32033
 	ErrCodeWorkflowTaskListScope         = -32034
 	ErrCodeWorktreeSelector              = -32035
-	ErrCodeWorktreeOperationIDConflict   = -32036
+	ErrCodeWorktreeTransitionPending     = -32036
 	ErrCodeWorktreeSetupRetained         = -32037
 	ErrCodeWorktreeDeletePrecondition    = -32038
 )

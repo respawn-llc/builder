@@ -99,7 +99,7 @@ func TestWorktreeStatusHasNoSelectorAndValidatesTypedProblems(t *testing.T) {
 	}
 }
 
-func TestWorktreeOperationContractValidatesUUIDV4PayloadAndLifecycle(t *testing.T) {
+func TestWorktreeTransitionRequestsUseUUIDV4Correlation(t *testing.T) {
 	operationID := NewWorktreeOperationID()
 	if err := operationID.Validate(); err != nil {
 		t.Fatalf("generated operation id rejected: %v", err)
@@ -114,64 +114,9 @@ func TestWorktreeOperationContractValidatesUUIDV4PayloadAndLifecycle(t *testing.
 		t.Fatal("scheduled acknowledgement accepted a non-v4 operation ID")
 	}
 
-	selector := "feature"
-	payload := WorktreeOperationPayload{
-		Version:             WorktreeOperationPayloadVersion1,
-		SessionID:           "session",
-		Kind:                WorktreeOperationKindDelete,
-		Selector:            &selector,
-		ForceFolderRemoval:  true,
-		BranchCleanupPolicy: WorktreeBranchCleanupPolicyDeleteSafe,
-	}
-	if err := payload.Validate(); err != nil {
-		t.Fatalf("delete payload rejected: %v", err)
-	}
-	if err := (WorktreeOperationPayload{
-		Version:             WorktreeOperationPayloadVersion1,
-		SessionID:           "session",
-		Kind:                WorktreeOperationKindLeave,
-		Selector:            &selector,
-		BranchCleanupPolicy: WorktreeBranchCleanupPolicyRetain,
-	}).Validate(); err == nil {
-		t.Fatal("leave payload with selector validated")
-	}
-	if err := (WorktreeOperationPayload{
-		Version:             WorktreeOperationPayloadVersion1,
-		SessionID:           "session",
-		Kind:                WorktreeOperationKindEnter,
-		BranchCleanupPolicy: WorktreeBranchCleanupPolicyRetain,
-	}).Validate(); err == nil {
-		t.Fatal("enter payload without selector validated")
-	}
-
 	acknowledgement := WorktreeScheduledAcknowledgement{OperationID: operationID}
 	if err := acknowledgement.Validate(); err != nil {
 		t.Fatalf("scheduled acknowledgement rejected: %v", err)
-	}
-	event := WorktreeOperationEvent{
-		OperationID: operationID,
-		Version:     1,
-		Kind:        WorktreeOperationEventKindCompleted,
-		Result:      &WorktreeOperationResult{Target: &clientui.SessionExecutionTarget{WorkspaceID: "workspace", WorkspaceRoot: "/repo"}},
-	}
-	if err := event.Validate(); err != nil {
-		t.Fatalf("completed event rejected: %v", err)
-	}
-	event.Version = 0
-	if err := event.Validate(); err == nil {
-		t.Fatal("zero lifecycle version validated")
-	}
-	failed := WorktreeOperationEvent{
-		OperationID: operationID,
-		Version:     2,
-		Kind:        WorktreeOperationEventKindFailed,
-		Failure: &WorktreeOperationFailure{
-			Kind:       WorktreeOperationFailureKindExecutionIndeterminate,
-			Diagnostic: "server stopped before the transition result was known",
-		},
-	}
-	if err := failed.Validate(); err != nil {
-		t.Fatalf("failed event rejected: %v", err)
 	}
 }
 

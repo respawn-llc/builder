@@ -469,7 +469,7 @@ func protocolError(resp *protocol.ResponseError) error {
 	}
 	switch resp.Code {
 	case protocol.ErrCodeWorktreeSelector,
-		protocol.ErrCodeWorktreeOperationIDConflict,
+		protocol.ErrCodeWorktreeTransitionPending,
 		protocol.ErrCodeWorktreeSetupRetained,
 		protocol.ErrCodeWorktreeDeletePrecondition:
 		if len(resp.Data) > 0 {

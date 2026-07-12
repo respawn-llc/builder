@@ -1,7 +1,6 @@
 package serverapi
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -138,71 +137,14 @@ type WorktreeBranchCleanupOutcome struct {
 	Diagnostic *string                          `json:"diagnostic,omitempty"`
 }
 
-type WorktreeOperationID uuid.UUID
+type WorktreeOperationID = clientui.WorktreeTransitionID
 
 func NewWorktreeOperationID() WorktreeOperationID {
-	return WorktreeOperationID(uuid.New())
+	return clientui.NewWorktreeTransitionID()
 }
 
 func ParseWorktreeOperationID(value string) (WorktreeOperationID, error) {
-	parsed, err := parseWorktreeUUIDV4(value, "operation_id")
-	if err != nil {
-		return WorktreeOperationID{}, err
-	}
-	return WorktreeOperationID(parsed), nil
-}
-
-func (id WorktreeOperationID) String() string {
-	value := uuid.UUID(id)
-	if value == uuid.Nil {
-		return ""
-	}
-	return value.String()
-}
-
-func (id WorktreeOperationID) Validate() error {
-	return validateWorktreeUUIDV4(uuid.UUID(id), "operation_id")
-}
-
-func (id WorktreeOperationID) MarshalJSON() ([]byte, error) {
-	if err := id.Validate(); err != nil {
-		return nil, err
-	}
-	return json.Marshal(id.String())
-}
-
-func (id *WorktreeOperationID) UnmarshalJSON(data []byte) error {
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	parsed, err := ParseWorktreeOperationID(value)
-	if err != nil {
-		return err
-	}
-	*id = parsed
-	return nil
-}
-
-type WorktreeOperationKind string
-
-const (
-	WorktreeOperationKindEnter  WorktreeOperationKind = "enter"
-	WorktreeOperationKindLeave  WorktreeOperationKind = "leave"
-	WorktreeOperationKindDelete WorktreeOperationKind = "delete"
-)
-
-const WorktreeOperationPayloadVersion1 int64 = 1
-
-// WorktreeOperationPayload is the immutable, normalized client behavior used
-// as the durable operation's idempotency payload.
-type WorktreeOperationPayload struct {
-	Version             int64                       `json:"version"`
-	SessionID           string                      `json:"session_id"`
-	Kind                WorktreeOperationKind       `json:"kind"`
-	Selector            *string                     `json:"selector,omitempty"`
-	ForceFolderRemoval  bool                        `json:"force_folder_removal"`
-	BranchCleanupPolicy WorktreeBranchCleanupPolicy `json:"branch_cleanup_policy"`
+	return clientui.ParseWorktreeTransitionID(value)
 }
 
 type WorktreeSelectorPreviewRequest struct {
@@ -241,58 +183,6 @@ type WorktreeScheduledAcknowledgement struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 }
 
-type WorktreeOperationExecutionMode string
-
-const (
-	WorktreeOperationExecutionModeSynchronous         WorktreeOperationExecutionMode = "synchronous"
-	WorktreeOperationExecutionModeScheduledTransition WorktreeOperationExecutionMode = "scheduled_transition"
-)
-
-type WorktreeOperationLifecycleState string
-
-const (
-	WorktreeOperationLifecycleStateQueued    WorktreeOperationLifecycleState = "queued"
-	WorktreeOperationLifecycleStateRunning   WorktreeOperationLifecycleState = "running"
-	WorktreeOperationLifecycleStateCompleted WorktreeOperationLifecycleState = "completed"
-	WorktreeOperationLifecycleStateFailed    WorktreeOperationLifecycleState = "failed"
-)
-
-func (mode WorktreeOperationExecutionMode) Validate() error {
-	switch mode {
-	case WorktreeOperationExecutionModeSynchronous, WorktreeOperationExecutionModeScheduledTransition:
-		return nil
-	default:
-		return errors.New("worktree operation execution mode is invalid")
-	}
-}
-
-func (state WorktreeOperationLifecycleState) Validate() error {
-	switch state {
-	case WorktreeOperationLifecycleStateQueued,
-		WorktreeOperationLifecycleStateRunning,
-		WorktreeOperationLifecycleStateCompleted,
-		WorktreeOperationLifecycleStateFailed:
-		return nil
-	default:
-		return errors.New("worktree operation lifecycle state is invalid")
-	}
-}
-
-type WorktreeOperationExpectedTarget struct {
-	WorktreeID    *WorktreeOperationID `json:"worktree_id,omitempty"`
-	CanonicalRoot string               `json:"canonical_root"`
-}
-
-func (target WorktreeOperationExpectedTarget) Validate() error {
-	if strings.TrimSpace(target.CanonicalRoot) == "" {
-		return errors.New("worktree operation expected canonical_root is required")
-	}
-	if target.WorktreeID != nil {
-		return target.WorktreeID.Validate()
-	}
-	return nil
-}
-
 type WorktreeDeleteResultKind string
 
 const (
@@ -309,39 +199,6 @@ type WorktreeDeleteResult struct {
 	Kind      WorktreeDeleteResultKind          `json:"kind"`
 	Completed *WorktreeDeleteCompletedResult    `json:"completed,omitempty"`
 	Scheduled *WorktreeScheduledAcknowledgement `json:"scheduled,omitempty"`
-}
-
-type WorktreeOperationEventKind string
-
-const (
-	WorktreeOperationEventKindAccepted  WorktreeOperationEventKind = "accepted"
-	WorktreeOperationEventKindCompleted WorktreeOperationEventKind = "completed"
-	WorktreeOperationEventKindFailed    WorktreeOperationEventKind = "failed"
-)
-
-type WorktreeOperationResult struct {
-	Target *clientui.SessionExecutionTarget `json:"target,omitempty"`
-	Delete *WorktreeDeleteCompletedResult   `json:"delete,omitempty"`
-}
-
-type WorktreeOperationFailureKind string
-
-const (
-	WorktreeOperationFailureKindExecutionFailed        WorktreeOperationFailureKind = "execution_failed"
-	WorktreeOperationFailureKindExecutionIndeterminate WorktreeOperationFailureKind = "execution_indeterminate"
-)
-
-type WorktreeOperationFailure struct {
-	Kind       WorktreeOperationFailureKind `json:"kind"`
-	Diagnostic string                       `json:"diagnostic"`
-}
-
-type WorktreeOperationEvent struct {
-	OperationID WorktreeOperationID        `json:"operation_id"`
-	Version     int64                      `json:"version"`
-	Kind        WorktreeOperationEventKind `json:"kind"`
-	Result      *WorktreeOperationResult   `json:"result,omitempty"`
-	Failure     *WorktreeOperationFailure  `json:"failure,omitempty"`
 }
 
 func (f WorktreeGitFacts) Validate() error {
@@ -523,55 +380,6 @@ func (outcome WorktreeBranchCleanupOutcome) Validate() error {
 	return nil
 }
 
-func (payload WorktreeOperationPayload) Validate() error {
-	if payload.Version != WorktreeOperationPayloadVersion1 {
-		return errors.New("worktree operation payload version is invalid")
-	}
-	if err := validateRequiredSessionID(payload.SessionID); err != nil {
-		return err
-	}
-	if err := payload.BranchCleanupPolicy.Validate(); err != nil {
-		return err
-	}
-	if payload.Selector != nil && strings.TrimSpace(*payload.Selector) == "" {
-		return errors.New("selector must not be empty")
-	}
-	switch payload.Kind {
-	case WorktreeOperationKindEnter:
-		if payload.Selector == nil {
-			return errors.New("enter operation requires selector")
-		}
-		if payload.ForceFolderRemoval || payload.BranchCleanupPolicy != WorktreeBranchCleanupPolicyRetain {
-			return errors.New("enter operation cannot contain delete behavior")
-		}
-	case WorktreeOperationKindLeave:
-		if payload.Selector != nil || payload.ForceFolderRemoval || payload.BranchCleanupPolicy != WorktreeBranchCleanupPolicyRetain {
-			return errors.New("leave operation cannot contain target or delete behavior")
-		}
-	case WorktreeOperationKindDelete:
-		if payload.Selector == nil {
-			return errors.New("delete operation requires selector")
-		}
-	default:
-		return errors.New("worktree operation kind is invalid")
-	}
-	return nil
-}
-
-func (payload WorktreeOperationPayload) Equal(other WorktreeOperationPayload) bool {
-	if payload.Version != other.Version ||
-		payload.SessionID != other.SessionID ||
-		payload.Kind != other.Kind ||
-		payload.ForceFolderRemoval != other.ForceFolderRemoval ||
-		payload.BranchCleanupPolicy != other.BranchCleanupPolicy {
-		return false
-	}
-	if payload.Selector == nil || other.Selector == nil {
-		return payload.Selector == other.Selector
-	}
-	return *payload.Selector == *other.Selector
-}
-
 func (request WorktreeSelectorPreviewRequest) Validate() error {
 	if err := validateRequiredSessionID(request.SessionID); err != nil {
 		return err
@@ -651,67 +459,6 @@ func (result WorktreeDeleteResult) Validate() error {
 	default:
 		return errors.New("worktree delete result kind is invalid")
 	}
-}
-
-func (event WorktreeOperationEvent) Validate() error {
-	if err := event.OperationID.Validate(); err != nil {
-		return err
-	}
-	if event.Version <= 0 {
-		return errors.New("worktree operation lifecycle version must be positive")
-	}
-	switch event.Kind {
-	case WorktreeOperationEventKindAccepted:
-		if event.Result != nil || event.Failure != nil {
-			return errors.New("accepted worktree operation event cannot contain terminal facts")
-		}
-	case WorktreeOperationEventKindCompleted:
-		if event.Result == nil || event.Failure != nil {
-			return errors.New("completed worktree operation event requires result only")
-		}
-		if err := event.Result.Validate(); err != nil {
-			return err
-		}
-	case WorktreeOperationEventKindFailed:
-		if event.Result != nil || event.Failure == nil {
-			return errors.New("failed worktree operation event requires failure only")
-		}
-		if err := event.Failure.Validate(); err != nil {
-			return err
-		}
-	default:
-		return errors.New("worktree operation event kind is invalid")
-	}
-	return nil
-}
-
-func (result WorktreeOperationResult) Validate() error {
-	payloadCount := 0
-	if result.Target != nil {
-		payloadCount++
-	}
-	if result.Delete != nil {
-		payloadCount++
-	}
-	if payloadCount != 1 {
-		return errors.New("worktree operation result requires exactly one payload")
-	}
-	if result.Delete != nil {
-		return result.Delete.Validate()
-	}
-	return nil
-}
-
-func (failure WorktreeOperationFailure) Validate() error {
-	switch failure.Kind {
-	case WorktreeOperationFailureKindExecutionFailed, WorktreeOperationFailureKindExecutionIndeterminate:
-	default:
-		return errors.New("worktree operation failure kind is invalid")
-	}
-	if strings.TrimSpace(failure.Diagnostic) == "" {
-		return errors.New("worktree operation failure requires diagnostic")
-	}
-	return nil
 }
 
 func parseWorktreeUUIDV4(value string, field string) (uuid.UUID, error) {

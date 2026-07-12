@@ -750,21 +750,9 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 				FallbackIdentity: "/repo/feature",
 			}},
 		},
-		&serverapi.WorktreeOperationIDConflictError{
-			OperationID: operationID,
-			Existing: serverapi.WorktreeOperationPayload{
-				Version:             serverapi.WorktreeOperationPayloadVersion1,
-				SessionID:           "session",
-				Kind:                serverapi.WorktreeOperationKindLeave,
-				BranchCleanupPolicy: serverapi.WorktreeBranchCleanupPolicyRetain,
-			},
-			Incoming: serverapi.WorktreeOperationPayload{
-				Version:             serverapi.WorktreeOperationPayloadVersion1,
-				SessionID:           "session",
-				Kind:                serverapi.WorktreeOperationKindDelete,
-				Selector:            remoteTestStringPointer("feature"),
-				BranchCleanupPolicy: serverapi.WorktreeBranchCleanupPolicyRetain,
-			},
+		&serverapi.WorktreeTransitionPendingError{
+			SessionID:          "session",
+			PendingOperationID: operationID,
 		},
 		&serverapi.WorktreeSetupRetainedError{
 			Worktree: serverapi.WorktreeTopologyEntry{
@@ -797,10 +785,10 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 		if !errors.As(err, &decoded) || len(decoded.Candidates) != 1 || decoded.Candidates[0].FallbackIdentity != "/repo/feature" {
 			t.Fatalf("decoded selector error = %+v (%v)", decoded, err)
 		}
-	case *serverapi.WorktreeOperationIDConflictError:
-		var decoded *serverapi.WorktreeOperationIDConflictError
-		if !errors.As(err, &decoded) || decoded.OperationID != operationID {
-			t.Fatalf("decoded operation conflict = %+v (%v)", decoded, err)
+	case *serverapi.WorktreeTransitionPendingError:
+		var decoded *serverapi.WorktreeTransitionPendingError
+		if !errors.As(err, &decoded) || decoded.PendingOperationID != operationID || decoded.SessionID != "session" {
+			t.Fatalf("decoded pending transition = %+v (%v)", decoded, err)
 		}
 	case *serverapi.WorktreeSetupRetainedError:
 		var decoded *serverapi.WorktreeSetupRetainedError
@@ -818,10 +806,6 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 }
 
 func remoteTestIntPointer(value int) *int {
-	return &value
-}
-
-func remoteTestStringPointer(value string) *string {
 	return &value
 }
 

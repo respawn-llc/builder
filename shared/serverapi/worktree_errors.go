@@ -3,7 +3,6 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"core/shared/protocol"
@@ -13,7 +12,7 @@ var (
 	ErrWorktreeSelectorNotFound    = errors.New("worktree selector not found")
 	ErrWorktreeSelectorAmbiguous   = errors.New("worktree selector is ambiguous")
 	ErrWorktreeSelectorUnavailable = errors.New("worktree selector is unavailable")
-	ErrWorktreeOperationIDConflict = errors.New("worktree operation id conflicts with an existing payload")
+	ErrWorktreeTransitionPending   = errors.New("a worktree transition is already pending for this session")
 	ErrWorktreeSetupRetained       = errors.New("worktree setup failed after worktree creation")
 	ErrWorktreeDeletePrecondition  = errors.New("worktree deletion requires additional authorization")
 )
@@ -125,58 +124,46 @@ func (candidate WorktreeSelectorCandidate) Validate() error {
 	return nil
 }
 
-type WorktreeOperationIDConflictError struct {
-	OperationID WorktreeOperationID      `json:"operation_id"`
-	Existing    WorktreeOperationPayload `json:"existing"`
-	Incoming    WorktreeOperationPayload `json:"incoming"`
+type WorktreeTransitionPendingError struct {
+	SessionID          string              `json:"session_id"`
+	PendingOperationID WorktreeOperationID `json:"pending_operation_id"`
 }
 
-func (e *WorktreeOperationIDConflictError) Error() string {
-	return ErrWorktreeOperationIDConflict.Error()
+func (e *WorktreeTransitionPendingError) Error() string {
+	return ErrWorktreeTransitionPending.Error()
 }
 
-func (e *WorktreeOperationIDConflictError) Is(target error) bool {
-	return target == ErrWorktreeOperationIDConflict
+func (e *WorktreeTransitionPendingError) Is(target error) bool {
+	return target == ErrWorktreeTransitionPending
 }
 
-func (e *WorktreeOperationIDConflictError) RPCErrorCode() int {
-	return protocol.ErrCodeWorktreeOperationIDConflict
+func (e *WorktreeTransitionPendingError) RPCErrorCode() int {
+	return protocol.ErrCodeWorktreeTransitionPending
 }
 
-func (e *WorktreeOperationIDConflictError) RPCErrorData() json.RawMessage {
+func (e *WorktreeTransitionPendingError) RPCErrorData() json.RawMessage {
 	if e == nil {
 		return nil
 	}
 	return marshalRPCErrorData(struct {
-		Type        string                   `json:"type"`
-		OperationID WorktreeOperationID      `json:"operation_id"`
-		Existing    WorktreeOperationPayload `json:"existing"`
-		Incoming    WorktreeOperationPayload `json:"incoming"`
+		Type               string              `json:"type"`
+		SessionID          string              `json:"session_id"`
+		PendingOperationID WorktreeOperationID `json:"pending_operation_id"`
 	}{
-		Type:        "worktree_operation_id_conflict",
-		OperationID: e.OperationID,
-		Existing:    e.Existing,
-		Incoming:    e.Incoming,
+		Type:               "worktree_transition_pending",
+		SessionID:          e.SessionID,
+		PendingOperationID: e.PendingOperationID,
 	})
 }
 
-func (e *WorktreeOperationIDConflictError) Validate() error {
+func (e *WorktreeTransitionPendingError) Validate() error {
 	if e == nil {
-		return errors.New("worktree operation id conflict is required")
+		return errors.New("worktree transition pending error is required")
 	}
-	if err := e.OperationID.Validate(); err != nil {
+	if err := validateRequiredSessionID(e.SessionID); err != nil {
 		return err
 	}
-	if err := e.Existing.Validate(); err != nil {
-		return fmt.Errorf("existing payload: %w", err)
-	}
-	if err := e.Incoming.Validate(); err != nil {
-		return fmt.Errorf("incoming payload: %w", err)
-	}
-	if e.Existing.Equal(e.Incoming) {
-		return errors.New("worktree operation id conflict requires different payloads")
-	}
-	return nil
+	return e.PendingOperationID.Validate()
 }
 
 type WorktreeSetupRetainedError struct {
@@ -338,20 +325,18 @@ func DecodeWorktreeRPCError(data json.RawMessage, message string) error {
 			return fallbackWorktreeRPCError(message)
 		}
 		return result
-	case "worktree_operation_id_conflict":
+	case "worktree_transition_pending":
 		var payload struct {
-			Type        string                   `json:"type"`
-			OperationID WorktreeOperationID      `json:"operation_id"`
-			Existing    WorktreeOperationPayload `json:"existing"`
-			Incoming    WorktreeOperationPayload `json:"incoming"`
+			Type               string              `json:"type"`
+			SessionID          string              `json:"session_id"`
+			PendingOperationID WorktreeOperationID `json:"pending_operation_id"`
 		}
 		if err := json.Unmarshal(data, &payload); err != nil {
 			return fallbackWorktreeRPCError(message)
 		}
-		result := &WorktreeOperationIDConflictError{
-			OperationID: payload.OperationID,
-			Existing:    payload.Existing,
-			Incoming:    payload.Incoming,
+		result := &WorktreeTransitionPendingError{
+			SessionID:          payload.SessionID,
+			PendingOperationID: payload.PendingOperationID,
 		}
 		if err := result.Validate(); err != nil {
 			return fallbackWorktreeRPCError(message)

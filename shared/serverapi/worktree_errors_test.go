@@ -20,22 +20,9 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		}},
 	}
 	operationID := NewWorktreeOperationID()
-	conflict := &WorktreeOperationIDConflictError{
-		OperationID: operationID,
-		Existing: WorktreeOperationPayload{
-			Version:             WorktreeOperationPayloadVersion1,
-			SessionID:           "session",
-			Kind:                WorktreeOperationKindDelete,
-			Selector:            stringPointer("feature"),
-			BranchCleanupPolicy: WorktreeBranchCleanupPolicyRetain,
-		},
-		Incoming: WorktreeOperationPayload{
-			Version:             WorktreeOperationPayloadVersion1,
-			SessionID:           "session",
-			Kind:                WorktreeOperationKindDelete,
-			Selector:            stringPointer("other"),
-			BranchCleanupPolicy: WorktreeBranchCleanupPolicyRetain,
-		},
+	pending := &WorktreeTransitionPendingError{
+		SessionID:          "session",
+		PendingOperationID: operationID,
 	}
 	retained := &WorktreeSetupRetainedError{
 		Worktree: WorktreeTopologyEntry{
@@ -58,7 +45,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		},
 	}
 
-	for _, source := range []protocol.StructuredRPCError{selector, conflict, retained, precondition} {
+	for _, source := range []protocol.StructuredRPCError{selector, pending, retained, precondition} {
 		if source.RPCErrorCode() >= 0 {
 			t.Fatalf("%T protocol error code = %d, want implementation-defined error code", source, source.RPCErrorCode())
 		}
@@ -76,16 +63,16 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		t.Fatalf("selector facts changed: %+v", selectorError)
 	}
 
-	decodedConflict := DecodeWorktreeRPCError(conflict.RPCErrorData(), conflict.Error())
-	var conflictError *WorktreeOperationIDConflictError
-	if !errors.As(decodedConflict, &conflictError) {
-		t.Fatalf("conflict decode = %T, want WorktreeOperationIDConflictError", decodedConflict)
+	decodedPending := DecodeWorktreeRPCError(pending.RPCErrorData(), pending.Error())
+	var pendingError *WorktreeTransitionPendingError
+	if !errors.As(decodedPending, &pendingError) {
+		t.Fatalf("pending decode = %T, want WorktreeTransitionPendingError", decodedPending)
 	}
-	if !errors.Is(decodedConflict, ErrWorktreeOperationIDConflict) {
-		t.Fatalf("conflict decode does not preserve conflict: %v", decodedConflict)
+	if !errors.Is(decodedPending, ErrWorktreeTransitionPending) {
+		t.Fatalf("pending decode does not preserve pending state: %v", decodedPending)
 	}
-	if conflictError.OperationID != operationID || *conflictError.Existing.Selector != "feature" || *conflictError.Incoming.Selector != "other" {
-		t.Fatalf("conflict facts changed: %+v", conflictError)
+	if pendingError.SessionID != pending.SessionID || pendingError.PendingOperationID != operationID {
+		t.Fatalf("pending facts changed: %+v", pendingError)
 	}
 
 	decodedRetained := DecodeWorktreeRPCError(retained.RPCErrorData(), retained.Error())
@@ -130,18 +117,10 @@ func TestWorktreeStructuredErrorsRejectInvalidTypedData(t *testing.T) {
 	}).Validate(); err == nil {
 		t.Fatal("unknown dirty-state with a count validated")
 	}
-	payload := WorktreeOperationPayload{
-		Version:             WorktreeOperationPayloadVersion1,
-		SessionID:           "session",
-		Kind:                WorktreeOperationKindLeave,
-		BranchCleanupPolicy: WorktreeBranchCleanupPolicyRetain,
-	}
-	if err := (&WorktreeOperationIDConflictError{
-		OperationID: NewWorktreeOperationID(),
-		Existing:    payload,
-		Incoming:    payload,
+	if err := (&WorktreeTransitionPendingError{
+		PendingOperationID: NewWorktreeOperationID(),
 	}).Validate(); err == nil {
-		t.Fatal("operation conflict with equal payloads validated")
+		t.Fatal("pending transition without session validated")
 	}
 }
 
