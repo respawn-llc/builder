@@ -150,7 +150,7 @@ describe("workflowEditorDraft", () => {
     if (baseNode === undefined) {
       throw new Error("Expected workflow fixture to include a node.");
     }
-    const withJoin = {
+    const withJoin: WorkflowDefinition = {
       ...workflowDefinition,
       nodes: [...workflowDefinition.nodes, { ...baseNode, id: "node-join", kind: "join" }],
     };
@@ -177,7 +177,7 @@ describe("workflowEditorDraft", () => {
     if (baseNode === undefined) {
       throw new Error("Expected workflow fixture to include a node.");
     }
-    const source = {
+    const source: WorkflowDefinition = {
       ...workflowDefinition,
       nodes: [
         {
@@ -358,7 +358,12 @@ function withVersion(source: WorkflowDefinition, version: number): WorkflowDefin
   return { ...source, workflow: { ...source.workflow, version } };
 }
 
-function fixedWorkflowNode(id: string, key: string, name: string, kind: "start" | "terminal") {
+function fixedWorkflowNode(
+  id: string,
+  key: string,
+  name: string,
+  kind: "start" | "terminal",
+): WorkflowDefinition["nodes"][number] {
   const source = workflowDefinition.nodes[0];
   if (source === undefined) throw new Error("Expected workflow fixture to include a node.");
   return {

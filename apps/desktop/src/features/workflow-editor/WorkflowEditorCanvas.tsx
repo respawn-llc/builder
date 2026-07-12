@@ -37,6 +37,7 @@ type PendingConnectedCreation = Readonly<{
 }>;
 
 type PendingGraphSelectionRequest = Readonly<{
+  conflictVersion: number | null;
   edgeID: string;
   expectedGraphVersion: number;
   requestID: string;
@@ -99,6 +100,7 @@ export function WorkflowEditorCanvas({
     );
     queueMicrotask(() => {
       setGraphSelectionRequest({
+        conflictVersion: pendingConnectedCreation.conflictVersion,
         edgeID: pendingConnectedCreation.edgeID,
         expectedGraphVersion: pendingConnectedCreation.expectedGraphVersion,
         requestID: `connected-node:${pendingConnectedCreation.edgeID}`,
@@ -107,19 +109,7 @@ export function WorkflowEditorCanvas({
     });
   }, [draftState, inspect, pendingConnectedCreation]);
 
-  useEffect(() => {
-    if (graphSelectionRequest === null || draftState === null) {
-      return;
-    }
-    if (
-      draftState.graphVersion > graphSelectionRequest.expectedGraphVersion ||
-      !draftState.draft.edges.some((edge) => edge.id === graphSelectionRequest.edgeID)
-    ) {
-      queueMicrotask(() => {
-        setGraphSelectionRequest(null);
-      });
-    }
-  }, [draftState, graphSelectionRequest]);
+  const validGraphSelectionRequest = graphSelectionRequestForDraft(graphSelectionRequest, draftState);
 
   const handleDeleteSelection = (selection: WorkflowGraphSelection): void => {
     if (draftState === null) {
@@ -282,11 +272,11 @@ export function WorkflowEditorCanvas({
         inspect({ kind: "workflow" });
       }}
       graphSelectionRequest={
-        graphSelectionRequest === null
+        validGraphSelectionRequest === null
           ? null
           : {
-              edgeID: graphSelectionRequest.edgeID,
-              requestID: graphSelectionRequest.requestID,
+              edgeID: validGraphSelectionRequest.edgeID,
+              requestID: validGraphSelectionRequest.requestID,
             }
       }
       onGraphSelectionConsumed={(requestID) => {
@@ -309,4 +299,20 @@ function connectedCreationSucceeded(
     mutation.nextSelection.edgeID === creation.edgeID &&
     draftState.draft.edges.some((edge) => edge.id === creation.edgeID)
   );
+}
+
+function graphSelectionRequestForDraft(
+  request: PendingGraphSelectionRequest | null,
+  draftState: WorkflowEditorDraftState | null,
+): PendingGraphSelectionRequest | null {
+  if (
+    request === null ||
+    draftState === null ||
+    draftState.conflict?.workflow.version !== request.conflictVersion ||
+    draftState.graphVersion !== request.expectedGraphVersion ||
+    !draftState.draft.edges.some((edge) => edge.id === request.edgeID)
+  ) {
+    return null;
+  }
+  return request;
 }

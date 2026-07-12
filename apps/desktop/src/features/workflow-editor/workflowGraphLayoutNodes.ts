@@ -1,7 +1,7 @@
 import { Position } from "@xyflow/react";
 import type { ElkNode } from "elkjs/lib/elk-api";
 
-import type { WorkflowDefinition, WorkflowNodeKind } from "../../api";
+import type { WorkflowDefinition } from "../../api";
 import {
   emptyGroupHeight,
   emptyGroupWidth,
@@ -239,7 +239,7 @@ function workflowGraphNodeRect(
   return {
     groupID: workflowNodeModel.groupID,
     height: graphNodeHeight(graphNode),
-    kind: workflowNodeKind(workflowNodeModel.kind),
+    kind: workflowNodeModel.kind,
     width: graphNodeWidth(graphNode),
     x: parentOffset.x + graphNode.position.x,
     y: parentOffset.y + graphNode.position.y,
@@ -266,7 +266,7 @@ function workflowNode(
     targetPosition: Position.Left,
     draggable: node.kind === "agent" || node.kind === "script",
     data: {
-      kind: workflowNodeKind(node.kind),
+      kind: node.kind,
       key: node.key,
       entityID: node.id,
       entityKind: "node",
@@ -287,13 +287,6 @@ function workflowGraphCreationHandleIDForNode(node: WorkflowDefinition["nodes"][
 
 function workflowGraphNodeRole(node: WorkflowDefinition["nodes"][number]): string {
   return node.kind === "script" ? node.scriptPath ?? "" : node.subagentRole;
-}
-
-function workflowNodeKind(kind: string): WorkflowNodeKind {
-  if (kind === "agent" || kind === "join" || kind === "script" || kind === "start" || kind === "terminal") {
-    return kind;
-  }
-  throw new Error(`Unsupported workflow node kind in graph layout: ${kind}`);
 }
 
 function parentNodeOptions(parentId: string): Pick<WorkflowGraphNode, "extent" | "parentId"> {

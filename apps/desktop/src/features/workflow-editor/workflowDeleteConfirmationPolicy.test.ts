@@ -43,12 +43,23 @@ describe("workflowDeleteConfirmationPolicy", () => {
   });
 });
 
-const agentNode = {
+const agentNode: Pick<
+  WorkflowNode,
+  | "groupID"
+  | "groupKey"
+  | "inputFields"
+  | "joinInputProviders"
+  | "kind"
+  | "outputFields"
+  | "promptTemplate"
+  | "subagentRole"
+  | "workflowID"
+> = {
   groupID: "",
   groupKey: "",
   inputFields: [],
   joinInputProviders: [],
-  kind: "agent" satisfies WorkflowNode["kind"],
+  kind: "agent",
   outputFields: [],
   promptTemplate: "",
   subagentRole: "default",

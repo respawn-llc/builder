@@ -205,7 +205,7 @@ export type WorkflowNode = Readonly<{
   id: string;
   workflowID: string;
   key: string;
-  kind: string;
+  kind: WorkflowNodeKind;
   name: string;
   groupID: string;
   groupKey: string;

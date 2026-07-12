@@ -85,6 +85,8 @@ type WorkflowGraphReconnectEndpointState = Readonly<{
   endpoint: WorkflowGraphReconnectEndpoint;
 }>;
 
+type ConnectionGesturePoint = Readonly<{ x: number; y: number }>;
+
 const connectionDragThreshold = 6;
 
 export function WorkflowGraphCanvas({
@@ -186,7 +188,7 @@ function WorkflowGraphCanvasInner({
   const instance = useReactFlow();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const reconnectEndpointRef = useRef<WorkflowGraphReconnectEndpointState | null>(null);
-  const connectionGestureRef = useRef<Readonly<{ nodeID: string; startX: number; startY: number }> | null>(null);
+  const connectionGestureRef = useRef<Readonly<{ nodeID: string; start: ConnectionGesturePoint }> | null>(null);
   const suppressedCreationHandleRef = useRef<string | null>(null);
   const consumedGraphSelectionRequestIDRef = useRef<string | null>(null);
   const graphSelectionRequestRef = useRef(graphSelectionRequest);
@@ -408,9 +410,10 @@ function WorkflowGraphCanvasInner({
           connectionGestureRef.current = null;
         }}
         onConnectStart={(event, params) => {
+          const start = connectionGesturePoint(event);
           connectionGestureRef.current =
-            params.handleType === "source" && params.nodeId !== null && event instanceof MouseEvent
-              ? { nodeID: params.nodeId, startX: event.clientX, startY: event.clientY }
+            params.handleType === "source" && params.nodeId !== null && start !== null
+              ? { nodeID: params.nodeId, start }
               : null;
         }}
         onEdgeClick={(_event, edge) => {
@@ -514,14 +517,23 @@ function WorkflowGraphCanvasInner({
   );
 }
 
-function connectionDragDistance(
-  event: unknown,
-  gesture: Readonly<{ startX: number; startY: number }>,
-): number {
-  if (!(event instanceof MouseEvent)) {
+function connectionDragDistance(event: unknown, gesture: Readonly<{ start: ConnectionGesturePoint }>): number {
+  const end = connectionGesturePoint(event);
+  if (end === null) {
     return 0;
   }
-  return Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY);
+  return Math.hypot(end.x - gesture.start.x, end.y - gesture.start.y);
+}
+
+function connectionGesturePoint(event: unknown): ConnectionGesturePoint | null {
+  if (event instanceof MouseEvent) {
+    return { x: event.clientX, y: event.clientY };
+  }
+  if (event instanceof TouchEvent) {
+    const touch = event.changedTouches.item(0) ?? event.touches.item(0);
+    return touch === null ? null : { x: touch.clientX, y: touch.clientY };
+  }
+  return null;
 }
 
 function copyTextWithNavigator(value: string): void {

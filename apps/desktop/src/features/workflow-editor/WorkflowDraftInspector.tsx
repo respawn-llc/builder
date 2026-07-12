@@ -31,7 +31,7 @@ import {
   EditableJoinProviders,
   PromptTemplateEditor,
 } from "./WorkflowDraftEditableSections";
-import { GroupDetails, NodeDetails } from "./WorkflowReadonlyInspector";
+import { GroupDetails } from "./WorkflowReadonlyInspector";
 import {
   contextModeOptions,
   contextSourceFromSelectValue,
@@ -146,10 +146,7 @@ function WorkflowDraftNodeDetails({
       />
     );
   }
-  if (node.kind === "start" || node.kind === "terminal") {
-    return <FixedNodeDraftDetails controller={controller} node={node} validation={validation} />;
-  }
-  return <NodeDetails definition={definition} node={{ ...node, outputFields: [] }} validation={validation} />;
+  return <FixedNodeDraftDetails controller={controller} node={node} validation={validation} />;
 }
 
 function EdgeDraftDetails({
