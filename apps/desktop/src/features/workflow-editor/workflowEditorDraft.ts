@@ -28,7 +28,6 @@ import type {
   DraftWorkflowDefinition,
   DraftWorkflowEdge,
   DraftWorkflowNode,
-  DraftWorkflowParameter,
 } from "./workflowEditorDraftTypes";
 
 export type {
