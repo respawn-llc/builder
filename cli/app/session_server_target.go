@@ -162,12 +162,7 @@ func newConfiguredServerPreflightError(cfg config.App, operation string, cause e
 }
 
 func serverRequiresOnboarding(readiness serverapi.ServerReadinessResponse) bool {
-	for _, cause := range readiness.Causes {
-		if cause.Code == string(serverapi.ServerNotReadyOnboardingRequired) {
-			return true
-		}
-	}
-	return false
+	return serverReadinessHasCause(readiness, serverapi.ServerNotReadyOnboardingRequired)
 }
 
 func startupReadinessAllowsSession(remote *client.Remote, readiness serverapi.ServerReadinessResponse) bool {
