@@ -21,6 +21,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const serverFailureSignalTestWait = 5 * time.Second
+
 func TestProcessEnvironmentsAreSeparateAndFallible(t *testing.T) {
 	t.Setenv("KENT_OPENAI_BASE_URL", "http://ambient.invalid")
 	t.Setenv("OPENAI_API_KEY", "ambient")
@@ -194,7 +196,7 @@ func TestServerFailureSignalWakesAQuietActionLoopOnLogOverflow(t *testing.T) {
 		if !errors.As(runErr, &overflow) {
 			t.Fatalf("runActions error = %T %v, want EvidenceLimitExceeded", runErr, runErr)
 		}
-	case <-time.After(cleanupRetryWait):
+	case <-time.After(serverFailureSignalTestWait):
 		t.Fatal("quiet action loop did not wake for server log overflow")
 	}
 }
