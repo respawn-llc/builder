@@ -51,6 +51,53 @@ func TestWriteStdinCompletionSuppressesBackgroundNoticeEvent(t *testing.T) {
 	waitForManagerCount(t, manager, 0, time.Second)
 }
 
+func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
+	workspace := t.TempDir()
+	manager := newBackgroundTestManager(t)
+	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	pollTool := NewWriteStdinTool(16_000, manager)
+	events := make(chan Event, 2)
+	manager.SetEventHandler(func(evt Event) {
+		if evt.Type == EventCompleted || evt.Type == EventKilled {
+			select {
+			case events <- evt:
+			default:
+			}
+		}
+	})
+
+	result := callExecCommand(t, execTool, "bg-large-1", map[string]any{
+		"cmd":           "sleep 0.3; dd if=/dev/zero bs=1048576 count=3 2>/dev/null | tr '\\000' x",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 250,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
+	}
+
+	pollResult := callWriteStdin(t, pollTool, "bg-large-2", map[string]any{
+		"session_id":    1000,
+		"yield_time_ms": 1_500,
+	})
+	if pollResult.IsError {
+		t.Fatalf("unexpected write_stdin error: %s", string(pollResult.Output))
+	}
+
+	select {
+	case evt := <-events:
+		if evt.completion == nil || evt.completion.source != completionOutputFallback {
+			t.Fatalf("expected fallback completion event, got %+v", evt)
+		}
+		if !evt.NoticeSuppressed {
+			t.Fatalf("expected fallback completion event notice to be suppressed after write_stdin harvest, got %+v", evt)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for fallback completion event")
+	}
+	waitForManagerCount(t, manager, 0, 3*time.Second)
+}
+
 func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)

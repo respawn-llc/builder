@@ -184,12 +184,7 @@ func (m *Manager) waitForExit(entry *processEntry) {
 				return
 			}
 		}
-		fallback, fallbackErr := m.fallbackBackgroundEvent(eventType, snapshot, warning, completionNoticeSuppressed(entry))
-		if fallbackErr != nil {
-			m.emitEvent(Event{Type: eventType, Snapshot: snapshot, NoticeSuppressed: completionNoticeSuppressed(entry)})
-		} else {
-			m.emitEvent(fallback)
-		}
+		m.emitFallbackBackgroundEvent(entry, eventType, snapshot, warning)
 		entry.finalizeClosedExit()
 		return
 	}
@@ -199,16 +194,21 @@ func (m *Manager) waitForExit(entry *processEntry) {
 		entry.finalizeClosedExit()
 		return
 	}
-	fallback, fallbackErr := m.fallbackBackgroundEvent(eventType, snapshot, warning, completionNoticeSuppressed(entry))
-	if fallbackErr != nil {
-		m.emitEvent(Event{Type: eventType, Snapshot: snapshot, NoticeSuppressed: completionNoticeSuppressed(entry)})
-	} else {
-		m.emitEvent(fallback)
-	}
+	m.emitFallbackBackgroundEvent(entry, eventType, snapshot, warning)
 	entry.finalizeClosedExit()
 }
 
-func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot, warning postprocess.Warning, noticeSuppressed bool) (Event, error) {
+func (m *Manager) emitFallbackBackgroundEvent(entry *processEntry, eventType EventType, snapshot Snapshot, warning postprocess.Warning) {
+	fallback, fallbackErr := m.fallbackBackgroundEvent(eventType, snapshot, warning)
+	if fallbackErr != nil {
+		m.emitEvent(Event{Type: eventType, Snapshot: snapshot, NoticeSuppressed: completionNoticeSuppressed(entry)})
+	} else {
+		fallback.NoticeSuppressed = completionNoticeSuppressed(entry)
+		m.emitEvent(fallback)
+	}
+}
+
+func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot, warning postprocess.Warning) (Event, error) {
 	preview, _, truncated, err := readBackgroundSummaryFromFile(snapshot.LogPath, defaultLimit, BackgroundOutputDefault, !snapshot.RawOutput)
 	if err != nil {
 		warning, err = mergeOperationalWarning(warning, fmt.Sprintf("failed to read output preview: %v", err))
@@ -221,7 +221,7 @@ func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot
 	if truncated {
 		removed = 1
 	}
-	return newFallbackBackgroundEvent(eventType, snapshot, preview, warning, removed, noticeSuppressed), nil
+	return newFallbackBackgroundEvent(eventType, snapshot, preview, warning, removed, false), nil
 }
 
 func completionNoticeSuppressed(entry *processEntry) bool {
