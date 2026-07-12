@@ -135,6 +135,10 @@ type backgroundNoticeOutput struct {
 	invariantFailure     *invariantFailureNotice
 }
 
+func (o backgroundNoticeOutput) shouldRenderNoOutputCompletion(exitCode *int) bool {
+	return exitCode != nil && !o.visible.HasVisibleContent()
+}
+
 func (s BackgroundNoticeSummary) RuntimePreview() (string, int) {
 	if s.output.inlinePreview == nil {
 		return "", s.output.previewRemoved
@@ -184,7 +188,7 @@ func SummarizeBackgroundEvent(evt Event, opts BackgroundNoticeOptions) (Backgrou
 		detail = append(detail, "Output:")
 		detail = append(detail, output.inlinePreview.text)
 	}
-	if !output.visible.HasVisibleContent() && (output.source == completionOutputFinalized || !output.retainedLogHasOutput) && evt.Snapshot.ExitCode != nil {
+	if output.shouldRenderNoOutputCompletion(evt.Snapshot.ExitCode) {
 		detail = append(detail, fmt.Sprintf("Exit code %d, no output.", *evt.Snapshot.ExitCode))
 	}
 	summary := fmt.Sprintf("Background shell %s %s", evt.Snapshot.ID, state)

@@ -129,6 +129,34 @@ func TestBackgroundNoticeWarningOnlyOutputDoesNotClaimLogContent(t *testing.T) {
 	}
 }
 
+func TestBackgroundNoticeWhitespaceLogRendersNoOutputCompletion(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "1000.log")
+	if err := os.WriteFile(logPath, []byte("\n"), 0o644); err != nil {
+		t.Fatalf("write whitespace log: %v", err)
+	}
+	exitCode := 0
+	event := newFinalizedBackgroundEvent(EventCompleted, Snapshot{
+		ID:       "1000",
+		State:    "completed",
+		LogPath:  logPath,
+		ExitCode: &exitCode,
+	}, "", nil, false)
+
+	summary, err := SummarizeBackgroundEvent(event, BackgroundNoticeOptions{SuccessOutputMode: BackgroundOutputDefault})
+	if err != nil {
+		t.Fatalf("SummarizeBackgroundEvent: %v", err)
+	}
+	if summary.output.logLineCount == nil || *summary.output.logLineCount != 1 {
+		t.Fatalf("whitespace log metadata = %+v, want one retained line", summary.output)
+	}
+	if !summary.output.shouldRenderNoOutputCompletion(&exitCode) {
+		t.Fatalf("whitespace-only completion must render explicit no-output state: %+v", summary.output)
+	}
+	if sections := len(strings.Split(summary.DetailText, "\n")); sections != 4 {
+		t.Fatalf("whitespace completion detail sections = %d, want 4", sections)
+	}
+}
+
 func TestBackgroundNoticeFallbackCarriesTruncationWithoutFinalizedState(t *testing.T) {
 	exitCode := 1
 	event := newFallbackBackgroundEvent(EventCompleted, Snapshot{
