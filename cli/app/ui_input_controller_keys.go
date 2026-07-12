@@ -131,8 +131,8 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	if isClipboardImagePasteKey(msg) {
-		return m, m.pasteClipboardImageCmd(uiClipboardPasteTargetMain)
+	if isClipboardPasteKey(msg) {
+		return m, m.pasteClipboardCmd(uiClipboardPasteTargetMain)
 	}
 	if handleSharedInputMovementKey(msg, uiSharedInputMovementActions{
 		MoveLeft:      m.moveCursorLeft,

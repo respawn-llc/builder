@@ -64,7 +64,7 @@ func helpSectionsForGOOS(goos string) []uiHelpSection {
 				{Bindings: []string{"Enter"}, Description: "submit the current input, selected answer, or flush the next queued item", Active: uiHelpInPromptInput},
 				{Bindings: []string{"Tab / Ctrl + Enter"}, Description: "autocomplete a selected slash command, or queue/send the current input", Active: uiHelpInMainInput},
 				{Bindings: []string{"↑ / ↓"}, Description: "browse submitted prompts at input boundaries; otherwise move within multiline input", Active: uiHelpInTextEditing},
-				{Bindings: []string{"Ctrl + V/D"}, Description: "paste a clipboard screenshot as a file path", Active: uiHelpInTextEditing},
+				{Bindings: []string{"Ctrl/Alt + V/D"}, Description: "paste clipboard image path or text at the cursor", Active: uiHelpInTextEditing},
 				{Bindings: []string{"Shift + Enter / Ctrl + J"}, Description: "insert a newline", Active: uiHelpInTextEditing},
 				{Bindings: deleteCurrentLineBindingsForGOOS(goos), Description: "delete the current input line", Active: uiHelpInTextEditing},
 				{Bindings: []string{"Delete / Ctrl + K/U/W/Y"}, Description: "edit/delete/yank text with shell-style shortcuts", Active: uiHelpInTextEditing},

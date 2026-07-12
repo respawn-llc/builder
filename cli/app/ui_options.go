@@ -218,9 +218,9 @@ func WithUIStartupUpdateNotice(enabled bool) UIOption {
 	}
 }
 
-func WithUIClipboardImagePaster(paster uiClipboardImagePaster) UIOption {
+func WithUIClipboardPaster(paster uiClipboardPaster) UIOption {
 	return func(m *uiModel) {
-		m.clipboardImagePaster = paster
+		m.clipboardPaster = paster
 	}
 }
 

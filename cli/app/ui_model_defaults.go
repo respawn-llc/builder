@@ -71,7 +71,7 @@ func newUIStatusFeatureState() uiStatusFeatureState {
 	debug := envFlagEnabled("KENT_DEBUG")
 	return uiStatusFeatureState{
 		statusRepository:      status.NewMemoryRepository(),
-		clipboardImagePaster:  newSystemClipboardImagePaster(),
+		clipboardPaster:       newSystemClipboardPaster(),
 		clipboardTextCopier:   newSystemClipboardTextCopier(),
 		debugKeys:             envFlagEnabled("KENT_DEBUG_KEYS"),
 		debugMode:             debug,

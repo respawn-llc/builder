@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -102,7 +103,7 @@ func stubLookPath(available ...string) func(string) (string, error) {
 	}
 }
 
-func newTestSystemClipboardImagePaster(t *testing.T, goos string) (*systemClipboardImagePaster, *stubClipboardCommandRunner, string) {
+func newTestSystemClipboardPaster(t *testing.T, goos string) (*systemClipboardPaster, *stubClipboardCommandRunner, string) {
 	t.Helper()
 	dir := t.TempDir()
 	runner := &stubClipboardCommandRunner{
@@ -112,15 +113,17 @@ func newTestSystemClipboardImagePaster(t *testing.T, goos string) (*systemClipbo
 		runInputErrs: make(map[string]error),
 		runInputs:    make(map[string][]byte),
 	}
-	return &systemClipboardImagePaster{
-		goos:             goos,
-		getenv:           func(string) string { return "" },
-		lookPath:         stubLookPath(),
-		runner:           runner,
-		createTemp:       os.CreateTemp,
-		writeFile:        os.WriteFile,
-		remove:           os.Remove,
-		stat:             os.Stat,
+	return &systemClipboardPaster{
+		goos:       goos,
+		getenv:     func(string) string { return "" },
+		lookPath:   stubLookPath(),
+		runner:     runner,
+		createTemp: os.CreateTemp,
+		writeFile:  os.WriteFile,
+		remove:     os.Remove,
+		openFile: func(path string) (io.ReadCloser, error) {
+			return os.Open(path)
+		},
 		preferredTempDir: func() string { return dir },
 	}, runner, dir
 }
@@ -141,8 +144,20 @@ func newTestSystemClipboardTextCopier(goos string) (*systemClipboardTextCopier, 
 	}, runner
 }
 
+func pasteClipboardImagePath(ctx context.Context, paster *systemClipboardPaster) (string, error) {
+	content, err := paster.Paste(ctx)
+	if err != nil {
+		return "", err
+	}
+	image, ok := content.(uiClipboardImage)
+	if !ok {
+		return "", errors.New("clipboard paste did not return an image path")
+	}
+	return image.Path, nil
+}
+
 func TestSystemClipboardImagePasterLinuxWaylandUsesWLPaste(t *testing.T) {
-	paster, runner, dir := newTestSystemClipboardImagePaster(t, "linux")
+	paster, runner, dir := newTestSystemClipboardPaster(t, "linux")
 	paster.getenv = func(name string) string {
 		if name == "WAYLAND_DISPLAY" {
 			return "wayland-0"
@@ -150,9 +165,10 @@ func TestSystemClipboardImagePasterLinuxWaylandUsesWLPaste(t *testing.T) {
 		return ""
 	}
 	paster.lookPath = stubLookPath("wl-paste")
-	runner.outputs[clipboardCommandKey("wl-paste", "--no-newline", "--type", "image/png")] = []byte("pngdata")
+	runner.outputs[clipboardCommandKey("wl-paste", "--list-types")] = []byte("image/png\n")
+	runner.outputs[clipboardCommandKey("wl-paste", "--no-newline", "--type", "image/png")] = pngHeader[:]
 
-	path, err := paster.PasteImage(context.Background())
+	path, err := pasteClipboardImagePath(context.Background(), paster)
 	if err != nil {
 		t.Fatalf("paste image: %v", err)
 	}
@@ -163,16 +179,16 @@ func TestSystemClipboardImagePasterLinuxWaylandUsesWLPaste(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read pasted file: %v", readErr)
 	}
-	if string(data) != "pngdata" {
+	if !bytes.Equal(data, pngHeader[:]) {
 		t.Fatalf("unexpected pasted file contents %q", string(data))
 	}
-	if len(runner.commands) != 1 || runner.commands[0] != clipboardCommandKey("wl-paste", "--no-newline", "--type", "image/png") {
+	if got, want := runner.commands, []string{clipboardCommandKey("wl-paste", "--list-types"), clipboardCommandKey("wl-paste", "--no-newline", "--type", "image/png")}; !slices.Equal(got, want) {
 		t.Fatalf("unexpected commands: %#v", runner.commands)
 	}
 }
 
 func TestSystemClipboardImagePasterLinuxWaylandMissingTool(t *testing.T) {
-	paster, _, _ := newTestSystemClipboardImagePaster(t, "linux")
+	paster, _, _ := newTestSystemClipboardPaster(t, "linux")
 	paster.getenv = func(name string) string {
 		if name == "WAYLAND_DISPLAY" {
 			return "wayland-0"
@@ -180,7 +196,7 @@ func TestSystemClipboardImagePasterLinuxWaylandMissingTool(t *testing.T) {
 		return ""
 	}
 
-	_, err := paster.PasteImage(context.Background())
+	_, err := pasteClipboardImagePath(context.Background(), paster)
 	var pasteErr *uiClipboardPasteError
 	if !errors.As(err, &pasteErr) {
 		t.Fatalf("expected uiClipboardPasteError, got %T", err)
@@ -188,15 +204,15 @@ func TestSystemClipboardImagePasterLinuxWaylandMissingTool(t *testing.T) {
 	if pasteErr.Kind != uiClipboardPasteErrorMissingTool {
 		t.Fatalf("expected missing-tool error, got %d", pasteErr.Kind)
 	}
-	if pasteErr.Message != "Clipboard image paste on Wayland requires `wl-paste`" {
+	if pasteErr.Message != "Clipboard paste on Wayland requires `wl-paste`" {
 		t.Fatalf("unexpected error message %q", pasteErr.Message)
 	}
 }
 
 func TestSystemClipboardImagePasterLinuxUnsupportedEnvironment(t *testing.T) {
-	paster, _, _ := newTestSystemClipboardImagePaster(t, "linux")
+	paster, _, _ := newTestSystemClipboardPaster(t, "linux")
 
-	_, err := paster.PasteImage(context.Background())
+	_, err := pasteClipboardImagePath(context.Background(), paster)
 	var pasteErr *uiClipboardPasteError
 	if !errors.As(err, &pasteErr) {
 		t.Fatalf("expected uiClipboardPasteError, got %T", err)
@@ -204,13 +220,13 @@ func TestSystemClipboardImagePasterLinuxUnsupportedEnvironment(t *testing.T) {
 	if pasteErr.Kind != uiClipboardPasteErrorUnsupported {
 		t.Fatalf("expected unsupported error, got %d", pasteErr.Kind)
 	}
-	if pasteErr.Message != "Clipboard image paste requires Wayland (`wl-paste`) or X11 (`xclip`)" {
+	if pasteErr.Message != "Clipboard paste requires Wayland (`wl-paste`) or X11 (`xclip`)" {
 		t.Fatalf("unexpected error message %q", pasteErr.Message)
 	}
 }
 
 func TestSystemClipboardImagePasterLinuxX11NoImage(t *testing.T) {
-	paster, runner, _ := newTestSystemClipboardImagePaster(t, "linux")
+	paster, runner, _ := newTestSystemClipboardPaster(t, "linux")
 	paster.getenv = func(name string) string {
 		if name == "DISPLAY" {
 			return ":0"
@@ -218,23 +234,23 @@ func TestSystemClipboardImagePasterLinuxX11NoImage(t *testing.T) {
 		return ""
 	}
 	paster.lookPath = stubLookPath("xclip")
-	runner.outputs[clipboardCommandKey("xclip", "-selection", "clipboard", "-target", "image/png", "-o")] = []byte{}
+	runner.outputs[clipboardCommandKey("xclip", "-selection", "clipboard", "-target", "TARGETS", "-o")] = []byte("text/html\n")
 
-	_, err := paster.PasteImage(context.Background())
+	_, err := pasteClipboardImagePath(context.Background(), paster)
 	var pasteErr *uiClipboardPasteError
 	if !errors.As(err, &pasteErr) {
 		t.Fatalf("expected uiClipboardPasteError, got %T", err)
 	}
-	if pasteErr.Kind != uiClipboardPasteErrorNoImage {
+	if pasteErr.Kind != uiClipboardPasteErrorNoContent {
 		t.Fatalf("expected no-image error, got %d", pasteErr.Kind)
 	}
-	if pasteErr.Message != "Clipboard does not contain an image" {
+	if pasteErr.Message != "Clipboard does not contain supported content" {
 		t.Fatalf("unexpected error message %q", pasteErr.Message)
 	}
 }
 
 func TestSystemClipboardImagePasterLinuxX11CommandFailure(t *testing.T) {
-	paster, runner, _ := newTestSystemClipboardImagePaster(t, "linux")
+	paster, runner, _ := newTestSystemClipboardPaster(t, "linux")
 	paster.getenv = func(name string) string {
 		if name == "DISPLAY" {
 			return ":0"
@@ -242,9 +258,9 @@ func TestSystemClipboardImagePasterLinuxX11CommandFailure(t *testing.T) {
 		return ""
 	}
 	paster.lookPath = stubLookPath("xclip")
-	runner.outErrs[clipboardCommandKey("xclip", "-selection", "clipboard", "-target", "image/png", "-o")] = errors.New("target image/png not available")
+	runner.outErrs[clipboardCommandKey("xclip", "-selection", "clipboard", "-target", "TARGETS", "-o")] = errors.New("targets unavailable")
 
-	_, err := paster.PasteImage(context.Background())
+	_, err := pasteClipboardImagePath(context.Background(), paster)
 	var pasteErr *uiClipboardPasteError
 	if !errors.As(err, &pasteErr) {
 		t.Fatalf("expected uiClipboardPasteError, got %T", err)
@@ -252,15 +268,15 @@ func TestSystemClipboardImagePasterLinuxX11CommandFailure(t *testing.T) {
 	if pasteErr.Kind != uiClipboardPasteErrorFailed {
 		t.Fatalf("expected failed error, got %d", pasteErr.Kind)
 	}
-	if pasteErr.Message != "Clipboard image paste failed" {
+	if pasteErr.Message != "Clipboard paste failed" {
 		t.Fatalf("unexpected error message %q", pasteErr.Message)
 	}
 }
 
 func TestSystemClipboardImagePasterDarwinMissingTool(t *testing.T) {
-	paster, _, _ := newTestSystemClipboardImagePaster(t, "darwin")
+	paster, _, _ := newTestSystemClipboardPaster(t, "darwin")
 
-	_, err := paster.PasteImage(context.Background())
+	_, err := pasteClipboardImagePath(context.Background(), paster)
 	var pasteErr *uiClipboardPasteError
 	if !errors.As(err, &pasteErr) {
 		t.Fatalf("expected uiClipboardPasteError, got %T", err)
@@ -268,13 +284,13 @@ func TestSystemClipboardImagePasterDarwinMissingTool(t *testing.T) {
 	if pasteErr.Kind != uiClipboardPasteErrorMissingTool {
 		t.Fatalf("expected missing-tool error, got %d", pasteErr.Kind)
 	}
-	if pasteErr.Message != "Clipboard image paste on macOS requires `osascript`" {
+	if pasteErr.Message != "Clipboard paste on macOS requires `osascript`" {
 		t.Fatalf("unexpected error message %q", pasteErr.Message)
 	}
 }
 
 func TestSystemClipboardImagePasterDarwinUsesOsascript(t *testing.T) {
-	paster, runner, dir := newTestSystemClipboardImagePaster(t, "darwin")
+	paster, runner, dir := newTestSystemClipboardPaster(t, "darwin")
 	paster.lookPath = stubLookPath("osascript")
 	runner.outFn = func(name string, args ...string) ([]byte, error) {
 		if name != "osascript" {
@@ -284,16 +300,16 @@ func TestSystemClipboardImagePasterDarwinUsesOsascript(t *testing.T) {
 			return nil, errors.New("unexpected osascript args")
 		}
 		path := filepath.Join(dir, "kent-clipboard-darwin-test.png")
-		if err := os.WriteFile(path, []byte("pngdata"), 0o600); err != nil {
+		if err := os.WriteFile(path, pngHeader[:], 0o600); err != nil {
 			return nil, err
 		}
-		return nil, nil
+		return []byte(`{"kind":"image"}`), nil
 	}
 	paster.createTemp = func(string, string) (*os.File, error) {
 		return os.Create(filepath.Join(dir, "kent-clipboard-darwin-test.png"))
 	}
 
-	path, err := paster.PasteImage(context.Background())
+	path, err := pasteClipboardImagePath(context.Background(), paster)
 	if err != nil {
 		t.Fatalf("paste image: %v", err)
 	}
@@ -308,24 +324,10 @@ func TestSystemClipboardImagePasterDarwinUsesOsascript(t *testing.T) {
 	}
 }
 
-func TestClassifyDarwinClipboardErrorNoImage(t *testing.T) {
-	err := classifyDarwinClipboardError(&exec.ExitError{Stderr: []byte("no_image\n")})
-	var pasteErr *uiClipboardPasteError
-	if !errors.As(err, &pasteErr) {
-		t.Fatalf("expected uiClipboardPasteError, got %T", err)
-	}
-	if pasteErr.Kind != uiClipboardPasteErrorNoImage {
-		t.Fatalf("expected no-image error, got %d", pasteErr.Kind)
-	}
-	if pasteErr.Message != "Clipboard does not contain an image" {
-		t.Fatalf("unexpected error message %q", pasteErr.Message)
-	}
-}
-
 func TestSystemClipboardImagePasterWindowsMissingTool(t *testing.T) {
-	paster, _, _ := newTestSystemClipboardImagePaster(t, "windows")
+	paster, _, _ := newTestSystemClipboardPaster(t, "windows")
 
-	_, err := paster.PasteImage(context.Background())
+	_, err := pasteClipboardImagePath(context.Background(), paster)
 	var pasteErr *uiClipboardPasteError
 	if !errors.As(err, &pasteErr) {
 		t.Fatalf("expected uiClipboardPasteError, got %T", err)
@@ -333,45 +335,45 @@ func TestSystemClipboardImagePasterWindowsMissingTool(t *testing.T) {
 	if pasteErr.Kind != uiClipboardPasteErrorMissingTool {
 		t.Fatalf("expected missing-tool error, got %d", pasteErr.Kind)
 	}
-	if pasteErr.Message != "Clipboard image paste on Windows requires `pwsh` or `powershell`" {
+	if pasteErr.Message != "Clipboard paste on Windows requires `pwsh` or `powershell`" {
 		t.Fatalf("unexpected error message %q", pasteErr.Message)
 	}
 }
 
 func TestSystemClipboardImagePasterWindowsNoImage(t *testing.T) {
-	paster, runner, _ := newTestSystemClipboardImagePaster(t, "windows")
+	paster, runner, _ := newTestSystemClipboardPaster(t, "windows")
 	paster.lookPath = stubLookPath("pwsh")
-	runner.runFn = func(name string, args ...string) error {
+	runner.outFn = func(name string, args ...string) ([]byte, error) {
 		if name != "pwsh" {
-			return nil
+			return nil, errors.New("unexpected command")
 		}
-		return stubExitCodeError{code: 3}
+		return []byte(`{"kind":"empty"}`), nil
 	}
 
-	_, err := paster.PasteImage(context.Background())
+	_, err := pasteClipboardImagePath(context.Background(), paster)
 	var pasteErr *uiClipboardPasteError
 	if !errors.As(err, &pasteErr) {
 		t.Fatalf("expected uiClipboardPasteError, got %T", err)
 	}
-	if pasteErr.Kind != uiClipboardPasteErrorNoImage {
+	if pasteErr.Kind != uiClipboardPasteErrorNoContent {
 		t.Fatalf("expected no-image error, got %d", pasteErr.Kind)
 	}
-	if pasteErr.Message != "Clipboard does not contain an image" {
+	if pasteErr.Message != "Clipboard does not contain supported content" {
 		t.Fatalf("unexpected error message %q", pasteErr.Message)
 	}
 }
 
 func TestSystemClipboardImagePasterWindowsCommandFailure(t *testing.T) {
-	paster, runner, _ := newTestSystemClipboardImagePaster(t, "windows")
+	paster, runner, _ := newTestSystemClipboardPaster(t, "windows")
 	paster.lookPath = stubLookPath("pwsh")
-	runner.runFn = func(name string, args ...string) error {
+	runner.outFn = func(name string, args ...string) ([]byte, error) {
 		if name != "pwsh" {
-			return nil
+			return nil, errors.New("unexpected command")
 		}
-		return errors.New("powershell failed")
+		return nil, errors.New("powershell failed")
 	}
 
-	_, err := paster.PasteImage(context.Background())
+	_, err := pasteClipboardImagePath(context.Background(), paster)
 	var pasteErr *uiClipboardPasteError
 	if !errors.As(err, &pasteErr) {
 		t.Fatalf("expected uiClipboardPasteError, got %T", err)
@@ -379,7 +381,7 @@ func TestSystemClipboardImagePasterWindowsCommandFailure(t *testing.T) {
 	if pasteErr.Kind != uiClipboardPasteErrorFailed {
 		t.Fatalf("expected failed error, got %d", pasteErr.Kind)
 	}
-	if pasteErr.Message != "Clipboard image paste failed" {
+	if pasteErr.Message != "Clipboard paste failed" {
 		t.Fatalf("unexpected error message %q", pasteErr.Message)
 	}
 }
