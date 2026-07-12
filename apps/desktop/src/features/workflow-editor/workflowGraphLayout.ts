@@ -210,7 +210,7 @@ export function workflowGraphLayoutWithDraftProjection(
               groupID: model.groupID,
               hasError: errorMarkers.nodeIDs.has(model.id) || errorMarkers.relatedIDs.has(model.id),
               key: model.key,
-              kind: model.kind,
+              kind: workflowNodeKind(model.kind),
               label: model.name,
               role: model.subagentRole,
             },
@@ -269,6 +269,13 @@ export function workflowGraphLayoutWithDraftProjection(
       ];
     }),
   };
+}
+
+function workflowNodeKind(kind: string): WorkflowNodeKind {
+  if (kind === "agent" || kind === "join" || kind === "script" || kind === "start" || kind === "terminal") {
+    return kind;
+  }
+  throw new Error(`Unsupported workflow node kind in graph layout: ${kind}`);
 }
 
 function elkWorkflowNode(

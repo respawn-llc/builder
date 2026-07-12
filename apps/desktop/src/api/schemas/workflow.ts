@@ -15,7 +15,7 @@ import type {
   ProjectWorkflowLink,
   WorkflowValidation,
 } from "../models";
-import { emptyWorkflowDerivedWiring, workflowNodeKinds } from "../models";
+import { emptyWorkflowDerivedWiring } from "../models";
 import {
   emptyString,
   validationErrorSchema,
@@ -116,7 +116,7 @@ const workflowNodesSchema = z
         id: z.string(),
         workflow_id: z.string(),
         key: z.string(),
-        kind: z.enum(workflowNodeKinds),
+        kind: z.string(),
         display_name: z.string(),
         group_id: emptyString,
         group_key: emptyString,
