@@ -113,7 +113,7 @@ func (s *applyState) getState(path string) (*patchFileState, error) {
 	if existing, ok := s.state[resolved]; ok {
 		return existing, nil
 	}
-	fileState := &patchFileState{NewPath: resolved, Original: resolved}
+	fileState := &patchFileState{Mode: 0o644, NewPath: resolved, Original: resolved}
 	snapshot, err := captureSnapshot(resolved)
 	if err == nil && snapshot.Exists {
 		fileState.Exists = true
