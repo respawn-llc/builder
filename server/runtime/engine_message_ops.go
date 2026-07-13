@@ -365,27 +365,80 @@ func (e *Engine) emitStreamingAssistantResetEventsRaw(stepID string, metadata *A
 }
 
 func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steeringCommittedAssistantMessage) error {
-	finalizesStreaming := committedAssistantMessageFinalizesStreaming(committed.message)
-	var clearedMetadata *AssistantStreamMetadata
-	var clearedStreamID *uuid.UUID
-	if finalizesStreaming {
-		clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
-		newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).RecordAssistantStreamFinalization(committed.committedStart, clearedStreamID)
-	}
-	e.emitRaw(Event{
+	return e.emitCommittedAssistantMessageEventRaw(stepID, committed, nil, nil)
+}
+
+func (e *Engine) emitCommittedAssistantMessageEventRaw(stepID string, committed steeringCommittedAssistantMessage, streamMetadata *AssistantStreamMetadata, streamID *uuid.UUID) error {
+	event := Event{
 		Kind:                        EventAssistantMessage,
 		StepID:                      stepID,
 		Message:                     committed.message,
-		AssistantStreamMetadata:     cloneAssistantStreamMetadata(clearedMetadata),
-		AssistantTranscriptStreamID: cloneTranscriptStreamID(clearedStreamID),
+		AssistantStreamMetadata:     cloneAssistantStreamMetadata(streamMetadata),
+		AssistantTranscriptStreamID: cloneTranscriptStreamID(streamID),
 		CommittedTranscriptChanged:  true,
-		CommittedEntryStart:         committed.committedStart,
-		CommittedEntryStartSet:      committed.committedStartSet,
-	})
-	if finalizesStreaming {
-		e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, "")
 	}
+	if committed.coordinate != nil {
+		event.CommittedEntryStart = committed.coordinate.start
+		event.CommittedEntryStartSet = true
+	}
+	e.emitRaw(event)
 	return nil
+}
+
+func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
+	switch instruction.kind {
+	case completedResponseResolutionInstructionFinalize:
+		if instruction.committedAssistant == nil {
+			return completedResponseResolutionOutcome{}, errors.New("completed response finalize instruction requires a committed assistant row")
+		}
+		if instruction.committedAssistant.coordinate == nil {
+			return completedResponseResolutionOutcome{}, errors.New("completed response finalize instruction requires committed assistant coordinates")
+		}
+	case completedResponseResolutionInstructionDiscard:
+		if instruction.committedAssistant != nil {
+			return completedResponseResolutionOutcome{}, errors.New("completed response discard instruction cannot include a committed assistant row")
+		}
+		if instruction.abortReason == "" {
+			return completedResponseResolutionOutcome{}, errors.New("completed response discard instruction requires an abort reason")
+		}
+	default:
+		return completedResponseResolutionOutcome{}, errors.New("completed response stream resolution instruction is invalid")
+	}
+
+	clearedMetadata, clearedStreamID := e.clearStreamingAssistantStateRaw()
+	if instruction.kind == completedResponseResolutionInstructionFinalize {
+		committed := instruction.committedAssistant
+		if clearedStreamID != nil {
+			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).RecordAssistantStreamFinalization(committed.coordinate.start, clearedStreamID)
+		}
+		if err := e.emitCommittedAssistantMessageEventRaw(stepID, steeringCommittedAssistantMessage{
+			message:    committed.message,
+			coordinate: cloneCommittedAssistantCoordinate(committed.coordinate),
+		}, clearedMetadata, clearedStreamID); err != nil {
+			return completedResponseResolutionOutcome{}, err
+		}
+		if clearedStreamID == nil {
+			return completedResponseResolutionOutcome{
+				kind:                             completedResponseResolutionAbsent,
+				committedAssistantEventPublished: true,
+			}, nil
+		}
+		e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, "")
+		return completedResponseResolutionOutcome{
+			kind:                             completedResponseResolutionFinalized,
+			streamID:                         cloneTranscriptStreamID(clearedStreamID),
+			committedAssistantEventPublished: true,
+		}, nil
+	}
+
+	if clearedStreamID == nil {
+		return completedResponseResolutionOutcome{kind: completedResponseResolutionAbsent}, nil
+	}
+	e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, instruction.abortReason)
+	return completedResponseResolutionOutcome{
+		kind:     completedResponseResolutionDiscarded,
+		streamID: cloneTranscriptStreamID(clearedStreamID),
+	}, nil
 }
 
 func flushedUserMessageEvent(msg llm.Message, stepID string) *Event {

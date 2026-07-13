@@ -345,7 +345,7 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 	}
 	assistantEntries := VisibleChatEntriesFromMessage(assistant)
 	assistantStart := eng.CommittedTranscriptEntryCount() - len(assistantEntries)
-	if err := eng.steer("step-1", steerCommittedAssistantMessageIntent(assistant, assistantStart, true)); err != nil {
+	if err := eng.steer("step-1", steerCommittedAssistantMessageIntent(assistant, &committedAssistantCoordinate{start: assistantStart})); err != nil {
 		t.Fatalf("publish assistant message: %v", err)
 	}
 
