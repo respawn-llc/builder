@@ -425,6 +425,117 @@ VALUES ('task-cross-worktree', 'link-1', 1, 2, 'BLD-2', 'Task', '', ?, 'worktree
 VALUES ('task-missing-source-workspace', 'link-1', 1, 3, 'BLD-3', 'Task', '', 'worktree-valid', ?, ?, '{}')`, now, now)
 }
 
+func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := time.Now().UTC().UnixMilli()
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	worktreeRoot := t.TempDir()
+	execSeed(t, store.db, "task target worktree", `INSERT INTO worktrees (
+    id, workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('worktree-target', ?, ?, 1, 1, '', '{"head_oid":"legacy-oid","branch_ref":"refs/heads/BLD-1"}', ?, ?)`, binding.WorkspaceID, worktreeRoot, now, now)
+
+	for _, column := range []string{
+		"execution_target_policy",
+		"execution_target_custom_ref",
+	} {
+		if !columnExists(t, store.db, "workflows", column) {
+			t.Fatalf("workflows.%s should exist", column)
+		}
+	}
+	for _, column := range []string{
+		"execution_target_mode",
+		"execution_target_requested_ref",
+		"execution_target_resolved_ref",
+		"execution_target_commit_oid",
+		"execution_target_provenance",
+	} {
+		if !columnExists(t, store.db, "tasks", column) {
+			t.Fatalf("tasks.%s should exist", column)
+		}
+	}
+	if !columnExists(t, store.db, "worktrees", "creation_base_commit_oid") {
+		t.Fatal("worktrees.creation_base_commit_oid should exist")
+	}
+
+	var policy string
+	if err := store.db.QueryRow(`SELECT execution_target_policy FROM workflows WHERE id = 'workflow-1'`).Scan(&policy); err != nil {
+		t.Fatalf("read default workflow target policy: %v", err)
+	}
+	if policy != "ask_on_first_execution" {
+		t.Fatalf("workflow target policy = %q, want ask_on_first_execution", policy)
+	}
+	assertSQLiteConstraint(t, store.db, `UPDATE workflows SET execution_target_policy = 'unknown' WHERE id = 'workflow-1'`)
+	assertSQLiteConstraint(t, store.db, `UPDATE workflows SET execution_target_policy = 'head', execution_target_custom_ref = 'refs/heads/main' WHERE id = 'workflow-1'`)
+	assertSQLiteConstraint(t, store.db, `UPDATE workflows SET execution_target_policy = 'custom_ref', execution_target_custom_ref = ' ' WHERE id = 'workflow-1'`)
+	if _, err := store.db.Exec(`UPDATE workflows SET execution_target_policy = 'custom_ref', execution_target_custom_ref = NULL WHERE id = 'workflow-1'`); err != nil {
+		t.Fatalf("incomplete custom-ref workflow draft should persist: %v", err)
+	}
+
+	insertExecutionTargetSchemaTask(t, store.db, "task-unlocked-provisional", 1, "BLD-1", binding.WorkspaceID, stringPointerForSchemaTest("worktree-target"), nil, nil, nil, nil, nil, now)
+	insertExecutionTargetSchemaTask(t, store.db, "task-none", 2, "BLD-2", binding.WorkspaceID, nil, stringPointerForSchemaTest("none"), nil, nil, nil, stringPointerForSchemaTest("resolved"), now)
+	insertExecutionTargetSchemaTask(t, store.db, "task-managed-missing-relation", 3, "BLD-3", binding.WorkspaceID, nil, stringPointerForSchemaTest("head"), stringPointerForSchemaTest("HEAD"), nil, stringPointerForSchemaTest("commit-1"), stringPointerForSchemaTest("resolved"), now)
+	insertExecutionTargetSchemaTask(t, store.db, "task-default-branch", 4, "BLD-4", binding.WorkspaceID, nil, stringPointerForSchemaTest("default_branch"), stringPointerForSchemaTest("refs/remotes/origin/HEAD"), stringPointerForSchemaTest("refs/remotes/origin/main"), stringPointerForSchemaTest("commit-4"), stringPointerForSchemaTest("resolved"), now)
+	insertExecutionTargetSchemaTask(t, store.db, "task-custom-ref", 5, "BLD-5", binding.WorkspaceID, nil, stringPointerForSchemaTest("custom_ref"), stringPointerForSchemaTest("release/v1"), stringPointerForSchemaTest("refs/tags/release/v1"), stringPointerForSchemaTest("commit-5"), stringPointerForSchemaTest("resolved"), now)
+
+	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id,
+    execution_target_mode, execution_target_commit_oid, created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES ('task-invalid-mixed', 'link-1', 1, 6, 'BLD-6', 'Task', '', ?, NULL, 'commit-1', ?, ?, '{}')`, binding.WorkspaceID, now, now)
+	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id,
+    managed_worktree_id, execution_target_mode, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES ('task-invalid-none-worktree', 'link-1', 1, 7, 'BLD-7', 'Task', '', ?, 'worktree-target', 'none', 'resolved', ?, ?, '{}')`, binding.WorkspaceID, now, now)
+	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id,
+    execution_target_mode, execution_target_requested_ref, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES ('task-invalid-managed-facts', 'link-1', 1, 8, 'BLD-8', 'Task', '', ?, 'head', 'HEAD', 'resolved', ?, ?, '{}')`, binding.WorkspaceID, now, now)
+
+	insertExecutionTargetSchemaTask(t, store.db, "task-locked-deleted-worktree", 9, "BLD-9", binding.WorkspaceID, stringPointerForSchemaTest("worktree-target"), stringPointerForSchemaTest("head"), stringPointerForSchemaTest("HEAD"), stringPointerForSchemaTest("refs/heads/BLD-9"), stringPointerForSchemaTest("commit-9"), stringPointerForSchemaTest("resolved"), now)
+	if _, err := store.db.Exec(`DELETE FROM worktrees WHERE id = 'worktree-target'`); err != nil {
+		t.Fatalf("delete locked managed worktree: %v", err)
+	}
+	var deletedRelation sql.NullString
+	var deletedMode string
+	if err := store.db.QueryRow(`SELECT managed_worktree_id, execution_target_mode FROM tasks WHERE id = 'task-locked-deleted-worktree'`).Scan(&deletedRelation, &deletedMode); err != nil {
+		t.Fatalf("read locked target after worktree delete: %v", err)
+	}
+	if deletedRelation.Valid || deletedMode != "head" {
+		t.Fatalf("locked target after worktree delete = relation=%+v mode=%q, want null/head", deletedRelation, deletedMode)
+	}
+}
+
+func TestWorktreeCreationBaseCommitOIDIsImmutable(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, store.db, "worktree with creation base", `INSERT INTO worktrees (
+    id, workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, creation_base_commit_oid, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('worktree-base', ?, ?, 1, 1, '', '{}', 'commit-created', ?, ?)`, binding.WorkspaceID, t.TempDir(), now, now)
+	assertSQLiteConstraint(t, store.db, `UPDATE worktrees SET creation_base_commit_oid = 'commit-mutated' WHERE id = 'worktree-base'`)
+	assertSQLiteConstraint(t, store.db, `UPDATE worktrees SET creation_base_commit_oid = NULL WHERE id = 'worktree-base'`)
+	assertSQLiteConstraint(t, store.db, `INSERT INTO worktrees (
+    id, workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, creation_base_commit_oid, created_at_unix_ms, updated_at_unix_ms
+) SELECT 'worktree-base-conflict', workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, 'commit-conflict', ?, ?
+FROM worktrees
+WHERE id = 'worktree-base'`, now, now)
+}
+
+func insertExecutionTargetSchemaTask(t *testing.T, db *sql.DB, id string, taskSeq int, shortID string, sourceWorkspaceID string, managedWorktreeID *string, mode *string, requestedRef *string, resolvedRef *string, commitOID *string, provenance *string, now int64) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id,
+    execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance,
+    created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES (?, 'link-1', 1, ?, ?, 'Task', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')`,
+		id, taskSeq, shortID, sourceWorkspaceID, managedWorktreeID, mode, requestedRef, resolvedRef, commitOID, provenance, now, now,
+	); err != nil {
+		t.Fatalf("insert execution target task %s: %v", id, err)
+	}
+}
+
+func stringPointerForSchemaTest(value string) *string {
+	return &value
+}
+
 func TestWorkflowRuntimeSchemaRejectsCrossWorkflowPlacementsAndRuns(t *testing.T) {
 	store, _, binding := newMetadataTestStore(t)
 	now := time.Now().UTC().UnixMilli()

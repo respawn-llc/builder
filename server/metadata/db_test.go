@@ -188,6 +188,122 @@ func TestOpenMigratesCommentsToMinimalStorage(t *testing.T) {
 	}
 }
 
+func TestOpenBackfillsExecutionTargetsForEveryLegacyTaskWithUsableRecordedWorktreeHead(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 52)
+	if err != nil {
+		t.Fatalf("open version 52 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "legacy project", `INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('project-legacy-target', 'Legacy target project', ?, ?)`, now, now)
+	execSeed(t, db, "legacy workspace", `INSERT INTO workspaces (id, project_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('workspace-legacy-target', 'project-legacy-target', ?, '{}', ?, ?)`, t.TempDir(), now, now)
+	seedWorkflowGraph(t, db, "project-legacy-target", now)
+	execSeed(t, db, "legacy managed worktrees", `INSERT INTO worktrees (
+    id, workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, created_at_unix_ms, updated_at_unix_ms
+) VALUES
+    ('worktree-legacy-valid', 'workspace-legacy-target', ?, 1, 1, '', '{"head_oid":"observed-commit","branch_ref":"refs/heads/BLD-1"}', ?, ?),
+    ('worktree-legacy-invalid', 'workspace-legacy-target', ?, 1, 1, '', '{"branch_ref":"refs/heads/BLD-3"}', ?, ?)`,
+		t.TempDir(), now, now, t.TempDir(), now, now,
+	)
+	for _, task := range []struct {
+		id          string
+		taskSeq     int
+		shortID     string
+		worktreeID  string
+		placementID string
+		nodeID      string
+		runID       string
+	}{
+		{id: "task-legacy-executed", taskSeq: 1, shortID: "BLD-1", worktreeID: "worktree-legacy-valid", placementID: "placement-legacy-executed", nodeID: "node-agent", runID: "run-legacy-executed"},
+		{id: "task-legacy-backlog", taskSeq: 2, shortID: "BLD-2", worktreeID: "worktree-legacy-valid", placementID: "placement-legacy-backlog", nodeID: "node-start"},
+		{id: "task-legacy-invalid-oid", taskSeq: 3, shortID: "BLD-3", worktreeID: "worktree-legacy-invalid", placementID: "placement-legacy-invalid", nodeID: "node-agent", runID: "run-legacy-invalid"},
+	} {
+		execSeed(t, db, "legacy task", `INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id,
+    created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES (?, 'link-1', 1, ?, ?, 'Legacy task', '', 'workspace-legacy-target', ?, ?, ?, '{}')`,
+			task.id, task.taskSeq, task.shortID, task.worktreeID, now, now,
+		)
+		execSeed(t, db, "legacy placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
+VALUES (?, ?, ?, 'active', ?, ?)`, task.placementID, task.id, task.nodeID, now, now)
+		if task.runID != "" {
+			execSeed(t, db, "legacy executable run", `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms)
+VALUES (?, ?, 1, ?, ?)`, task.runID, task.placementID, now, now)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 52 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var policy string
+	if err := store.db.QueryRow(`SELECT execution_target_policy FROM workflows WHERE id = 'workflow-1'`).Scan(&policy); err != nil {
+		t.Fatalf("read migrated workflow policy: %v", err)
+	}
+	if policy != "head" {
+		t.Fatalf("migrated workflow policy = %q, want head", policy)
+	}
+
+	type targetRow struct {
+		mode       sql.NullString
+		requested  sql.NullString
+		resolved   sql.NullString
+		commitOID  sql.NullString
+		provenance sql.NullString
+		worktreeID sql.NullString
+	}
+	readTarget := func(taskID string) targetRow {
+		t.Helper()
+		var row targetRow
+		if err := store.db.QueryRow(`SELECT
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
+    managed_worktree_id
+FROM tasks
+WHERE id = ?`, taskID).Scan(&row.mode, &row.requested, &row.resolved, &row.commitOID, &row.provenance, &row.worktreeID); err != nil {
+			t.Fatalf("read migrated task target %s: %v", taskID, err)
+		}
+		return row
+	}
+
+	executed := readTarget("task-legacy-executed")
+	if !executed.mode.Valid || executed.mode.String != "head" ||
+		!executed.requested.Valid || executed.requested.String != "HEAD" ||
+		!executed.resolved.Valid || executed.resolved.String != "refs/heads/BLD-1" ||
+		!executed.commitOID.Valid || executed.commitOID.String != "observed-commit" ||
+		!executed.provenance.Valid || executed.provenance.String != "legacy_observed" ||
+		!executed.worktreeID.Valid || executed.worktreeID.String != "worktree-legacy-valid" {
+		t.Fatalf("executed legacy target = %+v, want observed head target", executed)
+	}
+	backlog := readTarget("task-legacy-backlog")
+	if !backlog.mode.Valid || backlog.mode.String != "head" ||
+		!backlog.requested.Valid || backlog.requested.String != "HEAD" ||
+		!backlog.resolved.Valid || backlog.resolved.String != "refs/heads/BLD-1" ||
+		!backlog.commitOID.Valid || backlog.commitOID.String != "observed-commit" ||
+		!backlog.provenance.Valid || backlog.provenance.String != "legacy_observed" ||
+		!backlog.worktreeID.Valid || backlog.worktreeID.String != "worktree-legacy-valid" {
+		t.Fatalf("backlog legacy target = %+v, want observed head target", backlog)
+	}
+	invalid := readTarget("task-legacy-invalid-oid")
+	if invalid.mode.Valid || invalid.requested.Valid || invalid.resolved.Valid || invalid.commitOID.Valid || invalid.provenance.Valid {
+		t.Fatalf("invalid migrated task target = %+v, want all snapshot facts null", invalid)
+	}
+	if !invalid.worktreeID.Valid {
+		t.Fatal("invalid migrated task lost provisional managed worktree relation")
+	}
+}
+
 func TestOpenDropsPersistedWorkflowEvents(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")

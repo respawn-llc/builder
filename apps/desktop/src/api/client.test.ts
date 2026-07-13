@@ -10,6 +10,15 @@ const startTaskParamsSchema = z.object({
   setup_operation_id: z.string(),
 });
 
+const appliedStartResponse = {
+  outcome: "applied",
+  applied: {
+    transition_id: "transition-1",
+    placement_id: "placement-1",
+    run_id: "run-1",
+  },
+} as const;
+
 describe("ApiClient", () => {
   it("parses readiness and sends mutation params through typed method boundary", async () => {
     const transport = new FakeRpcTransport([
@@ -26,7 +35,7 @@ describe("ApiClient", () => {
           subagent_roles: [{ name: "default" }, { name: "coder" }],
         },
       },
-      { method: "workflow.task.start", result: {} },
+      { method: "workflow.task.start", result: appliedStartResponse },
     ]);
     const client = new ApiClient(transport);
 
@@ -37,7 +46,14 @@ describe("ApiClient", () => {
       protocolVersion: protocolVersion,
       subagentRoles: [{ name: "default" }, { name: "coder" }],
     });
-    await client.startTask("task-1");
+    await expect(client.startTask("task-1")).resolves.toMatchObject({
+      outcome: "applied",
+      applied: {
+        transitionID: "transition-1",
+        placementID: "placement-1",
+        runID: "run-1",
+      },
+    });
 
     const startCall = transport.calls.find((call) => call.method === "workflow.task.start");
     expect(startCall?.options).toEqual({ timeoutMs: null });
@@ -50,51 +66,6 @@ describe("ApiClient", () => {
     );
 
     await expect(client.getReadiness()).rejects.toBeInstanceOf(ContractError);
-  });
-
-  it("surfaces workflow move auto-approval failures returned in successful responses", async () => {
-    const client = new ApiClient(
-      new FakeRpcTransport([{ method: "workflow.task.move", result: { approval_error: "approval failed" } }]),
-    );
-
-    await expect(
-      client.moveTask({
-        taskID: "task-1",
-        targetNodeID: "node-1",
-        allowMissingEdge: true,
-        autoApprove: true,
-      }),
-    ).rejects.toThrow("approval failed");
-  });
-
-  it("returns workflow move run ids from successful responses", async () => {
-    const client = new ApiClient(
-      new FakeRpcTransport([
-        {
-          method: "workflow.task.move",
-          result: {
-            transition_id: "transition-1",
-            state: "approved",
-            placement_ids: ["placement-1"],
-            run_ids: ["run-1"],
-          },
-        },
-      ]),
-    );
-
-    await expect(
-      client.moveTask({
-        taskID: "task-1",
-        targetNodeID: "node-1",
-        allowMissingEdge: true,
-        autoApprove: true,
-      }),
-    ).resolves.toMatchObject({
-      placementIDs: ["placement-1"],
-      runIDs: ["run-1"],
-      state: "approved",
-      transitionID: "transition-1",
-    });
   });
 
   it("normalizes empty workflow board metadata and node-card slices returned as null by Go JSON", async () => {
@@ -373,6 +344,7 @@ describe("ApiClient", () => {
               name: "Delivery",
               description: "Ship",
               version: 4,
+              execution_target_policy: { mode: "custom_ref", custom_ref: "release/v1" },
             },
           ],
           next_page_token: "cursor-2",
@@ -386,6 +358,7 @@ describe("ApiClient", () => {
             name: "Ops",
             description: "",
             version: 1,
+            execution_target_policy: { mode: "ask_on_first_execution" },
           },
         },
       },
@@ -397,6 +370,7 @@ describe("ApiClient", () => {
             name: "Project workflow",
             description: "",
             version: 1,
+            execution_target_policy: { mode: "none" },
           },
           link: { id: "link-3", project_id: "project-1", workflow_id: "workflow-3", default: true },
         },
@@ -414,11 +388,19 @@ describe("ApiClient", () => {
       client.listWorkflows({ pageSize: 10, pageToken: "cursor-1", query: "ship" }),
     ).resolves.toMatchObject({
       nextPageToken: "cursor-2",
-      workflows: [{ id: "workflow-1", name: "Delivery", version: 4 }],
+      workflows: [
+        {
+          id: "workflow-1",
+          name: "Delivery",
+          version: 4,
+          executionTargetPolicy: { mode: "custom_ref", customRef: "release/v1" },
+        },
+      ],
     });
     await expect(client.createWorkflow({ name: "Ops", description: "" })).resolves.toMatchObject({
       id: "workflow-2",
       name: "Ops",
+      executionTargetPolicy: { mode: "ask_on_first_execution", customRef: null },
     });
     await expect(
       client.createAndLinkWorkflowToProject({
@@ -562,7 +544,11 @@ describe("ApiClient", () => {
     await expect(
       client.validateWorkflowGraphDraft({
         workflowID: "workflow-1",
-        metadata: { name: "Draft Workflow", description: "Draft description" },
+        metadata: {
+          name: "Draft Workflow",
+          description: "Draft description",
+          executionTargetPolicy: { mode: "custom_ref", customRef: "release/v1" },
+        },
         graph: workflowGraphDraft,
         modes: ["draft", "execution"],
       }),
@@ -583,7 +569,11 @@ describe("ApiClient", () => {
       client.previewWorkflowGraphSave({
         workflowID: "workflow-1",
         expectedVersion: 11,
-        metadata: { name: "Preview Workflow", description: "Preview description" },
+        metadata: {
+          name: "Preview Workflow",
+          description: "Preview description",
+          executionTargetPolicy: { mode: "default_branch", customRef: null },
+        },
         graph: workflowGraphDraft,
       }),
     ).resolves.toMatchObject({
@@ -596,7 +586,11 @@ describe("ApiClient", () => {
       client.saveWorkflowGraph({
         workflowID: "workflow-1",
         expectedVersion: 11,
-        metadata: { name: "Saved Workflow", description: "Saved description" },
+        metadata: {
+          name: "Saved Workflow",
+          description: "Saved description",
+          executionTargetPolicy: { mode: "none", customRef: null },
+        },
         graph: workflowGraphDraft,
         confirmation: {
           expectedRemovedNodeCount: 0,
@@ -617,7 +611,11 @@ describe("ApiClient", () => {
       method: "workflow.graph.validateDraft",
       params: {
         workflow_id: "workflow-1",
-        metadata: { name: "Draft Workflow", description: "Draft description" },
+        metadata: {
+          name: "Draft Workflow",
+          description: "Draft description",
+          execution_target_policy: { mode: "custom_ref", custom_ref: "release/v1" },
+        },
         modes: ["draft", "execution"],
         graph: {
           node_groups: [],
@@ -660,7 +658,11 @@ describe("ApiClient", () => {
       method: "workflow.graph.save",
       params: {
         expected_version: 11,
-        metadata: { name: "Saved Workflow", description: "Saved description" },
+        metadata: {
+          name: "Saved Workflow",
+          description: "Saved description",
+          execution_target_policy: { mode: "none" },
+        },
         confirmation: {
           expected_removed_edge_count: 1,
         },
@@ -834,6 +836,7 @@ const workflowDefinitionResponse = {
       name: "Delivery",
       description: "Delivery workflow",
       version: 9,
+      execution_target_policy: { mode: "head" },
     },
     node_groups: [
       {

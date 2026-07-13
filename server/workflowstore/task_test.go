@@ -3,10 +3,15 @@ package workflowstore
 import (
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"core/server/metadata"
 	"core/server/workflow"
+	"core/server/workflowscript"
 )
 
 func TestTaskCreateStartCancelAndComments(t *testing.T) {
@@ -119,6 +124,331 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 	}
 	if !activeDone || activeNonTerminal {
 		t.Fatalf("placements after cancel = %+v, want active Done sink and no active non-terminal placement", placements)
+	}
+}
+
+func TestStartTaskWithExecutionTargetLocksNoneAndCreatesRunAtomically(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
+
+	started, err := store.StartTaskWithExecutionTarget(ctx, task.ID, &candidate)
+	if err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+	if started.RunID == "" {
+		t.Fatalf("started = %+v, want run", started)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	snapshot, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
+	}
+	if snapshot == nil || snapshot.Mode != workflow.ExecutionTargetModeNone {
+		t.Fatalf("locked snapshot = %+v, want none without managed worktree", snapshot)
+	}
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != started.RunID {
+		t.Fatalf("runs = %+v, want one started run", runs)
+	}
+	input, err := store.GetRunStartContext(ctx, started.RunID)
+	if err != nil {
+		t.Fatalf("GetRunStartContext: %v", err)
+	}
+	if input.ExecutionRoot == nil ||
+		input.ExecutionRoot.Managed != nil ||
+		input.ExecutionRoot.SourceWorkspaceID != binding.WorkspaceID ||
+		input.ExecutionRoot.EffectiveRoot() != binding.CanonicalRoot {
+		t.Fatalf("run execution root = %+v, want source workspace %q at %q", input.ExecutionRoot, binding.WorkspaceID, binding.CanonicalRoot)
+	}
+}
+
+func TestStartTaskWithExecutionTargetLeavesUnlockedTaskUnchangedWithoutCandidate(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	_, err := store.StartTaskWithExecutionTarget(ctx, task.ID, nil)
+	if !errors.Is(err, ErrExecutionTargetRequired) {
+		t.Fatalf("StartTaskWithExecutionTarget error = %v, want ErrExecutionTargetRequired", err)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	snapshot, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
+	}
+	if snapshot != nil {
+		t.Fatalf("snapshot = %+v, want unlocked task", snapshot)
+	}
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no run", runs)
+	}
+}
+
+func TestStartTaskWithExecutionTargetLocksManagedProvisionalCandidate(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	worktreeID := "worktree-start-target"
+	worktreeRoot := t.TempDir()
+	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:            worktreeID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: worktreeRoot,
+		Availability:  "available",
+		Managed:       true,
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE tasks SET managed_worktree_id = ? WHERE id = ?`, worktreeID, string(task.ID)); err != nil {
+		t.Fatalf("attach provisional worktree: %v", err)
+	}
+	requestedRef := "HEAD"
+	commitOID := "0123456789abcdef"
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+			Managed: &ManagedExecutionRoot{
+				WorktreeID: worktreeID,
+				Root:       worktreeRoot,
+			},
+		},
+	}
+
+	if _, err := store.StartTaskWithExecutionTarget(ctx, task.ID, &candidate); err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	snapshot, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
+	}
+	if snapshot == nil || snapshot.CommitOID == nil || *snapshot.CommitOID != commitOID || !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != worktreeID {
+		t.Fatalf("locked managed snapshot = %+v", snapshot)
+	}
+}
+
+func TestStartTaskWithExecutionTargetRejectsManagedCandidateWithoutMatchingProvisionalRelation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	worktreeID := "worktree-unattached-target"
+	worktreeRoot := t.TempDir()
+	requestedRef := "HEAD"
+	commitOID := "0123456789abcdef"
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+			Managed: &ManagedExecutionRoot{
+				WorktreeID: worktreeID,
+				Root:       worktreeRoot,
+			},
+		},
+	}
+
+	_, err := store.StartTaskWithExecutionTarget(ctx, task.ID, &candidate)
+	if err == nil {
+		t.Fatal("StartTaskWithExecutionTarget accepted unattached managed candidate")
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	snapshot, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
+	}
+	if snapshot != nil {
+		t.Fatalf("snapshot = %+v, want unlocked", snapshot)
+	}
+}
+
+func TestStartTaskWithExecutionTargetReusesLockedSnapshot(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	worktreeID := "worktree-locked-target"
+	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:            worktreeID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: t.TempDir(),
+		Availability:  "available",
+		Managed:       true,
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE tasks
+SET
+    managed_worktree_id = ?,
+    execution_target_mode = ?,
+    execution_target_requested_ref = ?,
+    execution_target_commit_oid = ?,
+    execution_target_provenance = ?
+WHERE id = ?`,
+		worktreeID,
+		string(workflow.ExecutionTargetModeHead),
+		"HEAD",
+		"0123456789abcdef",
+		string(ExecutionTargetProvenanceResolved),
+		string(task.ID)); err != nil {
+		t.Fatalf("lock target fixture: %v", err)
+	}
+
+	if _, err := store.StartTaskWithExecutionTarget(ctx, task.ID, nil); err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+}
+
+func TestStartTaskWithExecutionTargetValidatesRelativeScriptInNoneSourceRoot(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	scriptName := "source-script"
+	if err := os.WriteFile(filepath.Join(binding.CanonicalRoot, scriptName), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile script: %v", err)
+	}
+	workflowID := createScriptStartWorkflow(t, ctx, store, scriptName)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
+
+	if _, err := store.StartTaskWithExecutionTarget(ctx, task.ID, &candidate); err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+}
+
+func TestStartTaskWithExecutionTargetDoesNotLockWhenScriptValidationFails(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createScriptStartWorkflow(t, ctx, store, "missing-script")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
+
+	_, err := store.StartTaskWithExecutionTarget(ctx, task.ID, &candidate)
+	var validationErr workflowscript.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("StartTaskWithExecutionTarget error = %v, want script validation", err)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	snapshot, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
+	}
+	if snapshot != nil {
+		t.Fatalf("snapshot = %+v, want unlocked task", snapshot)
+	}
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no run", runs)
+	}
+}
+
+func TestStartTaskWithExecutionTargetConcurrentRequestsCreateOneLockedRun(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	candidate := ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := store.StartTaskWithExecutionTarget(ctx, task.ID, &candidate)
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	successes := 0
+	stale := 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, sql.ErrNoRows):
+			stale++
+		default:
+			t.Fatalf("StartTaskWithExecutionTarget concurrent error = %v", err)
+		}
+	}
+	if successes != 1 || stale != 1 {
+		t.Fatalf("concurrent starts successes=%d stale=%d, want 1/1", successes, stale)
+	}
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %+v, want exactly one", runs)
 	}
 }
 
@@ -397,6 +727,40 @@ func TestTaskUpdateEditsTitleAndBodyAfterAutomationStarts(t *testing.T) {
 	canceledSourceTitle := "Canceled source"
 	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{TaskID: canceled.ID, Title: &canceledSourceTitle, SourceWorkspaceID: source.WorkspaceID}); !errors.Is(err, ErrSourceWorkspaceForCanceledTask) {
 		t.Fatalf("UpdateTask canceled source error = %v", err)
+	}
+}
+
+func TestTaskUpdateRejectsSourceWorkspaceChangeForLockedManagedTargetWithoutBinding(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	otherWorkspace, err := store.metadata.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE tasks
+SET
+    managed_worktree_id = NULL,
+    execution_target_mode = ?,
+    execution_target_requested_ref = ?,
+    execution_target_commit_oid = ?,
+    execution_target_provenance = ?
+WHERE id = ?`,
+		string(workflow.ExecutionTargetModeHead),
+		"HEAD",
+		"0123456789abcdef",
+		string(ExecutionTargetProvenanceResolved),
+		string(task.ID)); err != nil {
+		t.Fatalf("lock managed target without binding: %v", err)
+	}
+
+	_, err = store.UpdateTask(ctx, UpdateTaskRequest{
+		TaskID:            task.ID,
+		SourceWorkspaceID: otherWorkspace.WorkspaceID,
+	})
+	if !errors.Is(err, ErrSourceWorkspaceAfterAutomation) {
+		t.Fatalf("UpdateTask source workspace error = %v, want ErrSourceWorkspaceAfterAutomation", err)
 	}
 }
 

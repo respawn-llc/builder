@@ -166,7 +166,7 @@ A previous-transition parameter is valid only when every path to the prompt pass
 
 Use a Script node when a workflow step should run a deterministic local executable instead of an agent. Script nodes can be used anywhere an agent node can be used in the workflow graph, including the first node after Backlog and branches inside parallel groups.
 
-Set the script path on the script node. Absolute paths are resolved on the Kent server. Relative paths resolve against the task's managed worktree. Workflow graph saves allow empty or invalid paths so you can draft the graph, but execution validation and task start require the selected script to exist, be a file, and be executable.
+Set the script path on the script node. Absolute paths are resolved on the Kent server. Relative paths resolve against the task's execution root. Workflow graph saves allow empty or invalid paths so you can draft the graph, but execution validation and task start require the selected script to exist, be a file, and be executable.
 
 Kent executes the script directly, without a shell wrapper. Stdin is JSON:
 
@@ -278,11 +278,40 @@ Each task has a title, body, source workspace, and optional source URL. New task
 
 Choose the source workspace before starting automation. Agents run in the environment where the Kent server runs, so that environment must have the repository, toolchains, credentials, and local files the workflow needs.
 
+### Choose The Execution Target
+
+The workflow's execution-target policy chooses where executable agent and script nodes run:
+
+| Policy | Execution root |
+| --- | --- |
+| Ask when execution starts | Select one of the four concrete targets when an unlocked task first reaches executable work. |
+| No managed worktree | The task's source workspace. This supports non-Git workspaces and tracks source-workspace changes. |
+| Source HEAD | A managed task worktree created from the source repository's current commit. |
+| Repository default branch | A managed task worktree created from the default branch configured by local remote-HEAD metadata. |
+| Custom Git revision | A managed task worktree created from any branch, tag, or commit that resolves to a commit. |
+
+New workflows ask when execution starts. Kent Desktop offers all four concrete targets when selection is required, preselects the repository default branch, and uses the same dialog when a configured Git target cannot be resolved.
+
+Target selection occurs on the first executable start, manual move, or approval. The task locks the selected mode and managed requested/resolved commit facts only when that initiating action succeeds. Later workflow nodes reuse the locked target; a locked target cannot be replaced with another mode.
+
+Configure a workflow policy or select a concrete target when starting, approving, or manually moving a task:
+
+```bash
+kent workflow update <workflow> --execution-target ask-on-first-execution
+kent workflow update <workflow> --execution-target none|head|default-branch|ref:<revision>
+
+kent task start <task> --execution-target none|head|default-branch|ref:<revision>
+kent task approve <transition-id> --execution-target none|head|default-branch|ref:<revision>
+kent task move <task> <target-node-id> --execution-target none|head|default-branch|ref:<revision>
+```
+
+These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the target mode, execution root, requested revision, resolved commit, current named branch when available, and managed worktree.
+
 ### Keep Tasks Shippable
 
-Starting a task creates a managed git worktree for that task and schedules the first agent node. Kent reuses the same task worktree across downstream agent nodes, so implementation, review fixes, QA, and shipping steps happen against one checkout.
+Managed targets create or reuse one task worktree across downstream agent and script nodes, so implementation, review fixes, QA, and shipping steps happen against one checkout. A no-managed-worktree target runs directly in the source workspace.
 
-Because each started task has its own worktree, structure tasks as independently shippable branches. Do not split one feature into separate tasks that must share unmerged code in one checkout. If the work cannot ship independently, keep it as one task; if it can be sliced, make each slice feature-gated or isolated enough to merge separately before the next dependent task starts.
+Structure managed-worktree tasks as independently shippable branches. Do not split one feature into separate tasks that must share unmerged code in one checkout. If the work cannot ship independently, keep it as one task; if it can be sliced, make each slice feature-gated or isolated enough to merge separately before the next dependent task starts.
 
 ![Kent Desktop task board and task detail view showing task actions, comments, and a pending question.](/desktop/desktop-workflow-tasks.webp)
 

@@ -45,7 +45,10 @@ import type {
   ServerReadiness,
   TaskComment,
   TaskDetail,
+  TaskApproveResponse,
   TaskMoveResponse,
+  TaskStartResponse,
+  WorkflowExecutionTargetSelection,
   WorkflowBoard,
   WorkflowDeleteImpact,
   WorkflowDeleteResponse,
@@ -512,8 +515,12 @@ export class ApiClient {
     return response.task.id;
   }
 
-  async startTask(taskID: string, setupOperationID?: SetupOperationID): Promise<void> {
-    await taskLifecycle.startTask(this.transport, taskID, setupOperationID);
+  async startTask(
+    taskID: string,
+    setupOperationID?: SetupOperationID,
+    executionTarget?: WorkflowExecutionTargetSelection,
+  ): Promise<TaskStartResponse> {
+    return taskLifecycle.startTask(this.transport, taskID, setupOperationID, executionTarget);
   }
 
   async moveTask(input: TaskMoveInput): Promise<TaskMoveResponse> {
@@ -534,8 +541,14 @@ export class ApiClient {
   async approveTransition(
     taskTransitionID: string,
     setupOperationID?: SetupOperationID,
-  ): Promise<void> {
-    await taskLifecycle.approveTransition(this.transport, taskTransitionID, setupOperationID);
+    executionTarget?: WorkflowExecutionTargetSelection,
+  ): Promise<TaskApproveResponse> {
+    return taskLifecycle.approveTransition(
+      this.transport,
+      taskTransitionID,
+      setupOperationID,
+      executionTarget,
+    );
   }
 
   async cancelTask(taskID: string): Promise<void> {

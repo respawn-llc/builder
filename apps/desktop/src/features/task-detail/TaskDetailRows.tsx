@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { ChevronDown, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -23,6 +23,9 @@ import { fieldIslandInputClassName } from "../../ui/fieldInputStyles";
 import { useOpacityExit } from "../../ui/motion";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { taskStatusTone } from "./taskStatusTone";
+import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
+import { TaskPropertyLine } from "./TaskPropertyLine";
+import { taskExecutionRoot } from "./taskExecutionTarget";
 import type { useTaskMutations } from "./useTaskDetailData";
 import { useScriptOpenAvailability } from "./useScriptOpenAvailability";
 
@@ -327,19 +330,21 @@ export function PropertiesIsland({
       radius="l"
       unpadded
     >
-      <PropertyLine
-        label={t("task.identifier", { defaultValue: "ID" })}
-        value={<span className="font-mono">{detail.shortID}</span>}
-      />
-      <PropertyLine label={t("task.project")} value={detail.projectName} />
-      <PropertyLine
-        label={t("task.status")}
-        value={<TaskStatusText label={t(`task.statusKinds.${detail.status.kind}`)} tone={taskStatusTone(detail.status)} />}
-      />
-      <PropertyLine label={t("task.workspace")} value={detail.sourceWorkspace.name} />
-      <PropertyLine label={t("task.workflow")} value={detail.workflowName} />
-      <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
-      <PropertyLine label={t("task.sessions")} value={detail.runs.length.toString()} />
+      <dl className="m-0 grid min-w-0 gap-[var(--space-2)]">
+        <TaskPropertyLine
+          label={t("task.identifier", { defaultValue: "ID" })}
+          value={<span className="font-mono">{detail.shortID}</span>}
+        />
+        <TaskPropertyLine label={t("task.project")} value={detail.projectName} />
+        <TaskPropertyLine
+          label={t("task.status")}
+          value={<TaskStatusText label={t(`task.statusKinds.${detail.status.kind}`)} tone={taskStatusTone(detail.status)} />}
+        />
+        <TaskExecutionTargetFacts detail={detail} />
+        <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
+        <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
+        <TaskPropertyLine label={t("task.sessions")} value={detail.runs.length.toString()} />
+      </dl>
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
   );
@@ -443,9 +448,10 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
     [detail.runs],
   );
   const scriptRun = useMemo(() => preferredScriptRun(detail.runs), [detail.runs]);
+  const executionRoot = taskExecutionRoot(detail);
   const scriptOpenAvailable = useScriptOpenAvailability({
+    basePath: executionRoot,
     scriptPath: scriptRun?.scriptPath ?? "",
-    worktreePath: detail.worktreePath,
   });
   const cliCommand = useMemo(() => sessionCommand(detail.runs), [detail.runs]);
 
@@ -463,11 +469,15 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
   }
 
   async function openScript(): Promise<void> {
-    if (scriptRun === null || scriptRun.scriptPath.trim().length === 0) {
+    if (
+      scriptRun === null ||
+      scriptRun.scriptPath.trim().length === 0 ||
+      executionRoot === null
+    ) {
       setOpenScriptError(t("task.scriptPathUnavailable"));
       return;
     }
-    await nativeBridge.files.openFile({ basePath: detail.worktreePath, path: scriptRun.scriptPath });
+    await nativeBridge.files.openFile({ basePath: executionRoot, path: scriptRun.scriptPath });
   }
 
   return (
@@ -544,10 +554,10 @@ function SourceLine({
   }
   const href = safeExternalUrl(trimmed);
   if (href === undefined) {
-    return <PropertyLine label={label} value={trimmed} />;
+    return <TaskPropertyLine label={label} value={trimmed} />;
   }
   return (
-    <PropertyLine
+    <TaskPropertyLine
       label={label}
       value={
         <a
@@ -566,14 +576,6 @@ function SourceLine({
         </a>
       }
     />
-  );
-}
-
-function PropertyLine({ label, value }: Readonly<{ label: string; value: ReactNode }>) {
-  return (
-    <p className="m-0 flex min-w-0 flex-wrap items-center gap-[var(--space-1)] text-sm">
-      {label}: <span className="text-[var(--color-muted)]">{value}</span>
-    </p>
   );
 }
 

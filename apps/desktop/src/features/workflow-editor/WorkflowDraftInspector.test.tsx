@@ -17,6 +17,44 @@ import { WorkflowDraftInspectorContent } from "./WorkflowDraftInspector";
 void initializeI18n();
 
 describe("WorkflowDraftInspectorContent", () => {
+  it("edits all execution target policies and reveals the custom ref field only for custom refs", () => {
+    const controller = workflowDraftController(workflowDefinition);
+    mountInspector(controller, { kind: "workflow" });
+
+    const policyControls = screen.getAllByRole("radio");
+    expect(policyControls.map((control) => control.getAttribute("value"))).toEqual([
+      "none",
+      "head",
+      "default_branch",
+      "custom_ref",
+      "ask_on_first_execution",
+    ]);
+    const customRefControl = policyControls.at(3);
+    if (customRefControl === undefined) {
+      throw new Error("custom-ref policy control is required");
+    }
+    fireEvent.click(customRefControl);
+    expect(controller.dispatch).toHaveBeenCalledWith({
+      policy: { mode: "custom_ref", customRef: null },
+      type: "editWorkflowExecutionTargetPolicy",
+    });
+
+    const customController = workflowDraftController({
+      ...workflowDefinition,
+      workflow: {
+        ...workflowDefinition.workflow,
+        executionTargetPolicy: { mode: "custom_ref", customRef: "release/v1" },
+      },
+    });
+    mountInspector(customController, { kind: "workflow" });
+    const customRefInput = screen.getByDisplayValue("release/v1");
+    fireEvent.change(customRefInput, { target: { value: "release/v2" } });
+    expect(customController.dispatch).toHaveBeenCalledWith({
+      policy: { mode: "custom_ref", customRef: "release/v2" },
+      type: "editWorkflowExecutionTargetPolicy",
+    });
+  });
+
   it("shows completion mode only for editable agent nodes", () => {
     const controller = workflowDraftController(withAgentCompletionMode(workflowDefinition, "tool"));
 

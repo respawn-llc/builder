@@ -24,6 +24,18 @@ A monotonic workflow definition counter incremented by persisted definition edit
 
 A durable directed graph that describes how tasks move through work. Workflows are top-level reusable definitions linked into projects.
 
+### Execution Target Policy
+
+A workflow-level rule for choosing where a task's executable nodes run. The five policies are no managed worktree, source `HEAD`, repository default branch, custom Git ref, and `ask_on_first_execution`, which asks the operator when an unlocked task first reaches executable work.
+
+### Execution Target
+
+The target-selection provenance locked to a task when its first executable action succeeds. For a managed target it records the requested Git revision and resolved commit while the current managed-worktree relation, root, and named branch may be conservatively restored or changed by the operator. A no-managed-worktree target follows the task's current source workspace. Later nodes and retries reuse the locked mode and managed selection provenance despite workflow edits or Git ref movement.
+
+### Execution Root
+
+The currently derived directory used as the working directory and relative-path base for a task's executable nodes. It is the task's current source workspace when the task uses no managed worktree and the current managed worktree root otherwise.
+
 ### Workflow Draft
 
 A workflow definition that can be saved while semantic validation reports graph or project-context errors. Drafts still satisfy hard storage invariants such as valid identifiers, references, enums, unique keys, and exactly one start node.

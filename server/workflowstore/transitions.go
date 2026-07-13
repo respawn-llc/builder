@@ -79,16 +79,19 @@ func (s *Store) PendingTransitionTargetsExecutableNode(ctx context.Context, tran
 	if id == "" {
 		return false, ErrTransitionIDRequired
 	}
+	transition, err := s.queries.GetTransitionApprovalState(ctx, id)
+	if err != nil {
+		return false, err
+	}
 	edges, err := s.queries.ListTaskTransitionEdges(ctx, id)
 	if err != nil {
 		return false, err
 	}
-	for _, edge := range edges {
-		if executableNodeKind(workflow.NodeKind(edge.TargetNodeKind)) {
-			return true, nil
-		}
+	source, err := s.loadTransitionSource(ctx, transition.SourceRunID)
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return transitionTargetsExecutableNode(edges, source.snapshot)
 }
 
 type ApprovalTransitionProjection struct {
@@ -138,6 +141,14 @@ func (s *Store) ApprovalTransitionProjection(ctx context.Context, transitionID w
 }
 
 func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.TransitionID) (CompleteRunResult, error) {
+	return s.approveTransition(ctx, transitionID, nil, false)
+}
+
+func (s *Store) ApproveTransitionWithExecutionTarget(ctx context.Context, transitionID workflow.TransitionID, candidate *ExecutionTargetCandidate) (CompleteRunResult, error) {
+	return s.approveTransition(ctx, transitionID, candidate, true)
+}
+
+func (s *Store) approveTransition(ctx context.Context, transitionID workflow.TransitionID, candidate *ExecutionTargetCandidate, requireExecutionTarget bool) (CompleteRunResult, error) {
 	id := strings.TrimSpace(string(transitionID))
 	if id == "" {
 		return CompleteRunResult{}, ErrTransitionIDRequired
@@ -163,19 +174,25 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
-	worktreeRoot, err := taskManagedWorktreeRoot(ctx, s.queries, task)
+	source, err := s.loadTransitionSource(ctx, transition.SourceRunID)
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
-	hasSourceRun := transition.SourceRunID.Valid && strings.TrimSpace(transition.SourceRunID.String) != ""
-	sourceRun := sqlitegen.TaskRunRecord{}
-	sourceSnapshot := runStartSnapshot{}
-	if hasSourceRun {
-		sourceRun, err = s.queries.GetTaskRun(ctx, transition.SourceRunID.String)
+	requiresRoot, err := approvalTargetsExecutableNode(edges, source.snapshot)
+	if err != nil {
+		return CompleteRunResult{}, err
+	}
+	var executionRoot *ExecutionRoot
+	var targetMutation preparedExecutionTargetMutation
+	if requireExecutionTarget && requiresRoot {
+		targetMutation, err = s.prepareExecutionTargetMutation(ctx, task, candidate)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		if err := workflow.UnmarshalString(sourceRun.RunStartSnapshotJson, &sourceSnapshot); err != nil {
+		executionRoot = &targetMutation.executionRoot
+	} else {
+		executionRoot, err = executionRootForLockedTaskIfPresent(ctx, s.queries, task)
+		if err != nil {
 			return CompleteRunResult{}, err
 		}
 	}
@@ -186,6 +203,11 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	if requireExecutionTarget && requiresRoot {
+		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, now); err != nil {
+			return CompleteRunResult{}, err
+		}
+	}
 	updatedCount, err := q.ApprovePendingTransition(ctx, sqlitegen.ApprovePendingTransitionParams{
 		AppliedAtUnixMs: sql.NullInt64{Int64: now, Valid: true},
 		TransitionID:    id,
@@ -217,13 +239,13 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 			return CompleteRunResult{}, err
 		}
 		if targetEdge.TargetNode.Kind == workflow.NodeKindJoin {
-			if !hasSourceRun {
+			if !source.present {
 				return CompleteRunResult{}, errors.New("pending approval to join has no source run")
 			}
 			if _, err := q.ApplyPendingTransitionEdgeToJoin(ctx, edge.ID); err != nil {
 				return CompleteRunResult{}, fmt.Errorf("update approved join edge snapshot: %w", err)
 			}
-			joined, err := s.applyJoinIfReady(ctx, tx, q, now, transition.TaskID, sourceRun.PlacementID, sourceSnapshot, targetEdge)
+			joined, err := s.applyJoinIfReady(ctx, tx, q, now, transition.TaskID, source.run.PlacementID, source.snapshot, targetEdge)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
@@ -246,15 +268,14 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 		if !executableNodeKind(workflow.NodeKind(edge.TargetNodeKind)) {
 			continue
 		}
-		targetRunID := prefixedID("run")
 		edgeMetadata, err := transitionEdgeMetadata(edge)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
 		targetSnapshot := runStartSnapshot{}
 		foundSnapshot := false
-		if hasSourceRun {
-			targetSnapshot, foundSnapshot, err = sourceSnapshot.forNode(targetEdge.TargetNode)
+		if source.present {
+			targetSnapshot, foundSnapshot, err = source.snapshot.forNode(targetEdge.TargetNode)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
@@ -265,16 +286,12 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 			}
 			targetSnapshot = *edgeMetadata.TargetRunStartSnapshot
 		}
-		targetSnapshotJSON, err := workflow.MarshalString(targetSnapshot)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
 		resolution, ok, err := resolvedContextInvocationFromMetadata(ctx, q, edgeMetadata, targetEdge.ContextMode)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
 		if !ok {
-			resolution, err = s.resolveContextInvocation(ctx, q, transition.TaskID, transition.CreatedAtUnixMs, sourceRun.PlacementID, &sourceRun, sourceSnapshot, targetEdge)
+			resolution, err = s.resolveContextInvocation(ctx, q, transition.TaskID, transition.CreatedAtUnixMs, source.run.PlacementID, &source.run, source.snapshot, targetEdge)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
@@ -283,31 +300,87 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 		targetMetadata.PromptTemplate = strings.TrimSpace(targetEdge.PromptTemplate)
 		targetMetadata.Parameters = append([]workflow.Parameter(nil), targetEdge.Parameters...)
 		targetMetadata.PriorParameterValues = clonePriorParameterValues(edgeMetadata.PriorParameterValues)
-		targetMetadataJSON, err := workflow.MarshalString(targetMetadata)
+		createdRun, err := s.insertExecutableRun(ctx, q, executableRunRequest{
+			PlacementID:   targetPlacementID,
+			NodeID:        targetEdge.TargetNode.ID,
+			Snapshot:      targetSnapshot,
+			Metadata:      targetMetadata,
+			ExecutionRoot: executionRoot,
+			Now:           now,
+		})
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		interruptionReason, interruptionDetail, invalidScript, err := s.scriptNodeInterruption(ctx, q, targetEdge.TargetNode.ID, worktreeRoot)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		interruptedAt := sql.NullInt64{}
-		if invalidScript {
-			interruptedAt = sql.NullInt64{Int64: now, Valid: true}
-		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: nullableString(interruptionReason), InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
-			return CompleteRunResult{}, fmt.Errorf("insert approved target run: %w", err)
-		}
-		targetRun := workflow.RunID(targetRunID)
-		result.RunIDs = append(result.RunIDs, targetRun)
-		if invalidScript {
-			result.InterruptedRunIDs = append(result.InterruptedRunIDs, targetRun)
+		result.RunIDs = append(result.RunIDs, createdRun.RunID)
+		if createdRun.Interrupted {
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, createdRun.RunID)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return CompleteRunResult{}, err
 	}
 	return result, nil
+}
+
+func approvalTargetsExecutableNode(edges []sqlitegen.TaskTransitionEdgeRecord, sourceSnapshot runStartSnapshot) (bool, error) {
+	pending := make([]sqlitegen.TaskTransitionEdgeRecord, 0, len(edges))
+	for _, edge := range edges {
+		if edge.State == "pending" {
+			pending = append(pending, edge)
+		}
+	}
+	return transitionTargetsExecutableNode(pending, sourceSnapshot)
+}
+
+func transitionTargetsExecutableNode(edges []sqlitegen.TaskTransitionEdgeRecord, sourceSnapshot runStartSnapshot) (bool, error) {
+	for _, edge := range edges {
+		target, err := edgeContractSnapshotFromTransitionEdge(edge)
+		if err != nil {
+			return false, err
+		}
+		if executableNodeKind(target.TargetNode.Kind) {
+			return true, nil
+		}
+		if target.TargetNode.Kind != workflow.NodeKindJoin {
+			continue
+		}
+		joinSnapshot, found, err := sourceSnapshot.forNode(target.TargetNode)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			return false, fmt.Errorf("pending approval join target %q missing from frozen run snapshot", target.TargetNode.ID)
+		}
+		groups := joinSnapshot.transitionGroupsForNode(target.TargetNode.ID)
+		if len(groups) != 1 || len(groups[0].Edges) != 1 {
+			return false, fmt.Errorf("join node %q must have exactly one outgoing edge", target.TargetNode.ID)
+		}
+		if executableNodeKind(groups[0].Edges[0].TargetNode.Kind) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+type transitionSource struct {
+	run      sqlitegen.TaskRunRecord
+	snapshot runStartSnapshot
+	present  bool
+}
+
+func (s *Store) loadTransitionSource(ctx context.Context, sourceRunID sql.NullString) (transitionSource, error) {
+	if !sourceRunID.Valid || strings.TrimSpace(sourceRunID.String) == "" {
+		return transitionSource{}, nil
+	}
+	run, err := s.queries.GetTaskRun(ctx, sourceRunID.String)
+	if err != nil {
+		return transitionSource{}, err
+	}
+	snapshot := runStartSnapshot{}
+	if err := workflow.UnmarshalString(run.RunStartSnapshotJson, &snapshot); err != nil {
+		return transitionSource{}, err
+	}
+	return transitionSource{run: run, snapshot: snapshot, present: true}, nil
 }
 
 func (s *Store) approvedTransitionResult(ctx context.Context, transitionID string, state string) (CompleteRunResult, error) {

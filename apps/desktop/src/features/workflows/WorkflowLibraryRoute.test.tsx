@@ -199,6 +199,7 @@ const workflowListResponse = {
       name: "Delivery",
       description: "Ship changes",
       version: 1,
+      execution_target_policy: { mode: "ask_on_first_execution" },
     },
   ],
   next_page_token: "",
@@ -216,6 +217,7 @@ function workflowListResponseWithMetadata({
         name,
         description,
         version,
+        execution_target_policy: { mode: "ask_on_first_execution" },
       },
     ],
     next_page_token: "",
@@ -229,6 +231,7 @@ const workflowDefinitionResponse = {
       name: "Delivery",
       description: "Ship changes",
       version: 1,
+      execution_target_policy: { mode: "ask_on_first_execution" },
     },
     node_groups: [],
     nodes: [

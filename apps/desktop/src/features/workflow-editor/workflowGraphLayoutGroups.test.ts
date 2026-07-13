@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowNode, type WorkflowValidation } from "../../api";
+import {
+  defaultWorkflowExecutionTargetPolicy,
+  emptyWorkflowDerivedWiring,
+  type WorkflowDefinition,
+  type WorkflowNode,
+  type WorkflowValidation,
+} from "../../api";
 import type { WorkflowGraphEdge, WorkflowGraphNode, WorkflowGraphPoint } from "./workflowGraphLayout";
 import { layoutWorkflowGraph } from "./workflowGraphLayout";
 import {
@@ -137,7 +143,13 @@ function expectRouteToHaveCorner(points: readonly WorkflowGraphPoint[]): void {
 const emptyValidation: WorkflowValidation = { valid: true, errors: [] };
 
 const threeBranchGroupWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Group Proof", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Group Proof",
+    description: "",
+    version: 1,
+    executionTargetPolicy: defaultWorkflowExecutionTargetPolicy,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [
     {

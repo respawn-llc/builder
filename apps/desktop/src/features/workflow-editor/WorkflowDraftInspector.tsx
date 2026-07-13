@@ -1,10 +1,18 @@
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowDefinition, WorkflowValidation } from "../../api";
+import type {
+  WorkflowDefinition,
+  WorkflowExecutionTargetMode,
+  WorkflowExecutionTargetPolicy,
+  WorkflowValidation,
+} from "../../api";
 import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
 import {
   DisabledInteractionGuard,
   identifierInputAttributes,
+  RadioGroup,
+  RadioGroupItem,
   SelectField,
   TextArea,
   TextInput,
@@ -398,6 +406,15 @@ function WorkflowDraftDetails({ controller }: Readonly<{ controller: WorkflowEdi
           }}
           value={controller.draft.workflow.description}
         />
+        <ExecutionTargetPolicyField
+          onChange={(policy) => {
+            controller.dispatch({
+              policy,
+              type: "editWorkflowExecutionTargetPolicy",
+            });
+          }}
+          policy={controller.draft.workflow.executionTargetPolicy}
+        />
       </DetailSection>
       <DetailSection title={t("workflowEditor.inspectorOverview")}>
         <DetailRow label={t("workflowEditor.version")} value={controller.draft.workflow.version.toString()} />
@@ -411,6 +428,84 @@ function WorkflowDraftDetails({ controller }: Readonly<{ controller: WorkflowEdi
       <ValidationDetails errors={controller.draftValidation?.errors ?? []} />
     </InspectorStack>
   );
+}
+
+const executionTargetPolicyModes: readonly WorkflowExecutionTargetMode[] = [
+  "none",
+  "head",
+  "default_branch",
+  "custom_ref",
+  "ask_on_first_execution",
+];
+
+function ExecutionTargetPolicyField({
+  onChange,
+  policy,
+}: Readonly<{
+  onChange: (policy: WorkflowExecutionTargetPolicy) => void;
+  policy: WorkflowExecutionTargetPolicy;
+}>) {
+  const { t } = useTranslation();
+  const groupLabelID = useId();
+  return (
+    <div className="grid gap-[var(--space-2)]">
+      <div>
+        <div className="text-sm font-bold text-[var(--color-on-island)] opacity-70" id={groupLabelID}>
+          {t("workflowEditor.executionTargetPolicy")}
+        </div>
+        <p className="m-0 text-sm leading-snug text-[var(--color-on-island)] opacity-65">
+          {t("workflowEditor.executionTargetPolicyHelp")}
+        </p>
+      </div>
+      <RadioGroup
+        aria-labelledby={groupLabelID}
+        onValueChange={(mode) => {
+          if (!isWorkflowExecutionTargetMode(mode)) {
+            return;
+          }
+          onChange({
+            mode,
+            customRef: mode === "custom_ref" ? policy.customRef : null,
+          });
+        }}
+        value={policy.mode}
+      >
+        {executionTargetPolicyModes.map((mode) => {
+          const optionID = `${groupLabelID}-${mode}`;
+          return (
+            <label
+              className="grid cursor-pointer grid-cols-[auto_minmax(0,1fr)] gap-x-[var(--space-2)] gap-y-[2px] rounded-[var(--radius-m)] border border-[var(--color-outline)] p-[var(--space-2)] transition-[border-color,background-color] has-[[data-state=checked]]:border-[var(--color-primary)] has-[[data-state=checked]]:bg-[var(--color-island-2)]"
+              htmlFor={optionID}
+              key={mode}
+            >
+              <RadioGroupItem className="mt-[2px]" id={optionID} value={mode} />
+              <span className="text-sm font-bold">{t(`workflowEditor.executionTargetPolicy_${mode}`)}</span>
+              <span className="col-start-2 text-sm leading-snug opacity-65">
+                {t(`workflowEditor.executionTargetPolicy_${mode}Help`)}
+              </span>
+            </label>
+          );
+        })}
+      </RadioGroup>
+      {policy.mode === "custom_ref" ? (
+        <TextInput
+          label={t("workflowEditor.executionTargetCustomRef")}
+          onChange={(event) => {
+            const customRef = event.target.value.trim();
+            onChange({
+              mode: "custom_ref",
+              customRef: customRef.length === 0 ? null : customRef,
+            });
+          }}
+          value={policy.customRef ?? ""}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function isWorkflowExecutionTargetMode(value: string): value is WorkflowExecutionTargetMode {
+  return executionTargetPolicyModes.some((mode) => mode === value);
 }
 
 function AgentNodeDraftDetails({

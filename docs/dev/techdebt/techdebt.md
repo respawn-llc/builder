@@ -240,7 +240,7 @@ Entry shape: checklist title line, summary evidence paragraph, impact paragraph,
 
 - [ ] `TD-044` [P1] `server/worktree/service.go` concentrates git, locking, targeting, and lifecycle responsibilities.
 
-  `server/worktree/service.go` is 1770 LoC. One `Service` owns a `GitInspector`, two mutexes (`workspaceMu sync.Mutex` and `mu sync.Mutex`), git worktree operations through `s.git.ResolveCreateTarget`/`Add`/`Prune`/`Remove`/`DirtyFileCount`/`deleteBranch`, execution-target syncing, and worktree creation/removal/deletability through `EnsureTaskWorktree`, `DeleteTaskWorktree`, and `EnsureTaskWorktreeDeletable`. Git inspection, workspace mutation locking, target synchronization, and lifecycle management are interleaved in one type.
+  `server/worktree/service.go` is 1770 LoC. One `Service` owns a `GitInspector`, two mutexes (`workspaceMu sync.Mutex` and `mu sync.Mutex`), git worktree operations through `s.git.ResolveCreateTarget`/`Add`/`Prune`/`Remove`/`DirtyFileCount`/`deleteBranch`, execution-target syncing, and worktree materialization/restoration/removal/deletability through `MaterializeInitialTaskWorktree`, `RestoreLockedTaskWorktree`, `DeleteTaskWorktree`, and `EnsureTaskWorktreeDeletable`. Git inspection, workspace mutation locking, target synchronization, and lifecycle management are interleaved in one type.
 
   The service is a central worktree authority, so combining git subprocess behavior, coarse workspace locking, and lifecycle orchestration in one file makes lock scope and failure handling hard to reason about and raises the risk that a git or locking change silently affects unrelated lifecycle paths.
 

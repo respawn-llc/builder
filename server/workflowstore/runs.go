@@ -333,7 +333,19 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 	if err := workflow.UnmarshalString(run.RunStartSnapshotJson, &snapshot); err != nil {
 		return RunStartContext{}, err
 	}
-	inputResolution, err := s.resolveRunInputContext(ctx, run.PlacementID, taskRecordFromTask(task))
+	taskRecord, err := taskRecordFromTask(task)
+	if err != nil {
+		return RunStartContext{}, err
+	}
+	var executionRoot *ExecutionRoot
+	if taskRecord.ExecutionTarget != nil {
+		root, err := executionRootForTask(ctx, s.queries, task)
+		if err != nil {
+			return RunStartContext{}, err
+		}
+		executionRoot = &root
+	}
+	inputResolution, err := s.resolveRunInputContext(ctx, run.PlacementID, taskRecord)
 	if err != nil {
 		return RunStartContext{}, err
 	}
@@ -365,41 +377,9 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 	}
 	priorParameterValues := clonePriorParameterValues(runMetadata.PriorParameterValues)
 	parameters := append([]workflow.Parameter(nil), runMetadata.Parameters...)
-	worktreeID := strings.TrimSpace(task.ManagedWorktreeID.String)
-	if worktreeID == "" {
-		return RunStartContext{
-			Run:                            runRecordFromTaskRun(run),
-			Task:                           taskRecordFromTask(task),
-			Workflow:                       workflowRecord,
-			Node:                           nodeRecord,
-			ContextMode:                    transitionContext.ContextMode,
-			WorkflowHasContinueSessionEdge: snapshot.hasContinueSessionEdge(),
-			SourceRunID:                    transitionContext.SourceRunID,
-			SourceSessionID:                transitionContext.SourceSessionID,
-			SourceNode:                     transitionContext.SourceNode,
-			AcceptedTransitionPath:         transitionContext.AcceptedTransitionPath,
-			IsFanoutBranch:                 isFanoutBranch,
-			TransitionIDs:                  transitionIDsFromSnapshot(snapshot),
-			TransitionOptions:              transitionOptionsFromSnapshot(snapshot),
-			PromptTemplate:                 strings.TrimSpace(runMetadata.PromptTemplate),
-			Parameters:                     parameters,
-			ParameterValues:                parameterValues,
-			PriorParameterValues:           priorParameterValues,
-			InputValues:                    inputValues,
-			NodeOutputValues:               runMetadata.NodeOutputValues,
-		}, nil
-	}
-	worktree, err := s.metadata.GetWorktreeRecordByID(ctx, worktreeID)
-	if err != nil {
-		return RunStartContext{}, err
-	}
-	workspace, err := s.metadata.GetWorkspaceByID(ctx, worktree.WorkspaceID)
-	if err != nil {
-		return RunStartContext{}, err
-	}
 	return RunStartContext{
 		Run:                            runRecordFromTaskRun(run),
-		Task:                           taskRecordFromTask(task),
+		Task:                           taskRecord,
 		Workflow:                       workflowRecord,
 		Node:                           nodeRecord,
 		ContextMode:                    transitionContext.ContextMode,
@@ -417,10 +397,7 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 		PriorParameterValues:           priorParameterValues,
 		InputValues:                    inputValues,
 		NodeOutputValues:               runMetadata.NodeOutputValues,
-		WorkspaceID:                    workspace.ID,
-		WorkspaceRoot:                  workspace.CanonicalRootPath,
-		WorktreeID:                     worktree.ID,
-		WorktreeRoot:                   worktree.CanonicalRoot,
+		ExecutionRoot:                  executionRoot,
 	}, nil
 }
 

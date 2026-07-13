@@ -157,6 +157,10 @@ func scriptFailureReason(err error) string {
 }
 
 func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowScriptResult, error) {
+	executionRoot, err := requireRunExecutionRoot(input)
+	if err != nil {
+		return workflowScriptResult{}, workflowScriptError{Reason: ReasonScriptValidationFailed, Err: err}
+	}
 	resolvedPath, err := resolveWorkflowScriptPath(input)
 	if err != nil {
 		return workflowScriptResult{}, workflowScriptError{Reason: ReasonScriptValidationFailed, Err: err}
@@ -166,8 +170,11 @@ func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, in
 		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
 	}
 	cmd := exec.Command(resolvedPath)
-	cmd.Dir = input.WorktreeRoot
-	cmd.Env = workflowScriptEnv(req, input)
+	cmd.Dir = executionRoot.EffectiveRoot()
+	cmd.Env, err = workflowScriptEnv(req, input)
+	if err != nil {
+		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
+	}
 	cmd.Stdin = strings.NewReader(string(stdin))
 	prepareScriptCommand(cmd)
 	stdout := shelltool.NewBoundedOutput(scriptOutputLimitBytes)
@@ -221,10 +228,15 @@ func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, in
 }
 
 func resolveWorkflowScriptPath(input workflowstore.RunStartContext) (string, error) {
+	executionRoot, err := requireRunExecutionRoot(input)
+	if err != nil {
+		return "", err
+	}
+	rootPath := executionRoot.EffectiveRoot()
 	return workflowscript.ResolveExecutable(workflowscript.ValidationRequest{
-		RawPath:             input.Node.ScriptPath,
-		WorktreeRoot:        input.WorktreeRoot,
-		RequireWorktreeRoot: true,
+		RawPath:     input.Node.ScriptPath,
+		RootPath:    &rootPath,
+		RequireRoot: true,
 	})
 }
 
@@ -240,17 +252,24 @@ func workflowScriptStdin(req SchedulerStartRunRequest, input workflowstore.RunSt
 	return json.Marshal(payload)
 }
 
-func workflowScriptEnv(req SchedulerStartRunRequest, input workflowstore.RunStartContext) []string {
+func workflowScriptEnv(req SchedulerStartRunRequest, input workflowstore.RunStartContext) ([]string, error) {
 	env := tools.EnrichShellEnv(os.Environ())
+	executionRoot, err := requireRunExecutionRoot(input)
+	if err != nil {
+		return nil, err
+	}
 	env = append(env,
 		"KENT_WORKFLOW_RUN_ID="+string(req.RunID),
 		"KENT_WORKFLOW_PLACEMENT_ID="+string(req.PlacementID),
 		"KENT_WORKFLOW_TASK_ID="+string(input.Task.ID),
 		"KENT_WORKFLOW_ID="+string(input.Task.WorkflowID),
 		"KENT_WORKFLOW_NODE_ID="+string(input.Node.ID),
-		"KENT_WORKTREE_ROOT="+input.WorktreeRoot,
+		"KENT_EXECUTION_ROOT="+executionRoot.EffectiveRoot(),
 	)
-	return env
+	if executionRoot.Managed != nil {
+		env = append(env, "KENT_WORKTREE_ROOT="+executionRoot.Managed.Root)
+	}
+	return env, nil
 }
 
 func scriptFailureDetailJSON(err error, result workflowScriptResult) string {
