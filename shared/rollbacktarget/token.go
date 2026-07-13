@@ -14,6 +14,21 @@ var ErrInvalidRollbackTargetID = errors.New("invalid rollback target id")
 
 const tokenVersion = 2
 
+type CandidateLocator struct {
+	UserMessageSeq       int64 `json:"user_message_seq"`
+	CandidatePageEndByte int64 `json:"candidate_page_end_byte"`
+}
+
+func (l CandidateLocator) Validate() error {
+	if l.UserMessageSeq <= 0 {
+		return fmt.Errorf("rollback candidate user message sequence must be positive, got %d", l.UserMessageSeq)
+	}
+	if l.CandidatePageEndByte <= 0 {
+		return fmt.Errorf("rollback candidate page end byte must be positive, got %d", l.CandidatePageEndByte)
+	}
+	return nil
+}
+
 type tokenPayload struct {
 	Version        int   `json:"v"`
 	UserMessageSeq int64 `json:"s"`

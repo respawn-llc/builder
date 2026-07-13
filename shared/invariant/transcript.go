@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
 
@@ -51,6 +52,11 @@ func ValidateTranscriptCommittedRow(row clientui.TranscriptCommittedRow) error {
 	if row.Kind != expectedKind {
 		return fmt.Errorf("committed row kind %q does not match payload kind %q", row.Kind, expectedKind)
 	}
+	if row.User != nil && row.User.RollbackTargetID != nil {
+		if _, err := rollbacktarget.DecodeUserMessageSeq(*row.User.RollbackTargetID); err != nil {
+			return fmt.Errorf("committed user row has invalid rollback_target_id: %w", err)
+		}
+	}
 	if row.Integrity != transcript.RowIntegrityValid {
 		return nil
 	}
@@ -72,6 +78,11 @@ func ValidateTranscriptPage(page clientui.TranscriptPage) error {
 	}
 	if err := validateTranscriptPageCursor("newer", page.HasMoreBelow, page.NewerCursor); err != nil {
 		return err
+	}
+	if page.LatestRollbackCandidate != nil {
+		if err := page.LatestRollbackCandidate.Validate(); err != nil {
+			return fmt.Errorf("transcript page latest rollback candidate: %w", err)
+		}
 	}
 	for index, row := range page.Entries {
 		if err := ValidateTranscriptCommittedRow(row); err != nil {

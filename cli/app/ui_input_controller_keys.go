@@ -145,6 +145,11 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
+		if inputState.Mode == uiInputModeRollbackEdit {
+			return c.handleRuntimeCtrlC(func() tea.Cmd {
+				return c.stopRollbackSelectionFlowCmd()
+			})
+		}
 		return c.handleRuntimeCtrlC(nil)
 	case tea.KeyShiftTab, tea.KeyCtrlT:
 		return m, m.toggleTranscriptMode()
@@ -275,33 +280,40 @@ func (c uiInputController) handleRollbackSelectionKey(msg tea.KeyMsg) (tea.Model
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return c.handleRuntimeCtrlC(func() tea.Cmd {
-			if overlayCmd := m.popRollbackOverlay(); overlayCmd != nil {
-				m.stopRollbackSelectionMode()
-				return overlayCmd
-			}
-			m.stopRollbackSelectionMode()
-			return nil
+			return c.stopRollbackSelectionFlowCmd()
 		})
 	case tea.KeyEsc:
 		return m, c.stopRollbackSelectionFlowCmd()
+	}
+	if m.rollback.pendingNavigation != nil {
+		return m, nil
+	}
+	switch msg.Type {
 	case tea.KeyUp:
-		if m.rollback.selection <= 0 {
-			if cmd := m.requestRollbackSelectionPage(-1); cmd != nil {
-				return m, cmd
-			}
-		}
-		m.moveRollbackSelection(-1)
-		return m, nil
+		return m, m.moveRollbackSelectionWithPaging(-1)
 	case tea.KeyDown:
-		if cmd := m.requestRollbackSelectionPage(1); cmd != nil {
-			return m, cmd
-		}
-		m.moveRollbackSelection(1)
-		return m, nil
+		return m, m.moveRollbackSelectionWithPaging(1)
 	case tea.KeyEnter:
 		return m, c.beginRollbackEditingFlowCmd()
-	case tea.KeyPgUp, tea.KeyPgDown:
-		m.forwardToView(msg)
+	case tea.KeyPgUp:
+		return m, m.pageRollbackSelection(-1)
+	case tea.KeyPgDown:
+		return m, m.pageRollbackSelection(1)
+	case tea.KeyHome:
+		m.jumpRollbackSelection(-1)
+		return m, nil
+	case tea.KeyEnd:
+		m.jumpRollbackSelection(1)
+		return m, nil
+	case tea.KeyRunes:
+		if len(msg.Runes) == 1 {
+			switch msg.Runes[0] {
+			case 'k':
+				return m, m.moveRollbackSelectionWithPaging(-1)
+			case 'j':
+				return m, m.moveRollbackSelectionWithPaging(1)
+			}
+		}
 		return m, nil
 	default:
 		return m, nil

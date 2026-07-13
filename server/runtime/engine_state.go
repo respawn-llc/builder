@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
+	"core/shared/rollbacktarget"
 	"core/shared/transcript"
 )
 
@@ -92,6 +93,7 @@ type TranscriptSegmentPage struct {
 	HasMoreAbove                      bool
 	NewerCursor                       int64
 	HasMoreBelow                      bool
+	LatestRollbackCandidate           *rollbacktarget.CandidateLocator
 	LastCommittedAssistantFinalAnswer string
 }
 
@@ -99,11 +101,7 @@ func isCompactionSegmentBoundary(evt session.Event) bool {
 	if evt.Kind != sessionEventHistoryReplaced {
 		return false
 	}
-	_, ignoredLegacy, err := decodePersistedHistoryReplacementPayload(evt.Payload)
-	if err != nil {
-		return false
-	}
-	return !ignoredLegacy
+	return isPersistedHistoryReplacementBoundary(evt.Payload)
 }
 
 func TranscriptSegmentPageFromStore(store *session.Store, cursor int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
@@ -128,7 +126,15 @@ func TranscriptNewestSegmentPageFromStore(store *session.Store, cacheWarningMode
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
-	return segmentPageFromWindow(window, cacheWarningMode)
+	page, err := segmentPageFromWindow(window, cacheWarningMode)
+	if err != nil {
+		return TranscriptSegmentPage{}, err
+	}
+	page.LatestRollbackCandidate, err = rollbackCandidateLocatorFromActiveWindow(window)
+	if err != nil {
+		return TranscriptSegmentPage{}, err
+	}
+	return page, nil
 }
 
 func TranscriptSegmentPageForwardFromStore(store *session.Store, startOffset int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
@@ -167,6 +173,7 @@ func (e *Engine) TranscriptSegmentPage(cursor int64) (TranscriptSegmentPage, err
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
+	page.LatestRollbackCandidate = e.transcriptRuntimeState().LatestRollbackCandidate()
 	return page, nil
 }
 
@@ -178,6 +185,7 @@ func (e *Engine) TranscriptNewestSegmentPage() (TranscriptSegmentPage, error) {
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
+	page.LatestRollbackCandidate = e.transcriptRuntimeState().LatestRollbackCandidate()
 	e.overlayLiveStreaming(&page.Snapshot)
 	return page, nil
 }
@@ -190,6 +198,7 @@ func (e *Engine) TranscriptSegmentPageForward(startOffset int64) (TranscriptSegm
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
+	page.LatestRollbackCandidate = e.transcriptRuntimeState().LatestRollbackCandidate()
 	if !page.HasMoreBelow {
 		e.overlayLiveStreaming(&page.Snapshot)
 	}
@@ -798,12 +807,13 @@ type historyReplacementPayload struct {
 	// replacement, when the engine runs under a workflow run. It is the durable,
 	// single-write provenance of a compaction: resume reconstructs it from this
 	// event so a workflow run never recompacts a continuation it already committed.
-	WorkflowRunID                     string             `json:"workflow_run_id,omitempty"`
-	CompactionNumber                  int                `json:"compaction_number,omitempty"`
-	CommittedEntryStart               *int               `json:"committed_entry_start,omitempty"`
-	PendingHandoffFutureMessage       string             `json:"pending_handoff_future_message,omitempty"`
-	LastCommittedAssistantFinalAnswer string             `json:"last_committed_assistant_final_answer,omitempty"`
-	Items                             []llm.ResponseItem `json:"items"`
+	WorkflowRunID                     string                           `json:"workflow_run_id,omitempty"`
+	CompactionNumber                  int                              `json:"compaction_number,omitempty"`
+	CommittedEntryStart               *int                             `json:"committed_entry_start,omitempty"`
+	PendingHandoffFutureMessage       string                           `json:"pending_handoff_future_message,omitempty"`
+	LastCommittedAssistantFinalAnswer string                           `json:"last_committed_assistant_final_answer,omitempty"`
+	LatestRollbackCandidate           *rollbacktarget.CandidateLocator `json:"latest_rollback_candidate,omitempty"`
+	Items                             []llm.ResponseItem               `json:"items"`
 }
 
 func (e *Engine) setLastUsage(usage llm.Usage) {

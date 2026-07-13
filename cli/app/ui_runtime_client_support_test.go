@@ -16,6 +16,7 @@ type countingSessionViewClient struct {
 	page            clientui.TranscriptPage
 	count           atomic.Int32
 	mainViewCount   atomic.Int32
+	pageCount       atomic.Int32
 	lastMainViewReq serverapi.SessionMainViewRequest
 	lastPageReq     serverapi.SessionTranscriptPageRequest
 	lastFinalReq    serverapi.SessionLatestCommittedAssistantFinalAnswerRequest
@@ -32,6 +33,7 @@ func (c *countingSessionViewClient) GetSessionMainView(_ context.Context, req se
 
 func (c *countingSessionViewClient) GetSessionTranscriptPage(_ context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
 	c.lastPageReq = req
+	c.pageCount.Add(1)
 	return serverapi.SessionTranscriptPageResponse{Transcript: c.page}, nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/rollbacktarget"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -40,6 +41,76 @@ func TestSessionSnapshotSourcesParityForTranscriptTailEntries(t *testing.T) {
 	live := mustTranscriptTailEntries(t, fixture.live, fixture.sessionID)
 	dormant := mustTranscriptTailEntries(t, fixture.dormant, fixture.sessionID)
 	assertEqual(t, "transcript tail entries", normalizedChatEntries(live), normalizedChatEntries(dormant))
+}
+
+func TestSessionSnapshotSourcesParityForRollbackLocatorAcrossCandidateFreeCompactions(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.Create(dir, "ws", dir)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	appended, err := store.AppendEventWithEndByteCursor(
+		"user-step",
+		"message",
+		llm.Message{Role: llm.RoleUser, Content: "candidate before dormant compactions"},
+	)
+	if err != nil {
+		t.Fatalf("append rollback candidate: %v", err)
+	}
+	if appended.EndByteCursor == nil {
+		t.Fatal("rollback candidate append did not return a page cursor")
+	}
+	locator := rollbacktarget.CandidateLocator{
+		UserMessageSeq:       appended.Event.Seq,
+		CandidatePageEndByte: *appended.EndByteCursor,
+	}
+	for index := 0; index < 3; index++ {
+		if _, _, err := store.AppendEvent("compact-step", "history_replaced", map[string]any{
+			"engine":                    "local",
+			"latest_rollback_candidate": locator,
+			"items": llm.ItemsFromMessages([]llm.Message{{
+				Role:        llm.RoleUser,
+				MessageType: llm.MessageTypeCompactionSummary,
+				Content:     "candidate-free summary",
+			}}),
+		}); err != nil {
+			t.Fatalf("append history replacement %d: %v", index, err)
+		}
+	}
+	engine, err := runtime.New(store, &serviceFakeLLM{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("close engine: %v", err)
+		}
+	})
+	live := NewService(NewStaticSessionResolver(store), NewStaticRuntimeResolver(engine), nil)
+	dormant := NewService(NewStaticSessionResolver(store), nil, nil)
+
+	liveNewest := mustTranscriptPage(t, live, store.Meta().SessionID, nil)
+	dormantNewest := mustTranscriptPage(t, dormant, store.Meta().SessionID, nil)
+	assertEqual(t, "newest rollback locator", liveNewest.LatestRollbackCandidate, dormantNewest.LatestRollbackCandidate)
+	if dormantNewest.LatestRollbackCandidate == nil || *dormantNewest.LatestRollbackCandidate != locator {
+		t.Fatalf("dormant newest locator = %#v, want %#v", dormantNewest.LatestRollbackCandidate, locator)
+	}
+
+	cursor := locator.CandidatePageEndByte
+	liveCandidate := mustTranscriptPage(t, live, store.Meta().SessionID, &cursor)
+	dormantCandidate := mustTranscriptPage(t, dormant, store.Meta().SessionID, &cursor)
+	assertEqual(t, "candidate-page rollback locator", liveCandidate.LatestRollbackCandidate, dormantCandidate.LatestRollbackCandidate)
+	wantTarget := rollbacktarget.EncodeUserMessageSeq(locator.UserMessageSeq)
+	found := false
+	for _, row := range dormantCandidate.Entries {
+		if row.User != nil && row.User.RollbackTargetID != nil && *row.User.RollbackTargetID == wantTarget {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("dormant direct candidate page did not contain rollback target %q", wantTarget)
+	}
 }
 
 func TestSessionSnapshotSourcesParityForActiveRunStatus(t *testing.T) {
@@ -186,6 +257,18 @@ func mustTranscriptTailEntries(t *testing.T, svc *Service, sessionID string) []r
 		t.Fatalf("get transcript tail entries: %v", err)
 	}
 	return entries
+}
+
+func mustTranscriptPage(t *testing.T, svc *Service, sessionID string, cursor *int64) clientui.TranscriptPage {
+	t.Helper()
+	response, err := svc.GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{
+		SessionID: sessionID,
+		Cursor:    cursor,
+	})
+	if err != nil {
+		t.Fatalf("get transcript page: %v", err)
+	}
+	return response.Transcript
 }
 
 type comparableChatEntry struct {

@@ -8,60 +8,43 @@ import (
 )
 
 func (c uiInputController) startRollbackSelectionFlowCmd() tea.Cmd {
-	m := c.model
-	if !m.startRollbackSelectionMode() {
-		return nil
-	}
-	overlayCmd := m.pushRollbackOverlayIfNeeded()
-	if overlayCmd != nil {
-		m.applyRollbackSelectionHighlight()
-		m.focusRollbackSelection()
-		return overlayCmd
-	}
-	return m.suppressRollbackAlternateScrollIfNeeded()
+	return c.model.beginRollbackSelectionHydration()
 }
 
 func (c uiInputController) stopRollbackSelectionFlowCmd() tea.Cmd {
 	m := c.model
+	cancelCmd := m.cancelPendingDetailTranscriptRequest()
 	overlayCmd := m.popRollbackOverlay()
-	alternateScrollCmd := m.restoreRollbackAlternateScrollIfNeeded()
 	m.stopRollbackSelectionMode()
-	if overlayCmd != nil {
-		return sequenceCmds(alternateScrollCmd, overlayCmd)
-	}
-	return alternateScrollCmd
+	return sequenceCmds(cancelCmd, overlayCmd)
 }
 
 func (c uiInputController) beginRollbackEditingFlowCmd() tea.Cmd {
-	m := c.model
-	_, ok := m.beginRollbackEditing()
-	if !ok {
-		return nil
-	}
+	c.model.beginRollbackEditing()
 	return nil
 }
 
 func (c uiInputController) cancelRollbackEditingToSelectionFlowCmd() tea.Cmd {
-	m := c.model
-	if !m.cancelRollbackEditingBackToSelection() {
-		return nil
-	}
-	overlayCmd := m.pushRollbackOverlayIfNeeded()
-	if overlayCmd != nil {
-		m.applyRollbackSelectionHighlight()
-		m.focusRollbackSelection()
-		return overlayCmd
-	}
-	return m.suppressRollbackAlternateScrollIfNeeded()
+	c.model.cancelRollbackEditingBackToSelection()
+	return nil
 }
 
 func (c uiInputController) startRollbackFork(text string) (tea.Model, tea.Cmd) {
 	m := c.model
-	m.nextForkRollbackTargetID = ""
+	if m.rollback.editingCandidate == nil {
+		return m, m.sendTransientStatusWithNoticeID(
+			"Rollback target is unavailable",
+			uiStatusNoticeError,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		)
+	}
+	m.nextForkRollbackTargetID = m.rollback.editingCandidate.RollbackTargetID
 	m.nextSessionInitialPrompt = text
 	m.clearInput()
 	m.exitAction = UIActionForkRollback
-	m.rollback.phase = uiRollbackPhaseInactive
+	m.resetRollbackState()
 	return m, tea.Quit
 }
 

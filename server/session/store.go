@@ -944,19 +944,57 @@ func (s *Store) BackfillLockedRequestShape(fields LockedRequestShapeBackfill) (L
 	})
 }
 
+type EventAppendResult struct {
+	Event         Event
+	Committed     bool
+	EndByteCursor *int64
+}
+
+type eventAppendOutcome struct {
+	event         Event
+	committed     bool
+	endByteCursor *int64
+}
+
 func (s *Store) AppendEvent(stepID, kind string, payload any) (Event, bool, error) {
 	s.mu.Lock()
+	outcome, err := s.appendEventLocked(stepID, kind, payload)
+	return outcome.event, outcome.committed, err
+}
 
+func (s *Store) AppendEventWithEndByteCursor(stepID, kind string, payload any) (EventAppendResult, error) {
+	s.mu.Lock()
+	if s.options.filelessEvents {
+		s.mu.Unlock()
+		return EventAppendResult{}, errors.New("event-log byte cursor is unavailable with fileless event persistence")
+	}
+	outcome, err := s.appendEventLocked(stepID, kind, payload)
+	result := EventAppendResult{
+		Event:         outcome.event,
+		Committed:     outcome.committed,
+		EndByteCursor: valuecopy.Pointer(outcome.endByteCursor),
+	}
+	if err != nil {
+		return result, err
+	}
+	if result.EndByteCursor == nil || *result.EndByteCursor <= 0 {
+		return result, errors.New("committed event append did not produce a positive event-log byte cursor")
+	}
+	return result, nil
+}
+
+func (s *Store) appendEventLocked(stepID, kind string, payload any) (eventAppendOutcome, error) {
 	evt, err := s.buildEventLocked(stepID, kind, payload, time.Now().UTC())
 	if err != nil {
 		s.mu.Unlock()
-		return Event{}, false, err
+		return eventAppendOutcome{}, err
 	}
-	committed, err := s.appendObservedEventsLockedWithCommitStatus([]Event{evt})
-	if err != nil {
-		return evt, committed, err
-	}
-	return evt, committed, nil
+	committed, endByteCursor, err := s.appendObservedEventsLockedWithCommitStatus([]Event{evt})
+	return eventAppendOutcome{
+		event:         evt,
+		committed:     committed,
+		endByteCursor: endByteCursor,
+	}, err
 }
 
 func (s *Store) buildEventLocked(stepID, kind string, payload any, now time.Time) (Event, error) {
@@ -998,7 +1036,7 @@ func (s *Store) AppendTurnAtomic(stepID string, events []EventInput) ([]Event, e
 			Payload:   body,
 		})
 	}
-	if _, err := s.appendObservedEventsLockedWithCommitStatus(built); err != nil {
+	if _, _, err := s.appendObservedEventsLockedWithCommitStatus(built); err != nil {
 		return nil, err
 	}
 	return built, nil
@@ -1010,12 +1048,40 @@ type ReplayEvent struct {
 	Payload json.RawMessage
 }
 
+type replayEventsAppendOutcome struct {
+	events        []Event
+	endByteCursor *int64
+}
+
 func (s *Store) AppendReplayEvents(events []ReplayEvent) ([]Event, error) {
 	s.mu.Lock()
+	outcome, err := s.appendReplayEventsLocked(events)
+	if err != nil {
+		return nil, err
+	}
+	return outcome.events, nil
+}
 
+func (s *Store) appendReplayEventsWithEndByteCursor(events []ReplayEvent) (replayEventsAppendOutcome, error) {
+	s.mu.Lock()
+	if s.options.filelessEvents {
+		s.mu.Unlock()
+		return replayEventsAppendOutcome{}, errors.New("event-log byte cursor is unavailable with fileless event persistence")
+	}
+	outcome, err := s.appendReplayEventsLocked(events)
+	if err != nil {
+		return outcome, err
+	}
+	if outcome.endByteCursor == nil || *outcome.endByteCursor <= 0 {
+		return outcome, errors.New("replayed events did not produce a positive event-log byte cursor")
+	}
+	return outcome, nil
+}
+
+func (s *Store) appendReplayEventsLocked(events []ReplayEvent) (replayEventsAppendOutcome, error) {
 	if len(events) == 0 {
 		s.mu.Unlock()
-		return nil, nil
+		return replayEventsAppendOutcome{}, nil
 	}
 	built := make([]Event, 0, len(events))
 	seq := s.meta.LastSequence
@@ -1031,27 +1097,33 @@ func (s *Store) AppendReplayEvents(events []ReplayEvent) ([]Event, error) {
 			Payload:   payload,
 		})
 	}
-	if _, err := s.appendObservedEventsLockedWithCommitStatus(built); err != nil {
-		return nil, err
+	_, endByteCursor, err := s.appendObservedEventsLockedWithCommitStatus(built)
+	if err != nil {
+		return replayEventsAppendOutcome{events: built, endByteCursor: endByteCursor}, err
 	}
-	return built, nil
+	return replayEventsAppendOutcome{events: built, endByteCursor: endByteCursor}, nil
 }
 
-func (s *Store) appendObservedEventsLockedWithCommitStatus(events []Event) (bool, error) {
+func (s *Store) appendObservedEventsLockedWithCommitStatus(events []Event) (bool, *int64, error) {
 	previousMeta := s.meta
 	previousFreshness := s.conversationFreshness
 	s.captureFirstPromptPreviewLocked(events)
 	s.advanceConversationFreshnessLocked(events)
 	observation, committed, err := s.appendEventsAtomicLockedWithCommitStatus(events)
+	var endByteCursor *int64
+	if committed && !s.options.filelessEvents {
+		cursor := s.eventsFileSizeBytes
+		endByteCursor = &cursor
+	}
 	if err != nil && !committed {
 		s.meta = previousMeta
 		s.conversationFreshness = previousFreshness
 	}
 	s.mu.Unlock()
 	if err != nil {
-		return committed, err
+		return committed, endByteCursor, err
 	}
-	return committed, s.observePersistence(observation)
+	return committed, endByteCursor, s.observePersistence(observation)
 }
 
 type EventInput struct {

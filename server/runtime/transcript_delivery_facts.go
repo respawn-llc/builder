@@ -33,8 +33,9 @@ type TranscriptCommittedRowFact struct {
 }
 
 type TranscriptUserRowFact struct {
-	Text          string
-	CondensedText string
+	Text             string
+	CondensedText    string
+	RollbackTargetID *string
 }
 
 type TranscriptAssistantRowFact struct {
@@ -253,9 +254,16 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 		if strings.TrimSpace(text) == "" {
 			text = firstNonBlankTranscriptValue(entry.CondensedText, entry.CompactLabel)
 		}
+		if entry.RollbackTargetID != nil && strings.TrimSpace(*entry.RollbackTargetID) == "" {
+			panic("transcript user entry has a present but empty rollback target id")
+		}
 		return TranscriptCommittedRowFact{
-			Kind:       TranscriptCommittedRowFactUser,
-			User:       &TranscriptUserRowFact{Text: text, CondensedText: entry.CondensedText},
+			Kind: TranscriptCommittedRowFactUser,
+			User: &TranscriptUserRowFact{
+				Text:             text,
+				CondensedText:    entry.CondensedText,
+				RollbackTargetID: valuecopy.Pointer(entry.RollbackTargetID),
+			},
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
 			Integrity:  integrity,
 		}, true

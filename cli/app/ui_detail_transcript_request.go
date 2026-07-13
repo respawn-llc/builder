@@ -9,7 +9,6 @@ import (
 	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/valuecopy"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -23,6 +22,20 @@ type uiPendingDetailTranscriptRequest struct {
 }
 
 func (m *uiModel) loadDetailTranscriptPageCmd(req clientui.TranscriptPageRequest) tea.Cmd {
+	return m.loadDetailTranscriptPageWithNoticePolicyCmd(req, uiDetailTranscriptLoadingNoticeVisible)
+}
+
+type uiDetailTranscriptLoadingNoticePolicy uint8
+
+const (
+	uiDetailTranscriptLoadingNoticeVisible uiDetailTranscriptLoadingNoticePolicy = iota
+	uiDetailTranscriptLoadingNoticeSilent
+)
+
+func (m *uiModel) loadDetailTranscriptPageWithNoticePolicyCmd(
+	req clientui.TranscriptPageRequest,
+	noticePolicy uiDetailTranscriptLoadingNoticePolicy,
+) tea.Cmd {
 	if m == nil || m.pendingDetailTranscript != nil {
 		return nil
 	}
@@ -36,10 +49,7 @@ func (m *uiModel) loadDetailTranscriptPageCmd(req clientui.TranscriptPageRequest
 			"",
 		)
 	}
-	request := clientui.TranscriptPageRequest{
-		Cursor:      valuecopy.Pointer(req.Cursor),
-		NewerCursor: valuecopy.Pointer(req.NewerCursor),
-	}
+	request := cloneTranscriptPageRequest(req)
 	requestID := uuid.New()
 	parentCtx, cancel := context.WithCancel(context.Background())
 	m.pendingDetailTranscript = &uiPendingDetailTranscriptRequest{
@@ -48,7 +58,8 @@ func (m *uiModel) loadDetailTranscriptPageCmd(req clientui.TranscriptPageRequest
 		request:   request,
 		cancel:    cancel,
 	}
-	if request.Cursor != nil || request.NewerCursor != nil {
+	if noticePolicy == uiDetailTranscriptLoadingNoticeVisible &&
+		(request.Cursor != nil || request.NewerCursor != nil) {
 		m.showDetailTranscriptLoadingNotice(requestID)
 	}
 	client := m.statusConfig.SessionViews

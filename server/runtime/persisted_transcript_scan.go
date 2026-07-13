@@ -104,6 +104,7 @@ func clonePersistedChatEntries(entries []ChatEntry) []ChatEntry {
 
 func clonePersistedChatEntry(entry ChatEntry) ChatEntry {
 	copyEntry := entry
+	copyEntry.RollbackTargetID = valuecopy.Pointer(entry.RollbackTargetID)
 	copyEntry.BackgroundExitCode = valuecopy.Pointer(entry.BackgroundExitCode)
 	copyEntry.ToolCall = clonePersistedToolCallMeta(entry.ToolCall)
 	return copyEntry

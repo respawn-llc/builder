@@ -5,10 +5,61 @@ import (
 
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"core/shared/rollbacktarget"
 	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestRollbackTargetSelectionHighlightsAndCentersDetailEntry(t *testing.T) {
+	targetID := rollbacktarget.EncodeUserMessageSeq(4)
+	rows := make([]clientui.TranscriptCommittedRow, 0, 9)
+	for index := 0; index < 9; index++ {
+		row := detailUser(string(rune('a' + index)))
+		if index == 3 {
+			target := targetID
+			row.User.RollbackTargetID = &target
+		}
+		rows = append(rows, row)
+	}
+	model := NewModel()
+	next, _ := model.Update(SetViewportSizeMsg{Lines: 5, Width: 80})
+	model = next.(Model)
+	next, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page:   clientui.TranscriptPage{Entries: rows},
+		Anchor: DetailTranscriptAnchorBottom,
+	})
+	model = next.(Model)
+	next, _ = model.Update(SelectDetailTranscriptRollbackTargetMsg{
+		RollbackTargetID: targetID,
+		Center:           true,
+	})
+	model = next.(Model)
+
+	selected, ok := model.selectedDetailIndex()
+	if !ok || selected != 3 {
+		t.Fatalf("selected detail index = %d/%t, want rollback target index 3", selected, ok)
+	}
+	lineRange, ok := model.detailEntryLineRange(selected)
+	if !ok {
+		t.Fatal("selected rollback target has no detail line range")
+	}
+	selectedCenter := (lineRange.first + lineRange.last) / 2
+	viewportCenter := model.detailScroll + model.viewportLines/2
+	if absInt(selectedCenter-viewportCenter) > 1 {
+		t.Fatalf("selected line center = %d, viewport center = %d", selectedCenter, viewportCenter)
+	}
+	highlighted := false
+	for _, line := range model.detailVisibleProjectedLines() {
+		if line.EntryIndex == selected && line.Rail == detailRailSelected && line.SelectedFill {
+			highlighted = true
+			break
+		}
+	}
+	if !highlighted {
+		t.Fatal("selected rollback target was not highlighted in the detail viewport")
+	}
+}
 
 func TestDetailModeRendersHydratedCommittedRows(t *testing.T) {
 	model := NewModel()

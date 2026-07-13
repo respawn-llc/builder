@@ -12,7 +12,7 @@ import (
 // UI projections cannot survive when only metadata changed.
 type EntryPayload struct {
 	Visibility        EntryVisibility
-	RollbackTargetID  string
+	RollbackTargetID  *string
 	Role              string
 	Text              string
 	CondensedText     string
@@ -30,7 +30,7 @@ type EntryPayload struct {
 // overlap, page replacement, and stale-page checks.
 func EntryPayloadEqual(left, right EntryPayload) bool {
 	return NormalizeEntryVisibility(left.Visibility) == NormalizeEntryVisibility(right.Visibility) &&
-		strings.TrimSpace(left.RollbackTargetID) == strings.TrimSpace(right.RollbackTargetID) &&
+		optionalTrimmedStringEqual(left.RollbackTargetID, right.RollbackTargetID) &&
 		strings.ToLower(strings.TrimSpace(left.Role)) == strings.ToLower(strings.TrimSpace(right.Role)) &&
 		left.Text == right.Text &&
 		left.CondensedText == right.CondensedText &&
@@ -42,6 +42,13 @@ func EntryPayloadEqual(left, right EntryPayload) bool {
 		strings.TrimSpace(left.ToolCallID) == strings.TrimSpace(right.ToolCallID) &&
 		strings.TrimSpace(left.NoticeID) == strings.TrimSpace(right.NoticeID) &&
 		ToolCallMetaEqual(left.ToolCall, right.ToolCall)
+}
+
+func optionalTrimmedStringEqual(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return strings.TrimSpace(*left) == strings.TrimSpace(*right)
 }
 
 func ToolCallMetaEqual(left, right *ToolCallMeta) bool {
