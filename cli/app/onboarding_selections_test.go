@@ -208,6 +208,25 @@ func TestOnboardingSelectionInvariantFailureReturnsTypedErrorInRelease(t *testin
 	}
 }
 
+func TestOnboardingSelectionInvariantDiagnosticReportsInvalidImportReferenceValue(t *testing.T) {
+	state, err := newOnboardingFlowState(onboardingSeedConfig(), testOnboardingCapabilityFacts())
+	if err != nil {
+		t.Fatalf("construct onboarding state: %v", err)
+	}
+	invalidProviderID := " \t"
+	state.selections.skillImport = testImportSelection(onboardingImportProviderCodex, "/tmp/skills")
+	state.selections.skillImport.ChoiceRef.ImportProviderID = &invalidProviderID
+
+	violation, ok := state.selections.invariantViolation()
+	if !ok {
+		t.Fatal("invalid import provider reference unexpectedly passed invariants")
+	}
+	if violation.VariantType != "skill_import.choice_ref.import_provider_id" ||
+		violation.VariantTag != invalidProviderID {
+		t.Fatalf("import provider diagnostic = %+v, want offending value", violation)
+	}
+}
+
 func TestOnboardingSelectionInvariantFailureCannotSubmitFinalizationInRelease(t *testing.T) {
 	state, err := newOnboardingFlowState(onboardingSeedConfig(), testOnboardingCapabilityFacts())
 	if err != nil {

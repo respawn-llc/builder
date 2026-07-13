@@ -135,11 +135,17 @@ func (selections onboardingSelections) invariantViolation() (onboardingInvariant
 		if onboardingImportMode(ref.Mode) != onboardingImportModeSymlinkSource {
 			return onboardingInvariantViolation{VariantType: "skill_import.choice_ref.mode", VariantTag: ref.Mode}, true
 		}
-		if ref.ImportProviderID == nil || strings.TrimSpace(*ref.ImportProviderID) == "" {
-			return onboardingInvariantViolation{VariantType: "skill_import.choice_ref.import_provider_id", VariantTag: fmt.Sprint(ref.ImportProviderID)}, true
+		if violation, ok := requiredStringReferenceViolation(
+			"skill_import.choice_ref.import_provider_id",
+			ref.ImportProviderID,
+		); ok {
+			return violation, true
 		}
-		if ref.SourceRootPath == nil || strings.TrimSpace(*ref.SourceRootPath) == "" {
-			return onboardingInvariantViolation{VariantType: "skill_import.choice_ref.source_root_path", VariantTag: fmt.Sprint(ref.SourceRootPath)}, true
+		if violation, ok := requiredStringReferenceViolation(
+			"skill_import.choice_ref.source_root_path",
+			ref.SourceRootPath,
+		); ok {
+			return violation, true
 		}
 	}
 	if selections.preserved.providerOverride != nil && strings.TrimSpace(*selections.preserved.providerOverride) == "" {
@@ -158,6 +164,16 @@ func (selections onboardingSelections) invariantViolation() (onboardingInvariant
 		if _, ok := selections.preserved.enabledTools[id]; !ok {
 			return onboardingInvariantViolation{VariantType: "preserved.enabled_tools", VariantTag: string(id)}, true
 		}
+	}
+	return onboardingInvariantViolation{}, false
+}
+
+func requiredStringReferenceViolation(variantType string, value *string) (onboardingInvariantViolation, bool) {
+	if value == nil {
+		return onboardingInvariantViolation{VariantType: variantType, VariantTag: "nil"}, true
+	}
+	if strings.TrimSpace(*value) == "" {
+		return onboardingInvariantViolation{VariantType: variantType, VariantTag: *value}, true
 	}
 	return onboardingInvariantViolation{}, false
 }
