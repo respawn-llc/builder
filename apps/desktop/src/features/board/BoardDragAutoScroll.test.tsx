@@ -247,6 +247,8 @@ describe("useBoardDragAutoScroll", () => {
   });
 
   it.each([
+    ["left boundary", { clientX: 0, clientY: 200 }],
+    ["top boundary", { clientX: 250, clientY: 0 }],
     ["right boundary", { clientX: 500, clientY: 200 }],
     ["bottom boundary", { clientX: 250, clientY: 400 }],
     ["outside", { clientX: 501, clientY: 200 }],

@@ -255,9 +255,9 @@ export function useBoardDragAutoScroll({
 function pointIsInsideElement(point: DragPointer, element: HTMLElement): boolean {
   const rect = element.getBoundingClientRect();
   return (
-    point.clientX >= rect.left &&
+    point.clientX > rect.left &&
     point.clientX < rect.right &&
-    point.clientY >= rect.top &&
+    point.clientY > rect.top &&
     point.clientY < rect.bottom
   );
 }
