@@ -90,9 +90,6 @@ const boardWithoutWorkflowResponse = {
     workflows: [],
     groups: [],
     columns: [],
-    cards: [],
-    done_preview: [],
-    next_page_token: "",
     generated_at_unix_ms: 1,
   },
 };
