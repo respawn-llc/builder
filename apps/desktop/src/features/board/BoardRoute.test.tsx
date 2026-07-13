@@ -29,14 +29,10 @@ describe("BoardRoute live refresh", () => {
     expect(
       await screen.findByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") }),
     ).toBeEnabled();
-    expect(
-      screen.getByRole("button", { name: appI18n.t("workflowLibrary.createWorkflow") }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: appI18n.t("workflowLibrary.createWorkflow") })).toBeEnabled();
     expect(screen.queryByRole("list")).not.toBeInTheDocument();
     expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: appI18n.t("board.newTask") }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: appI18n.t("board.newTask") })).not.toBeInTheDocument();
 
     act(() => {
       services.transport.emit("workflow.event", {
@@ -71,9 +67,7 @@ describe("BoardRoute live refresh", () => {
 
     expect(await screen.findByRole("list")).toBeInTheDocument();
     expect(screen.getByRole("navigation")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: appI18n.t("board.newTask") }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: appI18n.t("board.newTask") })).toBeEnabled();
     expect(
       screen.queryByRole("button", { name: appI18n.t("workflowLibrary.createWorkflow") }),
     ).not.toBeInTheDocument();
