@@ -692,8 +692,8 @@ func TestResolveSessionActionResumeReopensPicker(t *testing.T) {
 	if resolved.ParentSessionID != "" {
 		t.Fatalf("expected no parent session id on resume, got %q", resolved.ParentSessionID)
 	}
-	if resolved.InitialPrompt != "" || resolved.InitialInput != "" {
-		t.Fatalf("expected no initial payload on resume, got prompt=%q input=%q", resolved.InitialPrompt, resolved.InitialInput)
+	if resolved.InitialPrompt != "" || resolved.InitialInput.TransitionInput != "" {
+		t.Fatalf("expected no initial payload on resume, got prompt=%q input=%q", resolved.InitialPrompt, resolved.InitialInput.TransitionInput)
 	}
 }
 
@@ -736,8 +736,8 @@ func TestResolveSessionActionNewSessionUsesForceNewFlow(t *testing.T) {
 	if resolved.ParentSessionID != "parent-1" {
 		t.Fatalf("expected parent session id passthrough, got %q", resolved.ParentSessionID)
 	}
-	if resolved.InitialPrompt != "hello" || resolved.InitialInput != "" {
-		t.Fatalf("expected initial prompt passthrough, got prompt=%q input=%q", resolved.InitialPrompt, resolved.InitialInput)
+	if resolved.InitialPrompt != "hello" || resolved.InitialInput.TransitionInput != "" {
+		t.Fatalf("expected initial prompt passthrough, got prompt=%q input=%q", resolved.InitialPrompt, resolved.InitialInput.TransitionInput)
 	}
 }
 
@@ -802,8 +802,8 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 	if !resolved.ShouldContinue || !resolved.ForceNewSession {
 		t.Fatalf("expected new-session transition, shouldContinue=%t forceNew=%t", resolved.ShouldContinue, resolved.ForceNewSession)
 	}
-	if resolved.NextSessionID != "" || resolved.InitialPrompt != "hello" || resolved.InitialInput != "" {
-		t.Fatalf("unexpected transition payload nextSessionID=%q initialPrompt=%q initialInput=%q", resolved.NextSessionID, resolved.InitialPrompt, resolved.InitialInput)
+	if resolved.NextSessionID != "" || resolved.InitialPrompt != "hello" || resolved.InitialInput.TransitionInput != "" {
+		t.Fatalf("unexpected transition payload nextSessionID=%q initialPrompt=%q initialInput=%q", resolved.NextSessionID, resolved.InitialPrompt, resolved.InitialInput.TransitionInput)
 	}
 
 	testServer := &testEmbeddedServer{
@@ -972,14 +972,155 @@ func TestResolveSessionActionOpenSessionUsesTargetID(t *testing.T) {
 	if resolved.InitialPrompt != "" {
 		t.Fatalf("expected no initial prompt, got %q", resolved.InitialPrompt)
 	}
-	if resolved.InitialInput != "draft reply" {
-		t.Fatalf("expected initial input passthrough, got %q", resolved.InitialInput)
+	if resolved.InitialInput.TransitionInput != "draft reply" {
+		t.Fatalf("expected initial input passthrough, got %q", resolved.InitialInput.TransitionInput)
 	}
 	if resolved.ParentSessionID != "" {
 		t.Fatalf("expected no parent session id, got %q", resolved.ParentSessionID)
 	}
 	if resolved.ForceNewSession {
 		t.Fatal("did not expect force-new session")
+	}
+}
+
+func TestResolveAndReleaseSessionHandoffOwnsInitialInputPrecedence(t *testing.T) {
+	tests := []struct {
+		name           string
+		action         UIAction
+		initialInput   string
+		wantPrecedence sessionInitialInputPrecedence
+	}{
+		{
+			name:           "open session preserves exact transition input",
+			action:         UIActionOpenSession,
+			initialInput:   " \nExact café 👩🏽‍💻\n尾  ",
+			wantPrecedence: sessionInitialInputPreferTransition,
+		},
+		{
+			name:           "open session preserves intentional empty transition input",
+			action:         UIActionOpenSession,
+			initialInput:   "",
+			wantPrecedence: sessionInitialInputPreferTransition,
+		},
+		{
+			name:           "other transitions prefer stored draft",
+			action:         UIActionResume,
+			initialInput:   "ordinary transition input",
+			wantPrecedence: sessionInitialInputPreferStoredDraft,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var initialInputRequest serverapi.SessionInitialInputRequest
+			lifecycle := &recordingSessionLifecycleClient{
+				resolveTransition: func(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
+					return serverapi.SessionResolveTransitionResponse{
+						NextSessionID:  "parent-session",
+						InitialInput:   req.Transition.InitialInput,
+						ShouldContinue: true,
+					}, nil
+				},
+				getInitialInput: func(_ context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
+					initialInputRequest = req
+					if req.OverrideStoredDraft {
+						return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
+					}
+					return serverapi.SessionInitialInputResponse{
+						Input: "stored parent draft",
+						RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
+							{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, ID: "stale-parent-buffer", Text: "stale queued input"},
+						},
+					}, nil
+				},
+			}
+			server := narrowSessionLifecycleServer{lifecycle: lifecycle}
+
+			handoff, err := resolveAndReleaseSessionHandoff(
+				context.Background(),
+				server,
+				nil,
+				"child-session",
+				UITransition{Action: tt.action, InitialInput: tt.initialInput},
+				&runtimeLaunchPlan{close: func() error { return nil }},
+			)
+			if err != nil {
+				t.Fatalf("resolve and release handoff: %v", err)
+			}
+			if handoff.InitialInput.TransitionInput != tt.initialInput {
+				t.Fatalf("transition input = %q, want %q", handoff.InitialInput.TransitionInput, tt.initialInput)
+			}
+			if handoff.InitialInput.Precedence != tt.wantPrecedence {
+				t.Fatalf("initial input precedence = %v, want %v", handoff.InitialInput.Precedence, tt.wantPrecedence)
+			}
+			if tt.action != UIActionOpenSession {
+				return
+			}
+
+			initialState := sessionLaunchInitialStateFromServer(
+				context.Background(),
+				server,
+				handoff.NextSessionID,
+				handoff.InitialInput,
+			)
+			if initialInputRequest.TransitionInput != tt.initialInput {
+				t.Fatalf("next-launch transition input = %q, want %q", initialInputRequest.TransitionInput, tt.initialInput)
+			}
+			if !initialInputRequest.OverrideStoredDraft {
+				t.Fatal("next-launch request did not apply transition-input precedence")
+			}
+			if initialState.Input != tt.initialInput {
+				t.Fatalf("resolved parent input = %q, want %q", initialState.Input, tt.initialInput)
+			}
+			if len(initialState.RecoveryBuffers) != 0 {
+				t.Fatalf("resolved parent recovery buffers = %+v, want none", initialState.RecoveryBuffers)
+			}
+
+			runtimeClient := &runtimeControlFakeClient{
+				mainView: clientui.RuntimeMainView{
+					Session: clientui.RuntimeSessionView{SessionID: handoff.NextSessionID},
+				},
+			}
+			composition, err := composeUIProgram(uiLoopRequest{
+				wiring: &runtimeWiring{
+					runtimeClient: runtimeClient,
+					runtimeEvents: closedProjectedRuntimeEvents(),
+					askEvents:     closedAskEvents(),
+				},
+				active:          config.Settings{Theme: "dark"},
+				initialPrompt:   handoff.InitialPrompt,
+				initialInput:    initialState.Input,
+				recoveryBuffers: initialState.RecoveryBuffers,
+				statusConfig:    uiStatusConfig{PersistenceRoot: t.TempDir()},
+			}, io.Discard)
+			if err != nil {
+				t.Fatalf("compose parent UI: %v", err)
+			}
+			defer composition.close()
+
+			model := composition.model
+			if model.input != tt.initialInput {
+				t.Fatalf("parent composer input = %q, want %q", model.input, tt.initialInput)
+			}
+			if model.startupSubmit != "" || model.activeSubmit.text != "" || model.isBusy() {
+				t.Fatalf("prefill must stay idle and unsent: startup=%q active=%+v busy=%t", model.startupSubmit, model.activeSubmit, model.isBusy())
+			}
+			if len(model.recoveredDraftBuffers) != 0 || len(model.pendingInjected) != 0 || len(model.queued) != 0 {
+				t.Fatalf("parent recovery state leaked: recovered=%+v pending=%+v queued=%+v", model.recoveredDraftBuffers, model.pendingInjected, model.queued)
+			}
+
+			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+			edited := next.(*uiModel)
+			if cmd != nil {
+				t.Fatal("normal composer edit created a command")
+			}
+			if edited.input != tt.initialInput+"x" {
+				t.Fatalf("edited parent input = %q, want %q", edited.input, tt.initialInput+"x")
+			}
+			if runtimeClient.submitText != "" || runtimeClient.queueUserMessageCalls != 0 || runtimeClient.submitQueuedCalls != 0 {
+				t.Fatalf("normal edit submitted runtime work: submit=%q queued=%d flushed=%d", runtimeClient.submitText, runtimeClient.queueUserMessageCalls, runtimeClient.submitQueuedCalls)
+			}
+		})
 	}
 }
 
@@ -1194,7 +1335,56 @@ func TestNormalExitUsesNormalRuntimePlanClose(t *testing.T) {
 	}
 }
 
-func TestResolveAndReleaseSessionActionReturnsReleaseFailureBeforeDestinationCanPlan(t *testing.T) {
+func TestResolveAndReleaseSessionHandoffTransitionFailureLeavesChildReopenableWithoutDestination(t *testing.T) {
+	child := createAppRuntimeSession(t)
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("persist child session: %v", err)
+	}
+	resolveErr := errors.New("transition resolution failed")
+	releaseCalls := 0
+	server := narrowSessionLifecycleServer{
+		lifecycle: &recordingSessionLifecycleClient{
+			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
+				return serverapi.SessionResolveTransitionResponse{}, resolveErr
+			},
+		},
+	}
+
+	handoff, err := resolveAndReleaseSessionHandoff(
+		context.Background(),
+		server,
+		nil,
+		child.Meta().SessionID,
+		UITransition{Action: UIActionOpenSession, TargetSessionID: "parent-session"},
+		&runtimeLaunchPlan{close: func() error {
+			releaseCalls++
+			return nil
+		}},
+	)
+	if !errors.Is(err, resolveErr) {
+		t.Fatalf("handoff error = %v, want transition failure", err)
+	}
+	if handoff.ShouldContinue || handoff.NextSessionID != "" {
+		t.Fatalf("transition failure returned destination handoff %+v", handoff)
+	}
+	if releaseCalls != 1 {
+		t.Fatalf("origin release calls = %d, want 1 after transition failure", releaseCalls)
+	}
+
+	reopened, err := session.Open(child.Dir())
+	if err != nil {
+		t.Fatalf("reopen child after transition failure: %v", err)
+	}
+	if reopened.Meta().SessionID != child.Meta().SessionID {
+		t.Fatalf("reopened child id = %q, want %q", reopened.Meta().SessionID, child.Meta().SessionID)
+	}
+}
+
+func TestResolveAndReleaseSessionHandoffReturnsReleaseFailureBeforeDestinationCanPlan(t *testing.T) {
+	child := createAppRuntimeSession(t)
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("persist child session: %v", err)
+	}
 	releaseErr := errors.New("release failed")
 	events := make([]string, 0, 2)
 	server := narrowSessionLifecycleServer{
@@ -1210,7 +1400,7 @@ func TestResolveAndReleaseSessionActionReturnsReleaseFailureBeforeDestinationCan
 		return releaseErr
 	}}
 
-	resolved, err := resolveAndReleaseSessionAction(context.Background(), server, nil, "origin", UITransition{Action: UIActionResume}, plan)
+	resolved, err := resolveAndReleaseSessionHandoff(context.Background(), server, nil, child.Meta().SessionID, UITransition{Action: UIActionResume}, plan)
 	if !errors.Is(err, releaseErr) {
 		t.Fatalf("error = %v, want release failure", err)
 	}
@@ -1219,6 +1409,140 @@ func TestResolveAndReleaseSessionActionReturnsReleaseFailureBeforeDestinationCan
 	}
 	if got := strings.Join(events, ","); got != "resolve,release" {
 		t.Fatalf("event order = %q, want resolve,release", got)
+	}
+	reopened, err := session.Open(child.Dir())
+	if err != nil {
+		t.Fatalf("reopen child after release failure: %v", err)
+	}
+	if reopened.Meta().SessionID != child.Meta().SessionID {
+		t.Fatalf("reopened child id = %q, want %q", reopened.Meta().SessionID, child.Meta().SessionID)
+	}
+}
+
+func TestDestinationPlanningFailureLeavesChildReopenableWithoutPreparation(t *testing.T) {
+	child := createAppRuntimeSession(t)
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("persist child session: %v", err)
+	}
+	planErr := errors.New("destination planning failed")
+	prepareCalls := 0
+	server := &testEmbeddedServer{
+		cfg: config.App{
+			WorkspaceRoot:   t.TempDir(),
+			PersistenceRoot: t.TempDir(),
+			Settings:        config.Settings{Theme: "dark"},
+		},
+		sessionLifecycle: &recordingSessionLifecycleClient{
+			resolveTransition: func(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
+				return serverapi.SessionResolveTransitionResponse{
+					NextSessionID:  req.Transition.TargetSessionID,
+					InitialInput:   req.Transition.InitialInput,
+					ShouldContinue: true,
+				}, nil
+			},
+		},
+		sessionLaunch: stubSessionLaunchClient{
+			planSession: func(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
+				return serverapi.SessionPlanResponse{}, planErr
+			},
+		},
+		prepareRuntime: func(context.Context, sessionLaunchPlan, io.Writer, string) (*runtimeLaunchPlan, error) {
+			prepareCalls++
+			return nil, errors.New("destination preparation must not start")
+		},
+	}
+
+	handoff, err := resolveAndReleaseSessionHandoff(
+		context.Background(),
+		server,
+		nil,
+		child.Meta().SessionID,
+		UITransition{Action: UIActionOpenSession, TargetSessionID: "parent-session", InitialInput: "child final"},
+		&runtimeLaunchPlan{close: func() error { return nil }},
+	)
+	if err != nil {
+		t.Fatalf("resolve destination handoff: %v", err)
+	}
+	planner := newSessionLaunchPlanner(server)
+	_, err = planner.PlanSession(context.Background(), sessionLaunchRequest{
+		Mode:              launchModeInteractive,
+		SelectedSessionID: handoff.NextSessionID,
+	})
+	if !errors.Is(err, planErr) {
+		t.Fatalf("destination planning error = %v, want %v", err, planErr)
+	}
+	if prepareCalls != 0 {
+		t.Fatalf("destination preparation calls = %d, want none after planning failure", prepareCalls)
+	}
+
+	reopened, err := session.Open(child.Dir())
+	if err != nil {
+		t.Fatalf("reopen child after destination planning failure: %v", err)
+	}
+	if reopened.Meta().SessionID != child.Meta().SessionID {
+		t.Fatalf("reopened child id = %q, want %q", reopened.Meta().SessionID, child.Meta().SessionID)
+	}
+}
+
+func TestDestinationPreparationFailureLeavesChildReopenableWithoutComposition(t *testing.T) {
+	child := createAppRuntimeSession(t)
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("persist child session: %v", err)
+	}
+	prepareErr := errors.New("destination runtime preparation failed")
+	initialInputCalls := 0
+	server := &testEmbeddedServer{
+		cfg: config.App{
+			WorkspaceRoot:   t.TempDir(),
+			PersistenceRoot: t.TempDir(),
+			Settings:        config.Settings{Theme: "dark"},
+		},
+		sessionLifecycle: &recordingSessionLifecycleClient{
+			getInitialInput: func(context.Context, serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
+				initialInputCalls++
+				return serverapi.SessionInitialInputResponse{}, errors.New("initial input must not load before runtime preparation")
+			},
+		},
+		prepareRuntime: func(context.Context, sessionLaunchPlan, io.Writer, string) (*runtimeLaunchPlan, error) {
+			return nil, prepareErr
+		},
+	}
+	planner := newSessionLaunchPlanner(server)
+
+	runtimePlan, request, err := prepareSessionUIRun(
+		context.Background(),
+		server,
+		planner,
+		sessionLaunchPlan{
+			SessionID:      "parent-session",
+			WorkspaceRoot:  server.cfg.WorkspaceRoot,
+			ActiveSettings: config.Settings{Model: "gpt-5", Theme: "dark"},
+		},
+		resolvedSessionHandoff{
+			NextSessionID: "parent-session",
+			InitialInput: sessionInitialInputDirective{
+				TransitionInput: "child final",
+				Precedence:      sessionInitialInputPreferTransition,
+			},
+		},
+		false,
+	)
+	if !errors.Is(err, prepareErr) {
+		t.Fatalf("destination preparation error = %v, want %v", err, prepareErr)
+	}
+	if runtimePlan != nil || request.wiring != nil {
+		t.Fatalf("failed destination preparation returned composable state plan=%+v request=%+v", runtimePlan, request)
+	}
+	if initialInputCalls != 0 {
+		t.Fatalf("initial input calls = %d, want none before successful runtime preparation", initialInputCalls)
+	}
+
+	reopened, err := session.Open(child.Dir())
+	if err != nil {
+		t.Fatalf("reopen child after destination preparation failure: %v", err)
+	}
+	if reopened.Meta().SessionID != child.Meta().SessionID {
+		t.Fatalf("reopened child id = %q, want %q", reopened.Meta().SessionID, child.Meta().SessionID)
 	}
 }
 
@@ -1261,7 +1585,7 @@ func TestResumeReleaseCompletesBeforePickerAndPickerCancelDoesNotReleaseAgain(t 
 		}
 		return sessionPickerResult{Canceled: true}, nil
 	}
-	resolved, err := resolveAndReleaseSessionAction(
+	resolved, err := resolveAndReleaseSessionHandoff(
 		context.Background(),
 		narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
 			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {

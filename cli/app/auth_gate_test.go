@@ -233,8 +233,8 @@ func TestResolveSessionActionLogoutUsesBootstrapAuthInteractor(t *testing.T) {
 	if resolved.NextSessionID != store.Meta().SessionID {
 		t.Fatalf("expected session to continue in place, got %q", resolved.NextSessionID)
 	}
-	if resolved.InitialPrompt != "" || resolved.InitialInput != "" || resolved.ParentSessionID != "" || resolved.ForceNewSession {
-		t.Fatalf("unexpected logout transition values prompt=%q input=%q parent=%q forceNew=%t", resolved.InitialPrompt, resolved.InitialInput, resolved.ParentSessionID, resolved.ForceNewSession)
+	if resolved.InitialPrompt != "" || resolved.InitialInput.TransitionInput != "" || resolved.ParentSessionID != "" || resolved.ForceNewSession {
+		t.Fatalf("unexpected logout transition values prompt=%q input=%q parent=%q forceNew=%t", resolved.InitialPrompt, resolved.InitialInput.TransitionInput, resolved.ParentSessionID, resolved.ForceNewSession)
 	}
 
 	state, err := mgr.Load(ctx)
