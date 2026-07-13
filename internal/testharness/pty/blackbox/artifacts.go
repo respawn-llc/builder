@@ -199,7 +199,7 @@ func (s artifactStore) beginRun() (*artifactRun, error) {
 	}
 	lease, err := acquireFileLease(filepath.Join(staging, artifactLeaseFileName))
 	if err != nil {
-		removeErr := removeTreeUntil(staging, time.Now().Add(fixedWait))
+		removeErr := removeTreeUntil(staging, time.Now().Add(cleanupRetryWait))
 		if removeErr != nil {
 			return nil, fmt.Errorf("acquire artifact run lease: %w; remove incomplete staging: %v", err, removeErr)
 		}

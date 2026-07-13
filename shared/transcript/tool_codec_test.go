@@ -45,18 +45,21 @@ func TestEncodeDecodeToolCallMetaRoundTripsShellDialect(t *testing.T) {
 }
 
 func TestEncodeDecodeToolCallMetaRoundTripsShellOutputStatus(t *testing.T) {
+	exitCode := 7
 	raw := EncodeToolCallMeta(ToolCallMeta{
 		ToolName:           "exec_command",
 		IsShell:            true,
 		RawOutputRequested: true,
 		OutputTruncated:    true,
 		MovedToBackground:  true,
+		ShellExitCode:      &exitCode,
 	})
 	meta, ok := DecodeToolCallMeta(raw)
 	if !ok {
 		t.Fatal("expected tool metadata to decode successfully")
 	}
-	if !meta.RawOutputRequested || !meta.OutputTruncated || !meta.MovedToBackground {
+	if !meta.RawOutputRequested || !meta.OutputTruncated || !meta.MovedToBackground ||
+		meta.ShellExitCode == nil || *meta.ShellExitCode != 7 {
 		t.Fatalf("expected shell output status to round-trip, got %+v", meta)
 	}
 }

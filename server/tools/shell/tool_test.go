@@ -916,6 +916,11 @@ func TestExecCommandReportsNonZeroExitCode(t *testing.T) {
 	if output == "" {
 		t.Fatal("non-zero completion with output must render non-empty content")
 	}
+	if result.PresentationDelta == nil ||
+		result.PresentationDelta.ShellExitCode == nil ||
+		*result.PresentationDelta.ShellExitCode != 7 {
+		t.Fatalf("non-zero shell presentation delta = %+v, want typed exit code 7", result.PresentationDelta)
+	}
 	exitCode := 7
 	presentation := projectExecResult(ExecResult{ExitCode: &exitCode, Output: "bad"})
 	if presentation.kind != execPresentationForegroundCompleted || presentation.exitCode != exitCode || !presentation.output.HasVisibleContent() {

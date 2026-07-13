@@ -12,7 +12,7 @@ Official color palette of the app:
 - Warning: #ffe74c; On warning: #12100e;
 - Success: #12ba85; On success is on background;
 - Error: #dc2e3c; On error is on background;
-- Dark background : #12100e;
+- Background: light mode #ffffff, dark mode #12100e;
 - On background light mode: #12100e, dark mode: #ffffff;
 
 Fonts:
@@ -20,5 +20,4 @@ Fonts:
 - Main: Montserrat
 - Monospace: Monaspace Neon
 - Heading: Montserrat alternates.
-
 

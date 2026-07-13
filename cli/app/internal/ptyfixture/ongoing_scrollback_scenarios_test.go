@@ -33,7 +33,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedAnyAppends        []string
 		forbiddenAnyAppends       []string
 		expectedScreenRows        []string
-		allowDuplicateAppends     bool
 		allowsAltScroll           bool
 		allowsFullScreen          bool
 		completionDrain           *time.Duration
@@ -67,9 +66,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"❮ hydration fixture complete",
 			},
 			expectedAnyAppends: []string{
-				"❮ PTY_HYDRATED_FIRST",
-				"  PTY_HYDRATED_SECOND",
-				"  PTY_HYDRATED_THIRD",
+				"❮ PTY_HYDRATED_FIRST PTY_HYDRATED_SECOND PTY_HYDRATED_THIRD",
 			},
 			forbiddenAnyAppends: []string{"❮ PTY_HYDRATED_COMPACT"},
 		},
@@ -129,13 +126,12 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedScrollbackAppends: []string{"volatile tail"},
 		},
 		{
-			name: "long_final_answer_with_resize",
+			name: "stable_history_not_replayed_after_resize",
 			script: map[string]any{
-				"prompt": "long final",
-				"final":  "line 01\nline 02\nline 03\nline 04\nline 05\nline 06\nline 07\nline 08\nline 09\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\nline 21\nline 22\nline 23\nline 24\nline 25",
+				"prompt": "resize stable history",
+				"final":  "stable history not replayed after resize",
 			},
-			expectedAppends:       []string{"❮ line 01"},
-			allowDuplicateAppends: true,
+			expectedAppends: []string{"❮ stable history not replayed after resize"},
 			resizes: []pty.DriverResizeEvent{{
 				After:      500 * time.Millisecond,
 				Dimensions: pty.MustDimensions(18, 72),
@@ -257,7 +253,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAnyAppends: []string{
 				"ℹ Background shell 1000 completed (exit 0)",
 			},
-			expectedScreenRows: []string{"$ sleep 2; echo $((51515150+1)) " + transcriptrender.BackgroundedShellSuffix},
+			expectedScreenRows: []string{"$ sleep 2; echo $((51515150+1))  " + transcriptrender.BackgroundedShellSuffix},
 		},
 		{
 			name: "live_tool_promotion_and_input_dispositions",
@@ -346,7 +342,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve scenario operation window: %v", err)
 			}
-			appends, err := scenarioAppendRowsWithBoundaryChecks(analysis, window, tc.expectedAppends, tc.allowDuplicateAppends)
+			appends, err := scenarioAppendRowsWithBoundaryChecks(analysis, window, tc.expectedAppends)
 			if err != nil {
 				t.Fatalf("append boundary windows: %v", err)
 			}
@@ -365,13 +361,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				}
 			}
 			for _, content := range tc.expectedAppends {
-				var err error
-				if tc.allowDuplicateAppends {
-					err = contentAppendedAtLeastOnce(appends, content)
-				} else {
-					err = contentAppendedExactlyOnce(appends, content)
-				}
-				if err != nil {
+				if err := contentAppendedExactlyOnce(appends, content); err != nil {
 					t.Fatalf("append cardinality: %v", err)
 				}
 			}
@@ -523,7 +513,7 @@ func scenarioOperationWindow(analysis pty.Analysis) (pty.OperationWindow, error)
 	return pty.OperationWindow{Start: *start, End: len(analysis.Operations)}, nil
 }
 
-func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.OperationWindow, expected []string, allowDuplicates bool) ([]logicalAppendRow, error) {
+func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.OperationWindow, expected []string) ([]logicalAppendRow, error) {
 	if len(expected) == 0 {
 		return nil, fmt.Errorf("scenario requires exact appended content expectations")
 	}
@@ -533,13 +523,7 @@ func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.Oper
 		lastTexts = appendTexts(appends)
 		matched := true
 		for _, content := range expected {
-			var err error
-			if allowDuplicates {
-				err = contentAppendedAtLeastOnce(appends, content)
-			} else {
-				err = contentAppendedExactlyOnce(appends, content)
-			}
-			if err != nil {
+			if err := contentAppendedExactlyOnce(appends, content); err != nil {
 				matched = false
 				break
 			}

@@ -31,6 +31,7 @@ type markdownProjectionFailure struct {
 
 type markdownRenderer interface {
 	Render(source string, width int) []string
+	RenderStable(source string, width int) []string
 }
 
 type markdownProjector struct {
@@ -77,7 +78,7 @@ func (p markdownProjector) Project(input markdownProjectionInput) markdownProjec
 		}
 	}
 	return markdownProjectionResult{
-		PromotedRows:     candidateRows,
+		PromotedRows:     p.renderer.RenderStable(suffix[:candidateBoundary], width),
 		VolatileRows:     append([]string(nil), fullRows[len(candidateRows):]...),
 		PromotedBoundary: input.PromotedBoundary + candidateBoundary,
 	}
@@ -93,6 +94,15 @@ func (r terminalMarkdownRenderer) Render(source string, width int) []string {
 		return nil
 	}
 	lines := transcriptrender.RenderMarkdownLines(transcriptrender.StyleRoleAssistant, source, width)
+	return encodeTranscriptLines(lines, r.themeName)
+}
+
+func (r terminalMarkdownRenderer) RenderStable(source string, width int) []string {
+	source = terminalSafeMarkdownSource(source)
+	if strings.TrimSpace(source) == "" {
+		return nil
+	}
+	lines := transcriptrender.RenderMarkdownStableLines(transcriptrender.StyleRoleAssistant, source, width)
 	return encodeTranscriptLines(lines, r.themeName)
 }
 

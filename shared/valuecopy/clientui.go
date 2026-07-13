@@ -14,6 +14,7 @@ func ToolCallMeta(meta *clientui.ToolCallMeta) *clientui.ToolCallMeta {
 		renderHint := *meta.RenderHint
 		copyMeta.RenderHint = &renderHint
 	}
+	copyMeta.ShellExitCode = Pointer(meta.ShellExitCode)
 	copyMeta.PatchRender = RenderedPatch(meta.PatchRender)
 	return &copyMeta
 }

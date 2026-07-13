@@ -10,7 +10,7 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-const BackgroundedShellSuffix = "• backgrounded"
+const BackgroundedShellSuffix = "· backgrounded"
 
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
 	var syntax *syntaxProjector
@@ -37,34 +37,22 @@ func renderCommittedRow(
 	case clientui.TranscriptRowNotice:
 		role, text := noticeRoleAndText(row.Notice, row.Visibility, mode)
 		meta := toolMeta{}
+		group := clientui.TranscriptRowNotice
 		if row.Notice != nil && row.Notice.Data.MessageType == clientui.MessageTypeBackgroundNotice {
 			symbolRole := StyleRoleNoticePrimary
 			meta.SymbolStyleRole = &symbolRole
+			group = clientui.TranscriptRowTool
 		}
-		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlockWithInlineMeta(role, text, "", width, mode, meta)}
+		return Row{Group: group, Lines: renderTextBlockWithInlineMeta(role, text, "", width, mode, meta)}
 	default:
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, mode)}
 	}
 }
 
-func RenderDivider(group clientui.TranscriptRowKind, width int) Line {
-	if width <= 0 {
-		return Line{}
-	}
-	if width == 1 {
-		return dividerLine("…")
-	}
-	return dividerLine(strings.Repeat("─", width))
-}
-
-func dividerLine(text string) Line {
-	return Line{Spans: []Span{SemanticSpan(text, StyleRoleNotice, SpanAttributeFaint)}}
-}
-
-// userAssistantDisplayText selects compact vs full text for user/assistant
+// userAssistantDisplayText selects compact vs full source for user/assistant
 // rows. Normal ongoing and collapsed detail prefer the server-provided
-// CondensedText when present. Detail-expanded and ongoing scratch hydration of
-// final assistant answers show the full text verbatim.
+// CondensedText when present. Stable ongoing and detail-expanded rendering use
+// the full Markdown source.
 func userAssistantDisplayText(text, condensed string, mode Mode) string {
 	if modeUsesFullUserAssistantText(mode) {
 		return text
@@ -84,6 +72,9 @@ func renderUserAssistantTextBlock(role StyleRole, text string, width int, mode M
 	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	if text == "" {
 		text = labelForRole(role)
+	}
+	if mode == ModeOngoingStable {
+		return attachPrefixWithMeta(role, RenderMarkdownStableLines(role, text, contentWidth(role, width)), width, false, mode, toolMeta{})
 	}
 	if modeUsesCompactTextBlock(mode) {
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
@@ -122,7 +113,7 @@ func RenderBackgroundedShell(command string, width int) Line {
 	command = strings.TrimSpace(firstDisplayLine(safeTranscriptText(command)))
 	symbol := SemanticSpan("$", StyleRoleToolShellSecondary)
 	fixed := []Span{
-		SemanticSpan(" ", StyleRoleToolShell, SpanAttributeFaint),
+		SemanticSpan("  ", StyleRoleToolShell, SpanAttributeFaint),
 		SemanticSpan(BackgroundedShellSuffix, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
 	}
 	fixedWidth := lipgloss.Width(symbol.Text) + spansWidth(fixed)
@@ -137,7 +128,7 @@ func RenderBackgroundedShell(command string, width int) Line {
 	spans := []Span{SemanticSpan(" ", StyleRoleToolShell, SpanAttributeFaint)}
 	spans = append(spans, commandLine.Spans...)
 	spans = append(spans,
-		SemanticSpan(" ", StyleRoleToolShell, SpanAttributeFaint),
+		SemanticSpan("  ", StyleRoleToolShell, SpanAttributeFaint),
 		SemanticSpan(BackgroundedShellSuffix, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
 	)
 	return Line{LeadingSymbol: &symbol, Spans: spans}
@@ -193,12 +184,16 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 			spans = inlineMetaCommandSpans(spans, role)
 		}
 		if inlineMeta != "" {
-			gap := bodyWidth - lipgloss.Width(command) - lipgloss.Width(inlineMeta)
-			if gap < 1 {
-				gap = 1
+			if modeUsesOngoingContinuationPrefix(mode) {
+				spans = ongoingInlineMetaSpans(spans, inlineMeta, bodyWidth)
+			} else {
+				gap := bodyWidth - lipgloss.Width(command) - lipgloss.Width(inlineMeta)
+				if gap < 1 {
+					gap = 1
+				}
+				spans = append(spans, contentRoleSpan(strings.Repeat(" ", gap), role, mode))
+				spans = append(spans, SemanticSpan(inlineMeta, StyleRoleNotice, SpanAttributeFaint))
 			}
-			spans = append(spans, contentRoleSpan(strings.Repeat(" ", gap), role, mode))
-			spans = append(spans, SemanticSpan(inlineMeta, StyleRoleNotice, SpanAttributeFaint))
 		}
 		if idx == 0 {
 			symbolRole := roleSymbolStyleRole(role, meta)
@@ -212,12 +207,25 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
 			line = Line{Spans: spans, Background: line.Background}
 		}
-		if forceEllipsis || lipgloss.Width(line.Plain()) > max(1, width) {
+		if forceEllipsis || (mode != ModeOngoingStable && lipgloss.Width(line.Plain()) > max(1, width)) {
 			line = TruncateLine(line, max(1, width), forceEllipsis)
 		}
 		out = append(out, line)
 	}
 	return out
+}
+
+func ongoingInlineMetaSpans(command []Span, inlineMeta string, bodyWidth int) []Span {
+	separator := SemanticSpan("  · ", StyleRoleNotice, SpanAttributeFaint)
+	meta := SemanticSpan(inlineMeta, StyleRoleNotice, SpanAttributeFaint)
+	suffix := []Span{separator, meta}
+	suffixWidth := spansWidth(suffix)
+	if suffixWidth >= bodyWidth {
+		return TruncateLine(Line{Spans: suffix}, max(1, bodyWidth), false).Spans
+	}
+	commandWidth := bodyWidth - suffixWidth
+	command = TruncateLine(Line{Spans: command}, commandWidth, false).Spans
+	return append(command, suffix...)
 }
 
 func continuationPrefix(mode Mode, prefixWidth int, isLast bool) []Span {
@@ -323,7 +331,7 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 	if role == StyleRoleToolPatch {
 		return "⇄"
 	}
-	if meta.IsError {
+	if meta.IsError && role != StyleRoleToolShell {
 		return "!"
 	}
 	symbol := "•"
@@ -437,7 +445,7 @@ func roleAllowsThreeLinePreview(role StyleRole) bool {
 }
 
 func modeUsesFullUserAssistantText(mode Mode) bool {
-	return mode == ModeOngoingFull || mode == ModeDetailExpanded
+	return mode == ModeOngoingFull || mode == ModeOngoingStable || mode == ModeDetailExpanded
 }
 
 func modeUsesCompactTextBlock(mode Mode) bool {
@@ -445,7 +453,7 @@ func modeUsesCompactTextBlock(mode Mode) bool {
 }
 
 func modeUsesOngoingContinuationPrefix(mode Mode) bool {
-	return mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeOngoingFull
+	return mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeOngoingFull || mode == ModeOngoingStable
 }
 
 func labelForRole(role StyleRole) string {

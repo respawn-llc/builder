@@ -2,13 +2,15 @@ package patch
 
 import (
 	"context"
-	patchformat "core/shared/transcript/patchformat"
 	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"core/internal/testharness/filemode"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 func TestDeleteFile(t *testing.T) {
@@ -213,6 +215,62 @@ func TestAddUpdateMove(t *testing.T) {
 	}
 }
 
+func TestUpdateFilePreservesExecutableMode(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
+		t.Fatalf("seed executable file: %v", err)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatalf("mark seed file executable: %v", err)
+	}
+	tool := newPatchTestTool(t, dir)
+
+	result := callPatch(t, tool, "preserve-executable-mode", "*** Begin Patch\n*** Update File: script.sh\n #!/bin/sh\n-echo old\n+echo new\n*** End Patch\n")
+	if result.IsError {
+		t.Fatalf("expected success, got %s", string(result.Output))
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
+		t.Fatalf("updated content = %q, want %q", got, want)
+	}
+	filemode.AssertUnixPermissionMode(t, target, 0o755)
+}
+
+func TestUpdateAndMoveFilePreservesExecutableMode(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "script.sh")
+	destination := filepath.Join(dir, "bin", "script.sh")
+	if err := os.WriteFile(source, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
+		t.Fatalf("seed executable file: %v", err)
+	}
+	if err := os.Chmod(source, 0o755); err != nil {
+		t.Fatalf("mark seed file executable: %v", err)
+	}
+	tool := newPatchTestTool(t, dir)
+
+	result := callPatch(t, tool, "move-preserve-executable-mode", "*** Begin Patch\n*** Update File: script.sh\n*** Move to: bin/script.sh\n #!/bin/sh\n-echo old\n+echo new\n*** End Patch\n")
+	if result.IsError {
+		t.Fatalf("expected success, got %s", string(result.Output))
+	}
+	if _, err := os.Stat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected source removed after move, stat err=%v", err)
+	}
+
+	data, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatalf("read moved file: %v", err)
+	}
+	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
+		t.Fatalf("moved content = %q, want %q", got, want)
+	}
+	filemode.AssertUnixPermissionMode(t, destination, 0o755)
+}
+
 func TestUpdateFileUsesCodexStyleContextHeader(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "a.go")
@@ -388,6 +446,26 @@ func TestAddFileInNewDirectory(t *testing.T) {
 	if string(data) != "hello\n" {
 		t.Fatalf("unexpected file content: %q", string(data))
 	}
+}
+
+func TestAddFileUsesDefaultNonExecutableMode(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "new-script.sh")
+	tool := newPatchTestTool(t, dir)
+
+	result := callPatch(t, tool, "add-default-mode", "*** Begin Patch\n*** Add File: new-script.sh\n+#!/bin/sh\n+echo new\n*** End Patch\n")
+	if result.IsError {
+		t.Fatalf("expected success, got %s", string(result.Output))
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read added file: %v", err)
+	}
+	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
+		t.Fatalf("added content = %q, want %q", got, want)
+	}
+	filemode.AssertUnixPermissionMode(t, target, 0o644)
 }
 
 func TestUpdateAnchorsToHeaderInRepeatedBlocks(t *testing.T) {
@@ -577,12 +655,12 @@ func TestCommitStagedFilesRollsBackCommittedTargetsOnLaterFailure(t *testing.T) 
 		t.Fatalf("seed blocking dir: %v", err)
 	}
 
-	firstStage, err := createStagedFile(first, []byte("patched-first\n"))
+	firstStage, err := createStagedFile(first, []byte("patched-first\n"), 0o644)
 	if err != nil {
 		t.Fatalf("stage first file: %v", err)
 	}
 	defer func() { _ = os.Remove(firstStage) }()
-	secondStage, err := createStagedFile(blockingDir, []byte("patched-second\n"))
+	secondStage, err := createStagedFile(blockingDir, []byte("patched-second\n"), 0o644)
 	if err != nil {
 		t.Fatalf("stage second file: %v", err)
 	}

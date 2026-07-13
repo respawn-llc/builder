@@ -3,10 +3,17 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"core/internal/testharness/scriptedllm"
+	"core/internal/testharness/worktreesetup"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/llm"
@@ -14,10 +21,12 @@ import (
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/skillcatalog"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
@@ -120,6 +129,134 @@ func TestNewWithContextOptionsAcceptsRuntimeClientFactory(t *testing.T) {
 	if appCore.bundles == nil || appCore.bundles.Runtime == nil || appCore.bundles.Runtime.sessionRuntimeService == nil {
 		t.Fatal("expected runtime bundle with session runtime service")
 	}
+}
+
+func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KENT_WORKTREE_SESSION_ID", "stale-parent-session")
+	worktreesetup.InitializeGitRepository(t, workspace)
+	sourceWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspace)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	resolved.Config.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeStructuredOutput
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildAuthSupport: %v", err)
+	}
+	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
+	if err != nil {
+		t.Fatalf("BuildRuntimeSupport: %v", err)
+	}
+
+	observation := make(chan error, 1)
+	const skillName = "setup-created-workflow-skill"
+	const skillDescription = "created before the first workflow model request"
+	markerRelativePath := filepath.Join(".kent", "setup-marker")
+	invocationCountRelativePath := filepath.Join(".kent", "setup-invocations")
+	setup := worktreesetup.New(t, worktreesetup.Options{
+		MarkerRelativePath:          &markerRelativePath,
+		InvocationCountRelativePath: &invocationCountRelativePath,
+		Skill: &worktreesetup.Skill{
+			Name:        skillName,
+			Description: skillDescription,
+		},
+	})
+	resolved.Config.Settings.Worktrees.SetupScript = setup.InstallInSourceWorkspace(t, workspace)
+	observerClient := &firstGenerateObserverClient{
+		delegate: scriptedllm.NewLegacyOnlyClient(
+			llm.ProviderCapabilities{ProviderID: "scripted-workflow", SupportsResponsesAPI: true},
+			scriptedllm.FinalAnswer(`{"commentary":"done"}`),
+		),
+		observation:      observation,
+		setup:            setup,
+		skillName:        skillName,
+		skillDescription: skillDescription,
+	}
+	appCore, err := NewWithContextOptions(ctx, resolved.Config, authSupport, runtimeSupport, Options{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return observerClient, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewWithContextOptions: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+
+	project, err := appCore.ProjectViewClient().CreateProject(ctx, serverapi.ProjectCreateRequest{
+		DisplayName:   "Workflow setup composition",
+		ProjectKey:    "SETUP",
+		WorkspaceRoot: workspace,
+	})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	workflowStore, err := workflowstore.New(appCore.bundles.Persistence.metadataStore)
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	workflowID := createCoreValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, project.Binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := appCore.WorkflowClient().CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID:         project.Binding.ProjectID,
+		WorkflowID:        string(workflowID),
+		Title:             "Provision task worktree",
+		SourceWorkspaceID: project.Binding.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowTask: %v", err)
+	}
+	started, err := appCore.WorkflowClient().StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
+	}
+	if err := started.Validate(); err != nil || started.Applied == nil || started.Applied.RunID == "" {
+		t.Fatalf("StartWorkflowTask response = %+v, validation error = %v", started, err)
+	}
+
+	select {
+	case err := <-observation:
+		if err != nil {
+			t.Fatalf("first workflow model request observed setup violation: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first workflow model request")
+	}
+
+	invocation, err := setup.Invocation()
+	if err != nil {
+		t.Fatalf("setup invocation: %v", err)
+	}
+	payload, err := invocation.Payload()
+	if err != nil {
+		t.Fatalf("setup payload: %v", err)
+	}
+	if payload.SourceWorkspaceRoot != sourceWorkspaceRoot || payload.BranchName != task.Task.ShortID || payload.WorktreeRoot == "" {
+		t.Fatalf("workflow setup payload = %+v", payload)
+	}
+	if payload.SessionID != nil {
+		t.Fatalf("workflow setup session_id = %q, want nil", *payload.SessionID)
+	}
+	if err := invocation.Verify(payload); err != nil {
+		t.Fatalf("workflow setup process contract: %v", err)
+	}
+	waitForCoreWorkflowTaskDone(t, appCore, task.Task.ID)
 }
 
 func TestRuntimePendingAskResolverUsesPendingPromptSource(t *testing.T) {
@@ -427,6 +564,90 @@ type fakePendingPromptSource struct {
 	items map[string][]registry.PendingPromptSnapshot
 }
 
+func waitForCoreWorkflowTaskDone(t *testing.T, appCore *Core, taskID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		detail, err := appCore.WorkflowClient().GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{TaskID: taskID})
+		if err != nil {
+			t.Fatalf("GetWorkflowTask: %v", err)
+		}
+		if detail.Task.Summary.Done {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("workflow task %q did not complete", taskID)
+}
+
+type firstGenerateObserverClient struct {
+	delegate         *scriptedllm.LegacyClient
+	observation      chan<- error
+	setup            worktreesetup.Fixture
+	skillName        string
+	skillDescription string
+	once             sync.Once
+}
+
+func (c *firstGenerateObserverClient) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
+	c.once.Do(func() {
+		c.observation <- c.observe(request)
+	})
+	return c.delegate.Generate(ctx, request)
+}
+
+func (c *firstGenerateObserverClient) ProviderCapabilities(ctx context.Context) (llm.ProviderCapabilities, error) {
+	return c.delegate.ProviderCapabilities(ctx)
+}
+
+func (c *firstGenerateObserverClient) observe(request llm.Request) error {
+	worktreeRoot := ""
+	for _, item := range request.Items {
+		if item.MessageType != llm.MessageTypeWorktreeMode {
+			continue
+		}
+		worktreeRoot = strings.TrimSpace(item.SourcePath)
+	}
+	if worktreeRoot == "" {
+		return errors.New("first request has no worktree mode source path")
+	}
+	if _, err := os.Stat(c.setup.MarkerPath(worktreeRoot)); err != nil {
+		return fmt.Errorf("setup marker before first request: %w", err)
+	}
+	invocations, err := c.setup.InvocationCount(worktreeRoot)
+	if err != nil {
+		return fmt.Errorf("read setup invocation count: %w", err)
+	}
+	if invocations != 1 {
+		return fmt.Errorf("setup invocation count = %d, want exactly one", invocations)
+	}
+	discovery, err := skillcatalog.Discover(skillcatalog.Options{WorkspaceRoot: worktreeRoot})
+	if err != nil {
+		return fmt.Errorf("discover setup-created skill: %w", err)
+	}
+	skillPath := c.setup.SkillPath(worktreeRoot)
+	skillFound := false
+	for _, skill := range discovery.Skills {
+		if skill.Path != skillPath {
+			continue
+		}
+		skillFound = true
+		if skill.Name != c.skillName || skill.Description != c.skillDescription {
+			return fmt.Errorf("setup-created skill = %+v, want name %q description %q", skill, c.skillName, c.skillDescription)
+		}
+	}
+	if !skillFound {
+		return fmt.Errorf("setup-created skill is not discoverable at %q", skillPath)
+	}
+	for _, item := range request.Items {
+		if item.Role != llm.RoleDeveloper || item.MessageType != llm.MessageTypeSkills {
+			continue
+		}
+		return nil
+	}
+	return errors.New("first request has no structured skills item")
+}
+
 func (f fakePendingPromptSource) ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot {
 	return append([]registry.PendingPromptSnapshot(nil), f.items[sessionID]...)
 }
@@ -444,7 +665,7 @@ func createCoreValidWorkflow(t *testing.T, ctx context.Context, store *workflows
 	start := coreWorkflowNodeByKind(t, def, workflow.NodeKindStart)
 	done := coreWorkflowNodeByKind(t, def, workflow.NodeKindTerminal)
 	agentID := workflow.NodeID("node-agent-" + string(created.ID))
-	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: "coder"}); err != nil {
+	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: workflow.DefaultAgentRole}); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
 	startGroupID := workflow.TransitionGroupID("group-start-" + string(created.ID))

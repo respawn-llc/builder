@@ -220,6 +220,9 @@
 - Managed targets use the existing task-worktree creation, setup, and collision behavior. Before the first executable run is scheduled, setup either succeeds for the newly created candidate in that request or a later explicit request accepts the same available, base-compatible candidate as manually repaired.
 - Managed worktree setup failure leaves the initiating action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
 - Setup runs only when the current request creates or recreates a worktree root. A later retry trusts an already-existing compatible root and does not rerun setup; no durable setup-readiness state exists.
+- Setup receives the source workspace root, branch name, and managed worktree root as stable positional inputs.
+- Workflow task setup has no session identity: its structured payload represents the session as null and its session environment input is absent. Session-originated setup supplies the requesting session's real identity in both inputs.
+- Kent-provided setup inputs are authoritative. Conflicting inherited process values cannot provide or override Kent-reserved setup inputs.
 - A managed target remains tied to its original source workspace, but its current root, metadata binding, branch history, and named branch may change.
 - Before execution Kent validates that the bound root is the exact worktree root for the source repository and has a named branch. It never compares current history or HEAD with the originally resolved commit, and it accepts any current named branch.
 - When a locked managed root or metadata binding is missing, the initiating action or workflow runner may synchronously invoke the single worktree materializer to conservatively restore an existing named branch at a collision-safe managed root, persist the relation, and run setup for the recreated root.

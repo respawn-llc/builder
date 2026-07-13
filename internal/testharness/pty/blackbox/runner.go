@@ -196,7 +196,7 @@ func runActions(session *driver.Session, environment *IsolatedEnvironment, actio
 	modelEvents := environment.Stub.Events()
 	serverFailures := environment.Server.Failure()
 	for index, action := range actions {
-		deadline := time.NewTimer(fixedWait)
+		deadline := time.NewTimer(scenarioActionWait)
 		commandID, commandPending, err := dispatchAction(session, action)
 		if err != nil {
 			deadline.Stop()
@@ -257,7 +257,7 @@ func runActions(session *driver.Session, environment *IsolatedEnvironment, actio
 				}
 				return observation, errors.New("standalone server exited during scenario")
 			case <-deadline.C:
-				return observation, fmt.Errorf("action %d (%s) timed out after %s: private_modes=%v", index, action.Kind, fixedWait, privateModeState(observation.Analysis))
+				return observation, fmt.Errorf("action %d (%s) timed out after %s: private_modes=%v", index, action.Kind, scenarioActionWait, privateModeState(observation.Analysis))
 			}
 			if !commandPending && actionSatisfied(action, observation) {
 				deadline.Stop()

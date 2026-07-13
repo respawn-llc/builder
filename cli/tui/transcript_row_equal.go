@@ -99,6 +99,7 @@ func transcriptToolCallMeta(meta *clientui.ToolCallMeta) *transcript.ToolCallMet
 		RawOutputRequested:     meta.RawOutputRequested,
 		OutputTruncated:        meta.OutputTruncated,
 		MovedToBackground:      meta.MovedToBackground,
+		ShellExitCode:          meta.ShellExitCode,
 	}
 	if meta.RenderHint != nil {
 		out.RenderHint = &transcript.ToolRenderHint{

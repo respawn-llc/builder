@@ -103,6 +103,7 @@ func TestPrepareExecutorToolCallsRejectsMissingProviderCallID(t *testing.T) {
 }
 
 func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
+	nonZeroExitCode := 7
 	tests := []struct {
 		name                  string
 		call                  llm.ToolCall
@@ -112,6 +113,7 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 		wantRaw               bool
 		wantTruncated         bool
 		wantMovedToBackground bool
+		wantShellExitCode     *int
 	}{
 		{
 			name:        "shell command",
@@ -138,6 +140,13 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 			delta:                 &transcript.ToolResultPresentationDelta{MovedToBackground: true},
 			wantCommand:           "sleep 20",
 			wantMovedToBackground: true,
+		},
+		{
+			name:              "failed shell command",
+			call:              llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23908", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"exit 7"}`)},
+			delta:             &transcript.ToolResultPresentationDelta{ShellExitCode: &nonZeroExitCode},
+			wantCommand:       "exit 7",
+			wantShellExitCode: &nonZeroExitCode,
 		},
 		{
 			name: "patch input",
@@ -191,8 +200,18 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 			if result.Presentation.MovedToBackground != tt.wantMovedToBackground {
 				t.Fatalf("backgrounded = %t, want %t", result.Presentation.MovedToBackground, tt.wantMovedToBackground)
 			}
+			if !optionalIntEqual(result.Presentation.ShellExitCode, tt.wantShellExitCode) {
+				t.Fatalf("shell exit code = %v, want %v", result.Presentation.ShellExitCode, tt.wantShellExitCode)
+			}
 		})
 	}
+}
+
+func optionalIntEqual(left, right *int) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func TestLiveToolCompletionBoundaryRejectsHandlerFinalizedPresentation(t *testing.T) {

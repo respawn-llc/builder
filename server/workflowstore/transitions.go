@@ -79,16 +79,19 @@ func (s *Store) PendingTransitionTargetsExecutableNode(ctx context.Context, tran
 	if id == "" {
 		return false, ErrTransitionIDRequired
 	}
+	transition, err := s.queries.GetTransitionApprovalState(ctx, id)
+	if err != nil {
+		return false, err
+	}
 	edges, err := s.queries.ListTaskTransitionEdges(ctx, id)
 	if err != nil {
 		return false, err
 	}
-	for _, edge := range edges {
-		if executableNodeKind(workflow.NodeKind(edge.TargetNodeKind)) {
-			return true, nil
-		}
+	source, err := s.loadTransitionSource(ctx, transition.SourceRunID)
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return transitionTargetsExecutableNode(edges, source.snapshot)
 }
 
 type ApprovalTransitionProjection struct {
@@ -171,19 +174,11 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
-	hasSourceRun := transition.SourceRunID.Valid && strings.TrimSpace(transition.SourceRunID.String) != ""
-	sourceRun := sqlitegen.TaskRunRecord{}
-	sourceSnapshot := runStartSnapshot{}
-	if hasSourceRun {
-		sourceRun, err = s.queries.GetTaskRun(ctx, transition.SourceRunID.String)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		if err := workflow.UnmarshalString(sourceRun.RunStartSnapshotJson, &sourceSnapshot); err != nil {
-			return CompleteRunResult{}, err
-		}
+	source, err := s.loadTransitionSource(ctx, transition.SourceRunID)
+	if err != nil {
+		return CompleteRunResult{}, err
 	}
-	requiresRoot, err := approvalTargetsExecutableNode(edges, sourceSnapshot)
+	requiresRoot, err := approvalTargetsExecutableNode(edges, source.snapshot)
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
@@ -244,13 +239,13 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 			return CompleteRunResult{}, err
 		}
 		if targetEdge.TargetNode.Kind == workflow.NodeKindJoin {
-			if !hasSourceRun {
+			if !source.present {
 				return CompleteRunResult{}, errors.New("pending approval to join has no source run")
 			}
 			if _, err := q.ApplyPendingTransitionEdgeToJoin(ctx, edge.ID); err != nil {
 				return CompleteRunResult{}, fmt.Errorf("update approved join edge snapshot: %w", err)
 			}
-			joined, err := s.applyJoinIfReady(ctx, tx, q, now, transition.TaskID, sourceRun.PlacementID, sourceSnapshot, targetEdge)
+			joined, err := s.applyJoinIfReady(ctx, tx, q, now, transition.TaskID, source.run.PlacementID, source.snapshot, targetEdge)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
@@ -279,8 +274,8 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 		}
 		targetSnapshot := runStartSnapshot{}
 		foundSnapshot := false
-		if hasSourceRun {
-			targetSnapshot, foundSnapshot, err = sourceSnapshot.forNode(targetEdge.TargetNode)
+		if source.present {
+			targetSnapshot, foundSnapshot, err = source.snapshot.forNode(targetEdge.TargetNode)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
@@ -296,7 +291,7 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 			return CompleteRunResult{}, err
 		}
 		if !ok {
-			resolution, err = s.resolveContextInvocation(ctx, q, transition.TaskID, transition.CreatedAtUnixMs, sourceRun.PlacementID, &sourceRun, sourceSnapshot, targetEdge)
+			resolution, err = s.resolveContextInvocation(ctx, q, transition.TaskID, transition.CreatedAtUnixMs, source.run.PlacementID, &source.run, source.snapshot, targetEdge)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
@@ -328,10 +323,17 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 }
 
 func approvalTargetsExecutableNode(edges []sqlitegen.TaskTransitionEdgeRecord, sourceSnapshot runStartSnapshot) (bool, error) {
+	pending := make([]sqlitegen.TaskTransitionEdgeRecord, 0, len(edges))
 	for _, edge := range edges {
-		if edge.State != "pending" {
-			continue
+		if edge.State == "pending" {
+			pending = append(pending, edge)
 		}
+	}
+	return transitionTargetsExecutableNode(pending, sourceSnapshot)
+}
+
+func transitionTargetsExecutableNode(edges []sqlitegen.TaskTransitionEdgeRecord, sourceSnapshot runStartSnapshot) (bool, error) {
+	for _, edge := range edges {
 		target, err := edgeContractSnapshotFromTransitionEdge(edge)
 		if err != nil {
 			return false, err
@@ -358,6 +360,27 @@ func approvalTargetsExecutableNode(edges []sqlitegen.TaskTransitionEdgeRecord, s
 		}
 	}
 	return false, nil
+}
+
+type transitionSource struct {
+	run      sqlitegen.TaskRunRecord
+	snapshot runStartSnapshot
+	present  bool
+}
+
+func (s *Store) loadTransitionSource(ctx context.Context, sourceRunID sql.NullString) (transitionSource, error) {
+	if !sourceRunID.Valid || strings.TrimSpace(sourceRunID.String) == "" {
+		return transitionSource{}, nil
+	}
+	run, err := s.queries.GetTaskRun(ctx, sourceRunID.String)
+	if err != nil {
+		return transitionSource{}, err
+	}
+	snapshot := runStartSnapshot{}
+	if err := workflow.UnmarshalString(run.RunStartSnapshotJson, &snapshot); err != nil {
+		return transitionSource{}, err
+	}
+	return transitionSource{run: run, snapshot: snapshot, present: true}, nil
 }
 
 func (s *Store) approvedTransitionResult(ctx context.Context, transitionID string, state string) (CompleteRunResult, error) {

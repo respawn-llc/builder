@@ -77,7 +77,8 @@ func ToolCallMetaEqual(left, right *ToolCallMeta) bool {
 		normalizedLeft.OmitSuccessfulResult == normalizedRight.OmitSuccessfulResult &&
 		normalizedLeft.RawOutputRequested == normalizedRight.RawOutputRequested &&
 		normalizedLeft.OutputTruncated == normalizedRight.OutputTruncated &&
-		normalizedLeft.MovedToBackground == normalizedRight.MovedToBackground
+		normalizedLeft.MovedToBackground == normalizedRight.MovedToBackground &&
+		optionalIntEqual(normalizedLeft.ShellExitCode, normalizedRight.ShellExitCode)
 }
 
 func toolCallMetaEmpty(meta ToolCallMeta) bool {
@@ -100,7 +101,15 @@ func toolCallMetaEmpty(meta ToolCallMeta) bool {
 		!meta.OmitSuccessfulResult &&
 		!meta.RawOutputRequested &&
 		!meta.OutputTruncated &&
-		!meta.MovedToBackground
+		!meta.MovedToBackground &&
+		meta.ShellExitCode == nil
+}
+
+func optionalIntEqual(left, right *int) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func toolRenderHintsEqual(left, right *ToolRenderHint) bool {

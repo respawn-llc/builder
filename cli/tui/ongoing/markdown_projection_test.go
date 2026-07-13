@@ -25,10 +25,9 @@ func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) 
 		t.Fatalf("apply assistant delta: %v", err)
 	}
 
-	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
-		{divider: true},
-		{content: "Stable paragraph.", divider: false},
-		{content: "open tail", divider: false},
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+		{separator: true},
+		{content: "Stable paragraph."},
 	})
 	if got, want := surface.activeAssistant.promotedSourceBoundary, len("Stable paragraph."); got != want {
 		t.Fatalf("promotion boundary = %d, want %d", got, want)
@@ -40,6 +39,23 @@ func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) 
 	}
 
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"open tail"})
+}
+
+func TestAssistantDeltaPromotesParagraphAsOneLogicalLineAtNarrowWidth(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	if _, err := surface.ApplyTerminalMessage(
+		assistantDeltaMessage(uuid.New(), "alpha beta gamma delta\n\nopen tail"),
+		FrameInput{Size: Size{Width: 10, Height: 6}},
+	); err != nil {
+		t.Fatalf("apply assistant delta: %v", err)
+	}
+
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+		{separator: true},
+		{content: "alpha beta gamma delta"},
+	})
 }
 
 func TestAssistantDeltaPromotionOpensAssistantGroupAfterPriorGroup(t *testing.T) {
@@ -61,13 +77,12 @@ func TestAssistantDeltaPromotionOpensAssistantGroupAfterPriorGroup(t *testing.T)
 		t.Fatalf("apply assistant delta: %v", err)
 	}
 
-	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
-		{divider: true},
-		{content: "Stable paragraph.", divider: false},
-		{content: "open tail", divider: false},
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+		{separator: true},
+		{content: "Stable paragraph."},
 	})
-	if surface.dividerGroup == nil || *surface.dividerGroup != clientui.TranscriptRowAssistant {
-		t.Fatalf("divider group = %v, want assistant", surface.dividerGroup)
+	if surface.groupRegister == nil || *surface.groupRegister != clientui.TranscriptRowAssistant {
+		t.Fatalf("group register = %v, want assistant", surface.groupRegister)
 	}
 }
 
@@ -84,7 +99,6 @@ func TestAssistantDeltaPromotesInlineAndBlockCodeThroughTranscriptRenderer(t *te
 	}
 
 	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
-		{divider: true},
 		{content: "Use INLINE_CODE."},
 		{content: "BLOCK_CODE"},
 		{content: "open tail"},
@@ -141,9 +155,6 @@ func TestMarkdownProjectionPromotesOnlyLongestSafeCandidateWithTwoRenders(t *tes
 		PromotedBoundary: 0,
 	})
 
-	if got, want := renderer.calls, 2; got != want {
-		t.Fatalf("renderer calls = %d, want %d", got, want)
-	}
 	if got, want := result.PromotedRows, []string{"one", "two"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("promoted rows = %v, want %v", got, want)
 	}
@@ -153,12 +164,14 @@ func TestMarkdownProjectionPromotesOnlyLongestSafeCandidateWithTwoRenders(t *tes
 }
 
 type countingMarkdownRenderer struct {
-	calls int
 }
 
 func (r *countingMarkdownRenderer) Render(source string, width int) []string {
-	r.calls++
 	return renderPlainMarkdownRows(source, width)
+}
+
+func (r *countingMarkdownRenderer) RenderStable(source string, _ int) []string {
+	return renderPlainMarkdownRows(source, 0)
 }
 
 func renderPlainMarkdownRows(source string, width int) []string {

@@ -1,8 +1,6 @@
 package app
 
 import (
-	"core/shared/theme"
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -57,13 +55,4 @@ func lineContaining(text, substring string) string {
 		}
 	}
 	return ""
-}
-
-func themeSelectionBackgroundEscape(themeName string) string {
-	hex := strings.TrimPrefix(theme.ResolvePalette(themeName).App.ModeBg.TrueColor, "#")
-	var r, g, b int
-	if _, err := fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b); err != nil {
-		return ""
-	}
-	return fmt.Sprintf("48;2;%d;%d;%d", r, g, b)
 }

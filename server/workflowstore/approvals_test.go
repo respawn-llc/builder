@@ -402,6 +402,35 @@ func TestApproveTransitionWithExecutionTargetLocksNoneForExecutableJoinContinuat
 	}
 }
 
+func TestPendingTransitionTargetsExecutableNodeIncludesJoinContinuation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "join_a")
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "join_b")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	_, branchRuns := startFanoutTask(t, ctx, store, binding.ProjectID, workflowID)
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	implA := nodeByKey(t, def, "impl_a")
+	implB := nodeByKey(t, def, "impl_b")
+	transitions := []CompleteRunResult{
+		completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}}),
+		completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implB)], TransitionID: "join"}),
+	}
+
+	for _, transition := range transitions {
+		requiresTarget, err := store.PendingTransitionTargetsExecutableNode(ctx, transition.TransitionID)
+		if err != nil {
+			t.Fatalf("PendingTransitionTargetsExecutableNode %s: %v", transition.TransitionID, err)
+		}
+		if !requiresTarget {
+			t.Fatalf("transition %s targeting executable join continuation did not require an execution target", transition.TransitionID)
+		}
+	}
+}
+
 func TestApprovePendingJoinWaitsForAllBranchApprovals(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)

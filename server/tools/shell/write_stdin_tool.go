@@ -80,9 +80,16 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 	if marshalErr != nil {
 		return tools.Result{}, marshalErr
 	}
-	toolResult := tools.Result{CallID: c.ID, Name: c.Name, Output: body}
-	if result.RawOutputRequested || result.Truncated {
-		toolResult.PresentationDelta = shellResultPresentationDelta(result.RawOutputRequested, result.Truncated, false)
+	toolResult := tools.Result{
+		CallID: c.ID,
+		Name:   c.Name,
+		Output: body,
+		PresentationDelta: shellResultPresentationDelta(
+			result.RawOutputRequested,
+			result.Truncated,
+			false,
+			result.ExitCode,
+		),
 	}
 	return toolResult, nil
 }

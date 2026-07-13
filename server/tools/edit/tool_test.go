@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/internal/testharness/filemode"
 	"core/server/tools"
 	"core/shared/toolspec"
 )
@@ -71,6 +72,36 @@ func TestExactReplaceAndReplaceAll(t *testing.T) {
 	if string(data) != "ONE two ONE\n" {
 		t.Fatalf("edited content = %q", string(data))
 	}
+}
+
+func TestEditReplacementPreservesExecutableMode(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
+		t.Fatalf("seed executable file: %v", err)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatalf("mark seed file executable: %v", err)
+	}
+	tool := newTestTool(t, dir)
+
+	result := callEdit(t, tool, map[string]any{
+		"path":       "script.sh",
+		"old_string": "echo old",
+		"new_string": "echo new",
+	})
+	if result.IsError {
+		t.Fatalf("expected success, got %s", string(result.Output))
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read edited file: %v", err)
+	}
+	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
+		t.Fatalf("edited content = %q, want %q", got, want)
+	}
+	filemode.AssertUnixPermissionMode(t, target, 0o755)
 }
 
 func TestInputAliasesAndConflicts(t *testing.T) {

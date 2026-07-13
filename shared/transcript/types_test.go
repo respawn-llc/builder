@@ -92,4 +92,26 @@ func TestToolCallMetaEqualIncludesShellOutputStatus(t *testing.T) {
 	if ToolCallMetaEqual(left, right) {
 		t.Fatal("expected backgrounded status to affect tool metadata equality")
 	}
+
+	exitCode := 7
+	right.MovedToBackground = false
+	right.ShellExitCode = &exitCode
+	if ToolCallMetaEqual(left, right) {
+		t.Fatal("expected shell exit status to affect tool metadata equality")
+	}
+}
+
+func TestApplyToolResultPresentationDeltaCopiesShellExitCode(t *testing.T) {
+	exitCode := 7
+	delta := &ToolResultPresentationDelta{ShellExitCode: &exitCode}
+
+	applied := ApplyToolResultPresentationDelta(ToolCallMeta{
+		ToolName: "exec_command",
+		IsShell:  true,
+	}, delta)
+	exitCode = 9
+
+	if applied.ShellExitCode == nil || *applied.ShellExitCode != 7 {
+		t.Fatalf("applied shell exit code = %v, want copied 7", applied.ShellExitCode)
+	}
 }
