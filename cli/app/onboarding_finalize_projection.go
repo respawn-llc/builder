@@ -134,6 +134,9 @@ func onboardingSupervisorChoice(selection onboardingSupervisorSelection) servera
 	if selection.thinking.kind == onboardingReviewerThinkingOverridden {
 		thinking := onboardingThinkingChoice(selection.thinking.override)
 		result.Thinking = &thinking
+	} else if selection.thinking.kind == onboardingReviewerThinkingCapabilityDisabled {
+		thinking := onboardingThinkingChoice(onboardingThinkingSelection{kind: onboardingThinkingDisabled})
+		result.Thinking = &thinking
 	}
 	return result
 }

@@ -266,6 +266,7 @@ func (selections *onboardingSelections) chooseSupervisorFrequency(choiceID strin
 	switch choiceID {
 	case string(onboardingSupervisorOff):
 		selections.supervisor.frequency = onboardingSupervisorOff
+		selections.pendingReviewerThinking = onboardingThinkingEdit{kind: onboardingThinkingEditNone}
 	case string(onboardingSupervisorEdits):
 		selections.supervisor.frequency = onboardingSupervisorEdits
 	case string(onboardingSupervisorAll):
@@ -392,12 +393,19 @@ func (selections *onboardingSelections) normalizeReviewerThinking(facts serverap
 	reviewerModel := selections.reviewerModelValue()
 	fact := modelFactForFacts(facts, reviewerModel)
 	if !fact.SupportsThinking {
+		if selections.supervisor.thinking.kind == onboardingReviewerThinkingOverridden &&
+			selections.supervisor.thinking.override.kind == onboardingThinkingDisabled {
+			selections.pendingReviewerThinking = onboardingThinkingEdit{kind: onboardingThinkingEditNone}
+			return
+		}
 		selections.supervisor.thinking = onboardingReviewerThinkingSelection{
-			kind:     onboardingReviewerThinkingOverridden,
-			override: onboardingThinkingSelection{kind: onboardingThinkingDisabled},
+			kind: onboardingReviewerThinkingCapabilityDisabled,
 		}
 		selections.pendingReviewerThinking = onboardingThinkingEdit{kind: onboardingThinkingEditNone}
 		return
+	}
+	if selections.supervisor.thinking.kind == onboardingReviewerThinkingCapabilityDisabled {
+		selections.supervisor.thinking = onboardingReviewerThinkingSelection{kind: onboardingReviewerThinkingInherited}
 	}
 	if selections.supervisor.thinking.kind == onboardingReviewerThinkingOverridden &&
 		selections.supervisor.thinking.override.kind == onboardingThinkingLevel &&

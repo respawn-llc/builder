@@ -124,6 +124,25 @@ func TestOnboardingNewReviewerCustomEditStartsBlankAndCommittedCustomRevisitsVal
 	}
 }
 
+func TestOnboardingSupervisorOffClearsHiddenReviewerCustomEdit(t *testing.T) {
+	state := testOnboardingFlowStatePtr(t, nil)
+	if err := state.chooseReviewerThinking("custom"); err != nil {
+		t.Fatalf("open reviewer custom edit: %v", err)
+	}
+	if state.selections.pendingReviewerThinking.kind != onboardingThinkingEditPending {
+		t.Fatalf("pending reviewer edit = %+v, want pending", state.selections.pendingReviewerThinking)
+	}
+	if err := state.chooseSupervisorFrequency(string(onboardingSupervisorOff)); err != nil {
+		t.Fatalf("disable supervisor: %v", err)
+	}
+	if state.selections.pendingReviewerThinking.kind != onboardingThinkingEditNone {
+		t.Fatalf("hidden reviewer edit survived supervisor disable: %+v", state.selections.pendingReviewerThinking)
+	}
+	if _, err := onboardingFinalizeRequest(*state, false); err != nil {
+		t.Fatalf("finalize with disabled supervisor: %v", err)
+	}
+}
+
 func TestOnboardingTraversalPreservesSeededSameValuedReviewerOverrides(t *testing.T) {
 	state := testOnboardingFlowState(t, func(cfg *config.App) {
 		cfg.Settings.Reviewer.Model = cfg.Settings.Model
@@ -331,8 +350,10 @@ func TestOnboardingSupervisorThinkingCapabilityLossDoesNotResurrectLatentValues(
 	state := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
 		cfg.Settings.Model = mainModel
 		cfg.Settings.ModelContextWindow = contextWindow
+		cfg.Settings.ThinkingLevel = "high"
 		cfg.Settings.Reviewer.Model = reviewerModel
 		cfg.Settings.Reviewer.ThinkingLevel = "low"
+		cfg.Source.Sources["thinking_level"] = "file"
 		cfg.Source.Sources["reviewer.model"] = "file"
 		cfg.Source.Sources["reviewer.thinking_level"] = "file"
 	}, facts)
@@ -341,15 +362,50 @@ func TestOnboardingSupervisorThinkingCapabilityLossDoesNotResurrectLatentValues(
 	if err := reviewerStep.apply(state, noThinkingReviewer); err != nil {
 		t.Fatalf("select no-thinking reviewer: %v", err)
 	}
-	if state.selections.supervisor.thinking.kind != onboardingReviewerThinkingOverridden ||
-		state.selections.supervisor.thinking.override.kind != onboardingThinkingDisabled {
+	if state.selections.supervisor.thinking.kind != onboardingReviewerThinkingCapabilityDisabled {
 		t.Fatalf("reviewer thinking capability loss did not disable selection: %+v", state.selections.supervisor.thinking)
+	}
+	request, err := onboardingFinalizeRequest(*state, false)
+	if err != nil {
+		t.Fatalf("project capability-disabled reviewer: %v", err)
+	}
+	if request.Supervisor == nil || request.Supervisor.Thinking == nil ||
+		request.Supervisor.Thinking.Kind != serverapi.OnboardingThinkingDisabled {
+		t.Fatalf("capability-disabled reviewer projection = %+v", request.Supervisor)
 	}
 	if err := reviewerStep.apply(state, reviewerModel); err != nil {
 		t.Fatalf("restore thinking-capable reviewer: %v", err)
 	}
-	if state.selections.supervisor.thinking.override.kind != onboardingThinkingDisabled {
-		t.Fatalf("reviewer thinking resurrected after capability regain: %+v", state.selections.supervisor.thinking)
+	if state.selections.supervisor.thinking.kind != onboardingReviewerThinkingInherited ||
+		state.selections.reviewerThinkingValue() != "high" {
+		t.Fatalf("reviewer thinking did not restore inheritance after capability regain: %+v", state.selections.supervisor.thinking)
+	}
+	request, err = onboardingFinalizeRequest(*state, false)
+	if err != nil {
+		t.Fatalf("project restored reviewer inheritance: %v", err)
+	}
+	if request.Supervisor == nil || request.Supervisor.Thinking != nil {
+		t.Fatalf("restored reviewer inheritance projected an override: %+v", request.Supervisor)
+	}
+
+	explicitDisabled := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
+		cfg.Settings.Model = mainModel
+		cfg.Settings.ModelContextWindow = contextWindow
+		cfg.Settings.Reviewer.Model = reviewerModel
+		cfg.Source.Sources["reviewer.model"] = "file"
+	}, facts)
+	if err := explicitDisabled.chooseReviewerThinking("disable"); err != nil {
+		t.Fatalf("explicitly disable reviewer thinking: %v", err)
+	}
+	if err := explicitDisabled.submitReviewerModel(noThinkingReviewer); err != nil {
+		t.Fatalf("select no-thinking reviewer after explicit disable: %v", err)
+	}
+	if err := explicitDisabled.submitReviewerModel(reviewerModel); err != nil {
+		t.Fatalf("restore thinking-capable reviewer after explicit disable: %v", err)
+	}
+	if explicitDisabled.selections.supervisor.thinking.kind != onboardingReviewerThinkingOverridden ||
+		explicitDisabled.selections.supervisor.thinking.override.kind != onboardingThinkingDisabled {
+		t.Fatalf("explicit reviewer disable lost provenance across capability change: %+v", explicitDisabled.selections.supervisor.thinking)
 	}
 }
 

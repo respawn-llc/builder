@@ -94,8 +94,9 @@ type onboardingReviewerModelSelection struct {
 type onboardingReviewerThinkingKind string
 
 const (
-	onboardingReviewerThinkingInherited  onboardingReviewerThinkingKind = "inherited"
-	onboardingReviewerThinkingOverridden onboardingReviewerThinkingKind = "overridden"
+	onboardingReviewerThinkingInherited          onboardingReviewerThinkingKind = "inherited"
+	onboardingReviewerThinkingOverridden         onboardingReviewerThinkingKind = "overridden"
+	onboardingReviewerThinkingCapabilityDisabled onboardingReviewerThinkingKind = "capability_disabled"
 )
 
 type onboardingReviewerThinkingSelection struct {
@@ -186,6 +187,9 @@ func (selections onboardingSelections) reviewerModelValue() string {
 }
 
 func (selections onboardingSelections) reviewerThinkingValue() string {
+	if selections.supervisor.thinking.kind == onboardingReviewerThinkingCapabilityDisabled {
+		return ""
+	}
 	if selections.supervisor.thinking.kind == onboardingReviewerThinkingOverridden {
 		switch selections.supervisor.thinking.override.kind {
 		case onboardingThinkingDisabled:

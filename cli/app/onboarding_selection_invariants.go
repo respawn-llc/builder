@@ -97,7 +97,7 @@ func (selections onboardingSelections) invariantViolation() (onboardingInvariant
 		{"verbosity", string(selections.verbosity.kind), []string{"omitted", "level"}},
 		{"supervisor.frequency", string(selections.supervisor.frequency), []string{"off", "edits", "all"}},
 		{"supervisor.model", string(selections.supervisor.model.kind), []string{"inherited", "overridden"}},
-		{"supervisor.thinking", string(selections.supervisor.thinking.kind), []string{"inherited", "overridden"}},
+		{"supervisor.thinking", string(selections.supervisor.thinking.kind), []string{"inherited", "overridden", "capability_disabled"}},
 		{"compaction", string(selections.compaction), []string{"local", "native", "manual_only"}},
 		{"skill_import", string(selections.skillImport.Mode), []string{"none", "symlink_source"}},
 		{"pending_primary_thinking", string(selections.pendingPrimaryThinking.kind), []string{"none", "pending", "revisiting"}},
