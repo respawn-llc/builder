@@ -13,7 +13,7 @@ type AskAnswerRequest struct {
 	AskID                string `json:"ask_id"`
 	ErrorMessage         string `json:"error_message,omitempty"`
 	Answer               string `json:"answer,omitempty"`
-	SelectedOptionNumber int    `json:"selected_option_number,omitempty"`
+	SelectedOptionNumber *int   `json:"selected_option_number"`
 	FreeformAnswer       string `json:"freeform_answer,omitempty"`
 }
 
@@ -35,6 +35,16 @@ func (r AskAnswerRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.AskID) == "" {
 		return errors.New("ask_id is required")
+	}
+	if r.SelectedOptionNumber != nil && *r.SelectedOptionNumber <= 0 {
+		return errors.New("selected_option_number must be positive when present")
+	}
+	hasAnswer := strings.TrimSpace(r.Answer) != "" || strings.TrimSpace(r.FreeformAnswer) != "" || r.SelectedOptionNumber != nil
+	if hasAnswer && strings.TrimSpace(r.ErrorMessage) != "" {
+		return errors.New("error_message cannot be combined with answer fields")
+	}
+	if !hasAnswer && strings.TrimSpace(r.ErrorMessage) == "" {
+		return errors.New("answer is required")
 	}
 	return nil
 }

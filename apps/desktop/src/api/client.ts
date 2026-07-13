@@ -608,7 +608,7 @@ export class ApiClient {
             },
           }
         : {
-            selected_option_number: input.selectedOptionNumber > 0 ? input.selectedOptionNumber : undefined,
+            selected_option_number: input.selectedOptionNumber,
             freeform_answer: input.freeformAnswer,
           };
     await this.transport.call(

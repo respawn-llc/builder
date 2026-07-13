@@ -682,7 +682,12 @@ const emptyWorkflow = {
 const emptyBoardResponse = {
   board: {
     project_id: "project-1",
-    project: { project_key: "proj", display_name: "Project" },
+    project: {
+      project_key: "proj",
+      display_name: "Project",
+      default_workspace_id: "workspace-1",
+      attached_workspace_count: 1,
+    },
     selected_workflow: emptyWorkflow,
     workflows: null,
     groups: null,

@@ -20,6 +20,7 @@ import (
 	"core/server/workflowview"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type Service struct {
@@ -103,7 +104,7 @@ type taskQuestionAnswerMemoRequest struct {
 	AskID                string
 	ErrorMessage         string
 	Answer               string
-	SelectedOptionNumber int
+	SelectedOptionNumber *int
 	FreeformAnswer       string
 	ApprovalDecision     clientui.ApprovalDecision
 	ApprovalCommentary   string
@@ -1130,7 +1131,7 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 	if s == nil || s.prompts == nil {
 		return errors.New("prompt responder is required")
 	}
-	memoReq := taskQuestionAnswerMemoRequest{TaskID: req.TaskID, RunID: req.RunID, AskID: req.AskID, ErrorMessage: req.ErrorMessage, Answer: req.Answer, SelectedOptionNumber: req.SelectedOptionNumber, FreeformAnswer: req.FreeformAnswer}
+	memoReq := taskQuestionAnswerMemoRequest{TaskID: req.TaskID, RunID: req.RunID, AskID: req.AskID, ErrorMessage: req.ErrorMessage, Answer: req.Answer, SelectedOptionNumber: textutil.CloneInt(req.SelectedOptionNumber), FreeformAnswer: req.FreeformAnswer}
 	if req.Approval != nil {
 		memoReq.ApprovalDecision = req.Approval.Decision
 		memoReq.ApprovalCommentary = req.Approval.Commentary
@@ -1145,7 +1146,7 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 				return struct{}{}, err
 			}
 		} else {
-			response := askquestion.AskQuestionResponse{RequestID: req.AskID, Answer: req.Answer, SelectedOptionNumber: req.SelectedOptionNumber, FreeformAnswer: req.FreeformAnswer}
+			response := askquestion.AskQuestionResponse{RequestID: req.AskID, Answer: req.Answer, SelectedOptionNumber: textutil.CloneInt(req.SelectedOptionNumber), FreeformAnswer: req.FreeformAnswer}
 			if req.Approval != nil {
 				response = askquestion.AskQuestionResponse{
 					RequestID: req.AskID,
@@ -1173,7 +1174,7 @@ func sameTaskQuestionAnswerMemoRequest(a taskQuestionAnswerMemoRequest, b taskQu
 		a.AskID == b.AskID &&
 		a.ErrorMessage == b.ErrorMessage &&
 		a.Answer == b.Answer &&
-		a.SelectedOptionNumber == b.SelectedOptionNumber &&
+		textutil.EqualOptionalInt(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
 		a.FreeformAnswer == b.FreeformAnswer &&
 		a.ApprovalDecision == b.ApprovalDecision &&
 		a.ApprovalCommentary == b.ApprovalCommentary

@@ -66,6 +66,7 @@ type ToolCallMeta struct {
 	RawOutputRequested     bool
 	OutputTruncated        bool
 	MovedToBackground      bool
+	ShellExitCode          *int
 }
 
 // ToolResultPresentationDelta contains only presentation facts learned from a
@@ -75,6 +76,7 @@ type ToolResultPresentationDelta struct {
 	RawOutputRequested bool
 	OutputTruncated    bool
 	MovedToBackground  bool
+	ShellExitCode      *int
 }
 
 func ApplyToolResultPresentationDelta(meta ToolCallMeta, delta *ToolResultPresentationDelta) ToolCallMeta {
@@ -84,6 +86,10 @@ func ApplyToolResultPresentationDelta(meta ToolCallMeta, delta *ToolResultPresen
 	meta.RawOutputRequested = meta.RawOutputRequested || delta.RawOutputRequested
 	meta.OutputTruncated = meta.OutputTruncated || delta.OutputTruncated
 	meta.MovedToBackground = meta.MovedToBackground || delta.MovedToBackground
+	if delta.ShellExitCode != nil {
+		exitCode := *delta.ShellExitCode
+		meta.ShellExitCode = &exitCode
+	}
 	return NormalizeToolCallMeta(meta)
 }
 

@@ -39,6 +39,7 @@ export type {
   TaskDetail,
   TaskRun,
   TaskStatus,
+  TaskStatusKind,
   TaskTransition,
   WorkflowBoard,
   WorkflowContextSource,
@@ -72,6 +73,7 @@ export type {
   WorkflowValidation,
   WorkflowValidationError,
   WorkspaceSummary,
+  WorkspaceAvailability,
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
 } from "./models";

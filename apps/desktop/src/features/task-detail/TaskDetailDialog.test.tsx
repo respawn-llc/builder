@@ -397,7 +397,9 @@ describe("TaskDetailSurface", () => {
 
     const question = await screen.findByRole("region", { name: "Question" });
     expect(await within(question).findByRole("radio", { name: /Use option A/u })).toBeChecked();
-    fireEvent.click(within(question).getByRole("radio", { name: "Neither" }));
+    const neither = within(question).getByRole("radio", { name: "Neither" });
+    expect(neither).not.toHaveValue("0");
+    fireEvent.click(neither);
     expect(within(question).getByRole("button", { name: "Submit answer" })).toBeDisabled();
 
     fireEvent.change(within(question).getByRole("textbox", { name: "Commentary" }), {
@@ -409,7 +411,7 @@ describe("TaskDetailSurface", () => {
       const params = callParams(services.transport.calls, "workflow.task.question.answer");
       expect(params.ask_id).toBe("ask-1");
       expect(params.freeform_answer).toBe("Use a different path.");
-      expect(params.selected_option_number).toBeUndefined();
+      expect(params.selected_option_number).toBeNull();
     });
   });
 
@@ -439,6 +441,46 @@ describe("TaskDetailSurface", () => {
       const params = callParams(services.transport.calls, "workflow.task.question.answer");
       expect(params.freeform_answer).toBe("Keep the rationale.");
       expect(params.selected_option_number).toBe(1);
+    });
+  });
+
+  it("renders freeform-only ordinary questions without an option group and submits a null selection", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const services = createTestServices([
+      ...startupRoutes,
+      { method: "workflow.task.get", result: taskDetailResponse },
+      { method: "workflow.task.activity.list", result: activityResponse },
+      {
+        method: "ask.listPendingBySession",
+        result: {
+          Asks: [
+            {
+              ...pendingAskResponse.Asks[0],
+              RecommendedOptionIndex: 0,
+              Suggestions: [],
+            },
+          ],
+        },
+      },
+      { method: "workflow.task.question.answer", result: {} },
+    ]);
+
+    render(<App services={services} />);
+
+    const question = await screen.findByRole("region", { name: "Question" });
+    expect(within(question).queryByRole("radiogroup")).not.toBeInTheDocument();
+    expect(within(question).queryByRole("radio")).not.toBeInTheDocument();
+    expect(within(question).queryByRole("radio", { name: "Neither" })).not.toBeInTheDocument();
+
+    fireEvent.change(within(question).getByRole("textbox", { name: "Commentary" }), {
+      target: { value: "Use the manual route." },
+    });
+    fireEvent.click(within(question).getByRole("button", { name: "Submit answer" }));
+
+    await waitFor(() => {
+      const params = callParams(services.transport.calls, "workflow.task.question.answer");
+      expect(params.freeform_answer).toBe("Use the manual route.");
+      expect(params.selected_option_number).toBeNull();
     });
   });
 

@@ -230,4 +230,5 @@ type ToolCallMeta struct {
 	RawOutputRequested     bool
 	OutputTruncated        bool
 	MovedToBackground      bool
+	ShellExitCode          *int
 }

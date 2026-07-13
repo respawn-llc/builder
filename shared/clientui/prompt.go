@@ -32,7 +32,7 @@ type PromptAnswer struct {
 	PromptID             string
 	ErrorMessage         string
 	Answer               string
-	SelectedOptionNumber int
+	SelectedOptionNumber *int
 	FreeformAnswer       string
 	Approval             *ApprovalPromptAnswer
 }

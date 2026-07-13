@@ -429,9 +429,18 @@ func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	if responder.sessionID != sessionID || responder.response.RequestID != "ask-task-question" || responder.response.FreeformAnswer != "ship it" {
 		t.Fatalf("prompt response = session:%q response:%+v", responder.sessionID, responder.response)
 	}
+	if responder.response.SelectedOptionNumber != nil {
+		t.Fatalf("selected option = %v, want nil", *responder.response.SelectedOptionNumber)
+	}
 	if err := service.AnswerWorkflowTaskQuestion(ctx, req); err != nil {
 		t.Fatalf("AnswerWorkflowTaskQuestion replay: %v", err)
 	}
+	selectedOption := 1
+	req.SelectedOptionNumber = &selectedOption
+	if err := service.AnswerWorkflowTaskQuestion(ctx, req); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+		t.Fatalf("AnswerWorkflowTaskQuestion present selection replay error = %v, want payload mismatch", err)
+	}
+	req.SelectedOptionNumber = nil
 	req.FreeformAnswer = "different"
 	if err := service.AnswerWorkflowTaskQuestion(ctx, req); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("AnswerWorkflowTaskQuestion mismatch error = %v", err)

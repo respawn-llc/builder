@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"errors"
@@ -167,11 +168,12 @@ func TestValidateAskQuestionResponseForApprovalPrompt(t *testing.T) {
 	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{Answer: "allow"}); !errors.Is(err, ErrAskQuestionApprovalRequiresResponse) {
 		t.Fatalf("ordinary answer to approval prompt error = %v, want approval response required", err)
 	}
+	selectedOption := 1
 	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{
 		Approval:             &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionDeny},
 		Answer:               "deny",
 		FreeformAnswer:       "mixed",
-		SelectedOptionNumber: 1,
+		SelectedOptionNumber: &selectedOption,
 	}); !errors.Is(err, ErrAskQuestionApprovalForbidsOrdinaryAnswer) {
 		t.Fatalf("mixed approval response error = %v, want ordinary answer fields rejected", err)
 	}
@@ -180,6 +182,30 @@ func TestValidateAskQuestionResponseForApprovalPrompt(t *testing.T) {
 	}
 	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionDeny, Commentary: "no"}}); err != nil {
 		t.Fatalf("valid approval response rejected: %v", err)
+	}
+}
+
+func TestValidateAskQuestionResponseRejectsNonPositiveSelectedOption(t *testing.T) {
+	zeroOption := 0
+	if err := ValidateAskQuestionResponse(
+		AskQuestionRequest{ID: "ask-1", Question: "Proceed?", Suggestions: []string{"yes"}},
+		AskQuestionResponse{SelectedOptionNumber: &zeroOption},
+	); err == nil {
+		t.Fatal("expected zero selected option to be rejected")
+	}
+	negativeOption := -1
+	if err := ValidateAskQuestionResponse(
+		AskQuestionRequest{ID: "ask-1", Question: "Proceed?", Suggestions: []string{"yes"}},
+		AskQuestionResponse{SelectedOptionNumber: &negativeOption},
+	); err == nil {
+		t.Fatal("expected negative selected option to be rejected")
+	}
+	outOfRange := 2
+	if err := ValidateAskQuestionResponse(
+		AskQuestionRequest{ID: "ask-1", Question: "Proceed?", Suggestions: []string{"yes"}},
+		AskQuestionResponse{SelectedOptionNumber: &outOfRange},
+	); err == nil {
+		t.Fatal("expected out-of-range selected option to be rejected")
 	}
 }
 
@@ -525,10 +551,10 @@ func TestToolCallBlocksUntilQueuedAnswerSubmitted(t *testing.T) {
 	default:
 	}
 
-	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: 2, FreeformAnswer: "need extra context"}); err != nil {
+	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Int(2), FreeformAnswer: "need extra context"}); err != nil {
 		t.Fatalf("submit answer: %v", err)
 	}
-	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: 1}); err == nil {
+	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Int(1)}); err == nil {
 		t.Fatal("expected duplicate submission to fail after queued tool answer")
 	}
 
@@ -741,7 +767,7 @@ func TestToolCallRejectsActionField(t *testing.T) {
 func TestToolCallSerializesSelectedOptionWithFreeformAsPlainText(t *testing.T) {
 	b := NewAskQuestionBroker()
 	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
-		return AskQuestionResponse{RequestID: req.ID, SelectedOptionNumber: 2, FreeformAnswer: "need extra context"}, nil
+		return AskQuestionResponse{RequestID: req.ID, SelectedOptionNumber: textutil.Int(2), FreeformAnswer: "need extra context"}, nil
 	})
 	result := callAskQuestionTool(t, b, "call-structured", `{
 			"question":"Pick one",

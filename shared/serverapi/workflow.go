@@ -866,7 +866,7 @@ type WorkflowTaskQuestionAnswerRequest struct {
 	AskID                string                              `json:"ask_id"`
 	ErrorMessage         string                              `json:"error_message,omitempty"`
 	Answer               string                              `json:"answer,omitempty"`
-	SelectedOptionNumber int                                 `json:"selected_option_number,omitempty"`
+	SelectedOptionNumber *int                                `json:"selected_option_number"`
 	FreeformAnswer       string                              `json:"freeform_answer,omitempty"`
 	Approval             *WorkflowTaskQuestionApprovalAnswer `json:"approval,omitempty"`
 }
@@ -1134,9 +1134,11 @@ type WorkflowBoard struct {
 }
 
 type ProjectBoardProject struct {
-	ProjectID   string `json:"project_id"`
-	ProjectKey  string `json:"project_key"`
-	DisplayName string `json:"display_name"`
+	ProjectID              string `json:"project_id"`
+	ProjectKey             string `json:"project_key"`
+	DisplayName            string `json:"display_name"`
+	DefaultWorkspaceID     string `json:"default_workspace_id"`
+	AttachedWorkspaceCount int    `json:"attached_workspace_count"`
 }
 
 type WorkflowPickerItem struct {
@@ -1181,7 +1183,7 @@ type WorkflowBoardTaskCard struct {
 	TaskID          string                  `json:"task_id"`
 	ShortID         string                  `json:"short_id"`
 	Title           string                  `json:"title"`
-	BodyPreview     string                  `json:"body_preview,omitempty"`
+	Body            string                  `json:"body"`
 	WorkflowID      string                  `json:"workflow_id"`
 	ActiveNodeIDs   []string                `json:"active_node_ids,omitempty"`
 	SourceWorkspace ProjectWorkspaceSummary `json:"source_workspace"`
@@ -1954,10 +1956,10 @@ func (r WorkflowTaskQuestionAnswerRequest) Validate() error {
 	hasTextAnswer := strings.TrimSpace(r.Answer) != ""
 	hasFreeform := strings.TrimSpace(r.FreeformAnswer) != ""
 	hasApproval := r.Approval != nil
-	if r.SelectedOptionNumber < 0 {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "selected_option_number", Message: "selected_option_number must be non-negative"}
+	if r.SelectedOptionNumber != nil && *r.SelectedOptionNumber <= 0 {
+		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "selected_option_number", Message: "selected_option_number must be positive when present"}
 	}
-	hasSelected := r.SelectedOptionNumber > 0
+	hasSelected := r.SelectedOptionNumber != nil
 	hasAnswer := hasTextAnswer || hasFreeform || hasSelected || hasApproval
 	hasError := strings.TrimSpace(r.ErrorMessage) != ""
 	if hasAnswer && hasError {

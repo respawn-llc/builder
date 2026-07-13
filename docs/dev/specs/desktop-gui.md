@@ -46,6 +46,7 @@
 - No hardcoded user-facing strings in components.
 - User-visible transitions should animate unless reduced motion is active.
 - Reduced/deterministic blur and motion are used in tests/snapshots.
+- Top-chrome readability treatment is platform-specific and mutually exclusive: macOS, Linux, and browser presentation use the contrast fade; Windows uses progressive blur across every destination and no darkening fade.
 - Dropdowns use app-local `SelectField` custom combobox/listbox. Do not use native `<select>` in desktop GUI feature code.
 - Use shared `EmptyState`, `LoadingState`, and `ErrorState` surfaces instead of one-off cards.
 
@@ -119,12 +120,17 @@
 - Grouped workflows render through group-aware UI. Initial preferred shape is group islands wrapping related columns unless implementation evidence shows better.
 - Join nodes are internal and not board columns.
 - Cards show task ID, task title, backend-native status component, and workspace chip when useful.
+- Board cards keep a stable outer height even when body content is short or absent. Titles occupy at most two rendered lines; the body uses the remaining bounded visual space and browser-native visual truncation rather than source-text truncation.
+- Approval-blocked cards replace the normal border color with the secondary semantic color, using the same border treatment as question-blocked cards.
+- A workspace chip is useful only when the project currently has multiple attached workspaces and the task source workspace differs from the current default workspace. Detached historical workspace context remains available in task detail rather than creating a board exception.
 - Card click opens task detail.
 - Resume appears only when resumable.
 - Interrupt appears in the same action slot when exactly one active run is interruptible and acts immediately.
 - Tasks with multiple active runs open detail for per-run controls.
 - Board visual states include Backlog/idle, queued, running, interrupted, approval-gated, question-gated, done/completed, and canceled.
 - Dragging Backlog task to first active node starts automation immediately with no confirmation.
+- The first executable-node drop hint reads `Drag here to start automation`.
+- While dragging a card, approaching a horizontal board edge or vertical hovered-column edge scrolls that surface, accelerating continuously toward the edge. Horizontal and vertical scrolling may run together; horizontal board scrolling takes priority if reliable simultaneous nested scrolling would require materially greater complexity.
 - Dragging to Done is a user archive/manual move, not normal edge completion.
 - Manual move and Done drag targets are unavailable while a task has a started active run that is not completed or interrupted, including runs waiting on a question.
 - Agent and script drag targets are available only when the server exposes a concrete workflow edge to that executable target.
@@ -155,7 +161,9 @@
 - Pop-out windows are keyed per task: re-popping a task that already has a window focuses the existing window instead of duplicating it; different tasks open separate windows.
 - Native/Tauri owns task-detail size and position. Do not keep custom remembered in-app sizing for native detail.
 - Closing child window after mutations blanket-refetches visible queries.
-- Fixed header/actions and task description are always visible.
+- Header/actions and task description are leading rows in the task-detail virtualized list and scroll with the rest of the surface.
+- Long task descriptions start in a collapsed read view targeting half the window height, clamped between approximately five and ten rendered text lines. Only overflowing descriptions show the centered bottom expand affordance and text fade; the island itself remains visible.
+- Expanding a description is one-way until the current task-detail surface closes, keeps the description top anchored in the viewport, and grows content downward. Entering edit mode expands automatically. Reopening task detail starts from the normal collapsed state.
 - `Inbox` area sits above tabs and shows current blockers plus answer/approval/resume controls.
 - Contextual resume modal is superseded by task detail Inbox; resume/next-blocker actions focus/reveal relevant Inbox item.
 - Tabs are `Comments`, `Activity`, and `Runs`; default tab is `Comments`.
@@ -179,6 +187,7 @@
 - Top detail action opens or focuses next/highest-priority unresolved attention item.
 - If multiple unresolved attention items exist, all get inline controls.
 - Question UI preserves ask functionality with options, blank commentary/freeform field, recommended marker, click or arrows plus Enter, and standard Tab focus. Do not show source-origin label.
+- An ordinary question with no actual answer suggestions shows only the freeform answer field and does not offer `Neither` as its sole option.
 - Runtime approval prompts are surfaced as question attention in Home Inbox, notifications, and task detail. They use the real prompt text, show approval-specific choices, may preselect the primary approval choice, and do not show a `Neither` freeform-answer option. Deny is the negative approval choice and requires commentary.
 - Workflow transition approval UI exposes Approve only.
 - Workflow transition approval UI shows stored approval snapshot: source node, transition label/id, target nodes, required provision fields/values, commentary, workflow version, stale warning.

@@ -210,7 +210,12 @@ export function KanbanBoard() {
               {columns.map((column) => (
                 <KanbanColumn
                   actionsDisabled={false}
-                  cards={(mockBoardNodeCards[column.id] ?? []).map(toKanbanCardVM)}
+                  cards={(mockBoardNodeCards[column.id] ?? []).map((card) =>
+                    toKanbanCardVM(card, {
+                      attachedWorkspaceCount: mockBoard.attachedWorkspaceCount,
+                      defaultWorkspaceID: mockBoard.defaultWorkspaceID,
+                    }),
+                  )}
                   column={toKanbanColumnVM(column)}
                   dropState="idle"
                   hasMoreCards={group.id === "group-delivery"}

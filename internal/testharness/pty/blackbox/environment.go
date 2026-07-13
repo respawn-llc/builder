@@ -23,7 +23,9 @@ import (
 	"core/shared/serverapi"
 )
 
-const fixedWait = 500 * time.Millisecond
+const cleanupRetryWait = 500 * time.Millisecond
+const controlRequestWait = 500 * time.Millisecond
+const scenarioActionWait = 5 * time.Second
 const cleanupWait = 10 * time.Second
 const readinessWait = cleanupWait
 const preflightWait = cleanupWait
@@ -153,7 +155,7 @@ func (e *IsolatedEnvironment) WaitReady() error {
 }
 
 func (e *IsolatedEnvironment) BindProject() (returnErr error) {
-	dialContext, cancelDial := context.WithTimeout(context.Background(), fixedWait)
+	dialContext, cancelDial := context.WithTimeout(context.Background(), controlRequestWait)
 	remote, err := client.DialRemoteURL(dialContext, "ws://"+net.JoinHostPort(e.Host, strconv.Itoa(e.Port))+"/rpc")
 	cancelDial()
 	if err != nil {
@@ -164,13 +166,13 @@ func (e *IsolatedEnvironment) BindProject() (returnErr error) {
 			returnErr = fmt.Errorf("close standalone project API: %w", err)
 		}
 	}()
-	acknowledgeContext, cancelAcknowledge := context.WithTimeout(context.Background(), fixedWait)
+	acknowledgeContext, cancelAcknowledge := context.WithTimeout(context.Background(), controlRequestWait)
 	err = remote.EnableNoAuthBootstrapAcknowledgement(acknowledgeContext)
 	cancelAcknowledge()
 	if err != nil {
 		return fmt.Errorf("acknowledge standalone no-auth setup: %w", err)
 	}
-	createContext, cancelCreate := context.WithTimeout(context.Background(), fixedWait)
+	createContext, cancelCreate := context.WithTimeout(context.Background(), controlRequestWait)
 	created, err := remote.CreateProject(createContext, serverapi.ProjectCreateRequest{
 		DisplayName:   "PTY Harness",
 		WorkspaceRoot: e.Workspace,
@@ -179,7 +181,7 @@ func (e *IsolatedEnvironment) BindProject() (returnErr error) {
 	if err != nil {
 		return fmt.Errorf("create isolated project: %w", err)
 	}
-	planContext, cancelPlan := context.WithTimeout(context.Background(), fixedWait)
+	planContext, cancelPlan := context.WithTimeout(context.Background(), controlRequestWait)
 	plan, err := remote.PlanWorkspaceBinding(planContext, serverapi.ProjectBindingPlanRequest{
 		Path: e.Workspace,
 		Mode: serverapi.ProjectBindingPlanModeInteractive,

@@ -211,7 +211,7 @@ func renderDetailProjectedLine(line detailProjectedLine, themeName string) strin
 		railStyle = railStyle.Foreground(palette.App.Primary.Lipgloss())
 	}
 	if line.SelectedFill {
-		railStyle = railStyle.Background(palette.App.ModeBg.Lipgloss())
+		railStyle = railStyle.Background(palette.App.Background.Lipgloss())
 	}
 	rail := railStyle.Render(railText)
 	if line.TargetWidth <= 1 {
@@ -269,14 +269,11 @@ func resolveDetailLineBackground(
 	palette theme.ResolvedPalette,
 	selected bool,
 ) detailResolvedBackground {
-	surfaceBackground := palette.App.ChatBg
-	if selected {
-		surfaceBackground = palette.App.ModeBg
-	}
+	surfaceBackground := palette.App.Background
 	switch background {
 	case transcriptrender.LineBackgroundDefault:
 		if selected {
-			return detailResolvedBackground{color: palette.App.ModeBg, present: true}
+			return detailResolvedBackground{color: palette.App.Background, present: true}
 		}
 		return detailResolvedBackground{}
 	case transcriptrender.LineBackgroundDiffAdded:

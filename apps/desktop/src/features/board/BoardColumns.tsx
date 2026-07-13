@@ -19,6 +19,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
+  MarkdownPlainText,
   Spinner,
 } from "../../ui";
 import { cx } from "../../ui/classes";
@@ -41,6 +42,7 @@ export type KanbanColumnProps = Readonly<{
   dropState: BoardColumnDropState;
   actionsDisabled: boolean;
   columnRef?: (element: HTMLElement | null) => void;
+  scrollportRef?: (element: HTMLElement | null) => void;
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
   onCardDragStart: (payload: BoardCardDragPayload) => void;
@@ -93,6 +95,7 @@ export function KanbanColumn({
   dropState,
   actionsDisabled,
   columnRef,
+  scrollportRef,
   onCardClick,
   onCardDragEnd,
   onCardDragStart,
@@ -173,6 +176,7 @@ export function KanbanColumn({
           <div
             className="board-column-scroll absolute inset-0 min-h-0 overflow-y-auto px-[var(--space-3)] hide-scrollbar"
             data-testid={`kanban-column-scroll-${column.id}`}
+            ref={scrollportRef}
             onScroll={(event) => {
               if (!hasMoreCards || isLoadingMoreCards || !isNearScrollEnd(event.currentTarget)) {
                 return;
@@ -293,9 +297,10 @@ function TaskCard({
         <article
           aria-label={card.title}
           className={cx(
-            "grid cursor-pointer gap-[var(--space-2)] rounded-[var(--radius-l)] border border-[var(--color-outline)] bg-[var(--color-island-1)] p-[var(--space-3)] outline-none focus-visible:border-[var(--color-primary)] focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-primary)_26%,transparent)]",
+            "board-task-card grid cursor-pointer gap-[var(--space-2)] rounded-[var(--radius-l)] border border-[var(--color-outline)] bg-[var(--color-island-1)] p-[var(--space-3)] outline-none focus-visible:border-[var(--color-primary)] focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-primary)_26%,transparent)]",
             cardClassName(card.id),
           )}
+          data-task-card-border-tone={card.borderTone}
           data-task-card-state={waitingForAnswer ? "waiting-answer" : card.statusKind}
           data-testid="task-card"
           draggable={canDrag}
@@ -317,28 +322,23 @@ function TaskCard({
             activateCardFromKeyboard(event, onClick);
           }}
           ref={registerCard}
-          style={{ ...cardStyle(card.id), ...(waitingForAnswer ? waitingForAnswerCardStyle : {}) }}
+          style={cardStyle(card.id)}
           tabIndex={0}
         >
-          <div className="grid gap-[var(--space-1)] text-left text-[var(--color-on-island)]">
-            <span className="flex min-w-0 items-center justify-between gap-[var(--space-2)]">
-              <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">
-                {card.shortID}
-              </span>
-              <span className="min-w-0 truncate text-right text-sm text-[var(--color-muted)]">
-                {formatRelativeTime(card.updatedAt)}
-              </span>
+          <span className="flex min-w-0 items-center justify-between gap-[var(--space-2)] text-left text-[var(--color-on-island)]">
+            <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">{card.shortID}</span>
+            <span className="min-w-0 truncate text-right text-sm text-[var(--color-muted)]">
+              {formatRelativeTime(card.updatedAt)}
             </span>
-            <strong data-testid="task-card-title">{card.title}</strong>
-            <span
-              className="task-card-body-preview text-sm text-[var(--color-muted)]"
-              data-testid="task-card-body"
-            >
-              {card.bodyPreview}
-            </span>
-          </div>
+          </span>
+          <strong className="task-card-title text-left text-[var(--color-on-island)]" data-testid="task-card-title">
+            {card.title}
+          </strong>
+          <span className="task-card-body-preview text-sm text-[var(--color-muted)]" data-testid="task-card-body">
+            <MarkdownPlainText value={card.body} />
+          </span>
           <div
-            className="flex items-start justify-between gap-[var(--space-2)]"
+            className="task-card-footer flex items-start justify-between gap-[var(--space-2)]"
             data-testid="task-card-footer"
           >
             <div
@@ -352,12 +352,11 @@ function TaskCard({
                   testID="task-card-active-run-spinner"
                 />
               ) : null}
-              <span
-                className="task-card-chip-slot inline-flex items-center"
-                data-testid="task-card-chip-slot"
-              >
-                <Badge tone="neutral">{card.sourceWorkspaceName || t("board.workspace")}</Badge>
-              </span>
+              {card.workspaceChipLabel !== null ? (
+                <span className="task-card-chip-slot inline-flex items-center" data-testid="task-card-chip-slot">
+                  <Badge tone="neutral">{card.workspaceChipLabel}</Badge>
+                </span>
+              ) : null}
             </div>
             <TaskCardActions
               actionsDisabled={actionsDisabled}
@@ -470,10 +469,6 @@ function TaskCardActions({
     </div>
   );
 }
-
-const waitingForAnswerCardStyle = {
-  borderColor: "var(--color-primary)",
-} satisfies CSSProperties;
 
 function isWaitingForAnswer(statusKind: string): boolean {
   return statusKind === "waiting_question";

@@ -72,7 +72,10 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 	// Preserve terminal-file identity (Fd/Read/Close) so Bubble Tea can detect
 	// the real terminal and emit WindowSizeMsg.
 	terminalOutput := newUITerminalOutputFile(output)
-	ongoingSurface := ongoing.NewSurface(terminalOutput)
+	ongoingSurface := ongoing.NewSurfaceWithTerminalResizePolicy(
+		terminalOutput,
+		ongoingTerminalResizePolicy(),
+	)
 	options := mainUIProgramOptionsWithOutput(
 		request.active,
 		terminalCursor,

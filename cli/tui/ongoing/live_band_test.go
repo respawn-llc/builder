@@ -32,8 +32,12 @@ func TestRenderPaintsLiveAreaWhenMinimumFits(t *testing.T) {
 	}
 
 	want := "\x1b[r\x1b[?6l" +
-		"\x1b[2;1H\x1b[2K\x1b[3;1H\x1b[2K\x1b[4;1H\x1b[2K" +
-		"\x1b[2;1Htool running\x1b[3;1H> prompt\x1b[4;1Hready" +
+		"\x1b]133;C\x1b\\" +
+		"\x1b[2;1H\x1b]133;C\x1b\\\x1b[2K" +
+		"\x1b[3;1H\x1b]133;C\x1b\\\x1b[2K" +
+		"\x1b[4;1H\x1b]133;C\x1b\\\x1b[2K" +
+		"\x1b[2;1H\x1b]133;A;redraw=1\x1b\\" +
+		"tool running\x1b[3;1H> prompt\x1b[4;1Hready" +
 		"\x1b[?25l"
 	if got := out.String(); got != want {
 		t.Fatalf("live band bytes = %q, want %q", got, want)
@@ -87,7 +91,9 @@ func TestRenderHidesEntireLiveAreaWhenMinimumDoesNotFit(t *testing.T) {
 	}
 
 	want := "\x1b[r\x1b[?6l" +
-		"\x1b[1;1H\x1b[2K\x1b[2;1H\x1b[2K" +
+		"\x1b]133;C\x1b\\" +
+		"\x1b[1;1H\x1b]133;C\x1b\\\x1b[2K" +
+		"\x1b[2;1H\x1b]133;C\x1b\\\x1b[2K" +
 		"\x1b[?25l"
 	if got := out.String(); got != want {
 		t.Fatalf("too-short live band bytes = %q, want %q", got, want)
@@ -215,6 +221,7 @@ func TestLiveBandGrowthScrollsImmutableRegionBeforeErase(t *testing.T) {
 	wantPrefix := []terminalOp{
 		{kind: terminalOpCSI, value: "\x1b[r"},
 		{kind: terminalOpCSI, value: "\x1b[?6l"},
+		{kind: terminalOpOSC, value: "\x1b]133;C\x1b\\"},
 		{kind: terminalOpCSI, value: "\x1b[1;4r"},
 		{kind: terminalOpCSI, value: "\x1b[4;1H"},
 		{kind: terminalOpCRLF, value: "\r\n"},
@@ -375,7 +382,7 @@ func TestHeightOnlyResizeRepaintsWithoutRehydration(t *testing.T) {
 	if result.Action != ResultNoop {
 		t.Fatalf("resize action = %q, want noop", result.Action)
 	}
-	if got, want := out.String(), "\x1b[r\x1b[?6l\x1b[4;1H\x1b[2K\x1b[4;1Hready\x1b[?25l"; got != want {
+	if got, want := out.String(), "\x1b[r\x1b[?6l\x1b]133;C\x1b\\\x1b[4;1H\x1b]133;C\x1b\\\x1b[2K\x1b[4;1H\x1b]133;A;redraw=1\x1b\\ready\x1b[?25l"; got != want {
 		t.Fatalf("height-only repaint bytes = %q, want %q", got, want)
 	}
 }
