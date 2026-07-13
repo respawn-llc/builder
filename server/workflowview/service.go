@@ -356,20 +356,17 @@ func (s *Service) workflowSelectionInputs(ctx context.Context, projectID string,
 		return nil, nil, nil, err
 	}
 	workflowIDs := make([]string, 0, len(links))
-	seen := map[string]bool{}
 	linkByWorkflowID := map[string]sqlitegen.ProjectWorkflowLinkRecord{}
 	for _, link := range links {
-		if linkByWorkflowID[link.WorkflowID].ID == "" {
-			linkByWorkflowID[link.WorkflowID] = link
+		if _, exists := linkByWorkflowID[link.WorkflowID]; exists {
+			continue
 		}
-		if !seen[link.WorkflowID] {
-			workflowIDs = append(workflowIDs, link.WorkflowID)
-			seen[link.WorkflowID] = true
-		}
+		linkByWorkflowID[link.WorkflowID] = link
+		workflowIDs = append(workflowIDs, link.WorkflowID)
 	}
 	activityByWorkflowID := map[string]int64{}
 	for _, activity := range taskActivityRows {
-		if seen[activity.WorkflowID] {
+		if _, linked := linkByWorkflowID[activity.WorkflowID]; linked {
 			activityByWorkflowID[activity.WorkflowID] = activity.LatestUpdatedAtUnixMs
 		}
 	}
@@ -383,15 +380,18 @@ func (s *Service) workflowSelectionInputs(ctx context.Context, projectID string,
 		}
 		definitions[workflowID] = def
 		nodeKindsByWorkflowID[workflowID] = nodeKinds
-		link := linkByWorkflowID[workflowID]
+		link, linked := linkByWorkflowID[workflowID]
+		if !linked {
+			return nil, nil, nil, fmt.Errorf("workflow selection invariant violated: active link missing for project_id=%q workflow_id=%q", projectID, workflowID)
+		}
 		validation := definitionExecutionValidation(def, roleResolver)
 		picker = append(picker, serverapi.WorkflowPickerItem{
 			WorkflowID:           workflowID,
 			DisplayName:          def.Workflow.Name,
 			Description:          def.Workflow.Description,
 			Version:              def.Workflow.Version,
-			IsProjectDefault:     link.ID != "" && link.IsDefault != 0,
-			ValidForTaskCreation: !validation.HasBlockingErrors() && link.ID != "",
+			IsProjectDefault:     link.IsDefault != 0,
+			ValidForTaskCreation: !validation.HasBlockingErrors(),
 			ValidationErrors:     ValidationErrors(def.Workflow.ID, validation.Errors),
 		})
 	}
