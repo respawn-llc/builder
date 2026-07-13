@@ -3,6 +3,7 @@ import { I18nextProvider } from "react-i18next";
 import { beforeAll, vi } from "vitest";
 
 import { appI18n, initializeI18n } from "../../i18n/setup";
+import { TestDataTransfer } from "../../test-support/board/TestDataTransfer";
 import { KanbanColumn } from "./BoardColumns";
 import type { KanbanCardVM, KanbanColumnVM } from "./BoardColumnViewModel";
 import { boardCardDragPayloadType, decodeBoardCardDragPayload } from "./BoardDragTypes";
@@ -163,7 +164,7 @@ describe("KanbanColumn", () => {
     expect(within(questionCard).queryByTestId("task-card-active-run-spinner")).not.toBeInTheDocument();
   });
 
-  it("renders complete card bodies, workspace chips only when present, and distinct question/approval border tones", () => {
+  it("renders bounded card previews, workspace chips only when present, and distinct question/approval border tones", () => {
     render(
       <I18nextProvider i18n={appI18n}>
         <KanbanColumn
@@ -171,7 +172,10 @@ describe("KanbanColumn", () => {
           cards={[
             {
               ...card,
-              body: "Complete body beyond the old preview boundary: **semantic source remains intact**",
+              preview: {
+                markdown: "Bounded preview from the server: **semantic source remains intact**",
+                truncated: true,
+              },
               id: "task-question",
               borderTone: "primary",
               statusKind: "waiting_question",
@@ -208,8 +212,10 @@ describe("KanbanColumn", () => {
     const approvalCard = screen.getByRole("article", { name: "Approval task" });
 
     expect(within(questionCard).getByTestId("task-card-body")).toHaveTextContent(
-      "Complete body beyond the old preview boundary: semantic source remains intact",
+      "Bounded preview from the server: semantic source remains intact",
     );
+    expect(within(questionCard).getByTestId("task-card-preview-ellipsis")).toHaveTextContent("…");
+    expect(within(approvalCard).queryByTestId("task-card-preview-ellipsis")).not.toBeInTheDocument();
     expect(within(questionCard).queryByTestId("task-card-chip-slot")).not.toBeInTheDocument();
     expect(within(approvalCard).getByTestId("task-card-chip-slot")).toHaveTextContent("Other workspace");
     expect(questionCard).toHaveAttribute("data-task-card-border-tone", "primary");
@@ -246,19 +252,29 @@ describe("KanbanColumn", () => {
     );
 
     expect(
-      within(screen.getByRole("article", { name: "Running task" })).getByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Running task" })).getByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByRole("article", { name: "Question task" })).queryByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Question task" })).queryByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).not.toBeInTheDocument();
     expect(
-      within(screen.getByRole("article", { name: "Approval task" })).queryByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Approval task" })).queryByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).not.toBeInTheDocument();
     expect(
-      within(screen.getByRole("article", { name: "Interrupted task" })).queryByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Interrupted task" })).queryByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).not.toBeInTheDocument();
     expect(
-      within(screen.getByRole("article", { name: "Canceled task" })).queryByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Canceled task" })).queryByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).not.toBeInTheDocument();
   });
 
@@ -385,6 +401,25 @@ describe("KanbanColumn", () => {
     expect(dataTransfer.setDragImage).toHaveBeenCalledTimes(1);
     expect(dataTransfer.setDragImage.mock.calls[0]?.[0]).toBeInstanceOf(HTMLElement);
     expect(onCardDragStart).toHaveBeenCalledTimes(1);
+    expect(onCardDragStart).toHaveBeenCalledWith({
+      instance: { columnID: "backlog", taskID: "task-1" },
+      lastVirtualIndex: 0,
+      payload: {
+        taskID: "task-1",
+        canStart: false,
+        activeNodeIDs: ["backlog"],
+        statusKind: "backlog",
+        manualMoveTargetNodeIDs: [],
+      },
+      snapshot: {
+        ...card,
+        actions: {
+          ...card.actions,
+          canStart: false,
+          manualMoveTargetNodeIDs: [],
+        },
+      },
+    });
     expect(onCardClick).not.toHaveBeenCalled();
   });
 
@@ -422,25 +457,6 @@ describe("KanbanColumn", () => {
   });
 });
 
-class TestDataTransfer {
-  readonly #values = new Map<string, string>();
-  effectAllowed = "all";
-  dropEffect = "none";
-  readonly setDragImage = vi.fn();
-
-  get types(): readonly string[] {
-    return [...this.#values.keys()];
-  }
-
-  setData(type: string, value: string): void {
-    this.#values.set(type, value);
-  }
-
-  getData(type: string): string {
-    return this.#values.get(type) ?? "";
-  }
-}
-
 function createCancelableDragEvent(type: string, dataTransfer: TestDataTransfer): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
@@ -462,7 +478,7 @@ const card: KanbanCardVM = {
     canStart: true,
     manualMoveTargetNodeIDs: [],
   },
-  body: "Body",
+  preview: { markdown: "Body", truncated: false },
   id: "task-1",
   shortID: "T-1",
   workspaceChipLabel: null,

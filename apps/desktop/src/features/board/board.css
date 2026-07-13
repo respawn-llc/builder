@@ -1,8 +1,10 @@
 .board-task-card {
-  --board-card-height: 18rem;
+  --board-card-height: 10rem;
 
   height: var(--board-card-height);
-  grid-template-rows: auto minmax(0, 2lh) minmax(0, 3lh) minmax(0, 1fr);
+  min-height: var(--board-card-height);
+  max-height: var(--board-card-height);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 .board-task-card[data-task-card-border-tone="primary"] {
@@ -31,11 +33,20 @@
 }
 
 .task-card-body-preview {
-  display: -webkit-box;
+  min-height: 0;
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    var(--color-on-island) 0,
+    var(--color-on-island) calc(100% - 1lh),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    var(--color-on-island) 0,
+    var(--color-on-island) calc(100% - 1lh),
+    transparent 100%
+  );
 }
 
 .task-card-footer {
@@ -132,18 +143,17 @@
      ramp. */
   --board-column-fade: var(--board-column-header-height);
 
-  padding-top: var(--board-column-fade);
   -webkit-mask-image: linear-gradient(
     to bottom,
     transparent 0,
     calc(var(--board-column-fade) * 0.58),
-    #000 var(--board-column-fade)
+    var(--color-on-island) var(--board-column-fade)
   );
   mask-image: linear-gradient(
     to bottom,
     transparent 0,
     calc(var(--board-column-fade) * 0.58),
-    #000 var(--board-column-fade)
+    var(--color-on-island) var(--board-column-fade)
   );
 }
 

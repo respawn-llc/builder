@@ -227,17 +227,59 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.start,
     activeNodeIDs: ["node-backlog"],
-    body: "Capture primitives, cards, panes, task detail, and board interactions.",
+    preview: "",
     id: "task-1",
     minutesAgo: 2,
     shortID: "BLDR-101",
     status: statuses.backlog,
-    title: "Inventory desktop UI components",
+    title: "No description fixture",
+  }),
+  card({
+    actions: taskActions.start,
+    activeNodeIDs: ["node-backlog"],
+    preview: "One concise preview line.",
+    id: "task-8",
+    minutesAgo: 4,
+    shortID: "BLDR-108",
+    status: statuses.backlog,
+    title: "Short description fixture",
+  }),
+  card({
+    actions: taskActions.start,
+    activeNodeIDs: ["node-backlog"],
+    preview:
+      "**Long preview fixture.** This bounded Markdown continues beyond the available card region so the always-on bottom fade can be reviewed independently from server truncation.",
+    previewTruncated: true,
+    id: "task-9",
+    minutesAgo: 6,
+    shortID: "BLDR-109",
+    status: statuses.backlog,
+    title: "Long description fixture",
+  }),
+  card({
+    actions: taskActions.start,
+    activeNodeIDs: ["node-backlog"],
+    preview: "A compact body leaves the title wrapping policy easy to inspect.",
+    id: "task-10",
+    minutesAgo: 8,
+    shortID: "BLDR-110",
+    status: statuses.backlog,
+    title: "Two-line title fixture with enough words to wrap across the compact board card",
+  }),
+  card({
+    actions: taskActions.resume,
+    activeNodeIDs: ["node-backlog"],
+    preview: "The footer keeps its natural action height without creating dead space.",
+    id: "task-11",
+    minutesAgo: 10,
+    shortID: "BLDR-111",
+    status: statuses.interrupted,
+    title: "Action footer fixture",
   }),
   card({
     actions: taskActions.running,
     activeNodeIDs: ["node-design"],
-    body: "Keep workflow picker accessible by hover, focus, and pin states.",
+    preview: "Keep workflow picker accessible by hover, focus, and pin states.",
     id: "task-2",
     minutesAgo: 12,
     shortID: "BLDR-102",
@@ -247,7 +289,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.waiting,
     activeNodeIDs: ["node-build"],
-    body: "Approval card should include transition snapshot and target nodes.",
+    preview: "Approval card should include transition snapshot and target nodes.",
     id: "task-3",
     minutesAgo: 24,
     shortID: "BLDR-103",
@@ -257,7 +299,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.waiting,
     activeNodeIDs: ["node-review"],
-    body: "Question card exercises suggestions, recommended choice, and freeform answer.",
+    preview: "Question card exercises suggestions, recommended choice, and freeform answer.",
     id: "task-4",
     minutesAgo: 36,
     shortID: "BLDR-104",
@@ -267,7 +309,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.resume,
     activeNodeIDs: ["node-review"],
-    body: "Interrupted task exposes resume control.",
+    preview: "Interrupted task exposes resume control.",
     id: "task-5",
     minutesAgo: 48,
     shortID: "BLDR-105",
@@ -277,7 +319,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.done,
     activeNodeIDs: ["node-done"],
-    body: "Completed proof remains visible through the regular Done node card stream.",
+    preview: "Completed proof remains visible through the regular Done node card stream.",
     id: "task-6",
     minutesAgo: 70,
     shortID: "BLDR-090",
@@ -287,7 +329,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.done,
     activeNodeIDs: ["node-done"],
-    body: "Older done task appears through Done pagination when needed.",
+    preview: "Older done task appears through Done pagination when needed.",
     id: "task-7",
     minutesAgo: 120,
     shortID: "BLDR-089",
@@ -385,7 +427,8 @@ function card(
   input: Readonly<{
     actions: TaskActions;
     activeNodeIDs: readonly string[];
-    body: string;
+    preview: string;
+    previewTruncated?: boolean;
     id: string;
     minutesAgo: number;
     shortID: string;
@@ -396,7 +439,7 @@ function card(
   return {
     actions: input.actions,
     activeNodeIDs: input.activeNodeIDs,
-    body: input.body,
+    preview: { markdown: input.preview, truncated: input.previewTruncated ?? false },
     id: input.id,
     shortID: input.shortID,
     sourceWorkspace: mockWorkspaces[0] ?? fallbackWorkspace,

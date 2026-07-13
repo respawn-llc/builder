@@ -27,8 +27,14 @@ import type {
 
 export const emptyString = z.string().optional().default("");
 export const numberValue = z.number().default(0);
-export const nullableString = z.string().nullish().transform((value) => value ?? null);
-const nullableNumber = z.number().nullish().transform((value) => value ?? null);
+export const nullableString = z
+  .string()
+  .nullish()
+  .transform((value) => value ?? null);
+const nullableNumber = z
+  .number()
+  .nullish()
+  .transform((value) => value ?? null);
 export const stringList = z
   .array(z.string())
   .nullish()
@@ -289,7 +295,12 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     task_id: z.string(),
     short_id: z.string(),
     title: z.string(),
-    body: z.string(),
+    preview: z
+      .object({
+        markdown: z.string(),
+        truncated: z.boolean(),
+      })
+      .strict(),
     workflow_id: z.string(),
     active_node_ids: stringList,
     source_workspace: workspaceSummarySchema,
@@ -302,7 +313,7 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     id: value.task_id,
     shortID: value.short_id,
     title: value.title,
-    body: value.body,
+    preview: value.preview,
     workflowID: value.workflow_id,
     activeNodeIDs: value.active_node_ids,
     sourceWorkspace: value.source_workspace,

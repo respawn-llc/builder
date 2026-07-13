@@ -10,7 +10,7 @@ const card: BoardCard = {
     canStart: true,
     manualMoveTargetNodeIDs: [],
   },
-  body: "Body",
+  preview: { markdown: "Body", truncated: false },
   id: "task-1",
   shortID: "KNT-1",
   sourceWorkspace: {
@@ -34,65 +34,65 @@ const card: BoardCard = {
 };
 
 describe("toKanbanCardVM", () => {
-  it.each<readonly [
+  it.each([
     {
-      name: string;
-      attachedWorkspaceCount: number;
-      defaultWorkspaceID: string;
-      availability: WorkspaceSummary["availability"];
-      expectedWorkspaceChipLabel: string | null;
-    },
-  ]>([
-    [{
       name: "hides the chip for a one-workspace project",
       attachedWorkspaceCount: 1,
       defaultWorkspaceID: "workspace-default",
       availability: "available",
       expectedWorkspaceChipLabel: null,
-    }],
-    [{
+    },
+    {
       name: "hides the chip for the default workspace",
       attachedWorkspaceCount: 2,
       defaultWorkspaceID: "workspace-other",
       availability: "available",
       expectedWorkspaceChipLabel: null,
-    }],
-    [{
+    },
+    {
       name: "shows the chip for an attached non-default workspace",
       attachedWorkspaceCount: 2,
       defaultWorkspaceID: "workspace-default",
       availability: "available",
       expectedWorkspaceChipLabel: "Other workspace",
-    }],
-    [{
+    },
+    {
       name: "shows the chip for a missing attached non-default workspace",
       attachedWorkspaceCount: 2,
       defaultWorkspaceID: "workspace-default",
       availability: "missing",
       expectedWorkspaceChipLabel: "Other workspace",
-    }],
-    [{
+    },
+    {
       name: "shows the chip for an inaccessible attached non-default workspace",
       attachedWorkspaceCount: 2,
       defaultWorkspaceID: "workspace-default",
       availability: "inaccessible",
       expectedWorkspaceChipLabel: "Other workspace",
-    }],
-    [{
+    },
+    {
       name: "hides detached historical context with one workspace",
       attachedWorkspaceCount: 1,
       defaultWorkspaceID: "workspace-default",
       availability: "unlinked",
       expectedWorkspaceChipLabel: null,
-    }],
-    [{
+    },
+    {
       name: "hides detached historical context with multiple remaining workspaces",
       attachedWorkspaceCount: 3,
       defaultWorkspaceID: "workspace-default",
       availability: "unlinked",
       expectedWorkspaceChipLabel: null,
-    }],
-  ])("$name", ({ attachedWorkspaceCount, defaultWorkspaceID, availability, expectedWorkspaceChipLabel }) => {
+    },
+  ] satisfies readonly {
+    name: string;
+    attachedWorkspaceCount: number;
+    defaultWorkspaceID: string;
+    availability: WorkspaceSummary["availability"];
+    expectedWorkspaceChipLabel: string | null;
+  }[])(
+    "$name",
+    ({ attachedWorkspaceCount, defaultWorkspaceID, availability, expectedWorkspaceChipLabel }) => {
       const viewModel = toKanbanCardVM(
         {
           ...card,
@@ -105,7 +105,8 @@ describe("toKanbanCardVM", () => {
       );
 
       expect(viewModel.workspaceChipLabel).toBe(expectedWorkspaceChipLabel);
-    });
+    },
+  );
 
   it.each([
     ["waiting_question", "primary"],

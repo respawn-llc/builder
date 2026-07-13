@@ -1344,7 +1344,7 @@ func workflowTaskSummaryFromCard(projectID string, card serverapi.WorkflowBoardT
 		WorkflowID:        card.WorkflowID,
 		ShortID:           card.ShortID,
 		Title:             card.Title,
-		BodyPreview:       card.Body,
+		BodyPreview:       card.Preview.Markdown,
 		SourceWorkspaceID: card.SourceWorkspace.WorkspaceID,
 		UpdatedAtUnixMs:   card.UpdatedAtUnixMs,
 		Done:              card.Status.Kind == "done",

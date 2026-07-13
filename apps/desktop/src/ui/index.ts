@@ -69,4 +69,6 @@ export { Popover, PopoverClose, PopoverContent, PopoverTrigger } from "../compon
 export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 export { dismissStatusToast, showStatusToast } from "./statusToast";
 export { VirtualizedInfiniteList } from "./VirtualizedInfiniteList";
+export { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
+export { useStableCallback } from "./useStableCallback";
 export type { StatusNotice, ToastTone } from "./statusToast";

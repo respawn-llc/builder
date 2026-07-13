@@ -23,6 +23,7 @@ const (
 const WorkflowListMaxPageSize = 100
 const WorkflowTaskListMaxPageSize = 100
 const WorkflowTaskListMaxSortSelectors = 5
+const WorkflowBoardNodeCardsMaxPageSize = 25
 
 type WorkflowNodeKind string
 
@@ -925,11 +926,8 @@ type WorkflowTaskCommentDeleteRequest struct {
 }
 
 type WorkflowBoardRequest struct {
-	ProjectID        string `json:"project_id"`
-	WorkflowID       string `json:"workflow_id,omitempty"`
-	DonePreviewLimit int    `json:"done_preview_limit"`
-	PageSize         int    `json:"page_size"`
-	PageToken        string `json:"page_token"`
+	ProjectID  string `json:"project_id"`
+	WorkflowID string `json:"workflow_id,omitempty"`
 }
 
 type WorkflowTaskStatusKind string
@@ -1125,11 +1123,11 @@ type WorkflowBoardResponse struct {
 }
 
 type WorkflowBoardNodeCardsListRequest struct {
-	ProjectID  string `json:"project_id"`
-	WorkflowID string `json:"workflow_id"`
-	NodeID     string `json:"node_id"`
-	PageSize   int    `json:"page_size"`
-	PageToken  string `json:"page_token"`
+	ProjectID  string  `json:"project_id"`
+	WorkflowID string  `json:"workflow_id"`
+	NodeID     string  `json:"node_id"`
+	PageSize   int     `json:"page_size"`
+	PageToken  *string `json:"page_token"`
 }
 
 type WorkflowBoardNodeCardsListResponse struct {
@@ -1137,22 +1135,19 @@ type WorkflowBoardNodeCardsListResponse struct {
 	WorkflowID        string                  `json:"workflow_id"`
 	NodeID            string                  `json:"node_id"`
 	Cards             []WorkflowBoardTaskCard `json:"cards"`
-	NextPageToken     string                  `json:"next_page_token"`
+	PreviousPageToken *string                 `json:"previous_page_token"`
+	NextPageToken     *string                 `json:"next_page_token"`
 	GeneratedAtUnixMs int64                   `json:"generated_at_unix_ms"`
 }
 
 type WorkflowBoard struct {
-	ProjectID          string                  `json:"project_id"`
-	Project            ProjectBoardProject     `json:"project"`
-	SelectedWorkflow   WorkflowPickerItem      `json:"selected_workflow"`
-	WorkflowPicker     []WorkflowPickerItem    `json:"workflows"`
-	Groups             []WorkflowBoardGroup    `json:"groups"`
-	Columns            []WorkflowBoardColumn   `json:"columns"`
-	Cards              []WorkflowBoardTaskCard `json:"cards"`
-	DonePreview        []WorkflowBoardTaskCard `json:"done_preview"`
-	HasHiddenDoneCards bool                    `json:"has_hidden_done_cards"`
-	NextPageToken      string                  `json:"next_page_token"`
-	GeneratedAtUnixMs  int64                   `json:"generated_at_unix_ms"`
+	ProjectID         string                `json:"project_id"`
+	Project           ProjectBoardProject   `json:"project"`
+	SelectedWorkflow  WorkflowPickerItem    `json:"selected_workflow"`
+	WorkflowPicker    []WorkflowPickerItem  `json:"workflows"`
+	Groups            []WorkflowBoardGroup  `json:"groups"`
+	Columns           []WorkflowBoardColumn `json:"columns"`
+	GeneratedAtUnixMs int64                 `json:"generated_at_unix_ms"`
 }
 
 type ProjectBoardProject struct {
@@ -1205,13 +1200,18 @@ type WorkflowBoardTaskCard struct {
 	TaskID          string                  `json:"task_id"`
 	ShortID         string                  `json:"short_id"`
 	Title           string                  `json:"title"`
-	Body            string                  `json:"body"`
+	Preview         MarkdownPreview         `json:"preview"`
 	WorkflowID      string                  `json:"workflow_id"`
 	ActiveNodeIDs   []string                `json:"active_node_ids,omitempty"`
 	SourceWorkspace ProjectWorkspaceSummary `json:"source_workspace"`
 	Status          WorkflowTaskStatus      `json:"status"`
 	Actions         WorkflowTaskActions     `json:"actions"`
 	UpdatedAtUnixMs int64                   `json:"updated_at_unix_ms"`
+}
+
+type MarkdownPreview struct {
+	Markdown  string `json:"markdown"`
+	Truncated bool   `json:"truncated"`
 }
 
 type WorkflowTaskStatus struct {
@@ -2087,19 +2087,7 @@ func (r WorkflowTaskCommentDeleteRequest) Validate() error {
 }
 
 func (r WorkflowBoardRequest) Validate() error {
-	if err := validateRequired("project_id", r.ProjectID); err != nil {
-		return err
-	}
-	if r.DonePreviewLimit < 0 {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "done_preview_limit", "done_preview_limit must be non-negative")
-	}
-	if r.PageSize < 0 {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
-	}
-	if strings.TrimSpace(r.PageToken) != r.PageToken {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
-	}
-	return nil
+	return validateRequired("project_id", r.ProjectID)
 }
 
 func (r WorkflowTaskListRequest) Validate() error {
@@ -2179,7 +2167,13 @@ func (r WorkflowBoardNodeCardsListRequest) Validate() error {
 	if r.PageSize < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
 	}
-	if strings.TrimSpace(r.PageToken) != r.PageToken {
+	if r.PageSize > WorkflowBoardNodeCardsMaxPageSize {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", fmt.Sprintf("page_size must be <= %d", WorkflowBoardNodeCardsMaxPageSize))
+	}
+	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not be blank")
+	}
+	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) != *r.PageToken {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
 	}
 	return nil

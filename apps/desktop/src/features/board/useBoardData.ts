@@ -1,6 +1,13 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 
+import type { BoardNodeCardsPage } from "../../api";
 import { queryKeys } from "../../app/queryKeys";
 import { useAppServices } from "../../app/useAppServices";
 import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
@@ -17,12 +24,21 @@ export function useBoard(projectID: string, workflowID: string) {
 
 export function useBoardNodeCards(projectID: string, workflowID: string, nodeID: string, enabled: boolean) {
   const { api } = useAppServices();
-  return useInfiniteQuery({
+  return useInfiniteQuery<
+    BoardNodeCardsPage,
+    Error,
+    InfiniteData<BoardNodeCardsPage, string | null>,
+    readonly string[],
+    string | null
+  >({
     queryKey: queryKeys.boardNodeCards(projectID, workflowID, nodeID),
     queryFn: async ({ pageParam }) => api.listBoardNodeCards(projectID, workflowID, nodeID, pageParam),
-    initialPageParam: "",
+    initialPageParam: null,
     enabled: enabled && projectID.length > 0 && workflowID.length > 0 && nodeID.length > 0,
-    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
+    getPreviousPageParam: (firstPage) => firstPage.previousPageToken ?? undefined,
+    getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
+    maxPages: 3,
+    gcTime: 0,
   });
 }
 
@@ -117,11 +133,7 @@ function isDeletedTaskEvent(params: unknown, taskID: string): boolean {
   if (trimmedTaskID.length === 0 || event === null) {
     return false;
   }
-  return (
-    event.resource === "task" &&
-    event.action === "deleted" &&
-    event.changedIDs.includes(trimmedTaskID)
-  );
+  return event.resource === "task" && event.action === "deleted" && event.changedIDs.includes(trimmedTaskID);
 }
 
 export function shouldRefreshBoardFromProjectEvent(

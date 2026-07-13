@@ -3874,364 +3874,142 @@ func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardCo
 	return items, nil
 }
 
-const listBoardDonePreviewTasks = `-- name: ListBoardDonePreviewTasks :many
-SELECT
-    t.id,
-    t.project_id,
-    t.project_workflow_link_id,
-    t.workflow_id,
-    t.workflow_revision_seen,
-    t.task_seq,
-    t.short_id,
-    t.title,
-    t.body,
-    t.source_url,
-    t.source_workspace_id,
-    t.managed_worktree_id,
-    t.execution_target_mode,
-    t.execution_target_requested_ref,
-    t.execution_target_resolved_ref,
-    t.execution_target_commit_oid,
-    t.execution_target_provenance,
-    t.canceled_at_unix_ms,
-    t.cancellation_reason,
-    t.created_at_unix_ms,
-    t.updated_at_unix_ms,
-    t.metadata_json
-FROM task_records t
-WHERE t.project_id = ?1
-  AND t.workflow_id = ?2
-  AND (
-      EXISTS (
-          SELECT 1
-          FROM task_node_placements p
-          JOIN workflow_nodes n ON n.id = p.node_id
-          WHERE p.task_id = t.id
-            AND p.state = 'active'
-            AND n.kind = 'terminal'
-      )
-      OR (
-          t.canceled_at_unix_ms IS NOT NULL
-          AND trim(?3) != ''
-      )
-  )
-ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-LIMIT ?4
-`
-
-type ListBoardDonePreviewTasksParams struct {
-	ProjectID              string
-	WorkflowID             string
-	CanceledTerminalNodeID string
-	LimitRows              int64
-}
-
-func (q *Queries) ListBoardDonePreviewTasks(ctx context.Context, arg ListBoardDonePreviewTasksParams) ([]TaskRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardDonePreviewTasks,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.CanceledTerminalNodeID,
-		arg.LimitRows,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRecord
-	for rows.Next() {
-		var i TaskRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.ProjectID,
-			&i.ProjectWorkflowLinkID,
-			&i.WorkflowID,
-			&i.WorkflowRevisionSeen,
-			&i.TaskSeq,
-			&i.ShortID,
-			&i.Title,
-			&i.Body,
-			&i.SourceUrl,
-			&i.SourceWorkspaceID,
-			&i.ManagedWorktreeID,
-			&i.ExecutionTargetMode,
-			&i.ExecutionTargetRequestedRef,
-			&i.ExecutionTargetResolvedRef,
-			&i.ExecutionTargetCommitOid,
-			&i.ExecutionTargetProvenance,
-			&i.CanceledAtUnixMs,
-			&i.CancellationReason,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listBoardNodeTasks = `-- name: ListBoardNodeTasks :many
-WITH board_node_task_ids AS (
-    SELECT
-        t.id
-    FROM task_node_placements p
-    JOIN task_records t ON t.id = p.task_id
-    JOIN workflow_nodes n ON n.id = p.node_id
-    WHERE p.node_id = ?5
-      AND (
-        p.state IN ('active', 'waiting_approval')
-      )
-      AND t.project_id = ?6
-      AND t.workflow_id = ?7
-      AND (
-        t.canceled_at_unix_ms IS NULL
-        OR n.kind = 'terminal'
-      )
-    UNION
-    SELECT
-        t.id
-    FROM task_transition_records tt
-    JOIN task_records t ON t.id = tt.task_id
-    WHERE tt.source_node_id = ?5
-      AND tt.state = 'pending_approval'
-      AND t.project_id = ?6
-      AND t.workflow_id = ?7
-      AND t.canceled_at_unix_ms IS NULL
-    UNION
-    SELECT
-        t.id
+WITH board_node_tasks AS (
+    SELECT t.id, t.project_id, t.project_workflow_link_id, t.workflow_id, t.workflow_revision_seen, t.task_seq, t.short_id, t.title, t.body, t.source_url, t.source_workspace_id, t.managed_worktree_id, t.execution_target_mode, t.execution_target_requested_ref, t.execution_target_resolved_ref, t.execution_target_commit_oid, t.execution_target_provenance, t.canceled_at_unix_ms, t.cancellation_reason, t.created_at_unix_ms, t.updated_at_unix_ms, t.metadata_json
     FROM task_records t
-    WHERE t.project_id = ?6
-      AND t.workflow_id = ?7
-      AND t.canceled_at_unix_ms IS NOT NULL
-      AND ?5 = ?8
-      AND EXISTS (
-        SELECT 1
-        FROM workflow_nodes n
-        WHERE n.id = ?5
-          AND n.kind = 'terminal'
+    WHERE t.project_id = ?1
+      AND t.workflow_id = ?2
+      AND (
+          EXISTS (
+              SELECT 1
+              FROM task_node_placements p
+              JOIN workflow_nodes n ON n.id = p.node_id
+              WHERE p.task_id = t.id
+                AND p.node_id = ?3
+                AND p.state IN ('active', 'waiting_approval')
+                AND (
+                    t.canceled_at_unix_ms IS NULL
+                    OR n.kind = 'terminal'
+                )
+          )
+          OR EXISTS (
+              SELECT 1
+              FROM task_transition_records tt
+              WHERE tt.task_id = t.id
+                AND tt.source_node_id = ?3
+                AND tt.state = 'pending_approval'
+                AND t.canceled_at_unix_ms IS NULL
+          )
+          OR (
+              t.canceled_at_unix_ms IS NOT NULL
+              AND ?3 = ?4
+              AND EXISTS (
+                  SELECT 1
+                  FROM workflow_nodes n
+                  WHERE n.id = ?3
+                    AND n.kind = 'terminal'
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_node_placements p
+                  JOIN workflow_nodes n ON n.id = p.node_id
+                  WHERE p.task_id = t.id
+                    AND p.state = 'active'
+                    AND n.kind = 'terminal'
+              )
+          )
       )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM task_node_placements p
-        JOIN workflow_nodes n ON n.id = p.node_id
-        WHERE p.task_id = t.id
-          AND p.state = 'active'
-          AND n.kind = 'terminal'
+),
+older_page AS (
+    SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json
+    FROM board_node_tasks t
+    WHERE ?5 = 'older'
+      AND (
+          ?6 IS NULL
+          OR t.updated_at_unix_ms < ?6
+          OR (
+              t.updated_at_unix_ms = ?6
+              AND t.id < ?7
+          )
       )
+    ORDER BY t.updated_at_unix_ms DESC, t.id DESC
+    LIMIT ?8
+),
+newer_page AS (
+    SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json
+    FROM board_node_tasks t
+    WHERE ?5 = 'newer'
+      AND ?6 IS NOT NULL
+      AND (
+          t.updated_at_unix_ms > ?6
+          OR (
+              t.updated_at_unix_ms = ?6
+              AND t.id > ?7
+          )
+      )
+    ORDER BY t.updated_at_unix_ms ASC, t.id ASC
+    LIMIT ?8
 )
-SELECT
-    t.id,
-    t.project_id,
-    t.project_workflow_link_id,
-    t.workflow_id,
-    t.workflow_revision_seen,
-    t.task_seq,
-    t.short_id,
-    t.title,
-    t.body,
-    t.source_url,
-    t.source_workspace_id,
-    t.managed_worktree_id,
-    t.execution_target_mode,
-    t.execution_target_requested_ref,
-    t.execution_target_resolved_ref,
-    t.execution_target_commit_oid,
-    t.execution_target_provenance,
-    t.canceled_at_unix_ms,
-    t.cancellation_reason,
-    t.created_at_unix_ms,
-    t.updated_at_unix_ms,
-    t.metadata_json
-FROM task_records t
-WHERE t.id IN (SELECT id FROM board_node_task_ids)
-  AND (
-    CAST(?1 AS INTEGER) = 0
-    OR t.updated_at_unix_ms < ?2
-    OR (
-        t.updated_at_unix_ms = ?2
-        AND t.id < ?3
-    )
-  )
-ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-LIMIT ?4
+SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json FROM older_page
+UNION ALL
+SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json FROM newer_page
 `
 
 type ListBoardNodeTasksParams struct {
-	CursorSet              int64
-	CursorUpdatedAtUnixMs  int64
-	CursorTaskID           string
-	LimitRows              int64
+	ProjectID              string
+	WorkflowID             string
 	NodeID                 sql.NullString
-	ProjectID              string
-	WorkflowID             string
 	CanceledTerminalNodeID interface{}
-}
-
-func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasksParams) ([]TaskRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardNodeTasks,
-		arg.CursorSet,
-		arg.CursorUpdatedAtUnixMs,
-		arg.CursorTaskID,
-		arg.LimitRows,
-		arg.NodeID,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.CanceledTerminalNodeID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRecord
-	for rows.Next() {
-		var i TaskRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.ProjectID,
-			&i.ProjectWorkflowLinkID,
-			&i.WorkflowID,
-			&i.WorkflowRevisionSeen,
-			&i.TaskSeq,
-			&i.ShortID,
-			&i.Title,
-			&i.Body,
-			&i.SourceUrl,
-			&i.SourceWorkspaceID,
-			&i.ManagedWorktreeID,
-			&i.ExecutionTargetMode,
-			&i.ExecutionTargetRequestedRef,
-			&i.ExecutionTargetResolvedRef,
-			&i.ExecutionTargetCommitOid,
-			&i.ExecutionTargetProvenance,
-			&i.CanceledAtUnixMs,
-			&i.CancellationReason,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listBoardOpenTasks = `-- name: ListBoardOpenTasks :many
-WITH board_open_task_ids AS (
-    SELECT
-        t.id
-    FROM task_node_placements p
-    JOIN task_records t ON t.id = p.task_id
-    JOIN workflow_nodes n ON n.id = p.node_id
-    WHERE p.state IN ('active', 'waiting_approval')
-      AND n.kind != 'terminal'
-      AND t.project_id = ?5
-      AND t.workflow_id = ?6
-      AND (
-          t.canceled_at_unix_ms IS NULL
-          OR trim(?7) = ''
-      )
-    UNION
-    SELECT
-        t.id
-    FROM task_transition_records tt
-    JOIN task_records t ON t.id = tt.task_id
-    JOIN workflow_nodes n ON n.id = tt.source_node_id
-    WHERE tt.state = 'pending_approval'
-      AND n.kind != 'terminal'
-      AND t.project_id = ?5
-      AND t.workflow_id = ?6
-      AND (
-          t.canceled_at_unix_ms IS NULL
-          OR trim(?7) = ''
-      )
-)
-SELECT
-    t.id,
-    t.project_id,
-    t.project_workflow_link_id,
-    t.workflow_id,
-    t.workflow_revision_seen,
-    t.task_seq,
-    t.short_id,
-    t.title,
-    t.body,
-    t.source_url,
-    t.source_workspace_id,
-    t.managed_worktree_id,
-    t.execution_target_mode,
-    t.execution_target_requested_ref,
-    t.execution_target_resolved_ref,
-    t.execution_target_commit_oid,
-    t.execution_target_provenance,
-    t.canceled_at_unix_ms,
-    t.cancellation_reason,
-    t.created_at_unix_ms,
-    t.updated_at_unix_ms,
-    t.metadata_json
-FROM task_records t
-WHERE t.id IN (SELECT id FROM board_open_task_ids)
-  AND NOT EXISTS (
-      SELECT 1
-      FROM task_node_placements terminal_placement
-      JOIN workflow_nodes terminal_node ON terminal_node.id = terminal_placement.node_id
-      WHERE terminal_placement.task_id = t.id
-        AND terminal_placement.state = 'active'
-        AND terminal_node.kind = 'terminal'
-  )
-  AND (
-    CAST(?1 AS INTEGER) = 0
-    OR t.updated_at_unix_ms < ?2
-    OR (
-        t.updated_at_unix_ms = ?2
-        AND t.id < ?3
-    )
-  )
-ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-LIMIT ?4
-`
-
-type ListBoardOpenTasksParams struct {
-	CursorSet              int64
-	CursorUpdatedAtUnixMs  int64
-	CursorTaskID           string
+	CursorDirection        interface{}
+	CursorUpdatedAtUnixMs  interface{}
+	CursorTaskID           sql.NullString
 	LimitRows              int64
-	ProjectID              string
-	WorkflowID             string
-	CanceledTerminalNodeID string
 }
 
-func (q *Queries) ListBoardOpenTasks(ctx context.Context, arg ListBoardOpenTasksParams) ([]TaskRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardOpenTasks,
-		arg.CursorSet,
+type ListBoardNodeTasksRow struct {
+	ID                          string
+	ProjectID                   string
+	ProjectWorkflowLinkID       string
+	WorkflowID                  string
+	WorkflowRevisionSeen        int64
+	TaskSeq                     int64
+	ShortID                     string
+	Title                       string
+	Body                        string
+	SourceUrl                   string
+	SourceWorkspaceID           sql.NullString
+	ManagedWorktreeID           sql.NullString
+	ExecutionTargetMode         sql.NullString
+	ExecutionTargetRequestedRef sql.NullString
+	ExecutionTargetResolvedRef  sql.NullString
+	ExecutionTargetCommitOid    sql.NullString
+	ExecutionTargetProvenance   sql.NullString
+	CanceledAtUnixMs            sql.NullInt64
+	CancellationReason          sql.NullString
+	CreatedAtUnixMs             int64
+	UpdatedAtUnixMs             int64
+	MetadataJson                string
+}
+
+func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasksParams) ([]ListBoardNodeTasksRow, error) {
+	rows, err := q.db.QueryContext(ctx, listBoardNodeTasks,
+		arg.ProjectID,
+		arg.WorkflowID,
+		arg.NodeID,
+		arg.CanceledTerminalNodeID,
+		arg.CursorDirection,
 		arg.CursorUpdatedAtUnixMs,
 		arg.CursorTaskID,
 		arg.LimitRows,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.CanceledTerminalNodeID,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TaskRecord
+	var items []ListBoardNodeTasksRow
 	for rows.Next() {
-		var i TaskRecord
+		var i ListBoardNodeTasksRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,

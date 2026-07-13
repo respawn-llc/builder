@@ -25,10 +25,7 @@ import type {
 } from "./clientInputs";
 import { compactJsonObject, emptyJsonObject } from "./json";
 import type { SetupOperationID } from "./setupOperationID";
-import {
-  worktreeSetupRpcHandler,
-  type WorktreeSetupEventHandler,
-} from "./worktreeSetup";
+import { worktreeSetupRpcHandler, type WorktreeSetupEventHandler } from "./worktreeSetup";
 import type {
   ActivityPage,
   AttentionPage,
@@ -447,7 +444,7 @@ export class ApiClient {
     projectID: string,
     workflowID: string,
     nodeID: string,
-    pageToken = "",
+    pageToken: string | null = null,
   ): Promise<BoardNodeCardsPage> {
     return parse(
       "workflow.board.nodeCards.list",
@@ -458,7 +455,7 @@ export class ApiClient {
           project_id: projectID,
           workflow_id: workflowID,
           node_id: nodeID,
-          page_size: 100,
+          page_size: 25,
           page_token: pageToken,
         }),
       ),
@@ -660,7 +657,10 @@ export class ApiClient {
     );
   }
 
-  subscribeWorktreeSetup(setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler): RpcSubscription {
+  subscribeWorktreeSetup(
+    setupOperationID: SetupOperationID,
+    handler: WorktreeSetupEventHandler,
+  ): RpcSubscription {
     return this.transport.subscribe(
       "worktree.setup.subscribe",
       { setup_operation_id: setupOperationID.toJSONValue() },

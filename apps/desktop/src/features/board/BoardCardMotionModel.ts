@@ -95,7 +95,9 @@ export function dirtyBoardCardCountColumnIDs(
   nextCounts: BoardCardColumnCountSnapshot,
 ): readonly string[] {
   const columnIDs = new Set([...currentCounts.keys(), ...nextCounts.keys()]);
-  return Array.from(columnIDs).filter((columnID) => (currentCounts.get(columnID) ?? 0) !== (nextCounts.get(columnID) ?? 0));
+  return Array.from(columnIDs).filter(
+    (columnID) => (currentCounts.get(columnID) ?? 0) !== (nextCounts.get(columnID) ?? 0),
+  );
 }
 
 export function boardCardColumnCountSnapshot(
@@ -105,7 +107,9 @@ export function boardCardColumnCountSnapshot(
 }
 
 export function boardCardColumnIDsWithCards(snapshot: BoardCardColumnsSnapshot): ReadonlySet<string> {
-  return new Set(Array.from(snapshot, ([columnID, cards]) => (cards.length > 0 ? columnID : "")).filter(Boolean));
+  return new Set(
+    Array.from(snapshot, ([columnID, cards]) => (cards.length > 0 ? columnID : "")).filter(Boolean),
+  );
 }
 
 export function boardRailLayoutSignature(
@@ -128,7 +132,9 @@ export function cardBelongsToColumn(column: BoardColumn, card: KanbanCardVM): bo
     return card.statusKind === "backlog";
   }
   if (column.isDone) {
-    return card.statusKind === "done" || card.statusKind === "canceled" || card.activeNodeIDs.includes(column.id);
+    return (
+      card.statusKind === "done" || card.statusKind === "canceled" || card.activeNodeIDs.includes(column.id)
+    );
   }
   return card.activeNodeIDs.includes(column.id);
 }
@@ -148,7 +154,8 @@ function cardContentEqual(left: KanbanCardVM, right: KanbanCardVM): boolean {
   return (
     left.shortID === right.shortID &&
     left.title === right.title &&
-    left.body === right.body &&
+    left.preview.markdown === right.preview.markdown &&
+    left.preview.truncated === right.preview.truncated &&
     left.updatedAt === right.updatedAt &&
     left.statusKind === right.statusKind &&
     arrayEqual(left.statusRunIDs, right.statusRunIDs) &&

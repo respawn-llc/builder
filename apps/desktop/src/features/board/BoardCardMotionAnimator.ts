@@ -3,7 +3,7 @@ import type { RefObject } from "react";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 
 export type BoardCardMotionTransitionOptions = Readonly<{
-  cardElementsRef: RefObject<ReadonlyMap<string, HTMLElement>>;
+  cardElementForTaskID: (taskID: string) => HTMLElement | undefined;
   columnElementsRef: RefObject<ReadonlyMap<string, HTMLElement>>;
   namesByCardID: ReadonlyMap<string, string>;
   pendingCardMove: PendingBoardCardMove | null;
@@ -20,14 +20,14 @@ export async function runBoardCardMotionTransition(options: BoardCardMotionTrans
     options.update();
     return;
   }
-  const oldSnapshots = snapshotBoardCardElements(options.cardElementsRef.current, options.namesByCardID);
+  const oldSnapshots = snapshotBoardCardElements(options.cardElementForTaskID, options.namesByCardID);
   options.update();
   const animations = Array.from(options.namesByCardID.keys()).flatMap((cardID) => {
     const oldSnapshot = oldSnapshots.get(cardID);
     if (oldSnapshot === undefined) {
       return [];
     }
-    const newElement = options.cardElementsRef.current.get(cardID);
+    const newElement = options.cardElementForTaskID(cardID);
     if (newElement !== undefined) {
       return [
         animateMovedBoardCard(newElement, oldSnapshot.rect).finally(() => {
@@ -37,7 +37,9 @@ export async function runBoardCardMotionTransition(options: BoardCardMotionTrans
     }
     const targetRect =
       options.pendingCardMove?.taskID === cardID
-        ? options.columnElementsRef.current.get(options.pendingCardMove.targetColumnID)?.getBoundingClientRect()
+        ? options.columnElementsRef.current
+            .get(options.pendingCardMove.targetColumnID)
+            ?.getBoundingClientRect()
         : undefined;
     return [animateDepartingBoardCard(oldSnapshot, targetRect)];
   });
@@ -45,12 +47,12 @@ export async function runBoardCardMotionTransition(options: BoardCardMotionTrans
 }
 
 function snapshotBoardCardElements(
-  cardElements: ReadonlyMap<string, HTMLElement>,
+  cardElementForTaskID: (taskID: string) => HTMLElement | undefined,
   namesByCardID: ReadonlyMap<string, string>,
 ): ReadonlyMap<string, BoardCardMotionSnapshot> {
   const snapshots = new Map<string, BoardCardMotionSnapshot>();
   for (const cardID of namesByCardID.keys()) {
-    const element = cardElements.get(cardID);
+    const element = cardElementForTaskID(cardID);
     if (element === undefined) {
       continue;
     }
@@ -84,7 +86,9 @@ async function animateDepartingBoardCard(
   const clone = snapshot.clone;
   document.body.append(clone);
   const targetTransform =
-    targetRect === undefined ? "translateY(-8px) scale(0.98)" : boardCardDepartureTransform(snapshot.rect, targetRect);
+    targetRect === undefined
+      ? "translateY(-8px) scale(0.98)"
+      : boardCardDepartureTransform(snapshot.rect, targetRect);
   try {
     await animateElement(
       clone,

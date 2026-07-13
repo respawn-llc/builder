@@ -1733,209 +1733,86 @@ ORDER BY
     rows.id ASC
 LIMIT (SELECT limit_rows FROM args);
 
--- name: ListBoardOpenTasks :many
-WITH board_open_task_ids AS (
-    SELECT
-        t.id
-    FROM task_node_placements p
-    JOIN task_records t ON t.id = p.task_id
-    JOIN workflow_nodes n ON n.id = p.node_id
-    WHERE p.state IN ('active', 'waiting_approval')
-      AND n.kind != 'terminal'
-      AND t.project_id = sqlc.arg(project_id)
-      AND t.workflow_id = sqlc.arg(workflow_id)
-      AND (
-          t.canceled_at_unix_ms IS NULL
-          OR trim(sqlc.arg(canceled_terminal_node_id)) = ''
-      )
-    UNION
-    SELECT
-        t.id
-    FROM task_transition_records tt
-    JOIN task_records t ON t.id = tt.task_id
-    JOIN workflow_nodes n ON n.id = tt.source_node_id
-    WHERE tt.state = 'pending_approval'
-      AND n.kind != 'terminal'
-      AND t.project_id = sqlc.arg(project_id)
-      AND t.workflow_id = sqlc.arg(workflow_id)
-      AND (
-          t.canceled_at_unix_ms IS NULL
-          OR trim(sqlc.arg(canceled_terminal_node_id)) = ''
-      )
-)
-SELECT
-    t.id,
-    t.project_id,
-    t.project_workflow_link_id,
-    t.workflow_id,
-    t.workflow_revision_seen,
-    t.task_seq,
-    t.short_id,
-    t.title,
-    t.body,
-    t.source_url,
-    t.source_workspace_id,
-    t.managed_worktree_id,
-    t.execution_target_mode,
-    t.execution_target_requested_ref,
-    t.execution_target_resolved_ref,
-    t.execution_target_commit_oid,
-    t.execution_target_provenance,
-    t.canceled_at_unix_ms,
-    t.cancellation_reason,
-    t.created_at_unix_ms,
-    t.updated_at_unix_ms,
-    t.metadata_json
-FROM task_records t
-WHERE t.id IN (SELECT id FROM board_open_task_ids)
-  AND NOT EXISTS (
-      SELECT 1
-      FROM task_node_placements terminal_placement
-      JOIN workflow_nodes terminal_node ON terminal_node.id = terminal_placement.node_id
-      WHERE terminal_placement.task_id = t.id
-        AND terminal_placement.state = 'active'
-        AND terminal_node.kind = 'terminal'
-  )
-  AND (
-    CAST(sqlc.arg(cursor_set) AS INTEGER) = 0
-    OR t.updated_at_unix_ms < sqlc.arg(cursor_updated_at_unix_ms)
-    OR (
-        t.updated_at_unix_ms = sqlc.arg(cursor_updated_at_unix_ms)
-        AND t.id < sqlc.arg(cursor_task_id)
-    )
-  )
-ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-LIMIT sqlc.arg(limit_rows);
-
--- name: ListBoardDonePreviewTasks :many
-SELECT
-    t.id,
-    t.project_id,
-    t.project_workflow_link_id,
-    t.workflow_id,
-    t.workflow_revision_seen,
-    t.task_seq,
-    t.short_id,
-    t.title,
-    t.body,
-    t.source_url,
-    t.source_workspace_id,
-    t.managed_worktree_id,
-    t.execution_target_mode,
-    t.execution_target_requested_ref,
-    t.execution_target_resolved_ref,
-    t.execution_target_commit_oid,
-    t.execution_target_provenance,
-    t.canceled_at_unix_ms,
-    t.cancellation_reason,
-    t.created_at_unix_ms,
-    t.updated_at_unix_ms,
-    t.metadata_json
-FROM task_records t
-WHERE t.project_id = sqlc.arg(project_id)
-  AND t.workflow_id = sqlc.arg(workflow_id)
-  AND (
-      EXISTS (
-          SELECT 1
-          FROM task_node_placements p
-          JOIN workflow_nodes n ON n.id = p.node_id
-          WHERE p.task_id = t.id
-            AND p.state = 'active'
-            AND n.kind = 'terminal'
-      )
-      OR (
-          t.canceled_at_unix_ms IS NOT NULL
-          AND trim(sqlc.arg(canceled_terminal_node_id)) != ''
-      )
-  )
-ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-LIMIT sqlc.arg(limit_rows);
-
 -- name: ListBoardNodeTasks :many
-WITH board_node_task_ids AS (
-    SELECT
-        t.id
-    FROM task_node_placements p
-    JOIN task_records t ON t.id = p.task_id
-    JOIN workflow_nodes n ON n.id = p.node_id
-    WHERE p.node_id = sqlc.arg(node_id)
-      AND (
-        p.state IN ('active', 'waiting_approval')
-      )
-      AND t.project_id = sqlc.arg(project_id)
-      AND t.workflow_id = sqlc.arg(workflow_id)
-      AND (
-        t.canceled_at_unix_ms IS NULL
-        OR n.kind = 'terminal'
-      )
-    UNION
-    SELECT
-        t.id
-    FROM task_transition_records tt
-    JOIN task_records t ON t.id = tt.task_id
-    WHERE tt.source_node_id = sqlc.arg(node_id)
-      AND tt.state = 'pending_approval'
-      AND t.project_id = sqlc.arg(project_id)
-      AND t.workflow_id = sqlc.arg(workflow_id)
-      AND t.canceled_at_unix_ms IS NULL
-    UNION
-    SELECT
-        t.id
+WITH board_node_tasks AS (
+    SELECT t.*
     FROM task_records t
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
-      AND t.canceled_at_unix_ms IS NOT NULL
-      AND sqlc.arg(node_id) = sqlc.arg(canceled_terminal_node_id)
-      AND EXISTS (
-        SELECT 1
-        FROM workflow_nodes n
-        WHERE n.id = sqlc.arg(node_id)
-          AND n.kind = 'terminal'
+      AND (
+          EXISTS (
+              SELECT 1
+              FROM task_node_placements p
+              JOIN workflow_nodes n ON n.id = p.node_id
+              WHERE p.task_id = t.id
+                AND p.node_id = sqlc.arg(node_id)
+                AND p.state IN ('active', 'waiting_approval')
+                AND (
+                    t.canceled_at_unix_ms IS NULL
+                    OR n.kind = 'terminal'
+                )
+          )
+          OR EXISTS (
+              SELECT 1
+              FROM task_transition_records tt
+              WHERE tt.task_id = t.id
+                AND tt.source_node_id = sqlc.arg(node_id)
+                AND tt.state = 'pending_approval'
+                AND t.canceled_at_unix_ms IS NULL
+          )
+          OR (
+              t.canceled_at_unix_ms IS NOT NULL
+              AND sqlc.arg(node_id) = sqlc.arg(canceled_terminal_node_id)
+              AND EXISTS (
+                  SELECT 1
+                  FROM workflow_nodes n
+                  WHERE n.id = sqlc.arg(node_id)
+                    AND n.kind = 'terminal'
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_node_placements p
+                  JOIN workflow_nodes n ON n.id = p.node_id
+                  WHERE p.task_id = t.id
+                    AND p.state = 'active'
+                    AND n.kind = 'terminal'
+              )
+          )
       )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM task_node_placements p
-        JOIN workflow_nodes n ON n.id = p.node_id
-        WHERE p.task_id = t.id
-          AND p.state = 'active'
-          AND n.kind = 'terminal'
+),
+older_page AS (
+    SELECT *
+    FROM board_node_tasks t
+    WHERE sqlc.arg(cursor_direction) = 'older'
+      AND (
+          sqlc.narg(cursor_updated_at_unix_ms) IS NULL
+          OR t.updated_at_unix_ms < sqlc.narg(cursor_updated_at_unix_ms)
+          OR (
+              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
+              AND t.id < sqlc.narg(cursor_task_id)
+          )
       )
+    ORDER BY t.updated_at_unix_ms DESC, t.id DESC
+    LIMIT sqlc.arg(limit_rows)
+),
+newer_page AS (
+    SELECT *
+    FROM board_node_tasks t
+    WHERE sqlc.arg(cursor_direction) = 'newer'
+      AND sqlc.narg(cursor_updated_at_unix_ms) IS NOT NULL
+      AND (
+          t.updated_at_unix_ms > sqlc.narg(cursor_updated_at_unix_ms)
+          OR (
+              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
+              AND t.id > sqlc.narg(cursor_task_id)
+          )
+      )
+    ORDER BY t.updated_at_unix_ms ASC, t.id ASC
+    LIMIT sqlc.arg(limit_rows)
 )
-SELECT
-    t.id,
-    t.project_id,
-    t.project_workflow_link_id,
-    t.workflow_id,
-    t.workflow_revision_seen,
-    t.task_seq,
-    t.short_id,
-    t.title,
-    t.body,
-    t.source_url,
-    t.source_workspace_id,
-    t.managed_worktree_id,
-    t.execution_target_mode,
-    t.execution_target_requested_ref,
-    t.execution_target_resolved_ref,
-    t.execution_target_commit_oid,
-    t.execution_target_provenance,
-    t.canceled_at_unix_ms,
-    t.cancellation_reason,
-    t.created_at_unix_ms,
-    t.updated_at_unix_ms,
-    t.metadata_json
-FROM task_records t
-WHERE t.id IN (SELECT id FROM board_node_task_ids)
-  AND (
-    CAST(sqlc.arg(cursor_set) AS INTEGER) = 0
-    OR t.updated_at_unix_ms < sqlc.arg(cursor_updated_at_unix_ms)
-    OR (
-        t.updated_at_unix_ms = sqlc.arg(cursor_updated_at_unix_ms)
-        AND t.id < sqlc.arg(cursor_task_id)
-    )
-  )
-ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-LIMIT sqlc.arg(limit_rows);
+SELECT * FROM older_page
+UNION ALL
+SELECT * FROM newer_page;
 
 -- name: UpdateTaskEditableFields :execrows
 UPDATE tasks

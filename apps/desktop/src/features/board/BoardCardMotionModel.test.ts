@@ -74,11 +74,14 @@ describe("BoardCardMotionModel", () => {
   it("compares card snapshots by card content and order", () => {
     const snapshot = boardCardSnapshotFromEntries([["backlog", [card("task-1")]]]);
 
-    expect(boardCardSnapshotsEqual(snapshot, boardCardSnapshotFromEntries([["backlog", [card("task-1")]]]))).toBe(
-      true,
-    );
     expect(
-      boardCardSnapshotsEqual(snapshot, boardCardSnapshotFromEntries([["backlog", [{ ...card("task-1"), title: "Changed" }]]])),
+      boardCardSnapshotsEqual(snapshot, boardCardSnapshotFromEntries([["backlog", [card("task-1")]]])),
+    ).toBe(true);
+    expect(
+      boardCardSnapshotsEqual(
+        snapshot,
+        boardCardSnapshotFromEntries([["backlog", [{ ...card("task-1"), title: "Changed" }]]]),
+      ),
     ).toBe(false);
   });
 
@@ -96,10 +99,12 @@ describe("BoardCardMotionModel", () => {
       ],
     };
 
-    expect(dirtyBoardCardCountColumnIDs(boardCardColumnCountSnapshot(board), boardCardColumnCountSnapshot(nextBoard))).toEqual([
-      "backlog",
-      "recon",
-    ]);
+    expect(
+      dirtyBoardCardCountColumnIDs(
+        boardCardColumnCountSnapshot(board),
+        boardCardColumnCountSnapshot(nextBoard),
+      ),
+    ).toEqual(["backlog", "recon"]);
   });
 });
 
@@ -112,7 +117,7 @@ function card(id: string): KanbanCardVM {
       canStart: true,
       manualMoveTargetNodeIDs: [],
     },
-    body: "Body",
+    preview: { markdown: "Body", truncated: false },
     id,
     shortID: id,
     workspaceChipLabel: null,

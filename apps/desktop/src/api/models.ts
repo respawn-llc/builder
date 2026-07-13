@@ -1,7 +1,4 @@
-import type {
-  WorkflowExecutionTarget,
-  WorkflowExecutionTargetPolicy,
-} from "./workflowExecutionTarget";
+import type { WorkflowExecutionTarget, WorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
 
 export { defaultWorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
 export type {
@@ -511,11 +508,16 @@ export type TaskActions = Readonly<{
   manualMoveTargetNodeIDs: readonly string[];
 }>;
 
+export type MarkdownPreview = Readonly<{
+  markdown: string;
+  truncated: boolean;
+}>;
+
 export type BoardCard = Readonly<{
   id: string;
   shortID: string;
   title: string;
-  body: string;
+  preview: MarkdownPreview;
   workflowID: string;
   activeNodeIDs: readonly string[];
   sourceWorkspace: WorkspaceSummary;
@@ -565,7 +567,8 @@ export type BoardNodeCardsPage = Readonly<{
   workflowID: string;
   nodeID: string;
   cards: readonly BoardCard[];
-  nextPageToken: string;
+  previousPageToken: string | null;
+  nextPageToken: string | null;
   generatedAt: number;
 }>;
 
