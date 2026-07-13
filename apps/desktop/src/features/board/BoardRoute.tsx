@@ -23,17 +23,12 @@ import {
 } from "../execution-target/executionTargetContinuation";
 import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
-import { useBoardDragAutoScroll, type BoardDragAutoScrollStopReason } from "./BoardDragAutoScroll";
+import { useBoardDragAutoScroll } from "./BoardDragAutoScroll";
 import { useBoardMoveRunFeedback } from "./BoardMoveRunFeedback";
 import { BoardRailMotionController } from "./BoardRailMotionController";
 import { TaskDeleteConfirmationFallbackDialog } from "./TaskDeleteConfirmation";
 import { taskDeleteWindowOptions, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
-import {
-  type BoardCardDragPayload,
-  type BoardColumnDropState,
-  boardCardDragPayloadType,
-  decodeBoardCardDragPayload,
-} from "./BoardDragTypes";
+import type { BoardColumnDropState } from "./BoardDragTypes";
 import type { ActiveBoardCardDrag } from "./BoardDragState";
 import {
   classifyDrop,
@@ -151,32 +146,16 @@ function BoardContent({
   >(() => ({ ids: new Set(), scope: "" }));
   const [rollbackDrop, setRollbackDrop] = useState<PendingDrop | null>(null);
   const [missingInputDrop, setMissingInputDrop] = useState<PendingMissingInputDrop | null>(null);
-  const activeDragRef = useRef<ActiveBoardCardDrag | null>(null);
   const { push } = useStatusController();
   const { api, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const scrollportRef = useRef<HTMLDivElement | null>(null);
-  const clearActiveDragState = useCallback((): void => {
-    activeDragRef.current = null;
+  const dragAutoScroll = useBoardDragAutoScroll({ active: activeDrag !== null, rootRef: scrollportRef });
+  const stopDragAutoScroll = dragAutoScroll.stop;
+  const cancelActiveDrag = useCallback(() => {
+    stopDragAutoScroll();
     setActiveDrag(null);
-  }, []);
-  const {
-    onBoardDragLeave,
-    onBoardDragOver,
-    registerColumnScrollport,
-    stop: stopDragAutoScroll,
-  } = useBoardDragAutoScroll({
-    active: activeDrag !== null,
-    onNativeDragTerminated: clearActiveDragState,
-    rootRef: scrollportRef,
-  });
-  const finishActiveDrag = useCallback(
-    (reason: BoardDragAutoScrollStopReason): void => {
-      stopDragAutoScroll(reason);
-      clearActiveDragState();
-    },
-    [clearActiveDragState, stopDragAutoScroll],
-  );
+  }, [stopDragAutoScroll]);
   const { openSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions(board.projectID, boardQueryWorkflowID, board.selectedWorkflow.id);
@@ -281,10 +260,32 @@ function BoardContent({
     selectedTaskId,
   ]);
 
+  useEffect(() => {
+    const handleDocumentDrop = (event: Event): void => {
+      const root = scrollportRef.current;
+      if (root !== null && event.target instanceof Node && root.contains(event.target)) {
+        stopDragAutoScroll();
+        return;
+      }
+      cancelActiveDrag();
+    };
+    const handleCancellation = (): void => {
+      cancelActiveDrag();
+    };
+    document.addEventListener("drop", handleDocumentDrop, true);
+    document.addEventListener("dragend", handleCancellation, true);
+    window.addEventListener("blur", handleCancellation);
+    return () => {
+      document.removeEventListener("drop", handleDocumentDrop, true);
+      document.removeEventListener("dragend", handleCancellation, true);
+      window.removeEventListener("blur", handleCancellation);
+    };
+  }, [cancelActiveDrag, stopDragAutoScroll]);
+
   function dropTask(event: DragEvent<HTMLElement>, column: BoardColumn): void {
     event.preventDefault();
-    const dragPayload = dragPayloadForDrop(activeDragRef.current, event.dataTransfer);
-    finishActiveDrag("document-drop");
+    const dragPayload = activeDrag === null ? null : activeDrag.payload;
+    cancelActiveDrag();
     if (dragPayload === null || actionsDisabled || !board.selectedWorkflow.validForTaskCreation) {
       reportRejectedDrop();
       return;
@@ -503,8 +504,8 @@ function BoardContent({
       <div
         className="h-full min-h-0 min-w-0 w-full overflow-x-auto hide-scrollbar"
         data-testid="board-scrollport"
-        onDragLeave={onBoardDragLeave}
-        onDragOver={onBoardDragOver}
+        onDragLeave={dragAutoScroll.onBoardDragLeave}
+        onDragOver={dragAutoScroll.onBoardDragOver}
         ref={scrollportRef}
         role="list"
       >
@@ -516,11 +517,8 @@ function BoardContent({
           columnIsCollapsed={columnIsCollapsed}
           firstActiveID={firstActive?.id}
           onCardClick={openTask}
-          onCardDragEnd={() => {
-            finishActiveDrag("card-end");
-          }}
+          onCardDragEnd={cancelActiveDrag}
           onCardDragStart={(drag) => {
-            activeDragRef.current = drag;
             setActiveDrag(drag);
           }}
           onCardsLoadError={reportCardsLoadError}
@@ -529,7 +527,7 @@ function BoardContent({
           onExpandColumn={expandColumn}
           onInterruptedRunObserved={moveRunFeedback.observeInterruptedRun}
           onInterruptTask={interruptTask}
-          onRegisterColumnScrollport={registerColumnScrollport}
+          onRegisterColumnScrollport={dragAutoScroll.registerColumnScrollport}
           pendingCardMove={pendingCardMove}
           onResumeTask={resumeTask}
           scrollportRef={scrollportRef}
@@ -615,15 +613,4 @@ function BoardNoWorkflowState({ projectID }: Readonly<{ projectID: string }>) {
       title={t("board.noWorkflowTitle")}
     />
   );
-}
-
-function dragPayloadFromDataTransfer(dataTransfer: DataTransfer): BoardCardDragPayload | null {
-  return decodeBoardCardDragPayload(dataTransfer.getData(boardCardDragPayloadType));
-}
-
-function dragPayloadForDrop(
-  activeDrag: ActiveBoardCardDrag | null,
-  dataTransfer: DataTransfer,
-): BoardCardDragPayload | null {
-  return activeDrag === null ? dragPayloadFromDataTransfer(dataTransfer) : activeDrag.payload;
 }

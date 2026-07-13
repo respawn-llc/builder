@@ -28,11 +28,7 @@ import {
   type VirtualizedInfiniteListBoundaryState,
 } from "../../ui";
 import { cx } from "../../ui/classes";
-import {
-  type BoardColumnDropState,
-  boardCardDragPayloadType,
-  encodeBoardCardDragPayload,
-} from "./BoardDragTypes";
+import { type BoardColumnDropState, boardCardDragPayloadType } from "./BoardDragTypes";
 import type { ActiveBoardCardDrag } from "./BoardDragState";
 import { boardCardInstanceKey, type BoardCardInstance, type BoardCardInstanceKey } from "./BoardCardInstance";
 import { useBoardCardInstanceVisibility } from "./BoardCardVisibilityRegistry";
@@ -386,9 +382,7 @@ const TaskCard = memo(function TaskCard({
               event.preventDefault();
               return;
             }
-            event.dataTransfer.setData("text/task-id", card.id);
-            event.dataTransfer.setData("text/plain", card.id);
-            event.dataTransfer.setData(boardCardDragPayloadType, encodeBoardCardDragPayload(dragPayload));
+            event.dataTransfer.setData(boardCardDragPayloadType, "board-card");
             event.dataTransfer.effectAllowed = "move";
             setBoardCardDragImage(event.currentTarget, event.dataTransfer);
             onCardDragStart({

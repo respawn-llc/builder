@@ -1,27 +1,11 @@
 import { useCallback, useEffect, useState, type DragEvent as ReactDragEvent, type RefObject } from "react";
 
-export const BOARD_DRAG_AUTOSCROLL_EDGE_ZONE_PX = 72;
-export const BOARD_DRAG_AUTOSCROLL_MAX_SPEED_PX_PER_SECOND = 900;
-export const BOARD_DRAG_AUTOSCROLL_MAX_FRAME_DELTA_MS = 48;
-
-export type BoardDragAutoScrollStopReason =
-  | "manual"
-  | "inactive"
-  | "leave-board"
-  | "document-outside"
-  | "document-exit"
-  | "document-drop"
-  | "document-dragend"
-  | "card-end"
-  | "window-blur"
-  | "unmount";
+const BOARD_DRAG_AUTOSCROLL_EDGE_ZONE_PX = 72;
+const BOARD_DRAG_AUTOSCROLL_MAX_SPEED_PX_PER_SECOND = 900;
+const BOARD_DRAG_AUTOSCROLL_MAX_FRAME_DELTA_MS = 48;
 
 type DragPointer = Readonly<{ clientX: number; clientY: number }>;
-
-type FrameScheduler = Readonly<{
-  requestFrame: (callback: FrameRequestCallback) => number;
-  cancelFrame: (frameID: number) => void;
-}>;
+type PointContainment = "inclusive" | "strict";
 
 type ScrollAxisMotion = Readonly<{
   element: HTMLElement;
@@ -34,21 +18,16 @@ type ScrollMotion = Readonly<{
   vertical: ScrollAxisMotion | null;
 }>;
 
-export class BoardDragAutoScrollController {
+class BoardDragAutoScrollController {
   #active = false;
   #columns = new Map<string, HTMLElement>();
   #frameID: number | null = null;
   #lastFrameTimestamp: number | null = null;
   #pointer: DragPointer | null = null;
   #root: HTMLElement | null;
-  readonly #scheduler: FrameScheduler;
 
-  constructor(input: Readonly<{ root: HTMLElement | null }> & Partial<FrameScheduler>) {
-    this.#root = input.root;
-    this.#scheduler = {
-      requestFrame: input.requestFrame ?? requestAnimationFrame,
-      cancelFrame: input.cancelFrame ?? cancelAnimationFrame,
-    };
+  constructor(root: HTMLElement | null) {
+    this.#root = root;
   }
 
   setRoot(root: HTMLElement | null): void {
@@ -59,7 +38,7 @@ export class BoardDragAutoScrollController {
   setActive(active: boolean): void {
     this.#active = active;
     if (!active) {
-      this.stop("inactive");
+      this.stop();
       return;
     }
     this.#refreshLoop();
@@ -82,18 +61,17 @@ export class BoardDragAutoScrollController {
     this.#refreshLoop();
   }
 
-  stop(reason: BoardDragAutoScrollStopReason = "manual"): void {
-    void reason;
+  stop(): void {
     this.#pointer = null;
     this.#lastFrameTimestamp = null;
     if (this.#frameID !== null) {
-      this.#scheduler.cancelFrame(this.#frameID);
+      cancelAnimationFrame(this.#frameID);
       this.#frameID = null;
     }
   }
 
   destroy(): void {
-    this.stop("unmount");
+    this.stop();
     this.#columns.clear();
     this.#root = null;
   }
@@ -106,7 +84,7 @@ export class BoardDragAutoScrollController {
     if (this.#frameID !== null) {
       return;
     }
-    this.#frameID = this.#scheduler.requestFrame((timestamp) => {
+    this.#frameID = requestAnimationFrame((timestamp) => {
       this.#frameID = null;
       this.#onFrame(timestamp);
     });
@@ -165,13 +143,7 @@ export class BoardDragAutoScrollController {
 
   #verticalTarget(pointer: DragPointer): HTMLElement | null {
     for (const element of this.#columns.values()) {
-      const rect = element.getBoundingClientRect();
-      if (
-        pointer.clientX >= rect.left &&
-        pointer.clientX <= rect.right &&
-        pointer.clientY >= rect.top &&
-        pointer.clientY <= rect.bottom
-      ) {
+      if (pointIsInsideElement(pointer, element, "inclusive")) {
         return element;
       }
     }
@@ -179,7 +151,7 @@ export class BoardDragAutoScrollController {
   }
 }
 
-export function boardDragEdgeVelocity(position: number, start: number, end: number): number {
+function boardDragEdgeVelocity(position: number, start: number, end: number): number {
   if (start >= end) {
     return 0;
   }
@@ -194,20 +166,18 @@ export function boardDragEdgeVelocity(position: number, start: number, end: numb
   return 0;
 }
 
-export function normalizedBoardDragFrameDeltaMs(deltaMs: number): number {
+function normalizedBoardDragFrameDeltaMs(deltaMs: number): number {
   return Math.min(Math.max(deltaMs, 0), BOARD_DRAG_AUTOSCROLL_MAX_FRAME_DELTA_MS);
 }
 
 export function useBoardDragAutoScroll({
   active,
-  onNativeDragTerminated,
   rootRef,
 }: Readonly<{
   active: boolean;
-  onNativeDragTerminated?: ((reason: BoardDragAutoScrollStopReason) => void) | undefined;
   rootRef: RefObject<HTMLElement | null>;
 }>) {
-  const [controller] = useState(() => new BoardDragAutoScrollController({ root: null }));
+  const [controller] = useState(() => new BoardDragAutoScrollController(null));
 
   useEffect(() => {
     controller.setRoot(rootRef.current);
@@ -218,40 +188,30 @@ export function useBoardDragAutoScroll({
     const stopOutsideBoard = (event: Event) => {
       const root = rootRef.current;
       if (root === null || !(event.target instanceof Node) || !root.contains(event.target)) {
-        controller.stop("document-outside");
+        controller.stop();
       }
     };
-    const stopDocumentExit = (event: Event) => {
-      if ("relatedTarget" in event && event.relatedTarget === null) {
-        controller.stop("document-exit");
-        onNativeDragTerminated?.("document-exit");
+    const stopDocumentExit = (event: globalThis.DragEvent) => {
+      if (event.relatedTarget === null) {
+        const root = rootRef.current;
+        if (
+          root !== null &&
+          event.target instanceof Node &&
+          root.contains(event.target) &&
+          pointIsInsideElement(event, root, "strict")
+        ) {
+          return;
+        }
+        controller.stop();
       }
-    };
-    const stopDrop = () => {
-      controller.stop("document-drop");
-      onNativeDragTerminated?.("document-drop");
-    };
-    const stopDragEnd = () => {
-      controller.stop("document-dragend");
-      onNativeDragTerminated?.("document-dragend");
-    };
-    const stopWindowBlur = () => {
-      controller.stop("window-blur");
-      onNativeDragTerminated?.("window-blur");
     };
     document.addEventListener("dragover", stopOutsideBoard, true);
     document.addEventListener("dragleave", stopDocumentExit, true);
-    document.addEventListener("drop", stopDrop, true);
-    document.addEventListener("dragend", stopDragEnd, true);
-    window.addEventListener("blur", stopWindowBlur);
     return () => {
       document.removeEventListener("dragover", stopOutsideBoard, true);
       document.removeEventListener("dragleave", stopDocumentExit, true);
-      document.removeEventListener("drop", stopDrop, true);
-      document.removeEventListener("dragend", stopDragEnd, true);
-      window.removeEventListener("blur", stopWindowBlur);
     };
-  }, [controller, onNativeDragTerminated, rootRef]);
+  }, [controller, rootRef]);
 
   useEffect(
     () => () => {
@@ -273,7 +233,10 @@ export function useBoardDragAutoScroll({
       if (root !== null && event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) {
         return;
       }
-      controller.stop("leave-board");
+      if (root !== null && event.relatedTarget === null && pointIsInsideElement(event, root, "strict")) {
+        return;
+      }
+      controller.stop();
     },
     [controller, rootRef],
   );
@@ -283,14 +246,33 @@ export function useBoardDragAutoScroll({
     },
     [controller],
   );
-  const stop = useCallback(
-    (reason: BoardDragAutoScrollStopReason = "manual") => {
-      controller.stop(reason);
-    },
-    [controller],
-  );
+  const stop = useCallback(() => {
+    controller.stop();
+  }, [controller]);
 
   return { onBoardDragLeave, onBoardDragOver, registerColumnScrollport, stop };
+}
+
+function pointIsInsideElement(
+  point: DragPointer,
+  element: HTMLElement,
+  containment: PointContainment,
+): boolean {
+  const rect = element.getBoundingClientRect();
+  if (containment === "inclusive") {
+    return (
+      point.clientX >= rect.left &&
+      point.clientX <= rect.right &&
+      point.clientY >= rect.top &&
+      point.clientY <= rect.bottom
+    );
+  }
+  return (
+    point.clientX > rect.left &&
+    point.clientX < rect.right &&
+    point.clientY > rect.top &&
+    point.clientY < rect.bottom
+  );
 }
 
 function edgeVelocityMagnitude(distanceFromEdge: number): number {

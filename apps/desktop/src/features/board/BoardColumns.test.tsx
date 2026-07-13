@@ -3,10 +3,10 @@ import { I18nextProvider } from "react-i18next";
 import { beforeAll, vi } from "vitest";
 
 import { appI18n, initializeI18n } from "../../i18n/setup";
-import { TestDataTransfer } from "../../test-support/board/TestDataTransfer";
+import { createBoardDragEvent, TestDataTransfer } from "../../testSupport/boardDrag";
 import { KanbanColumn } from "./BoardColumns";
 import type { KanbanCardVM, KanbanColumnVM } from "./BoardColumnViewModel";
-import { boardCardDragPayloadType, decodeBoardCardDragPayload } from "./BoardDragTypes";
+import { boardCardDragPayloadType } from "./BoardDragTypes";
 
 describe("KanbanColumn", () => {
   beforeAll(async () => {
@@ -390,14 +390,7 @@ describe("KanbanColumn", () => {
 
     fireEvent.dragStart(renderedCard, { dataTransfer });
 
-    expect(dataTransfer.getData("text/task-id")).toBe("task-1");
-    expect(decodeBoardCardDragPayload(dataTransfer.getData(boardCardDragPayloadType))).toEqual({
-      taskID: "task-1",
-      canStart: false,
-      activeNodeIDs: ["backlog"],
-      statusKind: "backlog",
-      manualMoveTargetNodeIDs: [],
-    });
+    expect(dataTransfer.types).toEqual([boardCardDragPayloadType]);
     expect(dataTransfer.setDragImage).toHaveBeenCalledTimes(1);
     expect(dataTransfer.setDragImage.mock.calls[0]?.[0]).toBeInstanceOf(HTMLElement);
     expect(onCardDragStart).toHaveBeenCalledTimes(1);
@@ -447,21 +440,48 @@ describe("KanbanColumn", () => {
     );
 
     const dataTransfer = new TestDataTransfer();
-    dataTransfer.setData(boardCardDragPayloadType, "{}");
-    const event = createCancelableDragEvent("dragover", dataTransfer);
+    dataTransfer.setData(boardCardDragPayloadType, "board-card");
+    const event = createBoardDragEvent("dragover", { dataTransfer });
 
     screen.getByRole("listitem", { name: "Backlog" }).dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
     expect(dataTransfer.dropEffect).toBe("move");
   });
-});
 
-function createCancelableDragEvent(type: string, dataTransfer: TestDataTransfer): Event {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-  return event;
-}
+  it("ignores unrelated dragover while the column has no active board drag", () => {
+    render(
+      <I18nextProvider i18n={appI18n}>
+        <KanbanColumn
+          actionsDisabled={false}
+          cards={[]}
+          column={column}
+          dropState="idle"
+          hasMoreCards={false}
+          isFirstActive={false}
+          isLoadingMoreCards={false}
+          onCardClick={() => undefined}
+          onCardDragEnd={() => undefined}
+          onCardDragStart={() => undefined}
+          onDeleteTask={() => undefined}
+          onDropTask={() => undefined}
+          onInterruptTask={() => undefined}
+          onLoadMoreCards={() => undefined}
+          onResumeTask={() => undefined}
+        />
+      </I18nextProvider>,
+    );
+
+    const dataTransfer = new TestDataTransfer();
+    dataTransfer.setData("text/plain", "unrelated");
+    const event = createBoardDragEvent("dragover", { dataTransfer });
+
+    screen.getByRole("listitem", { name: "Backlog" }).dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(dataTransfer.dropEffect).toBe("none");
+  });
+});
 
 const column: KanbanColumnVM = {
   assigneeRole: "",
