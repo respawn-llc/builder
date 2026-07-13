@@ -117,6 +117,7 @@ describe("KanbanColumn", () => {
 
     const interruptButton = within(footer).getByRole("button", { name: "Interrupt" });
     expect(interruptButton).toHaveAttribute("type", "button");
+    expect(interruptButton).not.toHaveTextContent("Interrupt");
 
     fireEvent.click(interruptButton);
 
@@ -396,7 +397,7 @@ describe("KanbanColumn", () => {
     expect(onCardDragStart).toHaveBeenCalledTimes(1);
     expect(onCardDragStart).toHaveBeenCalledWith({
       instance: { columnID: "backlog", taskID: "task-1" },
-      lastVirtualIndex: 0,
+      lastCardIndex: 0,
       payload: {
         taskID: "task-1",
         canStart: false,

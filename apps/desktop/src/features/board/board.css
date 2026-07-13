@@ -1,5 +1,5 @@
 .board-task-card {
-  --board-card-height: 11.5rem;
+  --board-card-height: 11rem;
 
   height: var(--board-card-height);
   min-height: var(--board-card-height);
@@ -30,23 +30,6 @@
 
 .task-card-chip-slot {
   height: var(--task-card-action-row-height);
-}
-
-.task-card-body-preview {
-  min-height: 0;
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    var(--color-on-island) 0,
-    var(--color-on-island) calc(100% - 1lh),
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    to bottom,
-    var(--color-on-island) 0,
-    var(--color-on-island) calc(100% - 1lh),
-    transparent 100%
-  );
 }
 
 .task-card-footer {

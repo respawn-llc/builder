@@ -2,7 +2,6 @@ import {
   memo,
   useCallback,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -11,16 +10,18 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Maximize2 } from "lucide-react";
+import { Maximize2, Square } from "lucide-react";
 
 import { formatRelativeTime } from "../../app/formatters";
 import {
+  AdaptiveLineClamp,
   Badge,
   Button,
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
+  IconTooltipButton,
   InfiniteListBoundary,
   MarkdownPlainText,
   Spinner,
@@ -30,7 +31,7 @@ import {
 import { cx } from "../../ui/classes";
 import { type BoardColumnDropState, boardCardDragPayloadType } from "./BoardDragTypes";
 import type { ActiveBoardCardDrag } from "./BoardDragState";
-import { boardCardInstanceKey, type BoardCardInstance, type BoardCardInstanceKey } from "./BoardCardInstance";
+import { boardCardInstanceKey, type BoardCardInstance } from "./BoardCardInstance";
 import { useBoardCardInstanceVisibility } from "./BoardCardVisibilityRegistry";
 import type { KanbanCardVM, KanbanColumnVM, KanbanGroupVM } from "./BoardColumnViewModel";
 import { useBoardCardMotion } from "./BoardCardMotionContext";
@@ -147,18 +148,9 @@ export function KanbanColumn({
   const columnClassName = isCollapsed
     ? `island-glass board-column-morph board-column-collapsed board-column-drop-${dropState} flex h-full min-h-0 w-[64px] shrink-0 rounded-[var(--radius-xl)] p-[var(--space-2)] align-top`
     : `island-glass board-column-morph board-column-drop-${dropState} relative h-full min-h-0 w-[min(420px,80vw)] shrink-0 overflow-hidden rounded-[var(--radius-xl)] align-top`;
-  const virtualCards = useMemo<readonly BoardVirtualCard[]>(
-    () =>
-      cards.map((card, virtualIndex) => {
-        const instance = { columnID: column.id, taskID: card.id };
-        return {
-          card,
-          instance,
-          key: boardCardInstanceKey(instance),
-          virtualIndex,
-        };
-      }),
-    [cards, column.id],
+  const getCardKey = useCallback(
+    (card: KanbanCardVM) => boardCardInstanceKey({ columnID: column.id, taskID: card.id }),
+    [column.id],
   );
   const emptyContent = initialBoundaryContent(initialBoundary);
   const listHeader = boardDropHint(isFirstActive, t("board.dropToStart"));
@@ -211,14 +203,14 @@ export function KanbanColumn({
             ariaLabel={column.name}
             className="board-column-scroll absolute inset-0 min-h-0 overflow-y-auto px-[var(--space-3)] hide-scrollbar"
             empty={emptyContent}
-            estimateSize={estimateBoardCardRowSize}
-            getItemKey={getBoardVirtualCardKey}
+            estimateSize={estimateInitialBoardCardRowSize}
+            getItemKey={getCardKey}
             hasNextPage={autoLoadAvailable(hasMoreCards, nextBoundary)}
             hasPreviousPage={autoLoadAvailable(hasPreviousCards, previousBoundary)}
             header={listHeader}
             isFetchingNextPage={isLoadingMoreCards}
             isFetchingPreviousPage={isLoadingPreviousCards}
-            items={virtualCards}
+            items={cards}
             loadingLabel={t("app.loadingMore")}
             nextBoundary={visibleNextBoundary}
             onLoadMore={onLoadMoreCards}
@@ -227,20 +219,23 @@ export function KanbanColumn({
             paddingStart={headerHeight}
             pinnedItemKeys={pinnedItemKeys}
             previousBoundary={visiblePreviousBoundary}
-            renderItem={(item) => (
-              <TaskCard
-                actionsDisabled={actionsDisabled}
-                card={item.card}
-                instance={item.instance}
-                onCardClick={onCardClick}
-                onCardDragEnd={onCardDragEnd}
-                onCardDragStart={onCardDragStart}
-                onDeleteTask={onDeleteTask}
-                onInterruptTask={onInterruptTask}
-                onResumeTask={onResumeTask}
-                virtualIndex={item.virtualIndex}
-              />
-            )}
+            renderItem={(card, cardIndex) => {
+              const instance = { columnID: column.id, taskID: card.id };
+              return (
+                <TaskCard
+                  actionsDisabled={actionsDisabled}
+                  card={card}
+                  cardIndex={cardIndex}
+                  instance={instance}
+                  onCardClick={onCardClick}
+                  onCardDragEnd={onCardDragEnd}
+                  onCardDragStart={onCardDragStart}
+                  onDeleteTask={onDeleteTask}
+                  onInterruptTask={onInterruptTask}
+                  onResumeTask={onResumeTask}
+                />
+              );
+            }}
             rowSpacing="default"
             testId={`kanban-column-scroll-${column.id}`}
           />
@@ -277,19 +272,9 @@ function CollapsedColumnHeader({
   );
 }
 
-type BoardVirtualCard = Readonly<{
-  card: KanbanCardVM;
-  instance: BoardCardInstance;
-  key: BoardCardInstanceKey;
-  virtualIndex: number;
-}>;
-
-function estimateBoardCardRowSize(): number {
-  return 164;
-}
-
-function getBoardVirtualCardKey(item: BoardVirtualCard): string {
-  return item.key;
+function estimateInitialBoardCardRowSize(): number {
+  // CSS owns exact card geometry; TanStack only needs a close estimate before measuring mounted rows.
+  return 200;
 }
 
 function initialBoundaryContent(
@@ -323,6 +308,7 @@ function autoLoadAvailable(
 const TaskCard = memo(function TaskCard({
   actionsDisabled,
   card,
+  cardIndex,
   instance,
   onCardClick,
   onCardDragEnd,
@@ -330,9 +316,9 @@ const TaskCard = memo(function TaskCard({
   onDeleteTask,
   onInterruptTask,
   onResumeTask,
-  virtualIndex,
 }: Readonly<{
   card: KanbanCardVM;
+  cardIndex: number;
   instance: BoardCardInstance;
   actionsDisabled: boolean;
   onCardClick: (taskID: string) => void;
@@ -341,15 +327,16 @@ const TaskCard = memo(function TaskCard({
   onDeleteTask: (taskID: string) => void;
   onInterruptTask: (taskID: string) => void;
   onResumeTask: (taskID: string) => void;
-  virtualIndex: number;
 }>) {
   const { t } = useTranslation();
   const { cardClassName, cardStyle, registerCard: registerMotionCard } = useBoardCardMotion();
+  const instanceColumnID = instance.columnID;
+  const instanceTaskID = instance.taskID;
   const registerCard = useCallback(
     (element: HTMLElement | null) => {
-      registerMotionCard(instance, element);
+      registerMotionCard({ columnID: instanceColumnID, taskID: instanceTaskID }, element);
     },
-    [instance, registerMotionCard],
+    [instanceColumnID, instanceTaskID, registerMotionCard],
   );
   const canDrag = !actionsDisabled && card.statusKind !== "canceled";
   const waitingForAnswer = isWaitingForAnswer(card.statusKind);
@@ -387,7 +374,7 @@ const TaskCard = memo(function TaskCard({
             setBoardCardDragImage(event.currentTarget, event.dataTransfer);
             onCardDragStart({
               instance,
-              lastVirtualIndex: virtualIndex,
+              lastCardIndex: cardIndex,
               payload: dragPayload,
               snapshot: card,
             });
@@ -415,14 +402,14 @@ const TaskCard = memo(function TaskCard({
           >
             {card.title}
           </strong>
-          <span
-            className="task-card-body-preview text-sm text-[var(--color-muted)]"
+          <AdaptiveLineClamp
+            className="text-sm text-[var(--color-muted)]"
             data-testid="task-card-body"
           >
             <TaskCardPreview instance={instance} preview={card.preview} />
-          </span>
+          </AdaptiveLineClamp>
           <div
-            className="task-card-footer flex items-start justify-between gap-[var(--space-2)]"
+            className="task-card-footer flex items-center justify-between gap-[var(--space-2)]"
             data-testid="task-card-footer"
           >
             <div
@@ -431,8 +418,8 @@ const TaskCard = memo(function TaskCard({
             >
               {card.statusKind === "running" ? (
                 <Spinner
-                  className="h-[18px] w-[18px]"
-                  strokeWidth={1.5}
+                  className="h-[20px] w-[20px]"
+                  strokeWidth={1.8}
                   testID="task-card-active-run-spinner"
                 />
               ) : null}
@@ -565,16 +552,24 @@ function TaskCardActions({
         </Button>
       ) : null}
       {canInterrupt ? (
-        <Button
+        <IconTooltipButton
+          label={t("board.interrupt")}
           onClick={(event) => {
             event.stopPropagation();
             onInterrupt(card.id);
           }}
           disabled={actionsDisabled}
+          size="icon-sm"
           variant="danger"
         >
-          {t("board.interrupt")}
-        </Button>
+          <Square
+            aria-hidden="true"
+            className="text-[var(--color-error)]"
+            fill="currentColor"
+            size={12}
+            strokeWidth={0}
+          />
+        </IconTooltipButton>
       ) : null}
     </div>
   );

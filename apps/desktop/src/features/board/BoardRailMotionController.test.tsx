@@ -204,7 +204,7 @@ function toTestCardVM(value: BoardCard): KanbanCardVM {
 
 type ActiveDragState = Readonly<{
   instance: Readonly<{ columnID: string; taskID: string }>;
-  lastVirtualIndex: number;
+  lastCardIndex: number;
   payload: BoardCardDragPayload;
   snapshot: KanbanCardVM;
 }>;
@@ -250,7 +250,7 @@ function Harness() {
           ? drag
           : {
               instance: { columnID: "backlog", taskID: drag.taskID },
-              lastVirtualIndex: 0,
+              lastCardIndex: 0,
               payload: drag,
               snapshot: toTestCardVM(backlogCard),
             };
@@ -608,14 +608,20 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
       throw new Error("Expected one Shared task instance in each active column");
     }
     expect(observedCards()).toEqual(new Set([backlogCardElement, reconCardElement]));
-    expect(within(backlogCardElement).getByTestId("task-card-body")).toBeEmptyDOMElement();
-    expect(within(reconCardElement).getByTestId("task-card-body")).toBeEmptyDOMElement();
+    expect(within(backlogCardElement).getByTestId("task-card-body")).not.toHaveTextContent(
+      "Visible preview",
+    );
+    expect(within(reconCardElement).getByTestId("task-card-body")).not.toHaveTextContent(
+      "Visible preview",
+    );
 
     intersect(backlogCardElement, true);
     await flush();
     expect(within(backlogCardElement).getByTestId("task-card-body")).toHaveTextContent("Visible preview");
     expect(within(backlogCardElement).getByTestId("task-card-preview-ellipsis")).toBeInTheDocument();
-    expect(within(reconCardElement).getByTestId("task-card-body")).toBeEmptyDOMElement();
+    expect(within(reconCardElement).getByTestId("task-card-body")).not.toHaveTextContent(
+      "Visible preview",
+    );
 
     intersect(recon, false);
     await flush();

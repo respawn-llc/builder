@@ -121,12 +121,11 @@
 - Join nodes are internal and not board columns.
 - Cards show task ID, task title, backend-native status component, and workspace chip when useful.
 - Cards do not show execution-target policy or locked execution-target facts.
-- Board cards use a stable 10rem outer height, 8px inner padding, and 4px row gaps even when body content is short or absent. Metadata and actions use their natural height, titles occupy at most two rendered lines, and the description uses every remaining pixel.
 - Board metadata contains selected-workflow, picker, grouping, column, count, validation, and generation facts but no cards. Paged column responses are the sole source of board cards.
 - Board-card responses omit the full task body. They carry one nested preview value whose outer whitespace is trimmed and whose Markdown text is hard-cut at 512 Unicode code points with an explicit truncation fact.
 - Board columns use bidirectional 25-card pages, retain at most three pages per active column, and virtualize their rows.
 - Columns release retained card pages when they leave the near-viewport activation region. Returning to a column loads its newest page at the top inside the existing shell without changing or animating its expanded/collapsed state.
-- The client parses Markdown previews only for cards intersecting the visible board viewport. A server-truncated preview receives a separate plain-text ellipsis suffix. The description region always fades over approximately its final text line to 100% transparency at the bottom, independently of server truncation.
+- The client parses Markdown previews only for cards intersecting the visible board viewport. A preview ends with an ellipsis when server truncation or available card space omits trailing content.
 - Question-blocked cards replace the normal border color with the primary semantic color. Approval-blocked cards use the secondary semantic color.
 - A workspace chip is useful only when the project currently has multiple attached workspaces and the task source workspace differs from the current default workspace. Detached historical workspace context remains available in task detail rather than creating a board exception.
 - Card click opens task detail.

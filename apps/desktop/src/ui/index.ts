@@ -1,5 +1,7 @@
 export { Badge } from "./Badge";
 export type { BadgeTone } from "./Badge";
+export { AdaptiveLineClamp } from "./AdaptiveLineClamp";
+export type { AdaptiveLineClampProps } from "./AdaptiveLineClamp";
 export { Button } from "./Button";
 export type { ButtonSize, ButtonVariant } from "./Button";
 export { IconTooltipButton } from "./IconTooltipButton";

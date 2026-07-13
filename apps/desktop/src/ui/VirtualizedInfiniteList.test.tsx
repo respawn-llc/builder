@@ -167,6 +167,25 @@ describe("shouldAdjustScrollForVirtualizedResize", () => {
 });
 
 describe("VirtualizedInfiniteList bidirectional boundaries", () => {
+  it("passes item indexes to renderers without counting virtual chrome rows", () => {
+    const items = [{ id: "item-1" }, { id: "item-2" }];
+
+    render(
+      <VirtualizedInfiniteList
+        {...virtualListProps(items)}
+        header={<span>Header</span>}
+        renderItem={(item, itemIndex) => (
+          <span>
+            {itemIndex}:{item.id}
+          </span>
+        )}
+      />,
+    );
+
+    expect(screen.getByText("0:item-1")).toBeInTheDocument();
+    expect(screen.getByText("1:item-2")).toBeInTheDocument();
+  });
+
   it("loads independently from the visible top and bottom boundaries", async () => {
     const onLoadPrevious = vi.fn();
     const onLoadNext = vi.fn();
