@@ -46,6 +46,14 @@ type WorktreeKentFacts struct {
 	OriginSessionID *string `json:"origin_session_id,omitempty"`
 }
 
+type WorktreePathAvailability string
+
+const (
+	WorktreePathAvailabilityAvailable    WorktreePathAvailability = "available"
+	WorktreePathAvailabilityMissing      WorktreePathAvailability = "missing"
+	WorktreePathAvailabilityInaccessible WorktreePathAvailability = "inaccessible"
+)
+
 type WorktreeRegisteredFacts struct {
 	Git  WorktreeGitFacts  `json:"git"`
 	Kent WorktreeKentFacts `json:"kent"`

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -771,8 +770,15 @@ func (s *Service) executionTargetForTask(ctx context.Context, task sqlitegen.Tas
 		switch {
 		case err == nil:
 			facts := worktreeKentFacts(row)
-			target.ManagedWorktree = &facts
-			if info, statErr := os.Stat(facts.CanonicalRoot); statErr == nil && info.IsDir() {
+			managedWorktree := serverapi.WorkflowExecutionTargetWorktree{
+				WorktreeID:    facts.WorktreeID,
+				DisplayName:   facts.DisplayName,
+				CanonicalRoot: facts.CanonicalRoot,
+				Availability:  worktree.InspectPath(facts.CanonicalRoot).Availability,
+				Managed:       facts.Managed,
+			}
+			target.ManagedWorktree = &managedWorktree
+			if managedWorktree.Availability == serverapi.WorktreePathAvailabilityAvailable {
 				root := facts.CanonicalRoot
 				target.EffectiveRoot = &root
 				if identity, inspectErr := s.git.ValidateManagedWorktreeIdentity(ctx, worktree.ManagedWorktreeIdentitySpec{
@@ -1910,7 +1916,6 @@ type boardProjectWorkspaceFacts struct {
 
 func projectBoardProject(project clientui.ProjectOverview, workspaceContext boardProjectWorkspaceFacts) serverapi.ProjectBoardProject {
 	return serverapi.ProjectBoardProject{
-		ProjectID:              project.Project.ProjectID,
 		ProjectKey:             project.Project.ProjectKey,
 		DisplayName:            project.Project.DisplayName,
 		DefaultWorkspaceID:     workspaceContext.defaultID,

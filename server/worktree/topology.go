@@ -134,7 +134,7 @@ func gitFactsFromEntry(entry GitWorktree) serverapi.WorktreeGitFacts {
 		Detached:      entry.Detached,
 		Bare:          entry.Bare,
 		IsMain:        entry.IsMain,
-		PathAvailable: pathAvailability(entry.Root) == "available",
+		PathAvailable: PathAvailability(entry.Root) == serverapi.WorktreePathAvailabilityAvailable,
 	}
 	if value := strings.TrimSpace(entry.BranchRef); value != "" {
 		facts.BranchRef = &value

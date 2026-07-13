@@ -1117,7 +1117,7 @@ func (s *Service) registerCreatedWorktree(ctx context.Context, req createdWorktr
 		WorkspaceID:           strings.TrimSpace(req.WorkspaceID),
 		CanonicalRoot:         strings.TrimSpace(gitEntry.Root),
 		DisplayName:           filepath.Base(strings.TrimSpace(gitEntry.Root)),
-		Availability:          pathAvailability(gitEntry.Root),
+		Availability:          string(PathAvailability(gitEntry.Root)),
 		IsMain:                gitEntry.IsMain,
 		Managed:               req.Managed,
 		CreatedBranch:         req.CreatedBranch,

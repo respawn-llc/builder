@@ -11,6 +11,7 @@ import (
 	"core/server/metadata"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTarget) error {
@@ -73,14 +74,30 @@ func worktreeNamedBranch(worktree GitWorktree) string {
 	return shortBranchName(strings.TrimSpace(worktree.BranchRef))
 }
 
-func pathAvailability(path string) string {
-	if _, err := os.Stat(path); err != nil {
+type PathInspection struct {
+	Availability serverapi.WorktreePathAvailability
+	Directory    bool
+}
+
+func PathAvailability(path string) serverapi.WorktreePathAvailability {
+	return InspectPath(path).Availability
+}
+
+func InspectPath(path string) PathInspection {
+	info, err := os.Stat(path)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "missing"
+			return PathInspection{Availability: serverapi.WorktreePathAvailabilityMissing}
 		}
-		return "inaccessible"
+		return PathInspection{Availability: serverapi.WorktreePathAvailabilityInaccessible}
 	}
-	return "available"
+	if !info.IsDir() {
+		return PathInspection{Availability: serverapi.WorktreePathAvailabilityInaccessible}
+	}
+	return PathInspection{
+		Availability: serverapi.WorktreePathAvailabilityAvailable,
+		Directory:    true,
+	}
 }
 
 func marshalGitMetadata(entry GitWorktree) (string, error) {

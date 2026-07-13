@@ -1151,7 +1151,6 @@ type WorkflowBoard struct {
 }
 
 type ProjectBoardProject struct {
-	ProjectID              string `json:"project_id"`
 	ProjectKey             string `json:"project_key"`
 	DisplayName            string `json:"display_name"`
 	DefaultWorkspaceID     string `json:"default_workspace_id"`

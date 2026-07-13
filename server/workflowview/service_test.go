@@ -491,7 +491,8 @@ func TestTaskDetailProjectsHealthyManagedExecutionTargetWithCurrentOperatorBranc
 		*target.CurrentBranch != "operator-renamed" ||
 		target.ManagedWorktree == nil ||
 		target.ManagedWorktree.WorktreeID != worktreeID ||
-		target.ManagedWorktree.CanonicalRoot != canonicalWorktreeRoot {
+		target.ManagedWorktree.CanonicalRoot != canonicalWorktreeRoot ||
+		target.ManagedWorktree.Availability != serverapi.WorktreePathAvailabilityAvailable {
 		t.Fatalf("managed execution target = mode:%q root:%v requested:%v resolved:%v commit:%v provenance:%q branch:%v worktree:%+v",
 			target.Mode,
 			target.EffectiveRoot,
@@ -654,11 +655,24 @@ func TestTaskDetailProjectsUnavailableLegacyObservedManagedTargetForNonDirectory
 		target.ManagedWorktree == nil ||
 		target.ManagedWorktree.WorktreeID != worktreeID ||
 		target.ManagedWorktree.CanonicalRoot != canonicalWorktreeRoot ||
+		target.ManagedWorktree.Availability != serverapi.WorktreePathAvailabilityInaccessible ||
 		!target.ManagedWorktree.Managed {
 		t.Fatalf("legacy observed target = %+v", target)
 	}
 	if target.EffectiveRoot != nil || target.CurrentBranch != nil {
 		t.Fatalf("unavailable legacy target exposed usable root or branch: %+v", target)
+	}
+
+	if err := os.Remove(worktreeRoot); err != nil {
+		t.Fatalf("remove replaced worktree root file: %v", err)
+	}
+	missing := mustTaskDetail(t, view, ctx, string(task.ID)).ExecutionTarget
+	if missing == nil ||
+		missing.ManagedWorktree == nil ||
+		missing.ManagedWorktree.Availability != serverapi.WorktreePathAvailabilityMissing ||
+		missing.EffectiveRoot != nil ||
+		missing.CurrentBranch != nil {
+		t.Fatalf("missing legacy target = %+v", missing)
 	}
 }
 
@@ -2604,7 +2618,7 @@ func TestTaskDetailProjectsGuiIdentityWorktreeStatusActionsAndAttention(t *testi
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Project.ProjectID != binding.ProjectID || detail.Project.ProjectKey != "WOR" || detail.Workflow.WorkflowID != string(workflowID) || !detail.Workflow.IsProjectDefault {
+	if detail.Summary.ProjectID != binding.ProjectID || detail.Project.ProjectKey != "WOR" || detail.Workflow.WorkflowID != string(workflowID) || !detail.Workflow.IsProjectDefault {
 		t.Fatalf("identity = project:%+v workflow:%+v", detail.Project, detail.Workflow)
 	}
 	if detail.ExecutionTarget != nil {
