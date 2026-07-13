@@ -20,7 +20,6 @@ const (
 	worktreeOverlayHeaderLines = 3
 	worktreeOverlayFooterLines = 1
 	worktreeOverlayRowLines    = 3
-	worktreeCreateRowID        = worktreeui.CreateRowID
 )
 
 type uiWorktreeOverlayPhase string
@@ -32,10 +31,24 @@ const (
 )
 
 type uiWorktreeOpenIntent struct {
-	OpenCreate          bool
-	OpenDelete          bool
-	ConfirmDeleteTarget string
-	PreferDeleteBranch  bool
+	OpenCreate         bool
+	OpenDelete         bool
+	DeleteTarget       uiWorktreeDeleteIntentTarget
+	PreferDeleteBranch bool
+}
+
+type uiWorktreeDeleteIntentTargetKind uint8
+
+const (
+	uiWorktreeDeleteIntentTargetCurrent uiWorktreeDeleteIntentTargetKind = iota
+	uiWorktreeDeleteIntentTargetSelector
+	uiWorktreeDeleteIntentTargetIdentity
+)
+
+type uiWorktreeDeleteIntentTarget struct {
+	kind     uiWorktreeDeleteIntentTargetKind
+	selector string
+	identity worktreeui.SelectionIdentity
 }
 
 type uiWorktreeCreateField = worktreeui.Field
@@ -90,23 +103,23 @@ type uiWorktreeDeleteDialogState struct {
 }
 
 type uiWorktreeOverlayState struct {
-	open          bool
-	loading       bool
-	phase         uiWorktreeOverlayPhase
-	selection     int
-	target        clientui.SessionExecutionTarget
-	entries       []worktreeui.Item
-	errorText     string
-	refreshToken  uint64
-	mutationToken uint64
-	switchToken   uint64
-	switchPending bool
-	queuedSwitch  uiWorktreeQueuedSwitch
-	selectedID    string
-	intent        uiWorktreeOpenIntent
-	create        uiWorktreeCreateDialogState
-	deleteConfirm uiWorktreeDeleteDialogState
-	inputCursor   uiInputFieldCursor
+	open             bool
+	loading          bool
+	phase            uiWorktreeOverlayPhase
+	selection        int
+	target           clientui.SessionExecutionTarget
+	entries          []worktreeui.Item
+	errorText        string
+	refreshToken     uint64
+	mutationToken    uint64
+	switchToken      uint64
+	switchPending    bool
+	queuedSwitch     uiWorktreeQueuedSwitch
+	selectedIdentity worktreeui.SelectionIdentity
+	intent           uiWorktreeOpenIntent
+	create           uiWorktreeCreateDialogState
+	deleteConfirm    uiWorktreeDeleteDialogState
+	inputCursor      uiInputFieldCursor
 }
 
 type uiWorktreeQueuedSwitch struct {
@@ -266,17 +279,11 @@ func (m *uiModel) applyWorktreeListResponse(resp serverapi.WorktreeListResponse)
 	m.restoreWorktreeSelection()
 	m.clampWorktreeSelection()
 	if m.worktrees.phase == uiWorktreeOverlayPhaseDeleteConfirm {
-		targetSelector := m.worktrees.deleteConfirm.target.Entry.Projection.Selector
-		if targetSelector == "" {
-			m.closeWorktreeDialog()
+		targetIdentity := worktreeui.SelectionIdentityForItem(m.worktrees.deleteConfirm.target)
+		if item, _, ok := worktreeui.FindByIdentity(m.worktrees.entries, targetIdentity); ok {
+			m.worktrees.deleteConfirm.target = item
+			m.worktrees.deleteConfirm.clampSelection()
 			return
-		}
-		for _, item := range m.worktrees.entries {
-			if item.Entry.Projection.Selector == targetSelector {
-				m.worktrees.deleteConfirm.target = item
-				m.worktrees.deleteConfirm.clampSelection()
-				return
-			}
 		}
 		m.closeWorktreeDialog()
 	}
@@ -294,20 +301,38 @@ func (m *uiModel) applyWorktreeIntent() tea.Cmd {
 	if !intent.OpenDelete {
 		return nil
 	}
-	target, err := worktreeui.ResolveDeletionTarget(m.worktrees.entries, intent.ConfirmDeleteTarget)
+	target, err := resolveWorktreeDeleteIntentTarget(m.worktrees.entries, intent.DeleteTarget)
 	if err != nil {
 		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
 		return nil
 	}
-	m.recordWorktreeSelection()
-	for idx, item := range m.worktrees.entries {
-		if item.Entry.Projection.Selector == target.Entry.Projection.Selector {
-			m.worktrees.selection = idx + 1
-			break
-		}
+	targetIdentity := worktreeui.SelectionIdentityForItem(target)
+	if _, idx, ok := worktreeui.FindByIdentity(m.worktrees.entries, targetIdentity); ok {
+		m.worktrees.selection = idx + 1
 	}
+	m.recordWorktreeSelection()
 	m.openDeleteWorktreeDialog(target, intent.PreferDeleteBranch)
 	return nil
+}
+
+func resolveWorktreeDeleteIntentTarget(
+	entries []worktreeui.Item,
+	target uiWorktreeDeleteIntentTarget,
+) (worktreeui.Item, error) {
+	switch target.kind {
+	case uiWorktreeDeleteIntentTargetCurrent:
+		return worktreeui.ResolveDeletionTarget(entries, "")
+	case uiWorktreeDeleteIntentTargetSelector:
+		return worktreeui.ResolveDeletionTarget(entries, target.selector)
+	case uiWorktreeDeleteIntentTargetIdentity:
+		item, _, ok := worktreeui.FindByIdentity(entries, target.identity)
+		if !ok {
+			return worktreeui.Item{}, serverapi.ErrWorktreeNotFound
+		}
+		return item, nil
+	default:
+		return worktreeui.Item{}, errors.New("worktree delete intent target is invalid")
+	}
 }
 
 func (m *uiModel) suggestedWorktreeBranchFromEntries() string {

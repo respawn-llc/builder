@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/cli/app/internal/worktreeui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -77,7 +78,102 @@ func TestWorktreeListControllerDeleteKeysSetIntent(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected refresh command for delete intent")
 	}
-	if !updated.worktrees.intent.OpenDelete || updated.worktrees.intent.ConfirmDeleteTarget != "feature" || !updated.worktrees.intent.PreferDeleteBranch {
-		t.Fatalf("intent = %+v, want delete+branch for selector feature", updated.worktrees.intent)
+	target := updated.worktrees.intent.DeleteTarget
+	if !updated.worktrees.intent.OpenDelete ||
+		target.kind != uiWorktreeDeleteIntentTargetIdentity ||
+		target.identity != worktreeui.SelectionIdentityForItem(updated.worktrees.entries[0]) ||
+		!updated.worktrees.intent.PreferDeleteBranch {
+		t.Fatalf("intent = %+v, want delete+branch for selected worktree identity", updated.worktrees.intent)
+	}
+}
+
+func TestWorktreeListDeleteIntentSurvivesSelectorChangeDuringRefresh(t *testing.T) {
+	model := newWorktreeListControllerTestModel(t, nil)
+	model.worktrees.selection = 1
+	updated, _ := applyWorktreeListControllerKey(
+		model,
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}},
+	)
+	response := serverapi.WorktreeListResponse{
+		Worktrees: []serverapi.WorktreeListEntry{
+			testRegisteredWorktreeListEntry(
+				"wt-other",
+				"other",
+				"/wt/other",
+				"feature",
+				false,
+				false,
+				true,
+				true,
+			),
+			testRegisteredWorktreeListEntry(
+				"wt-feature",
+				"renamed",
+				"/wt/feature",
+				"feature-renamed",
+				false,
+				false,
+				true,
+				true,
+			),
+		},
+	}
+
+	next, _ := updated.Update(worktreeListDoneMsg{
+		token: updated.worktrees.refreshToken,
+		resp:  response,
+	})
+	refreshed := next.(*uiModel)
+	if refreshed.worktrees.phase != uiWorktreeOverlayPhaseDeleteConfirm {
+		t.Fatalf("phase = %q, want delete confirmation", refreshed.worktrees.phase)
+	}
+	target := refreshed.worktrees.deleteConfirm.target
+	if worktreeui.WorktreeID(target) != "wt-feature" {
+		t.Fatalf("delete target worktree id = %q, want wt-feature", worktreeui.WorktreeID(target))
+	}
+	if target.Entry.Projection.Selector != "feature-renamed" {
+		t.Fatalf("delete target selector = %q, want feature-renamed", target.Entry.Projection.Selector)
+	}
+}
+
+func TestWorktreeListRefreshPreservesSelectionAndDeleteTargetByKentID(t *testing.T) {
+	model := newWorktreeListControllerTestModel(t, nil)
+	model.worktrees.selection = 1
+	model.openDeleteWorktreeDialog(model.worktrees.entries[0], false)
+
+	model.applyWorktreeListResponse(serverapi.WorktreeListResponse{
+		Worktrees: []serverapi.WorktreeListEntry{
+			testRegisteredWorktreeListEntry(
+				"wt-other",
+				"other",
+				"/wt/other",
+				"feature",
+				false,
+				false,
+				true,
+				true,
+			),
+			testRegisteredWorktreeListEntry(
+				"wt-feature",
+				"renamed",
+				"/wt/feature",
+				"feature-renamed",
+				false,
+				false,
+				true,
+				true,
+			),
+		},
+	})
+
+	if model.worktrees.selection != 2 {
+		t.Fatalf("selection = %d, want row 2", model.worktrees.selection)
+	}
+	target := model.worktrees.deleteConfirm.target
+	if worktreeui.WorktreeID(target) != "wt-feature" {
+		t.Fatalf("delete target worktree id = %q, want wt-feature", worktreeui.WorktreeID(target))
+	}
+	if target.Entry.Projection.Selector != "feature-renamed" {
+		t.Fatalf("delete target selector = %q, want feature-renamed", target.Entry.Projection.Selector)
 	}
 }

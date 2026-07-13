@@ -43,11 +43,17 @@ func (c uiInputController) handleWorktreeCommand(args string) (tea.Model, tea.Cm
 		if len(parts) > 2 {
 			return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", worktreeUsageText, ""), c.model.sendTransientStatusWithNoticeID(worktreeUsageText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 		}
-		token := ""
+		target := uiWorktreeDeleteIntentTarget{kind: uiWorktreeDeleteIntentTargetCurrent}
 		if len(parts) == 2 {
-			token = parts[1]
+			target = uiWorktreeDeleteIntentTarget{
+				kind:     uiWorktreeDeleteIntentTargetSelector,
+				selector: parts[1],
+			}
 		}
-		return m, c.startWorktreeOverlayCmd(uiWorktreeOpenIntent{OpenDelete: true, ConfirmDeleteTarget: token})
+		return m, c.startWorktreeOverlayCmd(uiWorktreeOpenIntent{
+			OpenDelete:   true,
+			DeleteTarget: target,
+		})
 	default:
 		return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", worktreeUsageText, ""), c.model.sendTransientStatusWithNoticeID(worktreeUsageText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}

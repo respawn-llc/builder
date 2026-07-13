@@ -190,7 +190,9 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		var listCmd tea.Cmd
 		if m.worktrees.open {
 			m.closeWorktreeDialog()
-			m.worktrees.selectedID = worktreeCreateRowID
+			m.worktrees.selectedIdentity = worktreeui.SelectionIdentity{
+				Kind: worktreeui.SelectionIdentityKindCreateRow,
+			}
 			listCmd = m.requestWorktreeListCmd()
 		}
 		feedbackCmd := m.sendTransientStatusWithNoticeID(worktreeDeleteSuccessStatus(msg.target, msg.resp), uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")

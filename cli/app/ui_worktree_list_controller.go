@@ -54,25 +54,25 @@ func (m *uiModel) selectedWorktreeRow() (worktreeui.Item, bool) {
 	return worktreeui.SelectedWorktree(m.worktrees.entries, m.worktrees.selection)
 }
 
-func (m *uiModel) selectedWorktreeID() string {
+func (m *uiModel) selectedWorktreeIdentity() worktreeui.SelectionIdentity {
 	if m == nil {
-		return worktreeCreateRowID
+		return worktreeui.SelectionIdentity{Kind: worktreeui.SelectionIdentityKindCreateRow}
 	}
-	return worktreeui.SelectedID(m.worktrees.entries, m.worktrees.selection)
+	return worktreeui.SelectedIdentity(m.worktrees.entries, m.worktrees.selection)
 }
 
 func (m *uiModel) recordWorktreeSelection() {
 	if m == nil {
 		return
 	}
-	m.worktrees.selectedID = m.selectedWorktreeID()
+	m.worktrees.selectedIdentity = m.selectedWorktreeIdentity()
 }
 
 func (m *uiModel) restoreWorktreeSelection() {
 	if m == nil {
 		return
 	}
-	m.worktrees.selection = worktreeui.Restore(m.worktrees.entries, m.worktrees.selection, m.worktrees.selectedID)
+	m.worktrees.selection = worktreeui.Restore(m.worktrees.entries, m.worktrees.selection, m.worktrees.selectedIdentity)
 }
 
 func (c uiInputController) startWorktreeOverlayCmd(intent uiWorktreeOpenIntent) tea.Cmd {
@@ -143,7 +143,13 @@ func (c uiInputController) handleWorktreeOverlayKey(msg tea.KeyMsg) (tea.Model, 
 		if target.IsMain {
 			return m, c.model.sendTransientStatusWithNoticeID("Main workspace is not deletable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		m.worktrees.intent = uiWorktreeOpenIntent{OpenDelete: true, ConfirmDeleteTarget: target.Entry.Projection.Selector}
+		m.worktrees.intent = uiWorktreeOpenIntent{
+			OpenDelete: true,
+			DeleteTarget: uiWorktreeDeleteIntentTarget{
+				kind:     uiWorktreeDeleteIntentTargetIdentity,
+				identity: worktreeui.SelectionIdentityForItem(target),
+			},
+		}
 		return m, tea.Batch(m.requestWorktreeListCmd(), m.reconcileSpinnerTicking(false))
 	case "x":
 		target, ok := m.selectedWorktreeRow()
@@ -153,7 +159,14 @@ func (c uiInputController) handleWorktreeOverlayKey(msg tea.KeyMsg) (tea.Model, 
 		if target.IsMain {
 			return m, c.model.sendTransientStatusWithNoticeID("Main workspace is not deletable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		m.worktrees.intent = uiWorktreeOpenIntent{OpenDelete: true, ConfirmDeleteTarget: target.Entry.Projection.Selector, PreferDeleteBranch: true}
+		m.worktrees.intent = uiWorktreeOpenIntent{
+			OpenDelete: true,
+			DeleteTarget: uiWorktreeDeleteIntentTarget{
+				kind:     uiWorktreeDeleteIntentTargetIdentity,
+				identity: worktreeui.SelectionIdentityForItem(target),
+			},
+			PreferDeleteBranch: true,
+		}
 		return m, tea.Batch(m.requestWorktreeListCmd(), m.reconcileSpinnerTicking(false))
 	case "enter":
 		if m.worktrees.selection == 0 {
