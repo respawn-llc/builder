@@ -12,6 +12,7 @@ import (
 )
 
 var errForkReplayBoundary = errors.New("fork replay boundary reached")
+var errDecodeForkHistoryReplacement = errors.New("decode history replacement for fork replay")
 
 // forkReplayFlushEventCount and forkReplayFlushByteBudget bound how much of the
 // parent conversation is buffered in memory before a chunk is flushed to the
@@ -169,7 +170,7 @@ func rebaseHistoryReplacementRollbackCandidate(
 ) (json.RawMessage, error) {
 	var engine historyReplacementEngine
 	if err := json.Unmarshal(payload, &engine); err != nil {
-		return append(json.RawMessage(nil), payload...), nil
+		return nil, fmt.Errorf("%w: %w", errDecodeForkHistoryReplacement, err)
 	}
 	if strings.TrimSpace(engine.Engine) == legacyReviewerRollbackEngine {
 		return append(json.RawMessage(nil), payload...), nil
@@ -177,7 +178,7 @@ func rebaseHistoryReplacementRollbackCandidate(
 
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil {
-		return nil, fmt.Errorf("decode history replacement for fork replay: %w", err)
+		return nil, fmt.Errorf("%w: %w", errDecodeForkHistoryReplacement, err)
 	}
 	const locatorField = "latest_rollback_candidate"
 	_, carriesLocator := fields[locatorField]

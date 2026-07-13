@@ -38,6 +38,8 @@ func (t rollbackCandidateLocatorTracker) Resolve(activeWindowEndByte int64) (*ro
 	if t.latestActiveUserSeq == nil {
 		return valuecopy.Pointer(t.carried), nil
 	}
+	// A segment window has at most one history-replacement boundary and it is
+	// first, so an observed active user is always newer than the carried locator.
 	locator := rollbacktarget.CandidateLocator{
 		UserMessageSeq:       *t.latestActiveUserSeq,
 		CandidatePageEndByte: activeWindowEndByte,

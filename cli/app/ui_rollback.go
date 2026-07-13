@@ -220,22 +220,10 @@ func (m *uiModel) jumpRollbackSelection(delta int) {
 }
 
 func (m *uiModel) pageRollbackSelection(delta int) tea.Cmd {
-	if m == nil || !m.rollback.isSelecting() || m.rollback.pendingNavigation != nil ||
-		(delta != -1 && delta != 1) {
-		return nil
-	}
 	if cmd := m.requestRollbackSelectionPage(delta); cmd != nil {
 		return cmd
 	}
-	if len(m.rollback.candidates) == 0 {
-		return nil
-	}
-	targetIndex := 0
-	if delta > 0 {
-		targetIndex = len(m.rollback.candidates) - 1
-	}
-	m.setSelectedRollbackCandidate(m.rollback.candidates[targetIndex])
-	m.applyRollbackSelectionHighlight()
+	m.jumpRollbackSelection(delta)
 	return nil
 }
 
