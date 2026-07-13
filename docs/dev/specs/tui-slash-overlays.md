@@ -48,7 +48,8 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 - Entry: Esc-Esc on empty idle input (owner: tui-chat-core). Candidates are the transcript's user messages with rollback targets; the newest is preselected.
 - The picker uses detail rendering inside alt-screen, does not enable alternate-scroll, and ignores mouse events. (owner: tui-transcript :: Detail Mode)
-- The selected candidate is highlighted and centered in the transcript. `Up`/`Down` move between candidates; at the window edge they page across transcript windows (bounded pages — never a full-transcript load), re-anchoring the selection.
+- The selected candidate is highlighted and centered in the transcript. `Up`/`Down` move between candidates; at the window edge they page across transcript windows through bounded requests, re-anchoring the selection.
+- Candidate-free pages encountered during edge navigation are traversed automatically through sequential bounded reads while remaining transient. Each navigation attempt has a 20-second deadline; timeout stops pagination, keeps the current candidate selected, and surfaces an error in the status line.
 - `Enter` begins editing: the composer is seeded with the selected message's text and the status line shows the `editing` label (owner: tui-status-line). `Esc` while editing returns to selection; `Esc` while selecting exits the picker and restores the prior transcript mode.
 - Submitting the edited message creates a rollback fork targeted at the selected message and opens it with the edited text as its first prompt — navigation to a new session target, never same-session transcript mutation. (fork nature owner: tui-transcript :: Ongoing Mode)
 - If the transcript has no rollback candidates, arming does nothing visible.

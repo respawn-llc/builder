@@ -4,26 +4,20 @@ import tea "github.com/charmbracelet/bubbletea"
 
 func (c uiInputController) handleRuntimeCtrlC(closeSurface func() tea.Cmd) (tea.Model, tea.Cmd) {
 	m := c.model
+	closeCmd := tea.Cmd(nil)
+	if closeSurface != nil {
+		closeCmd = closeSurface()
+	}
 	if m.hasPendingInterrupt() {
 		m.exitAction = UIActionExit
 		m.forcedLocalExit = true
-		if closeSurface != nil {
-			if cmd := closeSurface(); cmd != nil {
-				return m, tea.Sequence(cmd, tea.Quit)
-			}
-		}
-		return m, tea.Quit
+		return m, sequenceCmds(closeCmd, tea.Quit)
 	}
 	if m.blocksRuntimeInput() {
-		return m, c.interruptBusyRuntime()
+		return m, sequenceCmds(closeCmd, c.interruptBusyRuntime())
 	}
 	m.exitAction = UIActionExit
-	if closeSurface != nil {
-		if cmd := closeSurface(); cmd != nil {
-			return m, tea.Sequence(cmd, tea.Quit)
-		}
-	}
-	return m, tea.Quit
+	return m, sequenceCmds(closeCmd, tea.Quit)
 }
 
 func (c uiInputController) closeTranscriptSurfaceForRuntimeCtrlC(close func()) func() tea.Cmd {

@@ -48,7 +48,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - Exiting the TUI (Ctrl+C or `/exit`) persists the current main-input draft to the server before release; opening the session later seeds the input from that draft verbatim (owner: tui-startup.md :: Session Picker).
 - `/exit` is a client detach, not a runtime interrupt. An active server-owned run continues after this TUI releases its attachment.
 - Session-navigation commands persist the outgoing draft, resolve the typed transition, release the originating attachment, and only then plan or attach the destination. A release failure aborts navigation before destination attachment; an `/exit` release failure is reported after terminal teardown and exits nonzero.
-- A busy main-transcript `Ctrl+C` remains the distinct turn-local interrupt control; picker `Ctrl+C` exits only the picker and does not interrupt or reattach the originating run.
+- `Ctrl+C` in the rollback picker closes the overlay first, then uses the same global busy-interrupt/idle-exit handling as the main transcript. (owner: tui-slash-overlays :: Shared Overlay Conventions)
 - `Shift+Tab`/`Ctrl+T` toggle ongoing↔detail transcript mode; mode-toggle ephemerality is owned by tui-transcript :: Modes.
 - Arming the rollback flow requires two consecutive `Esc` presses on empty idle input within a short window (Esc-Esc); a single `Esc` does nothing visible. Rollback behavior itself is owned by its own family spec.
 

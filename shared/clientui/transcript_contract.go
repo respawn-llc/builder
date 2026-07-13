@@ -174,8 +174,9 @@ type TranscriptCommittedRow struct {
 }
 
 type TranscriptUserRow struct {
-	Text          string
-	CondensedText string
+	Text             string
+	CondensedText    string
+	RollbackTargetID *string
 }
 
 type TranscriptAssistantRow struct {

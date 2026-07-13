@@ -116,6 +116,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 			HTTPClient:                   llm.NewHTTPClient(time.Duration(active.Timeouts.ModelRequestSeconds) * time.Second),
 			OpenAIBaseURL:                mainProvider.OpenAIBaseURL,
 			ModelVerbosity:               string(mainProvider.ModelVerbosity),
+			ProviderIdentifier:           &mainProvider.ProviderIdentifier,
 			Store:                        mainProvider.Store,
 			ContextWindowTokens:          mainProvider.ContextWindowTokens,
 			ProviderCapabilitiesOverride: mainProvider.ProviderCapabilitiesOverride,
@@ -144,6 +145,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 			HTTPClient:                   llm.NewHTTPClient(time.Duration(active.Reviewer.TimeoutSeconds) * time.Second),
 			OpenAIBaseURL:                reviewerProvider.OpenAIBaseURL,
 			ModelVerbosity:               string(reviewerProvider.ModelVerbosity),
+			ProviderIdentifier:           &reviewerProvider.ProviderIdentifier,
 			Store:                        reviewerProvider.Store,
 			ContextWindowTokens:          reviewerProvider.ContextWindowTokens,
 			ProviderCapabilitiesOverride: reviewerProvider.ProviderCapabilitiesOverride,
@@ -268,6 +270,7 @@ type providerRuntimeSettings struct {
 	ProviderOverride             string
 	OpenAIBaseURL                string
 	ModelVerbosity               config.ModelVerbosity
+	ProviderIdentifier           string
 	Store                        bool
 	ContextWindowTokens          int
 	Auth                         string
@@ -280,6 +283,7 @@ func mainProviderRuntimeSettings(active config.Settings) providerRuntimeSettings
 		ProviderOverride:             active.ProviderOverride,
 		OpenAIBaseURL:                active.OpenAIBaseURL,
 		ModelVerbosity:               active.ModelVerbosity,
+		ProviderIdentifier:           active.ProviderIdentifier,
 		Store:                        active.Store,
 		ContextWindowTokens:          active.ModelContextWindow,
 		Auth:                         "inherit",
@@ -338,6 +342,7 @@ func reviewerProviderRuntimeSettings(active config.Settings) providerRuntimeSett
 		ProviderOverride:             reviewerProvider.ProviderOverride,
 		OpenAIBaseURL:                reviewerProvider.OpenAIBaseURL,
 		ModelVerbosity:               reviewer.ModelVerbosity,
+		ProviderIdentifier:           active.ProviderIdentifier,
 		Store:                        false,
 		ContextWindowTokens:          reviewer.ModelContextWindow,
 		Auth:                         reviewer.Auth,

@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"core/shared/rollbacktarget"
 )
 
 var errForkReplayBoundary = errors.New("fork replay boundary reached")
+var errDecodeForkHistoryReplacement = errors.New("decode history replacement for fork replay")
 
 // forkReplayFlushEventCount and forkReplayFlushByteBudget bound how much of the
 // parent conversation is buffered in memory before a chunk is flushed to the
@@ -94,12 +97,29 @@ func streamReplayIntoChild(parent *Store, child *Store, targetSeq int64) (replay
 	cutOrdinal := 0
 	buffer := make([]ReplayEvent, 0, forkReplayFlushEventCount)
 	bufferedBytes := 0
+	var latestRollbackCandidate *rollbacktarget.CandidateLocator
 	flush := func() error {
 		if len(buffer) == 0 {
 			return nil
 		}
-		if _, err := child.AppendReplayEvents(buffer); err != nil {
-			return err
+		if child.options.filelessEvents {
+			if _, err := child.AppendReplayEvents(buffer); err != nil {
+				return err
+			}
+		} else {
+			appended, err := child.appendReplayEventsWithEndByteCursor(buffer)
+			if err != nil {
+				return err
+			}
+			for index := range buffer {
+				if !hasVisibleUserMessageEvent(buffer[index].Kind, buffer[index].Payload) {
+					continue
+				}
+				latestRollbackCandidate = &rollbacktarget.CandidateLocator{
+					UserMessageSeq:       appended.events[index].Seq,
+					CandidatePageEndByte: *appended.endByteCursor,
+				}
+			}
 		}
 		buffer = buffer[:0]
 		bufferedBytes = 0
@@ -114,6 +134,19 @@ func streamReplayIntoChild(parent *Store, child *Store, targetSeq int64) (replay
 			}
 		}
 		replayEvent := ReplayEvent{StepID: evt.StepID, Kind: evt.Kind, Payload: append([]byte(nil), evt.Payload...)}
+		if replayEvent.Kind == "history_replaced" {
+			if err := flush(); err != nil {
+				return err
+			}
+			rebasedPayload, err := rebaseHistoryReplacementRollbackCandidate(
+				replayEvent.Payload,
+				latestRollbackCandidate,
+			)
+			if err != nil {
+				return err
+			}
+			replayEvent.Payload = rebasedPayload
+		}
 		derived.apply(replayEvent)
 		buffer = append(buffer, replayEvent)
 		bufferedBytes += len(replayEvent.Payload)
@@ -129,6 +162,43 @@ func streamReplayIntoChild(parent *Store, child *Store, targetSeq int64) (replay
 		return derived, 0, err
 	}
 	return derived, cutOrdinal, nil
+}
+
+func rebaseHistoryReplacementRollbackCandidate(
+	payload json.RawMessage,
+	locator *rollbacktarget.CandidateLocator,
+) (json.RawMessage, error) {
+	var engine historyReplacementEngine
+	if err := json.Unmarshal(payload, &engine); err != nil {
+		return nil, fmt.Errorf("%w: %w", errDecodeForkHistoryReplacement, err)
+	}
+	if strings.TrimSpace(engine.Engine) == legacyReviewerRollbackEngine {
+		return append(json.RawMessage(nil), payload...), nil
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return nil, fmt.Errorf("%w: %w", errDecodeForkHistoryReplacement, err)
+	}
+	const locatorField = "latest_rollback_candidate"
+	_, carriesLocator := fields[locatorField]
+	if locator == nil {
+		if !carriesLocator {
+			return append(json.RawMessage(nil), payload...), nil
+		}
+		delete(fields, locatorField)
+	} else {
+		encoded, err := json.Marshal(locator)
+		if err != nil {
+			return nil, fmt.Errorf("encode rebased rollback candidate locator: %w", err)
+		}
+		fields[locatorField] = encoded
+	}
+	rebased, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("encode rebased history replacement: %w", err)
+	}
+	return rebased, nil
 }
 
 func (s *Store) applyForkDerivedState(derived replayDerivedState) error {

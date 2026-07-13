@@ -294,36 +294,41 @@ func decodeClipboardPlatformEnvelope(output []byte) (clipboardPlatformEnvelope, 
 	return envelope, nil
 }
 
+const darwinClipboardReadFunction = `function kentReadClipboard(pasteboard, path) {
+  var png = pasteboard.dataForType($.NSPasteboardTypePNG);
+  if (!png.isNil()) {
+    if (!png.writeToFileAtomically(path, true)) {
+      throw new Error("could not write PNG clipboard image");
+    }
+    return {kind: "image"};
+  }
+  var tiff = pasteboard.dataForType($.NSPasteboardTypeTIFF);
+  if (!tiff.isNil()) {
+    var rep = $.NSBitmapImageRep.alloc.initWithData(tiff);
+    if (rep.isNil()) {
+      throw new Error("could not decode TIFF clipboard image");
+    }
+    var encoded = rep.representationUsingTypeProperties($.NSPNGFileType, $({}));
+    if (encoded.isNil() || !encoded.writeToFileAtomically(path, true)) {
+      throw new Error("could not encode PNG clipboard image");
+    }
+    return {kind: "image"};
+  }
+  var text = pasteboard.stringForType($.NSPasteboardTypeString);
+  if (!text.isNil()) {
+    return {kind: "text", text: ObjC.unwrap(text)};
+  }
+  return {kind: "empty"};
+}`
+
 func darwinClipboardPasteScript(path string) string {
 	quotedPath := strconv.Quote(path)
 	return strings.Join([]string{
 		`ObjC.import("AppKit");`,
 		`ObjC.import("Foundation");`,
+		darwinClipboardReadFunction,
 		`var path = $.NSString.stringWithUTF8String(` + quotedPath + `);`,
-		`var pasteboard = $.NSPasteboard.generalPasteboard;`,
-		`var png = pasteboard.dataForType($.NSPasteboardTypePNG);`,
-		`if (png) {`,
-		`  if (!png.writeToFileAtomically(path, true)) {`,
-		`    throw new Error("could not write PNG clipboard image");`,
-		`  }`,
-		`  console.log(JSON.stringify({kind: "image"}));`,
-		`} else {`,
-		`  var tiff = pasteboard.dataForType($.NSPasteboardTypeTIFF);`,
-		`  if (tiff) {`,
-		`    var rep = $.NSBitmapImageRep.alloc.initWithData(tiff);`,
-		`    if (!rep) { throw new Error("could not decode TIFF clipboard image"); }`,
-		`    var encoded = rep.representationUsingTypeProperties($.NSPNGFileType, $({}));`,
-		`    if (!encoded || !encoded.writeToFileAtomically(path, true)) { throw new Error("could not encode PNG clipboard image"); }`,
-		`    console.log(JSON.stringify({kind: "image"}));`,
-		`  } else {`,
-		`    var text = pasteboard.stringForType($.NSPasteboardTypeString);`,
-		`    if (text) {`,
-		`      console.log(JSON.stringify({kind: "text", text: ObjC.unwrap(text)}));`,
-		`    } else {`,
-		`      console.log(JSON.stringify({kind: "empty"}));`,
-		`    }`,
-		`  }`,
-		`}`,
+		`JSON.stringify(kentReadClipboard($.NSPasteboard.generalPasteboard, path));`,
 	}, "\n")
 }
 
@@ -684,11 +689,13 @@ func (m *uiModel) pasteClipboardCmd(target uiClipboardPasteTarget) tea.Cmd {
 
 func (m *uiModel) handleClipboardPasteDone(msg clipboardPasteDoneMsg) tea.Cmd {
 	if msg.Err != nil {
+		m.logClipboardPasteFailure(msg.Target, msg.Err)
 		message, kind := clipboardPasteStatus(msg.Err)
 		return m.sendTransientStatusWithNoticeID(message, kind, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	chars, err := clipboardContentRunes(msg.Content)
 	if err != nil {
+		m.logClipboardPasteFailure(msg.Target, err)
 		message, kind := clipboardPasteStatus(err)
 		return m.sendTransientStatusWithNoticeID(message, kind, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
@@ -705,6 +712,59 @@ func (m *uiModel) handleClipboardPasteDone(msg clipboardPasteDoneMsg) tea.Cmd {
 		return m.insertInputRunes(chars)
 	}
 	return nil
+}
+
+func (m *uiModel) logClipboardPasteFailure(target uiClipboardPasteTarget, err error) {
+	targetValue := clipboardPasteTargetLogValue(target)
+	var pasteErr *uiClipboardPasteError
+	if errors.As(err, &pasteErr) {
+		kindValue := clipboardPasteErrorKindLogValue(pasteErr.Kind)
+		if pasteErr.Err == nil {
+			m.logf("clipboard_paste.error target=%s kind=%s", targetValue, kindValue)
+			return
+		}
+		causeType := fmt.Sprintf("%T", pasteErr.Err)
+		var exitCoder interface{ ExitCode() int }
+		if errors.As(pasteErr.Err, &exitCoder) {
+			m.logf(
+				"clipboard_paste.error target=%s kind=%s cause_type=%s exit_code=%d",
+				targetValue,
+				kindValue,
+				causeType,
+				exitCoder.ExitCode(),
+			)
+			return
+		}
+		m.logf("clipboard_paste.error target=%s kind=%s cause_type=%s", targetValue, kindValue, causeType)
+		return
+	}
+	m.logf("clipboard_paste.error target=%s kind=untyped cause_type=%s", targetValue, fmt.Sprintf("%T", err))
+}
+
+func clipboardPasteTargetLogValue(target uiClipboardPasteTarget) string {
+	switch target {
+	case uiClipboardPasteTargetMain:
+		return "main"
+	case uiClipboardPasteTargetAsk:
+		return "ask"
+	default:
+		return "unknown(" + strconv.Itoa(int(target)) + ")"
+	}
+}
+
+func clipboardPasteErrorKindLogValue(kind uiClipboardPasteErrorKind) string {
+	switch kind {
+	case uiClipboardPasteErrorNoContent:
+		return "no_content"
+	case uiClipboardPasteErrorMissingTool:
+		return "missing_tool"
+	case uiClipboardPasteErrorUnsupported:
+		return "unsupported"
+	case uiClipboardPasteErrorFailed:
+		return "failed"
+	default:
+		return "unknown(" + strconv.Itoa(int(kind)) + ")"
+	}
 }
 
 func (m *uiModel) discardStaleClipboardImageCmd(content uiClipboardContent) tea.Cmd {

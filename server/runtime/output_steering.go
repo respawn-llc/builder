@@ -406,6 +406,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	// non-empty replacement active list is born already carrying it. Mirror the
 	// restore-time length signal here rather than scanning the items.
 	e.baseMetaInjected = len(preparedItems) > 0
+	replacement.payload.LatestRollbackCandidate = e.transcriptRuntimeState().LatestRollbackCandidate()
 	_, committed, appendErr := e.store.AppendEvent(stepID, "history_replaced", replacement.payload)
 	if appendErr != nil && !committed {
 		return appendErr

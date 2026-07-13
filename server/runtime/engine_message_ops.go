@@ -13,6 +13,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
+	"core/shared/rollbacktarget"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -184,7 +185,7 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	}
 	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendMessage(msg)
 	if persist {
-		if _, _, err := e.store.AppendEvent(stepID, "message", msg); err != nil {
+		if err := e.appendPersistedMessageEvent(stepID, msg); err != nil {
 			return err
 		}
 	}
@@ -193,6 +194,27 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
 	}
 	return nil
+}
+
+func (e *Engine) appendPersistedMessageEvent(stepID string, msg llm.Message) error {
+	if !isRollbackCandidateMessage(msg) {
+		_, _, err := e.store.AppendEvent(stepID, "message", msg)
+		return err
+	}
+	appended, err := e.store.AppendEventWithEndByteCursor(stepID, "message", msg)
+	if appended.Committed {
+		if appended.EndByteCursor == nil {
+			panic(fmt.Sprintf(
+				"committed rollback candidate message is missing its event-log end-byte cursor (event_seq=%d)",
+				appended.Event.Seq,
+			))
+		}
+		e.transcriptRuntimeState().SetLatestRollbackCandidate(rollbacktarget.CandidateLocator{
+			UserMessageSeq:       appended.Event.Seq,
+			CandidatePageEndByte: *appended.EndByteCursor,
+		})
+	}
+	return err
 }
 
 func (e *Engine) emitLiveToolAbortsRaw(stepID string, reason string) {
@@ -232,7 +254,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 	}
 	normalizedItems := normalizedQueuedUserMessageStatusItems(queueItems)
 	normalizedIDs := queuedUserMessageStatusItemIDs(normalizedItems)
-	if _, _, err := e.store.AppendEvent(stepID, "message", msg); err != nil {
+	if err := e.appendPersistedMessageEvent(stepID, msg); err != nil {
 		return err
 	}
 	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendMessage(msg)

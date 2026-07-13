@@ -12,6 +12,7 @@ import (
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -208,6 +209,45 @@ func TestPlannerReappliesPersistedSubagentRoleSettingsOnResume(t *testing.T) {
 	}
 	if got := plan.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("smart_reviewer")) {
 		t.Fatalf("continuation = %+v, want smart_reviewer preserved", got)
+	}
+}
+
+func TestResumedSessionUsesActiveProviderIdentifierWithoutPersistingIt(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	store := createTestSession(t, workspace)
+	if err := store.MarkModelDispatchLocked(session.LockedContract{
+		Model:           loaded.Settings.Model,
+		EnabledTools:    []string{string(toolspec.ToolExecCommand)},
+		HasEnabledTools: true,
+		WebSearchMode:   loaded.Settings.WebSearch,
+	}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+
+	reopened, err := session.Open(store.Dir())
+	if err != nil {
+		t.Fatalf("reopen session: %v", err)
+	}
+	loaded.Settings.ProviderIdentifier = "restarted-agent"
+	plan, err := ResolvePromptFacingSnapshotPlan(loaded, reopened, false)
+	if err != nil {
+		t.Fatalf("ResolvePromptFacingSnapshotPlan: %v", err)
+	}
+	if plan.ActiveSettings.ProviderIdentifier != "restarted-agent" {
+		t.Fatalf("provider identifier = %q, want restarted-agent", plan.ActiveSettings.ProviderIdentifier)
+	}
+
+	encoded, err := json.Marshal(reopened.Meta().Locked)
+	if err != nil {
+		t.Fatalf("marshal locked contract: %v", err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(encoded, &persisted); err != nil {
+		t.Fatalf("decode locked contract: %v", err)
+	}
+	if _, exists := persisted["provider_identifier"]; exists {
+		t.Fatalf("locked contract persisted provider_identifier: %+v", persisted)
 	}
 }
 
@@ -1232,6 +1272,7 @@ func TestSubagentRoleMetadataSurvivesCloneAndSourceReport(t *testing.T) {
 func TestResolveSubagentSettingsPreservesSubagentCatalogMetadata(t *testing.T) {
 	cfg := loadLaunchConfig(t, t.TempDir())
 	base := cfg.Settings
+	base.ProviderIdentifier = "global-agent"
 	workerSettings := base
 	workerSettings.ThinkingLevel = "high"
 	blockedSettings := base
@@ -1259,6 +1300,9 @@ func TestResolveSubagentSettingsPreservesSubagentCatalogMetadata(t *testing.T) {
 	}
 	if !resolved.Subagents["blocked"].AgentCallableSet || resolved.Subagents["blocked"].AgentCallable {
 		t.Fatalf("blocked metadata lost after resolve: %+v", resolved.Subagents["blocked"])
+	}
+	if resolved.ProviderIdentifier != "global-agent" {
+		t.Fatalf("provider identifier = %q, want global-agent", resolved.ProviderIdentifier)
 	}
 }
 

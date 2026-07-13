@@ -1,6 +1,7 @@
 package clientui
 
 import (
+	"core/shared/rollbacktarget"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 	"time"
@@ -145,7 +146,7 @@ type BackgroundShellEvent struct {
 
 type ChatEntry struct {
 	Visibility         EntryVisibility
-	RollbackTargetID   string
+	RollbackTargetID   *string
 	Role               string
 	Text               string
 	CondensedText      string
@@ -168,14 +169,15 @@ type TranscriptPageRequest struct {
 }
 
 type TranscriptPage struct {
-	SessionID             string
-	SessionName           string
-	ConversationFreshness ConversationFreshness
-	OlderCursor           *int64
-	HasMoreAbove          bool
-	NewerCursor           *int64
-	HasMoreBelow          bool
-	Entries               []TranscriptCommittedRow
+	SessionID               string
+	SessionName             string
+	ConversationFreshness   ConversationFreshness
+	OlderCursor             *int64
+	HasMoreAbove            bool
+	NewerCursor             *int64
+	HasMoreBelow            bool
+	LatestRollbackCandidate *rollbacktarget.CandidateLocator
+	Entries                 []TranscriptCommittedRow
 }
 
 type ToolPresentationKind string

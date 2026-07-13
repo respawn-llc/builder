@@ -90,11 +90,11 @@ type subagentRoleApplicableSetting interface {
 	appliesToSubagentRole() bool
 }
 
-type rootOnlyBoolSetting struct {
-	scalarSetting[bool]
+type rootOnlySetting[T any] struct {
+	scalarSetting[T]
 }
 
-func (rootOnlyBoolSetting) appliesToSubagentRole() bool {
+func (rootOnlySetting[T]) appliesToSubagentRole() bool {
 	return false
 }
 
@@ -203,6 +203,13 @@ func newSettingsRegistry() settingsRegistry {
 			func(opts LoadOptions) (string, bool, error) { return trimmedCLIString(opts.ProviderOverride) },
 			func(raw string) string { return strings.ToLower(strings.TrimSpace(raw)) },
 			settingDocOptions{}),
+		rootOnlySetting[string]{newStringSetting("provider_identifier", Command,
+			func(state *settingsState, value string) { state.Settings.ProviderIdentifier = value },
+			func(state settingsState) string { return state.Settings.ProviderIdentifier },
+			"KENT_PROVIDER_IDENTIFIER",
+			nil,
+			nil,
+			settingDocOptions{allowEmptyString: true})},
 		newStringSetting("openai_base_url", "",
 			func(state *settingsState, value string) { state.Settings.OpenAIBaseURL = value },
 			func(state settingsState) string { return state.Settings.OpenAIBaseURL },
@@ -423,7 +430,7 @@ func newSettingsRegistry() settingsRegistry {
 			"KENT_WORKFLOW_MAX_INVALID_COMPLETION_ATTEMPTS",
 			nil,
 			settingDocOptions{}),
-		rootOnlyBoolSetting{newBoolSetting("workflow.subagents", defaultWorkflowSubagents,
+		rootOnlySetting[bool]{newBoolSetting("workflow.subagents", defaultWorkflowSubagents,
 			func(state *settingsState, value bool) { state.Settings.Workflow.Subagents = value },
 			func(state settingsState) bool { return state.Settings.Workflow.Subagents },
 			"",
@@ -652,6 +659,7 @@ func newSettingsRegistry() settingsRegistry {
 			validateModelNotEmpty,
 			validateProviderOverrideRequiresModel,
 			validateProviderOverrideValue,
+			validateProviderIdentifier,
 			validateOpenAIBaseURL,
 			validateProviderCapabilitiesProviderID,
 			validateModelVerbosity,

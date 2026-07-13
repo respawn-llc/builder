@@ -21,6 +21,14 @@ func visibleUserTranscriptEntry(msg llm.Message) (ChatEntry, bool) {
 	return ChatEntry{Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: msg.Content, MessageType: msg.MessageType, SourcePath: strings.TrimSpace(msg.SourcePath), CompactLabel: compactLabelForMessage(msg)}, true
 }
 
+func isRollbackCandidateMessage(msg llm.Message) bool {
+	if msg.Role != llm.RoleUser {
+		return false
+	}
+	entry, ok := visibleUserTranscriptEntry(msg)
+	return ok && strings.TrimSpace(entry.Role) == "user"
+}
+
 func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 	if strings.TrimSpace(msg.Content) == "" {
 		if isUnknownDeveloperMessageType(msg.MessageType) {

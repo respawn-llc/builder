@@ -248,7 +248,11 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		if fact.User == nil {
 			return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
 		}
-		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: fact.User.Text, CondensedText: fact.User.CondensedText}}
+		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{
+			Text:             fact.User.Text,
+			CondensedText:    fact.User.CondensedText,
+			RollbackTargetID: valuecopy.Pointer(fact.User.RollbackTargetID),
+		}}
 	case runtime.TranscriptCommittedRowFactAssistant:
 		if fact.Assistant == nil {
 			return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}

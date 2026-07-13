@@ -92,11 +92,12 @@ func (a uiRuntimeAdapter) applyProjectedSessionMetadata(session clientui.Runtime
 	}
 	a.model.conversationFreshness = session.ConversationFreshness
 	if previousSessionID != "" && nextSessionID != "" && previousSessionID != nextSessionID {
+		rollbackCmd := a.model.discardRollbackStateForSessionReplacement()
 		cancelCmd := a.model.cancelPendingDetailTranscriptRequest()
 		a.model.detailTranscript.reset()
 		resetCmd := a.model.forwardToView(tui.ResetDetailTranscriptMsg{})
 		loadCmd := a.model.loadDetailTranscriptPageCmd(a.model.detailTranscript.requestedPageForDetailEntry())
-		return sequenceCmds(cancelCmd, resetCmd, loadCmd)
+		return sequenceCmds(rollbackCmd, cancelCmd, resetCmd, loadCmd)
 	}
 	return nil
 }

@@ -73,6 +73,9 @@ func TestLoadUsesDefaultsWithoutCreatingConfigOnFirstUse(t *testing.T) {
 	if cfg.Settings.Model != defaultModel {
 		t.Fatalf("default model mismatch: %q", cfg.Settings.Model)
 	}
+	if cfg.Settings.ProviderIdentifier != Command {
+		t.Fatalf("default provider identifier mismatch: %q", cfg.Settings.ProviderIdentifier)
+	}
 	if cfg.Settings.WebSearch != "native" {
 		t.Fatalf("default web_search mismatch: %q", cfg.Settings.WebSearch)
 	}

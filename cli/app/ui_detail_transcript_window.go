@@ -5,6 +5,7 @@ import (
 
 	"core/cli/tui"
 	"core/shared/clientui"
+	"core/shared/rollbacktarget"
 	"core/shared/valuecopy"
 )
 
@@ -21,15 +22,16 @@ type residentSegmentMeta struct {
 }
 
 type uiDetailTranscriptWindow struct {
-	sessionID    string
-	entries      []clientui.TranscriptCommittedRow
-	loaded       bool
-	olderCursor  *int64
-	hasMoreAbove bool
-	newerCursor  *int64
-	hasMoreBelow bool
-	segments     []residentSegmentMeta
-	lastRequest  clientui.TranscriptPageRequest
+	sessionID               string
+	entries                 []clientui.TranscriptCommittedRow
+	loaded                  bool
+	olderCursor             *int64
+	hasMoreAbove            bool
+	newerCursor             *int64
+	hasMoreBelow            bool
+	latestRollbackCandidate *rollbacktarget.CandidateLocator
+	segments                []residentSegmentMeta
+	lastRequest             clientui.TranscriptPageRequest
 }
 
 type uiDetailTranscriptMergeResult struct {
@@ -39,13 +41,32 @@ type uiDetailTranscriptMergeResult struct {
 
 func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
 	return clientui.TranscriptPage{
-		SessionID:    w.sessionID,
-		OlderCursor:  w.olderCursor,
-		HasMoreAbove: w.hasMoreAbove,
-		NewerCursor:  w.newerCursor,
-		HasMoreBelow: w.hasMoreBelow,
-		Entries:      cloneDetailTranscriptRows(w.entries),
+		SessionID:               w.sessionID,
+		OlderCursor:             w.olderCursor,
+		HasMoreAbove:            w.hasMoreAbove,
+		NewerCursor:             w.newerCursor,
+		HasMoreBelow:            w.hasMoreBelow,
+		LatestRollbackCandidate: valuecopy.Pointer(w.latestRollbackCandidate),
+		Entries:                 cloneDetailTranscriptRows(w.entries),
 	}
+}
+
+func (w uiDetailTranscriptWindow) clone() uiDetailTranscriptWindow {
+	cloned := w
+	cloned.entries = cloneDetailTranscriptRows(w.entries)
+	cloned.olderCursor = valuecopy.Pointer(w.olderCursor)
+	cloned.newerCursor = valuecopy.Pointer(w.newerCursor)
+	cloned.latestRollbackCandidate = valuecopy.Pointer(w.latestRollbackCandidate)
+	cloned.lastRequest = cloneTranscriptPageRequest(w.lastRequest)
+	if len(w.segments) > 0 {
+		cloned.segments = make([]residentSegmentMeta, len(w.segments))
+		for index, segment := range w.segments {
+			cloned.segments[index] = segment
+			cloned.segments[index].olderCursor = valuecopy.Pointer(segment.olderCursor)
+			cloned.segments[index].newerCursor = valuecopy.Pointer(segment.newerCursor)
+		}
+	}
+	return cloned
 }
 
 func (w *uiDetailTranscriptWindow) reset() {
@@ -77,6 +98,7 @@ func (w *uiDetailTranscriptWindow) refreshEdgeCursors(page clientui.TranscriptPa
 	bottom := &w.segments[len(w.segments)-1]
 	bottom.newerCursor = valuecopy.Pointer(page.NewerCursor)
 	bottom.hasMoreBelow = page.HasMoreBelow
+	w.latestRollbackCandidate = valuecopy.Pointer(page.LatestRollbackCandidate)
 	w.refreshBounds()
 }
 
@@ -130,6 +152,7 @@ func (w *uiDetailTranscriptWindow) replace(page clientui.TranscriptPage) {
 	w.sessionID = strings.TrimSpace(page.SessionID)
 	w.entries = cloneDetailTranscriptRows(page.Entries)
 	w.loaded = true
+	w.latestRollbackCandidate = valuecopy.Pointer(page.LatestRollbackCandidate)
 	w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
 	w.refreshBounds()
 	w.trimToSegments(len(w.entries))
@@ -143,6 +166,7 @@ func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPag
 		w.replace(page)
 		return uiDetailTranscriptMergeResult{}
 	}
+	w.latestRollbackCandidate = valuecopy.Pointer(page.LatestRollbackCandidate)
 	if w.hasSegment(page) {
 		return uiDetailTranscriptMergeResult{}
 	}
@@ -184,6 +208,7 @@ func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage
 		w.replace(page)
 		return uiDetailTranscriptMergeResult{}
 	}
+	w.latestRollbackCandidate = valuecopy.Pointer(page.LatestRollbackCandidate)
 	if w.hasSegment(page) {
 		return uiDetailTranscriptMergeResult{}
 	}
@@ -332,6 +357,13 @@ func pageRequestEqual(a, b clientui.TranscriptPageRequest) bool {
 	return int64PointerEqual(a.Cursor, b.Cursor) && int64PointerEqual(a.NewerCursor, b.NewerCursor)
 }
 
+func cloneTranscriptPageRequest(request clientui.TranscriptPageRequest) clientui.TranscriptPageRequest {
+	return clientui.TranscriptPageRequest{
+		Cursor:      valuecopy.Pointer(request.Cursor),
+		NewerCursor: valuecopy.Pointer(request.NewerCursor),
+	}
+}
+
 func transcriptPageSessionChanged(currentSessionID, nextSessionID string) bool {
 	trimmedCurrent := strings.TrimSpace(currentSessionID)
 	trimmedNext := strings.TrimSpace(nextSessionID)
@@ -349,6 +381,9 @@ func cloneDetailTranscriptRows(entries []clientui.TranscriptCommittedRow) []clie
 	for _, row := range entries {
 		copyRow := row
 		copyRow.User = valuecopy.Pointer(row.User)
+		if copyRow.User != nil {
+			copyRow.User.RollbackTargetID = valuecopy.Pointer(row.User.RollbackTargetID)
+		}
 		copyRow.Assistant = valuecopy.Pointer(row.Assistant)
 		if copyRow.Assistant != nil {
 			copyRow.Assistant.StreamID = valuecopy.Pointer(row.Assistant.StreamID)

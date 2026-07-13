@@ -154,6 +154,56 @@ func TestLoadOpenAIBaseURLPrecedence(t *testing.T) {
 	}
 }
 
+func TestLoadProviderIdentifierFromFileAndEnvironment(t *testing.T) {
+	_, workspace, configPath := newConfigTestFile(t)
+	writeConfigTestFile(t, configPath, `provider_identifier = "workspace-agent"`)
+
+	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
+	if cfg.Settings.ProviderIdentifier != "workspace-agent" {
+		t.Fatalf("provider identifier = %q, want workspace-agent", cfg.Settings.ProviderIdentifier)
+	}
+	assertConfigSource(t, cfg, "provider_identifier", "file")
+
+	t.Setenv("KENT_PROVIDER_IDENTIFIER", "environment-agent")
+	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
+	if cfg.Settings.ProviderIdentifier != "environment-agent" {
+		t.Fatalf("provider identifier = %q, want environment-agent", cfg.Settings.ProviderIdentifier)
+	}
+	assertConfigSource(t, cfg, "provider_identifier", "env")
+
+	t.Setenv("KENT_PROVIDER_IDENTIFIER", "   ")
+	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
+	if cfg.Settings.ProviderIdentifier != "workspace-agent" {
+		t.Fatalf("provider identifier = %q, want file value when environment is empty", cfg.Settings.ProviderIdentifier)
+	}
+	assertConfigSource(t, cfg, "provider_identifier", "file")
+}
+
+func TestLoadRejectsInvalidProviderIdentifier(t *testing.T) {
+	for _, identifier := range []string{
+		"",
+		"agent with spaces",
+		"agent/version",
+		"café",
+	} {
+		t.Run(identifier, func(t *testing.T) {
+			err := loadConfigTestFileError(t, `provider_identifier = "`+identifier+`"`, LoadOptions{})
+			if !errors.Is(err, errInvalidProviderIdentifier) {
+				t.Fatalf("error = %v, want invalid provider identifier", err)
+			}
+		})
+	}
+}
+
+func TestLoadSubagentRoleRejectsProviderIdentifierOverride(t *testing.T) {
+	err := loadConfigTestFileError(t, `[subagents.fast]
+provider_identifier = "role-agent"
+`, LoadOptions{})
+	if !unknownSettingsKeyReported(err, "subagents.fast.provider_identifier") {
+		t.Fatalf("error = %v, want root-only provider_identifier rejection", err)
+	}
+}
+
 func TestNormalizeSettingsForPersistence_AllowsDisabledThinkingWithReviewerInheritance(t *testing.T) {
 	settings := configRegistry.defaultState().Settings
 	settings.Model = "gpt-5.6-sol"
