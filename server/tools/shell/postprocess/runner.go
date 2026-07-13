@@ -15,7 +15,7 @@ import (
 
 type Settings struct {
 	Mode     config.ShellPostprocessingMode
-	HookPath string
+	HookPath *string
 }
 
 type Request struct {
@@ -177,34 +177,43 @@ func containsString(values []string, target string) bool {
 
 type Runner struct {
 	mode             config.ShellPostprocessingMode
-	hookPath         string
+	hookPath         *string
 	globalProcessors []Processor
 	processors       []Processor
 	hookProcessor    Processor
 }
 
-func NewRunner(settings Settings) *Runner {
-	mode := settings.Mode
-	if mode == "" {
-		mode = config.ShellPostprocessingModeBuiltin
+func NewRunner(settings Settings) (*Runner, error) {
+	switch settings.Mode {
+	case config.ShellPostprocessingModeNone, config.ShellPostprocessingModeBuiltin, config.ShellPostprocessingModeUser, config.ShellPostprocessingModeAll:
+	default:
+		return nil, fmt.Errorf("invalid shell postprocessing mode %q (expected none|builtin|user|all)", settings.Mode)
+	}
+	var hookPath *string
+	if settings.HookPath != nil {
+		normalizedHookPath := strings.TrimSpace(*settings.HookPath)
+		if normalizedHookPath == "" {
+			return nil, errors.New("shell postprocess hook cannot be empty; omit it to leave it unset")
+		}
+		hookPath = &normalizedHookPath
 	}
 	return &Runner{
-		mode:             mode,
-		hookPath:         strings.TrimSpace(settings.HookPath),
+		mode:             settings.Mode,
+		hookPath:         hookPath,
 		globalProcessors: []Processor{sanitizerProcessor{}},
 		processors:       []Processor{gitWorktreeAdvisoryProcessor{}, goTestSuccessProcessor{}, fileReadContextProcessor{}},
-	}
+	}, nil
 }
 
 func (r *Runner) PreservesRawOutput(raw bool) bool {
 	if raw || r == nil {
 		return true
 	}
-	return effectiveMode(r.mode) == config.ShellPostprocessingModeNone
+	return r.mode == config.ShellPostprocessingModeNone
 }
 
 func (r *Runner) Apply(ctx context.Context, req Request) (Result, error) {
-	if req.Raw || r == nil || effectiveMode(r.mode) == config.ShellPostprocessingModeNone {
+	if req.Raw || r == nil || r.mode == config.ShellPostprocessingModeNone {
 		return Result{Output: req.Output}, nil
 	}
 	request := normalizeRequest(req)
@@ -213,7 +222,7 @@ func (r *Runner) Apply(ctx context.Context, req Request) (Result, error) {
 	processed := false
 	processorID := ""
 
-	mode := effectiveMode(r.mode)
+	mode := r.mode
 	global, err := Chain{IDValue: "global", Processors: r.globalProcessors}.Process(ctx, envelope)
 	if err != nil {
 		return Result{}, err
@@ -264,15 +273,6 @@ func (r *Runner) Apply(ctx context.Context, req Request) (Result, error) {
 	return resultFromEnvelope(envelope, processed, processorID, ProcessorFailure{}), nil
 }
 
-func effectiveMode(mode config.ShellPostprocessingMode) config.ShellPostprocessingMode {
-	switch mode {
-	case config.ShellPostprocessingModeNone, config.ShellPostprocessingModeBuiltin, config.ShellPostprocessingModeUser, config.ShellPostprocessingModeAll:
-		return mode
-	default:
-		return config.ShellPostprocessingModeBuiltin
-	}
-}
-
 func normalizeRequest(req Request) Request {
 	req.CommandText = strings.TrimSpace(req.CommandText)
 	req.Workdir = strings.TrimSpace(req.Workdir)
@@ -290,15 +290,18 @@ func normalizeRequest(req Request) Request {
 	return req
 }
 
-func resolveHookPath(raw string) (string, bool) {
-	trimmed := strings.TrimSpace(raw)
+func resolveHookPath(raw *string) (string, bool, error) {
+	if raw == nil {
+		return "", false, nil
+	}
+	trimmed := strings.TrimSpace(*raw)
 	if trimmed == "" {
-		return "", false
+		return "", false, errors.New("present shell postprocess hook cannot be blank")
 	}
 	if strings.HasPrefix(trimmed, "~/") || trimmed == "~" {
 		home, err := os.UserHomeDir()
 		if err != nil || strings.TrimSpace(home) == "" {
-			return "", false
+			return "", false, nil
 		}
 		if trimmed == "~" {
 			trimmed = home
@@ -307,13 +310,13 @@ func resolveHookPath(raw string) (string, bool) {
 		}
 	}
 	if filepath.IsAbs(trimmed) {
-		return filepath.Clean(trimmed), true
+		return filepath.Clean(trimmed), true, nil
 	}
 	abs, err := filepath.Abs(trimmed)
 	if err != nil {
-		return "", false
+		return "", false, nil
 	}
-	return abs, true
+	return abs, true, nil
 }
 
 type Action string

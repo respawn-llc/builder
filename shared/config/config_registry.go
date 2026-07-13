@@ -82,6 +82,13 @@ type scalarSetting[T any] struct {
 	doc                settingDocOptions
 }
 
+type optionalStringSetting struct {
+	key     string
+	apply   func(*settingsState, *string)
+	get     func(settingsState) *string
+	envName string
+}
+
 type toolsSetting struct{}
 type skillsSetting struct{}
 type subagentsSetting struct{}
@@ -367,13 +374,10 @@ func newSettingsRegistry() settingsRegistry {
 			nil,
 			normalizeShellPostprocessingMode,
 			settingDocOptions{}),
-		newStringSetting("shell.postprocess_hook", "",
-			func(state *settingsState, value string) { state.Settings.Shell.PostprocessHook = value },
-			func(state settingsState) string { return state.Settings.Shell.PostprocessHook },
-			"KENT_SHELL_POSTPROCESS_HOOK",
-			nil,
-			nil,
-			settingDocOptions{}),
+		newOptionalStringSetting("shell.postprocess_hook",
+			func(state *settingsState, value *string) { state.Settings.Shell.PostprocessHook = value },
+			func(state settingsState) *string { return state.Settings.Shell.PostprocessHook },
+			"KENT_SHELL_POSTPROCESS_HOOK"),
 		newStringSetting("cache_warning_mode", CacheWarningMode(defaultCacheWarningMode),
 			func(state *settingsState, value CacheWarningMode) { state.Settings.CacheWarningMode = value },
 			func(state settingsState) CacheWarningMode { return state.Settings.CacheWarningMode },
@@ -826,6 +830,79 @@ func newStringSetting[T ~string](
 		},
 		doc: doc,
 	}
+}
+
+func newOptionalStringSetting(
+	key string,
+	apply func(*settingsState, *string),
+	get func(settingsState) *string,
+	envName string,
+) optionalStringSetting {
+	return optionalStringSetting{
+		key:     key,
+		apply:   apply,
+		get:     get,
+		envName: envName,
+	}
+}
+
+func (s optionalStringSetting) applyDefault(state *settingsState) {
+	s.apply(state, nil)
+}
+
+func (s optionalStringSetting) initSources(sources map[string]string) {
+	sources[s.key] = "default"
+}
+
+func (s optionalStringSetting) applyFile(raw settingsFile, _ string, state *settingsState, sources map[string]string) error {
+	value, ok, err := lookupFileStringAllowEmpty(raw, strings.Split(s.key, "."))
+	if err != nil || !ok {
+		return err
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("%s cannot be empty; remove the setting to leave it unset", s.key)
+	}
+	s.apply(state, stringPointer(trimmed))
+	sources[s.key] = "file"
+	return nil
+}
+
+func (s optionalStringSetting) applyEnv(lookup envLookup, state *settingsState, sources map[string]string) error {
+	if s.envName == "" {
+		return nil
+	}
+	value, ok := lookup(s.envName)
+	if !ok {
+		return nil
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("%s cannot be empty; unset the environment variable to leave it unset", s.envName)
+	}
+	s.apply(state, stringPointer(trimmed))
+	sources[s.key] = "env"
+	return nil
+}
+
+func (s optionalStringSetting) registerFileKeys(tree *fileKeyTree) {
+	tree.allowPath(strings.Split(s.key, "."))
+}
+
+func (s optionalStringSetting) appendDefaultLines(lines *[]defaultConfigLine, state settingsState) {
+	value := s.get(state)
+	if value == nil {
+		return
+	}
+	*lines = append(*lines, defaultConfigLine{
+		Path:  strings.Split(s.key, "."),
+		Value: *value,
+	})
+}
+
+func stringPointer(value string) *string {
+	copy := value
+	return &copy
 }
 
 func newBoolSetting(

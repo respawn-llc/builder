@@ -136,6 +136,7 @@ type ExecRequest struct {
 	MaxOutputChars int
 	KeepStdinOpen  bool
 	Raw            bool
+	Postprocessor  *postprocess.Runner
 }
 
 type ExecResult struct {
@@ -223,6 +224,7 @@ type processEntry struct {
 	command        string
 	workdir        string
 	raw            bool
+	postprocessor  *postprocess.Runner
 	preserveOutput bool
 	startedAt      time.Time
 	finishedAt     time.Time

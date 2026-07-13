@@ -26,9 +26,9 @@ func TestProtocolVersionLoadsFromEmbeddedDefinition(t *testing.T) {
 	}
 }
 
-func TestProtocolVersionIncludesMetadataOnlyBoardAndNullableWorkflowSelectionContract(t *testing.T) {
-	const want = "53"
+func TestProtocolVersionIncludesNullableShellPostprocessHookContract(t *testing.T) {
+	const want = "54"
 	if Version != want {
-		t.Fatalf("protocol version = %q, want %q for metadata-only board and nullable workflow selection contract", Version, want)
+		t.Fatalf("protocol version = %q, want %q for nullable shell postprocess hook contract", Version, want)
 	}
 }

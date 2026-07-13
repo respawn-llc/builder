@@ -89,7 +89,7 @@ type Timeouts struct {
 
 type ShellSettings struct {
 	PostprocessingMode ShellPostprocessingMode
-	PostprocessHook    string
+	PostprocessHook    *string
 }
 
 type SubagentRole struct {

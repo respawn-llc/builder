@@ -18,6 +18,8 @@ import (
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
+	shelltool "core/server/tools/shell"
+	"core/server/tools/shell/postprocess"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -366,9 +368,15 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		ClientRequestID: "activate-factory",
 		SessionID:       fixture.store.Meta().SessionID,
 		OwnerID:         "owner",
-		ActiveSettings:  config.Settings{Model: "gpt-5", ModelContextWindow: 200000, Reviewer: config.ReviewerSettings{Frequency: "off"}, Timeouts: config.Timeouts{ModelRequestSeconds: 1}},
-		EnabledToolIDs:  []string{string(toolspec.ToolExecCommand)},
-		Source:          config.SourceReport{Sources: map[string]string{}},
+		ActiveSettings: config.Settings{
+			Model:              "gpt-5",
+			ModelContextWindow: 200000,
+			Reviewer:           config.ReviewerSettings{Frequency: "off"},
+			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
+			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		EnabledToolIDs: []string{string(toolspec.ToolExecCommand)},
+		Source:         config.SourceReport{Sources: map[string]string{}},
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
@@ -383,6 +391,141 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		DropOwner:       true,
 		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	})
+}
+
+func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	bootstrapRunner, err := postprocess.NewRunner(postprocess.Settings{
+		Mode: config.ShellPostprocessingModeNone,
+	})
+	if err != nil {
+		t.Fatalf("new bootstrap shell postprocessor: %v", err)
+	}
+	background, err := shelltool.NewManager(
+		shelltool.WithMinimumExecToBgTime(time.Second),
+		shelltool.WithPostprocessor(bootstrapRunner),
+	)
+	if err != nil {
+		t.Fatalf("new background shell manager: %v", err)
+	}
+	t.Cleanup(func() { _ = background.Close() })
+	backgroundRouter := runtimewire.NewBackgroundEventRouter(
+		background,
+		16_000,
+		shelltool.BackgroundOutputDefault,
+	)
+	runtimes := registry.NewRuntimeRegistry()
+	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "running", Phase: llm.MessagePhaseCommentary},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call-active-shell",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"cmd":"printf '\\033[31mactive\\033[0m'; sleep 2","shell":"/bin/sh","login":false,"yield_time_ms":200}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	fixture.service = NewServiceWithOptions(
+		fixture.config.PersistenceRoot,
+		fixture.metadata,
+		nil,
+		nil,
+		background,
+		backgroundRouter,
+		runtimes,
+		registry.NewSessionStoreRegistry(),
+		ServiceOptions{
+			RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+				return client, nil
+			}),
+		},
+		fixture.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+	sessionID := fixture.store.Meta().SessionID
+	t.Cleanup(func() {
+		_, _ = fixture.service.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: "release-active-shell",
+			SessionID:       sessionID,
+			OwnerID:         "interactive-owner",
+			DropOwner:       true,
+			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		})
+	})
+
+	if fixture.service.background != background {
+		t.Fatal("interactive runtime did not retain the supplied global shell manager")
+	}
+	_, err = fixture.service.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID: "activate-active-shell",
+		SessionID:       sessionID,
+		OwnerID:         "interactive-owner",
+		ActiveSettings: config.Settings{
+			Model:                  "gpt-5",
+			ModelContextWindow:     200000,
+			MinimumExecToBgSeconds: 1,
+			ShellOutputMaxChars:    16_000,
+			Reviewer:               config.ReviewerSettings{Frequency: "off"},
+			Timeouts:               config.Timeouts{ModelRequestSeconds: 1},
+			Shell:                  config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		EnabledToolIDs: []string{string(toolspec.ToolExecCommand)},
+		Source:         config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+
+	err = fixture.service.WithRuntimeEngine(context.Background(), sessionID, func(engine *runtimepkg.Engine) error {
+		_, submitErr := engine.SubmitUserMessage(context.Background(), "run active shell")
+		return submitErr
+	})
+	if err != nil {
+		t.Fatalf("SubmitUserMessage through activated runtime: %v", err)
+	}
+
+	window, err := fixture.store.ReadRecentEvents(128)
+	if err != nil {
+		t.Fatalf("ReadRecentEvents: %v", err)
+	}
+	var toolResult string
+	for _, event := range window.Events {
+		if event.Kind != "message" {
+			continue
+		}
+		var message llm.Message
+		if err := json.Unmarshal(event.Payload, &message); err != nil {
+			t.Fatalf("decode message event: %v", err)
+		}
+		if message.Role != llm.RoleTool || message.ToolCallID != "call-active-shell" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(message.Content), &toolResult); err != nil {
+			t.Fatalf("decode exec_command result: %v", err)
+		}
+		break
+	}
+	if toolResult == "" {
+		t.Fatal("activated runtime transcript missing exec_command result")
+	}
+	if !strings.Contains(toolResult, "active") {
+		t.Fatalf("exec_command output = %q, want active output from request shell settings", toolResult)
+	}
+	if strings.Contains(toolResult, "\x1b[") {
+		t.Fatalf("exec_command output retained ANSI despite active builtin postprocessing: %q", toolResult)
+	}
+
+	processes := background.List()
+	if len(processes) != 1 {
+		t.Fatalf("supplied manager process count = %d, want 1 active background process", len(processes))
+	}
+	if processes[0].OwnerSessionID != sessionID {
+		t.Fatalf("background process owner session = %q, want activated session %q", processes[0].OwnerSessionID, sessionID)
+	}
 }
 
 func TestReleaseSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {

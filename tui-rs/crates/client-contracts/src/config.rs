@@ -131,7 +131,7 @@ pub struct ShellSettings {
     #[serde(rename = "PostprocessingMode")]
     pub postprocessing_mode: String,
     #[serde(rename = "PostprocessHook")]
-    pub postprocess_hook: String,
+    pub postprocess_hook: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

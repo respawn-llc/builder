@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/server/tools"
+	"core/server/tools/shell/postprocess"
 	"core/shared/transcript"
 )
 
@@ -31,6 +32,7 @@ type ExecCommandTool struct {
 	outputLimit    int
 	background     *Manager
 	ownerSessionID string
+	postprocessor  *postprocess.Runner
 }
 
 func NewExecCommandTool(workspaceRoot string, outputLimit int, background *Manager, ownerSessionID string) *ExecCommandTool {
@@ -49,6 +51,12 @@ func NewExecCommandTool(workspaceRoot string, outputLimit int, background *Manag
 		background:     background,
 		ownerSessionID: strings.TrimSpace(ownerSessionID),
 	}
+}
+
+func NewExecCommandToolWithPostprocessor(workspaceRoot string, outputLimit int, background *Manager, ownerSessionID string, runner *postprocess.Runner) *ExecCommandTool {
+	tool := NewExecCommandTool(workspaceRoot, outputLimit, background, ownerSessionID)
+	tool.postprocessor = runner
+	return tool
 }
 
 func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
@@ -100,6 +108,7 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		MaxOutputChars: maxChars,
 		KeepStdinOpen:  in.TTY,
 		Raw:            in.Raw,
+		Postprocessor:  t.postprocessor,
 	})
 	if err != nil {
 		return tools.ErrorResultWith(c, formatToolCallError("exec_command", err), marshalNoHTMLEscape), nil

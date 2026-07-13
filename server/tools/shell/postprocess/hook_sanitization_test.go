@@ -17,7 +17,7 @@ else
   printf '{"processed":true,"replaced_output":"UNEXPECTED_PAYLOAD"}'
 fi
 `)
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser, HookPath: hookPath})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeUser, HookPath: testStringPointer(hookPath)})
 	result, err := runner.Apply(context.Background(), Request{
 		ToolName:    toolspec.ToolExecCommand,
 		CommandText: "printf color",

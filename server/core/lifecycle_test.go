@@ -68,7 +68,12 @@ func TestCoreCloseNamesFailedResources(t *testing.T) {
 }
 
 func TestNewWithContextNamesMissingAuthBundleResource(t *testing.T) {
-	cfg := config.App{PersistenceRoot: t.TempDir()}
+	cfg := config.App{
+		PersistenceRoot: t.TempDir(),
+		Settings: config.Settings{
+			Shell: config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+	}
 	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)
 	if err != nil {
 		t.Fatalf("BuildRuntimeSupport: %v", err)
@@ -103,7 +108,12 @@ func TestNewWithContextNamesMissingRuntimeBundleResource(t *testing.T) {
 }
 
 func TestNewWithContextCleansPersistenceOnAuthBundleFailure(t *testing.T) {
-	cfg := config.App{PersistenceRoot: t.TempDir()}
+	cfg := config.App{
+		PersistenceRoot: t.TempDir(),
+		Settings: config.Settings{
+			Shell: config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+	}
 	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)
 	if err != nil {
 		t.Fatalf("BuildRuntimeSupport first: %v", err)

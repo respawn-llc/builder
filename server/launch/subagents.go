@@ -172,7 +172,7 @@ func applySubagentRoleOverrides(settings *config.Settings, role config.SubagentR
 		case "shell.postprocessing_mode":
 			settings.Shell.PostprocessingMode = role.Settings.Shell.PostprocessingMode
 		case "shell.postprocess_hook":
-			settings.Shell.PostprocessHook = role.Settings.Shell.PostprocessHook
+			settings.Shell.PostprocessHook = cloneOptionalString(role.Settings.Shell.PostprocessHook)
 		case "cache_warning_mode":
 			settings.CacheWarningMode = role.Settings.CacheWarningMode
 		default:
@@ -452,11 +452,20 @@ func applyReviewerRoleOverride(settings *config.Settings, role config.Settings, 
 
 func cloneSettings(in config.Settings) config.Settings {
 	out := in
+	out.Shell.PostprocessHook = cloneOptionalString(in.Shell.PostprocessHook)
 	out.SystemPromptFiles = append([]config.SystemPromptFile(nil), in.SystemPromptFiles...)
 	out.EnabledTools = cloneEnabledToolSet(in.EnabledTools)
 	out.SkillToggles = cloneStringBoolMap(in.SkillToggles)
 	out.Subagents = cloneSubagentRoles(in.Subagents)
 	return out
+}
+
+func cloneOptionalString(in *string) *string {
+	if in == nil {
+		return nil
+	}
+	copy := *in
+	return &copy
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

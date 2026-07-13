@@ -3127,7 +3127,7 @@ fn contract_settings_json() -> serde_json::Value {
         "Timeouts": {"ModelRequestSeconds": 0},
         "ShellOutputMaxChars": 0,
         "BGShellsOutput": "",
-        "Shell": {"PostprocessingMode": "", "PostprocessHook": ""},
+        "Shell": {"PostprocessingMode": "", "PostprocessHook": null},
         "CacheWarningMode": "",
         "Worktrees": {"BaseDir": "", "SetupScript": ""},
         "Workflow": {
