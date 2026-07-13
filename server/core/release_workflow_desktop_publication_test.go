@@ -23,34 +23,22 @@ type releaseWorkflowJob struct {
 type releaseWorkflowNeeds []string
 
 type releaseWorkflowStep struct {
-	ID   string                          `yaml:"id"`
-	Run  string                          `yaml:"run"`
-	Uses *releaseWorkflowActionReference `yaml:"uses"`
-	With releaseWorkflowStepWith         `yaml:"with"`
+	ID   string                  `yaml:"id"`
+	Run  string                  `yaml:"run"`
+	With releaseWorkflowStepWith `yaml:"with"`
 }
-
-type releaseWorkflowActionReference struct {
-	Repository releaseWorkflowActionRepository
-}
-
-type releaseWorkflowActionRepository string
 
 type releaseWorkflowStepWith struct {
-	Name  string `yaml:"name"`
-	Path  string `yaml:"path"`
-	Files string `yaml:"files"`
-	Draft *bool  `yaml:"draft"`
+	Name  *string `yaml:"name"`
+	Path  *string `yaml:"path"`
+	Files *string `yaml:"files"`
+	Draft *bool   `yaml:"draft"`
 }
 
 type desktopArtifactDownload struct {
 	name string
 	path string
 }
-
-const (
-	desktopArtifactDownloadAction releaseWorkflowActionRepository = "actions/download-artifact"
-	desktopPublicationAction      releaseWorkflowActionRepository = "softprops/action-gh-release"
-)
 
 func TestReleaseWorkflowPublishesAllDesktopPlatformsFailClosed(t *testing.T) {
 	repoRoot := findRepoRoot(t)
@@ -79,17 +67,16 @@ func TestReleaseWorkflowPublishesAllDesktopPlatformsFailClosed(t *testing.T) {
 		{name: "desktop-assets-windows-${{ needs.prepare_release.outputs.tag }}", path: "dist/desktop"},
 	}
 	allDownloadIndexes := workflowStepIndexes(publishDesktop.Steps, func(step releaseWorkflowStep) bool {
-		return workflowStepUsesAction(step, desktopArtifactDownloadAction)
+		return step.With.Name != nil && yamlStringEquals(step.With.Path, "dist/desktop")
 	})
 	if len(allDownloadIndexes) != len(expectedDownloads) {
-		t.Errorf("publish_desktop has %d actions/download-artifact steps, want exactly %d", len(allDownloadIndexes), len(expectedDownloads))
+		t.Errorf("publish_desktop has %d artifact tuples targeting dist/desktop, want exactly %d", len(allDownloadIndexes), len(expectedDownloads))
 	}
 	downloadIndexes := make([]int, 0, len(expectedDownloads))
 	for _, expected := range expectedDownloads {
 		indexes := workflowStepIndexes(publishDesktop.Steps, func(step releaseWorkflowStep) bool {
-			return workflowStepUsesAction(step, desktopArtifactDownloadAction) &&
-				step.With.Name == expected.name &&
-				step.With.Path == expected.path
+			return yamlStringEquals(step.With.Name, expected.name) &&
+				yamlStringEquals(step.With.Path, expected.path)
 		})
 		if len(indexes) != 1 {
 			t.Errorf("publish_desktop artifact tuple name=%q path=%q appears %d times, want exactly once", expected.name, expected.path, len(indexes))
@@ -113,8 +100,7 @@ func TestReleaseWorkflowPublishesAllDesktopPlatformsFailClosed(t *testing.T) {
 	}
 
 	publicationIndexes := workflowStepIndexes(publishDesktop.Steps, func(step releaseWorkflowStep) bool {
-		return workflowStepUsesAction(step, desktopPublicationAction) &&
-			step.With.Files == "dist/desktop/*" &&
+		return yamlStringEquals(step.With.Files, "dist/desktop/*") &&
 			step.With.Draft != nil &&
 			!*step.With.Draft
 	})
@@ -134,16 +120,39 @@ func TestReleaseWorkflowPublishesAllDesktopPlatformsFailClosed(t *testing.T) {
 	}
 }
 
-func (action *releaseWorkflowActionReference) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind != yaml.ScalarNode {
-		return fmt.Errorf("workflow action reference must be a scalar")
+func TestDesktopAssemblerRunSemanticContract(t *testing.T) {
+	testCases := []struct {
+		name    string
+		run     string
+		wantErr bool
+	}{
+		{
+			name: "accepts semantic command with reordered options and different quoting",
+			run:  `bash scripts/desktop-release.sh assemble --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}" --dist-dir 'dist/desktop' --version ${KENT_VERSION}`,
+		},
+		{
+			name:    "rejects another version source",
+			run:     `bash scripts/desktop-release.sh assemble --version "$VERSION" --dist-dir dist/desktop --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"`,
+			wantErr: true,
+		},
+		{
+			name:    "rejects another release URL",
+			run:     `bash scripts/desktop-release.sh assemble --version "$KENT_VERSION" --dist-dir dist/desktop --base-url "https://wrong.example/${GITHUB_REPOSITORY}/${TAG}"`,
+			wantErr: true,
+		},
 	}
-	repository, revision, found := strings.Cut(node.Value, "@")
-	if !found || repository == "" || revision == "" {
-		return fmt.Errorf("workflow action reference %q must use repository@revision syntax", node.Value)
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := validateDesktopAssemblerRun(testCase.run)
+			if testCase.wantErr && err == nil {
+				t.Fatal("assembler contract unexpectedly accepted invalid command")
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("assembler contract rejected valid command: %v", err)
+			}
+		})
 	}
-	action.Repository = releaseWorkflowActionRepository(repository)
-	return nil
 }
 
 func (needs *releaseWorkflowNeeds) UnmarshalYAML(node *yaml.Node) error {
@@ -167,8 +176,8 @@ func containsWorkflowNeed(needs releaseWorkflowNeeds, expected string) bool {
 	return false
 }
 
-func workflowStepUsesAction(step releaseWorkflowStep, repository releaseWorkflowActionRepository) bool {
-	return step.Uses != nil && step.Uses.Repository == repository
+func yamlStringEquals(value *string, expected string) bool {
+	return value != nil && *value == expected
 }
 
 func validateDesktopAssemblerRun(run string) error {
@@ -214,10 +223,83 @@ func validateDesktopAssemblerRun(run string) error {
 			return fmt.Errorf("assembler is missing required option %q", required)
 		}
 	}
-	if options["--dist-dir"].Lit() != "dist/desktop" {
+	if !shellWordIsLiteral(options["--dist-dir"], "dist/desktop") {
 		return fmt.Errorf("assembler --dist-dir must be dist/desktop")
 	}
+	if !shellWordIsParameter(options["--version"], "KENT_VERSION") {
+		return fmt.Errorf("assembler --version must use KENT_VERSION")
+	}
+	if !shellWordIsReleaseURL(options["--base-url"]) {
+		return fmt.Errorf("assembler --base-url must use the canonical GitHub repository/tag release URL")
+	}
 	return nil
+}
+
+func shellWordIsLiteral(word *syntax.Word, expected string) bool {
+	parts, ok := flattenShellWordParts(word)
+	return ok && len(parts) == 1 && shellWordPartIsLiteral(parts[0], expected)
+}
+
+func shellWordIsParameter(word *syntax.Word, name string) bool {
+	parts, ok := flattenShellWordParts(word)
+	return ok && len(parts) == 1 && shellWordPartIsParameter(parts[0], name)
+}
+
+func shellWordIsReleaseURL(word *syntax.Word) bool {
+	parts, ok := flattenShellWordParts(word)
+	if !ok || len(parts) != 4 {
+		return false
+	}
+	return shellWordPartIsLiteral(parts[0], "https://github.com/") &&
+		shellWordPartIsParameter(parts[1], "GITHUB_REPOSITORY") &&
+		shellWordPartIsLiteral(parts[2], "/releases/download/") &&
+		shellWordPartIsParameter(parts[3], "TAG")
+}
+
+func flattenShellWordParts(word *syntax.Word) ([]syntax.WordPart, bool) {
+	parts := make([]syntax.WordPart, 0, len(word.Parts))
+	for _, part := range word.Parts {
+		quoted, isDoubleQuoted := part.(*syntax.DblQuoted)
+		if !isDoubleQuoted {
+			parts = append(parts, part)
+			continue
+		}
+		if quoted.Dollar {
+			return nil, false
+		}
+		parts = append(parts, quoted.Parts...)
+	}
+	return parts, true
+}
+
+func shellWordPartIsLiteral(part syntax.WordPart, expected string) bool {
+	switch value := part.(type) {
+	case *syntax.Lit:
+		return value.Value == expected
+	case *syntax.SglQuoted:
+		return !value.Dollar && value.Value == expected
+	default:
+		return false
+	}
+}
+
+func shellWordPartIsParameter(part syntax.WordPart, name string) bool {
+	parameter, ok := part.(*syntax.ParamExp)
+	return ok &&
+		parameter.Param != nil &&
+		parameter.Param.Value == name &&
+		parameter.Flags == nil &&
+		!parameter.Excl &&
+		!parameter.Length &&
+		!parameter.Width &&
+		!parameter.IsSet &&
+		parameter.NestedParam == nil &&
+		parameter.Index == nil &&
+		len(parameter.Modifiers) == 0 &&
+		parameter.Slice == nil &&
+		parameter.Repl == nil &&
+		parameter.Names == 0 &&
+		parameter.Exp == nil
 }
 
 func workflowStepIndexes(steps []releaseWorkflowStep, matches func(releaseWorkflowStep) bool) []int {
