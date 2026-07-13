@@ -13,9 +13,9 @@ func sessionOpenDestinationForTest(t *testing.T, sessionID string) sessionOpenDe
 
 func sessionParentReferenceForTest(t *testing.T, sessionID string) *sessionParentReference {
 	t.Helper()
-	parent, err := newSessionParentReference(sessionID)
+	validated, err := newValidatedSessionID(sessionID)
 	if err != nil {
-		t.Fatalf("new parent session reference: %v", err)
+		t.Fatalf("validate parent session id: %v", err)
 	}
-	return &parent
+	return &sessionParentReference{sessionID: validated}
 }

@@ -59,14 +59,6 @@ type sessionParentReference struct {
 	sessionID validatedSessionID
 }
 
-func newSessionParentReference(sessionID string) (sessionParentReference, error) {
-	validated, err := newValidatedSessionID(sessionID)
-	if err != nil {
-		return sessionParentReference{}, err
-	}
-	return sessionParentReference{sessionID: validated}, nil
-}
-
 func (p sessionParentReference) SessionID() string {
 	return p.sessionID.String()
 }
