@@ -227,12 +227,54 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.start,
     activeNodeIDs: ["node-backlog"],
-    preview: "Capture primitives, cards, panes, task detail, and board interactions.",
+    preview: "",
     id: "task-1",
     minutesAgo: 2,
     shortID: "BLDR-101",
     status: statuses.backlog,
-    title: "Inventory desktop UI components",
+    title: "No description fixture",
+  }),
+  card({
+    actions: taskActions.start,
+    activeNodeIDs: ["node-backlog"],
+    preview: "One concise preview line.",
+    id: "task-8",
+    minutesAgo: 4,
+    shortID: "BLDR-108",
+    status: statuses.backlog,
+    title: "Short description fixture",
+  }),
+  card({
+    actions: taskActions.start,
+    activeNodeIDs: ["node-backlog"],
+    preview:
+      "**Long preview fixture.** This bounded Markdown continues beyond the available card region so the always-on bottom fade can be reviewed independently from server truncation.",
+    previewTruncated: true,
+    id: "task-9",
+    minutesAgo: 6,
+    shortID: "BLDR-109",
+    status: statuses.backlog,
+    title: "Long description fixture",
+  }),
+  card({
+    actions: taskActions.start,
+    activeNodeIDs: ["node-backlog"],
+    preview: "A compact body leaves the title wrapping policy easy to inspect.",
+    id: "task-10",
+    minutesAgo: 8,
+    shortID: "BLDR-110",
+    status: statuses.backlog,
+    title: "Two-line title fixture with enough words to wrap across the compact board card",
+  }),
+  card({
+    actions: taskActions.resume,
+    activeNodeIDs: ["node-backlog"],
+    preview: "The footer keeps its natural action height without creating dead space.",
+    id: "task-11",
+    minutesAgo: 10,
+    shortID: "BLDR-111",
+    status: statuses.interrupted,
+    title: "Action footer fixture",
   }),
   card({
     actions: taskActions.running,
@@ -386,6 +428,7 @@ function card(
     actions: TaskActions;
     activeNodeIDs: readonly string[];
     preview: string;
+    previewTruncated?: boolean;
     id: string;
     minutesAgo: number;
     shortID: string;
@@ -396,7 +439,7 @@ function card(
   return {
     actions: input.actions,
     activeNodeIDs: input.activeNodeIDs,
-    preview: { markdown: input.preview, truncated: false },
+    preview: { markdown: input.preview, truncated: input.previewTruncated ?? false },
     id: input.id,
     shortID: input.shortID,
     sourceWorkspace: mockWorkspaces[0] ?? fallbackWorkspace,

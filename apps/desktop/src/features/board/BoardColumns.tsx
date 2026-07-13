@@ -245,7 +245,7 @@ export function KanbanColumn({
                 virtualIndex={item.virtualIndex}
               />
             )}
-            rowSpacing="compact"
+            rowSpacing="tight"
             testId={`kanban-column-scroll-${column.id}`}
           />
         </>
@@ -370,7 +370,7 @@ const TaskCard = memo(function TaskCard({
         <article
           aria-label={card.title}
           className={cx(
-            "board-task-card grid cursor-pointer gap-[var(--space-2)] rounded-[var(--radius-l)] border border-[var(--color-outline)] bg-[var(--color-island-1)] p-[var(--space-3)] outline-none focus-visible:border-[var(--color-primary)] focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-primary)_26%,transparent)]",
+            "board-task-card grid cursor-pointer gap-[var(--space-1)] rounded-[var(--radius-l)] border border-[var(--color-outline)] bg-[var(--color-island-1)] p-[var(--space-2)] outline-none focus-visible:border-[var(--color-primary)] focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-primary)_26%,transparent)]",
             cardClassName(card.id),
           )}
           data-task-card-border-tone={card.borderTone}

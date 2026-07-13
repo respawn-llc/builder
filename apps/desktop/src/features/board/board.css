@@ -1,8 +1,10 @@
 .board-task-card {
-  --board-card-height: 18rem;
+  --board-card-height: 10rem;
 
   height: var(--board-card-height);
-  grid-template-rows: auto minmax(0, 2lh) minmax(0, 3lh) minmax(0, 1fr);
+  min-height: var(--board-card-height);
+  max-height: var(--board-card-height);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 .board-task-card[data-task-card-border-tone="primary"] {
@@ -31,11 +33,10 @@
 }
 
 .task-card-body-preview {
-  display: -webkit-box;
+  min-height: 0;
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 1lh), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 1lh), transparent 100%);
 }
 
 .task-card-footer {

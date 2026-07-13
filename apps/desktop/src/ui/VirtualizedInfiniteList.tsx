@@ -2,10 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNod
 import { type Range, type VirtualItem, useVirtualizer } from "@tanstack/react-virtual";
 
 import { cx } from "./classes";
-import {
-  InfiniteListBoundary,
-  type VirtualizedInfiniteListBoundaryState,
-} from "./InfiniteListBoundary";
+import { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 import { Spinner } from "./Spinner";
 import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitialScroll";
 import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
@@ -27,7 +24,7 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   onLoadMore: () => void;
   estimateSize: () => number;
   ariaLabel?: string | undefined;
-  rowSpacing?: "default" | "compact" | undefined;
+  rowSpacing?: "default" | "compact" | "tight" | undefined;
   testId?: string | undefined;
   initialScrollKey?: string | undefined;
   initialScrollRequestKey?: string | undefined;
@@ -416,11 +413,14 @@ function virtualRowClassName({
 }: Readonly<{
   count: number;
   index: number;
-  rowSpacing: "default" | "compact";
+  rowSpacing: "default" | "compact" | "tight";
   virtualized: boolean;
 }>): string {
   if (rowSpacing === "compact") {
     return cx("pb-[var(--space-2)]", index === count - 1 && "pb-0");
+  }
+  if (rowSpacing === "tight") {
+    return cx("pb-[var(--space-1)]", index === count - 1 && "pb-0");
   }
   // Single-direction top gap so the inter-row spacing is exactly one spacing step (between-element level)
   // rather than the doubled top+bottom padding it would otherwise accumulate. Top/bottom insets are owned

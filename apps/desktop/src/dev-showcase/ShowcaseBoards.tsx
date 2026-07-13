@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import type { WorkspaceSummary } from "../api";
 import { BoardHoverMenu } from "../features/board/BoardHoverMenu";
 import { KanbanColumn, KanbanGroup } from "../features/board/BoardColumns";
+import "../features/board/board.css";
 import { toKanbanCardVM, toKanbanColumnVM, toKanbanGroupVM } from "../features/board/BoardColumnViewModel";
 import { WorkspaceRow, WorkspaceUnlinkFallbackDialog } from "../features/project-edit/ProjectEditParts";
 import {
