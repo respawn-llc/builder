@@ -10,6 +10,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -124,6 +125,37 @@ func TestMissingToolOutputRepairLeavesUnrelated400Unrepaired(t *testing.T) {
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("model calls = %d, want 1 (no repair retry)", len(client.calls))
+	}
+}
+
+func TestRequiredToolChoiceDoesNotRepairAndRetryProvider400(t *testing.T) {
+	store := mustCreateTestSession(t)
+	appendRepairEvent(t, store, "message", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec", Input: json.RawMessage(`{}`)}},
+	})
+	client := &fakeClient{
+		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}},
+		responses: []llm.Response{{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "unexpected retry"},
+		}},
+	}
+	eng := mustNewWorkflowTestEngine(
+		t,
+		store,
+		client,
+		testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool),
+		Config{},
+	)
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); err == nil {
+		t.Fatal("expected required-choice provider failure to surface")
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(client.calls))
+	}
+	if repairItemsContainOutput(eng.transcriptRuntimeState().SnapshotItems(), "missing") {
+		t.Fatalf("required-choice failure unexpectedly appended a synthetic output: %+v", eng.transcriptRuntimeState().SnapshotItems())
 	}
 }
 
