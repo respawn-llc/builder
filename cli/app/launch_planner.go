@@ -27,11 +27,9 @@ const (
 )
 
 type sessionLaunchRequest struct {
-	Mode              launchMode
-	SelectedSessionID string
-	ForceNewSession   bool
-	ParentSessionID   string
-	Overrides         serverapi.RunPromptOverrides
+	Mode        launchMode
+	Destination sessionLaunchDestination
+	Overrides   serverapi.RunPromptOverrides
 }
 
 type sessionLaunchPlan struct {
@@ -52,7 +50,8 @@ type sessionLaunchPlan struct {
 }
 
 type resolvedSessionPlanRequest struct {
-	request             serverapi.SessionPlanRequest
+	destination         sessionLaunchDestination
+	overrides           serverapi.RunPromptOverrides
 	selectedViaPicker   bool
 	sessionSummaries    []clientui.SessionSummary
 	hasSessionSummaries bool
@@ -135,7 +134,11 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
-	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, resolved.request)
+	apiRequest, err := resolved.apiRequest(req.Mode)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
+	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, apiRequest)
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
@@ -222,19 +225,19 @@ func (p *launchPlanner) PrepareRuntime(ctx context.Context, plan sessionLaunchPl
 func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunchRequest) (resolvedSessionPlanRequest, error) {
 	overrides := sessionPlanOverridesFromConfig(p.server.Config())
 	overrides = mergeSessionPlanOverrides(overrides, req.Overrides)
-	resolved := resolvedSessionPlanRequest{request: serverapi.SessionPlanRequest{
-		ClientRequestID:   uuid.NewString(),
-		Mode:              serverapi.SessionLaunchMode(req.Mode),
-		SelectedSessionID: strings.TrimSpace(req.SelectedSessionID),
-		ForceNewSession:   req.ForceNewSession,
-		ParentSessionID:   strings.TrimSpace(req.ParentSessionID),
-		Overrides:         overrides,
-	}}
-	if resolved.request.Mode == serverapi.SessionLaunchModeHeadless && resolved.request.SelectedSessionID == "" {
-		resolved.request.ForceNewSession = true
-		return resolved, nil
+	resolved := resolvedSessionPlanRequest{
+		destination: req.Destination,
+		overrides:   overrides,
 	}
-	if resolved.request.SelectedSessionID != "" || resolved.request.ForceNewSession {
+	switch req.Destination.(type) {
+	case sessionOpenDestination, sessionCreateDestination:
+		return resolved, nil
+	case sessionPickerDestination:
+	default:
+		return resolvedSessionPlanRequest{}, errors.New("session launch destination is required")
+	}
+	if req.Mode == launchModeHeadless {
+		resolved.destination = sessionCreateDestination{}
 		return resolved, nil
 	}
 	summaries, err := p.listSessionSummaries(ctx)
@@ -244,7 +247,7 @@ func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunc
 	resolved.sessionSummaries = append([]clientui.SessionSummary(nil), summaries...)
 	resolved.hasSessionSummaries = true
 	if len(summaries) == 0 {
-		resolved.request.ForceNewSession = true
+		resolved.destination = sessionCreateDestination{}
 		return resolved, nil
 	}
 	if p.pickSession == nil {
@@ -259,15 +262,39 @@ func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunc
 		return resolvedSessionPlanRequest{}, projectbinding.ErrStartupCanceledByUser
 	}
 	if picked.CreateNew {
-		resolved.request.ForceNewSession = true
+		resolved.destination = sessionCreateDestination{}
 		return resolved, nil
 	}
 	if picked.Session == nil {
 		return resolvedSessionPlanRequest{}, errors.New("no session selected")
 	}
-	resolved.request.SelectedSessionID = picked.Session.SessionID
+	destination, err := newSessionOpenDestination(picked.Session.SessionID)
+	if err != nil {
+		return resolvedSessionPlanRequest{}, err
+	}
+	resolved.destination = destination
 	resolved.selectedViaPicker = true
 	return resolved, nil
+}
+
+func (r resolvedSessionPlanRequest) apiRequest(mode launchMode) (serverapi.SessionPlanRequest, error) {
+	request := serverapi.SessionPlanRequest{
+		ClientRequestID: uuid.NewString(),
+		Mode:            serverapi.SessionLaunchMode(mode),
+		Overrides:       r.overrides,
+	}
+	switch destination := r.destination.(type) {
+	case sessionOpenDestination:
+		request.SelectedSessionID = destination.SessionID()
+	case sessionCreateDestination:
+		request.ForceNewSession = true
+		if destination.Parent != nil {
+			request.ParentSessionID = destination.Parent.SessionID()
+		}
+	default:
+		return serverapi.SessionPlanRequest{}, errors.New("resolved session launch destination is required")
+	}
+	return request, nil
 }
 
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {

@@ -119,9 +119,13 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	server = boundServer
 
 	planner := newSessionLaunchPlanner(server)
+	destination, err := newSessionOpenDestination(sessionID)
+	if err != nil {
+		return err
+	}
 	plan, err := planner.PlanSession(ctx, sessionLaunchRequest{
-		Mode:              launchModeInteractive,
-		SelectedSessionID: sessionID,
+		Mode:        launchModeInteractive,
+		Destination: destination,
 	})
 	if err != nil {
 		return err

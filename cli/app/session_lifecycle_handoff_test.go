@@ -36,7 +36,7 @@ func requireSessionOpenDestination(t *testing.T, handoff *resolvedSessionHandoff
 	if !ok {
 		t.Fatalf("destination = %T, want existing session", handoff.Destination)
 	}
-	return destination.SessionID
+	return destination.SessionID()
 }
 
 func requireSessionCreateDestination(t *testing.T, handoff *resolvedSessionHandoff) *sessionParentReference {
@@ -81,11 +81,14 @@ func TestResolveAndReleaseSessionHandoffOwnsInitialInputPrecedence(t *testing.T)
 			var initialInputRequest serverapi.SessionInitialInputRequest
 			lifecycle := &recordingSessionLifecycleClient{
 				resolveTransition: func(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-					return serverapi.SessionResolveTransitionResponse{
-						NextSessionID:  "parent-session",
+					response := serverapi.SessionResolveTransitionResponse{
 						InitialInput:   req.Transition.InitialInput,
 						ShouldContinue: true,
-					}, nil
+					}
+					if req.Transition.Action == UIActionOpenSession {
+						response.NextSessionID = "parent-session"
+					}
+					return response, nil
 				},
 				getInitialInput: func(_ context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
 					initialInputRequest = req
@@ -200,17 +203,20 @@ func TestResolveAndReleaseSessionHandoffOwnsInitialInputPrecedence(t *testing.T)
 func TestResolvedSessionHandoffRejectsInvalidWireCombinations(t *testing.T) {
 	tests := []struct {
 		name     string
+		action   UIAction
 		response serverapi.SessionResolveTransitionResponse
 	}{
 		{
-			name: "non-continuing response with destination",
+			name:   "non-continuing response with destination",
+			action: UIActionNone,
 			response: serverapi.SessionResolveTransitionResponse{
 				ShouldContinue: false,
 				NextSessionID:  "session-1",
 			},
 		},
 		{
-			name: "force new with existing destination",
+			name:   "force new with existing destination",
+			action: UIActionNewSession,
 			response: serverapi.SessionResolveTransitionResponse{
 				ShouldContinue:  true,
 				ForceNewSession: true,
@@ -218,7 +224,8 @@ func TestResolvedSessionHandoffRejectsInvalidWireCombinations(t *testing.T) {
 			},
 		},
 		{
-			name: "existing destination with parent",
+			name:   "existing destination with parent",
+			action: UIActionOpenSession,
 			response: serverapi.SessionResolveTransitionResponse{
 				ShouldContinue:  true,
 				NextSessionID:   "session-1",
@@ -226,24 +233,48 @@ func TestResolvedSessionHandoffRejectsInvalidWireCombinations(t *testing.T) {
 			},
 		},
 		{
-			name: "picker destination with parent",
+			name:   "picker destination with parent",
+			action: UIActionResume,
 			response: serverapi.SessionResolveTransitionResponse{
 				ShouldContinue:  true,
 				ParentSessionID: "parent-1",
 			},
 		},
 		{
-			name: "history flag without prompt",
+			name:   "history flag without prompt",
+			action: UIActionResume,
 			response: serverapi.SessionResolveTransitionResponse{
 				ShouldContinue:               true,
 				InitialPromptHistoryRecorded: true,
+			},
+		},
+		{
+			name:   "open session with picker destination",
+			action: UIActionOpenSession,
+			response: serverapi.SessionResolveTransitionResponse{
+				ShouldContinue: true,
+			},
+		},
+		{
+			name:   "resume with existing destination",
+			action: UIActionResume,
+			response: serverapi.SessionResolveTransitionResponse{
+				ShouldContinue: true,
+				NextSessionID:  "session-1",
+			},
+		},
+		{
+			name:   "new session with picker destination",
+			action: UIActionNewSession,
+			response: serverapi.SessionResolveTransitionResponse{
+				ShouldContinue: true,
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handoff, err := resolvedSessionHandoffFromResponse(tt.response)
+			handoff, err := resolvedSessionHandoffFromResponse(tt.action, tt.response)
 			if err == nil {
 				t.Fatalf("invalid response produced handoff %+v", handoff)
 			}

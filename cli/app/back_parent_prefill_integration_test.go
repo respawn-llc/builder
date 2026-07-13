@@ -219,8 +219,8 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 
 			planner := newSessionLaunchPlanner(server)
 			parentPlan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{
-				Mode:              launchModeInteractive,
-				SelectedSessionID: parentSessionID,
+				Mode:        launchModeInteractive,
+				Destination: sessionOpenDestinationForTest(t, parentSessionID),
 			})
 			if err != nil {
 				t.Fatalf("plan parent session: %v", err)

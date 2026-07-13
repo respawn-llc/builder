@@ -304,30 +304,6 @@ type sessionInitialInputDirective struct {
 	Precedence      sessionInitialInputPrecedence
 }
 
-type sessionLaunchDestination interface {
-	sessionLaunchDestination()
-}
-
-type sessionPickerDestination struct{}
-
-func (sessionPickerDestination) sessionLaunchDestination() {}
-
-type sessionOpenDestination struct {
-	SessionID string
-}
-
-func (sessionOpenDestination) sessionLaunchDestination() {}
-
-type sessionParentReference struct {
-	SessionID string
-}
-
-type sessionCreateDestination struct {
-	Parent *sessionParentReference
-}
-
-func (sessionCreateDestination) sessionLaunchDestination() {}
-
 type sessionInitialPrompt struct {
 	Text            string
 	HistoryRecorded bool
@@ -340,9 +316,9 @@ type resolvedSessionHandoff struct {
 }
 
 func initialSessionHandoff(initialSessionID string, forceNewSession bool) (resolvedSessionHandoff, error) {
-	normalizedSessionID := strings.TrimSpace(initialSessionID)
+	validatedSessionID := optionalValidatedSessionID(initialSessionID)
 	if forceNewSession {
-		if normalizedSessionID != "" {
+		if validatedSessionID != nil {
 			return resolvedSessionHandoff{}, errors.New("initial session id cannot be combined with force-new session")
 		}
 		return resolvedSessionHandoff{
@@ -350,77 +326,26 @@ func initialSessionHandoff(initialSessionID string, forceNewSession bool) (resol
 			InitialInput: sessionInitialInputDirective{Precedence: sessionInitialInputPreferStoredDraft},
 		}, nil
 	}
-	if normalizedSessionID == "" {
+	if validatedSessionID == nil {
 		return resolvedSessionHandoff{
 			Destination:  sessionPickerDestination{},
 			InitialInput: sessionInitialInputDirective{Precedence: sessionInitialInputPreferStoredDraft},
 		}, nil
 	}
-	destination, err := newSessionOpenDestination(normalizedSessionID)
-	if err != nil {
-		return resolvedSessionHandoff{}, err
-	}
 	return resolvedSessionHandoff{
-		Destination:  destination,
+		Destination:  sessionOpenDestination{sessionID: *validatedSessionID},
 		InitialInput: sessionInitialInputDirective{Precedence: sessionInitialInputPreferStoredDraft},
 	}, nil
 }
 
-func newSessionOpenDestination(sessionID string) (sessionOpenDestination, error) {
-	normalized := strings.TrimSpace(sessionID)
-	if normalized == "" {
-		return sessionOpenDestination{}, errors.New("open-session destination requires a session id")
-	}
-	if normalized != sessionID {
-		return sessionOpenDestination{}, errors.New("open-session destination session id must be normalized")
-	}
-	return sessionOpenDestination{SessionID: normalized}, nil
-}
-
-func newSessionParentReference(sessionID string) (sessionParentReference, error) {
-	normalized := strings.TrimSpace(sessionID)
-	if normalized == "" {
-		return sessionParentReference{}, errors.New("parent session id is required")
-	}
-	if normalized != sessionID {
-		return sessionParentReference{}, errors.New("parent session id must be normalized")
-	}
-	return sessionParentReference{SessionID: normalized}, nil
-}
-
-func optionalSessionParentReference(sessionID string) (*sessionParentReference, error) {
-	if sessionID == "" {
-		return nil, nil
-	}
-	parent, err := newSessionParentReference(sessionID)
-	if err != nil {
-		return nil, err
-	}
-	return &parent, nil
-}
-
 func sessionLaunchRequestFromHandoff(handoff resolvedSessionHandoff, overrides serverapi.RunPromptOverrides) (sessionLaunchRequest, error) {
-	request := sessionLaunchRequest{Mode: launchModeInteractive, Overrides: overrides}
-	switch destination := handoff.Destination.(type) {
-	case sessionPickerDestination:
-		return request, nil
-	case sessionOpenDestination:
-		normalized, err := newSessionOpenDestination(destination.SessionID)
-		if err != nil {
-			return sessionLaunchRequest{}, err
-		}
-		request.SelectedSessionID = normalized.SessionID
-		return request, nil
-	case sessionCreateDestination:
-		request.ForceNewSession = true
-		if destination.Parent != nil {
-			parent, err := newSessionParentReference(destination.Parent.SessionID)
-			if err != nil {
-				return sessionLaunchRequest{}, err
-			}
-			request.ParentSessionID = parent.SessionID
-		}
-		return request, nil
+	switch handoff.Destination.(type) {
+	case sessionPickerDestination, sessionOpenDestination, sessionCreateDestination:
+		return sessionLaunchRequest{
+			Mode:        launchModeInteractive,
+			Destination: handoff.Destination,
+			Overrides:   overrides,
+		}, nil
 	default:
 		return sessionLaunchRequest{}, errors.New("session handoff destination is required")
 	}
@@ -461,11 +386,14 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 			return nil, err
 		}
 	}
-	return resolvedSessionHandoffFromResponse(resolved)
+	return resolvedSessionHandoffFromResponse(transition.Action, resolved)
 }
 
-func resolvedSessionHandoffFromResponse(resolved serverapi.SessionResolveTransitionResponse) (*resolvedSessionHandoff, error) {
+func resolvedSessionHandoffFromResponse(action UIAction, resolved serverapi.SessionResolveTransitionResponse) (*resolvedSessionHandoff, error) {
 	if !resolved.ShouldContinue {
+		if transitionActionRequiresDestination(action) {
+			return nil, errors.New("session transition did not resolve a destination")
+		}
 		if resolved.NextSessionID != "" ||
 			resolved.InitialPrompt != "" ||
 			resolved.InitialPromptHistoryRecorded ||
@@ -479,6 +407,9 @@ func resolvedSessionHandoffFromResponse(resolved serverapi.SessionResolveTransit
 
 	destination, err := sessionLaunchDestinationFromResponse(resolved)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateTransitionDestination(action, destination); err != nil {
 		return nil, err
 	}
 	var prompt *sessionInitialPrompt
@@ -501,15 +432,51 @@ func resolvedSessionHandoffFromResponse(resolved serverapi.SessionResolveTransit
 	}, nil
 }
 
+func transitionActionRequiresDestination(action UIAction) bool {
+	switch action {
+	case UIActionNewSession,
+		UIActionResume,
+		UIActionLogout,
+		UIActionForkRollback,
+		UIActionOpenSession:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateTransitionDestination(action UIAction, destination sessionLaunchDestination) error {
+	switch action {
+	case UIActionOpenSession, UIActionForkRollback:
+		if _, ok := destination.(sessionOpenDestination); !ok {
+			return errors.New("session transition requires an existing-session destination")
+		}
+	case UIActionNewSession:
+		if _, ok := destination.(sessionCreateDestination); !ok {
+			return errors.New("new-session transition requires a create-session destination")
+		}
+	case UIActionResume:
+		if _, ok := destination.(sessionPickerDestination); !ok {
+			return errors.New("resume transition requires a session-picker destination")
+		}
+	case UIActionLogout:
+		switch destination.(type) {
+		case sessionOpenDestination, sessionPickerDestination:
+		default:
+			return errors.New("logout transition requires an existing-session or session-picker destination")
+		}
+	default:
+		return errors.New("continuing session transition has unsupported action")
+	}
+	return nil
+}
+
 func sessionLaunchDestinationFromResponse(resolved serverapi.SessionResolveTransitionResponse) (sessionLaunchDestination, error) {
 	if resolved.ForceNewSession {
 		if resolved.NextSessionID != "" {
 			return nil, errors.New("force-new session transition cannot also select an existing session")
 		}
-		parent, err := optionalSessionParentReference(resolved.ParentSessionID)
-		if err != nil {
-			return nil, err
-		}
+		parent := optionalSessionParentReference(resolved.ParentSessionID)
 		return sessionCreateDestination{Parent: parent}, nil
 	}
 	if resolved.NextSessionID != "" {

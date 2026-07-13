@@ -713,7 +713,7 @@ func TestResolveSessionActionNewSessionUsesForceNewFlow(t *testing.T) {
 		t.Fatalf("resolve session action: %v", err)
 	}
 	parent := requireSessionCreateDestination(t, resolved)
-	if parent == nil || parent.SessionID != "parent-1" {
+	if parent == nil || parent.SessionID() != "parent-1" {
 		t.Fatalf("expected parent session id passthrough, got %+v", parent)
 	}
 	if resolved.InitialPrompt == nil || resolved.InitialPrompt.Text != "hello" || resolved.InitialInput.TransitionInput != "" {
@@ -780,7 +780,7 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 		t.Fatalf("resolve session action: %v", err)
 	}
 	parent := requireSessionCreateDestination(t, resolved)
-	if parent == nil || parent.SessionID != "parent-1" {
+	if parent == nil || parent.SessionID() != "parent-1" {
 		t.Fatalf("expected new-session parent, got %+v", parent)
 	}
 	if resolved.InitialPrompt == nil || resolved.InitialPrompt.Text != "hello" || resolved.InitialInput.TransitionInput != "" {
@@ -1211,7 +1211,7 @@ func TestResumeReleaseCompletesBeforePickerAndPickerCancelDoesNotReleaseAgain(t 
 		t.Fatalf("resolve and release resume: %v", err)
 	}
 	requireSessionPickerDestination(t, resolved)
-	if _, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive}); !errors.Is(err, projectbinding.ErrStartupCanceledByUser) {
+	if _, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}); !errors.Is(err, projectbinding.ErrStartupCanceledByUser) {
 		t.Fatalf("picker result error = %v, want cancellation", err)
 	}
 	if releaseCalls != 1 {

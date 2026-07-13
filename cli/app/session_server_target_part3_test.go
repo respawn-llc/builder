@@ -44,7 +44,7 @@ func TestStartSessionServerUsesConfiguredDaemonForSessionLifecycleDraftPersisten
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "session lifecycle draft persistence")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "session lifecycle draft persistence")
 	defer runtimePlan.Close()
 	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "saved draft"}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
@@ -104,7 +104,7 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 	}
 	promptViews := requirePromptViewServer(t, server)
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote prompt snapshot reads")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "test remote prompt snapshot reads")
 	defer runtimePlan.Close()
 
 	askDone := make(chan error, 1)
@@ -187,7 +187,7 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 	processes := requireProcessServer(t, server)
 
 	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -414,7 +414,7 @@ func waitForRemoteInlineOutput(t *testing.T, controls client.ProcessControlClien
 
 func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServer, wantReply string) {
 	t.Helper()
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "workflow parity")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "workflow parity")
 	defer runtimePlan.Close()
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello parity")

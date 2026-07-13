@@ -421,6 +421,19 @@ func TestServiceResolveTransitionRejectsPathLikeSessionID(t *testing.T) {
 	}
 }
 
+func TestServiceResolveTransitionOpenSessionRequiresTarget(t *testing.T) {
+	service := newTestSessionLifecycleService(t.TempDir(), nil)
+	response, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
+		ClientRequestID: "open-session-without-target",
+		Transition: serverapi.SessionTransition{
+			Action: serverapi.SessionTransitionActionOpenSession,
+		},
+	})
+	if err == nil {
+		t.Fatalf("open-session transition without target resolved as %+v", response)
+	}
+}
+
 func TestServiceResolveTransitionForkRollbackCreatesFork(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {

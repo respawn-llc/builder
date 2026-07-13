@@ -67,6 +67,50 @@ func TestResolveAndReleaseSessionHandoffTransitionFailureLeavesChildReopenableWi
 	}
 }
 
+func TestResolveAndReleaseSessionHandoffRejectsOpenSessionWithoutDestination(t *testing.T) {
+	child := createAppRuntimeSession(t)
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("persist child session: %v", err)
+	}
+	releaseCalls := 0
+	server := narrowSessionLifecycleServer{
+		lifecycle: &recordingSessionLifecycleClient{
+			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
+				return serverapi.SessionResolveTransitionResponse{ShouldContinue: true}, nil
+			},
+		},
+	}
+
+	handoff, err := resolveAndReleaseSessionHandoff(
+		context.Background(),
+		server,
+		nil,
+		child.Meta().SessionID,
+		UITransition{Action: UIActionOpenSession},
+		&runtimeLaunchPlan{close: func() error {
+			releaseCalls++
+			return nil
+		}},
+	)
+	if err == nil {
+		t.Fatal("open-session response without destination was accepted")
+	}
+	if handoff != nil {
+		t.Fatalf("open-session response without destination returned handoff %+v", handoff)
+	}
+	if releaseCalls != 1 {
+		t.Fatalf("origin cleanup calls = %d, want 1", releaseCalls)
+	}
+
+	reopened, err := session.Open(child.Dir())
+	if err != nil {
+		t.Fatalf("reopen child after invalid open-session response: %v", err)
+	}
+	if reopened.Meta().SessionID != child.Meta().SessionID {
+		t.Fatalf("reopened child id = %q, want %q", reopened.Meta().SessionID, child.Meta().SessionID)
+	}
+}
+
 func TestResolveAndReleaseSessionHandoffReturnsReleaseFailureBeforeDestinationCanPlan(t *testing.T) {
 	child := createAppRuntimeSession(t)
 	if err := child.EnsureDurable(); err != nil {
@@ -153,8 +197,8 @@ func TestDestinationPlanningFailureLeavesChildReopenableWithoutPreparation(t *te
 	parentSessionID := requireSessionOpenDestination(t, handoff)
 	planner := newSessionLaunchPlanner(server)
 	_, err = planner.PlanSession(context.Background(), sessionLaunchRequest{
-		Mode:              launchModeInteractive,
-		SelectedSessionID: parentSessionID,
+		Mode:        launchModeInteractive,
+		Destination: sessionOpenDestinationForTest(t, parentSessionID),
 	})
 	if !errors.Is(err, planErr) {
 		t.Fatalf("destination planning error = %v, want %v", err, planErr)
@@ -207,7 +251,7 @@ func TestDestinationPreparationFailureLeavesChildReopenableWithoutComposition(t 
 			ActiveSettings: config.Settings{Model: "gpt-5", Theme: "dark"},
 		},
 		resolvedSessionHandoff{
-			Destination: sessionOpenDestination{SessionID: "parent-session"},
+			Destination: sessionOpenDestinationForTest(t, "parent-session"),
 			InitialInput: sessionInitialInputDirective{
 				TransitionInput: "child final",
 				Precedence:      sessionInitialInputPreferTransition,
@@ -271,7 +315,7 @@ func TestDestinationInitialInputFailureClosesRuntimeAndLeavesChildReopenableWith
 			ActiveSettings: config.Settings{Model: "gpt-5", Theme: "dark"},
 		},
 		resolvedSessionHandoff{
-			Destination: sessionOpenDestination{SessionID: "parent-session"},
+			Destination: sessionOpenDestinationForTest(t, "parent-session"),
 			InitialInput: sessionInitialInputDirective{
 				TransitionInput: "child final",
 				Precedence:      sessionInitialInputPreferTransition,
@@ -331,7 +375,7 @@ func TestDestinationClientPromptRootsFailureJoinsRuntimeCleanupFailure(t *testin
 			ActiveSettings: config.Settings{Model: "gpt-5", Theme: "dark"},
 		},
 		resolvedSessionHandoff{
-			Destination:  sessionOpenDestination{SessionID: "parent-session"},
+			Destination:  sessionOpenDestinationForTest(t, "parent-session"),
 			InitialInput: sessionInitialInputDirective{Precedence: sessionInitialInputPreferTransition},
 		},
 		false,
