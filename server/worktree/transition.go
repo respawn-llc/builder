@@ -54,8 +54,15 @@ func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnter
 		kind:        clientui.WorktreeTransitionEnter,
 		selector:    strings.TrimSpace(req.Selector),
 	}
+	if ack, ok := s.replayPendingWorktreeTransition(request); ok {
+		return ack, nil
+	}
+	target, err := s.resolveScheduledEnterTarget(ctx, request.sessionID, request.selector)
+	if err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
 	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, sync transitionTargetSync) error {
-		return s.executeEnterWorktree(runCtx, request.sessionID, request.selector, sync)
+		return s.executeEnterWorktree(runCtx, request.sessionID, target, sync)
 	})
 }
 
@@ -140,7 +147,34 @@ func (s *Service) runWorktreeTransition(request worktreeTransitionRequest, execu
 	s.transitionMu.Unlock()
 }
 
-func (s *Service) executeEnterWorktree(ctx context.Context, sessionID string, selector string, sync transitionTargetSync) error {
+func (s *Service) resolveScheduledEnterTarget(
+	ctx context.Context,
+	sessionID string,
+	selector string,
+) (scheduledWorktreeTarget, error) {
+	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, sessionID)
+	if err != nil {
+		return scheduledWorktreeTarget{}, err
+	}
+	defer release()
+	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
+	if err != nil {
+		return scheduledWorktreeTarget{}, err
+	}
+	match, err := resolveTopologySelector(topology, selector)
+	if err != nil {
+		return scheduledWorktreeTarget{}, err
+	}
+	if match.entry.Variant == serverapi.WorktreeTopologyVariantMissing {
+		return scheduledWorktreeTarget{}, &serverapi.WorktreeSelectorError{
+			Kind:  serverapi.WorktreeSelectorErrorKindUnavailable,
+			Input: selector,
+		}
+	}
+	return scheduledWorktreeTargetFromEntry(match.entry)
+}
+
+func (s *Service) executeEnterWorktree(ctx context.Context, sessionID string, target scheduledWorktreeTarget, sync transitionTargetSync) error {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, sessionID)
 	if err != nil {
 		return err
@@ -150,18 +184,18 @@ func (s *Service) executeEnterWorktree(ctx context.Context, sessionID string, se
 	if err != nil {
 		return err
 	}
-	match, err := resolveTopologySelector(topology, selector)
+	entry, err := target.resolve(topology)
 	if err != nil {
 		return err
 	}
-	if topologyIsCurrent(match.entry, workspaceCtx.target) {
+	if topologyIsCurrent(entry, workspaceCtx.target) {
 		return nil
 	}
 	previous, err := s.currentTransitionWorktree(ctx, topology, workspaceCtx.target)
 	if err != nil {
 		return err
 	}
-	next, err := s.enterTransitionWorktree(ctx, workspaceCtx, match.entry)
+	next, err := s.enterTransitionWorktree(ctx, workspaceCtx, entry)
 	if err != nil {
 		return err
 	}

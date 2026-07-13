@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -80,6 +81,46 @@ func TestDeleteWorktreeAutoCleanupRetainsBranchWhenLiveProvenanceChanged(t *test
 		if err != nil || !exists {
 			t.Fatalf("retained branch %q exists=%v err=%v", branch, exists, err)
 		}
+	}
+}
+
+func TestDeleteWorktreeUsesPersistedBranchFactsForMissingWorktree(t *testing.T) {
+	for _, policy := range []serverapi.WorktreeBranchCleanupMode{
+		serverapi.WorktreeBranchCleanupModeAutoIfKentCreated,
+		serverapi.WorktreeBranchCleanupModeDeleteSafe,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			env := newServiceTestEnv(t)
+			created := mustCreateWorktree(t, env, "feature/delete-missing-"+string(policy))
+			if err := env.service.git.Remove(env.ctx, env.workspaceRoot, created.CanonicalRoot, true); err != nil {
+				t.Fatalf("Remove worktree: %v", err)
+			}
+			if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, created.BranchName); err != nil || !exists {
+				t.Fatalf("persisted branch before delete exists=%v err=%v", exists, err)
+			}
+
+			result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+				OperationID:         serverapi.NewWorktreeOperationID(),
+				SessionID:           env.session.Meta().SessionID,
+				Selector:            created.WorktreeID,
+				BranchCleanupPolicy: policy,
+			})
+			if err != nil {
+				t.Fatalf("DeleteWorktree: %v", err)
+			}
+			if result.Completed == nil ||
+				result.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted ||
+				result.Completed.Cleanup.BranchName == nil ||
+				*result.Completed.Cleanup.BranchName != created.BranchName {
+				t.Fatalf("cleanup = %+v, want deleted persisted branch %q", result.Completed, created.BranchName)
+			}
+			if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, created.BranchName); err != nil || exists {
+				t.Fatalf("persisted branch after delete exists=%v err=%v", exists, err)
+			}
+			if _, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("GetWorktreeRecordByID after delete error = %v, want sql.ErrNoRows", err)
+			}
+		})
 	}
 }
 

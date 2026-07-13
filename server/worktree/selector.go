@@ -1,6 +1,8 @@
 package worktree
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -10,6 +12,74 @@ import (
 type topologySelectorMatch struct {
 	index int
 	entry serverapi.WorktreeTopologyEntry
+}
+
+type scheduledWorktreeTarget struct {
+	worktreeID    *string
+	canonicalRoot string
+}
+
+func scheduledWorktreeTargetFromEntry(entry serverapi.WorktreeTopologyEntry) (scheduledWorktreeTarget, error) {
+	root := strings.TrimSpace(topologyRoot(entry))
+	if root == "" {
+		return scheduledWorktreeTarget{}, errors.New("scheduled worktree target requires a canonical root")
+	}
+	target := scheduledWorktreeTarget{canonicalRoot: root}
+	if id := topologyWorktreeID(entry); id != nil {
+		value := strings.TrimSpace(*id)
+		if value == "" {
+			return scheduledWorktreeTarget{}, errors.New("scheduled worktree target has an invalid Kent worktree id")
+		}
+		target.worktreeID = &value
+	}
+	return target, nil
+}
+
+func scheduledKentWorktreeTargetFromEntry(entry serverapi.WorktreeTopologyEntry) (scheduledWorktreeTarget, error) {
+	target, err := scheduledWorktreeTargetFromEntry(entry)
+	if err != nil {
+		return scheduledWorktreeTarget{}, err
+	}
+	if target.worktreeID == nil {
+		return scheduledWorktreeTarget{}, errors.New("scheduled worktree target requires a Kent worktree id")
+	}
+	return target, nil
+}
+
+func (target scheduledWorktreeTarget) resolve(topology []serverapi.WorktreeTopologyEntry) (serverapi.WorktreeTopologyEntry, error) {
+	root := strings.TrimSpace(target.canonicalRoot)
+	if root == "" {
+		return serverapi.WorktreeTopologyEntry{}, errors.New("scheduled worktree target identity is invalid")
+	}
+	if target.worktreeID != nil {
+		worktreeID := strings.TrimSpace(*target.worktreeID)
+		if worktreeID == "" {
+			return serverapi.WorktreeTopologyEntry{}, errors.New("scheduled worktree target identity is invalid")
+		}
+		entry, found := topologyEntryByWorktreeID(topology, worktreeID)
+		if !found {
+			return serverapi.WorktreeTopologyEntry{}, errors.Join(
+				serverapi.ErrWorktreeNotFound,
+				fmt.Errorf("scheduled worktree target %q is no longer present", worktreeID),
+			)
+		}
+		if filepath.Clean(topologyRoot(entry)) != filepath.Clean(root) {
+			return serverapi.WorktreeTopologyEntry{}, errors.Join(
+				serverapi.ErrWorktreeNotFound,
+				fmt.Errorf("scheduled worktree target %q changed root", worktreeID),
+			)
+		}
+		return entry, nil
+	}
+	for _, entry := range topology {
+		if filepath.Clean(topologyRoot(entry)) == filepath.Clean(root) {
+			return entry, nil
+		}
+	}
+	return serverapi.WorktreeTopologyEntry{}, errors.Join(
+		serverapi.ErrWorktreeNotFound,
+		fmt.Errorf("scheduled worktree target %q is no longer present", root),
+	)
 }
 
 func resolveTopologySelector(entries []serverapi.WorktreeTopologyEntry, selector string) (topologySelectorMatch, error) {

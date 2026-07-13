@@ -56,10 +56,7 @@ func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktr
 	if persistedRef == "" {
 		return "", false, nil
 	}
-	branchName := strings.TrimSpace(persisted.BranchName)
-	if branchName == "" {
-		branchName = shortBranchName(persistedRef)
-	}
+	branchName := worktreeNamedBranch(persisted)
 	if branchName == "" {
 		return "", false, nil
 	}
@@ -67,6 +64,13 @@ func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktr
 		return "", false, nil
 	}
 	return branchName, true, nil
+}
+
+func worktreeNamedBranch(worktree GitWorktree) string {
+	if branchName := strings.TrimSpace(worktree.BranchName); branchName != "" {
+		return branchName
+	}
+	return shortBranchName(strings.TrimSpace(worktree.BranchRef))
 }
 
 func pathAvailability(path string) string {
