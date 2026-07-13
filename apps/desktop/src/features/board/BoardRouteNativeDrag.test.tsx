@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import type { JsonValue } from "../../api/json";
 import { App } from "../../App";
+import { TestDataTransfer } from "../../test-support/board/TestDataTransfer";
 import { createTestServices, startupRoutes } from "../../testSupport/appServices";
 
 describe("BoardRoute native drag lifecycle", () => {
@@ -197,22 +198,3 @@ const sourceCard = {
 };
 
 const nodeCardsRequestSchema = z.object({ node_id: z.string() });
-
-class TestDataTransfer {
-  readonly #values = new Map<string, string>();
-  effectAllowed = "all";
-  dropEffect = "none";
-  readonly setDragImage = vi.fn();
-
-  get types(): readonly string[] {
-    return [...this.#values.keys()];
-  }
-
-  setData(type: string, value: string): void {
-    this.#values.set(type, value);
-  }
-
-  getData(type: string): string {
-    return this.#values.get(type) ?? "";
-  }
-}

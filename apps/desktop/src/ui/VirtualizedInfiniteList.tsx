@@ -80,9 +80,9 @@ export function VirtualizedInfiniteList<TItem>({
     },
     [onScrollElementChange],
   );
-  const lastInitialScrollKeyRef = useRef("");
-  const lastLoadPreviousKeyRef = useRef("");
-  const lastLoadMoreKeyRef = useRef("");
+  const lastInitialScrollKeyRef = useRef<string | null>(null);
+  const lastLoadPreviousKeyRef = useRef<string | null>(null);
+  const lastLoadMoreKeyRef = useRef<string | null>(null);
   const wasFetchingPreviousPageRef = useRef(false);
   const wasFetchingNextPageRef = useRef(false);
   const leadingAnchorRef = useRef<VirtualizedLeadingAnchor | null>(null);

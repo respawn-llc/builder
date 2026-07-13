@@ -18,7 +18,7 @@ const atBottom = {
 
 describe("resolveLoadMore", () => {
   it("requests the next page when scrolled to the bottom for an unseen key", () => {
-    expect(resolveLoadMore({ ...atBottom, lastLoadMoreKey: "", loadMoreKey: "page-1" })).toEqual({
+    expect(resolveLoadMore({ ...atBottom, lastLoadMoreKey: null, loadMoreKey: "page-1" })).toEqual({
       shouldLoad: true,
       lastLoadMoreKey: "page-1",
     });
@@ -45,11 +45,11 @@ describe("resolveLoadMore", () => {
         lastLoadMoreKey: "page-1",
         loadMoreKey: "page-1",
       }),
-    ).toEqual({ shouldLoad: false, lastLoadMoreKey: "" });
+    ).toEqual({ shouldLoad: false, lastLoadMoreKey: null });
   });
 
   it("retries the failed page on the next pass after suppression was released", () => {
-    expect(resolveLoadMore({ ...atBottom, lastLoadMoreKey: "", loadMoreKey: "page-1" })).toEqual({
+    expect(resolveLoadMore({ ...atBottom, lastLoadMoreKey: null, loadMoreKey: "page-1" })).toEqual({
       shouldLoad: true,
       lastLoadMoreKey: "page-1",
     });
@@ -68,8 +68,8 @@ describe("resolveLoadMore", () => {
 
   it("does not request more while away from the bottom", () => {
     expect(
-      resolveLoadMore({ ...atBottom, atBottom: false, lastLoadMoreKey: "", loadMoreKey: "page-1" }),
-    ).toEqual({ shouldLoad: false, lastLoadMoreKey: "" });
+      resolveLoadMore({ ...atBottom, atBottom: false, lastLoadMoreKey: null, loadMoreKey: "page-1" }),
+    ).toEqual({ shouldLoad: false, lastLoadMoreKey: null });
   });
 
   it("keeps previous and next retry suppression independent", () => {
@@ -86,7 +86,7 @@ describe("resolveLoadMore", () => {
       loadMoreKey: "next-1",
     });
 
-    expect(previous).toEqual({ shouldLoad: false, lastLoadMoreKey: "" });
+    expect(previous).toEqual({ shouldLoad: false, lastLoadMoreKey: null });
     expect(next).toEqual({ shouldLoad: false, lastLoadMoreKey: "next-1" });
   });
 });
@@ -126,6 +126,16 @@ describe("virtualizedInitialScrollIndex", () => {
   });
 
   it("suppresses repeated request keys while allowing the same target for a new request", () => {
+    expect(
+      resolveVirtualizedInitialScroll({
+        getItemKey,
+        headerCount: 1,
+        initialScrollKey: "inbox",
+        initialScrollRequestKey: "task-1",
+        items,
+        lastRequestKey: null,
+      }),
+    ).toEqual({ requestKey: "task-1", scrollIndex: 2 });
     expect(
       resolveVirtualizedInitialScroll({
         getItemKey,

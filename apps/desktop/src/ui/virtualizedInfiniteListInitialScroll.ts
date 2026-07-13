@@ -29,7 +29,7 @@ export function resolveVirtualizedInitialScroll<TItem>({
   initialScrollKey: string | undefined;
   initialScrollRequestKey: string | undefined;
   items: readonly TItem[];
-  lastRequestKey: string;
+  lastRequestKey: string | null;
 }>): Readonly<{ requestKey: string; scrollIndex: number }> | null {
   if (initialScrollKey === undefined || initialScrollKey.length === 0) {
     return null;

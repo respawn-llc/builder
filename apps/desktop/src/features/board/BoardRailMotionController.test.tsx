@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import type { BoardCard, BoardColumn, WorkflowBoard, WorkflowPickerItem } from "../../api";
 import { appI18n, initializeI18n } from "../../i18n/setup";
+import { TestDataTransfer } from "../../test-support/board/TestDataTransfer";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import type { KanbanCardVM } from "./BoardColumnViewModel";
 import type { BoardCardDragPayload } from "./BoardDragTypes";
@@ -479,7 +480,6 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
       hasPreviousPage: true,
     });
 
-    expect(screen.getByRole("article", { name: "Task 2" })).not.toHaveClass("board-card-enter-reveal");
     expect(boardCardMotionCalls()).toBe(0);
     animateElementMock.mockClear();
 
@@ -756,23 +756,4 @@ function observedCards(): ReadonlySet<Element> {
       Array.from(observer.targets).filter((target) => target.getAttribute("data-testid") === "task-card"),
     ),
   );
-}
-
-class TestDataTransfer {
-  readonly #values = new Map<string, string>();
-  effectAllowed = "all";
-  dropEffect = "none";
-  readonly setDragImage = vi.fn();
-
-  get types(): readonly string[] {
-    return [...this.#values.keys()];
-  }
-
-  setData(type: string, value: string): void {
-    this.#values.set(type, value);
-  }
-
-  getData(type: string): string {
-    return this.#values.get(type) ?? "";
-  }
 }

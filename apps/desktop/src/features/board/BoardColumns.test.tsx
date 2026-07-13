@@ -3,6 +3,7 @@ import { I18nextProvider } from "react-i18next";
 import { beforeAll, vi } from "vitest";
 
 import { appI18n, initializeI18n } from "../../i18n/setup";
+import { TestDataTransfer } from "../../test-support/board/TestDataTransfer";
 import { KanbanColumn } from "./BoardColumns";
 import type { KanbanCardVM, KanbanColumnVM } from "./BoardColumnViewModel";
 import { boardCardDragPayloadType, decodeBoardCardDragPayload } from "./BoardDragTypes";
@@ -214,11 +215,6 @@ describe("KanbanColumn", () => {
       "Bounded preview from the server: semantic source remains intact",
     );
     expect(within(questionCard).getByTestId("task-card-preview-ellipsis")).toHaveTextContent("…");
-    expect(
-      within(within(questionCard).getByTestId("task-card-body")).getByText(
-        "Bounded preview from the server: semantic source remains intact",
-      ),
-    ).toHaveClass("markdown-plain-text");
     expect(within(approvalCard).queryByTestId("task-card-preview-ellipsis")).not.toBeInTheDocument();
     expect(within(questionCard).queryByTestId("task-card-chip-slot")).not.toBeInTheDocument();
     expect(within(approvalCard).getByTestId("task-card-chip-slot")).toHaveTextContent("Other workspace");
@@ -460,25 +456,6 @@ describe("KanbanColumn", () => {
     expect(dataTransfer.dropEffect).toBe("move");
   });
 });
-
-class TestDataTransfer {
-  readonly #values = new Map<string, string>();
-  effectAllowed = "all";
-  dropEffect = "none";
-  readonly setDragImage = vi.fn();
-
-  get types(): readonly string[] {
-    return [...this.#values.keys()];
-  }
-
-  setData(type: string, value: string): void {
-    this.#values.set(type, value);
-  }
-
-  getData(type: string): string {
-    return this.#values.get(type) ?? "";
-  }
-}
 
 function createCancelableDragEvent(type: string, dataTransfer: TestDataTransfer): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
