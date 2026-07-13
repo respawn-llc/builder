@@ -71,8 +71,8 @@ describe("useBoardDragAutoScroll", () => {
       scrollHeight: 1_000,
     });
 
-    dispatchBoardDrag(root, "dragover", { clientX: 476, clientY: 396 });
-    dispatchBoardDrag(root, "dragover", { clientX: 476, clientY: 396 });
+    dispatchBoardDrag(root, "dragover", { clientX: 480, clientY: 400 });
+    dispatchBoardDrag(root, "dragover", { clientX: 480, clientY: 400 });
 
     expect(frames.pending).toBe(1);
     frames.step(0);
@@ -81,6 +81,35 @@ describe("useBoardDragAutoScroll", () => {
     expect(root.scrollLeft).toBeGreaterThan(0);
     expect(column.scrollTop).toBeGreaterThan(0);
     expect(frames.pending).toBe(1);
+  });
+
+  it("selects a registered column at its exact left and top edges", () => {
+    render(<AutoScrollHarness active columnIDs={["column-1"]} />);
+    const root = screen.getByTestId("auto-scroll-root");
+    const column = screen.getByTestId("column-1");
+    setScrollportGeometry(root, {
+      left: 0,
+      top: 0,
+      width: 500,
+      height: 400,
+      scrollWidth: 500,
+      scrollHeight: 400,
+    });
+    setScrollportGeometry(column, {
+      left: 300,
+      top: 0,
+      width: 180,
+      height: 400,
+      scrollWidth: 180,
+      scrollHeight: 1_000,
+    });
+    column.scrollTop = 300;
+
+    dispatchBoardDrag(root, "dragover", { clientX: 300, clientY: 0 });
+    frames.step(0);
+    frames.step(16);
+
+    expect(column.scrollTop).toBeLessThan(300);
   });
 
   it("keeps each actionable axis independent of the other axis", () => {

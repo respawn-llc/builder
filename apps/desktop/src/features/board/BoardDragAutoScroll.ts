@@ -5,6 +5,7 @@ const BOARD_DRAG_AUTOSCROLL_MAX_SPEED_PX_PER_SECOND = 900;
 const BOARD_DRAG_AUTOSCROLL_MAX_FRAME_DELTA_MS = 48;
 
 type DragPointer = Readonly<{ clientX: number; clientY: number }>;
+type PointContainment = "inclusive" | "strict";
 
 type ScrollAxisMotion = Readonly<{
   element: HTMLElement;
@@ -142,7 +143,7 @@ class BoardDragAutoScrollController {
 
   #verticalTarget(pointer: DragPointer): HTMLElement | null {
     for (const element of this.#columns.values()) {
-      if (pointIsInsideElement(pointer, element)) {
+      if (pointIsInsideElement(pointer, element, "inclusive")) {
         return element;
       }
     }
@@ -197,7 +198,7 @@ export function useBoardDragAutoScroll({
           root !== null &&
           event.target instanceof Node &&
           root.contains(event.target) &&
-          pointIsInsideElement(event, root)
+          pointIsInsideElement(event, root, "strict")
         ) {
           return;
         }
@@ -232,7 +233,7 @@ export function useBoardDragAutoScroll({
       if (root !== null && event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) {
         return;
       }
-      if (root !== null && event.relatedTarget === null && pointIsInsideElement(event, root)) {
+      if (root !== null && event.relatedTarget === null && pointIsInsideElement(event, root, "strict")) {
         return;
       }
       controller.stop();
@@ -252,8 +253,20 @@ export function useBoardDragAutoScroll({
   return { onBoardDragLeave, onBoardDragOver, registerColumnScrollport, stop };
 }
 
-function pointIsInsideElement(point: DragPointer, element: HTMLElement): boolean {
+function pointIsInsideElement(
+  point: DragPointer,
+  element: HTMLElement,
+  containment: PointContainment,
+): boolean {
   const rect = element.getBoundingClientRect();
+  if (containment === "inclusive") {
+    return (
+      point.clientX >= rect.left &&
+      point.clientX <= rect.right &&
+      point.clientY >= rect.top &&
+      point.clientY <= rect.bottom
+    );
+  }
   return (
     point.clientX > rect.left &&
     point.clientX < rect.right &&
