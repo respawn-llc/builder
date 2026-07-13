@@ -280,6 +280,42 @@ func TestMovedToBackgroundShellRowKeepsMovedToBackgroundSuffixAtNarrowWidth(t *t
 	}
 }
 
+func TestMovedToBackgroundMultilineShellStacksHiddenLineCount(t *testing.T) {
+	command := "sleep 20;\nprintf completed;\necho done"
+	row := toolRow("exec_command", clientui.ToolPresentationShell, command, false)
+	row.Tool.ToolPresentation.MovedToBackground = true
+
+	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
+	if len(rendered.Lines) != 1 {
+		t.Fatalf("backgrounded multiline shell lines = %+v, want one compact line", rendered.Lines)
+	}
+	if got, want := rendered.Lines[0].Plain(), "$ sleep 20;  · 2 more lines · backgrounded"; got != want {
+		t.Fatalf("backgrounded multiline shell = %q, want %q", got, want)
+	}
+}
+
+func TestMovedToBackgroundMultilineShellShowsCountOnlyWhileDetailIsCollapsed(t *testing.T) {
+	command := "sleep 20;\nprintf completed;\necho done"
+	row := toolRow("exec_command", clientui.ToolPresentationShell, command, false)
+	row.Tool.ToolPresentation.MovedToBackground = true
+
+	for _, tt := range []struct {
+		mode Mode
+		want string
+	}{
+		{mode: ModeDetailCollapsed, want: "$ sleep 20;  · 2 more lines · backgrounded"},
+		{mode: ModeDetailExpanded, want: "$ sleep 20;  · backgrounded"},
+	} {
+		rendered := RenderCommittedRow(row, 80, "", tt.mode)
+		if len(rendered.Lines) != 1 {
+			t.Fatalf("mode %v backgrounded detail lines = %+v, want one compact line", tt.mode, rendered.Lines)
+		}
+		if got := rendered.Lines[0].Plain(); got != tt.want {
+			t.Fatalf("mode %v backgrounded detail = %q, want %q", tt.mode, got, tt.want)
+		}
+	}
+}
+
 func assertShellLineIsPlainText(t *testing.T, line Line, wantFaint bool) {
 	t.Helper()
 	if len(line.Spans) < 2 {
@@ -561,6 +597,24 @@ func TestPendingToolChangesOnlyCommittedSymbolText(t *testing.T) {
 	pendingSymbol.Text = committedSymbol.Text
 	if pendingSymbol != committedSymbol || !slices.Equal(pending.Spans, committed.Spans) {
 		t.Fatalf("pending decoration changed non-text metadata: pending=%+v committed=%+v", pending, committed)
+	}
+}
+
+func TestPendingMultilineShellShowsExplicitHiddenLineCount(t *testing.T) {
+	command := "body=$(kent task show KENT-224 --project . --json |\n  jq -r '.body')\necho \"$body\""
+	line := RenderPendingTool(clientui.TranscriptToolStart{
+		ToolCallID: "db2b88a0-3a53-442e-a47b-84bb38ba7f77",
+		ToolName:   "exec_command",
+		ToolPresentation: &clientui.ToolCallMeta{
+			ToolName:     "exec_command",
+			Presentation: clientui.ToolPresentationShell,
+			Command:      command,
+			CompactText:  command,
+		},
+	}, 120, "", "⢎ ")
+
+	if got, want := line.Plain(), "⢎  body=$(kent task show KENT-224 --project . --json |  · 2 more lines"; got != want {
+		t.Fatalf("pending multiline shell = %q, want %q", got, want)
 	}
 }
 
@@ -889,6 +943,31 @@ func TestCollapsedToolResultSummaryRendersAsFaintInlineMetadata(t *testing.T) {
 	gap := spans[len(spans)-2]
 	if gap.Text != "  · " || gap.Style.SemanticRole != StyleRoleNotice || !gap.Style.Has(SpanAttributeFaint) {
 		t.Fatalf("result summary separator span = %+v, want faint inline separator", gap)
+	}
+}
+
+func TestCommittedMultilineShellStacksHiddenLineCountBeforeStatus(t *testing.T) {
+	command := "body=$(kent task show KENT-224 --project . --json |\n  jq -r '.body')\necho \"$body\""
+	row := toolRow("exec_command", clientui.ToolPresentationShell, command, false)
+	exitCode := 7
+	row.Tool.ToolPresentation.ShellExitCode = &exitCode
+
+	ongoing := RenderCommittedRow(row, 120, "", ModeOngoing)
+	if len(ongoing.Lines) != 1 {
+		t.Fatalf("ongoing committed multiline shell lines = %+v, want one compact line", ongoing.Lines)
+	}
+	if got, want := ongoing.Lines[0].Plain(), "$ body=$(kent task show KENT-224 --project . --json |  · 2 more lines · exit 7"; got != want {
+		t.Fatalf("ongoing committed multiline shell = %q, want %q", got, want)
+	}
+
+	detail := RenderCommittedRow(row, 120, "", ModeDetailCollapsed)
+	if len(detail.Lines) != 1 {
+		t.Fatalf("collapsed detail multiline shell lines = %+v, want one compact line", detail.Lines)
+	}
+	detailText := detail.Lines[0].Plain()
+	if !strings.HasPrefix(detailText, "$ body=$(kent task show KENT-224 --project . --json |") ||
+		!strings.HasSuffix(detailText, "2 more lines · exit 7") {
+		t.Fatalf("collapsed detail multiline shell = %q, want command plus existing aligned continuation/status metadata", detailText)
 	}
 }
 

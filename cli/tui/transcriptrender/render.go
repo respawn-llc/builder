@@ -11,7 +11,10 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-const BackgroundedShellSuffix = "· backgrounded"
+const (
+	backgroundedShellStatus = "backgrounded"
+	BackgroundedShellSuffix = "· " + backgroundedShellStatus
+)
 
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
 	var syntax *syntaxProjector
@@ -107,15 +110,22 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 	return attachPrefixWithMeta(role, textLines(role, wrapLines(text, contentWidth(role, width)), meta, mode), width, false, mode, meta)
 }
 
-func RenderBackgroundedShell(command string, width int) Line {
+func renderBackgroundedShell(command string, width int, mode Mode) Line {
 	if width <= 0 {
 		return Line{}
 	}
-	command = strings.TrimSpace(firstDisplayLine(safeTranscriptText(command)))
+	command = safeTranscriptText(command)
+	inlineMeta := backgroundedShellStatus
+	if modeShowsShellContinuationMetadata(mode) {
+		if continuation, ok := shellCommandContinuationMetadata(command); ok {
+			inlineMeta = joinToolInlineMetadata(continuation, inlineMeta)
+		}
+	}
+	command = strings.TrimSpace(firstDisplayLine(command))
 	symbol := SemanticSpan("$", StyleRoleToolShellSecondary)
 	fixed := []Span{
 		SemanticSpan("  ", StyleRoleToolShell, SpanAttributeFaint),
-		SemanticSpan(BackgroundedShellSuffix, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
+		SemanticSpan("· "+inlineMeta, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
 	}
 	fixedWidth := lipgloss.Width(symbol.Text) + spansWidth(fixed)
 	if command == "" || width <= fixedWidth {
@@ -128,10 +138,7 @@ func RenderBackgroundedShell(command string, width int) Line {
 	}}, commandWidth, false)
 	spans := []Span{SemanticSpan(" ", StyleRoleToolShell, SpanAttributeFaint)}
 	spans = append(spans, commandLine.Spans...)
-	spans = append(spans,
-		SemanticSpan("  ", StyleRoleToolShell, SpanAttributeFaint),
-		SemanticSpan(BackgroundedShellSuffix, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
-	)
+	spans = append(spans, fixed...)
 	return Line{LeadingSymbol: &symbol, Spans: spans}
 }
 
