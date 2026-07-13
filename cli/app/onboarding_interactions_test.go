@@ -292,6 +292,12 @@ func TestOnboardingImportAndSkillTransitionsRemainComplete(t *testing.T) {
 	if state.selections.skillEnablement[candidates[0].ID] {
 		t.Fatal("skill disable selection was not retained")
 	}
+	if err := importStep.apply(state, importOptionID); err != nil {
+		t.Fatalf("reconfirm import: %v", err)
+	}
+	if state.selections.skillEnablement[candidates[0].ID] {
+		t.Fatal("reconfirming the selected import reset the skill disable selection")
+	}
 }
 
 func TestOnboardingThinkingCapabilityLossDoesNotResurrectLatentValues(t *testing.T) {

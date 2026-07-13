@@ -219,17 +219,26 @@ func noneChoiceID(choices []onboardingImportChoice) (string, bool) {
 
 func optionIDForSelection(choices []onboardingImportChoice, selection onboardingImportSelection) (string, bool) {
 	for _, choice := range choices {
-		if choice.Mode != selection.Mode {
-			continue
-		}
-		if choice.Mode == onboardingImportModeNone {
-			return choice.OptionID, true
-		}
-		if importChoiceRefsEqual(choice.Ref, selection.ChoiceRef) {
+		candidate := onboardingImportSelection{Mode: choice.Mode, ChoiceRef: choice.Ref}
+		if importSelectionsEqual(candidate, selection) {
 			return choice.OptionID, true
 		}
 	}
 	return "", false
+}
+
+func importSelectionsEqual(left, right onboardingImportSelection) bool {
+	if left.Mode != right.Mode {
+		return false
+	}
+	switch left.Mode {
+	case onboardingImportModeNone:
+		return true
+	case onboardingImportModeSymlinkSource:
+		return importChoiceRefsEqual(left.ChoiceRef, right.ChoiceRef)
+	default:
+		return false
+	}
 }
 
 func importChoiceRefsEqual(left, right serverapi.ImportChoiceRef) bool {

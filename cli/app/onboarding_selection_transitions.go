@@ -102,8 +102,12 @@ func (state *onboardingFlowState) chooseCompaction(choiceID string) error {
 
 func (state *onboardingFlowState) chooseSkillImport(choiceID string) error {
 	return state.updateSelections("apply_choice", onboardingStepSkillsImport, func(selections *onboardingSelections) error {
+		previous := selections.skillImport
 		if err := applyImportChoice(&selections.skillImport, choiceID, state.imports.skillChoices); err != nil {
 			return err
+		}
+		if importSelectionsEqual(previous, selections.skillImport) {
+			return nil
 		}
 		state.recomputeSkillEnablement(selections)
 		return nil
