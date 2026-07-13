@@ -894,9 +894,6 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 		if err == nil {
 			return resp, nil
 		}
-		if !providerFailureRetriesAllowed(req) {
-			return llm.Response{}, err
-		}
 		if !llm.HasHTTPStatus(err, 400) {
 			return llm.Response{}, err
 		}

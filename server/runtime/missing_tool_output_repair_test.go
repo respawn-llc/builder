@@ -128,7 +128,7 @@ func TestMissingToolOutputRepairLeavesUnrelated400Unrepaired(t *testing.T) {
 	}
 }
 
-func TestRequiredToolChoiceDoesNotRepairAndRetryProvider400(t *testing.T) {
+func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T) {
 	store := mustCreateTestSession(t)
 	appendRepairEvent(t, store, "message", llm.Message{
 		Role:      llm.RoleAssistant,
@@ -137,7 +137,10 @@ func TestRequiredToolChoiceDoesNotRepairAndRetryProvider400(t *testing.T) {
 	client := &fakeClient{
 		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}},
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "unexpected retry"},
+			Assistant: llm.Message{
+				Role:      llm.RoleAssistant,
+				ToolCalls: []llm.ToolCall{{ID: "complete", Name: "complete_node", Input: json.RawMessage(`{"commentary":"repaired"}`)}},
+			},
 		}},
 	}
 	eng := mustNewWorkflowTestEngine(
@@ -148,14 +151,19 @@ func TestRequiredToolChoiceDoesNotRepairAndRetryProvider400(t *testing.T) {
 		Config{},
 	)
 
-	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); err == nil {
-		t.Fatal("expected required-choice provider failure to surface")
+	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); err != nil {
+		t.Fatalf("submit user message: %v", err)
 	}
-	if len(client.calls) != 1 {
-		t.Fatalf("model calls = %d, want 1", len(client.calls))
+	if len(client.calls) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(client.calls))
 	}
-	if repairItemsContainOutput(eng.transcriptRuntimeState().SnapshotItems(), "missing") {
-		t.Fatalf("required-choice failure unexpectedly appended a synthetic output: %+v", eng.transcriptRuntimeState().SnapshotItems())
+	for i, call := range client.calls {
+		if call.ToolChoiceMode != llm.ToolChoiceModeRequired {
+			t.Fatalf("call %d tool choice = %q, want required", i, call.ToolChoiceMode)
+		}
+	}
+	if !repairItemsContainOutput(client.calls[1].Items, "missing") {
+		t.Fatalf("repaired request is missing the synthetic output: %+v", client.calls[1].Items)
 	}
 }
 
