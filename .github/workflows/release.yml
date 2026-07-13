@@ -362,8 +362,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Both platforms' staged bundles merge into one dist dir so assemble sees all
-      # updater .sig files and emits a single latest.json covering both platforms.
+      # All platforms' staged bundles merge into one dist dir so assembly sees every
+      # updater signature and emits one cross-platform manifest.
       - name: Download macOS desktop artifacts
         uses: actions/download-artifact@v8.0.1
         with:
@@ -376,7 +376,14 @@ jobs:
           name: desktop-assets-linux-${{ needs.prepare_release.outputs.tag }}
           path: dist/desktop
 
+      - name: Download Windows desktop artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: desktop-assets-windows-${{ needs.prepare_release.outputs.tag }}
+          path: dist/desktop
+
       - name: Assemble updater manifest + checksums
+        id: assemble_desktop
         env:
           KENT_VERSION: ${{ needs.prepare_release.outputs.version }}
           TAG: ${{ needs.prepare_release.outputs.tag }}

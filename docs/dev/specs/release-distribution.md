@@ -39,24 +39,29 @@
 
 ## Desktop Bundle Artifacts
 
-- The desktop app ships arm64 macOS + x86_64 Linux only. Per-release assets, built
-  by `scripts/desktop-release.sh build` and published by the `release.yml`
+- The desktop app ships arm64 macOS, x86_64 Linux, and x86_64 Windows bundles.
+  Windows desktop supports Windows 11. Per-release assets, built by
+  `scripts/desktop-release.sh build` and published by the `release.yml`
   `build_desktop` → `publish_desktop` jobs:
   - `Kent_<ver>_aarch64.dmg` (macOS installer),
   - `Kent_<ver>_aarch64.app.tar.gz` (+`.sig`) — macOS updater artifact (Tauri emits
     it as `Kent.app.tar.gz`; the build step renames it to this versioned asset),
   - `Kent_<ver>_amd64.AppImage` (+`.sig`) — Linux updater artifact,
-  - `Kent_<ver>_amd64.deb` (Linux, apt/manual updates).
+  - `Kent_<ver>_amd64.deb` (Linux, apt/manual updates),
+  - `Kent_<ver>_x64-setup.exe` (+`.sig`) — Windows NSIS installer and updater
+    artifact.
 - `latest.json` is the Tauri updater manifest (`scripts/desktop-release.sh assemble`
-  builds it from the `.sig` files), with `darwin-aarch64` and `linux-x86_64` entries
-  pointing at the `.app.tar.gz` / `.AppImage` updater artifacts. It is the
-  `plugins.updater` endpoint target.
+  builds it from the `.sig` files), with `darwin-aarch64`, `linux-x86_64`, and
+  `windows-x86_64` entries pointing at the `.app.tar.gz`, `.AppImage`, and NSIS
+  updater artifacts. It is the `plugins.updater` endpoint target.
 - `desktop-checksums.txt` carries sha256s for the distributable bundles.
 - macOS bundles are Developer ID signed in CI (`APPLE_CERTIFICATE`); notarization is
   off for v1 (Apple-side blocked), so v1 ships signed + un-notarized. The macOS
   build runner is pinned `macos-26` for the liquid-glass icon toolchain. Minimum
   deployment target is macOS 15 (Sequoia); Liquid Glass UI falls back to
   `NSVisualEffectView` on pre-26 macOS.
+- Windows installers are not Authenticode-signed. Their Tauri updater signatures
+  remain mandatory for self-update verification.
 
 ## Desktop App Updates
 
@@ -71,18 +76,19 @@ The update channel is a property of how the app was installed, not a user settin
 Each install has exactly **one** update channel; the channels are mutually
 exclusive so brew and the in-app updater never fight over the same bundle.
 
-- **Direct download** (`.dmg` / AppImage from the GH release): the Tauri
-  self-updater is the channel. The app checks on startup and surfaces the update
-  chip in the chrome.
+- **Direct download** (`.dmg` / AppImage / Windows NSIS installer from the GH
+  release): the Tauri self-updater is the channel. The app checks on startup and
+  surfaces the update chip in the chrome. Windows desktop is distributed only
+  through this channel, not Homebrew.
 - **Linux `.deb` / plain binary**: the system package manager (apt/manual) is the
   channel. The Tauri Linux updater only services AppImage bundles, so the in-app
   self-updater is gated **off** for these installs. The desktop detects this at
   runtime via the `APPIMAGE` env var (`self_update_supported` Tauri command): on
   Linux, self-update is enabled only when running from an AppImage.
-- **Homebrew** (`kent-desktop` cask alongside the `kent` formula): **brew** is the
-  channel. `brew upgrade` moves the `kent` server formula and the `kent-desktop`
-  cask together, keeping client and server in lockstep. The in-app self-updater is
-  **disabled** on brew installs.
+- **Homebrew (macOS only)** (`kent-desktop` cask alongside the `kent` formula):
+  **brew** is the channel. `brew upgrade` moves the `kent` server formula and the
+  `kent-desktop` cask together, keeping client and server in lockstep. The in-app
+  self-updater is **disabled** on brew installs.
 
 ### Gate mechanism
 
