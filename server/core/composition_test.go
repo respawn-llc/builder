@@ -616,10 +616,12 @@ func (c *firstGenerateObserverClient) observe(request llm.Request) error {
 		if item.MessageType != llm.MessageTypeWorktreeMode {
 			continue
 		}
-		worktreeRoot = strings.TrimSpace(item.SourcePath)
+		if item.WorktreeContext != nil {
+			worktreeRoot = strings.TrimSpace(item.WorktreeContext.EffectiveCwd)
+		}
 	}
 	if worktreeRoot == "" {
-		return errors.New("first request has no worktree mode source path")
+		return errors.New("first request has no typed worktree effective cwd")
 	}
 	if _, err := os.Stat(c.setup.MarkerPath(worktreeRoot)); err != nil {
 		return fmt.Errorf("setup marker before first request: %w", err)

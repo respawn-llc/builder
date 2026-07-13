@@ -195,11 +195,13 @@ func TestSyncExecutionTargetPersistsReminderWithoutActiveRuntime(t *testing.T) {
 		WorkspaceRoot:    " /tmp/workspace ",
 		EffectiveWorkdir: " /tmp/workspace ",
 	}, &session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeExit,
-		Branch:        " feature/worktree ",
-		WorktreePath:  " /tmp/worktree-a ",
-		WorkspaceRoot: " /tmp/workspace ",
-		EffectiveCwd:  " /tmp/workspace ",
+		Mode: session.WorktreeReminderModeExit,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch(" feature/worktree "),
+			WorktreePath:  " /tmp/worktree-a ",
+			WorkspaceRoot: " /tmp/workspace ",
+			EffectiveCwd:  " /tmp/workspace ",
+		},
 	})
 	if err != nil {
 		t.Fatalf("SyncExecutionTarget: %v", err)
@@ -216,14 +218,17 @@ func TestSyncExecutionTargetPersistsReminderWithoutActiveRuntime(t *testing.T) {
 	if state.Mode != session.WorktreeReminderModeExit {
 		t.Fatalf("mode = %q, want exit", state.Mode)
 	}
-	if state.Branch != "feature/worktree" {
-		t.Fatalf("branch = %q, want feature/worktree", state.Branch)
+	if state.Branch == nil || *state.Branch != "feature/worktree" {
+		t.Fatalf("branch = %v, want feature/worktree", state.Branch)
 	}
 	if state.WorktreePath != "/tmp/worktree-a" {
 		t.Fatalf("worktree path = %q, want /tmp/worktree-a", state.WorktreePath)
 	}
 	if state.EffectiveCwd != "/tmp/workspace" {
 		t.Fatalf("effective cwd = %q, want /tmp/workspace", state.EffectiveCwd)
+	}
+	if state.ContextID == nil {
+		t.Fatal("worktree context id was not assigned")
 	}
 }
 

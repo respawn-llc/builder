@@ -59,6 +59,17 @@ func TestRequestEntryPointsUseUnifiedMetaContextPreparation(t *testing.T) {
 	}
 }
 
+func TestRuntimeMetaContextRenderersStayInsideBuilder(t *testing.T) {
+	bannedCalls := map[string]bool{
+		"headlessModeMetaMessage":     true,
+		"headlessModeExitMetaMessage": true,
+		"workflowModeMetaMessage":     true,
+		"worktreeModeMetaMessage":     true,
+		"worktreeModeExitMetaMessage": true,
+	}
+	assertNoBannedRuntimeCalls(t, map[string]bool{"meta_context.go": true}, bannedCalls)
+}
+
 func TestProductionRuntimeOutputMutationsUseSteeringBoundary(t *testing.T) {
 	allowedFiles := map[string]bool{
 		"chat_store.go":             true,

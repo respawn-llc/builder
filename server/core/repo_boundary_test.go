@@ -163,6 +163,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"TranscriptNoticeReason":                   {},
 		"TranscriptNoticeRow":                      {},
 		"TranscriptNoticeSeverity":                 {},
+		"TranscriptWorktreeContext":                {},
 		"TranscriptPendingSessionPrompt":           {},
 		"TranscriptPendingSessionPromptData":       {},
 		"TranscriptPromptKind":                     {},

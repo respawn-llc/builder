@@ -580,18 +580,24 @@ func TestSyncExecutionTargetPersistsReminderBeforeQueuedUserAutoDrain(t *testing
 		WorkspaceRoot:    fixture.config.WorkspaceRoot,
 		EffectiveWorkdir: targetWorkdir,
 	}, &session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		Branch:        "feature/queued-switch",
-		WorktreePath:  targetWorkdir,
-		WorkspaceRoot: fixture.config.WorkspaceRoot,
-		EffectiveCwd:  targetWorkdir,
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/queued-switch"),
+			WorktreePath:  targetWorkdir,
+			WorkspaceRoot: fixture.config.WorkspaceRoot,
+			EffectiveCwd:  targetWorkdir,
+		},
 	})
 	if err != nil {
 		t.Fatalf("SyncExecutionTarget: %v", err)
 	}
 	req := client.firstCall(t)
 	for _, item := range req.Items {
-		if item.Type == llm.ResponseItemTypeMessage && item.Role == llm.RoleDeveloper && item.MessageType == llm.MessageTypeWorktreeMode && item.SourcePath == targetWorkdir {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.Role == llm.RoleDeveloper &&
+			item.MessageType == llm.MessageTypeWorktreeMode &&
+			item.WorktreeContext != nil &&
+			item.WorktreeContext.EffectiveCwd == targetWorkdir {
 			return
 		}
 	}
@@ -653,11 +659,13 @@ func TestSyncExecutionTargetRollsBackRebindWhenReminderPersistenceFails(t *testi
 		WorkspaceRoot:    workspaceRoot,
 		EffectiveWorkdir: targetWorkdir,
 	}, &session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		Branch:        "feature/persist-fails",
-		WorktreePath:  targetWorkdir,
-		WorkspaceRoot: workspaceRoot,
-		EffectiveCwd:  targetWorkdir,
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/persist-fails"),
+			WorktreePath:  targetWorkdir,
+			WorkspaceRoot: workspaceRoot,
+			EffectiveCwd:  targetWorkdir,
+		},
 	})
 	if err == nil {
 		t.Fatal("expected SyncExecutionTarget to fail when reminder persistence fails")
@@ -719,11 +727,13 @@ func TestSyncExecutionTargetFailsQueuedUserWorkWhenRollbackRebindFails(t *testin
 		WorkspaceRoot:    workspaceRoot,
 		EffectiveWorkdir: targetWorkdir,
 	}, &session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		Branch:        "feature/rollback-rebind-fails",
-		WorktreePath:  targetWorkdir,
-		WorkspaceRoot: workspaceRoot,
-		EffectiveCwd:  targetWorkdir,
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/rollback-rebind-fails"),
+			WorktreePath:  targetWorkdir,
+			WorkspaceRoot: workspaceRoot,
+			EffectiveCwd:  targetWorkdir,
+		},
 	})
 	if err == nil {
 		t.Fatal("expected SyncExecutionTarget to fail when rollback rebind fails")

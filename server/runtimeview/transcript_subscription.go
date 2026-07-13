@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"core/server/llm"
 	"core/server/runtime"
+	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/transcript"
 	"core/shared/valuecopy"
@@ -297,6 +299,7 @@ func transcriptNoticeFromFact(fact *runtime.TranscriptNoticeRowFact) *clientui.T
 			NoticeID:           fact.NoticeID,
 			MessageType:        clientui.MessageType(strings.TrimSpace(string(fact.MessageType))),
 			SourcePath:         strings.TrimSpace(fact.SourcePath),
+			WorktreeContext:    transcriptWorktreeContext(fact.MessageType, fact.WorktreeContext),
 			CondensedText:      strings.TrimSpace(fact.CondensedText),
 			CompactLabel:       strings.TrimSpace(fact.CompactLabel),
 			BackgroundExitCode: valuecopy.Pointer(fact.BackgroundExitCode),
@@ -325,4 +328,32 @@ func transcriptNoticeFromFact(fact *runtime.TranscriptNoticeRowFact) *clientui.T
 		notice.Severity = clientui.TranscriptNoticeInfo
 	}
 	return notice
+}
+
+func transcriptWorktreeContext(messageType llm.MessageType, context *session.WorktreeContext) *clientui.TranscriptWorktreeContext {
+	if context == nil {
+		return nil
+	}
+	mode := session.WorktreeReminderMode("")
+	switch messageType {
+	case llm.MessageTypeWorktreeMode:
+		mode = session.WorktreeReminderModeEnter
+	case llm.MessageTypeWorktreeModeExit:
+		mode = session.WorktreeReminderModeExit
+	default:
+		panic(fmt.Sprintf("worktree transcript context has non-worktree message type %q", messageType))
+	}
+	state, err := session.NormalizeWorktreeReminderState(session.WorktreeReminderState{
+		Mode:            mode,
+		WorktreeContext: *session.CloneWorktreeContext(context),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("project worktree transcript context: message_type=%q context=%+v: %v", messageType, context, err))
+	}
+	return &clientui.TranscriptWorktreeContext{
+		Branch:        valuecopy.Pointer(state.Branch),
+		WorktreePath:  strings.TrimSpace(state.WorktreePath),
+		WorkspaceRoot: strings.TrimSpace(state.WorkspaceRoot),
+		EffectiveCwd:  strings.TrimSpace(state.EffectiveCwd),
+	}
 }

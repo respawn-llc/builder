@@ -161,13 +161,13 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 	if err := parent.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:                  session.WorktreeReminderModeEnter,
-		Branch:                "feature/worktree",
-		WorktreePath:          canonicalWorktreeRoot,
-		WorkspaceRoot:         cfg.WorkspaceRoot,
-		EffectiveCwd:          worktreeSubdir,
-		HasIssuedInGeneration: true,
-		IssuedCompactionCount: 2,
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/worktree"),
+			WorktreePath:  canonicalWorktreeRoot,
+			WorkspaceRoot: cfg.WorkspaceRoot,
+			EffectiveCwd:  worktreeSubdir,
+		},
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
@@ -195,7 +195,9 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 	if childMeta.WorktreeReminder == nil {
 		t.Fatal("expected child worktree reminder")
 	}
-	if childMeta.WorktreeReminder.Branch != "feature/worktree" || childMeta.WorktreeReminder.WorktreePath != canonicalWorktreeRoot {
+	if childMeta.WorktreeReminder.Branch == nil ||
+		*childMeta.WorktreeReminder.Branch != "feature/worktree" ||
+		childMeta.WorktreeReminder.WorktreePath != canonicalWorktreeRoot {
 		t.Fatalf("child worktree reminder = %+v", childMeta.WorktreeReminder)
 	}
 	messages, err := readStoredMessages(child)

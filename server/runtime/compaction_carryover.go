@@ -45,9 +45,9 @@ func handoffFutureAgentMessage(text string) llm.Message {
 	}
 }
 
-func (c compactionCarryoverCoordinator) postCompactionMessages(mode compactionMode, manualCarryover string, headlessActive bool) []postCompactionMessage {
+func (c compactionCarryoverCoordinator) postCompactionMessages(mode compactionMode, manualCarryover string) []postCompactionMessage {
 	e := c.engine
-	out := make([]postCompactionMessage, 0, 3)
+	out := make([]postCompactionMessage, 0, 2)
 	if mode == compactionModeManual {
 		if carryover := manualCompactionCarryoverMessage(manualCarryover); strings.TrimSpace(carryover.Content) != "" {
 			out = append(out, postCompactionMessage{message: carryover})
@@ -62,16 +62,6 @@ func (c compactionCarryoverCoordinator) postCompactionMessages(mode compactionMo
 					pendingHandoffFutureText: req.futureAgentMessage,
 				})
 			}
-		}
-	}
-	// A headless session retains its enter prompt across compaction so the
-	// post-handoff model still knows it is running headless. This trails the
-	// carryover/handoff messages so the future-agent note is read first.
-	// Interactive is the default and needs no reminder, so nothing is reinjected
-	// when the session is not headless.
-	if headlessActive {
-		if headless, ok := headlessModeMetaMessage(); ok {
-			out = append(out, postCompactionMessage{message: headless})
 		}
 	}
 	return out

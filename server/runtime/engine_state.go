@@ -25,25 +25,6 @@ func (e *Engine) overlayLiveStreaming(snapshot *ChatSnapshot) {
 	snapshot.StreamingError = streamingErr
 }
 
-func (e *Engine) recentTranscriptEntries(limit int) []ChatEntry {
-	if e == nil || e.store == nil || limit <= 0 {
-		return nil
-	}
-	window, err := e.store.ReadRecentEvents(limit)
-	if err != nil {
-		return nil
-	}
-	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{CacheWarningMode: e.cfg.CacheWarningMode})
-	for _, evt := range window.Events {
-		_ = scan.ApplyPersistedEvent(evt)
-	}
-	entries := scan.CollectedPageSnapshot().Entries
-	if len(entries) > limit {
-		entries = entries[len(entries)-limit:]
-	}
-	return entries
-}
-
 func (e *Engine) RecentTailTranscriptWindow(maxEntries int) TranscriptWindowSnapshot {
 	if e == nil {
 		return TranscriptWindowSnapshot{}

@@ -172,10 +172,12 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 		t.Fatalf("session.Create: %v", err)
 	}
 	if err := store.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		WorktreePath:  "/tmp/worktree",
-		WorkspaceRoot: "/tmp/workspace",
-		EffectiveCwd:  "/tmp/worktree/pkg",
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			WorktreePath:  "/tmp/worktree",
+			WorkspaceRoot: "/tmp/workspace",
+			EffectiveCwd:  "/tmp/worktree/pkg",
+		},
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState: %v", err)
 	}
@@ -186,22 +188,20 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 	}
 }
 
-func TestHeadlessRuntimeWorkdirFallsBackToInheritedWorktreePath(t *testing.T) {
+func TestHeadlessRuntimeWorkdirRejectsReminderWithoutEffectiveCWD(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace")
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if err := store.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		WorktreePath:  "/tmp/worktree",
-		WorkspaceRoot: "/tmp/workspace",
-	}); err != nil {
-		t.Fatalf("SetWorktreeReminderState: %v", err)
-	}
-
-	got := headlessRuntimeWorkdir(launch.SessionPlan{Store: store, WorkspaceRoot: "/tmp/workspace"})
-	if got != "/tmp/worktree" {
-		t.Fatalf("headless runtime workdir = %q, want /tmp/worktree", got)
+	err = store.SetWorktreeReminderState(&session.WorktreeReminderState{
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			WorktreePath:  "/tmp/worktree",
+			WorkspaceRoot: "/tmp/workspace",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing effective cwd to be rejected")
 	}
 }
 

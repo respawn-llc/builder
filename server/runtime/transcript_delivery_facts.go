@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -62,6 +63,7 @@ type TranscriptNoticeRowFact struct {
 	NoticeID           *string
 	MessageType        llm.MessageType
 	SourcePath         string
+	WorktreeContext    *session.WorktreeContext
 	CondensedText      string
 	CompactLabel       string
 	BackgroundExitCode *int
@@ -547,6 +549,7 @@ func runtimeNoticeFactFromMessage(msg llm.Message, severity string) TranscriptCo
 		Severity:           normalizeTranscriptNoticeSeverity(severity),
 		MessageType:        msg.MessageType,
 		SourcePath:         strings.TrimSpace(msg.SourcePath),
+		WorktreeContext:    session.CloneWorktreeContext(msg.WorktreeContext),
 		CondensedText:      strings.TrimSpace(msg.CompactContent),
 		CompactLabel:       compactLabelForMessage(msg),
 		BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode),
@@ -573,6 +576,7 @@ func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact
 		NoticeID:           noticeIDPtr,
 		MessageType:        messageType,
 		SourcePath:         strings.TrimSpace(entry.SourcePath),
+		WorktreeContext:    session.CloneWorktreeContext(entry.WorktreeContext),
 		CondensedText:      strings.TrimSpace(entry.CondensedText),
 		CompactLabel:       strings.TrimSpace(entry.CompactLabel),
 		BackgroundExitCode: valuecopy.Pointer(entry.BackgroundExitCode),

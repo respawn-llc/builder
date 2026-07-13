@@ -2,10 +2,10 @@ package runtime
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/shared/transcript"
 	"core/shared/valuecopy"
 )
@@ -155,6 +155,7 @@ func developerContextEntry(msg llm.Message, visibility transcript.EntryVisibilit
 		CondensedText:      strings.TrimSpace(msg.CompactContent),
 		MessageType:        msg.MessageType,
 		SourcePath:         strings.TrimSpace(msg.SourcePath),
+		WorktreeContext:    session.CloneWorktreeContext(msg.WorktreeContext),
 		CompactLabel:       compactLabelForMessage(msg),
 		BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode),
 	}
@@ -181,9 +182,9 @@ func compactLabelForMessage(msg llm.Message) string {
 	case llm.MessageTypeWorkflowMode:
 		return "Workflow mode instructions"
 	case llm.MessageTypeWorktreeMode:
-		return worktreeLabel("Switched to worktree", "Switched worktree", msg.SourcePath)
+		return ""
 	case llm.MessageTypeWorktreeModeExit:
-		return worktreeLabel("Returned from worktree", "Returned from worktree", msg.SourcePath)
+		return ""
 	case llm.MessageTypeCompactionSummary:
 		return "Context compacted"
 	case llm.MessageTypeInterruption:
@@ -204,11 +205,4 @@ func compactLabelForMessage(msg llm.Message) string {
 		}
 		return ""
 	}
-}
-
-func worktreeLabel(prefix, fallback, sourcePath string) string {
-	if name := strings.TrimSpace(filepath.Base(strings.TrimSpace(sourcePath))); name != "" && name != "." && name != string(filepath.Separator) {
-		return prefix + " " + name
-	}
-	return fallback
 }

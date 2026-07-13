@@ -1,12 +1,14 @@
 package runtime
 
 import (
+	"encoding/json"
+	"strings"
+
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/rollbacktarget"
 	"core/shared/toolspec"
-	"encoding/json"
-	"strings"
 )
 
 type transcriptPageSnapshot struct {
@@ -238,13 +240,14 @@ func (w *responseItemMessageWalker) Apply(item llm.ResponseItem) {
 			role = llm.RoleUser
 		}
 		msg := llm.Message{
-			Role:           role,
-			MessageType:    item.MessageType,
-			SourcePath:     item.SourcePath,
-			Phase:          item.Phase,
-			Content:        item.Content,
-			CompactContent: item.CompactContent,
-			Name:           item.Name,
+			Role:            role,
+			MessageType:     item.MessageType,
+			SourcePath:      item.SourcePath,
+			WorktreeContext: session.CloneWorktreeContext(item.WorktreeContext),
+			Phase:           item.Phase,
+			Content:         item.Content,
+			CompactContent:  item.CompactContent,
+			Name:            item.Name,
 		}
 		if role == llm.RoleAssistant {
 			w.flushAssistant()

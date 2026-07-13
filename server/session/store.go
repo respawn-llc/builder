@@ -128,6 +128,9 @@ func openPersistedSession(sessionDir string, resolvedMeta *Meta, storeOpts store
 	} else if err := s.loadMetaLocked(); err != nil {
 		return nil, err
 	}
+	if err := normalizeMetaWorktreeReminder(&s.meta); err != nil {
+		return nil, fmt.Errorf("validate session worktree context: %w", err)
+	}
 	s.metadataVersion = 1
 	s.persistedMetaVersion = 1
 	if err := s.bootstrapEventLogStateLocked(); err != nil {
@@ -533,19 +536,44 @@ func (s *Store) SetCompactionSoonReminderIssued(issued bool) error {
 }
 
 func (s *Store) SetWorktreeReminderState(state *WorktreeReminderState) error {
-	nextState := cloneWorktreeReminderState(state)
+	var nextState *WorktreeReminderState
+	if state != nil {
+		normalized, err := NormalizeWorktreeReminderState(*state)
+		if err != nil {
+			return err
+		}
+		nextState = &normalized
+	}
 	s.mu.Lock()
+	if s.meta.WorktreeReminder != nil && nextState != nil && WorktreeReminderTargetEqual(*s.meta.WorktreeReminder, *nextState) {
+		nextState.ContextID = cloneUUID(s.meta.WorktreeReminder.ContextID)
+	} else if nextState != nil && nextState.ContextID == nil {
+		contextID := uuid.New()
+		nextState.ContextID = &contextID
+	}
 	statesEqual := s.meta.WorktreeReminder == nil && nextState == nil
 	if s.meta.WorktreeReminder != nil && nextState != nil {
-		statesEqual = *s.meta.WorktreeReminder == *nextState
+		statesEqual = WorktreeReminderStateEqual(*s.meta.WorktreeReminder, *nextState)
 	}
 	if statesEqual && (!s.persisted || s.hasDurableMetadataLocked()) {
 		s.mu.Unlock()
 		return nil
 	}
-	s.meta.WorktreeReminder = nextState
+	s.meta.WorktreeReminder = CloneWorktreeReminderState(nextState)
 	s.meta.UpdatedAt = time.Now().UTC()
 	return s.unlockAndObservePersistence(s.persistMetaLocked())
+}
+
+func normalizeMetaWorktreeReminder(meta *Meta) error {
+	if meta == nil || meta.WorktreeReminder == nil {
+		return nil
+	}
+	normalized, err := NormalizeWorktreeReminderState(*meta.WorktreeReminder)
+	if err != nil {
+		return err
+	}
+	meta.WorktreeReminder = &normalized
+	return nil
 }
 
 func (s *Store) SetGoal(objective string, actor GoalActor) (GoalState, error) {
