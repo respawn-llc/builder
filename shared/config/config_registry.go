@@ -9,6 +9,7 @@ import (
 
 	"core/shared/theme"
 	"core/shared/toolspec"
+	"core/shared/valuecopy"
 )
 
 type settingsState struct {
@@ -867,7 +868,7 @@ func (s optionalStringSetting) applyFile(raw settingsFile, _ string, state *sett
 	if trimmed == "" {
 		return fmt.Errorf("%s cannot be empty; remove the setting to leave it unset", s.key)
 	}
-	s.apply(state, stringPointer(trimmed))
+	s.apply(state, valuecopy.Pointer(&trimmed))
 	sources[s.key] = "file"
 	return nil
 }
@@ -884,7 +885,7 @@ func (s optionalStringSetting) applyEnv(lookup envLookup, state *settingsState, 
 	if trimmed == "" {
 		return fmt.Errorf("%s cannot be empty; unset the environment variable to leave it unset", s.envName)
 	}
-	s.apply(state, stringPointer(trimmed))
+	s.apply(state, valuecopy.Pointer(&trimmed))
 	sources[s.key] = "env"
 	return nil
 }
@@ -902,11 +903,6 @@ func (s optionalStringSetting) appendDefaultLines(lines *[]defaultConfigLine, st
 		Path:  strings.Split(s.key, "."),
 		Value: *value,
 	})
-}
-
-func stringPointer(value string) *string {
-	copy := value
-	return &copy
 }
 
 func newBoolSetting(
