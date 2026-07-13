@@ -309,9 +309,6 @@ func (m *onboardingModel) submitCurrentScreen() (tea.Model, tea.Cmd) {
 func (m *onboardingModel) finalizeCmd(writeDefaults bool) tea.Cmd {
 	state := m.state
 	return func() tea.Msg {
-		if err := state.validateInvariant("finalize_projection", "review"); err != nil {
-			return onboardingFinalizeDoneMsg{err: err}
-		}
 		request, err := onboardingFinalizeRequest(state, writeDefaults)
 		if err != nil {
 			return onboardingFinalizeDoneMsg{err: err}

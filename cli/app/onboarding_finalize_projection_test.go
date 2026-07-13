@@ -622,12 +622,7 @@ func newOnboardingFinalizeProjectionState(t *testing.T, configure func(*config.A
 	if configure != nil {
 		configure(&cfg)
 	}
-	if cfg.Source.Sources["reviewer.model"] == "default" {
-		cfg.Settings.Reviewer.Model = cfg.Settings.Model
-	}
-	if cfg.Source.Sources["reviewer.thinking_level"] == "default" {
-		cfg.Settings.Reviewer.ThinkingLevel = cfg.Settings.ThinkingLevel
-	}
+	normalizeOnboardingReviewerSeedInheritance(&cfg)
 	state, err := newOnboardingFlowState(cfg, facts)
 	if err != nil {
 		t.Fatalf("construct onboarding state: %v", err)

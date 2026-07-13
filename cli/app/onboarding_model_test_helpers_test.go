@@ -17,12 +17,7 @@ func testOnboardingFlowState(t *testing.T, mutate func(*config.App), suppliedFac
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	if cfg.Source.Sources["reviewer.model"] == "default" {
-		cfg.Settings.Reviewer.Model = cfg.Settings.Model
-	}
-	if cfg.Source.Sources["reviewer.thinking_level"] == "default" {
-		cfg.Settings.Reviewer.ThinkingLevel = cfg.Settings.ThinkingLevel
-	}
+	normalizeOnboardingReviewerSeedInheritance(&cfg)
 	facts := testOnboardingCapabilityFacts()
 	if len(suppliedFacts) > 0 {
 		facts = suppliedFacts[0]
@@ -38,4 +33,13 @@ func testOnboardingFlowStatePtr(t *testing.T, mutate func(*config.App), supplied
 	t.Helper()
 	state := testOnboardingFlowState(t, mutate, suppliedFacts...)
 	return &state
+}
+
+func normalizeOnboardingReviewerSeedInheritance(cfg *config.App) {
+	if cfg.Source.Sources["reviewer.model"] == "default" {
+		cfg.Settings.Reviewer.Model = cfg.Settings.Model
+	}
+	if cfg.Source.Sources["reviewer.thinking_level"] == "default" {
+		cfg.Settings.Reviewer.ThinkingLevel = cfg.Settings.ThinkingLevel
+	}
 }
