@@ -32,6 +32,9 @@ func renderToolRow(
 	meta.syntax = syntax
 	meta.IsError = row.IsError || shellExitFailed(meta)
 	role := toolRole(meta)
+	if lines, ok := renderAnsweredQuestion(row, meta, width, mode); ok {
+		return lines
+	}
 	display := toolDisplayText(row, meta, mode)
 	if role == StyleRoleToolShell && meta.MovedToBackground && !meta.IsError {
 		return []Line{RenderBackgroundedShell(display.Text, width)}
@@ -65,6 +68,24 @@ func renderToolRow(
 		)
 	}
 	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode, meta)
+}
+
+func renderAnsweredQuestion(row clientui.TranscriptToolRow, meta toolMeta, width int, mode Mode) ([]Line, bool) {
+	if meta.Presentation != transcript.ToolPresentationAskQuestion ||
+		meta.IsError ||
+		(mode != ModeOngoing && mode != ModeOngoingCollapsed) {
+		return nil, false
+	}
+	answer := strings.TrimSpace(safeTranscriptText(row.CondensedText))
+	if answer == "" {
+		return nil, false
+	}
+
+	question := strings.TrimSpace(safeTranscriptText(firstNonEmpty(meta.Question, meta.Command, meta.CompactText, "ask question")))
+	bodyWidth := contentWidth(StyleRoleToolQuestion, width)
+	lines := RenderMarkdownLines(StyleRoleUser, question, bodyWidth)
+	lines = append(lines, textLines(StyleRoleUser, wrapLines(answer, bodyWidth), meta, mode)...)
+	return attachPrefixWithTree(StyleRoleToolQuestion, lines, width, mode, meta), true
 }
 
 func RenderPendingTool(tool clientui.TranscriptToolStart, width int, themeName string, spinner string) Line {

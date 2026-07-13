@@ -1,6 +1,7 @@
 package transcriptrender
 
 import (
+	"fmt"
 	"strings"
 
 	"core/shared/clientui"
@@ -166,6 +167,48 @@ func attachPrefixWithMeta(role StyleRole, lines []Line, width int, forceEllipsis
 }
 
 func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, firstLineMeta string, mode Mode, meta toolMeta) []Line {
+	return attachPrefixWithFirstLineMetaAndContinuation(
+		role,
+		lines,
+		width,
+		forceEllipsis,
+		firstLineMeta,
+		mode,
+		meta,
+		continuationForMode,
+	)
+}
+
+type continuationLayout uint8
+
+const (
+	continuationForMode continuationLayout = iota
+	continuationTree
+)
+
+func attachPrefixWithTree(role StyleRole, lines []Line, width int, mode Mode, meta toolMeta) []Line {
+	return attachPrefixWithFirstLineMetaAndContinuation(
+		role,
+		lines,
+		width,
+		false,
+		"",
+		mode,
+		meta,
+		continuationTree,
+	)
+}
+
+func attachPrefixWithFirstLineMetaAndContinuation(
+	role StyleRole,
+	lines []Line,
+	width int,
+	forceEllipsis bool,
+	firstLineMeta string,
+	mode Mode,
+	meta toolMeta,
+	continuation continuationLayout,
+) []Line {
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{SemanticSpan("", role)}}}
 	}
@@ -204,7 +247,7 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 			spans = append([]Span{contentRoleSpan(" ", role, mode)}, spans...)
 			line = Line{LeadingSymbol: &symbol, Spans: spans, Background: line.Background}
 		} else {
-			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
+			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex, continuation), spans...)
 			line = Line{Spans: spans, Background: line.Background}
 		}
 		if forceEllipsis || (mode != ModeOngoingStable && lipgloss.Width(line.Plain()) > max(1, width)) {
@@ -228,9 +271,15 @@ func ongoingInlineMetaSpans(command []Span, inlineMeta string, bodyWidth int) []
 	return append(command, suffix...)
 }
 
-func continuationPrefix(mode Mode, prefixWidth int, isLast bool) []Span {
-	if modeUsesOngoingContinuationPrefix(mode) {
-		return []Span{SemanticSpan(strings.Repeat(" ", max(0, prefixWidth)), StyleRoleNotice, SpanAttributeFaint)}
+func continuationPrefix(mode Mode, prefixWidth int, isLast bool, layout continuationLayout) []Span {
+	switch layout {
+	case continuationForMode:
+		if modeUsesOngoingContinuationPrefix(mode) {
+			return []Span{SemanticSpan(strings.Repeat(" ", max(0, prefixWidth)), StyleRoleNotice, SpanAttributeFaint)}
+		}
+	case continuationTree:
+	default:
+		panic(fmt.Sprintf("render transcript continuation with invalid layout %d", layout))
 	}
 	// Detail continuations form a real tree: middle lines use the vertical "│"
 	// guide, the last continuation line of the entry closes the tree with "└".

@@ -418,8 +418,9 @@ func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow
 
 // ongoingRenderMode selects the renderer mode for a committed row in the
 // ongoing surface. O rows render their full ongoing preview; OC rows render
-// the collapsed/short (single-line) ongoing form per tui-transcript.md
-// visibility rules. D and X rows never reach this path.
+// the collapsed/short ongoing form per tui-transcript.md visibility rules.
+// Answered questions are the typed multi-line exception. D and X rows never
+// reach this path.
 func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
 	switch row.Visibility {
 	case clientui.EntryVisibilityOngoingCollapsed:
