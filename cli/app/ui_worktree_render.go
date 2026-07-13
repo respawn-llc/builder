@@ -48,7 +48,7 @@ func (l uiViewLayout) renderWorktreeList(width, height int, style uiStyles) []st
 	content := make([]string, 0, remainingHeight)
 	if remainingHeight > 0 {
 		switch {
-		case m.worktrees.loading:
+		case m.worktrees.isLoading():
 			content = append(content, style.meta.Render(pendingToolSpinnerFrame(m.spinnerFrame)+" Loading worktrees..."))
 		case strings.TrimSpace(m.worktrees.errorText) != "":
 			content = append(content, renderWorktreeErrorLines(m.worktrees.errorText, width, lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Error.Adaptive()).Bold(true), worktreeOverlayMaxErrorLines)...)

@@ -11,23 +11,26 @@ import (
 )
 
 type testWorktreeClient struct {
-	listResp        serverapi.WorktreeListResponse
-	listErr         error
-	listCtx         context.Context
-	listRequests    []serverapi.WorktreeListRequest
-	resolveCtx      context.Context
-	resolveResp     serverapi.WorktreeCreateTargetResolveResponse
-	resolveRequests []serverapi.WorktreeCreateTargetResolveRequest
-	createCtx       context.Context
-	createResp      serverapi.WorktreeCreateResponse
-	createRequests  []serverapi.WorktreeCreateRequest
-	enterCtx        context.Context
-	enterResp       serverapi.WorktreeScheduledAcknowledgement
-	enterRequests   []serverapi.WorktreeEnterRequest
-	deleteCtx       context.Context
-	deleteResp      serverapi.WorktreeDeleteResult
-	deleteRequests  []serverapi.WorktreeDeleteRequest
-	errs            []error
+	listResp         serverapi.WorktreeListResponse
+	listErr          error
+	listCtx          context.Context
+	listRequests     []serverapi.WorktreeListRequest
+	selectorCtx      context.Context
+	selectorResp     serverapi.WorktreeSelectorPreviewResponse
+	selectorRequests []serverapi.WorktreeSelectorPreviewRequest
+	resolveCtx       context.Context
+	resolveResp      serverapi.WorktreeCreateTargetResolveResponse
+	resolveRequests  []serverapi.WorktreeCreateTargetResolveRequest
+	createCtx        context.Context
+	createResp       serverapi.WorktreeCreateResponse
+	createRequests   []serverapi.WorktreeCreateRequest
+	enterCtx         context.Context
+	enterResp        serverapi.WorktreeScheduledAcknowledgement
+	enterRequests    []serverapi.WorktreeEnterRequest
+	deleteCtx        context.Context
+	deleteResp       serverapi.WorktreeDeleteResult
+	deleteRequests   []serverapi.WorktreeDeleteRequest
+	errs             []error
 }
 
 func (c *testWorktreeClient) GetWorktreeStatus(context.Context, serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
@@ -40,8 +43,10 @@ func (c *testWorktreeClient) ListWorktrees(ctx context.Context, req serverapi.Wo
 	return c.listResp, c.listErr
 }
 
-func (c *testWorktreeClient) ResolveWorktreeSelector(context.Context, serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
-	return serverapi.WorktreeSelectorPreviewResponse{}, c.nextErr()
+func (c *testWorktreeClient) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	c.selectorCtx = ctx
+	c.selectorRequests = append(c.selectorRequests, req)
+	return c.selectorResp, c.nextErr()
 }
 
 func (c *testWorktreeClient) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
@@ -225,6 +230,24 @@ func TestResolveCreateTargetUsesBoundedContext(t *testing.T) {
 	}
 	if got := client.resolveRequests[0]; got.SessionID != "session-1" || got.Target != "main" {
 		t.Fatalf("resolve request = %+v", got)
+	}
+}
+
+func TestResolveSelectorUsesBoundedSessionScopedRequest(t *testing.T) {
+	client := &testWorktreeClient{}
+	service := newTestService(client)
+
+	if _, err := service.ResolveSelector(" /wt/feature "); err != nil {
+		t.Fatalf("ResolveSelector: %v", err)
+	}
+	if client.selectorCtx == nil {
+		t.Fatal("expected selector context recorded")
+	}
+	if _, ok := client.selectorCtx.Deadline(); !ok {
+		t.Fatal("expected bounded selector context")
+	}
+	if got := client.selectorRequests[0]; got.SessionID != "session-1" || got.Selector != "/wt/feature" {
+		t.Fatalf("selector request = %+v, want trimmed session-scoped selector", got)
 	}
 }
 

@@ -58,6 +58,18 @@ func (s Service) ResolveCreateTarget(target string) (serverapi.WorktreeCreateTar
 	})
 }
 
+func (s Service) ResolveSelector(selector string) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	if s.Client == nil {
+		return serverapi.WorktreeSelectorPreviewResponse{}, ErrClientUnavailable
+	}
+	ctx, cancel := s.resolveContext()
+	defer cancel()
+	return s.Client.ResolveWorktreeSelector(ctx, serverapi.WorktreeSelectorPreviewRequest{
+		SessionID: strings.TrimSpace(s.SessionID),
+		Selector:  strings.TrimSpace(selector),
+	})
+}
+
 func (s Service) Create(req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
 	clientRequestID := s.clientRequestID()
 	if err := req.SetupOperationID.Validate(); err != nil {

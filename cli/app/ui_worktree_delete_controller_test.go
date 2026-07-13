@@ -18,6 +18,11 @@ func worktreeDeleteControllerTarget(t *testing.T) worktreeui.Item {
 	))
 }
 
+func worktreeDeleteControllerExternalTarget(t *testing.T) worktreeui.Item {
+	t.Helper()
+	return mustProjectWorktreeItem(t, testExternalWorktreeListEntry("/wt/external", "external", false))
+}
+
 func newWorktreeDeleteControllerTestModel(t *testing.T, client *worktreeCommandTestClient) *uiModel {
 	t.Helper()
 	model := newWorktreeControllerTestModel(t, client, uiWorktreeOverlayPhaseDeleteConfirm)
@@ -143,8 +148,8 @@ func TestWorktreeDeleteControllerSubmitSchedulesSpinnerTick(t *testing.T) {
 			if tt.deleteBranch {
 				wantPolicy = serverapi.WorktreeBranchCleanupModeDeleteSafe
 			}
-			if got := client.deleteRequests[0]; got.Selector != "feature" || got.BranchCleanupPolicy != wantPolicy {
-				t.Fatalf("delete request = %+v, want policy=%s for selector feature", got, wantPolicy)
+			if got := client.deleteRequests[0]; got.Selector != "wt-feature" || got.BranchCleanupPolicy != wantPolicy {
+				t.Fatalf("delete request = %+v, want policy=%s for stable worktree ID", got, wantPolicy)
 			}
 		})
 	}
@@ -241,7 +246,7 @@ func TestWorktreeDeleteCompletionPreservesSpinnerForFollowUpListLoading(t *testi
 	if completed.worktrees.deleteConfirm.submitting {
 		t.Fatal("expected delete completion to clear submitting state")
 	}
-	if !completed.worktrees.loading {
+	if !completed.worktrees.isLoading() {
 		t.Fatal("expected delete success in overlay to start follow-up list loading")
 	}
 	if completed.spinnerTickToken == 0 {
@@ -252,33 +257,46 @@ func TestWorktreeDeleteCompletionPreservesSpinnerForFollowUpListLoading(t *testi
 func TestWorktreeDeleteControllerSubmitsDelete(t *testing.T) {
 	withDeterministicSpinnerClock(t)
 
-	client := &worktreeCommandTestClient{listResp: testMainWorktreeListResponse()}
-	model := newWorktreeDeleteControllerTestModel(t, client)
-	model.worktrees.deleteConfirm.selectedAction = uiWorktreeDeleteActionDelete
+	tests := []struct {
+		name         string
+		target       worktreeui.Item
+		wantSelector string
+	}{
+		{name: "registered worktree ID", target: worktreeDeleteControllerTarget(t), wantSelector: "wt-feature"},
+		{name: "external canonical root", target: worktreeDeleteControllerExternalTarget(t), wantSelector: "/wt/external"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &worktreeCommandTestClient{listResp: testMainWorktreeListResponse()}
+			model := newWorktreeDeleteControllerTestModel(t, client)
+			model.worktrees.deleteConfirm.target = tc.target
+			model.worktrees.deleteConfirm.selectedAction = uiWorktreeDeleteActionDelete
 
-	updated, cmd := applyWorktreeDeleteControllerKey(model, tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected delete command")
-	}
-	if !updated.worktrees.deleteConfirm.submitting {
-		t.Fatal("expected delete submitting state")
-	}
-	msgs := collectCmdMessages(t, cmd)
-	if !hasWorktreeDeleteDoneMsg(msgs) {
-		t.Fatalf("expected worktreeDeleteDoneMsg, got %+v", msgs)
-	}
-	if len(client.deleteRequests) != 1 {
-		t.Fatalf("delete requests = %d, want 1", len(client.deleteRequests))
-	}
-	if got := client.deleteRequests[0]; got.Selector != "feature" || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeAutoIfKentCreated || got.ForceFolderRemoval {
-		t.Fatalf("delete request = %+v, want worktree-only delete", got)
-	}
-	deadline, ok := client.deleteCtx.Deadline()
-	if !ok {
-		t.Fatal("expected bounded delete context")
-	}
-	if remaining := time.Until(deadline); remaining <= 20*time.Second {
-		t.Fatalf("delete context remaining = %v, want worktree mutation timeout", remaining)
+			updated, cmd := applyWorktreeDeleteControllerKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatal("expected delete command")
+			}
+			if !updated.worktrees.deleteConfirm.submitting {
+				t.Fatal("expected delete submitting state")
+			}
+			msgs := collectCmdMessages(t, cmd)
+			if !hasWorktreeDeleteDoneMsg(msgs) {
+				t.Fatalf("expected worktreeDeleteDoneMsg, got %+v", msgs)
+			}
+			if len(client.deleteRequests) != 1 {
+				t.Fatalf("delete requests = %d, want 1", len(client.deleteRequests))
+			}
+			if got := client.deleteRequests[0]; got.Selector != tc.wantSelector || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeAutoIfKentCreated || got.ForceFolderRemoval {
+				t.Fatalf("delete request = %+v, want selector %q with worktree-only delete", got, tc.wantSelector)
+			}
+			deadline, ok := client.deleteCtx.Deadline()
+			if !ok {
+				t.Fatal("expected bounded delete context")
+			}
+			if remaining := time.Until(deadline); remaining <= 20*time.Second {
+				t.Fatalf("delete context remaining = %v, want worktree mutation timeout", remaining)
+			}
+		})
 	}
 }
 
@@ -300,7 +318,7 @@ func TestWorktreeDeleteControllerSubmitsDeleteBranch(t *testing.T) {
 	if len(client.deleteRequests) != 1 {
 		t.Fatalf("delete requests = %d, want 1", len(client.deleteRequests))
 	}
-	if got := client.deleteRequests[0]; got.Selector != "feature" || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
+	if got := client.deleteRequests[0]; got.Selector != "wt-feature" || got.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 		t.Fatalf("delete request = %+v, want delete branch", got)
 	}
 }
@@ -324,8 +342,8 @@ func TestWorktreeDeleteControllerUpdateRoutesToDeleteDialog(t *testing.T) {
 	if !hasWorktreeDeleteDoneMsg(msgs) {
 		t.Fatalf("expected worktreeDeleteDoneMsg, got %+v", msgs)
 	}
-	if len(client.deleteRequests) != 1 || client.deleteRequests[0].Selector != "feature" {
-		t.Fatalf("delete requests = %+v, want feature selector delete", client.deleteRequests)
+	if len(client.deleteRequests) != 1 || client.deleteRequests[0].Selector != "wt-feature" {
+		t.Fatalf("delete requests = %+v, want stable worktree ID delete", client.deleteRequests)
 	}
 }
 

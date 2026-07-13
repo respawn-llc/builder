@@ -219,5 +219,7 @@ type uiRollbackFeatureState struct {
 }
 
 type uiWorktreeFeatureState struct {
-	worktrees uiWorktreeOverlayState
+	worktrees                        uiWorktreeOverlayState
+	worktreeListGeneration           uint64
+	deleteTargetResolutionGeneration uint64
 }

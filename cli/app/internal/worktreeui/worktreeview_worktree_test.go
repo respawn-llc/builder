@@ -14,27 +14,16 @@ func TestProjectItemPreservesServerSelectorAndTopologyFacts(t *testing.T) {
 	}
 }
 
-func TestResolveTokenUsesOnlyServerProjectedSelector(t *testing.T) {
-	item := testWorktreeItem(t, "wt-1", "feature", "/wt/feature", "feature", false, false)
-	if _, err := ResolveToken([]Item{item}, "wt-1"); err == nil {
-		t.Fatal("client-local ID lookup succeeded, want server-projected selector only")
-	}
-	resolved, err := ResolveToken([]Item{item}, "feature")
-	if err != nil || WorktreeID(resolved) != "wt-1" {
-		t.Fatalf("ResolveToken = %+v, %v", resolved, err)
-	}
-}
-
-func TestResolveDeletionTargetRejectsCurrentMainWorkspace(t *testing.T) {
+func TestResolveCurrentDeletionTargetRejectsMainWorkspace(t *testing.T) {
 	item := testWorktreeItem(t, "wt-main", "main", "/repo", "main", true, true)
-	_, err := ResolveDeletionTarget([]Item{item}, "")
+	_, err := ResolveCurrentDeletionTarget([]Item{item})
 	if err == nil || !errors.Is(err, ErrMainWorkspaceNotDeletable) {
 		t.Fatalf("expected main workspace rejection, got %v", err)
 	}
 }
 
-func TestResolveDeletionTargetFallsBackToNotFound(t *testing.T) {
-	_, err := ResolveDeletionTarget(nil, "")
+func TestResolveCurrentDeletionTargetFallsBackToNotFound(t *testing.T) {
+	_, err := ResolveCurrentDeletionTarget(nil)
 	if !errors.Is(err, serverapi.ErrWorktreeNotFound) {
 		t.Fatalf("expected worktree not found, got %v", err)
 	}

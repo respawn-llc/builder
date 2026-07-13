@@ -1,5 +1,12 @@
 package worktreeui
 
+import (
+	"errors"
+	"strings"
+)
+
+var errInvalidSelectionIdentity = errors.New("worktree selection identity is invalid")
+
 type SelectionIdentityKind uint8
 
 const (
@@ -13,11 +20,32 @@ type SelectionIdentity struct {
 	Value string
 }
 
-func SelectionIdentityForItem(item Item) SelectionIdentity {
-	if worktreeID := WorktreeID(item); worktreeID != "" {
-		return SelectionIdentity{Kind: SelectionIdentityKindKentWorktree, Value: worktreeID}
+func SelectionIdentityForItem(item Item) (SelectionIdentity, error) {
+	if item.WorktreeID != nil {
+		worktreeID := strings.TrimSpace(*item.WorktreeID)
+		if worktreeID == "" {
+			return SelectionIdentity{}, errInvalidSelectionIdentity
+		}
+		return SelectionIdentity{Kind: SelectionIdentityKindKentWorktree, Value: worktreeID}, nil
 	}
-	return SelectionIdentity{Kind: SelectionIdentityKindGitRoot, Value: item.CanonicalRoot}
+	root := strings.TrimSpace(item.CanonicalRoot)
+	if root == "" {
+		return SelectionIdentity{}, errInvalidSelectionIdentity
+	}
+	return SelectionIdentity{Kind: SelectionIdentityKindGitRoot, Value: root}, nil
+}
+
+func StableMutationSelector(item Item) (string, error) {
+	identity, err := SelectionIdentityForItem(item)
+	if err != nil {
+		return "", err
+	}
+	switch identity.Kind {
+	case SelectionIdentityKindKentWorktree, SelectionIdentityKindGitRoot:
+	default:
+		return "", errInvalidSelectionIdentity
+	}
+	return identity.Value, nil
 }
 
 func RowCount(entries []Item) int {
@@ -49,34 +77,45 @@ func SelectedWorktree(entries []Item, selection int) (Item, bool) {
 	return entries[index], true
 }
 
-func SelectedIdentity(entries []Item, selection int) SelectionIdentity {
+func SelectedIdentity(entries []Item, selection int) (SelectionIdentity, error) {
 	if item, ok := SelectedWorktree(entries, selection); ok {
 		return SelectionIdentityForItem(item)
 	}
-	return SelectionIdentity{Kind: SelectionIdentityKindCreateRow}
+	return SelectionIdentity{Kind: SelectionIdentityKindCreateRow}, nil
 }
 
-func FindByIdentity(entries []Item, identity SelectionIdentity) (Item, int, bool) {
+func FindByIdentity(entries []Item, identity SelectionIdentity) (Item, int, bool, error) {
 	if identity.Kind == SelectionIdentityKindCreateRow {
-		return Item{}, 0, false
+		return Item{}, 0, false, nil
+	}
+	if (identity.Kind != SelectionIdentityKindKentWorktree &&
+		identity.Kind != SelectionIdentityKindGitRoot) ||
+		strings.TrimSpace(identity.Value) == "" {
+		return Item{}, 0, false, errInvalidSelectionIdentity
 	}
 	for idx, item := range entries {
-		if SelectionIdentityForItem(item) == identity {
-			return item, idx, true
+		itemIdentity, err := SelectionIdentityForItem(item)
+		if err != nil {
+			return Item{}, 0, false, err
+		}
+		if itemIdentity == identity {
+			return item, idx, true, nil
 		}
 	}
-	return Item{}, 0, false
+	return Item{}, 0, false, nil
 }
 
-func Restore(entries []Item, currentSelection int, selectedIdentity SelectionIdentity) int {
+func Restore(entries []Item, currentSelection int, selectedIdentity SelectionIdentity) (int, error) {
 	if selectedIdentity.Kind == SelectionIdentityKindCreateRow {
-		return 0
+		return 0, nil
 	}
-	if _, idx, ok := FindByIdentity(entries, selectedIdentity); ok {
-		return idx + 1
+	if _, idx, ok, err := FindByIdentity(entries, selectedIdentity); err != nil {
+		return 0, err
+	} else if ok {
+		return idx + 1, nil
 	}
 	if len(entries) == 0 {
-		return 0
+		return 0, nil
 	}
-	return Clamp(currentSelection, entries)
+	return Clamp(currentSelection, entries), nil
 }

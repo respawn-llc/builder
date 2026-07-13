@@ -39,7 +39,7 @@ func TestWorktreeOverlayScreenReview(t *testing.T) {
 		{
 			name: "loading", width: 48, height: 10,
 			setup: func(model *uiModel) {
-				model.worktrees.loading = true
+				model.worktrees.listPending = true
 				model.worktrees.target = list.Target
 			},
 		},

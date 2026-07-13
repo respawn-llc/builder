@@ -74,6 +74,15 @@ func ProjectItem(entry serverapi.WorktreeListEntry) (Item, error) {
 	return item, nil
 }
 
+func ProjectSelectorPreview(response serverapi.WorktreeSelectorPreviewResponse) (Item, error) {
+	return ProjectItem(serverapi.WorktreeListEntry{
+		Topology: response.Worktree,
+		Projection: serverapi.WorktreeListProjection{
+			Selector: response.Selector,
+		},
+	})
+}
+
 func stringPointer(value string) *string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -137,31 +146,21 @@ func DeleteCanAutoDeleteBranch(item Item) bool {
 	return item.Managed && item.CreatedBranch && item.BranchName != nil
 }
 
-func ResolveDeletionTarget(entries []Item, token string) (Item, error) {
-	trimmedToken := strings.TrimSpace(token)
-	if trimmedToken != "" {
-		return ResolveToken(entries, trimmedToken)
+func ValidateDeletionTarget(item Item) error {
+	if item.IsMain {
+		return ErrMainWorkspaceNotDeletable
 	}
+	return nil
+}
+
+func ResolveCurrentDeletionTarget(entries []Item) (Item, error) {
 	for _, item := range entries {
 		if item.IsCurrent {
-			if item.IsMain {
-				return Item{}, fmt.Errorf("%w; choose another worktree", ErrMainWorkspaceNotDeletable)
+			if err := ValidateDeletionTarget(item); err != nil {
+				return Item{}, fmt.Errorf("%w; choose another worktree", err)
 			}
 			return item, nil
 		}
 	}
 	return Item{}, serverapi.ErrWorktreeNotFound
-}
-
-func ResolveToken(entries []Item, token string) (Item, error) {
-	trimmedToken := strings.TrimSpace(token)
-	if trimmedToken == "" {
-		return Item{}, serverapi.ErrWorktreeNotFound
-	}
-	for _, item := range entries {
-		if item.Entry.Projection.Selector == trimmedToken {
-			return item, nil
-		}
-	}
-	return Item{}, fmt.Errorf("worktree selector %q is not present in the current list", trimmedToken)
 }

@@ -3,9 +3,7 @@ package app
 import (
 	"strings"
 
-	"core/cli/app/internal/worktreeui"
 	"core/shared/clientui"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -82,30 +80,6 @@ func (m *uiModel) worktreeSwitchCommandForTarget(targetToken string) tea.Cmd {
 		ack, err := service.Enter(targetToken)
 		return worktreeSwitchDoneMsg{token: switchToken, target: targetToken, ack: ack, err: err}
 	}
-}
-
-func (m *uiModel) listWorktreesForCurrentSession() (serverapi.WorktreeListResponse, error) {
-	if m == nil {
-		return serverapi.WorktreeListResponse{}, worktreeui.ErrClientUnavailable
-	}
-	m.checkTUIBlockingOperation("worktree service read", "list worktrees")
-	return m.worktreeMutationService().List()
-}
-
-func (m *uiModel) resolveWorktreeToken(token string) (worktreeui.Item, error) {
-	if m == nil {
-		return worktreeui.Item{}, worktreeui.ErrClientUnavailable
-	}
-	m.checkTUIBlockingOperation("worktree service read", "resolve worktree")
-	list, err := m.worktreeMutationService().List()
-	if err != nil {
-		return worktreeui.Item{}, err
-	}
-	items, err := worktreeui.ProjectItems(list.Worktrees)
-	if err != nil {
-		return worktreeui.Item{}, err
-	}
-	return worktreeui.ResolveToken(items, token)
 }
 
 func (m *uiModel) suggestedWorktreeSessionName() string {

@@ -93,8 +93,16 @@ const (
 	uiWorktreeDeleteActionDeleteBranch = worktreeui.DeleteActionDeleteBranch
 )
 
+type uiWorktreeDeleteTargetAuthority uint8
+
+const (
+	uiWorktreeDeleteTargetAuthorityListed uiWorktreeDeleteTargetAuthority = iota
+	uiWorktreeDeleteTargetAuthorityResolvedSelector
+)
+
 type uiWorktreeDeleteDialogState struct {
 	target             worktreeui.Item
+	targetAuthority    uiWorktreeDeleteTargetAuthority
 	selectedAction     uiWorktreeDeleteAction
 	preferDeleteBranch bool
 	errorText          string
@@ -103,23 +111,23 @@ type uiWorktreeDeleteDialogState struct {
 }
 
 type uiWorktreeOverlayState struct {
-	open             bool
-	loading          bool
-	phase            uiWorktreeOverlayPhase
-	selection        int
-	target           clientui.SessionExecutionTarget
-	entries          []worktreeui.Item
-	errorText        string
-	refreshToken     uint64
-	mutationToken    uint64
-	switchToken      uint64
-	switchPending    bool
-	queuedSwitch     uiWorktreeQueuedSwitch
-	selectedIdentity worktreeui.SelectionIdentity
-	intent           uiWorktreeOpenIntent
-	create           uiWorktreeCreateDialogState
-	deleteConfirm    uiWorktreeDeleteDialogState
-	inputCursor      uiInputFieldCursor
+	open                          bool
+	listPending                   bool
+	deleteTargetResolutionPending bool
+	phase                         uiWorktreeOverlayPhase
+	selection                     int
+	target                        clientui.SessionExecutionTarget
+	entries                       []worktreeui.Item
+	errorText                     string
+	mutationToken                 uint64
+	switchToken                   uint64
+	switchPending                 bool
+	queuedSwitch                  uiWorktreeQueuedSwitch
+	selectedIdentity              worktreeui.SelectionIdentity
+	intent                        uiWorktreeOpenIntent
+	create                        uiWorktreeCreateDialogState
+	deleteConfirm                 uiWorktreeDeleteDialogState
+	inputCursor                   uiInputFieldCursor
 }
 
 type uiWorktreeQueuedSwitch struct {
@@ -130,6 +138,13 @@ type worktreeListDoneMsg struct {
 	token uint64
 	resp  serverapi.WorktreeListResponse
 	err   error
+}
+
+type worktreeDeleteTargetResolvedMsg struct {
+	generation         uint64
+	resp               serverapi.WorktreeSelectorPreviewResponse
+	preferDeleteBranch bool
+	err                error
 }
 
 type worktreeCreateDoneMsg struct {
@@ -184,13 +199,19 @@ func (s uiWorktreeOverlayState) visibleErrorText() string {
 	}
 }
 
+func (s uiWorktreeOverlayState) isLoading() bool {
+	return s.listPending || s.deleteTargetResolutionPending
+}
+
 func (m *uiModel) openWorktreeOverlay(intent uiWorktreeOpenIntent) {
 	if m == nil {
 		return
 	}
+	m.invalidateWorktreeListRequest()
+	m.invalidateWorktreeDeleteTargetResolution()
 	m.worktrees.open = true
 	m.worktrees.phase = uiWorktreeOverlayPhaseList
-	m.worktrees.loading = true
+	m.worktrees.listPending = true
 	m.worktrees.errorText = ""
 	m.worktrees.intent = intent
 	m.worktrees.create = uiWorktreeCreateDialogState{}
@@ -211,6 +232,8 @@ func (m *uiModel) closeWorktreeOverlay() {
 	if m.worktrees.create.setupProgress != nil && m.worktrees.create.setupProgress.cancel != nil {
 		m.worktrees.create.setupProgress.cancel()
 	}
+	m.invalidateWorktreeListRequest()
+	m.invalidateWorktreeDeleteTargetResolution()
 	m.worktrees = uiWorktreeOverlayState{}
 	m.restorePrimaryInputMode()
 }
@@ -219,9 +242,9 @@ func (m *uiModel) requestWorktreeListCmd() tea.Cmd {
 	if m == nil {
 		return nil
 	}
-	m.worktrees.refreshToken++
-	token := m.worktrees.refreshToken
-	m.worktrees.loading = true
+	m.worktreeListGeneration = nextNonZeroToken(m.worktreeListGeneration)
+	token := m.worktreeListGeneration
+	m.worktrees.listPending = true
 	m.worktrees.errorText = ""
 	service := m.worktreeMutationService()
 	return func() tea.Msg {
@@ -234,19 +257,29 @@ func (m *uiModel) openCreateWorktreeDialog() tea.Cmd {
 	if m == nil {
 		return nil
 	}
+	m.invalidateWorktreeDeleteTargetResolution()
 	m.worktrees.phase = uiWorktreeOverlayPhaseCreate
 	m.worktrees.errorText = ""
 	m.worktrees.create = newWorktreeCreateDialog(m.suggestedWorktreeBranchFromEntries())
 	return m.scheduleWorktreeCreateTargetResolution()
 }
 
-func (m *uiModel) openDeleteWorktreeDialog(target worktreeui.Item, preferDeleteBranch bool) {
+func (m *uiModel) openDeleteWorktreeDialog(
+	target worktreeui.Item,
+	preferDeleteBranch bool,
+	targetAuthority uiWorktreeDeleteTargetAuthority,
+) {
 	if m == nil {
 		return
 	}
+	m.invalidateWorktreeDeleteTargetResolution()
 	m.worktrees.phase = uiWorktreeOverlayPhaseDeleteConfirm
 	m.worktrees.errorText = ""
-	m.worktrees.deleteConfirm = uiWorktreeDeleteDialogState{target: target, preferDeleteBranch: preferDeleteBranch}
+	m.worktrees.deleteConfirm = uiWorktreeDeleteDialogState{
+		target:             target,
+		targetAuthority:    targetAuthority,
+		preferDeleteBranch: preferDeleteBranch,
+	}
 	m.worktrees.deleteConfirm.clampSelection()
 }
 
@@ -263,30 +296,52 @@ func (m *uiModel) closeWorktreeDialog() {
 	m.worktrees.errorText = ""
 }
 
-func (m *uiModel) applyWorktreeListResponse(resp serverapi.WorktreeListResponse) {
+func (m *uiModel) applyWorktreeListResponse(resp serverapi.WorktreeListResponse) error {
 	if m == nil {
-		return
+		return nil
 	}
-	m.recordWorktreeSelection()
+	if err := m.recordWorktreeSelection(); err != nil {
+		return err
+	}
 	m.worktrees.target = resp.Target
 	entries, err := worktreeui.ProjectItems(resp.Worktrees)
 	if err != nil {
 		m.worktrees.entries = nil
-		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
-		return
+		return err
 	}
 	m.worktrees.entries = entries
-	m.restoreWorktreeSelection()
+	if err := m.restoreWorktreeSelection(); err != nil {
+		return err
+	}
 	m.clampWorktreeSelection()
 	if m.worktrees.phase == uiWorktreeOverlayPhaseDeleteConfirm {
-		targetIdentity := worktreeui.SelectionIdentityForItem(m.worktrees.deleteConfirm.target)
-		if item, _, ok := worktreeui.FindByIdentity(m.worktrees.entries, targetIdentity); ok {
-			m.worktrees.deleteConfirm.target = item
+		targetIdentity, err := worktreeui.SelectionIdentityForItem(m.worktrees.deleteConfirm.target)
+		if err != nil {
+			return err
+		}
+		item, idx, ok, err := worktreeui.FindByIdentity(m.worktrees.entries, targetIdentity)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if m.worktrees.deleteConfirm.targetAuthority == uiWorktreeDeleteTargetAuthorityResolvedSelector {
+				target := m.worktrees.deleteConfirm.target
+				target.IsCurrent = item.IsCurrent
+				target.Entry.Projection.IsCurrent = item.Entry.Projection.IsCurrent
+				m.worktrees.entries[idx] = target
+				m.worktrees.deleteConfirm.target = target
+			} else {
+				m.worktrees.deleteConfirm.target = item
+			}
 			m.worktrees.deleteConfirm.clampSelection()
-			return
+			return nil
+		}
+		if m.worktrees.deleteConfirm.targetAuthority == uiWorktreeDeleteTargetAuthorityResolvedSelector {
+			return nil
 		}
 		m.closeWorktreeDialog()
 	}
+	return nil
 }
 
 func (m *uiModel) applyWorktreeIntent() tea.Cmd {
@@ -301,17 +356,36 @@ func (m *uiModel) applyWorktreeIntent() tea.Cmd {
 	if !intent.OpenDelete {
 		return nil
 	}
+	if intent.DeleteTarget.kind == uiWorktreeDeleteIntentTargetSelector {
+		return m.worktreeDeleteTargetResolveCmd(intent.DeleteTarget.selector, intent.PreferDeleteBranch)
+	}
 	target, err := resolveWorktreeDeleteIntentTarget(m.worktrees.entries, intent.DeleteTarget)
 	if err != nil {
 		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
 		return nil
 	}
-	targetIdentity := worktreeui.SelectionIdentityForItem(target)
-	if _, idx, ok := worktreeui.FindByIdentity(m.worktrees.entries, targetIdentity); ok {
+	targetIdentity, err := worktreeui.SelectionIdentityForItem(target)
+	if err != nil {
+		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		return nil
+	}
+	_, idx, ok, err := worktreeui.FindByIdentity(m.worktrees.entries, targetIdentity)
+	if err != nil {
+		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		return nil
+	}
+	if ok {
 		m.worktrees.selection = idx + 1
 	}
-	m.recordWorktreeSelection()
-	m.openDeleteWorktreeDialog(target, intent.PreferDeleteBranch)
+	if err := m.recordWorktreeSelection(); err != nil {
+		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		return nil
+	}
+	m.openDeleteWorktreeDialog(
+		target,
+		intent.PreferDeleteBranch,
+		uiWorktreeDeleteTargetAuthorityListed,
+	)
 	return nil
 }
 
@@ -321,11 +395,12 @@ func resolveWorktreeDeleteIntentTarget(
 ) (worktreeui.Item, error) {
 	switch target.kind {
 	case uiWorktreeDeleteIntentTargetCurrent:
-		return worktreeui.ResolveDeletionTarget(entries, "")
-	case uiWorktreeDeleteIntentTargetSelector:
-		return worktreeui.ResolveDeletionTarget(entries, target.selector)
+		return worktreeui.ResolveCurrentDeletionTarget(entries)
 	case uiWorktreeDeleteIntentTargetIdentity:
-		item, _, ok := worktreeui.FindByIdentity(entries, target.identity)
+		item, _, ok, err := worktreeui.FindByIdentity(entries, target.identity)
+		if err != nil {
+			return worktreeui.Item{}, err
+		}
 		if !ok {
 			return worktreeui.Item{}, serverapi.ErrWorktreeNotFound
 		}
@@ -333,6 +408,42 @@ func resolveWorktreeDeleteIntentTarget(
 	default:
 		return worktreeui.Item{}, errors.New("worktree delete intent target is invalid")
 	}
+}
+
+func (m *uiModel) worktreeDeleteTargetResolveCmd(selector string, preferDeleteBranch bool) tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	m.deleteTargetResolutionGeneration = nextNonZeroToken(m.deleteTargetResolutionGeneration)
+	generation := m.deleteTargetResolutionGeneration
+	m.worktrees.deleteTargetResolutionPending = true
+	m.worktrees.errorText = ""
+	service := m.worktreeMutationService()
+	return func() tea.Msg {
+		resp, err := service.ResolveSelector(selector)
+		return worktreeDeleteTargetResolvedMsg{
+			generation:         generation,
+			resp:               resp,
+			preferDeleteBranch: preferDeleteBranch,
+			err:                err,
+		}
+	}
+}
+
+func (m *uiModel) invalidateWorktreeDeleteTargetResolution() {
+	if m == nil {
+		return
+	}
+	m.deleteTargetResolutionGeneration = nextNonZeroToken(m.deleteTargetResolutionGeneration)
+	m.worktrees.deleteTargetResolutionPending = false
+}
+
+func (m *uiModel) invalidateWorktreeListRequest() {
+	if m == nil {
+		return
+	}
+	m.worktreeListGeneration = nextNonZeroToken(m.worktreeListGeneration)
+	m.worktrees.listPending = false
 }
 
 func (m *uiModel) suggestedWorktreeBranchFromEntries() string {
@@ -427,6 +538,7 @@ func (m *uiModel) worktreeSwitchCmd(target worktreeui.Item) tea.Cmd {
 		m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{TargetToken: selector}
 		return nil
 	}
+	m.invalidateWorktreeDeleteTargetResolution()
 	m.worktrees.errorText = ""
 	return m.worktreeSwitchCommandForTarget(selector)
 }
@@ -453,12 +565,16 @@ func (m *uiModel) worktreeDeleteCmd(target worktreeui.Item, deleteBranch bool) t
 	m.worktrees.deleteConfirm.errorText = ""
 	m.worktrees.deleteConfirm.submitting = true
 	service := m.worktreeMutationService()
+	selector, selectorErr := worktreeui.StableMutationSelector(target)
 	cleanupPolicy := serverapi.WorktreeBranchCleanupModeAutoIfKentCreated
 	if deleteBranch {
 		cleanupPolicy = serverapi.WorktreeBranchCleanupModeDeleteSafe
 	}
 	return func() tea.Msg {
-		resp, err := service.Delete(target.Entry.Projection.Selector, m.worktrees.deleteConfirm.forceFolderRemoval, cleanupPolicy)
+		if selectorErr != nil {
+			return worktreeDeleteDoneMsg{token: token, target: worktreeui.DisplayName(target), err: selectorErr}
+		}
+		resp, err := service.Delete(selector, m.worktrees.deleteConfirm.forceFolderRemoval, cleanupPolicy)
 		return worktreeDeleteDoneMsg{token: token, target: worktreeui.DisplayName(target), resp: resp, err: err}
 	}
 }

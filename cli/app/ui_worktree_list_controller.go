@@ -1,8 +1,10 @@
 package app
 
 import (
+	"errors"
 	"strings"
 
+	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -54,25 +56,35 @@ func (m *uiModel) selectedWorktreeRow() (worktreeui.Item, bool) {
 	return worktreeui.SelectedWorktree(m.worktrees.entries, m.worktrees.selection)
 }
 
-func (m *uiModel) selectedWorktreeIdentity() worktreeui.SelectionIdentity {
+func (m *uiModel) selectedWorktreeIdentity() (worktreeui.SelectionIdentity, error) {
 	if m == nil {
-		return worktreeui.SelectionIdentity{Kind: worktreeui.SelectionIdentityKindCreateRow}
+		return worktreeui.SelectionIdentity{Kind: worktreeui.SelectionIdentityKindCreateRow}, nil
 	}
 	return worktreeui.SelectedIdentity(m.worktrees.entries, m.worktrees.selection)
 }
 
-func (m *uiModel) recordWorktreeSelection() {
+func (m *uiModel) recordWorktreeSelection() error {
 	if m == nil {
-		return
+		return nil
 	}
-	m.worktrees.selectedIdentity = m.selectedWorktreeIdentity()
+	identity, err := m.selectedWorktreeIdentity()
+	if err != nil {
+		return err
+	}
+	m.worktrees.selectedIdentity = identity
+	return nil
 }
 
-func (m *uiModel) restoreWorktreeSelection() {
+func (m *uiModel) restoreWorktreeSelection() error {
 	if m == nil {
-		return
+		return nil
 	}
-	m.worktrees.selection = worktreeui.Restore(m.worktrees.entries, m.worktrees.selection, m.worktrees.selectedIdentity)
+	selection, err := worktreeui.Restore(m.worktrees.entries, m.worktrees.selection, m.worktrees.selectedIdentity)
+	if err != nil {
+		return err
+	}
+	m.worktrees.selection = selection
+	return nil
 }
 
 func (c uiInputController) startWorktreeOverlayCmd(intent uiWorktreeOpenIntent) tea.Cmd {
@@ -136,38 +148,9 @@ func (c uiInputController) handleWorktreeOverlayKey(msg tea.KeyMsg) (tea.Model, 
 	case "c", "n":
 		return m, m.openCreateWorktreeDialog()
 	case "d":
-		target, ok := m.selectedWorktreeRow()
-		if !ok {
-			return m, c.model.sendTransientStatusWithNoticeID("Select a worktree to delete", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-		}
-		if target.IsMain {
-			return m, c.model.sendTransientStatusWithNoticeID("Main workspace is not deletable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-		}
-		m.worktrees.intent = uiWorktreeOpenIntent{
-			OpenDelete: true,
-			DeleteTarget: uiWorktreeDeleteIntentTarget{
-				kind:     uiWorktreeDeleteIntentTargetIdentity,
-				identity: worktreeui.SelectionIdentityForItem(target),
-			},
-		}
-		return m, tea.Batch(m.requestWorktreeListCmd(), m.reconcileSpinnerTicking(false))
+		return c.startSelectedWorktreeDelete(false)
 	case "x":
-		target, ok := m.selectedWorktreeRow()
-		if !ok {
-			return m, c.model.sendTransientStatusWithNoticeID("Select a worktree to delete", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-		}
-		if target.IsMain {
-			return m, c.model.sendTransientStatusWithNoticeID("Main workspace is not deletable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-		}
-		m.worktrees.intent = uiWorktreeOpenIntent{
-			OpenDelete: true,
-			DeleteTarget: uiWorktreeDeleteIntentTarget{
-				kind:     uiWorktreeDeleteIntentTargetIdentity,
-				identity: worktreeui.SelectionIdentityForItem(target),
-			},
-			PreferDeleteBranch: true,
-		}
-		return m, tea.Batch(m.requestWorktreeListCmd(), m.reconcileSpinnerTicking(false))
+		return c.startSelectedWorktreeDelete(true)
 	case "enter":
 		if m.worktrees.selection == 0 {
 			return m, m.openCreateWorktreeDialog()
@@ -183,4 +166,34 @@ func (c uiInputController) handleWorktreeOverlayKey(msg tea.KeyMsg) (tea.Model, 
 	default:
 		return m, nil
 	}
+}
+
+func (c uiInputController) startSelectedWorktreeDelete(preferDeleteBranch bool) (tea.Model, tea.Cmd) {
+	m := c.model
+	target, ok := m.selectedWorktreeRow()
+	if !ok {
+		return m, c.model.sendTransientStatusWithNoticeID("Select a worktree to delete", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	}
+	if err := worktreeui.ValidateDeletionTarget(target); err != nil {
+		if errors.Is(err, worktreeui.ErrMainWorkspaceNotDeletable) {
+			return m, c.model.sendTransientStatusWithNoticeID("Main workspace is not deletable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		}
+		status := runtimeattach.FormatSubmissionError(err)
+		return m, c.model.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	}
+	identity, err := worktreeui.SelectionIdentityForItem(target)
+	if err != nil {
+		status := runtimeattach.FormatSubmissionError(err)
+		return m, c.model.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	}
+	m.invalidateWorktreeDeleteTargetResolution()
+	m.worktrees.intent = uiWorktreeOpenIntent{
+		OpenDelete: true,
+		DeleteTarget: uiWorktreeDeleteIntentTarget{
+			kind:     uiWorktreeDeleteIntentTargetIdentity,
+			identity: identity,
+		},
+		PreferDeleteBranch: preferDeleteBranch,
+	}
+	return m, tea.Batch(m.requestWorktreeListCmd(), m.reconcileSpinnerTicking(false))
 }

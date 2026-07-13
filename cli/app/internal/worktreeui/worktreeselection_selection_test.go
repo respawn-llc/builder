@@ -1,6 +1,10 @@
 package worktreeui
 
-import "testing"
+import (
+	"testing"
+
+	"core/shared/serverapi"
+)
 
 func TestSelectionUsesCreateRowAndStableIdentities(t *testing.T) {
 	entries := []Item{
@@ -17,24 +21,69 @@ func TestSelectionUsesCreateRowAndStableIdentities(t *testing.T) {
 	if !ok || WorktreeID(item) != "wt-2" {
 		t.Fatalf("selected = %+v ok=%v", item, ok)
 	}
-	if got := SelectedIdentity(entries, 0); got.Kind != SelectionIdentityKindCreateRow {
-		t.Fatalf("create selection identity = %+v", got)
+	if got, err := SelectedIdentity(entries, 0); err != nil || got.Kind != SelectionIdentityKindCreateRow {
+		t.Fatalf("create selection identity = %+v, %v", got, err)
 	}
-	if got := Restore(entries, 0, SelectionIdentityForItem(entries[1])); got != 2 {
-		t.Fatalf("restored selection = %d", got)
+	selectedIdentity, err := SelectionIdentityForItem(entries[1])
+	if err != nil {
+		t.Fatalf("SelectionIdentityForItem: %v", err)
+	}
+	if got, err := Restore(entries, 0, selectedIdentity); err != nil || got != 2 {
+		t.Fatalf("restored selection = %d, %v", got, err)
 	}
 }
 
 func TestSelectionRestoresRegisteredWorktreeByKentIDWhenSelectorChanges(t *testing.T) {
 	selected := testWorktreeItem(t, "wt-1", "one", "/wt/one", "old-selector", false, false)
-	selectedIdentity := SelectedIdentity([]Item{selected}, 1)
+	selectedIdentity, err := SelectedIdentity([]Item{selected}, 1)
+	if err != nil {
+		t.Fatalf("SelectedIdentity: %v", err)
+	}
 	if selectedIdentity.Kind != SelectionIdentityKindKentWorktree || selectedIdentity.Value != "wt-1" {
 		t.Fatalf("selected identity = %+v, want Kent worktree wt-1", selectedIdentity)
 	}
 
 	other := testWorktreeItem(t, "wt-2", "two", "/wt/two", "old-selector", false, false)
 	refreshed := testWorktreeItem(t, "wt-1", "renamed", "/wt/one", "new-selector", false, false)
-	if got := Restore([]Item{other, refreshed}, 1, selectedIdentity); got != 2 {
-		t.Fatalf("restored selection = %d, want 2", got)
+	if got, err := Restore([]Item{other, refreshed}, 1, selectedIdentity); err != nil || got != 2 {
+		t.Fatalf("restored selection = %d, %v, want 2", got, err)
+	}
+}
+
+func TestSelectionIdentityRejectsInvalidPresentKentID(t *testing.T) {
+	invalidID := " "
+	if _, err := SelectionIdentityForItem(Item{
+		WorktreeID:    &invalidID,
+		CanonicalRoot: "/wt/feature",
+	}); err == nil {
+		t.Fatal("expected present invalid Kent ID to fail instead of falling back to root")
+	}
+}
+
+func TestStableMutationSelectorUsesExternalCanonicalRoot(t *testing.T) {
+	item, err := ProjectItem(serverapi.WorktreeListEntry{
+		Topology: serverapi.WorktreeTopologyEntry{
+			Variant: serverapi.WorktreeTopologyVariantExternal,
+			External: &serverapi.WorktreeExternalFacts{
+				Git: serverapi.WorktreeGitFacts{
+					CanonicalRoot: "/wt/external",
+					HeadObject:    "deadbeef",
+					Detached:      true,
+					PathAvailable: true,
+				},
+			},
+		},
+		Projection: serverapi.WorktreeListProjection{Selector: "external"},
+	})
+	if err != nil {
+		t.Fatalf("ProjectItem: %v", err)
+	}
+
+	selector, err := StableMutationSelector(item)
+	if err != nil {
+		t.Fatalf("StableMutationSelector: %v", err)
+	}
+	if selector != "/wt/external" {
+		t.Fatalf("selector = %q, want external canonical root", selector)
 	}
 }

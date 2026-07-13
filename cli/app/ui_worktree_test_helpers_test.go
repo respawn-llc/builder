@@ -20,6 +20,10 @@ type worktreeCommandTestClient struct {
 	listErr           error
 	listCtx           context.Context
 	listRequests      []serverapi.WorktreeListRequest
+	selectorCtx       context.Context
+	selectorResp      serverapi.WorktreeSelectorPreviewResponse
+	selectorErr       error
+	selectorRequests  []serverapi.WorktreeSelectorPreviewRequest
 	resolveCtx        context.Context
 	resolveResp       serverapi.WorktreeCreateTargetResolveResponse
 	resolveErr        error
@@ -47,8 +51,10 @@ func (c *worktreeCommandTestClient) ListWorktrees(ctx context.Context, req serve
 	return c.listResp, c.listErr
 }
 
-func (c *worktreeCommandTestClient) ResolveWorktreeSelector(context.Context, serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
-	return serverapi.WorktreeSelectorPreviewResponse{}, nil
+func (c *worktreeCommandTestClient) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	c.selectorCtx = ctx
+	c.selectorRequests = append(c.selectorRequests, req)
+	return c.selectorResp, c.selectorErr
 }
 
 func (c *worktreeCommandTestClient) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
@@ -144,7 +150,7 @@ func applyWorktreeCmdMessages(t *testing.T, model *uiModel, cmd tea.Cmd) *uiMode
 	t.Helper()
 	for _, msg := range collectCmdMessages(t, cmd) {
 		switch msg.(type) {
-		case worktreeListDoneMsg, worktreeCreateDoneMsg, worktreeSwitchDoneMsg, worktreeDeleteDoneMsg, worktreeCreateTargetResolveDebounceMsg, worktreeCreateTargetResolveDoneMsg:
+		case worktreeListDoneMsg, worktreeDeleteTargetResolvedMsg, worktreeCreateDoneMsg, worktreeSwitchDoneMsg, worktreeDeleteDoneMsg, worktreeCreateTargetResolveDebounceMsg, worktreeCreateTargetResolveDoneMsg:
 			next, nextCmd := model.Update(msg)
 			model = next.(*uiModel)
 			model = applyWorktreeCmdMessages(t, model, nextCmd)
@@ -237,6 +243,26 @@ func testRegisteredWorktreeListEntry(id, name, root, branch string, main, curren
 			},
 		},
 		Projection: serverapi.WorktreeListProjection{Selector: branch, IsCurrent: current},
+	}
+}
+
+func testExternalWorktreeListEntry(root string, selector string, current bool) serverapi.WorktreeListEntry {
+	return serverapi.WorktreeListEntry{
+		Topology: serverapi.WorktreeTopologyEntry{
+			Variant: serverapi.WorktreeTopologyVariantExternal,
+			External: &serverapi.WorktreeExternalFacts{
+				Git: serverapi.WorktreeGitFacts{
+					CanonicalRoot: root,
+					HeadObject:    "deadbeef",
+					Detached:      true,
+					PathAvailable: true,
+				},
+			},
+		},
+		Projection: serverapi.WorktreeListProjection{
+			Selector:  selector,
+			IsCurrent: current,
+		},
 	}
 }
 
