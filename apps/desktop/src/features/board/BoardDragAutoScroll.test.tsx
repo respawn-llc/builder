@@ -246,7 +246,11 @@ describe("useBoardDragAutoScroll", () => {
     expect(frames.pending).toBe(0);
   });
 
-  it("stops a null-target board leave when the pointer is outside live board geometry", () => {
+  it.each([
+    ["right boundary", { clientX: 500, clientY: 200 }],
+    ["bottom boundary", { clientX: 250, clientY: 400 }],
+    ["outside", { clientX: 501, clientY: 200 }],
+  ] as const)("stops a null-target board leave at the %s", (_location, point) => {
     render(<AutoScrollHarness active />);
     const root = screen.getByTestId("auto-scroll-root");
     setScrollportGeometry(root, {
@@ -261,7 +265,7 @@ describe("useBoardDragAutoScroll", () => {
     dispatchBoardDrag(root, "dragover", { clientX: 496, clientY: 200 });
     expect(frames.pending).toBe(1);
 
-    dispatchBoardDrag(root, "dragleave", { clientX: 501, clientY: 200, relatedTarget: null });
+    dispatchBoardDrag(root, "dragleave", { ...point, relatedTarget: null });
     expect(frames.pending).toBe(0);
   });
 

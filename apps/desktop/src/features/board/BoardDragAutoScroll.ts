@@ -256,9 +256,9 @@ function pointIsInsideElement(point: DragPointer, element: HTMLElement): boolean
   const rect = element.getBoundingClientRect();
   return (
     point.clientX >= rect.left &&
-    point.clientX <= rect.right &&
+    point.clientX < rect.right &&
     point.clientY >= rect.top &&
-    point.clientY <= rect.bottom
+    point.clientY < rect.bottom
   );
 }
 
