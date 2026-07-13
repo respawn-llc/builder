@@ -1,8 +1,10 @@
 package worktree
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +12,78 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 )
+
+func TestEnterWorktreePreflightObservesCancellationWhileWorkspaceMutationLocked(t *testing.T) {
+	env := newServiceTestEnv(t)
+	release, err := env.service.acquireWorkspaceMutationLock(env.ctx, env.binding.WorkspaceID)
+	if err != nil {
+		t.Fatalf("acquireWorkspaceMutationLock: %v", err)
+	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			release()
+		}
+	})
+
+	ctx, cancel := context.WithCancel(env.ctx)
+	result := make(chan error, 1)
+	go func() {
+		_, err := env.service.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			SessionID:   env.session.Meta().SessionID,
+			Selector:    "main",
+		})
+		result <- err
+	}()
+	waitForWorkspaceMutationReferences(t, env.service, env.binding.WorkspaceID, 2)
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("EnterWorktree error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		release()
+		released = true
+		select {
+		case <-result:
+		case <-time.After(3 * time.Second):
+			t.Fatal("EnterWorktree remained blocked after releasing workspace mutation")
+		}
+		t.Fatal("EnterWorktree ignored cancellation while waiting for workspace mutation")
+	}
+	release()
+	released = true
+	nextRelease, _, err := env.service.beginWorkspaceMutation(env.ctx, env.session.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("beginWorkspaceMutation after canceled waiter: %v", err)
+	}
+	nextRelease()
+}
+
+func waitForWorkspaceMutationReferences(t *testing.T, service *Service, workspaceID string, want int) {
+	t.Helper()
+	workspaceID = strings.TrimSpace(workspaceID)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		service.workspaceMu.Lock()
+		lock := service.workspaceLocks[workspaceID]
+		refs := 0
+		if lock != nil {
+			refs = lock.refs
+		}
+		service.workspaceMu.Unlock()
+		if refs == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("workspace mutation references = %d, want %d", refs, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 func TestEnterWorktreeRejectsInvalidSelectorsBeforeScheduling(t *testing.T) {
 	env := newServiceTestEnv(t)

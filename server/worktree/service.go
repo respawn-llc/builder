@@ -80,8 +80,8 @@ type Service struct {
 }
 
 type workspaceMutationLock struct {
-	mu   sync.Mutex
-	refs int
+	token chan struct{}
+	refs  int
 }
 
 type syncedWorktree struct {
@@ -269,7 +269,10 @@ func (s *Service) materializeInitialTaskWorktree(ctx context.Context, taskID str
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
-	release := s.acquireWorkspaceMutationLock(workspace.WorkspaceID)
+	release, err := s.acquireWorkspaceMutationLock(ctx, workspace.WorkspaceID)
+	if err != nil {
+		return TaskWorktreeMaterialization{}, err
+	}
 	defer release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
@@ -354,7 +357,10 @@ func (s *Service) RestoreLockedTaskWorktree(ctx context.Context, req LockedTaskW
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
-	release := s.acquireWorkspaceMutationLock(workspace.WorkspaceID)
+	release, err := s.acquireWorkspaceMutationLock(ctx, workspace.WorkspaceID)
+	if err != nil {
+		return TaskWorktreeMaterialization{}, err
+	}
 	defer release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
@@ -743,7 +749,10 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if workspaceRoot == "" {
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("workspace %q has no root path", strings.TrimSpace(record.WorkspaceID))
 	}
-	release := s.acquireWorkspaceMutationLock(record.WorkspaceID)
+	release, err := s.acquireWorkspaceMutationLock(ctx, record.WorkspaceID)
+	if err != nil {
+		return DeleteTaskWorktreeResponse{}, err
+	}
 	defer release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
@@ -1223,7 +1232,10 @@ func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) 
 		if err != nil {
 			return nil, sessionWorkspaceContext{}, err
 		}
-		workspaceLease := s.acquireWorkspaceMutationLock(workspaceCtx.workspaceID)
+		workspaceLease, err := s.acquireWorkspaceMutationLock(ctx, workspaceCtx.workspaceID)
+		if err != nil {
+			return nil, sessionWorkspaceContext{}, err
+		}
 		lockedWorkspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
 		if err != nil {
 			workspaceLease()
@@ -1236,10 +1248,16 @@ func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) 
 	}
 }
 
-func (s *Service) acquireWorkspaceMutationLock(workspaceID string) func() {
+func (s *Service) acquireWorkspaceMutationLock(ctx context.Context, workspaceID string) (func(), error) {
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	if s == nil || trimmedWorkspaceID == "" {
-		return func() {}
+	if s == nil {
+		return nil, errors.New("worktree service is required")
+	}
+	if ctx == nil {
+		return nil, errors.New("workspace mutation context is required")
+	}
+	if trimmedWorkspaceID == "" {
+		return nil, errors.New("workspace mutation requires a workspace id")
 	}
 	s.workspaceMu.Lock()
 	if s.workspaceLocks == nil {
@@ -1247,23 +1265,51 @@ func (s *Service) acquireWorkspaceMutationLock(workspaceID string) func() {
 	}
 	lock := s.workspaceLocks[trimmedWorkspaceID]
 	if lock == nil {
-		lock = &workspaceMutationLock{}
+		token := make(chan struct{}, 1)
+		token <- struct{}{}
+		lock = &workspaceMutationLock{token: token}
 		s.workspaceLocks[trimmedWorkspaceID] = lock
 	}
 	lock.refs++
 	s.workspaceMu.Unlock()
-	lock.mu.Lock()
+
+	select {
+	case <-ctx.Done():
+		s.releaseWorkspaceMutationLockReference(trimmedWorkspaceID, lock)
+		return nil, ctx.Err()
+	case <-lock.token:
+	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			lock.mu.Unlock()
-			s.workspaceMu.Lock()
-			defer s.workspaceMu.Unlock()
-			lock.refs--
-			if lock.refs == 0 {
-				delete(s.workspaceLocks, trimmedWorkspaceID)
+			select {
+			case lock.token <- struct{}{}:
+			default:
+				panic(fmt.Sprintf(
+					"release workspace mutation lock invariant violated: workspace_id=%q token already available",
+					trimmedWorkspaceID,
+				))
 			}
+			s.releaseWorkspaceMutationLockReference(trimmedWorkspaceID, lock)
 		})
+	}, nil
+}
+
+func (s *Service) releaseWorkspaceMutationLockReference(workspaceID string, lock *workspaceMutationLock) {
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	registered := s.workspaceLocks[workspaceID]
+	if registered != lock || lock.refs <= 0 {
+		panic(fmt.Sprintf(
+			"release workspace mutation lock reference invariant violated: workspace_id=%q refs=%d registered_same=%t",
+			workspaceID,
+			lock.refs,
+			registered == lock,
+		))
+	}
+	lock.refs--
+	if lock.refs == 0 {
+		delete(s.workspaceLocks, workspaceID)
 	}
 }
 

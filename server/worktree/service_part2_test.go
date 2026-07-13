@@ -96,7 +96,10 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}
 	secondSession := createServiceTestSession(t, env.store, secondCfg, secondBinding)
 
-	firstWorkspaceLock := env.service.acquireWorkspaceMutationLock(env.binding.WorkspaceID)
+	firstWorkspaceLock, err := env.service.acquireWorkspaceMutationLock(env.ctx, env.binding.WorkspaceID)
+	if err != nil {
+		t.Fatalf("acquireWorkspaceMutationLock: %v", err)
+	}
 	firstLockReleased := false
 	defer func() {
 		if !firstLockReleased {
