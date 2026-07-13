@@ -66,8 +66,22 @@ func TestWorktreeListControllerEnterWorktreeSubmitsSwitch(t *testing.T) {
 	if _, ok := result.(worktreeSwitchDoneMsg); !ok {
 		t.Fatalf("command message type = %T, want worktreeSwitchDoneMsg", result)
 	}
-	if len(client.enterRequests) != 1 || client.enterRequests[0].Selector != "feature" {
-		t.Fatalf("enter requests = %+v, want selector feature", client.enterRequests)
+	if len(client.enterRequests) != 1 || client.enterRequests[0].Selector != "wt-feature" {
+		t.Fatalf("enter requests = %+v, want stable worktree ID", client.enterRequests)
+	}
+}
+
+func TestWorktreeListControllerQueuesStableSwitchTarget(t *testing.T) {
+	model := newWorktreeListControllerTestModel(t, nil)
+	model.worktrees.selection = 1
+	model.worktrees.switchPending = true
+
+	updated, cmd := applyWorktreeListControllerKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("queued switch returned a command while another switch is pending")
+	}
+	if updated.worktrees.queuedSwitch.TargetToken != "wt-feature" {
+		t.Fatalf("queued switch = %+v, want stable worktree ID", updated.worktrees.queuedSwitch)
 	}
 }
 

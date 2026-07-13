@@ -526,6 +526,11 @@ func (c *Remote) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRe
 	return resp, c.call(ctx, protocol.MethodWorktreeList, req, &resp)
 }
 
+func (c *Remote) ListWorkspaceWorktrees(ctx context.Context, req serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
+	var resp serverapi.WorktreeWorkspaceListResponse
+	return resp, c.call(ctx, protocol.MethodWorktreeWorkspaceList, req, &resp)
+}
+
 func (c *Remote) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
 	var resp serverapi.WorktreeStatusResponse
 	return resp, c.call(ctx, protocol.MethodWorktreeStatus, req, &resp)

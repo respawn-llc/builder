@@ -169,6 +169,25 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	case rpccontract.ScopeProjectWorkspace:
 		_, err := e.gateway.activeProjectID(ctx, state)
 		return err
+	case rpccontract.ScopeProjectWorkspaceBinding:
+		activeProjectID, err := e.gateway.activeProjectID(ctx, state)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(scopeParams.projectID) != strings.TrimSpace(activeProjectID) {
+			return serverapi.ErrWorkspaceNotRegistered
+		}
+		if strings.TrimSpace(state.attachedWorkspaceID) != strings.TrimSpace(scopeParams.workspaceID) {
+			return serverapi.ErrWorkspaceNotRegistered
+		}
+		binding, err := e.gateway.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, scopeParams.workspaceID)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(activeProjectID) {
+			return serverapi.ErrWorkspaceNotRegistered
+		}
+		return nil
 	case rpccontract.ScopeAttachSession:
 		_, err := e.gateway.resolveSessionAttachment(ctx, state, scopeParams.sessionID)
 		return err
@@ -209,6 +228,8 @@ type routeScopeParams struct {
 	sessionID      string
 	processID      string
 	ownerSessionID string
+	projectID      string
+	workspaceID    string
 }
 
 func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams, error) {
@@ -238,8 +259,23 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 			return routeScopeParams{}, fmt.Errorf("route %q scope %q requires typed owner session id accessor", route.Method, route.Scope)
 		}
 		return routeScopeParams{ownerSessionID: ownerSessionID}, nil
+	case rpccontract.ScopeProjectWorkspaceBinding:
+		projectID, workspaceID, ok := routeProjectWorkspaceBinding(params)
+		if !ok {
+			return routeScopeParams{}, fmt.Errorf("route %q scope %q requires typed project/workspace accessor", route.Method, route.Scope)
+		}
+		return routeScopeParams{projectID: projectID, workspaceID: workspaceID}, nil
 	default:
 		return routeScopeParams{}, nil
+	}
+}
+
+func routeProjectWorkspaceBinding(params any) (string, string, bool) {
+	switch request := params.(type) {
+	case serverapi.WorktreeWorkspaceListRequest:
+		return request.ProjectID, request.WorkspaceID, true
+	default:
+		return "", "", false
 	}
 }
 

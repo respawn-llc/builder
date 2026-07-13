@@ -97,7 +97,7 @@ func worktreeStatusSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 
 func worktreeListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" worktree list", stderr, worktreeListUsage)
-	sessionFlag := fs.String("session", "", "session to inspect; required outside Kent shell commands")
+	sessionFlag := fs.String("session", "", "session whose current worktree to mark")
 	jsonOut := fs.Bool("json", false, "write the list response as JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
@@ -106,31 +106,57 @@ func worktreeListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, "worktree list does not accept positional arguments")
 		return 2
 	}
-	sessionID, err := resolveWorktreeCommandSession(*sessionFlag)
+	if sessionID := resolveOptionalWorktreeCommandSession(*sessionFlag); sessionID != nil {
+		return withWorktreeCommandRemote(stderr, *sessionID, func(remote worktreeCommandRemote) int {
+			ctx, cancel := context.WithTimeout(context.Background(), worktreeCommandTimeout)
+			defer cancel()
+			response, err := remote.ListWorktrees(ctx, serverapi.WorktreeListRequest{SessionID: *sessionID})
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			if *jsonOut {
+				return encodeWorktreeJSON(stdout, stderr, response)
+			}
+			writeWorktreeList(stdout, response.Worktrees, true)
+			return 0
+		})
+	}
+	remote, binding, err := openWorktreeWorkspaceListRemote(context.Background())
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return 2
+		return 1
 	}
-	return withWorktreeCommandRemote(stderr, sessionID, func(remote worktreeCommandRemote) int {
-		ctx, cancel := context.WithTimeout(context.Background(), worktreeCommandTimeout)
-		defer cancel()
-		response, err := remote.ListWorktrees(ctx, serverapi.WorktreeListRequest{SessionID: sessionID})
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if *jsonOut {
-			return encodeWorktreeJSON(stdout, stderr, response)
-		}
-		for _, entry := range response.Worktrees {
-			current := " "
-			if entry.Projection.IsCurrent {
-				current = "*"
-			}
-			fmt.Fprintf(stdout, "%s %s\t%s\n", current, entry.Projection.Selector, entry.Topology.Variant)
-		}
-		return 0
+	defer func() { _ = remote.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), worktreeCommandTimeout)
+	defer cancel()
+	response, err := remote.ListWorkspaceWorktrees(ctx, serverapi.WorktreeWorkspaceListRequest{
+		ProjectID:   binding.ProjectID,
+		WorkspaceID: binding.WorkspaceID,
 	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if *jsonOut {
+		return encodeWorktreeJSON(stdout, stderr, response)
+	}
+	writeWorktreeList(stdout, response.Worktrees, false)
+	return 0
+}
+
+func writeWorktreeList(stdout io.Writer, worktrees []serverapi.WorktreeListEntry, showCurrent bool) {
+	for _, entry := range worktrees {
+		if !showCurrent {
+			fmt.Fprintf(stdout, "%s\t%s\n", entry.Projection.Selector, entry.Topology.Variant)
+			continue
+		}
+		current := " "
+		if entry.Projection.IsCurrent {
+			current = "*"
+		}
+		fmt.Fprintf(stdout, "%s %s\t%s\n", current, entry.Projection.Selector, entry.Topology.Variant)
+	}
 }
 
 func worktreeCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -361,23 +387,26 @@ func encodeWorktreeJSON(stdout io.Writer, stderr io.Writer, value any) int {
 }
 
 func resolveWorktreeCommandSession(sessionFlag string) (string, error) {
-	if sessionID, ok := sessionenv.LookupSessionID(os.LookupEnv); ok {
-		return sessionID, nil
-	}
-	if trimmed := strings.TrimSpace(sessionFlag); trimmed != "" {
-		return trimmed, nil
+	if sessionID := resolveOptionalWorktreeCommandSession(sessionFlag); sessionID != nil {
+		return *sessionID, nil
 	}
 	return "", errors.New("worktree command requires --session outside Kent shell commands")
 }
 
+func resolveOptionalWorktreeCommandSession(sessionFlag string) *string {
+	if sessionID, ok := sessionenv.LookupSessionID(os.LookupEnv); ok {
+		return &sessionID
+	}
+	if trimmed := strings.TrimSpace(sessionFlag); trimmed != "" {
+		return &trimmed
+	}
+	return nil
+}
+
 func openWorktreeCommandRemote(ctx context.Context, sessionID string) (worktreeCommandRemote, error) {
-	workspaceRoot, err := config.FindNearestWorkspaceSettingsRoot(".")
+	configRoot, err := worktreeCommandConfigRoot()
 	if err != nil {
 		return nil, err
-	}
-	configRoot := "."
-	if workspaceRoot != nil {
-		configRoot = *workspaceRoot
 	}
 	cfg, err := config.Load(configRoot, config.LoadOptions{})
 	if err != nil {
@@ -394,4 +423,47 @@ func openWorktreeCommandRemote(ctx context.Context, sessionID string) (worktreeC
 		return nil, err
 	}
 	return remote, nil
+}
+
+func openWorktreeWorkspaceListRemote(ctx context.Context) (*client.Remote, serverapi.ProjectBinding, error) {
+	configRoot, err := worktreeCommandConfigRoot()
+	if err != nil {
+		return nil, serverapi.ProjectBinding{}, err
+	}
+	cfg, discoveryRemote, err := openBindingCommandRemote(ctx, configRoot)
+	if err != nil {
+		return nil, serverapi.ProjectBinding{}, err
+	}
+	binding, err := bindingCommandWorkspaceResolver(ctx, discoveryRemote, cfg.WorkspaceRoot)
+	_ = discoveryRemote.Close()
+	if err != nil {
+		return nil, serverapi.ProjectBinding{}, err
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, worktreeCommandTimeout)
+	defer cancel()
+	remote, err := client.DialConfiguredRemoteForProjectWorkspaceID(
+		dialCtx,
+		cfg,
+		strings.TrimSpace(binding.ProjectID),
+		strings.TrimSpace(binding.WorkspaceID),
+	)
+	if err != nil {
+		return nil, serverapi.ProjectBinding{}, err
+	}
+	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
+		_ = remote.Close()
+		return nil, serverapi.ProjectBinding{}, err
+	}
+	return remote, binding, nil
+}
+
+func worktreeCommandConfigRoot() (string, error) {
+	workspaceRoot, err := config.FindNearestWorkspaceSettingsRoot(".")
+	if err != nil {
+		return "", err
+	}
+	if workspaceRoot != nil {
+		return *workspaceRoot, nil
+	}
+	return ".", nil
 }

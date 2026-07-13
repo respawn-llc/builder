@@ -127,6 +127,21 @@ func TestWorktreeStatusHasNoSelectorAndValidatesTypedProblems(t *testing.T) {
 	}
 }
 
+func TestWorktreeWorkspaceListRequestRequiresProjectAndWorkspace(t *testing.T) {
+	valid := WorktreeWorkspaceListRequest{ProjectID: "project-1", WorkspaceID: "workspace-1"}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid workspace list request rejected: %v", err)
+	}
+	for _, request := range []WorktreeWorkspaceListRequest{
+		{WorkspaceID: "workspace-1"},
+		{ProjectID: "project-1"},
+	} {
+		if err := request.Validate(); err == nil {
+			t.Fatalf("invalid workspace list request validated: %+v", request)
+		}
+	}
+}
+
 func TestWorktreeTransitionRequestsUseUUIDV4Correlation(t *testing.T) {
 	operationID := NewWorktreeOperationID()
 	if err := operationID.Validate(); err != nil {

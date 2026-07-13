@@ -98,6 +98,7 @@ const (
 	MethodSessionRuntimeActivate                        = "session.runtime.activate"
 	MethodSessionRuntimeRelease                         = "session.runtime.release"
 	MethodWorktreeList                                  = "worktree.list"
+	MethodWorktreeWorkspaceList                         = "worktree.workspace.list"
 	MethodWorktreeStatus                                = "worktree.status"
 	MethodWorktreeSelectorResolve                       = "worktree.selector.resolve"
 	MethodWorktreeCreateTargetResolve                   = "worktree.create_target.resolve"

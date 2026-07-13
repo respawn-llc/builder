@@ -141,3 +141,30 @@ func TestWorktreeCreateSetupEventUpdatesPendingOperationState(t *testing.T) {
 		t.Fatal("create operation stopped submitting before create response")
 	}
 }
+
+func TestWorktreeCreateCompletionSwitchesByStableWorktreeID(t *testing.T) {
+	client := &worktreeCommandTestClient{listResp: testMainWorktreeListResponse()}
+	model := newWorktreeCreateControllerTestModel(t, client)
+	model.worktrees.mutationToken = 7
+	created := testRegisteredWorktreeListEntry(
+		"wt-created",
+		"created",
+		"/wt/created",
+		"feature/created",
+		false,
+		false,
+		true,
+		true,
+	)
+
+	next, cmd := model.Update(worktreeCreateDoneMsg{
+		token: 7,
+		resp:  serverapi.WorktreeCreateResponse{Worktree: created},
+	})
+	_ = next.(*uiModel)
+	_ = collectCmdMessages(t, cmd)
+
+	if len(client.enterRequests) != 1 || client.enterRequests[0].Selector != "wt-created" {
+		t.Fatalf("enter requests = %+v, want created worktree ID", client.enterRequests)
+	}
+}

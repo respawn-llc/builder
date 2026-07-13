@@ -56,6 +56,107 @@ func TestWorktreeStatusUsesShellSessionFromNestedWorkspaceDirectory(t *testing.T
 	}
 }
 
+func TestWorktreeListUsesWorkspaceWithoutShellSession(t *testing.T) {
+	workspace := t.TempDir()
+	testsetup.InitializeGitRepository(t, workspace)
+	_, binding, _ := newBindingCommandSession(t, workspace)
+	configureWorktreeCommandWorkspaceServer(t, workspace)
+	cleanup := startBindingCommandServer(t, workspace)
+	defer cleanup()
+	disableWorktreeCommandLocalSocket(t, workspace)
+	nested := filepath.Join(workspace, "pkg")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatalf("Mkdir nested cwd: %v", err)
+	}
+	t.Chdir(nested)
+	t.Setenv("KENT_SESSION_ID", "")
+
+	var stdout, stderr bytes.Buffer
+	if exitCode := rootCommand(
+		[]string{"worktree", "list", "--json"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	); exitCode != 0 {
+		t.Fatalf("worktree list exit=%d stderr=%s", exitCode, stderr.String())
+	}
+	var response serverapi.WorktreeWorkspaceListResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("decode workspace list response: %v", err)
+	}
+	if response.WorkspaceID != binding.WorkspaceID || len(response.Worktrees) != 1 {
+		t.Fatalf("workspace list = %+v", response)
+	}
+	if response.Worktrees[0].Projection.IsCurrent {
+		t.Fatalf("workspace projection = %+v, want markerless", response.Worktrees[0].Projection)
+	}
+}
+
+func TestWorktreeListUsesSessionProjectionWhenSessionIsPresent(t *testing.T) {
+	remote := &worktreeCommandTestRemote{
+		list: serverapi.WorktreeListResponse{
+			Target: clientui.SessionExecutionTarget{WorkspaceID: "workspace-1", WorkspaceRoot: "/repo"},
+			Worktrees: []serverapi.WorktreeListEntry{{
+				Topology: serverapi.WorktreeTopologyEntry{
+					Variant: serverapi.WorktreeTopologyVariantExternal,
+					External: &serverapi.WorktreeExternalFacts{Git: serverapi.WorktreeGitFacts{
+						CanonicalRoot: "/repo",
+						HeadObject:    "deadbeef",
+						IsMain:        true,
+						PathAvailable: true,
+					}},
+				},
+				Projection: serverapi.WorktreeListProjection{Selector: "main", IsCurrent: true},
+			}},
+		},
+	}
+	replaceWorktreeCommandRemote(t, remote)
+	t.Setenv("KENT_SESSION_ID", "shell-session")
+
+	var stdout, stderr bytes.Buffer
+	if exitCode := rootCommand(
+		[]string{"worktree", "list", "--json"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	); exitCode != 0 {
+		t.Fatalf("worktree list exit=%d stderr=%s", exitCode, stderr.String())
+	}
+	if remote.listRequest == nil || remote.listRequest.SessionID != "shell-session" {
+		t.Fatalf("session list request = %+v", remote.listRequest)
+	}
+	var response serverapi.WorktreeListResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("decode session list response: %v", err)
+	}
+	if len(response.Worktrees) != 1 || !response.Worktrees[0].Projection.IsCurrent {
+		t.Fatalf("session list = %+v, want current projection", response)
+	}
+}
+
+func TestWorktreeListUsesExplicitSessionProjectionOutsideShell(t *testing.T) {
+	remote := &worktreeCommandTestRemote{
+		list: serverapi.WorktreeListResponse{
+			Target: clientui.SessionExecutionTarget{WorkspaceID: "workspace-1", WorkspaceRoot: "/repo"},
+		},
+	}
+	replaceWorktreeCommandRemote(t, remote)
+	t.Setenv("KENT_SESSION_ID", "")
+
+	var stdout, stderr bytes.Buffer
+	if exitCode := rootCommand(
+		[]string{"worktree", "list", "--session", "explicit-session"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	); exitCode != 0 {
+		t.Fatalf("worktree list exit=%d stderr=%s", exitCode, stderr.String())
+	}
+	if remote.listRequest == nil || remote.listRequest.SessionID != "explicit-session" {
+		t.Fatalf("session list request = %+v", remote.listRequest)
+	}
+}
+
 func disableWorktreeCommandLocalSocket(t *testing.T, workspace string) {
 	t.Helper()
 	cfg, err := config.Load(workspace, config.LoadOptions{})

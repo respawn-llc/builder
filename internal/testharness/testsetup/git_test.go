@@ -53,6 +53,26 @@ func TestInitializeRepositoryPinsInitialBranch(t *testing.T) {
 	}
 }
 
+func TestRunGitDisablesAutomaticMaintenance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(
+		filepath.Join(home, ".gitconfig"),
+		[]byte("[maintenance]\n\tauto = true\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write test Git config: %v", err)
+	}
+
+	value, err := runGit(t.TempDir(), "config", "--bool", "maintenance.auto")
+	if err != nil {
+		t.Fatalf("read effective maintenance.auto: %v", err)
+	}
+	if value != "false" {
+		t.Fatalf("effective maintenance.auto = %q, want false", value)
+	}
+}
+
 func TestSanitizedGitEnvironmentDropsExternalConfigOverrides(t *testing.T) {
 	environment := sanitizedGitEnvironment([]string{
 		"GIT_CONFIG_GLOBAL=/tmp/global.gitconfig",

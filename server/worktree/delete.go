@@ -53,6 +53,15 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		return serverapi.WorktreeDeleteResult{}, fmt.Errorf("cannot delete main workspace worktree: %w", serverapi.ErrWorktreeBlocked)
 	}
 	if topologyIsCurrent(match.entry, workspaceCtx.target) {
+		target, _, err := s.deleteTarget(ctx, workspaceCtx, match.entry)
+		if err != nil {
+			release()
+			return serverapi.WorktreeDeleteResult{}, err
+		}
+		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, target, req.ForceFolderRemoval); err != nil {
+			release()
+			return serverapi.WorktreeDeleteResult{}, err
+		}
 		deleteTarget, err := scheduledKentWorktreeTargetFromEntry(match.entry)
 		if err != nil {
 			release()
@@ -135,12 +144,8 @@ func (s *Service) executeDeleteLocked(
 		if processBlockers := s.backgroundProcessBlockers(target.record.CanonicalRoot); len(processBlockers) > 0 {
 			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
 		}
-		dirtyState, err := s.git.ProbeDirtyState(ctx, target.record.CanonicalRoot)
-		if err != nil {
+		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, target, req.ForceFolderRemoval); err != nil {
 			return serverapi.WorktreeDeleteCompletedResult{}, err
-		}
-		if dirtyState.Kind != serverapi.WorktreeDirtyStateClean && !req.ForceFolderRemoval {
-			return serverapi.WorktreeDeleteCompletedResult{}, &serverapi.WorktreeDeletePreconditionError{DirtyState: dirtyState}
 		}
 	}
 	retargetCompensation := worktreeSessionRetargetCompensation{}
@@ -167,6 +172,24 @@ func (s *Service) executeDeleteLocked(
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Service) ensureDeleteFolderRemovalAuthorized(
+	ctx context.Context,
+	target *syncedWorktree,
+	forceFolderRemoval bool,
+) error {
+	if target == nil {
+		return nil
+	}
+	dirtyState, err := s.git.ProbeDirtyState(ctx, target.record.CanonicalRoot)
+	if err != nil {
+		return err
+	}
+	if dirtyState.Kind != serverapi.WorktreeDirtyStateClean && !forceFolderRemoval {
+		return &serverapi.WorktreeDeletePreconditionError{DirtyState: dirtyState}
+	}
+	return nil
 }
 
 func (s *Service) deleteTarget(

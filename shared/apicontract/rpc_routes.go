@@ -33,6 +33,7 @@ const (
 	ScopeAttachSession              ScopePolicy = "attach_session"
 	ScopeProjectView                ScopePolicy = "project_view"
 	ScopeProjectWorkspace           ScopePolicy = "project_workspace"
+	ScopeProjectWorkspaceBinding    ScopePolicy = "project_workspace_binding"
 	ScopeSessionActiveProject       ScopePolicy = "session_active_project"
 	ScopeSessionActiveProjectIfSet  ScopePolicy = "session_active_project_if_set"
 	ScopeSessionAttachedProject     ScopePolicy = "session_attached_project"
@@ -265,6 +266,7 @@ var routeContracts = []Route{
 	unary[serverapi.SessionRuntimeReleaseRequest, serverapi.SessionRuntimeReleaseResponse](protocol.MethodSessionRuntimeRelease, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencySessionRuntime),
 	unary[serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](protocol.MethodWorktreeStatus, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](protocol.MethodWorktreeList, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
+	unary[serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](protocol.MethodWorktreeWorkspaceList, AuthServer, ScopeProjectWorkspaceBinding, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](protocol.MethodWorktreeSelectorResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](protocol.MethodWorktreeCreateTargetResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](protocol.MethodWorktreeCreate, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),

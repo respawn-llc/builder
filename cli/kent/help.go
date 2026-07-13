@@ -91,7 +91,7 @@ var (
 	goalResumeUsage         = leafCommandUsage(config.Command+" goal resume [--session <id>]", "Resume a paused session goal.", "", "User-only; unavailable inside Kent shell commands.")
 	goalCompleteUsage       = leafCommandUsage(config.Command+" goal complete [--session <id>] [--confirm]", "Mark a session goal complete.", "", "Agents must pass `--confirm`; user invocations do not require it.")
 	goalClearUsage          = leafCommandUsage(config.Command+" goal clear [--session <id>]", "Remove a session goal.", "", "User-only; unavailable inside Kent shell commands.")
-	worktreeUsage           = leafCommandUsage(config.Command+" worktree <status|list|create|enter|leave|delete> ...", "Inspect and manage a session's Git worktree execution target.")
+	worktreeUsage           = leafCommandUsage(config.Command+" worktree <status|list|create|enter|leave|delete> ...", "Inspect workspace worktrees and manage a session's execution target.")
 	worktreeStatusUsage     = leafCommandUsage(config.Command+" worktree status [--session <id>] [--json]", "Inspect the selected session's recorded worktree target.")
 	worktreeListUsage       = leafCommandUsage(config.Command+" worktree list [--session <id>] [--json]", "List registered, external, and missing worktrees.")
 	worktreeCreateUsage     = leafCommandUsage(config.Command+" worktree create [--session <id>] [--base <ref>] [--json] <branch-or-ref> [path]", "Create and set up a worktree without entering it.")

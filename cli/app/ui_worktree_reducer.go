@@ -174,7 +174,14 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		status := "Created worktree " + worktreeui.DisplayName(created)
 		feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
-		enterCmd := m.worktreeSwitchCommandForTarget(msg.resp.Worktree.Projection.Selector)
+		targetToken, err := worktreeui.StableMutationSelector(created)
+		if err != nil {
+			status = "Created worktree " + worktreeui.DisplayName(created) + " but could not select it: " + err.Error()
+			feedbackCmd = m.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, m.reconcileSpinnerTicking(false)))
+		}
+		enterCmd := m.worktreeSwitchCommandForTarget(targetToken)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, enterCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, m.reconcileSpinnerTicking(false)))
 	case worktreeSetupEventMsg:
