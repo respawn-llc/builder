@@ -19,8 +19,10 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 	root := t.TempDir()
 	store := newRuntimeWireSession(t, root, "factory")
 	var purposes []RuntimeClientPurpose
+	var providerIdentifiers []string
 	factory := RuntimeClientFactoryFunc(func(_ context.Context, req RuntimeClientRequest) (llm.Client, error) {
 		purposes = append(purposes, req.Purpose)
+		providerIdentifiers = append(providerIdentifiers, req.ProviderSettings.ProviderIdentifier)
 		return &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
 
@@ -28,6 +30,7 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 		store,
 		config.Settings{
 			Model:              "gpt-5",
+			ProviderIdentifier: "factory-agent",
 			ModelContextWindow: 200000,
 			Reviewer:           config.ReviewerSettings{Frequency: "all", Model: "gpt-5"},
 			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
@@ -45,6 +48,9 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 	t.Cleanup(func() { _ = wiring.Close() })
 	if len(purposes) != 2 || purposes[0] != RuntimeClientPurposeMain || purposes[1] != RuntimeClientPurposeReviewer {
 		t.Fatalf("factory purposes = %#v, want main then reviewer", purposes)
+	}
+	if len(providerIdentifiers) != 2 || providerIdentifiers[0] != "factory-agent" || providerIdentifiers[1] != "factory-agent" {
+		t.Fatalf("factory provider identifiers = %#v, want shared configured identifier", providerIdentifiers)
 	}
 }
 

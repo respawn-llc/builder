@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/shared/config"
 	"core/shared/llmerrors"
 
 	openai "github.com/openai/openai-go/v3"
@@ -25,8 +26,6 @@ import (
 const (
 	defaultOpenAIBaseURL   = "https://api.openai.com/v1"
 	codexResponsesEndpoint = "https://chatgpt.com/backend-api/codex/responses"
-	defaultOriginator      = "kent"
-	defaultUserAgent       = "kent/dev"
 	reasoningRoleSummary   = "reasoning"
 )
 
@@ -54,6 +53,7 @@ type HTTPTransport struct {
 	Store                        bool
 	ModelVerbosity               string
 	ContextWindowTokens          int
+	ProviderIdentifier           string
 	ProviderCapabilitiesOverride *ProviderCapabilities
 
 	mu                  sync.RWMutex
@@ -72,9 +72,14 @@ func NewHTTPTransport(auth AuthHeaderProvider) *HTTPTransport {
 		Client:              NewHTTPClient(120 * time.Second),
 		Auth:                auth,
 		Provider:            ProviderOpenAI,
+		ProviderIdentifier:  config.Command,
 		ContextWindowTokens: window,
 		modelContextWindows: make(map[string]int),
 	}
+}
+
+func (t *HTTPTransport) providerUserAgent() string {
+	return t.ProviderIdentifier + "/" + config.Version
 }
 
 func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (OpenAIResponse, error) {

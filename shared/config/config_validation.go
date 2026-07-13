@@ -151,6 +151,36 @@ func validateProviderOverrideValue(state settingsState, _ map[string]string) err
 	}
 }
 
+func validateProviderIdentifier(state settingsState, _ map[string]string) error {
+	identifier := state.Settings.ProviderIdentifier
+	if identifier == "" {
+		return fmt.Errorf("%w: value must not be empty", errInvalidProviderIdentifier)
+	}
+	for i := 0; i < len(identifier); i++ {
+		if !isHTTPProductTokenByte(identifier[i]) {
+			return fmt.Errorf("%w %q: expected an HTTP product token", errInvalidProviderIdentifier, identifier)
+		}
+	}
+	return nil
+}
+
+func isHTTPProductTokenByte(value byte) bool {
+	switch {
+	case value >= '0' && value <= '9':
+		return true
+	case value >= 'A' && value <= 'Z':
+		return true
+	case value >= 'a' && value <= 'z':
+		return true
+	}
+	switch value {
+	case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	default:
+		return false
+	}
+}
+
 func validateOpenAIBaseURL(state settingsState, _ map[string]string) error {
 	provider := strings.ToLower(strings.TrimSpace(state.Settings.ProviderOverride))
 	if strings.TrimSpace(state.Settings.OpenAIBaseURL) != "" && provider != "" && provider != "openai" {
