@@ -245,11 +245,12 @@ func TestResponsesStubConsumesTypedProbeAndRejectsUnconsumedQueue(t *testing.T) 
 	probe := uuid.New().String()
 	output := "ok"
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID:      uuid.New(),
-		Route:   blackbox.RouteResponses,
-		Probe:   &probe,
-		Outcome: blackbox.OutcomeStream,
-		Output:  &output,
+		ID:            uuid.New(),
+		Route:         blackbox.RouteResponses,
+		Probe:         &probe,
+		Outcome:       blackbox.OutcomeStream,
+		Output:        &output,
+		ResponsePhase: blackbox.NewResponsePhase(blackbox.ResponsePhaseFinal),
 	}})
 	if err != nil {
 		t.Fatalf("StartResponsesStub: %v", err)
@@ -775,7 +776,7 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	probe := uuid.New().String()
 	output := "\x1b\x00\n"
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &probe, Outcome: blackbox.OutcomeStream, Output: &output,
+		ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &probe, Outcome: blackbox.OutcomeStream, Output: &output, ResponsePhase: blackbox.NewResponsePhase(blackbox.ResponsePhaseFinal),
 	}})
 	if err != nil {
 		t.Fatalf("StartResponsesStub: %v", err)

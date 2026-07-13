@@ -3,12 +3,10 @@ package runtime
 import (
 	"context"
 	"strings"
-
-	"core/server/llm"
 )
 
 type CompletionAdapter interface {
-	Evaluate(ctx context.Context, final llm.Message) (objectiveOutcome, error)
+	Evaluate(ctx context.Context, content string) (objectiveOutcome, error)
 }
 
 type objectiveOutcome struct {
@@ -26,16 +24,13 @@ func (s *defaultStepExecutor) workflowCompletionAdapter() workflowCompletionAdap
 	return workflowCompletionAdapter{executor: s}
 }
 
-func (a workflowCompletionAdapter) Evaluate(ctx context.Context, final llm.Message) (objectiveOutcome, error) {
+func (a workflowCompletionAdapter) Evaluate(ctx context.Context, content string) (objectiveOutcome, error) {
 	e := a.executor.engine
-	if final.Phase != llm.MessagePhaseFinal {
-		return objectiveOutcome{}, nil
-	}
 	mode, err := e.workflowCompletionMode(ctx)
 	if err != nil {
 		return objectiveOutcome{}, err
 	}
-	eval, ok := evaluateWorkflowOutputCompletion(mode, e.cfg.WorkflowRun.Contract, strings.TrimSpace(final.Content))
+	eval, ok := evaluateWorkflowOutputCompletion(mode, e.cfg.WorkflowRun.Contract, strings.TrimSpace(content))
 	if !ok {
 		return objectiveOutcome{}, nil
 	}

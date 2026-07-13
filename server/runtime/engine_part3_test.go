@@ -847,6 +847,7 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 				Role:    llm.RoleAssistant,
 				Content: "Working on it",
 			},
+			ProviderPhase: llm.AbsentProviderPhase(),
 			OutputItems: []llm.ResponseItem{
 				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleAssistant, Content: "Working on it"},
 			},
@@ -966,6 +967,34 @@ func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) 
 		if persisted.Role == llm.RoleDeveloper && strings.Contains(persisted.Content, missingAssistantPhaseWarning) {
 			t.Fatalf("did not expect missing-phase warning for legacy client response")
 		}
+	}
+}
+
+func TestSubmitUserMessageCompatibleResponsesMissingPhaseRemainsTerminal(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{
+		caps: llm.ProviderCapabilities{
+			ProviderID:           "openai-compatible",
+			SupportsResponsesAPI: true,
+			IsOpenAIFirstParty:   false,
+		},
+		responses: []llm.Response{{
+			Assistant:     llm.Message{Role: llm.RoleAssistant, Content: "done"},
+			ProviderPhase: llm.AbsentProviderPhase(),
+			Usage:         llm.Usage{WindowTokens: 200000},
+		}},
+	}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "compatible-model"})
+
+	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if msg.Content != "done" {
+		t.Fatalf("assistant content = %q, want done", msg.Content)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(client.calls))
 	}
 }
 

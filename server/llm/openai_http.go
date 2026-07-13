@@ -119,10 +119,13 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 		return OpenAIResponse{}, fmt.Errorf("openai responses request failed: empty response")
 	}
 
-	outputItems, assistantText, assistantPhase, toolCalls, reasoning, reasoningItems := parseOutputItems(decoded.Output)
+	outputItems, assistantText, _, providerPhase, toolCalls, reasoning, reasoningItems, parseErr := parseOutputItems(decoded.Output)
+	if parseErr != nil {
+		return OpenAIResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), parseErr)
+	}
 	return OpenAIResponse{
 		AssistantText:  assistantText,
-		AssistantPhase: assistantPhase,
+		ProviderPhase:  providerPhase,
 		ToolCalls:      toolCalls,
 		Reasoning:      normalizeReasoningEntries(reasoning),
 		ReasoningItems: reasoningItems,
@@ -185,7 +188,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	}
 	if err := stream.Err(); err != nil {
 		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
-			return accumulator.Response(), nil
+			return responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
 		}
 		responseStatus := newOpenAIResponseStatus(rawResp)
 		if responseStatus != nil && isOpenAIResponsesStreamFramingError(err) {
@@ -208,7 +211,18 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 			errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
 		))
 	}
-	return accumulator.Response(), nil
+	return responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
+}
+
+func responseFromStreamAccumulator(accumulator *responseStreamAccumulator, providerID string, rawResp *http.Response) (OpenAIResponse, error) {
+	response, err := accumulator.Response()
+	if err != nil {
+		return OpenAIResponse{}, fmt.Errorf(
+			"read responses stream events: %w",
+			newOpenAIProviderContractError(providerID, newOpenAIResponseStatus(rawResp), err),
+		)
+	}
+	return response, nil
 }
 
 func isOpenAIResponsesStreamFramingError(err error) bool {
@@ -230,11 +244,31 @@ type openAIResponseStatus struct {
 	Code int
 }
 
+type providerContractErrorWithoutStatus struct {
+	ProviderID string
+	Err        error
+}
+
+func (e *providerContractErrorWithoutStatus) Error() string {
+	return fmt.Sprintf("%s provider contract error without HTTP response status: %v", e.ProviderID, e.Err)
+}
+
+func (e *providerContractErrorWithoutStatus) Unwrap() error {
+	return e.Err
+}
+
 func newOpenAIResponseStatus(rawResp *http.Response) *openAIResponseStatus {
 	if rawResp == nil {
 		return nil
 	}
 	return &openAIResponseStatus{Code: rawResp.StatusCode}
+}
+
+func newOpenAIProviderContractError(providerID string, status *openAIResponseStatus, cause error) error {
+	if status == nil {
+		return &providerContractErrorWithoutStatus{ProviderID: providerID, Err: cause}
+	}
+	return llmerrors.NewProviderContractError(providerID, status.Code, cause)
 }
 
 func callerCanceledStreamRead(ctx context.Context) bool {
@@ -300,7 +334,10 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 		return OpenAICompactionResponse{}, fmt.Errorf("openai responses compact request failed: empty response")
 	}
 
-	outputItems, _, _, _, _, _ := parseOutputItems(decoded.Output)
+	outputItems, _, _, _, _, _, _, parseErr := parseOutputItems(decoded.Output)
+	if parseErr != nil {
+		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), parseErr)
+	}
 	return OpenAICompactionResponse{
 		OutputItems:       outputItems,
 		Usage:             usageFromSDK(decoded.Usage, windowTokens),

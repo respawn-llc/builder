@@ -612,6 +612,7 @@ func (u Usage) CacheHitPercent() (int, bool) {
 
 type Response struct {
 	Assistant      Message          `json:"assistant"`
+	ProviderPhase  *ProviderPhase   `json:"-"`
 	ToolCalls      []ToolCall       `json:"tool_calls,omitempty"`
 	Reasoning      []ReasoningEntry `json:"reasoning,omitempty"`
 	ReasoningItems []ReasoningItem  `json:"reasoning_items,omitempty"`

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
@@ -24,7 +25,7 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 	saveReadyAppAuthState(t, workspace)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 11) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -33,7 +34,7 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 		if got := strings.TrimSpace(r.Header.Get("Authorization")); got == "" {
 			t.Fatal("expected authorization header")
 		}
-		writeTestOpenAICompletedResponseStream(w, "hello from fake", 11, 7)
+		modelstub.WriteCompletedResponseStream(w, "hello from fake", 11, 7)
 	}))
 	defer server.Close()
 
@@ -223,7 +224,7 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 
 	requestBodies := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 11) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -238,7 +239,7 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 			t.Fatalf("decode payload: %v", err)
 		}
 		requestBodies <- payload
-		writeTestOpenAICompletedResponseStream(w, "fast via role provider", 11, 7)
+		modelstub.WriteCompletedResponseStream(w, "fast via role provider", 11, 7)
 	}))
 	defer server.Close()
 
@@ -405,7 +406,7 @@ func newFakeResponsesServer(t *testing.T, assistantReplies []string) (*httptest.
 	t.Helper()
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 11) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -418,7 +419,7 @@ func newFakeResponsesServer(t *testing.T, assistantReplies []string) (*httptest.
 		if index >= len(assistantReplies) {
 			t.Fatalf("unexpected response request index %d", index)
 		}
-		writeTestOpenAICompletedResponseStream(w, assistantReplies[index], 11, 7)
+		modelstub.WriteCompletedResponseStream(w, assistantReplies[index], 11, 7)
 	}))
 	return server, &hits
 }
@@ -427,7 +428,7 @@ func newNoAuthFakeResponsesServer(t *testing.T, assistantReplies []string) (*htt
 	t.Helper()
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 11) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -440,7 +441,7 @@ func newNoAuthFakeResponsesServer(t *testing.T, assistantReplies []string) (*htt
 		if index >= len(assistantReplies) {
 			t.Fatalf("unexpected response request index %d", index)
 		}
-		writeTestOpenAICompletedResponseStream(w, assistantReplies[index], 11, 7)
+		modelstub.WriteCompletedResponseStream(w, assistantReplies[index], 11, 7)
 	}))
 	return server, &hits
 }

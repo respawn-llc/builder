@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/llm"
@@ -265,7 +266,7 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -274,7 +275,7 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 		if got := r.Header.Get("Authorization"); got == "" {
 			t.Fatal("expected authorization header")
 		}
-		writeTestOpenAICompletedResponseStream(w, "from persisted continuation", 1, 1)
+		modelstub.WriteCompletedResponseStream(w, "from persisted continuation", 1, 1)
 	}))
 	defer server.Close()
 
@@ -379,7 +380,7 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -387,7 +388,7 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 		}
 		startedOnce.Do(func() { close(started) })
 		<-release
-		writeTestOpenAICompletedResponseStream(w, "done", 1, 1)
+		modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
 	}))
 	defer server.Close()
 
@@ -464,7 +465,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 
 	requestBodies := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -476,7 +477,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 			t.Fatalf("decode request payload: %v", err)
 		}
 		requestBodies <- payload
-		writeTestOpenAICompletedResponseStream(w, "locked response", 1, 1)
+		modelstub.WriteCompletedResponseStream(w, "locked response", 1, 1)
 	}))
 	defer server.Close()
 
