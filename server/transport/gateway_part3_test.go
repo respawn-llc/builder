@@ -1,18 +1,66 @@
 package transport
 
 import (
+	"context"
+	"core/internal/testharness/testsetup"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
 	"core/server/metadata"
 	"core/server/session"
+	remoteclient "core/shared/client"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"encoding/json"
+	"errors"
 	"golang.org/x/net/websocket"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 )
+
+func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
+	appCore, server := newUnboundGatewayTestServer(t)
+	testsetup.InitializeGitRepository(t, appCore.Config().WorkspaceRoot)
+	binding, err := appCore.MetadataStore().RegisterWorkspaceBinding(
+		context.Background(),
+		appCore.Config().WorkspaceRoot,
+	)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	store, err := session.Create(
+		filepath.Join(appCore.Config().PersistenceRoot, "projects", binding.ProjectID, "sessions"),
+		filepath.Base(appCore.Config().WorkspaceRoot),
+		appCore.Config().WorkspaceRoot,
+		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+
+	remote, err := remoteclient.DialRemoteURLForSession(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		store.Meta().SessionID,
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	status, err := remote.GetWorktreeStatus(
+		context.Background(),
+		serverapi.WorktreeStatusRequest{SessionID: store.Meta().SessionID},
+	)
+	if err != nil {
+		t.Fatalf("GetWorktreeStatus: %v", err)
+	}
+	if status.Target.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("target workspace id = %q, want %q", status.Target.WorkspaceID, binding.WorkspaceID)
+	}
+}
 
 func newGatewayTestServer(t *testing.T) (*core.Core, *httptest.Server) {
 	t.Helper()
@@ -163,6 +211,35 @@ func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 	decoded, ok := serverapi.DecodeWorkflowTaskListScopeError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskListScopeError)
 	if !ok || decoded.Kind != source.Kind || decoded.MissingScope == nil || *decoded.MissingScope != missing || len(decoded.WorkflowIDs) != 2 {
 		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
+	}
+}
+
+func TestDecodeAndHandlePreservesWorktreeStructuredErrors(t *testing.T) {
+	source := &serverapi.WorktreeSelectorError{
+		Kind:  serverapi.WorktreeSelectorErrorKindAmbiguous,
+		Input: "feature",
+		Candidates: []serverapi.WorktreeSelectorCandidate{{
+			Variant:          serverapi.WorktreeTopologyVariantRegistered,
+			Selector:         "feature-a",
+			FallbackIdentity: "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+		}},
+	}
+	response := decodeAndHandle[serverapi.WorktreeSelectorPreviewRequest, struct{}](
+		protocol.Request{
+			ID:     "worktree-selector-error",
+			Params: mustJSON(t, serverapi.WorktreeSelectorPreviewRequest{SessionID: "session", Selector: "feature"}),
+		},
+		func(serverapi.WorktreeSelectorPreviewRequest) (struct{}, error) {
+			return struct{}{}, source
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorktreeSelector {
+		t.Fatalf("response error = %+v, want structured worktree selector error", response.Error)
+	}
+	decoded := serverapi.DecodeWorktreeRPCError(response.Error.Data, response.Error.Message)
+	var selector *serverapi.WorktreeSelectorError
+	if !errors.As(decoded, &selector) || selector.Kind != source.Kind || selector.Input != source.Input || len(selector.Candidates) != 1 || selector.Candidates[0].FallbackIdentity != source.Candidates[0].FallbackIdentity {
+		t.Fatalf("decoded selector error = %+v (%v), want %+v", selector, decoded, source)
 	}
 }
 

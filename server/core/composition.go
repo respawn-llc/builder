@@ -148,7 +148,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
 	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithOperationCoordinator(runtimeOperations).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
 	gitInspector := worktree.NewGitInspector(nil)
-	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, runtimeControlService, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript, SetupTimeoutSeconds: cfg.Settings.Worktrees.SetupTimeoutSeconds})
+	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript, SetupTimeoutSeconds: cfg.Settings.Worktrees.SetupTimeoutSeconds})
 	projectViews := client.NewLoopbackProjectViewClient(projectService)
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
@@ -161,6 +161,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	var workflowScheduler *workflowrunner.SchedulerService
 	cleanupNewFailure := func() {
 		sleepManager.Close()
+		_ = worktreeService.Close()
 		if workflowScheduler != nil {
 			_ = workflowScheduler.Close()
 		}
@@ -334,9 +335,12 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 	if err != nil {
 		return workflowstore.ManagedExecutionRoot{}, err
 	}
+	if materialized.Worktree.Variant != serverapi.WorktreeTopologyVariantRegistered || materialized.Worktree.Registered == nil {
+		return workflowstore.ManagedExecutionRoot{}, errors.New("materialized task worktree is not registered")
+	}
 	return workflowstore.ManagedExecutionRoot{
-		WorktreeID: materialized.Worktree.WorktreeID,
-		Root:       materialized.Worktree.CanonicalRoot,
+		WorktreeID: materialized.Worktree.Registered.Kent.WorktreeID,
+		Root:       materialized.Worktree.Registered.Git.CanonicalRoot,
 	}, nil
 }
 
@@ -357,7 +361,7 @@ type runtimeTaskWorktreeRestorer struct {
 
 func (r runtimeTaskWorktreeRestorer) RestoreLockedTaskWorktree(ctx context.Context, req workflowrunner.LockedTaskWorktreeRestoreRequest) error {
 	if r.service == nil {
-		return nil
+		return errors.New("worktree service is required")
 	}
 	_, err := r.service.RestoreLockedTaskWorktree(ctx, worktree.LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
 	return err

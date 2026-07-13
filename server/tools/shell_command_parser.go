@@ -7,6 +7,36 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+type LiteralShellInvocation struct {
+	Args []string
+}
+
+func ExtractLiteralShellInvocations(command string) []LiteralShellInvocation {
+	parser := syntax.NewParser()
+	file, err := parser.Parse(strings.NewReader(command), "")
+	if err != nil || file == nil {
+		return nil
+	}
+	var invocations []LiteralShellInvocation
+	syntax.Walk(file, func(node syntax.Node) bool {
+		call, ok := node.(*syntax.CallExpr)
+		if !ok {
+			return true
+		}
+		args, ok := literalCallArgs(call)
+		if !ok {
+			return true
+		}
+		args, ok = unwrapLiteralCommand(args)
+		if !ok {
+			return true
+		}
+		invocations = append(invocations, LiteralShellInvocation{Args: args})
+		return true
+	})
+	return invocations
+}
+
 func ParseSimpleShellCommand(command string) ([]string, bool) {
 	parser := syntax.NewParser()
 	file, err := parser.Parse(strings.NewReader(command), "")
@@ -20,20 +50,14 @@ func ParseSimpleShellCommand(command string) ([]string, bool) {
 	}
 
 	callExpr, ok := stmt.Cmd.(*syntax.CallExpr)
-	if !ok || len(callExpr.Assigns) > 0 || len(callExpr.Args) == 0 {
+	if !ok || len(callExpr.Assigns) > 0 {
 		return nil, false
 	}
-
-	args := make([]string, 0, len(callExpr.Args))
-	for _, arg := range callExpr.Args {
-		literal, ok := literalWord(arg)
-		if !ok || (len(args) == 0 && literal == "") {
-			return nil, false
-		}
-		args = append(args, literal)
+	args, ok := literalCallArgs(callExpr)
+	if !ok {
+		return nil, false
 	}
-
-	return args, true
+	return unwrapLiteralCommand(args)
 }
 
 func NormalizeShellCommandName(command string) string {
@@ -76,4 +100,68 @@ func literalWord(word *syntax.Word) (string, bool) {
 	}
 
 	return out.String(), true
+}
+
+func literalCallArgs(call *syntax.CallExpr) ([]string, bool) {
+	if call == nil || len(call.Args) == 0 {
+		return nil, false
+	}
+	args := make([]string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		literal, ok := literalWord(arg)
+		if !ok || (len(args) == 0 && literal == "") {
+			return nil, false
+		}
+		args = append(args, literal)
+	}
+	return args, true
+}
+
+func unwrapLiteralCommand(args []string) ([]string, bool) {
+	for len(args) > 0 {
+		switch NormalizeShellCommandName(args[0]) {
+		case "command":
+			args = args[1:]
+			if len(args) > 0 && args[0] == "--" {
+				args = args[1:]
+			}
+			if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+				return nil, false
+			}
+		case "env":
+			args = args[1:]
+			if len(args) > 0 && args[0] == "--" {
+				args = args[1:]
+			}
+			for len(args) > 0 && isEnvironmentAssignment(args[0]) {
+				args = args[1:]
+			}
+			if len(args) > 0 && args[0] == "--" {
+				args = args[1:]
+			}
+			if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+				return nil, false
+			}
+		default:
+			return append([]string(nil), args...), true
+		}
+	}
+	return nil, false
+}
+
+func isEnvironmentAssignment(value string) bool {
+	name, _, found := strings.Cut(value, "=")
+	if !found || name == "" {
+		return false
+	}
+	for index, character := range name {
+		if character == '_' ||
+			character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			index > 0 && character >= '0' && character <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }

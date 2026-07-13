@@ -133,8 +133,11 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 		CommitOID:     stringPointer("0123456789abcdef"),
 		Provenance:    WorkflowExecutionTargetProvenanceResolved,
 		CurrentBranch: stringPointer("operator-renamed"),
-		ManagedWorktree: &WorktreeView{
+		ManagedWorktree: &WorktreeKentFacts{
+			WorktreeID:    "worktree-1",
 			CanonicalRoot: "/worktree",
+			DisplayName:   "worktree",
+			Managed:       true,
 		},
 	}
 	if err := target.Validate(); err != nil {
@@ -145,6 +148,16 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 	if err := legacy.Validate(); err != nil {
 		t.Fatalf("legacy-observed target invalid: %v", err)
 	}
+	target.ManagedWorktree.Managed = false
+	if err := target.Validate(); err == nil {
+		t.Fatal("managed target accepted unmanaged worktree facts")
+	}
+	target.ManagedWorktree.Managed = true
+	target.ManagedWorktree.WorktreeID = ""
+	if err := target.Validate(); err == nil {
+		t.Fatal("managed target accepted invalid worktree facts")
+	}
+	target.ManagedWorktree.WorktreeID = "worktree-1"
 	data, err := json.Marshal(WorkflowTaskDetail{ExecutionTarget: &target})
 	if err != nil {
 		t.Fatalf("marshal detail: %v", err)
@@ -225,6 +238,11 @@ func TestWorkflowTaskDetailDoesNotDuplicateManagedWorktreeOrChangeBoardCards(t *
 	if _, exists := detailType.FieldByName("ManagedWorktree"); exists {
 		t.Fatal("WorkflowTaskDetail still duplicates execution_target.managed_worktree")
 	}
+	targetType := reflect.TypeOf(WorkflowExecutionTarget{})
+	managedWorktree, exists := targetType.FieldByName("ManagedWorktree")
+	if !exists || managedWorktree.Type != reflect.TypeOf((*WorktreeKentFacts)(nil)) {
+		t.Fatalf("WorkflowExecutionTarget managed worktree contract = %v, want *WorktreeKentFacts", managedWorktree.Type)
+	}
 	for _, boardType := range []reflect.Type{
 		reflect.TypeOf(WorkflowBoardTaskCard{}),
 		reflect.TypeOf(WorkflowTaskListItem{}),
@@ -259,10 +277,6 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("task detail response accepted an invalid execution target")
 	}
-}
-
-func stringPointer(value string) *string {
-	return &value
 }
 
 func jsonFieldPresent(t *testing.T, data []byte, field string) bool {

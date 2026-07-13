@@ -186,11 +186,7 @@ func writeTaskExecutionTarget(stdout io.Writer, target serverapi.WorkflowExecuti
 	if target.ManagedWorktree != nil {
 		worktreeRoot := strings.TrimSpace(target.ManagedWorktree.CanonicalRoot)
 		if worktreeRoot != "" {
-			if availability := strings.TrimSpace(target.ManagedWorktree.Availability); availability != "" && availability != "available" {
-				fmt.Fprintf(stdout, "Worktree: %s (%s)\n", worktreeRoot, availability)
-			} else {
-				fmt.Fprintf(stdout, "Worktree: %s\n", worktreeRoot)
-			}
+			fmt.Fprintf(stdout, "Worktree: %s\n", worktreeRoot)
 		}
 	}
 }

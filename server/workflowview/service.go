@@ -819,14 +819,14 @@ func (s *Service) executionTargetForTask(ctx context.Context, task sqlitegen.Tas
 		row, err := s.queries.GetWorktreeByID(ctx, worktreeID)
 		switch {
 		case err == nil:
-			view := worktreeView(row)
-			target.ManagedWorktree = &view
-			if view.Availability == "available" {
-				root := view.CanonicalRoot
+			facts := worktreeKentFacts(row)
+			target.ManagedWorktree = &facts
+			if info, statErr := os.Stat(facts.CanonicalRoot); statErr == nil && info.IsDir() {
+				root := facts.CanonicalRoot
 				target.EffectiveRoot = &root
 				if identity, inspectErr := s.git.ValidateManagedWorktreeIdentity(ctx, worktree.ManagedWorktreeIdentitySpec{
 					SourceWorkspaceRoot:  sourceWorkspace.RootPath,
-					ExpectedWorktreeRoot: view.CanonicalRoot,
+					ExpectedWorktreeRoot: facts.CanonicalRoot,
 				}); inspectErr == nil {
 					if branchName, ok := identity.NamedBranch(); ok {
 						target.CurrentBranch = &branchName
@@ -834,6 +834,8 @@ func (s *Service) executionTargetForTask(ctx context.Context, task sqlitegen.Tas
 				} else if ctxErr := ctx.Err(); ctxErr != nil {
 					return nil, ctxErr
 				}
+			} else if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
 			}
 		case !errors.Is(err, sql.ErrNoRows):
 			return nil, err
@@ -1289,8 +1291,18 @@ func workflowPickerItem(def serverapi.WorkflowDefinition, link sqlitegen.Project
 	return item
 }
 
-func worktreeView(row sqlitegen.GetWorktreeByIDRow) serverapi.WorktreeView {
-	return serverapi.WorktreeView{WorktreeID: row.ID, DisplayName: displayNameForPath(row.CanonicalRootPath), CanonicalRoot: row.CanonicalRootPath, Availability: availabilityForPath(row.CanonicalRootPath), IsMain: row.IsMain != 0, Managed: row.Managed != 0, CreatedBranch: row.CreatedBranch != 0, OriginSessionID: row.OriginSessionID}
+func worktreeKentFacts(row sqlitegen.GetWorktreeByIDRow) serverapi.WorktreeKentFacts {
+	facts := serverapi.WorktreeKentFacts{
+		WorktreeID:    row.ID,
+		DisplayName:   displayNameForPath(row.CanonicalRootPath),
+		CanonicalRoot: row.CanonicalRootPath,
+		Managed:       row.Managed != 0,
+		CreatedBranch: row.CreatedBranch != 0,
+	}
+	if originSessionID := strings.TrimSpace(row.OriginSessionID); originSessionID != "" {
+		facts.OriginSessionID = &originSessionID
+	}
+	return facts
 }
 
 func displayNameForPath(path string) string {
@@ -1303,20 +1315,6 @@ func displayNameForPath(path string) string {
 		return ""
 	}
 	return base
-}
-
-func availabilityForPath(path string) string {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return ""
-	}
-	if _, err := os.Stat(trimmed); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "missing"
-		}
-		return "inaccessible"
-	}
-	return "available"
 }
 
 type taskActivityRow struct {

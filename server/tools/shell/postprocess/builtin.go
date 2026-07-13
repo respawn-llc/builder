@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"core/server/tools"
 	"core/shared/toolspec"
 
 	xansi "github.com/charmbracelet/x/ansi"
@@ -14,6 +15,73 @@ type sanitizerProcessor struct{}
 
 func (sanitizerProcessor) ID() string {
 	return "builtin/sanitize-output"
+}
+
+type gitWorktreeAdvisoryProcessor struct{}
+
+func (gitWorktreeAdvisoryProcessor) ID() string {
+	return "builtin/git-worktree-advisory"
+}
+
+func (p gitWorktreeAdvisoryProcessor) Process(_ context.Context, envelope Envelope) (Decision, error) {
+	for _, invocation := range envelope.Request.Invocations {
+		if len(invocation.Args) == 0 || tools.NormalizeShellCommandName(invocation.Args[0]) != "git" {
+			continue
+		}
+		subcommand, ok := gitSubcommand(invocation.Args)
+		if !ok || subcommand != "worktree" {
+			continue
+		}
+		warning, err := NewWarning("Use `kent worktree` commands instead of `git worktree` so Kent keeps session targets and metadata consistent.")
+		if err != nil {
+			return Decision{}, err
+		}
+		return Decision{Action: ActionSkip, Next: envelope, Warning: warning}, nil
+	}
+	return Skip(envelope), nil
+}
+
+func gitSubcommand(args []string) (string, bool) {
+	for index := 1; index < len(args); {
+		arg := args[index]
+		switch arg {
+		case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix":
+			if index+1 >= len(args) {
+				return "", false
+			}
+			index += 2
+		case "-p", "--paginate", "-P", "--no-pager", "--no-replace-objects", "--bare",
+			"--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
+			"--no-optional-locks", "--no-advice", "--":
+			index++
+		default:
+			if gitGlobalOptionWithInlineValue(arg) {
+				index++
+				continue
+			}
+			if strings.HasPrefix(arg, "-") {
+				return "", false
+			}
+			return arg, true
+		}
+	}
+	return "", false
+}
+
+func gitGlobalOptionWithInlineValue(arg string) bool {
+	for _, prefix := range []string{
+		"--git-dir=",
+		"--work-tree=",
+		"--namespace=",
+		"--super-prefix=",
+		"--config-env=",
+		"--exec-path=",
+	} {
+		if strings.HasPrefix(arg, prefix) && len(arg) > len(prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p sanitizerProcessor) Process(_ context.Context, envelope Envelope) (Decision, error) {

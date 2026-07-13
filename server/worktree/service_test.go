@@ -3,8 +3,6 @@ package worktree
 import (
 	"context"
 	"core/server/metadata"
-	"core/server/registry"
-	runtimepkg "core/server/runtime"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
@@ -22,17 +20,22 @@ import (
 )
 
 type serviceTestRuntime struct {
-	mu                    sync.Mutex
-	rebindCalls           []serviceRuntimeCall
-	reminderCalls         []session.WorktreeReminderState
-	clearReminderSessions []string
-	activeSessions        map[string]bool
-	runningSessions       map[string]bool
-	syncErrSessions       map[string]error
-	blockedRuns           map[string]int
-	rebindErr             error
-	rebindErrRoot         string
-	rebindHook            func(context.Context, string, string, string)
+	mu                     sync.Mutex
+	rebindCalls            []serviceRuntimeCall
+	reminderCalls          []session.WorktreeReminderState
+	clearReminderSessions  []string
+	activeSessions         map[string]bool
+	runningSessions        map[string]bool
+	syncErrSessions        map[string]error
+	blockedRuns            map[string]int
+	blockRunsHook          func([]string)
+	rebindErr              error
+	rebindErrRoot          string
+	rebindHook             func(context.Context, string, string, string)
+	transitionGate         <-chan struct{}
+	transitionOutcomes     []clientui.WorktreeTransitionOutcome
+	transitionOutcomeReady chan struct{}
+	steeredFailures        []clientui.WorktreeTransitionOutcome
 }
 
 func sessionTargetWorktreeID(target clientui.SessionExecutionTarget) string {
@@ -101,6 +104,44 @@ func (r *serviceTestRuntime) HasBlockingRuntimeActivity(_ context.Context, sessi
 	return r.runningSessions[strings.TrimSpace(sessionID)], nil
 }
 
+func (r *serviceTestRuntime) RunWorktreeTransition(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+) error {
+	if r.transitionGate != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.transitionGate:
+		}
+	}
+	return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+		return r.SyncExecutionTarget(syncCtx, sessionID, target, reminder)
+	})
+}
+
+func (r *serviceTestRuntime) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
+	r.mu.Lock()
+	r.transitionOutcomes = append(r.transitionOutcomes, outcome)
+	if r.transitionOutcomeReady == nil {
+		r.transitionOutcomeReady = make(chan struct{}, 1)
+	}
+	ready := r.transitionOutcomeReady
+	r.mu.Unlock()
+	select {
+	case ready <- struct{}{}:
+	default:
+	}
+}
+
+func (r *serviceTestRuntime) SteerWorktreeTransitionFailure(_ context.Context, _ string, outcome clientui.WorktreeTransitionOutcome) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.steeredFailures = append(r.steeredFailures, outcome)
+	return nil
+}
+
 func (r *serviceTestRuntime) IsSessionRuntimeActive(sessionID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -121,7 +162,11 @@ func (r *serviceTestRuntime) BlockSessionRuns(sessionIDs []string) func() {
 		r.blockedRuns[trimmed]++
 		blocked = append(blocked, trimmed)
 	}
+	hook := r.blockRunsHook
 	r.mu.Unlock()
+	if hook != nil {
+		hook(append([]string(nil), blocked...))
+	}
 	return func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -210,7 +255,6 @@ type serviceTestEnv struct {
 	session       *session.Store
 	runtime       *serviceTestRuntime
 	processes     *serviceTestProcessSource
-	localNotes    *serviceTestLocalNotes
 	service       *Service
 	leaseID       string
 	workspaceRoot string
@@ -238,25 +282,26 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	if err != nil {
 		t.Fatalf("CreateWorktree: %v", err)
 	}
-	if !resp.CreatedBranch {
+	createdView := worktreeViewFromListEntryForTest(resp.Worktree)
+	if !createdView.CreatedBranch {
 		t.Fatal("expected create to report created branch")
 	}
-	if !resp.Worktree.Managed {
+	if !createdView.Managed {
 		t.Fatal("expected worktree managed=true")
 	}
-	if sessionTargetWorktreeID(resp.Target) != resp.Worktree.WorktreeID {
-		t.Fatalf("create target worktree id = %q, want %q", sessionTargetWorktreeID(resp.Target), resp.Worktree.WorktreeID)
+	if sessionTargetWorktreeID(resp.Target) != "" {
+		t.Fatalf("create changed session target to %q", sessionTargetWorktreeID(resp.Target))
 	}
-	if resp.Target.EffectiveWorkdir != resp.Worktree.CanonicalRoot {
-		t.Fatalf("create effective workdir = %q, want %q", resp.Target.EffectiveWorkdir, resp.Worktree.CanonicalRoot)
+	if resp.Target.EffectiveWorkdir != env.workspaceRoot {
+		t.Fatalf("create effective workdir = %q, want %q", resp.Target.EffectiveWorkdir, env.workspaceRoot)
 	}
-	if !resp.Worktree.CreatedBranch {
+	if !createdView.CreatedBranch {
 		t.Fatal("expected worktree created_branch=true")
 	}
-	if resp.Worktree.OriginSessionID != env.session.Meta().SessionID {
-		t.Fatalf("origin session id = %q, want %q", resp.Worktree.OriginSessionID, env.session.Meta().SessionID)
+	if createdView.OriginSessionID != env.session.Meta().SessionID {
+		t.Fatalf("origin session id = %q, want %q", createdView.OriginSessionID, env.session.Meta().SessionID)
 	}
-	record, err := env.store.GetWorktreeRecordByID(env.ctx, resp.Worktree.WorktreeID)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, createdView.WorktreeID)
 	if err != nil {
 		t.Fatalf("GetWorktreeRecordByID: %v", err)
 	}
@@ -273,32 +318,29 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	if payload.SessionID == nil || *payload.SessionID != env.session.Meta().SessionID {
 		t.Fatalf("setup payload session_id = %v, want %q", payload.SessionID, env.session.Meta().SessionID)
 	}
-	if payload.WorktreeID != resp.Worktree.WorktreeID {
-		t.Fatalf("setup payload worktree_id = %q, want %q", payload.WorktreeID, resp.Worktree.WorktreeID)
+	if payload.WorktreeID != createdView.WorktreeID {
+		t.Fatalf("setup payload worktree_id = %q, want %q", payload.WorktreeID, createdView.WorktreeID)
 	}
 	if !payload.CreatedBranch {
 		t.Fatal("expected setup payload created_branch=true")
 	}
-	if got := waitForFileText(t, cwdPath); got != resp.Worktree.CanonicalRoot {
-		t.Fatalf("setup cwd = %q, want %q", got, resp.Worktree.CanonicalRoot)
+	if got := waitForFileText(t, cwdPath); got != createdView.CanonicalRoot {
+		t.Fatalf("setup cwd = %q, want %q", got, createdView.CanonicalRoot)
 	}
-	if got := waitForFileLines(t, argsPath); len(got) != 3 || got[0] != env.workspaceRoot || got[1] != "feature/create-provenance" || got[2] != resp.Worktree.CanonicalRoot {
-		t.Fatalf("setup args = %+v, want [%q %q %q]", got, env.workspaceRoot, "feature/create-provenance", resp.Worktree.CanonicalRoot)
+	if got := waitForFileLines(t, argsPath); len(got) != 3 || got[0] != env.workspaceRoot || got[1] != "feature/create-provenance" || got[2] != createdView.CanonicalRoot {
+		t.Fatalf("setup args = %+v, want [%q %q %q]", got, env.workspaceRoot, "feature/create-provenance", createdView.CanonicalRoot)
 	}
 	if stdinPayload := waitForSetupPayload(t, stdinPath); !reflect.DeepEqual(stdinPayload, payload) {
 		t.Fatalf("stdin payload = %+v, want %+v", stdinPayload, payload)
 	}
-	if len(env.runtime.rebindCalls) != 1 || env.runtime.rebindCalls[0].root != resp.Worktree.CanonicalRoot {
-		t.Fatalf("expected create-time rebind to created worktree, got %+v", env.runtime.rebindCalls)
+	if len(env.runtime.rebindCalls) != 0 {
+		t.Fatalf("create rebounded the runtime, got %+v", env.runtime.rebindCalls)
 	}
-	if notes := env.localNotes.snapshot(); len(notes) != 0 {
-		t.Fatalf("expected no synthetic create-time switch notes, got %+v", notes)
-	}
-	if len(env.runtime.reminderCalls) == 0 {
-		t.Fatal("expected create-time pending worktree reminder")
+	if len(env.runtime.reminderCalls) != 0 {
+		t.Fatalf("create issued a worktree reminder, got %+v", env.runtime.reminderCalls)
 	}
 	worktrees := mustListWorktrees(t, env)
-	created := findWorktreeByID(t, worktrees.Worktrees, resp.Worktree.WorktreeID)
+	created := findWorktreeByID(t, worktrees.Worktrees, createdView.WorktreeID)
 	if !created.Managed || !created.CreatedBranch || created.OriginSessionID != env.session.Meta().SessionID {
 		t.Fatalf("sync lost worktree provenance: %+v", created)
 	}
@@ -349,7 +391,7 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 	select {
 	case result := <-resultCh:
 		t.Fatalf("CreateWorktree returned before setup release: resp=%+v err=%v", result.resp, result.err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
@@ -377,8 +419,8 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget after: %v", err)
 	}
-	if sessionTargetWorktreeID(target) != result.resp.Worktree.WorktreeID {
-		t.Fatalf("session target after setup = %+v, want worktree %q", target, result.resp.Worktree.WorktreeID)
+	if sessionTargetWorktreeID(target) != "" || target.EffectiveWorkdir != env.workspaceRoot {
+		t.Fatalf("session target after setup = %+v, want unchanged main target", target)
 	}
 }
 
@@ -408,6 +450,10 @@ func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("CreateWorktree succeeded, want setup failure")
+	}
+	var retained *serverapi.WorktreeSetupRetainedError
+	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
+		t.Fatalf("CreateWorktree error = %T %v, want retained worktree facts", err, err)
 	}
 	if _, statErr := os.Stat(expectedRoot); statErr != nil {
 		t.Fatalf("expected setup-failed worktree kept, stat err=%v", statErr)
@@ -585,21 +631,6 @@ func TestCreateWorktreeMissingSetupScriptKeepsWorktreeAndSessionTarget(t *testin
 	}
 }
 
-func TestRunSetupScriptDoesNotAppendSuccessNote(t *testing.T) {
-	notes := &serviceTestLocalNotes{}
-	service := &Service{localNotes: notes}
-	scriptPath := filepath.Join(t.TempDir(), "setup.sh")
-	writeExecutableFile(t, scriptPath, "#!/bin/sh\nexit 0\n")
-
-	if err := service.runSetupScript(context.Background(), scriptPath, setupScriptPayload{WorktreeRoot: t.TempDir()}); err != nil {
-		t.Fatalf("runSetupScript: %v", err)
-	}
-
-	if got := notes.snapshot(); len(got) != 0 {
-		t.Fatalf("expected no setup success note, got %+v", got)
-	}
-}
-
 func TestCreateWorktreeAllowsExistingRefWithoutCreatingBranch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	runGit(t, env.workspaceRoot, "branch", "feature/existing-ref")
@@ -614,16 +645,17 @@ func TestCreateWorktreeAllowsExistingRefWithoutCreatingBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorktree existing ref: %v", err)
 	}
-	if resp.CreatedBranch {
+	createdView := worktreeViewFromListEntryForTest(resp.Worktree)
+	if createdView.CreatedBranch {
 		t.Fatal("expected created_branch=false for existing ref")
 	}
-	if resp.Worktree.BranchName != "feature/existing-ref" {
-		t.Fatalf("branch name = %q, want feature/existing-ref", resp.Worktree.BranchName)
+	if createdView.BranchName != "feature/existing-ref" {
+		t.Fatalf("branch name = %q, want feature/existing-ref", createdView.BranchName)
 	}
-	if !resp.Worktree.Managed {
+	if !createdView.Managed {
 		t.Fatal("expected managed worktree for existing ref")
 	}
-	record, err := env.store.GetWorktreeRecordByID(env.ctx, resp.Worktree.WorktreeID)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, createdView.WorktreeID)
 	if err != nil {
 		t.Fatalf("GetWorktreeRecordByID: %v", err)
 	}
@@ -632,7 +664,7 @@ func TestCreateWorktreeAllowsExistingRefWithoutCreatingBranch(t *testing.T) {
 	}
 }
 
-func TestSyncWorkspaceClearsStaleManagedProvenanceWhenRootIsReused(t *testing.T) {
+func TestListWorktreesDoesNotResetManagedProvenanceWhenRootIsReused(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/provenance-stale")
 
@@ -640,12 +672,13 @@ func TestSyncWorkspaceClearsStaleManagedProvenanceWhenRootIsReused(t *testing.T)
 	runGit(t, env.workspaceRoot, "worktree", "add", "--detach", created.CanonicalRoot, "HEAD")
 
 	worktrees := mustListWorktrees(t, env).Worktrees
-	for _, worktree := range worktrees {
+	for _, entry := range worktrees {
+		worktree := worktreeViewFromListEntryForTest(entry)
 		if strings.TrimSpace(worktree.CanonicalRoot) != strings.TrimSpace(created.CanonicalRoot) {
 			continue
 		}
-		if worktree.Managed || worktree.CreatedBranch || strings.TrimSpace(worktree.OriginSessionID) != "" {
-			t.Fatalf("expected stale managed provenance cleared for reused root, got %+v", worktree)
+		if !worktree.Managed || !worktree.CreatedBranch || strings.TrimSpace(worktree.OriginSessionID) == "" {
+			t.Fatalf("list mutated managed provenance for reused root: %+v", worktree)
 		}
 		return
 	}
@@ -678,76 +711,6 @@ func TestResolveWorktreeCreateTargetClassifiesBranchDetachedRefAndNewBranch(t *t
 	}
 	if newBranch.Resolution.Kind != serverapi.WorktreeCreateTargetResolutionKindNewBranch {
 		t.Fatalf("new branch kind = %q, want new_branch", newBranch.Resolution.Kind)
-	}
-}
-
-func TestDeleteWorktreeKeepsExistingBranchUnlessExplicitlyRequested(t *testing.T) {
-	env := newServiceTestEnv(t)
-	runGit(t, env.workspaceRoot, "branch", "feature/shared-branch")
-	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "req-create-shared-branch",
-		SessionID:        env.session.Meta().SessionID,
-		BaseRef:          "feature/shared-branch",
-		CreateBranch:     false,
-	})
-	if err != nil {
-		t.Fatalf("CreateWorktree existing branch: %v", err)
-	}
-	env.localNotes = &serviceTestLocalNotes{}
-	env.service.localNotes = env.localNotes
-
-	deleteResp, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-shared-branch", resp.Worktree.WorktreeID))
-	if err != nil {
-		t.Fatalf("DeleteWorktree: %v", err)
-	}
-	if deleteResp.BranchDeleted {
-		t.Fatal("did not expect branch deletion without explicit confirmation")
-	}
-	if !strings.Contains(deleteResp.BranchCleanupMessage, "Kept branch feature/shared-branch") {
-		t.Fatalf("unexpected branch cleanup message: %q", deleteResp.BranchCleanupMessage)
-	}
-	if notes := env.localNotes.snapshot(); len(notes) != 0 {
-		t.Fatalf("expected no transcript note for delete branch cleanup message, got %+v", notes)
-	}
-	if got := runGit(t, env.workspaceRoot, "branch", "--list", "feature/shared-branch"); !strings.Contains(got, "feature/shared-branch") {
-		t.Fatalf("expected shared branch to remain, got %q", got)
-	}
-}
-
-func TestDeleteWorktreeDeletesExistingBranchWhenExplicitlyRequested(t *testing.T) {
-	env := newServiceTestEnv(t)
-	runGit(t, env.workspaceRoot, "branch", "feature/shared-branch")
-	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "req-create-shared-branch-explicit",
-		SessionID:        env.session.Meta().SessionID,
-		BaseRef:          "feature/shared-branch",
-		CreateBranch:     false,
-	})
-	if err != nil {
-		t.Fatalf("CreateWorktree existing branch: %v", err)
-	}
-	env.localNotes = &serviceTestLocalNotes{}
-	env.service.localNotes = env.localNotes
-
-	deleteReq := worktreeDeleteRequest(env, "req-delete-shared-branch-explicit", resp.Worktree.WorktreeID)
-	deleteReq.DeleteBranch = true
-	deleteResp, err := env.service.DeleteWorktree(env.ctx, deleteReq)
-	if err != nil {
-		t.Fatalf("DeleteWorktree explicit branch delete: %v", err)
-	}
-	if !deleteResp.BranchDeleted {
-		t.Fatalf("expected branch deletion, got %+v", deleteResp)
-	}
-	if !strings.Contains(deleteResp.BranchCleanupMessage, "Deleted branch feature/shared-branch") {
-		t.Fatalf("unexpected branch cleanup message: %q", deleteResp.BranchCleanupMessage)
-	}
-	if notes := env.localNotes.snapshot(); len(notes) != 0 {
-		t.Fatalf("expected no transcript note for delete branch cleanup message, got %+v", notes)
-	}
-	if got := runGit(t, env.workspaceRoot, "branch", "--list", "feature/shared-branch"); strings.Contains(got, "feature/shared-branch") {
-		t.Fatalf("expected shared branch removed, got %q", got)
 	}
 }
 
@@ -788,26 +751,39 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 		t.Fatalf("MkdirAll pkg: %v", err)
 	}
 	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, "pkg")
-	main := findMainWorktreeView(t, mustListWorktrees(t, env).Worktrees)
-
-	resp, err := env.service.SwitchWorktree(env.ctx, worktreeSwitchRequest(env, "req-switch-main", main.WorktreeID))
+	mainGit, found, err := env.service.git.FindCreatedWorktree(env.ctx, env.workspaceRoot, env.workspaceRoot)
+	if err != nil || !found {
+		t.Fatalf("find main worktree: found=%v err=%v", found, err)
+	}
+	previousRecord, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID)
 	if err != nil {
-		t.Fatalf("SwitchWorktree: %v", err)
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
 	}
-	if sessionTargetWorktreeID(resp.Target) != "" {
-		t.Fatalf("target worktree id = %q, want main workspace", sessionTargetWorktreeID(resp.Target))
+	previous := syncedWorktree{record: previousRecord, git: GitWorktree{Root: created.CanonicalRoot, BranchName: created.BranchName}}
+	respTarget, err := env.service.switchSessionTarget(env.ctx, sessionWorkspaceContext{
+		target:        mustResolveServiceTestTarget(t, env),
+		projectID:     env.binding.ProjectID,
+		workspaceID:   env.binding.WorkspaceID,
+		workspaceRoot: env.workspaceRoot,
+		sessionID:     env.session.Meta().SessionID,
+	}, &previous, syncedWorktree{
+		record: metadata.WorktreeRecord{WorkspaceID: env.binding.WorkspaceID, CanonicalRoot: env.workspaceRoot},
+		git:    mainGit,
+	})
+	if err != nil {
+		t.Fatalf("switchSessionTarget: %v", err)
 	}
-	if resp.Target.CwdRelpath != "." {
-		t.Fatalf("target cwd_relpath = %q, want .", resp.Target.CwdRelpath)
+	if sessionTargetWorktreeID(respTarget) != "" {
+		t.Fatalf("target worktree id = %q, want main workspace", sessionTargetWorktreeID(respTarget))
 	}
-	if resp.Target.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("effective workdir = %q, want %q", resp.Target.EffectiveWorkdir, env.workspaceRoot)
+	if respTarget.CwdRelpath != "." {
+		t.Fatalf("target cwd_relpath = %q, want .", respTarget.CwdRelpath)
+	}
+	if respTarget.EffectiveWorkdir != env.workspaceRoot {
+		t.Fatalf("effective workdir = %q, want %q", respTarget.EffectiveWorkdir, env.workspaceRoot)
 	}
 	if len(env.runtime.rebindCalls) == 0 || env.runtime.rebindCalls[len(env.runtime.rebindCalls)-1].root != env.workspaceRoot {
 		t.Fatalf("expected rebind to main workspace, got %+v", env.runtime.rebindCalls)
-	}
-	if notes := env.localNotes.snapshot(); len(notes) != 0 {
-		t.Fatalf("expected no synthetic switch local notes, got %+v", notes)
 	}
 	if len(env.runtime.reminderCalls) == 0 {
 		t.Fatal("expected pending worktree reminder")
@@ -825,15 +801,12 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 	}
 }
 
-func TestListWorktreesRetargetsMissingCurrentWorktreeBeforePruning(t *testing.T) {
+func TestListWorktreesReportsMissingCurrentWorktreeWithoutRetargeting(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/missing-current")
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	if err := os.MkdirAll(filepath.Join(created.CanonicalRoot, "pkg"), 0o755); err != nil {
-		t.Fatalf("MkdirAll pkg: %v", err)
-	}
-	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, "pkg")
-	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, "pkg")
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
 	env.runtime.rebindCalls = nil
 	env.runtime.reminderCalls = nil
 	runGit(t, env.workspaceRoot, "worktree", "remove", "--force", created.CanonicalRoot)
@@ -842,90 +815,37 @@ func TestListWorktreesRetargetsMissingCurrentWorktreeBeforePruning(t *testing.T)
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}
-	if sessionTargetWorktreeID(resp.Target) != "" {
-		t.Fatalf("response target worktree id = %q, want main workspace", sessionTargetWorktreeID(resp.Target))
+	if sessionTargetWorktreeID(resp.Target) != created.WorktreeID {
+		t.Fatalf("response target worktree id = %q, want %q", sessionTargetWorktreeID(resp.Target), created.WorktreeID)
 	}
-	if resp.Target.CwdRelpath != "." {
-		t.Fatalf("response target cwd_relpath = %q, want .", resp.Target.CwdRelpath)
-	}
-	if resp.Target.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("response effective workdir = %q, want %q", resp.Target.EffectiveWorkdir, env.workspaceRoot)
-	}
-	for _, worktree := range resp.Worktrees {
-		if worktree.WorktreeID == created.WorktreeID {
-			t.Fatalf("expected missing worktree pruned from list, got %+v", worktree)
+	foundMissing := false
+	for _, entry := range resp.Worktrees {
+		if worktreeIDFromListEntry(entry) == created.WorktreeID {
+			foundMissing = entry.Topology.Variant == serverapi.WorktreeTopologyVariantMissing && entry.Projection.IsCurrent
 		}
+	}
+	if !foundMissing {
+		t.Fatalf("missing current worktree not projected: %+v", resp.Worktrees)
 	}
 	resolved, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if sessionTargetWorktreeID(resolved) != "" {
-		t.Fatalf("stored target worktree id = %q, want main workspace", sessionTargetWorktreeID(resolved))
-	}
-	if sessionTargetWorktreeRoot(resolved) != "" {
-		t.Fatalf("stored target worktree root = %q, want empty", sessionTargetWorktreeRoot(resolved))
-	}
-	if resolved.CwdRelpath != "." {
-		t.Fatalf("stored target cwd_relpath = %q, want .", resolved.CwdRelpath)
-	}
-	if resolved.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("stored effective workdir = %q, want %q", resolved.EffectiveWorkdir, env.workspaceRoot)
+	if sessionTargetWorktreeID(resolved) != created.WorktreeID {
+		t.Fatalf("stored target worktree id = %q, want %q", sessionTargetWorktreeID(resolved), created.WorktreeID)
 	}
 	otherTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, otherSession.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget other session: %v", err)
 	}
-	if sessionTargetWorktreeID(otherTarget) != "" || otherTarget.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("expected other session retargeted to main workspace, got %+v", otherTarget)
+	if sessionTargetWorktreeID(otherTarget) != created.WorktreeID {
+		t.Fatalf("other session was retargeted during list: %+v", otherTarget)
 	}
-	if len(env.runtime.rebindCalls) != 1 {
-		t.Fatalf("expected exactly one active-runtime rebind, got %+v", env.runtime.rebindCalls)
+	if len(env.runtime.rebindCalls) != 0 {
+		t.Fatalf("list rebound runtimes: %+v", env.runtime.rebindCalls)
 	}
-	if got := env.runtime.rebindCalls[0]; got.sessionID != env.session.Meta().SessionID || got.root != env.workspaceRoot {
-		t.Fatalf("unexpected active-runtime rebind call: %+v", got)
-	}
-	if len(env.runtime.reminderCalls) != 2 {
-		t.Fatalf("expected reminder for each retargeted session, got %+v", env.runtime.reminderCalls)
-	}
-	for _, reminder := range env.runtime.reminderCalls {
-		if reminder.Mode != session.WorktreeReminderModeExit {
-			t.Fatalf("reminder mode = %q, want exit", reminder.Mode)
-		}
-		if reminder.WorktreePath != created.CanonicalRoot {
-			t.Fatalf("reminder worktree path = %q, want %q", reminder.WorktreePath, created.CanonicalRoot)
-		}
-		if reminder.EffectiveCwd != env.workspaceRoot {
-			t.Fatalf("reminder effective cwd = %q, want %q", reminder.EffectiveCwd, env.workspaceRoot)
-		}
-	}
-}
-
-func TestSwitchWorktreeRollsBackExecutionTargetWhenRebindFails(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/rebind-fail")
-	main := findMainWorktreeView(t, mustListWorktrees(t, env).Worktrees)
-	if _, err := env.service.SwitchWorktree(env.ctx, worktreeSwitchRequest(env, "req-switch-reset-main", main.WorktreeID)); err != nil {
-		t.Fatalf("SwitchWorktree main reset: %v", err)
-	}
-	env.localNotes = &serviceTestLocalNotes{}
-	env.service.localNotes = env.localNotes
-	env.runtime.rebindErrRoot = created.CanonicalRoot
-	env.runtime.rebindErr = errors.New("boom")
-
-	_, err := env.service.SwitchWorktree(env.ctx, worktreeSwitchRequest(env, "req-switch-fail", created.WorktreeID))
-	if err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("SwitchWorktree error = %v, want rebind failure", err)
-	}
-	finalTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
-	}
-	if sessionTargetWorktreeID(finalTarget) != "" || finalTarget.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("expected execution target rollback to main workspace, got %+v", finalTarget)
-	}
-	if notes := env.localNotes.snapshot(); len(notes) != 0 {
-		t.Fatalf("expected no local notes on failed switch, got %+v", notes)
+	if len(env.runtime.reminderCalls) != 0 {
+		t.Fatalf("list emitted reminders: %+v", env.runtime.reminderCalls)
 	}
 }
 
@@ -966,50 +886,6 @@ func TestSwitchSessionTargetRejectsInvalidPreviousTargetBeforeMetadataMutation(t
 	}
 }
 
-func TestSwitchWorktreeRollsBackExecutionTargetWhenRequestContextCancelsDuringRebindFailure(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/rebind-canceled")
-	main := findMainWorktreeView(t, mustListWorktrees(t, env).Worktrees)
-	if _, err := env.service.SwitchWorktree(env.ctx, worktreeSwitchRequest(env, "req-switch-reset-main-canceled", main.WorktreeID)); err != nil {
-		t.Fatalf("SwitchWorktree main reset: %v", err)
-	}
-	env.localNotes = &serviceTestLocalNotes{}
-	env.service.localNotes = env.localNotes
-
-	ctx, cancel := context.WithCancel(env.ctx)
-	env.runtime.rebindErrRoot = created.CanonicalRoot
-	env.runtime.rebindHook = func(rebindCtx context.Context, _ string, _ string, workspaceRoot string) {
-		if err := rebindCtx.Err(); err != nil {
-			t.Fatalf("unexpected rebind context canceled before rollback trigger: %v", err)
-		}
-		if strings.TrimSpace(workspaceRoot) == strings.TrimSpace(created.CanonicalRoot) {
-			cancel()
-		}
-	}
-	env.runtime.rebindErr = errors.New("boom")
-
-	_, err := env.service.SwitchWorktree(ctx, worktreeSwitchRequest(env, "req-switch-fail-canceled", created.WorktreeID))
-	if err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("SwitchWorktree error = %v, want rebind failure", err)
-	}
-	finalTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
-	}
-	if sessionTargetWorktreeID(finalTarget) != "" || finalTarget.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("expected execution target rollback to main workspace, got %+v", finalTarget)
-	}
-	if got := env.runtime.rebindCalls[len(env.runtime.rebindCalls)-1].root; got != env.workspaceRoot {
-		t.Fatalf("expected final rollback rebind to main workspace, got %q calls=%+v", got, env.runtime.rebindCalls)
-	}
-	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected request context canceled, got %v", err)
-	}
-	if notes := env.localNotes.snapshot(); len(notes) != 0 {
-		t.Fatalf("expected no local notes on failed switch, got %+v", notes)
-	}
-}
-
 func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 	env := newServiceTestEnv(t)
 	expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/create-rollback"})
@@ -1018,7 +894,7 @@ func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 	}
 	env.runtime.rebindErr = errors.New("boom")
 
-	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		ClientRequestID:  "req-create-rollback",
 		SessionID:        env.session.Meta().SessionID,
@@ -1026,8 +902,11 @@ func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 		CreateBranch:     true,
 		BranchName:       "feature/create-rollback",
 	})
-	if err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("CreateWorktree error = %v, want rebind failure", err)
+	if err != nil {
+		t.Fatalf("CreateWorktree error = %v, want successful create without switching", err)
+	}
+	if sessionTargetWorktreeID(resp.Target) != "" || len(env.runtime.rebindCalls) != 0 {
+		t.Fatalf("create changed target despite no-enter contract: target=%+v rebinds=%+v", resp.Target, env.runtime.rebindCalls)
 	}
 	if _, statErr := os.Stat(expectedRoot); statErr != nil {
 		t.Fatalf("expected failed create worktree root kept, stat err=%v", statErr)
@@ -1060,236 +939,5 @@ func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 	}
 	if sessionTargetWorktreeID(finalTarget) != "" || finalTarget.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("expected session target unchanged after failed create, got %+v", finalTarget)
-	}
-}
-
-func TestDeleteWorktreeBlocksWhenAnotherSessionTargetsIt(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-blocked-session")
-	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	env.runtime.activeSessions[otherSession.Meta().SessionID] = true
-	env.runtime.runningSessions = map[string]bool{otherSession.Meta().SessionID: true}
-
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-blocked-session", created.WorktreeID))
-	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
-		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
-	}
-}
-
-func TestDeleteWorktreeRetargetsActiveIdleSessionsTargetingIt(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-active-idle-session")
-	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	dormantSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	updateServiceTestSessionTarget(t, env, dormantSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	env.runtime.activeSessions[otherSession.Meta().SessionID] = true
-
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-active-idle-session", created.WorktreeID))
-	if err != nil {
-		t.Fatalf("DeleteWorktree: %v", err)
-	}
-	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, otherSession.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget other session: %v", err)
-	}
-	if sessionTargetWorktreeID(target) != "" || target.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("expected active idle session retargeted to main workspace, got %+v", target)
-	}
-	dormantTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, dormantSession.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget dormant session: %v", err)
-	}
-	if sessionTargetWorktreeID(dormantTarget) != "" || dormantTarget.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("expected dormant stale session retargeted by worktree deletion cleanup, got %+v", dormantTarget)
-	}
-	foundRebind := false
-	for _, call := range env.runtime.rebindCalls {
-		if call.sessionID == otherSession.Meta().SessionID && call.root == env.workspaceRoot {
-			foundRebind = true
-		}
-	}
-	if !foundRebind {
-		t.Fatalf("expected active idle session runtime rebind to main workspace, got %+v", env.runtime.rebindCalls)
-	}
-}
-
-func TestDeleteWorktreeRollsBackActiveIdleSessionRetargetsOnRuntimeSyncError(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-active-idle-rollback")
-	firstSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	secondSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	for _, sess := range []*session.Store{firstSession, secondSession} {
-		updateServiceTestSessionTarget(t, env, sess.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-		env.runtime.activeSessions[sess.Meta().SessionID] = true
-	}
-	env.runtime.syncErrSessions = map[string]error{secondSession.Meta().SessionID: errors.New("runtime sync failed")}
-
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-active-idle-rollback", created.WorktreeID))
-	if err == nil || !strings.Contains(err.Error(), "runtime sync failed") {
-		t.Fatalf("DeleteWorktree error = %v, want runtime sync failed", err)
-	}
-	for _, sess := range []*session.Store{firstSession, secondSession} {
-		target, err := env.store.ResolveSessionExecutionTarget(env.ctx, sess.Meta().SessionID)
-		if err != nil {
-			t.Fatalf("ResolveSessionExecutionTarget %s: %v", sess.Meta().SessionID, err)
-		}
-		if sessionTargetWorktreeID(target) != created.WorktreeID || target.EffectiveWorkdir != created.CanonicalRoot {
-			t.Fatalf("expected %s target rolled back to worktree, got %+v", sess.Meta().SessionID, target)
-		}
-	}
-	if _, err := os.Stat(created.CanonicalRoot); err != nil {
-		t.Fatalf("expected worktree root kept after retarget rollback, stat err=%v", err)
-	}
-	foundFirstRollback := false
-	for _, call := range env.runtime.rebindCalls {
-		if call.sessionID == firstSession.Meta().SessionID && call.root == created.CanonicalRoot {
-			foundFirstRollback = true
-		}
-	}
-	if !foundFirstRollback {
-		t.Fatalf("expected first session runtime rolled back to deleted worktree, calls=%+v", env.runtime.rebindCalls)
-	}
-}
-
-func TestDeleteWorktreeIgnoresDormantSessionsTargetingIt(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-dormant-session")
-	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-dormant-session", created.WorktreeID))
-	if err != nil {
-		t.Fatalf("DeleteWorktree: %v", err)
-	}
-	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected worktree root removed, stat err=%v", err)
-	}
-}
-
-func TestListWorktreesReportsDirtyFileCount(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/dirty-count")
-	if err := os.WriteFile(filepath.Join(created.CanonicalRoot, "untracked.txt"), []byte("dirty"), 0o644); err != nil {
-		t.Fatalf("write untracked file: %v", err)
-	}
-
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, IncludeDirtyCount: true})
-	if err != nil {
-		t.Fatalf("ListWorktrees: %v", err)
-	}
-	listed := findWorktreeByID(t, resp.Worktrees, created.WorktreeID)
-	if listed.DirtyFileCount != 1 {
-		t.Fatalf("dirty file count = %d, want 1", listed.DirtyFileCount)
-	}
-}
-
-func TestListWorktreesDirtyCountProbeFailureIsBestEffort(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/dirty-probe-failure")
-	env.service.git = NewGitInspector(&dirtyCountFailingGitRunner{base: execGitCommandRunner{}, dirtyRoot: created.CanonicalRoot})
-
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, IncludeDirtyCount: true})
-	if err != nil {
-		t.Fatalf("ListWorktrees: %v", err)
-	}
-	listed := findWorktreeByID(t, resp.Worktrees, created.WorktreeID)
-	if listed.DirtyFileCount != -1 {
-		t.Fatalf("dirty file count after failed probe = %d, want -1", listed.DirtyFileCount)
-	}
-}
-
-func TestDeleteWorktreeForcesRemovalWhenDirty(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-dirty")
-	if err := os.WriteFile(filepath.Join(created.CanonicalRoot, "untracked.txt"), []byte("dirty"), 0o644); err != nil {
-		t.Fatalf("write untracked file: %v", err)
-	}
-
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-dirty", created.WorktreeID))
-	if err != nil {
-		t.Fatalf("DeleteWorktree: %v", err)
-	}
-	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected dirty worktree root removed, stat err=%v", err)
-	}
-}
-
-func TestDeleteWorktreeDirtyCountProbeFailureIsBestEffort(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-dirty-probe-failure")
-	env.service.git = NewGitInspector(&dirtyCountFailingGitRunner{base: execGitCommandRunner{}, dirtyRoot: created.CanonicalRoot})
-
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-dirty-probe-failure", created.WorktreeID))
-	if err != nil {
-		t.Fatalf("DeleteWorktree: %v", err)
-	}
-	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected worktree root removed, stat err=%v", err)
-	}
-}
-
-func TestDeleteWorktreeBlocksOnlyActiveSessionsTargetingIt(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-mixed-session-blockers")
-	dormantSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	activeSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	if err := dormantSession.SetName("dormant blocker"); err != nil {
-		t.Fatalf("SetName dormant: %v", err)
-	}
-	if err := activeSession.SetName("active blocker"); err != nil {
-		t.Fatalf("SetName active: %v", err)
-	}
-	if err := env.store.ImportSessionSnapshot(env.ctx, session.PersistedStoreSnapshot{SessionDir: dormantSession.Dir(), Meta: dormantSession.Meta()}); err != nil {
-		t.Fatalf("ImportSessionSnapshot dormant: %v", err)
-	}
-	if err := env.store.ImportSessionSnapshot(env.ctx, session.PersistedStoreSnapshot{SessionDir: activeSession.Dir(), Meta: activeSession.Meta()}); err != nil {
-		t.Fatalf("ImportSessionSnapshot active: %v", err)
-	}
-	updateServiceTestSessionTarget(t, env, dormantSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	updateServiceTestSessionTarget(t, env, activeSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	env.runtime.activeSessions[activeSession.Meta().SessionID] = true
-	env.runtime.runningSessions = map[string]bool{activeSession.Meta().SessionID: true}
-
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-mixed-session-blockers", created.WorktreeID))
-	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
-		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
-	}
-	message := err.Error()
-	if !strings.Contains(message, "active blocker") {
-		t.Fatalf("expected active blocker in error, got %q", message)
-	}
-	if strings.Contains(message, "dormant blocker") {
-		t.Fatalf("did not expect dormant blocker in error, got %q", message)
-	}
-}
-
-func TestDeleteWorktreeAllowsSessionAfterRuntimeRegistryCleanup(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-after-runtime-cleanup")
-	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	runtimes := registry.NewRuntimeRegistry()
-	engine := &runtimepkg.Engine{}
-	claim, _, _ := runtimes.AcquireRuntimeClaim(otherSession.Meta().SessionID, "test-owner")
-	claim.Resolve(engine, nil, nil)
-	env.service.active = runtimes
-	env.runtime.runningSessions = map[string]bool{otherSession.Meta().SessionID: true}
-
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-before-runtime-cleanup", created.WorktreeID))
-	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
-		t.Fatalf("DeleteWorktree before runtime cleanup error = %v, want ErrWorktreeBlocked", err)
-	}
-
-	if claim := runtimes.RuntimeClaimFor(otherSession.Meta().SessionID); claim != nil {
-		_, _ = claim.Close(env.ctx, nil)
-	}
-	_, err = env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-after-runtime-cleanup", created.WorktreeID))
-	if err != nil {
-		t.Fatalf("DeleteWorktree after runtime cleanup: %v", err)
-	}
-	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected worktree root removed after runtime cleanup, stat err=%v", err)
 	}
 }

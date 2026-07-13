@@ -3,9 +3,7 @@ package app
 import (
 	"strings"
 
-	"core/cli/app/internal/worktreeui"
 	"core/shared/clientui"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -43,11 +41,17 @@ func (c uiInputController) handleWorktreeCommand(args string) (tea.Model, tea.Cm
 		if len(parts) > 2 {
 			return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", worktreeUsageText, ""), c.model.sendTransientStatusWithNoticeID(worktreeUsageText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 		}
-		token := ""
+		target := uiWorktreeDeleteIntentTarget{kind: uiWorktreeDeleteIntentTargetCurrent}
 		if len(parts) == 2 {
-			token = parts[1]
+			target = uiWorktreeDeleteIntentTarget{
+				kind:     uiWorktreeDeleteIntentTargetSelector,
+				selector: parts[1],
+			}
 		}
-		return m, c.startWorktreeOverlayCmd(uiWorktreeOpenIntent{OpenDelete: true, ConfirmDeleteTarget: token})
+		return m, c.startWorktreeOverlayCmd(uiWorktreeOpenIntent{
+			OpenDelete:   true,
+			DeleteTarget: target,
+		})
 	default:
 		return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", worktreeUsageText, ""), c.model.sendTransientStatusWithNoticeID(worktreeUsageText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}
@@ -60,10 +64,10 @@ func (c uiInputController) handleWorktreeSwitchCommand(token string) (tea.Model,
 		m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{TargetToken: target}
 		return m, nil
 	}
-	return m, m.worktreeSwitchCommandForTarget(target, "")
+	return m, m.worktreeSwitchCommandForTarget(target)
 }
 
-func (m *uiModel) worktreeSwitchCommandForTarget(targetToken, worktreeID string) tea.Cmd {
+func (m *uiModel) worktreeSwitchCommandForTarget(targetToken string) tea.Cmd {
 	if m == nil {
 		return nil
 	}
@@ -72,43 +76,10 @@ func (m *uiModel) worktreeSwitchCommandForTarget(targetToken, worktreeID string)
 	switchToken := m.worktrees.switchToken
 	m.worktrees.switchPending = true
 	targetToken = strings.TrimSpace(targetToken)
-	worktreeID = strings.TrimSpace(worktreeID)
 	return func() tea.Msg {
-		resolvedID := worktreeID
-		if resolvedID == "" {
-			list, err := service.List(false)
-			if err != nil {
-				return worktreeSwitchDoneMsg{token: switchToken, err: err}
-			}
-			resolved, err := worktreeui.ResolveToken(list.Worktrees, targetToken)
-			if err != nil {
-				return worktreeSwitchDoneMsg{token: switchToken, err: err}
-			}
-			resolvedID = resolved.WorktreeID
-		}
-		resp, err := service.Switch(resolvedID)
-		return worktreeSwitchDoneMsg{token: switchToken, resp: resp, err: err}
+		ack, err := service.Enter(targetToken)
+		return worktreeSwitchDoneMsg{token: switchToken, target: targetToken, ack: ack, err: err}
 	}
-}
-
-func (m *uiModel) listWorktreesForCurrentSession(includeDirtyCount bool) (serverapi.WorktreeListResponse, error) {
-	if m == nil {
-		return serverapi.WorktreeListResponse{}, worktreeui.ErrClientUnavailable
-	}
-	m.checkTUIBlockingOperation("worktree service read", "list worktrees")
-	return m.worktreeMutationService().List(includeDirtyCount)
-}
-
-func (m *uiModel) resolveWorktreeToken(token string) (serverapi.WorktreeView, error) {
-	if m == nil {
-		return serverapi.WorktreeView{}, worktreeui.ErrClientUnavailable
-	}
-	m.checkTUIBlockingOperation("worktree service read", "resolve worktree")
-	list, err := m.worktreeMutationService().List(false)
-	if err != nil {
-		return serverapi.WorktreeView{}, err
-	}
-	return worktreeui.ResolveToken(list.Worktrees, token)
 }
 
 func (m *uiModel) suggestedWorktreeSessionName() string {

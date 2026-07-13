@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/server/metadata"
 	servicecontract "core/shared/apicontract"
 	"core/shared/serverapi"
 )
@@ -48,6 +49,33 @@ func (g *Gateway) resolveAttachedProjectWorkspace(ctx context.Context, projectID
 		return "", "", fmt.Errorf("workspace %q is not bound to project %q", resolved.Binding.CanonicalRoot, strings.TrimSpace(projectID))
 	}
 	return strings.TrimSpace(resolved.Binding.WorkspaceID), strings.TrimSpace(resolved.Binding.CanonicalRoot), nil
+}
+
+func (g *Gateway) resolveSessionAttachment(ctx context.Context, state *connectionState, sessionID string) (metadata.Binding, error) {
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return metadata.Binding{}, errors.New("session id is required")
+	}
+	metadataStore := g.deps.MetadataStore()
+	if metadataStore == nil {
+		return metadata.Binding{}, errors.New("metadata store is required")
+	}
+	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, trimmedSessionID)
+	if err != nil {
+		return metadata.Binding{}, err
+	}
+	binding, err := metadataStore.LookupWorkspaceBindingByID(ctx, target.WorkspaceID)
+	if err != nil {
+		return metadata.Binding{}, err
+	}
+	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
+	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
+		activeProjectID = strings.TrimSpace(state.attachedProject)
+	}
+	if activeProjectID != "" && strings.TrimSpace(binding.ProjectID) != activeProjectID {
+		return metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
+	}
+	return binding, nil
 }
 
 func (g *Gateway) sessionLaunchClientForState(ctx context.Context, state *connectionState) (service servicecontract.SessionLaunchService, _ error) {

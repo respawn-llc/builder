@@ -91,6 +91,13 @@ var (
 	goalResumeUsage         = leafCommandUsage(config.Command+" goal resume [--session <id>]", "Resume a paused session goal.", "", "User-only; unavailable inside Kent shell commands.")
 	goalCompleteUsage       = leafCommandUsage(config.Command+" goal complete [--session <id>] [--confirm]", "Mark a session goal complete.", "", "Agents must pass `--confirm`; user invocations do not require it.")
 	goalClearUsage          = leafCommandUsage(config.Command+" goal clear [--session <id>]", "Remove a session goal.", "", "User-only; unavailable inside Kent shell commands.")
+	worktreeUsage           = leafCommandUsage(config.Command+" worktree <status|list|create|enter|leave|delete> ...", "Inspect and manage a session's Git worktree execution target.")
+	worktreeStatusUsage     = leafCommandUsage(config.Command+" worktree status [--session <id>] [--json]", "Inspect the selected session's recorded worktree target.")
+	worktreeListUsage       = leafCommandUsage(config.Command+" worktree list [--session <id>] [--json]", "List registered, external, and missing worktrees.")
+	worktreeCreateUsage     = leafCommandUsage(config.Command+" worktree create [--session <id>] [--base <ref>] [--json] <branch-or-ref> [path]", "Create and set up a worktree without entering it.")
+	worktreeEnterUsage      = leafCommandUsage(config.Command+" worktree enter [--session <id>] [--json] <selector>", "Schedule the session to enter a worktree.")
+	worktreeLeaveUsage      = leafCommandUsage(config.Command+" worktree leave [--session <id>] [--json]", "Schedule the session to return to the main workspace.")
+	worktreeDeleteUsage     = leafCommandUsage(config.Command+" worktree delete [--session <id>] [--force] [--delete-branch] [--json] <selector>", "Delete a worktree; agent shell commands always retain branches.")
 	workflowUsage           = commandUsage{helpFile: "workflow.txt"}
 	workflowCreateUsage     = leafCommandUsage(config.Command+" workflow create [--description <text>] [--json] <name>", "Create a workflow with `backlog` start and `done` terminal nodes.")
 	workflowListUsage       = leafCommandUsage(config.Command+" workflow list [--page-size <n>] [--page-token <token>] [--json]", "List workflow definitions.")

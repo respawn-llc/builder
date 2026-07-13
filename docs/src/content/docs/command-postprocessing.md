@@ -7,6 +7,10 @@ Kent post-processes shell command output before it is shown to the model to norm
 
 Successful commands with visible output return that output. A completed command without visible output reports its exit code and explicit no-output completion.
 
+Use `kent worktree` for worktree operations. Kent warns about direct `git worktree` commands.
+
+Raw shell output skips post-processing.
+
 ## Config
 
 Configure command post-processing under `[shell]` in `~/.kent/config.toml`:
@@ -21,14 +25,10 @@ postprocess_hook = "~/.kent/shell_postprocess_hook"
 
 Allowed values:
 
-- `none`: disable command post-processing. Not recommended.
-- `builtin`: run Kent's sanitizer and built-in processors. Kent has multiple built-in processors that are generally applicable to all projects and improve model performance.
-- `user`: run Kent's sanitizer, then your configured hook. Only recommended if your post-processors fully replace what is done in Kent.
-- `all`: run Kent's sanitizer, built-ins, then your configured hook
-
-:::info[Not a hooks replacement]
-The model can always control whether a command is post-processed. If the output has issues, the agent will bypass command post-processing, so do not treat this as hooks replacement - hooks are not optional.
-:::
+- `none`: disable command post-processing.
+- `builtin`: run Kent's output cleanup and built-in processing.
+- `user`: run Kent's output cleanup, then your configured hook.
+- `all`: run Kent's output cleanup, built-in processing, then your configured hook.
 
 ## Protocol
 
@@ -53,11 +53,8 @@ Kent sends JSON like:
 
 Your hook receives both:
 
-- `original_output`: sanitized command output before Kent semantic shaping
-- `current_output`: current Kent output after built-ins, or the same as `original_output` if no built-in handled it
-
-This lets your hook either add on top of Kent defaults or replace them completely.
-In `all` mode, the hook runs after built-ins even when a built-in processor stops the built-in chain.
+- `original_output`: sanitized command output before built-in processing
+- `current_output`: command output after built-in processing, or `original_output` when unchanged
 
 Hook **must** return JSON like:
 

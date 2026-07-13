@@ -10,25 +10,103 @@ import (
 	"core/shared/serverapi"
 )
 
-// ErrMainWorkspaceNotDeletable is returned when deletion targets the current
-// main workspace. Callers and tests match this with errors.Is rather than
-// comparing rendered message text.
 var ErrMainWorkspaceNotDeletable = errors.New("main workspace is not deletable")
 
-func DisplayName(item serverapi.WorktreeView) string {
-	if trimmed := strings.TrimSpace(item.DisplayName); trimmed != "" {
-		return trimmed
+type Item struct {
+	Entry         serverapi.WorktreeListEntry
+	DisplayName   string
+	CanonicalRoot string
+	WorktreeID    *string
+	BranchName    *string
+	Detached      bool
+	IsMain        bool
+	IsCurrent     bool
+	Managed       bool
+	CreatedBranch bool
+}
+
+func ProjectItems(entries []serverapi.WorktreeListEntry) ([]Item, error) {
+	out := make([]Item, 0, len(entries))
+	for _, entry := range entries {
+		item, err := ProjectItem(entry)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
 	}
-	if item.IsMain {
-		return "main"
+	return out, nil
+}
+
+func ProjectItem(entry serverapi.WorktreeListEntry) (Item, error) {
+	if err := entry.Validate(); err != nil {
+		return Item{}, err
 	}
-	if trimmed := strings.TrimSpace(item.BranchName); trimmed != "" {
-		return trimmed
+	item := Item{Entry: entry, IsCurrent: entry.Projection.IsCurrent}
+	switch entry.Topology.Variant {
+	case serverapi.WorktreeTopologyVariantRegistered:
+		git := entry.Topology.Registered.Git
+		kent := entry.Topology.Registered.Kent
+		item.DisplayName = kent.DisplayName
+		item.CanonicalRoot = git.CanonicalRoot
+		item.WorktreeID = stringPointer(kent.WorktreeID)
+		item.BranchName = git.BranchName
+		item.Detached = git.Detached
+		item.IsMain = git.IsMain
+		item.Managed = kent.Managed
+		item.CreatedBranch = kent.CreatedBranch
+	case serverapi.WorktreeTopologyVariantExternal:
+		git := entry.Topology.External.Git
+		item.DisplayName = filepath.Base(git.CanonicalRoot)
+		item.CanonicalRoot = git.CanonicalRoot
+		item.BranchName = git.BranchName
+		item.Detached = git.Detached
+		item.IsMain = git.IsMain
+	case serverapi.WorktreeTopologyVariantMissing:
+		kent := entry.Topology.Missing.Kent
+		item.DisplayName = kent.DisplayName
+		item.CanonicalRoot = kent.CanonicalRoot
+		item.WorktreeID = stringPointer(kent.WorktreeID)
+		item.Managed = kent.Managed
+		item.CreatedBranch = kent.CreatedBranch
+	default:
+		return Item{}, fmt.Errorf("unsupported worktree topology variant %q", entry.Topology.Variant)
 	}
-	if trimmed := strings.TrimSpace(item.CanonicalRoot); trimmed != "" {
-		return filepath.Base(trimmed)
+	return item, nil
+}
+
+func ProjectSelectorPreview(response serverapi.WorktreeSelectorPreviewResponse) (Item, error) {
+	return ProjectItem(serverapi.WorktreeListEntry{
+		Topology: response.Worktree,
+		Projection: serverapi.WorktreeListProjection{
+			Selector: response.Selector,
+		},
+	})
+}
+
+func stringPointer(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
 	}
-	return strings.TrimSpace(item.WorktreeID)
+	return &trimmed
+}
+
+func WorktreeID(item Item) string {
+	if item.WorktreeID == nil {
+		return ""
+	}
+	return *item.WorktreeID
+}
+
+func BranchName(item Item) string {
+	if item.BranchName == nil {
+		return ""
+	}
+	return *item.BranchName
+}
+
+func DisplayName(item Item) string {
+	return item.DisplayName
 }
 
 func SanitizeBranchSuggestion(raw string) string {
@@ -64,79 +142,25 @@ func SanitizeBranchSuggestion(raw string) string {
 	return result
 }
 
-func DeleteCanAutoDeleteBranch(item serverapi.WorktreeView) bool {
-	return item.Managed && item.CreatedBranch && strings.TrimSpace(item.BranchName) != ""
+func DeleteCanAutoDeleteBranch(item Item) bool {
+	return item.Managed && item.CreatedBranch && item.BranchName != nil
 }
 
-func ResolveDeletionTarget(entries []serverapi.WorktreeView, token string) (serverapi.WorktreeView, error) {
-	trimmedToken := strings.TrimSpace(token)
-	if trimmedToken != "" {
-		return ResolveToken(entries, trimmedToken)
+func ValidateDeletionTarget(item Item) error {
+	if item.IsMain {
+		return ErrMainWorkspaceNotDeletable
 	}
+	return nil
+}
+
+func ResolveCurrentDeletionTarget(entries []Item) (Item, error) {
 	for _, item := range entries {
 		if item.IsCurrent {
-			if item.IsMain {
-				return serverapi.WorktreeView{}, fmt.Errorf("%w; choose another worktree", ErrMainWorkspaceNotDeletable)
+			if err := ValidateDeletionTarget(item); err != nil {
+				return Item{}, fmt.Errorf("%w; choose another worktree", err)
 			}
 			return item, nil
 		}
 	}
-	return serverapi.WorktreeView{}, serverapi.ErrWorktreeNotFound
-}
-
-func ResolveToken(entries []serverapi.WorktreeView, token string) (serverapi.WorktreeView, error) {
-	trimmedToken := strings.TrimSpace(token)
-	if trimmedToken == "" {
-		return serverapi.WorktreeView{}, serverapi.ErrWorktreeNotFound
-	}
-	matchers := []func(serverapi.WorktreeView, string) bool{
-		func(item serverapi.WorktreeView, token string) bool {
-			return strings.TrimSpace(item.WorktreeID) == token
-		},
-		func(item serverapi.WorktreeView, token string) bool {
-			return strings.TrimSpace(item.CanonicalRoot) == token
-		},
-		func(item serverapi.WorktreeView, token string) bool {
-			return strings.TrimSpace(item.DisplayName) == token
-		},
-		func(item serverapi.WorktreeView, token string) bool {
-			return strings.TrimSpace(item.BranchName) == token || (token == "main" && item.IsMain)
-		},
-	}
-	for _, matcher := range matchers {
-		uniqueMatches := make(map[string]serverapi.WorktreeView, len(entries))
-		orderedKeys := make([]string, 0, len(entries))
-		for _, item := range entries {
-			if !matcher(item, trimmedToken) {
-				continue
-			}
-			key := tokenMatchKey(item)
-			if _, ok := uniqueMatches[key]; ok {
-				continue
-			}
-			uniqueMatches[key] = item
-			orderedKeys = append(orderedKeys, key)
-		}
-		if len(orderedKeys) == 1 {
-			return uniqueMatches[orderedKeys[0]], nil
-		}
-		if len(orderedKeys) > 1 {
-			names := make([]string, 0, len(orderedKeys))
-			for _, key := range orderedKeys {
-				names = append(names, DisplayName(uniqueMatches[key]))
-			}
-			return serverapi.WorktreeView{}, fmt.Errorf("worktree %q is ambiguous: %s", trimmedToken, strings.Join(names, ", "))
-		}
-	}
-	return serverapi.WorktreeView{}, fmt.Errorf("worktree %q not found", trimmedToken)
-}
-
-func tokenMatchKey(item serverapi.WorktreeView) string {
-	if trimmed := strings.TrimSpace(item.WorktreeID); trimmed != "" {
-		return "id:" + trimmed
-	}
-	if trimmed := strings.TrimSpace(item.CanonicalRoot); trimmed != "" {
-		return "root:" + trimmed
-	}
-	return "name:" + DisplayName(item)
+	return Item{}, serverapi.ErrWorktreeNotFound
 }

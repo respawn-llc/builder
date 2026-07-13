@@ -1,6 +1,6 @@
 ---
 name: kent-dogfooding
-description: How to use `kent` cli to change your behavior, environment, config, or debug issues. Read when the user asks to change Kent config.toml/settings/behavior/hooks/subagents; or to debug project/workspace/workflow errors.
+description: How to use `kent` cli to change your behavior, environment, config, or debug issues. Read when the user asks to manage worktrees, change Kent config.toml/settings/behavior/hooks/subagents, or debug project/workspace/worktree/workflow errors.
 ---
 
 Kent is the harness you are running inside, but it's also a server that runs agentic loops, a TUI, and a CLI.
@@ -54,8 +54,20 @@ Note that you shouldn't be rewriting main agent's system prompt: the output can 
 User may ask you to define new "subagents" or "agent roles". Subagents are `kent run` commands you call. You can also use them for scripting of user's kent-based workflows. More info at `kent run --help` and `https://kent.sh/headless.md`.
 
 ## Worktrees
-Kent manages worktrees you work in. You can customize the process of worktree creation by providing a setup script, use it to prepare a newly created worktree with files that a worktree checkout did not bring over, like `.env`, private credentials, encryption keys, symlinks to local docs or other files, install dependencies, etc. It's designed to go from "just did a git checkout" to "fully ready for development".
-Read how to create the hook at `https://kent.sh/worktrees.md`.
+Use Kent's server-backed commands instead of mutating worktrees with `git worktree`:
+
+```bash
+kent worktree status
+kent worktree list
+kent worktree create <branch-or-ref> [path]
+kent worktree enter <selector>
+kent worktree leave
+kent worktree delete <selector>
+```
+
+Inside an agent shell, these commands target `KENT_SESSION_ID`. `create` prepares and records the checkout but does not enter it; use the printed `kent worktree enter ...` command separately. Agent-shell deletion retains branches and rejects `--delete-branch`. Use `--force` only when the user explicitly authorizes removing a dirty or indeterminate worktree folder.
+
+Worktree setup scripts prepare new checkouts with local files, credentials, symlinks, or dependencies. Read the setup contract at `https://kent.sh/worktrees.md`.
 
 ## Shell Postprocess Hooks
 Kent can post-process shell command output before you see it.

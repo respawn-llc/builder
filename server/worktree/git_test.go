@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"core/shared/serverapi"
 )
 
 type canceledGitCommandRunner struct{}
@@ -168,6 +170,64 @@ func TestGitInspectorDirtyFileCountUsesPorcelainStatus(t *testing.T) {
 	}
 }
 
+func TestGitInspectorProbeDirtyStateUsesTypedCleanDirtyAndUnknownResults(t *testing.T) {
+	root := t.TempDir()
+	clean := NewGitInspector(&stubGitCommandRunner{})
+	state, err := clean.ProbeDirtyState(context.Background(), root)
+	if err != nil || state.Kind != serverapi.WorktreeDirtyStateClean || state.DirtyFileCount == nil || *state.DirtyFileCount != 0 {
+		t.Fatalf("clean state = %+v err=%v", state, err)
+	}
+
+	dirty := NewGitInspector(&stubGitCommandRunner{output: []byte(" M changed.go\x00")})
+	state, err = dirty.ProbeDirtyState(context.Background(), root)
+	if err != nil || state.Kind != serverapi.WorktreeDirtyStateDirty || state.DirtyFileCount == nil || *state.DirtyFileCount != 1 {
+		t.Fatalf("dirty state = %+v err=%v", state, err)
+	}
+
+	unknown := NewGitInspector(&stubGitCommandRunner{err: errors.New("status unavailable"), exitCode: 1})
+	state, err = unknown.ProbeDirtyState(context.Background(), root)
+	if err != nil || state.Kind != serverapi.WorktreeDirtyStateUnknown || state.DirtyFileCount != nil || state.UnknownCause == nil {
+		t.Fatalf("unknown state = %+v err=%v", state, err)
+	}
+}
+
+func TestGitInspectorInspectsTargetIdentityAndExactRef(t *testing.T) {
+	root := t.TempDir()
+	commonDir := filepath.Join(root, ".git")
+	if err := os.Mkdir(commonDir, 0o755); err != nil {
+		t.Fatalf("Mkdir Git marker: %v", err)
+	}
+	runner := &stubGitCommandRunner{outputs: map[string][]byte{
+		strings.Join([]string{"rev-parse", "--show-toplevel"}, "\x00"):  []byte(root + "\n"),
+		strings.Join([]string{"rev-parse", "--git-common-dir"}, "\x00"): []byte(commonDir + "\n"),
+	}}
+	inspector := NewGitInspector(runner)
+	inspection, err := inspector.InspectTarget(context.Background(), root)
+	if err != nil {
+		t.Fatalf("InspectTarget: %v", err)
+	}
+	if inspection.Identity.TopLevelRoot != canonicalTestPath(t, root) || inspection.Identity.CommonDir != canonicalTestPath(t, commonDir) {
+		t.Fatalf("inspection = %+v", inspection)
+	}
+
+	runner.errors = map[string]error{strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}, "\x00"): errors.New("exit status 1")}
+	runner.exitCodes = map[string]int{strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}, "\x00"): 1}
+	exists, err := inspector.RefExists(context.Background(), root, "refs/heads/feature/*")
+	if err != nil || exists {
+		t.Fatalf("RefExists = %t, %v; want false, nil", exists, err)
+	}
+}
+
+func TestGitInspectorFindCreatedWorktreeUsesCanonicalRoot(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	createdRoot := filepath.Join(t.TempDir(), "created")
+	runner := &stubGitCommandRunner{output: []byte("worktree " + workspaceRoot + "\nHEAD aaa111\nbranch refs/heads/main\n\nworktree " + createdRoot + "\nHEAD bbb222\nbranch refs/heads/feature\n")}
+	created, found, err := NewGitInspector(runner).FindCreatedWorktree(context.Background(), workspaceRoot, createdRoot)
+	if err != nil || !found || created.Root != canonicalTestPath(t, createdRoot) {
+		t.Fatalf("FindCreatedWorktree = %+v found=%t err=%v", created, found, err)
+	}
+}
+
 func TestGitInspectorRemoveUsesForceWhenRequested(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	worktreeRoot := filepath.Join(t.TempDir(), "linked")
@@ -310,10 +370,10 @@ func TestGitInspectorBranchExistsUsesExactRefLookup(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	runner := &stubGitCommandRunner{
 		errors: map[string]error{
-			strings.Join([]string{"show-ref", "--verify", "--quiet", "refs/heads/feature/*"}, "\x00"): errors.New("exit status 1"),
+			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}, "\x00"): errors.New("exit status 1"),
 		},
 		exitCodes: map[string]int{
-			strings.Join([]string{"show-ref", "--verify", "--quiet", "refs/heads/feature/*"}, "\x00"): 1,
+			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}, "\x00"): 1,
 		},
 	}
 	inspector := NewGitInspector(runner)
@@ -324,7 +384,7 @@ func TestGitInspectorBranchExistsUsesExactRefLookup(t *testing.T) {
 	if exists {
 		t.Fatal("expected exact-ref lookup to treat glob-like branch as absent")
 	}
-	if got, want := runner.args, []string{"show-ref", "--verify", "--quiet", "refs/heads/feature/*"}; !equalStrings(got, want) {
+	if got, want := runner.args, []string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}; !equalStrings(got, want) {
 		t.Fatalf("git args=%v want=%v", got, want)
 	}
 }

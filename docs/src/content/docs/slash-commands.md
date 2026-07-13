@@ -23,7 +23,7 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 | <code>/ps [kill&#124;inline&#124;logs] &lt;id&gt;</code> | optional action + id | Open the background-process picker, or manage a specific background shell. |
 | <code>/wt</code> | none | Open the Worktrees page. |
 | <code>/wt create</code> | none | Open the create-worktree dialog; new branches require a non-empty base ref. |
-| <code>/wt switch &lt;target&gt;</code> | required selector | Switch directly to a worktree by id/branch/path. |
+| <code>/wt switch &lt;target&gt;</code> | required selector | Schedule entry into a worktree by id, branch, display name, or path. |
 | <code>/wt delete [&lt;target&gt;]</code> | optional selector | Delete a worktree. |
 | `/copy` | none | Copy the latest durable model final answer to the system clipboard. |
 | `/back` | none | Return to the parent session, if present, with the child’s latest durable final answer prefilled. |

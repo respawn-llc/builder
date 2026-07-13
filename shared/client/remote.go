@@ -22,33 +22,42 @@ type Remote struct {
 	projectID      string
 	workspaceID    string
 	workspaceRoot  string
+	sessionID      *string
 	expectedRootID atomic.Value // string; empty disables root validation
 	noAuthAck      atomic.Bool
 	closed         atomic.Bool
 }
 
 func DialRemoteURL(ctx context.Context, rpcURL string) (*Remote, error) {
-	return dialRemoteURL(ctx, rpcURL, "", "", "")
+	return dialRemoteURL(ctx, rpcURL, "", "", "", nil)
 }
 
 func DialRemoteURLForProject(ctx context.Context, rpcURL string, projectID string) (*Remote, error) {
-	return dialRemoteURL(ctx, rpcURL, projectID, "", "")
+	return dialRemoteURL(ctx, rpcURL, projectID, "", "", nil)
 }
 
 func DialRemoteURLForProjectWorkspace(ctx context.Context, rpcURL string, projectID string, workspaceRoot string) (*Remote, error) {
-	return dialRemoteURL(ctx, rpcURL, projectID, "", workspaceRoot)
+	return dialRemoteURL(ctx, rpcURL, projectID, "", workspaceRoot, nil)
+}
+
+func DialRemoteURLForSession(ctx context.Context, rpcURL string, sessionID string) (*Remote, error) {
+	return dialRemoteURL(ctx, rpcURL, "", "", "", &sessionID)
 }
 
 func DialConfiguredRemote(ctx context.Context, cfg config.App) (*Remote, error) {
-	return dialConfiguredRemote(ctx, cfg, "", "", "")
+	return dialConfiguredRemote(ctx, cfg, "", "", "", nil)
 }
 
 func DialConfiguredRemoteForProjectWorkspace(ctx context.Context, cfg config.App, projectID string, workspaceRoot string) (*Remote, error) {
-	return dialConfiguredRemote(ctx, cfg, projectID, "", workspaceRoot)
+	return dialConfiguredRemote(ctx, cfg, projectID, "", workspaceRoot, nil)
 }
 
 func DialConfiguredRemoteForProjectWorkspaceID(ctx context.Context, cfg config.App, projectID string, workspaceID string) (*Remote, error) {
-	return dialConfiguredRemote(ctx, cfg, projectID, workspaceID, "")
+	return dialConfiguredRemote(ctx, cfg, projectID, workspaceID, "", nil)
+}
+
+func DialConfiguredRemoteForSession(ctx context.Context, cfg config.App, sessionID string) (*Remote, error) {
+	return dialConfiguredRemote(ctx, cfg, "", "", "", &sessionID)
 }
 
 func (c *Remote) Close() error {
@@ -517,6 +526,16 @@ func (c *Remote) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRe
 	return resp, c.call(ctx, protocol.MethodWorktreeList, req, &resp)
 }
 
+func (c *Remote) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
+	var resp serverapi.WorktreeStatusResponse
+	return resp, c.call(ctx, protocol.MethodWorktreeStatus, req, &resp)
+}
+
+func (c *Remote) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	var resp serverapi.WorktreeSelectorPreviewResponse
+	return resp, c.call(ctx, protocol.MethodWorktreeSelectorResolve, req, &resp)
+}
+
 func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
 	var resp serverapi.WorktreeCreateTargetResolveResponse
 	return resp, c.call(ctx, protocol.MethodWorktreeCreateTargetResolve, req, &resp)
@@ -527,13 +546,18 @@ func (c *Remote) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreat
 	return resp, c.call(ctx, protocol.MethodWorktreeCreate, req, &resp)
 }
 
-func (c *Remote) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwitchRequest) (serverapi.WorktreeSwitchResponse, error) {
-	var resp serverapi.WorktreeSwitchResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeSwitch, req, &resp)
+func (c *Remote) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	var resp serverapi.WorktreeScheduledAcknowledgement
+	return resp, c.call(ctx, protocol.MethodWorktreeEnter, req, &resp)
 }
 
-func (c *Remote) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResponse, error) {
-	var resp serverapi.WorktreeDeleteResponse
+func (c *Remote) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	var resp serverapi.WorktreeScheduledAcknowledgement
+	return resp, c.call(ctx, protocol.MethodWorktreeLeave, req, &resp)
+}
+
+func (c *Remote) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
+	var resp serverapi.WorktreeDeleteResult
 	return resp, c.call(ctx, protocol.MethodWorktreeDelete, req, &resp)
 }
 
@@ -764,27 +788,27 @@ func (c *Remote) openControlRPCConn(ctx context.Context) (rpcwire.Conn, protocol
 		cleanup()
 		return nil, protocol.ServerIdentity{}, err
 	}
-	if err := attachProjectRPC(ctx, conn, c.projectID, c.workspaceID, c.workspaceRoot); err != nil {
+	if err := attachRemoteRPC(ctx, conn, c.projectID, c.workspaceID, c.workspaceRoot, c.sessionID); err != nil {
 		cleanup()
 		return nil, protocol.ServerIdentity{}, err
 	}
 	return conn, identity, nil
 }
 
-func dialRemoteURL(ctx context.Context, rpcURL string, projectID string, workspaceID string, workspaceRoot string) (*Remote, error) {
+func dialRemoteURL(ctx context.Context, rpcURL string, projectID string, workspaceID string, workspaceRoot string, sessionID *string) (*Remote, error) {
 	endpoint, err := rpcwire.ParseWebSocketEndpoint(strings.TrimSpace(rpcURL))
 	if err != nil {
 		return nil, err
 	}
-	return dialRemoteWithTransport(ctx, remoteDialPlan{endpoints: []rpcwire.Endpoint{endpoint}}, rpcwire.NewWebSocketTransport(), projectID, workspaceID, workspaceRoot)
+	return dialRemoteWithTransport(ctx, remoteDialPlan{endpoints: []rpcwire.Endpoint{endpoint}}, rpcwire.NewWebSocketTransport(), projectID, workspaceID, workspaceRoot, sessionID)
 }
 
-func dialConfiguredRemote(ctx context.Context, cfg config.App, projectID string, workspaceID string, workspaceRoot string) (*Remote, error) {
+func dialConfiguredRemote(ctx context.Context, cfg config.App, projectID string, workspaceID string, workspaceRoot string, sessionID *string) (*Remote, error) {
 	plan, err := configuredRemoteDialPlan(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return dialRemoteWithTransport(ctx, plan, rpcwire.NewWebSocketTransport(), projectID, workspaceID, workspaceRoot)
+	return dialRemoteWithTransport(ctx, plan, rpcwire.NewWebSocketTransport(), projectID, workspaceID, workspaceRoot, sessionID)
 }
 
 var _ ProjectViewClient = (*Remote)(nil)

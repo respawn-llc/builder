@@ -6,50 +6,84 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestClampUsesCreateRowPlusEntries(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}}
+func TestSelectionUsesCreateRowAndStableIdentities(t *testing.T) {
+	entries := []Item{
+		testWorktreeItem(t, "wt-1", "one", "/wt/one", "one", false, false),
+		testWorktreeItem(t, "wt-2", "two", "/wt/two", "two", false, false),
+	}
 	if got := Clamp(-1, entries); got != 0 {
-		t.Fatalf("negative selection = %d, want 0", got)
+		t.Fatalf("negative selection = %d", got)
 	}
-	if got := Clamp(9, entries); got != 1 {
-		t.Fatalf("overflow selection = %d, want last row", got)
+	if got := Clamp(9, entries); got != 2 {
+		t.Fatalf("overflow selection = %d", got)
 	}
-}
-
-func TestSelectedWorktreeMapsSelectionAfterCreateRow(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}, {WorktreeID: "wt-2"}}
 	item, ok := SelectedWorktree(entries, 2)
-	if !ok || item.WorktreeID != "wt-2" {
-		t.Fatalf("selected = %+v ok=%v, want wt-2", item, ok)
+	if !ok || WorktreeID(item) != "wt-2" {
+		t.Fatalf("selected = %+v ok=%v", item, ok)
 	}
-	if _, ok := SelectedWorktree(entries, 0); ok {
-		t.Fatal("create row should not select worktree")
+	if got, err := SelectedIdentity(entries, 0); err != nil || got.Kind != SelectionIdentityKindCreateRow {
+		t.Fatalf("create selection identity = %+v, %v", got, err)
 	}
-}
-
-func TestSelectedIDReturnsCreateRowForCreateSelection(t *testing.T) {
-	if got := SelectedID([]serverapi.WorktreeView{{WorktreeID: "wt-1"}}, 0); got != CreateRowID {
-		t.Fatalf("selected id = %q, want create row id", got)
+	selectedIdentity, err := SelectionIdentityForItem(entries[1])
+	if err != nil {
+		t.Fatalf("SelectionIdentityForItem: %v", err)
 	}
-}
-
-func TestRestoreFindsRecordedWorktreeID(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}, {WorktreeID: "wt-2"}}
-	if got := Restore(entries, 0, " wt-2 "); got != 2 {
-		t.Fatalf("selection = %d, want 2", got)
+	if got, err := Restore(entries, 0, selectedIdentity); err != nil || got != 2 {
+		t.Fatalf("restored selection = %d, %v", got, err)
 	}
 }
 
-func TestRestoreFallsBackToClampedCurrentSelection(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}}
-	if got := Restore(entries, 7, "missing"); got != 1 {
-		t.Fatalf("selection = %d, want clamped current", got)
+func TestSelectionRestoresRegisteredWorktreeByKentIDWhenSelectorChanges(t *testing.T) {
+	selected := testWorktreeItem(t, "wt-1", "one", "/wt/one", "old-selector", false, false)
+	selectedIdentity, err := SelectedIdentity([]Item{selected}, 1)
+	if err != nil {
+		t.Fatalf("SelectedIdentity: %v", err)
+	}
+	if selectedIdentity.Kind != SelectionIdentityKindKentWorktree || selectedIdentity.Value != "wt-1" {
+		t.Fatalf("selected identity = %+v, want Kent worktree wt-1", selectedIdentity)
+	}
+
+	other := testWorktreeItem(t, "wt-2", "two", "/wt/two", "old-selector", false, false)
+	refreshed := testWorktreeItem(t, "wt-1", "renamed", "/wt/one", "new-selector", false, false)
+	if got, err := Restore([]Item{other, refreshed}, 1, selectedIdentity); err != nil || got != 2 {
+		t.Fatalf("restored selection = %d, %v, want 2", got, err)
 	}
 }
 
-func TestRestoreUsesCreateRowWhenRecordedWorktreeDisappearsAndCurrentSelectionIsCreateRow(t *testing.T) {
-	entries := []serverapi.WorktreeView{{WorktreeID: "wt-1"}}
-	if got := Restore(entries, 0, "missing"); got != 0 {
-		t.Fatalf("selection = %d, want create row", got)
+func TestSelectionIdentityRejectsInvalidPresentKentID(t *testing.T) {
+	invalidID := " "
+	if _, err := SelectionIdentityForItem(Item{
+		WorktreeID:    &invalidID,
+		CanonicalRoot: "/wt/feature",
+	}); err == nil {
+		t.Fatal("expected present invalid Kent ID to fail instead of falling back to root")
+	}
+}
+
+func TestStableMutationSelectorUsesExternalCanonicalRoot(t *testing.T) {
+	item, err := ProjectItem(serverapi.WorktreeListEntry{
+		Topology: serverapi.WorktreeTopologyEntry{
+			Variant: serverapi.WorktreeTopologyVariantExternal,
+			External: &serverapi.WorktreeExternalFacts{
+				Git: serverapi.WorktreeGitFacts{
+					CanonicalRoot: "/wt/external",
+					HeadObject:    "deadbeef",
+					Detached:      true,
+					PathAvailable: true,
+				},
+			},
+		},
+		Projection: serverapi.WorktreeListProjection{Selector: "external"},
+	})
+	if err != nil {
+		t.Fatalf("ProjectItem: %v", err)
+	}
+
+	selector, err := StableMutationSelector(item)
+	if err != nil {
+		t.Fatalf("StableMutationSelector: %v", err)
+	}
+	if selector != "/wt/external" {
+		t.Fatalf("selector = %q, want external canonical root", selector)
 	}
 }

@@ -14,8 +14,6 @@ import (
 	"core/internal/testharness/pty"
 )
 
-var postResponseResizeCompletionDrain = 2 * time.Second
-
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	buildCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -28,6 +26,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		env                       []string
 		inputs                    []pty.InputEvent
 		resizes                   []pty.DriverResizeEvent
+		frameResizes              []pty.FrameResizeEvent
 		expectedAppends           []string
 		expectedScrollbackAppends []string
 		expectedAnyAppends        []string
@@ -132,11 +131,12 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"final":  "stable history not replayed after resize",
 			},
 			expectedAppends: []string{"❮ stable history not replayed after resize"},
-			resizes: []pty.DriverResizeEvent{{
-				After:      500 * time.Millisecond,
-				Dimensions: pty.MustDimensions(18, 72),
+			frameResizes: []pty.FrameResizeEvent{{
+				Phase:           pty.PhaseScenarioFinalApplied,
+				Readiness:       pty.ReadinessRendererFrame,
+				Dimensions:      pty.MustDimensions(18, 72),
+				CompletionBytes: []byte{0x03, 0x03},
 			}},
-			completionDrain: &postResponseResizeCompletionDrain,
 		},
 		{
 			name: "parallel_tools_order_and_long_output",
@@ -333,7 +333,15 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			scenarioCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
-			capture, observationsPath := runPTYFixtureScenario(t, scenarioCtx, bin, tc.name, tc.script, tc.env, tc.inputs, tc.resizes, tc.completionDrain)
+			capture, observationsPath := runPTYFixtureScenario(t, scenarioCtx, bin, tc.name, tc.script, tc.env, tc.inputs, tc.resizes, tc.frameResizes, tc.completionDrain)
+			if len(capture.Resizes) != len(tc.resizes)+len(tc.frameResizes) {
+				t.Fatalf(
+					"capture resize count = %d, want scheduled=%d frame-gated=%d",
+					len(capture.Resizes),
+					len(tc.resizes),
+					len(tc.frameResizes),
+				)
+			}
 			analysis, err := pty.Analyze(capture)
 			if err != nil {
 				t.Fatalf("analyze capture: %v", err)
@@ -420,7 +428,7 @@ func toolSeed(name string, callID string, input map[string]any, condensed string
 	}
 }
 
-func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
+func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, frameResizes []pty.FrameResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
 	t.Helper()
 	return runPTYFixtureScenarioWithInputPlan(
 		t,
@@ -429,7 +437,7 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 		name,
 		script,
 		env,
-		ptyFixtureInputPlan{scheduled: inputs},
+		ptyFixtureInputPlan{scheduled: inputs, frameResizes: frameResizes},
 		resizes,
 		configuredCompletionDrain,
 	)
@@ -438,6 +446,7 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 type ptyFixtureInputPlan struct {
 	scheduled      []pty.InputEvent
 	frameSequences []pty.FrameInputSequence
+	frameResizes   []pty.FrameResizeEvent
 }
 
 func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputPlan ptyFixtureInputPlan, resizes []pty.DriverResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
@@ -478,17 +487,20 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 			Bytes: input.Bytes,
 		})
 	}
-	phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
-		Phase: completionPhase,
-		After: completionDrain,
-		Bytes: []byte{0x03, 0x03},
-	})
+	if len(inputPlan.frameResizes) == 0 {
+		phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
+			Phase: completionPhase,
+			After: completionDrain,
+			Bytes: []byte{0x03, 0x03},
+		})
+	}
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path:                bin,
 		Env:                 append([]string(nil), env...),
 		Dimensions:          pty.MustDimensions(24, 80),
 		PhaseInputs:         phaseInputs,
 		FrameInputSequences: inputPlan.frameSequences,
+		FrameResizes:        inputPlan.frameResizes,
 		Resizes:             resizes,
 		Timeout:             75 * time.Second,
 	})

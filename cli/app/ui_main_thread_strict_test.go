@@ -8,7 +8,6 @@ import (
 
 	"core/cli/app/internal/status"
 	"core/shared/clientui"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -172,9 +171,9 @@ func TestTUIStrictIOStatusOpenDefersCollectorBaseToCommand(t *testing.T) {
 
 func TestTUIStrictIOWorktreeSwitchRunsAsCommand(t *testing.T) {
 	resp := testMainWorktreeListResponse()
-	resp.Worktrees = append(resp.Worktrees, serverapi.WorktreeView{
-		WorktreeID: "wt-feature", DisplayName: "feature", CanonicalRoot: "/repo-feature", BranchName: "feature",
-	})
+	resp.Worktrees = append(resp.Worktrees, testRegisteredWorktreeListEntry(
+		"wt-feature", "feature", "/repo-feature", "feature", false, false, true, true,
+	))
 	client := &worktreeCommandTestClient{listResp: resp}
 	m := newWorktreeTestModel(t, client, WithUIDebug(true))
 
@@ -182,11 +181,11 @@ func TestTUIStrictIOWorktreeSwitchRunsAsCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected worktree switch command")
 	}
-	if len(client.listRequests) != 0 || len(client.switchRequests) != 0 {
-		t.Fatalf("worktree client called before command: list=%d switch=%d", len(client.listRequests), len(client.switchRequests))
+	if len(client.enterRequests) != 0 {
+		t.Fatalf("worktree client called before command: enter=%d", len(client.enterRequests))
 	}
 	_ = collectCmdMessages(t, cmd)
-	if len(client.listRequests) == 0 || len(client.switchRequests) == 0 {
-		t.Fatalf("expected worktree list/switch after command, list=%d switch=%d", len(client.listRequests), len(client.switchRequests))
+	if len(client.enterRequests) != 1 {
+		t.Fatalf("expected worktree enter after command, enter=%d", len(client.enterRequests))
 	}
 }

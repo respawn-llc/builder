@@ -48,15 +48,24 @@ func TestDetailPrecutRestorationPTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("analyze capture: %v", err)
 	}
-	writeDetailPrecutRestorationCaptureProof(t, capture, analysis)
+	t.Cleanup(func() {
+		if t.Failed() {
+			writeDetailPrecutRestorationCaptureProof(t, capture, analysis)
+		}
+	})
 
-	checkpoints := collectDetailPrecutFrameCheckpoints(t, capture, inputPlan)
+	bounds := detailAlternateScreenBounds(t, analysis)
+	checkpoints := collectDetailPrecutFrameCheckpoints(t, capture, inputPlan, bounds)
+	t.Cleanup(func() {
+		if t.Failed() {
+			writeDetailPrecutRestorationProof(t, checkpoints.proofScreens())
+		}
+	})
 	assertDetailTerminalModeWindows(t, analysis, 1)
 	assertNewestDetailSelection(t, checkpoints.initialNewest)
 	assertSelectedShellDetail(t, checkpoints.selectedShell)
 	assertSelectedMarkdownDetail(t, checkpoints.selectedMarkdown)
-	assertOngoingScreenRestored(t, capture, analysis)
-	writeDetailPrecutRestorationProof(t, capture, analysis, checkpoints.proofScreens())
+	assertOngoingScreenRestored(t, checkpoints.ongoingBefore, checkpoints.ongoingAfter)
 }
 
 func detailPrecutSeedTranscript() []map[string]any {
@@ -134,29 +143,6 @@ func assertDetailTerminalModeWindows(t *testing.T, analysis pty.Analysis, want i
 	if mouseCaptureEnabled {
 		t.Fatal("detail PTY enabled terminal mouse capture")
 	}
-}
-
-func analyzeCapturePrefix(t *testing.T, capture pty.Capture, byteOffset int64) pty.Analysis {
-	t.Helper()
-	if len(capture.Resizes) != 0 {
-		t.Fatalf("detail prefix analysis does not accept resized capture: %+v", capture.Resizes)
-	}
-	if byteOffset < 0 || byteOffset > int64(len(capture.Raw)) {
-		t.Fatalf("capture prefix byte offset = %d, raw bytes = %d", byteOffset, len(capture.Raw))
-	}
-	var chunks []pty.Chunk
-	if byteOffset > 0 {
-		chunks = []pty.Chunk{pty.NewChunk(0, 0, capture.Raw[:byteOffset])}
-	}
-	prefix, err := pty.NewCapture(capture.Dimensions, chunks)
-	if err != nil {
-		t.Fatalf("create capture prefix: %v", err)
-	}
-	analysis, err := pty.Analyze(prefix)
-	if err != nil {
-		t.Fatalf("analyze capture prefix ending at %d: %v", byteOffset, err)
-	}
-	return analysis
 }
 
 func assertNewestDetailSelection(t *testing.T, screen pty.ScreenSnapshot) {
@@ -380,29 +366,8 @@ func assertSelectedVisualSpacer(t *testing.T, screen pty.ScreenSnapshot, selecte
 	t.Fatal("detail selection has no visual spacer row")
 }
 
-func assertOngoingScreenRestored(t *testing.T, capture pty.Capture, analysis pty.Analysis) {
+func assertOngoingScreenRestored(t *testing.T, before pty.ScreenSnapshot, after pty.ScreenSnapshot) {
 	t.Helper()
-	var firstEnable *pty.Operation
-	var lastDisable *pty.Operation
-	for index := range analysis.Operations {
-		operation := &analysis.Operations[index]
-		if operation.Kind != pty.OperationModeChange ||
-			operation.PrivateMode == nil ||
-			operation.PrivateMode.Mode != 1049 {
-			continue
-		}
-		if operation.PrivateMode.Enabled && firstEnable == nil {
-			firstEnable = operation
-		}
-		if !operation.PrivateMode.Enabled {
-			lastDisable = operation
-		}
-	}
-	if firstEnable == nil || lastDisable == nil {
-		t.Fatal("detail alternate-screen boundaries missing")
-	}
-	before := analyzeCapturePrefix(t, capture, firstEnable.ByteRange.Start).Screen
-	after := analyzeCapturePrefix(t, capture, lastDisable.ByteRange.End).Screen
 	protectedRows := max(1, before.Dimensions.Rows-3)
 	protectedCells := 0
 	for row := 0; row < protectedRows; row++ {
@@ -427,9 +392,8 @@ func assertOngoingScreenRestored(t *testing.T, capture pty.Capture, analysis pty
 	}
 }
 
-func writeDetailPrecutRestorationProof(t *testing.T, capture pty.Capture, analysis pty.Analysis, proofs []detailPrecutProofScreen) {
+func writeDetailPrecutRestorationProof(t *testing.T, proofs []detailPrecutProofScreen) {
 	t.Helper()
-	writeDetailPrecutRestorationCaptureProof(t, capture, analysis)
 	proofDir := detailPrecutRestorationProofDir(t)
 	for _, proof := range proofs {
 		snapshotCapture, err := pty.NewCapture(proof.screen.Dimensions, nil)
@@ -444,6 +408,38 @@ func writeDetailPrecutRestorationProof(t *testing.T, capture pty.Capture, analys
 		if err := pty.WriteArtifacts(filepath.Join(proofDir, proof.name), snapshotCapture, snapshotAnalysis, nil); err != nil {
 			t.Fatalf("write detail proof snapshot %q: %v", proof.name, err)
 		}
+	}
+}
+
+type detailAlternateScreenOffsets struct {
+	beforeOffset int64
+	afterOffset  int64
+}
+
+func detailAlternateScreenBounds(t *testing.T, analysis pty.Analysis) detailAlternateScreenOffsets {
+	t.Helper()
+	var firstEnable *pty.Operation
+	var lastDisable *pty.Operation
+	for index := range analysis.Operations {
+		operation := &analysis.Operations[index]
+		if operation.Kind != pty.OperationModeChange ||
+			operation.PrivateMode == nil ||
+			operation.PrivateMode.Mode != 1049 {
+			continue
+		}
+		if operation.PrivateMode.Enabled && firstEnable == nil {
+			firstEnable = operation
+		}
+		if !operation.PrivateMode.Enabled {
+			lastDisable = operation
+		}
+	}
+	if firstEnable == nil || lastDisable == nil {
+		t.Fatal("detail alternate-screen boundaries missing")
+	}
+	return detailAlternateScreenOffsets{
+		beforeOffset: firstEnable.ByteRange.Start,
+		afterOffset:  lastDisable.ByteRange.End,
 	}
 }
 

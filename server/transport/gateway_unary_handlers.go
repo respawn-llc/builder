@@ -141,10 +141,21 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			if err := params.Validate(); err != nil {
 				return protocol.AttachResponse{}, err
 			}
-			state.attachedWorkspaceID = ""
-			state.attachedWorkspaceRoot = ""
+			binding, err := g.resolveSessionAttachment(ctx, state, params.SessionID)
+			if err != nil {
+				return protocol.AttachResponse{}, err
+			}
+			state.attachedProject = binding.ProjectID
+			state.attachedWorkspaceID = binding.WorkspaceID
+			state.attachedWorkspaceRoot = binding.CanonicalRoot
 			state.attachedSession = params.SessionID
-			return protocol.AttachResponse{Kind: "session", SessionID: params.SessionID}, nil
+			return protocol.AttachResponse{
+				Kind:          "session",
+				ProjectID:     binding.ProjectID,
+				WorkspaceID:   binding.WorkspaceID,
+				WorkspaceRoot: binding.CanonicalRoot,
+				SessionID:     params.SessionID,
+			}, nil
 		})
 	},
 	protocol.MethodProjectList:                   gatewayClientCall[client.ProjectViewClient, serverapi.ProjectListRequest, serverapi.ProjectListResponse](GatewayDependencies.ProjectViewClient, client.ProjectViewClient.ListProjects),
@@ -226,11 +237,14 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodSessionPersistInputDraft:                      gatewayClientCall[client.SessionLifecycleClient, serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](GatewayDependencies.SessionLifecycleClient, client.SessionLifecycleClient.PersistInputDraft),
 	protocol.MethodSessionRetargetWorkspace:                      gatewayClientCall[client.SessionLifecycleClient, serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](GatewayDependencies.SessionLifecycleClient, client.SessionLifecycleClient.RetargetSessionWorkspace),
 	protocol.MethodSessionResolveTransition:                      gatewayClientCall[client.SessionLifecycleClient, serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](GatewayDependencies.SessionLifecycleClient, client.SessionLifecycleClient.ResolveTransition),
+	protocol.MethodWorktreeStatus:                                gatewayClientCall[client.WorktreeClient, serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](GatewayDependencies.WorktreeClient, client.WorktreeClient.GetWorktreeStatus),
 	protocol.MethodWorktreeList:                                  gatewayClientCall[client.WorktreeClient, serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](GatewayDependencies.WorktreeClient, client.WorktreeClient.ListWorktrees),
+	protocol.MethodWorktreeSelectorResolve:                       gatewayClientCall[client.WorktreeClient, serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](GatewayDependencies.WorktreeClient, client.WorktreeClient.ResolveWorktreeSelector),
 	protocol.MethodWorktreeCreateTargetResolve:                   gatewayClientCall[client.WorktreeClient, serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](GatewayDependencies.WorktreeClient, client.WorktreeClient.ResolveWorktreeCreateTarget),
 	protocol.MethodWorktreeCreate:                                gatewayClientCall[client.WorktreeClient, serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](GatewayDependencies.WorktreeClient, client.WorktreeClient.CreateWorktree),
-	protocol.MethodWorktreeSwitch:                                gatewayClientCall[client.WorktreeClient, serverapi.WorktreeSwitchRequest, serverapi.WorktreeSwitchResponse](GatewayDependencies.WorktreeClient, client.WorktreeClient.SwitchWorktree),
-	protocol.MethodWorktreeDelete:                                gatewayClientCall[client.WorktreeClient, serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResponse](GatewayDependencies.WorktreeClient, client.WorktreeClient.DeleteWorktree),
+	protocol.MethodWorktreeEnter:                                 gatewayClientCall[client.WorktreeClient, serverapi.WorktreeEnterRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, client.WorktreeClient.EnterWorktree),
+	protocol.MethodWorktreeLeave:                                 gatewayClientCall[client.WorktreeClient, serverapi.WorktreeLeaveRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, client.WorktreeClient.LeaveWorktree),
+	protocol.MethodWorktreeDelete:                                gatewayClientCall[client.WorktreeClient, serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResult](GatewayDependencies.WorktreeClient, client.WorktreeClient.DeleteWorktree),
 	protocol.MethodSessionRuntimeActivate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 			params.OwnerID = state.runtimeOwnerID

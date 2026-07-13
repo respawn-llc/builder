@@ -8,95 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/server/metadata"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
 )
-
-func mapSyncedWorktrees(items []syncedWorktree, target clientui.SessionExecutionTarget) ([]serverapi.WorktreeView, error) {
-	out := make([]serverapi.WorktreeView, 0, len(items))
-	for _, item := range items {
-		view, err := worktreeViewFromSynced(item, target)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, view)
-	}
-	return out, nil
-}
-
-func worktreeViewFromSynced(item syncedWorktree, target clientui.SessionExecutionTarget) (serverapi.WorktreeView, error) {
-	if err := validatePresentExecutionTargetWorktreeID(target); err != nil {
-		return serverapi.WorktreeView{}, err
-	}
-	isCurrent := item.git.IsMain && target.Worktree == nil
-	if target.Worktree != nil {
-		targetWorktreeID := strings.TrimSpace(target.Worktree.ID)
-		isCurrent = targetWorktreeID == strings.TrimSpace(item.record.ID)
-	}
-	return serverapi.WorktreeView{
-		WorktreeID:      item.record.ID,
-		DisplayName:     item.record.DisplayName,
-		CanonicalRoot:   item.record.CanonicalRoot,
-		Availability:    item.record.Availability,
-		BranchRef:       item.git.BranchRef,
-		BranchName:      item.git.BranchName,
-		Detached:        item.git.Detached,
-		LockedReason:    item.git.LockedReason,
-		PrunableReason:  item.git.PrunableReason,
-		DirtyFileCount:  item.git.DirtyFileCount,
-		IsMain:          item.git.IsMain,
-		IsCurrent:       isCurrent,
-		Managed:         item.record.Managed,
-		CreatedBranch:   item.record.CreatedBranch,
-		OriginSessionID: item.record.OriginSessionID,
-	}, nil
-}
-
-func findSyncedWorktreeByID(items []syncedWorktree, worktreeID string) (syncedWorktree, bool) {
-	trimmedID := strings.TrimSpace(worktreeID)
-	for _, item := range items {
-		if strings.TrimSpace(item.record.ID) == trimmedID {
-			return item, true
-		}
-	}
-	return syncedWorktree{}, false
-}
-
-func findSyncedWorktreeByRoot(items []syncedWorktree, worktreeRoot string) (syncedWorktree, bool) {
-	trimmedRoot := strings.TrimSpace(worktreeRoot)
-	for _, item := range items {
-		if strings.TrimSpace(item.record.CanonicalRoot) == trimmedRoot {
-			return item, true
-		}
-	}
-	return syncedWorktree{}, false
-}
-
-func findMainWorktree(items []syncedWorktree) (syncedWorktree, bool) {
-	for _, item := range items {
-		if item.git.IsMain {
-			return item, true
-		}
-	}
-	return syncedWorktree{}, false
-}
-
-func currentSyncedWorktree(items []syncedWorktree, target clientui.SessionExecutionTarget) (*syncedWorktree, error) {
-	if err := validatePresentExecutionTargetWorktreeID(target); err != nil {
-		return nil, err
-	}
-	if target.Worktree == nil {
-		return nil, nil
-	}
-	trimmedID := strings.TrimSpace(target.Worktree.ID)
-	for idx := range items {
-		if strings.TrimSpace(items[idx].record.ID) == trimmedID {
-			return &items[idx], nil
-		}
-	}
-	return nil, nil
-}
 
 func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTarget) error {
 	if target.Worktree == nil {
@@ -129,6 +44,35 @@ func (s *Service) branchCleanupSkippedMessage(target syncedWorktree, explicitDel
 	return fmt.Sprintf("Kept branch %s: Kent cannot prove this worktree created it", branchName)
 }
 
+func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktree) (string, bool, error) {
+	if !record.CreatedBranch {
+		return "", false, nil
+	}
+	persisted, err := worktreeGitMetadataFromRecord(record)
+	if err != nil {
+		return "", false, err
+	}
+	persistedRef := strings.TrimSpace(persisted.BranchRef)
+	if persistedRef == "" {
+		return "", false, nil
+	}
+	branchName := worktreeNamedBranch(persisted)
+	if branchName == "" {
+		return "", false, nil
+	}
+	if live != nil && (live.Detached || strings.TrimSpace(live.BranchRef) != persistedRef) {
+		return "", false, nil
+	}
+	return branchName, true, nil
+}
+
+func worktreeNamedBranch(worktree GitWorktree) string {
+	if branchName := strings.TrimSpace(worktree.BranchName); branchName != "" {
+		return branchName
+	}
+	return shortBranchName(strings.TrimSpace(worktree.BranchRef))
+}
+
 func pathAvailability(path string) string {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -140,23 +84,7 @@ func pathAvailability(path string) string {
 }
 
 func marshalGitMetadata(entry GitWorktree) (string, error) {
-	body, err := json.Marshal(struct {
-		HeadOID        string `json:"head_oid,omitempty"`
-		BranchRef      string `json:"branch_ref,omitempty"`
-		BranchName     string `json:"branch_name,omitempty"`
-		Detached       bool   `json:"detached,omitempty"`
-		Bare           bool   `json:"bare,omitempty"`
-		LockedReason   string `json:"locked_reason,omitempty"`
-		PrunableReason string `json:"prunable_reason,omitempty"`
-	}{
-		HeadOID:        entry.HeadOID,
-		BranchRef:      entry.BranchRef,
-		BranchName:     entry.BranchName,
-		Detached:       entry.Detached,
-		Bare:           entry.Bare,
-		LockedReason:   entry.LockedReason,
-		PrunableReason: entry.PrunableReason,
-	})
+	body, err := json.Marshal(entry)
 	if err != nil {
 		return "", fmt.Errorf("marshal git worktree metadata: %w", err)
 	}

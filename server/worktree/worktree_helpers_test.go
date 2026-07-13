@@ -7,44 +7,22 @@ import (
 	"core/shared/clientui"
 )
 
-func TestWorktreeHelpersRejectPresentTargetWithEmptyWorktreeID(t *testing.T) {
-	item := syncedWorktree{
-		record: metadata.WorktreeRecord{ID: "worktree-1"},
-		git:    GitWorktree{},
+func TestGitMetadataRoundTripPreservesBranchIdentity(t *testing.T) {
+	source := GitWorktree{
+		HeadOID:    "deadbeef",
+		BranchRef:  "refs/heads/feature/round-trip",
+		BranchName: "feature/round-trip",
 	}
-	target := clientui.SessionExecutionTarget{Worktree: &clientui.SessionExecutionWorktreeTarget{}}
-
-	if _, err := worktreeViewFromSynced(item, target); err == nil {
-		t.Fatal("expected worktree view to reject present worktree target without id")
-	}
-	if _, err := currentSyncedWorktree([]syncedWorktree{item}, target); err == nil {
-		t.Fatal("expected current worktree lookup to reject present worktree target without id")
-	}
-}
-
-func TestWorktreeViewFromSyncedUsesNilWorktreeAsMainWorkspaceTarget(t *testing.T) {
-	main := syncedWorktree{
-		record: metadata.WorktreeRecord{ID: "worktree-main"},
-		git:    GitWorktree{IsMain: true},
-	}
-	linked := syncedWorktree{
-		record: metadata.WorktreeRecord{ID: "worktree-linked"},
-		git:    GitWorktree{IsMain: false},
-	}
-
-	mainView, err := worktreeViewFromSynced(main, clientui.SessionExecutionTarget{})
+	encoded, err := marshalGitMetadata(source)
 	if err != nil {
-		t.Fatalf("main worktree view: %v", err)
+		t.Fatalf("marshalGitMetadata: %v", err)
 	}
-	linkedView, err := worktreeViewFromSynced(linked, clientui.SessionExecutionTarget{})
+	decoded, err := worktreeGitMetadataFromRecord(metadata.WorktreeRecord{GitMetadataJSON: encoded})
 	if err != nil {
-		t.Fatalf("linked worktree view: %v", err)
+		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
 	}
-	if !mainView.IsCurrent {
-		t.Fatal("expected main worktree current when target has nil worktree")
-	}
-	if linkedView.IsCurrent {
-		t.Fatal("expected linked worktree not current when target has nil worktree")
+	if decoded.HeadOID != source.HeadOID || decoded.BranchRef != source.BranchRef || decoded.BranchName != source.BranchName {
+		t.Fatalf("decoded metadata = %+v, want branch identity from %+v", decoded, source)
 	}
 }
 

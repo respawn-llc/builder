@@ -25,13 +25,13 @@ func TestZeroValueUIModelUsesPromotedFeatureDefaultsSafely(t *testing.T) {
 func TestUIUpdateRoutesWorktreeMessagesThroughReducer(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.worktrees.open = true
-	m.worktrees.loading = true
-	m.worktrees.refreshToken = 7
+	m.worktrees.listPending = true
+	m.worktreeListGeneration = 7
 
 	next, _ := m.Update(worktreeListDoneMsg{token: 7})
 	updated := next.(*uiModel)
 
-	if updated.worktrees.loading {
+	if updated.worktrees.isLoading() {
 		t.Fatal("expected worktree list completion to be handled by worktree reducer")
 	}
 }

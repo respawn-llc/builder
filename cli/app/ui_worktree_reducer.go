@@ -1,8 +1,12 @@
 package app
 
 import (
+	"errors"
+	"strings"
+
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,6 +14,49 @@ import (
 
 type uiWorktreeFeatureReducer struct {
 	model *uiModel
+}
+
+func (a uiRuntimeAdapter) reconcileWorktreeTransitionOutcome(evt clientui.Event) tea.Cmd {
+	m := a.model
+	if m == nil {
+		return nil
+	}
+	if evt.Kind == clientui.EventStreamGap {
+		if m.worktrees.open {
+			return m.requestWorktreeListCmd()
+		}
+		return nil
+	}
+	if evt.Kind != clientui.EventWorktreeTransitionOutcome || evt.WorktreeTransition == nil {
+		return nil
+	}
+	outcome := *evt.WorktreeTransition
+	if err := outcome.Validate(); err != nil {
+		return m.sendTransientStatusWithNoticeID("invalid worktree transition outcome: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	}
+	var statusCmd tea.Cmd
+	if outcome.State == clientui.WorktreeTransitionFailed {
+		statusCmd = m.sendTransientStatusWithNoticeID(
+			outcome.Failure.Diagnostic,
+			uiStatusNoticeError,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		)
+	} else {
+		statusCmd = m.sendTransientStatusWithNoticeID(
+			"Worktree "+string(outcome.Transition)+" completed",
+			uiStatusNoticeSuccess,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		)
+	}
+	refresh := m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd
+	if m.worktrees.open {
+		return tea.Batch(statusCmd, refresh, m.requestWorktreeListCmd())
+	}
+	return tea.Batch(statusCmd, refresh)
 }
 
 func (m *uiModel) worktreeReducer() uiWorktreeFeatureReducer {
@@ -20,21 +67,79 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	m := r.model
 	switch msg := msg.(type) {
 	case worktreeListDoneMsg:
-		if !m.worktrees.open || msg.token != m.worktrees.refreshToken {
+		if !m.worktrees.open || msg.token != m.worktreeListGeneration {
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, nil)
 		}
-		m.worktrees.loading = false
+		m.worktrees.listPending = false
 		if msg.err != nil {
 			m.worktrees.errorText = runtimeattach.FormatSubmissionError(msg.err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
 		m.worktrees.errorText = ""
-		m.applyWorktreeListResponse(msg.resp)
+		if err := m.applyWorktreeListResponse(msg.resp); err != nil {
+			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
+		}
 		cmd := m.applyWorktreeIntent()
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, tea.Batch(cmd, m.reconcileSpinnerTicking(false)))
+	case worktreeDeleteTargetResolvedMsg:
+		if !m.worktrees.open ||
+			m.worktrees.phase != uiWorktreeOverlayPhaseList ||
+			msg.generation != m.deleteTargetResolutionGeneration {
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, nil)
+		}
+		m.worktrees.deleteTargetResolutionPending = false
+		if msg.err != nil {
+			m.worktrees.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
+		}
+		target, err := worktreeui.ProjectSelectorPreview(msg.resp)
+		if err != nil {
+			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
+		}
+		if err := worktreeui.ValidateDeletionTarget(target); err != nil {
+			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
+		}
+		targetIdentity, err := worktreeui.SelectionIdentityForItem(target)
+		if err != nil {
+			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
+		}
+		listedTarget, idx, ok, err := worktreeui.FindByIdentity(m.worktrees.entries, targetIdentity)
+		if err != nil {
+			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
+		}
+		if ok {
+			target.IsCurrent = listedTarget.IsCurrent
+			target.Entry.Projection.IsCurrent = listedTarget.Entry.Projection.IsCurrent
+			m.worktrees.entries[idx] = target
+			m.worktrees.selection = idx + 1
+			if err := m.recordWorktreeSelection(); err != nil {
+				m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+				m.layout().syncViewport()
+				return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
+			}
+		}
+		m.openDeleteWorktreeDialog(
+			target,
+			msg.preferDeleteBranch,
+			uiWorktreeDeleteTargetAuthorityResolvedSelector,
+		)
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 	case worktreeCreateDoneMsg:
 		if msg.token != m.worktrees.mutationToken {
 			m.layout().syncViewport()
@@ -60,10 +165,18 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			overlayCmd = m.restoreTranscriptSurface()
 			m.closeWorktreeOverlay()
 		}
-		status := "Created worktree " + worktreeui.DisplayName(msg.resp.Worktree)
+		created, err := worktreeui.ProjectItem(msg.resp.Worktree)
+		if err != nil {
+			status := "invalid created worktree response: " + err.Error()
+			feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, m.reconcileSpinnerTicking(false)))
+		}
+		status := "Created worktree " + worktreeui.DisplayName(created)
 		feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
+		enterCmd := m.worktreeSwitchCommandForTarget(msg.resp.Worktree.Projection.Selector)
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, m.reconcileSpinnerTicking(false)))
+		return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, enterCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, m.reconcileSpinnerTicking(false)))
 	case worktreeSetupEventMsg:
 		if msg.token != m.worktrees.mutationToken {
 			m.layout().syncViewport()
@@ -104,7 +217,7 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			overlayCmd = m.restoreTranscriptSurface()
 			m.closeWorktreeOverlay()
 		}
-		status := "Switched to " + worktreeui.DisplayName(msg.resp.Worktree)
+		status := "Scheduled worktree switch to " + strings.TrimSpace(msg.target)
 		feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 		followUp = m.takeQueuedWorktreeSwitchCmd()
 		m.layout().syncViewport()
@@ -116,6 +229,13 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.worktrees.deleteConfirm.submitting = false
 		if msg.err != nil {
+			var precondition *serverapi.WorktreeDeletePreconditionError
+			if errors.As(msg.err, &precondition) {
+				m.worktrees.deleteConfirm.forceFolderRemoval = true
+				m.worktrees.deleteConfirm.errorText = worktreeDeleteForceConfirmation(precondition.DirtyState)
+				m.layout().syncViewport()
+				return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
+			}
 			if !m.worktrees.open {
 				status := runtimeattach.FormatSubmissionError(msg.err)
 				m.layout().syncViewport()
@@ -128,10 +248,12 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		var listCmd tea.Cmd
 		if m.worktrees.open {
 			m.closeWorktreeDialog()
-			m.worktrees.selectedID = worktreeCreateRowID
+			m.worktrees.selectedIdentity = worktreeui.SelectionIdentity{
+				Kind: worktreeui.SelectionIdentityKindCreateRow,
+			}
 			listCmd = m.requestWorktreeListCmd()
 		}
-		feedbackCmd := m.sendTransientStatusWithNoticeID(worktreeDeleteSuccessStatus(msg.resp), uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
+		feedbackCmd := m.sendTransientStatusWithNoticeID(worktreeDeleteSuccessStatus(msg.target, msg.resp), uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, tea.Batch(feedbackCmd, listCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, m.reconcileSpinnerTicking(false)))
 	case worktreeCreateTargetResolveDebounceMsg:

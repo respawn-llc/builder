@@ -27,6 +27,21 @@ func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
 	}
 }
 
+func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
+	sessionID := " \t "
+	if _, err := dialRemoteWithTransport(
+		t.Context(),
+		remoteDialPlan{},
+		nil,
+		"",
+		"",
+		"",
+		&sessionID,
+	); !errors.Is(err, errRemoteSessionIDRequired) {
+		t.Fatalf("dial error = %v, want required session ID error", err)
+	}
+}
+
 func newRemoteTestServer(t *testing.T, handle func(*websocket.Conn)) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
@@ -368,7 +383,8 @@ func TestRemoteSessionTranscriptSubscriptionPreservesTypedCloseReason(t *testing
 	}
 }
 
-func TestRemoteDeleteWorktreeCarriesDeleteBranchFlagAndResponseFields(t *testing.T) {
+func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
+	operationID := serverapi.NewWorktreeOperationID()
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -381,17 +397,20 @@ func TestRemoteDeleteWorktreeCarriesDeleteBranchFlagAndResponseFields(t *testing
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			t.Fatalf("unmarshal delete params: %v", err)
 		}
-		if !params.DeleteBranch {
-			t.Fatalf("expected delete_branch=true in params, got %+v", params)
-		}
-		if params.WorktreeID != "wt-1" {
+		if params.OperationID != operationID ||
+			params.Selector != "wt-1" ||
+			params.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteSafe {
 			t.Fatalf("unexpected delete params: %+v", params)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeDeleteResponse{
-			Target:               clientui.SessionExecutionTarget{EffectiveWorkdir: "/repo"},
-			Worktree:             serverapi.WorktreeView{WorktreeID: "wt-1", DisplayName: "feature-a"},
-			BranchDeleted:        true,
-			BranchCleanupMessage: "Deleted branch feature-a",
+		branchName := "feature-a"
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeDeleteResult{
+			Kind: serverapi.WorktreeDeleteResultKindCompleted,
+			Completed: &serverapi.WorktreeDeleteCompletedResult{
+				Cleanup: serverapi.WorktreeBranchCleanupOutcome{
+					Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
+					BranchName: &branchName,
+				},
+			},
 		})); err != nil {
 			t.Fatalf("send delete response: %v", err)
 		}
@@ -404,15 +423,15 @@ func TestRemoteDeleteWorktreeCarriesDeleteBranchFlagAndResponseFields(t *testing
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.DeleteWorktree(context.Background(), serverapi.WorktreeDeleteRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		WorktreeID:      "wt-1",
-		DeleteBranch:    true,
+		OperationID:         operationID,
+		SessionID:           "session-1",
+		Selector:            "wt-1",
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if !resp.BranchDeleted || resp.BranchCleanupMessage != "Deleted branch feature-a" {
+	if resp.Completed == nil || resp.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
 		t.Fatalf("unexpected delete response: %+v", resp)
 	}
 }
@@ -540,6 +559,64 @@ func TestDialRemoteURLForProjectAttachesProjectAndReturnsRemote(t *testing.T) {
 	}
 	if got := remote.Identity().ServerID; got != "server-1" {
 		t.Fatalf("server id = %q, want server-1", got)
+	}
+}
+
+func TestDialRemoteURLForSessionAttachesSessionBeforeUnaryCalls(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive attach session: %v", err)
+		}
+		if req.Method != protocol.MethodAttachSession {
+			t.Fatalf("expected attach-session during dial, got %q", req.Method)
+		}
+		var attach protocol.AttachSessionRequest
+		if err := json.Unmarshal(req.Params, &attach); err != nil {
+			t.Fatalf("decode attach-session: %v", err)
+		}
+		if attach.SessionID != "session-1" {
+			t.Fatalf("attach session id = %q, want session-1", attach.SessionID)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{
+			Kind:      "session",
+			SessionID: attach.SessionID,
+		})); err != nil {
+			t.Fatalf("send attach response: %v", err)
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive worktree status: %v", err)
+		}
+		if req.Method != protocol.MethodWorktreeStatus {
+			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeStatus)
+		}
+		var statusRequest serverapi.WorktreeStatusRequest
+		if err := json.Unmarshal(req.Params, &statusRequest); err != nil {
+			t.Fatalf("decode worktree status: %v", err)
+		}
+		if statusRequest.SessionID != attach.SessionID {
+			t.Fatalf("status session id = %q, want %q", statusRequest.SessionID, attach.SessionID)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{})); err != nil {
+			t.Fatalf("send worktree status response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURLForSession(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		"session-1",
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	if _, err := remote.GetWorktreeStatus(
+		context.Background(),
+		serverapi.WorktreeStatusRequest{SessionID: "session-1"},
+	); err != nil {
+		t.Fatalf("GetWorktreeStatus: %v", err)
 	}
 }
 
@@ -696,6 +773,117 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	if decoded.Kind != source.Kind || decoded.MissingScope == nil || *decoded.MissingScope != missing || len(decoded.ProjectIDs) != 2 || decoded.ProjectIDs[0] != "project-1" || decoded.ProjectIDs[1] != "project-2" {
 		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
 	}
+}
+
+func TestProtocolErrorDecodesWorktreeStructuredErrors(t *testing.T) {
+	operationID := serverapi.NewWorktreeOperationID()
+	for _, source := range remoteTestWorktreeStructuredErrors(operationID) {
+		t.Run(source.Error(), func(t *testing.T) {
+			err := protocolError(&protocol.ResponseError{
+				Code:    source.RPCErrorCode(),
+				Message: source.Error(),
+				Data:    source.RPCErrorData(),
+			})
+			assertRemoteWorktreeStructuredError(t, err, source, operationID)
+		})
+	}
+}
+
+func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
+	operationID := serverapi.NewWorktreeOperationID()
+	for _, source := range remoteTestWorktreeStructuredErrors(operationID) {
+		t.Run(source.Error(), func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				req := acceptRemoteHandshake(t, ws)
+				if err := websocket.JSON.Receive(ws, &req); err != nil {
+					t.Fatalf("receive worktree request: %v", err)
+				}
+				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData())); err != nil {
+					t.Fatalf("send structured worktree error: %v", err)
+				}
+			})
+			defer server.Close()
+
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+
+			_, err = remote.ListWorktrees(context.Background(), serverapi.WorktreeListRequest{SessionID: "session"})
+			assertRemoteWorktreeStructuredError(t, err, source, operationID)
+		})
+	}
+}
+
+func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationID) []protocol.StructuredRPCError {
+	return []protocol.StructuredRPCError{
+		&serverapi.WorktreeSelectorError{
+			Kind:  serverapi.WorktreeSelectorErrorKindAmbiguous,
+			Input: "feature",
+			Candidates: []serverapi.WorktreeSelectorCandidate{{
+				Variant:          serverapi.WorktreeTopologyVariantExternal,
+				Selector:         "feature",
+				FallbackIdentity: "/repo/feature",
+			}},
+		},
+		&serverapi.WorktreeTransitionPendingError{
+			SessionID:          "session",
+			PendingOperationID: operationID,
+		},
+		&serverapi.WorktreeSetupRetainedError{
+			Worktree: serverapi.WorktreeTopologyEntry{
+				Variant: serverapi.WorktreeTopologyVariantRegistered,
+				Registered: &serverapi.WorktreeRegisteredFacts{
+					Git: serverapi.WorktreeGitFacts{CanonicalRoot: "/repo/feature", HeadObject: "abc123", PathAvailable: true},
+					Kent: serverapi.WorktreeKentFacts{
+						WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+						CanonicalRoot: "/repo/feature",
+						DisplayName:   "feature",
+					},
+				},
+			},
+			Diagnostic: "setup failed",
+		},
+		&serverapi.WorktreeDeletePreconditionError{
+			DirtyState: serverapi.WorktreeDirtyState{
+				Kind:           serverapi.WorktreeDirtyStateDirty,
+				DirtyFileCount: remoteTestIntPointer(2),
+			},
+		},
+	}
+}
+
+func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protocol.StructuredRPCError, operationID serverapi.WorktreeOperationID) {
+	t.Helper()
+	switch source.(type) {
+	case *serverapi.WorktreeSelectorError:
+		var decoded *serverapi.WorktreeSelectorError
+		if !errors.As(err, &decoded) || len(decoded.Candidates) != 1 || decoded.Candidates[0].FallbackIdentity != "/repo/feature" {
+			t.Fatalf("decoded selector error = %+v (%v)", decoded, err)
+		}
+	case *serverapi.WorktreeTransitionPendingError:
+		var decoded *serverapi.WorktreeTransitionPendingError
+		if !errors.As(err, &decoded) || decoded.PendingOperationID != operationID || decoded.SessionID != "session" {
+			t.Fatalf("decoded pending transition = %+v (%v)", decoded, err)
+		}
+	case *serverapi.WorktreeSetupRetainedError:
+		var decoded *serverapi.WorktreeSetupRetainedError
+		if !errors.As(err, &decoded) || decoded.Worktree.Registered == nil || decoded.Worktree.Registered.Kent.DisplayName != "feature" {
+			t.Fatalf("decoded retained setup = %+v (%v)", decoded, err)
+		}
+	case *serverapi.WorktreeDeletePreconditionError:
+		var decoded *serverapi.WorktreeDeletePreconditionError
+		if !errors.As(err, &decoded) || decoded.DirtyState.DirtyFileCount == nil || *decoded.DirtyState.DirtyFileCount != 2 {
+			t.Fatalf("decoded delete precondition = %+v (%v)", decoded, err)
+		}
+	default:
+		t.Fatalf("unsupported structured worktree error %T", source)
+	}
+}
+
+func remoteTestIntPointer(value int) *int {
+	return &value
 }
 
 func TestProtocolErrorDecodesWorkflowExecutionTargetResolutionError(t *testing.T) {

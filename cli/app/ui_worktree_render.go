@@ -48,7 +48,7 @@ func (l uiViewLayout) renderWorktreeList(width, height int, style uiStyles) []st
 	content := make([]string, 0, remainingHeight)
 	if remainingHeight > 0 {
 		switch {
-		case m.worktrees.loading:
+		case m.worktrees.isLoading():
 			content = append(content, style.meta.Render(pendingToolSpinnerFrame(m.spinnerFrame)+" Loading worktrees..."))
 		case strings.TrimSpace(m.worktrees.errorText) != "":
 			content = append(content, renderWorktreeErrorLines(m.worktrees.errorText, width, lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Error.Adaptive()).Bold(true), worktreeOverlayMaxErrorLines)...)
@@ -110,7 +110,7 @@ func renderWorktreeCreateRow(selected bool, width int, theme string, style uiSty
 	}
 }
 
-func renderWorktreeEntry(item serverapi.WorktreeView, selected bool, width int, theme string, style uiStyles) []string {
+func renderWorktreeEntry(item worktreeui.Item, selected bool, width int, theme string, style uiStyles) []string {
 	p := uiPalette(theme)
 	line := lipgloss.NewStyle().Foreground(p.foreground)
 	if selected {
@@ -137,7 +137,7 @@ func renderWorktreeEntry(item serverapi.WorktreeView, selected bool, width int, 
 	}
 }
 
-func renderWorktreeBadges(item serverapi.WorktreeView, selected bool, theme string) []string {
+func renderWorktreeBadges(item worktreeui.Item, selected bool, theme string) []string {
 	p := uiPalette(theme)
 	badges := make([]string, 0, 4)
 	base := lipgloss.NewStyle()
@@ -155,7 +155,7 @@ func renderWorktreeBadges(item serverapi.WorktreeView, selected bool, theme stri
 	}
 	if item.Detached {
 		badges = append(badges, badge("detached", sharedtheme.DefaultPalette().Status.Warning.Adaptive()))
-	} else if branch := strings.TrimSpace(item.BranchName); branch != "" {
+	} else if branch := worktreeui.BranchName(item); branch != "" {
 		badges = append(badges, badge("branch:"+branch, p.foreground))
 	}
 	if !item.Managed && !item.IsMain {
@@ -382,7 +382,8 @@ func (l uiViewLayout) renderWorktreeDeleteDialog(width, height int, style uiStyl
 		}
 		lines = append(lines, lineStyle.Render(truncateQueuedMessageLine(line.Text, width)))
 	}
-	lines = append(lines, "", renderWorktreeDeleteButtons(width, l.model.theme, dialog))
+	lines = append(lines, "")
+	lines = append(lines, renderWorktreeDeleteButtons(width, l.model.theme, dialog)...)
 	if dialog.submitting {
 		lines = append(lines, "", style.meta.Render(pendingToolSpinnerFrame(m.spinnerFrame)+" Deleting worktree..."))
 	}
@@ -400,7 +401,7 @@ func renderWorktreeErrorLines(text string, width int, lineStyle lipgloss.Style, 
 	}
 	wrapped := make([]string, 0, maxLines)
 	for _, line := range splitPlainLines(strings.TrimRight(trimmed, "\n")) {
-		parts := wrapLine(line, width)
+		parts := wrapANSIText(line, width)
 		if len(parts) == 0 {
 			parts = []string{""}
 		}

@@ -128,6 +128,9 @@ func rootCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 	if len(args) > 0 && args[0] == "goal" {
 		return goalSubcommand(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "worktree" {
+		return worktreeSubcommand(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "workflow" {
 		return workflowSubcommand(args[1:], stdout, stderr)
 	}

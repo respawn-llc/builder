@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"core/cli/app/internal/worktreeui"
 	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -320,12 +319,22 @@ func (m *uiModel) inputController() uiInputController {
 	return uiInputController{model: m}
 }
 
-func worktreeDeleteSuccessStatus(resp serverapi.WorktreeDeleteResponse) string {
-	status := "Deleted worktree " + worktreeui.DisplayName(resp.Worktree)
-	if cleanup := strings.TrimSpace(resp.BranchCleanupMessage); cleanup != "" {
-		status += ". " + cleanup
+func worktreeDeleteSuccessStatus(target string, result serverapi.WorktreeDeleteResult) string {
+	if result.Kind == serverapi.WorktreeDeleteResultKindScheduled {
+		return "Scheduled deletion of worktree " + strings.TrimSpace(target)
+	}
+	status := "Deleted worktree " + strings.TrimSpace(target)
+	if result.Completed != nil && result.Completed.Cleanup.Diagnostic != nil {
+		status += ". Kept branch: " + strings.TrimSpace(*result.Completed.Cleanup.Diagnostic)
 	}
 	return status
+}
+
+func worktreeDeleteForceConfirmation(state serverapi.WorktreeDirtyState) string {
+	if state.Kind == serverapi.WorktreeDirtyStateDirty && state.DirtyFileCount != nil {
+		return fmt.Sprintf("Worktree has %d modified or untracked file(s). Press Delete again to force folder removal.", *state.DirtyFileCount)
+	}
+	return "Worktree cleanliness could not be determined. Press Delete again to force folder removal."
 }
 
 func (m *uiModel) askController() uiAskController {

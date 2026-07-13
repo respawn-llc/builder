@@ -30,6 +30,7 @@ type Request struct {
 	Output          string
 	MaxDisplayChars int
 	Backgrounded    bool
+	Invocations     []tools.LiteralShellInvocation
 }
 
 type Result struct {
@@ -191,7 +192,7 @@ func NewRunner(settings Settings) *Runner {
 		mode:             mode,
 		hookPath:         strings.TrimSpace(settings.HookPath),
 		globalProcessors: []Processor{sanitizerProcessor{}},
-		processors:       []Processor{goTestSuccessProcessor{}, fileReadContextProcessor{}},
+		processors:       []Processor{gitWorktreeAdvisoryProcessor{}, goTestSuccessProcessor{}, fileReadContextProcessor{}},
 	}
 }
 
@@ -203,10 +204,10 @@ func (r *Runner) PreservesRawOutput(raw bool) bool {
 }
 
 func (r *Runner) Apply(ctx context.Context, req Request) (Result, error) {
-	request := normalizeRequest(req)
-	if request.Raw || r == nil || effectiveMode(r.mode) == config.ShellPostprocessingModeNone {
-		return Result{Output: request.Output}, nil
+	if req.Raw || r == nil || effectiveMode(r.mode) == config.ShellPostprocessingModeNone {
+		return Result{Output: req.Output}, nil
 	}
+	request := normalizeRequest(req)
 
 	envelope := NewEnvelope(request)
 	processed := false
@@ -275,6 +276,9 @@ func effectiveMode(mode config.ShellPostprocessingMode) config.ShellPostprocessi
 func normalizeRequest(req Request) Request {
 	req.CommandText = strings.TrimSpace(req.CommandText)
 	req.Workdir = strings.TrimSpace(req.Workdir)
+	if len(req.Invocations) == 0 && req.CommandText != "" {
+		req.Invocations = tools.ExtractLiteralShellInvocations(req.CommandText)
+	}
 	if len(req.ParsedArgs) == 0 && req.CommandText != "" {
 		if parsed, ok := tools.ParseSimpleShellCommand(req.CommandText); ok {
 			req.ParsedArgs = parsed

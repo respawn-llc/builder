@@ -39,6 +39,7 @@ const (
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
 	EventRuntimeActivityChanged     EventKind = "runtime_activity_changed"
+	EventWorktreeTransitionOutcome  EventKind = "worktree_transition_outcome"
 
 	TranscriptRecoveryCauseNone         TranscriptRecoveryCause = ""
 	TranscriptRecoveryCauseStreamGap    TranscriptRecoveryCause = "stream_gap"
@@ -69,6 +70,7 @@ type Event struct {
 	ReadModelVersion             ReadModelVersion
 	RuntimeActivity              *RuntimeActivity
 	InputReconciliation          *RuntimeInputReconciliationSnapshot
+	WorktreeTransition           *WorktreeTransitionOutcome
 }
 
 type RuntimeGoalStatusUpdate struct {

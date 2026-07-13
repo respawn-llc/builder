@@ -44,6 +44,10 @@ const (
 	ErrCodeWorkflowTaskListScope             = -32034
 	ErrCodeWorkflowExecutionTargetResolution = -32035
 	ErrCodeWorkflowLockedExecutionTarget     = -32036
+	ErrCodeWorktreeSelector                  = -32037
+	ErrCodeWorktreeTransitionPending         = -32038
+	ErrCodeWorktreeSetupRetained             = -32039
+	ErrCodeWorktreeDeletePrecondition        = -32040
 )
 
 type Request struct {

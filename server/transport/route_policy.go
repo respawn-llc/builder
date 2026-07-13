@@ -169,7 +169,10 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	case rpccontract.ScopeProjectWorkspace:
 		_, err := e.gateway.activeProjectID(ctx, state)
 		return err
-	case rpccontract.ScopeAttachSession, rpccontract.ScopeSessionActiveProject:
+	case rpccontract.ScopeAttachSession:
+		_, err := e.gateway.resolveSessionAttachment(ctx, state, scopeParams.sessionID)
+		return err
+	case rpccontract.ScopeSessionActiveProject:
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionActiveProjectIfSet:
 		if strings.TrimSpace(scopeParams.sessionID) == "" {
@@ -264,11 +267,17 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.WorktreeListRequest:
 		return p.SessionID, true
+	case serverapi.WorktreeStatusRequest:
+		return p.SessionID, true
+	case serverapi.WorktreeSelectorPreviewRequest:
+		return p.SessionID, true
 	case serverapi.WorktreeCreateTargetResolveRequest:
 		return p.SessionID, true
 	case serverapi.WorktreeCreateRequest:
 		return p.SessionID, true
-	case serverapi.WorktreeSwitchRequest:
+	case serverapi.WorktreeEnterRequest:
+		return p.SessionID, true
+	case serverapi.WorktreeLeaveRequest:
 		return p.SessionID, true
 	case serverapi.WorktreeDeleteRequest:
 		return p.SessionID, true

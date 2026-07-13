@@ -746,6 +746,23 @@ func (r *RuntimeRegistry) PublishRuntimeActivitySnapshot(sessionID string, snaps
 	}
 }
 
+func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome) {
+	if r == nil {
+		return
+	}
+	if err := outcome.Validate(); err != nil {
+		panic(fmt.Sprintf("publish invalid worktree transition outcome for session %q: %v", strings.TrimSpace(sessionID), err))
+	}
+	entry := r.directory.Entry(strings.TrimSpace(sessionID))
+	if entry == nil || entry.sessionActivity == nil {
+		return
+	}
+	entry.sessionActivity.Publish(clientui.Event{
+		Kind:               clientui.EventWorktreeTransitionOutcome,
+		WorktreeTransition: &outcome,
+	})
+}
+
 func (r *RuntimeRegistry) SubscribeSessionActivity(_ context.Context, sessionID string) (serverapi.SessionActivitySubscription, error) {
 	return r.SubscribeSessionActivityFrom(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: sessionID})
 }

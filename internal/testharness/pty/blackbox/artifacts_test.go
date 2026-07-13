@@ -50,7 +50,7 @@ func TestPublishFailureArtifactsRetainsBundleWhenLatestLeaseIsContended(t *testi
 	t.Cleanup(func() {
 		closeTestLease(t, lock)
 	})
-	_, err = publishFailureArtifacts(time.Now().Add(40*time.Millisecond), run, testArtifactEvidence(t), errors.New("primary failure"), nil)
+	_, err = publishFailureArtifacts(time.Now().Add(time.Second), run, testArtifactEvidence(t), errors.New("primary failure"), nil)
 	if err == nil {
 		t.Fatal("publishFailureArtifacts succeeded while latest lease was held")
 	}
@@ -77,7 +77,7 @@ func TestPublishFailureArtifactsRetainsBundleWhenLatestLeaseIsContendedCrossProc
 		}
 	})
 
-	_, err = publishFailureArtifacts(time.Now().Add(40*time.Millisecond), run, testArtifactEvidence(t), errors.New("primary failure"), nil)
+	_, err = publishFailureArtifacts(time.Now().Add(time.Second), run, testArtifactEvidence(t), errors.New("primary failure"), nil)
 	var incomplete *ArtifactPublicationIncomplete
 	if !errors.As(err, &incomplete) {
 		t.Fatalf("publish error = %T %v, want ArtifactPublicationIncomplete", err, err)

@@ -11,11 +11,14 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 // ErrBaseRefRequired is returned when a create spec omits a required base ref.
 // Callers match it via errors.Is; the create_branch context is added with %w.
 var ErrBaseRefRequired = errors.New("base ref is required")
+
+var errGitTargetNotFound = errors.New("git target not found")
 
 // InvalidCreateTargetError reports that a requested create target is neither a
 // valid branch name nor a resolvable ref. It exposes the offending target so
@@ -29,16 +32,26 @@ func (e *InvalidCreateTargetError) Error() string {
 }
 
 type GitWorktree struct {
-	Root           string
-	HeadOID        string
-	BranchRef      string
-	BranchName     string
-	Detached       bool
-	Bare           bool
-	LockedReason   string
-	PrunableReason string
-	DirtyFileCount int
-	IsMain         bool
+	Root           string `json:"-"`
+	HeadOID        string `json:"head_oid,omitempty"`
+	BranchRef      string `json:"branch_ref,omitempty"`
+	BranchName     string `json:"branch_name,omitempty"`
+	Detached       bool   `json:"detached,omitempty"`
+	Bare           bool   `json:"bare,omitempty"`
+	LockedReason   string `json:"locked_reason,omitempty"`
+	PrunableReason string `json:"prunable_reason,omitempty"`
+	DirtyFileCount int    `json:"-"`
+	IsMain         bool   `json:"-"`
+}
+
+type GitRepositoryIdentity struct {
+	TopLevelRoot string
+	CommonDir    string
+}
+
+type GitTargetInspection struct {
+	Root     string
+	Identity GitRepositoryIdentity
 }
 
 type CreateSpec struct {
@@ -553,7 +566,22 @@ func (i *GitInspector) BranchExists(ctx context.Context, workspaceRoot string, b
 	if trimmedBranch == "" {
 		return false, fmt.Errorf("branch name is required")
 	}
-	_, exitCode, err := i.runner.Run(ctx, canonicalRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+trimmedBranch)
+	return i.RefExists(ctx, canonicalRoot, "refs/heads/"+trimmedBranch)
+}
+
+func (i *GitInspector) RefExists(ctx context.Context, worktreeRoot string, ref string) (bool, error) {
+	if i == nil {
+		return false, fmt.Errorf("git inspector is required")
+	}
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		return false, err
+	}
+	trimmedRef := strings.TrimSpace(ref)
+	if trimmedRef == "" {
+		return false, fmt.Errorf("ref is required")
+	}
+	_, exitCode, err := i.runner.Run(ctx, canonicalRoot, "rev-parse", "--verify", "--quiet", trimmedRef+"^{object}")
 	if err == nil {
 		return true, nil
 	}
@@ -564,6 +592,66 @@ func (i *GitInspector) BranchExists(ctx context.Context, workspaceRoot string, b
 		return false, nil
 	}
 	return false, err
+}
+
+func (i *GitInspector) InspectTarget(ctx context.Context, worktreeRoot string) (GitTargetInspection, error) {
+	if i == nil {
+		return GitTargetInspection{}, fmt.Errorf("git inspector is required")
+	}
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		return GitTargetInspection{}, err
+	}
+	if _, err := os.Stat(filepath.Join(canonicalRoot, ".git")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return GitTargetInspection{}, fmt.Errorf("%w: %q", errGitTargetNotFound, canonicalRoot)
+		}
+		return GitTargetInspection{}, fmt.Errorf("inspect git target marker %q: %w", canonicalRoot, err)
+	}
+	topLevelOutput, err := i.runner.Output(ctx, canonicalRoot, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return GitTargetInspection{}, err
+	}
+	commonDirOutput, err := i.runner.Output(ctx, canonicalRoot, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return GitTargetInspection{}, err
+	}
+	topLevelRoot, err := config.CanonicalWorkspaceRoot(strings.TrimSpace(string(topLevelOutput)))
+	if err != nil {
+		return GitTargetInspection{}, err
+	}
+	commonDir := strings.TrimSpace(string(commonDirOutput))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(canonicalRoot, commonDir)
+	}
+	canonicalCommonDir, err := config.CanonicalWorkspaceRoot(commonDir)
+	if err != nil {
+		return GitTargetInspection{}, err
+	}
+	return GitTargetInspection{
+		Root: canonicalRoot,
+		Identity: GitRepositoryIdentity{
+			TopLevelRoot: topLevelRoot,
+			CommonDir:    canonicalCommonDir,
+		},
+	}, nil
+}
+
+func (i *GitInspector) FindCreatedWorktree(ctx context.Context, workspaceRoot string, worktreeRoot string) (GitWorktree, bool, error) {
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		return GitWorktree{}, false, err
+	}
+	entries, err := i.List(ctx, workspaceRoot)
+	if err != nil {
+		return GitWorktree{}, false, err
+	}
+	for _, entry := range entries {
+		if entry.Root == canonicalRoot {
+			return entry, true, nil
+		}
+	}
+	return GitWorktree{}, false, nil
 }
 
 func (i *GitInspector) ResolveCreateTarget(ctx context.Context, workspaceRoot string, rawTarget string) (CreateTargetResolution, error) {
@@ -662,6 +750,38 @@ func (i *GitInspector) DirtyFileCount(ctx context.Context, worktreeRoot string) 
 		return 0, err
 	}
 	return countPorcelainStatusEntries(output), nil
+}
+
+func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (serverapi.WorktreeDirtyState, error) {
+	if i == nil {
+		return serverapi.WorktreeDirtyState{}, fmt.Errorf("git inspector is required")
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		return serverapi.WorktreeDirtyState{}, err
+	}
+	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, "status", "--porcelain=v1", "-z")
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return serverapi.WorktreeDirtyState{}, ctxErr
+		}
+		cause := err.Error()
+		return serverapi.WorktreeDirtyState{
+			Kind:         serverapi.WorktreeDirtyStateUnknown,
+			UnknownCause: &cause,
+		}, nil
+	}
+	count := countPorcelainStatusEntries(output)
+	if count == 0 {
+		return serverapi.WorktreeDirtyState{
+			Kind:           serverapi.WorktreeDirtyStateClean,
+			DirtyFileCount: &count,
+		}, nil
+	}
+	return serverapi.WorktreeDirtyState{
+		Kind:           serverapi.WorktreeDirtyStateDirty,
+		DirtyFileCount: &count,
+	}, nil
 }
 
 func (i *GitInspector) Remove(ctx context.Context, workspaceRoot string, worktreeRoot string, force bool) error {

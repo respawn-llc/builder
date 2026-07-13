@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"core/internal/testharness/scriptedllm"
-	"core/internal/testharness/worktreesetup"
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/llm"
@@ -24,6 +24,7 @@ import (
 	"core/server/skillcatalog"
 	askquestion "core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowrunner"
 	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -137,7 +138,7 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("KENT_WORKTREE_SESSION_ID", "stale-parent-session")
-	worktreesetup.InitializeGitRepository(t, workspace)
+	testsetup.InitializeGitRepository(t, workspace)
 	sourceWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspace)
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
@@ -162,10 +163,10 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	const skillDescription = "created before the first workflow model request"
 	markerRelativePath := filepath.Join(".kent", "setup-marker")
 	invocationCountRelativePath := filepath.Join(".kent", "setup-invocations")
-	setup := worktreesetup.New(t, worktreesetup.Options{
+	setup := testsetup.New(t, testsetup.Options{
 		MarkerRelativePath:          &markerRelativePath,
 		InvocationCountRelativePath: &invocationCountRelativePath,
-		Skill: &worktreesetup.Skill{
+		Skill: &testsetup.Skill{
 			Name:        skillName,
 			Description: skillDescription,
 		},
@@ -378,6 +379,15 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 	}
 }
 
+func TestRuntimeTaskWorktreeRestorerRequiresService(t *testing.T) {
+	if err := (runtimeTaskWorktreeRestorer{}).RestoreLockedTaskWorktree(
+		t.Context(),
+		workflowrunner.LockedTaskWorktreeRestoreRequest{},
+	); err == nil {
+		t.Fatal("RestoreLockedTaskWorktree succeeded without a worktree service")
+	}
+}
+
 func TestComposedAttentionClientUsesOneRootGlobalTaskDetailBroker(t *testing.T) {
 	ctx := context.Background()
 	appCore := newComposedCoreForAttentionTest(t)
@@ -583,7 +593,7 @@ func waitForCoreWorkflowTaskDone(t *testing.T, appCore *Core, taskID string) {
 type firstGenerateObserverClient struct {
 	delegate         *scriptedllm.LegacyClient
 	observation      chan<- error
-	setup            worktreesetup.Fixture
+	setup            testsetup.Fixture
 	skillName        string
 	skillDescription string
 	once             sync.Once

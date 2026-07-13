@@ -32,17 +32,17 @@ type Service struct {
 	Runtime            RuntimeControl
 	ResolveContext     func() (context.Context, context.CancelFunc)
 	NewClientRequestID func() string
+	NewOperationID     func() serverapi.WorktreeOperationID
 }
 
-func (s Service) List(includeDirtyCount bool) (serverapi.WorktreeListResponse, error) {
+func (s Service) List() (serverapi.WorktreeListResponse, error) {
 	ctx, cancel, err := s.resolveMutationContext(false)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
 	defer cancel()
 	return s.Client.ListWorktrees(ctx, serverapi.WorktreeListRequest{
-		SessionID:         s.SessionID,
-		IncludeDirtyCount: includeDirtyCount,
+		SessionID: s.SessionID,
 	})
 }
 
@@ -58,6 +58,18 @@ func (s Service) ResolveCreateTarget(target string) (serverapi.WorktreeCreateTar
 	})
 }
 
+func (s Service) ResolveSelector(selector string) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	if s.Client == nil {
+		return serverapi.WorktreeSelectorPreviewResponse{}, ErrClientUnavailable
+	}
+	ctx, cancel := s.resolveContext()
+	defer cancel()
+	return s.Client.ResolveWorktreeSelector(ctx, serverapi.WorktreeSelectorPreviewRequest{
+		SessionID: strings.TrimSpace(s.SessionID),
+		Selector:  strings.TrimSpace(selector),
+	})
+}
+
 func (s Service) Create(req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
 	clientRequestID := s.clientRequestID()
 	if err := req.SetupOperationID.Validate(); err != nil {
@@ -70,25 +82,40 @@ func (s Service) Create(req serverapi.WorktreeCreateRequest) (serverapi.Worktree
 	})
 }
 
-func (s Service) Switch(worktreeID string) (serverapi.WorktreeSwitchResponse, error) {
-	clientRequestID := s.clientRequestID()
-	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeSwitchResponse, error) {
-		return s.Client.SwitchWorktree(ctx, serverapi.WorktreeSwitchRequest{
-			ClientRequestID: clientRequestID,
-			SessionID:       s.SessionID,
-			WorktreeID:      strings.TrimSpace(worktreeID),
+func (s Service) Enter(selector string) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	operationID := s.operationID()
+	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeScheduledAcknowledgement, error) {
+		return s.Client.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
+			OperationID: operationID,
+			SessionID:   s.SessionID,
+			Selector:    strings.TrimSpace(selector),
 		})
 	})
 }
 
-func (s Service) Delete(worktreeID string, deleteBranch bool) (serverapi.WorktreeDeleteResponse, error) {
-	clientRequestID := s.clientRequestID()
-	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeDeleteResponse, error) {
+func (s Service) Leave() (serverapi.WorktreeScheduledAcknowledgement, error) {
+	operationID := s.operationID()
+	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeScheduledAcknowledgement, error) {
+		return s.Client.LeaveWorktree(ctx, serverapi.WorktreeLeaveRequest{
+			OperationID: operationID,
+			SessionID:   s.SessionID,
+		})
+	})
+}
+
+func (s Service) Delete(
+	selector string,
+	forceFolderRemoval bool,
+	cleanupPolicy serverapi.WorktreeBranchCleanupMode,
+) (serverapi.WorktreeDeleteResult, error) {
+	operationID := s.operationID()
+	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeDeleteResult, error) {
 		return s.Client.DeleteWorktree(ctx, serverapi.WorktreeDeleteRequest{
-			ClientRequestID: clientRequestID,
-			SessionID:       s.SessionID,
-			WorktreeID:      strings.TrimSpace(worktreeID),
-			DeleteBranch:    deleteBranch,
+			OperationID:         operationID,
+			SessionID:           s.SessionID,
+			Selector:            strings.TrimSpace(selector),
+			ForceFolderRemoval:  forceFolderRemoval,
+			BranchCleanupPolicy: cleanupPolicy,
 		})
 	})
 }
@@ -165,6 +192,15 @@ func (s Service) clientRequestID() string {
 		}
 	}
 	return uuid.NewString()
+}
+
+func (s Service) operationID() serverapi.WorktreeOperationID {
+	if s.NewOperationID != nil {
+		if id := s.NewOperationID(); id.Validate() == nil {
+			return id
+		}
+	}
+	return serverapi.NewWorktreeOperationID()
 }
 
 func retryControlCall[T any](ctx context.Context, recoverRuntimeConnection func(context.Context, error, bool) error, appendRecoveryWarning bool, call func() (T, error)) (T, error) {

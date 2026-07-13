@@ -260,8 +260,11 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 		SourceWorkspace: serverapi.ProjectWorkspaceSummary{RootPath: "/workspace"},
 		ExecutionTarget: &serverapi.WorkflowExecutionTarget{
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
-			ManagedWorktree: &serverapi.WorktreeView{
+			ManagedWorktree: &serverapi.WorktreeKentFacts{
+				WorktreeID:    "worktree-1",
 				CanonicalRoot: "/workspace-task",
+				DisplayName:   "workspace-task",
+				Managed:       true,
 			},
 		},
 		SourceURL: "https://example.test/source",
@@ -316,10 +319,10 @@ func TestTaskDetailExecutionTargetHumanAndJSONFacts(t *testing.T) {
 			CommitOID:     &commitOID,
 			Provenance:    serverapi.WorkflowExecutionTargetProvenanceLegacyObserved,
 			CurrentBranch: &currentBranch,
-			ManagedWorktree: &serverapi.WorktreeView{
+			ManagedWorktree: &serverapi.WorktreeKentFacts{
 				WorktreeID:    "worktree-1",
 				CanonicalRoot: effectiveRoot,
-				Availability:  "available",
+				DisplayName:   "workspace-task",
 				Managed:       true,
 			},
 		},

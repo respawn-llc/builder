@@ -285,24 +285,25 @@ func (b *tracingBackend) Blit(source, destination, size vt.Coord) {
 	if size.X <= 0 || size.Y <= 0 {
 		return
 	}
-	type copiedCell struct {
-		position Position
-		cell     Cell
+	rowStart, rowEnd, rowStep := 0, int(size.Y), 1
+	colStart, colEnd, colStep := 0, int(size.X), 1
+	// Reverse overlapping in-place moves so writes cannot clobber unread source
+	// cells; column reversal is only needed when source and destination share rows.
+	if destination.Y > source.Y {
+		rowStart, rowEnd, rowStep = int(size.Y)-1, -1, -1
+	} else if destination.Y == source.Y && destination.X > source.X {
+		colStart, colEnd, colStep = int(size.X)-1, -1, -1
 	}
-	copied := make([]copiedCell, 0, int(size.X)*int(size.Y))
-	for row := 0; row < int(size.Y); row++ {
-		for col := 0; col < int(size.X); col++ {
+	for row := rowStart; row != rowEnd; row += rowStep {
+		for col := colStart; col != colEnd; col += colStep {
 			from := Position{Row: int(source.Y) + row, Col: int(source.X) + col}
 			to := Position{Row: int(destination.Y) + row, Col: int(destination.X) + col}
 			if from.Row < 0 || from.Row >= b.dimensions.Rows || from.Col < 0 || from.Col >= b.dimensions.Cols ||
 				to.Row < 0 || to.Row >= b.dimensions.Rows || to.Col < 0 || to.Col >= b.dimensions.Cols {
 				continue
 			}
-			copied = append(copied, copiedCell{position: to, cell: b.cells[from.Row][from.Col]})
+			b.cells[to.Row][to.Col] = b.cells[from.Row][from.Col]
 		}
-	}
-	for _, copiedCell := range copied {
-		b.cells[copiedCell.position.Row][copiedCell.position.Col] = copiedCell.cell
 	}
 }
 

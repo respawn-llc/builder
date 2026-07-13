@@ -3,6 +3,7 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/shared/protocol"
@@ -43,7 +44,7 @@ type WorkflowExecutionTarget struct {
 	CommitOID       *string                           `json:"commit_oid,omitempty"`
 	Provenance      WorkflowExecutionTargetProvenance `json:"provenance"`
 	CurrentBranch   *string                           `json:"current_branch,omitempty"`
-	ManagedWorktree *WorktreeView                     `json:"managed_worktree,omitempty"`
+	ManagedWorktree *WorktreeKentFacts                `json:"managed_worktree,omitempty"`
 }
 
 type WorkflowExecutionTargetConfiguredTarget struct {
@@ -263,6 +264,14 @@ func (t WorkflowExecutionTarget) Validate() error {
 	}
 	if t.CurrentBranch != nil && strings.TrimSpace(*t.CurrentBranch) == "" {
 		return errors.New("execution target current_branch must be non-blank when present")
+	}
+	if t.ManagedWorktree != nil {
+		if err := t.ManagedWorktree.Validate(); err != nil {
+			return fmt.Errorf("managed execution target managed_worktree: %w", err)
+		}
+		if !t.ManagedWorktree.Managed {
+			return errors.New("managed execution target managed_worktree must be managed")
+		}
 	}
 	if t.EffectiveRoot != nil {
 		if t.ManagedWorktree == nil {

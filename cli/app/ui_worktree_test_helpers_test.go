@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/cli/app/internal/worktreeui"
 	sharedclient "core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -19,29 +20,41 @@ type worktreeCommandTestClient struct {
 	listErr           error
 	listCtx           context.Context
 	listRequests      []serverapi.WorktreeListRequest
+	selectorCtx       context.Context
+	selectorResp      serverapi.WorktreeSelectorPreviewResponse
+	selectorErr       error
+	selectorRequests  []serverapi.WorktreeSelectorPreviewRequest
 	resolveCtx        context.Context
 	resolveResp       serverapi.WorktreeCreateTargetResolveResponse
 	resolveErr        error
 	createCtx         context.Context
 	createResp        serverapi.WorktreeCreateResponse
 	createErr         error
+	enterRequests     []serverapi.WorktreeEnterRequest
+	enterErr          error
 	deleteCtx         context.Context
-	deleteResp        serverapi.WorktreeDeleteResponse
+	deleteResp        serverapi.WorktreeDeleteResult
 	deleteErr         error
-	switchCtx         context.Context
-	switchResp        serverapi.WorktreeSwitchResponse
-	switchErr         error
 	resolveRequests   []serverapi.WorktreeCreateTargetResolveRequest
 	createRequests    []serverapi.WorktreeCreateRequest
 	deleteRequests    []serverapi.WorktreeDeleteRequest
-	switchRequests    []serverapi.WorktreeSwitchRequest
 	reconnectFailures map[string]int
+}
+
+func (c *worktreeCommandTestClient) GetWorktreeStatus(context.Context, serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
+	return serverapi.WorktreeStatusResponse{}, nil
 }
 
 func (c *worktreeCommandTestClient) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
 	c.listCtx = ctx
 	c.listRequests = append(c.listRequests, req)
 	return c.listResp, c.listErr
+}
+
+func (c *worktreeCommandTestClient) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	c.selectorCtx = ctx
+	c.selectorRequests = append(c.selectorRequests, req)
+	return c.selectorResp, c.selectorErr
 }
 
 func (c *worktreeCommandTestClient) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
@@ -65,20 +78,23 @@ func (c *worktreeCommandTestClient) CreateWorktree(ctx context.Context, req serv
 	return c.createResp, c.createErr
 }
 
-func (c *worktreeCommandTestClient) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwitchRequest) (serverapi.WorktreeSwitchResponse, error) {
-	c.switchCtx = ctx
-	c.switchRequests = append(c.switchRequests, req)
-	if c.consumeReconnectFailure("switch") {
-		return serverapi.WorktreeSwitchResponse{}, serverapi.ErrRuntimeUnavailable
+func (c *worktreeCommandTestClient) EnterWorktree(_ context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	c.enterRequests = append(c.enterRequests, req)
+	if c.consumeReconnectFailure("enter") {
+		return serverapi.WorktreeScheduledAcknowledgement{}, serverapi.ErrRuntimeUnavailable
 	}
-	return c.switchResp, c.switchErr
+	return serverapi.WorktreeScheduledAcknowledgement{OperationID: req.OperationID}, c.enterErr
 }
 
-func (c *worktreeCommandTestClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResponse, error) {
+func (c *worktreeCommandTestClient) LeaveWorktree(context.Context, serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	return serverapi.WorktreeScheduledAcknowledgement{}, nil
+}
+
+func (c *worktreeCommandTestClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
 	c.deleteCtx = ctx
 	c.deleteRequests = append(c.deleteRequests, req)
 	if c.consumeReconnectFailure("delete") {
-		return serverapi.WorktreeDeleteResponse{}, serverapi.ErrRuntimeUnavailable
+		return serverapi.WorktreeDeleteResult{}, serverapi.ErrRuntimeUnavailable
 	}
 	return c.deleteResp, c.deleteErr
 }
@@ -134,7 +150,7 @@ func applyWorktreeCmdMessages(t *testing.T, model *uiModel, cmd tea.Cmd) *uiMode
 	t.Helper()
 	for _, msg := range collectCmdMessages(t, cmd) {
 		switch msg.(type) {
-		case worktreeListDoneMsg, worktreeCreateDoneMsg, worktreeSwitchDoneMsg, worktreeDeleteDoneMsg, worktreeCreateTargetResolveDebounceMsg, worktreeCreateTargetResolveDoneMsg:
+		case worktreeListDoneMsg, worktreeDeleteTargetResolvedMsg, worktreeCreateDoneMsg, worktreeSwitchDoneMsg, worktreeDeleteDoneMsg, worktreeCreateTargetResolveDebounceMsg, worktreeCreateTargetResolveDoneMsg:
 			next, nextCmd := model.Update(msg)
 			model = next.(*uiModel)
 			model = applyWorktreeCmdMessages(t, model, nextCmd)
@@ -154,14 +170,9 @@ func testMainWorktreeListResponse() serverapi.WorktreeListResponse {
 			WorkspaceRoot:    "/repo",
 			EffectiveWorkdir: "/repo",
 		},
-		Worktrees: []serverapi.WorktreeView{{
-			WorktreeID:    "wt-main",
-			DisplayName:   "main",
-			CanonicalRoot: "/repo",
-			BranchName:    "main",
-			IsMain:        true,
-			IsCurrent:     true,
-		}},
+		Worktrees: []serverapi.WorktreeListEntry{
+			testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, true, true, false),
+		},
 	}
 }
 
@@ -172,29 +183,17 @@ func worktreeListResponseForRoots(mainRoot string, featureRoot string) serverapi
 			WorkspaceRoot:    mainRoot,
 			EffectiveWorkdir: mainRoot,
 		},
-		Worktrees: []serverapi.WorktreeView{{
-			WorktreeID:    "wt-main",
-			DisplayName:   "main",
-			CanonicalRoot: mainRoot,
-			BranchName:    "main",
-			IsMain:        true,
-			IsCurrent:     featureRoot == "",
-		}},
+		Worktrees: []serverapi.WorktreeListEntry{
+			testRegisteredWorktreeListEntry("wt-main", "main", mainRoot, "main", true, featureRoot == "", true, false),
+		},
 	}
 	if strings.TrimSpace(featureRoot) != "" {
 		resp.Target.Worktree = &clientui.SessionExecutionWorktreeTarget{ID: "wt-feature", Root: featureRoot}
 		resp.Target.EffectiveWorkdir = featureRoot
-		resp.Worktrees[0].IsCurrent = false
-		resp.Worktrees = append(resp.Worktrees, serverapi.WorktreeView{
-			WorktreeID:      "wt-feature",
-			DisplayName:     "feature",
-			CanonicalRoot:   featureRoot,
-			BranchName:      "feature",
-			IsCurrent:       true,
-			Managed:         true,
-			CreatedBranch:   true,
-			OriginSessionID: "session-1",
-		})
+		resp.Worktrees[0].Projection.IsCurrent = false
+		resp.Worktrees = append(resp.Worktrees, testRegisteredWorktreeListEntry(
+			"wt-feature", "feature", featureRoot, "feature", false, true, true, true,
+		))
 	}
 	return resp
 }
@@ -207,24 +206,71 @@ func testLinkedWorktreeListResponse() serverapi.WorktreeListResponse {
 			Worktree:         &clientui.SessionExecutionWorktreeTarget{ID: "wt-feature", Root: "/wt/feature-a"},
 			EffectiveWorkdir: "/wt/feature-a/pkg",
 		},
-		Worktrees: []serverapi.WorktreeView{
-			{
-				WorktreeID:    "wt-main",
-				DisplayName:   "main",
-				CanonicalRoot: "/repo",
-				BranchName:    "main",
-				IsMain:        true,
-			},
-			{
-				WorktreeID:      "wt-feature",
-				DisplayName:     "feature-a",
-				CanonicalRoot:   "/wt/feature-a",
-				BranchName:      "feature/a",
-				IsCurrent:       true,
-				Managed:         true,
-				CreatedBranch:   true,
-				OriginSessionID: "session-1",
-			},
+		Worktrees: []serverapi.WorktreeListEntry{
+			testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, false, true, false),
+			testRegisteredWorktreeListEntry("wt-feature", "feature-a", "/wt/feature-a", "feature/a", false, true, true, true),
 		},
 	}
+}
+
+func testRegisteredWorktreeListEntry(id, name, root, branch string, main, current, managed, createdBranch bool) serverapi.WorktreeListEntry {
+	branchRef := "refs/heads/" + branch
+	branchName := branch
+	originSessionID := "session-1"
+	kent := serverapi.WorktreeKentFacts{
+		WorktreeID:    id,
+		CanonicalRoot: root,
+		DisplayName:   name,
+		Managed:       managed,
+		CreatedBranch: createdBranch,
+	}
+	if createdBranch {
+		kent.OriginSessionID = &originSessionID
+	}
+	return serverapi.WorktreeListEntry{
+		Topology: serverapi.WorktreeTopologyEntry{
+			Variant: serverapi.WorktreeTopologyVariantRegistered,
+			Registered: &serverapi.WorktreeRegisteredFacts{
+				Git: serverapi.WorktreeGitFacts{
+					CanonicalRoot: root,
+					HeadObject:    "deadbeef",
+					BranchRef:     &branchRef,
+					BranchName:    &branchName,
+					IsMain:        main,
+					PathAvailable: true,
+				},
+				Kent: kent,
+			},
+		},
+		Projection: serverapi.WorktreeListProjection{Selector: branch, IsCurrent: current},
+	}
+}
+
+func testExternalWorktreeListEntry(root string, selector string, current bool) serverapi.WorktreeListEntry {
+	return serverapi.WorktreeListEntry{
+		Topology: serverapi.WorktreeTopologyEntry{
+			Variant: serverapi.WorktreeTopologyVariantExternal,
+			External: &serverapi.WorktreeExternalFacts{
+				Git: serverapi.WorktreeGitFacts{
+					CanonicalRoot: root,
+					HeadObject:    "deadbeef",
+					Detached:      true,
+					PathAvailable: true,
+				},
+			},
+		},
+		Projection: serverapi.WorktreeListProjection{
+			Selector:  selector,
+			IsCurrent: current,
+		},
+	}
+}
+
+func mustProjectWorktreeItem(t *testing.T, entry serverapi.WorktreeListEntry) worktreeui.Item {
+	t.Helper()
+	item, err := worktreeui.ProjectItem(entry)
+	if err != nil {
+		t.Fatalf("ProjectItem: %v", err)
+	}
+	return item
 }

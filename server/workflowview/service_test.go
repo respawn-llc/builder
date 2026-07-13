@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/runtime"
@@ -445,7 +446,7 @@ func TestTaskDetailPreservesManagedSelectionFactsWhenBindingIsMissing(t *testing
 	}
 }
 
-func TestTaskDetailProjectsUnavailableLegacyObservedManagedTarget(t *testing.T) {
+func TestTaskDetailProjectsUnavailableLegacyObservedManagedTargetForNonDirectoryRoot(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
@@ -460,10 +461,14 @@ func TestTaskDetailProjectsUnavailableLegacyObservedManagedTarget(t *testing.T) 
 	if err := os.Mkdir(worktreeRoot, 0o755); err != nil {
 		t.Fatalf("Mkdir worktree root: %v", err)
 	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
 	if err := store.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
 		ID:            worktreeID,
 		WorkspaceID:   binding.WorkspaceID,
-		CanonicalRoot: worktreeRoot,
+		CanonicalRoot: canonicalWorktreeRoot,
 		Availability:  "available",
 		Managed:       true,
 		CreatedBranch: true,
@@ -491,16 +496,18 @@ func TestTaskDetailProjectsUnavailableLegacyObservedManagedTarget(t *testing.T) 
 			SourceWorkspaceRoot: binding.CanonicalRoot,
 			Managed: &workflowstore.ManagedExecutionRoot{
 				WorktreeID: worktreeID,
-				Root:       worktreeRoot,
+				Root:       canonicalWorktreeRoot,
 			},
 		},
 	}
 	if _, err := workflowStore.StartTaskWithExecutionTarget(ctx, task.ID, &candidate); err != nil {
 		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
 	}
-	movedRoot := worktreeRoot + "-moved"
-	if err := os.Rename(worktreeRoot, movedRoot); err != nil {
-		t.Fatalf("move worktree root: %v", err)
+	if err := os.Remove(worktreeRoot); err != nil {
+		t.Fatalf("remove worktree root directory: %v", err)
+	}
+	if err := os.WriteFile(worktreeRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("replace worktree root with file: %v", err)
 	}
 
 	target := mustTaskDetail(t, view, ctx, string(task.ID)).ExecutionTarget
@@ -509,7 +516,9 @@ func TestTaskDetailProjectsUnavailableLegacyObservedManagedTarget(t *testing.T) 
 		target.CommitOID == nil ||
 		*target.CommitOID != observedCommit ||
 		target.ManagedWorktree == nil ||
-		target.ManagedWorktree.Availability != "missing" {
+		target.ManagedWorktree.WorktreeID != worktreeID ||
+		target.ManagedWorktree.CanonicalRoot != canonicalWorktreeRoot ||
+		!target.ManagedWorktree.Managed {
 		t.Fatalf("legacy observed target = %+v", target)
 	}
 	if target.EffectiveRoot != nil || target.CurrentBranch != nil {
@@ -2777,11 +2786,7 @@ func newWorkflowViewTestStore(t *testing.T) (*metadata.Store, *workflowstore.Sto
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = metadataStore.Close() })
+	metadataStore := testsetup.OpenStore(t, cfg.PersistenceRoot)
 	binding, err := metadataStore.RegisterWorkspaceBinding(context.Background(), cfg.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)

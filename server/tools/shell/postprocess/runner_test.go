@@ -461,6 +461,85 @@ func TestRunnerRawBypassesBuiltinProcessing(t *testing.T) {
 	}
 }
 
+func TestRunnerAdvisesForEveryProvenGitWorktreeInvocation(t *testing.T) {
+	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	for _, command := range []string{
+		`printf ready; command -- git worktree list`,
+		`git -C /repo worktree list`,
+		`git -c core.quotePath=false worktree list`,
+		`git --git-dir /repo/.git worktree list`,
+		`git --git-dir=/repo/.git worktree list`,
+	} {
+		result, err := runner.Apply(context.Background(), Request{
+			ToolName:    toolspec.ToolExecCommand,
+			CommandText: command,
+			Output:      "ready",
+		})
+		if err != nil {
+			t.Fatalf("Apply(%q): %v", command, err)
+		}
+		if result.Warning == nil {
+			t.Fatalf("expected git worktree advisory for %q", command)
+		}
+	}
+}
+
+func TestRunnerUserModeDoesNotRunGitWorktreeAdvisory(t *testing.T) {
+	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser})
+	runner.hookProcessor = testProcessor{id: "user-hook", fn: func(envelope Envelope) (Decision, error) {
+		return Skip(envelope), nil
+	}}
+	result, err := runner.Apply(context.Background(), Request{
+		ToolName:    toolspec.ToolExecCommand,
+		CommandText: `git worktree list`,
+		Output:      "unchanged",
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if result.Warning != nil {
+		t.Fatalf("unexpected built-in advisory in user mode: %s", result.Warning.Text())
+	}
+}
+
+func TestRunnerDoesNotAdviseForTextOrDynamicGitWorktreeWords(t *testing.T) {
+	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	for _, command := range []string{
+		`printf 'git worktree list'`,
+		`git "$subcommand" list`,
+	} {
+		result, err := runner.Apply(context.Background(), Request{
+			ToolName:    toolspec.ToolExecCommand,
+			CommandText: command,
+			Output:      "unchanged",
+		})
+		if err != nil {
+			t.Fatalf("Apply(%q): %v", command, err)
+		}
+		if result.Warning != nil {
+			t.Fatalf("unexpected advisory for %q: %s", command, result.Warning.Text())
+		}
+	}
+}
+
+func TestRunnerAggregateProcessorRequiresStandaloneInvocation(t *testing.T) {
+	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	exitCode := 0
+	output := "PASS\nok\texample.com/postprocess\t0.123s\ndone\n"
+	result, err := runner.Apply(context.Background(), Request{
+		ToolName:    toolspec.ToolExecCommand,
+		CommandText: `go test ./... && printf done`,
+		ExitCode:    &exitCode,
+		Output:      output,
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if result.Output != output {
+		t.Fatalf("output = %q, want attributable aggregate output unchanged", result.Output)
+	}
+}
+
 func TestRunnerUserHookReplacesOutput(t *testing.T) {
 	hookPath := writeHookScript(t, "#!/bin/sh\nprintf '{\"processed\":true,\"replaced_output\":\"HOOKED\"}\n'")
 	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser, HookPath: hookPath})

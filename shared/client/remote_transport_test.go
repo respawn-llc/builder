@@ -395,21 +395,7 @@ func TestRemoteReconnectsUnaryControlConnectionAfterDrop(t *testing.T) {
 		t.Fatalf("ListProjects: %v", err)
 	}
 	requireNoHandlerError(t, handlerErrs)
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		requireNoHandlerError(t, handlerErrs)
-		remote.mu.Lock()
-		controlDone := remote.control == nil || remote.control.IsDone()
-		remote.mu.Unlock()
-		if controlDone {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for dropped control connection")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForRemoteControlDisconnect(t, remote, handlerErrs)
 
 	resp, err := remote.ResolveProjectPath(context.Background(), serverapi.ProjectResolvePathRequest{Path: "/tmp/reconnected"})
 	if err != nil {
@@ -420,6 +406,96 @@ func TestRemoteReconnectsUnaryControlConnectionAfterDrop(t *testing.T) {
 	}
 	if got := connectionCount.Load(); got != 2 {
 		t.Fatalf("connectionCount = %d, want 2", got)
+	}
+	requireNoHandlerError(t, handlerErrs)
+}
+
+func TestRemoteSessionAttachmentSurvivesUnaryControlReconnect(t *testing.T) {
+	var connectionCount atomic.Int32
+	var attachCount atomic.Int32
+	handlerErrs := make(chan error, 8)
+	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
+		connIndex := connectionCount.Add(1)
+		handshaken := false
+		attached := false
+		for event := range conn.Events() {
+			if event.Err != nil {
+				return
+			}
+			req := event.Frame.Request()
+			switch {
+			case !handshaken:
+				if req.Method != protocol.MethodHandshake {
+					reportHandlerError(handlerErrs, "connection %d first method = %q, want handshake", connIndex, req.Method)
+					return
+				}
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{
+					Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+				}))); err != nil {
+					reportHandlerError(handlerErrs, "send handshake response: %w", err)
+					return
+				}
+				handshaken = true
+			case !attached:
+				if req.Method != protocol.MethodAttachSession {
+					reportHandlerError(handlerErrs, "connection %d second method = %q, want attach-session", connIndex, req.Method)
+					return
+				}
+				var attach protocol.AttachSessionRequest
+				if err := json.Unmarshal(req.Params, &attach); err != nil {
+					reportHandlerError(handlerErrs, "decode attach-session: %v", err)
+					return
+				}
+				if attach.SessionID != "session-1" {
+					reportHandlerError(handlerErrs, "attach session id = %q, want session-1", attach.SessionID)
+					return
+				}
+				attachCount.Add(1)
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{
+					Kind:      "session",
+					SessionID: attach.SessionID,
+				}))); err != nil {
+					reportHandlerError(handlerErrs, "send attach-session response: %w", err)
+					return
+				}
+				attached = true
+			default:
+				if req.Method != protocol.MethodWorktreeStatus {
+					reportHandlerError(handlerErrs, "connection %d method = %q, want worktree status", connIndex, req.Method)
+					return
+				}
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{}))); err != nil {
+					reportHandlerError(handlerErrs, "send worktree status response: %w", err)
+				}
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	remote, err := DialRemoteURLForSession(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		"session-1",
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	request := serverapi.WorktreeStatusRequest{SessionID: "session-1"}
+	if _, err := remote.GetWorktreeStatus(context.Background(), request); err != nil {
+		t.Fatalf("first GetWorktreeStatus: %v", err)
+	}
+	waitForRemoteControlDisconnect(t, remote, handlerErrs)
+	if _, err := remote.GetWorktreeStatus(context.Background(), request); err != nil {
+		t.Fatalf("GetWorktreeStatus after reconnect: %v", err)
+	}
+	if got := connectionCount.Load(); got != 2 {
+		t.Fatalf("connectionCount = %d, want 2", got)
+	}
+	if got := attachCount.Load(); got != 2 {
+		t.Fatalf("attachCount = %d, want 2", got)
 	}
 	requireNoHandlerError(t, handlerErrs)
 }
@@ -656,21 +732,7 @@ func TestRemoteReconnectRejectsChangedPersistenceRoot(t *testing.T) {
 		t.Fatalf("first ListProjects: %v", err)
 	}
 	requireNoHandlerError(t, handlerErrs)
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		requireNoHandlerError(t, handlerErrs)
-		remote.mu.Lock()
-		controlDone := remote.control == nil || remote.control.IsDone()
-		remote.mu.Unlock()
-		if controlDone {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for dropped control connection")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForRemoteControlDisconnect(t, remote, handlerErrs)
 
 	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); !errors.Is(err, ErrServerRootMismatch) {
 		t.Fatalf("reconnect ListProjects = %v, want ErrServerRootMismatch", err)
@@ -813,5 +875,23 @@ func requireNoHandlerError(t *testing.T, handlerErrs <-chan error) {
 	case err := <-handlerErrs:
 		t.Fatal(err)
 	default:
+	}
+}
+
+func waitForRemoteControlDisconnect(t *testing.T, remote *Remote, handlerErrs <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		requireNoHandlerError(t, handlerErrs)
+		remote.mu.Lock()
+		controlDone := remote.control == nil || remote.control.IsDone()
+		remote.mu.Unlock()
+		if controlDone {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for dropped control connection")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
