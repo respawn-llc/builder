@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
@@ -13,6 +13,7 @@ describe("BoardRoute native drag lifecycle", () => {
 
   it.each([
     ["document drop", () => document.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }))],
+    ["card dragend", (source: HTMLElement) => fireEvent.dragEnd(source)],
     ["document dragend", () => document.dispatchEvent(new Event("dragend", { bubbles: true }))],
     [
       "document exit/cancel",
@@ -46,13 +47,13 @@ describe("BoardRoute native drag lifecycle", () => {
       expect(destination).toHaveAttribute("data-drop-state", "allowed");
     });
 
-    terminate();
+    await act(async () => {
+      terminate(source);
+      await Promise.resolve();
+    });
 
     await waitFor(() => {
-      expect(screen.getByRole("listitem", { name: "Backlog" })).toHaveAttribute(
-        "data-drop-state",
-        "idle",
-      );
+      expect(screen.getByRole("listitem", { name: "Backlog" })).toHaveAttribute("data-drop-state", "idle");
       expect(destination).toHaveAttribute("data-drop-state", "idle");
     });
 
@@ -113,14 +114,16 @@ function boardResponse(backlogTaskCount: number) {
   };
 }
 
-function boardColumn(input: Readonly<{
-  id: string;
-  kind: string;
-  name: string;
-  sortOrder: number;
-  isBacklog: boolean;
-  taskCount: number;
-}>) {
+function boardColumn(
+  input: Readonly<{
+    id: string;
+    kind: string;
+    name: string;
+    sortOrder: number;
+    isBacklog: boolean;
+    taskCount: number;
+  }>,
+) {
   return {
     node: {
       node_id: input.id,

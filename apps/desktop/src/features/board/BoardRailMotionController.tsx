@@ -9,19 +9,15 @@ import {
   type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
-import { useTranslation } from "react-i18next";
 
 import type { BoardColumn, WorkflowBoard } from "../../api";
 import { chromeContentPaddingClassName } from "../../ui/chromePadding";
-import {
-  BoardColumnDataOwner,
-  type BoardColumnDataView,
-  type BoardColumnQueryDataSnapshot,
-  type BoardColumnQuerySnapshot,
-} from "./BoardColumnDataOwner";
+import { type BoardColumnQueryDataSnapshot, type BoardColumnQuerySnapshot } from "./BoardColumnDataOwner";
+import { BoardColumnMotionBoundary } from "./BoardColumnMotionBoundary";
 import { runBoardCardMotionTransition } from "./BoardCardMotionAnimator";
 import { BoardCardMotionContext, type BoardCardMotionContextValue } from "./BoardCardMotionContext";
-import { KanbanColumn, KanbanGroup } from "./BoardColumns";
+import { BoardCardVisibilityContext, BoardCardVisibilityStore } from "./BoardCardVisibilityRegistry";
+import { KanbanGroup } from "./BoardColumns";
 import {
   boardCardColumnCountSnapshot,
   boardCardMotionParticipants,
@@ -35,11 +31,10 @@ import {
   type BoardCardColumnsSnapshot,
   type PendingBoardCardMove,
 } from "./BoardCardMotionModel";
-import { toKanbanColumnVM, toKanbanGroupVM, type KanbanCardVM } from "./BoardColumnViewModel";
-import type { BoardCardDragPayload, BoardColumnDropState } from "./BoardDragTypes";
-import { registerCardElement } from "./BoardCardVisibilityRegistry";
+import { toKanbanGroupVM, type KanbanCardVM } from "./BoardColumnViewModel";
+import type { ActiveBoardCardDrag } from "./BoardDragState";
+import type { BoardColumnDropState } from "./BoardDragTypes";
 import { boardSections } from "./BoardModel";
-import { useColumnVisibility } from "./useColumnVisibility";
 
 type BoardMotionPhase = "idle" | "arming" | "running";
 
@@ -59,6 +54,7 @@ type DisplayedSnapshot = Readonly<{
 }>;
 
 export type BoardRailMotionControllerProps = Readonly<{
+  activeDrag: ActiveBoardCardDrag | null;
   actionsDisabled: boolean;
   board: WorkflowBoard;
   columnDropState: (column: BoardColumn) => BoardColumnDropState;
@@ -66,7 +62,7 @@ export type BoardRailMotionControllerProps = Readonly<{
   firstActiveID: string | undefined;
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
-  onCardDragStart: (payload: BoardCardDragPayload) => void;
+  onCardDragStart: (drag: ActiveBoardCardDrag) => void;
   onCardsLoadError: (error: unknown) => void;
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
@@ -84,6 +80,7 @@ const emptyColumnsSnapshot: BoardCardColumnsSnapshot = new Map();
 const emptyPendingMoveColumnIDs: ReadonlySet<string> = new Set();
 
 export function BoardRailMotionController({
+  activeDrag,
   actionsDisabled,
   board,
   columnDropState,
@@ -104,21 +101,29 @@ export function BoardRailMotionController({
   scrollportRef,
 }: BoardRailMotionControllerProps) {
   const sections = useMemo(() => boardSections(board), [board]);
-  const layoutSignature = useMemo(() => boardRailLayoutSignature(board, sections, firstActiveID), [board, firstActiveID, sections]);
+  const layoutSignature = useMemo(
+    () => boardRailLayoutSignature(board, sections, firstActiveID),
+    [board, firstActiveID, sections],
+  );
   const boardColumnCounts = useMemo(() => boardCardColumnCountSnapshot(board), [board]);
   const [displayedSnapshot, setDisplayedSnapshot] = useState<DisplayedSnapshot>(() => ({
     columnCounts: boardColumnCounts,
     columns: new Map(),
     layoutSignature,
   }));
-  const [activeNamesByCardID, setActiveNamesByCardID] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [activeNamesByCardID, setActiveNamesByCardID] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
   const [revealCardIDs, setRevealCardIDs] = useState<ReadonlySet<string>>(() => new Set());
   const [armedTransition, setArmedTransition] = useState<ArmedTransition | null>(null);
   const [heldExpandedColumnIDs, setHeldExpandedColumnIDs] = useState<ReadonlySet<string>>(() => new Set());
   const [columnVersion, setColumnVersion] = useState(0);
-  const displayedColumns = displayedSnapshot.layoutSignature === layoutSignature ? displayedSnapshot.columns : emptyColumnsSnapshot;
+  const displayedColumns =
+    displayedSnapshot.layoutSignature === layoutSignature ? displayedSnapshot.columns : emptyColumnsSnapshot;
   const displayedColumnCounts =
-    displayedSnapshot.layoutSignature === layoutSignature ? displayedSnapshot.columnCounts : boardColumnCounts;
+    displayedSnapshot.layoutSignature === layoutSignature
+      ? displayedSnapshot.columnCounts
+      : boardColumnCounts;
   const pendingMoveColumnIDs = useMemo(() => {
     if (pendingCardMove === null) {
       return emptyPendingMoveColumnIDs;
@@ -129,10 +134,8 @@ export function BoardRailMotionController({
   const displayedColumnsRef = useRef(displayedColumns);
   const displayedColumnCountsRef = useRef(displayedColumnCounts);
   const boardColumnCountsRef = useRef(boardColumnCounts);
-  const visibleCardIDsRef = useRef<ReadonlySet<string>>(new Set());
-  const cardElementsRef = useRef<ReadonlyMap<string, HTMLElement>>(new Map());
   const columnElementsRef = useRef<ReadonlyMap<string, HTMLElement>>(new Map());
-  const cardObserverRef = useRef<IntersectionObserver | null>(null);
+  const [cardVisibilityStore] = useState(() => new BoardCardVisibilityStore());
   const phaseRef = useRef<BoardMotionPhase>("idle");
   const followUpPendingRef = useRef(false);
   const attemptIDRef = useRef(0);
@@ -163,7 +166,10 @@ export function BoardRailMotionController({
         return;
       }
       const dirtyCountColumnSet = new Set(dirtyCountColumns);
-      const dirtyColumns = unionColumnIDs(dirtyBoardCardColumnIDs(currentDisplayed, nextDisplayed), dirtyCountColumns);
+      const dirtyColumns = unionColumnIDs(
+        dirtyBoardCardColumnIDs(currentDisplayed, nextDisplayed),
+        dirtyCountColumns,
+      );
       const dirtySettled = dirtyColumns.every((columnID) =>
         columnSnapshotSettledForBoardCount(
           latestColumnsRef.current.get(columnID),
@@ -181,7 +187,11 @@ export function BoardRailMotionController({
         return;
       }
       clearStaleSnapshotTimer(timeoutRef);
-      const participants = boardCardMotionParticipants(currentDisplayed, nextDisplayed, visibleCardIDsRef.current);
+      const participants = boardCardMotionParticipants(
+        currentDisplayed,
+        nextDisplayed,
+        cardVisibilityStore.visibleTaskIDs(),
+      );
       if (participants.namesByCardID.size === 0) {
         displayedColumnsRef.current = nextDisplayed;
         displayedColumnCountsRef.current = nextCounts;
@@ -204,7 +214,7 @@ export function BoardRailMotionController({
         revealCardIDs: participants.revealCardIDs,
       });
     },
-    [latestSnapshot, layoutSignature],
+    [cardVisibilityStore, latestSnapshot, layoutSignature],
   );
 
   useLayoutEffect(() => {
@@ -255,10 +265,9 @@ export function BoardRailMotionController({
       clearStaleSnapshotTimer(timeoutRef);
       clearRevealTimers(revealTimeoutsRef);
       staleTimeoutDueRef.current = false;
-      cardObserverRef.current?.disconnect();
-      cardObserverRef.current = null;
+      cardVisibilityStore.destroy();
     };
-  }, []);
+  }, [cardVisibilityStore]);
 
   const reportColumnSnapshot = useCallback(
     (columnID: string, snapshot: BoardColumnQuerySnapshot): void => {
@@ -279,9 +288,7 @@ export function BoardRailMotionController({
       }
       latestColumnsRef.current = new Map(current).set(columnID, data);
       if (snapshot.cause !== "domain" || !displayedColumnsRef.current.has(columnID)) {
-        replaceDisplayedColumnsWithoutMotion(
-          new Map(displayedColumnsRef.current).set(columnID, data.cards),
-        );
+        replaceDisplayedColumnsWithoutMotion(new Map(displayedColumnsRef.current).set(columnID, data.cards));
         return;
       }
       setColumnVersion((version) => version + 1);
@@ -338,7 +345,7 @@ export function BoardRailMotionController({
       }
       phaseRef.current = "running";
       void runBoardCardMotionTransition({
-        cardElementsRef,
+        cardElementForTaskID: (taskID) => cardVisibilityStore.elementForUniqueTask(taskID),
         columnElementsRef,
         namesByCardID: armedTransition.namesByCardID,
         pendingCardMove,
@@ -373,11 +380,14 @@ export function BoardRailMotionController({
         }
       });
     });
-  }, [armedTransition, pendingCardMove, scheduleNextTransition]);
+  }, [armedTransition, cardVisibilityStore, pendingCardMove, scheduleNextTransition]);
 
-  const registerCard = useCallback((cardID: string, element: HTMLElement | null) => {
-    registerCardElement({ cardElementsRef, cardObserverRef, visibleCardIDsRef }, cardID, element);
-  }, []);
+  const registerCard = useCallback(
+    (instance: Readonly<{ columnID: string; taskID: string }>, element: HTMLElement | null) => {
+      cardVisibilityStore.register(instance, element);
+    },
+    [cardVisibilityStore],
+  );
 
   const registerColumn = useCallback((columnID: string, element: HTMLElement | null) => {
     const current = columnElementsRef.current;
@@ -405,220 +415,88 @@ export function BoardRailMotionController({
   );
 
   function effectiveColumnIsCollapsed(column: BoardColumn): boolean {
-    return columnIsCollapsed(column) && !heldExpandedColumnIDs.has(column.id) && !pendingMoveColumnIDs.has(column.id);
+    return (
+      columnIsCollapsed(column) &&
+      !heldExpandedColumnIDs.has(column.id) &&
+      !pendingMoveColumnIDs.has(column.id)
+    );
   }
 
   return (
-    <BoardCardMotionContext.Provider value={motionContext}>
-      <div
-        className={`flex h-full min-h-0 w-max min-w-full gap-[var(--space-2)] ${chromeContentPaddingClassName}`}
-        data-testid="board-column-rail"
-      >
-        {sections.map((section) =>
-          section.kind === "group" ? (
-            <KanbanGroup
-              group={toKanbanGroupVM(section.group)}
-              hideHeader={section.columns.every(effectiveColumnIsCollapsed)}
-              key={section.id}
-            >
-              {section.columns.map((column) => (
-                <BoardColumnMotionBoundary
-                  actionsDisabled={actionsDisabled}
-                  board={board}
-                  displayedCards={displayedColumns.get(column.id)}
-                  column={column}
-                  dropState={columnDropState(column)}
-                  isCollapsed={effectiveColumnIsCollapsed(column)}
-                  isFirstActive={column.id === firstActiveID}
-                  key={`${board.projectID}:${board.selectedWorkflow.id}:${column.id}`}
-                  latestIsCollapsed={effectiveColumnIsCollapsed(column)}
-                  onCardClick={onCardClick}
-                  onCardDragEnd={onCardDragEnd}
-                  onCardDragStart={onCardDragStart}
-                  onCardsLoadError={onCardsLoadError}
-                  onDeleteTask={onDeleteTask}
-                  onDropTask={onDropTask}
-                  onExpandColumn={onExpandColumn}
-                  onInterruptedRunObserved={onInterruptedRunObserved}
-                  onInterruptTask={onInterruptTask}
-                  onReportColumnSnapshot={reportColumnSnapshot}
-                  onRegisterColumn={registerColumn}
-                  onRegisterColumnScrollport={onRegisterColumnScrollport}
-                  onResumeTask={onResumeTask}
-                  scrollportRef={scrollportRef}
-                />
-              ))}
-            </KanbanGroup>
-          ) : (
-            <BoardColumnMotionBoundary
-              actionsDisabled={actionsDisabled}
-              board={board}
-              displayedCards={displayedColumns.get(section.column.id)}
-              column={section.column}
-              dropState={columnDropState(section.column)}
-              isCollapsed={effectiveColumnIsCollapsed(section.column)}
-              isFirstActive={section.column.id === firstActiveID}
-              key={`${board.projectID}:${board.selectedWorkflow.id}:${section.id}`}
-              latestIsCollapsed={effectiveColumnIsCollapsed(section.column)}
-              onCardClick={onCardClick}
-              onCardDragEnd={onCardDragEnd}
-              onCardDragStart={onCardDragStart}
-              onCardsLoadError={onCardsLoadError}
-              onDeleteTask={onDeleteTask}
-              onDropTask={onDropTask}
-              onExpandColumn={onExpandColumn}
-              onInterruptedRunObserved={onInterruptedRunObserved}
-              onInterruptTask={onInterruptTask}
-              onReportColumnSnapshot={reportColumnSnapshot}
-              onRegisterColumn={registerColumn}
-              onRegisterColumnScrollport={onRegisterColumnScrollport}
-              onResumeTask={onResumeTask}
-              scrollportRef={scrollportRef}
-            />
-          ),
-        )}
-      </div>
-    </BoardCardMotionContext.Provider>
-  );
-}
-
-function BoardColumnMotionBoundary({
-  actionsDisabled,
-  board,
-  displayedCards,
-  column,
-  dropState,
-  isCollapsed,
-  isFirstActive,
-  latestIsCollapsed,
-  onCardClick,
-  onCardDragEnd,
-  onCardDragStart,
-  onCardsLoadError,
-  onDeleteTask,
-  onDropTask,
-  onExpandColumn,
-  onInterruptedRunObserved,
-  onInterruptTask,
-  onReportColumnSnapshot,
-  onRegisterColumn,
-  onRegisterColumnScrollport,
-  onResumeTask,
-  scrollportRef,
-}: Readonly<{
-  actionsDisabled: boolean;
-  board: WorkflowBoard;
-  displayedCards: readonly KanbanCardVM[] | undefined;
-  column: BoardColumn;
-  dropState: BoardColumnDropState;
-  isCollapsed: boolean;
-  isFirstActive: boolean;
-  latestIsCollapsed: boolean;
-  onCardClick: (taskID: string) => void;
-  onCardDragEnd: () => void;
-  onCardDragStart: (payload: BoardCardDragPayload) => void;
-  onCardsLoadError: (error: unknown) => void;
-  onDeleteTask: (taskID: string) => void;
-  onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
-  onExpandColumn: (columnID: string) => void;
-  onInterruptedRunObserved: (input: Readonly<{ runID: string; taskID: string }>) => void;
-  onInterruptTask: (taskID: string) => void;
-  onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
-  onRegisterColumn: (columnID: string, element: HTMLElement | null) => void;
-  onRegisterColumnScrollport: (columnID: string, element: HTMLElement | null) => void;
-  onResumeTask: (taskID: string) => void;
-  scrollportRef: RefObject<HTMLDivElement | null>;
-}>) {
-  const { t } = useTranslation();
-  const [columnElement, setColumnElement] = useState<HTMLElement | null>(null);
-  const [dataView, setDataView] = useState<BoardColumnDataView | null>(null);
-  const columnScrollElementRef = useRef<HTMLElement | null>(null);
-  const wasDataOwnerActiveRef = useRef(false);
-  const setRegisteredColumnElement = useCallback(
-    (element: HTMLElement | null): void => {
-      setColumnElement(element);
-      onRegisterColumn(column.id, element);
-    },
-    [column.id, onRegisterColumn],
-  );
-  const setRegisteredScrollElement = useCallback(
-    (element: HTMLElement | null): void => {
-      columnScrollElementRef.current = element;
-      onRegisterColumnScrollport(column.id, element);
-    },
-    [column.id, onRegisterColumnScrollport],
-  );
-  const isVisible = useColumnVisibility(scrollportRef, columnElement);
-  const dataOwnerActive = isVisible && !latestIsCollapsed;
-  const columnVM = useMemo(() => toKanbanColumnVM(column), [column]);
-  const loadingDataView = useMemo<BoardColumnDataView>(
-    () => ({
-      cards: [],
-      hasNextPage: false,
-      initialBoundary: { state: "loading", label: t("states.loading") },
-      isFetchingNextPage: false,
-      nextBoundary: { state: "idle" },
-      onLoadMore: () => undefined,
-      previousBoundary: { state: "idle" },
-    }),
-    [t],
-  );
-  const activeDataView = dataView ?? loadingDataView;
-  const renderedCards = dataOwnerActive ? (displayedCards ?? activeDataView.cards) : [];
-
-  useLayoutEffect(() => {
-    const scrollElement = columnScrollElementRef.current;
-    if (dataOwnerActive && !wasDataOwnerActiveRef.current && scrollElement !== null) {
-      scrollElement.scrollTop = 0;
-    }
-    wasDataOwnerActiveRef.current = dataOwnerActive;
-  }, [dataOwnerActive]);
-  const releaseDataView = useCallback(() => {
-    setDataView(null);
-  }, []);
-
-  return (
-    <>
-      {dataOwnerActive ? (
-        <BoardColumnDataOwner
-          board={board}
-          column={column}
-          onCardsLoadError={onCardsLoadError}
-          onDataViewChange={setDataView}
-          onDataViewRelease={releaseDataView}
-          onInterruptedRunObserved={onInterruptedRunObserved}
-          onReportColumnSnapshot={onReportColumnSnapshot}
-        />
-      ) : null}
-      <KanbanColumn
-        actionsDisabled={actionsDisabled}
-        cards={renderedCards}
-        column={columnVM}
-        columnRef={setRegisteredColumnElement}
-        scrollportRef={setRegisteredScrollElement}
-        dropState={dropState}
-        hasMoreCards={dataOwnerActive && activeDataView.hasNextPage}
-        initialBoundary={dataOwnerActive ? activeDataView.initialBoundary : undefined}
-        isCollapsed={isCollapsed}
-        isFirstActive={isFirstActive}
-        isLoadingMoreCards={dataOwnerActive && activeDataView.isFetchingNextPage}
-        nextBoundary={dataOwnerActive ? activeDataView.nextBoundary : undefined}
-        onCardClick={onCardClick}
-        onCardDragEnd={onCardDragEnd}
-        onCardDragStart={onCardDragStart}
-        onDeleteTask={onDeleteTask}
-        onDropTask={(event) => {
-          onDropTask(event, column);
-        }}
-        onExpandColumn={() => {
-          onExpandColumn(column.id);
-        }}
-        onInterruptTask={onInterruptTask}
-        onLoadMoreCards={activeDataView.onLoadMore}
-        onResumeTask={onResumeTask}
-        previousBoundary={dataOwnerActive ? activeDataView.previousBoundary : undefined}
-      />
-    </>
+    <BoardCardVisibilityContext.Provider value={cardVisibilityStore}>
+      <BoardCardMotionContext.Provider value={motionContext}>
+        <div
+          className={`flex h-full min-h-0 w-max min-w-full gap-[var(--space-2)] ${chromeContentPaddingClassName}`}
+          data-testid="board-column-rail"
+        >
+          {sections.map((section) =>
+            section.kind === "group" ? (
+              <KanbanGroup
+                group={toKanbanGroupVM(section.group)}
+                hideHeader={section.columns.every(effectiveColumnIsCollapsed)}
+                key={section.id}
+              >
+                {section.columns.map((column) => (
+                  <BoardColumnMotionBoundary
+                    activeDrag={activeDrag}
+                    actionsDisabled={actionsDisabled}
+                    board={board}
+                    displayedCards={displayedColumns.get(column.id)}
+                    column={column}
+                    dropState={columnDropState(column)}
+                    isCollapsed={effectiveColumnIsCollapsed(column)}
+                    isFirstActive={column.id === firstActiveID}
+                    key={`${board.projectID}:${board.selectedWorkflow.id}:${column.id}`}
+                    latestIsCollapsed={effectiveColumnIsCollapsed(column)}
+                    onCardClick={onCardClick}
+                    onCardDragEnd={onCardDragEnd}
+                    onCardDragStart={onCardDragStart}
+                    onCardsLoadError={onCardsLoadError}
+                    onDeleteTask={onDeleteTask}
+                    onDropTask={onDropTask}
+                    onExpandColumn={onExpandColumn}
+                    onInterruptedRunObserved={onInterruptedRunObserved}
+                    onInterruptTask={onInterruptTask}
+                    onReportColumnSnapshot={reportColumnSnapshot}
+                    onRegisterColumn={registerColumn}
+                    onRegisterColumnScrollport={onRegisterColumnScrollport}
+                    onResumeTask={onResumeTask}
+                    scrollportRef={scrollportRef}
+                  />
+                ))}
+              </KanbanGroup>
+            ) : (
+              <BoardColumnMotionBoundary
+                activeDrag={activeDrag}
+                actionsDisabled={actionsDisabled}
+                board={board}
+                displayedCards={displayedColumns.get(section.column.id)}
+                column={section.column}
+                dropState={columnDropState(section.column)}
+                isCollapsed={effectiveColumnIsCollapsed(section.column)}
+                isFirstActive={section.column.id === firstActiveID}
+                key={`${board.projectID}:${board.selectedWorkflow.id}:${section.id}`}
+                latestIsCollapsed={effectiveColumnIsCollapsed(section.column)}
+                onCardClick={onCardClick}
+                onCardDragEnd={onCardDragEnd}
+                onCardDragStart={onCardDragStart}
+                onCardsLoadError={onCardsLoadError}
+                onDeleteTask={onDeleteTask}
+                onDropTask={onDropTask}
+                onExpandColumn={onExpandColumn}
+                onInterruptedRunObserved={onInterruptedRunObserved}
+                onInterruptTask={onInterruptTask}
+                onReportColumnSnapshot={reportColumnSnapshot}
+                onRegisterColumn={registerColumn}
+                onRegisterColumnScrollport={onRegisterColumnScrollport}
+                onResumeTask={onResumeTask}
+                scrollportRef={scrollportRef}
+              />
+            ),
+          )}
+        </div>
+      </BoardCardMotionContext.Provider>
+    </BoardCardVisibilityContext.Provider>
   );
 }
 

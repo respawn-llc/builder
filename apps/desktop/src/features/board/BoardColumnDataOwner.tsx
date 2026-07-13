@@ -30,10 +30,13 @@ export type BoardColumnQuerySnapshot =
 export type BoardColumnDataView = Readonly<{
   cards: readonly KanbanCardVM[];
   hasNextPage: boolean;
+  hasPreviousPage: boolean;
   initialBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   isFetchingNextPage: boolean;
+  isFetchingPreviousPage: boolean;
   nextBoundary: VirtualizedInfiniteListBoundaryState;
   onLoadMore: () => void;
+  onLoadPrevious: () => void;
   previousBoundary: VirtualizedInfiniteListBoundaryState;
 }>;
 
@@ -150,18 +153,24 @@ export function BoardColumnDataOwner({
     () => ({
       cards: cardVMs,
       hasNextPage,
+      hasPreviousPage,
       initialBoundary,
       isFetchingNextPage,
+      isFetchingPreviousPage,
       nextBoundary,
       onLoadMore: loadOlder,
+      onLoadPrevious: loadNewer,
       previousBoundary,
     }),
     [
       cardVMs,
       hasNextPage,
+      hasPreviousPage,
       initialBoundary,
       isFetchingNextPage,
+      isFetchingPreviousPage,
       loadOlder,
+      loadNewer,
       nextBoundary,
       previousBoundary,
     ],
@@ -178,20 +187,10 @@ export function BoardColumnDataOwner({
   }, [error, isError, onCardsLoadError]);
 
   useEffect(() => {
-    if (
-      isFetchingPreviousPage ||
-      isFetchingNextPage ||
-      isFetchPreviousPageError ||
-      isFetchNextPageError
-    ) {
+    if (isFetchingPreviousPage || isFetchingNextPage || isFetchPreviousPageError || isFetchNextPageError) {
       paginationInFlightRef.current = true;
     }
-  }, [
-    isFetchNextPageError,
-    isFetchPreviousPageError,
-    isFetchingNextPage,
-    isFetchingPreviousPage,
-  ]);
+  }, [isFetchNextPageError, isFetchPreviousPageError, isFetchingNextPage, isFetchingPreviousPage]);
 
   useEffect(() => {
     const cause: BoardColumnUpdateCause = !hasHydratedRef.current
@@ -241,14 +240,16 @@ export function BoardColumnDataOwner({
   return null;
 }
 
-function directionalBoundary(input: Readonly<{
-  error: unknown;
-  failed: boolean;
-  loading: boolean;
-  loadingLabel: string;
-  onRetry: () => void;
-  retryLabel: string;
-}>): VirtualizedInfiniteListBoundaryState {
+function directionalBoundary(
+  input: Readonly<{
+    error: unknown;
+    failed: boolean;
+    loading: boolean;
+    loadingLabel: string;
+    onRetry: () => void;
+    retryLabel: string;
+  }>,
+): VirtualizedInfiniteListBoundaryState {
   if (input.failed) {
     return {
       state: "error",

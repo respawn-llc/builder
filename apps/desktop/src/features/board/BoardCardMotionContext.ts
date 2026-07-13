@@ -1,9 +1,11 @@
 import { createContext, useContext, type CSSProperties } from "react";
 
+import type { BoardCardInstance } from "./BoardCardInstance";
+
 export type BoardCardMotionContextValue = Readonly<{
   cardStyle: (cardID: string) => CSSProperties | undefined;
   cardClassName: (cardID: string) => string | undefined;
-  registerCard: (cardID: string, element: HTMLElement | null) => void;
+  registerCard: (instance: BoardCardInstance, element: HTMLElement | null) => void;
 }>;
 
 export const BoardCardMotionContext = createContext<BoardCardMotionContextValue>({

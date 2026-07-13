@@ -119,7 +119,9 @@ export class BoardDragAutoScrollController {
       return;
     }
     const elapsedMs =
-      this.#lastFrameTimestamp === null ? 0 : normalizedBoardDragFrameDeltaMs(timestamp - this.#lastFrameTimestamp);
+      this.#lastFrameTimestamp === null
+        ? 0
+        : normalizedBoardDragFrameDeltaMs(timestamp - this.#lastFrameTimestamp);
     this.#lastFrameTimestamp = timestamp;
     if (elapsedMs > 0) {
       if (motion.horizontal !== null) {
@@ -142,9 +144,15 @@ export class BoardDragAutoScrollController {
     const verticalVelocity =
       verticalTarget === null
         ? 0
-        : boardDragEdgeVelocity(this.#pointer.clientY, verticalTarget.getBoundingClientRect().top, verticalTarget.getBoundingClientRect().bottom);
+        : boardDragEdgeVelocity(
+            this.#pointer.clientY,
+            verticalTarget.getBoundingClientRect().top,
+            verticalTarget.getBoundingClientRect().bottom,
+          );
     const horizontalCanMove = canScroll(this.#root, "x", horizontalVelocity);
-    const horizontal = horizontalCanMove ? { element: this.#root, axis: "x" as const, velocity: horizontalVelocity } : null;
+    const horizontal = horizontalCanMove
+      ? { element: this.#root, axis: "x" as const, velocity: horizontalVelocity }
+      : null;
     const vertical =
       verticalTarget !== null && canScroll(verticalTarget, "y", verticalVelocity)
         ? { element: verticalTarget, axis: "y" as const, velocity: verticalVelocity }
@@ -192,9 +200,11 @@ export function normalizedBoardDragFrameDeltaMs(deltaMs: number): number {
 
 export function useBoardDragAutoScroll({
   active,
+  onNativeDragTerminated,
   rootRef,
 }: Readonly<{
   active: boolean;
+  onNativeDragTerminated?: ((reason: BoardDragAutoScrollStopReason) => void) | undefined;
   rootRef: RefObject<HTMLElement | null>;
 }>) {
   const [controller] = useState(() => new BoardDragAutoScrollController({ root: null }));
@@ -214,16 +224,20 @@ export function useBoardDragAutoScroll({
     const stopDocumentExit = (event: Event) => {
       if ("relatedTarget" in event && event.relatedTarget === null) {
         controller.stop("document-exit");
+        onNativeDragTerminated?.("document-exit");
       }
     };
     const stopDrop = () => {
       controller.stop("document-drop");
+      onNativeDragTerminated?.("document-drop");
     };
     const stopDragEnd = () => {
       controller.stop("document-dragend");
+      onNativeDragTerminated?.("document-dragend");
     };
     const stopWindowBlur = () => {
       controller.stop("window-blur");
+      onNativeDragTerminated?.("window-blur");
     };
     document.addEventListener("dragover", stopOutsideBoard, true);
     document.addEventListener("dragleave", stopDocumentExit, true);
@@ -237,7 +251,7 @@ export function useBoardDragAutoScroll({
       document.removeEventListener("dragend", stopDragEnd, true);
       window.removeEventListener("blur", stopWindowBlur);
     };
-  }, [controller, rootRef]);
+  }, [controller, onNativeDragTerminated, rootRef]);
 
   useEffect(
     () => () => {
@@ -289,7 +303,8 @@ function canScroll(element: HTMLElement, axis: "x" | "y", velocity: number): boo
     return false;
   }
   const position = axis === "x" ? element.scrollLeft : element.scrollTop;
-  const max = axis === "x" ? element.scrollWidth - element.clientWidth : element.scrollHeight - element.clientHeight;
+  const max =
+    axis === "x" ? element.scrollWidth - element.clientWidth : element.scrollHeight - element.clientHeight;
   return velocity < 0 ? position > 0 : position < max;
 }
 
@@ -298,7 +313,10 @@ function applyScroll(element: HTMLElement, axis: "x" | "y", velocity: number, el
     return false;
   }
   const position = axis === "x" ? element.scrollLeft : element.scrollTop;
-  const max = Math.max(0, axis === "x" ? element.scrollWidth - element.clientWidth : element.scrollHeight - element.clientHeight);
+  const max = Math.max(
+    0,
+    axis === "x" ? element.scrollWidth - element.clientWidth : element.scrollHeight - element.clientHeight,
+  );
   const next = Math.min(Math.max(position + (velocity * elapsedMs) / 1_000, 0), max);
   if (axis === "x") {
     element.scrollLeft = next;

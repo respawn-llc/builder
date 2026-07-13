@@ -211,7 +211,7 @@ describe("KanbanColumn", () => {
     const approvalCard = screen.getByRole("article", { name: "Approval task" });
 
     expect(within(questionCard).getByTestId("task-card-body")).toHaveTextContent(
-      "Bounded preview from the server: semantic source remains intact…",
+      "Bounded preview from the server: semantic source remains intact",
     );
     expect(within(questionCard).getByTestId("task-card-preview-ellipsis")).toHaveTextContent("…");
     expect(

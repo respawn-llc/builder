@@ -266,11 +266,7 @@ function Harness() {
     pendingCardMove: state.pending,
     scrollportRef: { current: null },
   };
-  return (
-    <BoardRailMotionController
-      {...controllerProps}
-    />
-  );
+  return <BoardRailMotionController {...controllerProps} />;
 }
 
 async function flush(): Promise<void> {
@@ -559,6 +555,8 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
       const backlog = screen.getByRole("listitem", { name: "Backlog" });
       intersect(backlog, true);
       await flush();
+      fetchNextByNode.get("backlog")?.mockClear();
+      fetchPreviousByNode.get("backlog")?.mockClear();
 
       const scrollport = screen.getByTestId("kanban-column-scroll-backlog");
       scrollport.scrollTop = 346;
@@ -615,16 +613,14 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
 
     intersect(backlogCardElement, true);
     await flush();
-    expect(within(backlogCardElement).getByTestId("task-card-body")).toHaveTextContent(
-      "Visible preview…",
-    );
+    expect(within(backlogCardElement).getByTestId("task-card-body")).toHaveTextContent("Visible preview");
+    expect(within(backlogCardElement).getByTestId("task-card-preview-ellipsis")).toBeInTheDocument();
     expect(within(reconCardElement).getByTestId("task-card-body")).toBeEmptyDOMElement();
 
-    await updateNode("recon", { cards: [], isFetching: false, isPending: false, hasData: true });
+    intersect(recon, false);
+    await flush();
     expect(screen.getByRole("article", { name: "Shared task" })).toBe(backlogCardElement);
-    expect(within(backlogCardElement).getByTestId("task-card-body")).toHaveTextContent(
-      "Visible preview…",
-    );
+    expect(within(backlogCardElement).getByTestId("task-card-body")).toHaveTextContent("Visible preview");
   });
 
   it("keeps the same native drag-source instance mounted beyond overscan and source-page eviction", async () => {

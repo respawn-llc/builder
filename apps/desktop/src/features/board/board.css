@@ -132,7 +132,6 @@
      ramp. */
   --board-column-fade: var(--board-column-header-height);
 
-  padding-top: var(--board-column-fade);
   -webkit-mask-image: linear-gradient(
     to bottom,
     transparent 0,
