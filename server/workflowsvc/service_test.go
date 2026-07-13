@@ -2344,7 +2344,7 @@ func TestServiceCommentsAndReadModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkflowBoard: %v", err)
 	}
-	if len(board.Board.Cards) != 1 || len(board.Board.Columns) == 0 {
+	if len(board.Board.Columns) == 0 {
 		t.Fatalf("board = %+v", board.Board)
 	}
 	backlogNodeID := ""
@@ -2425,8 +2425,29 @@ func TestServiceWorkflowProjectSubscriptionEmitsRunCompletionEvent(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetWorkflowBoard after completion: %v", err)
 	}
-	if len(boardAfter.Board.DonePreview) != 1 {
-		t.Fatalf("board done preview = %+v, want completed task", boardAfter.Board.DonePreview)
+	doneNodeID := ""
+	for _, column := range boardAfter.Board.Columns {
+		if column.IsDone {
+			doneNodeID = column.Node.NodeID
+			if column.TaskCount != 1 {
+				t.Fatalf("done column count = %d, want 1", column.TaskCount)
+			}
+			break
+		}
+	}
+	if doneNodeID == "" {
+		t.Fatalf("board columns missing done: %+v", boardAfter.Board.Columns)
+	}
+	donePage, err := service.ListWorkflowBoardNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowID,
+		NodeID:     doneNodeID,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowBoardNodeCards done: %v", err)
+	}
+	if len(donePage.Cards) != 1 || donePage.Cards[0].TaskID != task.Task.ID {
+		t.Fatalf("done cards = %+v, want completed task %s", donePage.Cards, task.Task.ID)
 	}
 }
 

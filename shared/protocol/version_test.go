@@ -25,3 +25,10 @@ func TestProtocolVersionLoadsFromEmbeddedDefinition(t *testing.T) {
 		t.Fatalf("protocol version = %q, want positive integer string", Version)
 	}
 }
+
+func TestProtocolVersionIncludesMetadataOnlyBoardContract(t *testing.T) {
+	const want = "52"
+	if Version != want {
+		t.Fatalf("protocol version = %q, want %q for metadata-only board contract", Version, want)
+	}
+}

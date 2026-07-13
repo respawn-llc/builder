@@ -377,7 +377,7 @@ func TestWorkflowTaskQuestionAnswerSelectedOptionJSONUsesNullableValue(t *testin
 	}
 }
 
-func TestWorkflowBoardJSONUsesTruthfulProjectFactsAndCardBody(t *testing.T) {
+func TestWorkflowBoardJSONContainsMetadataOnly(t *testing.T) {
 	board := WorkflowBoard{
 		ProjectID: "project-1",
 		Project: ProjectBoardProject{
@@ -387,13 +387,6 @@ func TestWorkflowBoardJSONUsesTruthfulProjectFactsAndCardBody(t *testing.T) {
 			DefaultWorkspaceID:     "workspace-default",
 			AttachedWorkspaceCount: 2,
 		},
-		Cards: []WorkflowBoardTaskCard{{
-			TaskID:     "task-1",
-			ShortID:    "KNT-1",
-			Title:      "Task",
-			Body:       "Complete body, including UTF-8 界",
-			WorkflowID: "workflow-1",
-		}},
 	}
 
 	raw, err := json.Marshal(board)
@@ -408,24 +401,104 @@ func TestWorkflowBoardJSONUsesTruthfulProjectFactsAndCardBody(t *testing.T) {
 	if !ok || project["default_workspace_id"] != "workspace-default" || project["attached_workspace_count"] != float64(2) {
 		t.Fatalf("project JSON = %#v, want workspace facts", shape["project"])
 	}
-	cards, ok := shape["cards"].([]any)
-	if !ok || len(cards) != 1 {
-		t.Fatalf("cards JSON = %#v, want one card", shape["cards"])
-	}
-	card, ok := cards[0].(map[string]any)
-	if !ok || card["body"] != "Complete body, including UTF-8 界" {
-		t.Fatalf("card JSON = %#v, want full body", cards[0])
-	}
-	if _, ok := card["body_preview"]; ok {
-		t.Fatalf("card JSON retains obsolete body_preview: %#v", card)
+	for _, forbidden := range []string{"cards", "done_preview", "has_hidden_done_cards", "next_page_token"} {
+		if _, ok := shape[forbidden]; ok {
+			t.Fatalf("board metadata JSON contains card-owned key %q: %#v", forbidden, shape)
+		}
 	}
 
 	var decoded WorkflowBoard
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal board: %v", err)
 	}
-	if decoded.Project.DefaultWorkspaceID != "workspace-default" || decoded.Project.AttachedWorkspaceCount != 2 || len(decoded.Cards) != 1 || decoded.Cards[0].Body != "Complete body, including UTF-8 界" {
-		t.Fatalf("decoded board = %+v, want project facts and full body", decoded)
+	if decoded.Project.DefaultWorkspaceID != "workspace-default" || decoded.Project.AttachedWorkspaceCount != 2 {
+		t.Fatalf("decoded board = %+v, want project facts", decoded)
+	}
+}
+
+func TestWorkflowBoardCardJSONContainsNestedMarkdownPreviewAndNullableCursors(t *testing.T) {
+	cardRaw, err := json.Marshal(WorkflowBoardTaskCard{
+		TaskID:  "task-1",
+		ShortID: "KNT-1",
+		Title:   "Task",
+		Preview: MarkdownPreview{
+			Markdown: "Complete body must not cross the board-card boundary",
+		},
+		WorkflowID: "workflow-1",
+	})
+	if err != nil {
+		t.Fatalf("marshal board card: %v", err)
+	}
+	var cardShape map[string]any
+	if err := json.Unmarshal(cardRaw, &cardShape); err != nil {
+		t.Fatalf("unmarshal board card JSON shape: %v", err)
+	}
+	if _, ok := cardShape["body"]; ok {
+		t.Fatalf("board card JSON contains full body: %#v", cardShape)
+	}
+	preview, ok := cardShape["preview"].(map[string]any)
+	if !ok {
+		t.Fatalf("board card preview JSON = %#v, want nested object", cardShape["preview"])
+	}
+	if preview["markdown"] != "Complete body must not cross the board-card boundary" || preview["truncated"] != false {
+		t.Fatalf("board card preview JSON = %#v, want markdown and truncation fact", preview)
+	}
+	for _, obsolete := range []string{"body_preview", "preview_markdown", "preview_truncated"} {
+		if _, ok := cardShape[obsolete]; ok {
+			t.Fatalf("board card JSON contains obsolete flat preview key %q: %#v", obsolete, cardShape)
+		}
+	}
+
+	pageRaw, err := json.Marshal(WorkflowBoardNodeCardsListResponse{
+		ProjectID:  "project-1",
+		WorkflowID: "workflow-1",
+		NodeID:     "node-1",
+	})
+	if err != nil {
+		t.Fatalf("marshal board card page: %v", err)
+	}
+	var pageShape map[string]any
+	if err := json.Unmarshal(pageRaw, &pageShape); err != nil {
+		t.Fatalf("unmarshal board card page JSON shape: %v", err)
+	}
+	for _, cursor := range []string{"previous_page_token", "next_page_token"} {
+		value, ok := pageShape[cursor]
+		if !ok || value != nil {
+			t.Fatalf("%s JSON = %#v, want explicit null", cursor, value)
+		}
+	}
+
+	requestRaw, err := json.Marshal(WorkflowBoardNodeCardsListRequest{
+		ProjectID:  "project-1",
+		WorkflowID: "workflow-1",
+		NodeID:     "node-1",
+	})
+	if err != nil {
+		t.Fatalf("marshal board card page request: %v", err)
+	}
+	var requestShape map[string]any
+	if err := json.Unmarshal(requestRaw, &requestShape); err != nil {
+		t.Fatalf("unmarshal board card page request JSON shape: %v", err)
+	}
+	if value, ok := requestShape["page_token"]; !ok || value != nil {
+		t.Fatalf("request page_token JSON = %#v, want explicit null", value)
+	}
+}
+
+func TestWorkflowBoardNodeCardsRequestCapsPageSizeAt25(t *testing.T) {
+	valid := WorkflowBoardNodeCardsListRequest{
+		ProjectID:  "project-1",
+		WorkflowID: "workflow-1",
+		NodeID:     "node-1",
+		PageSize:   25,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("25-card page rejected: %v", err)
+	}
+	oversized := valid
+	oversized.PageSize = 26
+	if err := oversized.Validate(); !isWorkflowFieldError(err, "page_size", WorkflowRequestErrorInvalidMode) {
+		t.Fatalf("26-card page error = %#v, want invalid_mode on page_size", err)
 	}
 }
 
