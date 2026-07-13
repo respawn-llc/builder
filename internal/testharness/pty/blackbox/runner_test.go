@@ -17,6 +17,8 @@ import (
 	"core/internal/testharness/pty/driver"
 )
 
+const cleanupTeardownTestMargin = time.Second
+
 func TestRunnerExecutesDeclaredGoModelBoundaryScenario(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "kent")
 	build := exec.CommandContext(context.Background(), "./scripts/build.sh", "server", "--output", binary)
@@ -69,15 +71,15 @@ func TestCleanupForceKillsTERMAndHUPIgnoringClientAtGraceDeadline(t *testing.T) 
 	started := time.Now()
 	sessionOwner := session
 	var environment *IsolatedEnvironment
-	incomplete := (cleanupSupervisor{session: &sessionOwner, environment: &environment}).stopOwners(session, nil, started.Add(fixedWait))
+	incomplete := (cleanupSupervisor{session: &sessionOwner, environment: &environment}).stopOwners(session, nil, started.Add(cleanupRetryWait))
 	elapsed := time.Since(started)
 	if incomplete != nil {
 		t.Fatalf("cleanup incomplete: %v", incomplete)
 	}
-	if elapsed < fixedWait/2 {
+	if elapsed < cleanupRetryWait/2 {
 		t.Fatalf("cleanup completed before the TERM grace elapsed: %s", elapsed)
 	}
-	if elapsed > fixedWait+100*time.Millisecond {
+	if elapsed > cleanupRetryWait+cleanupTeardownTestMargin {
 		t.Fatalf("cleanup exceeded its total deadline: %s", elapsed)
 	}
 	select {

@@ -42,29 +42,37 @@ Setup is blocking because worktree-local context can change what the agent sees.
 
 While setup is running, Kent reports live setup progress with the resolved script path and worktree path. If setup fails, times out, or is canceled, the foreground create/start operation fails and Kent does not switch the session or start the workflow run against that worktree. The created worktree and Kent metadata remain available so you can inspect, repair, or delete them.
 
-The script receives environment variables as input:
+Kent invokes the script with the new worktree as its cwd and three positional arguments:
+
+1. source workspace root
+2. branch name
+3. worktree root
+
+Kent supplies these reserved environment variables, replacing conflicting inherited values:
 
 - `KENT_WORKTREE_SOURCE_WORKSPACE_ROOT` - Original/main workspace root that created the worktree, e.g. `/home/user/dev/app` or `C:\Users\user\dev\app`.
 - `KENT_WORKTREE_BRANCH_NAME` - Branch/ref name selected for the new worktree, e.g. `feature/search-fix`.
 - `KENT_WORKTREE_ROOT` - Filesystem path to the newly created worktree; setup script runs with this as cwd, e.g. `/home/user/.kent/worktrees/app/search-fix`.
-- `KENT_WORKTREE_SESSION_ID` - Kent session id that requested the worktree, e.g. `b31234ab-78ce-43d1-8f4c-2d6c6d4adbc1`.
+- `KENT_WORKTREE_SESSION_ID` - Kent session id that requested the worktree, e.g. `b31234ab-78ce-43d1-8f4c-2d6c6d4adbc1`. Present only when a session initiates creation; workflow task setup omits it.
 - `KENT_WORKTREE_PROJECT_ID` - Kent project id for the workspace/project, e.g. `project-94b18685-19ed-4513-96bb-bcffa10410ff`.
 - `KENT_WORKTREE_WORKSPACE_ID` - Kent workspace binding id for the source workspace, e.g. `workspace-2f7b6d4a`.
 - `KENT_WORKTREE_WORKTREE_ID` - Kent metadata id for the created worktree, e.g. `worktree-8c9a0e3f`.
 - `KENT_WORKTREE_CREATED_BRANCH` - Whether Kent created a new branch for this worktree, e.g. `true` or `false`.
-- `KENT_WORKTREE_PAYLOAD_JSON` - Full setup payload as one JSON string containing all fields above, e.g. `{"source_workspace_root":"/repo","branch_name":"feature/x","worktree_root":"/repo-wt","session_id":"...","project_id":"...","workspace_id":"...","worktree_id":"...","created_branch":true}`.
+- `KENT_WORKTREE_PAYLOAD_JSON` - Full setup payload as one JSON string containing all fields above, e.g. `{"source_workspace_root":"/repo","branch_name":"feature/x","worktree_root":"/repo-wt","session_id":null,"project_id":"...","workspace_id":"...","worktree_id":"...","created_branch":true}`.
 
-It also receives JSON as stdin:
+It also receives the same payload as JSON on stdin:
 
 ```json
 {
     "source_workspace_root": "/path/to/main/workspace",
     "branch_name": "feature/name",
     "worktree_root": "/path/to/new/worktree",
-    "session_id": "...",
+    "session_id": null,
     "project_id": "...",
     "workspace_id": "...",
     "worktree_id": "...",
     "created_branch": true
 }
 ```
+
+`session_id` is nullable: workflow task setup supplies `null`, while session-originated creation supplies the requesting session ID.

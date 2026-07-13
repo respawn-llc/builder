@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/worktreesetup"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
@@ -105,6 +106,85 @@ func TestEnsureTaskWorktreeRunsSetupAndPublishesProgressBeforeReturning(t *testi
 	payload := waitForSetupPayload(t, payloadPath)
 	if payload.SourceWorkspaceRoot != env.workspaceRoot || payload.WorktreeRoot != result.resp.Worktree.CanonicalRoot {
 		t.Fatalf("setup payload = %+v, want source %q worktree %q", payload, env.workspaceRoot, result.resp.Worktree.CanonicalRoot)
+	}
+}
+
+func TestEnsureTaskWorktreeSetupOmitsStaleParentSessionEnvironment(t *testing.T) {
+	env := newServiceTestEnv(t)
+	t.Setenv(setupEnvironmentKeySessionID, "stale-parent-session")
+	t.Setenv(setupEnvironmentKeyWorktreeRoot, "stale-parent-worktree")
+	task, _ := createTaskWorktreeTestTask(t, env)
+	capture := worktreesetup.New(t, worktreesetup.Options{})
+	env.service.setupScript = capture.Executable()
+
+	resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("EnsureTaskWorktree: %v", err)
+	}
+	invocation, err := capture.Invocation()
+	if err != nil {
+		t.Fatalf("setup invocation: %v", err)
+	}
+	payload, err := invocation.Payload()
+	if err != nil {
+		t.Fatalf("setup payload: %v", err)
+	}
+	if payload.SessionID != nil {
+		t.Fatalf("workflow setup session_id = %q, want nil", *payload.SessionID)
+	}
+	if err := invocation.Verify(worktreesetup.Payload{
+		SourceWorkspaceRoot: env.workspaceRoot,
+		BranchName:          task.ShortID,
+		WorktreeRoot:        resp.Worktree.CanonicalRoot,
+		ProjectID:           env.binding.ProjectID,
+		WorkspaceID:         env.binding.WorkspaceID,
+		WorktreeID:          resp.Worktree.WorktreeID,
+		CreatedBranch:       resp.CreatedBranch,
+	}); err != nil {
+		t.Fatalf("workflow setup contract: %v", err)
+	}
+}
+
+func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T) {
+	env := newServiceTestEnv(t)
+	t.Setenv(setupEnvironmentKeySessionID, "stale-parent-session")
+	t.Setenv(setupEnvironmentKeyWorktreeRoot, "stale-parent-worktree")
+	capture := worktreesetup.New(t, worktreesetup.Options{})
+	env.service.setupScript = capture.Executable()
+
+	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "req-session-contract",
+		SessionID:        env.session.Meta().SessionID,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/session-contract",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	invocation, err := capture.Invocation()
+	if err != nil {
+		t.Fatalf("setup invocation: %v", err)
+	}
+	payload, err := invocation.Payload()
+	if err != nil {
+		t.Fatalf("setup payload: %v", err)
+	}
+	if payload.SessionID == nil || *payload.SessionID != env.session.Meta().SessionID {
+		t.Fatalf("session setup session_id = %v, want %q", payload.SessionID, env.session.Meta().SessionID)
+	}
+	if err := invocation.Verify(worktreesetup.Payload{
+		SourceWorkspaceRoot: env.workspaceRoot,
+		BranchName:          "feature/session-contract",
+		WorktreeRoot:        resp.Worktree.CanonicalRoot,
+		SessionID:           payload.SessionID,
+		ProjectID:           env.binding.ProjectID,
+		WorkspaceID:         env.binding.WorkspaceID,
+		WorktreeID:          resp.Worktree.WorktreeID,
+		CreatedBranch:       resp.CreatedBranch,
+	}); err != nil {
+		t.Fatalf("session setup contract: %v", err)
 	}
 }
 
