@@ -23,8 +23,11 @@ func TestRenderErasesMutableBandResetsMarginsAndPlacesCursor(t *testing.T) {
 	}
 
 	want := "\x1b[r\x1b[?6l" +
-		"\x1b[4;1H\x1b[2K\x1b[5;1H\x1b[2K" +
-		"\x1b[4;1Halpha\x1b[5;1Hbeta" +
+		"\x1b]133;C\x1b\\" +
+		"\x1b[4;1H\x1b]133;C\x1b\\\x1b[2K" +
+		"\x1b[5;1H\x1b]133;C\x1b\\\x1b[2K" +
+		"\x1b[4;1H\x1b]133;A;redraw=1\x1b\\" +
+		"alpha\x1b[5;1Hbeta" +
 		"\x1b[5;3H\x1b[?25h"
 	if got := out.String(); got != want {
 		t.Fatalf("terminal transaction bytes = %q, want %q", got, want)
@@ -44,8 +47,11 @@ func TestRenderErasesPreviousMutableBandRows(t *testing.T) {
 	}
 
 	want := "\x1b[r\x1b[?6l" +
-		"\x1b[4;1H\x1b[2K\x1b[5;1H\x1b[2K" +
-		"\x1b[5;1Hgamma" +
+		"\x1b]133;C\x1b\\" +
+		"\x1b[4;1H\x1b]133;C\x1b\\\x1b[2K" +
+		"\x1b[5;1H\x1b]133;C\x1b\\\x1b[2K" +
+		"\x1b[5;1H\x1b]133;A;redraw=1\x1b\\" +
+		"gamma" +
 		"\x1b[?25l"
 	if got := out.String(); got != want {
 		t.Fatalf("terminal transaction bytes = %q, want %q", got, want)

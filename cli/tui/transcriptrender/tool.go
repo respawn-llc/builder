@@ -30,7 +30,7 @@ func renderToolRow(
 ) []Line {
 	meta := normalizeToolMeta(row.ToolName, row.ToolPresentation)
 	meta.syntax = syntax
-	meta.IsError = row.IsError
+	meta.IsError = row.IsError || shellExitFailed(meta)
 	role := toolRole(meta)
 	display := toolDisplayText(row, meta, mode)
 	if role == StyleRoleToolShell && meta.MovedToBackground && !meta.IsError {
@@ -119,6 +119,7 @@ func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
 			RawOutputRequested:     in.RawOutputRequested,
 			OutputTruncated:        in.OutputTruncated,
 			MovedToBackground:      in.MovedToBackground,
+			ShellExitCode:          in.ShellExitCode,
 		}
 		if in.RenderHint != nil {
 			adapted.RenderHint = &transcript.ToolRenderHint{
@@ -168,7 +169,7 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) t
 		if meta.IsError && (mode == ModeOngoing || mode == ModeOngoingCollapsed) {
 			resultSummary = ""
 		}
-		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(resultSummary, meta.InlineMeta)}
+		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(shellExitStatus(meta), resultSummary, meta.InlineMeta)}
 	}
 	if !meta.IsError &&
 		meta.RenderHint != nil &&
@@ -177,6 +178,17 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) t
 		return toolDisplay{Text: row.Text, kind: toolDisplaySourceResult}
 	}
 	return toolDisplay{Text: detailedToolText(meta, row.Text)}
+}
+
+func shellExitFailed(meta toolMeta) bool {
+	return meta.IsShell && meta.ShellExitCode != nil && *meta.ShellExitCode != 0
+}
+
+func shellExitStatus(meta toolMeta) string {
+	if !shellExitFailed(meta) {
+		return ""
+	}
+	return fmt.Sprintf("exit %d", *meta.ShellExitCode)
 }
 
 func compactToolText(meta toolMeta, fallback string) string {

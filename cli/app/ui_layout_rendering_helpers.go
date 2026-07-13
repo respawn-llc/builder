@@ -329,7 +329,7 @@ type uiColors struct {
 	border     lipgloss.TerminalColor
 	modeBg     lipgloss.TerminalColor
 	modeText   lipgloss.TerminalColor
-	chatBg     lipgloss.TerminalColor
+	background lipgloss.TerminalColor
 	inputBg    lipgloss.TerminalColor
 }
 
@@ -343,7 +343,7 @@ func uiPalette(themeName string) uiColors {
 		border:     palette.Border.Lipgloss(),
 		modeBg:     palette.ModeBg.Lipgloss(),
 		modeText:   palette.ModeText.Lipgloss(),
-		chatBg:     palette.ChatBg.Lipgloss(),
+		background: palette.Background.Lipgloss(),
 		inputBg:    palette.InputBg.Lipgloss(),
 	}
 }

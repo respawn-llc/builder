@@ -13,6 +13,7 @@ const (
 	ModeOngoing Mode = iota
 	ModeOngoingCollapsed
 	ModeOngoingFull
+	ModeOngoingStable
 	ModeDetailCollapsed
 	ModeDetailExpanded
 )

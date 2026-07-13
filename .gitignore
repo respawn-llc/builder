@@ -61,7 +61,7 @@ target/
 docs/tmp/
 
 # Nested git worktrees (e.g. agent-managed sibling branches)
-.claude/worktrees/
+/.claude/worktrees/
 
 # Local runtime state
 .env

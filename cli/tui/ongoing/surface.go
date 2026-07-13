@@ -90,11 +90,19 @@ const (
 	RehydrateReasonWidthChange   RehydrateReason = "width_change"
 )
 
+type TerminalResizePolicy uint8
+
+const (
+	TerminalResizeSemanticPrompt TerminalResizePolicy = iota + 1
+	TerminalResizeWidthRehydration
+)
+
 type Surface struct {
 	writer             io.Writer
 	previousBandHeight int
-	dividerGroup       *clientui.TranscriptRowKind
+	groupRegister      *clientui.TranscriptRowKind
 	activeAssistant    activeAssistantState
+	terminalResize     TerminalResizePolicy
 	lastSize           Size
 }
 
@@ -111,7 +119,19 @@ func NewSurface(writers ...io.Writer) *Surface {
 	if len(writers) > 0 && writers[0] != nil {
 		writer = writers[0]
 	}
-	return &Surface{writer: writer}
+	return NewSurfaceWithTerminalResizePolicy(writer, TerminalResizeSemanticPrompt)
+}
+
+func NewSurfaceWithTerminalResizePolicy(writer io.Writer, policy TerminalResizePolicy) *Surface {
+	if writer == nil {
+		writer = io.Discard
+	}
+	switch policy {
+	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration:
+	default:
+		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", policy))
+	}
+	return &Surface{writer: writer, terminalResize: policy}
 }
 
 func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
@@ -156,7 +176,7 @@ func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame Frame
 			})
 		}
 		s.activeAssistant.promotedSourceBoundary = projection.PromotedBoundary
-		lines = append(lines, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), frame.Theme)...)
+		lines = append(lines, s.renderAssistantPromotedRows(projection.PromotedRows)...)
 	}
 	if len(lines) == 0 && !activeStreamHydrated {
 		return Result{}, nil
@@ -216,7 +236,7 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, phase cl
 	if len(projection.PromotedRows) == 0 {
 		return s.writeFrameTransaction(frame, nil)
 	}
-	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), frame.Theme))
+	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(projection.PromotedRows))
 }
 
 func (s *Surface) activeAssistantPromotionDeferred() bool {
@@ -266,10 +286,10 @@ func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame
 	unpromoted := s.activeAssistant.source[s.activeAssistant.promotedSourceBoundary:]
 	var rows []string
 	if unpromoted != "" {
-		rows = newMarkdownProjector(nil, frame.Theme).renderer.Render(unpromoted, frameWidthOrDefault(frame))
+		rows = newMarkdownProjector(nil, frame.Theme).renderer.RenderStable(unpromoted, frameWidthOrDefault(frame))
 	}
 	s.activeAssistant = activeAssistantState{}
-	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(rows, frameWidthOrDefault(frame), frame.Theme))
+	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(rows))
 }
 
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
@@ -297,7 +317,7 @@ func (s *Surface) SetNormalBufferOwned(_ bool, _ FrameInput) (Result, error) {
 }
 
 func (s *Surface) Resize(size Size, frame FrameInput) (Result, error) {
-	if result := s.observeResizeForWidthRehydration(size); result.Action != ResultNoop {
+	if result := s.observeResize(size); result.Action != ResultNoop {
 		return result, nil
 	}
 	frame.Size = size
@@ -305,11 +325,14 @@ func (s *Surface) Resize(size Size, frame FrameInput) (Result, error) {
 }
 
 func (s *Surface) ObserveResize(size Size) Result {
-	return s.observeResizeForWidthRehydration(size)
+	return s.observeResize(size)
 }
 
-func (s *Surface) observeResizeForWidthRehydration(size Size) Result {
-	if s.widthChanged(size) && s.immutableScrollbackProduced() {
+func (s *Surface) observeResize(size Size) Result {
+	if s.terminalResize != TerminalResizeWidthRehydration {
+		return Result{}
+	}
+	if s.lastSize.Width > 0 && size.Width > 0 && size.Width != s.lastSize.Width && s.immutableScrollbackProduced() {
 		s.lastSize = size
 		return Result{Action: ResultScheduleWidthRehydration, Reason: RehydrateReasonWidthChange}
 	}
@@ -317,12 +340,8 @@ func (s *Surface) observeResizeForWidthRehydration(size Size) Result {
 	return Result{}
 }
 
-func (s *Surface) widthChanged(size Size) bool {
-	return s.lastSize.Width > 0 && size.Width > 0 && size.Width != s.lastSize.Width
-}
-
 func (s *Surface) immutableScrollbackProduced() bool {
-	return s.dividerGroup != nil || s.activeAssistant.promotedSourceBoundary > 0
+	return s.groupRegister != nil || s.activeAssistant.promotedSourceBoundary > 0
 }
 
 func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameInput) (Result, error) {
@@ -330,6 +349,7 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 	linesToErase := min(s.previousBandHeight, max(0, frame.Size.Height))
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
+	transaction.WriteString(semanticOutputSequence())
 	writeMutableBandErase(&transaction, frame.Size.Height, linesToErase)
 	writeCursor(&transaction, Cursor{})
 	if _, err := io.WriteString(s.writer, transaction.String()); err != nil {
@@ -337,7 +357,7 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 	}
 	s.previousBandHeight = 0
 	s.activeAssistant = activeAssistantState{}
-	s.dividerGroup = nil
+	s.groupRegister = nil
 	return Result{Action: ResultRequestScratchRehydration, Reason: reason}, nil
 }
 
@@ -393,7 +413,7 @@ func (s *Surface) renderHydratedCommittedRow(row clientui.TranscriptCommittedRow
 
 func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow, width int, themeName string, mode transcriptrender.Mode) []string {
 	group, lines := committedRowLines(row, width, themeName, mode)
-	return s.renderGroupedRows(group, lines, width, themeName, false)
+	return s.renderGroupedRows(group, lines, false)
 }
 
 // ongoingRenderMode selects the renderer mode for a committed row in the
@@ -413,14 +433,14 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 
 func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
 	if row.Kind == clientui.TranscriptRowUser && row.User != nil {
-		return transcriptrender.ModeOngoingFull
+		return transcriptrender.ModeOngoingStable
 	}
 	if row.Kind != clientui.TranscriptRowAssistant || row.Assistant == nil {
 		return ongoingRenderMode(row)
 	}
 	switch row.Assistant.Phase {
 	case transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal:
-		return transcriptrender.ModeOngoingFull
+		return transcriptrender.ModeOngoingStable
 	case transcript.AssistantPhaseCommentary:
 		return ongoingRenderMode(row)
 	default:
@@ -428,20 +448,20 @@ func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrende
 	}
 }
 
-func (s *Surface) renderAssistantPromotedRows(rows []string, width int, themeName string) []string {
-	return s.renderGroupedRows(clientui.TranscriptRowAssistant, rows, width, themeName, true)
+func (s *Surface) renderAssistantPromotedRows(rows []string) []string {
+	return s.renderGroupedRows(clientui.TranscriptRowAssistant, rows, true)
 }
 
-func (s *Surface) renderGroupedRows(group clientui.TranscriptRowKind, rows []string, width int, themeName string, dividerWhenRegisterUnset bool) []string {
+func (s *Surface) renderGroupedRows(group clientui.TranscriptRowKind, rows []string, separatorWhenRegisterUnset bool) []string {
 	if len(rows) == 0 {
 		return nil
 	}
 	var output []string
-	if (s.dividerGroup == nil && dividerWhenRegisterUnset) || (s.dividerGroup != nil && *s.dividerGroup != group) {
-		output = append(output, dividerLine(group, width, themeName))
+	if (s.groupRegister == nil && separatorWhenRegisterUnset) || (s.groupRegister != nil && *s.groupRegister != group) {
+		output = append(output, "")
 	}
 	groupCopy := group
-	s.dividerGroup = &groupCopy
+	s.groupRegister = &groupCopy
 	output = append(output, rows...)
 	return output
 }
@@ -454,10 +474,6 @@ func committedRowLines(row clientui.TranscriptCommittedRow, width int, themeName
 	default:
 		panic(fmt.Sprintf("ongoing render unknown committed row kind %q", row.Kind))
 	}
-}
-
-func dividerLine(group clientui.TranscriptRowKind, width int, themeName string) string {
-	return encodeTranscriptLine(transcriptrender.RenderDivider(group, width), themeName)
 }
 
 func encodeTranscriptLines(lines []transcriptrender.Line, themeName string) []string {
@@ -569,6 +585,7 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 	eraseHeight := min(max(s.previousBandHeight, len(liveLines)), frame.Size.Height)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
+	transaction.WriteString(semanticOutputSequence())
 	if len(liveLines) > s.previousBandHeight && s.immutableScrollbackProduced() {
 		writeImmutableRegionScrollForLiveBandGrowth(&transaction, frame.Size.Height, s.previousBandHeight, len(liveLines))
 	}
@@ -777,10 +794,22 @@ func resetScrollRegionAndOriginMode() string {
 	return "\x1b[r\x1b[?6l"
 }
 
+func semanticOutputSequence() string {
+	return "\x1b]133;C\x1b\\"
+}
+
+func redrawableSemanticPromptSequence() string {
+	return "\x1b]133;A;redraw=1\x1b\\"
+}
+
 func writeMutableBandErase(builder *strings.Builder, terminalHeight, bandHeight int) {
 	startRow := terminalHeight - bandHeight + 1
 	for row := startRow; row <= terminalHeight; row++ {
-		fmt.Fprintf(builder, "\x1b[%d;1H\x1b[2K", row)
+		fmt.Fprintf(builder, "\x1b[%d;1H", row)
+		// Retire semantic prompt metadata before this row can rejoin the
+		// immutable area; erasing cells alone does not clear that metadata.
+		builder.WriteString(semanticOutputSequence())
+		builder.WriteString("\x1b[2K")
 	}
 }
 
@@ -804,9 +833,18 @@ func writeImmutableRegionScrollForLiveBandGrowth(builder *strings.Builder, termi
 }
 
 func writeMutableBandLines(builder *strings.Builder, terminalHeight int, lines []string) {
+	if len(lines) == 0 {
+		return
+	}
 	startRow := terminalHeight - len(lines) + 1
 	for index, line := range lines {
-		fmt.Fprintf(builder, "\x1b[%d;1H%s", startRow+index, line)
+		fmt.Fprintf(builder, "\x1b[%d;1H", startRow+index)
+		if index == 0 {
+			// At the left margin OSC 133 A marks this row without advancing.
+			// Supporting terminals clear the region before resize reflow.
+			builder.WriteString(redrawableSemanticPromptSequence())
+		}
+		builder.WriteString(line)
 	}
 }
 

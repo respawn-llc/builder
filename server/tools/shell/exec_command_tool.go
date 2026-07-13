@@ -111,20 +111,32 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 	if marshalErr != nil {
 		return tools.Result{}, marshalErr
 	}
-	toolResult := tools.Result{CallID: c.ID, Name: c.Name, Output: body}
-	if in.Raw || result.Truncated || result.MovedToBackground {
-		toolResult.PresentationDelta = shellResultPresentationDelta(in.Raw, result.Truncated, result.MovedToBackground)
+	toolResult := tools.Result{
+		CallID: c.ID,
+		Name:   c.Name,
+		Output: body,
+		PresentationDelta: shellResultPresentationDelta(
+			in.Raw,
+			result.Truncated,
+			result.MovedToBackground,
+			result.ExitCode,
+		),
 	}
 	return toolResult, nil
 }
 
-func shellResultPresentationDelta(rawRequested bool, truncated bool, movedToBackground bool) *transcript.ToolResultPresentationDelta {
-	if !rawRequested && !truncated && !movedToBackground {
+func shellResultPresentationDelta(rawRequested bool, truncated bool, movedToBackground bool, shellExitCode *int) *transcript.ToolResultPresentationDelta {
+	if !rawRequested && !truncated && !movedToBackground && shellExitCode == nil {
 		return nil
 	}
-	return &transcript.ToolResultPresentationDelta{
+	delta := &transcript.ToolResultPresentationDelta{
 		RawOutputRequested: rawRequested,
 		OutputTruncated:    truncated,
 		MovedToBackground:  movedToBackground,
 	}
+	if shellExitCode != nil {
+		exitCode := *shellExitCode
+		delta.ShellExitCode = &exitCode
+	}
+	return delta
 }

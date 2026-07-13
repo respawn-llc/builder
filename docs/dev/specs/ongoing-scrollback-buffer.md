@@ -11,6 +11,7 @@
 
 - Append: writing bytes at the bottom of the normal buffer so existing content moves up into terminal scrollback naturally.
 - Immutable area: all rows above the mutable boundary. Committed history rows and promoted assistant markdown rows.
+- Logical line: one immutable append unit containing no terminal-width-generated line break. The terminal may soft-wrap it into multiple display rows.
 - Mutable band: the bottom band owned by the current frame: unstable assistant stream tail, live tool activity, input field, status line.
 - Promotion: moving rendered assistant stream rows out of the mutable band into the immutable area by appending them.
 - Re-emission: writing content into the immutable area whose semantic equivalent was already written there.
@@ -22,8 +23,10 @@
 - The ongoing surface is a single normal-buffer frame split by an immutable boundary.
 - Immutable-area writes are fire-and-forget. After bytes are emitted, the client must not store, remember, hash, digest, diff, compare against, acknowledge, or reconcile them in any form: not as lines, blocks, ANSI bytes, rendered text, entry identities, counts, or any terminal-visible equivalent. Emitted output is unavailable state.
 - The mutable band is an absolute-positioned viewport anchored to the visible terminal bottom. Every render and erase establishes geometry, resets origin mode and scroll margins, and derives the band top from the submitted frame height. It must not depend on the current cursor position.
+- Immutable writes use OSC 133 output semantics. The mutable band is one OSC 133 redrawable semantic-prompt region, so supporting terminals clear it before resize reflow and the resize event repaints it from mutable frame state. Retired mutable rows return to output semantics before erase, so semantic-prompt marking never survives into immutable rows or permits history replay.
+- The client resolves one terminal-resize policy at startup. Exact `TERM_PROGRAM=ghostty` or a non-empty `KITTY_WINDOW_ID` selects OSC 133 repaint unless non-empty `TMUX` is present; tmux, every other identity, and absent identity select legacy width rehydration. Terminal identity matching is exact, with no substring inference from `TERM` or process names.
 - On each received event, streaming chunk, or status change, ongoing performs one frame transaction: erase the mutable band line by line at absolute coordinates, append newly stable rows to the immutable area, repaint the mutable band from fresh state. The erase never targets rows above the immutable boundary.
-- There is no clock-based repainting. Animations produce state changes and those changes schedule renders. When no state changes exist, the surface stops rendering.
+- There is no clock-based repainting. Animations produce state changes and those changes schedule renders. When no state changes exist, the surface stops rendering. The legacy resize fallback uses a one-second debounce to coalesce width changes before scratch rehydration; it is not a repaint timer.
 
 ## Mutable Band Height
 
@@ -35,7 +38,7 @@
 - Ongoing consumes the exactly-once ordered transcript subscription defined in `core-runtime-tools.md`: per-subscription monotonic event seq, hydration delivered as the first ordered message(s) on the same channel, content-complete events, committed assistant entries carrying the stream/step identity of their deltas.
 - Exactly one code path leads from a received subscription event to terminal output. For every received event, the outcome is exactly one of: rendered now through that path; held in the arrival-order queue because the surface does not own the normal buffer; scratch rehydration because its seq is discontiguous; a developer error.
 - No other outcome exists. A received event must never be skipped, dropped, deduplicated, merged with another event, reordered relative to arrival order, partially applied, or held back to await a matching or confirming event.
-- Committed tool lines join the open group in server emission order. There is no client-side reordering or frontier between parallel tool calls. Visual grouping follows the Grouping And Dividers section and never changes arrival order.
+- Committed tool lines join the open group in server emission order. There is no client-side reordering or frontier between parallel tool calls. Visual grouping follows the Grouping And Separators section and never changes arrival order.
 - During live operation the client must not issue transcript reads of any kind: no page requests, tail requests, gap fills, refreshes, recovery reads, or committed-advance re-reads. The ongoing surface reads from the server through exactly one mechanism: opening the subscription, which is also the scratch-rehydration mechanism. Detail-mode history paging is a separate surface and is not available to ongoing rendering.
 
 ## Client State
@@ -46,7 +49,7 @@
   - Mutable-band frame state: pending tool-call rows, spinner/animation state, input field, status line.
   - The arrival-order queue of received-but-unrendered typed events, used only while the surface does not own the normal buffer, plus its rehydration-required marker after overflow.
   - Operator-owned UI-local state: input draft, editor cursor state, and prompt history capped at the 100 most recent entries. Prompt history must never grow unbounded; entries beyond the cap are discarded oldest-first.
-  - The divider register: the group kind of the most recently promoted row. One enum value.
+  - The group register: the group kind of the most recently promoted row. One enum value.
 - Everything else is banned. Banned state includes, without being limited to: any collection of committed transcript entries retained after rendering; any committed-entry count, total, base offset, index range, or revision; any ledger, cache, hash, digest, flag set, dedupe key, or "delivered/seen/emitted" record of output or entries; any before/after snapshot kept for diffing; any placeholder, optimistic, or transient row awaiting replacement by a committed counterpart; any rendered-output cache for the immutable area.
 - No transcript row is ever rendered before the server commits it. A committed-append failure on the server surfaces as an error; the client has no local fallback row path.
 
@@ -58,20 +61,22 @@
 
 ## Assistant Streaming
 
-- Streaming is source-backed. Deltas append to the in-memory stream source; the full source renders through the assistant markdown projection for the active theme and width; rows whose rendering is prefix-stable promote into the immutable area; the volatile tail stays in the mutable band.
+- Streaming is source-backed. Deltas append to the in-memory stream source. The volatile tail renders through the width-aware live projection; closed prefix-stable blocks render through the stable logical-line projection and promote into the immutable area.
 - Markdown promotion is aware of Markdown constructs that can restyle or reflow preceding rows. The current source line and any open construct whose visible rows can still change remain volatile until the renderer can prove they are stable; tables are one example where earlier rows may wait until the row-closing line is known.
 - Promotion is monotonic. The promotion boundary never moves backward past rows already appended to the immutable area. If re-rendering the source would change an already-promoted row, that is a developer error, not a trigger to rewrite, restyle, or re-emit.
-- Raw deltas are never written into the immutable area. Only rendered markdown projection rows are promoted.
+- Stable prose contains no line breaks generated from terminal width. Markdown soft line breaks flow as spaces; authored hard breaks and authored preformatted line boundaries remain logical line boundaries. GFM tables are the width-formatted Markdown exception and use the terminal width at promotion.
+- Raw deltas are never written into the immutable area. Only stable markdown projection lines are promoted.
 - Finalization matches the committed assistant entry to the active stream by carried stream/step identity, then applies exactly one of three outcomes: committed text equals the streamed source, finalize with no additional writes; committed text extends the streamed source, emit only the missing suffix through the stream path, then finalize; anything else is a developer error. There is no fourth outcome. Finding a finalizer by scanning entries, matching by text similarity, or matching across different stream identities is banned reconciliation.
 
-## Grouping And Dividers
+## Grouping And Separators
 
-- Every committed row maps to exactly one group kind: user input, assistant output, tool activity, or notice. The mapping is total, owned by the transcript projection, and never inferred from row text.
+- Every committed row maps to exactly one visual group kind: user input, assistant output, tool activity, or notice. The mapping is total, owned by the transcript projection, and never inferred from row text. Typed background shell completion notices retain notice rendering and transcript identity but map to the tool-activity visual group.
 - Consecutive promoted rows of the same kind form one group. A row of a different kind closes the open group and opens a new one. Group close has exactly one trigger: arrival of a row of a different kind. Nothing detects, waits for, or confirms a group end.
-- A divider is a rendered line emitted into the immutable area immediately before the first row of a new group. The divider below a group and the divider above the next group are the same single divider. Dividers are never emitted retroactively, never inserted above existing content, and never emitted between rows of the same kind.
-- Divider emission reads exactly one piece of state: the divider register. Incoming kind differs from the register: emit one divider, then the row. Incoming kind equals the register: append the row with no divider. The register updates on every promotion. Deciding divider placement by scanning, retaining, or re-reading promoted content is banned reconciliation.
+- A separator is one blank line emitted into the immutable area immediately before the first row of a new group. The blank line below a group and the blank line above the next group are the same single separator. Separators are never emitted retroactively, never inserted above existing content, and never emitted between rows of the same kind.
+- Separator emission reads exactly one piece of state: the group register. Incoming kind differs from the register: emit one blank line, then the row. Incoming kind equals the register: append the row with no separator. The register updates on every promotion. Deciding separator placement by scanning, retaining, or re-reading promoted content is banned reconciliation.
 - Pending tool activity renders in the mutable band and repaints freely there until the server emits a committed tool row or abort for that call. A committed tool row appends to the immutable area immediately in server order and must not be retained for delayed group promotion, reordering, or batching.
-- Assistant output groups promote progressively through stream promotion; the divider for the group is emitted before its first promoted row.
+- Compact tool and notice rows remain one-line width-bound summaries and may ellipsize at emission. This compacting contract is separate from full user/assistant Markdown flow.
+- Assistant output groups promote progressively through stream promotion; the blank separator for the group is emitted before its first promoted row.
 
 ## Queueing While Not Owning The Normal Buffer
 
@@ -84,8 +89,9 @@
 
 - Scratch rehydration is the only path that re-issues already-shown content. The trigger list is exhaustive:
   - The received event seq is discontiguous with the last received seq, or the connection/subscription was lost. The emitted history may misrepresent the conversation and appending cannot repair it.
-  - Terminal width changes after immutable content was emitted. The resize is debounced 1 second; resize events during the debounce restart the timer. Height-only changes repaint the mutable band without scratch rehydration.
   - The arrival-order queue exceeded 1000 events.
+  - A width change under the legacy terminal-resize fallback policy, after the one-second debounce.
+- Height changes always repaint the mutable band. Width changes use OSC 133 repaint only for exact Ghostty or kitty capability evidence outside tmux; all other environments use the legacy fallback.
 - Never triggers. Each of these is an ordinary append or a bug to fix at its cause, and re-emitting in response to any of them is banned:
   - New content arrived: a delta, a tool call, a notice, any addition.
   - The needed change is addition-only.
@@ -96,7 +102,7 @@
   - Correct concurrency is inconvenient to implement.
   - The cursor is not where erasing would be convenient.
   - A large paste filled the screen.
-- A bug is never resolved by re-emitting committed state, in any code path, under any severity.
+- Outside the exhaustive trigger list, a bug is never resolved by re-emitting committed state, in any code path, under any severity.
 - Rehydration erases only the mutable band, reopens the subscription through the same session-open hydration path, and appends the received active segment below existing scrollback. It never clears scrollback, reaches into emitted content, or compares the hydrated segment against anything. Duplicate-looking output after rehydration is acceptable and must not be suppressed.
 - Only operator-owned UI-local state survives rehydration. Transcript, queue, running, status, tool, and steering state come from the hydration payload. If hydration fails, the TUI exits with a clear error; it does not fabricate empty state or continue on stale state.
 

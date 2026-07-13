@@ -24,7 +24,7 @@ func TestResetForScratchHydrationErasesMutableBandAndClearsVolatileState(t *test
 	if result.Action != ResultRequestScratchRehydration {
 		t.Fatalf("reset action = %q, want scratch rehydration", result.Action)
 	}
-	if got, want := out.String(), "\x1b[r\x1b[?6l\x1b[2;1H\x1b[2K\x1b[3;1H\x1b[2K\x1b[?25l"; got != want {
+	if got, want := out.String(), "\x1b[r\x1b[?6l\x1b]133;C\x1b\\\x1b[2;1H\x1b]133;C\x1b\\\x1b[2K\x1b[3;1H\x1b]133;C\x1b\\\x1b[2K\x1b[?25l"; got != want {
 		t.Fatalf("reset bytes = %q, want %q", got, want)
 	}
 	if surface.activeAssistant.source != "" || surface.activeAssistant.streamID != nil {

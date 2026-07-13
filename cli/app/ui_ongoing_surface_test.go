@@ -52,7 +52,7 @@ func TestNativeOngoingSurfaceWritesBypassRendererGate(t *testing.T) {
 		t.Fatalf("render ongoing surface: %v", err)
 	}
 
-	if got, want := out.String(), "\x1b[r\x1b[?6l\x1b[3;1H\x1b[2K\x1b[3;1Hready\x1b[?25l"; got != want {
+	if got, want := out.String(), "\x1b[r\x1b[?6l\x1b]133;C\x1b\\\x1b[3;1H\x1b]133;C\x1b\\\x1b[2K\x1b[3;1H\x1b]133;A;redraw=1\x1b\\ready\x1b[?25l"; got != want {
 		t.Fatalf("ongoing surface bytes = %q, want %q", got, want)
 	}
 }
