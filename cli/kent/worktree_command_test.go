@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -39,26 +40,28 @@ func TestOpenWorktreeCommandRemoteAttachesCurrentProjectWorkspace(t *testing.T) 
 }
 
 type worktreeCommandTestRemote struct {
-	statusRequest serverapi.WorktreeStatusRequest
+	statusRequest *serverapi.WorktreeStatusRequest
 	status        serverapi.WorktreeStatusResponse
-	listRequest   serverapi.WorktreeListRequest
+	listRequest   *serverapi.WorktreeListRequest
 	list          serverapi.WorktreeListResponse
 	resolve       serverapi.WorktreeCreateTargetResolveResponse
-	createRequest serverapi.WorktreeCreateRequest
+	createRequest *serverapi.WorktreeCreateRequest
 	create        serverapi.WorktreeCreateResponse
-	enterRequest  serverapi.WorktreeEnterRequest
-	leaveRequest  serverapi.WorktreeLeaveRequest
-	deleteRequest serverapi.WorktreeDeleteRequest
+	enterRequest  *serverapi.WorktreeEnterRequest
+	leaveRequest  *serverapi.WorktreeLeaveRequest
+	deleteRequest *serverapi.WorktreeDeleteRequest
 	deleteResult  serverapi.WorktreeDeleteResult
 }
 
 func (r *worktreeCommandTestRemote) GetWorktreeStatus(_ context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
-	r.statusRequest = req
+	request := req
+	r.statusRequest = &request
 	return r.status, nil
 }
 
 func (r *worktreeCommandTestRemote) ListWorktrees(_ context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
-	r.listRequest = req
+	request := req
+	r.listRequest = &request
 	return r.list, nil
 }
 
@@ -67,22 +70,26 @@ func (r *worktreeCommandTestRemote) ResolveWorktreeCreateTarget(_ context.Contex
 }
 
 func (r *worktreeCommandTestRemote) CreateWorktree(_ context.Context, req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
-	r.createRequest = req
+	request := req
+	r.createRequest = &request
 	return r.create, nil
 }
 
 func (r *worktreeCommandTestRemote) EnterWorktree(_ context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	r.enterRequest = req
+	request := req
+	r.enterRequest = &request
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: req.OperationID}, nil
 }
 
 func (r *worktreeCommandTestRemote) LeaveWorktree(_ context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	r.leaveRequest = req
+	request := req
+	r.leaveRequest = &request
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: req.OperationID}, nil
 }
 
 func (r *worktreeCommandTestRemote) DeleteWorktree(_ context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
-	r.deleteRequest = req
+	request := req
+	r.deleteRequest = &request
 	return r.deleteResult, nil
 }
 
@@ -106,11 +113,17 @@ func TestWorktreeStatusUsesShellSessionAndJSONHasNoSelector(t *testing.T) {
 	if exitCode := rootCommand([]string{"worktree", "status", "--json", "--session", "ignored"}, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
 		t.Fatalf("rootCommand exit=%d stderr=%s", exitCode, stderr.String())
 	}
-	if remote.statusRequest.SessionID != "shell-session" {
-		t.Fatalf("status session = %q", remote.statusRequest.SessionID)
+	if remote.statusRequest == nil || remote.statusRequest.SessionID != "shell-session" {
+		t.Fatalf("status request = %+v", remote.statusRequest)
 	}
-	if strings.Contains(stdout.String(), "selector") {
-		t.Fatalf("status JSON exposed selector: %s", stdout.String())
+	var payload struct {
+		Worktree map[string]json.RawMessage `json:"worktree"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode status JSON: %v", err)
+	}
+	if _, exists := payload.Worktree["selector"]; exists {
+		t.Fatalf("status JSON exposed selector: %+v", payload.Worktree)
 	}
 }
 
@@ -119,26 +132,30 @@ func TestWorktreeEnterAndLeaveReturnScheduledAcknowledgements(t *testing.T) {
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
 	for _, args := range [][]string{
-		{"worktree", "enter", "feature/a"},
-		{"worktree", "leave"},
+		{"worktree", "enter", "--json", "feature/a"},
+		{"worktree", "leave", "--json"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if exitCode := rootCommand(args, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
 			t.Fatalf("%v exit=%d stderr=%s", args, exitCode, stderr.String())
 		}
-		if !strings.Contains(stdout.String(), "Scheduled:") {
-			t.Fatalf("%v stdout=%q", args, stdout.String())
+		var acknowledgement serverapi.WorktreeScheduledAcknowledgement
+		if err := json.Unmarshal(stdout.Bytes(), &acknowledgement); err != nil {
+			t.Fatalf("%v decode acknowledgement: %v", args, err)
+		}
+		if err := acknowledgement.OperationID.Validate(); err != nil {
+			t.Fatalf("%v acknowledgement = %+v: %v", args, acknowledgement, err)
 		}
 	}
-	if remote.enterRequest.SessionID != "shell-session" || remote.enterRequest.Selector != "feature/a" {
+	if remote.enterRequest == nil || remote.enterRequest.SessionID != "shell-session" || remote.enterRequest.Selector != "feature/a" {
 		t.Fatalf("enter request = %+v", remote.enterRequest)
 	}
-	if remote.leaveRequest.SessionID != "shell-session" {
+	if remote.leaveRequest == nil || remote.leaveRequest.SessionID != "shell-session" {
 		t.Fatalf("leave request = %+v", remote.leaveRequest)
 	}
 }
 
-func TestWorktreeCreateDoesNotEnterAndPrintsEnterAction(t *testing.T) {
+func TestWorktreeCreateDoesNotEnterAndReturnsCreatedSelector(t *testing.T) {
 	remote := &worktreeCommandTestRemote{
 		resolve: serverapi.WorktreeCreateTargetResolveResponse{
 			Resolution: serverapi.WorktreeCreateTargetResolution{
@@ -171,17 +188,21 @@ func TestWorktreeCreateDoesNotEnterAndPrintsEnterAction(t *testing.T) {
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
 	var stdout, stderr bytes.Buffer
-	if exitCode := rootCommand([]string{"worktree", "create", "--base", "main", "feature/a"}, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
+	if exitCode := rootCommand([]string{"worktree", "create", "--json", "--base", "main", "feature/a"}, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
 		t.Fatalf("exit=%d stderr=%s", exitCode, stderr.String())
 	}
-	if remote.createRequest.SessionID != "shell-session" || !remote.createRequest.CreateBranch || remote.createRequest.BaseRef != "main" {
+	if remote.createRequest == nil || remote.createRequest.SessionID != "shell-session" || !remote.createRequest.CreateBranch || remote.createRequest.BaseRef != "main" {
 		t.Fatalf("create request = %+v", remote.createRequest)
 	}
-	if remote.enterRequest.OperationID.Validate() == nil {
+	if remote.enterRequest != nil {
 		t.Fatalf("create unexpectedly entered worktree: %+v", remote.enterRequest)
 	}
-	if !strings.Contains(stdout.String(), "worktree enter worktree-a") {
-		t.Fatalf("stdout=%q", stdout.String())
+	var response serverapi.WorktreeCreateResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if response.Worktree.Projection.Selector != "worktree-a" {
+		t.Fatalf("created selector = %q, want worktree-a", response.Worktree.Projection.Selector)
 	}
 }
 
@@ -200,7 +221,7 @@ func TestAgentWorktreeDeleteRetainsBranchAndRejectsDeleteBranch(t *testing.T) {
 	if exitCode := rootCommand([]string{"worktree", "delete", "--force", "feature/a"}, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
 		t.Fatalf("delete exit=%d stderr=%s", exitCode, stderr.String())
 	}
-	if remote.deleteRequest.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeRetain || !remote.deleteRequest.ForceFolderRemoval {
+	if remote.deleteRequest == nil || remote.deleteRequest.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeRetain || !remote.deleteRequest.ForceFolderRemoval {
 		t.Fatalf("delete request = %+v", remote.deleteRequest)
 	}
 	stdout.Reset()

@@ -71,12 +71,11 @@ func (s *Service) scheduleWorktreeTransition(
 	if execute == nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, errors.New("worktree transition executor is required")
 	}
-	select {
-	case <-s.transitionCtx.Done():
-		return serverapi.WorktreeScheduledAcknowledgement{}, context.Canceled
-	default:
-	}
 	s.transitionMu.Lock()
+	if s.transitionsClosed {
+		s.transitionMu.Unlock()
+		return serverapi.WorktreeScheduledAcknowledgement{}, context.Canceled
+	}
 	if pending, ok := s.transitions[request.sessionID]; ok {
 		s.transitionMu.Unlock()
 		if pending.request == request {

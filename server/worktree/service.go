@@ -76,6 +76,7 @@ type Service struct {
 	transitionMu      sync.Mutex
 	transitions       map[string]pendingWorktreeTransition
 	transitionWG      sync.WaitGroup
+	transitionsClosed bool
 }
 
 type workspaceMutationLock struct {
@@ -180,6 +181,9 @@ func (s *Service) Close() error {
 	if s == nil {
 		return nil
 	}
+	s.transitionMu.Lock()
+	s.transitionsClosed = true
+	s.transitionMu.Unlock()
 	if s.cancelTransitions != nil {
 		s.cancelTransitions()
 	}

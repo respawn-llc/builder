@@ -13,6 +13,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/clientui"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -20,6 +21,18 @@ import (
 type failOnIssuedWorktreeReminderObservation struct {
 	failed bool
 	calls  int
+}
+
+func TestSteerWorktreeTransitionFailureRejectsInvalidOutcomeBeforeRuntimeMutation(t *testing.T) {
+	engine := &Engine{}
+	err := engine.SteerWorktreeTransitionFailure(clientui.WorktreeTransitionOutcome{
+		Transition: clientui.WorktreeTransitionEnter,
+		State:      clientui.WorktreeTransitionFailed,
+		Failure:    &clientui.WorktreeTransitionFailure{Diagnostic: "failed"},
+	})
+	if err == nil {
+		t.Fatal("invalid worktree transition outcome was accepted")
+	}
 }
 
 func (o *failOnIssuedWorktreeReminderObservation) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {

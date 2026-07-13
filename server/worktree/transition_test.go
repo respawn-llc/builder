@@ -115,6 +115,27 @@ func TestCloseCancelsPendingWorktreeTransitionWithoutPublishingOutcome(t *testin
 	}
 }
 
+func TestCloseWaitsForTransitionSchedulingCriticalSection(t *testing.T) {
+	env := newServiceTestEnv(t)
+	env.service.transitionMu.Lock()
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- env.service.Close()
+	}()
+
+	select {
+	case err := <-closeResult:
+		env.service.transitionMu.Unlock()
+		t.Fatalf("Close returned before transition scheduling completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	env.service.transitionMu.Unlock()
+	if err := <-closeResult; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestScheduledWorktreeTransitionFailurePublishesAndSteersTypedOutcome(t *testing.T) {
 	env := newServiceTestEnv(t)
 	operationID := serverapi.NewWorktreeOperationID()

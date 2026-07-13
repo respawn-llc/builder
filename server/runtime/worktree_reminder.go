@@ -11,13 +11,13 @@ import (
 )
 
 func (e *Engine) SteerWorktreeTransitionFailure(outcome clientui.WorktreeTransitionOutcome) error {
-	if outcome.State != clientui.WorktreeTransitionFailed || outcome.Failure == nil {
+	if err := outcome.Validate(); err != nil {
+		return fmt.Errorf("validate worktree transition outcome: %w", err)
+	}
+	if outcome.State != clientui.WorktreeTransitionFailed {
 		return errors.New("failed worktree transition outcome is required")
 	}
 	diagnostic := strings.TrimSpace(outcome.Failure.Diagnostic)
-	if diagnostic == "" {
-		return errors.New("worktree transition failure diagnostic is required")
-	}
 	return e.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:        llm.RoleDeveloper,
 		MessageType: llm.MessageTypeErrorFeedback,

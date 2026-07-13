@@ -110,7 +110,9 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		created, err := worktreeui.ProjectItem(msg.resp.Worktree)
 		if err != nil {
 			status := "invalid created worktree response: " + err.Error()
-			return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+			feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, m.reconcileSpinnerTicking(false)))
 		}
 		status := "Created worktree " + worktreeui.DisplayName(created)
 		feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")

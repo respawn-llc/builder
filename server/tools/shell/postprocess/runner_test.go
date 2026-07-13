@@ -463,16 +463,24 @@ func TestRunnerRawBypassesBuiltinProcessing(t *testing.T) {
 
 func TestRunnerAdvisesForEveryProvenGitWorktreeInvocation(t *testing.T) {
 	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
-	result, err := runner.Apply(context.Background(), Request{
-		ToolName:    toolspec.ToolExecCommand,
-		CommandText: `printf ready; command -- git worktree list`,
-		Output:      "ready",
-	})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if result.Warning == nil {
-		t.Fatal("expected git worktree advisory")
+	for _, command := range []string{
+		`printf ready; command -- git worktree list`,
+		`git -C /repo worktree list`,
+		`git -c core.quotePath=false worktree list`,
+		`git --git-dir /repo/.git worktree list`,
+		`git --git-dir=/repo/.git worktree list`,
+	} {
+		result, err := runner.Apply(context.Background(), Request{
+			ToolName:    toolspec.ToolExecCommand,
+			CommandText: command,
+			Output:      "ready",
+		})
+		if err != nil {
+			t.Fatalf("Apply(%q): %v", command, err)
+		}
+		if result.Warning == nil {
+			t.Fatalf("expected git worktree advisory for %q", command)
+		}
 	}
 }
 

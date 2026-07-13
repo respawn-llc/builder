@@ -191,7 +191,7 @@ func TestDecodeAndHandlePreservesWorktreeStructuredErrors(t *testing.T) {
 	}
 	decoded := serverapi.DecodeWorktreeRPCError(response.Error.Data, response.Error.Message)
 	var selector *serverapi.WorktreeSelectorError
-	if !errors.As(decoded, &selector) || selector.Input != source.Input || len(selector.Candidates) != 1 || selector.Candidates[0].FallbackIdentity != source.Candidates[0].FallbackIdentity {
+	if !errors.As(decoded, &selector) || selector.Kind != source.Kind || selector.Input != source.Input || len(selector.Candidates) != 1 || selector.Candidates[0].FallbackIdentity != source.Candidates[0].FallbackIdentity {
 		t.Fatalf("decoded selector error = %+v (%v), want %+v", selector, decoded, source)
 	}
 }
