@@ -1154,16 +1154,34 @@ func TestUserAssistantMarkdownCodeUsesPrimaryFullStrengthRole(t *testing.T) {
 }
 
 func TestStableMarkdownCollapsesSoftBreaksAndPreservesHardBreaks(t *testing.T) {
-	row := clientui.TranscriptCommittedRow{
-		Kind: clientui.TranscriptRowAssistant,
-		Assistant: &clientui.TranscriptAssistantRow{
-			Text: "alpha\nbeta  \ngamma",
+	for _, tt := range []struct {
+		name string
+		row  clientui.TranscriptCommittedRow
+		want []string
+	}{
+		{
+			name: "user",
+			row: clientui.TranscriptCommittedRow{
+				Kind: clientui.TranscriptRowUser,
+				User: &clientui.TranscriptUserRow{Text: "alpha\nbeta  \ngamma"},
+			},
+			want: []string{"❯ alpha beta", "gamma"},
 		},
-	}
-
-	rendered := RenderCommittedRow(row, 8, "", ModeOngoingStable)
-	if got, want := PlainLines(rendered.Lines), []string{"❮ alpha beta", "  gamma"}; !slices.Equal(got, want) {
-		t.Fatalf("stable markdown lines = %q, want %q", got, want)
+		{
+			name: "assistant",
+			row: clientui.TranscriptCommittedRow{
+				Kind:      clientui.TranscriptRowAssistant,
+				Assistant: &clientui.TranscriptAssistantRow{Text: "alpha\nbeta  \ngamma"},
+			},
+			want: []string{"❮ alpha beta", "gamma"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rendered := RenderCommittedRow(tt.row, 8, "", ModeOngoingStable)
+			if got := PlainLines(rendered.Lines); !slices.Equal(got, tt.want) {
+				t.Fatalf("stable markdown lines = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

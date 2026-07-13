@@ -112,7 +112,15 @@ type activeAssistantState struct {
 	phase                  clientui.MessagePhase
 	phaseSourceStart       int
 	promotedSourceBoundary int
+	rolePrefixState        assistantRolePrefixState
 }
+
+type assistantRolePrefixState uint8
+
+const (
+	assistantRolePrefixPending assistantRolePrefixState = iota
+	assistantRolePrefixEmitted
+)
 
 func NewSurface(writers ...io.Writer) *Surface {
 	writer := io.Discard
@@ -175,8 +183,9 @@ func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame Frame
 				"width":              projection.ProjectionFailure.Width,
 			})
 		}
+		promotedRows := s.renderAssistantPromotedRows(projection.PromotedRows, frame.Theme)
 		s.activeAssistant.promotedSourceBoundary = projection.PromotedBoundary
-		lines = append(lines, s.renderAssistantPromotedRows(projection.PromotedRows)...)
+		lines = append(lines, promotedRows...)
 	}
 	if len(lines) == 0 && !activeStreamHydrated {
 		return Result{}, nil
@@ -236,7 +245,8 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, phase cl
 	if len(projection.PromotedRows) == 0 {
 		return s.writeFrameTransaction(frame, nil)
 	}
-	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(projection.PromotedRows))
+	promotedRows := s.renderAssistantPromotedRows(projection.PromotedRows, frame.Theme)
+	return s.writeFrameTransaction(frame, promotedRows)
 }
 
 func (s *Surface) activeAssistantPromotionDeferred() bool {
@@ -288,8 +298,9 @@ func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame
 	if unpromoted != "" {
 		rows = newMarkdownProjector(nil, frame.Theme).renderer.RenderStable(unpromoted, frameWidthOrDefault(frame))
 	}
+	promotedRows := s.renderAssistantPromotedRows(rows, frame.Theme)
 	s.activeAssistant = activeAssistantState{}
-	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(rows))
+	return s.writeFrameTransaction(frame, promotedRows)
 }
 
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
@@ -449,8 +460,23 @@ func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrende
 	}
 }
 
-func (s *Surface) renderAssistantPromotedRows(rows []string) []string {
-	return s.renderGroupedRows(clientui.TranscriptRowAssistant, rows, true)
+func (s *Surface) renderAssistantPromotedRows(rows []string, themeName string) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	decorated := rows
+	if s.activeAssistant.rolePrefixState == assistantRolePrefixPending {
+		decorated = append([]string(nil), rows...)
+		decorated[0] = encodeTranscriptSpan(
+			transcriptrender.SemanticSpan(
+				transcriptrender.AssistantSymbol+" ",
+				transcriptrender.StyleRoleAssistant,
+			),
+			themeName,
+		) + rows[0]
+		s.activeAssistant.rolePrefixState = assistantRolePrefixEmitted
+	}
+	return s.renderGroupedRows(clientui.TranscriptRowAssistant, decorated, true)
 }
 
 func (s *Surface) renderGroupedRows(group clientui.TranscriptRowKind, rows []string, separatorWhenRegisterUnset bool) []string {

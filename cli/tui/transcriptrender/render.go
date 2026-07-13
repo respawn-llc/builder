@@ -281,6 +281,9 @@ func ongoingInlineMetaSpans(command []Span, inlineMeta string, bodyWidth int) []
 func continuationPrefix(mode Mode, prefixWidth int, isLast bool, layout continuationLayout) []Span {
 	switch layout {
 	case continuationForMode:
+		if mode == ModeOngoingStable {
+			return nil
+		}
 		if modeUsesOngoingContinuationPrefix(mode) {
 			return []Span{SemanticSpan(strings.Repeat(" ", max(0, prefixWidth)), StyleRoleNotice, SpanAttributeFaint)}
 		}
@@ -581,7 +584,12 @@ func wrapLines(text string, width int) []string {
 }
 
 func contentWidth(role StyleRole, width int) int {
-	return max(1, width-lipgloss.Width(roleSymbol(role)+" "))
+	return max(1, width-RolePrefixWidth(role))
+}
+
+// RolePrefixWidth returns the terminal cells reserved for a row's symbol and gap.
+func RolePrefixWidth(role StyleRole) int {
+	return lipgloss.Width(roleSymbol(role) + " ")
 }
 
 func firstNonEmpty(values ...string) string {
