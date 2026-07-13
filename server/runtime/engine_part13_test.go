@@ -465,6 +465,11 @@ func TestPendingTriggerHandoffFailsToolCallsAndRetriesLocalSummary(t *testing.T)
 	if len(client.calls) != 2 {
 		t.Fatalf("expected local summary retry after failed tool call, got %d requests", len(client.calls))
 	}
+	for i, request := range client.calls {
+		if request.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+			t.Fatalf("handoff compaction request %d tool choice mode = %q, want automatic", i, request.ToolChoiceMode)
+		}
+	}
 	assertRequestsPreserveCacheIdentity(t, client.calls[0], client.calls[1])
 
 	foundFailedOutputs := map[string]bool{}
@@ -669,9 +674,15 @@ func TestPendingTriggerHandoffLeavesRequestPendingWhenSummaryRetryStillToolCalls
 	if len(client.calls) != 4 {
 		t.Fatalf("expected original summary request and three retries, got %d", len(client.calls))
 	}
-	for idx, call := range client.calls[1:] {
+	for idx, call := range client.calls {
+		if call.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+			t.Fatalf("handoff compaction request %d tool choice mode = %q, want automatic", idx, call.ToolChoiceMode)
+		}
+		if idx == 0 {
+			continue
+		}
 		if len(call.Tools) == 0 {
-			t.Fatalf("expected retry request %d to keep tools exposed for cache stability", idx+1)
+			t.Fatalf("expected retry request %d to keep tools exposed for cache stability", idx)
 		}
 		assertRequestsPreserveCacheIdentity(t, client.calls[0], call)
 	}

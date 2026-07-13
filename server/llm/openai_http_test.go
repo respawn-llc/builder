@@ -89,7 +89,7 @@ func TestBuildResponsesInputRawTakesPrecedenceOverTypedFields(t *testing.T) {
 
 func TestBuildPayload_SerializesAssistantToolCalls(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:        "gpt-5",
 		SystemPrompt: "sys",
 		Items: ItemsFromMessages([]Message{
@@ -693,7 +693,7 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	transport.Client = server.Client()
 	transport.ProviderIdentifier = "acme_agent"
 
-	if _, err := transport.Generate(context.Background(), OpenAIRequest{Model: "gpt-5"}); err != nil {
+	if _, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	headers := <-requestHeaders
@@ -811,7 +811,7 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 		t.Fatalf("expected openai-compatible provider capabilities, got %+v", providerCaps)
 	}
 
-	resp, err := transport.Generate(context.Background(), OpenAIRequest{
+	resp, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "vendor-custom-model",
 		Items: []ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"}},
 	})
@@ -837,7 +837,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func TestBuildPayload_UsesTransportStoreSetting(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.Store = true
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -849,7 +849,7 @@ func TestBuildPayload_UsesTransportStoreSetting(t *testing.T) {
 
 func TestBuildPayload_AddsNativeWebSearchToolWhenEnabled(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:                 "gpt-5",
 		EnableNativeWebSearch: true,
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
@@ -871,9 +871,112 @@ func TestBuildPayload_AddsNativeWebSearchToolWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestBuildPayload_SerializesPatchAsCustomGrammarTool(t *testing.T) {
+func TestBuildPayloadRejectsRequiredToolChoiceForNonResponsesAdapter(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	_, err := transport.buildPayload(OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeRequired,
+		Tools:          []Tool{{Name: "shell"}},
+	}, OpenAIAuthMode{}, ProviderCapabilities{ProviderID: "anthropic"})
+	if !errors.Is(err, ErrUnsupportedToolChoicePolicy) {
+		t.Fatalf("buildPayload() error = %v, want ErrUnsupportedToolChoicePolicy", err)
+	}
+}
+
+func TestBuildPayloadSerializesRequiredToolChoice(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	payload, err := transport.buildPayload(OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeRequired,
+		Tools:          []Tool{{Name: "shell"}},
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	if err != nil {
+		t.Fatalf("buildPayload: %v", err)
+	}
+	jsonPayload := mustMarshalObject(t, payload)
+	if got := jsonPayload["tool_choice"]; got != "required" {
+		t.Fatalf("tool_choice = %#v, want required", got)
+	}
+}
+
+func TestBuildPayloadSerializesAutomaticToolChoice(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	payload, err := transport.buildPayload(OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		Tools:          []Tool{{Name: "shell"}},
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	if err != nil {
+		t.Fatalf("buildPayload: %v", err)
+	}
+	jsonPayload := mustMarshalObject(t, payload)
+	if got := jsonPayload["tool_choice"]; got != "auto" {
+		t.Fatalf("tool_choice = %#v, want auto", got)
+	}
+}
+
+func TestBuildPayloadRequiredToolChoicePreservesEffectiveToolsAndParallelSetting(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
+	base := OpenAIRequest{
+		Model:                 "gpt-5",
+		EnableNativeWebSearch: true,
+		Tools: []Tool{
+			{Name: "shell"},
+			{Name: "patch"},
+		},
+	}
+	base.ToolChoiceMode = ToolChoiceModeAutomatic
+	automatic, err := transport.buildPayload(base, OpenAIAuthMode{}, caps)
+	if err != nil {
+		t.Fatalf("build automatic payload: %v", err)
+	}
+	base.ToolChoiceMode = ToolChoiceModeRequired
+	required, err := transport.buildPayload(base, OpenAIAuthMode{}, caps)
+	if err != nil {
+		t.Fatalf("build required payload: %v", err)
+	}
+	automaticJSON := mustMarshalObject(t, automatic)
+	requiredJSON := mustMarshalObject(t, required)
+	if !reflect.DeepEqual(automaticJSON["tools"], requiredJSON["tools"]) {
+		t.Fatalf("tool declarations changed across modes\nautomatic=%#v\nrequired=%#v", automaticJSON["tools"], requiredJSON["tools"])
+	}
+	if automaticJSON["parallel_tool_calls"] != true || requiredJSON["parallel_tool_calls"] != true {
+		t.Fatalf("parallel tool settings = automatic:%#v required:%#v", automaticJSON["parallel_tool_calls"], requiredJSON["parallel_tool_calls"])
+	}
+}
+
+func TestBuildPayloadAcceptsRequiredToolChoiceWithHostedWebSearchOnly(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	payload, err := transport.buildPayload(OpenAIRequest{
+		Model:                 "gpt-5",
+		ToolChoiceMode:        ToolChoiceModeRequired,
+		EnableNativeWebSearch: true,
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	if err != nil {
+		t.Fatalf("buildPayload: %v", err)
+	}
+	jsonPayload := mustMarshalObject(t, payload)
+	tools, ok := jsonPayload["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want hosted web search only", jsonPayload["tools"])
+	}
+}
+
+func TestBuildPayloadRejectsRequiredToolChoiceWithoutMaterializedTools(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	_, err := transport.buildPayload(OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeRequired,
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("buildPayload() error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestBuildPayload_SerializesPatchAsCustomGrammarTool(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "gpt-5",
 		Tools: []Tool{{
 			Name:        string(toolspec.ToolPatch),
@@ -915,7 +1018,7 @@ func TestBuildPayload_SerializesPatchAsCustomGrammarTool(t *testing.T) {
 func TestBuildPayload_UsesExplicitPatchCustomGrammarTool(t *testing.T) {
 	transport := NewHTTPTransport(oauthStaticAuth{})
 	mode := OpenAIAuthMode{IsOAuth: true, AccountID: "acc-1"}
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "gpt-5.4",
 		Tools: []Tool{
 			{Name: string(toolspec.ToolExecCommand), Description: "shell", Schema: json.RawMessage(`{"type":"object","additionalProperties":false}`)},
@@ -982,7 +1085,7 @@ func TestBuildFunctionToolParamRejectsBlankCustomToolName(t *testing.T) {
 
 func TestBuildPayload_DoesNotAddNativeWebSearchToolWhenDisabled(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:                 "gpt-5",
 		EnableNativeWebSearch: false,
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
@@ -998,7 +1101,7 @@ func TestBuildPayload_DoesNotAddNativeWebSearchToolWhenDisabled(t *testing.T) {
 
 func TestBuildPayload_SetsPromptCacheKey(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:          "gpt-5",
 		PromptCacheKey: "cache-key-1",
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
@@ -1014,7 +1117,7 @@ func TestBuildPayload_SetsPromptCacheKey(t *testing.T) {
 
 func TestBuildPayload_DoesNotSetPromptCacheKeyForOpenAICompatibleProvider(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:          "gpt-5",
 		PromptCacheKey: "cache-key-1",
 	}, OpenAIAuthMode{}, ProviderCapabilities{
@@ -1034,7 +1137,7 @@ func TestBuildPayload_DoesNotSetPromptCacheKeyForOpenAICompatibleProvider(t *tes
 
 func TestBuildPayload_SetsPromptCacheKeyWhenExplicitCapabilityIsEnabled(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:          "gpt-5",
 		PromptCacheKey: "cache-key-1",
 	}, OpenAIAuthMode{}, ProviderCapabilities{
@@ -1060,7 +1163,7 @@ func TestHTTPTransport_ProviderCapabilitiesOverrideControlsPromptCacheKeyPayload
 		SupportsResponsesAPI:   true,
 		SupportsPromptCacheKey: false,
 	}
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:          "gpt-5",
 		PromptCacheKey: "cache-key-1",
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))

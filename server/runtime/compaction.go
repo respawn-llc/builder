@@ -334,7 +334,15 @@ func (e *Engine) buildRequestWithoutPromptRefresh(ctx context.Context) (llm.Requ
 	if err != nil {
 		return llm.Request{}, err
 	}
-	req, err := llm.RequestFromLockedContract(locked, systemPrompt, e.transcriptRuntimeState().SnapshotItems(), requestTools)
+	nativeWebSearch, nativeErr := e.enableNativeWebSearch(ctx)
+	if nativeErr != nil {
+		return llm.Request{}, nativeErr
+	}
+	toolChoiceMode := toolChoiceModeForWorkflowCompletion(workflowMode)
+	req, err := llm.RequestFromLockedContract(locked, systemPrompt, e.transcriptRuntimeState().SnapshotItems(), requestTools, llm.ToolControls{
+		ChoiceMode:            toolChoiceMode,
+		EnableNativeWebSearch: nativeWebSearch,
+	})
 	if err != nil {
 		return llm.Request{}, err
 	}
@@ -347,11 +355,9 @@ func (e *Engine) buildRequestWithoutPromptRefresh(ctx context.Context) (llm.Requ
 			req.PromptCacheScope = transcript.CacheWarningScopeConversation
 		}
 	}
-	nativeWebSearch, nativeErr := e.enableNativeWebSearch(ctx)
-	if nativeErr != nil {
-		return llm.Request{}, nativeErr
+	if err := e.validateToolChoiceSupport(ctx, toolChoiceMode); err != nil {
+		return llm.Request{}, err
 	}
-	req.EnableNativeWebSearch = nativeWebSearch
 	return req, nil
 }
 

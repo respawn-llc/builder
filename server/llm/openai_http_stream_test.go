@@ -75,7 +75,7 @@ func TestGenerateStream_AcceptsCompletedResponseEOFWithoutDoneSentinel(t *testin
 		``,
 	}, "\n"))
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestGenerateStream_SalvagesCompletedResponseBeforeTrailingMalformedEvent(t 
 		``,
 	}, "\n"))
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestGenerateStream_MapsResponseIncompleteEventToProviderAPIError(t *testing
 		``,
 	}, "\n"))
 
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected response incomplete event")
 	}
@@ -156,7 +156,7 @@ func TestGenerateStream_MapsResponseIncompleteWithoutReasonToProviderContractErr
 		``,
 	}, "\n"))
 
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected response incomplete event")
 	}
@@ -191,7 +191,7 @@ func TestGenerateStream_RejectsCompletedEventWithoutResponsePayload(t *testing.T
 				``,
 			}, "\n"))
 
-			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 			if err == nil {
 				t.Fatal("expected provider contract error")
 			}
@@ -239,7 +239,7 @@ func TestGenerateStream_RejectsPreTerminalMalformedResponsesStream(t *testing.T)
 		t.Run(name, func(t *testing.T) {
 			transport := newOpenAIRawStreamTestTransport(t, stream)
 
-			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 			if err == nil {
 				t.Fatal("expected provider contract error")
 			}
@@ -264,7 +264,7 @@ func TestGenerateStream_LeavesPreResponseEOFRetryable(t *testing.T) {
 		return nil, io.EOF
 	})}
 
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected pre-response EOF")
 	}
@@ -291,7 +291,7 @@ func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
 
 	var deltas []AssistantDelta
 	var reasoning []ReasoningSummaryDelta
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
 		OnAssistantDelta: func(delta AssistantDelta) {
 			deltas = append(deltas, delta)
 		},
@@ -351,7 +351,7 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	)
 
 	var deltas []AssistantDelta
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
 		OnAssistantDelta: func(delta AssistantDelta) {
 			deltas = append(deltas, delta)
 		},
@@ -388,7 +388,7 @@ func TestGenerateStream_PreservesDisplayedDeltasWhenCompletedMessageIsShorter(t 
 	)
 
 	var deltas []AssistantDelta
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
 		OnAssistantDelta: func(delta AssistantDelta) {
 			deltas = append(deltas, delta)
 		},
@@ -415,7 +415,7 @@ func TestGenerateStream_DoesNotRepairMultiMessageAssistantOutputWithAggregateTex
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestGenerateStream_DoesNotRepairMultiMessageAssistantOutputWithAggregateTex
 func TestGenerateStream_MapsStructuredStreamErrorToProviderAPIError(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t, `{"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","param":"input","message":"too many tokens"}}`)
 
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected stream error")
 	}
@@ -453,7 +453,7 @@ func TestGenerateStream_MapsResponseErrorEventToProviderAPIError(t *testing.T) {
 		`[DONE]`,
 	)
 
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected response error event")
 	}
@@ -468,7 +468,7 @@ func TestGenerateStream_MapsResponseFailedEventToProviderAPIError(t *testing.T) 
 		`[DONE]`,
 	)
 
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected response failed event")
 	}
@@ -483,7 +483,7 @@ func TestGenerateStream_ReturnsUnknownProviderErrorForUnrecognizedStructuredStre
 		`[DONE]`,
 	)
 
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected unrecognized stream error")
 	}
@@ -505,7 +505,7 @@ func TestGenerateStream_ParsesCustomPatchToolCall(t *testing.T) {
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestGenerateStream_PreservesBoldReasoningTextWithoutInferringStatus(t *test
 	)
 
 	var reasoning []ReasoningSummaryDelta
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
 		OnReasoningSummaryDelta: func(delta ReasoningSummaryDelta) {
 			reasoning = append(reasoning, delta)
 		},
@@ -575,7 +575,7 @@ func TestGenerateStream_PreservesStreamedAssistantTextWhenCompletedMessageIsEmpt
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestGenerateStream_PreservesAssistantOutputItemPhaseWhenCompletedPhaseIsMis
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
@@ -633,7 +633,7 @@ func TestGenerateStream_PrefersPhaseResolvedAssistantTextOverRawDeltaConcatenati
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
@@ -653,7 +653,7 @@ func TestGenerateStream_RepairsMissingAssistantOutputItemAtNonZeroOutputIndex(t 
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
@@ -680,7 +680,7 @@ func TestGenerateStream_PreservesHostedWebSearchOutputItemFromStream(t *testing.
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}

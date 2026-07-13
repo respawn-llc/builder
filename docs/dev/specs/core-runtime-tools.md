@@ -178,6 +178,15 @@
 - `tools.web_search` is enabled by default; `web_search` selects provider-native search (`native`) or disabled (`off`).
 - `tools.view_image` is enabled by default and advertised only to multimodal-capable models.
 
+## Model Requests And Cache Identity
+
+- Every provider-neutral generation request carries one required typed tool-choice mode: automatic or required. Missing and unknown values are invalid.
+- Required tool choice validates against the complete effective advertised-tool set, including local/custom declarations and enabled provider-hosted tools. A truly empty set is an invalid request; a selected adapter that cannot represent required choice returns a typed provider-policy error before dispatch.
+- Provider and transport failures for a valid required request surface without retrying or falling back to automatic choice.
+- Tool-choice mode changes only selection policy. It does not remove, add, or reorder effective tool declarations or change parallel-tool behavior.
+- Tool-choice mode is excluded from cached-prefix chunks and digest identity and does not rotate the prompt cache key.
+- Exact input-token counting of an already-built generation request preserves its tool-choice mode and complete effective advertised-tool set. Standalone item estimation uses automatic choice.
+
 ## Compaction
 
 - Compaction starts a new active conversation list from compacting output seed items. Full persisted session events remain in the durable session log.
@@ -197,6 +206,7 @@
 - The compaction request itself always uses the stored pre-compaction contract when one exists. Refreshed system/reviewer prompt snapshots apply only to requests sent **after** successful history replacement to prevent cache invalidation before cache key is rotated due to compaction. A repeat compaction before lazy refresh starts from the cleared prompt snapshot state and uses a non-mutating prompt resolver rather than preserving or persisting the previous prompt.
 - Local compaction instructions are final `developer` messages. Runtime rejects any tool calls returned by the agent during local compaction, submits a developer-only error message instructing the model not to call tools, and retries the compaction requests up to 3 times before failing the compaction attempt and stopping the model loop. Each failed attempt emits a user-visible, model-visible, persisted developer error transcript message stating that the model attempted tool calls during compaction. Model-visible text is an instruction not to call tools and retry; user-visible message is a regular notice wording.
 - Local compaction summary generation reuses the normal main-agent request envelope and logic and only appends the developer message, then capturing model output, to reuse existing model turn paths and cache continuity.
+- Local compaction-summary generation uses automatic tool choice. Post-compaction workflow generation derives the active workflow run's normal generation policy.
 - If native or local compaction exceeds provider context length and triggers an API failure (both must be true), Kent retries by collapsing supported historical tool payloads in the compaction request only. The four total attempts are the original request, then cumulative collapse targets of 10%, 20%, and 40% of the model context window. Shell outputs, including `exec_command` and `write_stdin` outputs, and patch inputs collapse to exact text `<collapsed>`; tool calls and call/output relationships remain present. Reasoning items and unsupported tool payloads are not removed or collapsed. Successful repaired compaction persists an operator-visible diagnostic with collapse counts and estimated omitted tokens.
 - Compaction lifecycle status is emitted through runtime output mutation.
 - Completed compaction creates no UI-only transcript row. Transcript-visible compaction summaries come from server-owned transcript items.

@@ -263,7 +263,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	}
 	t.Cleanup(func() { _ = wiring.Close() })
 
-	request := llm.Request{
+	request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model: "operator-alias",
 		Items: []llm.ResponseItem{
 			{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"},

@@ -217,6 +217,9 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 	if len(client.calls) != 1 {
 		t.Fatalf("expected manual local compaction to fail without retry, got %d requests", len(client.calls))
 	}
+	if client.calls[0].ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+		t.Fatalf("manual compaction tool choice mode = %q, want automatic", client.calls[0].ToolChoiceMode)
+	}
 	for _, item := range client.calls[0].Items {
 		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call_1" {
 			t.Fatalf("did not expect manual compaction request to inject synthetic failed tool output, got %+v", client.calls[0].Items)

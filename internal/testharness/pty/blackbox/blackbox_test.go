@@ -787,8 +787,9 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	transport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
 	var deltas []string
 	response, err := transport.GenerateStream(context.Background(), llm.OpenAIRequest{
-		Model: "gpt-5",
-		Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: probe}}),
+		Model:          "gpt-5",
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: probe}}),
 	}, func(delta string) {
 		deltas = append(deltas, delta)
 	})
@@ -835,8 +836,9 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 	}
 	t.Cleanup(inputTokens.Close)
 	count, err := newStubTransport(inputTokens).CountRequestInputTokens(context.Background(), llm.OpenAIRequest{
-		Model: "gpt-5",
-		Items: []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "input"}},
+		Model:          "gpt-5",
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+		Items:          []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "input"}},
 	})
 	if err != nil {
 		t.Fatalf("CountRequestInputTokens: %v", err)

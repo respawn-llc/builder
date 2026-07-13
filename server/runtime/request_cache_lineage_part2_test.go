@@ -87,7 +87,7 @@ func testPromptCacheRequest(cacheKey string, messages ...string) llm.Request {
 	for _, message := range messages {
 		items = append(items, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: message}})...)
 	}
-	return llm.Request{
+	return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model:            "gpt-5",
 		SystemPrompt:     "system",
 		PromptCacheKey:   cacheKey,

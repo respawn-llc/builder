@@ -34,7 +34,7 @@ func TestGenerateWithRetryStalledStreamUsesReducedRetryBudget(t *testing.T) {
 	stall := &countingFailingStreamClient{err: fmt.Errorf("model stream stalled: %w", llm.ErrModelStreamStalled)}
 	eng := mustNewTestEngine(t, store, stall, tools.NewRegistry(), Config{Model: "gpt-5"})
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", stall, llm.Request{Model: "gpt-5"}, nil, nil, nil); err == nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", stall, llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "gpt-5"}, nil, nil, nil); err == nil {
 		t.Fatal("expected stall failure after reduced retries")
 	}
 	if got := stall.calls.Load(); got != int32(len(idleStallRetryDelays)+1) {
@@ -50,7 +50,7 @@ func TestGenerateWithRetryGenericRetriableUsesFullRetryBudget(t *testing.T) {
 	retriable := &countingFailingStreamClient{err: &llm.APIStatusError{StatusCode: 503, Body: "overloaded"}}
 	eng := mustNewTestEngine(t, store, retriable, tools.NewRegistry(), Config{Model: "gpt-5"})
 
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", retriable, llm.Request{Model: "gpt-5"}, nil, nil, nil); err == nil {
+	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", retriable, llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "gpt-5"}, nil, nil, nil); err == nil {
 		t.Fatal("expected failure after full retries")
 	}
 	if got := retriable.calls.Load(); got != int32(len(generateRetryDelays)+1) {

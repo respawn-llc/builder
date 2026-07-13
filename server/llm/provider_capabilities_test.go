@@ -264,7 +264,7 @@ func TestProviderCapabilitiesFromLockedOrOverridePrefersSessionContract(t *testi
 	caps, ok := ProviderCapabilitiesFromLockedOrOverride(
 		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
 			ProviderID:                "locked-provider",
-			SupportsResponsesAPI:      true,
+			SupportsResponsesAPI:      false,
 			SupportsProviderVerbosity: &lockedVerbosity,
 		}},
 		config.ProviderCapabilitiesOverride{
@@ -276,8 +276,40 @@ func TestProviderCapabilitiesFromLockedOrOverridePrefersSessionContract(t *testi
 	if !ok {
 		t.Fatal("expected resolved provider capabilities")
 	}
-	if caps.ProviderID != "locked-provider" || !caps.SupportsProviderVerbosity {
+	if caps.ProviderID != "locked-provider" || caps.SupportsResponsesAPI || !caps.SupportsProviderVerbosity {
 		t.Fatalf("resolved capabilities = %+v, want locked contract", caps)
+	}
+}
+
+func TestRequiredToolChoiceSupportUsesResponsesAdapterContract(t *testing.T) {
+	for _, providerID := range []string{"openai", "chatgpt-codex", "openai-compatible"} {
+		t.Run(providerID, func(t *testing.T) {
+			caps, ok := LookupProviderCapabilityContract(providerID)
+			if !ok {
+				t.Fatalf("missing provider contract %q", providerID)
+			}
+			if err := ValidateToolChoiceSupport(caps, ToolChoiceModeRequired); err != nil {
+				t.Fatalf("ValidateToolChoiceSupport() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestRequiredToolChoiceSupportReturnsTypedErrorForNonResponsesAdapter(t *testing.T) {
+	caps, ok := LookupProviderCapabilityContract("anthropic")
+	if !ok {
+		t.Fatal("missing anthropic provider contract")
+	}
+	err := ValidateToolChoiceSupport(caps, ToolChoiceModeRequired)
+	if !errors.Is(err, ErrUnsupportedToolChoicePolicy) {
+		t.Fatalf("ValidateToolChoiceSupport() error = %v, want ErrUnsupportedToolChoicePolicy", err)
+	}
+	var typedErr *UnsupportedToolChoicePolicyError
+	if !errors.As(err, &typedErr) {
+		t.Fatalf("ValidateToolChoiceSupport() error type = %T, want *UnsupportedToolChoicePolicyError", err)
+	}
+	if typedErr.ProviderID != "anthropic" || typedErr.Mode != ToolChoiceModeRequired {
+		t.Fatalf("typed error = %+v", typedErr)
 	}
 }
 

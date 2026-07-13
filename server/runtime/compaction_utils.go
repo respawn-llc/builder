@@ -73,10 +73,11 @@ func buildTokenCountRequestForItems(model string, instructions string, items []l
 		return llm.Request{}, false
 	}
 	req := llm.Request{
-		Model:        trimmedModel,
-		SystemPrompt: strings.TrimSpace(instructions),
-		Items:        llm.CloneResponseItems(items),
-		Tools:        []llm.Tool{},
+		Model:          trimmedModel,
+		SystemPrompt:   strings.TrimSpace(instructions),
+		Items:          llm.CloneResponseItems(items),
+		Tools:          []llm.Tool{},
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 	}
 	if err := req.Validate(); err != nil {
 		return llm.Request{}, false

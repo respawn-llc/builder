@@ -20,6 +20,7 @@ type OpenAIRequest struct {
 	SessionID               string
 	Items                   []ResponseItem
 	Tools                   []Tool
+	ToolChoiceMode          ToolChoiceMode
 	StructuredOutput        *StructuredOutput
 }
 
@@ -41,6 +42,7 @@ func RequestAsOpenAI(request Request) OpenAIRequest {
 		SessionID:               request.SessionID,
 		Items:                   CloneResponseItems(request.Items),
 		Tools:                   append([]Tool(nil), request.Tools...),
+		ToolChoiceMode:          request.ToolChoiceMode,
 		StructuredOutput:        request.StructuredOutput,
 	}
 }

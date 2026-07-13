@@ -74,7 +74,7 @@ func TestGenerateStream_HealthyLongStreamSurvivesTotalWallClockBeyondIdle(t *tes
 		pacedStreamEvent{delay: 0, data: `[DONE]`},
 	)
 
-	resp, err := client.GenerateStreamWithEvents(context.Background(), Request{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := client.GenerateStreamWithEvents(context.Background(), Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("healthy long stream failed: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestGenerateStream_StalledStreamReturnsStallSentinel(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	_, err := client.GenerateStreamWithEvents(ctx, Request{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := client.GenerateStreamWithEvents(ctx, Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected stall error")
 	}
@@ -122,7 +122,7 @@ func TestGenerateStream_ParentCancelIsDistinguishableFromStall(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := client.GenerateStreamWithEvents(ctx, Request{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := client.GenerateStreamWithEvents(ctx, Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}
@@ -139,7 +139,7 @@ func TestGenerateStream_StallAfterCompletedSalvagesResponse(t *testing.T) {
 		pacedStreamEvent{delay: 5 * time.Second, data: `[DONE]`},
 	)
 
-	resp, err := client.GenerateStreamWithEvents(context.Background(), Request{Model: "gpt-5"}, StreamCallbacks{})
+	resp, err := client.GenerateStreamWithEvents(context.Background(), Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("a fully-received response must not be discarded as a stall: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestGenerateStream_CallerCancelAfterCompletedIsNotSalvaged(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := client.GenerateStreamWithEvents(ctx, Request{Model: "gpt-5"}, StreamCallbacks{})
+	_, err := client.GenerateStreamWithEvents(ctx, Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err == nil {
 		t.Fatal("caller cancellation after a completed event must not be salvaged into a successful response")
 	}
@@ -180,7 +180,7 @@ func TestGenerateStream_TransportEmitsActivityHeartbeatPerEvent(t *testing.T) {
 	)
 
 	var beats atomic.Int32
-	if _, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{
+	if _, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
 		OnStreamActivity: func() { beats.Add(1) },
 	}); err != nil {
 		t.Fatalf("GenerateStreamWithEvents failed: %v", err)

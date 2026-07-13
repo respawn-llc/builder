@@ -951,7 +951,7 @@ func (c *blockingThenQueuedClient) requestAt(index int) llm.Request {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if index < 0 || index >= len(c.calls) {
-		return llm.Request{}
+		return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic}
 	}
 	return c.calls[index]
 }
@@ -990,7 +990,7 @@ func fakeClientRequestAt(client *fakeClient, index int) llm.Request {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if index < 0 || index >= len(client.calls) {
-		return llm.Request{}
+		return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic}
 	}
 	return client.calls[index]
 }

@@ -508,7 +508,7 @@ func skillFixtureMarkdown(name, description string) string {
 }
 
 func seq21To28ShapeRequest(thirdCallInput json.RawMessage) llm.Request {
-	return llm.Request{
+	return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model:        "gpt-5",
 		SystemPrompt: "system",
 		Items: llm.ItemsFromMessages([]llm.Message{

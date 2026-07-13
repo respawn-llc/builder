@@ -15,7 +15,7 @@ import (
 
 func TestBuildPayload_AppliesStructuredOutputJSONSchema(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "gpt-5",
 		StructuredOutput: &StructuredOutput{
 			Name:   "reviewer_suggestions",
@@ -49,7 +49,7 @@ func TestBuildPayload_AppliesStructuredOutputJSONSchema(t *testing.T) {
 
 func TestBuildPayload_PreservesNullableStructuredOutputSchemaProperties(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "gpt-5",
 		StructuredOutput: &StructuredOutput{
 			Name: "workflow_completion",
@@ -118,7 +118,7 @@ func assertNullablePayloadProperty(t *testing.T, properties map[string]any, name
 func TestBuildPayload_AppliesConfiguredModelVerbosityForSupportedModels(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "high"
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestBuildPayload_AppliesConfiguredModelVerbosityForSupportedModels(t *testi
 func TestBuildPayload_IgnoresConfiguredModelVerbosityForUnsupportedModels(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "high"
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-4.1"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-4.1"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestBuildPayload_IgnoresConfiguredModelVerbosityForUnsupportedModels(t *tes
 func TestBuildPayload_AppliesConfiguredModelVerbosityForUnknownFirstPartyModels(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "high"
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5-preview"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5-preview"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestBuildPayload_AppliesConfiguredModelVerbosityForUnknownFirstPartyModels(
 func TestBuildPayload_IgnoresConfiguredModelVerbosityForUnknownNonFirstPartyProviders(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "high"
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5-preview"}, OpenAIAuthMode{}, ProviderCapabilities{ProviderID: "openai-compatible", IsOpenAIFirstParty: false})
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5-preview"}, OpenAIAuthMode{}, ProviderCapabilities{ProviderID: "openai-compatible", IsOpenAIFirstParty: false})
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -210,13 +210,13 @@ func TestRequestBuildersUseProviderVerbosityCapabilityForUnknownModels(t *testin
 			transport := NewHTTPTransport(staticAuth{})
 			transport.ModelVerbosity = "high"
 
-			responsePayload, err := transport.buildPayload(OpenAIRequest{Model: "operator-alias"}, OpenAIAuthMode{}, tt.caps)
+			responsePayload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "operator-alias"}, OpenAIAuthMode{}, tt.caps)
 			if err != nil {
 				t.Fatalf("build response payload: %v", err)
 			}
 			assertTextVerbosityPresence(t, mustMarshalObject(t, responsePayload), tt.wantText)
 
-			inputTokenCountPayload, err := transport.buildInputTokenCountParams(OpenAIRequest{Model: "operator-alias"}, tt.caps)
+			inputTokenCountPayload, err := transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "operator-alias"}, tt.caps)
 			if err != nil {
 				t.Fatalf("build input-token-count payload: %v", err)
 			}
@@ -239,7 +239,7 @@ func assertTextVerbosityPresence(t *testing.T, payload map[string]any, wantText 
 func TestBuildPayload_MergesConfiguredModelVerbosityWithStructuredOutput(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "low"
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "gpt-5",
 		StructuredOutput: &StructuredOutput{
 			Name:   "reviewer_suggestions",
@@ -266,7 +266,7 @@ func TestBuildPayload_MergesConfiguredModelVerbosityWithStructuredOutput(t *test
 
 func TestBuildPayload_AppliesReasoningEffortForOpenAIModels(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:           "gpt-5",
 		ReasoningEffort: "xhigh",
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
@@ -286,7 +286,7 @@ func TestBuildPayload_AppliesReasoningEffortForOpenAIModels(t *testing.T) {
 
 func TestBuildPayload_SkipsReasoningSummaryForUnknownModels(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:           "custom-model",
 		ReasoningEffort: "high",
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
@@ -316,7 +316,7 @@ func TestBuildPayload_SkipsReasoningSummaryForUnknownModels(t *testing.T) {
 func TestBuildPayload_SkipsReasoningSummaryForCodexSpark(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "medium"
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:           "gpt-5.3-codex-spark",
 		ReasoningEffort: "high",
 	}, OpenAIAuthMode{IsOAuth: true}, requireProviderCapabilities(t, transport, OpenAIAuthMode{IsOAuth: true}))
@@ -352,7 +352,7 @@ func TestBuildPayload_SkipsReasoningSummaryForCodexSpark(t *testing.T) {
 
 func TestBuildPayload_AppliesFastModeForCodexProvider(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:    "gpt-5.3-codex",
 		FastMode: true,
 	}, OpenAIAuthMode{IsOAuth: true}, requireProviderCapabilities(t, transport, OpenAIAuthMode{IsOAuth: true}))
@@ -371,7 +371,7 @@ func TestBuildPayload_AppliesFastModeForCodexProvider(t *testing.T) {
 
 func TestBuildPayload_AppliesFastModeForOpenAIProvider(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:    "gpt-5.3-codex",
 		FastMode: true,
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
@@ -391,7 +391,7 @@ func TestBuildPayload_AppliesFastModeForOpenAIProvider(t *testing.T) {
 func TestBuildPayload_SkipsFastModeForRemoteOpenAICompatibleProvider(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.BaseURL = "https://example.openai.azure.com/openai/v1"
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:    "gpt-5.3-codex",
 		FastMode: true,
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
@@ -418,7 +418,7 @@ func TestBuildPayload_SkipsFastModeForRemoteOpenAICompatibleProvider(t *testing.
 
 func TestBuildPayload_DefaultsReasoningEffortForUnknownModelFamily(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:           "custom-model",
 		ReasoningEffort: "high",
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
@@ -473,7 +473,7 @@ func TestBuildResponsesInput_AssistantReasoningItemsUseEncryptedContentOnly(t *t
 
 func TestBuildPayload_AddsAdditionalPropertiesFalseToToolSchemas(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "gpt-5",
 		Tools: []Tool{
 			{
@@ -735,7 +735,7 @@ func TestInputTokenCountPayloadMatchesCompactPayloadInputShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build compact payload: %v", err)
 	}
-	countPayload, err := transport.buildInputTokenCountParams(OpenAIRequest{
+	countPayload, err := transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:        "gpt-5",
 		SystemPrompt: "compaction instructions",
 		Items:        canonicalItems,
@@ -754,6 +754,39 @@ func TestInputTokenCountPayloadMatchesCompactPayloadInputShape(t *testing.T) {
 	}
 }
 
+func TestBuildInputTokenCountPreservesRequiredToolChoiceAndEffectiveTools(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	request := OpenAIRequest{
+		Model:                 "gpt-5",
+		ToolChoiceMode:        ToolChoiceModeRequired,
+		EnableNativeWebSearch: true,
+		Tools: []Tool{
+			{Name: "shell"},
+			{Name: "patch"},
+		},
+	}
+	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
+	generation, err := transport.buildPayload(request, OpenAIAuthMode{}, caps)
+	if err != nil {
+		t.Fatalf("build generation payload: %v", err)
+	}
+	count, err := transport.buildInputTokenCountParams(request, caps)
+	if err != nil {
+		t.Fatalf("build input-token-count payload: %v", err)
+	}
+	generationJSON := mustMarshalJSONMap(t, generation)
+	countJSON := mustMarshalJSONMap(t, count)
+	if countJSON["tool_choice"] != "required" {
+		t.Fatalf("count tool_choice = %#v, want required", countJSON["tool_choice"])
+	}
+	if !reflect.DeepEqual(generationJSON["tools"], countJSON["tools"]) {
+		t.Fatalf("effective tools differ\ngeneration=%#v\ncount=%#v", generationJSON["tools"], countJSON["tools"])
+	}
+	if countJSON["parallel_tool_calls"] != true {
+		t.Fatalf("count parallel_tool_calls = %#v, want true", countJSON["parallel_tool_calls"])
+	}
+}
+
 func TestOpenAIRequestBuildersRejectUnmaterializedViewImageInputFileOutput(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	unpreparedItems := []ResponseItem{unmaterializedViewImageInputFileOutput()}
@@ -765,10 +798,10 @@ func TestOpenAIRequestBuildersRejectUnmaterializedViewImageInputFileOutput(t *te
 		}
 	}
 
-	_, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5", Items: unpreparedItems}, OpenAIAuthMode{}, caps)
+	_, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", Items: unpreparedItems}, OpenAIAuthMode{}, caps)
 	checkErr("buildPayload", err)
 
-	_, err = transport.buildInputTokenCountParams(OpenAIRequest{Model: "gpt-5", Items: unpreparedItems}, caps)
+	_, err = transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", Items: unpreparedItems}, caps)
 	checkErr("buildInputTokenCountParams", err)
 
 	_, err = newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, ProviderCapabilities{}).BuildCompact(OpenAICompactionRequest{Model: "gpt-5", InputItems: unpreparedItems})
@@ -787,7 +820,7 @@ func unmaterializedViewImageInputFileOutput() ResponseItem {
 func TestBuildInputTokenCountParams_AppliesConfiguredModelVerbosity(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "medium"
-	payload, err := transport.buildInputTokenCountParams(OpenAIRequest{Model: "gpt-5"}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	payload, err := transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build input-token-count payload: %v", err)
 	}
@@ -821,7 +854,7 @@ func TestCountRequestInputTokensTargetsResponsesInputTokensPath(t *testing.T) {
 	transport.BaseURL = server.URL + "/v1"
 	transport.Client = server.Client()
 
-	count, err := transport.CountRequestInputTokens(context.Background(), OpenAIRequest{
+	count, err := transport.CountRequestInputTokens(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:        "gpt-5",
 		SystemPrompt: "sys",
 		Items: []ResponseItem{

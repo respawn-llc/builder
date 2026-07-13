@@ -201,7 +201,7 @@ func (e *Engine) compactionCacheObservationRequest(ctx context.Context, request 
 	if err != nil {
 		return llm.Request{}, false, err
 	}
-	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools)
+	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{ChoiceMode: llm.ToolChoiceModeAutomatic})
 	if err != nil {
 		return llm.Request{}, false, err
 	}
@@ -319,7 +319,7 @@ func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, locked se
 		Content: instructions,
 	})
 	for attempt := 0; ; attempt++ {
-		req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools)
+		req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{ChoiceMode: llm.ToolChoiceModeAutomatic})
 		if err != nil {
 			return "", err
 		}
