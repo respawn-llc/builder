@@ -242,7 +242,7 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
     const view = render(<VirtualizedInfiniteList {...props} />);
 
     await waitFor(() => {
-      expect(onScrollElementChange).toHaveBeenCalledWith(expect.any(HTMLDivElement));
+      expect(onScrollElementChange.mock.calls[0]?.[0]).toBeInstanceOf(HTMLDivElement);
     });
     view.unmount();
     expect(onScrollElementChange).toHaveBeenLastCalledWith(null);
