@@ -3,6 +3,7 @@ package workflowview
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -1182,6 +1183,138 @@ func TestBoardColumnTaskCountsUseFullSelectedWorkflow(t *testing.T) {
 	doneColumn := workflowViewColumnByKind(t, board, workflow.NodeKindTerminal)
 	if _, err := view.ListBoardNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: doneColumn.Node.NodeID, PageSize: 1, PageToken: firstPage.NextPageToken}, workflow.StaticRoleResolver{"coder": true}); !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("ListBoardNodeCards with token from other node error = %v", err)
+	}
+}
+
+func TestBoardNodeCardsBidirectionalPaginationRoundTripsWithoutGaps(t *testing.T) {
+	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	type expectedCard struct {
+		taskID          string
+		updatedAtUnixMs int64
+	}
+	expected := make([]expectedCard, 0, 126)
+	for index := 0; index < 126; index++ {
+		task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: workflowID,
+			Title:      "Paged task " + strconv.Itoa(index),
+			Body:       "Body",
+		})
+		if err != nil {
+			t.Fatalf("CreateTask %d: %v", index, err)
+		}
+		updatedAtUnixMs := int64(10_000 + index/3)
+		if _, err := store.DB().ExecContext(ctx, `UPDATE tasks SET updated_at_unix_ms = ? WHERE id = ?`, updatedAtUnixMs, string(task.ID)); err != nil {
+			t.Fatalf("set task %d timestamp: %v", index, err)
+		}
+		expected = append(expected, expectedCard{taskID: string(task.ID), updatedAtUnixMs: updatedAtUnixMs})
+	}
+	sort.Slice(expected, func(i, j int) bool {
+		if expected[i].updatedAtUnixMs != expected[j].updatedAtUnixMs {
+			return expected[i].updatedAtUnixMs > expected[j].updatedAtUnixMs
+		}
+		return expected[i].taskID > expected[j].taskID
+	})
+
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	backlog := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
+	listPage := func(pageToken *string) serverapi.WorkflowBoardNodeCardsListResponse {
+		t.Helper()
+		page, err := view.ListBoardNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: string(workflowID),
+			NodeID:     backlog.Node.NodeID,
+			PageSize:   25,
+			PageToken:  pageToken,
+		}, workflow.StaticRoleResolver{"coder": true})
+		if err != nil {
+			t.Fatalf("ListBoardNodeCards: %v", err)
+		}
+		return page
+	}
+	assertPage := func(page serverapi.WorkflowBoardNodeCardsListResponse, expectedStart int) {
+		t.Helper()
+		expectedEnd := min(expectedStart+25, len(expected))
+		wantIDs := make([]string, 0, expectedEnd-expectedStart)
+		for _, card := range expected[expectedStart:expectedEnd] {
+			wantIDs = append(wantIDs, card.taskID)
+		}
+		gotIDs := workflowViewBoardCardIDs(page.Cards)
+		if !reflect.DeepEqual(gotIDs, wantIDs) {
+			t.Fatalf("page at %d IDs = %+v, want %+v", expectedStart, gotIDs, wantIDs)
+		}
+	}
+
+	pages := []serverapi.WorkflowBoardNodeCardsListResponse{listPage(nil)}
+	assertPage(pages[0], 0)
+	if pages[0].PreviousPageToken != nil || pages[0].NextPageToken == nil {
+		t.Fatalf("initial cursors = previous %v next %v, want only older", pages[0].PreviousPageToken, pages[0].NextPageToken)
+	}
+	allIDs := append([]string(nil), workflowViewBoardCardIDs(pages[0].Cards)...)
+	for pages[len(pages)-1].NextPageToken != nil {
+		next := listPage(pages[len(pages)-1].NextPageToken)
+		pages = append(pages, next)
+		assertPage(next, (len(pages)-1)*25)
+		allIDs = append(allIDs, workflowViewBoardCardIDs(next.Cards)...)
+	}
+	if len(pages) != 6 {
+		t.Fatalf("page count = %d, want 6 for 126 cards", len(pages))
+	}
+	for index, page := range pages {
+		if index > 0 && page.PreviousPageToken == nil {
+			t.Fatalf("page %d has no newer cursor", index)
+		}
+		if index < len(pages)-1 && page.NextPageToken == nil {
+			t.Fatalf("page %d has no older cursor", index)
+		}
+	}
+	wantAllIDs := make([]string, 0, len(expected))
+	for _, card := range expected {
+		wantAllIDs = append(wantAllIDs, card.taskID)
+	}
+	if !reflect.DeepEqual(allIDs, wantAllIDs) {
+		t.Fatalf("older traversal IDs contain a gap or duplicate: got %d IDs, want %d", len(allIDs), len(wantAllIDs))
+	}
+
+	newerFromDeep := listPage(pages[4].PreviousPageToken)
+	assertPage(newerFromDeep, 75)
+	newerAgain := listPage(newerFromDeep.PreviousPageToken)
+	assertPage(newerAgain, 50)
+	olderAgain := listPage(newerAgain.NextPageToken)
+	assertPage(olderAgain, 75)
+
+	invalidTokens := []struct {
+		name   string
+		mutate func(*boardNodeCardsTokenFixture)
+	}{
+		{name: "version", mutate: func(payload *boardNodeCardsTokenFixture) { payload.Version = 1 }},
+		{name: "direction", mutate: func(payload *boardNodeCardsTokenFixture) { payload.Direction = "sideways" }},
+		{name: "project scope", mutate: func(payload *boardNodeCardsTokenFixture) { payload.ProjectID = "other-project" }},
+		{name: "workflow scope", mutate: func(payload *boardNodeCardsTokenFixture) { payload.WorkflowID = "other-workflow" }},
+		{name: "node scope", mutate: func(payload *boardNodeCardsTokenFixture) { payload.NodeID = "other-node" }},
+		{name: "blank task ID", mutate: func(payload *boardNodeCardsTokenFixture) { payload.TaskID = " " }},
+		{name: "negative timestamp", mutate: func(payload *boardNodeCardsTokenFixture) { payload.UpdatedAtUnixMs = -1 }},
+	}
+	for _, testCase := range invalidTokens {
+		t.Run("rejects "+testCase.name, func(t *testing.T) {
+			token := mutateBoardNodeCardsToken(t, pages[0].NextPageToken, testCase.mutate)
+			if _, err := view.ListBoardNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+				ProjectID:  binding.ProjectID,
+				WorkflowID: string(workflowID),
+				NodeID:     backlog.Node.NodeID,
+				PageSize:   25,
+				PageToken:  &token,
+			}, workflow.StaticRoleResolver{"coder": true}); !errors.Is(err, ErrInvalidPageToken) {
+				t.Fatalf("%s error = %v, want ErrInvalidPageToken", testCase.name, err)
+			}
+		})
 	}
 }
 
@@ -3114,6 +3247,45 @@ func workflowViewBoardColumnKeys(columns []serverapi.WorkflowBoardColumn) []stri
 		keys = append(keys, column.Node.Key)
 	}
 	return keys
+}
+
+func workflowViewBoardCardIDs(cards []serverapi.WorkflowBoardTaskCard) []string {
+	ids := make([]string, 0, len(cards))
+	for _, card := range cards {
+		ids = append(ids, card.TaskID)
+	}
+	return ids
+}
+
+type boardNodeCardsTokenFixture struct {
+	Version         int    `json:"version"`
+	ProjectID       string `json:"project_id"`
+	WorkflowID      string `json:"workflow_id"`
+	NodeID          string `json:"node_id"`
+	UpdatedAtUnixMs int64  `json:"updated_at_unix_ms"`
+	TaskID          string `json:"task_id"`
+	Direction       string `json:"direction"`
+}
+
+func mutateBoardNodeCardsToken(t *testing.T, token *string, mutate func(*boardNodeCardsTokenFixture)) string {
+	t.Helper()
+	if token == nil {
+		t.Fatal("page token is required")
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(*token)
+	if err != nil {
+		t.Fatalf("decode page token: %v", err)
+	}
+	var payload boardNodeCardsTokenFixture
+	if err := json.Unmarshal(decoded, &payload); err != nil {
+		t.Fatalf("unmarshal page token: %v", err)
+	}
+	mutate(&payload)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal page token: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(encoded)
 }
 
 func TestWorkflowViewRejectsMissingIDs(t *testing.T) {
