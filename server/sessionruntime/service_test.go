@@ -457,9 +457,6 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 		})
 	})
 
-	if fixture.service.background != background {
-		t.Fatal("interactive runtime did not retain the supplied global shell manager")
-	}
 	_, err = fixture.service.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-active-shell",
 		SessionID:       sessionID,

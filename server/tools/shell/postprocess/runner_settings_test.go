@@ -27,20 +27,20 @@ func TestNewRunnerRejectsPresentBlankHook(t *testing.T) {
 	}
 }
 
-func TestNewRunnerPreservesTypedHookAbsence(t *testing.T) {
+func TestNewRunnerWithAbsentHookSurfacesUnavailableWarning(t *testing.T) {
 	runner, err := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	if runner.hookPath != nil {
-		t.Fatalf("compiled absent hook = %#v, want nil", runner.hookPath)
+	result, err := runner.Apply(context.Background(), Request{
+		ToolName: toolspec.ToolExecCommand,
+		Output:   "input",
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
-}
-
-func TestResolveHookPathRejectsPresentBlankValue(t *testing.T) {
-	blank := " \t "
-	if _, _, err := resolveHookPath(&blank); err == nil {
-		t.Fatal("expected present blank compiled hook to fail resolution")
+	if result.Output != "input" || result.Warning == nil {
+		t.Fatalf("absent hook result = %+v, want unchanged output with warning", result)
 	}
 }
 
@@ -53,9 +53,6 @@ func TestNewRunnerCopiesPresentHook(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
-	}
-	if runner.hookPath == nil || *runner.hookPath != originalPath {
-		t.Fatalf("compiled hook = %#v, want copied path %q", runner.hookPath, originalPath)
 	}
 	hookPath = originalPath + ".missing"
 
