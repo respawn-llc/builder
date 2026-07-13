@@ -122,7 +122,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"stream_deltas": []string{"Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\n", "volatile tail"},
 				"final":         "Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\nvolatile tail",
 			},
-			expectedAppends:           []string{"Plain stable."},
+			expectedAppends:           []string{transcriptrender.AssistantSymbol + " Plain stable."},
 			expectedScrollbackAppends: []string{"volatile tail"},
 		},
 		{
