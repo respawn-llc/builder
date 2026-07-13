@@ -181,9 +181,19 @@ func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID stri
 		return nil, rpccontract.Route{}, err
 	}
 	if attachSession {
-		if err := callRPC(ctx, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: sessionID}, nil); err != nil {
+		if c.sessionID != nil && strings.TrimSpace(*c.sessionID) != strings.TrimSpace(sessionID) {
 			cleanup()
-			return nil, rpccontract.Route{}, err
+			return nil, rpccontract.Route{}, fmt.Errorf(
+				"remote is attached to session %q, cannot subscribe to session %q",
+				strings.TrimSpace(*c.sessionID),
+				strings.TrimSpace(sessionID),
+			)
+		}
+		if c.sessionID == nil {
+			if err := attachSessionRPC(ctx, conn, sessionID); err != nil {
+				cleanup()
+				return nil, rpccontract.Route{}, err
+			}
 		}
 	}
 	var ack protocol.SubscribeResponse

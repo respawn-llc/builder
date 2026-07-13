@@ -39,6 +39,55 @@ func resolveWorkspaceSettingsFilePath(workspaceRoot string) (string, error) {
 	return filepath.Join(absRoot, ConfigDirName, "config.toml"), nil
 }
 
+// FindNearestWorkspaceSettingsRoot returns the nearest ancestor containing
+// workspace-local settings. The global persistence settings file is excluded.
+func FindNearestWorkspaceSettingsRoot(path string) (*string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return nil, errors.New("workspace search path is required")
+	}
+	root, err := filepath.Abs(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace search path: %w", err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, fmt.Errorf("stat workspace search path: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("workspace search path is not a directory: %q", root)
+	}
+	persistenceRoot, err := ResolvePersistenceRoot("")
+	if err != nil {
+		return nil, err
+	}
+	globalSettingsPath, err := resolveSettingsFilePathInRoot(persistenceRoot)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		settingsPath, err := resolveWorkspaceSettingsFilePath(root)
+		if err != nil {
+			return nil, err
+		}
+		if filepath.Clean(settingsPath) == filepath.Clean(globalSettingsPath) {
+			return nil, nil
+		}
+		exists, err := settingsFileExists(settingsPath)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return &root, nil
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			return nil, nil
+		}
+		root = parent
+	}
+}
+
 func settingsFileExists(path string) (bool, error) {
 	if _, err := os.Stat(path); err == nil {
 		return true, nil

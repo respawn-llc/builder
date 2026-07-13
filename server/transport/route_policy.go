@@ -169,7 +169,10 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	case rpccontract.ScopeProjectWorkspace:
 		_, err := e.gateway.activeProjectID(ctx, state)
 		return err
-	case rpccontract.ScopeAttachSession, rpccontract.ScopeSessionActiveProject:
+	case rpccontract.ScopeAttachSession:
+		_, err := e.gateway.resolveSessionAttachment(ctx, state, scopeParams.sessionID)
+		return err
+	case rpccontract.ScopeSessionActiveProject:
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionActiveProjectIfSet:
 		if strings.TrimSpace(scopeParams.sessionID) == "" {

@@ -3,6 +3,7 @@ package worktree
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -192,6 +193,9 @@ func TestGitInspectorProbeDirtyStateUsesTypedCleanDirtyAndUnknownResults(t *test
 func TestGitInspectorInspectsTargetIdentityAndExactRef(t *testing.T) {
 	root := t.TempDir()
 	commonDir := filepath.Join(root, ".git")
+	if err := os.Mkdir(commonDir, 0o755); err != nil {
+		t.Fatalf("Mkdir Git marker: %v", err)
+	}
 	runner := &stubGitCommandRunner{outputs: map[string][]byte{
 		strings.Join([]string{"rev-parse", "--show-toplevel"}, "\x00"):  []byte(root + "\n"),
 		strings.Join([]string{"rev-parse", "--git-common-dir"}, "\x00"): []byte(commonDir + "\n"),

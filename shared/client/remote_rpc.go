@@ -117,10 +117,15 @@ func hasExplicitTCPServerTarget(cfg config.App) bool {
 	return sources["server_host"] != "default" || sources["server_port"] != "default"
 }
 
-func dialRemoteWithTransport(ctx context.Context, plan remoteDialPlan, transport rpcwire.ClientTransport, projectID string, workspaceID string, workspaceRoot string) (*Remote, error) {
+func dialRemoteWithTransport(ctx context.Context, plan remoteDialPlan, transport rpcwire.ClientTransport, projectID string, workspaceID string, workspaceRoot string, sessionID *string) (*Remote, error) {
 	trimmedProjectID := strings.TrimSpace(projectID)
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	trimmedWorkspaceRoot := strings.TrimSpace(workspaceRoot)
+	var trimmedSessionID *string
+	if sessionID != nil {
+		value := strings.TrimSpace(*sessionID)
+		trimmedSessionID = &value
+	}
 	conn, err := plan.dial(ctx, transport)
 	if err != nil {
 		return nil, err
@@ -131,7 +136,7 @@ func dialRemoteWithTransport(ctx context.Context, plan remoteDialPlan, transport
 		cleanup()
 		return nil, err
 	}
-	if err := attachProjectRPC(ctx, conn, trimmedProjectID, trimmedWorkspaceID, trimmedWorkspaceRoot); err != nil {
+	if err := attachRemoteRPC(ctx, conn, trimmedProjectID, trimmedWorkspaceID, trimmedWorkspaceRoot, trimmedSessionID); err != nil {
 		cleanup()
 		return nil, err
 	}
@@ -144,6 +149,7 @@ func dialRemoteWithTransport(ctx context.Context, plan remoteDialPlan, transport
 		projectID:     trimmedProjectID,
 		workspaceID:   trimmedWorkspaceID,
 		workspaceRoot: trimmedWorkspaceRoot,
+		sessionID:     trimmedSessionID,
 	}, nil
 }
 
@@ -216,7 +222,7 @@ func (c *Remote) openRPCConn(ctx context.Context) (rpcwire.Conn, func(), error) 
 		cleanup()
 		return nil, nil, err
 	}
-	if err := attachProjectRPC(ctx, conn, c.projectID, c.workspaceID, c.workspaceRoot); err != nil {
+	if err := attachRemoteRPC(ctx, conn, c.projectID, c.workspaceID, c.workspaceRoot, c.sessionID); err != nil {
 		cleanup()
 		return nil, nil, err
 	}
@@ -394,6 +400,36 @@ func attachProjectRPC(ctx context.Context, conn rpcwire.Conn, projectID string, 
 		return nil
 	}
 	return callRPC(ctx, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: trimmedProjectID, WorkspaceID: strings.TrimSpace(workspaceID), WorkspaceRoot: strings.TrimSpace(workspaceRoot)}, nil)
+}
+
+func attachSessionRPC(ctx context.Context, conn rpcwire.Conn, sessionID string) error {
+	return callRPC(
+		ctx,
+		conn,
+		"attach-session",
+		protocol.MethodAttachSession,
+		protocol.AttachSessionRequest{SessionID: strings.TrimSpace(sessionID)},
+		nil,
+	)
+}
+
+func attachRemoteRPC(
+	ctx context.Context,
+	conn rpcwire.Conn,
+	projectID string,
+	workspaceID string,
+	workspaceRoot string,
+	sessionID *string,
+) error {
+	if sessionID != nil {
+		if strings.TrimSpace(projectID) != "" ||
+			strings.TrimSpace(workspaceID) != "" ||
+			strings.TrimSpace(workspaceRoot) != "" {
+			return errors.New("remote cannot attach both project and session scope")
+		}
+		return attachSessionRPC(ctx, conn, *sessionID)
+	}
+	return attachProjectRPC(ctx, conn, projectID, workspaceID, workspaceRoot)
 }
 
 func callRPC(ctx context.Context, conn rpcwire.Conn, requestID string, method string, params any, out any) error {

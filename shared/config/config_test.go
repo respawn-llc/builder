@@ -268,6 +268,77 @@ func TestLoadTrimsWorkspaceRootBeforeResolving(t *testing.T) {
 	}
 }
 
+func TestFindNearestWorkspaceSettingsRoot(t *testing.T) {
+	workspace := t.TempDir()
+	settingsDir := filepath.Join(workspace, ConfigDirName)
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll settings: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(settingsDir, "config.toml"), nil, 0o644); err != nil {
+		t.Fatalf("WriteFile settings: %v", err)
+	}
+	nested := filepath.Join(workspace, "pkg", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll nested: %v", err)
+	}
+
+	root, err := FindNearestWorkspaceSettingsRoot(nested)
+	if err != nil {
+		t.Fatalf("FindNearestWorkspaceSettingsRoot: %v", err)
+	}
+	if root == nil || *root != workspace {
+		t.Fatalf("settings root = %v, want %q", root, workspace)
+	}
+}
+
+func TestFindNearestWorkspaceSettingsRootDoesNotTreatHomeSettingsAsWorkspaceSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, ConfigDirName)
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll settings: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(settingsDir, "config.toml"), nil, 0o644); err != nil {
+		t.Fatalf("WriteFile settings: %v", err)
+	}
+	nested := filepath.Join(home, "projects", "demo")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll nested: %v", err)
+	}
+
+	root, err := FindNearestWorkspaceSettingsRoot(nested)
+	if err != nil {
+		t.Fatalf("FindNearestWorkspaceSettingsRoot: %v", err)
+	}
+	if root != nil {
+		t.Fatalf("settings root = %q, want absent", *root)
+	}
+}
+
+func TestFindNearestWorkspaceSettingsRootExcludesExplicitPersistenceSettings(t *testing.T) {
+	workspace := t.TempDir()
+	persistenceRoot := filepath.Join(workspace, ConfigDirName)
+	t.Setenv(PersistenceRootEnvName, persistenceRoot)
+	if err := os.MkdirAll(persistenceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll persistence root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(persistenceRoot, "config.toml"), nil, 0o644); err != nil {
+		t.Fatalf("WriteFile settings: %v", err)
+	}
+	nested := filepath.Join(workspace, "pkg")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll nested: %v", err)
+	}
+
+	root, err := FindNearestWorkspaceSettingsRoot(nested)
+	if err != nil {
+		t.Fatalf("FindNearestWorkspaceSettingsRoot: %v", err)
+	}
+	if root != nil {
+		t.Fatalf("settings root = %q, want absent", *root)
+	}
+}
+
 func TestLoadAppliesWorkspaceConfigBeforeEnvBeforeCLI(t *testing.T) {
 	home, workspace := newConfigTestEnv(t)
 	t.Setenv("KENT_MODEL", "env-model")

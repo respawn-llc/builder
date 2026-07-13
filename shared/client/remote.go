@@ -22,33 +22,42 @@ type Remote struct {
 	projectID      string
 	workspaceID    string
 	workspaceRoot  string
+	sessionID      *string
 	expectedRootID atomic.Value // string; empty disables root validation
 	noAuthAck      atomic.Bool
 	closed         atomic.Bool
 }
 
 func DialRemoteURL(ctx context.Context, rpcURL string) (*Remote, error) {
-	return dialRemoteURL(ctx, rpcURL, "", "", "")
+	return dialRemoteURL(ctx, rpcURL, "", "", "", nil)
 }
 
 func DialRemoteURLForProject(ctx context.Context, rpcURL string, projectID string) (*Remote, error) {
-	return dialRemoteURL(ctx, rpcURL, projectID, "", "")
+	return dialRemoteURL(ctx, rpcURL, projectID, "", "", nil)
 }
 
 func DialRemoteURLForProjectWorkspace(ctx context.Context, rpcURL string, projectID string, workspaceRoot string) (*Remote, error) {
-	return dialRemoteURL(ctx, rpcURL, projectID, "", workspaceRoot)
+	return dialRemoteURL(ctx, rpcURL, projectID, "", workspaceRoot, nil)
+}
+
+func DialRemoteURLForSession(ctx context.Context, rpcURL string, sessionID string) (*Remote, error) {
+	return dialRemoteURL(ctx, rpcURL, "", "", "", &sessionID)
 }
 
 func DialConfiguredRemote(ctx context.Context, cfg config.App) (*Remote, error) {
-	return dialConfiguredRemote(ctx, cfg, "", "", "")
+	return dialConfiguredRemote(ctx, cfg, "", "", "", nil)
 }
 
 func DialConfiguredRemoteForProjectWorkspace(ctx context.Context, cfg config.App, projectID string, workspaceRoot string) (*Remote, error) {
-	return dialConfiguredRemote(ctx, cfg, projectID, "", workspaceRoot)
+	return dialConfiguredRemote(ctx, cfg, projectID, "", workspaceRoot, nil)
 }
 
 func DialConfiguredRemoteForProjectWorkspaceID(ctx context.Context, cfg config.App, projectID string, workspaceID string) (*Remote, error) {
-	return dialConfiguredRemote(ctx, cfg, projectID, workspaceID, "")
+	return dialConfiguredRemote(ctx, cfg, projectID, workspaceID, "", nil)
+}
+
+func DialConfiguredRemoteForSession(ctx context.Context, cfg config.App, sessionID string) (*Remote, error) {
+	return dialConfiguredRemote(ctx, cfg, "", "", "", &sessionID)
 }
 
 func (c *Remote) Close() error {
@@ -775,27 +784,27 @@ func (c *Remote) openControlRPCConn(ctx context.Context) (rpcwire.Conn, protocol
 		cleanup()
 		return nil, protocol.ServerIdentity{}, err
 	}
-	if err := attachProjectRPC(ctx, conn, c.projectID, c.workspaceID, c.workspaceRoot); err != nil {
+	if err := attachRemoteRPC(ctx, conn, c.projectID, c.workspaceID, c.workspaceRoot, c.sessionID); err != nil {
 		cleanup()
 		return nil, protocol.ServerIdentity{}, err
 	}
 	return conn, identity, nil
 }
 
-func dialRemoteURL(ctx context.Context, rpcURL string, projectID string, workspaceID string, workspaceRoot string) (*Remote, error) {
+func dialRemoteURL(ctx context.Context, rpcURL string, projectID string, workspaceID string, workspaceRoot string, sessionID *string) (*Remote, error) {
 	endpoint, err := rpcwire.ParseWebSocketEndpoint(strings.TrimSpace(rpcURL))
 	if err != nil {
 		return nil, err
 	}
-	return dialRemoteWithTransport(ctx, remoteDialPlan{endpoints: []rpcwire.Endpoint{endpoint}}, rpcwire.NewWebSocketTransport(), projectID, workspaceID, workspaceRoot)
+	return dialRemoteWithTransport(ctx, remoteDialPlan{endpoints: []rpcwire.Endpoint{endpoint}}, rpcwire.NewWebSocketTransport(), projectID, workspaceID, workspaceRoot, sessionID)
 }
 
-func dialConfiguredRemote(ctx context.Context, cfg config.App, projectID string, workspaceID string, workspaceRoot string) (*Remote, error) {
+func dialConfiguredRemote(ctx context.Context, cfg config.App, projectID string, workspaceID string, workspaceRoot string, sessionID *string) (*Remote, error) {
 	plan, err := configuredRemoteDialPlan(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return dialRemoteWithTransport(ctx, plan, rpcwire.NewWebSocketTransport(), projectID, workspaceID, workspaceRoot)
+	return dialRemoteWithTransport(ctx, plan, rpcwire.NewWebSocketTransport(), projectID, workspaceID, workspaceRoot, sessionID)
 }
 
 var _ ProjectViewClient = (*Remote)(nil)

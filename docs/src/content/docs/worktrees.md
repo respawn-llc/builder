@@ -40,6 +40,8 @@ The main workspace worktree cannot be deleted. Deletion blocks while another tar
 
 Dirty or indeterminate worktrees require `--force`, which authorizes `git worktree remove --force` for the folder only. Agent-shell deletion always retains branches. Human CLI deletion can pass `--delete-branch` for safe `git branch -d` cleanup.
 
+If Git retains the branch, deletion succeeds and the CLI prints `Kept branch <name>: <diagnostic>`.
+
 ## Configuration
 
 Since worktrees are raw git checkouts, you can set a custom worktree creation script that prepares newly created checkouts with local data such as `.env`, encryption credentials, Gradle wrappers, installed dependencies, local skills, docs, or config.

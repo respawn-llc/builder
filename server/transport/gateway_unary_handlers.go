@@ -141,10 +141,21 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			if err := params.Validate(); err != nil {
 				return protocol.AttachResponse{}, err
 			}
-			state.attachedWorkspaceID = ""
-			state.attachedWorkspaceRoot = ""
+			binding, err := g.resolveSessionAttachment(ctx, state, params.SessionID)
+			if err != nil {
+				return protocol.AttachResponse{}, err
+			}
+			state.attachedProject = binding.ProjectID
+			state.attachedWorkspaceID = binding.WorkspaceID
+			state.attachedWorkspaceRoot = binding.CanonicalRoot
 			state.attachedSession = params.SessionID
-			return protocol.AttachResponse{Kind: "session", SessionID: params.SessionID}, nil
+			return protocol.AttachResponse{
+				Kind:          "session",
+				ProjectID:     binding.ProjectID,
+				WorkspaceID:   binding.WorkspaceID,
+				WorkspaceRoot: binding.CanonicalRoot,
+				SessionID:     params.SessionID,
+			}, nil
 		})
 	},
 	protocol.MethodProjectList:                   gatewayClientCall[client.ProjectViewClient, serverapi.ProjectListRequest, serverapi.ProjectListResponse](GatewayDependencies.ProjectViewClient, client.ProjectViewClient.ListProjects),

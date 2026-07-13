@@ -17,6 +17,8 @@ import (
 // Callers match it via errors.Is; the create_branch context is added with %w.
 var ErrBaseRefRequired = errors.New("base ref is required")
 
+var errGitTargetNotFound = errors.New("git target not found")
+
 // InvalidCreateTargetError reports that a requested create target is neither a
 // valid branch name nor a resolvable ref. It exposes the offending target so
 // callers can inspect it via errors.As instead of parsing message wording.
@@ -149,6 +151,12 @@ func (i *GitInspector) InspectTarget(ctx context.Context, worktreeRoot string) (
 	canonicalRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
 	if err != nil {
 		return GitTargetInspection{}, err
+	}
+	if _, err := os.Stat(filepath.Join(canonicalRoot, ".git")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return GitTargetInspection{}, fmt.Errorf("%w: %q", errGitTargetNotFound, canonicalRoot)
+		}
+		return GitTargetInspection{}, fmt.Errorf("inspect git target marker %q: %w", canonicalRoot, err)
 	}
 	topLevelOutput, err := i.runner.Output(ctx, canonicalRoot, "rev-parse", "--show-toplevel")
 	if err != nil {

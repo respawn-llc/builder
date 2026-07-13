@@ -547,6 +547,64 @@ func TestDialRemoteURLForProjectAttachesProjectAndReturnsRemote(t *testing.T) {
 	}
 }
 
+func TestDialRemoteURLForSessionAttachesSessionBeforeUnaryCalls(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive attach session: %v", err)
+		}
+		if req.Method != protocol.MethodAttachSession {
+			t.Fatalf("expected attach-session during dial, got %q", req.Method)
+		}
+		var attach protocol.AttachSessionRequest
+		if err := json.Unmarshal(req.Params, &attach); err != nil {
+			t.Fatalf("decode attach-session: %v", err)
+		}
+		if attach.SessionID != "session-1" {
+			t.Fatalf("attach session id = %q, want session-1", attach.SessionID)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{
+			Kind:      "session",
+			SessionID: attach.SessionID,
+		})); err != nil {
+			t.Fatalf("send attach response: %v", err)
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive worktree status: %v", err)
+		}
+		if req.Method != protocol.MethodWorktreeStatus {
+			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeStatus)
+		}
+		var statusRequest serverapi.WorktreeStatusRequest
+		if err := json.Unmarshal(req.Params, &statusRequest); err != nil {
+			t.Fatalf("decode worktree status: %v", err)
+		}
+		if statusRequest.SessionID != attach.SessionID {
+			t.Fatalf("status session id = %q, want %q", statusRequest.SessionID, attach.SessionID)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{})); err != nil {
+			t.Fatalf("send worktree status response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURLForSession(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		"session-1",
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	if _, err := remote.GetWorktreeStatus(
+		context.Background(),
+		serverapi.WorktreeStatusRequest{SessionID: "session-1"},
+	); err != nil {
+		t.Fatalf("GetWorktreeStatus: %v", err)
+	}
+}
+
 func TestDialRemoteURLForProjectValidatesAttachProject(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		var req protocol.Request

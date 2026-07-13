@@ -25,9 +25,9 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeS
 			err,
 		)
 	}
-	root := strings.TrimSpace(target.EffectiveWorkdir)
-	if root == "" {
-		root = strings.TrimSpace(target.WorkspaceRoot)
+	root := strings.TrimSpace(target.WorkspaceRoot)
+	if target.Worktree != nil {
+		root = strings.TrimSpace(target.Worktree.Root)
 	}
 	status := serverapi.WorktreeStatusTarget{RecordedRoot: root}
 	if target.Worktree != nil {
@@ -51,12 +51,23 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeS
 		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: kind, Root: &problemRoot})
 		return response, nil
 	}
-	observed, observedErr := s.git.InspectTarget(ctx, root)
-	workspace, workspaceErr := s.git.InspectTarget(ctx, target.WorkspaceRoot)
-	if observedErr != nil || workspaceErr != nil {
+	observed, err := s.git.InspectTarget(ctx, root)
+	if errors.Is(err, errGitTargetNotFound) {
 		problemRoot := root
 		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemGitBindingMissing, Root: &problemRoot})
 		return response, nil
+	}
+	if err != nil {
+		return response, fmt.Errorf("inspect recorded worktree root %q: %w", root, err)
+	}
+	workspace, err := s.git.InspectTarget(ctx, target.WorkspaceRoot)
+	if errors.Is(err, errGitTargetNotFound) {
+		problemRoot := root
+		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemGitBindingMissing, Root: &problemRoot})
+		return response, nil
+	}
+	if err != nil {
+		return response, fmt.Errorf("inspect workspace root %q: %w", target.WorkspaceRoot, err)
 	}
 	observedRoot := observed.Root
 	response.Worktree.ObservedRoot = &observedRoot
@@ -66,7 +77,15 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeS
 	}
 	if response.Worktree.RecordedBranchRef != nil {
 		exists, err := s.git.RefExists(ctx, root, *response.Worktree.RecordedBranchRef)
-		if err != nil || !exists {
+		if err != nil {
+			return response, fmt.Errorf(
+				"inspect recorded worktree ref %q at %q: %w",
+				*response.Worktree.RecordedBranchRef,
+				root,
+				err,
+			)
+		}
+		if !exists {
 			problemRef := *response.Worktree.RecordedBranchRef
 			response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemRecordedRefMissing, Ref: &problemRef})
 		}

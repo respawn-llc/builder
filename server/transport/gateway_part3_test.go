@@ -1,10 +1,13 @@
 package transport
 
 import (
+	"context"
+	"core/internal/testharness/worktreesetup"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
 	"core/server/metadata"
 	"core/server/session"
+	remoteclient "core/shared/client"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"encoding/json"
@@ -14,6 +17,50 @@ import (
 	"path/filepath"
 	"testing"
 )
+
+func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
+	appCore, server := newUnboundGatewayTestServer(t)
+	worktreesetup.InitializeGitRepository(t, appCore.Config().WorkspaceRoot)
+	binding, err := appCore.MetadataStore().RegisterWorkspaceBinding(
+		context.Background(),
+		appCore.Config().WorkspaceRoot,
+	)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	store, err := session.Create(
+		filepath.Join(appCore.Config().PersistenceRoot, "projects", binding.ProjectID, "sessions"),
+		filepath.Base(appCore.Config().WorkspaceRoot),
+		appCore.Config().WorkspaceRoot,
+		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+
+	remote, err := remoteclient.DialRemoteURLForSession(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		store.Meta().SessionID,
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	status, err := remote.GetWorktreeStatus(
+		context.Background(),
+		serverapi.WorktreeStatusRequest{SessionID: store.Meta().SessionID},
+	)
+	if err != nil {
+		t.Fatalf("GetWorktreeStatus: %v", err)
+	}
+	if status.Target.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("target workspace id = %q, want %q", status.Target.WorkspaceID, binding.WorkspaceID)
+	}
+}
 
 func newGatewayTestServer(t *testing.T) (*core.Core, *httptest.Server) {
 	t.Helper()

@@ -4,38 +4,93 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"core/shared/client"
+	"core/internal/testharness/worktreesetup"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
-func TestOpenWorktreeCommandRemoteAttachesCurrentProjectWorkspace(t *testing.T) {
+func TestWorktreeStatusUsesShellSessionFromNestedWorkspaceDirectory(t *testing.T) {
 	workspace := t.TempDir()
-	binding := registerBindingCommandWorkspace(t, workspace)
+	worktreesetup.InitializeGitRepository(t, workspace)
+	configureWorktreeCommandWorkspaceServer(t, workspace)
+	_, binding, sess := newBindingCommandSession(t, workspace)
+	if err := sess.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
 	cleanup := startBindingCommandServer(t, workspace)
 	defer cleanup()
-	t.Chdir(workspace)
+	disableWorktreeCommandLocalSocket(t, workspace)
+	nested := filepath.Join(workspace, "pkg")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatalf("Mkdir nested cwd: %v", err)
+	}
+	t.Chdir(nested)
+	t.Setenv("KENT_SESSION_ID", sess.Meta().SessionID)
 
-	remoteClient, err := openWorktreeCommandRemote(context.Background())
+	var stdout, stderr bytes.Buffer
+	if exitCode := rootCommand(
+		[]string{"worktree", "status", "--json"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	); exitCode != 0 {
+		t.Fatalf("worktree status exit=%d stderr=%s", exitCode, stderr.String())
+	}
+	var status serverapi.WorktreeStatusResponse
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
+	if status.Target.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("target workspace id = %q, want %q", status.Target.WorkspaceID, binding.WorkspaceID)
+	}
+	if status.Worktree.RecordedRoot != binding.CanonicalRoot {
+		t.Fatalf("recorded root = %q, want %q", status.Worktree.RecordedRoot, binding.CanonicalRoot)
+	}
+}
+
+func disableWorktreeCommandLocalSocket(t *testing.T, workspace string) {
+	t.Helper()
+	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
-		t.Fatalf("openWorktreeCommandRemote: %v", err)
+		t.Fatalf("config.Load workspace: %v", err)
 	}
-	defer func() { _ = remoteClient.Close() }()
-	remote, ok := remoteClient.(*client.Remote)
+	socketPath, ok, err := config.ServerLocalRPCSocketPath(cfg)
+	if err != nil {
+		t.Fatalf("ServerLocalRPCSocketPath: %v", err)
+	}
 	if !ok {
-		t.Fatalf("remote type = %T, want *client.Remote", remoteClient)
+		return
 	}
-	if remote.ProjectID() != binding.ProjectID || remote.WorkspaceID() != binding.WorkspaceID {
-		t.Fatalf(
-			"attachment = project %q workspace %q, want %q %q",
-			remote.ProjectID(),
-			remote.WorkspaceID(),
-			binding.ProjectID,
-			binding.WorkspaceID,
-		)
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove local RPC socket: %v", err)
+	}
+}
+
+func configureWorktreeCommandWorkspaceServer(t *testing.T, workspace string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	reserveBindingCommandTestPort(t, listener)
+	configDir := filepath.Join(workspace, config.ConfigDirName)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("Mkdir workspace config: %v", err)
+	}
+	settings := fmt.Sprintf(
+		"server_host = \"127.0.0.1\"\nserver_port = %d\n",
+		listener.Addr().(*net.TCPAddr).Port,
+	)
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(settings), 0o644); err != nil {
+		t.Fatalf("write workspace config: %v", err)
 	}
 }
 
@@ -98,7 +153,9 @@ func (*worktreeCommandTestRemote) Close() error { return nil }
 func replaceWorktreeCommandRemote(t *testing.T, remote *worktreeCommandTestRemote) {
 	t.Helper()
 	previous := worktreeCommandRemoteOpener
-	worktreeCommandRemoteOpener = func(context.Context) (worktreeCommandRemote, error) { return remote, nil }
+	worktreeCommandRemoteOpener = func(context.Context, string) (worktreeCommandRemote, error) {
+		return remote, nil
+	}
 	t.Cleanup(func() { worktreeCommandRemoteOpener = previous })
 }
 
@@ -228,5 +285,37 @@ func TestAgentWorktreeDeleteRetainsBranchAndRejectsDeleteBranch(t *testing.T) {
 	stderr.Reset()
 	if exitCode := rootCommand([]string{"worktree", "delete", "--delete-branch", "feature/a"}, strings.NewReader(""), &stdout, &stderr); exitCode != 2 {
 		t.Fatalf("delete-branch exit=%d stderr=%s", exitCode, stderr.String())
+	}
+}
+
+func TestHumanWorktreeDeleteReportsRetainedBranchCleanup(t *testing.T) {
+	branchName := "feature/a"
+	diagnostic := "branch is not fully merged"
+	remote := &worktreeCommandTestRemote{
+		deleteResult: serverapi.WorktreeDeleteResult{
+			Kind: serverapi.WorktreeDeleteResultKindCompleted,
+			Completed: &serverapi.WorktreeDeleteCompletedResult{
+				Cleanup: serverapi.WorktreeBranchCleanupOutcome{
+					Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+					BranchName: &branchName,
+					Diagnostic: &diagnostic,
+				},
+			},
+		},
+	}
+	replaceWorktreeCommandRemote(t, remote)
+	t.Setenv("KENT_SESSION_ID", "")
+	var stdout, stderr bytes.Buffer
+	exitCode := rootCommand(
+		[]string{"worktree", "delete", "--session", "human-session", "--delete-branch", "feature/a"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("delete exit=%d stderr=%s", exitCode, stderr.String())
+	}
+	if got, want := stdout.String(), "Deleted worktree\nKept branch feature/a: branch is not fully merged\n"; got != want {
+		t.Fatalf("delete output = %q, want %q", got, want)
 	}
 }
