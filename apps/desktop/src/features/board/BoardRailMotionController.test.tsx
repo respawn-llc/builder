@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import type { BoardCard, BoardColumn, SelectedWorkflowBoard, WorkflowPickerItem } from "../../api";
 import { appI18n, initializeI18n } from "../../i18n/setup";
-import { TestDataTransfer } from "../../test-support/board/TestDataTransfer";
+import { TestDataTransfer } from "../../testSupport/boardDrag";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import type { KanbanCardVM } from "./BoardColumnViewModel";
 import type { BoardCardDragPayload } from "./BoardDragTypes";
