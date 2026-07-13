@@ -22,7 +22,7 @@ func TestClientStreamsDeltasFinalResponseAndReasoning(t *testing.T) {
 
 	var assistant []llm.AssistantDelta
 	var reasoning []llm.ReasoningSummaryDelta
-	resp, err := client.GenerateStreamWithEvents(context.Background(), llm.Request{Model: "m"}, llm.StreamCallbacks{
+	resp, err := client.GenerateStreamWithEvents(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}, llm.StreamCallbacks{
 		OnAssistantDelta:        func(delta llm.AssistantDelta) { assistant = append(assistant, delta) },
 		OnReasoningSummaryDelta: func(delta llm.ReasoningSummaryDelta) { reasoning = append(reasoning, delta) },
 	})
@@ -45,7 +45,7 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 	client := scriptedllm.NewClient(scriptedllm.Script{
 		Steps: []scriptedllm.Step{scriptedllm.ToolBatch("tools", llm.ToolCall{ID: "call_1", Name: "exec_command", Input: input})},
 	})
-	resp, err := client.Generate(context.Background(), llm.Request{Model: "m"})
+	resp, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"})
 	if err != nil {
 		t.Fatalf("Generate tool call: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 			Response:            scriptedllm.FinalAnswer("done").Response,
 		}},
 	})
-	if _, err := validator.Generate(context.Background(), llm.Request{Model: "m"}); !errors.Is(err, scriptedllm.ErrUnexpectedToolResult) {
+	if _, err := validator.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, scriptedllm.ErrUnexpectedToolResult) {
 		t.Fatalf("missing tool result error = %v, want ErrUnexpectedToolResult", err)
 	}
 	successValidator := scriptedllm.NewClient(scriptedllm.Script{
@@ -68,7 +68,7 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 			Response:            scriptedllm.FinalAnswer("done").Response,
 		}},
 	})
-	_, err = successValidator.Generate(context.Background(), llm.Request{
+	_, err = successValidator.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model: "m",
 		Items: []llm.ResponseItem{{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: "call_1", Name: "exec_command"}},
 	})
@@ -96,7 +96,7 @@ func TestClientCompactionCapabilitiesTokensAndContextWindow(t *testing.T) {
 	if err != nil || caps.ProviderID != "scripted" {
 		t.Fatalf("ProviderCapabilities = %+v, %v", caps, err)
 	}
-	count, err := client.CountRequestInputTokens(context.Background(), llm.Request{Model: "m"})
+	count, err := client.CountRequestInputTokens(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"})
 	if err != nil || count != tokens {
 		t.Fatalf("CountRequestInputTokens = %d, %v", count, err)
 	}
@@ -144,10 +144,10 @@ func TestClientExhaustedCancellationAndConcurrentCallErrors(t *testing.T) {
 	client := scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{scriptedllm.Cancellation()}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := client.Generate(ctx, llm.Request{Model: "m"}); !errors.Is(err, ctx.Err()) {
+	if _, err := client.Generate(ctx, llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, ctx.Err()) {
 		t.Fatalf("cancellation error = %v, want %v", err, ctx.Err())
 	}
-	if _, err := client.Generate(context.Background(), llm.Request{Model: "m"}); !errors.Is(err, scriptedllm.ErrScriptExhausted) {
+	if _, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, scriptedllm.ErrScriptExhausted) {
 		t.Fatalf("exhausted error = %v, want ErrScriptExhausted", err)
 	}
 
@@ -160,12 +160,12 @@ func TestClientExhaustedCancellationAndConcurrentCallErrors(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, _ = concurrent.Generate(context.Background(), llm.Request{Model: "m"})
+		_, _ = concurrent.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"})
 	}()
 	if err := concurrent.WaitUntilActive(context.Background()); err != nil {
 		t.Fatalf("WaitUntilActive: %v", err)
 	}
-	if _, err := concurrent.Generate(context.Background(), llm.Request{Model: "m"}); !errors.Is(err, scriptedllm.ErrConcurrentCall) {
+	if _, err := concurrent.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, scriptedllm.ErrConcurrentCall) {
 		t.Fatalf("concurrent call error = %v, want ErrConcurrentCall", err)
 	}
 	close(block)

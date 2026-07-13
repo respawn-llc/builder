@@ -987,6 +987,10 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 				onAttemptReset()
 			}
 		}
+		if !providerFailureRetriesAllowed(req) {
+			resetAttempt()
+			return llm.Response{}, attemptErr
+		}
 		if llm.IsNonRetriableModelError(attemptErr) || llm.IsContextLengthOverflowError(attemptErr) {
 			if !llm.HasHTTPStatus(attemptErr, 400) {
 				resetAttempt()
@@ -1007,6 +1011,10 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 		}
 	}
 	return llm.Response{}, fmt.Errorf("model generation failed after retries: %w", lastErr)
+}
+
+func providerFailureRetriesAllowed(req llm.Request) bool {
+	return req.ToolChoiceMode == llm.ToolChoiceModeAutomatic
 }
 
 func (e *Engine) executeToolCalls(ctx context.Context, stepID string, calls []llm.ToolCall) ([]tools.Result, error) {

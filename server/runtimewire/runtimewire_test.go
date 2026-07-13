@@ -803,7 +803,7 @@ func TestReviewerAuthNoneDoesNotSendGlobalAuthToLocalEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new reviewer provider client: %v", err)
 	}
-	if _, err := client.Generate(context.Background(), llm.Request{
+	if _, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model:        "local-reviewer",
 		Temperature:  1,
 		SystemPrompt: "review",
@@ -1076,7 +1076,7 @@ func (f *runtimewireCaptureClient) LastRequest() llm.Request {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.calls) == 0 {
-		return llm.Request{}
+		return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic}
 	}
 	return f.calls[len(f.calls)-1]
 }

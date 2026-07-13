@@ -61,6 +61,55 @@ func TestWorkflowCacheFriendlyCompletionModesKeepRequestMetadataStableAcrossCont
 	}
 }
 
+func TestPromptCacheLineageExcludesToolChoiceMode(t *testing.T) {
+	automatic := llm.Request{
+		Model:                 "gpt-5",
+		SystemPrompt:          "system",
+		PromptCacheKey:        "session-1",
+		PromptCacheScope:      transcript.CacheWarningScopeConversation,
+		ToolChoiceMode:        llm.ToolChoiceModeAutomatic,
+		EnableNativeWebSearch: true,
+		Tools:                 []llm.Tool{{Name: "shell"}, {Name: "patch"}},
+		Items:                 []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"}},
+	}
+	required := automatic
+	required.ToolChoiceMode = llm.ToolChoiceModeRequired
+
+	automaticChunks, err := promptCacheChunks(automatic)
+	if err != nil {
+		t.Fatalf("automatic promptCacheChunks: %v", err)
+	}
+	requiredChunks, err := promptCacheChunks(required)
+	if err != nil {
+		t.Fatalf("required promptCacheChunks: %v", err)
+	}
+	if len(automaticChunks) != len(requiredChunks) {
+		t.Fatalf("chunk counts = automatic:%d required:%d", len(automaticChunks), len(requiredChunks))
+	}
+	for i := range automaticChunks {
+		if !bytes.Equal(automaticChunks[i], requiredChunks[i]) {
+			t.Fatalf("chunk %d changed across tool-choice modes\nautomatic=%s\nrequired=%s", i, automaticChunks[i], requiredChunks[i])
+		}
+	}
+	automaticSummary, err := summarizePromptCacheRequest(automatic)
+	if err != nil {
+		t.Fatalf("automatic summarizePromptCacheRequest: %v", err)
+	}
+	requiredSummary, err := summarizePromptCacheRequest(required)
+	if err != nil {
+		t.Fatalf("required summarizePromptCacheRequest: %v", err)
+	}
+	if automaticSummary.chunkCount != requiredSummary.chunkCount || automaticSummary.terminalHash != requiredSummary.terminalHash {
+		t.Fatalf("cache summaries differ: automatic=%+v required=%+v", automaticSummary, requiredSummary)
+	}
+	if automatic.PromptCacheKey != required.PromptCacheKey {
+		t.Fatalf("prompt cache keys differ: automatic=%q required=%q", automatic.PromptCacheKey, required.PromptCacheKey)
+	}
+	if len(automatic.Tools) != len(required.Tools) || automatic.EnableNativeWebSearch != required.EnableNativeWebSearch {
+		t.Fatalf("effective tool declarations changed: automatic=%+v required=%+v", automatic, required)
+	}
+}
+
 func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 	tests := []struct {
 		name string

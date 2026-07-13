@@ -120,7 +120,7 @@ func TestWorkflowProviderClientPreservesLockedVerbosityAcrossConfigChanges(t *te
 			if err != nil {
 				t.Fatalf("newWorkflowProviderClient: %v", err)
 			}
-			request := llm.Request{
+			request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 				Model: "operator-alias",
 				Items: []llm.ResponseItem{
 					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"},

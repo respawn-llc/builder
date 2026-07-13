@@ -142,7 +142,7 @@ func TestResumedInspectionWirePayloadUsesLockedVerbosityAcrossConfigChanges(t *t
 		t.Fatalf("resolve inspection provider capabilities: %v", err)
 	}
 	wire, err := llm.MarshalOpenAIWirePayload(
-		llm.OpenAIRequest{Model: "operator-alias"},
+		llm.OpenAIRequest{Model: "operator-alias", ToolChoiceMode: llm.ToolChoiceModeAutomatic},
 		false,
 		"high",
 		llm.OpenAIAuthMode{},

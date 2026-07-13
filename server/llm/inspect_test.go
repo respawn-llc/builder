@@ -13,7 +13,7 @@ import (
 // request body (via ResponseNewParams.MarshalJSON, the same Marshaler the
 // openai-go requestconfig layer invokes).
 func TestMarshalOpenAIWirePayloadMatchesTransportPath(t *testing.T) {
-	req := OpenAIRequest{
+	req := OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:                   "gpt-5.5",
 		Temperature:             1,
 		SystemPrompt:            "you are helpful",
@@ -48,5 +48,25 @@ func TestMarshalOpenAIWirePayloadMatchesTransportPath(t *testing.T) {
 	var round responses.ResponseNewParams
 	if err := json.Unmarshal(internal, &round); err != nil {
 		t.Fatalf("round-trip unmarshal: %v", err)
+	}
+}
+
+func TestMarshalOpenAIWirePayloadSerializesRequiredToolChoice(t *testing.T) {
+	req := OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeRequired,
+		Tools:          []Tool{{Name: "shell"}},
+	}
+	caps, _ := LookupProviderCapabilityContract("openai")
+	payload, err := MarshalOpenAIWirePayload(req, false, "", OpenAIAuthMode{}, caps)
+	if err != nil {
+		t.Fatalf("MarshalOpenAIWirePayload: %v", err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(payload, &object); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if object["tool_choice"] != "required" {
+		t.Fatalf("tool_choice = %#v, want required", object["tool_choice"])
 	}
 }

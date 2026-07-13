@@ -22,6 +22,11 @@ type openAIRequestPayloadBuilder struct {
 	capabilities   ProviderCapabilities
 }
 
+type openAIPayloadToolControls struct {
+	tools  []responses.ToolUnionParam
+	choice responses.ToolChoiceOptions
+}
+
 func newOpenAIRequestPayloadBuilder(store bool, modelVerbosity string, capabilities ProviderCapabilities) openAIRequestPayloadBuilder {
 	return openAIRequestPayloadBuilder{store: store, modelVerbosity: strings.ToLower(strings.TrimSpace(modelVerbosity)), capabilities: capabilities}
 }
@@ -41,12 +46,18 @@ func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode O
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
-	tools, err := b.buildTools(request.Tools, request.EnableNativeWebSearch)
+	toolControls, err := b.prepareToolControls(request)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
 
-	out := responses.ResponseNewParams{Model: request.Model, Store: openai.Bool(b.store)}
+	out := responses.ResponseNewParams{
+		Model: request.Model,
+		Store: openai.Bool(b.store),
+		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(toolControls.choice),
+		},
+	}
 	if cacheKey := strings.TrimSpace(request.PromptCacheKey); cacheKey != "" && SupportsPromptCacheKeyProvider(b.capabilities) {
 		out.PromptCacheKey = openai.String(cacheKey)
 	}
@@ -56,8 +67,8 @@ func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode O
 	if instructions := strings.TrimSpace(request.SystemPrompt); instructions != "" {
 		out.Instructions = openai.String(instructions)
 	}
-	if len(tools) > 0 {
-		out.Tools = tools
+	if len(toolControls.tools) > 0 {
+		out.Tools = toolControls.tools
 		out.ParallelToolCalls = openai.Bool(true)
 	}
 	if shouldApplyReasoningEffort(request.SupportsReasoningEffort, request.Model, request.ReasoningEffort) {
@@ -88,20 +99,25 @@ func (b openAIRequestPayloadBuilder) BuildInputTokenCount(request OpenAIRequest)
 	if err != nil {
 		return responses.InputTokenCountParams{}, err
 	}
-	tools, err := b.buildTools(request.Tools, request.EnableNativeWebSearch)
+	toolControls, err := b.prepareToolControls(request)
 	if err != nil {
 		return responses.InputTokenCountParams{}, err
 	}
 
-	out := responses.InputTokenCountParams{Model: param.NewOpt(strings.TrimSpace(request.Model))}
+	out := responses.InputTokenCountParams{
+		Model: param.NewOpt(strings.TrimSpace(request.Model)),
+		ToolChoice: responses.InputTokenCountParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(toolControls.choice),
+		},
+	}
 	if len(input) > 0 {
 		out.Input = responses.InputTokenCountParamsInputUnion{OfResponseInputItemArray: input}
 	}
 	if instructions := strings.TrimSpace(request.SystemPrompt); instructions != "" {
 		out.Instructions = param.NewOpt(instructions)
 	}
-	if len(tools) > 0 {
-		out.Tools = tools
+	if len(toolControls.tools) > 0 {
+		out.Tools = toolControls.tools
 		out.ParallelToolCalls = param.NewOpt(true)
 	}
 	if shouldApplyReasoningEffort(request.SupportsReasoningEffort, request.Model, request.ReasoningEffort) {
@@ -115,6 +131,35 @@ func (b openAIRequestPayloadBuilder) BuildInputTokenCount(request OpenAIRequest)
 		out.Text = textConfig
 	}
 	return out, nil
+}
+
+func (b openAIRequestPayloadBuilder) prepareToolControls(request OpenAIRequest) (openAIPayloadToolControls, error) {
+	if err := ValidateToolChoiceSupport(b.capabilities, request.ToolChoiceMode); err != nil {
+		return openAIPayloadToolControls{}, err
+	}
+	tools, err := b.buildTools(request.Tools, request.EnableNativeWebSearch)
+	if err != nil {
+		return openAIPayloadToolControls{}, err
+	}
+	if request.ToolChoiceMode == ToolChoiceModeRequired && len(tools) == 0 {
+		return openAIPayloadToolControls{}, fmt.Errorf("%w: required tool choice needs at least one materialized tool", ErrInvalidRequest)
+	}
+	choice, err := openAIToolChoice(request.ToolChoiceMode)
+	if err != nil {
+		return openAIPayloadToolControls{}, err
+	}
+	return openAIPayloadToolControls{tools: tools, choice: choice}, nil
+}
+
+func openAIToolChoice(mode ToolChoiceMode) (responses.ToolChoiceOptions, error) {
+	switch mode {
+	case ToolChoiceModeAutomatic:
+		return responses.ToolChoiceOptionsAuto, nil
+	case ToolChoiceModeRequired:
+		return responses.ToolChoiceOptionsRequired, nil
+	default:
+		return "", fmt.Errorf("%w: unknown tool choice mode %q", ErrInvalidRequest, mode)
+	}
 }
 
 func (openAIRequestPayloadBuilder) BuildCompact(request OpenAICompactionRequest) (responses.ResponseCompactParams, error) {

@@ -10,6 +10,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -124,6 +125,45 @@ func TestMissingToolOutputRepairLeavesUnrelated400Unrepaired(t *testing.T) {
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("model calls = %d, want 1 (no repair retry)", len(client.calls))
+	}
+}
+
+func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T) {
+	store := mustCreateTestSession(t)
+	appendRepairEvent(t, store, "message", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec", Input: json.RawMessage(`{}`)}},
+	})
+	client := &fakeClient{
+		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}},
+		responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:      llm.RoleAssistant,
+				ToolCalls: []llm.ToolCall{{ID: "complete", Name: "complete_node", Input: json.RawMessage(`{"commentary":"repaired"}`)}},
+			},
+		}},
+	}
+	eng := mustNewWorkflowTestEngine(
+		t,
+		store,
+		client,
+		testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool),
+		Config{},
+	)
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); err != nil {
+		t.Fatalf("submit user message: %v", err)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(client.calls))
+	}
+	for i, call := range client.calls {
+		if call.ToolChoiceMode != llm.ToolChoiceModeRequired {
+			t.Fatalf("call %d tool choice = %q, want required", i, call.ToolChoiceMode)
+		}
+	}
+	if !repairItemsContainOutput(client.calls[1].Items, "missing") {
+		t.Fatalf("repaired request is missing the synthetic output: %+v", client.calls[1].Items)
 	}
 }
 

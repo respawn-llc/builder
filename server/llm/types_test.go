@@ -2,10 +2,54 @@ package llm
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"core/server/session"
 )
+
+func TestRequestValidateRejectsMissingToolChoiceMode(t *testing.T) {
+	err := (Request{Model: "gpt-5"}).Validate()
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Validate() error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestRequestValidateRejectsUnknownToolChoiceMode(t *testing.T) {
+	err := (Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceMode("sometimes")}).Validate()
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Validate() error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestRequestValidateAcceptsRequiredToolChoiceWithLocalTool(t *testing.T) {
+	err := (Request{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeRequired,
+		Tools:          []Tool{{Name: "shell"}},
+	}).Validate()
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestRequestValidateAcceptsRequiredToolChoiceWithHostedWebSearchOnly(t *testing.T) {
+	err := (Request{
+		Model:                 "gpt-5",
+		ToolChoiceMode:        ToolChoiceModeRequired,
+		EnableNativeWebSearch: true,
+	}).Validate()
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestRequestValidateRejectsRequiredToolChoiceWithoutAdvertisedTools(t *testing.T) {
+	err := (Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeRequired}).Validate()
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Validate() error = %v, want ErrInvalidRequest", err)
+	}
+}
 
 func TestRequestFromLockedContract_UsesBinaryPromptAndExplicitTools(t *testing.T) {
 	locked := session.LockedContract{
@@ -15,7 +59,7 @@ func TestRequestFromLockedContract_UsesBinaryPromptAndExplicitTools(t *testing.T
 	}
 	tool := Tool{Name: "shell", Schema: []byte(`{"type":"object"}`)}
 
-	req, err := RequestFromLockedContract(locked, "sys", []ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hi"}}, []Tool{tool})
+	req, err := RequestFromLockedContract(locked, "sys", []ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hi"}}, []Tool{tool}, ToolControls{ChoiceMode: ToolChoiceModeAutomatic})
 	if err != nil {
 		t.Fatalf("request from contract: %v", err)
 	}
@@ -28,6 +72,9 @@ func TestRequestFromLockedContract_UsesBinaryPromptAndExplicitTools(t *testing.T
 	if len(req.Tools) != 1 || req.Tools[0].Name != "shell" {
 		t.Fatalf("tools mismatch: %+v", req.Tools)
 	}
+	if req.ToolChoiceMode != ToolChoiceModeAutomatic {
+		t.Fatalf("tool choice mode = %q, want automatic", req.ToolChoiceMode)
+	}
 }
 
 func TestRequestFromLockedContract_RespectsExplicitToolDisable(t *testing.T) {
@@ -36,12 +83,26 @@ func TestRequestFromLockedContract_RespectsExplicitToolDisable(t *testing.T) {
 		Temperature:    1,
 		MaxOutputToken: 0,
 	}
-	req, err := RequestFromLockedContract(locked, "sys", []ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hi"}}, []Tool{})
+	req, err := RequestFromLockedContract(locked, "sys", []ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hi"}}, []Tool{}, ToolControls{ChoiceMode: ToolChoiceModeAutomatic})
 	if err != nil {
 		t.Fatalf("request from contract: %v", err)
 	}
 	if len(req.Tools) != 0 {
 		t.Fatalf("expected tools disabled, got %+v", req.Tools)
+	}
+}
+
+func TestRequestFromLockedContractValidatesHostedToolsAfterControlsAreApplied(t *testing.T) {
+	locked := session.LockedContract{Model: "gpt-5"}
+	req, err := RequestFromLockedContract(locked, "sys", nil, nil, ToolControls{
+		ChoiceMode:            ToolChoiceModeRequired,
+		EnableNativeWebSearch: true,
+	})
+	if err != nil {
+		t.Fatalf("request from contract: %v", err)
+	}
+	if !req.EnableNativeWebSearch || req.ToolChoiceMode != ToolChoiceModeRequired {
+		t.Fatalf("request controls = web_search:%t mode:%q", req.EnableNativeWebSearch, req.ToolChoiceMode)
 	}
 }
 

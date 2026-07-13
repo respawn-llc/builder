@@ -17,20 +17,20 @@ func TestScriptedClientRecordsRequestsAndSteps(t *testing.T) {
 		ScriptedRuntimeError(ErrScriptedRuntime),
 		ScriptedCancellation(),
 	)
-	if _, err := client.Generate(context.Background(), llm.Request{Model: "m"}); err != nil {
+	if _, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); err != nil {
 		t.Fatalf("Generate final: %v", err)
 	}
-	toolResp, err := client.Generate(context.Background(), llm.Request{Model: "m"})
+	toolResp, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"})
 	if err != nil {
 		t.Fatalf("Generate tools: %v", err)
 	}
 	if len(toolResp.ToolCalls) != 1 || toolResp.ToolCalls[0].Name != "exec_command" {
 		t.Fatalf("tool response = %+v", toolResp)
 	}
-	if _, err := client.Generate(context.Background(), llm.Request{Model: "m"}); !errors.Is(err, ErrScriptedRuntime) {
+	if _, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, ErrScriptedRuntime) {
 		t.Fatalf("runtime error = %v, want ErrScriptedRuntime", err)
 	}
-	if _, err := client.Generate(context.Background(), llm.Request{Model: "m"}); !errors.Is(err, context.Canceled) {
+	if _, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation error = %v, want context.Canceled", err)
 	}
 	if got := len(client.Requests()); got != 4 {
@@ -55,7 +55,7 @@ func TestScriptedClientCancellationReturnsContextErr(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := client.Generate(ctx, llm.Request{Model: "m"}); !errors.Is(err, ctx.Err()) {
+	if _, err := client.Generate(ctx, llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}); !errors.Is(err, ctx.Err()) {
 		t.Fatalf("Generate error = %v, want %v", err, ctx.Err())
 	}
 }

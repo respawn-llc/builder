@@ -74,7 +74,21 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	if err != nil {
 		return requestBuildPlan{}, err
 	}
-	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools)
+	nativeWebSearch := false
+	if allowTools {
+		nativeWebSearch, err = e.enableNativeWebSearch(ctx)
+		if err != nil {
+			return requestBuildPlan{}, err
+		}
+	}
+	toolChoiceMode := llm.ToolChoiceModeAutomatic
+	if allowTools {
+		toolChoiceMode = toolChoiceModeForWorkflowCompletion(workflowMode)
+	}
+	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{
+		ChoiceMode:            toolChoiceMode,
+		EnableNativeWebSearch: nativeWebSearch,
+	})
 	if err != nil {
 		return requestBuildPlan{}, err
 	}
@@ -86,13 +100,6 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 			req.PromptCacheKey = cacheKey
 			req.PromptCacheScope = transcript.CacheWarningScopeConversation
 		}
-	}
-	if allowTools {
-		nativeWebSearch, nativeErr := e.enableNativeWebSearch(ctx)
-		if nativeErr != nil {
-			return requestBuildPlan{}, nativeErr
-		}
-		req.EnableNativeWebSearch = nativeWebSearch
 	}
 	if workflowMode != "" {
 		if workflowMode == workflowruntime.CompletionModeStructuredOutput {
@@ -106,7 +113,30 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 			return requestBuildPlan{}, err
 		}
 	}
+	if err := e.validateToolChoiceSupport(ctx, toolChoiceMode); err != nil {
+		return requestBuildPlan{}, err
+	}
 	return requestBuildPlan{Request: req}, nil
+}
+
+func toolChoiceModeForWorkflowCompletion(mode workflowruntime.CompletionMode) llm.ToolChoiceMode {
+	switch mode {
+	case workflowruntime.CompletionModeShellCommand, workflowruntime.CompletionModeTool:
+		return llm.ToolChoiceModeRequired
+	default:
+		return llm.ToolChoiceModeAutomatic
+	}
+}
+
+func (e *Engine) validateToolChoiceSupport(ctx context.Context, mode llm.ToolChoiceMode) error {
+	if mode != llm.ToolChoiceModeRequired {
+		return nil
+	}
+	capabilities, err := e.providerCapabilities(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve provider capabilities for required tool choice: %w", err)
+	}
+	return llm.ValidateToolChoiceSupport(capabilities, mode)
 }
 
 func (e *Engine) supportsPromptCacheKey(ctx context.Context) bool {

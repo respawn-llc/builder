@@ -28,7 +28,7 @@ func TestGenerateWithRetryPropagatesContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := eng.generateWithRetryClient(ctx, "step-1", eng.llm, llm.Request{Model: "gpt-5"}, nil, nil, nil)
+		_, err := eng.generateWithRetryClient(ctx, "step-1", eng.llm, llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "gpt-5"}, nil, nil, nil)
 		done <- err
 	}()
 

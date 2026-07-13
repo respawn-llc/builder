@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	ErrInvalidRequest   = errors.New("invalid llm request")
-	ErrMissingTransport = errors.New("openai transport is required")
+	ErrInvalidRequest              = errors.New("invalid llm request")
+	ErrMissingTransport            = errors.New("openai transport is required")
+	ErrUnsupportedToolChoicePolicy = errors.New("unsupported tool choice policy")
 )
 
 type Role string
@@ -416,6 +417,52 @@ type StructuredOutput struct {
 	Strict      bool            `json:"strict,omitempty"`
 }
 
+type ToolChoiceMode string
+
+const (
+	ToolChoiceModeAutomatic ToolChoiceMode = "automatic"
+	ToolChoiceModeRequired  ToolChoiceMode = "required"
+)
+
+type ToolControls struct {
+	ChoiceMode            ToolChoiceMode
+	EnableNativeWebSearch bool
+}
+
+type UnsupportedToolChoicePolicyError struct {
+	ProviderID string
+	Mode       ToolChoiceMode
+}
+
+func (e *UnsupportedToolChoicePolicyError) Error() string {
+	return fmt.Sprintf("provider %q cannot represent %q tool choice; select a Responses API provider", e.ProviderID, e.Mode)
+}
+
+func (e *UnsupportedToolChoicePolicyError) Unwrap() error {
+	return ErrUnsupportedToolChoicePolicy
+}
+
+func ValidateToolChoiceSupport(capabilities ProviderCapabilities, mode ToolChoiceMode) error {
+	switch mode {
+	case ToolChoiceModeAutomatic:
+		return nil
+	case ToolChoiceModeRequired:
+		if capabilities.SupportsResponsesAPI {
+			return nil
+		}
+		return &UnsupportedToolChoicePolicyError{
+			ProviderID: strings.TrimSpace(capabilities.ProviderID),
+			Mode:       mode,
+		}
+	default:
+		return fmt.Errorf("%w: unknown tool choice mode %q", ErrInvalidRequest, mode)
+	}
+}
+
+func HasEffectiveAdvertisedTools(tools []Tool, enableNativeWebSearch bool) bool {
+	return len(tools) > 0 || enableNativeWebSearch
+}
+
 type Request struct {
 	Model                   string                       `json:"model"`
 	Temperature             float64                      `json:"temperature"`
@@ -430,6 +477,7 @@ type Request struct {
 	SessionID               string                       `json:"session_id,omitempty"`
 	Items                   []ResponseItem               `json:"items,omitempty"`
 	Tools                   []Tool                       `json:"tools,omitempty"`
+	ToolChoiceMode          ToolChoiceMode               `json:"tool_choice_mode"`
 	StructuredOutput        *StructuredOutput            `json:"structured_output,omitempty"`
 }
 
@@ -439,6 +487,14 @@ func (r Request) Validate() error {
 	}
 	if r.MaxTokens < 0 {
 		return fmt.Errorf("%w: max_tokens must be >= 0", ErrInvalidRequest)
+	}
+	switch r.ToolChoiceMode {
+	case ToolChoiceModeAutomatic, ToolChoiceModeRequired:
+	default:
+		return fmt.Errorf("%w: unknown tool choice mode %q", ErrInvalidRequest, r.ToolChoiceMode)
+	}
+	if r.ToolChoiceMode == ToolChoiceModeRequired && !HasEffectiveAdvertisedTools(r.Tools, r.EnableNativeWebSearch) {
+		return fmt.Errorf("%w: required tool choice needs at least one advertised tool", ErrInvalidRequest)
 	}
 	for i := range r.Items {
 		if strings.TrimSpace(string(r.Items[i].Type)) == "" {
@@ -469,7 +525,7 @@ func (r Request) Validate() error {
 	return nil
 }
 
-func RequestFromLockedContract(locked session.LockedContract, systemPrompt string, items []ResponseItem, tools []Tool) (Request, error) {
+func RequestFromLockedContract(locked session.LockedContract, systemPrompt string, items []ResponseItem, tools []Tool, controls ToolControls) (Request, error) {
 	if locked.Model == "" {
 		return Request{}, fmt.Errorf("%w: locked model is required", ErrInvalidRequest)
 	}
@@ -482,13 +538,14 @@ func RequestFromLockedContract(locked session.LockedContract, systemPrompt strin
 		Temperature:             locked.Temperature,
 		MaxTokens:               locked.MaxOutputToken,
 		SupportsReasoningEffort: LockedContractSupportsReasoningEffort(&locked, locked.Model),
-		EnableNativeWebSearch:   false,
+		EnableNativeWebSearch:   controls.EnableNativeWebSearch,
 		SystemPrompt:            systemPrompt,
 		PromptCacheKey:          "",
 		PromptCacheScope:        "",
 		SessionID:               "",
 		Items:                   CloneResponseItems(items),
 		Tools:                   append([]Tool(nil), tools...),
+		ToolChoiceMode:          controls.ChoiceMode,
 	}
 	if err := req.Validate(); err != nil {
 		return Request{}, err

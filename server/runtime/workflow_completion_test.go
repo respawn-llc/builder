@@ -96,6 +96,47 @@ func (c *fakeTaskCommentCounter) CountTaskComments(context.Context, workflow.Tas
 	return c.count, nil
 }
 
+type workflowSteeringClient struct {
+	started  chan struct{}
+	release  chan struct{}
+	mu       sync.Mutex
+	requests []llm.Request
+}
+
+func newWorkflowSteeringClient() *workflowSteeringClient {
+	return &workflowSteeringClient{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (c *workflowSteeringClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.requests = append(c.requests, request)
+	call := len(c.requests)
+	c.mu.Unlock()
+	if call == 1 {
+		close(c.started)
+		<-c.release
+		return commentaryResponse("working", llm.ToolCall{
+			ID:    "call-shell",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{}`),
+		}), nil
+	}
+	return commentaryResponse("complete", completeNodeCall("call-complete", json.RawMessage(`{"commentary":"done","summary":"done"}`))), nil
+}
+
+func (c *workflowSteeringClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true}, nil
+}
+
+func (c *workflowSteeringClient) Requests() []llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]llm.Request(nil), c.requests...)
+}
+
 type countingTool struct {
 	name  toolspec.ID
 	count atomic.Int64
@@ -183,6 +224,9 @@ func TestWorkflowToolModeExposesCompleteNodeDespiteEnabledTools(t *testing.T) {
 	if _, ok := toolsByName[string(toolspec.ToolExecCommand)]; ok {
 		t.Fatalf("exec_command should not be re-added from role tools, tools=%+v", req.Tools)
 	}
+	if req.ToolChoiceMode != llm.ToolChoiceModeRequired {
+		t.Fatalf("tool choice mode = %q, want required", req.ToolChoiceMode)
+	}
 }
 
 func TestCompleteNodeNotAdvertisedOutsideWorkflow(t *testing.T) {
@@ -198,6 +242,154 @@ func TestCompleteNodeNotAdvertisedOutsideWorkflow(t *testing.T) {
 		if tool.Name == string(toolspec.ToolCompleteNode) {
 			t.Fatalf("complete_node advertised outside workflow: %+v", req.Tools)
 		}
+	}
+	if req.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+		t.Fatalf("tool choice mode = %q, want automatic", req.ToolChoiceMode)
+	}
+}
+
+func TestWorkflowGenerationToolChoiceMatchesEffectiveCompletionMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode config.WorkflowCompletionMode
+		want llm.ToolChoiceMode
+	}{
+		{name: "structured output", mode: config.WorkflowCompletionModeStructuredOutput, want: llm.ToolChoiceModeAutomatic},
+		{name: "tool", mode: config.WorkflowCompletionModeTool, want: llm.ToolChoiceModeRequired},
+		{name: "shell command", mode: config.WorkflowCompletionModeShellCommand, want: llm.ToolChoiceModeRequired},
+		{name: "unstructured output", mode: config.WorkflowCompletionModeUnstructured, want: llm.ToolChoiceModeAutomatic},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, testWorkflowConfig(&fakeWorkflowController{}, tt.mode), Config{
+				EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+			})
+			req, err := eng.buildRequest(context.Background(), "step", true)
+			if err != nil {
+				t.Fatalf("buildRequest: %v", err)
+			}
+			if req.ToolChoiceMode != tt.want {
+				t.Fatalf("tool choice mode = %q, want %q", req.ToolChoiceMode, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkflowRequiredToolChoiceIncludesLocalAndHostedTools(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
+		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
+		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
+	), Config{
+		Model:         "gpt-5",
+		WorkflowRun:   testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
+		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
+		WebSearchMode: "native",
+	})
+	req, err := eng.buildRequest(context.Background(), "step", true)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if req.ToolChoiceMode != llm.ToolChoiceModeRequired || !req.EnableNativeWebSearch {
+		t.Fatalf("tool controls = mode:%q web_search:%t", req.ToolChoiceMode, req.EnableNativeWebSearch)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != string(toolspec.ToolExecCommand) {
+		t.Fatalf("local tools = %+v, want exec_command", req.Tools)
+	}
+}
+
+func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
+		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
+	), Config{
+		Model:         "gpt-5",
+		WorkflowRun:   testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
+		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
+		WebSearchMode: "native",
+	})
+	req, err := eng.buildRequest(context.Background(), "step", true)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if len(req.Tools) != 0 || !req.EnableNativeWebSearch || req.ToolChoiceMode != llm.ToolChoiceModeRequired {
+		t.Fatalf("request = %+v, want hosted-only required tools", req)
+	}
+}
+
+func TestWorkflowRequiredToolChoiceRejectsEmptyEffectiveToolSet(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:       "gpt-5",
+		WorkflowRun: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
+	})
+	_, err := eng.buildRequest(context.Background(), "step", true)
+	if !errors.Is(err, llm.ErrInvalidRequest) {
+		t.Fatalf("buildRequest() error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestWorkflowRequiredToolChoiceRejectsNonResponsesAdapter(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{caps: llm.ProviderCapabilities{
+		ProviderID:           "anthropic",
+		SupportsResponsesAPI: false,
+	}}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+	})
+	_, err := eng.buildRequest(context.Background(), "step", true)
+	if !errors.Is(err, llm.ErrUnsupportedToolChoicePolicy) {
+		t.Fatalf("buildRequest() error = %v, want ErrUnsupportedToolChoicePolicy", err)
+	}
+}
+
+func TestAcceptedLiveWorkflowSteeringKeepsRequiredToolChoice(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := newWorkflowSteeringClient()
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+	})
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := eng.SubmitWorkflowTurn(context.Background())
+		submitDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active workflow request")
+	}
+	_, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "steer active workflow", "req-steer")
+	if err != nil {
+		t.Fatalf("SubmitUserMessageOrSteer: %v", err)
+	}
+	if queued == nil {
+		t.Fatal("expected accepted live steering to queue on active workflow")
+	}
+	close(client.release)
+	if err := <-submitDone; err != nil {
+		t.Fatalf("SubmitWorkflowTurn: %v", err)
+	}
+	requests := client.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("requests = %+v, want initial and steered turns", requests)
+	}
+	for i, request := range requests {
+		if request.ToolChoiceMode != llm.ToolChoiceModeRequired {
+			t.Fatalf("request %d tool choice mode = %q, want required", i, request.ToolChoiceMode)
+		}
+	}
+	foundSteer := false
+	for _, message := range requestMessages(requests[1]) {
+		if message.Role == llm.RoleUser && message.Content == "steer active workflow" {
+			foundSteer = true
+		}
+	}
+	if !foundSteer {
+		t.Fatalf("steered user message missing from second request: %+v", requestMessages(requests[1]))
 	}
 }
 

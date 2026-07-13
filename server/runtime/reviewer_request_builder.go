@@ -48,6 +48,7 @@ func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Cl
 		SessionID:               reviewerSessionID(e.store.Meta().SessionID),
 		Items:                   reviewerItems,
 		Tools:                   []llm.Tool{},
+		ToolChoiceMode:          llm.ToolChoiceModeAutomatic,
 		StructuredOutput:        reviewerSuggestionsStructuredOutput(),
 	}
 	if supportsPromptCacheKeyForClient(ctx, reviewerClient) {
