@@ -66,7 +66,7 @@ export function useAppNavigation(): AppNavigation {
           await navigate({ to: "/" });
         });
       },
-      async openProject(projectID, workflowID = "") {
+      async openProject(projectID, workflowID) {
         await runNavigation(async () => {
           await navigate({
             to: "/projects/$projectId",

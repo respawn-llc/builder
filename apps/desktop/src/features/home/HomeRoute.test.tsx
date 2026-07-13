@@ -5,13 +5,14 @@ import { z } from "zod";
 import type { JsonValue } from "../../api/json";
 import { App } from "../../App";
 import { createTestServices, startupRoutes } from "../../testSupport/appServices";
+import { installTestStorage } from "../../testSupport/storage";
 
 const jsonRecordSchema = z.record(z.string(), z.unknown());
 
 describe("HomeRoute", () => {
   beforeEach(() => {
-    installStorage("localStorage");
-    installStorage("sessionStorage");
+    installTestStorage("localStorage");
+    installTestStorage("sessionStorage");
     window.history.pushState(null, "", "/");
   });
 
@@ -346,27 +347,6 @@ function workspaceSummary(workspaceID: string, rootPath: string, updatedAtUnixMs
     is_primary: true,
     updated_at_unix_ms: updatedAtUnixMs,
   };
-}
-
-function installStorage(name: "localStorage" | "sessionStorage"): void {
-  const values = new Map<string, string>();
-  Object.defineProperty(globalThis, name, {
-    configurable: true,
-    value: {
-      clear() {
-        values.clear();
-      },
-      getItem(key: string) {
-        return values.get(key) ?? null;
-      },
-      removeItem(key: string) {
-        values.delete(key);
-      },
-      setItem(key: string, value: string) {
-        values.set(key, value);
-      },
-    },
-  });
 }
 
 function attentionItem({

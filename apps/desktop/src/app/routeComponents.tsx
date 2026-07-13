@@ -60,7 +60,7 @@ function RoutePersistence() {
   const isHomeRoute = useMatch({ from: "/", shouldThrow: false }) !== undefined;
   const projectMatch = useMatch({ from: "/projects/$projectId", shouldThrow: false });
   const projectId = projectMatch?.params.projectId ?? null;
-  const workflowId = projectMatch?.search.workflowId ?? "";
+  const workflowId = projectMatch?.search.workflowId;
 
   useEffect(() => {
     if (claimRouteRestoreCheck()) {
@@ -117,7 +117,7 @@ export function ProjectRoute() {
     <BoardRoute
       projectId={params.projectId}
       selectedTaskId={search.taskId}
-      workflowId={search.workflowId.length === 0 ? undefined : search.workflowId}
+      workflowId={search.workflowId}
     />
   );
 }

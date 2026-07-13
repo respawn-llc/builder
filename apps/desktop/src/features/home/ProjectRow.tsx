@@ -35,7 +35,7 @@ export function ProjectRow({ project }: Readonly<{ project: ProjectSummary }>) {
       }
       ariaLabel={`${project.name} ${workspacePathLabel}`}
       onClick={() => {
-        void navigation.openProject(project.id, project.defaultWorkflowID);
+        void navigation.openProject(project.id);
       }}
       title={project.primaryWorkspace.rootPath}
     >

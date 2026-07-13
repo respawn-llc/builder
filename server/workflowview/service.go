@@ -134,11 +134,8 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 		return serverapi.WorkflowBoard{}, err
 	}
 	workspaceContext := boardProjectWorkspaceContext(project)
-	requestedWorkflowID := ""
-	if req.WorkflowID != nil {
-		requestedWorkflowID = *req.WorkflowID
-	}
-	selected := selectWorkflow(picker, requestedWorkflowID, false)
+	selector := workflowBoardSelectorFromRequest(req)
+	selected := selector.selectFrom(picker)
 	if selected == nil {
 		return serverapi.WorkflowBoard{ProjectID: projectID, Project: projectBoardProject(project, workspaceContext), WorkflowPicker: picker, GeneratedAtUnixMs: time.Now().UTC().UnixMilli()}, nil
 	}
@@ -2116,17 +2113,44 @@ func scriptPathDefinitionValidationErrors(def workflow.Definition, rootPath *str
 	return out
 }
 
-func selectWorkflow(picker []serverapi.WorkflowPickerItem, requested string, requireExact bool) *serverapi.WorkflowPickerItem {
-	if requested != "" {
-		for index := range picker {
-			if picker[index].WorkflowID == requested {
-				return &picker[index]
-			}
-		}
-		if requireExact {
-			return nil
+type workflowBoardSelector interface {
+	selectFrom(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem
+}
+
+type workflowBoardDefaultSelector struct{}
+
+func (workflowBoardDefaultSelector) selectFrom(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem {
+	return defaultWorkflowBoardSelection(picker)
+}
+
+type workflowBoardExplicitSelector struct {
+	workflowID string
+}
+
+func (s workflowBoardExplicitSelector) selectFrom(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem {
+	if selected := exactWorkflowBoardSelection(picker, s.workflowID); selected != nil {
+		return selected
+	}
+	return defaultWorkflowBoardSelection(picker)
+}
+
+func workflowBoardSelectorFromRequest(req serverapi.WorkflowBoardRequest) workflowBoardSelector {
+	if req.WorkflowID != nil {
+		return workflowBoardExplicitSelector{workflowID: *req.WorkflowID}
+	}
+	return workflowBoardDefaultSelector{}
+}
+
+func exactWorkflowBoardSelection(picker []serverapi.WorkflowPickerItem, workflowID string) *serverapi.WorkflowPickerItem {
+	for index := range picker {
+		if picker[index].WorkflowID == workflowID {
+			return &picker[index]
 		}
 	}
+	return nil
+}
+
+func defaultWorkflowBoardSelection(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem {
 	for index := range picker {
 		if picker[index].IsProjectDefault {
 			return &picker[index]

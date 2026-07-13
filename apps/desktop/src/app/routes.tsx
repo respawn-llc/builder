@@ -17,9 +17,10 @@ import {
 import { createWorkflowDeleteWindowRoute } from "./workflowDeleteRoute";
 
 const optionalSearchString = z.string().catch("");
+const optionalWorkflowSelector = z.string().optional().catch(undefined);
 
 const projectSearchSchema = z.object({
-  workflowId: optionalSearchString,
+  workflowId: optionalWorkflowSelector,
   taskId: optionalSearchString,
 });
 

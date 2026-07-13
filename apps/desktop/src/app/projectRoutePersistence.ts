@@ -3,7 +3,7 @@ import { z } from "zod";
 const lastProjectRouteStorageKey = "desktop.lastProjectRoute";
 const storedProjectRouteSchema = z.object({
   projectId: z.string(),
-  workflowId: z.string(),
+  workflowId: z.string().optional(),
 });
 type StoredProjectRoute = z.output<typeof storedProjectRouteSchema>;
 

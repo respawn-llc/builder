@@ -7,6 +7,26 @@ import { createTestServices, startupRoutes } from "../../testSupport/appServices
 void initializeI18n();
 
 describe("BoardRoute live refresh", () => {
+  it("preserves an explicitly empty route selector at the transport boundary", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=");
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        result: boardWithoutWorkflowResponse,
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    await waitFor(() => {
+      expect(boardCalls(services)).toContainEqual({
+        method: "workflow.board.get",
+        params: { project_id: "project-1", workflow_id: "" },
+      });
+    });
+  });
+
   it("refreshes a board without a selected workflow after a workflow-link event", async () => {
     window.history.pushState(null, "", "/projects/project-1");
     const services = createTestServices([
