@@ -29,16 +29,16 @@ func (e *InvalidCreateTargetError) Error() string {
 }
 
 type GitWorktree struct {
-	Root           string
-	HeadOID        string
-	BranchRef      string
-	BranchName     string
-	Detached       bool
-	Bare           bool
-	LockedReason   string
-	PrunableReason string
-	DirtyFileCount int
-	IsMain         bool
+	Root           string `json:"-"`
+	HeadOID        string `json:"head_oid,omitempty"`
+	BranchRef      string `json:"branch_ref,omitempty"`
+	BranchName     string `json:"branch_name,omitempty"`
+	Detached       bool   `json:"detached,omitempty"`
+	Bare           bool   `json:"bare,omitempty"`
+	LockedReason   string `json:"locked_reason,omitempty"`
+	PrunableReason string `json:"prunable_reason,omitempty"`
+	DirtyFileCount int    `json:"-"`
+	IsMain         bool   `json:"-"`
 }
 
 type GitRepositoryIdentity struct {

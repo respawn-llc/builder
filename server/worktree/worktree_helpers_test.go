@@ -7,6 +7,25 @@ import (
 	"core/shared/clientui"
 )
 
+func TestGitMetadataRoundTripPreservesBranchIdentity(t *testing.T) {
+	source := GitWorktree{
+		HeadOID:    "deadbeef",
+		BranchRef:  "refs/heads/feature/round-trip",
+		BranchName: "feature/round-trip",
+	}
+	encoded, err := marshalGitMetadata(source)
+	if err != nil {
+		t.Fatalf("marshalGitMetadata: %v", err)
+	}
+	decoded, err := worktreeGitMetadataFromRecord(metadata.WorktreeRecord{GitMetadataJSON: encoded})
+	if err != nil {
+		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
+	}
+	if decoded.HeadOID != source.HeadOID || decoded.BranchRef != source.BranchRef || decoded.BranchName != source.BranchName {
+		t.Fatalf("decoded metadata = %+v, want branch identity from %+v", decoded, source)
+	}
+}
+
 func TestWorktreeReminderTransitionRejectsPresentPreviousTargetWithEmptyWorktreeID(t *testing.T) {
 	previous := &syncedWorktree{
 		record: metadata.WorktreeRecord{CanonicalRoot: "/repo/worktree"},

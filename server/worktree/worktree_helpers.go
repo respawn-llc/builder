@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/server/metadata"
 	"core/shared/clientui"
 	"core/shared/config"
 )
@@ -53,6 +54,31 @@ func (s *Service) branchCleanupSkippedMessage(target syncedWorktree, explicitDel
 	return fmt.Sprintf("Kept branch %s: Kent cannot prove this worktree created it", branchName)
 }
 
+func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktree) (string, bool, error) {
+	if !record.CreatedBranch {
+		return "", false, nil
+	}
+	persisted, err := worktreeGitMetadataFromRecord(record)
+	if err != nil {
+		return "", false, err
+	}
+	persistedRef := strings.TrimSpace(persisted.BranchRef)
+	if persistedRef == "" {
+		return "", false, nil
+	}
+	branchName := strings.TrimSpace(persisted.BranchName)
+	if branchName == "" {
+		branchName = shortBranchName(persistedRef)
+	}
+	if branchName == "" {
+		return "", false, nil
+	}
+	if live != nil && (live.Detached || strings.TrimSpace(live.BranchRef) != persistedRef) {
+		return "", false, nil
+	}
+	return branchName, true, nil
+}
+
 func pathAvailability(path string) string {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -64,23 +90,7 @@ func pathAvailability(path string) string {
 }
 
 func marshalGitMetadata(entry GitWorktree) (string, error) {
-	body, err := json.Marshal(struct {
-		HeadOID        string `json:"head_oid,omitempty"`
-		BranchRef      string `json:"branch_ref,omitempty"`
-		BranchName     string `json:"branch_name,omitempty"`
-		Detached       bool   `json:"detached,omitempty"`
-		Bare           bool   `json:"bare,omitempty"`
-		LockedReason   string `json:"locked_reason,omitempty"`
-		PrunableReason string `json:"prunable_reason,omitempty"`
-	}{
-		HeadOID:        entry.HeadOID,
-		BranchRef:      entry.BranchRef,
-		BranchName:     entry.BranchName,
-		Detached:       entry.Detached,
-		Bare:           entry.Bare,
-		LockedReason:   entry.LockedReason,
-		PrunableReason: entry.PrunableReason,
-	})
+	body, err := json.Marshal(entry)
 	if err != nil {
 		return "", fmt.Errorf("marshal git worktree metadata: %w", err)
 	}

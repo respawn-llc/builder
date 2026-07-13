@@ -147,7 +147,7 @@ func (s *Service) executeDeleteLocked(
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
 	}
-	cleanup := s.cleanupDeletedBranch(ctx, workspaceCtx.workspaceRoot, entry, req.BranchCleanupPolicy)
+	cleanup := s.cleanupDeletedBranch(ctx, workspaceCtx.workspaceRoot, entry, record, req.BranchCleanupPolicy)
 	result := serverapi.WorktreeDeleteCompletedResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}
 	if err := result.Validate(); err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
@@ -272,39 +272,24 @@ func (s *Service) retargetDeleteSessions(
 	record metadata.WorktreeRecord,
 	currentSync transitionTargetSync,
 ) error {
-	sessions, err := s.metadata.ListSessionsTargetingWorktree(ctx, record.ID)
-	if err != nil {
-		return err
-	}
-	retargeted := make([]pendingWorktreeSessionRetarget, 0, len(sessions))
-	for _, targetSession := range sessions {
-		sessionID := strings.TrimSpace(targetSession.SessionID)
-		previousTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, sessionID)
-		if err != nil {
-			return errors.Join(err, s.rollbackDeleteRetargets(ctx, workspaceCtx.sessionID, retargeted, currentSync))
-		}
-		if err := s.metadata.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
-			SessionID:  sessionID,
-			Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: workspaceCtx.workspaceID},
-			Worktree:   nil,
-			CwdRelpath: clampCwdRelpath(previousTarget.CwdRelpath, workspaceCtx.workspaceRoot),
-		}); err != nil {
-			return errors.Join(err, s.rollbackDeleteRetargets(ctx, workspaceCtx.sessionID, retargeted, currentSync))
-		}
-		retargeted = append(retargeted, pendingWorktreeSessionRetarget{sessionID: sessionID, previousTarget: previousTarget})
-		nextTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, sessionID)
-		if err != nil {
-			return errors.Join(err, s.rollbackDeleteRetargets(ctx, workspaceCtx.sessionID, retargeted, currentSync))
-		}
-		reminder, err := worktreeReminderStateForExitedWorktree(record, nextTarget)
-		if err != nil {
-			return errors.Join(err, s.rollbackDeleteRetargets(ctx, workspaceCtx.sessionID, retargeted, currentSync))
-		}
-		if err := s.syncDeleteSession(ctx, workspaceCtx.sessionID, sessionID, nextTarget, &reminder, currentSync); err != nil {
-			return errors.Join(err, s.rollbackDeleteRetargets(ctx, workspaceCtx.sessionID, retargeted, currentSync))
-		}
-	}
-	return nil
+	return s.retargetSessionsFromWorktree(
+		ctx,
+		workspaceCtx.workspaceID,
+		workspaceCtx.workspaceRoot,
+		record,
+		worktreeSessionRetargetOptions{
+			reminder: worktreeReminderStateForExitedWorktree,
+			sync: func(
+				syncCtx context.Context,
+				sessionID string,
+				target clientui.SessionExecutionTarget,
+				reminder *session.WorktreeReminderState,
+			) error {
+				return s.syncDeleteSession(syncCtx, workspaceCtx.sessionID, sessionID, target, reminder, currentSync)
+			},
+			rollbackOnError: true,
+		},
+	)
 }
 
 func (s *Service) syncDeleteSession(
@@ -319,32 +304,6 @@ func (s *Service) syncDeleteSession(
 		return currentSync(ctx, target, reminder)
 	}
 	return s.runtime.SyncExecutionTarget(ctx, sessionID, target, reminder)
-}
-
-func (s *Service) rollbackDeleteRetargets(
-	ctx context.Context,
-	currentSessionID string,
-	retargeted []pendingWorktreeSessionRetarget,
-	currentSync transitionTargetSync,
-) error {
-	var collected []error
-	for index := len(retargeted) - 1; index >= 0; index-- {
-		item := retargeted[index]
-		rollbackCtx, cancel := liveRollbackContext(ctx)
-		if err := s.metadata.UpdateSessionExecutionTarget(rollbackCtx, metadata.SessionExecutionTargetUpdateFromReadModel(item.sessionID, item.previousTarget)); err != nil {
-			collected = append(collected, err)
-			cancel()
-			continue
-		}
-		if err := s.runtime.ClearWorktreeReminder(rollbackCtx, item.sessionID); err != nil {
-			collected = append(collected, err)
-		}
-		if err := s.syncDeleteSession(rollbackCtx, currentSessionID, item.sessionID, item.previousTarget, nil, currentSync); err != nil {
-			collected = append(collected, err)
-		}
-		cancel()
-	}
-	return errors.Join(collected...)
 }
 
 func missingLeftoverRoot(entry serverapi.WorktreeTopologyEntry) *string {
@@ -362,6 +321,7 @@ func (s *Service) cleanupDeletedBranch(
 	ctx context.Context,
 	workspaceRoot string,
 	entry serverapi.WorktreeTopologyEntry,
+	record *metadata.WorktreeRecord,
 	policy serverapi.WorktreeBranchCleanupMode,
 ) serverapi.WorktreeBranchCleanupOutcome {
 	branch := topologyBranch(entry)
@@ -373,7 +333,7 @@ func (s *Service) cleanupDeletedBranch(
 	case serverapi.WorktreeBranchCleanupModeRetain:
 		return serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotRequested}
 	case serverapi.WorktreeBranchCleanupModeAutoIfKentCreated:
-		if entry.Variant != serverapi.WorktreeTopologyVariantRegistered || !entry.Registered.Kent.CreatedBranch {
+		if entry.Variant != serverapi.WorktreeTopologyVariantRegistered || record == nil {
 			diagnostic := "Kent cannot prove this worktree created the branch"
 			return serverapi.WorktreeBranchCleanupOutcome{
 				Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
@@ -381,6 +341,25 @@ func (s *Service) cleanupDeletedBranch(
 				Diagnostic: &diagnostic,
 			}
 		}
+		live := gitWorktreeFromFacts(entry.Registered.Git)
+		createdBranch, proven, err := kentCreatedBranchForCleanup(*record, &live)
+		if err != nil {
+			diagnostic := err.Error()
+			return serverapi.WorktreeBranchCleanupOutcome{
+				Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+				BranchName: &branchName,
+				Diagnostic: &diagnostic,
+			}
+		}
+		if !proven {
+			diagnostic := "Kent cannot prove this worktree created the branch"
+			return serverapi.WorktreeBranchCleanupOutcome{
+				Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+				BranchName: &branchName,
+				Diagnostic: &diagnostic,
+			}
+		}
+		branchName = createdBranch
 	case serverapi.WorktreeBranchCleanupModeDeleteSafe:
 	default:
 		panic(fmt.Sprintf("invalid branch cleanup policy %q", policy))

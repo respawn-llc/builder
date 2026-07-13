@@ -90,8 +90,8 @@ const (
 
 type WorktreeStatusProblem struct {
 	Kind WorktreeStatusProblemKind `json:"kind"`
-	Root string                    `json:"root,omitempty"`
-	Ref  string                    `json:"ref,omitempty"`
+	Root *string                   `json:"root,omitempty"`
+	Ref  *string                   `json:"ref,omitempty"`
 }
 
 // WorktreeStatusTarget intentionally has no selector. Its display and branch
@@ -330,11 +330,11 @@ func (problem WorktreeStatusProblem) Validate() error {
 		WorktreeStatusProblemRootInaccessible,
 		WorktreeStatusProblemGitBindingMissing,
 		WorktreeStatusProblemGitBindingMismatched:
-		if strings.TrimSpace(problem.Root) == "" || strings.TrimSpace(problem.Ref) != "" {
+		if problem.Root == nil || strings.TrimSpace(*problem.Root) == "" || problem.Ref != nil {
 			return errors.New("root status problem requires root only")
 		}
 	case WorktreeStatusProblemRecordedRefMissing:
-		if strings.TrimSpace(problem.Ref) == "" || strings.TrimSpace(problem.Root) != "" {
+		if problem.Ref == nil || strings.TrimSpace(*problem.Ref) == "" || problem.Root != nil {
 			return errors.New("recorded ref status problem requires ref only")
 		}
 	default:

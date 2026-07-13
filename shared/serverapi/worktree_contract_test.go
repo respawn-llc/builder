@@ -67,7 +67,7 @@ func TestWorktreeStatusHasNoSelectorAndValidatesTypedProblems(t *testing.T) {
 		},
 		Problems: []WorktreeStatusProblem{{
 			Kind: WorktreeStatusProblemRootMissing,
-			Root: "/repo/feature",
+			Root: stringPointer("/repo/feature"),
 		}},
 	}
 	if err := response.Validate(); err != nil {
@@ -84,11 +84,26 @@ func TestWorktreeStatusHasNoSelectorAndValidatesTypedProblems(t *testing.T) {
 	if _, ok := fields["selector"]; ok {
 		t.Fatal("status JSON exposed a selector")
 	}
+	var wire struct {
+		Problems []map[string]json.RawMessage `json:"problems"`
+	}
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("decode status problems: %v", err)
+	}
+	if len(wire.Problems) != 1 {
+		t.Fatalf("status problem count = %d, want 1", len(wire.Problems))
+	}
+	if _, ok := wire.Problems[0]["root"]; !ok {
+		t.Fatalf("root problem omitted root: %+v", wire.Problems[0])
+	}
+	if _, ok := wire.Problems[0]["ref"]; ok {
+		t.Fatalf("root problem exposed absent ref: %+v", wire.Problems[0])
+	}
 	for _, problem := range []WorktreeStatusProblem{
-		{Kind: WorktreeStatusProblemRootInaccessible, Root: "/repo/feature"},
-		{Kind: WorktreeStatusProblemGitBindingMissing, Root: "/repo/feature"},
-		{Kind: WorktreeStatusProblemGitBindingMismatched, Root: "/repo/feature"},
-		{Kind: WorktreeStatusProblemRecordedRefMissing, Ref: "refs/heads/feature"},
+		{Kind: WorktreeStatusProblemRootInaccessible, Root: stringPointer("/repo/feature")},
+		{Kind: WorktreeStatusProblemGitBindingMissing, Root: stringPointer("/repo/feature")},
+		{Kind: WorktreeStatusProblemGitBindingMismatched, Root: stringPointer("/repo/feature")},
+		{Kind: WorktreeStatusProblemRecordedRefMissing, Ref: stringPointer("refs/heads/feature")},
 	} {
 		if err := problem.Validate(); err != nil {
 			t.Fatalf("status problem %s rejected: %v", problem.Kind, err)
@@ -96,6 +111,19 @@ func TestWorktreeStatusHasNoSelectorAndValidatesTypedProblems(t *testing.T) {
 	}
 	if err := (WorktreeStatusProblem{Kind: WorktreeStatusProblemRecordedRefMissing}).Validate(); err == nil {
 		t.Fatal("recorded ref problem without ref validated")
+	}
+	if err := (WorktreeStatusProblem{
+		Kind: WorktreeStatusProblemRootMissing,
+		Root: stringPointer(""),
+	}).Validate(); err == nil {
+		t.Fatal("root problem with an empty root validated")
+	}
+	if err := (WorktreeStatusProblem{
+		Kind: WorktreeStatusProblemRecordedRefMissing,
+		Ref:  stringPointer("refs/heads/feature"),
+		Root: stringPointer("/repo/feature"),
+	}).Validate(); err == nil {
+		t.Fatal("recorded ref problem with a root validated")
 	}
 }
 

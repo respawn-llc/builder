@@ -57,6 +57,32 @@ func TestDeleteWorktreeCompletesNonCurrentDeletionAndRetainsBranch(t *testing.T)
 	}
 }
 
+func TestDeleteWorktreeAutoCleanupRetainsBranchWhenLiveProvenanceChanged(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/delete-provenance")
+	liveBranch := "feature/delete-provenance-manual"
+	runGit(t, created.CanonicalRoot, "switch", "-c", liveBranch)
+
+	result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+		OperationID:         serverapi.NewWorktreeOperationID(),
+		SessionID:           env.session.Meta().SessionID,
+		Selector:            created.WorktreeID,
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeAutoIfKentCreated,
+	})
+	if err != nil {
+		t.Fatalf("DeleteWorktree: %v", err)
+	}
+	if result.Completed == nil || result.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeRetained {
+		t.Fatalf("cleanup = %+v, want retained stale-provenance branch", result.Completed)
+	}
+	for _, branch := range []string{created.BranchName, liveBranch} {
+		exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branch)
+		if err != nil || !exists {
+			t.Fatalf("retained branch %q exists=%v err=%v", branch, exists, err)
+		}
+	}
+}
+
 func TestDeleteCurrentWorktreeSchedulesRetargetAndRemoval(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-scheduled")

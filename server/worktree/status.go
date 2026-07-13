@@ -47,24 +47,28 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeS
 		if errors.Is(err, os.ErrNotExist) {
 			kind = serverapi.WorktreeStatusProblemRootMissing
 		}
-		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: kind, Root: root})
+		problemRoot := root
+		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: kind, Root: &problemRoot})
 		return response, nil
 	}
 	observed, observedErr := s.git.InspectTarget(ctx, root)
 	workspace, workspaceErr := s.git.InspectTarget(ctx, target.WorkspaceRoot)
 	if observedErr != nil || workspaceErr != nil {
-		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemGitBindingMissing, Root: root})
+		problemRoot := root
+		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemGitBindingMissing, Root: &problemRoot})
 		return response, nil
 	}
 	observedRoot := observed.Root
 	response.Worktree.ObservedRoot = &observedRoot
 	if observed.Identity.CommonDir != workspace.Identity.CommonDir {
-		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemGitBindingMismatched, Root: root})
+		problemRoot := root
+		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemGitBindingMismatched, Root: &problemRoot})
 	}
 	if response.Worktree.RecordedBranchRef != nil {
 		exists, err := s.git.RefExists(ctx, root, *response.Worktree.RecordedBranchRef)
 		if err != nil || !exists {
-			response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemRecordedRefMissing, Ref: *response.Worktree.RecordedBranchRef})
+			problemRef := *response.Worktree.RecordedBranchRef
+			response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemRecordedRefMissing, Ref: &problemRef})
 		}
 	}
 	return response, nil

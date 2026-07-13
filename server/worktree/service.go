@@ -481,21 +481,18 @@ func (s *Service) ensureTaskWorktreeDeletionUnblocked(ctx context.Context, taskI
 }
 
 func (s *Service) deleteTaskWorktreeBranch(ctx context.Context, workspaceRoot string, record metadata.WorktreeRecord, target syncedWorktree, found bool) (bool, error) {
-	if !record.Managed || !record.CreatedBranch {
+	if !record.Managed {
 		return false, nil
 	}
-	branchName := ""
+	var live *GitWorktree
 	if found {
-		branchName = strings.TrimSpace(target.git.BranchName)
+		live = &target.git
 	}
-	if branchName == "" {
-		gitMetadata, err := worktreeGitMetadataFromRecord(record)
-		if err != nil {
-			return false, err
-		}
-		branchName = strings.TrimSpace(gitMetadata.BranchName)
+	branchName, proven, err := kentCreatedBranchForCleanup(record, live)
+	if err != nil {
+		return false, err
 	}
-	if branchName == "" {
+	if !proven {
 		return false, nil
 	}
 	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, false); err != nil {
