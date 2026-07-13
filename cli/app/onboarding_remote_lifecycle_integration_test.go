@@ -65,7 +65,18 @@ func runOnboardingRemoteLifecycleHelper(configPath string) error {
 		return fmt.Errorf("dial onboarding lifecycle remote: %w", err)
 	}
 	defer remote.Close()
-	result, err := runOnboardingFlow(ctx, config.App{Settings: config.Settings{Theme: theme.Dark}}, remote, remote)
+	settings := config.DefaultOnboardingSettings()
+	settings.Theme = theme.Dark
+	settings.Reviewer.Model = settings.Model
+	settings.Reviewer.ThinkingLevel = settings.ThinkingLevel
+	result, err := runOnboardingFlow(ctx, config.App{
+		Settings: settings,
+		Source: config.SourceReport{Sources: map[string]string{
+			"thinking_level":          "default",
+			"reviewer.model":          "default",
+			"reviewer.thinking_level": "default",
+		}},
+	}, remote, remote)
 	output := onboardingRemoteLifecycleProcessResult{
 		Completed: result.Completed,
 		Canceled:  errors.Is(err, context.Canceled) || errors.Is(err, ErrOnboardingCanceled),

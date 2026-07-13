@@ -34,13 +34,9 @@ func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient client.C
 	if err := ctx.Err(); err != nil {
 		return onboardingResult{}, err
 	}
-	state := onboardingFlowState{
-		settings:         cfg.Settings,
-		baselineSettings: cfg.Settings,
-		theme:            cfg.Settings.Theme,
-		facts:            facts,
-		imports:          onboardingImportDiscoveryFromFacts(facts.Imports),
-		skillImport:      onboardingImportSelection{Mode: onboardingImportModeNone},
+	state, err := newOnboardingFlowState(cfg, facts)
+	if err != nil {
+		return onboardingResult{}, fmt.Errorf("initialize first-time setup selections: %w", err)
 	}
 	finalization := newOnboardingFinalization(finalizer, ctx)
 	model := newOnboardingModel(finalization, state)

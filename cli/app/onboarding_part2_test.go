@@ -12,7 +12,7 @@ import (
 )
 
 func TestOnboardingImportDiscoveryKeepsTypedInput(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol"}})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, nil))
 	steps := model.workflow.visibleSteps(&model.state)
 	modelStepIndex := -1
 	for index, step := range steps {
@@ -38,7 +38,7 @@ func TestOnboardingImportDiscoveryKeepsTypedInput(t *testing.T) {
 }
 
 func TestOnboardingInputRendersReusableEditorFieldCursor(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
 	model.currentScreen = onboardingScreen{Kind: onboardingScreenInput, Title: "Enter value"}
 	model.input = newSingleLineEditor("abc")
 	model.input.SetCursor(byteOffsetForRuneCursor(model.input.Text(), 1))
@@ -55,7 +55,7 @@ func TestOnboardingInputRendersReusableEditorFieldCursor(t *testing.T) {
 }
 
 func TestOnboardingInputCursorRowTracksWrappedReusableEditorField(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
 	model.currentScreen = onboardingScreen{Kind: onboardingScreenInput, Title: "Enter value"}
 	model.input = newSingleLineEditor("alpha beta gamma")
 
@@ -71,7 +71,7 @@ func TestOnboardingInputCursorRowTracksWrappedReusableEditorField(t *testing.T) 
 
 func TestOnboardingInputUsesRealAltScreenCursorWhenAvailable(t *testing.T) {
 	state := newUITerminalCursorState()
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
 	model.terminalCursor = state
 	model.width = 24
 	model.height = 12
@@ -108,7 +108,7 @@ func TestOnboardingEditorFieldDeleteCurrentLineUsesAppKeyAdapter(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+			model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
 			model.currentScreen = onboardingScreen{Kind: onboardingScreenInput, Title: "Enter value"}
 			model.input = newSingleLineEditor("project name")
 			model.input.SetCursor(byteOffsetForRuneCursor(model.input.Text(), len([]rune("project"))))
@@ -127,10 +127,7 @@ func TestOnboardingEditorFieldDeleteCurrentLineUsesAppKeyAdapter(t *testing.T) {
 
 func newOnboardingModelAtModelInput(t *testing.T) *onboardingModel {
 	t.Helper()
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{
-		settings: config.Settings{Model: "gpt-5.6-sol"},
-		theme:    "dark",
-	})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
 	steps := model.workflow.visibleSteps(&model.state)
 	modelStepIndex := -1
 	for index, step := range steps {
@@ -231,7 +228,7 @@ func TestOnboardingInputPlainArrowsKeepStepNavigation(t *testing.T) {
 }
 
 func TestOnboardingSpinnerTickDoesNotRescheduleOutsideLoadingOrFinalize(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
 	model.state.imports.pending = false
 	model.syncScreen(true)
 	if model.currentScreen.Kind == onboardingScreenLoading {
@@ -249,7 +246,7 @@ func TestOnboardingSpinnerTickDoesNotRescheduleOutsideLoadingOrFinalize(t *testi
 }
 
 func TestOnboardingSpinnerTickReschedulesWhileLoading(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
 	model.currentScreen = onboardingScreen{Kind: onboardingScreenLoading}
 	tickAt := model.spinnerClock.anchor.Add(spinnerTickInterval)
 	next, cmd := model.Update(onboardingSpinnerTickMsg{at: tickAt})
@@ -263,7 +260,7 @@ func TestOnboardingSpinnerTickReschedulesWhileLoading(t *testing.T) {
 }
 
 func TestOnboardingSpinnerTickReschedulesWhileFinalizing(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
 	model.state.imports.pending = false
 	model.syncScreen(true)
 	model.finalizing = true
@@ -279,53 +276,35 @@ func TestOnboardingSpinnerTickReschedulesWhileFinalizing(t *testing.T) {
 }
 
 func TestApplyOnboardingModelUpdatesKnownContextWindow(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits"}}, baselineSettings: config.Settings{ModelContextWindow: 272_000, ContextCompactionThresholdTokens: 272_000 * 95 / 100}}
-	state.facts = testOnboardingCapabilityFacts()
-	if err := applyOnboardingModel(state, "gpt-5.6-sol"); err != nil {
+	state := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
+		cfg.Settings.Model = "gpt-5.3-codex"
+	})
+	if err := state.submitPrimaryModel("gpt-5.6-sol"); err != nil {
 		t.Fatalf("apply onboarding model: %v", err)
 	}
-	if state.settings.ModelContextWindow != 272_000 {
-		t.Fatalf("expected gpt-5.6-sol default context window, got %d", state.settings.ModelContextWindow)
+	if state.selections.contextWindow.kind != onboardingContextDefault {
+		t.Fatalf("expected gpt-5.6-sol default context window, got %+v", state.selections.contextWindow)
 	}
-	if state.settings.ContextCompactionThresholdTokens != 272_000*95/100 {
-		t.Fatalf("unexpected compaction threshold: %d", state.settings.ContextCompactionThresholdTokens)
+	if state.selections.reviewerModelValue() != "gpt-5.6-sol" {
+		t.Fatalf("expected reviewer model to follow main model, got %q", state.selections.reviewerModelValue())
 	}
-	if state.settings.Reviewer.Model != "gpt-5.6-sol" {
-		t.Fatalf("expected reviewer model to follow main model, got %q", state.settings.Reviewer.Model)
-	}
-	if state.settings.Reviewer.ThinkingLevel != "medium" {
-		t.Fatalf("expected reviewer thinking to follow main thinking, got %q", state.settings.Reviewer.ThinkingLevel)
+	if state.selections.reviewerThinkingValue() != "medium" {
+		t.Fatalf("expected reviewer thinking to follow main thinking, got %q", state.selections.reviewerThinkingValue())
 	}
 }
 
 func TestApplyOnboardingModelResetsUnknownModelContextWindowToBaseline(t *testing.T) {
-	state := &onboardingFlowState{
-		settings: config.Settings{
-			Model:                            "gpt-5.3-codex",
-			ModelContextWindow:               400_000,
-			ContextCompactionThresholdTokens: 400_000 * 95 / 100,
-			ThinkingLevel:                    "medium",
-			Reviewer:                         config.ReviewerSettings{Frequency: "edits"},
-		},
-		baselineSettings: config.Settings{
-			ModelContextWindow:               272_000,
-			ContextCompactionThresholdTokens: 272_000 * 95 / 100,
-		},
-	}
-	state.facts = testOnboardingCapabilityFacts()
-	if err := applyOnboardingModel(state, "my-team-alias"); err != nil {
+	state := testOnboardingFlowStatePtr(t, nil)
+	if err := state.submitPrimaryModel("my-team-alias"); err != nil {
 		t.Fatalf("apply onboarding model: %v", err)
 	}
-	if state.settings.ModelContextWindow != 272_000 {
-		t.Fatalf("expected unknown model context window to reset to onboarding baseline, got %d", state.settings.ModelContextWindow)
-	}
-	if state.settings.ContextCompactionThresholdTokens != 272_000*95/100 {
-		t.Fatalf("expected unknown model compaction threshold to reset to onboarding baseline, got %d", state.settings.ContextCompactionThresholdTokens)
+	if state.selections.contextWindow.kind != onboardingContextCustom || state.selections.contextWindow.tokens != 272_000 {
+		t.Fatalf("expected unknown model context window to reset to onboarding baseline, got %+v", state.selections.contextWindow)
 	}
 }
 
 func TestReviewerModelStepDefaultsToMainModel(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol"}}}
+	state := testOnboardingFlowStatePtr(t, nil)
 	screen := findWorkflowStep(t, state, "reviewer_model").build(state)
 	if screen.InputValue != "gpt-5.6-sol" {
 		t.Fatalf("expected reviewer model default to follow main model, got %q", screen.InputValue)
@@ -333,7 +312,11 @@ func TestReviewerModelStepDefaultsToMainModel(t *testing.T) {
 }
 
 func TestReviewerThinkingStepDefaultsToMainThinking(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "high", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "high"}}}
+	state := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
+		cfg.Settings.ThinkingLevel = "high"
+		cfg.Settings.Reviewer.ThinkingLevel = "high"
+		cfg.Source.Sources["thinking_level"] = "file"
+	})
 	screen := findWorkflowStep(t, state, "reviewer_thinking").build(state)
 	if screen.DefaultOptionID != "high" {
 		t.Fatalf("expected reviewer thinking default to follow main thinking, got %q", screen.DefaultOptionID)
@@ -341,39 +324,38 @@ func TestReviewerThinkingStepDefaultsToMainThinking(t *testing.T) {
 }
 
 func TestMainThinkingChoiceSynchronizesReviewerThinking(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "medium"}}}
+	state := testOnboardingFlowStatePtr(t, nil)
 	if err := findWorkflowStep(t, state, "thinking").apply(state, "high"); err != nil {
 		t.Fatalf("apply thinking choice: %v", err)
 	}
-	if state.settings.Reviewer.ThinkingLevel != "high" {
-		t.Fatalf("expected reviewer thinking to track updated main thinking, got %q", state.settings.Reviewer.ThinkingLevel)
+	if state.selections.reviewerThinkingValue() != "high" {
+		t.Fatalf("expected reviewer thinking to track updated main thinking, got %q", state.selections.reviewerThinkingValue())
 	}
 }
 
 func TestMainThinkingChoicePreservesCustomReviewerThinking(t *testing.T) {
-	state := &onboardingFlowState{
-		settings:               config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "low"}},
-		reviewerCustomThinking: true,
-	}
-	state.facts = testOnboardingCapabilityFacts()
+	state := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
+		cfg.Settings.Reviewer.ThinkingLevel = "low"
+		cfg.Source.Sources["reviewer.thinking_level"] = "file"
+	})
 	if err := findWorkflowStep(t, state, "thinking").apply(state, "high"); err != nil {
 		t.Fatalf("apply thinking choice: %v", err)
 	}
-	if state.settings.Reviewer.ThinkingLevel != "low" {
-		t.Fatalf("expected custom reviewer thinking to be preserved, got %q", state.settings.Reviewer.ThinkingLevel)
+	if state.selections.reviewerThinkingValue() != "low" {
+		t.Fatalf("expected custom reviewer thinking to be preserved, got %q", state.selections.reviewerThinkingValue())
 	}
 }
 
 func TestReviewerThinkingDisableDoesNotForceCustomInput(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "high", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "high"}}}
+	state := testOnboardingFlowStatePtr(t, nil)
 	if err := findWorkflowStep(t, state, "reviewer_thinking").apply(state, "disable"); err != nil {
 		t.Fatalf("apply reviewer disable choice: %v", err)
 	}
-	if state.settings.Reviewer.ThinkingLevel != "" {
-		t.Fatalf("expected reviewer thinking to be disabled, got %q", state.settings.Reviewer.ThinkingLevel)
+	if state.selections.supervisor.thinking.override.kind != onboardingThinkingDisabled {
+		t.Fatalf("expected reviewer thinking to be disabled, got %+v", state.selections.supervisor.thinking)
 	}
-	if state.reviewerCustomThinking {
-		t.Fatal("expected disable choice not to force custom reviewer thinking input")
+	if state.selections.pendingReviewerThinking.kind != onboardingThinkingEditNone {
+		t.Fatal("expected disable choice not to open custom reviewer thinking input")
 	}
 	if workflowIncludesStep(newOnboardingWorkflow(state).visibleSteps(state), "reviewer_thinking_custom") {
 		t.Fatal("expected custom reviewer thinking step to stay hidden after disable choice")
@@ -381,17 +363,17 @@ func TestReviewerThinkingDisableDoesNotForceCustomInput(t *testing.T) {
 }
 
 func TestReviewerThinkingPresetChoiceDoesNotForceCustomInput(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "medium"}}}
+	state := testOnboardingFlowStatePtr(t, nil)
 	if err := findWorkflowStep(t, state, "reviewer_thinking").apply(state, "low"); err != nil {
 		t.Fatalf("apply reviewer preset choice: %v", err)
 	}
-	if state.settings.Reviewer.ThinkingLevel != "low" {
-		t.Fatalf("expected reviewer thinking preset to be preserved, got %q", state.settings.Reviewer.ThinkingLevel)
+	if state.selections.reviewerThinkingValue() != "low" {
+		t.Fatalf("expected reviewer thinking preset to be preserved, got %q", state.selections.reviewerThinkingValue())
 	}
-	if !state.reviewerCustomThinking {
+	if state.selections.supervisor.thinking.kind != onboardingReviewerThinkingOverridden {
 		t.Fatal("expected non-primary reviewer preset to remain an override")
 	}
-	if state.reviewerCustomThinkingInput {
+	if state.selections.pendingReviewerThinking.kind != onboardingThinkingEditNone {
 		t.Fatal("expected preset reviewer thinking choice not to open custom input")
 	}
 	if workflowIncludesStep(newOnboardingWorkflow(state).visibleSteps(state), "reviewer_thinking_custom") {
@@ -400,47 +382,41 @@ func TestReviewerThinkingPresetChoiceDoesNotForceCustomInput(t *testing.T) {
 }
 
 func TestMainThinkingChoicePreservesDisabledReviewerThinking(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "medium"}}}
+	state := testOnboardingFlowStatePtr(t, nil)
 	if err := findWorkflowStep(t, state, "reviewer_thinking").apply(state, "disable"); err != nil {
 		t.Fatalf("apply reviewer disable choice: %v", err)
 	}
 	if err := findWorkflowStep(t, state, "thinking").apply(state, "high"); err != nil {
 		t.Fatalf("apply main thinking choice: %v", err)
 	}
-	if state.settings.Reviewer.ThinkingLevel != "" {
-		t.Fatalf("expected reviewer thinking to remain disabled after main thinking change, got %q", state.settings.Reviewer.ThinkingLevel)
+	if state.selections.reviewerThinkingValue() != "" {
+		t.Fatalf("expected reviewer thinking to remain disabled after main thinking change, got %q", state.selections.reviewerThinkingValue())
 	}
-	if !state.reviewerThinkingDisabled {
+	if state.selections.supervisor.thinking.kind != onboardingReviewerThinkingOverridden ||
+		state.selections.supervisor.thinking.override.kind != onboardingThinkingDisabled {
 		t.Fatal("expected explicit reviewer disable choice to remain sticky")
 	}
 }
 
 func TestApplyOnboardingModelPreservesCustomReviewerOverrides(t *testing.T) {
-	state := &onboardingFlowState{
-		settings: config.Settings{
-			Model:                            "gpt-5.6-sol",
-			ThinkingLevel:                    "medium",
-			ModelContextWindow:               272_000,
-			ContextCompactionThresholdTokens: 272_000 * 95 / 100,
-			Reviewer:                         config.ReviewerSettings{Frequency: "edits", Model: "gpt-4.1", ThinkingLevel: "low"},
-		},
-		baselineSettings:       config.Settings{ModelContextWindow: 272_000, ContextCompactionThresholdTokens: 272_000 * 95 / 100},
-		reviewerCustomModel:    true,
-		reviewerCustomThinking: true,
-	}
-	state.facts = testOnboardingCapabilityFacts()
-	if err := applyOnboardingModel(state, "gpt-5.3-codex"); err != nil {
+	state := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
+		cfg.Settings.Reviewer.Model = "gpt-4.1"
+		cfg.Settings.Reviewer.ThinkingLevel = "low"
+		cfg.Source.Sources["reviewer.model"] = "file"
+		cfg.Source.Sources["reviewer.thinking_level"] = "file"
+	})
+	if err := state.submitPrimaryModel("gpt-5.3-codex"); err != nil {
 		t.Fatalf("apply onboarding model: %v", err)
 	}
-	if state.settings.Reviewer.Model != "gpt-4.1" {
-		t.Fatalf("expected custom reviewer model to be preserved, got %q", state.settings.Reviewer.Model)
+	if state.selections.reviewerModelValue() != "gpt-4.1" {
+		t.Fatalf("expected custom reviewer model to be preserved, got %q", state.selections.reviewerModelValue())
 	}
-	if state.settings.Reviewer.ThinkingLevel != "low" {
-		t.Fatalf("expected custom reviewer thinking to be preserved, got %q", state.settings.Reviewer.ThinkingLevel)
+	if state.selections.reviewerThinkingValue() != "low" {
+		t.Fatalf("expected custom reviewer thinking to be preserved, got %q", state.selections.reviewerThinkingValue())
 	}
 }
 
-func findWorkflowStep(t *testing.T, state *onboardingFlowState, id string) onboardingStepDefinition {
+func findWorkflowStep(t *testing.T, state *onboardingFlowState, id onboardingStepID) onboardingStepDefinition {
 	t.Helper()
 	if len(state.facts.Models.KnownModels) == 0 && !state.facts.Models.UnknownFallback.SupportsThinking {
 		state.facts = testOnboardingCapabilityFacts()
@@ -480,7 +456,7 @@ func ptrString(value string) *string {
 	return &value
 }
 
-func workflowIncludesStep(steps []onboardingStepDefinition, id string) bool {
+func workflowIncludesStep(steps []onboardingStepDefinition, id onboardingStepID) bool {
 	for _, step := range steps {
 		if step.id == id {
 			return true

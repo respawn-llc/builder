@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -12,37 +11,26 @@ import (
 )
 
 func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (serverapi.OnboardingFinalizeRequest, error) {
-	theme, err := onboardingTheme(state.settings.Theme)
-	if err != nil {
+	if err := state.validateInvariant("finalize_projection", "review"); err != nil {
 		return serverapi.OnboardingFinalizeRequest{}, err
 	}
+	theme := serverapi.OnboardingTheme(state.selections.theme.kind)
 	req := serverapi.OnboardingFinalizeRequest{
 		Theme:          &theme,
 		CommandsImport: onboardingNoneImportSelection(),
 	}
 	if !defaults {
-		mainProvider := onboardingMainProviderChoice(state.settings)
-		model, err := onboardingModelChoice(state, state.settings.Model)
-		if err != nil {
-			return serverapi.OnboardingFinalizeRequest{}, err
+		if state.selections.pendingPrimaryThinking.pending() ||
+			state.selections.pendingReviewerThinking.pending() {
+			return serverapi.OnboardingFinalizeRequest{}, errors.New("custom thinking input must be committed before finishing setup")
 		}
-		contextWindow, err := onboardingContextWindowChoice(state)
-		if err != nil {
-			return serverapi.OnboardingFinalizeRequest{}, err
-		}
-		thinking, err := onboardingPrimaryThinkingChoice(state)
-		if err != nil {
-			return serverapi.OnboardingFinalizeRequest{}, err
-		}
-		supervisor, err := onboardingSupervisorChoice(state)
-		if err != nil {
-			return serverapi.OnboardingFinalizeRequest{}, err
-		}
-		compaction, err := onboardingCompaction(state.settings.CompactionMode)
-		if err != nil {
-			return serverapi.OnboardingFinalizeRequest{}, err
-		}
-		skillsImport, err := onboardingImportSelectionRequest(state.skillImport)
+		mainProvider := onboardingMainProviderChoice(state.selections.preserved)
+		model := onboardingModelChoice(state.selections.model)
+		contextWindow := onboardingContextWindowChoice(state.selections.contextWindow)
+		thinking := onboardingThinkingChoice(state.selections.thinking)
+		supervisor := onboardingSupervisorChoice(state.selections.supervisor)
+		compaction := serverapi.OnboardingCompactionMode(state.selections.compactionValue())
+		skillsImport, err := onboardingImportSelectionRequest(state.selections.skillImport)
 		if err != nil {
 			return serverapi.OnboardingFinalizeRequest{}, err
 		}
@@ -53,15 +41,12 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (server
 		req.Supervisor = &supervisor
 		req.Compaction = &compaction
 		req.SkillsImport = skillsImport
-		askQuestion := state.settings.EnabledTools[toolspec.ToolAskQuestion]
+		askQuestion := state.selections.askQuestion
 		req.AskQuestion = &askQuestion
-		req.ToolOverrides = onboardingToolOverrides(state.settings.EnabledTools)
-		if state.settings.Timeouts.ModelRequestSeconds != config.DefaultOnboardingSettings().Timeouts.ModelRequestSeconds {
-			modelTimeoutSeconds := state.settings.Timeouts.ModelRequestSeconds
-			req.ModelTimeoutSeconds = &modelTimeoutSeconds
-		}
-		if state.settings.ModelVerbosity != "" {
-			verbosity := serverapi.OnboardingVerbosity(state.settings.ModelVerbosity)
+		req.ToolOverrides = onboardingToolOverrides(state.selections.preserved.enabledTools)
+		req.ModelTimeoutSeconds = state.selections.preserved.modelTimeoutSeconds
+		if state.selections.verbosity.kind == onboardingVerbosityLevel {
+			verbosity := serverapi.OnboardingVerbosity(state.selections.verbosity.value)
 			req.Verbosity = &verbosity
 		}
 		req.DisabledSkillNames = disabledOnboardingSkillNames(state)
@@ -72,17 +57,17 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (server
 	return req, nil
 }
 
-func onboardingMainProviderChoice(settings config.Settings) *serverapi.OnboardingProviderChoice {
-	providerOverride := strings.TrimSpace(settings.ProviderOverride)
-	openAIBaseURL := strings.TrimSpace(settings.OpenAIBaseURL)
-	if providerOverride == "" && openAIBaseURL == "" {
+func onboardingMainProviderChoice(preserved onboardingPreservedInputs) *serverapi.OnboardingProviderChoice {
+	if preserved.providerOverride == nil && preserved.openAIBaseURL == nil {
 		return nil
 	}
 	choice := serverapi.OnboardingProviderChoice{}
-	if providerOverride != "" {
+	if preserved.providerOverride != nil {
+		providerOverride := *preserved.providerOverride
 		choice.ProviderOverride = &providerOverride
 	}
-	if openAIBaseURL != "" {
+	if preserved.openAIBaseURL != nil {
+		openAIBaseURL := *preserved.openAIBaseURL
 		choice.OpenAIBaseURL = &openAIBaseURL
 	}
 	return &choice
@@ -95,10 +80,7 @@ func onboardingToolOverrides(enabledTools map[toolspec.ID]bool) []serverapi.Onbo
 		if id == toolspec.ToolAskQuestion {
 			continue
 		}
-		enabled, configured := enabledTools[id]
-		if !configured {
-			enabled = defaults[id]
-		}
+		enabled := enabledTools[id]
 		if enabled != defaults[id] {
 			overrides = append(overrides, serverapi.OnboardingToolOverride{ID: id, Enabled: enabled})
 		}
@@ -109,106 +91,54 @@ func onboardingToolOverrides(enabledTools map[toolspec.ID]bool) []serverapi.Onbo
 	return overrides
 }
 
-func onboardingTheme(value string) (serverapi.OnboardingTheme, error) {
-	switch strings.TrimSpace(value) {
-	case "", "auto":
-		return serverapi.OnboardingThemeAuto, nil
-	case "light":
-		return serverapi.OnboardingThemeLight, nil
-	case "dark":
-		return serverapi.OnboardingThemeDark, nil
+func onboardingModelChoice(selection onboardingModelSelection) serverapi.OnboardingModelChoice {
+	if selection.kind == onboardingModelKnown {
+		return serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: selection.value}
+	}
+	return serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: selection.value}
+}
+
+func onboardingContextWindowChoice(selection onboardingContextSelection) serverapi.OnboardingContextWindowChoice {
+	switch selection.kind {
+	case onboardingContextLarge:
+		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowLarge}
+	case onboardingContextCustom:
+		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowCustom, Tokens: selection.tokens}
 	default:
-		return "", fmt.Errorf("unsupported onboarding theme %q", value)
+		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowDefault}
 	}
 }
 
-func onboardingModelChoice(state onboardingFlowState, value string) (serverapi.OnboardingModelChoice, error) {
-	model := strings.TrimSpace(value)
-	if model == "" {
-		return serverapi.OnboardingModelChoice{}, fmt.Errorf("onboarding model is required")
-	}
-	fact := modelFactFor(&state, model)
-	if fact.Known {
-		return serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: model}, nil
-	}
-	return serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: model}, nil
-}
-
-func onboardingContextWindowChoice(state onboardingFlowState) (serverapi.OnboardingContextWindowChoice, error) {
-	fact := modelFactFor(&state, state.settings.Model)
-	selected := state.settings.ModelContextWindow
-	switch {
-	case fact.ContextWindowTokens != nil && selected == *fact.ContextWindowTokens:
-		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowDefault}, nil
-	case fact.LargeWindow != nil && selected == fact.LargeWindow.Tokens:
-		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowLarge}, nil
-	case selected > 0:
-		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowCustom, Tokens: selected}, nil
+func onboardingThinkingChoice(selection onboardingThinkingSelection) serverapi.OnboardingThinkingChoice {
+	switch selection.kind {
+	case onboardingThinkingDefault:
+		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDefault}
+	case onboardingThinkingDisabled:
+		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDisabled}
+	case onboardingThinkingCustom:
+		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingCustom, Value: selection.value}
 	default:
-		return serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowDefault}, nil
+		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: selection.value}
 	}
 }
 
-func onboardingThinkingChoice(value string, custom bool) (serverapi.OnboardingThinkingChoice, error) {
-	thinking := strings.TrimSpace(value)
-	switch {
-	case thinking == "":
-		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDisabled}, nil
-	case custom:
-		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingCustom, Value: thinking}, nil
-	default:
-		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: thinking}, nil
+func onboardingSupervisorChoice(selection onboardingSupervisorSelection) serverapi.OnboardingSupervisorChoice {
+	result := serverapi.OnboardingSupervisorChoice{Frequency: serverapi.OnboardingSupervisorFrequency(selection.frequency)}
+	if selection.frequency == onboardingSupervisorOff {
+		return result
 	}
-}
-
-func onboardingPrimaryThinkingChoice(state onboardingFlowState) (serverapi.OnboardingThinkingChoice, error) {
-	if !state.customThinking && strings.TrimSpace(state.settings.ThinkingLevel) == strings.TrimSpace(config.DefaultOnboardingSettings().ThinkingLevel) {
-		return serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDefault}, nil
-	}
-	return onboardingThinkingChoice(state.settings.ThinkingLevel, state.customThinking)
-}
-
-func onboardingSupervisorChoice(state onboardingFlowState) (serverapi.OnboardingSupervisorChoice, error) {
-	frequency := strings.TrimSpace(state.settings.Reviewer.Frequency)
-	switch frequency {
-	case "", "off":
-		return serverapi.OnboardingSupervisorChoice{Frequency: serverapi.OnboardingSupervisorOff}, nil
-	case "edits", "all":
-	default:
-		return serverapi.OnboardingSupervisorChoice{}, fmt.Errorf("unsupported reviewer frequency %q", frequency)
-	}
-	result := serverapi.OnboardingSupervisorChoice{Frequency: serverapi.OnboardingSupervisorFrequency(frequency)}
-	if state.reviewerCustomModel {
-		model, err := onboardingModelChoice(state, state.settings.Reviewer.Model)
-		if err != nil {
-			return serverapi.OnboardingSupervisorChoice{}, err
-		}
+	if selection.model.kind == onboardingReviewerModelOverridden {
+		model := onboardingModelChoice(selection.model.override)
 		result.Model = &model
 	}
-	if state.reviewerThinkingDisabled {
-		thinking := serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDisabled}
+	if selection.thinking.kind == onboardingReviewerThinkingOverridden {
+		thinking := onboardingThinkingChoice(selection.thinking.override)
 		result.Thinking = &thinking
-	} else if state.reviewerCustomThinking {
-		thinking, err := onboardingThinkingChoice(state.settings.Reviewer.ThinkingLevel, state.reviewerCustomThinkingInput)
-		if err != nil {
-			return serverapi.OnboardingSupervisorChoice{}, err
-		}
+	} else if selection.thinking.kind == onboardingReviewerThinkingCapabilityDisabled {
+		thinking := onboardingThinkingChoice(onboardingThinkingSelection{kind: onboardingThinkingDisabled})
 		result.Thinking = &thinking
 	}
-	return result, nil
-}
-
-func onboardingCompaction(value config.CompactionMode) (serverapi.OnboardingCompactionMode, error) {
-	switch value {
-	case config.CompactionModeLocal:
-		return serverapi.OnboardingCompactionLocal, nil
-	case config.CompactionModeNative:
-		return serverapi.OnboardingCompactionNative, nil
-	case config.CompactionModeNone:
-		return serverapi.OnboardingCompactionNone, nil
-	default:
-		return "", fmt.Errorf("unsupported compaction mode %q", value)
-	}
+	return result
 }
 
 func onboardingNoneImportSelection() *serverapi.OnboardingImportSelection {
@@ -216,7 +146,6 @@ func onboardingNoneImportSelection() *serverapi.OnboardingImportSelection {
 }
 
 func onboardingImportSelectionRequest(selection onboardingImportSelection) (*serverapi.OnboardingImportSelection, error) {
-	selection = normalizeImportSelection(selection)
 	switch selection.Mode {
 	case onboardingImportModeNone:
 		return onboardingNoneImportSelection(), nil
@@ -237,8 +166,9 @@ func onboardingImportSelectionRequest(selection onboardingImportSelection) (*ser
 
 func disabledOnboardingSkillNames(state onboardingFlowState) []string {
 	disabled := map[string]struct{}{}
+	selected := effectiveSkillSelection(&state)
 	for _, item := range skillSelectionCandidates(&state) {
-		if effectiveSkillSelection(&state)[item.ID] {
+		if selected[item.ID] {
 			continue
 		}
 		if name := config.NormalizeSkillName(item.SkillName); name != "" {

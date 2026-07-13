@@ -13,12 +13,10 @@ import (
 )
 
 type onboardingImportChoice struct {
-	OptionID   string
-	Mode       onboardingImportMode
-	Provider   *onboardingImportProviderID
-	SourceRoot *string
-	Count      int
-	Ref        serverapi.ImportChoiceRef
+	OptionID string
+	Mode     onboardingImportMode
+	Count    int
+	Ref      serverapi.ImportChoiceRef
 }
 
 type onboardingImportDiscovery struct {
@@ -108,15 +106,11 @@ func importChoiceIDFromRecommendation(recommendation *serverapi.ImportModeRecomm
 func importChoicesFromFacts(facts []serverapi.ImportChoiceFact) []onboardingImportChoice {
 	choices := make([]onboardingImportChoice, 0, len(facts))
 	for _, fact := range facts {
-		provider := providerIDFromPtr(fact.ImportProviderID)
-		sourceRoot := valuecopy.Pointer(fact.SourceRootPath)
 		choices = append(choices, onboardingImportChoice{
-			OptionID:   uuid.NewString(),
-			Mode:       onboardingImportMode(fact.Ref.Mode),
-			Provider:   provider,
-			SourceRoot: sourceRoot,
-			Count:      fact.ItemCount,
-			Ref:        fact.Ref,
+			OptionID: uuid.NewString(),
+			Mode:     onboardingImportMode(fact.Ref.Mode),
+			Count:    fact.ItemCount,
+			Ref:      fact.Ref,
 		})
 	}
 	return choices
@@ -224,19 +218,27 @@ func noneChoiceID(choices []onboardingImportChoice) (string, bool) {
 }
 
 func optionIDForSelection(choices []onboardingImportChoice, selection onboardingImportSelection) (string, bool) {
-	selection = normalizeImportSelection(selection)
 	for _, choice := range choices {
-		if choice.Mode != selection.Mode {
-			continue
-		}
-		if choice.Mode == onboardingImportModeNone {
-			return choice.OptionID, true
-		}
-		if ptrEqual(choice.Provider, selection.Provider) && ptrStringEqual(choice.SourceRoot, selection.SourceRoot) {
+		candidate := onboardingImportSelection{Mode: choice.Mode, ChoiceRef: choice.Ref}
+		if importSelectionsEqual(candidate, selection) {
 			return choice.OptionID, true
 		}
 	}
 	return "", false
+}
+
+func importSelectionsEqual(left, right onboardingImportSelection) bool {
+	if left.Mode != right.Mode {
+		return false
+	}
+	switch left.Mode {
+	case onboardingImportModeNone:
+		return true
+	case onboardingImportModeSymlinkSource:
+		return importChoiceRefsEqual(left.ChoiceRef, right.ChoiceRef)
+	default:
+		return false
+	}
 }
 
 func importChoiceRefsEqual(left, right serverapi.ImportChoiceRef) bool {
@@ -265,23 +267,10 @@ func applyImportChoice(selection *onboardingImportSelection, choiceID string, ch
 		if choice.OptionID != choiceID {
 			continue
 		}
-		next := onboardingImportSelection{Mode: choice.Mode, ChoiceRef: choice.Ref}
-		if choice.Provider != nil {
-			provider := *choice.Provider
-			next.Provider = &provider
-		}
-		next.SourceRoot = valuecopy.Pointer(choice.SourceRoot)
-		*selection = next
+		*selection = onboardingImportSelection{Mode: choice.Mode, ChoiceRef: choice.Ref}
 		return nil
 	}
 	return fmt.Errorf("unknown import choice %q", choiceID)
-}
-
-func normalizeImportSelection(selection onboardingImportSelection) onboardingImportSelection {
-	if strings.TrimSpace(string(selection.Mode)) == "" {
-		selection.Mode = onboardingImportModeNone
-	}
-	return selection
 }
 
 func buildSkillImportScreen(state *onboardingFlowState) onboardingScreen {
@@ -296,7 +285,7 @@ func buildSkillImportScreen(state *onboardingFlowState) onboardingScreen {
 		return onboardingScreen{ID: "skills_import", Kind: onboardingScreenChoice, Title: "Import skills?", Body: "Kent could not inspect importable skills on this machine.", ErrorText: state.imports.err.Error(), Options: []onboardingOption{{ID: optionID, Title: "Do not import"}}, DefaultOptionID: optionID}
 	}
 	defaultID := state.imports.skillRecommendationID
-	if selectedID, ok := optionIDForSelection(state.imports.skillChoices, state.skillImport); ok {
+	if selectedID, ok := optionIDForSelection(state.imports.skillChoices, state.selections.skillImport); ok {
 		defaultID = selectedID
 	}
 	options := make([]onboardingOption, 0, len(state.imports.skillChoices))
@@ -308,7 +297,7 @@ func buildSkillImportScreen(state *onboardingFlowState) onboardingScreen {
 			if choice.Count == 0 {
 				continue
 			}
-			options = append(options, onboardingOption{ID: choice.OptionID, Title: fmt.Sprintf("Symlink to %s (%d found)", importProviderDisplayLabel(choice.Provider, "external_provider"), choice.Count)})
+			options = append(options, onboardingOption{ID: choice.OptionID, Title: fmt.Sprintf("Symlink to %s (%d found)", importProviderDisplayLabel(providerIDFromPtr(choice.Ref.ImportProviderID), "external_provider"), choice.Count)})
 		}
 	}
 	if len(options) == 0 {
@@ -328,13 +317,13 @@ func importSkillsBody(discovery onboardingImportDiscovery) string {
 	providers := make([]string, 0)
 	for _, choice := range discovery.skillChoices {
 		if choice.Mode == onboardingImportModeSymlinkSource && choice.Count > 0 {
-			providers = append(providers, importProviderDisplayLabel(choice.Provider, "external_provider"))
+			providers = append(providers, importProviderDisplayLabel(providerIDFromPtr(choice.Ref.ImportProviderID), "external_provider"))
 		}
 	}
 	return "Kent found importable skills from " + strings.Join(providers, ", ") + ". Would you like to symlink to the other provider's directories?"
 }
 
-func skippedImportScreen(id string, title string, bodyKind string, choices []onboardingImportChoice, err error) onboardingScreen {
+func skippedImportScreen(id onboardingStepID, title string, bodyKind string, choices []onboardingImportChoice, err error) onboardingScreen {
 	optionID, ok := noneChoiceID(choices)
 	if !ok {
 		optionID = uuid.NewString()
@@ -374,8 +363,8 @@ func allSkillItemsSelected(items []onboardingSkillImportItem, selection map[stri
 
 func skillSelectionCandidates(state *onboardingFlowState) []onboardingSkillImportItem {
 	choiceID, hasChoice := noneChoiceID(state.imports.skillChoices)
-	if state.skillImport.Mode == onboardingImportModeSymlinkSource && !state.imports.skipSkills {
-		choiceID, hasChoice = optionIDForSelection(state.imports.skillChoices, state.skillImport)
+	if state.selections.skillImport.Mode == onboardingImportModeSymlinkSource && !state.imports.skipSkills {
+		choiceID, hasChoice = optionIDForSelection(state.imports.skillChoices, state.selections.skillImport)
 	}
 	if hasChoice {
 		if items, ok := state.imports.skillEnablementByChoice[choiceID]; ok {
@@ -389,8 +378,12 @@ func skillImportSummary(state *onboardingFlowState) string {
 	if state.imports.skipSkills {
 		return "skipped - existing found"
 	}
-	if state.skillImport.Mode != onboardingImportModeSymlinkSource {
+	if state.selections.skillImport.Mode != onboardingImportModeSymlinkSource {
 		return ""
 	}
-	return fmt.Sprintf("Symlink %d skills from %s", len(skillSelectionCandidates(state)), importProviderDisplayLabel(state.skillImport.Provider, "external_provider"))
+	return fmt.Sprintf(
+		"Symlink %d skills from %s",
+		len(skillSelectionCandidates(state)),
+		importProviderDisplayLabel(providerIDFromPtr(state.selections.skillImport.ChoiceRef.ImportProviderID), "external_provider"),
+	)
 }
