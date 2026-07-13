@@ -30,17 +30,18 @@ type steeringIntent struct {
 }
 
 type steeringItem struct {
-	message            *steeringMessage
-	committedAssistant *steeringCommittedAssistantMessage
-	localEntry         *steeringLocalEntry
-	historyReplace     *steeringHistoryReplacement
-	toolCompletion     *tools.Result
-	queuedFlush        *steeringQueuedUserMessageFlush
-	event              *Event
-	streaming          *steeringStreamingOutput
-	cacheWarning       *steeringCacheWarning
-	cacheObservation   *steeringCacheObservation
-	liveToolAbort      *steeringLiveToolAbort
+	message                     *steeringMessage
+	committedAssistant          *steeringCommittedAssistantMessage
+	completedResponseResolution *steeringCompletedResponseResolution
+	localEntry                  *steeringLocalEntry
+	historyReplace              *steeringHistoryReplacement
+	toolCompletion              *tools.Result
+	queuedFlush                 *steeringQueuedUserMessageFlush
+	event                       *Event
+	streaming                   *steeringStreamingOutput
+	cacheWarning                *steeringCacheWarning
+	cacheObservation            *steeringCacheObservation
+	liveToolAbort               *steeringLiveToolAbort
 }
 
 type steeringMessage struct {
@@ -54,9 +55,46 @@ type steeringLocalEntry struct {
 }
 
 type steeringCommittedAssistantMessage struct {
-	message           llm.Message
-	committedStart    int
-	committedStartSet bool
+	message    llm.Message
+	coordinate *committedAssistantCoordinate
+}
+
+type committedAssistantCoordinate struct {
+	start int
+}
+
+type completedResponseResolutionInstructionKind uint8
+
+const (
+	completedResponseResolutionInstructionInvalid completedResponseResolutionInstructionKind = iota
+	completedResponseResolutionInstructionFinalize
+	completedResponseResolutionInstructionDiscard
+)
+
+type completedResponseResolutionInstruction struct {
+	kind               completedResponseResolutionInstructionKind
+	committedAssistant *steeringCommittedAssistantMessage
+	abortReason        *AssistantStreamAbortReason
+}
+
+type completedResponseResolutionKind uint8
+
+const (
+	completedResponseResolutionInvalid completedResponseResolutionKind = iota
+	completedResponseResolutionFinalized
+	completedResponseResolutionDiscarded
+	completedResponseResolutionAbsent
+)
+
+type completedResponseResolutionOutcome struct {
+	kind                             completedResponseResolutionKind
+	streamID                         *uuid.UUID
+	committedAssistantEventPublished bool
+}
+
+type steeringCompletedResponseResolution struct {
+	instruction completedResponseResolutionInstruction
+	outcome     *completedResponseResolutionOutcome
 }
 
 type steeringHistoryReplacement struct {
@@ -70,7 +108,7 @@ type steeringStreamingOutput struct {
 	reasoningDelta *llm.ReasoningSummaryDelta
 	clearState     bool
 	resetEvents    bool
-	abortReason    AssistantStreamAbortReason
+	abortReason    *AssistantStreamAbortReason
 }
 
 type steeringCacheWarning struct {
@@ -181,13 +219,48 @@ func steerLiveToolAbortIntent(reason string) steeringIntent {
 	}
 }
 
-func steerCommittedAssistantMessageIntent(msg llm.Message, committedStart int, committedStartSet bool) steeringIntent {
+func steerCommittedAssistantMessageIntent(msg llm.Message, coordinate *committedAssistantCoordinate) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{committedAssistant: &steeringCommittedAssistantMessage{
-			message:           msg,
-			committedStart:    committedStart,
-			committedStartSet: committedStartSet,
+			message:    msg,
+			coordinate: cloneCommittedAssistantCoordinate(coordinate),
+		}}},
+	}
+}
+
+func completedResponseFinalizeInstruction(msg llm.Message, coordinate *committedAssistantCoordinate) completedResponseResolutionInstruction {
+	return completedResponseResolutionInstruction{
+		kind: completedResponseResolutionInstructionFinalize,
+		committedAssistant: &steeringCommittedAssistantMessage{
+			message:    msg,
+			coordinate: cloneCommittedAssistantCoordinate(coordinate),
+		},
+	}
+}
+
+func cloneCommittedAssistantCoordinate(coordinate *committedAssistantCoordinate) *committedAssistantCoordinate {
+	if coordinate == nil {
+		return nil
+	}
+	copyCoordinate := *coordinate
+	return &copyCoordinate
+}
+
+func completedResponseDiscardInstruction() completedResponseResolutionInstruction {
+	reason := AssistantStreamAbortSuperseded
+	return completedResponseResolutionInstruction{
+		kind:        completedResponseResolutionInstructionDiscard,
+		abortReason: &reason,
+	}
+}
+
+func steerCompletedResponseResolutionIntent(instruction completedResponseResolutionInstruction, outcome *completedResponseResolutionOutcome) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items: []steeringItem{{completedResponseResolution: &steeringCompletedResponseResolution{
+			instruction: instruction,
+			outcome:     outcome,
 		}}},
 	}
 }
@@ -209,9 +282,10 @@ func steerReasoningDeltaIntent(delta llm.ReasoningSummaryDelta) steeringIntent {
 }
 
 func steerClearStreamingStateIntent() steeringIntent {
+	reason := AssistantStreamAbortSuperseded
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: AssistantStreamAbortSuperseded}}},
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: &reason}}},
 	}
 }
 
@@ -296,12 +370,35 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	return nil
 }
 
+func (e *Engine) resolveCompletedResponseStream(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
+	outcome := completedResponseResolutionOutcome{}
+	if err := e.steerOrdered(stepID, steerCompletedResponseResolutionIntent(instruction, &outcome)); err != nil {
+		return completedResponseResolutionOutcome{}, err
+	}
+	if outcome.kind == completedResponseResolutionInvalid {
+		return completedResponseResolutionOutcome{}, errors.New("completed response stream resolution produced no outcome")
+	}
+	return outcome, nil
+}
+
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.message != nil {
 		return e.appendMessageRaw(stepID, item.message.message, item.message.eventPolicy, item.message.persist)
 	}
 	if item.committedAssistant != nil {
 		return e.emitCommittedAssistantMessageRaw(stepID, *item.committedAssistant)
+	}
+	if item.completedResponseResolution != nil {
+		resolution := item.completedResponseResolution
+		if resolution.outcome == nil {
+			return errors.New("completed response stream resolution requires an outcome destination")
+		}
+		outcome, err := e.resolveCompletedResponseStreamRaw(stepID, resolution.instruction)
+		if err != nil {
+			return err
+		}
+		*resolution.outcome = outcome
+		return nil
 	}
 	if item.localEntry != nil {
 		return e.appendPersistedLocalEntryRecordRaw(stepID, item.localEntry.entry)

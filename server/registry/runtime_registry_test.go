@@ -100,11 +100,26 @@ func closeRuntime(r *RuntimeRegistry, sessionID string, _ *runtime.Engine) {
 
 func newRegistryTestRuntime(t *testing.T, onEvent func(runtime.Event)) *runtime.Engine {
 	t.Helper()
+	return newRegistryRuntime(t, registryRuntimeFakeClient{}, askquestion.NewRegistry(), runtime.Config{Model: "gpt-5"}, func(_ *runtime.Engine, evt runtime.Event) {
+		if onEvent != nil {
+			onEvent(evt)
+		}
+	})
+}
+
+func newRegistryRuntime(t *testing.T, client llm.Client, toolRegistry *askquestion.Registry, cfg runtime.Config, onEvent func(*runtime.Engine, runtime.Event)) *runtime.Engine {
+	t.Helper()
 	store, err := session.Create(t.TempDir(), "workspace", t.TempDir())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	engine, err := runtime.New(store, registryRuntimeFakeClient{}, askquestion.NewRegistry(), runtime.Config{Model: "gpt-5", OnEvent: onEvent})
+	var engine *runtime.Engine
+	cfg.OnEvent = func(evt runtime.Event) {
+		if onEvent != nil {
+			onEvent(engine, evt)
+		}
+	}
+	engine, err = runtime.New(store, client, toolRegistry, cfg)
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
 	}

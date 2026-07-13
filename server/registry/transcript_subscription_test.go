@@ -11,7 +11,6 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/runtimecontrol"
-	"core/server/session"
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/invariant"
@@ -761,25 +760,12 @@ func TestSessionTranscriptSubscriptionEmitsToolCompletionsInServerOrder(t *testi
 
 func TestSessionTranscriptHydratesRuntimeLedgerInFlightToolAndCompletionTerminalsIt(t *testing.T) {
 	registry := NewRuntimeRegistry()
-	handler := &blockingToolHandler{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	store, err := session.Create(t.TempDir(), "workspace", t.TempDir())
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	var engine *runtime.Engine
-	engine, err = runtime.New(store, registryRuntimeFakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: handler}), runtime.Config{
+	handler := newBlockingToolHandler()
+	engine := newRegistryRuntime(t, registryRuntimeFakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: handler}), runtime.Config{
 		Model: "gpt-5",
-		OnEvent: func(evt runtime.Event) {
-			registry.PublishRuntimeEvent(engine.SessionID(), evt)
-		},
+	}, func(engine *runtime.Engine, evt runtime.Event) {
+		registry.PublishRuntimeEvent(engine.SessionID(), evt)
 	})
-	if err != nil {
-		t.Fatalf("new runtime: %v", err)
-	}
-	t.Cleanup(func() { _ = engine.Close() })
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
 
@@ -788,11 +774,7 @@ func TestSessionTranscriptHydratesRuntimeLedgerInFlightToolAndCompletionTerminal
 		_, err := engine.SubmitUserShellCommand(context.Background(), "pwd")
 		done <- err
 	}()
-	select {
-	case <-handler.entered:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for tool handler to start")
-	}
+	handler.waitFallbackEntered(t)
 
 	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
 	defer func() { _ = sub.Close() }()
@@ -805,7 +787,7 @@ func TestSessionTranscriptHydratesRuntimeLedgerInFlightToolAndCompletionTerminal
 		t.Fatalf("hydrated in-flight tool = %+v, want provider call id and exec_command", inFlight)
 	}
 
-	close(handler.release)
+	handler.releaseFallback()
 	if err := <-done; err != nil {
 		t.Fatalf("SubmitUserShellCommand: %v", err)
 	}
@@ -843,25 +825,6 @@ func TestSessionTranscriptToolAbortTerminalsVisibleStart(t *testing.T) {
 	abort := nextTranscriptMessage(t, sub)
 	if abort.Sequence != 3 || abort.Kind != clientui.TranscriptMessageToolAbort || abort.ToolAbort == nil || abort.ToolAbort.ToolCallID != "call-abort" {
 		t.Fatalf("tool abort = %+v, want terminal abort", abort)
-	}
-}
-
-type blockingToolHandler struct {
-	entered chan struct{}
-	release chan struct{}
-}
-
-func (h *blockingToolHandler) Call(ctx context.Context, call tools.Call) (tools.Result, error) {
-	close(h.entered)
-	select {
-	case <-ctx.Done():
-		return tools.Result{}, ctx.Err()
-	case <-h.release:
-		return tools.Result{
-			CallID: call.ID,
-			Name:   call.Name,
-			Output: []byte(`{"output":"done"}`),
-		}, nil
 	}
 }
 
