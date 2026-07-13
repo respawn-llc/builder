@@ -211,8 +211,15 @@ describe("KanbanColumn", () => {
     const approvalCard = screen.getByRole("article", { name: "Approval task" });
 
     expect(within(questionCard).getByTestId("task-card-body")).toHaveTextContent(
-      "Bounded preview from the server: semantic source remains intact",
+      "Bounded preview from the server: semantic source remains intact…",
     );
+    expect(within(questionCard).getByTestId("task-card-preview-ellipsis")).toHaveTextContent("…");
+    expect(
+      within(within(questionCard).getByTestId("task-card-body")).getByText(
+        "Bounded preview from the server: semantic source remains intact",
+      ),
+    ).toHaveClass("markdown-plain-text");
+    expect(within(approvalCard).queryByTestId("task-card-preview-ellipsis")).not.toBeInTheDocument();
     expect(within(questionCard).queryByTestId("task-card-chip-slot")).not.toBeInTheDocument();
     expect(within(approvalCard).getByTestId("task-card-chip-slot")).toHaveTextContent("Other workspace");
     expect(questionCard).toHaveAttribute("data-task-card-border-tone", "primary");
@@ -398,6 +405,25 @@ describe("KanbanColumn", () => {
     expect(dataTransfer.setDragImage).toHaveBeenCalledTimes(1);
     expect(dataTransfer.setDragImage.mock.calls[0]?.[0]).toBeInstanceOf(HTMLElement);
     expect(onCardDragStart).toHaveBeenCalledTimes(1);
+    expect(onCardDragStart).toHaveBeenCalledWith({
+      instance: { columnID: "backlog", taskID: "task-1" },
+      lastVirtualIndex: 0,
+      payload: {
+        taskID: "task-1",
+        canStart: false,
+        activeNodeIDs: ["backlog"],
+        statusKind: "backlog",
+        manualMoveTargetNodeIDs: [],
+      },
+      snapshot: {
+        ...card,
+        actions: {
+          ...card.actions,
+          canStart: false,
+          manualMoveTargetNodeIDs: [],
+        },
+      },
+    });
     expect(onCardClick).not.toHaveBeenCalled();
   });
 
