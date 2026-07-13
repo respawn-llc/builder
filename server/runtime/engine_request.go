@@ -81,7 +81,10 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 			return requestBuildPlan{}, err
 		}
 	}
-	toolChoiceMode := toolChoiceModeForWorkflowCompletion(workflowMode)
+	toolChoiceMode := llm.ToolChoiceModeAutomatic
+	if allowTools {
+		toolChoiceMode = toolChoiceModeForWorkflowCompletion(workflowMode)
+	}
 	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{
 		ChoiceMode:            toolChoiceMode,
 		EnableNativeWebSearch: nativeWebSearch,
