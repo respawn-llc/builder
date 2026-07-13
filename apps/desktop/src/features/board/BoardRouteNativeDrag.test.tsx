@@ -348,6 +348,15 @@ function nodeCardsResponse(nodeIDValue: string, includeSource: boolean) {
 }
 
 const boardGroupID = "group-qa";
+const workflow = {
+  workflow_id: "workflow-1",
+  display_name: "Workflow",
+  description: "Board drag QA workflow",
+  version: 1,
+  is_project_default: true,
+  valid_for_task_creation: true,
+  validation_errors: [],
+};
 
 function boardResponse(backlogTaskCount: number) {
   return {
@@ -359,26 +368,8 @@ function boardResponse(backlogTaskCount: number) {
         default_workspace_id: "workspace-1",
         attached_workspace_count: 1,
       },
-      selected_workflow: {
-        workflow_id: "workflow-1",
-        display_name: "Workflow",
-        description: "Board drag QA workflow",
-        version: 1,
-        is_project_default: true,
-        valid_for_task_creation: true,
-        validation_errors: [],
-      },
-      workflows: [
-        {
-          workflow_id: "workflow-1",
-          display_name: "Workflow",
-          description: "Board drag QA workflow",
-          version: 1,
-          is_project_default: true,
-          valid_for_task_creation: true,
-          validation_errors: [],
-        },
-      ],
+      selected_workflow: workflow,
+      workflows: [workflow],
       groups: [
         {
           group_id: boardGroupID,
