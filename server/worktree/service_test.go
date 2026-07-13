@@ -20,20 +20,21 @@ import (
 )
 
 type serviceTestRuntime struct {
-	mu                    sync.Mutex
-	rebindCalls           []serviceRuntimeCall
-	reminderCalls         []session.WorktreeReminderState
-	clearReminderSessions []string
-	activeSessions        map[string]bool
-	runningSessions       map[string]bool
-	syncErrSessions       map[string]error
-	blockedRuns           map[string]int
-	rebindErr             error
-	rebindErrRoot         string
-	rebindHook            func(context.Context, string, string, string)
-	transitionGate        <-chan struct{}
-	transitionOutcomes    []clientui.WorktreeTransitionOutcome
-	steeredFailures       []clientui.WorktreeTransitionOutcome
+	mu                     sync.Mutex
+	rebindCalls            []serviceRuntimeCall
+	reminderCalls          []session.WorktreeReminderState
+	clearReminderSessions  []string
+	activeSessions         map[string]bool
+	runningSessions        map[string]bool
+	syncErrSessions        map[string]error
+	blockedRuns            map[string]int
+	rebindErr              error
+	rebindErrRoot          string
+	rebindHook             func(context.Context, string, string, string)
+	transitionGate         <-chan struct{}
+	transitionOutcomes     []clientui.WorktreeTransitionOutcome
+	transitionOutcomeReady chan struct{}
+	steeredFailures        []clientui.WorktreeTransitionOutcome
 }
 
 func sessionTargetWorktreeID(target clientui.SessionExecutionTarget) string {
@@ -121,8 +122,16 @@ func (r *serviceTestRuntime) RunWorktreeTransition(
 
 func (r *serviceTestRuntime) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.transitionOutcomes = append(r.transitionOutcomes, outcome)
+	if r.transitionOutcomeReady == nil {
+		r.transitionOutcomeReady = make(chan struct{}, 1)
+	}
+	ready := r.transitionOutcomeReady
+	r.mu.Unlock()
+	select {
+	case ready <- struct{}{}:
+	default:
+	}
 }
 
 func (r *serviceTestRuntime) SteerWorktreeTransitionFailure(_ context.Context, _ string, outcome clientui.WorktreeTransitionOutcome) error {
@@ -377,7 +386,7 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 	select {
 	case result := <-resultCh:
 		t.Fatalf("CreateWorktree returned before setup release: resp=%+v err=%v", result.resp, result.err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
 	if err != nil {

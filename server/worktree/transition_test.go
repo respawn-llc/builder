@@ -169,17 +169,25 @@ func createExternalWorktree(t *testing.T, env *serviceTestEnv, branch string) st
 
 func waitForWorktreeTransitionOutcome(t *testing.T, runtime *serviceTestRuntime) clientui.WorktreeTransitionOutcome {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for {
 		runtime.mu.Lock()
 		if len(runtime.transitionOutcomes) > 0 {
 			outcome := runtime.transitionOutcomes[len(runtime.transitionOutcomes)-1]
 			runtime.mu.Unlock()
 			return outcome
 		}
+		if runtime.transitionOutcomeReady == nil {
+			runtime.transitionOutcomeReady = make(chan struct{}, 1)
+		}
+		ready := runtime.transitionOutcomeReady
 		runtime.mu.Unlock()
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-ready:
+		case <-timeout.C:
+			t.Fatal("timed out waiting for worktree transition outcome")
+			return clientui.WorktreeTransitionOutcome{}
+		}
 	}
-	t.Fatal("timed out waiting for worktree transition outcome")
-	return clientui.WorktreeTransitionOutcome{}
 }

@@ -101,7 +101,7 @@ func TestEnsureTaskWorktreeRunsSetupAndPublishesProgressBeforeReturning(t *testi
 	select {
 	case result := <-resultCh:
 		t.Fatalf("EnsureTaskWorktree returned before setup release: resp=%+v err=%v", result.resp, result.err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 	if err := os.WriteFile(releasePath, []byte("release"), 0o644); err != nil {
 		t.Fatalf("release setup: %v", err)

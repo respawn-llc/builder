@@ -35,6 +35,10 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	if err != nil {
 		return analyzer.Capture{}, err
 	}
+	frameResizes, err := newFrameResizeDispatcher(spec.FrameResizes)
+	if err != nil {
+		return analyzer.Capture{}, err
+	}
 	parseableInputs := newParseableInputDispatcher(spec.ParseableInputs)
 	readiness, err := analyzer.NewReadinessTracker(spec.Dimensions)
 	if err != nil {
@@ -122,12 +126,20 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		}
 		return nil
 	}
+	var applyResize func(ResizeEvent) (int64, error)
 	dispatchPendingInputs := func() error {
 		if processExited.Load() {
 			return nil
 		}
 		if err := dispatchPhaseInputs(phaseInputs.pending(readiness.PhaseEvents())); err != nil {
 			return err
+		}
+		for _, resize := range frameResizes.pendingResize(readiness) {
+			resizeByteOffset, err := applyResize(ResizeEvent{Dimensions: resize.Dimensions})
+			if err != nil {
+				return fmt.Errorf("apply frame-gated PTY resize for phase=%d: %w", resize.Phase, err)
+			}
+			frameResizes.markResized(resize.Index, resizeByteOffset)
 		}
 		pendingFrameInputs := frameInputs.pending(readiness)
 		for _, input := range pendingFrameInputs {
@@ -155,6 +167,14 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				StartedAt:                  startedAt,
 			})
 			mu.Unlock()
+		}
+		for _, completion := range frameResizes.pendingCompletion(readiness) {
+			if err := writeFull(ptmx, completion.Bytes); err != nil {
+				if processExited.Load() {
+					return nil
+				}
+				return fmt.Errorf("write post-resize PTY completion input for phase=%d: %w", completion.Phase, err)
+			}
 		}
 		if len(phaseInputs.events) == 0 || allDispatchesTriggered(phaseInputs.triggered) {
 			for _, payload := range parseableInputs.pending(analyzer.Analysis{}) {
@@ -187,11 +207,11 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		default:
 		}
 	}
-	applyResize := func(resize ResizeEvent) error {
+	applyResize = func(resize ResizeEvent) (int64, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)}); err != nil {
-			return fmt.Errorf("resize PTY to dimensions=%+v: %w", resize.Dimensions, err)
+			return 0, fmt.Errorf("resize PTY to dimensions=%+v: %w", resize.Dimensions, err)
 		}
 		placement := analyzer.BeforeFirstChunk()
 		source := analyzer.Chunk{Index: 0}
@@ -202,16 +222,17 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		at := time.Since(started)
 		resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: at, Dimensions: resize.Dimensions})
 		if err := stream.ResizeFrom(resize.Dimensions, source, at); err != nil {
-			return fmt.Errorf("apply live PTY resize: %w", err)
+			return 0, fmt.Errorf("apply live PTY resize: %w", err)
 		}
+		resizeByteOffset := stream.Offset()
 		requestAnalysis()
-		return nil
+		return resizeByteOffset, nil
 	}
 	for _, resize := range spec.Resizes {
 		if resize.After != 0 {
 			continue
 		}
-		if err := applyResize(resize); err != nil {
+		if _, err := applyResize(resize); err != nil {
 			eventErrors.Add(err)
 			cancel()
 			break
@@ -321,7 +342,7 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				if processExited.Load() || ctx.Err() != nil {
 					return
 				}
-				if err := applyResize(resize); err != nil {
+				if _, err := applyResize(resize); err != nil {
 					if processExited.Load() {
 						return
 					}
@@ -514,6 +535,114 @@ type readyFrameInput struct {
 	ReadyBoundary              analyzer.ReadinessBoundaryKind
 	ReadyBoundaryEndByteOffset int64
 	Bytes                      []byte
+}
+
+type frameResizeDispatcher struct {
+	states []frameResizeState
+}
+
+type frameResizeState struct {
+	event             FrameResizeEvent
+	phaseObserved     bool
+	phaseByteOffset   int64
+	resized           bool
+	resizeByteOffset  int64
+	completionWritten bool
+}
+
+type readyFrameResize struct {
+	Index      int
+	Phase      analyzer.PhaseKind
+	Dimensions analyzer.Dimensions
+}
+
+type readyFrameResizeCompletion struct {
+	Phase analyzer.PhaseKind
+	Bytes []byte
+}
+
+func newFrameResizeDispatcher(events []FrameResizeEvent) (*frameResizeDispatcher, error) {
+	states := make([]frameResizeState, len(events))
+	for index, event := range events {
+		if !event.Phase.Valid() {
+			return nil, fmt.Errorf("frame resize event %d has invalid phase %d", index, event.Phase)
+		}
+		if !event.Readiness.Valid() {
+			return nil, fmt.Errorf("frame resize event %d has invalid readiness boundary %d", index, event.Readiness)
+		}
+		if _, err := analyzer.NewDimensions(event.Dimensions.Rows, event.Dimensions.Cols); err != nil {
+			return nil, fmt.Errorf("frame resize event %d dimensions: %w", index, err)
+		}
+		if len(event.CompletionBytes) == 0 {
+			return nil, fmt.Errorf("frame resize event %d completion input is empty", index)
+		}
+		states[index] = frameResizeState{
+			event: FrameResizeEvent{
+				Phase:           event.Phase,
+				Readiness:       event.Readiness,
+				Dimensions:      event.Dimensions,
+				CompletionBytes: append([]byte(nil), event.CompletionBytes...),
+			},
+		}
+	}
+	return &frameResizeDispatcher{states: states}, nil
+}
+
+func (d *frameResizeDispatcher) pendingResize(readiness *analyzer.ReadinessTracker) []readyFrameResize {
+	if d == nil || readiness == nil || readiness.ByteCount() == 0 {
+		return nil
+	}
+	out := make([]readyFrameResize, 0, len(d.states))
+	for index := range d.states {
+		state := &d.states[index]
+		if state.resized {
+			continue
+		}
+		if !state.phaseObserved {
+			phase, ok := readiness.LatestPhaseAfter(state.event.Phase, 0)
+			if !ok {
+				continue
+			}
+			state.phaseObserved = true
+			state.phaseByteOffset = phase.ByteRange.End
+		}
+		if _, ok := readiness.LatestBoundaryAfter(state.event.Readiness, state.phaseByteOffset); !ok {
+			continue
+		}
+		out = append(out, readyFrameResize{Index: index, Phase: state.event.Phase, Dimensions: state.event.Dimensions})
+	}
+	return out
+}
+
+func (d *frameResizeDispatcher) markResized(index int, byteOffset int64) {
+	if d == nil || index < 0 || index >= len(d.states) {
+		panic(fmt.Sprintf("mark frame resize with invalid index %d", index))
+	}
+	state := &d.states[index]
+	state.resized = true
+	state.resizeByteOffset = byteOffset
+}
+
+func (d *frameResizeDispatcher) pendingCompletion(readiness *analyzer.ReadinessTracker) []readyFrameResizeCompletion {
+	if d == nil || readiness == nil {
+		return nil
+	}
+	out := make([]readyFrameResizeCompletion, 0, len(d.states))
+	for index := range d.states {
+		state := &d.states[index]
+		if !state.resized || state.completionWritten {
+			continue
+		}
+		if _, ok := readiness.LatestBoundaryAfter(analyzer.ReadinessRendererFrame, state.resizeByteOffset); !ok {
+			continue
+		}
+		state.completionWritten = true
+		out = append(out, readyFrameResizeCompletion{
+			Phase: state.event.Phase,
+			Bytes: append([]byte(nil), state.event.CompletionBytes...),
+		})
+	}
+	return out
 }
 
 func newFrameInputDispatcher(sequences []FrameInputSequence) (*frameInputDispatcher, error) {

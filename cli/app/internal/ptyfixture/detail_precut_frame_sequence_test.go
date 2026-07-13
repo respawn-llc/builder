@@ -39,6 +39,8 @@ type detailPrecutFrameCheckpoints struct {
 	selectedShell      pty.ScreenSnapshot
 	selectedMarkdown   pty.ScreenSnapshot
 	finalOngoing       pty.ScreenSnapshot
+	ongoingBefore      pty.ScreenSnapshot
+	ongoingAfter       pty.ScreenSnapshot
 }
 
 type detailPrecutProofScreen struct {
@@ -103,17 +105,24 @@ func (plan detailPrecutFramePlan) sequence() pty.FrameInputSequence {
 	}
 }
 
-func collectDetailPrecutFrameCheckpoints(t *testing.T, capture pty.Capture, plan detailPrecutFramePlan) detailPrecutFrameCheckpoints {
+func collectDetailPrecutFrameCheckpoints(t *testing.T, capture pty.Capture, plan detailPrecutFramePlan, bounds detailAlternateScreenOffsets) detailPrecutFrameCheckpoints {
 	t.Helper()
 	dispatches := detailPrecutFrameDispatchesByIndex(t, capture, plan)
-	screenBefore := func(inputIndex int) pty.ScreenSnapshot {
-		t.Helper()
-		return analyzeCapturePrefix(
-			t,
-			capture,
-			dispatches[inputIndex].ReadyBoundaryEndByteOffset,
-		).Screen
+	offsets := make([]int64, len(plan.inputs)+2)
+	for inputIndex, dispatch := range dispatches {
+		offsets[inputIndex] = dispatch.ReadyBoundaryEndByteOffset
 	}
+	offsets[len(plan.inputs)] = bounds.beforeOffset
+	offsets[len(plan.inputs)+1] = bounds.afterOffset
+	replayCheckpoints := make([]pty.ReplayCheckpoint, len(offsets))
+	for index, offset := range offsets {
+		replayCheckpoints[index] = pty.ReplayCheckpoint{ByteOffset: offset}
+	}
+	screens, err := pty.ReplayCheckpointScreens(capture, replayCheckpoints)
+	if err != nil {
+		t.Fatalf("replay detail checkpoints: %v", err)
+	}
+	screenBefore := func(inputIndex int) pty.ScreenSnapshot { return screens[inputIndex] }
 
 	traversal := make([]pty.ScreenSnapshot, 0, len(plan.newerTraversalInputIndices))
 	for _, inputIndex := range plan.newerTraversalInputIndices {
@@ -131,6 +140,8 @@ func collectDetailPrecutFrameCheckpoints(t *testing.T, capture pty.Capture, plan
 		selectedShell:      screenBefore(plan.selectedShellNextInputIndex),
 		selectedMarkdown:   screenBefore(plan.selectedMarkdownExitInputIndex),
 		finalOngoing:       screenBefore(plan.finalOngoingExitInputIndex),
+		ongoingBefore:      screens[len(plan.inputs)],
+		ongoingAfter:       screens[len(plan.inputs)+1],
 	}
 	assertDetailCenterToNewestTraversal(t, checkpoints, traversal)
 	return checkpoints

@@ -155,3 +155,19 @@ func (s *Stream) Snapshot() (Analysis, error) {
 		Screen:             screen,
 	}, nil
 }
+
+func (s *Stream) ScreenSnapshot() (ScreenSnapshot, error) {
+	if s == nil {
+		return ScreenSnapshot{}, errors.New("terminal stream is required")
+	}
+	if s.finished {
+		return ScreenSnapshot{}, errors.New("terminal stream is finished")
+	}
+	if err := s.sideChannel.error(); err != nil {
+		return ScreenSnapshot{}, err
+	}
+	if err := s.backend.error(); err != nil {
+		return ScreenSnapshot{}, err
+	}
+	return s.backend.snapshot(), nil
+}

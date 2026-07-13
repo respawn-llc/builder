@@ -1,9 +1,13 @@
 package analyzer
 
 import (
+	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/gdamore/tcell/v3/vt"
 )
 
 func TestRecordPutMergesContiguousSpansWithoutCopyingPriorText(t *testing.T) {
@@ -181,5 +185,70 @@ func TestMaximumPrintableEvidenceUsesOneBoundedWriteTextArena(t *testing.T) {
 		if record.Write.arena != analysis.Operations[0].Write.arena {
 			t.Fatal("write record does not reference the shared analysis arena")
 		}
+	}
+}
+
+func TestOperationBudgetPreservesOrderedTailAfterCircularWrap(t *testing.T) {
+	budget := newOperationBudget()
+	payload := make([]byte, evidenceExcerptSize+17)
+	for index := range payload {
+		payload[index] = byte(index)
+		budget.observeByte(payload[index])
+	}
+
+	if got, want := budget.prefixBytes(), payload[:evidenceExcerptSize]; !bytes.Equal(got, want) {
+		t.Fatalf("prefix = %v, want %v", got, want)
+	}
+	if got, want := budget.tailBytes(), payload[len(payload)-evidenceExcerptSize:]; !bytes.Equal(got, want) {
+		t.Fatalf("tail = %v, want %v", got, want)
+	}
+}
+
+func TestTracingBackendBlitPreservesOverlappingCells(t *testing.T) {
+	t.Run("moves down without copying a source row twice", func(t *testing.T) {
+		backend := newTracingBackend(MustDimensions(3, 1))
+		backend.cells[0][0].Content = "a"
+		backend.cells[1][0].Content = "b"
+		backend.cells[2][0].Content = "c"
+
+		backend.Blit(vt.Coord{X: 0, Y: 0}, vt.Coord{X: 0, Y: 1}, vt.Coord{X: 1, Y: 2})
+
+		if got := []string{backend.cells[0][0].Content, backend.cells[1][0].Content, backend.cells[2][0].Content}; !slices.Equal(got, []string{"a", "a", "b"}) {
+			t.Fatalf("cells = %q, want [a a b]", got)
+		}
+	})
+	t.Run("moves right without copying a source cell twice", func(t *testing.T) {
+		backend := newTracingBackend(MustDimensions(1, 4))
+		for index, value := range []string{"a", "b", "c", "d"} {
+			backend.cells[0][index].Content = value
+		}
+
+		backend.Blit(vt.Coord{X: 0, Y: 0}, vt.Coord{X: 1, Y: 0}, vt.Coord{X: 3, Y: 1})
+
+		if got := []string{backend.cells[0][0].Content, backend.cells[0][1].Content, backend.cells[0][2].Content, backend.cells[0][3].Content}; !slices.Equal(got, []string{"a", "a", "b", "c"}) {
+			t.Fatalf("cells = %q, want [a a b c]", got)
+		}
+	})
+}
+
+func TestReplayCheckpointScreensUsesOneCaptureTimeline(t *testing.T) {
+	capture, err := NewCapture(MustDimensions(1, 4), []Chunk{
+		NewChunk(0, 0, []byte("ab")),
+	})
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	screens, err := ReplayCheckpointScreens(capture, []ReplayCheckpoint{
+		{ByteOffset: 1},
+		{ByteOffset: 2},
+	})
+	if err != nil {
+		t.Fatalf("ReplayCheckpointScreens: %v", err)
+	}
+	if got := screens[0].TextInRegion(Region{Top: 0, Bottom: 1, Left: 0, Right: 2}); got != "a" {
+		t.Fatalf("first checkpoint = %q, want a", got)
+	}
+	if got := screens[1].TextInRegion(Region{Top: 0, Bottom: 1, Left: 0, Right: 2}); got != "ab" {
+		t.Fatalf("second checkpoint = %q, want ab", got)
 	}
 }

@@ -75,6 +75,7 @@ type CommandSpec struct {
 	Inputs              []InputEvent
 	PhaseInputs         []PhaseInputEvent
 	FrameInputSequences []FrameInputSequence
+	FrameResizes        []FrameResizeEvent
 	ParseableInputs     []ParseableInputEvent
 	Resizes             []ResizeEvent
 	Timeout             time.Duration
@@ -103,6 +104,16 @@ type FrameInput struct {
 	Readiness  analyzer.ReadinessBoundaryKind
 	AfterPhase *analyzer.PhaseKind
 	Bytes      []byte
+}
+
+// FrameResizeEvent resizes after a typed readiness boundary and sends its
+// completion input only after the first renderer frame produced after that
+// resize.
+type FrameResizeEvent struct {
+	Phase           analyzer.PhaseKind
+	Readiness       analyzer.ReadinessBoundaryKind
+	Dimensions      analyzer.Dimensions
+	CompletionBytes []byte
 }
 
 type ParseableInputEvent struct {

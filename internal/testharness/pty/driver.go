@@ -16,6 +16,8 @@ type FrameInputSequence = driver.FrameInputSequence
 
 type FrameInput = driver.FrameInput
 
+type FrameResizeEvent = driver.FrameResizeEvent
+
 type ParseableInputEvent = driver.ParseableInputEvent
 
 type DriverResizeEvent = driver.ResizeEvent

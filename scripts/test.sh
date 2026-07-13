@@ -22,11 +22,13 @@ implies the server target unless targets are named explicitly.
 
 Options:
   --no-wall-clock-cap
-            Disable the Rust TUI wall-clock cap.
+            Disable the script-level server test cap while keeping Go's own package timeouts.
   --inherit-env
             Do not sanitize KENT_* environment variables before running tests.
 
 Environment:
+  KENT_TEST_TIMEOUT_SECONDS
+            Server test wall-clock cap in seconds. Defaults to 120.
   KENT_TEST_GO_PACKAGE_PARALLELISM
             Maximum Go test packages to execute concurrently. Defaults to 4.
   KENT_TEST_TUI_TIMEOUT_SECONDS
@@ -96,7 +98,7 @@ fi
 if [ "$inherit_env" != "1" ]; then
     while IFS= read -r name; do
         case "$name" in
-            KENT_SKIP_FRONTEND|KENT_TEST_DISABLE_WALL_CLOCK_CAP|KENT_TEST_FRONTEND|KENT_TEST_GO_PACKAGE_PARALLELISM|KENT_TEST_INHERIT_ENV|KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP|KENT_TEST_TUI_TIMEOUT_SECONDS)
+            KENT_SKIP_FRONTEND|KENT_TEST_DISABLE_WALL_CLOCK_CAP|KENT_TEST_FRONTEND|KENT_TEST_GO_PACKAGE_PARALLELISM|KENT_TEST_INHERIT_ENV|KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP|KENT_TEST_TIMEOUT_SECONDS|KENT_TEST_TUI_TIMEOUT_SECONDS)
                 ;;
             KENT_*)
                 unset "$name"
@@ -114,6 +116,7 @@ case "$disable_wall_clock_cap" in
         ;;
 esac
 
+timeout_seconds="${KENT_TEST_TIMEOUT_SECONDS:-120}"
 go_test_package_parallelism="${KENT_TEST_GO_PACKAGE_PARALLELISM:-4}"
 tui_timeout_seconds="${KENT_TEST_TUI_TIMEOUT_SECONDS:-600}"
 inside_tui_wall_clock_cap="${KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP:-0}"
@@ -129,6 +132,16 @@ if [ "$go_test_package_parallelism" -le 0 ]; then
 fi
 server_go_test_args=(-p "$go_test_package_parallelism" "${server_test_args[@]}")
 if [ "$disable_wall_clock_cap" != "1" ]; then
+    case "$timeout_seconds" in
+        ''|*[!0-9]*)
+            printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 120\n' >&2
+            exit 2
+            ;;
+    esac
+    if [ "$timeout_seconds" -le 0 ] || [ "$timeout_seconds" -gt 120 ]; then
+        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 120\n' >&2
+        exit 2
+    fi
     case "$tui_timeout_seconds" in
         ''|*[!0-9]*)
             printf 'KENT_TEST_TUI_TIMEOUT_SECONDS must be a positive integer <= 1800\n' >&2
@@ -196,6 +209,9 @@ require_command() {
 check_dependencies() {
     if target_selected server; then
         require_command go "run server tests"
+        if [ "$disable_wall_clock_cap" != "1" ]; then
+            require_command python3 "enforce the server test wall-clock timeout"
+        fi
     fi
     if target_selected tui && [ -f tui-rs/Cargo.toml ]; then
         require_command cargo "run Rust checks"
@@ -303,15 +319,61 @@ run_desktop_tests() {
 }
 
 run_server_tests() {
+    if [ "$disable_wall_clock_cap" = "1" ]; then
+        set +e
+        go test "${server_go_test_args[@]}" >"$go_log_file" 2>&1
+        status=$?
+        set -e
+        if [ "$status" -eq 0 ]; then
+            return
+        fi
+        cat "$go_log_file"
+        exit "$status"
+    fi
+
     set +e
-    go test "${server_go_test_args[@]}" >"$go_log_file" 2>&1
+    python3 - "$go_log_file" "${server_go_test_args[@]}" <<'PY' &
+import os
+import sys
+
+log_file = sys.argv[1]
+test_args = sys.argv[2:]
+os.setsid()
+fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+try:
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+finally:
+    os.close(fd)
+os.execvp("go", ["go", "test", *test_args])
+PY
+    test_pid=$!
+    timed_out=0
+    deadline=$((SECONDS + timeout_seconds))
+
+    while kill -0 "$test_pid" 2>/dev/null; do
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            timed_out=1
+            terminate_test_process_group
+            break
+        fi
+        sleep 1
+    done
+
+    set +e
+    wait "$test_pid"
     status=$?
     set -e
     if [ "$status" -eq 0 ]; then
         return
     fi
+    if [ "$timed_out" -eq 1 ]; then
+        printf 'test suite exceeded %ds wall-clock cap; simplify or speed up tests before continuing\n' "$timeout_seconds"
+    elif [ "$status" -eq 143 ] || [ "$status" -eq 137 ]; then
+        printf 'test process was terminated by a signal (exit status %d)\n' "$status"
+    fi
     cat "$go_log_file"
-    exit "$status"
+    exit 1
 }
 
 check_dependencies

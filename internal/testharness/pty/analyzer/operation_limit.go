@@ -10,10 +10,11 @@ const maxWriteBatchSegments = maxTerminalCells
 // operationBudget is shared by terminal writes, controls, private-mode
 // changes, and phase events. It retains only bounded raw-byte diagnostics.
 type operationBudget struct {
-	count  int
-	detail string
-	prefix []byte
-	tail   []byte
+	count     int
+	detail    string
+	prefix    []byte
+	tail      []byte
+	tailStart int
 }
 
 func newOperationBudget() *operationBudget {
@@ -34,8 +35,8 @@ func (b *operationBudget) observeByte(value byte) {
 		b.tail = append(b.tail, value)
 		return
 	}
-	copy(b.tail, b.tail[1:])
-	b.tail[len(b.tail)-1] = value
+	b.tail[b.tailStart] = value
+	b.tailStart = (b.tailStart + 1) % len(b.tail)
 }
 
 func (b *operationBudget) reserve() error {
@@ -48,10 +49,30 @@ func (b *operationBudget) reserve() error {
 			Detail:   b.detail,
 			Limit:    maxAnalyzerOperations,
 			Observed: b.count + 1,
-			Prefix:   append([]byte(nil), b.prefix...),
-			Tail:     append([]byte(nil), b.tail...),
+			Prefix:   b.prefixBytes(),
+			Tail:     b.tailBytes(),
 		}
 	}
 	b.count++
 	return nil
+}
+
+func (b *operationBudget) prefixBytes() []byte {
+	if b == nil {
+		return nil
+	}
+	return append([]byte(nil), b.prefix...)
+}
+
+func (b *operationBudget) tailBytes() []byte {
+	if b == nil || len(b.tail) == 0 {
+		return nil
+	}
+	if len(b.tail) < evidenceExcerptSize || b.tailStart == 0 {
+		return append([]byte(nil), b.tail...)
+	}
+	tail := make([]byte, len(b.tail))
+	n := copy(tail, b.tail[b.tailStart:])
+	copy(tail[n:], b.tail[:b.tailStart])
+	return tail
 }

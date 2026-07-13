@@ -1,34 +1,153 @@
 package worktreesetup
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
-
-	"core/shared/config"
 )
+
+type repositorySeedEntry struct {
+	relativePath string
+	mode         fs.FileMode
+	directory    bool
+	contents     []byte
+}
+
+var cleanRepositorySeed struct {
+	once    sync.Once
+	entries []repositorySeedEntry
+	err     error
+}
 
 func InitializeGitRepository(t *testing.T, root string) {
 	t.Helper()
-	RunGit(t, root, "init", "-q")
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("root\n"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
-	RunGit(t, root, "add", "README.md")
-	RunGit(t, root, "commit", "-q", "-m", "init")
-	canonicalRoot, err := config.CanonicalWorkspaceRoot(root)
+	entries, err := repositorySeed()
 	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+		t.Fatalf("prepare clean git repository seed: %v", err)
 	}
-	if got := RunGit(t, root, "rev-parse", "--show-toplevel"); got != canonicalRoot {
-		t.Fatalf("git top-level = %q, want %q", got, canonicalRoot)
+	if err := materializeRepository(entries, root); err != nil {
+		t.Fatalf("materialize clean git repository: %v", err)
 	}
+}
+
+func repositorySeed() ([]repositorySeedEntry, error) {
+	cleanRepositorySeed.once.Do(func() {
+		cleanRepositorySeed.entries, cleanRepositorySeed.err = createRepositorySeed()
+	})
+	return cleanRepositorySeed.entries, cleanRepositorySeed.err
+}
+
+func createRepositorySeed() ([]repositorySeedEntry, error) {
+	root, err := os.MkdirTemp("", "kent-test-clean-git-repository-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temporary clean git repository seed: %w", err)
+	}
+
+	initializeErr := initializeRepository(root)
+	var entries []repositorySeedEntry
+	if initializeErr == nil {
+		entries, initializeErr = snapshotRepository(root)
+	}
+	cleanupErr := os.RemoveAll(root)
+	if cleanupErr != nil {
+		cleanupErr = fmt.Errorf("remove temporary clean git repository seed %q: %w", root, cleanupErr)
+	}
+	if initializeErr != nil || cleanupErr != nil {
+		return nil, errors.Join(initializeErr, cleanupErr)
+	}
+	return entries, nil
+}
+
+func initializeRepository(root string) error {
+	if _, err := runGit(root, "init", "-q"); err != nil {
+		return fmt.Errorf("initialize clean git repository seed: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("root\n"), 0o644); err != nil {
+		return fmt.Errorf("write clean git repository seed README: %w", err)
+	}
+	if _, err := runGit(root, "add", "README.md"); err != nil {
+		return fmt.Errorf("stage clean git repository seed README: %w", err)
+	}
+	if _, err := runGit(root, "commit", "-q", "-m", "init"); err != nil {
+		return fmt.Errorf("commit clean git repository seed: %w", err)
+	}
+	return nil
+}
+
+func snapshotRepository(root string) ([]repositorySeedEntry, error) {
+	var entries []repositorySeedEntry
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relativePath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			entries = append(entries, repositorySeedEntry{
+				relativePath: relativePath,
+				mode:         info.Mode().Perm(),
+				directory:    true,
+			})
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("clean git repository seed contains unsupported file %q with mode %v", path, entry.Type())
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, repositorySeedEntry{
+			relativePath: relativePath,
+			mode:         info.Mode().Perm(),
+			contents:     contents,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("snapshot clean git repository seed: %w", err)
+	}
+	return entries, nil
+}
+
+func materializeRepository(entries []repositorySeedEntry, root string) error {
+	for _, entry := range entries {
+		path := filepath.Join(root, entry.relativePath)
+		if entry.directory {
+			if err := os.MkdirAll(path, entry.mode); err != nil {
+				return fmt.Errorf("create clean git repository directory %q: %w", path, err)
+			}
+			continue
+		}
+		if err := os.WriteFile(path, entry.contents, entry.mode); err != nil {
+			return fmt.Errorf("write clean git repository file %q: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func RunGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	output, err := runGit(dir, args...)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return output
+}
+
+func runGit(dir string, args ...string) (string, error) {
 	command := exec.Command("git", args...)
 	command.Dir = dir
 	command.Env = append(sanitizedGitEnvironment(os.Environ()),
@@ -39,9 +158,9 @@ func RunGit(t *testing.T, dir string, args ...string) string {
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(string(output)), nil
 }
 
 func sanitizedGitEnvironment(environment []string) []string {

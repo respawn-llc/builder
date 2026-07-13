@@ -134,8 +134,8 @@ func writeBatchLimitExceeded(backend *tracingBackend) error {
 		Detail:   "write_batch_records",
 		Limit:    maxWriteBatchSegments,
 		Observed: len(backend.writeBatch.segments) + len(backend.writeBatch.controls) + 1,
-		Prefix:   append([]byte(nil), backend.operationBudget.prefix...),
-		Tail:     append([]byte(nil), backend.operationBudget.tail...),
+		Prefix:   backend.operationBudget.prefixBytes(),
+		Tail:     backend.operationBudget.tailBytes(),
 	}
 }
 
