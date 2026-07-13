@@ -1,4 +1,4 @@
-package worktreesetup
+package testsetup
 
 import (
 	"errors"

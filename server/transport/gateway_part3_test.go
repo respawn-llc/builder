@@ -2,7 +2,7 @@ package transport
 
 import (
 	"context"
-	"core/internal/testharness/worktreesetup"
+	"core/internal/testharness/testsetup"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
 	"core/server/metadata"
@@ -20,7 +20,7 @@ import (
 
 func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 	appCore, server := newUnboundGatewayTestServer(t)
-	worktreesetup.InitializeGitRepository(t, appCore.Config().WorkspaceRoot)
+	testsetup.InitializeGitRepository(t, appCore.Config().WorkspaceRoot)
 	binding, err := appCore.MetadataStore().RegisterWorkspaceBinding(
 		context.Background(),
 		appCore.Config().WorkspaceRoot,

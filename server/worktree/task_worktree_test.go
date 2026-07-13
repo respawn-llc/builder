@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"core/internal/testharness/worktreesetup"
+	"core/internal/testharness/testsetup"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflowstore"
@@ -544,7 +544,7 @@ func TestMaterializeInitialTaskWorktreeSetupOmitsStaleParentSessionEnvironment(t
 	t.Setenv(setupEnvironmentKeySessionID, "stale-parent-session")
 	t.Setenv(setupEnvironmentKeyWorktreeRoot, "stale-parent-worktree")
 	task, _ := createTaskWorktreeTestTask(t, env)
-	capture := worktreesetup.New(t, worktreesetup.Options{})
+	capture := testsetup.New(t, testsetup.Options{})
 	env.service.setupScript = capture.Executable()
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 
@@ -566,7 +566,7 @@ func TestMaterializeInitialTaskWorktreeSetupOmitsStaleParentSessionEnvironment(t
 	if payload.SessionID != nil {
 		t.Fatalf("workflow setup session_id = %q, want nil", *payload.SessionID)
 	}
-	if err := invocation.Verify(worktreesetup.Payload{
+	if err := invocation.Verify(testsetup.Payload{
 		SourceWorkspaceRoot: env.workspaceRoot,
 		BranchName:          task.ShortID,
 		WorktreeRoot:        taskWorktreeRoot(resp.Worktree),
@@ -583,7 +583,7 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 	env := newServiceTestEnv(t)
 	t.Setenv(setupEnvironmentKeySessionID, "stale-parent-session")
 	t.Setenv(setupEnvironmentKeyWorktreeRoot, "stale-parent-worktree")
-	capture := worktreesetup.New(t, worktreesetup.Options{})
+	capture := testsetup.New(t, testsetup.Options{})
 	env.service.setupScript = capture.Executable()
 
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
@@ -609,7 +609,7 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 		t.Fatalf("session setup session_id = %v, want %q", payload.SessionID, env.session.Meta().SessionID)
 	}
 	created := worktreeViewFromListEntryForTest(resp.Worktree)
-	if err := invocation.Verify(worktreesetup.Payload{
+	if err := invocation.Verify(testsetup.Payload{
 		SourceWorkspaceRoot: env.workspaceRoot,
 		BranchName:          "feature/session-contract",
 		WorktreeRoot:        created.CanonicalRoot,

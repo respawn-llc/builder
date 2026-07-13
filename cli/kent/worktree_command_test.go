@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/internal/testharness/worktreesetup"
+	"core/internal/testharness/testsetup"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -19,7 +19,7 @@ import (
 
 func TestWorktreeStatusUsesShellSessionFromNestedWorkspaceDirectory(t *testing.T) {
 	workspace := t.TempDir()
-	worktreesetup.InitializeGitRepository(t, workspace)
+	testsetup.InitializeGitRepository(t, workspace)
 	configureWorktreeCommandWorkspaceServer(t, workspace)
 	_, binding, sess := newBindingCommandSession(t, workspace)
 	if err := sess.EnsureDurable(); err != nil {

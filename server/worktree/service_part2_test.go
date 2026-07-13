@@ -2,7 +2,7 @@ package worktree
 
 import (
 	"context"
-	"core/internal/testharness/worktreesetup"
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
@@ -328,11 +328,7 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	store, err := metadata.Open(cfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := testsetup.OpenStore(t, cfg.PersistenceRoot)
 	binding, err := store.RegisterWorkspaceBinding(ctx, cfg.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
@@ -377,12 +373,12 @@ func createServiceTestSession(t *testing.T, store *metadata.Store, cfg config.Ap
 
 func initGitRepo(t *testing.T, root string) {
 	t.Helper()
-	worktreesetup.InitializeGitRepository(t, root)
+	testsetup.InitializeGitRepository(t, root)
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	return worktreesetup.RunGit(t, dir, args...)
+	return testsetup.RunGit(t, dir, args...)
 }
 
 func writeExecutableFile(t *testing.T, path string, body string) {
