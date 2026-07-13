@@ -324,19 +324,23 @@ func worktreeReminderStateForTransition(previous *syncedWorktree, previousTarget
 			return session.WorktreeReminderState{}, false, nil
 		}
 		return session.WorktreeReminderState{
-			Mode:          session.WorktreeReminderModeExit,
-			Branch:        strings.TrimSpace(previous.git.BranchName),
-			WorktreePath:  strings.TrimSpace(previous.record.CanonicalRoot),
-			WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
-			EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
+			Mode: session.WorktreeReminderModeExit,
+			WorktreeContext: session.WorktreeContext{
+				Branch:        session.OptionalWorktreeBranch(previous.git.BranchName),
+				WorktreePath:  strings.TrimSpace(previous.record.CanonicalRoot),
+				WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
+				EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
+			},
 		}, true, nil
 	}
 	return session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		Branch:        strings.TrimSpace(next.git.BranchName),
-		WorktreePath:  strings.TrimSpace(next.record.CanonicalRoot),
-		WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
-		EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch(next.git.BranchName),
+			WorktreePath:  strings.TrimSpace(next.record.CanonicalRoot),
+			WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
+			EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
+		},
 	}, true, nil
 }
 
@@ -350,11 +354,13 @@ func worktreeReminderStateForExitedWorktree(worktree metadata.WorktreeRecord, ne
 		branchName = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(gitMetadata.BranchRef), "refs/heads/"))
 	}
 	return session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeExit,
-		Branch:        branchName,
-		WorktreePath:  strings.TrimSpace(worktree.CanonicalRoot),
-		WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
-		EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
+		Mode: session.WorktreeReminderModeExit,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch(branchName),
+			WorktreePath:  strings.TrimSpace(worktree.CanonicalRoot),
+			WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
+			EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
+		},
 	}, nil
 }
 

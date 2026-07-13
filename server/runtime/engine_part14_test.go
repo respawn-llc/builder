@@ -556,7 +556,7 @@ func TestManualLocalCompactionRebuildsCanonicalContextOrder(t *testing.T) {
 	}
 }
 
-func TestHandoffCompactionAppendsFutureMessageBeforeHeadlessReentry(t *testing.T) {
+func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
@@ -594,8 +594,8 @@ func TestHandoffCompactionAppendsFutureMessageBeforeHeadlessReentry(t *testing.T
 	if headlessIdx < 0 {
 		t.Fatalf("expected headless enter reinjection after handoff compaction, got %+v", messages)
 	}
-	if futureIdx >= headlessIdx {
-		t.Fatalf("expected future-agent message before headless reinjection, future=%d headless=%d messages=%+v", futureIdx, headlessIdx, messages)
+	if headlessIdx >= futureIdx {
+		t.Fatalf("expected atomic headless context before future-agent carryover, headless=%d future=%d messages=%+v", headlessIdx, futureIdx, messages)
 	}
 }
 

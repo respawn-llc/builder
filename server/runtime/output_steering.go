@@ -499,9 +499,9 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	projectedStart := e.CommittedTranscriptEntryCount()
 	replacement.payload.CommittedEntryStart = &projectedStart
 	preparedItems := llm.CloneResponseItems(replacement.payload.Items)
-	// Compaction reinjects base meta into the same replacement payload, so a
-	// non-empty replacement active list is born already carrying it. Mirror the
-	// restore-time length signal here rather than scanning the items.
+	// Compaction reinjects canonical generation context, including base meta,
+	// into the same replacement payload. Mirror the restore-time length signal
+	// here rather than scanning individual items.
 	e.baseMetaInjected = len(preparedItems) > 0
 	replacement.payload.LatestRollbackCandidate = e.transcriptRuntimeState().LatestRollbackCandidate()
 	_, committed, appendErr := e.store.AppendEvent(stepID, "history_replaced", replacement.payload)

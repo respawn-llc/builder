@@ -217,7 +217,7 @@
 - Create dialog auto-suggests target name only from sanitized session name. It does not fall back to current branch, main, or generic placeholder.
 - Create dialog has no explicit new/existing selector. Kent resolves typed `Branch or ref` asynchronously and shows `new branch`, `existing branch`, or `detached ref`.
 - `Branch or ref` appears before `Base ref`. `Base ref` defaults to `HEAD` and is required only for new branch creation.
-- Worktree transitions store the latest pending typed developer-context steering intent and materialize it at normal steering priority before user/model execution resumes.
+- Worktree transitions store the current typed target context. Ordinary target changes materialize it at normal steering priority before user/model execution resumes; active-list birth consumes the same target through the unified generation-context builder.
 - Worktree transitions do not append synthetic transcript notes.
 - Git is the source of truth for topology. Kent stores additive metadata. During deletion, active runtime activity in another session targeting the worktree blocks removal; idle targeting sessions are retargeted to main before removal. Kent blocks new runs for every targeting session through the retarget-and-removal critical section.
 - Worktree lists correlate Git's complete native-order enumeration with Kent metadata as one unpaginated result. Git provides no cursor contract for linked worktrees, so Kent does not present artificial page tokens over that enumeration; the list-result path is an explicit full-result memory exception.

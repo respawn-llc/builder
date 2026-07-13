@@ -206,6 +206,7 @@ func transcriptContractTypes() []reflect.Type {
 		reflect.TypeOf(TranscriptToolRow{}),
 		reflect.TypeOf(TranscriptNoticeRow{}),
 		reflect.TypeOf(TranscriptNoticeData{}),
+		reflect.TypeOf(TranscriptWorktreeContext{}),
 		reflect.TypeOf(TranscriptCacheWarningData{}),
 		reflect.TypeOf(TranscriptDiagnosticData{}),
 		reflect.TypeOf(TranscriptAssistantStream{}),

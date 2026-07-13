@@ -20,7 +20,7 @@ func TestPostCompactionMessagesSkipsEmptyHandoffFutureMessage(t *testing.T) {
 	state.QueueRequest("keep API details", " \n\t ")
 	eng := &Engine{handoffState: state}
 
-	messages := newCompactionCarryoverCoordinator(eng).postCompactionMessages(compactionModeHandoff, "", false)
+	messages := newCompactionCarryoverCoordinator(eng).postCompactionMessages(compactionModeHandoff, "")
 	for _, message := range messages {
 		if message.message.MessageType == llm.MessageTypeHandoffFutureMessage {
 			t.Fatalf("did not expect empty handoff future message carryover: %+v", message)

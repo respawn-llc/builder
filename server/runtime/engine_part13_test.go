@@ -319,13 +319,13 @@ func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompacti
 	defer func() { prompts.WorktreeModePrompt = prevPrompt }()
 
 	store := mustCreateTestSession(t)
-	mustSetWorktreeReminderState(t, store, session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		Branch:        "feature/handoff",
-		WorktreePath:  "/tmp/wt-handoff",
-		WorkspaceRoot: "/tmp/workspace",
-		EffectiveCwd:  "/tmp/wt-handoff",
-	})
+	mustSetWorktreeReminderState(t, store, testWorktreeReminderState(
+		session.WorktreeReminderModeEnter,
+		"feature/handoff",
+		"/tmp/wt-handoff",
+		"/tmp/workspace",
+		"/tmp/wt-handoff",
+	))
 
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
@@ -363,59 +363,9 @@ func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompacti
 	if reminderCount != 1 {
 		t.Fatalf("expected one materialized worktree reminder after handoff compaction, got %d messages=%+v", reminderCount, messages)
 	}
-	state := store.Meta().WorktreeReminder
-	if state == nil || !state.HasIssuedInGeneration {
-		t.Fatalf("expected issued reminder state after handoff compaction, got %+v", state)
-	}
 	if len(client.calls) != 1 {
 		t.Fatalf("expected only handoff compaction call, got %d calls", len(client.calls))
 	}
-}
-
-func TestPrepareModelTurnHandoffReminderPersistenceFailureRetriesWithoutDuplicate(t *testing.T) {
-	prevPrompt := prompts.WorktreeModePrompt
-	prompts.WorktreeModePrompt = "enter {{branch}}"
-	defer func() { prompts.WorktreeModePrompt = prevPrompt }()
-
-	observer := &failOnIssuedWorktreeReminderObservation{}
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir, session.WithPersistenceObserver(observer))
-	mustSetWorktreeReminderState(t, store, session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		Branch:        "feature/handoff-fail",
-		WorktreePath:  "/tmp/wt-handoff-fail",
-		WorkspaceRoot: "/tmp/workspace",
-		EffectiveCwd:  "/tmp/wt-handoff-fail",
-	})
-	client := &fakeCompactionClient{
-		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "handoff summary"}, Usage: llm.Usage{InputTokens: 1_900, WindowTokens: 2_000}},
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "handoff summary retry"}, Usage: llm.Usage{InputTokens: 1_900, WindowTokens: 2_000}},
-		},
-		inputTokenCount: 1_900,
-	}
-	eng := mustNewHandoffTestEngine(t, store, client, Config{
-		CompactionMode:        "local",
-		ContextWindowTokens:   2_000,
-		AutoCompactTokenLimit: 1_000,
-	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
-		t.Fatalf("append seed message: %v", err)
-	}
-	eng.setLastUsage(llm.Usage{InputTokens: 1_900, WindowTokens: 2_000})
-	eng.handoffRuntimeState().QueueRequest("keep runtime details", "")
-	executor := &defaultStepExecutor{engine: eng}
-
-	if err := executor.prepareModelTurn(context.Background(), "step-1"); err == nil || !strings.Contains(err.Error(), "persist observer failed") {
-		t.Fatalf("prepare error = %v, want reminder state persistence failure", err)
-	}
-	assertWorktreeReminderEntryCount(t, eng.ChatSnapshot(), 1)
-
-	eng.handoffRuntimeState().QueueRequest("keep runtime details", "")
-	if err := executor.prepareModelTurn(context.Background(), "step-2"); err != nil {
-		t.Fatalf("retry prepare model turn: %v", err)
-	}
-	assertWorktreeReminderEntryCount(t, eng.ChatSnapshot(), 1)
 }
 
 func TestPendingTriggerHandoffFailsToolCallsAndRetriesLocalSummary(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/workflow"
 	"core/shared/config"
 	"core/shared/transcript"
@@ -31,6 +32,90 @@ func (e *Engine) ensureMetaContextForCompaction(ctx context.Context, stepID stri
 	return e.steerBaseMetaContextIfNeeded(stepID)
 }
 
+func (e *Engine) activeMetaContextBuilder(model string) metaContextBuilder {
+	return newActiveMetaContextBuilder(e.store.Meta(), model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.DisabledSkills, time.Now()).
+		withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
+}
+
+func (e *Engine) steerMetaContextIfChanged(stepID string, priority steeringPriority, messages []llm.Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	activeItems := e.transcriptRuntimeState().SnapshotItems()
+	pending := make([]llm.Message, 0, len(messages))
+	for _, message := range messages {
+		if latestActiveMetaContextMatches(activeItems, message) {
+			continue
+		}
+		pending = append(pending, message)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	return e.steer(stepID, steerMessagesWithPersistenceIntent(priority, steeringMessageEventDefault, true, pending))
+}
+
+func latestActiveMetaContextMatches(items []llm.ResponseItem, desired llm.Message) bool {
+	// MessageType selects the typed context slot. Structured target facts carry
+	// worktree identity; rendered prompt text is presentation only.
+	desiredClassification, ok := classifyMetaContextMessage(desired)
+	if !ok {
+		return false
+	}
+	for idx := len(items) - 1; idx >= 0; idx-- {
+		item := items[idx]
+		if item.Type != llm.ResponseItemTypeMessage {
+			continue
+		}
+		classification, classified := classifyMetaContextMessage(llm.Message{
+			Role:            item.Role,
+			MessageType:     item.MessageType,
+			SourcePath:      item.SourcePath,
+			WorktreeContext: item.WorktreeContext,
+		})
+		if !classified || !sameMetaContextSlot(classification.kind, desiredClassification.kind) {
+			continue
+		}
+		return sameMetaContextIdentity(classification, desiredClassification)
+	}
+	return false
+}
+
+func sameMetaContextIdentity(current, desired metaContextClassification) bool {
+	if current.kind != desired.kind {
+		return false
+	}
+	switch desired.kind {
+	case metaContextKindWorktree, metaContextKindWorktreeExit:
+		if current.worktreeContext != nil && desired.worktreeContext != nil {
+			return session.WorktreeContextEqual(*current.worktreeContext, *desired.worktreeContext)
+		}
+		return legacyWorktreeContextMatchesBySourcePath(current, desired)
+	default:
+		return current.sourcePath == desired.sourcePath
+	}
+}
+
+// legacyWorktreeContextMatchesBySourcePath prevents one duplicate when an
+// active generation was persisted before structured worktree identity existed.
+func legacyWorktreeContextMatchesBySourcePath(current, desired metaContextClassification) bool {
+	return current.worktreeContext == nil &&
+		desired.worktreeContext != nil &&
+		desired.worktreeContext.ContextID == nil &&
+		current.sourcePath == desired.worktreeContext.EffectiveCwd
+}
+
+func sameMetaContextSlot(left, right metaContextKind) bool {
+	switch right {
+	case metaContextKindHeadless, metaContextKindHeadlessExit:
+		return left == metaContextKindHeadless || left == metaContextKindHeadlessExit
+	case metaContextKindWorktree, metaContextKindWorktreeExit:
+		return left == metaContextKindWorktree || left == metaContextKindWorktreeExit
+	default:
+		return left == right
+	}
+}
+
 // steerBaseMetaContextIfNeeded injects base meta context (AGENTS.md, skills,
 // subagents, environment) exactly once, at the first request of a fresh
 // session. The guard is deterministic: it is seeded from restored-history
@@ -42,7 +127,7 @@ func (e *Engine) steerBaseMetaContextIfNeeded(stepID string) error {
 	if e.baseMetaInjected {
 		return nil
 	}
-	builder := newActiveMetaContextBuilder(e.store.Meta(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.DisabledSkills, time.Now()).withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
+	builder := e.activeMetaContextBuilder(e.cfg.Model)
 	opts := baseMetaContextBuildOptions(true)
 	if e.workflowRunActive() {
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
@@ -82,13 +167,13 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 	if e.cfg.HeadlessMode == e.store.Meta().HeadlessActive {
 		return nil
 	}
-	builder := newMetaContextBuilder(e.store.Meta().WorkspaceRoot, e.cfg.Model, e.ThinkingLevel(), e.cfg.DisabledSkills, time.Now()).withGlobalConfigDir(e.cfg.GlobalConfigDir)
+	builder := e.activeMetaContextBuilder(e.cfg.Model)
 	if e.cfg.HeadlessMode {
 		metaResult, err := builder.Build(metaContextBuildOptions{IncludeHeadless: true})
 		if err != nil {
 			return err
 		}
-		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityRuntimeContext, steeringMessageEventDefault, true, metaResult.Headless)); err != nil {
+		if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Headless); err != nil {
 			return err
 		}
 		return e.store.SetHeadlessActive(true)
@@ -97,7 +182,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 	if err != nil {
 		return err
 	}
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityRuntimeContext, steeringMessageEventDefault, true, metaResult.HeadlessExit)); err != nil {
+	if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.HeadlessExit); err != nil {
 		return err
 	}
 	return e.store.SetHeadlessActive(false)
@@ -108,10 +193,12 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 		return nil
 	}
 	runID := strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID))
-	for _, msg := range e.transcriptRuntimeState().SnapshotMessages() {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeWorkflowMode && strings.TrimSpace(msg.SourcePath) == runID {
-			return nil
-		}
+	if latestActiveMetaContextMatches(e.transcriptRuntimeState().SnapshotItems(), llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: llm.MessageTypeWorkflowMode,
+		SourcePath:  runID,
+	}) {
+		return nil
 	}
 	mode, err := e.workflowCompletionMode(ctx)
 	if err != nil {
@@ -121,20 +208,24 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	if err != nil {
 		return err
 	}
-	message, ok, renderErr := workflowModeMetaMessage(mode, e.cfg.WorkflowRun, commentCount)
-	if renderErr != nil {
-		return renderErr
+	metaResult, err := e.activeMetaContextBuilder(e.cfg.Model).Build(metaContextBuildOptions{
+		IncludeWorkflow:          true,
+		WorkflowCompletionMode:   mode,
+		WorkflowRun:              e.cfg.WorkflowRun,
+		WorkflowTaskCommentCount: commentCount,
+	})
+	if err != nil {
+		return err
 	}
-	if !ok {
-		return nil
-	}
-	message.SourcePath = runID
-	return e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityRuntimeContext, steeringMessageEventDefault, true, []llm.Message{message}))
+	return e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Workflow)
 }
 
 func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Message, error) {
-	builder := newActiveMetaContextBuilder(e.store.Meta(), e.currentModel(), e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.DisabledSkills, time.Now()).withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
+	meta := e.store.Meta()
+	builder := e.activeMetaContextBuilder(e.currentModel())
 	opts := baseMetaContextBuildOptions(false)
+	opts.IncludeHeadless = meta.HeadlessActive
+	opts.WorktreeReminder = session.CloneWorktreeReminderState(meta.WorktreeReminder)
 	if e.workflowRunActive() {
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
 		mode, err := e.workflowCompletionMode(ctx)

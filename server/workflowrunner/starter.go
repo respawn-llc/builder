@@ -251,10 +251,12 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 	var reminder *session.WorktreeReminderState
 	if executionRoot.Managed != nil {
 		reminder = &session.WorktreeReminderState{
-			Mode:          session.WorktreeReminderModeEnter,
-			WorktreePath:  executionRoot.Managed.Root,
-			WorkspaceRoot: executionRoot.SourceWorkspaceRoot,
-			EffectiveCwd:  executionRoot.EffectiveRoot(),
+			Mode: session.WorktreeReminderModeEnter,
+			WorktreeContext: session.WorktreeContext{
+				WorktreePath:  executionRoot.Managed.Root,
+				WorkspaceRoot: executionRoot.SourceWorkspaceRoot,
+				EffectiveCwd:  executionRoot.EffectiveRoot(),
+			},
 		}
 	}
 	if err := plan.Store.SetWorktreeReminderState(reminder); err != nil {

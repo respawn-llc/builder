@@ -133,10 +133,27 @@ func mustNewWorkflowTestEngine(t *testing.T, store *session.Store, client llm.Cl
 	return mustNewExecTestEngine(t, store, client, cfg)
 }
 
-func mustSetWorktreeReminderState(t *testing.T, store *session.Store, state session.WorktreeReminderState) {
+func mustSetWorktreeReminderState(t *testing.T, store *session.Store, state session.WorktreeReminderState) session.WorktreeReminderState {
 	t.Helper()
 	if err := store.SetWorktreeReminderState(&state); err != nil {
 		t.Fatalf("SetWorktreeReminderState: %v", err)
+	}
+	persisted := store.Meta().WorktreeReminder
+	if persisted == nil {
+		t.Fatal("worktree reminder state was not persisted")
+	}
+	return *session.CloneWorktreeReminderState(persisted)
+}
+
+func testWorktreeReminderState(mode session.WorktreeReminderMode, branch, worktreePath, workspaceRoot, effectiveCWD string) session.WorktreeReminderState {
+	return session.WorktreeReminderState{
+		Mode: mode,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch(branch),
+			WorktreePath:  worktreePath,
+			WorkspaceRoot: workspaceRoot,
+			EffectiveCwd:  effectiveCWD,
+		},
 	}
 }
 

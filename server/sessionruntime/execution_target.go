@@ -24,7 +24,7 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 	}
 	var normalizedReminder *session.WorktreeReminderState
 	if reminder != nil {
-		normalized, err := normalizeWorktreeReminderState(*reminder)
+		normalized, err := session.NormalizeWorktreeReminderState(*reminder)
 		if err != nil {
 			return err
 		}
@@ -165,7 +165,7 @@ func (s *Service) syncGuardedExecutionTarget(
 	}
 	var normalizedReminder *session.WorktreeReminderState
 	if reminder != nil {
-		normalized, err := normalizeWorktreeReminderState(*reminder)
+		normalized, err := session.NormalizeWorktreeReminderState(*reminder)
 		if err != nil {
 			return err
 		}
@@ -207,31 +207,6 @@ func (s *Service) persistWorktreeReminderState(ctx context.Context, sessionID st
 		return err
 	}
 	return store.SetWorktreeReminderState(reminder)
-}
-
-func normalizeWorktreeReminderState(state session.WorktreeReminderState) (session.WorktreeReminderState, error) {
-	state.Mode = session.WorktreeReminderMode(strings.TrimSpace(string(state.Mode)))
-	switch state.Mode {
-	case session.WorktreeReminderModeEnter, session.WorktreeReminderModeExit:
-	default:
-		return session.WorktreeReminderState{}, errors.New("worktree reminder mode is required")
-	}
-	state.Branch = strings.TrimSpace(state.Branch)
-	state.WorktreePath = strings.TrimSpace(state.WorktreePath)
-	state.WorkspaceRoot = strings.TrimSpace(state.WorkspaceRoot)
-	state.EffectiveCwd = strings.TrimSpace(state.EffectiveCwd)
-	if state.WorkspaceRoot == "" {
-		return session.WorktreeReminderState{}, errors.New("worktree reminder workspace root is required")
-	}
-	if state.EffectiveCwd == "" {
-		return session.WorktreeReminderState{}, errors.New("worktree reminder effective cwd is required")
-	}
-	if state.Mode == session.WorktreeReminderModeEnter && state.WorktreePath == "" {
-		return session.WorktreeReminderState{}, errors.New("worktree reminder worktree path is required for enter mode")
-	}
-	state.HasIssuedInGeneration = false
-	state.IssuedCompactionCount = 0
-	return state, nil
 }
 
 func (s *Service) resolveStore(ctx context.Context, sessionID string) (*session.Store, error) {
