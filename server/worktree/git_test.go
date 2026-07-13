@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -408,6 +409,284 @@ func TestGitInspectorIsValidBranchNamePropagatesContextCancellation(t *testing.T
 	}
 }
 
+func TestGitInspectorResolveRevisionPeelsCommitAndReportsCanonicalRef(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	initGitRepo(t, workspaceRoot)
+	commitOID := runGit(t, workspaceRoot, "rev-parse", "HEAD")
+	headRef := runGit(t, workspaceRoot, "symbolic-ref", "HEAD")
+	runGit(t, workspaceRoot, "branch", "feature/target")
+	runGit(t, workspaceRoot, "-c", "tag.gpgSign=false", "tag", "v0")
+	runGit(t, workspaceRoot, "-c", "tag.gpgSign=false", "tag", "-a", "v1", "-m", "release")
+	blobPath := filepath.Join(workspaceRoot, "blob.txt")
+	if err := os.WriteFile(blobPath, []byte("not a commit\n"), 0o644); err != nil {
+		t.Fatalf("write blob: %v", err)
+	}
+	blobOID := runGit(t, workspaceRoot, "hash-object", "-w", "blob.txt")
+
+	inspector := NewGitInspector(nil)
+	for _, test := range []struct {
+		name     string
+		revision string
+		wantRef  *string
+	}{
+		{name: "head", revision: "HEAD", wantRef: stringPointer(headRef)},
+		{name: "branch", revision: "feature/target", wantRef: stringPointer("refs/heads/feature/target")},
+		{name: "tag", revision: "v0", wantRef: stringPointer("refs/tags/v0")},
+		{name: "annotated tag", revision: "v1", wantRef: stringPointer("refs/tags/v1")},
+		{name: "commit", revision: commitOID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolution, err := inspector.ResolveRevision(context.Background(), workspaceRoot, test.revision)
+			if err != nil {
+				t.Fatalf("ResolveRevision(%q): %v", test.revision, err)
+			}
+			if resolution.CommitOID != commitOID {
+				t.Fatalf("commit oid = %q, want %q", resolution.CommitOID, commitOID)
+			}
+			if (resolution.CanonicalRef == nil) != (test.wantRef == nil) || resolution.CanonicalRef != nil && *resolution.CanonicalRef != *test.wantRef {
+				t.Fatalf("canonical ref = %v, want %v", resolution.CanonicalRef, test.wantRef)
+			}
+		})
+	}
+
+	_, err := inspector.ResolveRevision(context.Background(), workspaceRoot, blobOID)
+	var resolutionErr *GitRevisionResolutionError
+	if !errors.As(err, &resolutionErr) || resolutionErr.Kind != GitRevisionResolutionErrorNonCommit {
+		t.Fatalf("ResolveRevision(non-commit) error = %v, want typed non-commit error", err)
+	}
+	_, err = inspector.ResolveRevision(context.Background(), workspaceRoot, "missing-revision")
+	if !errors.As(err, &resolutionErr) || resolutionErr.Kind != GitRevisionResolutionErrorInvalidRevision {
+		t.Fatalf("ResolveRevision(missing) error = %v, want typed invalid revision error", err)
+	}
+
+	runGit(t, workspaceRoot, "checkout", "-q", "--detach")
+	detached, err := inspector.ResolveHEAD(context.Background(), workspaceRoot)
+	if err != nil {
+		t.Fatalf("ResolveHEAD(detached): %v", err)
+	}
+	if detached.CommitOID != commitOID || detached.CanonicalRef != nil {
+		t.Fatalf("detached head resolution = %+v, want commit %q without canonical ref", detached, commitOID)
+	}
+}
+
+func TestGitInspectorResolveDefaultBranchUsesConfiguredRemoteHEAD(t *testing.T) {
+	newRepositoryWithRemoteHEAD := func(t *testing.T, remoteName string, branchName string) string {
+		t.Helper()
+		workspaceRoot := t.TempDir()
+		initGitRepo(t, workspaceRoot)
+		commitOID := runGit(t, workspaceRoot, "rev-parse", "HEAD")
+		runGit(t, workspaceRoot, "remote", "add", remoteName, "https://example.invalid/"+remoteName+".git")
+		runGit(t, workspaceRoot, "update-ref", "refs/remotes/"+remoteName+"/"+branchName, commitOID)
+		runGit(t, workspaceRoot, "symbolic-ref", "refs/remotes/"+remoteName+"/HEAD", "refs/remotes/"+remoteName+"/"+branchName)
+		return workspaceRoot
+	}
+
+	t.Run("prefers origin", func(t *testing.T) {
+		workspaceRoot := newRepositoryWithRemoteHEAD(t, "origin", "main")
+		commitOID := runGit(t, workspaceRoot, "rev-parse", "HEAD")
+		runGit(t, workspaceRoot, "remote", "add", "upstream", "https://example.invalid/upstream.git")
+		runGit(t, workspaceRoot, "update-ref", "refs/remotes/upstream/trunk", commitOID)
+		runGit(t, workspaceRoot, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk")
+
+		resolution, err := NewGitInspector(nil).ResolveDefaultBranch(context.Background(), workspaceRoot)
+		if err != nil {
+			t.Fatalf("ResolveDefaultBranch: %v", err)
+		}
+		if resolution.RemoteName != "origin" || resolution.Ref != "refs/remotes/origin/main" {
+			t.Fatalf("resolution = %+v, want origin refs/remotes/origin/main", resolution)
+		}
+	})
+
+	t.Run("uses exactly one non-origin remote", func(t *testing.T) {
+		workspaceRoot := newRepositoryWithRemoteHEAD(t, "upstream", "trunk")
+
+		resolution, err := NewGitInspector(nil).ResolveDefaultBranch(context.Background(), workspaceRoot)
+		if err != nil {
+			t.Fatalf("ResolveDefaultBranch: %v", err)
+		}
+		if resolution.RemoteName != "upstream" || resolution.Ref != "refs/remotes/upstream/trunk" {
+			t.Fatalf("resolution = %+v, want upstream refs/remotes/upstream/trunk", resolution)
+		}
+	})
+
+	t.Run("rejects missing and ambiguous remote heads", func(t *testing.T) {
+		missingRoot := t.TempDir()
+		initGitRepo(t, missingRoot)
+		_, err := NewGitInspector(nil).ResolveDefaultBranch(context.Background(), missingRoot)
+		var missingErr *GitDefaultBranchResolutionError
+		if !errors.As(err, &missingErr) || missingErr.Kind != GitDefaultBranchResolutionErrorMissing {
+			t.Fatalf("missing ResolveDefaultBranch error = %v, want typed missing error", err)
+		}
+
+		ambiguousRoot := newRepositoryWithRemoteHEAD(t, "upstream", "trunk")
+		commitOID := runGit(t, ambiguousRoot, "rev-parse", "HEAD")
+		runGit(t, ambiguousRoot, "remote", "add", "fork", "https://example.invalid/fork.git")
+		runGit(t, ambiguousRoot, "update-ref", "refs/remotes/fork/main", commitOID)
+		runGit(t, ambiguousRoot, "symbolic-ref", "refs/remotes/fork/HEAD", "refs/remotes/fork/main")
+		_, err = NewGitInspector(nil).ResolveDefaultBranch(context.Background(), ambiguousRoot)
+		var ambiguousErr *GitDefaultBranchResolutionError
+		if !errors.As(err, &ambiguousErr) || ambiguousErr.Kind != GitDefaultBranchResolutionErrorAmbiguous {
+			t.Fatalf("ambiguous ResolveDefaultBranch error = %v, want typed ambiguous error", err)
+		}
+	})
+}
+
+func TestGitInspectorValidateManagedWorktreeIdentity(t *testing.T) {
+	newManagedWorktree := func(t *testing.T, branchName string) (string, string) {
+		t.Helper()
+		sourceRoot := t.TempDir()
+		initGitRepo(t, sourceRoot)
+		targetRoot := filepath.Join(t.TempDir(), "target")
+		runGit(t, sourceRoot, "worktree", "add", "-q", "-b", branchName, targetRoot, "HEAD")
+		return sourceRoot, targetRoot
+	}
+	assertIdentityError := func(t *testing.T, err error, want ManagedWorktreeIdentityErrorKind) {
+		t.Helper()
+		var identityErr *ManagedWorktreeIdentityError
+		if !errors.As(err, &identityErr) || identityErr.Kind != want {
+			t.Fatalf("identity error = %v, want typed %q error", err, want)
+		}
+	}
+
+	t.Run("healthy even after task branch advances", func(t *testing.T) {
+		const taskBranch = "task-healthy"
+		sourceRoot, targetRoot := newManagedWorktree(t, taskBranch)
+		inspector := NewGitInspector(nil)
+
+		identity, err := inspector.ValidateManagedWorktreeIdentity(context.Background(), ManagedWorktreeIdentitySpec{
+			SourceWorkspaceRoot:  sourceRoot,
+			ExpectedWorktreeRoot: targetRoot,
+		})
+		if err != nil {
+			t.Fatalf("ValidateManagedWorktreeIdentity: %v", err)
+		}
+		if identity.SourceTopLevel != canonicalTestPath(t, sourceRoot) || identity.WorktreeTopLevel != canonicalTestPath(t, targetRoot) || identity.SourceCommonDir != identity.WorktreeCommonDir || identity.SymbolicHead != "refs/heads/"+taskBranch {
+			t.Fatalf("identity = %+v", identity)
+		}
+
+		if err := os.WriteFile(filepath.Join(targetRoot, "advanced.txt"), []byte("advanced\n"), 0o644); err != nil {
+			t.Fatalf("write advanced commit: %v", err)
+		}
+		runGit(t, targetRoot, "add", "advanced.txt")
+		runGit(t, targetRoot, "commit", "-q", "-m", "advance task branch")
+		if _, err := inspector.ValidateManagedWorktreeIdentity(context.Background(), ManagedWorktreeIdentitySpec{
+			SourceWorkspaceRoot:  sourceRoot,
+			ExpectedWorktreeRoot: targetRoot,
+		}); err != nil {
+			t.Fatalf("advanced branch identity: %v", err)
+		}
+	})
+
+	t.Run("classifies unusable roots and repositories", func(t *testing.T) {
+		const taskBranch = "task-invalid"
+		sourceRoot, targetRoot := newManagedWorktree(t, taskBranch)
+		inspector := NewGitInspector(nil)
+		validate := func(expectedRoot string) error {
+			_, err := inspector.ValidateManagedWorktreeIdentity(context.Background(), ManagedWorktreeIdentitySpec{
+				SourceWorkspaceRoot:  sourceRoot,
+				ExpectedWorktreeRoot: expectedRoot,
+			})
+			return err
+		}
+
+		assertIdentityError(t, validate(filepath.Join(t.TempDir(), "missing")), ManagedWorktreeIdentityErrorRootMissing)
+
+		notDirectory := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(notDirectory, []byte("file\n"), 0o644); err != nil {
+			t.Fatalf("write non-directory root: %v", err)
+		}
+		assertIdentityError(t, validate(notDirectory), ManagedWorktreeIdentityErrorRootNotDirectory)
+		assertIdentityError(t, validate(t.TempDir()), ManagedWorktreeIdentityErrorNotGitWorktree)
+
+		nestedRoot := filepath.Join(targetRoot, "nested")
+		if err := os.MkdirAll(nestedRoot, 0o755); err != nil {
+			t.Fatalf("MkdirAll nested root: %v", err)
+		}
+		assertIdentityError(t, validate(nestedRoot), ManagedWorktreeIdentityErrorTopLevelMismatch)
+
+		otherSourceRoot, otherTargetRoot := newManagedWorktree(t, taskBranch)
+		_ = otherSourceRoot
+		assertIdentityError(t, validate(otherTargetRoot), ManagedWorktreeIdentityErrorSourceRepositoryMismatch)
+
+		runGit(t, targetRoot, "checkout", "-q", "--detach")
+		assertIdentityError(t, validate(targetRoot), ManagedWorktreeIdentityErrorDetachedHead)
+
+		sourceRoot, targetRoot = newManagedWorktree(t, taskBranch)
+		inspector = NewGitInspector(nil)
+		runGit(t, targetRoot, "checkout", "-q", "-b", "other-branch")
+		identity, err := inspector.ValidateManagedWorktreeIdentity(context.Background(), ManagedWorktreeIdentitySpec{
+			SourceWorkspaceRoot:  sourceRoot,
+			ExpectedWorktreeRoot: targetRoot,
+		})
+		if err != nil {
+			t.Fatalf("named branch identity: %v", err)
+		}
+		if identity.SymbolicHead != "refs/heads/other-branch" {
+			t.Fatalf("named branch symbolic head = %q, want other branch", identity.SymbolicHead)
+		}
+
+		_, err = inspector.ValidateManagedWorktreeIdentity(context.Background(), ManagedWorktreeIdentitySpec{
+			SourceWorkspaceRoot:  filepath.Join(t.TempDir(), "missing-source"),
+			ExpectedWorktreeRoot: targetRoot,
+		})
+		assertIdentityError(t, err, ManagedWorktreeIdentityErrorGitInspectionFailed)
+	})
+
+	if runtime.GOOS != "windows" {
+		t.Run("classifies inaccessible root", func(t *testing.T) {
+			sourceRoot, _ := newManagedWorktree(t, "task-inaccessible")
+			parentRoot := t.TempDir()
+			targetRoot := filepath.Join(parentRoot, "locked")
+			if err := os.MkdirAll(targetRoot, 0o700); err != nil {
+				t.Fatalf("MkdirAll inaccessible root: %v", err)
+			}
+			if err := os.Chmod(parentRoot, 0o000); err != nil {
+				t.Fatalf("Chmod inaccessible parent: %v", err)
+			}
+			defer func() {
+				if err := os.Chmod(parentRoot, 0o700); err != nil {
+					t.Fatalf("restore inaccessible parent permissions: %v", err)
+				}
+			}()
+			_, err := NewGitInspector(nil).ValidateManagedWorktreeIdentity(context.Background(), ManagedWorktreeIdentitySpec{
+				SourceWorkspaceRoot:  sourceRoot,
+				ExpectedWorktreeRoot: targetRoot,
+			})
+			assertIdentityError(t, err, ManagedWorktreeIdentityErrorRootInaccessible)
+		})
+	}
+}
+
+func TestGitInspectorResolutionPropagatesCancellationAndClassifiesCommandFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := NewGitInspector(canceledGitCommandRunner{}).ResolveRevision(ctx, t.TempDir(), "HEAD")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ResolveRevision error = %v, want context canceled", err)
+	}
+
+	runner := &stubGitCommandRunner{
+		err:      errors.New("git unavailable"),
+		exitCode: -1,
+	}
+	_, err = NewGitInspector(runner).ResolveRevision(context.Background(), t.TempDir(), "HEAD")
+	var resolutionErr *GitRevisionResolutionError
+	if !errors.As(err, &resolutionErr) || resolutionErr.Kind != GitRevisionResolutionErrorGitFailure || !errors.Is(err, runner.err) {
+		t.Fatalf("failed ResolveRevision error = %v, want typed git failure that wraps command error", err)
+	}
+
+	_, err = NewGitInspector(canceledGitCommandRunner{}).ResolveDefaultBranch(ctx, t.TempDir())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ResolveDefaultBranch error = %v, want context canceled", err)
+	}
+
+	_, err = NewGitInspector(runner).ResolveDefaultBranch(context.Background(), t.TempDir())
+	var defaultBranchErr *GitDefaultBranchResolutionError
+	if !errors.As(err, &defaultBranchErr) || defaultBranchErr.Kind != GitDefaultBranchResolutionErrorGitFailure || !errors.Is(err, runner.err) {
+		t.Fatalf("failed ResolveDefaultBranch error = %v, want typed git failure that wraps command error", err)
+	}
+}
+
 func canonicalTestPath(t *testing.T, path string) string {
 	t.Helper()
 	canonical, err := filepath.EvalSymlinks(path)
@@ -419,6 +698,10 @@ func canonicalTestPath(t *testing.T, path string) string {
 		t.Fatalf("abs path %q: %v", path, absErr)
 	}
 	return filepath.Clean(abs)
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func equalStrings(got []string, want []string) bool {

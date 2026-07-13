@@ -3,11 +3,11 @@ import type {
   WorkflowEdge,
   WorkflowGraphDraft,
   WorkflowGraphMetadata,
+  WorkflowExecutionTargetPolicy,
   WorkflowInputField,
   WorkflowNode,
   WorkflowParameter,
 } from "../../api";
-import { z } from "zod";
 import {
   type AddWorkflowNodeInput,
   type AddConnectedWorkflowNodeInput,
@@ -22,12 +22,12 @@ import {
   type WorkflowEditorSelection,
 } from "./workflowEditorGraphMutations";
 import { workflowGraphsEqual } from "./workflowDraftEquality";
+import { draftParameterRowID, reorderDraftRows } from "./workflowEditorDraftRows";
 import { workflowEditorTopologyMutation } from "./workflowEditorTopologyReducer";
 import type {
   DraftWorkflowDefinition,
   DraftWorkflowEdge,
   DraftWorkflowNode,
-  DraftWorkflowParameter,
 } from "./workflowEditorDraftTypes";
 
 export type {
@@ -37,8 +37,6 @@ export type {
   DraftWorkflowNode,
   DraftWorkflowParameter,
 } from "./workflowEditorDraftTypes";
-
-const workflowParameterRowIDSchema = z.string();
 
 export type WorkflowEditorDraftState = Readonly<{
   acknowledgedConflictVersion: number;
@@ -62,6 +60,7 @@ export type WorkflowEditorDraftAction =
   | Readonly<{ type: "keepEditing" }>
   | Readonly<{ type: "reloadConflict" }>
   | Readonly<{ type: "editWorkflowMetadata"; name: string; description: string }>
+  | Readonly<{ type: "editWorkflowExecutionTargetPolicy"; policy: WorkflowExecutionTargetPolicy }>
   | Readonly<{
       type: "editNodeIdentity";
       nodeID: string;
@@ -130,7 +129,15 @@ export function initializeWorkflowEditorDraft(source: WorkflowDefinition): Workf
 
 type LifecycleAction = Extract<
   WorkflowEditorDraftAction,
-  { type: "reset" | "conflict" | "keepEditing" | "reloadConflict" | "editWorkflowMetadata" }
+  {
+    type:
+      | "reset"
+      | "conflict"
+      | "keepEditing"
+      | "reloadConflict"
+      | "editWorkflowMetadata"
+      | "editWorkflowExecutionTargetPolicy";
+  }
 >;
 
 type NodeFieldAction = Extract<
@@ -187,6 +194,7 @@ const lifecycleActionTypes: ReadonlySet<DraftActionType> = new Set<LifecycleActi
   "keepEditing",
   "reloadConflict",
   "editWorkflowMetadata",
+  "editWorkflowExecutionTargetPolicy",
 ]);
 
 const nodeFieldActionTypes: ReadonlySet<DraftActionType> = new Set<NodeFieldAction["type"]>([
@@ -262,6 +270,18 @@ function reduceLifecycleAction(
         },
         false,
       );
+    case "editWorkflowExecutionTargetPolicy":
+      return nextDraftState(
+        state,
+        {
+          ...state.draft,
+          workflow: {
+            ...state.draft.workflow,
+            executionTargetPolicy: canonicalWorkflowExecutionTargetPolicy(action.policy),
+          },
+        },
+        false,
+      );
   }
 }
 
@@ -329,7 +349,7 @@ function reduceNodeFieldAction(
     case "reorderInputField":
       return editDraftNode(state, action.nodeID, false, (node) => ({
         ...node,
-        inputFields: reorderRow(node.inputFields, action.activeRowID, action.overRowID),
+        inputFields: reorderDraftRows(node.inputFields, action.activeRowID, action.overRowID),
       }));
     case "assignJoinInputProvider":
       return editDraftNode(state, action.nodeID, false, (node) => ({
@@ -378,7 +398,7 @@ function reduceEdgeFieldAction(
     case "reorderEdgeParameter":
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
         ...edge,
-        parameters: reorderParameterRows(edge.parameters, action.activeRowID, action.overRowID),
+        parameters: reorderDraftRows(edge.parameters, action.activeRowID, action.overRowID),
       }));
   }
 }
@@ -424,7 +444,11 @@ export function workflowDefinitionFromDraft(draft: DraftWorkflowDefinition): Wor
 export function workflowEditorDirtyState(state: WorkflowEditorDraftState): WorkflowEditorDirtyState {
   const metadataDirty =
     state.draft.workflow.name !== state.source.workflow.name ||
-    state.draft.workflow.description !== state.source.workflow.description;
+    state.draft.workflow.description !== state.source.workflow.description ||
+    state.draft.workflow.executionTargetPolicy.mode !==
+      state.source.workflow.executionTargetPolicy.mode ||
+    state.draft.workflow.executionTargetPolicy.customRef !==
+      state.source.workflow.executionTargetPolicy.customRef;
   const graphDirty = !workflowGraphsEqual(workflowDefinitionFromDraft(state.draft), state.source);
   return { dirty: metadataDirty || graphDirty, graphDirty, metadataDirty };
 }
@@ -469,7 +493,20 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
 }
 
 export function workflowEditorDraftMetadata(state: WorkflowEditorDraftState): WorkflowGraphMetadata {
-  return { description: state.draft.workflow.description, name: state.draft.workflow.name };
+  return {
+    description: state.draft.workflow.description,
+    name: state.draft.workflow.name,
+    executionTargetPolicy: state.draft.workflow.executionTargetPolicy,
+  };
+}
+
+function canonicalWorkflowExecutionTargetPolicy(
+  policy: WorkflowExecutionTargetPolicy,
+): WorkflowExecutionTargetPolicy {
+  if (policy.mode === "custom_ref") {
+    return policy;
+  }
+  return { mode: policy.mode, customRef: null };
 }
 
 function nextDraftState(
@@ -557,14 +594,6 @@ function draftEdgeWithParameterRowIDs(edge: WorkflowEdge): DraftWorkflowEdge {
   };
 }
 
-function draftParameterRowID(parameter: WorkflowParameter): string | undefined {
-  if (!("rowID" in parameter)) {
-    return undefined;
-  }
-  const rowID = workflowParameterRowIDSchema.safeParse(parameter.rowID);
-  return rowID.success ? rowID.data : undefined;
-}
-
 type SelectedNodeCascadeRequest = Readonly<{
   edges: readonly DraftWorkflowEdge[];
   nodeID: string;
@@ -585,44 +614,6 @@ function selectedNodeCascadeEdges(req: SelectedNodeCascadeRequest): readonly Dra
       ? { ...edge, contextSource: { ...edge.contextSource, nodeKey: newKey } }
       : edge,
   );
-}
-
-function reorderRow<T extends Readonly<{ rowID: string }>>(
-  rows: readonly T[],
-  activeRowID: string,
-  overRowID: string,
-): readonly T[] {
-  const activeIndex = rows.findIndex((row) => row.rowID === activeRowID);
-  const overIndex = rows.findIndex((row) => row.rowID === overRowID);
-  if (activeIndex < 0 || overIndex < 0 || activeIndex === overIndex) {
-    return rows;
-  }
-  const next = [...rows];
-  const [item] = next.splice(activeIndex, 1);
-  if (item === undefined) {
-    return rows;
-  }
-  next.splice(overIndex, 0, item);
-  return next;
-}
-
-function reorderParameterRows(
-  rows: readonly DraftWorkflowParameter[],
-  activeRowID: string,
-  overRowID: string,
-): readonly DraftWorkflowParameter[] {
-  const activeIndex = rows.findIndex((row) => row.rowID === activeRowID);
-  const overIndex = rows.findIndex((row) => row.rowID === overRowID);
-  if (activeIndex < 0 || overIndex < 0 || activeIndex === overIndex) {
-    return rows;
-  }
-  const next = [...rows];
-  const [item] = next.splice(activeIndex, 1);
-  if (item === undefined) {
-    return rows;
-  }
-  next.splice(overIndex, 0, item);
-  return next;
 }
 
 function assignJoinInputProvider(

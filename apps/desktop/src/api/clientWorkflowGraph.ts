@@ -80,6 +80,10 @@ export function workflowGraphMetadataPayload(
   return {
     name: metadata.name,
     description: metadata.description,
+    execution_target_policy: compactJsonObject({
+      mode: metadata.executionTargetPolicy.mode,
+      custom_ref: metadata.executionTargetPolicy.customRef ?? undefined,
+    }),
   };
 }
 

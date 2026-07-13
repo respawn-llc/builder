@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -257,9 +258,17 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 		Workflow:        serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		Body:            "Do the work.",
 		SourceWorkspace: serverapi.ProjectWorkspaceSummary{RootPath: "/workspace"},
-		ManagedWorktree: &serverapi.WorktreeKentFacts{CanonicalRoot: "/workspace-task"},
-		SourceURL:       "https://example.test/source",
-		Status:          serverapi.WorkflowTaskStatus{Kind: "backlog"},
+		ExecutionTarget: &serverapi.WorkflowExecutionTarget{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+			ManagedWorktree: &serverapi.WorktreeKentFacts{
+				WorktreeID:    "worktree-1",
+				CanonicalRoot: "/workspace-task",
+				DisplayName:   "workspace-task",
+				Managed:       true,
+			},
+		},
+		SourceURL: "https://example.test/source",
+		Status:    serverapi.WorkflowTaskStatus{Kind: "backlog"},
 		Runs: []serverapi.WorkflowRun{
 			{ID: "run-1"},
 			{ID: "run-2"},
@@ -286,6 +295,66 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 	}
 	if strings.Contains(output, "placements") || strings.Contains(output, "transitions") {
 		t.Fatalf("task detail output = %q, did not expect internal placement/transition dump", output)
+	}
+}
+
+func TestTaskDetailExecutionTargetHumanAndJSONFacts(t *testing.T) {
+	effectiveRoot := "/workspace-task"
+	requestedRef := "release/v1"
+	resolvedRef := "refs/remotes/origin/release/v1"
+	commitOID := "0123456789abcdef0123456789abcdef01234567"
+	currentBranch := "operator-renamed"
+	task := serverapi.WorkflowTaskDetail{
+		Summary:  serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
+		Project:  serverapi.ProjectBoardProject{ProjectID: "project-1", DisplayName: "Project"},
+		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		SourceWorkspace: serverapi.ProjectWorkspaceSummary{
+			RootPath: "/workspace",
+		},
+		ExecutionTarget: &serverapi.WorkflowExecutionTarget{
+			Mode:          serverapi.WorkflowExecutionTargetModeCustomRef,
+			EffectiveRoot: &effectiveRoot,
+			RequestedRef:  &requestedRef,
+			ResolvedRef:   &resolvedRef,
+			CommitOID:     &commitOID,
+			Provenance:    serverapi.WorkflowExecutionTargetProvenanceLegacyObserved,
+			CurrentBranch: &currentBranch,
+			ManagedWorktree: &serverapi.WorktreeKentFacts{
+				WorktreeID:    "worktree-1",
+				CanonicalRoot: effectiveRoot,
+				DisplayName:   "workspace-task",
+				Managed:       true,
+			},
+		},
+		Status: serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
+	}
+
+	var human bytes.Buffer
+	if err := writeTaskDetail(&human, task); err != nil {
+		t.Fatalf("writeTaskDetail: %v", err)
+	}
+	for _, fact := range []string{
+		string(task.ExecutionTarget.Mode),
+		effectiveRoot,
+		requestedRef,
+		resolvedRef,
+		commitOID[:12],
+		currentBranch,
+	} {
+		if !strings.Contains(human.String(), fact) {
+			t.Fatalf("human task detail omitted target fact %q: %s", fact, human.String())
+		}
+	}
+	if strings.Contains(human.String(), commitOID) {
+		t.Fatalf("human task detail exposed full commit OID: %s", human.String())
+	}
+
+	data, err := json.Marshal(taskShowOutputFromDetail(task))
+	if err != nil {
+		t.Fatalf("marshal task show output: %v", err)
+	}
+	if !strings.Contains(string(data), commitOID) {
+		t.Fatalf("JSON task detail omitted full commit OID: %s", data)
 	}
 }
 

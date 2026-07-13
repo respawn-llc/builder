@@ -146,7 +146,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		}
 		resolved = workflowInspection.Plan
 		workflowConfig = workflowInspection.Runtime
-		workingDirectory = workflowInspection.WorktreeRoot
+		workingDirectory = workflowInspection.ExecutionRoot
 		activeSettings = resolved.ActiveSettings
 		activeToolIDs = resolved.EnabledTools
 		activeSources = resolved.Source.Sources

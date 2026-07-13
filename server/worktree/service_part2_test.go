@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -212,6 +213,57 @@ func TestRetargetSessionsFromMissingWorktreeRollsBackActiveSessionMetadataOnRunt
 	}
 	if len(env.runtime.reminderCalls) != 2 {
 		t.Fatalf("expected reminder for both sessions, got %+v", env.runtime.reminderCalls)
+	}
+}
+
+func TestRetargetSessionsFromWorktreeStopsBeforeLaterMutationWhenPlanningFails(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/retarget-plan-failure")
+	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	blockers, err := env.store.ListSessionsTargetingWorktree(env.ctx, created.WorktreeID)
+	if err != nil {
+		t.Fatalf("ListSessionsTargetingWorktree: %v", err)
+	}
+	if len(blockers) != 2 {
+		t.Fatalf("targeting sessions = %+v, want two", blockers)
+	}
+	failedSessionID := blockers[0].SessionID
+	laterSessionID := blockers[1].SessionID
+	laterTargetBefore, err := env.store.ResolveSessionExecutionTarget(env.ctx, laterSessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget later before: %v", err)
+	}
+	env.runtime.blockRunsHook = func(blocked []string) {
+		if !slices.Contains(blocked, failedSessionID) {
+			t.Fatalf("blocked sessions = %+v, want failed session %q", blocked, failedSessionID)
+		}
+		if err := env.store.DeleteSessionRecordByID(env.ctx, failedSessionID); err != nil {
+			t.Fatalf("DeleteSessionRecordByID: %v", err)
+		}
+	}
+	err = env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{
+		reminder:        worktreeReminderStateForExitedWorktree,
+		rollbackOnError: true,
+	})
+	if err == nil {
+		t.Fatal("retargetSessionsFromWorktree succeeded after planned session disappeared")
+	}
+	laterTargetAfter, err := env.store.ResolveSessionExecutionTarget(env.ctx, laterSessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget later after: %v", err)
+	}
+	if sessionTargetWorktreeID(laterTargetAfter) != sessionTargetWorktreeID(laterTargetBefore) ||
+		laterTargetAfter.EffectiveWorkdir != laterTargetBefore.EffectiveWorkdir {
+		t.Fatalf("later session was mutated after planning failure: before=%+v after=%+v", laterTargetBefore, laterTargetAfter)
+	}
+	if len(env.runtime.rebindCalls) != 0 {
+		t.Fatalf("runtime targets changed after planning failure: %+v", env.runtime.rebindCalls)
 	}
 }
 

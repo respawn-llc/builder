@@ -94,6 +94,115 @@ func TestWorkflowGraphSaveSupportsMetadataAndNoopRevisions(t *testing.T) {
 	}
 }
 
+func TestWorkflowGraphSaveRoundTripsExecutionTargetPolicy(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	if record.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution || def.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution {
+		t.Fatalf("created workflow policy = record=%+v definition=%+v, want ask_on_first_execution", record.ExecutionTargetPolicy, def.ExecutionTargetPolicy)
+	}
+
+	customRef := "refs/tags/v1"
+	custom := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	custom.Metadata = &WorkflowGraphSaveMetadata{
+		Name:                  record.Name,
+		Description:           record.Description,
+		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeCustomRef, CustomRef: &customRef},
+	}
+	customPreview, err := store.PreviewWorkflowGraphSave(ctx, custom)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave custom: %v", err)
+	}
+	if !customPreview.CanSave || customPreview.Version != record.Version {
+		t.Fatalf("custom policy preview = %+v, want saveable unchanged revision", customPreview)
+	}
+	customSaved, err := store.SaveWorkflowGraph(ctx, custom)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph custom: %v", err)
+	}
+	if !customSaved.Saved || !customSaved.Changed || customSaved.Version != record.Version+1 {
+		t.Fatalf("custom policy save = %+v, want one metadata revision", customSaved)
+	}
+	updated, updatedRecord, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition custom: %v", err)
+	}
+	if updated.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeCustomRef || updated.ExecutionTargetPolicy.CustomRef == nil || *updated.ExecutionTargetPolicy.CustomRef != customRef ||
+		updatedRecord.ExecutionTargetPolicy != updated.ExecutionTargetPolicy {
+		t.Fatalf("custom policy did not round-trip: definition=%+v record=%+v", updated.ExecutionTargetPolicy, updatedRecord.ExecutionTargetPolicy)
+	}
+
+	combined := workflowGraphSaveRequestFromDefinition(workflowID, updatedRecord.Version, false, updated)
+	combined.Nodes = renameWorkflowGraphSaveNode(combined.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Renamed agent")
+	combined.Metadata = &WorkflowGraphSaveMetadata{
+		Name:                  updatedRecord.Name,
+		Description:           updatedRecord.Description,
+		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeHead},
+	}
+	combinedSaved, err := store.SaveWorkflowGraph(ctx, combined)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph combined policy and graph: %v", err)
+	}
+	if !combinedSaved.Saved || combinedSaved.Version != updatedRecord.Version+1 {
+		t.Fatalf("combined policy/graph save = %+v, want exactly one version increment", combinedSaved)
+	}
+	afterCombined, afterCombinedRecord, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition combined: %v", err)
+	}
+	if afterCombined.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeHead || afterCombined.ExecutionTargetPolicy.CustomRef != nil ||
+		afterCombinedRecord.ExecutionTargetPolicy != afterCombined.ExecutionTargetPolicy {
+		t.Fatalf("non-custom policy should clear custom ref: definition=%+v record=%+v", afterCombined.ExecutionTargetPolicy, afterCombinedRecord.ExecutionTargetPolicy)
+	}
+
+	noop := workflowGraphSaveRequestFromDefinition(workflowID, afterCombinedRecord.Version, false, afterCombined)
+	noop.Metadata = &WorkflowGraphSaveMetadata{
+		Name:                  afterCombinedRecord.Name,
+		Description:           afterCombinedRecord.Description,
+		ExecutionTargetPolicy: &afterCombinedRecord.ExecutionTargetPolicy,
+	}
+	noopSaved, err := store.SaveWorkflowGraph(ctx, noop)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph policy noop: %v", err)
+	}
+	if !noopSaved.Saved || noopSaved.Changed || noopSaved.Version != afterCombinedRecord.Version {
+		t.Fatalf("policy noop = %+v, want unchanged workflow", noopSaved)
+	}
+
+	incomplete := workflowGraphSaveRequestFromDefinition(workflowID, afterCombinedRecord.Version, false, afterCombined)
+	incomplete.Metadata = &WorkflowGraphSaveMetadata{
+		Name:                  afterCombinedRecord.Name,
+		Description:           afterCombinedRecord.Description,
+		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeCustomRef},
+	}
+	incompletePreview, err := store.PreviewWorkflowGraphSave(ctx, incomplete)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave incomplete custom ref: %v", err)
+	}
+	if !incompletePreview.CanSave || !hasWorkflowValidationCode(incompletePreview.ValidationErrors, workflow.CodeExecutionTargetCustomRefRequired) {
+		t.Fatalf("incomplete custom ref preview = %+v, want saveable semantic validation", incompletePreview)
+	}
+	incompleteSaved, err := store.SaveWorkflowGraph(ctx, incomplete)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph incomplete custom ref: %v", err)
+	}
+	if !incompleteSaved.Saved || incompleteSaved.Version != afterCombinedRecord.Version+1 {
+		t.Fatalf("incomplete custom ref save = %+v, want one metadata revision", incompleteSaved)
+	}
+}
+
+func hasWorkflowValidationCode(errors []workflow.ValidationError, want workflow.ValidationErrorCode) bool {
+	for _, err := range errors {
+		if err.Code == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestWorkflowGraphSavePersistsScriptPathOnlyEdit(t *testing.T) {
 	ctx, store, _ := newTestStoreContext(t)
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Script Workflow"})

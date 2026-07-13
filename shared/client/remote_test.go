@@ -871,6 +871,43 @@ func remoteTestIntPointer(value int) *int {
 	return &value
 }
 
+func TestProtocolErrorDecodesWorkflowExecutionTargetResolutionError(t *testing.T) {
+	source := &serverapi.WorkflowExecutionTargetResolutionError{
+		Code:         serverapi.WorkflowExecutionTargetResolutionErrorInvalidRevision,
+		RequestedRef: "missing-ref",
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowExecutionTargetResolution,
+		Message: "execution target resolution failed",
+		Data:    source.RPCErrorData(),
+	})
+	var decoded *serverapi.WorkflowExecutionTargetResolutionError
+	if !errors.As(err, &decoded) {
+		t.Fatalf("decoded error = %T %v, want WorkflowExecutionTargetResolutionError", err, err)
+	}
+	if decoded.Code != source.Code || decoded.RequestedRef != source.RequestedRef {
+		t.Fatalf("decoded execution target error = %+v, want %+v", decoded, source)
+	}
+}
+
+func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
+	source := &serverapi.WorkflowLockedExecutionTargetError{
+		Cause: serverapi.WorkflowLockedExecutionTargetCauseMissingBranch,
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowLockedExecutionTarget,
+		Message: "locked execution target is unavailable",
+		Data:    source.RPCErrorData(),
+	})
+	var decoded *serverapi.WorkflowLockedExecutionTargetError
+	if !errors.As(err, &decoded) {
+		t.Fatalf("decoded error = %T %v, want WorkflowLockedExecutionTargetError", err, err)
+	}
+	if decoded.Cause != source.Cause {
+		t.Fatalf("decoded locked target error = %+v, want %+v", decoded, source)
+	}
+}
+
 func TestProtocolErrorMapsAuthRequiredCode(t *testing.T) {
 	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeAuthRequired, Message: "auth required"}); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("expected server auth required, got %v", err)

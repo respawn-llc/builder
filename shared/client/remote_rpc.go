@@ -512,6 +512,12 @@ func protocolError(resp *protocol.ResponseError) error {
 			return serverapi.DecodeWorktreeRPCError(resp.Data, message)
 		}
 	}
+	if resp.Code == protocol.ErrCodeWorkflowExecutionTargetResolution && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowExecutionTargetResolutionError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodeWorkflowLockedExecutionTarget && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowLockedExecutionTargetError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeRequestCanceled {
 		return requestCanceledError{message: message}
 	}

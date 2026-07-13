@@ -13,16 +13,6 @@ import (
 	"core/shared/config"
 )
 
-func findSyncedWorktreeByRoot(items []syncedWorktree, worktreeRoot string) (syncedWorktree, bool) {
-	trimmedRoot := strings.TrimSpace(worktreeRoot)
-	for _, item := range items {
-		if strings.TrimSpace(item.record.CanonicalRoot) == trimmedRoot {
-			return item, true
-		}
-	}
-	return syncedWorktree{}, false
-}
-
 func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTarget) error {
 	if target.Worktree == nil {
 		return nil

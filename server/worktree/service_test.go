@@ -28,6 +28,7 @@ type serviceTestRuntime struct {
 	runningSessions        map[string]bool
 	syncErrSessions        map[string]error
 	blockedRuns            map[string]int
+	blockRunsHook          func([]string)
 	rebindErr              error
 	rebindErrRoot          string
 	rebindHook             func(context.Context, string, string, string)
@@ -161,7 +162,11 @@ func (r *serviceTestRuntime) BlockSessionRuns(sessionIDs []string) func() {
 		r.blockedRuns[trimmed]++
 		blocked = append(blocked, trimmed)
 	}
+	hook := r.blockRunsHook
 	r.mu.Unlock()
+	if hook != nil {
+		hook(append([]string(nil), blocked...))
+	}
 	return func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()

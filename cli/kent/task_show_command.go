@@ -14,20 +14,20 @@ import (
 )
 
 type taskShowOutput struct {
-	Summary         serverapi.WorkflowTaskSummary     `json:"summary"`
-	Body            string                            `json:"body"`
-	SourceURL       string                            `json:"source_url,omitempty"`
-	Project         serverapi.ProjectBoardProject     `json:"project"`
-	Workflow        serverapi.WorkflowPickerItem      `json:"workflow"`
-	SourceWorkspace serverapi.ProjectWorkspaceSummary `json:"source_workspace"`
-	ManagedWorktree *serverapi.WorktreeKentFacts      `json:"managed_worktree,omitempty"`
-	Status          serverapi.WorkflowTaskStatus      `json:"status"`
-	Actions         serverapi.WorkflowTaskActions     `json:"actions"`
-	AttentionCount  int                               `json:"attention_count"`
-	PlacementCount  int                               `json:"placement_count"`
-	RunCount        int                               `json:"run_count"`
-	TransitionCount int                               `json:"transition_count"`
-	CommentCount    int                               `json:"comment_count"`
+	Summary         serverapi.WorkflowTaskSummary      `json:"summary"`
+	Body            string                             `json:"body"`
+	SourceURL       string                             `json:"source_url,omitempty"`
+	Project         serverapi.ProjectBoardProject      `json:"project"`
+	Workflow        serverapi.WorkflowPickerItem       `json:"workflow"`
+	SourceWorkspace serverapi.ProjectWorkspaceSummary  `json:"source_workspace"`
+	ExecutionTarget *serverapi.WorkflowExecutionTarget `json:"execution_target,omitempty"`
+	Status          serverapi.WorkflowTaskStatus       `json:"status"`
+	Actions         serverapi.WorkflowTaskActions      `json:"actions"`
+	AttentionCount  int                                `json:"attention_count"`
+	PlacementCount  int                                `json:"placement_count"`
+	RunCount        int                                `json:"run_count"`
+	TransitionCount int                                `json:"transition_count"`
+	CommentCount    int                                `json:"comment_count"`
 }
 
 func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -83,7 +83,7 @@ func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput 
 		Project:         task.Project,
 		Workflow:        task.Workflow,
 		SourceWorkspace: task.SourceWorkspace,
-		ManagedWorktree: task.ManagedWorktree,
+		ExecutionTarget: task.ExecutionTarget,
 		Status:          task.Status,
 		Actions:         task.Actions,
 		AttentionCount:  len(task.Attention),
@@ -150,14 +150,54 @@ func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error 
 	if strings.TrimSpace(task.SourceWorkspace.RootPath) != "" {
 		fmt.Fprintf(stdout, "Main workspace: %s\n", task.SourceWorkspace.RootPath)
 	}
-	if task.ManagedWorktree != nil && strings.TrimSpace(task.ManagedWorktree.CanonicalRoot) != "" {
-		fmt.Fprintf(stdout, "Worktree: %s\n", task.ManagedWorktree.CanonicalRoot)
+	if task.ExecutionTarget != nil {
+		writeTaskExecutionTarget(stdout, *task.ExecutionTarget)
 	}
 	if strings.TrimSpace(task.SourceURL) != "" {
 		fmt.Fprintf(stdout, "Imported from: %s\n", task.SourceURL)
 	}
 	writeTaskDetailComments(stdout, task.Summary.ShortID, task.Comments)
 	return nil
+}
+
+func writeTaskExecutionTarget(stdout io.Writer, target serverapi.WorkflowExecutionTarget) {
+	fmt.Fprintf(stdout, "Execution target: %s\n", target.Mode)
+	if target.EffectiveRoot != nil {
+		fmt.Fprintf(stdout, "Execution root: %s\n", *target.EffectiveRoot)
+	} else if target.Mode != serverapi.WorkflowExecutionTargetModeNone {
+		fmt.Fprintln(stdout, "Execution root: unavailable")
+	}
+	if target.RequestedRef != nil {
+		fmt.Fprintf(stdout, "Requested revision: %s\n", *target.RequestedRef)
+	}
+	if target.ResolvedRef != nil {
+		fmt.Fprintf(stdout, "Resolved revision: %s\n", *target.ResolvedRef)
+	}
+	if target.CommitOID != nil {
+		label := "Resolved commit"
+		if target.Provenance == serverapi.WorkflowExecutionTargetProvenanceLegacyObserved {
+			label = "Observed commit (legacy)"
+		}
+		fmt.Fprintf(stdout, "%s: %s\n", label, shortCommitOID(*target.CommitOID))
+	}
+	if target.CurrentBranch != nil {
+		fmt.Fprintf(stdout, "Current branch: %s\n", *target.CurrentBranch)
+	}
+	if target.ManagedWorktree != nil {
+		worktreeRoot := strings.TrimSpace(target.ManagedWorktree.CanonicalRoot)
+		if worktreeRoot != "" {
+			fmt.Fprintf(stdout, "Worktree: %s\n", worktreeRoot)
+		}
+	}
+}
+
+func shortCommitOID(commitOID string) string {
+	const displayLength = 12
+	trimmed := strings.TrimSpace(commitOID)
+	if len(trimmed) <= displayLength {
+		return trimmed
+	}
+	return trimmed[:displayLength]
 }
 
 func taskStatusText(status serverapi.WorkflowTaskStatus) (string, error) {

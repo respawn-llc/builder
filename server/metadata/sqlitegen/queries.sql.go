@@ -1913,6 +1913,11 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
     canceled_at_unix_ms,
     cancellation_reason,
     created_at_unix_ms,
@@ -1939,6 +1944,11 @@ func (q *Queries) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 		&i.SourceUrl,
 		&i.SourceWorkspaceID,
 		&i.ManagedWorktreeID,
+		&i.ExecutionTargetMode,
+		&i.ExecutionTargetRequestedRef,
+		&i.ExecutionTargetResolvedRef,
+		&i.ExecutionTargetCommitOid,
+		&i.ExecutionTargetProvenance,
 		&i.CanceledAtUnixMs,
 		&i.CancellationReason,
 		&i.CreatedAtUnixMs,
@@ -1962,6 +1972,11 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
     canceled_at_unix_ms,
     cancellation_reason,
     created_at_unix_ms,
@@ -1994,6 +2009,11 @@ func (q *Queries) GetTaskByProjectShortID(ctx context.Context, arg GetTaskByProj
 		&i.SourceUrl,
 		&i.SourceWorkspaceID,
 		&i.ManagedWorktreeID,
+		&i.ExecutionTargetMode,
+		&i.ExecutionTargetRequestedRef,
+		&i.ExecutionTargetResolvedRef,
+		&i.ExecutionTargetCommitOid,
+		&i.ExecutionTargetProvenance,
 		&i.CanceledAtUnixMs,
 		&i.CancellationReason,
 		&i.CreatedAtUnixMs,
@@ -2167,6 +2187,8 @@ SELECT
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms
 FROM workflows
@@ -2182,6 +2204,8 @@ func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) 
 		&i.Name,
 		&i.Description,
 		&i.Version,
+		&i.ExecutionTargetPolicy,
+		&i.ExecutionTargetCustomRef,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 	)
@@ -2694,6 +2718,7 @@ SELECT
     wt.created_branch,
     wt.origin_session_id,
     wt.git_metadata_json,
+    wt.creation_base_commit_oid,
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
@@ -2703,16 +2728,17 @@ LIMIT 1
 `
 
 type GetWorktreeByCanonicalRootRow struct {
-	ID                string
-	WorkspaceID       string
-	CanonicalRootPath string
-	IsMain            int64
-	Managed           int64
-	CreatedBranch     int64
-	OriginSessionID   string
-	GitMetadataJson   string
-	CreatedAtUnixMs   int64
-	UpdatedAtUnixMs   int64
+	ID                    string
+	WorkspaceID           string
+	CanonicalRootPath     string
+	IsMain                int64
+	Managed               int64
+	CreatedBranch         int64
+	OriginSessionID       string
+	GitMetadataJson       string
+	CreationBaseCommitOid sql.NullString
+	CreatedAtUnixMs       int64
+	UpdatedAtUnixMs       int64
 }
 
 func (q *Queries) GetWorktreeByCanonicalRoot(ctx context.Context, canonicalRootPath string) (GetWorktreeByCanonicalRootRow, error) {
@@ -2727,6 +2753,7 @@ func (q *Queries) GetWorktreeByCanonicalRoot(ctx context.Context, canonicalRootP
 		&i.CreatedBranch,
 		&i.OriginSessionID,
 		&i.GitMetadataJson,
+		&i.CreationBaseCommitOid,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 	)
@@ -2743,6 +2770,7 @@ SELECT
     wt.created_branch,
     wt.origin_session_id,
     wt.git_metadata_json,
+    wt.creation_base_commit_oid,
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
@@ -2752,16 +2780,17 @@ LIMIT 1
 `
 
 type GetWorktreeByIDRow struct {
-	ID                string
-	WorkspaceID       string
-	CanonicalRootPath string
-	IsMain            int64
-	Managed           int64
-	CreatedBranch     int64
-	OriginSessionID   string
-	GitMetadataJson   string
-	CreatedAtUnixMs   int64
-	UpdatedAtUnixMs   int64
+	ID                    string
+	WorkspaceID           string
+	CanonicalRootPath     string
+	IsMain                int64
+	Managed               int64
+	CreatedBranch         int64
+	OriginSessionID       string
+	GitMetadataJson       string
+	CreationBaseCommitOid sql.NullString
+	CreatedAtUnixMs       int64
+	UpdatedAtUnixMs       int64
 }
 
 func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeByIDRow, error) {
@@ -2776,6 +2805,7 @@ func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeBy
 		&i.CreatedBranch,
 		&i.OriginSessionID,
 		&i.GitMetadataJson,
+		&i.CreationBaseCommitOid,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 	)
@@ -3273,6 +3303,8 @@ INSERT INTO workflows (
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms
 ) VALUES (
@@ -3281,17 +3313,21 @@ INSERT INTO workflows (
     ?3,
     ?4,
     ?5,
-    ?6
+    ?6,
+    ?7,
+    ?8
 )
 `
 
 type InsertWorkflowParams struct {
-	ID              string
-	Name            string
-	Description     string
-	Version         int64
-	CreatedAtUnixMs int64
-	UpdatedAtUnixMs int64
+	ID                       string
+	Name                     string
+	Description              string
+	Version                  int64
+	ExecutionTargetPolicy    string
+	ExecutionTargetCustomRef sql.NullString
+	CreatedAtUnixMs          int64
+	UpdatedAtUnixMs          int64
 }
 
 func (q *Queries) InsertWorkflow(ctx context.Context, arg InsertWorkflowParams) error {
@@ -3300,6 +3336,8 @@ func (q *Queries) InsertWorkflow(ctx context.Context, arg InsertWorkflowParams) 
 		arg.Name,
 		arg.Description,
 		arg.Version,
+		arg.ExecutionTargetPolicy,
+		arg.ExecutionTargetCustomRef,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
@@ -3850,6 +3888,11 @@ SELECT
     t.source_url,
     t.source_workspace_id,
     t.managed_worktree_id,
+    t.execution_target_mode,
+    t.execution_target_requested_ref,
+    t.execution_target_resolved_ref,
+    t.execution_target_commit_oid,
+    t.execution_target_provenance,
     t.canceled_at_unix_ms,
     t.cancellation_reason,
     t.created_at_unix_ms,
@@ -3910,6 +3953,11 @@ func (q *Queries) ListBoardDonePreviewTasks(ctx context.Context, arg ListBoardDo
 			&i.SourceUrl,
 			&i.SourceWorkspaceID,
 			&i.ManagedWorktreeID,
+			&i.ExecutionTargetMode,
+			&i.ExecutionTargetRequestedRef,
+			&i.ExecutionTargetResolvedRef,
+			&i.ExecutionTargetCommitOid,
+			&i.ExecutionTargetProvenance,
 			&i.CanceledAtUnixMs,
 			&i.CancellationReason,
 			&i.CreatedAtUnixMs,
@@ -3992,6 +4040,11 @@ SELECT
     t.source_url,
     t.source_workspace_id,
     t.managed_worktree_id,
+    t.execution_target_mode,
+    t.execution_target_requested_ref,
+    t.execution_target_resolved_ref,
+    t.execution_target_commit_oid,
+    t.execution_target_provenance,
     t.canceled_at_unix_ms,
     t.cancellation_reason,
     t.created_at_unix_ms,
@@ -4053,6 +4106,11 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 			&i.SourceUrl,
 			&i.SourceWorkspaceID,
 			&i.ManagedWorktreeID,
+			&i.ExecutionTargetMode,
+			&i.ExecutionTargetRequestedRef,
+			&i.ExecutionTargetResolvedRef,
+			&i.ExecutionTargetCommitOid,
+			&i.ExecutionTargetProvenance,
 			&i.CanceledAtUnixMs,
 			&i.CancellationReason,
 			&i.CreatedAtUnixMs,
@@ -4115,6 +4173,11 @@ SELECT
     t.source_url,
     t.source_workspace_id,
     t.managed_worktree_id,
+    t.execution_target_mode,
+    t.execution_target_requested_ref,
+    t.execution_target_resolved_ref,
+    t.execution_target_commit_oid,
+    t.execution_target_provenance,
     t.canceled_at_unix_ms,
     t.cancellation_reason,
     t.created_at_unix_ms,
@@ -4182,6 +4245,11 @@ func (q *Queries) ListBoardOpenTasks(ctx context.Context, arg ListBoardOpenTasks
 			&i.SourceUrl,
 			&i.SourceWorkspaceID,
 			&i.ManagedWorktreeID,
+			&i.ExecutionTargetMode,
+			&i.ExecutionTargetRequestedRef,
+			&i.ExecutionTargetResolvedRef,
+			&i.ExecutionTargetCommitOid,
+			&i.ExecutionTargetProvenance,
 			&i.CanceledAtUnixMs,
 			&i.CancellationReason,
 			&i.CreatedAtUnixMs,
@@ -6318,6 +6386,11 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
     canceled_at_unix_ms,
     cancellation_reason,
     created_at_unix_ms,
@@ -6358,6 +6431,11 @@ func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) ([]T
 			&i.SourceUrl,
 			&i.SourceWorkspaceID,
 			&i.ManagedWorktreeID,
+			&i.ExecutionTargetMode,
+			&i.ExecutionTargetRequestedRef,
+			&i.ExecutionTargetResolvedRef,
+			&i.ExecutionTargetCommitOid,
+			&i.ExecutionTargetProvenance,
 			&i.CanceledAtUnixMs,
 			&i.CancellationReason,
 			&i.CreatedAtUnixMs,
@@ -6401,15 +6479,35 @@ WHERE short_id = ?1
 ORDER BY created_at_unix_ms ASC, id ASC
 `
 
-func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]TaskRecord, error) {
+type ListTasksByShortIDRow struct {
+	ID                    string
+	ProjectID             string
+	ProjectWorkflowLinkID string
+	WorkflowID            string
+	WorkflowRevisionSeen  int64
+	TaskSeq               int64
+	ShortID               string
+	Title                 string
+	Body                  string
+	SourceUrl             string
+	SourceWorkspaceID     sql.NullString
+	ManagedWorktreeID     sql.NullString
+	CanceledAtUnixMs      sql.NullInt64
+	CancellationReason    sql.NullString
+	CreatedAtUnixMs       int64
+	UpdatedAtUnixMs       int64
+	MetadataJson          string
+}
+
+func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]ListTasksByShortIDRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTasksByShortID, shortID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TaskRecord
+	var items []ListTasksByShortIDRow
 	for rows.Next() {
-		var i TaskRecord
+		var i ListTasksByShortIDRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
@@ -7177,6 +7275,8 @@ WITH workflow_list(
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms,
     activity_at_unix_ms
@@ -7186,6 +7286,8 @@ WITH workflow_list(
         workflows.name,
         workflows.description,
         workflows.version,
+        workflows.execution_target_policy,
+        workflows.execution_target_custom_ref,
         workflows.created_at_unix_ms,
         workflows.updated_at_unix_ms,
         CAST(MAX(
@@ -7231,6 +7333,8 @@ SELECT
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms,
     activity_at_unix_ms
@@ -7249,13 +7353,15 @@ type ListWorkflowRecordsPageParams struct {
 }
 
 type ListWorkflowRecordsPageRow struct {
-	ID               string
-	Name             string
-	Description      string
-	Version          int64
-	CreatedAtUnixMs  int64
-	UpdatedAtUnixMs  int64
-	ActivityAtUnixMs int64
+	ID                       string
+	Name                     string
+	Description              string
+	Version                  int64
+	ExecutionTargetPolicy    string
+	ExecutionTargetCustomRef sql.NullString
+	CreatedAtUnixMs          int64
+	UpdatedAtUnixMs          int64
+	ActivityAtUnixMs         int64
 }
 
 func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowRecordsPageParams) ([]ListWorkflowRecordsPageRow, error) {
@@ -7279,6 +7385,8 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 			&i.Name,
 			&i.Description,
 			&i.Version,
+			&i.ExecutionTargetPolicy,
+			&i.ExecutionTargetCustomRef,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.ActivityAtUnixMs,
@@ -7624,6 +7732,11 @@ selected_rows AS (
         t.source_url,
         t.source_workspace_id,
         t.managed_worktree_id,
+        t.execution_target_mode,
+        t.execution_target_requested_ref,
+        t.execution_target_resolved_ref,
+        t.execution_target_commit_oid,
+        t.execution_target_provenance,
         t.canceled_at_unix_ms,
         t.cancellation_reason,
         t.created_at_unix_ms,
@@ -7773,6 +7886,11 @@ SELECT
     rows.source_url,
     rows.source_workspace_id,
     rows.managed_worktree_id,
+    rows.execution_target_mode,
+    rows.execution_target_requested_ref,
+    rows.execution_target_resolved_ref,
+    rows.execution_target_commit_oid,
+    rows.execution_target_provenance,
     rows.canceled_at_unix_ms,
     rows.cancellation_reason,
     rows.created_at_unix_ms,
@@ -7847,32 +7965,37 @@ type ListWorkflowTaskListRowsParams struct {
 }
 
 type ListWorkflowTaskListRowsRow struct {
-	ID                    string
-	ProjectID             string
-	ProjectWorkflowLinkID string
-	WorkflowID            string
-	WorkflowRevisionSeen  int64
-	TaskSeq               int64
-	ShortID               string
-	Title                 string
-	Body                  string
-	SourceUrl             string
-	SourceWorkspaceID     sql.NullString
-	ManagedWorktreeID     sql.NullString
-	CanceledAtUnixMs      sql.NullInt64
-	CancellationReason    sql.NullString
-	CreatedAtUnixMs       int64
-	UpdatedAtUnixMs       int64
-	MetadataJson          string
-	ColumnRank            int64
-	ColumnKeysJson        string
-	Kind                  string
-	PrimaryStatusRank     int64
-	NodeIdsJson           string
-	RunIdsJson            string
-	AttentionTypesJson    string
-	RunCount              int64
-	TitleSort             string
+	ID                          string
+	ProjectID                   string
+	ProjectWorkflowLinkID       string
+	WorkflowID                  string
+	WorkflowRevisionSeen        int64
+	TaskSeq                     int64
+	ShortID                     string
+	Title                       string
+	Body                        string
+	SourceUrl                   string
+	SourceWorkspaceID           sql.NullString
+	ManagedWorktreeID           sql.NullString
+	ExecutionTargetMode         sql.NullString
+	ExecutionTargetRequestedRef sql.NullString
+	ExecutionTargetResolvedRef  sql.NullString
+	ExecutionTargetCommitOid    sql.NullString
+	ExecutionTargetProvenance   sql.NullString
+	CanceledAtUnixMs            sql.NullInt64
+	CancellationReason          sql.NullString
+	CreatedAtUnixMs             int64
+	UpdatedAtUnixMs             int64
+	MetadataJson                string
+	ColumnRank                  int64
+	ColumnKeysJson              string
+	Kind                        string
+	PrimaryStatusRank           int64
+	NodeIdsJson                 string
+	RunIdsJson                  string
+	AttentionTypesJson          string
+	RunCount                    int64
+	TitleSort                   string
 }
 
 func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflowTaskListRowsParams) ([]ListWorkflowTaskListRowsRow, error) {
@@ -7927,6 +8050,11 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 			&i.SourceUrl,
 			&i.SourceWorkspaceID,
 			&i.ManagedWorktreeID,
+			&i.ExecutionTargetMode,
+			&i.ExecutionTargetRequestedRef,
+			&i.ExecutionTargetResolvedRef,
+			&i.ExecutionTargetCommitOid,
+			&i.ExecutionTargetProvenance,
 			&i.CanceledAtUnixMs,
 			&i.CancellationReason,
 			&i.CreatedAtUnixMs,
@@ -8108,6 +8236,8 @@ SELECT
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms
 FROM workflows
@@ -8128,6 +8258,8 @@ func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
 			&i.Name,
 			&i.Description,
 			&i.Version,
+			&i.ExecutionTargetPolicy,
+			&i.ExecutionTargetCustomRef,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 		); err != nil {
@@ -8277,6 +8409,7 @@ SELECT
     wt.created_branch,
     wt.origin_session_id,
     wt.git_metadata_json,
+    wt.creation_base_commit_oid,
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
@@ -8286,16 +8419,17 @@ ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC
 `
 
 type ListWorktreesByWorkspaceIDRow struct {
-	ID                string
-	WorkspaceID       string
-	CanonicalRootPath string
-	IsMain            int64
-	Managed           int64
-	CreatedBranch     int64
-	OriginSessionID   string
-	GitMetadataJson   string
-	CreatedAtUnixMs   int64
-	UpdatedAtUnixMs   int64
+	ID                    string
+	WorkspaceID           string
+	CanonicalRootPath     string
+	IsMain                int64
+	Managed               int64
+	CreatedBranch         int64
+	OriginSessionID       string
+	GitMetadataJson       string
+	CreationBaseCommitOid sql.NullString
+	CreatedAtUnixMs       int64
+	UpdatedAtUnixMs       int64
 }
 
 func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID string) ([]ListWorktreesByWorkspaceIDRow, error) {
@@ -8316,6 +8450,7 @@ func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID st
 			&i.CreatedBranch,
 			&i.OriginSessionID,
 			&i.GitMetadataJson,
+			&i.CreationBaseCommitOid,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 		); err != nil {
@@ -8330,6 +8465,55 @@ func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID st
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockTaskExecutionTarget = `-- name: LockTaskExecutionTarget :execrows
+UPDATE tasks
+SET
+    managed_worktree_id = ?1,
+    execution_target_mode = ?2,
+    execution_target_requested_ref = ?3,
+    execution_target_resolved_ref = ?4,
+    execution_target_commit_oid = ?5,
+    execution_target_provenance = ?6,
+    updated_at_unix_ms = ?7
+WHERE id = ?8
+  AND execution_target_mode IS NULL
+  AND execution_target_requested_ref IS NULL
+  AND execution_target_resolved_ref IS NULL
+  AND execution_target_commit_oid IS NULL
+  AND execution_target_provenance IS NULL
+  AND managed_worktree_id IS ?9
+`
+
+type LockTaskExecutionTargetParams struct {
+	ManagedWorktreeID           sql.NullString
+	ExecutionTargetMode         sql.NullString
+	ExecutionTargetRequestedRef sql.NullString
+	ExecutionTargetResolvedRef  sql.NullString
+	ExecutionTargetCommitOid    sql.NullString
+	ExecutionTargetProvenance   sql.NullString
+	UpdatedAtUnixMs             int64
+	TaskID                      string
+	ExpectedManagedWorktreeID   sql.NullString
+}
+
+func (q *Queries) LockTaskExecutionTarget(ctx context.Context, arg LockTaskExecutionTargetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, lockTaskExecutionTarget,
+		arg.ManagedWorktreeID,
+		arg.ExecutionTargetMode,
+		arg.ExecutionTargetRequestedRef,
+		arg.ExecutionTargetResolvedRef,
+		arg.ExecutionTargetCommitOid,
+		arg.ExecutionTargetProvenance,
+		arg.UpdatedAtUnixMs,
+		arg.TaskID,
+		arg.ExpectedManagedWorktreeID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const recordInvalidCompletionProtocolViolation = `-- name: RecordInvalidCompletionProtocolViolation :one
@@ -9508,6 +9692,77 @@ func (q *Queries) UpdateWorkflowInfoWithoutVersion(ctx context.Context, arg Upda
 	return result.RowsAffected()
 }
 
+const updateWorkflowMetadata = `-- name: UpdateWorkflowMetadata :execrows
+UPDATE workflows
+SET
+    name = ?1,
+    description = ?2,
+    execution_target_policy = ?3,
+    execution_target_custom_ref = ?4,
+    version = version + 1,
+    updated_at_unix_ms = ?5
+WHERE id = ?6
+`
+
+type UpdateWorkflowMetadataParams struct {
+	Name                     string
+	Description              string
+	ExecutionTargetPolicy    string
+	ExecutionTargetCustomRef sql.NullString
+	UpdatedAtUnixMs          int64
+	ID                       string
+}
+
+func (q *Queries) UpdateWorkflowMetadata(ctx context.Context, arg UpdateWorkflowMetadataParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateWorkflowMetadata,
+		arg.Name,
+		arg.Description,
+		arg.ExecutionTargetPolicy,
+		arg.ExecutionTargetCustomRef,
+		arg.UpdatedAtUnixMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateWorkflowMetadataWithoutVersion = `-- name: UpdateWorkflowMetadataWithoutVersion :execrows
+UPDATE workflows
+SET
+    name = ?1,
+    description = ?2,
+    execution_target_policy = ?3,
+    execution_target_custom_ref = ?4,
+    updated_at_unix_ms = ?5
+WHERE id = ?6
+`
+
+type UpdateWorkflowMetadataWithoutVersionParams struct {
+	Name                     string
+	Description              string
+	ExecutionTargetPolicy    string
+	ExecutionTargetCustomRef sql.NullString
+	UpdatedAtUnixMs          int64
+	ID                       string
+}
+
+func (q *Queries) UpdateWorkflowMetadataWithoutVersion(ctx context.Context, arg UpdateWorkflowMetadataWithoutVersionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateWorkflowMetadataWithoutVersion,
+		arg.Name,
+		arg.Description,
+		arg.ExecutionTargetPolicy,
+		arg.ExecutionTargetCustomRef,
+		arg.UpdatedAtUnixMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateWorkflowNode = `-- name: UpdateWorkflowNode :execrows
 UPDATE workflow_nodes
 SET
@@ -10153,6 +10408,7 @@ INSERT INTO worktrees (
     created_branch,
     origin_session_id,
     git_metadata_json,
+    creation_base_commit_oid,
     created_at_unix_ms,
     updated_at_unix_ms
 ) VALUES (
@@ -10164,7 +10420,8 @@ INSERT INTO worktrees (
     ?6,
     ?7,
     ?8,
-    ?9
+    ?9,
+    ?10
 )
 ON CONFLICT(canonical_root_path) DO UPDATE SET
     workspace_id = excluded.workspace_id,
@@ -10176,15 +10433,16 @@ ON CONFLICT(canonical_root_path) DO UPDATE SET
 `
 
 type UpsertWorktreeParams struct {
-	ID                string
-	WorkspaceID       string
-	CanonicalRootPath string
-	Managed           int64
-	CreatedBranch     int64
-	OriginSessionID   string
-	GitMetadataJson   string
-	CreatedAtUnixMs   int64
-	UpdatedAtUnixMs   int64
+	ID                    string
+	WorkspaceID           string
+	CanonicalRootPath     string
+	Managed               int64
+	CreatedBranch         int64
+	OriginSessionID       string
+	GitMetadataJson       string
+	CreationBaseCommitOid sql.NullString
+	CreatedAtUnixMs       int64
+	UpdatedAtUnixMs       int64
 }
 
 func (q *Queries) UpsertWorktree(ctx context.Context, arg UpsertWorktreeParams) error {
@@ -10196,6 +10454,7 @@ func (q *Queries) UpsertWorktree(ctx context.Context, arg UpsertWorktreeParams) 
 		arg.CreatedBranch,
 		arg.OriginSessionID,
 		arg.GitMetadataJson,
+		arg.CreationBaseCommitOid,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)

@@ -30,8 +30,9 @@ type WorkflowGraphSaveRequest struct {
 }
 
 type WorkflowGraphSaveMetadata struct {
-	Name        string
-	Description string
+	Name                  string
+	Description           string
+	ExecutionTargetPolicy *workflow.ExecutionTargetPolicy
 }
 
 type WorkflowGraphSaveImpact struct {
@@ -95,7 +96,11 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
 	}
-	metadata, metadataChanged, err := prepareWorkflowGraphSaveMetadata(current.Name, current.Description, req.Metadata)
+	currentPolicy := workflow.ExecutionTargetPolicy{
+		Mode:      workflow.ExecutionTargetMode(current.ExecutionTargetPolicy),
+		CustomRef: workflowCustomRefFromRow(current.ExecutionTargetCustomRef),
+	}.Canonical()
+	metadata, metadataChanged, err := prepareWorkflowGraphSaveMetadata(current.Name, current.Description, currentPolicy, req.Metadata)
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
 	}
@@ -103,7 +108,11 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 	if metadata != nil {
 		displayName = metadata.Name
 	}
-	prepared, def, err := prepareWorkflowGraphSave(workflowID, displayName, req)
+	executionTargetPolicy := currentPolicy
+	if metadata != nil && metadata.ExecutionTargetPolicy != nil {
+		executionTargetPolicy = *metadata.ExecutionTargetPolicy
+	}
+	prepared, def, err := prepareWorkflowGraphSave(workflowID, displayName, executionTargetPolicy, req)
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
 	}
@@ -120,6 +129,8 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		GraphChanged:    graphChanged,
 		MetadataChanged: metadataChanged,
 	}
+	validation := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: s.roleResolver})
+	plan.ValidationErrors = validation.Errors
 	if !graphChanged && !metadataChanged {
 		return plan, nil
 	}
@@ -127,12 +138,8 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		plan.Blockers = []WorkflowGraphSaveBlocker{{Code: "version_changed", Message: "Workflow changed. Refresh before saving.", Count: current.Version}}
 		return plan, nil
 	}
-	if !graphChanged {
-		return plan, nil
-	}
-	validation := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: s.roleResolver})
-	validationErrors := validation.BlockingErrors()
-	plan.ValidationErrors = validationErrors
+	blockingValidationErrors := validation.BlockingErrors()
+	plan.ValidationErrors = validation.Errors
 	impact, removed, err := workflowGraphSaveImpact(ctx, q, workflowID, prepared)
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
@@ -143,8 +150,8 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 	}
 	blockers := workflowGraphSaveBlockers(req, impact)
 	blockers = append(blockers, workflowGraphSaveBlockersFromEditPolicy(editPolicy.Blockers)...)
-	if len(validationErrors) > 0 {
-		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "validation_failed", Message: "Workflow graph has blocking validation errors.", Count: int64(len(validationErrors))})
+	if len(blockingValidationErrors) > 0 {
+		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "validation_failed", Message: "Workflow graph has blocking validation errors.", Count: int64(len(blockingValidationErrors))})
 	}
 	plan.Removed = removed
 	plan.Impact = impact
@@ -182,12 +189,18 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 		version = revision
 	}
 	if plan.MetadataChanged && plan.Metadata != nil {
+		if plan.Metadata.ExecutionTargetPolicy == nil {
+			return WorkflowGraphSaveResult{}, errors.New("prepared workflow execution target policy is required")
+		}
+		customRef := workflowCustomRefForQuery(plan.Metadata.ExecutionTargetPolicy.CustomRef)
 		if plan.GraphChanged {
-			updated, err := q.UpdateWorkflowInfoWithoutVersion(ctx, sqlitegen.UpdateWorkflowInfoWithoutVersionParams{
-				ID:              string(plan.WorkflowID),
-				Name:            plan.Metadata.Name,
-				Description:     plan.Metadata.Description,
-				UpdatedAtUnixMs: s.now().UnixMilli(),
+			updated, err := q.UpdateWorkflowMetadataWithoutVersion(ctx, sqlitegen.UpdateWorkflowMetadataWithoutVersionParams{
+				ID:                       string(plan.WorkflowID),
+				Name:                     plan.Metadata.Name,
+				Description:              plan.Metadata.Description,
+				ExecutionTargetPolicy:    string(plan.Metadata.ExecutionTargetPolicy.Mode),
+				ExecutionTargetCustomRef: customRef,
+				UpdatedAtUnixMs:          s.now().UnixMilli(),
 			})
 			if err != nil {
 				return WorkflowGraphSaveResult{}, fmt.Errorf("update workflow metadata: %w", err)
@@ -196,7 +209,14 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 				return WorkflowGraphSaveResult{}, sql.ErrNoRows
 			}
 		} else {
-			updated, err := q.UpdateWorkflowInfo(ctx, sqlitegen.UpdateWorkflowInfoParams{ID: string(plan.WorkflowID), Name: plan.Metadata.Name, Description: plan.Metadata.Description, UpdatedAtUnixMs: s.now().UnixMilli()})
+			updated, err := q.UpdateWorkflowMetadata(ctx, sqlitegen.UpdateWorkflowMetadataParams{
+				ID:                       string(plan.WorkflowID),
+				Name:                     plan.Metadata.Name,
+				Description:              plan.Metadata.Description,
+				ExecutionTargetPolicy:    string(plan.Metadata.ExecutionTargetPolicy.Mode),
+				ExecutionTargetCustomRef: customRef,
+				UpdatedAtUnixMs:          s.now().UnixMilli(),
+			})
 			if err != nil {
 				return WorkflowGraphSaveResult{}, fmt.Errorf("update workflow metadata: %w", err)
 			}
@@ -242,19 +262,46 @@ type removedWorkflowGraphRows struct {
 	edges            []workflow.EdgeID
 }
 
-func prepareWorkflowGraphSaveMetadata(currentName string, currentDescription string, metadata *WorkflowGraphSaveMetadata) (*WorkflowGraphSaveMetadata, bool, error) {
+func prepareWorkflowGraphSaveMetadata(currentName string, currentDescription string, currentPolicy workflow.ExecutionTargetPolicy, metadata *WorkflowGraphSaveMetadata) (*WorkflowGraphSaveMetadata, bool, error) {
 	if metadata == nil {
 		return nil, false, nil
 	}
-	prepared := WorkflowGraphSaveMetadata{Name: strings.TrimSpace(metadata.Name), Description: strings.TrimSpace(metadata.Description)}
+	policy := currentPolicy
+	if metadata.ExecutionTargetPolicy != nil {
+		policy = normalizeWorkflowExecutionTargetPolicy(*metadata.ExecutionTargetPolicy)
+	}
+	prepared := WorkflowGraphSaveMetadata{Name: strings.TrimSpace(metadata.Name), Description: strings.TrimSpace(metadata.Description), ExecutionTargetPolicy: &policy}
 	if prepared.Name == "" {
 		return nil, false, ErrWorkflowNameRequired
 	}
-	changed := prepared.Name != currentName || prepared.Description != currentDescription
+	if policy.Mode != workflow.ExecutionTargetModeCustomRef && policy.CustomRef != nil {
+		return nil, false, errors.New("execution target custom ref is only valid for custom_ref policy")
+	}
+	if policy.Mode == workflow.ExecutionTargetModeCustomRef && policy.CustomRef != nil && strings.TrimSpace(*policy.CustomRef) == "" {
+		return nil, false, errors.New("execution target custom ref must be non-blank when present")
+	}
+	if policy.Mode != workflow.ExecutionTargetModeNone &&
+		policy.Mode != workflow.ExecutionTargetModeHead &&
+		policy.Mode != workflow.ExecutionTargetModeDefaultBranch &&
+		policy.Mode != workflow.ExecutionTargetModeCustomRef &&
+		policy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution {
+		return nil, false, errors.New("execution target policy mode is invalid")
+	}
+	changed := prepared.Name != currentName || prepared.Description != currentDescription || !workflowExecutionTargetPoliciesEqual(*prepared.ExecutionTargetPolicy, currentPolicy)
 	return &prepared, changed, nil
 }
 
-func prepareWorkflowGraphSave(workflowID workflow.WorkflowID, displayName string, req WorkflowGraphSaveRequest) (preparedWorkflowGraphSave, workflow.Definition, error) {
+func workflowExecutionTargetPoliciesEqual(a workflow.ExecutionTargetPolicy, b workflow.ExecutionTargetPolicy) bool {
+	if a.Mode != b.Mode {
+		return false
+	}
+	if a.CustomRef == nil || b.CustomRef == nil {
+		return a.CustomRef == nil && b.CustomRef == nil
+	}
+	return *a.CustomRef == *b.CustomRef
+}
+
+func prepareWorkflowGraphSave(workflowID workflow.WorkflowID, displayName string, executionTargetPolicy workflow.ExecutionTargetPolicy, req WorkflowGraphSaveRequest) (preparedWorkflowGraphSave, workflow.Definition, error) {
 	prepared := preparedWorkflowGraphSave{
 		nodeGroups:       append([]NodeGroupRecord(nil), req.NodeGroups...),
 		nodes:            append([]NodeRecord(nil), req.Nodes...),
@@ -293,7 +340,7 @@ func prepareWorkflowGraphSave(workflowID workflow.WorkflowID, displayName string
 		prepared.nodeGroups[i] = group
 	}
 
-	def := workflow.Definition{ID: workflowID, DisplayName: displayName}
+	def := workflow.Definition{ID: workflowID, DisplayName: displayName, ExecutionTargetPolicy: executionTargetPolicy}
 	groupNodeIDs := map[string][]workflow.NodeID{}
 	for i, node := range prepared.nodes {
 		if strings.TrimSpace(string(node.WorkflowID)) == "" {

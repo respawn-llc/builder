@@ -24,9 +24,26 @@ More info in `--help`.
 ## Config Locations
 Global config (applies to all projects) `~/.kent/config.toml` (`%USERPROFILE%\.kent\` on Windows), local config is at `<workspace-root>/.kent/config.toml`. Workspace root is usually your cwd, or your worktree's main workspace cwd. Config schema and full notes at `https://kent.sh/config.md`. The database and session logs that kent uses are colocated with the config file. Session logs are `.json` files with a full history of events, split per-project. Careful: session logs are very long and can weigh gigabytes.
 
+Runtime logs live under the persistence root (default `~/.kent`; override with `$KENT_PERSISTENCE_ROOT`):
+
+- Desktop: `<persistence-root>/gui/desktop.log`.
+- CLI: `<persistence-root>/logs/tui.log`.
+- Server: `<persistence-root>/logs/server.log` and `<persistence-root>/logs/server.err.log`; `kent service status` prints the exact paths.
+
 Most behavior changes you make affect only **new sessions** and only **after server restart**. Existing sessions will keep captured conversation logs and settings. After changing config, ask the user to restart the service with `kent service restart`, restart the Kent GUI, and then start a new session, for changes to apply.
 
 Important: do not make changes to your configuration that were not authorized or directly asked for by the user. If your environment is buggy/broken, ask the user for help instead of messing with your internals.
+
+## Bug Reports
+File Kent bugs in `respawn-llc/kent` with `gh issue create --repo respawn-llc/kent`.
+
+Include the observed and expected behavior, minimal reproduction steps, Kent version, operating system, and relevant redacted log excerpts. Do not attach full logs or secrets.
+
+Every ticket must include this exact line:
+
+`Filed by Kent on behalf of the user`
+
+For suspected security vulnerabilities, follow the repository's `SECURITY.md` instead of filing a public issue.
 
 ## Change Agent Behavior
 Use prompt files for broad behavior changes, skills for reusable on-demand workflows, and subagent roles for specialized headless agents. Start by reading docs at `https://kent.sh/prompts.md`

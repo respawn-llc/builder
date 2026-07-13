@@ -35,18 +35,19 @@ type Binding struct {
 }
 
 type WorktreeRecord struct {
-	ID              string
-	WorkspaceID     string
-	CanonicalRoot   string
-	DisplayName     string
-	Availability    string
-	IsMain          bool
-	Managed         bool
-	CreatedBranch   bool
-	OriginSessionID string
-	GitMetadataJSON string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                    string
+	WorkspaceID           string
+	CanonicalRoot         string
+	DisplayName           string
+	Availability          string
+	IsMain                bool
+	Managed               bool
+	CreatedBranch         bool
+	OriginSessionID       string
+	GitMetadataJSON       string
+	CreationBaseCommitOID *string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type WorktreeSessionBlocker struct {
@@ -314,7 +315,7 @@ func (s *Store) ListWorktreeRecordsByWorkspaceID(ctx context.Context, workspaceI
 	}
 	out := make([]WorktreeRecord, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreatedAtUnixMs, row.UpdatedAtUnixMs))
+		out = append(out, worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs))
 	}
 	return out, nil
 }
@@ -327,7 +328,7 @@ func (s *Store) GetWorktreeRecordByID(ctx context.Context, worktreeID string) (W
 	if err != nil {
 		return WorktreeRecord{}, fmt.Errorf("get worktree by id: %w", err)
 	}
-	return worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreatedAtUnixMs, row.UpdatedAtUnixMs), nil
+	return worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs), nil
 }
 
 func (s *Store) GetWorktreeRecordByCanonicalRoot(ctx context.Context, worktreeRoot string) (WorktreeRecord, error) {
@@ -342,7 +343,7 @@ func (s *Store) GetWorktreeRecordByCanonicalRoot(ctx context.Context, worktreeRo
 	if err != nil {
 		return WorktreeRecord{}, fmt.Errorf("get worktree by canonical root: %w", err)
 	}
-	return worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreatedAtUnixMs, row.UpdatedAtUnixMs), nil
+	return worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs), nil
 }
 
 func (s *Store) UpsertWorktreeRecord(ctx context.Context, record WorktreeRecord) error {
@@ -379,16 +380,25 @@ func (s *Store) UpsertWorktreeRecord(ctx context.Context, record WorktreeRecord)
 	if record.CreatedBranch {
 		createdBranch = 1
 	}
+	creationBaseCommitOID := sql.NullString{}
+	if record.CreationBaseCommitOID != nil {
+		value := strings.TrimSpace(*record.CreationBaseCommitOID)
+		if value == "" {
+			return errors.New("worktree creation base commit oid must be non-blank when present")
+		}
+		creationBaseCommitOID = sql.NullString{String: value, Valid: true}
+	}
 	if err := s.queries.UpsertWorktree(ctx, sqlitegen.UpsertWorktreeParams{
-		ID:                strings.TrimSpace(record.ID),
-		WorkspaceID:       strings.TrimSpace(record.WorkspaceID),
-		CanonicalRootPath: canonicalRoot,
-		Managed:           managed,
-		CreatedBranch:     createdBranch,
-		OriginSessionID:   strings.TrimSpace(record.OriginSessionID),
-		GitMetadataJson:   defaultJSONObject(record.GitMetadataJSON),
-		CreatedAtUnixMs:   createdAt.UnixMilli(),
-		UpdatedAtUnixMs:   updatedAt.UnixMilli(),
+		ID:                    strings.TrimSpace(record.ID),
+		WorkspaceID:           strings.TrimSpace(record.WorkspaceID),
+		CanonicalRootPath:     canonicalRoot,
+		Managed:               managed,
+		CreatedBranch:         createdBranch,
+		OriginSessionID:       strings.TrimSpace(record.OriginSessionID),
+		GitMetadataJson:       defaultJSONObject(record.GitMetadataJSON),
+		CreationBaseCommitOid: creationBaseCommitOID,
+		CreatedAtUnixMs:       createdAt.UnixMilli(),
+		UpdatedAtUnixMs:       updatedAt.UnixMilli(),
 	}); err != nil {
 		return fmt.Errorf("upsert worktree: %w", err)
 	}
@@ -2159,20 +2169,21 @@ func sessionExecutionTargetFromRow(row sqlitegen.GetSessionExecutionTargetByIDRo
 	}
 }
 
-func worktreeRecordFromParts(id string, workspaceID string, canonicalRoot string, isMain bool, managed bool, createdBranch bool, originSessionID string, gitMetadataJSON string, createdAtUnixMs int64, updatedAtUnixMs int64) WorktreeRecord {
+func worktreeRecordFromParts(id string, workspaceID string, canonicalRoot string, isMain bool, managed bool, createdBranch bool, originSessionID string, gitMetadataJSON string, creationBaseCommitOID sql.NullString, createdAtUnixMs int64, updatedAtUnixMs int64) WorktreeRecord {
 	return WorktreeRecord{
-		ID:              id,
-		WorkspaceID:     workspaceID,
-		CanonicalRoot:   canonicalRoot,
-		DisplayName:     displayNameForPath(canonicalRoot),
-		Availability:    availabilityForOptionalPath(canonicalRoot),
-		IsMain:          isMain,
-		Managed:         managed,
-		CreatedBranch:   createdBranch,
-		OriginSessionID: originSessionID,
-		GitMetadataJSON: gitMetadataJSON,
-		CreatedAt:       timeFromStoredTimestamp(createdAtUnixMs),
-		UpdatedAt:       timeFromStoredTimestamp(updatedAtUnixMs),
+		ID:                    id,
+		WorkspaceID:           workspaceID,
+		CanonicalRoot:         canonicalRoot,
+		DisplayName:           displayNameForPath(canonicalRoot),
+		Availability:          availabilityForOptionalPath(canonicalRoot),
+		IsMain:                isMain,
+		Managed:               managed,
+		CreatedBranch:         createdBranch,
+		OriginSessionID:       originSessionID,
+		GitMetadataJSON:       gitMetadataJSON,
+		CreationBaseCommitOID: OptionalString(creationBaseCommitOID),
+		CreatedAt:             timeFromStoredTimestamp(createdAtUnixMs),
+		UpdatedAt:             timeFromStoredTimestamp(updatedAtUnixMs),
 	}
 }
 

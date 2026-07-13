@@ -8,10 +8,10 @@ import (
 	"core/shared/serverapi"
 )
 
-func writeTaskStartResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, resp serverapi.WorkflowTaskStartResponse) {
-	run, _ := workflowTaskRunByID(task, resp.RunID)
+func writeTaskStartResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, applied serverapi.WorkflowTaskStartApplied) {
+	run, _ := workflowTaskRunByID(task, applied.RunID)
 	sessionID := strings.TrimSpace(run.SessionID)
-	placement, _ := workflowTaskPlacementByID(task, resp.PlacementID)
+	placement, _ := workflowTaskPlacementByID(task, applied.PlacementID)
 	nodeKey := placementDisplayKey(placement, run.NodeID)
 	if sessionID == "" {
 		fmt.Fprintf(stdout, "Started task %s using workflow %q (%s).\n", taskDisplayID(task), task.Workflow.DisplayName, task.Workflow.WorkflowID)

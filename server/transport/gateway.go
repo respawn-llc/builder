@@ -335,6 +335,11 @@ func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TRe
 	if err != nil {
 		return responseForError(req.ID, err)
 	}
+	if validator, ok := any(resp).(interface{ Validate() error }); ok {
+		if err := validator.Validate(); err != nil {
+			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
+		}
+	}
 	return protocol.NewSuccessResponse(req.ID, resp)
 }
 

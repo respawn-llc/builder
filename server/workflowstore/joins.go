@@ -99,21 +99,16 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		worktreeRoot, err := taskManagedWorktreeRoot(ctx, q, task)
+		executionRoot, err := executionRootForLockedTaskIfPresent(ctx, q, task)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		targetRunID := prefixedID("run")
 		targetSnapshot, foundSnapshot, err := joinSnapshot.forNode(outEdge.TargetNode)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
 		if !foundSnapshot {
 			return CompleteRunResult{}, fmt.Errorf("join target node %q missing from run snapshot", outEdge.TargetNode.ID)
-		}
-		targetSnapshotJSON, err := workflow.MarshalString(targetSnapshot)
-		if err != nil {
-			return CompleteRunResult{}, err
 		}
 		resolution, err := s.resolveContextInvocation(ctx, q, taskID, now, joinPlacementID, nil, joinSnapshot, outEdge)
 		if err != nil {
@@ -127,25 +122,20 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		targetMetadata.PromptTemplate = strings.TrimSpace(outEdge.PromptTemplate)
 		targetMetadata.Parameters = append([]workflow.Parameter(nil), outEdge.Parameters...)
 		targetMetadata.PriorParameterValues = clonePriorParameterValues(priorParameterValues)
-		targetMetadataJSON, err := workflow.MarshalString(targetMetadata)
+		createdRun, err := s.insertExecutableRun(ctx, q, executableRunRequest{
+			PlacementID:   targetPlacementID,
+			NodeID:        outEdge.TargetNode.ID,
+			Snapshot:      targetSnapshot,
+			Metadata:      targetMetadata,
+			ExecutionRoot: executionRoot,
+			Now:           now,
+		})
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		interruptionReason, interruptionDetail, invalidScript, err := s.scriptNodeInterruption(ctx, q, outEdge.TargetNode.ID, worktreeRoot)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		interruptedAt := sql.NullInt64{}
-		if invalidScript {
-			interruptedAt = sql.NullInt64{Int64: now, Valid: true}
-		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: nullableString(interruptionReason), InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
-			return CompleteRunResult{}, err
-		}
-		targetRun := workflow.RunID(targetRunID)
-		result.RunIDs = append(result.RunIDs, targetRun)
-		if invalidScript {
-			result.InterruptedRunIDs = append(result.InterruptedRunIDs, targetRun)
+		result.RunIDs = append(result.RunIDs, createdRun.RunID)
+		if createdRun.Interrupted {
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, createdRun.RunID)
 		}
 	}
 	return result, nil

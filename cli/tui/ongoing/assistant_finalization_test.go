@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/analyzer"
 	"core/shared/clientui"
@@ -27,7 +28,7 @@ func TestAssistantFinalizationEqualSourceFlushesUnpromotedTailAndClearsStream(t 
 
 	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
 		{separator: true},
-		{content: "hello"},
+		{content: transcriptrender.AssistantSymbol + " hello"},
 	})
 	if surface.activeAssistant.streamID != nil {
 		t.Fatalf("active stream after finalization = %+v, want cleared", surface.activeAssistant)
@@ -101,7 +102,7 @@ func TestAssistantFinalizationDoesNotLeaveBlankRowsFromVolatileTail(t *testing.T
 		t.Fatalf("analyze assistant finalization: %v", err)
 	}
 	rows := strings.Split(analysis.Screen.RenderText(), "\n")
-	alphaRow := screenRowIndex(rows, "alpha")
+	alphaRow := screenRowIndex(rows, transcriptrender.AssistantSymbol+" alpha")
 	betaRow := screenRowIndex(rows, "beta")
 	gammaRow := screenRowIndex(rows, "gamma")
 	if alphaRow < 0 || betaRow < 0 || gammaRow < 0 {
@@ -168,7 +169,7 @@ func TestHydrationRestoresActiveAssistantStreamAndFinalizes(t *testing.T) {
 
 	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
 		{separator: true},
-		{content: "Stable paragraph."},
+		{content: transcriptrender.AssistantSymbol + " Stable paragraph."},
 	})
 	out.Reset()
 

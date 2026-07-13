@@ -47,6 +47,51 @@ func TestEnsureWorkspaceBindingDoesNotRegisterUnknownWorkspace(t *testing.T) {
 	}
 }
 
+func TestWorktreeRecordPersistsImmutableCreationBaseCommitOID(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	ctx := t.Context()
+	oid := "creation-commit"
+	root := t.TempDir()
+	record := WorktreeRecord{
+		ID:                    "worktree-creation-base",
+		WorkspaceID:           binding.WorkspaceID,
+		CanonicalRoot:         root,
+		GitMetadataJSON:       "{}",
+		CreationBaseCommitOID: &oid,
+	}
+	if err := store.UpsertWorktreeRecord(ctx, record); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	stored, err := store.GetWorktreeRecordByID(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	if stored.CreationBaseCommitOID == nil || *stored.CreationBaseCommitOID != oid {
+		t.Fatalf("creation base commit oid = %+v, want %q", stored.CreationBaseCommitOID, oid)
+	}
+	if err := store.UpsertWorktreeRecord(ctx, WorktreeRecord{
+		ID:                    "worktree-creation-base-conflict",
+		WorkspaceID:           binding.WorkspaceID,
+		CanonicalRoot:         root,
+		GitMetadataJSON:       "{}",
+		CreationBaseCommitOID: stringPointerForStoreTest("different-commit"),
+	}); err == nil {
+		t.Fatal("UpsertWorktreeRecord accepted a conflicting immutable creation base commit")
+	}
+	if err := store.UpsertWorktreeRecord(ctx, WorktreeRecord{
+		ID:              "worktree-creation-base",
+		WorkspaceID:     binding.WorkspaceID,
+		CanonicalRoot:   root,
+		GitMetadataJSON: "{}",
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord without creation base should preserve immutable provenance: %v", err)
+	}
+}
+
+func stringPointerForStoreTest(value string) *string {
+	return &value
+}
+
 func TestResolveWorkspacePathLeavesNestedDirectoryUnbound(t *testing.T) {
 	workspace := t.TempDir()
 	nested := filepath.Join(workspace, "subdir", "deeper")

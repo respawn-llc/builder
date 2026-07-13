@@ -61,13 +61,12 @@ type RuntimeStore interface {
 	InterruptRunGeneration(context.Context, workflow.RunID, int64, string, string) error
 }
 
-type TaskWorktreeEnsurer interface {
-	EnsureTaskWorktree(ctx context.Context, req TaskWorktreeEnsureRequest) error
+type LockedTaskWorktreeRestorer interface {
+	RestoreLockedTaskWorktree(ctx context.Context, req LockedTaskWorktreeRestoreRequest) error
 }
 
-type TaskWorktreeEnsureRequest struct {
+type LockedTaskWorktreeRestoreRequest struct {
 	TaskID           workflow.TaskID
-	RunID            workflow.RunID
 	SetupOperationID serverapi.WorktreeSetupOperationID
 }
 
@@ -89,7 +88,7 @@ type Starter struct {
 	storeOptions         []session.StoreOption
 	clientFactory        func(SchedulerStartRunRequest) llm.Client
 	runtimeClientFactory runtimewire.RuntimeClientFactory
-	worktrees            TaskWorktreeEnsurer
+	worktrees            LockedTaskWorktreeRestorer
 	attentionFinalizer   workflowAttentionFinalizer
 	finished             func(workflow.RunID, int64)
 
@@ -104,7 +103,7 @@ type Starter struct {
 type StarterOptions struct {
 	ClientFactory        func(SchedulerStartRunRequest) llm.Client
 	RuntimeClientFactory runtimewire.RuntimeClientFactory
-	Worktrees            TaskWorktreeEnsurer
+	Worktrees            LockedTaskWorktreeRestorer
 	SessionRuntime       *sessionruntime.Service
 	AttentionFinalizer   workflowAttentionFinalizer
 }
@@ -168,17 +167,30 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 		return errors.New("workflow runtime starter closed")
 	}
 	s.mu.Unlock()
-	if s.worktrees != nil {
-		if err := s.worktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: req.TaskID, RunID: req.RunID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()}); err != nil {
+	input, err := s.store.GetRunStartContext(ctx, req.RunID)
+	if err != nil {
+		if s.worktrees == nil || !recoverableManagedExecutionRootError(err) {
+			return err
+		}
+		if restoreErr := s.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()}); restoreErr != nil {
+			return restoreErr
+		}
+		input, err = s.store.GetRunStartContext(ctx, req.RunID)
+		if err != nil {
+			return err
+		}
+	} else if input.ExecutionRoot != nil && input.ExecutionRoot.Managed != nil && s.worktrees != nil {
+		if err := s.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()}); err != nil {
+			return err
+		}
+		input, err = s.store.GetRunStartContext(ctx, req.RunID)
+		if err != nil {
 			return err
 		}
 	}
-	input, err := s.store.GetRunStartContext(ctx, req.RunID)
+	executionRoot, err := requireRunExecutionRoot(input)
 	if err != nil {
 		return err
-	}
-	if strings.TrimSpace(input.WorktreeID) == "" || strings.TrimSpace(input.WorktreeRoot) == "" {
-		return fmt.Errorf("workflow task %q has no managed worktree", input.Task.ID)
 	}
 	if input.Run.Generation != req.Generation {
 		return fmt.Errorf("stale workflow run generation: got %d want %d", req.Generation, input.Run.Generation)
@@ -236,12 +248,16 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 	if err != nil {
 		return errors.Join(err, cleanupSession())
 	}
-	if err := plan.Store.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		WorktreePath:  input.WorktreeRoot,
-		WorkspaceRoot: input.WorkspaceRoot,
-		EffectiveCwd:  input.WorktreeRoot,
-	}); err != nil {
+	var reminder *session.WorktreeReminderState
+	if executionRoot.Managed != nil {
+		reminder = &session.WorktreeReminderState{
+			Mode:          session.WorktreeReminderModeEnter,
+			WorktreePath:  executionRoot.Managed.Root,
+			WorkspaceRoot: executionRoot.SourceWorkspaceRoot,
+			EffectiveCwd:  executionRoot.EffectiveRoot(),
+		}
+	}
+	if err := plan.Store.SetWorktreeReminderState(reminder); err != nil {
 		return errors.Join(err, cleanupSession())
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -249,12 +265,15 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 		cancel()
 		return errors.Join(errors.New("workflow runtime starter closed"), cleanupSession())
 	}
-	if err := s.metadata.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
+	targetUpdate := metadata.SessionExecutionTargetUpdate{
 		SessionID:  plan.Store.Meta().SessionID,
-		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: input.WorkspaceID},
-		Worktree:   &metadata.SessionExecutionTargetUpdateWorktree{ID: input.WorktreeID},
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: executionRoot.SourceWorkspaceID},
 		CwdRelpath: ".",
-	}); err != nil {
+	}
+	if executionRoot.Managed != nil {
+		targetUpdate.Worktree = &metadata.SessionExecutionTargetUpdateWorktree{ID: executionRoot.Managed.WorktreeID}
+	}
+	if err := s.metadata.UpdateSessionExecutionTarget(ctx, targetUpdate); err != nil {
 		cancel()
 		s.releaseRegisteredRun(req.RunID)
 		return errors.Join(err, cleanupSession())
@@ -283,6 +302,29 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 	}
 	go s.run(runCtx, req, input, plan, warnings, client, effectiveMode)
 	return nil
+}
+
+func recoverableManagedExecutionRootError(err error) bool {
+	var rootErr *workflowstore.ExecutionRootError
+	if !errors.As(err, &rootErr) {
+		return false
+	}
+	return rootErr.Kind == workflowstore.ExecutionRootErrorManagedRelationMissing ||
+		rootErr.Kind == workflowstore.ExecutionRootErrorManagedRecordMissing
+}
+
+func requireRunExecutionRoot(input workflowstore.RunStartContext) (workflowstore.ExecutionRoot, error) {
+	if input.ExecutionRoot == nil {
+		return workflowstore.ExecutionRoot{}, fmt.Errorf("workflow run %q has no execution root", input.Run.ID)
+	}
+	root := *input.ExecutionRoot
+	if err := root.Validate(); err != nil {
+		return workflowstore.ExecutionRoot{}, fmt.Errorf("workflow run %q has an invalid execution root: %w", input.Run.ID, err)
+	}
+	if strings.TrimSpace(root.EffectiveRoot()) == "" {
+		return workflowstore.ExecutionRoot{}, fmt.Errorf("workflow run %q has no effective execution root", input.Run.ID)
+	}
+	return root, nil
 }
 
 func (s *Starter) registerRun(req SchedulerStartRunRequest, cancel context.CancelFunc) bool {
@@ -414,8 +456,12 @@ func reusesExistingSession(input workflowstore.RunStartContext) bool {
 }
 
 func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartContext) (launch.SessionPlan, []string, error) {
+	executionRoot, err := requireRunExecutionRoot(input)
+	if err != nil {
+		return launch.SessionPlan{}, nil, err
+	}
 	cfg := s.cfg
-	cfg.WorkspaceRoot = strings.TrimSpace(input.WorkspaceRoot)
+	cfg.WorkspaceRoot = executionRoot.SourceWorkspaceRoot
 	projectID := strings.TrimSpace(input.Task.ProjectID)
 	if projectID == "" {
 		return launch.SessionPlan{}, nil, errors.New("workflow task project id is required")
@@ -441,7 +487,6 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 		}
 	}()
 	var plan launch.SessionPlan
-	var err error
 	overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
 	skipPersistedRoleValidation := overrides.HasAny()
 	if strings.TrimSpace(input.Run.SessionID) != "" {
@@ -808,7 +853,12 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		return
 	}
 	defer func() { _ = logger.Close() }()
-	logger.Logf("workflow.runtime.start run_id=%s task_id=%s session_id=%s node_id=%s worktree=%s model=%s", req.RunID, req.TaskID, plan.Store.Meta().SessionID, req.NodeID, input.WorktreeRoot, plan.ActiveSettings.Model)
+	executionRoot, err := requireRunExecutionRoot(input)
+	if err != nil {
+		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonRuntimeFailed, err)
+		return
+	}
+	logger.Logf("workflow.runtime.start run_id=%s task_id=%s session_id=%s node_id=%s execution_root=%s model=%s", req.RunID, req.TaskID, plan.Store.Meta().SessionID, req.NodeID, executionRoot.EffectiveRoot(), plan.ActiveSettings.Model)
 	for _, warning := range warnings {
 		logger.Logf("workflow.runtime.warning %s", warning)
 	}
@@ -837,7 +887,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		if err != nil {
 			return sessionruntime.RuntimeBuildResult{}, err
 		}
-		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), input.WorktreeRoot, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
+		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), executionRoot.EffectiveRoot(), s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
 			Headless:                            true,
 			FastMode:                            nil,
 			Sources:                             plan.Source.Sources,

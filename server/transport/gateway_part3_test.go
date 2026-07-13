@@ -243,6 +243,37 @@ func TestDecodeAndHandlePreservesWorktreeStructuredErrors(t *testing.T) {
 	}
 }
 
+func TestDecodeAndHandleRejectsInvalidWorkflowActionResponse(t *testing.T) {
+	response := decodeAndHandle[struct{}, serverapi.WorkflowTaskStartResponse](
+		protocol.Request{ID: "invalid-workflow-action-response", Params: mustJSON(t, struct{}{})},
+		func(struct{}) (serverapi.WorkflowTaskStartResponse, error) {
+			return serverapi.WorkflowTaskStartResponse{}, nil
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeInternalError || len(response.Result) != 0 {
+		t.Fatalf("response = %+v, want internal error without result", response)
+	}
+}
+
+func TestDecodeAndHandleRejectsInvalidWorkflowTaskDetailResponse(t *testing.T) {
+	blankRoot := " "
+	response := decodeAndHandle[struct{}, serverapi.WorkflowTaskGetResponse](
+		protocol.Request{ID: "invalid-workflow-task-detail-response", Params: mustJSON(t, struct{}{})},
+		func(struct{}) (serverapi.WorkflowTaskGetResponse, error) {
+			return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
+				ExecutionTarget: &serverapi.WorkflowExecutionTarget{
+					Mode:          serverapi.WorkflowExecutionTargetModeNone,
+					EffectiveRoot: &blankRoot,
+					Provenance:    serverapi.WorkflowExecutionTargetProvenanceResolved,
+				},
+			}}, nil
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeInternalError || len(response.Result) != 0 {
+		t.Fatalf("response = %+v, want internal error without result", response)
+	}
+}
+
 func receiveGatewayNotification(t *testing.T, conn *websocket.Conn, method string, label string, out any) {
 	t.Helper()
 	var notif protocol.Request

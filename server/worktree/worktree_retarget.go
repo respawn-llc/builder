@@ -95,6 +95,9 @@ func (s *Service) retargetSessionsFromWorktree(ctx context.Context, workspaceID 
 		previousTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, blocker.SessionID)
 		if err != nil {
 			appendErr(blocker.SessionID, err)
+			if options.rollbackOnError {
+				return errors.Join(errors.Join(collected...), s.rollbackRetargetedSessions(ctx, pending, targetSync))
+			}
 			continue
 		}
 		cwdRelpath := clampCwdRelpath(previousTarget.CwdRelpath, trimmedWorkspaceRoot)
@@ -177,26 +180,6 @@ func (s *Service) rollbackRetargetedSessions(
 		cancel()
 	}
 	return errors.Join(collected...)
-}
-
-func shouldResetWorktreeProvenance(record metadata.WorktreeRecord, gitEntry GitWorktree) bool {
-	if !record.Managed && !record.CreatedBranch && strings.TrimSpace(record.OriginSessionID) == "" {
-		return false
-	}
-	if gitEntry.Detached || (strings.TrimSpace(gitEntry.BranchRef) == "" && !gitEntry.IsMain) {
-		return true
-	}
-	previousGit, err := worktreeGitMetadataFromRecord(record)
-	if err != nil {
-		return false
-	}
-	if !worktreeHasStableIdentity(previousGit) {
-		return false
-	}
-	if previousGit.IsMain != gitEntry.IsMain || previousGit.Detached != gitEntry.Detached || previousGit.Bare != gitEntry.Bare {
-		return true
-	}
-	return strings.TrimSpace(previousGit.BranchRef) != strings.TrimSpace(gitEntry.BranchRef)
 }
 
 func worktreeHasStableIdentity(entry GitWorktree) bool {
@@ -350,10 +333,27 @@ func worktreeGitMetadataFromRecord(worktree metadata.WorktreeRecord) (GitWorktre
 	if metadataJSON == "" {
 		return GitWorktree{}, nil
 	}
-	var gitMetadata GitWorktree
-	if err := json.Unmarshal([]byte(metadataJSON), &gitMetadata); err != nil {
+	var persisted struct {
+		HeadOID        string `json:"head_oid"`
+		BranchRef      string `json:"branch_ref"`
+		BranchName     string `json:"branch_name"`
+		Detached       bool   `json:"detached"`
+		Bare           bool   `json:"bare"`
+		LockedReason   string `json:"locked_reason"`
+		PrunableReason string `json:"prunable_reason"`
+	}
+	if err := json.Unmarshal([]byte(metadataJSON), &persisted); err != nil {
 		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
 	}
-	gitMetadata.IsMain = worktree.IsMain
-	return gitMetadata, nil
+	return GitWorktree{
+		Root:           worktree.CanonicalRoot,
+		HeadOID:        persisted.HeadOID,
+		BranchRef:      persisted.BranchRef,
+		BranchName:     persisted.BranchName,
+		Detached:       persisted.Detached,
+		Bare:           persisted.Bare,
+		LockedReason:   persisted.LockedReason,
+		PrunableReason: persisted.PrunableReason,
+		IsMain:         worktree.IsMain,
+	}, nil
 }
