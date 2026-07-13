@@ -190,7 +190,7 @@ func TestRetargetSessionsFromMissingWorktreeRollsBackActiveSessionMetadataOnRunt
 	env.runtime.rebindCalls = nil
 	env.runtime.reminderCalls = nil
 
-	err = env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{reminder: worktreeReminderStateForExitedWorktree})
+	_, err = env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{reminder: worktreeReminderStateForExitedWorktree})
 	if err == nil || !strings.Contains(err.Error(), "runtime rebind failed") {
 		t.Fatalf("retargetSessionsFromMissingWorktree error = %v, want runtime rebind failed", err)
 	}
@@ -247,7 +247,7 @@ func TestRetargetSessionsFromWorktreeStopsBeforeLaterMutationWhenPlanningFails(t
 			t.Fatalf("DeleteSessionRecordByID: %v", err)
 		}
 	}
-	err = env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{
+	_, err = env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{
 		reminder:        worktreeReminderStateForExitedWorktree,
 		rollbackOnError: true,
 	})
@@ -285,7 +285,7 @@ func TestRetargetSessionsFromMissingWorktreeBlocksStartsUntilRuntimeSync(t *test
 		close(checked)
 	}
 
-	if err := env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{reminder: worktreeReminderStateForExitedWorktree}); err != nil {
+	if _, err := env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{reminder: worktreeReminderStateForExitedWorktree}); err != nil {
 		t.Fatalf("retargetSessionsFromWorktree: %v", err)
 	}
 	select {

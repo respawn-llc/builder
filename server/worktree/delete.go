@@ -143,15 +143,17 @@ func (s *Service) executeDeleteLocked(
 			return serverapi.WorktreeDeleteCompletedResult{}, &serverapi.WorktreeDeletePreconditionError{DirtyState: dirtyState}
 		}
 	}
+	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
-		if err := s.retargetDeleteSessions(ctx, workspaceCtx, *record, currentSync); err != nil {
+		retargetCompensation, err = s.retargetDeleteSessions(ctx, workspaceCtx, *record, currentSync)
+		if err != nil {
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
 	}
 	leftoverRoot := missingLeftoverRoot(entry)
 	if target != nil {
 		if err := s.git.Remove(ctx, workspaceCtx.workspaceRoot, target.record.CanonicalRoot, req.ForceFolderRemoval); err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
+			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(ctx))
 		}
 	}
 	if record != nil {
@@ -283,7 +285,7 @@ func (s *Service) retargetDeleteSessions(
 	workspaceCtx sessionWorkspaceContext,
 	record metadata.WorktreeRecord,
 	currentSync transitionTargetSync,
-) error {
+) (worktreeSessionRetargetCompensation, error) {
 	return s.retargetSessionsFromWorktree(
 		ctx,
 		workspaceCtx.workspaceID,

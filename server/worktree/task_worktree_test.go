@@ -889,6 +889,55 @@ func TestDeleteTaskWorktreeRemovesManagedWorktreeAndBranch(t *testing.T) {
 	}
 }
 
+func TestDeleteTaskWorktreeRollsBackSessionTargetWhenRemovalFails(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	created, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
+	}
+	worktreeID := taskWorktreeID(created.Worktree)
+	worktreeRoot := taskWorktreeRoot(created.Worktree)
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, worktreeID, ".")
+	targetBefore := mustResolveServiceTestTarget(t, env)
+	runGit(t, env.workspaceRoot, "worktree", "lock", worktreeRoot)
+	t.Cleanup(func() {
+		if _, err := os.Stat(worktreeRoot); err == nil {
+			runGit(t, env.workspaceRoot, "worktree", "unlock", worktreeRoot)
+		}
+	})
+
+	if _, err := env.service.DeleteTaskWorktree(env.ctx, DeleteTaskWorktreeRequest{TaskID: string(task.ID)}); err == nil {
+		t.Fatal("DeleteTaskWorktree succeeded for locked worktree")
+	}
+	targetAfter := mustResolveServiceTestTarget(t, env)
+	if sessionTargetWorktreeID(targetAfter) != sessionTargetWorktreeID(targetBefore) ||
+		targetAfter.EffectiveWorkdir != targetBefore.EffectiveWorkdir {
+		t.Fatalf("session target changed after failed task worktree removal: before=%+v after=%+v", targetBefore, targetAfter)
+	}
+	if _, err := os.Stat(worktreeRoot); err != nil {
+		t.Fatalf("locked task worktree root changed after failed removal: %v", err)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); err != nil {
+		t.Fatalf("task worktree record changed after failed removal: %v", err)
+	}
+	env.runtime.mu.Lock()
+	defer env.runtime.mu.Unlock()
+	restoredRuntime := false
+	for _, call := range env.runtime.rebindCalls {
+		if call.sessionID == env.session.Meta().SessionID && call.root == worktreeRoot {
+			restoredRuntime = true
+			break
+		}
+	}
+	if !restoredRuntime {
+		t.Fatalf("task session runtime target was not restored: %+v", env.runtime.rebindCalls)
+	}
+}
+
 func createTaskWorktreeTestTask(t *testing.T, env *serviceTestEnv) (workflowstore.TaskRecord, *workflowstore.Store) {
 	t.Helper()
 	return createTaskWorktreeTestTaskWithSource(t, env, "")

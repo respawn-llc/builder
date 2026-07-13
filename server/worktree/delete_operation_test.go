@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"core/shared/clientui"
@@ -158,6 +159,84 @@ func TestDeleteCurrentWorktreeSchedulesRetargetAndRemoval(t *testing.T) {
 	}
 	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("worktree root still exists: %v", err)
+	}
+}
+
+func TestScheduledDeleteRollsBackSessionTargetsWhenWorktreeRemovalFails(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/delete-rollback")
+	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	env.runtime.mu.Lock()
+	env.runtime.activeSessions[otherSession.Meta().SessionID] = true
+	env.runtime.mu.Unlock()
+	currentBefore := mustResolveServiceTestTarget(t, env)
+	otherBefore, err := env.store.ResolveSessionExecutionTarget(env.ctx, otherSession.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget other before: %v", err)
+	}
+	runGit(t, env.workspaceRoot, "worktree", "lock", created.CanonicalRoot)
+	t.Cleanup(func() {
+		if _, err := os.Stat(created.CanonicalRoot); err == nil {
+			runGit(t, env.workspaceRoot, "worktree", "unlock", created.CanonicalRoot)
+		}
+	})
+
+	operationID := serverapi.NewWorktreeOperationID()
+	result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+		OperationID:         operationID,
+		SessionID:           env.session.Meta().SessionID,
+		Selector:            created.WorktreeID,
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+	})
+	if err != nil {
+		t.Fatalf("DeleteWorktree: %v", err)
+	}
+	if result.Kind != serverapi.WorktreeDeleteResultKindScheduled {
+		t.Fatalf("result = %+v, want scheduled delete", result)
+	}
+	outcome := waitForWorktreeTransitionOutcome(t, env.runtime)
+	if outcome.OperationID != operationID || outcome.State != clientui.WorktreeTransitionFailed {
+		t.Fatalf("outcome = %+v, want failed locked-worktree removal", outcome)
+	}
+
+	currentAfter := mustResolveServiceTestTarget(t, env)
+	otherAfter, err := env.store.ResolveSessionExecutionTarget(env.ctx, otherSession.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget other after: %v", err)
+	}
+	for sessionID, targets := range map[string][2]clientui.SessionExecutionTarget{
+		env.session.Meta().SessionID:  {currentBefore, currentAfter},
+		otherSession.Meta().SessionID: {otherBefore, otherAfter},
+	} {
+		if sessionTargetWorktreeID(targets[1]) != sessionTargetWorktreeID(targets[0]) ||
+			targets[1].EffectiveWorkdir != targets[0].EffectiveWorkdir {
+			t.Fatalf("session %s target changed after failed removal: before=%+v after=%+v", sessionID, targets[0], targets[1])
+		}
+	}
+	if _, err := os.Stat(created.CanonicalRoot); err != nil {
+		t.Fatalf("locked worktree root changed after failed removal: %v", err)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID); err != nil {
+		t.Fatalf("worktree record changed after failed removal: %v", err)
+	}
+	env.runtime.mu.Lock()
+	defer env.runtime.mu.Unlock()
+	for _, sessionID := range []string{env.session.Meta().SessionID, otherSession.Meta().SessionID} {
+		if !slices.Contains(env.runtime.clearReminderSessions, sessionID) {
+			t.Fatalf("session %s reminder was not cleared during rollback: %+v", sessionID, env.runtime.clearReminderSessions)
+		}
+		restoredRuntime := false
+		for _, call := range env.runtime.rebindCalls {
+			if call.sessionID == sessionID && call.root == created.CanonicalRoot {
+				restoredRuntime = true
+				break
+			}
+		}
+		if !restoredRuntime {
+			t.Fatalf("session %s runtime target was not restored: %+v", sessionID, env.runtime.rebindCalls)
+		}
 	}
 }
 
