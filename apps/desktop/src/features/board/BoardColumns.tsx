@@ -10,13 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Maximize2, Square } from "lucide-react";
+import { Maximize2, Play, Square } from "lucide-react";
 
 import { formatRelativeTime } from "../../app/formatters";
 import {
   AdaptiveLineClamp,
   Badge,
-  Button,
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -274,7 +273,7 @@ function CollapsedColumnHeader({
 
 function estimateInitialBoardCardRowSize(): number {
   // CSS owns exact card geometry; TanStack only needs a close estimate before measuring mounted rows.
-  return 200;
+  return 216;
 }
 
 function initialBoundaryContent(
@@ -340,6 +339,12 @@ const TaskCard = memo(function TaskCard({
   );
   const canDrag = !actionsDisabled && card.statusKind !== "canceled";
   const waitingForAnswer = isWaitingForAnswer(card.statusKind);
+  const availableActions = taskCardActionAvailability(card);
+  const hasFooter =
+    card.statusKind === "running" ||
+    card.workspaceChipLabel !== null ||
+    availableActions.canInterrupt ||
+    availableActions.canResume;
   const dragPayload = {
     taskID: card.id,
     canStart: card.actions.canStart,
@@ -353,7 +358,7 @@ const TaskCard = memo(function TaskCard({
         <article
           aria-label={card.title}
           className={cx(
-            "board-task-card grid cursor-pointer gap-[var(--space-1)] rounded-[var(--radius-l)] border border-[var(--color-outline)] bg-[var(--color-island-1)] p-[var(--space-2)] outline-none focus-visible:border-[var(--color-primary)] focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-primary)_26%,transparent)]",
+            "board-task-card grid cursor-pointer gap-0 rounded-[var(--radius-l)] border border-[var(--color-outline)] bg-[var(--color-island-1)] p-[var(--space-3)] shadow-[var(--shadow-island-0)] outline-none focus-visible:border-[var(--color-primary)] focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-primary)_26%,transparent)]",
             cardClassName(card.id),
           )}
           data-task-card-border-tone={card.borderTone}
@@ -388,57 +393,59 @@ const TaskCard = memo(function TaskCard({
           style={cardStyle(card.id)}
           tabIndex={0}
         >
-          <span className="flex min-w-0 items-center justify-between gap-[var(--space-2)] text-left text-[var(--color-on-island)]">
-            <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">
-              {card.shortID}
+          <header className="grid gap-[var(--space-1)]">
+            <span className="flex min-w-0 items-center justify-between gap-[var(--space-2)] text-left text-xs leading-5 text-[var(--color-muted)]">
+              <span className="shrink-0 font-mono font-medium tracking-wide">
+                {card.shortID}
+              </span>
+              <span className="min-w-0 truncate text-right">
+                {formatRelativeTime(card.updatedAt)}
+              </span>
             </span>
-            <span className="min-w-0 truncate text-right text-sm text-[var(--color-muted)]">
-              {formatRelativeTime(card.updatedAt)}
-            </span>
-          </span>
-          <strong
-            className="task-card-title text-left text-[var(--color-on-island)]"
-            data-testid="task-card-title"
-          >
-            {card.title}
-          </strong>
+            <strong
+              className="task-card-title text-left text-base leading-snug font-semibold text-[var(--color-on-island)]"
+              data-testid="task-card-title"
+            >
+              {card.title}
+            </strong>
+          </header>
           <AdaptiveLineClamp
-            className="text-sm text-[var(--color-muted)]"
+            className="mt-[var(--space-3)] text-sm leading-relaxed text-[var(--color-muted)]"
             data-testid="task-card-body"
           >
             <TaskCardPreview instance={instance} preview={card.preview} />
           </AdaptiveLineClamp>
-          <div
-            className="task-card-footer flex items-center justify-between gap-[var(--space-2)]"
-            data-testid="task-card-footer"
-          >
+          {hasFooter ? (
             <div
-              className="task-card-chip-row flex min-w-0 flex-1 flex-wrap items-center gap-[var(--space-2)] text-sm text-[var(--color-muted)]"
-              data-testid="task-card-chips"
+              className="task-card-footer flex items-center justify-between gap-[var(--space-3)]"
+              data-testid="task-card-footer"
             >
-              {card.statusKind === "running" ? (
-                <Spinner
-                  className="h-[20px] w-[20px]"
-                  strokeWidth={1.8}
-                  testID="task-card-active-run-spinner"
-                />
-              ) : null}
-              {card.workspaceChipLabel !== null ? (
-                <span
-                  className="task-card-chip-slot inline-flex items-center"
-                  data-testid="task-card-chip-slot"
-                >
-                  <Badge tone="neutral">{card.workspaceChipLabel}</Badge>
-                </span>
-              ) : null}
+              <div
+                className="flex min-w-0 flex-1 flex-wrap items-center gap-[var(--space-2)] text-xs text-[var(--color-muted)]"
+                data-testid="task-card-chips"
+              >
+                {card.statusKind === "running" ? (
+                  <Spinner
+                    className="h-[20px] w-[20px]"
+                    strokeWidth={1.8}
+                    testID="task-card-active-run-spinner"
+                  />
+                ) : null}
+                {card.workspaceChipLabel !== null ? (
+                  <span className="inline-flex items-center" data-testid="task-card-chip-slot">
+                    <Badge tone="neutral">{card.workspaceChipLabel}</Badge>
+                  </span>
+                ) : null}
+              </div>
+              <TaskCardActions
+                actionsDisabled={actionsDisabled}
+                availableActions={availableActions}
+                cardID={card.id}
+                onInterrupt={onInterruptTask}
+                onResume={onResumeTask}
+              />
             </div>
-            <TaskCardActions
-              actionsDisabled={actionsDisabled}
-              card={card}
-              onInterrupt={onInterruptTask}
-              onResume={onResumeTask}
-            />
-          </div>
+          ) : null}
         </article>
       </ContextMenuTrigger>
       <ContextMenuContent>
@@ -522,41 +529,44 @@ function isInteractiveEventTarget(target: EventTarget): boolean {
 }
 
 function TaskCardActions({
-  card,
   actionsDisabled,
+  availableActions,
+  cardID,
   onInterrupt,
   onResume,
 }: Readonly<{
-  card: KanbanCardVM;
   actionsDisabled: boolean;
+  availableActions: TaskCardActionAvailability;
+  cardID: string;
   onInterrupt: (taskID: string) => void;
   onResume: (taskID: string) => void;
 }>) {
   const { t } = useTranslation();
-  const canInterrupt = card.actions.canInterrupt && !isWaitingForAnswer(card.statusKind);
-  if (!canInterrupt && !card.actions.canResume) {
+  if (!availableActions.canInterrupt && !availableActions.canResume) {
     return null;
   }
   return (
     <div className="flex shrink-0 flex-wrap justify-end gap-[var(--space-2)]">
-      {card.actions.canResume ? (
-        <Button
+      {availableActions.canResume ? (
+        <IconTooltipButton
+          label={t("board.resume")}
           onClick={(event) => {
             event.stopPropagation();
-            onResume(card.id);
+            onResume(cardID);
           }}
           disabled={actionsDisabled}
-          variant="primary"
+          size="icon-sm"
+          variant="primary-outline"
         >
-          {t("board.resume")}
-        </Button>
+          <Play aria-hidden="true" fill="currentColor" size={12} strokeWidth={0} />
+        </IconTooltipButton>
       ) : null}
-      {canInterrupt ? (
+      {availableActions.canInterrupt ? (
         <IconTooltipButton
           label={t("board.interrupt")}
           onClick={(event) => {
             event.stopPropagation();
-            onInterrupt(card.id);
+            onInterrupt(cardID);
           }}
           disabled={actionsDisabled}
           size="icon-sm"
@@ -573,6 +583,18 @@ function TaskCardActions({
       ) : null}
     </div>
   );
+}
+
+type TaskCardActionAvailability = Readonly<{
+  canInterrupt: boolean;
+  canResume: boolean;
+}>;
+
+function taskCardActionAvailability(card: KanbanCardVM): TaskCardActionAvailability {
+  return {
+    canInterrupt: card.actions.canInterrupt && !isWaitingForAnswer(card.statusKind),
+    canResume: card.actions.canResume,
+  };
 }
 
 function isWaitingForAnswer(statusKind: string): boolean {

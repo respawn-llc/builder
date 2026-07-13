@@ -78,6 +78,32 @@ describe("KanbanColumn", () => {
     expect(onExpandColumn).toHaveBeenCalledTimes(1);
   });
 
+  it("omits the footer when the card has no status, chip, or action content", () => {
+    render(
+      <I18nextProvider i18n={appI18n}>
+        <KanbanColumn
+          actionsDisabled={false}
+          cards={[card]}
+          column={column}
+          dropState="idle"
+          hasMoreCards={false}
+          isFirstActive={false}
+          isLoadingMoreCards={false}
+          onCardClick={() => undefined}
+          onCardDragEnd={() => undefined}
+          onCardDragStart={() => undefined}
+          onDeleteTask={() => undefined}
+          onDropTask={() => undefined}
+          onInterruptTask={() => undefined}
+          onLoadMoreCards={() => undefined}
+          onResumeTask={() => undefined}
+        />
+      </I18nextProvider>,
+    );
+
+    expect(screen.queryByTestId("task-card-footer")).not.toBeInTheDocument();
+  });
+
   it("keeps action buttons in the chip row, uses danger interrupt, and omits run count chip", () => {
     const onInterruptTask = vi.fn();
     const onCardClick = vi.fn();
@@ -122,6 +148,51 @@ describe("KanbanColumn", () => {
     fireEvent.click(interruptButton);
 
     expect(onInterruptTask).toHaveBeenCalledWith("task-1");
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
+  it("uses an icon-only resume control without opening task detail", () => {
+    const onResumeTask = vi.fn();
+    const onCardClick = vi.fn();
+
+    render(
+      <I18nextProvider i18n={appI18n}>
+        <KanbanColumn
+          actionsDisabled={false}
+          cards={[
+            {
+              ...card,
+              actions: {
+                ...card.actions,
+                canResume: true,
+              },
+            },
+          ]}
+          column={column}
+          dropState="idle"
+          hasMoreCards={false}
+          isFirstActive={false}
+          isLoadingMoreCards={false}
+          onCardClick={onCardClick}
+          onCardDragEnd={() => undefined}
+          onCardDragStart={() => undefined}
+          onDeleteTask={() => undefined}
+          onDropTask={() => undefined}
+          onInterruptTask={() => undefined}
+          onLoadMoreCards={() => undefined}
+          onResumeTask={onResumeTask}
+        />
+      </I18nextProvider>,
+    );
+
+    const resumeButton = within(screen.getByTestId("task-card-footer")).getByRole("button", {
+      name: "Resume",
+    });
+    expect(resumeButton).not.toHaveTextContent("Resume");
+
+    fireEvent.click(resumeButton);
+
+    expect(onResumeTask).toHaveBeenCalledWith("task-1");
     expect(onCardClick).not.toHaveBeenCalled();
   });
 
@@ -286,7 +357,7 @@ describe("KanbanColumn", () => {
       <I18nextProvider i18n={appI18n}>
         <KanbanColumn
           actionsDisabled={false}
-          cards={[card]}
+          cards={[{ ...card, workspaceChipLabel: "Other workspace" }]}
           column={column}
           dropState="idle"
           hasMoreCards={false}
