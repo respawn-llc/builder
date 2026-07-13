@@ -127,7 +127,7 @@
 - Board columns use bidirectional 25-card pages, retain at most three pages per active column, and virtualize their rows.
 - Columns release retained card pages when they leave the near-viewport activation region. Returning to a column loads its newest page at the top inside the existing shell without changing or animating its expanded/collapsed state.
 - The client parses Markdown previews only for cards intersecting the visible board viewport. A server-truncated preview receives a separate plain-text ellipsis suffix. The description region always fades over approximately its final text line to 100% transparency at the bottom, independently of server truncation.
-- Approval-blocked cards replace the normal border color with the secondary semantic color, using the same border treatment as question-blocked cards.
+- Question-blocked cards replace the normal border color with the primary semantic color. Approval-blocked cards use the secondary semantic color.
 - A workspace chip is useful only when the project currently has multiple attached workspaces and the task source workspace differs from the current default workspace. Detached historical workspace context remains available in task detail rather than creating a board exception.
 - Card click opens task detail.
 - Resume appears only when resumable.
@@ -182,8 +182,9 @@
 - Comments tab has composer, list, edit/delete, and count badge.
 - Activity tab is compact timeline with no mutation controls and no count badge.
 - Runs tab contains runs, worktree/session info, and telemetry when too dense for header; it has a run count badge.
-- Required identity/status fields: task ID, title, body rendered as Markdown, project, workflow, source workspace, current node/status, completion/done/cancel state, and server action flags.
-- Conditional fields: locked execution target mode and effective root; requested Git revision, resolved commit, current named branch when the managed root is available, and worktree path for managed targets; agent role/run status, session ID/name, source URL, and assignee/column ownership when server provides them.
+- Required identity/status fields: task ID, title, body rendered as Markdown, project, workflow, one source-workspace row containing its display name and root path, current node/status, completion/done/cancel state, and server action flags.
+- Conditional fields: locked execution target mode; requested Git revision, resolved commit, current named branch when the managed root is available, and one managed-worktree path row for managed targets; agent role/run status, session ID/name, source URL, and assignee/column ownership when server provides them.
+- Task detail does not render standalone Source root or Execution root rows. A no-managed-worktree target communicates source-workspace execution through the Execution target value; a managed target shows its path only in the Managed worktree row.
 - Irrelevant execution-target fields are omitted. Resolved commits render as short monospaced hashes with a copy-full action.
 - Missing-field policy: hide expected-not-yet-created fields, show continuity fields empty/unassigned where useful, and render unexpected meaningful missing fields as unavailable/error states.
 - Task detail allows title/body edit only while still in Backlog. Source URL is shown read-only in Properties and is never editable: valid `http(s)`/`mailto` values render as a compact link labeled with the bare host (e.g. `github.com`) opening in the system browser, and other values fall back to plain `Source: <text>`.

@@ -133,7 +133,8 @@
 - A task awaiting approval has no active placement; its live position is the pending transition's source node, surfaced as a synthesized `waiting_approval` placement.
 - Manually moving a task that is awaiting approval overrides the proposed transition: the pending approval is marked `rejected` (auditable, not deleted) and the task moves from the approval's source node to the chosen target. This is the operator path to reject a proposed transition (e.g. sending an awaiting-approval plan back to Backlog).
 - Missing-edge manual overrides cannot target executable nodes. Manual movement into an agent or script node requires a concrete workflow edge so the target run has a real prompt/contract.
-- Task start, manual movement into an executable node, and approval into an executable node apply no movement, approval, or scheduling when target selection is required. A valid selection retries and applies the original action once; dismissal leaves it unchanged.
+- Task start and manual movement into an executable node apply no movement or scheduling when target selection is required. A valid selection retries and applies the original action once; dismissal leaves it unchanged.
+- Approvals occur only after a task has reached an executable node and therefore always reuse the task's locked execution target.
 
 ## Context Preservation And Bindings
 
@@ -209,7 +210,7 @@
 
 ## Execution Targets And Worktrees
 
-- A workflow execution target policy is evaluated only when an unlocked task first reaches an executable node through task start, manual movement, or approval.
+- A workflow execution target policy is evaluated only when an unlocked task first reaches an executable node through task start or manual movement.
 - No managed worktree uses the source workspace as the execution root, supports non-Git workspaces, and creates no branch or worktree and runs no worktree setup.
 - A no-managed-worktree target follows the task's current source workspace. Changing that workspace intentionally changes later execution roots.
 - Source `HEAD`, repository default branch, and custom Git ref resolve server-side to an immutable commit before managed-worktree creation. Custom ref accepts any Git revision that resolves to a commit.

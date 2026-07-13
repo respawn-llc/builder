@@ -241,7 +241,7 @@ export function KanbanColumn({
                 virtualIndex={item.virtualIndex}
               />
             )}
-            rowSpacing="tight"
+            rowSpacing="default"
             testId={`kanban-column-scroll-${column.id}`}
           />
         </>

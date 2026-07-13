@@ -188,22 +188,19 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
     expect(onLoadNext).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps directional boundary slots mounted across idle, loading, and error states", () => {
+  it("does not reserve directional boundary rows unless they represent loading or error", () => {
     const previousRetry = vi.fn();
     const nextRetry = vi.fn();
-    const idleProps = {
-      ...virtualListProps([{ id: "item-1" }]),
-      previousBoundary: { state: "idle" } as const,
-      nextBoundary: { state: "idle" } as const,
-    };
-    const view = render(<VirtualizedInfiniteList {...idleProps} />);
-    const previousSlot = screen.getByTestId("virtual-boundary-previous");
-    const nextSlot = screen.getByTestId("virtual-boundary-next");
+    const props = virtualListProps([{ id: "item-1" }]);
+    const view = render(<VirtualizedInfiniteList {...props} />);
+    expect(screen.queryByTestId("virtual-boundary-previous")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("virtual-boundary-next")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
     view.rerender(
       <VirtualizedInfiniteList
         {...{
-          ...idleProps,
+          ...props,
           previousBoundary: { state: "loading", label: "Loading newer cards" } as const,
           nextBoundary: { state: "loading", label: "Loading older cards" } as const,
         }}
@@ -211,15 +208,13 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
     );
     const loadingPreviousSlot = screen.getByTestId("virtual-boundary-previous");
     const loadingNextSlot = screen.getByTestId("virtual-boundary-next");
-    expect(loadingPreviousSlot).toBe(previousSlot);
-    expect(loadingNextSlot).toBe(nextSlot);
     expect(within(loadingPreviousSlot).getByRole("status")).toHaveAccessibleName("Loading newer cards");
     expect(within(loadingNextSlot).getByRole("status")).toHaveAccessibleName("Loading older cards");
 
     view.rerender(
       <VirtualizedInfiniteList
         {...{
-          ...idleProps,
+          ...props,
           previousBoundary: {
             state: "error",
             message: "Newer cards failed",
@@ -235,8 +230,6 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
         }}
       />,
     );
-    expect(screen.getByTestId("virtual-boundary-previous")).toBe(previousSlot);
-    expect(screen.getByTestId("virtual-boundary-next")).toBe(nextSlot);
     fireEvent.click(screen.getByRole("button", { name: "Retry newer cards" }));
     fireEvent.click(screen.getByRole("button", { name: "Retry older cards" }));
     expect(previousRetry).toHaveBeenCalledTimes(1);

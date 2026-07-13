@@ -1,5 +1,5 @@
 .board-task-card {
-  --board-card-height: 10rem;
+  --board-card-height: 11.5rem;
 
   height: var(--board-card-height);
   min-height: var(--board-card-height);
@@ -25,7 +25,7 @@
 
 .task-card-chip-row {
   /* Matches current board action button height so wrapped chip rows align to the button box. */
-  --task-card-action-row-height: 30px;
+  --task-card-action-row-height: 34px;
 }
 
 .task-card-chip-slot {
@@ -70,7 +70,7 @@
 }
 
 .board-horizontal-scrollbar {
-  height: 16px;
+  height: 12px;
   margin: 0;
   appearance: none;
   background: transparent;

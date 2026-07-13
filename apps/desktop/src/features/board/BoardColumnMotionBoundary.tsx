@@ -126,10 +126,10 @@ export function BoardColumnMotionBoundary({
       initialBoundary: { state: "loading", label: t("states.loading") },
       isFetchingNextPage: false,
       isFetchingPreviousPage: false,
-      nextBoundary: { state: "idle" },
+      nextBoundary: undefined,
       onLoadMore: () => undefined,
       onLoadPrevious: () => undefined,
-      previousBoundary: { state: "idle" },
+      previousBoundary: undefined,
     }),
     [t],
   );

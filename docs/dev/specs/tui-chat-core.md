@@ -45,7 +45,8 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - `Ctrl+C` while busy: turn-local interrupt — stop current step and active tool, keep session alive, detail-only `User interrupted you` control message, idle with input ready, resume needs explicit user text. (owner: tui-transcript :: Input And Queueing)
 - The interrupt also drains pending messages: queued and steering queue contents populate the main input, so nothing typed is lost and the user can edit or resend.
 - `Ctrl+C` while idle exits the TUI.
-- Exiting the TUI (Ctrl+C or `/exit`) persists the current main-input draft to the server before release; opening the session later seeds the input from that draft verbatim (owner: tui-startup.md :: Session Picker).
+- Draft recovery does not depend on a graceful shutdown callback. Closing the terminal window or otherwise losing the TUI process preserves the current main-input draft; opening the session later seeds the input from that draft verbatim.
+- Graceful TUI exit through Ctrl+C or `/exit` flushes the current main-input draft to the server before release. (owner: tui-startup.md :: Session Picker).
 - `/exit` is a client detach, not a runtime interrupt. An active server-owned run continues after this TUI releases its attachment.
 - Session-navigation commands persist the outgoing draft, resolve the typed transition, release the originating attachment, and only then plan or attach the destination. A release failure aborts navigation before destination attachment; an `/exit` release failure is reported after terminal teardown and exits nonzero.
 - `Ctrl+C` in the rollback picker closes the overlay first, then uses the same global busy-interrupt/idle-exit handling as the main transcript. (owner: tui-slash-overlays :: Shared Overlay Conventions)
