@@ -67,6 +67,7 @@ type settingDocOptions struct {
 	resolveRelativeToSettingsDir bool
 	defaultValue                 func(settingsState) any
 	allowEmptyString             bool
+	rejectEmptyString            bool
 }
 
 type scalarSetting[T any] struct {
@@ -373,7 +374,7 @@ func newSettingsRegistry() settingsRegistry {
 			"KENT_SHELL_POSTPROCESSING_MODE",
 			nil,
 			normalizeShellPostprocessingMode,
-			settingDocOptions{}),
+			settingDocOptions{rejectEmptyString: true}),
 		newOptionalStringSetting("shell.postprocess_hook",
 			func(state *settingsState, value *string) { state.Settings.Shell.PostprocessHook = value },
 			func(state settingsState) *string { return state.Settings.Shell.PostprocessHook },
@@ -796,12 +797,15 @@ func newStringSetting[T ~string](
 		transformFileValue: transformFileValue,
 		decodeFile: func(raw settingsFile, path []string) (T, bool, error) {
 			lookup := lookupFileString
-			if doc.allowEmptyString {
+			if doc.allowEmptyString || doc.rejectEmptyString {
 				lookup = lookupFileStringAllowEmpty
 			}
 			value, ok, err := lookup(raw, path)
 			if err != nil || !ok {
 				return *new(T), ok, err
+			}
+			if doc.rejectEmptyString && value == "" {
+				return *new(T), false, fmt.Errorf("%s cannot be empty", key)
 			}
 			if normalize != nil {
 				return normalize(value), true, nil
@@ -1010,8 +1014,18 @@ func (s scalarSetting[T]) applyEnv(lookup envLookup, state *settingsState, sourc
 		return nil
 	}
 	value, ok := lookupTrimmedEnv(lookup, s.envName)
+	if s.doc.rejectEmptyString {
+		raw, present := lookup(s.envName)
+		if !present {
+			return nil
+		}
+		value, ok = strings.TrimSpace(raw), true
+	}
 	if !ok {
 		return nil
+	}
+	if s.doc.rejectEmptyString && value == "" {
+		return fmt.Errorf("%s cannot be empty", s.envName)
 	}
 	parsed, err := s.decodeEnv(value, s.envName)
 	if err != nil {

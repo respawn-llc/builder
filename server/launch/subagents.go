@@ -9,6 +9,7 @@ import (
 	"core/server/llm"
 	"core/shared/config"
 	"core/shared/toolspec"
+	"core/shared/valuecopy"
 )
 
 const fastRoleSameAsMainWarning = "Warning: user configuration for fast agents is the same as for other agents. Consider asking the user to edit their config to pick a faster, smaller model at the end of your task. More info at " + config.DocsURL
@@ -172,7 +173,7 @@ func applySubagentRoleOverrides(settings *config.Settings, role config.SubagentR
 		case "shell.postprocessing_mode":
 			settings.Shell.PostprocessingMode = role.Settings.Shell.PostprocessingMode
 		case "shell.postprocess_hook":
-			settings.Shell.PostprocessHook = cloneOptionalString(role.Settings.Shell.PostprocessHook)
+			settings.Shell.PostprocessHook = valuecopy.Pointer(role.Settings.Shell.PostprocessHook)
 		case "cache_warning_mode":
 			settings.CacheWarningMode = role.Settings.CacheWarningMode
 		default:
@@ -452,20 +453,12 @@ func applyReviewerRoleOverride(settings *config.Settings, role config.Settings, 
 
 func cloneSettings(in config.Settings) config.Settings {
 	out := in
-	out.Shell.PostprocessHook = cloneOptionalString(in.Shell.PostprocessHook)
+	out.Shell.PostprocessHook = valuecopy.Pointer(in.Shell.PostprocessHook)
 	out.SystemPromptFiles = append([]config.SystemPromptFile(nil), in.SystemPromptFiles...)
 	out.EnabledTools = cloneEnabledToolSet(in.EnabledTools)
 	out.SkillToggles = cloneStringBoolMap(in.SkillToggles)
 	out.Subagents = cloneSubagentRoles(in.Subagents)
 	return out
-}
-
-func cloneOptionalString(in *string) *string {
-	if in == nil {
-		return nil
-	}
-	copy := *in
-	return &copy
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

@@ -61,6 +61,25 @@ func TestLoadRejectsPresentBlankShellPostprocessHook(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsPresentBlankShellPostprocessingMode(t *testing.T) {
+	for _, contents := range []string{
+		"[shell]\npostprocessing_mode = \"\"\n",
+		"[shell]\npostprocessing_mode = \" \\t \"\n",
+	} {
+		if err := loadConfigTestFileError(t, contents, LoadOptions{}); err == nil {
+			t.Fatalf("expected explicitly blank TOML shell.postprocessing_mode to fail: %q", contents)
+		}
+	}
+
+	for _, value := range []string{"", " \t "} {
+		_, workspace := newConfigTestEnv(t)
+		t.Setenv("KENT_SHELL_POSTPROCESSING_MODE", value)
+		if _, err := Load(workspace, LoadOptions{}); err == nil {
+			t.Fatalf("expected explicitly blank KENT_SHELL_POSTPROCESSING_MODE to fail: %q", value)
+		}
+	}
+}
+
 func TestDefaultSettingsOmitAbsentShellPostprocessHook(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	writeConfigTestFile(t, path, settingsTOMLWithRenderingOptions(configRegistry.defaultState().Settings, true, nil, nil))
