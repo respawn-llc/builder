@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -32,13 +33,29 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeS
 	status := serverapi.WorktreeStatusTarget{RecordedRoot: root}
 	if target.Worktree != nil {
 		record, err := s.metadata.GetWorktreeRecordByID(ctx, target.Worktree.ID)
-		if err == nil {
+		switch {
+		case err == nil:
 			displayName := record.DisplayName
 			status.DisplayName = &displayName
-			if gitMetadata, metadataErr := worktreeGitMetadataFromRecord(record); metadataErr == nil && strings.TrimSpace(gitMetadata.BranchRef) != "" {
+			gitMetadata, metadataErr := worktreeGitMetadataFromRecord(record)
+			if metadataErr != nil {
+				return serverapi.WorktreeStatusResponse{}, fmt.Errorf(
+					"decode recorded worktree metadata for %q: %w",
+					strings.TrimSpace(target.Worktree.ID),
+					metadataErr,
+				)
+			}
+			if strings.TrimSpace(gitMetadata.BranchRef) != "" {
 				branchRef := gitMetadata.BranchRef
 				status.RecordedBranchRef = &branchRef
 			}
+		case errors.Is(err, sql.ErrNoRows):
+		default:
+			return serverapi.WorktreeStatusResponse{}, fmt.Errorf(
+				"resolve recorded worktree metadata for %q: %w",
+				strings.TrimSpace(target.Worktree.ID),
+				err,
+			)
 		}
 	}
 	response := serverapi.WorktreeStatusResponse{Target: target, Worktree: status}
@@ -62,7 +79,7 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeS
 	}
 	workspace, err := s.git.InspectTarget(ctx, target.WorkspaceRoot)
 	if errors.Is(err, errGitTargetNotFound) {
-		problemRoot := root
+		problemRoot := target.WorkspaceRoot
 		response.Problems = append(response.Problems, serverapi.WorktreeStatusProblem{Kind: serverapi.WorktreeStatusProblemGitBindingMissing, Root: &problemRoot})
 		return response, nil
 	}

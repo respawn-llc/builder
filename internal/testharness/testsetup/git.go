@@ -65,7 +65,7 @@ func createRepositorySeed() ([]repositorySeedEntry, error) {
 }
 
 func initializeRepository(root string) error {
-	if _, err := runGit(root, "init", "-q"); err != nil {
+	if _, err := runGit(root, "init", "-q", "--initial-branch=main"); err != nil {
 		return fmt.Errorf("initialize clean git repository seed: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("root\n"), 0o644); err != nil {

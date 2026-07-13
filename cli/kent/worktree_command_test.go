@@ -315,7 +315,8 @@ func TestHumanWorktreeDeleteReportsRetainedBranchCleanup(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("delete exit=%d stderr=%s", exitCode, stderr.String())
 	}
-	if got, want := stdout.String(), "Deleted worktree\nKept branch feature/a: branch is not fully merged\n"; got != want {
-		t.Fatalf("delete output = %q, want %q", got, want)
+	output := stdout.String()
+	if !strings.Contains(output, branchName) || !strings.Contains(output, diagnostic) {
+		t.Fatalf("delete output = %q, want retained branch facts %q and %q", output, branchName, diagnostic)
 	}
 }

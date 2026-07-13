@@ -34,6 +34,25 @@ func TestInitializeGitRepositoryMaterializesIsolatedCleanRepositories(t *testing
 	}
 }
 
+func TestInitializeRepositoryPinsInitialBranch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(
+		filepath.Join(home, ".gitconfig"),
+		[]byte("[init]\n\tdefaultBranch = environment-default\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write test Git config: %v", err)
+	}
+	root := t.TempDir()
+	if err := initializeRepository(root); err != nil {
+		t.Fatalf("initializeRepository: %v", err)
+	}
+	if branch := RunGit(t, root, "branch", "--show-current"); branch != "main" {
+		t.Fatalf("initial branch = %q, want main", branch)
+	}
+}
+
 func TestSanitizedGitEnvironmentDropsExternalConfigOverrides(t *testing.T) {
 	environment := sanitizedGitEnvironment([]string{
 		"GIT_CONFIG_GLOBAL=/tmp/global.gitconfig",

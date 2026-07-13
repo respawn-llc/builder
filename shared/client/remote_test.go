@@ -27,6 +27,21 @@ func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
 	}
 }
 
+func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
+	sessionID := " \t "
+	if _, err := dialRemoteWithTransport(
+		t.Context(),
+		remoteDialPlan{},
+		nil,
+		"",
+		"",
+		"",
+		&sessionID,
+	); !errors.Is(err, errRemoteSessionIDRequired) {
+		t.Fatalf("dial error = %v, want required session ID error", err)
+	}
+}
+
 func newRemoteTestServer(t *testing.T, handle func(*websocket.Conn)) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {

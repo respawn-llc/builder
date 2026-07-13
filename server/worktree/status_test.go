@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"core/server/metadata/sqlitegen"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -92,6 +95,75 @@ func TestWorktreeStatusUsesWorkspaceRootWithNestedCwd(t *testing.T) {
 	}
 	if status.Worktree.ObservedRoot == nil || *status.Worktree.ObservedRoot != env.workspaceRoot {
 		t.Fatalf("observed root = %v, want %q", status.Worktree.ObservedRoot, env.workspaceRoot)
+	}
+}
+
+func TestWorktreeStatusReportsWorkspaceRootWhenWorkspaceGitBindingIsMissing(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/status-workspace-binding")
+	updateServiceTestSessionTarget(
+		t,
+		env,
+		env.session.Meta().SessionID,
+		env.binding.WorkspaceID,
+		created.WorktreeID,
+		".",
+	)
+	missingWorkspaceRoot, err := config.CanonicalWorkspaceRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	updated, err := env.store.Queries().UpdateWorkspaceBindingCanonicalRoot(env.ctx, sqlitegen.UpdateWorkspaceBindingCanonicalRootParams{
+		CanonicalRootPath: missingWorkspaceRoot,
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		ID:                env.binding.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorkspaceBindingCanonicalRoot: %v", err)
+	}
+	if updated != 1 {
+		t.Fatalf("updated workspace bindings = %d, want 1", updated)
+	}
+
+	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
+		SessionID: env.session.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("GetWorktreeStatus: %v", err)
+	}
+	if len(status.Problems) != 1 ||
+		status.Problems[0].Kind != serverapi.WorktreeStatusProblemGitBindingMissing ||
+		status.Problems[0].Root == nil ||
+		*status.Problems[0].Root != missingWorkspaceRoot {
+		t.Fatalf("status problems = %+v, want missing workspace binding at %q", status.Problems, missingWorkspaceRoot)
+	}
+}
+
+func TestWorktreeStatusSurfacesInvalidRecordedGitMetadata(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/status-invalid-metadata")
+	updateServiceTestSessionTarget(
+		t,
+		env,
+		env.session.Meta().SessionID,
+		env.binding.WorkspaceID,
+		created.WorktreeID,
+		".",
+	)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	record.GitMetadataJSON = "{"
+	record.UpdatedAt = time.Now().UTC()
+	if err := env.store.UpsertWorktreeRecord(env.ctx, record); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+
+	if _, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
+		SessionID: env.session.Meta().SessionID,
+	}); err == nil {
+		t.Fatal("GetWorktreeStatus succeeded with invalid recorded Git metadata")
 	}
 }
 

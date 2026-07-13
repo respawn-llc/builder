@@ -821,7 +821,7 @@ func (s *Service) executionTargetForTask(ctx context.Context, task sqlitegen.Tas
 		case err == nil:
 			facts := worktreeKentFacts(row)
 			target.ManagedWorktree = &facts
-			if _, statErr := os.Stat(facts.CanonicalRoot); statErr == nil {
+			if info, statErr := os.Stat(facts.CanonicalRoot); statErr == nil && info.IsDir() {
 				root := facts.CanonicalRoot
 				target.EffectiveRoot = &root
 				if identity, inspectErr := s.git.ValidateManagedWorktreeIdentity(ctx, worktree.ManagedWorktreeIdentitySpec{

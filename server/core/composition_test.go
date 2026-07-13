@@ -24,6 +24,7 @@ import (
 	"core/server/skillcatalog"
 	askquestion "core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowrunner"
 	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -375,6 +376,15 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 	}
 	if len(detail.Task.Attention) != 1 || detail.Task.Attention[0].Message != "Question from composed session transcript?" {
 		t.Fatalf("attention = %+v", detail.Task.Attention)
+	}
+}
+
+func TestRuntimeTaskWorktreeRestorerRequiresService(t *testing.T) {
+	if err := (runtimeTaskWorktreeRestorer{}).RestoreLockedTaskWorktree(
+		t.Context(),
+		workflowrunner.LockedTaskWorktreeRestoreRequest{},
+	); err == nil {
+		t.Fatal("RestoreLockedTaskWorktree succeeded without a worktree service")
 	}
 }
 

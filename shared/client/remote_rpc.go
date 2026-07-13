@@ -30,6 +30,8 @@ var errRequestCanceledByClient = errors.New("request canceled by client")
 
 const preferredLocalSocketProbeTimeout = 100 * time.Millisecond
 
+var errRemoteSessionIDRequired = errors.New("remote session ID is required")
+
 type requestCanceledError struct {
 	message string
 }
@@ -124,6 +126,9 @@ func dialRemoteWithTransport(ctx context.Context, plan remoteDialPlan, transport
 	var trimmedSessionID *string
 	if sessionID != nil {
 		value := strings.TrimSpace(*sessionID)
+		if value == "" {
+			return nil, errRemoteSessionIDRequired
+		}
 		trimmedSessionID = &value
 	}
 	conn, err := plan.dial(ctx, transport)

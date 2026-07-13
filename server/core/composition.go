@@ -361,7 +361,7 @@ type runtimeTaskWorktreeRestorer struct {
 
 func (r runtimeTaskWorktreeRestorer) RestoreLockedTaskWorktree(ctx context.Context, req workflowrunner.LockedTaskWorktreeRestoreRequest) error {
 	if r.service == nil {
-		return nil
+		return errors.New("worktree service is required")
 	}
 	_, err := r.service.RestoreLockedTaskWorktree(ctx, worktree.LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
 	return err

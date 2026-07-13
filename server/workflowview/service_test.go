@@ -446,7 +446,7 @@ func TestTaskDetailPreservesManagedSelectionFactsWhenBindingIsMissing(t *testing
 	}
 }
 
-func TestTaskDetailProjectsUnavailableLegacyObservedManagedTarget(t *testing.T) {
+func TestTaskDetailProjectsUnavailableLegacyObservedManagedTargetForNonDirectoryRoot(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
@@ -503,9 +503,11 @@ func TestTaskDetailProjectsUnavailableLegacyObservedManagedTarget(t *testing.T) 
 	if _, err := workflowStore.StartTaskWithExecutionTarget(ctx, task.ID, &candidate); err != nil {
 		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
 	}
-	movedRoot := worktreeRoot + "-moved"
-	if err := os.Rename(worktreeRoot, movedRoot); err != nil {
-		t.Fatalf("move worktree root: %v", err)
+	if err := os.Remove(worktreeRoot); err != nil {
+		t.Fatalf("remove worktree root directory: %v", err)
+	}
+	if err := os.WriteFile(worktreeRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("replace worktree root with file: %v", err)
 	}
 
 	target := mustTaskDetail(t, view, ctx, string(task.ID)).ExecutionTarget

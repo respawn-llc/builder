@@ -287,6 +287,8 @@ func (b *tracingBackend) Blit(source, destination, size vt.Coord) {
 	}
 	rowStart, rowEnd, rowStep := 0, int(size.Y), 1
 	colStart, colEnd, colStep := 0, int(size.X), 1
+	// Reverse overlapping in-place moves so writes cannot clobber unread source
+	// cells; column reversal is only needed when source and destination share rows.
 	if destination.Y > source.Y {
 		rowStart, rowEnd, rowStep = int(size.Y)-1, -1, -1
 	} else if destination.Y == source.Y && destination.X > source.X {
