@@ -104,6 +104,33 @@ func TestOngoingTranscriptControllerRendersHydrationLiveFactsWithOnlyNonOngoingR
 	}
 }
 
+func TestPendingPromptSectionOmitsRedundantProtocolLabels(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+
+	if _, err := controller.Accept(clientui.TranscriptMessage{
+		Sequence: 1,
+		Kind:     clientui.TranscriptMessageHydration,
+		Hydration: &clientui.TranscriptHydration{
+			PendingSessionPrompts: []clientui.TranscriptPendingSessionPrompt{{
+				ID:    "11111111-1111-4111-8111-111111111111",
+				Kind:  clientui.TranscriptPromptQuestion,
+				State: clientui.TranscriptPromptPending,
+				Data: clientui.TranscriptPendingSessionPromptData{
+					ToolName: "ask_question",
+					Question: "Should continuation metadata appear in both rows?",
+				},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingPrompt), []string{"Should continuation metadata appear in both rows?"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending prompt section lines = %v, want question only %v", got, want)
+	}
+}
+
 func TestOngoingTranscriptControllerLiveAppOwnedMessageKindsRenderFrameSections(t *testing.T) {
 	tests := []struct {
 		name    string
