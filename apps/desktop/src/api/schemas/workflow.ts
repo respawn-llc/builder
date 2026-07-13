@@ -12,6 +12,7 @@ import type {
   WorkflowGraphValidationResults,
   WorkflowPage,
   WorkflowRecord,
+  WorkflowExecutionTargetPolicy,
   ProjectWorkflowLink,
   WorkflowValidation,
 } from "../models";
@@ -24,18 +25,39 @@ import {
 } from "./common";
 import { emptyArray } from "./workflowHelpers";
 
+const workflowExecutionTargetPolicySchema: z.ZodType<WorkflowExecutionTargetPolicy> = z
+  .object({
+    mode: z.enum(["none", "head", "default_branch", "custom_ref", "ask_on_first_execution"]),
+    custom_ref: z.string().trim().min(1).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.mode !== "custom_ref" && value.custom_ref !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "custom_ref is only valid for custom_ref",
+        path: ["custom_ref"],
+      });
+    }
+  })
+  .transform((value) => ({
+    mode: value.mode,
+    customRef: value.custom_ref ?? null,
+  }));
+
 const workflowRecordSchema: z.ZodType<WorkflowRecord> = z
   .object({
     id: z.string(),
     name: z.string(),
     description: emptyString,
     version: z.number(),
+    execution_target_policy: workflowExecutionTargetPolicySchema,
   })
   .transform((value) => ({
     id: value.id,
     name: value.name,
     description: value.description,
     version: value.version,
+    executionTargetPolicy: value.execution_target_policy,
   }));
 
 export const workflowListSchema: z.ZodType<WorkflowPage> = z
@@ -324,12 +346,7 @@ const workflowEdgesSchema = z
 
 const workflowDefinitionValueSchema: z.ZodType<WorkflowDefinition> = z
   .object({
-    workflow: z.object({
-      id: z.string(),
-      name: z.string(),
-      description: emptyString,
-      version: z.number(),
-    }),
+    workflow: workflowRecordSchema,
     node_groups: workflowNodeGroupsSchema,
     nodes: workflowNodesSchema,
     transition_groups: workflowTransitionGroupsSchema,
@@ -339,12 +356,7 @@ const workflowDefinitionValueSchema: z.ZodType<WorkflowDefinition> = z
       .transform((value) => value ?? emptyWorkflowDerivedWiring),
   })
   .transform((value) => ({
-    workflow: {
-      id: value.workflow.id,
-      name: value.workflow.name,
-      description: value.workflow.description,
-      version: value.workflow.version,
-    },
+    workflow: value.workflow,
     nodeGroups: value.node_groups,
     nodes: value.nodes,
     transitionGroups: value.transition_groups,

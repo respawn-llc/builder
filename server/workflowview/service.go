@@ -20,6 +20,7 @@ import (
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowscript"
+	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -28,6 +29,7 @@ import (
 type Service struct {
 	metadata    *metadata.Store
 	queries     *sqlitegen.Queries
+	git         *worktree.GitInspector
 	transcripts SessionTranscriptTailEntryProvider
 	prompts     PendingPromptSource
 }
@@ -80,7 +82,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Service, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	svc := &Service{metadata: metadataStore, queries: metadataStore.Queries()}
+	svc := &Service{metadata: metadataStore, queries: metadataStore.Queries(), git: worktree.NewGitInspector(nil)}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(svc)
@@ -97,6 +99,18 @@ func (s *Service) GetDefinition(ctx context.Context, workflowID string) (servera
 		return serverapi.WorkflowDefinition{}, nil, errors.New("workflow_id is required")
 	}
 	return s.definition(ctx, workflowID)
+}
+
+func workflowExecutionTargetPolicyFromRow(mode string, customRef sql.NullString) serverapi.WorkflowExecutionTargetConfiguration {
+	var ref *string
+	if customRef.Valid {
+		value := customRef.String
+		ref = &value
+	}
+	return serverapi.WorkflowExecutionTargetConfiguration{
+		Mode:      serverapi.WorkflowExecutionTargetMode(mode),
+		CustomRef: ref,
+	}
 }
 
 func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardRequest, roleResolver workflow.RoleResolver) (serverapi.WorkflowBoard, error) {
@@ -730,15 +744,12 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.Workflo
 	status := statusFact.Status
 	summary := taskSummary(task, status, statusFact.Done)
 	actions := taskActions(task, summary, placements, runs, def, nodeKinds)
-	detail := serverapi.WorkflowTaskDetail{Summary: summary, Project: projectBoardProject(project, workspaceContext), Workflow: workflowPickerItem(def, linkByWorkflowID[task.WorkflowID], nil), Body: task.Body, SourceURL: task.SourceUrl, SourceWorkspace: sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary), Status: status, Actions: actions}
-	if strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
-		if worktree, err := s.queries.GetWorktreeByID(ctx, strings.TrimSpace(task.ManagedWorktreeID.String)); err == nil {
-			view := worktreeView(worktree)
-			detail.ManagedWorktree = &view
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return serverapi.WorkflowTaskDetail{}, err
-		}
+	sourceWorkspace := sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary)
+	executionTarget, err := s.executionTargetForTask(ctx, task, sourceWorkspace)
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
 	}
+	detail := serverapi.WorkflowTaskDetail{Summary: summary, Project: projectBoardProject(project, workspaceContext), Workflow: workflowPickerItem(def, linkByWorkflowID[task.WorkflowID], nil), Body: task.Body, SourceURL: task.SourceUrl, SourceWorkspace: sourceWorkspace, ExecutionTarget: executionTarget, Status: status, Actions: actions}
 	attention, err := s.attentionItems(ctx, task.ProjectID, task.ID, nil)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -775,6 +786,63 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.Workflo
 		detail.Comments = append(detail.Comments, commentDTO(comment))
 	}
 	return detail, nil
+}
+
+func (s *Service) executionTargetForTask(ctx context.Context, task sqlitegen.TaskRecord, sourceWorkspace serverapi.ProjectWorkspaceSummary) (*serverapi.WorkflowExecutionTarget, error) {
+	if !task.ExecutionTargetMode.Valid {
+		if task.ExecutionTargetRequestedRef.Valid ||
+			task.ExecutionTargetResolvedRef.Valid ||
+			task.ExecutionTargetCommitOid.Valid ||
+			task.ExecutionTargetProvenance.Valid {
+			return nil, errors.New("unlocked task has execution target facts")
+		}
+		return nil, nil
+	}
+	target := &serverapi.WorkflowExecutionTarget{
+		Mode:         serverapi.WorkflowExecutionTargetMode(task.ExecutionTargetMode.String),
+		RequestedRef: metadata.OptionalString(task.ExecutionTargetRequestedRef),
+		ResolvedRef:  metadata.OptionalString(task.ExecutionTargetResolvedRef),
+		CommitOID:    metadata.OptionalString(task.ExecutionTargetCommitOid),
+		Provenance:   serverapi.WorkflowExecutionTargetProvenance(task.ExecutionTargetProvenance.String),
+	}
+	if target.Mode == serverapi.WorkflowExecutionTargetModeNone {
+		root := sourceWorkspace.RootPath
+		target.EffectiveRoot = &root
+		if err := target.Validate(); err != nil {
+			return nil, fmt.Errorf("project task execution target: %w", err)
+		}
+		return target, nil
+	}
+
+	worktreeID := strings.TrimSpace(task.ManagedWorktreeID.String)
+	if task.ManagedWorktreeID.Valid && worktreeID != "" {
+		row, err := s.queries.GetWorktreeByID(ctx, worktreeID)
+		switch {
+		case err == nil:
+			view := worktreeView(row)
+			target.ManagedWorktree = &view
+			if view.Availability == "available" {
+				root := view.CanonicalRoot
+				target.EffectiveRoot = &root
+				if identity, inspectErr := s.git.ValidateManagedWorktreeIdentity(ctx, worktree.ManagedWorktreeIdentitySpec{
+					SourceWorkspaceRoot:  sourceWorkspace.RootPath,
+					ExpectedWorktreeRoot: view.CanonicalRoot,
+				}); inspectErr == nil {
+					if branchName, ok := identity.NamedBranch(); ok {
+						target.CurrentBranch = &branchName
+					}
+				} else if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
+			}
+		case !errors.Is(err, sql.ErrNoRows):
+			return nil, err
+		}
+	}
+	if err := target.Validate(); err != nil {
+		return nil, fmt.Errorf("project task execution target: %w", err)
+	}
+	return target, nil
 }
 
 func (s *Service) GetTaskByProjectShortID(ctx context.Context, projectID string, shortID string) (serverapi.WorkflowTaskDetail, error) {
@@ -1097,7 +1165,13 @@ func (s *Service) definition(ctx context.Context, workflowID string) (serverapi.
 	if err != nil {
 		return serverapi.WorkflowDefinition{}, nil, err
 	}
-	def := serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: row.ID, Name: row.Name, Description: row.Description, Version: row.Version}}
+	def := serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{
+		ID:                    row.ID,
+		Name:                  row.Name,
+		Description:           row.Description,
+		Version:               row.Version,
+		ExecutionTargetPolicy: workflowExecutionTargetPolicyFromRow(row.ExecutionTargetPolicy, row.ExecutionTargetCustomRef),
+	}}
 	nodeGroups, err := s.queries.ListWorkflowNodeGroups(ctx, workflowID)
 	if err != nil {
 		return serverapi.WorkflowDefinition{}, nil, err
@@ -1949,7 +2023,11 @@ func bodyPreview(body string) string {
 }
 
 func definitionForValidation(def serverapi.WorkflowDefinition) workflow.Definition {
-	out := workflow.Definition{ID: workflow.WorkflowID(def.Workflow.ID), DisplayName: def.Workflow.Name}
+	out := workflow.Definition{
+		ID:                    workflow.WorkflowID(def.Workflow.ID),
+		DisplayName:           def.Workflow.Name,
+		ExecutionTargetPolicy: workflowExecutionTargetPolicyForValidation(def.Workflow.ExecutionTargetPolicy),
+	}
 	groupMemberIDs := map[string][]workflow.NodeID{}
 	for _, group := range def.NodeGroups {
 		out.NodeGroups = append(out.NodeGroups, workflow.NodeGroup{
@@ -2031,22 +2109,34 @@ func definitionForValidation(def serverapi.WorkflowDefinition) workflow.Definiti
 	return out
 }
 
+func workflowExecutionTargetPolicyForValidation(policy serverapi.WorkflowExecutionTargetConfiguration) workflow.ExecutionTargetPolicy {
+	var customRef *string
+	if policy.CustomRef != nil {
+		value := *policy.CustomRef
+		customRef = &value
+	}
+	return workflow.ExecutionTargetPolicy{
+		Mode:      workflow.ExecutionTargetMode(policy.Mode),
+		CustomRef: customRef,
+	}.Canonical()
+}
+
 func definitionExecutionValidation(def serverapi.WorkflowDefinition, roleResolver workflow.RoleResolver) *workflow.ValidationResult {
 	domain := definitionForValidation(def)
 	result := workflow.ValidateDefinition(domain, workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: roleResolver})
-	result.Errors = append(result.Errors, scriptPathDefinitionValidationErrors(domain, "")...)
+	result.Errors = append(result.Errors, scriptPathDefinitionValidationErrors(domain, nil)...)
 	return &result
 }
 
-func scriptPathDefinitionValidationErrors(def workflow.Definition, worktreeRoot string) []workflow.ValidationError {
+func scriptPathDefinitionValidationErrors(def workflow.Definition, rootPath *string) []workflow.ValidationError {
 	out := []workflow.ValidationError{}
 	for _, node := range def.Nodes {
 		if node.Kind() != workflow.NodeKindScript {
 			continue
 		}
 		diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{
-			RawPath:      workflow.NodeScriptPath(node).String(),
-			WorktreeRoot: worktreeRoot,
+			RawPath:  workflow.NodeScriptPath(node).String(),
+			RootPath: rootPath,
 		})
 		for _, diagnostic := range diagnostics {
 			out = append(out, workflow.ValidationError{

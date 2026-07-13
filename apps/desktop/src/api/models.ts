@@ -1,3 +1,31 @@
+import type {
+  WorkflowExecutionTarget,
+  WorkflowExecutionTargetPolicy,
+} from "./workflowExecutionTarget";
+
+export { defaultWorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
+export type {
+  TaskApproveApplied,
+  TaskApproveResponse,
+  TaskMoveApplied,
+  TaskMoveResponse,
+  TaskStartApplied,
+  TaskStartResponse,
+  WorkflowExecutionTargetActionResponse,
+  WorkflowExecutionTarget,
+  WorkflowExecutionTargetMode,
+  WorkflowExecutionTargetPolicy,
+  WorkflowExecutionTargetProvenance,
+  WorkflowExecutionTargetSelection,
+  WorkflowExecutionTargetSelectionMode,
+  WorkflowExecutionTargetSelectionRequirement,
+  WorkflowExecutionTargetUnavailableCause,
+  WorkflowExecutionTargetWorktree,
+  WorkflowExecutionTargetWorktreeAvailability,
+  WorkflowManagedExecutionTarget,
+  WorkflowNoManagedExecutionTarget,
+} from "./workflowExecutionTarget";
+
 export type ServerCause = Readonly<{
   code: string;
   severity: string;
@@ -184,6 +212,7 @@ export type WorkflowRecord = Readonly<{
   name: string;
   description: string;
   version: number;
+  executionTargetPolicy: WorkflowExecutionTargetPolicy;
 }>;
 
 export type WorkflowPage = Readonly<{
@@ -367,6 +396,7 @@ export type WorkflowGraphValidateDraftResult = WorkflowGraphValidationResults &
 export type WorkflowGraphMetadata = Readonly<{
   name: string;
   description: string;
+  executionTargetPolicy: WorkflowExecutionTargetPolicy;
 }>;
 
 export type WorkflowGraphSaveImpact = Readonly<{
@@ -479,14 +509,6 @@ export type TaskActions = Readonly<{
   canResume: boolean;
   canCancel: boolean;
   manualMoveTargetNodeIDs: readonly string[];
-}>;
-
-export type TaskMoveResponse = Readonly<{
-  transitionID: string;
-  state: string;
-  placementIDs: readonly string[];
-  runIDs: readonly string[];
-  approvalError: string;
 }>;
 
 export type BoardCard = Readonly<{
@@ -648,7 +670,7 @@ export type TaskDetail = Readonly<{
   comments: readonly TaskComment[];
   runs: readonly TaskRun[];
   transitions: readonly TaskTransition[];
-  worktreePath: string;
+  executionTarget: WorkflowExecutionTarget | null;
   createdAt: number;
   updatedAt: number;
   done: boolean;

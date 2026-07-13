@@ -89,6 +89,8 @@ INSERT INTO workflows (
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms
 ) VALUES (
@@ -96,6 +98,8 @@ INSERT INTO workflows (
     sqlc.arg(name),
     sqlc.arg(description),
     sqlc.arg(version),
+    sqlc.arg(execution_target_policy),
+    sqlc.narg(execution_target_custom_ref),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms)
 );
@@ -117,6 +121,27 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(id);
 
+-- name: UpdateWorkflowMetadata :execrows
+UPDATE workflows
+SET
+    name = sqlc.arg(name),
+    description = sqlc.arg(description),
+    execution_target_policy = sqlc.arg(execution_target_policy),
+    execution_target_custom_ref = sqlc.narg(execution_target_custom_ref),
+    version = version + 1,
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(id);
+
+-- name: UpdateWorkflowMetadataWithoutVersion :execrows
+UPDATE workflows
+SET
+    name = sqlc.arg(name),
+    description = sqlc.arg(description),
+    execution_target_policy = sqlc.arg(execution_target_policy),
+    execution_target_custom_ref = sqlc.narg(execution_target_custom_ref),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(id);
+
 -- name: IncrementWorkflowVersion :one
 UPDATE workflows
 SET
@@ -131,6 +156,8 @@ SELECT
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms
 FROM workflows
@@ -143,6 +170,8 @@ SELECT
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms
 FROM workflows
@@ -154,6 +183,8 @@ WITH workflow_list(
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms,
     activity_at_unix_ms
@@ -163,6 +194,8 @@ WITH workflow_list(
         workflows.name,
         workflows.description,
         workflows.version,
+        workflows.execution_target_policy,
+        workflows.execution_target_custom_ref,
         workflows.created_at_unix_ms,
         workflows.updated_at_unix_ms,
         CAST(MAX(
@@ -208,6 +241,8 @@ SELECT
     name,
     description,
     version,
+    execution_target_policy,
+    execution_target_custom_ref,
     created_at_unix_ms,
     updated_at_unix_ms,
     activity_at_unix_ms
@@ -1171,6 +1206,11 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
     canceled_at_unix_ms,
     cancellation_reason,
     created_at_unix_ms,
@@ -1220,6 +1260,11 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
     canceled_at_unix_ms,
     cancellation_reason,
     created_at_unix_ms,
@@ -1274,6 +1319,11 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
     canceled_at_unix_ms,
     cancellation_reason,
     created_at_unix_ms,
@@ -1484,6 +1534,11 @@ selected_rows AS (
         t.source_url,
         t.source_workspace_id,
         t.managed_worktree_id,
+        t.execution_target_mode,
+        t.execution_target_requested_ref,
+        t.execution_target_resolved_ref,
+        t.execution_target_commit_oid,
+        t.execution_target_provenance,
         t.canceled_at_unix_ms,
         t.cancellation_reason,
         t.created_at_unix_ms,
@@ -1633,6 +1688,11 @@ SELECT
     rows.source_url,
     rows.source_workspace_id,
     rows.managed_worktree_id,
+    rows.execution_target_mode,
+    rows.execution_target_requested_ref,
+    rows.execution_target_resolved_ref,
+    rows.execution_target_commit_oid,
+    rows.execution_target_provenance,
     rows.canceled_at_unix_ms,
     rows.cancellation_reason,
     rows.created_at_unix_ms,
@@ -1716,6 +1776,11 @@ SELECT
     t.source_url,
     t.source_workspace_id,
     t.managed_worktree_id,
+    t.execution_target_mode,
+    t.execution_target_requested_ref,
+    t.execution_target_resolved_ref,
+    t.execution_target_commit_oid,
+    t.execution_target_provenance,
     t.canceled_at_unix_ms,
     t.cancellation_reason,
     t.created_at_unix_ms,
@@ -1756,6 +1821,11 @@ SELECT
     t.source_url,
     t.source_workspace_id,
     t.managed_worktree_id,
+    t.execution_target_mode,
+    t.execution_target_requested_ref,
+    t.execution_target_resolved_ref,
+    t.execution_target_commit_oid,
+    t.execution_target_provenance,
     t.canceled_at_unix_ms,
     t.cancellation_reason,
     t.created_at_unix_ms,
@@ -1844,6 +1914,11 @@ SELECT
     t.source_url,
     t.source_workspace_id,
     t.managed_worktree_id,
+    t.execution_target_mode,
+    t.execution_target_requested_ref,
+    t.execution_target_resolved_ref,
+    t.execution_target_commit_oid,
+    t.execution_target_provenance,
     t.canceled_at_unix_ms,
     t.cancellation_reason,
     t.created_at_unix_ms,
@@ -2929,6 +3004,7 @@ SELECT
     wt.created_branch,
     wt.origin_session_id,
     wt.git_metadata_json,
+    wt.creation_base_commit_oid,
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
@@ -2946,6 +3022,7 @@ SELECT
     wt.created_branch,
     wt.origin_session_id,
     wt.git_metadata_json,
+    wt.creation_base_commit_oid,
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
@@ -2963,6 +3040,7 @@ SELECT
     wt.created_branch,
     wt.origin_session_id,
     wt.git_metadata_json,
+    wt.creation_base_commit_oid,
     wt.created_at_unix_ms,
     wt.updated_at_unix_ms
 FROM worktrees wt
@@ -2979,6 +3057,7 @@ INSERT INTO worktrees (
     created_branch,
     origin_session_id,
     git_metadata_json,
+    creation_base_commit_oid,
     created_at_unix_ms,
     updated_at_unix_ms
 ) VALUES (
@@ -2989,6 +3068,7 @@ INSERT INTO worktrees (
     sqlc.arg(created_branch),
     sqlc.arg(origin_session_id),
     sqlc.arg(git_metadata_json),
+    sqlc.narg(creation_base_commit_oid),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms)
 )
@@ -4034,6 +4114,24 @@ WHERE task_node_placements.id = sqlc.arg(placement_id)
       WHERE tasks.id = sqlc.arg(task_id)
         AND tasks.canceled_at_unix_ms IS NULL
   );
+
+-- name: LockTaskExecutionTarget :execrows
+UPDATE tasks
+SET
+    managed_worktree_id = sqlc.narg(managed_worktree_id),
+    execution_target_mode = sqlc.narg(execution_target_mode),
+    execution_target_requested_ref = sqlc.narg(execution_target_requested_ref),
+    execution_target_resolved_ref = sqlc.narg(execution_target_resolved_ref),
+    execution_target_commit_oid = sqlc.narg(execution_target_commit_oid),
+    execution_target_provenance = sqlc.narg(execution_target_provenance),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(task_id)
+  AND execution_target_mode IS NULL
+  AND execution_target_requested_ref IS NULL
+  AND execution_target_resolved_ref IS NULL
+  AND execution_target_commit_oid IS NULL
+  AND execution_target_provenance IS NULL
+  AND managed_worktree_id IS sqlc.narg(expected_managed_worktree_id);
 
 -- name: TouchTaskUpdatedAt :execrows
 UPDATE tasks

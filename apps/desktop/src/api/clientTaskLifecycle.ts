@@ -1,8 +1,17 @@
 import type { TaskMoveInput } from "./clientInputs";
 import { parseRpcResponse } from "./clientParse";
 import { compactJsonObject } from "./json";
-import type { TaskMoveResponse } from "./models";
-import { taskMoveResponseSchema } from "./schemas/workflowBoard";
+import type {
+  TaskApproveResponse,
+  TaskMoveResponse,
+  TaskStartResponse,
+  WorkflowExecutionTargetSelection,
+} from "./models";
+import {
+  taskApproveResponseSchema,
+  taskMoveResponseSchema,
+  taskStartResponseSchema,
+} from "./schemas/workflowBoard";
 import { newSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import type { RpcTransport } from "./transport";
 
@@ -10,11 +19,20 @@ export async function startTask(
   transport: RpcTransport,
   taskID: string,
   setupOperationID: SetupOperationID = newSetupOperationID(),
-): Promise<void> {
-  await transport.call(
+  executionTarget?: WorkflowExecutionTargetSelection,
+): Promise<TaskStartResponse> {
+  return parseRpcResponse(
     "workflow.task.start",
-    { task_id: taskID, setup_operation_id: setupOperationID.toJSONValue() },
-    { timeoutMs: null },
+    taskStartResponseSchema,
+    await transport.call(
+      "workflow.task.start",
+      compactJsonObject({
+        task_id: taskID,
+        setup_operation_id: setupOperationID.toJSONValue(),
+        execution_target: executionTargetPayload(executionTarget),
+      }),
+      { timeoutMs: null },
+    ),
   );
 }
 
@@ -31,13 +49,11 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
         allow_missing_edge: input.allowMissingEdge,
         auto_approve: input.autoApprove,
         setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
+        execution_target: executionTargetPayload(input.executionTarget),
       }),
       { timeoutMs: null },
     ),
   );
-  if (response.approvalError.length > 0) {
-    throw new Error(response.approvalError);
-  }
   return response;
 }
 
@@ -45,10 +61,29 @@ export async function approveTransition(
   transport: RpcTransport,
   taskTransitionID: string,
   setupOperationID: SetupOperationID = newSetupOperationID(),
-): Promise<void> {
-  await transport.call(
+  executionTarget?: WorkflowExecutionTargetSelection,
+): Promise<TaskApproveResponse> {
+  return parseRpcResponse(
     "workflow.task.approve",
-    { task_transition_id: taskTransitionID, setup_operation_id: setupOperationID.toJSONValue() },
-    { timeoutMs: null },
+    taskApproveResponseSchema,
+    await transport.call(
+      "workflow.task.approve",
+      compactJsonObject({
+        task_transition_id: taskTransitionID,
+        setup_operation_id: setupOperationID.toJSONValue(),
+        execution_target: executionTargetPayload(executionTarget),
+      }),
+      { timeoutMs: null },
+    ),
   );
+}
+
+function executionTargetPayload(selection: WorkflowExecutionTargetSelection | undefined) {
+  if (selection === undefined) {
+    return undefined;
+  }
+  return compactJsonObject({
+    mode: selection.mode,
+    custom_ref: selection.customRef ?? undefined,
+  });
 }

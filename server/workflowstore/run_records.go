@@ -64,7 +64,11 @@ func runRecordFromClaimedTaskRun(row sqlitegen.ClaimWorkflowRunRow) RunRecord {
 	}
 }
 
-func taskRecordFromTask(row sqlitegen.TaskRecord) TaskRecord {
+func taskRecordFromTask(row sqlitegen.TaskRecord) (TaskRecord, error) {
+	executionTarget, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		return TaskRecord{}, err
+	}
 	return TaskRecord{
 		ID:                workflow.TaskID(row.ID),
 		ProjectID:         row.ProjectID,
@@ -76,8 +80,9 @@ func taskRecordFromTask(row sqlitegen.TaskRecord) TaskRecord {
 		SourceURL:         row.SourceUrl,
 		SourceWorkspaceID: strings.TrimSpace(row.SourceWorkspaceID.String),
 		ManagedWorktreeID: strings.TrimSpace(row.ManagedWorktreeID.String),
+		ExecutionTarget:   executionTarget,
 		CanceledAt:        metadata.OptionalInt64(row.CanceledAtUnixMs),
 		CancelReason:      metadata.OptionalString(row.CancellationReason),
 		Version:           row.WorkflowRevisionSeen,
-	}
+	}, nil
 }

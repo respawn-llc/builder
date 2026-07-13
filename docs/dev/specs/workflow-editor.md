@@ -45,7 +45,11 @@
 
 - Editing uses GUI route-local draft state. Server mutations apply only on Save.
 - Draft state owns workflow metadata, node identity fields, transition invocation fields, join aggregate diagnostics, dirty state, remote conflicts, and draft version counters.
-- Workflow metadata editing includes workflow name and description through the workflow inspector/settings sidebar.
+- Workflow metadata editing includes workflow name, description, and execution target policy through the workflow inspector/settings sidebar.
+- Execution target policy exposes exactly five choices: no managed worktree, source `HEAD`, repository default branch, custom Git ref, and ask when execution first starts.
+- The policy uses an existing UI-kit single-choice control with concise explanations. Prefer an explained vertical choice group when shared components support it cleanly; a shared dropdown plus adjacent explanation is acceptable. Custom Git ref reveals its value field directly with the selected policy.
+- Selecting a policy other than custom Git ref clears the custom-ref value. A missing custom-ref value is a draft validation issue rather than a hard Save rejection.
+- The editor does not attempt repository-dependent Git resolution. The selected revision resolves against each task's source workspace when execution first begins.
 - Agent node editing includes display name, key, and assignee role. Script node editing includes display name, key, and script path. Agent prompts and parameters are edited on transitions.
 - Start/backlog and terminal node editing includes display name and key. Their kind and execution config stay fixed by domain validation.
 - The assignee dropdown is sourced from server readiness `subagent_roles`.

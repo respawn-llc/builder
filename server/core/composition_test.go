@@ -219,12 +219,15 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	started, err := appCore.WorkflowClient().StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
 	})
 	if err != nil {
 		t.Fatalf("StartWorkflowTask: %v", err)
 	}
-	if started.RunID == "" {
-		t.Fatal("StartWorkflowTask returned an empty run id")
+	if err := started.Validate(); err != nil || started.Applied == nil || started.Applied.RunID == "" {
+		t.Fatalf("StartWorkflowTask response = %+v, validation error = %v", started, err)
 	}
 
 	select {

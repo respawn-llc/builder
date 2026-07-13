@@ -129,6 +129,39 @@ func TestWorkflowJSONFlagPlacementCompatibility(t *testing.T) {
 	}
 }
 
+func TestWorkflowUpdateRoundTripsExecutionTargetPolicies(t *testing.T) {
+	cfg, _, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	workflowID := workflowCreateForTest(t, "Target Policy Workflow").ID
+	for _, selector := range []string{
+		"none",
+		"head",
+		"default-branch",
+		"ref:release/v1",
+		"ask-on-first-execution",
+	} {
+		output, _ := runWorkflowRootCommandOK(t, "workflow", "update", workflowID, "--execution-target", selector, "--json")
+		var record serverapi.WorkflowRecord
+		if err := json.Unmarshal([]byte(output), &record); err != nil {
+			t.Fatalf("decode workflow update %q output %q: %v", selector, output, err)
+		}
+		if got := workflowExecutionTargetPolicySelector(record.ExecutionTargetPolicy); got != selector {
+			t.Fatalf("workflow update %q returned policy %q (%+v)", selector, got, record.ExecutionTargetPolicy)
+		}
+		def := workflowInspectDefinitionForTest(t, workflowID)
+		if got := workflowExecutionTargetPolicySelector(def.Workflow.ExecutionTargetPolicy); got != selector {
+			t.Fatalf("workflow inspect after %q returned policy %q (%+v)", selector, got, def.Workflow.ExecutionTargetPolicy)
+		}
+	}
+
+	human, _ := runWorkflowRootCommandOK(t, "workflow", "inspect", workflowID)
+	if !strings.Contains(human, "ask-on-first-execution") {
+		t.Fatalf("workflow inspect omitted execution target policy: %s", human)
+	}
+}
+
 func TestWorkflowEditCommandsPersistNodeAndEdgeMetadata(t *testing.T) {
 	cfg, _, remote := newWorkflowCommandLoopback(t)
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"github.com/google/uuid"
 )
@@ -27,7 +28,7 @@ func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) 
 
 	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
 		{separator: true},
-		{content: "Stable paragraph."},
+		{content: transcriptrender.AssistantSymbol + " Stable paragraph."},
 	})
 	if got, want := surface.activeAssistant.promotedSourceBoundary, len("Stable paragraph."); got != want {
 		t.Fatalf("promotion boundary = %d, want %d", got, want)
@@ -54,7 +55,7 @@ func TestAssistantDeltaPromotesParagraphAsOneLogicalLineAtNarrowWidth(t *testing
 
 	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
 		{separator: true},
-		{content: "alpha beta gamma delta"},
+		{content: transcriptrender.AssistantSymbol + " alpha beta gamma delta"},
 	})
 }
 
@@ -79,7 +80,7 @@ func TestAssistantDeltaPromotionOpensAssistantGroupAfterPriorGroup(t *testing.T)
 
 	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
 		{separator: true},
-		{content: "Stable paragraph."},
+		{content: transcriptrender.AssistantSymbol + " Stable paragraph."},
 	})
 	if surface.groupRegister == nil || *surface.groupRegister != clientui.TranscriptRowAssistant {
 		t.Fatalf("group register = %v, want assistant", surface.groupRegister)
@@ -99,7 +100,7 @@ func TestAssistantDeltaPromotesInlineAndBlockCodeThroughTranscriptRenderer(t *te
 	}
 
 	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
-		{content: "Use INLINE_CODE."},
+		{content: transcriptrender.AssistantSymbol + " Use INLINE_CODE."},
 		{content: "BLOCK_CODE"},
 		{content: "open tail"},
 	})

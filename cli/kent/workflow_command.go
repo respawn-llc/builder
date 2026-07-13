@@ -89,6 +89,8 @@ func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "create":
 		return workflowCreateSubcommand(args[1:], stdout, stderr)
+	case "update":
+		return workflowUpdateSubcommand(args[1:], stdout, stderr)
 	case "list":
 		return workflowListSubcommand(args[1:], stdout, stderr)
 	case "node":
@@ -111,6 +113,77 @@ func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		workflowUsage.write(fs)
 		return 2
 	}
+}
+
+func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := newCommandFlagSet(config.Command+" workflow update", stderr, workflowUsage)
+	name := fs.String("name", "", "replace the workflow name")
+	description := fs.String("description", "", "replace the workflow description; pass an empty value to clear")
+	executionTargetRaw := fs.String("execution-target", "", "workflow execution target: ask-on-first-execution, "+executionTargetSelectorHelp)
+	jsonOut := fs.Bool("json", false, "write the updated workflow as JSON")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow update requires <workflow>")
+	if !ok {
+		return exitCode
+	}
+	if !flagWasProvided(fs, "name") && !flagWasProvided(fs, "description") && !flagWasProvided(fs, "execution-target") {
+		fmt.Fprintln(stderr, "workflow update requires at least one of --name, --description, or --execution-target")
+		return 2
+	}
+	var targetPolicy *serverapi.WorkflowExecutionTargetConfiguration
+	if flagWasProvided(fs, "execution-target") {
+		parsed, err := parseWorkflowExecutionTargetPolicySelector(*executionTargetRaw)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		targetPolicy = &parsed
+	}
+	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer func() { _ = remote.Close() }()
+	def, err := resolveWorkflowDefinition(context.Background(), remote, positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	metadata := serverapi.WorkflowGraphMetadata{
+		Name:                  def.Workflow.Name,
+		Description:           def.Workflow.Description,
+		ExecutionTargetPolicy: targetPolicy,
+	}
+	if flagWasProvided(fs, "name") {
+		metadata.Name = strings.TrimSpace(*name)
+	}
+	if flagWasProvided(fs, "description") {
+		metadata.Description = strings.TrimSpace(*description)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+	defer cancel()
+	resp, err := remote.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      def.Workflow.ID,
+		ExpectedVersion: def.Workflow.Version,
+		Metadata:        &metadata,
+		Graph:           workflowGraphDraftFromDefinition(def),
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if !resp.Saved || resp.Definition == nil {
+		fmt.Fprintf(stderr, "workflow update was not saved at version %d\n", resp.CurrentVersion)
+		for _, blocker := range resp.Blockers {
+			fmt.Fprintf(stderr, "- [%s] %s\n", blocker.Code, blocker.Message)
+		}
+		return 1
+	}
+	if *jsonOut {
+		return writeWorkflowJSON(stdout, stderr, resp.Definition.Workflow)
+	}
+	fmt.Fprintf(stdout, "Updated workflow %q (%s) to version %d.\n", resp.Definition.Workflow.Name, resp.Definition.Workflow.ID, resp.Definition.Workflow.Version)
+	return 0
 }
 
 func workflowCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -836,8 +909,64 @@ func writeWorkflowDefinition(stdout io.Writer, def serverapi.WorkflowDefinition)
 	if description := strings.TrimSpace(def.Workflow.Description); description != "" {
 		fmt.Fprintf(stdout, "Description: %s\n", description)
 	}
+	fmt.Fprintf(stdout, "Execution target: %s\n", workflowExecutionTargetPolicySelector(def.Workflow.ExecutionTargetPolicy))
 	writeWorkflowDefinitionNodes(stdout, def.Nodes)
 	writeWorkflowDefinitionTransitions(stdout, def)
+}
+
+func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverapi.WorkflowGraphDraft {
+	graph := serverapi.WorkflowGraphDraft{
+		NodeGroups:       make([]serverapi.WorkflowGraphDraftNodeGroup, 0, len(def.NodeGroups)),
+		Nodes:            make([]serverapi.WorkflowGraphDraftNode, 0, len(def.Nodes)),
+		TransitionGroups: make([]serverapi.WorkflowGraphDraftTransitionGroup, 0, len(def.TransitionGroups)),
+		Edges:            make([]serverapi.WorkflowGraphDraftEdge, 0, len(def.Edges)),
+	}
+	for _, group := range def.NodeGroups {
+		graph.NodeGroups = append(graph.NodeGroups, serverapi.WorkflowGraphDraftNodeGroup{
+			ID:          group.GroupID,
+			Key:         group.GroupKey,
+			DisplayName: group.DisplayName,
+		})
+	}
+	for _, node := range def.Nodes {
+		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
+			ID:                 node.ID,
+			Key:                node.Key,
+			Kind:               node.Kind,
+			DisplayName:        node.DisplayName,
+			GroupID:            node.GroupID,
+			GroupKey:           node.GroupKey,
+			SubagentRole:       node.SubagentRole,
+			PromptTemplate:     node.PromptTemplate,
+			CompletionMode:     node.CompletionMode,
+			ScriptPath:         node.ScriptPath,
+			InputFields:        node.InputFields,
+			JoinInputProviders: node.JoinInputProviders,
+		})
+	}
+	for _, group := range def.TransitionGroups {
+		graph.TransitionGroups = append(graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{
+			ID:           group.ID,
+			SourceNodeID: group.SourceNodeID,
+			TransitionID: group.TransitionID,
+			DisplayName:  group.DisplayName,
+			Description:  group.Description,
+		})
+	}
+	for _, edge := range def.Edges {
+		graph.Edges = append(graph.Edges, serverapi.WorkflowGraphDraftEdge{
+			ID:                edge.ID,
+			TransitionGroupID: edge.TransitionGroupID,
+			Key:               edge.Key,
+			TargetNodeID:      edge.TargetNodeID,
+			RequiresApproval:  edge.RequiresApproval,
+			ContextMode:       edge.ContextMode,
+			ContextSource:     edge.ContextSource,
+			PromptTemplate:    edge.PromptTemplate,
+			Parameters:        edge.Parameters,
+		})
+	}
+	return graph
 }
 
 func writeWorkflowDefinitionNodes(stdout io.Writer, nodes []serverapi.WorkflowNode) {

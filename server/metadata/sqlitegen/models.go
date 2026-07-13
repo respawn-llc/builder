@@ -68,21 +68,26 @@ type SessionPromptHistoryEntry struct {
 }
 
 type Task struct {
-	ID                    string
-	ProjectWorkflowLinkID string
-	WorkflowRevisionSeen  int64
-	TaskSeq               int64
-	ShortID               string
-	Title                 string
-	Body                  string
-	SourceUrl             string
-	SourceWorkspaceID     sql.NullString
-	ManagedWorktreeID     sql.NullString
-	CanceledAtUnixMs      sql.NullInt64
-	CancellationReason    sql.NullString
-	CreatedAtUnixMs       int64
-	UpdatedAtUnixMs       int64
-	MetadataJson          string
+	ID                          string
+	ProjectWorkflowLinkID       string
+	WorkflowRevisionSeen        int64
+	TaskSeq                     int64
+	ShortID                     string
+	Title                       string
+	Body                        string
+	SourceUrl                   string
+	SourceWorkspaceID           sql.NullString
+	ManagedWorktreeID           sql.NullString
+	ExecutionTargetMode         sql.NullString
+	ExecutionTargetRequestedRef sql.NullString
+	ExecutionTargetResolvedRef  sql.NullString
+	ExecutionTargetCommitOid    sql.NullString
+	ExecutionTargetProvenance   sql.NullString
+	CanceledAtUnixMs            sql.NullInt64
+	CancellationReason          sql.NullString
+	CreatedAtUnixMs             int64
+	UpdatedAtUnixMs             int64
+	MetadataJson                string
 }
 
 type TaskComment struct {
@@ -119,23 +124,28 @@ type TaskNodePlacementRecord struct {
 }
 
 type TaskRecord struct {
-	ID                    string
-	ProjectID             string
-	ProjectWorkflowLinkID string
-	WorkflowID            string
-	WorkflowRevisionSeen  int64
-	TaskSeq               int64
-	ShortID               string
-	Title                 string
-	Body                  string
-	SourceUrl             string
-	SourceWorkspaceID     sql.NullString
-	ManagedWorktreeID     sql.NullString
-	CanceledAtUnixMs      sql.NullInt64
-	CancellationReason    sql.NullString
-	CreatedAtUnixMs       int64
-	UpdatedAtUnixMs       int64
-	MetadataJson          string
+	ID                          string
+	ProjectID                   string
+	ProjectWorkflowLinkID       string
+	WorkflowID                  string
+	WorkflowRevisionSeen        int64
+	TaskSeq                     int64
+	ShortID                     string
+	Title                       string
+	Body                        string
+	SourceUrl                   string
+	SourceWorkspaceID           sql.NullString
+	ManagedWorktreeID           sql.NullString
+	ExecutionTargetMode         sql.NullString
+	ExecutionTargetRequestedRef sql.NullString
+	ExecutionTargetResolvedRef  sql.NullString
+	ExecutionTargetCommitOid    sql.NullString
+	ExecutionTargetProvenance   sql.NullString
+	CanceledAtUnixMs            sql.NullInt64
+	CancellationReason          sql.NullString
+	CreatedAtUnixMs             int64
+	UpdatedAtUnixMs             int64
+	MetadataJson                string
 }
 
 type TaskRun struct {
@@ -258,12 +268,14 @@ type TaskTransitionRecord struct {
 }
 
 type Workflow struct {
-	ID              string
-	Name            string
-	Description     string
-	Version         int64
-	CreatedAtUnixMs int64
-	UpdatedAtUnixMs int64
+	ID                       string
+	Name                     string
+	Description              string
+	Version                  int64
+	ExecutionTargetPolicy    string
+	ExecutionTargetCustomRef sql.NullString
+	CreatedAtUnixMs          int64
+	UpdatedAtUnixMs          int64
 }
 
 type WorkflowEdge struct {
@@ -372,13 +384,14 @@ type Workspace struct {
 }
 
 type Worktree struct {
-	ID                string
-	WorkspaceID       string
-	CanonicalRootPath string
-	Managed           int64
-	CreatedBranch     int64
-	OriginSessionID   string
-	GitMetadataJson   string
-	CreatedAtUnixMs   int64
-	UpdatedAtUnixMs   int64
+	ID                    string
+	WorkspaceID           string
+	CanonicalRootPath     string
+	Managed               int64
+	CreatedBranch         int64
+	OriginSessionID       string
+	GitMetadataJson       string
+	CreatedAtUnixMs       int64
+	UpdatedAtUnixMs       int64
+	CreationBaseCommitOid sql.NullString
 }

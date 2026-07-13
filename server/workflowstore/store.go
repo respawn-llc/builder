@@ -96,10 +96,11 @@ func (s *Store) withWorkflowGraphMutation(ctx context.Context, workflowID workfl
 }
 
 type WorkflowRecord struct {
-	ID          workflow.WorkflowID
-	Name        string
-	Description string
-	Version     int64
+	ID                    workflow.WorkflowID
+	Name                  string
+	Description           string
+	Version               int64
+	ExecutionTargetPolicy workflow.ExecutionTargetPolicy
 }
 
 type NodeRecord struct {
@@ -236,6 +237,7 @@ type TaskRecord struct {
 	SourceURL         string
 	SourceWorkspaceID string
 	ManagedWorktreeID string
+	ExecutionTarget   *ExecutionTargetSnapshot
 	CanceledAt        *int64
 	CancelReason      *string
 	Version           int64
@@ -305,10 +307,7 @@ type RunStartContext struct {
 	PriorParameterValues map[string]map[string]string
 	InputValues          map[string]string
 	NodeOutputValues     map[string]map[string]string
-	WorkspaceID          string
-	WorkspaceRoot        string
-	WorktreeID           string
-	WorktreeRoot         string
+	ExecutionRoot        *ExecutionRoot
 }
 
 type AcceptedTransitionPath struct {
@@ -456,7 +455,16 @@ func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req Cr
 	workflowID := prefixedID("workflow")
 	startID := prefixedID("node")
 	doneID := prefixedID("node")
-	if err := q.InsertWorkflow(ctx, sqlitegen.InsertWorkflowParams{ID: workflowID, Name: name, Description: description, Version: 1, CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+	policy := workflow.DefaultExecutionTargetPolicy()
+	if err := q.InsertWorkflow(ctx, sqlitegen.InsertWorkflowParams{
+		ID:                    workflowID,
+		Name:                  name,
+		Description:           description,
+		Version:               1,
+		ExecutionTargetPolicy: string(policy.Mode),
+		CreatedAtUnixMs:       now,
+		UpdatedAtUnixMs:       now,
+	}); err != nil {
 		return WorkflowRecord{}, fmt.Errorf("insert workflow: %w", err)
 	}
 	if err := q.InsertWorkflowNode(ctx, sqlitegen.InsertWorkflowNodeParams{ID: startID, WorkflowID: workflowID, NodeKey: "backlog", Kind: string(workflow.NodeKindStart), DisplayName: "Backlog", InputFieldsJson: "[]", JoinInputProvidersJson: "[]", OutputFieldsJson: "[]", SortOrder: 0}); err != nil {
@@ -465,7 +473,7 @@ func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req Cr
 	if err := q.InsertWorkflowNode(ctx, sqlitegen.InsertWorkflowNodeParams{ID: doneID, WorkflowID: workflowID, NodeKey: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done", InputFieldsJson: "[]", JoinInputProvidersJson: "[]", OutputFieldsJson: "[]", SortOrder: 1000}); err != nil {
 		return WorkflowRecord{}, fmt.Errorf("insert done node: %w", err)
 	}
-	return WorkflowRecord{ID: workflow.WorkflowID(workflowID), Name: name, Description: description, Version: 1}, nil
+	return WorkflowRecord{ID: workflow.WorkflowID(workflowID), Name: name, Description: description, Version: 1, ExecutionTargetPolicy: policy}, nil
 }
 
 func (s *Store) UpdateWorkflowInfo(ctx context.Context, workflowID workflow.WorkflowID, name string, description string) error {
@@ -513,13 +521,15 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 	rowsOut := make([]workflowRecordRow, 0, pageSize+1)
 	for _, row := range rows {
 		rowsOut = append(rowsOut, workflowRecordRow{
-			ID:               row.ID,
-			Name:             row.Name,
-			Description:      row.Description,
-			Version:          row.Version,
-			CreatedAtUnixMs:  row.CreatedAtUnixMs,
-			UpdatedAtUnixMs:  row.UpdatedAtUnixMs,
-			ActivityAtUnixMs: row.ActivityAtUnixMs,
+			ID:                       row.ID,
+			Name:                     row.Name,
+			Description:              row.Description,
+			Version:                  row.Version,
+			ExecutionTargetPolicy:    row.ExecutionTargetPolicy,
+			ExecutionTargetCustomRef: row.ExecutionTargetCustomRef,
+			CreatedAtUnixMs:          row.CreatedAtUnixMs,
+			UpdatedAtUnixMs:          row.UpdatedAtUnixMs,
+			ActivityAtUnixMs:         row.ActivityAtUnixMs,
 		})
 	}
 	nextPageToken := ""
@@ -1071,7 +1081,17 @@ func (s *Store) GetDefinition(ctx context.Context, workflowID workflow.WorkflowI
 	if err != nil {
 		return workflow.Definition{}, WorkflowRecord{}, err
 	}
-	def := workflow.Definition{ID: workflow.WorkflowID(row.ID), DisplayName: row.Name}
+	record := workflowRecordFromRow(workflowRecordRow{
+		ID:                       row.ID,
+		Name:                     row.Name,
+		Description:              row.Description,
+		Version:                  row.Version,
+		ExecutionTargetPolicy:    row.ExecutionTargetPolicy,
+		ExecutionTargetCustomRef: row.ExecutionTargetCustomRef,
+		CreatedAtUnixMs:          row.CreatedAtUnixMs,
+		UpdatedAtUnixMs:          row.UpdatedAtUnixMs,
+	})
+	def := workflow.Definition{ID: workflow.WorkflowID(row.ID), DisplayName: row.Name, ExecutionTargetPolicy: record.ExecutionTargetPolicy}
 	groupMemberIDs := map[string][]workflow.NodeID{}
 	for _, group := range nodeGroups {
 		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: workflow.WorkflowID(group.WorkflowID), ID: group.ID, Key: workflow.ModelKey(group.GroupKey), DisplayName: group.DisplayName})
@@ -1139,21 +1159,32 @@ func (s *Store) GetDefinition(ctx context.Context, workflowID workflow.WorkflowI
 		}
 		def.Edges = append(def.Edges, workflow.Edge{WorkflowID: workflow.WorkflowID(edge.WorkflowID), ID: workflow.EdgeID(edge.ID), Key: workflow.ModelKey(edge.EdgeKey), TransitionGroupID: workflow.TransitionGroupID(edge.TransitionGroupID), TargetNodeID: workflow.NodeID(edge.TargetNodeID), RequiresApproval: edge.RequiresApproval != 0, ContextMode: workflow.ContextMode(edge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSourceKind), NodeKey: workflow.ModelKey(edge.ContextSourceNodeKey)}), PromptTemplate: edge.PromptTemplate, Parameters: parameters, InputBindings: inputs, OutputRequirements: requirements})
 	}
-	return def, workflowRecordFromRow(workflowRecordRow{ID: row.ID, Name: row.Name, Description: row.Description, Version: row.Version, CreatedAtUnixMs: row.CreatedAtUnixMs, UpdatedAtUnixMs: row.UpdatedAtUnixMs}), nil
+	return def, record, nil
 }
 
 type workflowRecordRow struct {
-	ID               string
-	Name             string
-	Description      string
-	Version          int64
-	CreatedAtUnixMs  int64
-	UpdatedAtUnixMs  int64
-	ActivityAtUnixMs int64
+	ID                       string
+	Name                     string
+	Description              string
+	Version                  int64
+	ExecutionTargetPolicy    string
+	ExecutionTargetCustomRef sql.NullString
+	CreatedAtUnixMs          int64
+	UpdatedAtUnixMs          int64
+	ActivityAtUnixMs         int64
 }
 
 func workflowRecordFromRow(row workflowRecordRow) WorkflowRecord {
-	return WorkflowRecord{ID: workflow.WorkflowID(row.ID), Name: row.Name, Description: row.Description, Version: row.Version}
+	return WorkflowRecord{
+		ID:          workflow.WorkflowID(row.ID),
+		Name:        row.Name,
+		Description: row.Description,
+		Version:     row.Version,
+		ExecutionTargetPolicy: workflow.ExecutionTargetPolicy{
+			Mode:      workflow.ExecutionTargetMode(row.ExecutionTargetPolicy),
+			CustomRef: metadata.OptionalString(row.ExecutionTargetCustomRef),
+		}.Canonical(),
+	}
 }
 
 func parseWorkflowListPageToken(token string) (workflowListPageCursor, error) {

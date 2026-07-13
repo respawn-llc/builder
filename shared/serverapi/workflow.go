@@ -72,10 +72,11 @@ const (
 )
 
 type WorkflowRecord struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Version     int64  `json:"version"`
+	ID                    string                               `json:"id"`
+	Name                  string                               `json:"name"`
+	Description           string                               `json:"description"`
+	Version               int64                                `json:"version"`
+	ExecutionTargetPolicy WorkflowExecutionTargetConfiguration `json:"execution_target_policy"`
 }
 
 type WorkflowNode struct {
@@ -284,8 +285,9 @@ type WorkflowGraphSavePreviewRequest struct {
 }
 
 type WorkflowGraphMetadata struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name                  string                                `json:"name"`
+	Description           string                                `json:"description"`
+	ExecutionTargetPolicy *WorkflowExecutionTargetConfiguration `json:"execution_target_policy,omitempty"`
 }
 
 type WorkflowGraphSaveConfirmation struct {
@@ -676,11 +678,18 @@ type WorkflowTaskUpdateResponse struct {
 }
 
 type WorkflowTaskStartRequest struct {
-	TaskID           string                   `json:"task_id"`
-	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
+	TaskID           string                            `json:"task_id"`
+	SetupOperationID WorktreeSetupOperationID          `json:"setup_operation_id"`
+	ExecutionTarget  *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 }
 
 type WorkflowTaskStartResponse struct {
+	Outcome           WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
+	Applied           *WorkflowTaskStartApplied                    `json:"applied,omitempty"`
+	SelectionRequired *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+}
+
+type WorkflowTaskStartApplied struct {
 	TransitionID string `json:"transition_id"`
 	PlacementID  string `json:"placement_id"`
 	RunID        string `json:"run_id"`
@@ -702,12 +711,19 @@ type WorkflowTaskResumeResponse struct {
 }
 
 type WorkflowTaskApproveRequest struct {
-	TaskTransitionID string                   `json:"task_transition_id,omitempty"`
-	TransitionID     string                   `json:"transition_id,omitempty"`
-	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
+	TaskTransitionID string                            `json:"task_transition_id,omitempty"`
+	TransitionID     string                            `json:"transition_id,omitempty"`
+	SetupOperationID WorktreeSetupOperationID          `json:"setup_operation_id"`
+	ExecutionTarget  *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 }
 
 type WorkflowTaskApproveResponse struct {
+	Outcome           WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
+	Applied           *WorkflowTaskApproveApplied                  `json:"applied,omitempty"`
+	SelectionRequired *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+}
+
+type WorkflowTaskApproveApplied struct {
 	TransitionID string   `json:"transition_id"`
 	TaskID       string   `json:"task_id"`
 	State        string   `json:"state"`
@@ -716,21 +732,27 @@ type WorkflowTaskApproveResponse struct {
 }
 
 type WorkflowTaskMoveRequest struct {
-	TaskID           string                   `json:"task_id"`
-	TargetNodeID     string                   `json:"target_node_id"`
-	OutputValues     map[string]string        `json:"output_values,omitempty"`
-	Commentary       string                   `json:"commentary,omitempty"`
-	AllowMissingEdge bool                     `json:"allow_missing_edge,omitempty"`
-	AutoApprove      bool                     `json:"auto_approve,omitempty"`
-	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
+	TaskID           string                            `json:"task_id"`
+	TargetNodeID     string                            `json:"target_node_id"`
+	OutputValues     map[string]string                 `json:"output_values,omitempty"`
+	Commentary       string                            `json:"commentary,omitempty"`
+	AllowMissingEdge bool                              `json:"allow_missing_edge,omitempty"`
+	AutoApprove      bool                              `json:"auto_approve,omitempty"`
+	SetupOperationID WorktreeSetupOperationID          `json:"setup_operation_id"`
+	ExecutionTarget  *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 }
 
 type WorkflowTaskMoveResponse struct {
-	TransitionID  string   `json:"transition_id"`
-	State         string   `json:"state"`
-	PlacementIDs  []string `json:"placement_ids,omitempty"`
-	RunIDs        []string `json:"run_ids,omitempty"`
-	ApprovalError string   `json:"approval_error,omitempty"`
+	Outcome           WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
+	Applied           *WorkflowTaskMoveApplied                     `json:"applied,omitempty"`
+	SelectionRequired *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+}
+
+type WorkflowTaskMoveApplied struct {
+	TransitionID string   `json:"transition_id"`
+	State        string   `json:"state"`
+	PlacementIDs []string `json:"placement_ids,omitempty"`
+	RunIDs       []string `json:"run_ids,omitempty"`
 }
 
 const (
@@ -1280,7 +1302,7 @@ type WorkflowTaskDetail struct {
 	Body            string                   `json:"body"`
 	SourceURL       string                   `json:"source_url,omitempty"`
 	SourceWorkspace ProjectWorkspaceSummary  `json:"source_workspace"`
-	ManagedWorktree *WorktreeView            `json:"managed_worktree,omitempty"`
+	ExecutionTarget *WorkflowExecutionTarget `json:"execution_target,omitempty"`
 	Status          WorkflowTaskStatus       `json:"status"`
 	Actions         WorkflowTaskActions      `json:"actions"`
 	Attention       []WorkflowAttentionItem  `json:"attention,omitempty"`
@@ -1755,6 +1777,11 @@ func validateWorkflowGraphMetadata(metadata *WorkflowGraphMetadata) error {
 	if metadata.Description != strings.TrimSpace(metadata.Description) {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "metadata.description", "metadata.description must not have leading or trailing whitespace")
 	}
+	if metadata.ExecutionTargetPolicy != nil {
+		if err := metadata.ExecutionTargetPolicy.Validate(true); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1831,11 +1858,24 @@ func (r WorkflowTaskUpdateRequest) Validate() error {
 	return nil
 }
 
+func (r WorkflowTaskGetResponse) Validate() error {
+	if r.Task.ExecutionTarget != nil {
+		return r.Task.ExecutionTarget.Validate()
+	}
+	return nil
+}
+
 func (r WorkflowTaskStartRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
-	return r.SetupOperationID.Validate()
+	if err := r.SetupOperationID.Validate(); err != nil {
+		return err
+	}
+	if r.ExecutionTarget != nil {
+		return r.ExecutionTarget.Validate()
+	}
+	return nil
 }
 
 func (r WorkflowTaskResumeRequest) Validate() error {
@@ -1843,6 +1883,11 @@ func (r WorkflowTaskResumeRequest) Validate() error {
 }
 
 func (r WorkflowTaskApproveRequest) Validate() error {
+	if r.ExecutionTarget != nil {
+		if err := r.ExecutionTarget.Validate(); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(r.TaskTransitionID) != "" {
 		return r.SetupOperationID.Validate()
 	}
@@ -1856,7 +1901,13 @@ func (r WorkflowTaskMoveRequest) Validate() error {
 	if err := validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID)); err != nil {
 		return err
 	}
-	return r.SetupOperationID.Validate()
+	if err := r.SetupOperationID.Validate(); err != nil {
+		return err
+	}
+	if r.ExecutionTarget != nil {
+		return r.ExecutionTarget.Validate()
+	}
+	return nil
 }
 
 func (r WorkflowTaskCompleteRequest) Validate() error {

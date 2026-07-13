@@ -4,27 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflowscript"
 )
 
-func taskManagedWorktreeRoot(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord) (string, error) {
-	worktreeID := strings.TrimSpace(task.ManagedWorktreeID.String)
-	if !task.ManagedWorktreeID.Valid || worktreeID == "" {
-		return "", nil
-	}
-	record, err := q.GetWorktreeByID(ctx, worktreeID)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(record.CanonicalRootPath), nil
-}
-
-func (s *Store) validateScriptNodeForExecution(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, worktreeRoot string) error {
-	diagnostics, err := s.scriptNodeDiagnostics(ctx, q, nodeID, worktreeRoot)
+func (s *Store) validateScriptNodeForExecution(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, executionRoot *ExecutionRoot) error {
+	diagnostics, err := s.scriptNodeDiagnostics(ctx, q, nodeID, executionRoot)
 	if err != nil {
 		return err
 	}
@@ -36,8 +23,8 @@ func (s *Store) validateScriptNodeForExecution(ctx context.Context, q *sqlitegen
 	return nil
 }
 
-func (s *Store) scriptNodeInterruption(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, worktreeRoot string) (reason string, detail string, invalid bool, err error) {
-	diagnostics, err := s.scriptNodeDiagnostics(ctx, q, nodeID, worktreeRoot)
+func (s *Store) scriptNodeInterruption(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, executionRoot *ExecutionRoot) (reason string, detail string, invalid bool, err error) {
+	diagnostics, err := s.scriptNodeDiagnostics(ctx, q, nodeID, executionRoot)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -51,7 +38,7 @@ func (s *Store) scriptNodeInterruption(ctx context.Context, q *sqlitegen.Queries
 	return "", "{}", false, nil
 }
 
-func (s *Store) scriptNodeDiagnostics(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, worktreeRoot string) ([]workflowscript.Diagnostic, error) {
+func (s *Store) scriptNodeDiagnostics(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, executionRoot *ExecutionRoot) ([]workflowscript.Diagnostic, error) {
 	node, err := q.GetWorkflowNode(ctx, string(nodeID))
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -66,9 +53,17 @@ func (s *Store) scriptNodeDiagnostics(ctx context.Context, q *sqlitegen.Queries,
 	if node.ScriptPath.Valid {
 		path = node.ScriptPath.String
 	}
+	var rootPath *string
+	if executionRoot != nil {
+		if err := executionRoot.Validate(); err != nil {
+			return nil, err
+		}
+		effectiveRoot := executionRoot.EffectiveRoot()
+		rootPath = &effectiveRoot
+	}
 	return workflowscript.Validate(workflowscript.ValidationRequest{
-		RawPath:             path,
-		WorktreeRoot:        worktreeRoot,
-		RequireWorktreeRoot: true,
+		RawPath:     path,
+		RootPath:    rootPath,
+		RequireRoot: true,
 	}), nil
 }

@@ -84,12 +84,13 @@ const (
 const RuntimePromptParameterCommentary = "commentary"
 
 type Definition struct {
-	ID               WorkflowID
-	DisplayName      string
-	NodeGroups       []NodeGroup
-	Nodes            []Node
-	TransitionGroups []TransitionGroup
-	Edges            []Edge
+	ID                    WorkflowID
+	DisplayName           string
+	ExecutionTargetPolicy ExecutionTargetPolicy
+	NodeGroups            []NodeGroup
+	Nodes                 []Node
+	TransitionGroups      []TransitionGroup
+	Edges                 []Edge
 }
 
 type NodeGroup struct {

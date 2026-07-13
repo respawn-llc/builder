@@ -75,11 +75,20 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	}
 	runWorkflowRootCommandOK(t, "task", "comment", "delete", commentID)
 
-	startResp, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: taskID})
+	startResp, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:           taskID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
 	if err != nil {
 		t.Fatalf("StartWorkflowTask for resume command: %v", err)
 	}
-	runID := startResp.RunID
+	if startResp.Applied == nil {
+		t.Fatalf("StartWorkflowTask response = %+v, want applied payload", startResp)
+	}
+	runID := startResp.Applied.RunID
 	claimed, err := remote.store.ClaimRun(context.Background(), workflow.RunID(runID), 0)
 	if err != nil {
 		t.Fatalf("ClaimRun for resume command: %v", err)

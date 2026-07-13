@@ -28,10 +28,13 @@ func TestExecuteWorkflowScriptUsesJSONStdinAndSeparatedStderr(t *testing.T) {
 	}
 	req := SchedulerStartRunRequest{RunID: "run_script", TaskID: "task_1", PlacementID: "placement_1", NodeID: "node_script", Generation: 1}
 	input := workflowstore.RunStartContext{
-		Task:         workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
-		Node:         workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript, ScriptPath: "complete.sh"},
-		InputValues:  map[string]string{"summary": "hello"},
-		WorktreeRoot: dir,
+		Task:        workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
+		Node:        workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript, ScriptPath: "complete.sh"},
+		InputValues: map[string]string{"summary": "hello"},
+		ExecutionRoot: &workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   "workspace_1",
+			SourceWorkspaceRoot: dir,
+		},
 	}
 
 	result, err := executeWorkflowScript(context.Background(), req, input)
@@ -65,6 +68,55 @@ func TestExecuteWorkflowScriptUsesJSONStdinAndSeparatedStderr(t *testing.T) {
 	}
 }
 
+func TestWorkflowScriptEnvUsesSourceExecutionRootWithoutWorktreeVariable(t *testing.T) {
+	sourceRoot := t.TempDir()
+	input := workflowstore.RunStartContext{
+		Task: workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
+		Node: workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript},
+		ExecutionRoot: &workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   "workspace_1",
+			SourceWorkspaceRoot: sourceRoot,
+		},
+	}
+	env, err := workflowScriptEnv(SchedulerStartRunRequest{RunID: "run_script", PlacementID: "placement_1"}, input)
+	if err != nil {
+		t.Fatalf("workflowScriptEnv: %v", err)
+	}
+	if value, ok := environmentValue(env, "KENT_EXECUTION_ROOT"); !ok || value != sourceRoot {
+		t.Fatalf("KENT_EXECUTION_ROOT = %q, present=%t; want %q", value, ok, sourceRoot)
+	}
+	if value, ok := environmentValue(env, "KENT_WORKTREE_ROOT"); ok {
+		t.Fatalf("KENT_WORKTREE_ROOT = %q, want variable omitted for source execution root", value)
+	}
+}
+
+func TestWorkflowScriptEnvIncludesManagedExecutionAndWorktreeRoots(t *testing.T) {
+	sourceRoot := t.TempDir()
+	worktreeRoot := t.TempDir()
+	input := workflowstore.RunStartContext{
+		Task: workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
+		Node: workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript},
+		ExecutionRoot: &workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   "workspace_1",
+			SourceWorkspaceRoot: sourceRoot,
+			Managed: &workflowstore.ManagedExecutionRoot{
+				WorktreeID: "worktree_1",
+				Root:       worktreeRoot,
+			},
+		},
+	}
+	env, err := workflowScriptEnv(SchedulerStartRunRequest{RunID: "run_script", PlacementID: "placement_1"}, input)
+	if err != nil {
+		t.Fatalf("workflowScriptEnv: %v", err)
+	}
+	if value, ok := environmentValue(env, "KENT_EXECUTION_ROOT"); !ok || value != worktreeRoot {
+		t.Fatalf("KENT_EXECUTION_ROOT = %q, present=%t; want %q", value, ok, worktreeRoot)
+	}
+	if value, ok := environmentValue(env, "KENT_WORKTREE_ROOT"); !ok || value != worktreeRoot {
+		t.Fatalf("KENT_WORKTREE_ROOT = %q, present=%t; want %q", value, ok, worktreeRoot)
+	}
+}
+
 func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture uses POSIX signal handling")
@@ -78,10 +130,13 @@ func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
 	}
 	req := SchedulerStartRunRequest{RunID: "run_script", TaskID: "task_1", PlacementID: "placement_1", NodeID: "node_script", Generation: 1}
 	input := workflowstore.RunStartContext{
-		Task:         workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
-		Node:         workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript, ScriptPath: "ignore-term.sh"},
-		InputValues:  map[string]string{},
-		WorktreeRoot: dir,
+		Task:        workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
+		Node:        workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript, ScriptPath: "ignore-term.sh"},
+		InputValues: map[string]string{},
+		ExecutionRoot: &workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   "workspace_1",
+			SourceWorkspaceRoot: dir,
+		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -143,4 +198,14 @@ func waitForWorkflowScriptProcessIdentity(t *testing.T, path string, timeout tim
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func environmentValue(environment []string, name string) (string, bool) {
+	prefix := name + "="
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix), true
+		}
+	}
+	return "", false
 }

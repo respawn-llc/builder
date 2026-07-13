@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -217,6 +219,301 @@ func TestBoardAndTaskDetailProjectTaskSourceWorkspaceAndBody(t *testing.T) {
 	}
 	if detail.Summary.BodyPreview == "" || detail.Summary.CreatedAtUnixMs == 0 || detail.Summary.UpdatedAtUnixMs == 0 {
 		t.Fatalf("detail summary missing preview/timestamps: %+v", detail.Summary)
+	}
+}
+
+func TestTaskDetailProjectsExecutionTargetOnlyAfterLockAndNoneUsesSourceWorkspace(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Target detail", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	unlocked := mustTaskDetail(t, view, ctx, string(task.ID))
+	if unlocked.ExecutionTarget != nil {
+		t.Fatalf("unlocked execution target = %+v, want absent", unlocked.ExecutionTarget)
+	}
+	if unlocked.SourceWorkspace.WorkspaceID != binding.WorkspaceID || unlocked.SourceWorkspace.RootPath != binding.CanonicalRoot {
+		t.Fatalf("source workspace = %+v, want %q at %q", unlocked.SourceWorkspace, binding.WorkspaceID, binding.CanonicalRoot)
+	}
+
+	candidate := workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
+	if _, err := workflowStore.StartTaskWithExecutionTarget(ctx, task.ID, &candidate); err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+
+	locked := mustTaskDetail(t, view, ctx, string(task.ID))
+	if locked.ExecutionTarget == nil ||
+		locked.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeNone ||
+		locked.ExecutionTarget.EffectiveRoot == nil ||
+		*locked.ExecutionTarget.EffectiveRoot != binding.CanonicalRoot ||
+		locked.ExecutionTarget.Provenance != serverapi.WorkflowExecutionTargetProvenanceResolved {
+		t.Fatalf("locked none execution target = %+v", locked.ExecutionTarget)
+	}
+	if locked.ExecutionTarget.RequestedRef != nil ||
+		locked.ExecutionTarget.ResolvedRef != nil ||
+		locked.ExecutionTarget.CommitOID != nil ||
+		locked.ExecutionTarget.CurrentBranch != nil ||
+		locked.ExecutionTarget.ManagedWorktree != nil {
+		t.Fatalf("locked none execution target has managed facts: %+v", locked.ExecutionTarget)
+	}
+}
+
+func TestTaskDetailProjectsHealthyManagedExecutionTargetWithCurrentOperatorBranch(t *testing.T) {
+	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Managed target", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	runWorkflowViewGit(t, binding.CanonicalRoot, "init")
+	runWorkflowViewGit(t, binding.CanonicalRoot, "config", "user.email", "kent@example.com")
+	runWorkflowViewGit(t, binding.CanonicalRoot, "config", "user.name", "Kent Test")
+	runWorkflowViewGit(t, binding.CanonicalRoot, "commit", "--allow-empty", "-m", "initial")
+	worktreeRoot := filepath.Join(t.TempDir(), "managed")
+	runWorkflowViewGit(t, binding.CanonicalRoot, "worktree", "add", "-b", task.ShortID, worktreeRoot, "HEAD")
+	runWorkflowViewGit(t, worktreeRoot, "branch", "-m", "operator-renamed")
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+
+	worktreeID := "worktree-managed-detail"
+	if err := store.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:            worktreeID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: worktreeRoot,
+		Availability:  "available",
+		Managed:       true,
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := store.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                string(task.ID),
+		ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
+		UpdatedAtUnixMs:   1,
+	}); err != nil {
+		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+	}
+	requestedRef := "HEAD"
+	resolvedRef := "refs/heads/main"
+	commitOID := runWorkflowViewGit(t, binding.CanonicalRoot, "rev-parse", "HEAD")
+	candidate := workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			ResolvedRef:  &resolvedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+			Managed: &workflowstore.ManagedExecutionRoot{
+				WorktreeID: worktreeID,
+				Root:       canonicalWorktreeRoot,
+			},
+		},
+	}
+	if _, err := workflowStore.StartTaskWithExecutionTarget(ctx, task.ID, &candidate); err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+
+	detail := mustTaskDetail(t, view, ctx, string(task.ID))
+	target := detail.ExecutionTarget
+	if target == nil ||
+		target.Mode != serverapi.WorkflowExecutionTargetModeHead ||
+		target.EffectiveRoot == nil ||
+		*target.EffectiveRoot != canonicalWorktreeRoot ||
+		target.RequestedRef == nil ||
+		*target.RequestedRef != requestedRef ||
+		target.ResolvedRef == nil ||
+		*target.ResolvedRef != resolvedRef ||
+		target.CommitOID == nil ||
+		*target.CommitOID != commitOID ||
+		target.Provenance != serverapi.WorkflowExecutionTargetProvenanceResolved ||
+		target.CurrentBranch == nil ||
+		*target.CurrentBranch != "operator-renamed" ||
+		target.ManagedWorktree == nil ||
+		target.ManagedWorktree.WorktreeID != worktreeID ||
+		target.ManagedWorktree.CanonicalRoot != canonicalWorktreeRoot {
+		t.Fatalf("managed execution target = mode:%q root:%v requested:%v resolved:%v commit:%v provenance:%q branch:%v worktree:%+v",
+			target.Mode,
+			target.EffectiveRoot,
+			target.RequestedRef,
+			target.ResolvedRef,
+			target.CommitOID,
+			target.Provenance,
+			target.CurrentBranch,
+			target.ManagedWorktree,
+		)
+	}
+}
+
+func TestTaskDetailPreservesManagedSelectionFactsWhenBindingIsMissing(t *testing.T) {
+	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Missing managed binding", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	worktreeID := "worktree-missing-binding"
+	worktreeRoot := t.TempDir()
+	if err := store.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:            worktreeID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: worktreeRoot,
+		Availability:  "available",
+		Managed:       true,
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := store.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                string(task.ID),
+		ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
+		UpdatedAtUnixMs:   1,
+	}); err != nil {
+		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+	}
+	requestedRef := "HEAD"
+	resolvedRef := "refs/heads/main"
+	commitOID := "0123456789abcdef"
+	candidate := workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			ResolvedRef:  &resolvedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+			Managed: &workflowstore.ManagedExecutionRoot{
+				WorktreeID: worktreeID,
+				Root:       worktreeRoot,
+			},
+		},
+	}
+	if _, err := workflowStore.StartTaskWithExecutionTarget(ctx, task.ID, &candidate); err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+	if _, err := store.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                string(task.ID),
+		ManagedWorktreeID: sql.NullString{},
+		UpdatedAtUnixMs:   2,
+	}); err != nil {
+		t.Fatalf("clear managed binding: %v", err)
+	}
+
+	target := mustTaskDetail(t, view, ctx, string(task.ID)).ExecutionTarget
+	if target == nil ||
+		target.Mode != serverapi.WorkflowExecutionTargetModeHead ||
+		target.RequestedRef == nil ||
+		*target.RequestedRef != requestedRef ||
+		target.ResolvedRef == nil ||
+		*target.ResolvedRef != resolvedRef ||
+		target.CommitOID == nil ||
+		*target.CommitOID != commitOID ||
+		target.Provenance != serverapi.WorkflowExecutionTargetProvenanceResolved {
+		t.Fatalf("managed selection facts = %+v", target)
+	}
+	if target.EffectiveRoot != nil || target.CurrentBranch != nil || target.ManagedWorktree != nil {
+		t.Fatalf("missing binding exposed current operational facts: %+v", target)
+	}
+}
+
+func TestTaskDetailProjectsUnavailableLegacyObservedManagedTarget(t *testing.T) {
+	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Legacy target", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	worktreeID := "worktree-legacy-detail"
+	worktreeRoot := filepath.Join(t.TempDir(), "legacy")
+	if err := os.Mkdir(worktreeRoot, 0o755); err != nil {
+		t.Fatalf("Mkdir worktree root: %v", err)
+	}
+	if err := store.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:            worktreeID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: worktreeRoot,
+		Availability:  "available",
+		Managed:       true,
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := store.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                string(task.ID),
+		ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
+		UpdatedAtUnixMs:   1,
+	}); err != nil {
+		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+	}
+	requestedRef := "HEAD"
+	observedCommit := "fedcba9876543210"
+	candidate := workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &observedCommit,
+			Provenance:   workflowstore.ExecutionTargetProvenanceLegacyObserved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+			Managed: &workflowstore.ManagedExecutionRoot{
+				WorktreeID: worktreeID,
+				Root:       worktreeRoot,
+			},
+		},
+	}
+	if _, err := workflowStore.StartTaskWithExecutionTarget(ctx, task.ID, &candidate); err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+	movedRoot := worktreeRoot + "-moved"
+	if err := os.Rename(worktreeRoot, movedRoot); err != nil {
+		t.Fatalf("move worktree root: %v", err)
+	}
+
+	target := mustTaskDetail(t, view, ctx, string(task.ID)).ExecutionTarget
+	if target == nil ||
+		target.Provenance != serverapi.WorkflowExecutionTargetProvenanceLegacyObserved ||
+		target.CommitOID == nil ||
+		*target.CommitOID != observedCommit ||
+		target.ManagedWorktree == nil ||
+		target.ManagedWorktree.Availability != "missing" {
+		t.Fatalf("legacy observed target = %+v", target)
+	}
+	if target.EffectiveRoot != nil || target.CurrentBranch != nil {
+		t.Fatalf("unavailable legacy target exposed usable root or branch: %+v", target)
 	}
 }
 
@@ -1949,8 +2246,8 @@ func TestTaskDetailProjectsGuiIdentityWorktreeStatusActionsAndAttention(t *testi
 	if detail.Project.ProjectID != binding.ProjectID || detail.Project.ProjectKey != "WOR" || detail.Workflow.WorkflowID != string(workflowID) || !detail.Workflow.IsProjectDefault {
 		t.Fatalf("identity = project:%+v workflow:%+v", detail.Project, detail.Workflow)
 	}
-	if detail.ManagedWorktree == nil || detail.ManagedWorktree.WorktreeID != worktreeID || !detail.ManagedWorktree.Managed || detail.ManagedWorktree.CanonicalRoot == "" {
-		t.Fatalf("managed worktree = %+v", detail.ManagedWorktree)
+	if detail.ExecutionTarget != nil {
+		t.Fatalf("unlocked task unexpectedly exposed execution target: %+v", detail.ExecutionTarget)
 	}
 	if detail.Status.Kind != "waiting_question" || !detail.Actions.CanInterrupt {
 		t.Fatalf("status/actions = %+v/%+v", detail.Status, detail.Actions)
@@ -2519,6 +2816,16 @@ func newWorkflowViewTestContextService(t *testing.T) (context.Context, *metadata
 	t.Helper()
 	store, workflowStore, binding, view := newWorkflowViewTestService(t)
 	return context.Background(), store, workflowStore, binding, view
+}
+
+func runWorkflowViewGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %q: %v\n%s", args, dir, err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func forceCanceledBacklogPlacementWithoutTerminal(t *testing.T, ctx context.Context, store *metadata.Store, taskID workflow.TaskID, workflowID workflow.WorkflowID) {
