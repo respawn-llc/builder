@@ -351,6 +351,7 @@ func roleDefaultFaint(role StyleRole) bool {
 		StyleRoleToolShell,
 		StyleRoleToolShellSecondary,
 		StyleRoleToolQuestion,
+		StyleRoleToolQuestionAnswer,
 		StyleRoleToolWebSearch,
 		StyleRoleNotice,
 		StyleRoleNoticeForegroundFaint:

@@ -84,7 +84,7 @@ func renderAnsweredQuestion(row clientui.TranscriptToolRow, meta toolMeta, width
 	question := strings.TrimSpace(safeTranscriptText(firstNonEmpty(meta.Question, meta.Command, meta.CompactText, "ask question")))
 	bodyWidth := contentWidth(StyleRoleToolQuestion, width)
 	lines := RenderMarkdownLines(StyleRoleUser, question, bodyWidth)
-	lines = append(lines, textLines(StyleRoleUser, wrapLines(answer, bodyWidth), meta, mode)...)
+	lines = append(lines, textLines(StyleRoleToolQuestionAnswer, wrapLines(answer, bodyWidth), meta, mode)...)
 	return attachPrefixWithTree(StyleRoleToolQuestion, lines, width, mode, meta), true
 }
 
