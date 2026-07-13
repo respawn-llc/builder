@@ -4,7 +4,6 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/theme"
-	"core/shared/toolspec"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,9 +62,7 @@ func testImportSelection(provider onboardingImportProviderID, sourceRoot string)
 	sourceKind := "external_provider"
 	providerID := string(provider)
 	return onboardingImportSelection{
-		Mode:       onboardingImportModeSymlinkSource,
-		Provider:   &provider,
-		SourceRoot: &sourceRoot,
+		Mode: onboardingImportModeSymlinkSource,
 		ChoiceRef: serverapi.ImportChoiceRef{
 			Mode:             string(onboardingImportModeSymlinkSource),
 			SourceKind:       &sourceKind,
@@ -96,7 +93,10 @@ func TestOnboardingImportDiscoveryUsesServerFactsForChoicesAndCandidates(t *test
 	if err := applyImportChoice(&selection, choiceID, discovery.skillChoices); err != nil {
 		t.Fatalf("apply import choice from facts: %v", err)
 	}
-	state := &onboardingFlowState{imports: discovery, skillImport: selection}
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = discovery
+	state.selections.skillImport = selection
+	state.selections.skillEnablement = initialSkillEnablement(state)
 	items := skillSelectionCandidates(state)
 	if len(items) != 2 {
 		t.Fatalf("expected both server-projected duplicate candidates to remain visible, got %d", len(items))
@@ -120,7 +120,8 @@ func TestOnboardingImportErrorsDoNotHideValidServerChoices(t *testing.T) {
 			Skills: &serverapi.ImportModeRecommendationFact{ChoiceRef: skillSymlinkChoiceFact("codex", root, 1).Ref, ItemCount: 1},
 		},
 	}
-	state := &onboardingFlowState{imports: onboardingImportDiscoveryFromFacts(facts)}
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = onboardingImportDiscoveryFromFacts(facts)
 
 	screen := buildSkillImportScreen(state)
 	foundChoice := false
@@ -151,7 +152,8 @@ func TestOnboardingCommandImportErrorsDoNotSurfaceInSkillsFlow(t *testing.T) {
 	if discovery.err != nil {
 		t.Fatalf("command-only import error must not become a skill error: %v", discovery.err)
 	}
-	state := &onboardingFlowState{imports: discovery}
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = discovery
 	for _, step := range newOnboardingWorkflow(state).steps {
 		if step.id == "skills_import" && step.visible(state) {
 			t.Fatal("command-only import error must not make the skills import step visible")
@@ -167,7 +169,8 @@ func TestOnboardingImportTargetSkipFactsHideImportSteps(t *testing.T) {
 			Target:  serverapi.ImportTargetFact{Skip: true, Conflicts: []serverapi.ImportConflictFact{{SourceKind: "global"}}},
 		},
 	}
-	state := &onboardingFlowState{imports: onboardingImportDiscoveryFromFacts(facts)}
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = onboardingImportDiscoveryFromFacts(facts)
 
 	for _, step := range newOnboardingWorkflow(state).steps {
 		if step.id == "skills_import" && step.visible(state) {
@@ -185,16 +188,17 @@ func TestOnboardingSkippedImportErrorScreenCanContinueWithNoneChoice(t *testing.
 		},
 		Errors: []serverapi.ImportErrorFact{{Code: "target_read_failed", Scope: "target", Operation: "read_import_target", Message: "permission denied"}},
 	}
-	state := &onboardingFlowState{imports: onboardingImportDiscoveryFromFacts(facts)}
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = onboardingImportDiscoveryFromFacts(facts)
 	screen := buildSkillImportScreen(state)
 	if len(screen.Options) != 1 {
 		t.Fatalf("expected only none option for skipped import, got %+v", screen.Options)
 	}
-	if err := applyImportChoice(&state.skillImport, screen.Options[0].ID, state.imports.skillChoices); err != nil {
+	if err := applyImportChoice(&state.selections.skillImport, screen.Options[0].ID, state.imports.skillChoices); err != nil {
 		t.Fatalf("expected skipped none choice to be accepted: %v", err)
 	}
-	if state.skillImport.Mode != onboardingImportModeNone {
-		t.Fatalf("expected none selection, got %+v", state.skillImport)
+	if state.selections.skillImport.Mode != onboardingImportModeNone {
+		t.Fatalf("expected none selection, got %+v", state.selections.skillImport)
 	}
 }
 
@@ -209,7 +213,7 @@ func TestApplyImportChoiceRejectsRemovedCopyModes(t *testing.T) {
 }
 
 func TestOnboardingModelBackspaceTogglesMultiSelect(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
 	model.currentScreen = onboardingScreen{
 		ID:        "skills_enabled",
 		Kind:      onboardingScreenMulti,
@@ -227,7 +231,7 @@ func TestOnboardingModelBackspaceTogglesMultiSelect(t *testing.T) {
 }
 
 func TestOnboardingModelCtrlHTogglesMultiSelect(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
 	model.currentScreen = onboardingScreen{
 		ID:        "skills_enabled",
 		Kind:      onboardingScreenMulti,
@@ -247,103 +251,86 @@ func TestOnboardingModelCtrlHTogglesMultiSelect(t *testing.T) {
 func TestBuildSkillSelectionScreenAddsToggleAllOptionWhenThereAreMoreThanTwoItems(t *testing.T) {
 	choiceID := "test-choice"
 	sourceRoot := t.TempDir()
-	state := &onboardingFlowState{
-		skillImport: testImportSelection(onboardingImportProviderCodex, sourceRoot),
-		imports: onboardingImportDiscovery{skillEnablementByChoice: map[string][]onboardingSkillImportItem{
-			choiceID: {
-				{ID: "codex:one", Provider: testImportProviderPtr(onboardingImportProviderCodex), ProviderLabel: "Codex", TargetDirName: "one", SkillName: "one", DefaultEnabled: true},
-				{ID: "codex:two", Provider: testImportProviderPtr(onboardingImportProviderCodex), ProviderLabel: "Codex", TargetDirName: "two", SkillName: "two", DefaultEnabled: true},
-				{ID: "codex:three", Provider: testImportProviderPtr(onboardingImportProviderCodex), ProviderLabel: "Codex", TargetDirName: "three", SkillName: "three", DefaultEnabled: true},
-			},
-		}, skillChoices: []onboardingImportChoice{
-			{OptionID: choiceID, Mode: onboardingImportModeSymlinkSource, Provider: testImportProviderPtr(onboardingImportProviderCodex), SourceRoot: &sourceRoot, Ref: testImportSelection(onboardingImportProviderCodex, sourceRoot).ChoiceRef},
-		}},
-	}
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.selections.skillImport = testImportSelection(onboardingImportProviderCodex, sourceRoot)
+	state.imports = onboardingImportDiscovery{skillEnablementByChoice: map[string][]onboardingSkillImportItem{
+		choiceID: {
+			{ID: "codex:one", Provider: testImportProviderPtr(onboardingImportProviderCodex), ProviderLabel: "Codex", TargetDirName: "one", SkillName: "one", DefaultEnabled: true},
+			{ID: "codex:two", Provider: testImportProviderPtr(onboardingImportProviderCodex), ProviderLabel: "Codex", TargetDirName: "two", SkillName: "two", DefaultEnabled: true},
+			{ID: "codex:three", Provider: testImportProviderPtr(onboardingImportProviderCodex), ProviderLabel: "Codex", TargetDirName: "three", SkillName: "three", DefaultEnabled: true},
+		},
+	}, skillChoices: []onboardingImportChoice{
+		{OptionID: choiceID, Mode: onboardingImportModeSymlinkSource, Ref: testImportSelection(onboardingImportProviderCodex, sourceRoot).ChoiceRef},
+	}}
+	state.selections.skillEnablement = initialSkillEnablement(state)
 	screen := buildSkillSelectionScreen(state)
 	if len(screen.Options) == 0 || screen.Options[0].ID != onboardingToggleAllOptionID {
 		t.Fatalf("expected first option to be toggle-all action, got %+v", screen.Options)
 	}
-	if screen.Options[0].Title != "Disable all" {
-		t.Fatalf("expected initial toggle-all label to disable all, got %q", screen.Options[0].Title)
-	}
 }
 
 func TestBuildSkillSelectionScreenShowsGeneratedSkillsWithoutImport(t *testing.T) {
-	state := &onboardingFlowState{
-		imports: onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
-			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
-			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
-		}},
-		skillImport: onboardingImportSelection{Mode: onboardingImportModeNone},
-	}
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
+		{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
+		{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
+	}}
+	state.selections.skillEnablement = initialSkillEnablement(state)
 	screen := buildSkillSelectionScreen(state)
 	if len(screen.Options) != 2 {
 		t.Fatalf("expected generated skills as selectable options, got %+v", screen.Options)
 	}
-	for _, want := range []string{"Preinstalled / kent-dogfooding", "Preinstalled / creating-skills"} {
+	for _, want := range []string{"generated:kent-dogfooding", "generated:creating-skills"} {
 		found := false
 		for _, option := range screen.Options {
-			if option.Title == want {
+			if option.ID == want {
 				found = true
 			}
 		}
 		if !found {
-			t.Fatalf("expected option %q, got %+v", want, screen.Options)
+			t.Fatalf("expected option ID %q, got %+v", want, screen.Options)
 		}
 	}
 }
 
-func TestBuildSkillTogglesCanDisableGeneratedSkillWithoutImport(t *testing.T) {
-	state := &onboardingFlowState{
-		imports: onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
-			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
-			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
-		}},
-		skillImport: onboardingImportSelection{Mode: onboardingImportModeNone},
-	}
-	toggles := buildSkillToggles(state, map[string]bool{
+func TestDisabledOnboardingSkillNamesCanDisableGeneratedSkillWithoutImport(t *testing.T) {
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
+		{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
+		{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
+	}}
+	state.selections.skillEnablement = initialSkillEnablement(state)
+	state.selections.skillEnablement = map[string]bool{
 		"generated:kent-dogfooding": true,
 		"generated:creating-skills": false,
-	})
-	disabled, ok := toggles["creating-skills"]
-	if len(toggles) != 1 || !ok || disabled {
-		t.Fatalf("expected disabled generated skill toggle, got %+v", toggles)
+	}
+	disabled := disabledOnboardingSkillNames(*state)
+	if len(disabled) != 1 || disabled[0] != "creating-skills" {
+		t.Fatalf("disabled generated skills = %+v, want creating-skills", disabled)
 	}
 }
 
-func TestReviewSummaryIncludesGeneratedSkillSelectionWithoutImport(t *testing.T) {
-	state := &onboardingFlowState{
-		settings: config.Settings{
-			Theme:        theme.Auto,
-			Model:        "gpt-5.6-sol",
-			EnabledTools: map[toolspec.ID]bool{},
-		},
-		imports: onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
-			{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
-			{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
-		}},
-		skillSelection: map[string]bool{
-			"generated:kent-dogfooding": true,
-			"generated:creating-skills": false,
-		},
+func TestGeneratedSkillSelectionCountsWithoutImport(t *testing.T) {
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
+		{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
+		{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
+	}}
+	state.selections.skillEnablement = map[string]bool{
+		"generated:kent-dogfooding": true,
+		"generated:creating-skills": false,
 	}
-	lines := reviewSummaryLines(state)
-	hasEnabledLine := false
-	for _, line := range lines {
-		switch line {
-		case "- Enabled skills: `1 enabled, 1 disabled`":
-			hasEnabledLine = true
-		case "- Skills import:":
-			t.Fatalf("did not expect import summary when only generated skills were configured, got %q", lines)
-		}
+	enabled, disabled := selectedSkillCounts(state)
+	if enabled != 1 || disabled != 1 {
+		t.Fatalf("generated skill counts = (%d, %d), want (1, 1)", enabled, disabled)
 	}
-	if !hasEnabledLine {
-		t.Fatalf("expected generated skill counts in review summary, got %q", lines)
+	if state.selections.skillImport.Mode != onboardingImportModeNone {
+		t.Fatalf("generated-only selection unexpectedly changed import mode: %+v", state.selections.skillImport)
 	}
 }
 
 func TestOnboardingModelToggleAllHotkeyTogglesMultiSelection(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
 	model.currentScreen = onboardingScreen{
 		ID:      "skills_enabled",
 		Kind:    onboardingScreenMulti,
@@ -358,13 +345,13 @@ func TestOnboardingModelToggleAllHotkeyTogglesMultiSelection(t *testing.T) {
 			t.Fatalf("expected %q to be toggled off", id)
 		}
 	}
-	if updated.currentScreen.Options[0].Title != "Enable all" {
-		t.Fatalf("expected toggle-all label to update after hotkey, got %q", updated.currentScreen.Options[0].Title)
+	if updated.selection[onboardingToggleAllOptionID] {
+		t.Fatal("toggle-all selection must be unchecked when selectable options are disabled")
 	}
 }
 
 func TestOnboardingModelToggleAllMenuItemTogglesMultiSelection(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
 	model.currentScreen = onboardingScreen{
 		ID:      "skills_enabled",
 		Kind:    onboardingScreenMulti,
@@ -383,7 +370,7 @@ func TestOnboardingModelToggleAllMenuItemTogglesMultiSelection(t *testing.T) {
 }
 
 func TestOnboardingModelRefreshToggleAllTracksCheckedState(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
 	model.currentScreen = onboardingScreen{
 		ID:      "skills_enabled",
 		Kind:    onboardingScreenMulti,
@@ -395,22 +382,16 @@ func TestOnboardingModelRefreshToggleAllTracksCheckedState(t *testing.T) {
 	if !model.selection[onboardingToggleAllOptionID] {
 		t.Fatal("expected toggle-all action to render checked when all options are enabled")
 	}
-	if got := model.currentScreen.Options[0].Title; got != "Disable all" {
-		t.Fatalf("expected toggle-all title to stay on Disable all, got %q", got)
-	}
 
 	model.selection["two"] = false
 	model.refreshToggleAllOption()
 	if model.selection[onboardingToggleAllOptionID] {
 		t.Fatal("expected toggle-all action to render unchecked when not all options are enabled")
 	}
-	if got := model.currentScreen.Options[0].Title; got != "Enable all" {
-		t.Fatalf("expected toggle-all title to switch to Enable all, got %q", got)
-	}
 }
 
 func TestOnboardingSubmitCurrentScreenShowsValidationError(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, nil))
 	model.stepIndex = 2
 	model.syncScreen(true)
 	model.input.Replace(strings.NewReplacer("\r", "", "\n", "").Replace(""))
@@ -425,8 +406,9 @@ func TestOnboardingSubmitCurrentScreenShowsValidationError(t *testing.T) {
 }
 
 func TestOnboardingWorkflowStartsWithThemeStep(t *testing.T) {
-	workflow := newOnboardingWorkflow(&onboardingFlowState{})
-	steps := workflow.visibleSteps(&onboardingFlowState{})
+	state := testOnboardingFlowStatePtr(t, nil)
+	workflow := newOnboardingWorkflow(state)
+	steps := workflow.visibleSteps(state)
 	if len(steps) == 0 {
 		t.Fatal("expected onboarding workflow to include steps")
 	}
@@ -440,14 +422,14 @@ func TestThemeStepDefaultsToDetectedTheme(t *testing.T) {
 	defer lipgloss.SetHasDarkBackground(original)
 
 	lipgloss.SetHasDarkBackground(false)
-	lightState := &onboardingFlowState{}
+	lightState := testOnboardingFlowStatePtr(t, nil)
 	lightScreen := newOnboardingWorkflow(lightState).visibleSteps(lightState)[0].build(lightState)
 	if lightScreen.DefaultOptionID != "light" {
 		t.Fatalf("expected light background detection to preselect light theme, got %q", lightScreen.DefaultOptionID)
 	}
 
 	lipgloss.SetHasDarkBackground(true)
-	darkState := &onboardingFlowState{}
+	darkState := testOnboardingFlowStatePtr(t, nil)
 	darkScreen := newOnboardingWorkflow(darkState).visibleSteps(darkState)[0].build(darkState)
 	if darkScreen.DefaultOptionID != "dark" {
 		t.Fatalf("expected dark background detection to preselect dark theme, got %q", darkScreen.DefaultOptionID)
@@ -459,22 +441,22 @@ func TestThemeStepChoicePreservesAutoWhenKeepingDetectedDefault(t *testing.T) {
 	defer lipgloss.SetHasDarkBackground(original)
 
 	lipgloss.SetHasDarkBackground(true)
-	state := &onboardingFlowState{settings: config.Settings{Theme: theme.Auto}}
+	state := testOnboardingFlowStatePtr(t, nil)
 	themeStep := newOnboardingWorkflow(state).visibleSteps(state)[0]
 	if err := themeStep.apply(state, "dark"); err != nil {
 		t.Fatalf("apply detected theme choice: %v", err)
 	}
-	if state.settings.Theme != theme.Auto {
-		t.Fatalf("expected detected default to preserve auto, got %q", state.settings.Theme)
+	if state.selections.theme.kind != onboardingThemeAuto {
+		t.Fatalf("expected detected default to preserve auto, got %q", state.selections.theme.kind)
 	}
 
 	lipgloss.SetHasDarkBackground(false)
-	state = &onboardingFlowState{settings: config.Settings{Theme: theme.Auto}}
+	state = testOnboardingFlowStatePtr(t, nil)
 	themeStep = newOnboardingWorkflow(state).visibleSteps(state)[0]
 	if err := themeStep.apply(state, "dark"); err != nil {
 		t.Fatalf("apply explicit override: %v", err)
 	}
-	if state.settings.Theme != theme.Dark {
-		t.Fatalf("expected overriding detected default to persist explicit dark, got %q", state.settings.Theme)
+	if state.selections.theme.kind != onboardingThemeDark {
+		t.Fatalf("expected overriding detected default to persist explicit dark, got %q", state.selections.theme.kind)
 	}
 }

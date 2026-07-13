@@ -7,7 +7,6 @@ import (
 	tuiinput "core/cli/tui/input"
 	"core/shared/config"
 	sharedtheme "core/shared/theme"
-	"core/shared/toolspec"
 
 	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
@@ -269,7 +268,7 @@ func (m *onboardingModel) renderThemePreview(width int) []string {
 	palette := uiPalette(theme)
 	previewStyles := onboardingThemePreviewStyleSet(theme, width)
 	heading := lipgloss.NewStyle().Foreground(palette.primary).Bold(true).Render("Preview")
-	modelLabel := strings.TrimSpace(m.state.settings.Model)
+	modelLabel := strings.TrimSpace(m.state.selections.model.value)
 	if modelLabel == "" {
 		modelLabel = config.DefaultModel()
 	}
@@ -296,27 +295,28 @@ func (m *onboardingModel) renderReviewSummary(width int) []string {
 		row := m.styles.body.Render("- "+label+": ") + style.Render(value)
 		lines = append(lines, wrapANSIText(row, width)...)
 	}
-	themeSummary := sharedtheme.Auto + " (" + sharedtheme.Resolve(m.state.settings.Theme) + ")"
-	if sharedtheme.IsExplicit(m.state.settings.Theme) {
-		themeSummary = sharedtheme.Resolve(m.state.settings.Theme)
+	themeValue := m.state.selections.themeValue()
+	themeSummary := sharedtheme.Auto + " (" + sharedtheme.Resolve(themeValue) + ")"
+	if sharedtheme.IsExplicit(themeValue) {
+		themeSummary = sharedtheme.Resolve(themeValue)
 	}
 	appendRow("Theme", themeSummary, m.styles.valueNeutral)
-	appendRow("Model", m.state.settings.Model, m.styles.valueNeutral)
-	modelFact := modelFactFor(&m.state, m.state.settings.Model)
+	appendRow("Model", m.state.selections.model.value, m.styles.valueNeutral)
+	modelFact := modelFactFor(&m.state, m.state.selections.model.value)
 	if modelFact.ContextWindowTokens != nil && *modelFact.ContextWindowTokens > 0 {
-		contextValue := formatTokenWindow(m.state.settings.ModelContextWindow)
-		if m.state.settings.ModelContextWindow == *modelFact.ContextWindowTokens {
+		contextValue := formatTokenWindow(m.state.selections.contextWindowTokens(modelFact))
+		if m.state.selections.contextWindow.kind == onboardingContextDefault {
 			contextValue = "default (" + formatTokenWindow(*modelFact.ContextWindowTokens) + ")"
 		}
 		appendRow("Context window", contextValue, m.styles.valueNeutral)
 	}
-	thinking := strings.TrimSpace(m.state.settings.ThinkingLevel)
+	thinking := strings.TrimSpace(m.state.selections.thinkingValue())
 	if thinking == "" {
 		appendRow("Thinking", "off", m.styles.valueOff)
 	} else {
 		appendRow("Thinking", thinking, m.styles.valueNeutral)
 	}
-	verbosity := string(m.state.settings.ModelVerbosity)
+	verbosity := m.state.selections.verbosity.value
 	if strings.TrimSpace(verbosity) == "" {
 		verbosity = "off"
 	}
@@ -325,23 +325,20 @@ func (m *onboardingModel) renderReviewSummary(width int) []string {
 		verbosityStyle = m.styles.valueOff
 	}
 	appendRow("Verbosity", verbosity, verbosityStyle)
-	if m.state.settings.EnabledTools[toolspec.ToolAskQuestion] {
+	if m.state.selections.askQuestion {
 		appendRow("Questions", "on", m.styles.valueOn)
 	} else {
 		appendRow("Questions", "off", m.styles.valueOff)
 	}
-	reviewer := m.state.settings.Reviewer.Frequency
-	if strings.TrimSpace(reviewer) == "" {
-		reviewer = "off"
-	}
+	reviewer := string(m.state.selections.supervisor.frequency)
 	reviewerStyle := m.styles.valueOn
 	if reviewer == "off" {
 		reviewerStyle = m.styles.valueOff
 	}
 	appendRow("Supervisor", reviewer, reviewerStyle)
 	if reviewerEnabled(&m.state) {
-		appendRow("Supervisor model", m.state.settings.Reviewer.Model, m.styles.valueNeutral)
-		reviewerThinking := strings.TrimSpace(m.state.settings.Reviewer.ThinkingLevel)
+		appendRow("Supervisor model", m.state.selections.reviewerModelValue(), m.styles.valueNeutral)
+		reviewerThinking := strings.TrimSpace(m.state.selections.reviewerThinkingValue())
 		reviewerThinkingStyle := m.styles.valueNeutral
 		if reviewerThinking == "" {
 			reviewerThinking = "off"
@@ -350,10 +347,10 @@ func (m *onboardingModel) renderReviewSummary(width int) []string {
 		appendRow("Supervisor thinking", reviewerThinking, reviewerThinkingStyle)
 	}
 	compactionStyle := m.styles.valueNeutral
-	if m.state.settings.CompactionMode == config.CompactionModeNone {
+	if m.state.selections.compaction == onboardingCompactionManualOnly {
 		compactionStyle = m.styles.valueOff
 	}
-	appendRow("Compaction", string(m.state.settings.CompactionMode), compactionStyle)
+	appendRow("Compaction", string(m.state.selections.compactionValue()), compactionStyle)
 	if summary := skillImportSummary(&m.state); summary != "" {
 		appendRow("Skills import", summary, m.styles.valueNeutral)
 	}

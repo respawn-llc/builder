@@ -59,7 +59,7 @@ func newOnboardingModel(finalization *onboardingFinalization, state onboardingFl
 		finalization: finalization,
 		width:        defaultPickerWidth,
 		height:       defaultPickerHeight,
-		styles:       newOnboardingStyles(state.theme),
+		styles:       newOnboardingStyles(state.selections.themeValue()),
 		input:        input,
 	}
 	m.spinnerClock.Start(uiAnimationNow())
@@ -86,7 +86,7 @@ func (m *onboardingModel) activeTheme() string {
 			return optionTheme
 		}
 	}
-	return theme.Resolve(m.state.settings.Theme)
+	return theme.Resolve(m.state.selections.themeValue())
 }
 
 func (m *onboardingModel) applyActiveThemeStyles() {
@@ -112,14 +112,28 @@ func (m *onboardingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case onboardingImportDiscoveryDoneMsg:
 		m.state.imports = typed.discovery
 		m.state.imports.pending = false
-		if m.state.imports.skipSkills {
-			m.state.skillImport = onboardingImportSelection{Mode: onboardingImportModeNone}
+		if err := m.state.refreshSkillSelectionsAfterDiscovery(); err != nil {
+			var internalStateErr *onboardingInternalStateError
+			if errors.As(err, &internalStateErr) {
+				m.terminalErr = fmt.Errorf("first-time setup internal state failure: %w", err)
+				return m, tea.Quit
+			}
+			m.errorText = err.Error()
+			return m, nil
 		}
 		m.syncScreen(false)
+		if m.terminalErr != nil {
+			return m, tea.Quit
+		}
 		return m, nil
 	case onboardingFinalizeDoneMsg:
 		m.finalizing = false
 		if typed.err != nil {
+			var internalStateErr *onboardingInternalStateError
+			if errors.As(typed.err, &internalStateErr) {
+				m.terminalErr = fmt.Errorf("first-time setup internal state failure: %w", typed.err)
+				return m, tea.Quit
+			}
 			if typed.submitted && onboardingCommittedActivationFailed(typed.err) {
 				m.terminalErr = fmt.Errorf("onboarding completed but server activation failed: %w", typed.err)
 				return m, tea.Quit
@@ -253,6 +267,11 @@ func (m *onboardingModel) submitCurrentScreen() (tea.Model, tea.Cmd) {
 		}
 	}
 	if err != nil {
+		var internalStateErr *onboardingInternalStateError
+		if errors.As(err, &internalStateErr) {
+			m.terminalErr = fmt.Errorf("first-time setup internal state failure: %w", err)
+			return m, tea.Quit
+		}
 		m.errorText = err.Error()
 		m.currentScreen.ErrorText = m.errorText
 		return m, nil
@@ -263,6 +282,9 @@ func (m *onboardingModel) submitCurrentScreen() (tea.Model, tea.Cmd) {
 		m.state.pendingAction = onboardingPendingActionNone
 		m.stepIndex = 0
 		m.syncScreen(true)
+		if m.terminalErr != nil {
+			return m, tea.Quit
+		}
 		return m, nil
 	case onboardingPendingActionWriteDefaults:
 		m.state.pendingAction = onboardingPendingActionNone
@@ -277,6 +299,9 @@ func (m *onboardingModel) submitCurrentScreen() (tea.Model, tea.Cmd) {
 	default:
 		m.stepIndex++
 		m.syncScreen(true)
+		if m.terminalErr != nil {
+			return m, tea.Quit
+		}
 		return m, nil
 	}
 }
@@ -284,6 +309,9 @@ func (m *onboardingModel) submitCurrentScreen() (tea.Model, tea.Cmd) {
 func (m *onboardingModel) finalizeCmd(writeDefaults bool) tea.Cmd {
 	state := m.state
 	return func() tea.Msg {
+		if err := state.validateInvariant("finalize_projection", "review"); err != nil {
+			return onboardingFinalizeDoneMsg{err: err}
+		}
 		request, err := onboardingFinalizeRequest(state, writeDefaults)
 		if err != nil {
 			return onboardingFinalizeDoneMsg{err: err}
@@ -291,7 +319,7 @@ func (m *onboardingModel) finalizeCmd(writeDefaults bool) tea.Cmd {
 		if m.finalization == nil {
 			return onboardingFinalizeDoneMsg{err: errors.New("onboarding finalization is required")}
 		}
-		return m.finalization.submit(request, writeDefaults, state.settings.Theme)()
+		return m.finalization.submit(request, writeDefaults, state.selections.themeValue())()
 	}
 }
 
@@ -330,6 +358,10 @@ func (m *onboardingModel) currentStep() *onboardingStepDefinition {
 func (m *onboardingModel) syncScreen(resetViewport bool) {
 	step := m.currentStep()
 	if step == nil {
+		return
+	}
+	if err := m.state.validateInvariant("screen_projection", step.id); err != nil {
+		m.terminalErr = err
 		return
 	}
 	screen := step.build(&m.state)
