@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"core/server/auth"
@@ -72,6 +73,26 @@ func clipboardTestInputText(m *uiModel, target clipboardTestInputTarget) string 
 type unexpectedClipboardContent struct{}
 
 func (unexpectedClipboardContent) uiClipboardContent() {}
+
+type clipboardDiagnosticLogger struct {
+	calls int
+	args  []any
+}
+
+func (l *clipboardDiagnosticLogger) Logf(_ string, args ...any) {
+	l.calls++
+	l.args = append([]any(nil), args...)
+}
+
+type secretClipboardExitError struct{}
+
+func (secretClipboardExitError) Error() string {
+	return "clipboard-secret"
+}
+
+func (secretClipboardExitError) ExitCode() int {
+	return 7
+}
 
 func TestClipboardPasteInsertsMultilineUnicodeTextAtMainCursor(t *testing.T) {
 	calls := 0
@@ -351,6 +372,35 @@ func TestClipboardPasteNoContentUsesErrorStatus(t *testing.T) {
 	})
 	if kind != uiStatusNoticeError {
 		t.Fatalf("status kind = %d, want error", kind)
+	}
+}
+
+func TestClipboardPasteFailureWritesSanitizedDiagnostic(t *testing.T) {
+	logger := &clipboardDiagnosticLogger{}
+	m := setupClipboardTestInput(t, newProjectedStaticUIModel(WithUILogger(logger)), clipboardTestInputMain)
+	cause := secretClipboardExitError{}
+
+	m.Update(clipboardPasteDoneMsg{
+		Target:         uiClipboardPasteTargetMain,
+		MainDraftToken: m.mainInputDraftToken,
+		Err: &uiClipboardPasteError{
+			Kind:    uiClipboardPasteErrorFailed,
+			Message: "Clipboard paste failed",
+			Err:     cause,
+		},
+	})
+
+	if logger.calls != 1 {
+		t.Fatalf("clipboard failure diagnostics = %d, want 1", logger.calls)
+	}
+	wantArgs := []any{"main", "failed", fmt.Sprintf("%T", cause), 7}
+	if len(logger.args) != len(wantArgs) {
+		t.Fatalf("clipboard diagnostic args = %#v, want %#v", logger.args, wantArgs)
+	}
+	for index, want := range wantArgs {
+		if logger.args[index] != want {
+			t.Fatalf("clipboard diagnostic arg %d = %#v, want %#v", index, logger.args[index], want)
+		}
 	}
 }
 

@@ -7,8 +7,117 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 )
+
+func TestDarwinClipboardReadFunctionReturnsTextFromNamedPasteboard(t *testing.T) {
+	path := darwinClipboardTestPath(t)
+	text := "α\nβ"
+	setup := namedDarwinPasteboardSetup(
+		`pasteboard.setStringForType($.NSString.stringWithUTF8String(` + strconv.Quote(text) + `), $.NSPasteboardTypeString);`,
+	)
+	envelope := runDarwinClipboardReadFunction(t, setup, path)
+	if envelope.Kind != "text" || envelope.Text != text {
+		t.Fatalf("clipboard envelope = %#v, want text %q", envelope, text)
+	}
+}
+
+func TestDarwinClipboardReadFunctionReturnsEmptyFromNamedPasteboard(t *testing.T) {
+	path := darwinClipboardTestPath(t)
+	setup := namedDarwinPasteboardSetup()
+	envelope := runDarwinClipboardReadFunction(t, setup, path)
+	if envelope.Kind != "empty" {
+		t.Fatalf("clipboard envelope = %#v, want empty", envelope)
+	}
+}
+
+func TestDarwinClipboardReadFunctionWritesPNGFromNamedPasteboard(t *testing.T) {
+	path := darwinClipboardTestPath(t)
+	setup := namedDarwinPasteboardSetup(
+		`var png = $.NSData.alloc.initWithBase64EncodedStringOptions($("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII="), 0);`,
+		`pasteboard.setDataForType(png, $.NSPasteboardTypePNG);`,
+	)
+	envelope := runDarwinClipboardReadFunction(t, setup, path)
+	if envelope.Kind != "image" {
+		t.Fatalf("clipboard envelope = %#v, want image", envelope)
+	}
+	assertClipboardPNGFile(t, path)
+}
+
+func TestDarwinClipboardReadFunctionConvertsTIFFFromNamedPasteboard(t *testing.T) {
+	path := darwinClipboardTestPath(t)
+	setup := namedDarwinPasteboardSetup(
+		`var image = $.NSImage.imageNamed($.NSImageNameActionTemplate);`,
+		`var tiff = image.TIFFRepresentation;`,
+		`pasteboard.setDataForType(tiff, $.NSPasteboardTypeTIFF);`,
+	)
+	envelope := runDarwinClipboardReadFunction(t, setup, path)
+	if envelope.Kind != "image" {
+		t.Fatalf("clipboard envelope = %#v, want image", envelope)
+	}
+	assertClipboardPNGFile(t, path)
+}
+
+func darwinClipboardTestPath(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Skip("requires the macOS pasteboard")
+	}
+	path := filepath.Join(t.TempDir(), "clipboard.png")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("reserve clipboard image path: %v", err)
+	}
+	return path
+}
+
+func namedDarwinPasteboardSetup(lines ...string) string {
+	return strings.Join(append([]string{
+		`var pasteboard = $.NSPasteboard.pasteboardWithUniqueName;`,
+		`pasteboard.clearContents;`,
+	}, lines...), "\n")
+}
+
+func assertClipboardPNGFile(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read clipboard image: %v", err)
+	}
+	if !bytes.HasPrefix(data, pngHeader[:]) {
+		t.Fatalf("clipboard image is not PNG: header=%v", data[:min(len(data), len(pngHeader))])
+	}
+}
+
+func runDarwinClipboardReadFunction(t *testing.T, setup string, path string) clipboardPlatformEnvelope {
+	t.Helper()
+	script := strings.Join([]string{
+		`ObjC.import("AppKit");`,
+		`ObjC.import("Foundation");`,
+		darwinClipboardReadFunction,
+		setup,
+		`var path = $.NSString.stringWithUTF8String(` + strconv.Quote(path) + `);`,
+		`JSON.stringify(kentReadClipboard(pasteboard, path));`,
+	}, "\n")
+	cmd := exec.Command("/usr/bin/osascript", "-l", "JavaScript", "-e", script)
+	output, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			t.Fatalf("run clipboard paste script: %v; stderr=%q", err, string(exitErr.Stderr))
+		}
+		t.Fatalf("run clipboard paste script: %v", err)
+	}
+	envelope, err := decodeClipboardPlatformEnvelope(output)
+	if err != nil {
+		t.Fatalf("decode clipboard paste output: %v; output_bytes=%d", err, len(output))
+	}
+	return envelope
+}
 
 func TestSystemClipboardPasterDarwinReturnsTextAndCleansReservedImagePath(t *testing.T) {
 	paster, runner, dir := newTestSystemClipboardPaster(t, "darwin")
