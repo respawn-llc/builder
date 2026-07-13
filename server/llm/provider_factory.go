@@ -24,6 +24,7 @@ type ProviderClientOptions struct {
 	HTTPClient                   *http.Client
 	OpenAIBaseURL                string
 	ModelVerbosity               string
+	ProviderIdentifier           *string
 	Store                        bool
 	ContextWindowTokens          int
 	ProviderCapabilitiesOverride *ProviderCapabilities
@@ -260,6 +261,9 @@ func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
 		transport.BaseURLExplicit = !IsOpenAIFirstPartyBaseURL(normalizedBaseURL)
 	}
 	transport.ModelVerbosity = strings.ToLower(strings.TrimSpace(opts.ModelVerbosity))
+	if opts.ProviderIdentifier != nil {
+		transport.ProviderIdentifier = *opts.ProviderIdentifier
+	}
 	if opts.ContextWindowTokens > 0 {
 		transport.ContextWindowTokens = opts.ContextWindowTokens
 	}

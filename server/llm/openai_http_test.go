@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"core/server/auth"
+	"core/shared/config"
 	"core/shared/toolspec"
 	"encoding/json"
 	"errors"
@@ -670,6 +671,37 @@ func TestBuildRequestOptions_OAuthAddsCodexHeaders(t *testing.T) {
 	}
 	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "")) != 3 {
 		t.Fatal("expected non-oauth options to include auth/caching headers")
+	}
+}
+
+func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
+	requestHeaders := make(chan http.Header, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestHeaders <- r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_identity_1",
+			"object":"response",
+			"output":[],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer server.Close()
+
+	transport := NewHTTPTransport(staticAuth{})
+	transport.BaseURL = server.URL
+	transport.Client = server.Client()
+	transport.ProviderIdentifier = "acme_agent"
+
+	if _, err := transport.Generate(context.Background(), OpenAIRequest{Model: "gpt-5"}); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	headers := <-requestHeaders
+	if got := headers.Get("originator"); got != "acme_agent" {
+		t.Fatalf("originator = %q, want acme_agent", got)
+	}
+	if got, want := headers.Get("User-Agent"), "acme_agent/"+config.Version; got != want {
+		t.Fatalf("User-Agent = %q, want %q", got, want)
 	}
 }
 

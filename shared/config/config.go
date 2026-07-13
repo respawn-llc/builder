@@ -131,6 +131,7 @@ type Settings struct {
 	ServerPort                       int
 	WebSearch                        string
 	ProviderOverride                 string
+	ProviderIdentifier               string
 	OpenAIBaseURL                    string
 	ProviderCapabilities             ProviderCapabilitiesOverride
 	Store                            bool
