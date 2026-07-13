@@ -1,19 +1,23 @@
 package runtime
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/rollbacktarget"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 )
 
 type transcriptRuntimeState struct {
-	mu        sync.Mutex
-	cwd       string
-	chat      *chatStore
-	liveTools *transcriptLiveToolLedger
+	mu                      sync.Mutex
+	cwd                     string
+	chat                    *chatStore
+	liveTools               *transcriptLiveToolLedger
+	latestRollbackCandidate *rollbacktarget.CandidateLocator
 }
 
 func newTranscriptRuntimeState(cwd string) *transcriptRuntimeState {
@@ -41,6 +45,27 @@ func (s *transcriptRuntimeState) WorkingDir() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return strings.TrimSpace(s.cwd)
+}
+
+func (s *transcriptRuntimeState) SetLatestRollbackCandidate(locator rollbacktarget.CandidateLocator) {
+	if s == nil {
+		return
+	}
+	if err := locator.Validate(); err != nil {
+		panic(fmt.Sprintf("set latest rollback candidate: %v", err))
+	}
+	s.mu.Lock()
+	s.latestRollbackCandidate = &locator
+	s.mu.Unlock()
+}
+
+func (s *transcriptRuntimeState) LatestRollbackCandidate() *rollbacktarget.CandidateLocator {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return valuecopy.Pointer(s.latestRollbackCandidate)
 }
 
 func (s *transcriptRuntimeState) chatProjection() *chatStore {

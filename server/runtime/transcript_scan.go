@@ -116,8 +116,9 @@ func (s *inMemoryTranscriptScan) visibleEntriesFromMessage(msg llm.Message, seq 
 	switch msg.Role {
 	case llm.RoleUser:
 		if entry, ok := visibleUserTranscriptEntry(msg); ok {
-			if strings.TrimSpace(entry.Role) == "user" {
-				entry.RollbackTargetID = rollbacktarget.EncodeUserMessageSeq(seq)
+			if strings.TrimSpace(entry.Role) == "user" && seq > 0 {
+				targetID := rollbacktarget.EncodeUserMessageSeq(seq)
+				entry.RollbackTargetID = &targetID
 			}
 			entries = append(entries, entry)
 		}

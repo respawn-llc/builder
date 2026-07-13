@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/rollbacktarget"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -61,6 +62,37 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 	if got := hydration.CommittedRows[0].Visibility; got != clientui.EntryVisibilityHidden {
 		t.Fatalf("hydration visibility = %q, want hidden", got)
+	}
+}
+
+func TestTranscriptPagePreservesRollbackTargetIdentity(t *testing.T) {
+	targetID := rollbacktarget.EncodeUserMessageSeq(91)
+	locator := &rollbacktarget.CandidateLocator{
+		UserMessageSeq:       91,
+		CandidatePageEndByte: 2048,
+	}
+	page := TranscriptPageFromSegment(
+		"58e121b5-30f7-4d0f-a1fa-fb3e6695e39c",
+		"name",
+		clientui.ConversationFreshnessEstablished,
+		runtime.TranscriptSegmentPage{
+			LatestRollbackCandidate: locator,
+			Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
+				Role:             "user",
+				Text:             "persisted user prompt",
+				RollbackTargetID: &targetID,
+			}}},
+		},
+	)
+
+	if len(page.Entries) != 1 || page.Entries[0].User == nil {
+		t.Fatalf("transcript page rows = %#v, want one user row", page.Entries)
+	}
+	if got := page.Entries[0].User.RollbackTargetID; got == nil || *got != targetID {
+		t.Fatalf("projected rollback target = %v, want exact target %q", got, targetID)
+	}
+	if page.LatestRollbackCandidate == nil || *page.LatestRollbackCandidate != *locator {
+		t.Fatalf("projected rollback candidate locator = %#v, want %#v", page.LatestRollbackCandidate, locator)
 	}
 }
 

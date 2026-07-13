@@ -35,6 +35,7 @@ type RuntimeClientProviderSettings struct {
 	ProviderOverride             string
 	OpenAIBaseURL                string
 	ModelVerbosity               config.ModelVerbosity
+	ProviderIdentifier           string
 	Store                        bool
 	ContextWindowTokens          int
 	Auth                         string
@@ -57,6 +58,7 @@ func runtimeClientProviderSettings(settings providerRuntimeSettings) RuntimeClie
 		ProviderOverride:             settings.ProviderOverride,
 		OpenAIBaseURL:                settings.OpenAIBaseURL,
 		ModelVerbosity:               settings.ModelVerbosity,
+		ProviderIdentifier:           settings.ProviderIdentifier,
 		Store:                        settings.Store,
 		ContextWindowTokens:          settings.ContextWindowTokens,
 		Auth:                         settings.Auth,

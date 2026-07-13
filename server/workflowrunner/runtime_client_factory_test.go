@@ -31,7 +31,7 @@ func TestWorkflowProviderCapabilitiesUseRuntimeClientFactory(t *testing.T) {
 
 	caps, resolvedClient, err := starter.workflowProviderCapabilities(context.Background(), launch.SessionPlan{
 		Store:          store,
-		ActiveSettings: config.Settings{Model: "gpt-5", ModelContextWindow: 200000},
+		ActiveSettings: config.Settings{Model: "gpt-5", ProviderIdentifier: "workflow-agent", ModelContextWindow: 200000},
 		EnabledTools:   []toolspec.ID{toolspec.ToolExecCommand},
 		WorkspaceRoot:  t.TempDir(),
 		Source:         config.SourceReport{Sources: map[string]string{"model": "test"}},
@@ -42,7 +42,10 @@ func TestWorkflowProviderCapabilitiesUseRuntimeClientFactory(t *testing.T) {
 	if caps.ProviderID != "scripted-workflow" || resolvedClient != client {
 		t.Fatalf("caps/client = %+v/%T, want factory client", caps, resolvedClient)
 	}
-	if got.Purpose != runtimewire.RuntimeClientPurposeWorkflow || got.SessionID != store.Meta().SessionID || got.ProviderSettings.Model != "gpt-5" {
+	if got.Purpose != runtimewire.RuntimeClientPurposeWorkflow ||
+		got.SessionID != store.Meta().SessionID ||
+		got.ProviderSettings.Model != "gpt-5" ||
+		got.ProviderSettings.ProviderIdentifier != "workflow-agent" {
 		t.Fatalf("factory request = %+v, want workflow purpose and plan data", got)
 	}
 }

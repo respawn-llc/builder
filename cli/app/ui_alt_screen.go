@@ -52,7 +52,10 @@ func (m *uiModel) transitionTranscriptModeWithOptions(options transcriptModeTran
 	if !options.suppressAltScreen && surfaceTransitionCmd == nil {
 		transitionCmd = m.altScreenCmdForModeTransition(prevMode, nextMode)
 	}
-	detailLoadCmd := m.detailLoadCmdForModeTransition(prevMode, nextMode)
+	detailLoadCmd := tea.Cmd(nil)
+	if !options.skipDetailWarmup {
+		detailLoadCmd = m.detailLoadCmdForModeTransition(prevMode, nextMode)
+	}
 	if clearCmd == nil && surfaceTransitionCmd == nil && transitionCmd == nil && detailLoadCmd == nil {
 		return nil
 	}

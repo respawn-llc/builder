@@ -45,6 +45,15 @@ type SetDetailTranscriptPageMsg struct {
 
 type ResetDetailTranscriptMsg struct{}
 
+type RestoreDetailPresentationMsg struct {
+	Snapshot DetailPresentationSnapshot
+}
+
+type SelectDetailTranscriptRollbackTargetMsg struct {
+	RollbackTargetID string
+	Center           bool
+}
+
 type DetailTranscriptPageDirection uint8
 
 const (
@@ -148,6 +157,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyDetailTranscriptPage(msg.Page, msg.Anchor, msg.PrependedEntriesCount, msg.TrimmedFrontEntries)
 	case ResetDetailTranscriptMsg:
 		m.resetDetailTranscript()
+	case RestoreDetailPresentationMsg:
+		m.restoreDetailPresentation(msg.Snapshot)
+	case SelectDetailTranscriptRollbackTargetMsg:
+		m.selectDetailRollbackTarget(msg.RollbackTargetID, msg.Center)
 	case tea.KeyMsg:
 		if m.mode == ModeDetail {
 			switch msg.Type {

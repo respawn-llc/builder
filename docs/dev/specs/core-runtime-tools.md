@@ -174,6 +174,7 @@
 - Effective reviewer and subagent context windows must be at least `40000` or the server crashes with config validation failure.
 - `context_compaction_threshold_tokens < model_context_window` is required or the server crashes with config validation failure.
 - OpenAI Responses API `store` is configurable with default `false`.
+- Root-level `provider_identifier` defaults to `kent` and must be a non-empty HTTP product token. OpenAI-family model-provider requests use it for the `originator` header and for the `<provider_identifier>/<Kent version>` `User-Agent`; the same resolved value applies to main, reviewer, workflow, and subagent clients. It is process configuration rather than persisted session-contract data, so resumed sessions adopt the active value after restart. OAuth bootstrap, subscription-status, and update-check traffic are excluded.
 - `tools.web_search` is enabled by default; `web_search` selects provider-native search (`native`) or disabled (`off`).
 - `tools.view_image` is enabled by default and advertised only to multimodal-capable models.
 

@@ -318,25 +318,25 @@ func (s dormantSessionSnapshot) TranscriptPage(ctx context.Context, req clientui
 	meta := s.store.Meta()
 	freshness := runtimeview.ConversationFreshnessFromSession(s.store.ConversationFreshness())
 	cacheWarningMode := s.source.cacheWarningModeOrDefault()
+	entry, err := s.source.dormant.get(ctx, s.store)
+	if err != nil {
+		return clientui.TranscriptPage{}, err
+	}
 	if req.NewerCursor != nil {
 		segment, err := runtime.TranscriptSegmentPageForwardFromStore(s.store, *req.NewerCursor, cacheWarningMode)
 		if err != nil {
 			return clientui.TranscriptPage{}, err
 		}
-		return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, segment), nil
+		return entry.transcriptPage(meta, freshness, segment), nil
 	}
 	if req.Cursor == nil {
-		entry, err := s.source.dormant.get(ctx, s.store)
-		if err != nil {
-			return clientui.TranscriptPage{}, err
-		}
 		return entry.newestSegmentPage(meta, freshness), nil
 	}
 	segment, err := runtime.TranscriptSegmentPageFromStore(s.store, *req.Cursor, cacheWarningMode)
 	if err != nil {
 		return clientui.TranscriptPage{}, err
 	}
-	return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, segment), nil
+	return entry.transcriptPage(meta, freshness, segment), nil
 }
 
 func (s dormantSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {

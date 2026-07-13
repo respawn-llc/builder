@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -140,7 +141,31 @@ func TestForkAtUserMessageOutOfRangeCleansUpChild(t *testing.T) {
 	if _, _, err := ForkAtUserMessage(parent, 999999, "fork"); err == nil {
 		t.Fatal("expected out-of-range fork to fail")
 	}
+	assertOnlyForkParentSessionDir(t, root, parent)
+}
 
+func TestForkAtUserMessageRejectsMalformedHistoryReplacement(t *testing.T) {
+	root := t.TempDir()
+	parent := newSessionTestStoreAt(t, root)
+	if _, _, err := parent.AppendEvent("step", "message", userMessagePayload(t, "before malformed history")); err != nil {
+		t.Fatalf("append first user message: %v", err)
+	}
+	if _, _, err := parent.AppendEvent("step", "history_replaced", "malformed history replacement"); err != nil {
+		t.Fatalf("append malformed history replacement: %v", err)
+	}
+	target, _, err := parent.AppendEvent("step", "message", userMessagePayload(t, "fork target"))
+	if err != nil {
+		t.Fatalf("append fork target: %v", err)
+	}
+
+	if _, _, err := ForkAtUserMessage(parent, target.Seq, "fork"); !errors.Is(err, errDecodeForkHistoryReplacement) {
+		t.Fatalf("fork error = %v, want %v", err, errDecodeForkHistoryReplacement)
+	}
+	assertOnlyForkParentSessionDir(t, root, parent)
+}
+
+func assertOnlyForkParentSessionDir(t *testing.T, root string, parent *Store) {
+	t.Helper()
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatalf("read container dir: %v", err)

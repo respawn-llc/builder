@@ -56,11 +56,13 @@ func TestInferProviderFromModel(t *testing.T) {
 
 func TestNewProviderClient_OpenAI(t *testing.T) {
 	httpClient := &http.Client{Timeout: 7 * time.Second}
+	providerIdentifier := "factory-agent"
 	client, err := NewProviderClient(ProviderClientOptions{
-		Model:          "gpt-5.3-codex",
-		Auth:           providerTestAuth{},
-		HTTPClient:     httpClient,
-		ModelVerbosity: "HIGH",
+		Model:              "gpt-5.3-codex",
+		Auth:               providerTestAuth{},
+		HTTPClient:         httpClient,
+		ModelVerbosity:     "HIGH",
+		ProviderIdentifier: &providerIdentifier,
 	})
 	if err != nil {
 		t.Fatalf("new provider client: %v", err)
@@ -78,6 +80,9 @@ func TestNewProviderClient_OpenAI(t *testing.T) {
 	}
 	if transport.ModelVerbosity != "high" {
 		t.Fatalf("expected normalized model verbosity, got %q", transport.ModelVerbosity)
+	}
+	if transport.ProviderIdentifier != "factory-agent" {
+		t.Fatalf("provider identifier = %q, want factory-agent", transport.ProviderIdentifier)
 	}
 }
 

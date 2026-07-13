@@ -26,8 +26,8 @@ func (t *HTTPTransport) serviceBaseURL(mode OpenAIAuthMode) string {
 
 func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMode, sessionID string) []option.RequestOption {
 	opts := []option.RequestOption{
-		option.WithHeader("originator", defaultOriginator),
-		option.WithHeader("User-Agent", defaultUserAgent),
+		option.WithHeader("originator", t.ProviderIdentifier),
+		option.WithHeader("User-Agent", t.providerUserAgent()),
 	}
 	if strings.TrimSpace(authHeader) != "" {
 		opts = append([]option.RequestOption{option.WithHeader("Authorization", authHeader)}, opts...)

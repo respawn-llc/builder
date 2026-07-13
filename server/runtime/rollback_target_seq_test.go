@@ -32,16 +32,16 @@ func TestPostCompactionSegmentRollbackTargetEncodesGlobalEventSeq(t *testing.T) 
 		t.Fatal("expected newest segment to report history above the compaction boundary")
 	}
 
-	var targetID string
+	var targetID *string
 	for _, entry := range page.Snapshot.Entries {
 		if entry.Role == "user" && entry.Text == "u2" {
 			targetID = entry.RollbackTargetID
 		}
 	}
-	if targetID == "" {
+	if targetID == nil {
 		t.Fatal("expected post-compaction user entry to carry a rollback target id")
 	}
-	seq, err := rollbacktarget.DecodeUserMessageSeq(targetID)
+	seq, err := rollbacktarget.DecodeUserMessageSeq(*targetID)
 	if err != nil {
 		t.Fatalf("decode rollback target id: %v", err)
 	}

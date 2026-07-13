@@ -35,6 +35,7 @@ Selecting a non-default root also makes client attach root-aware: a client only 
 
 ```toml
 model = "gpt-5.6-sol"
+provider_identifier = "kent"
 thinking_level = "medium" # low, medium, high, xhigh, max, ultra
 model_verbosity = "low" # or "medium" / "high"
 # system_prompt_file = "SYSTEM.md" # relative to this config.toml directory
@@ -131,6 +132,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `server_port` | int | `53082` | `KENT_SERVER_PORT` |  | Exact TCP app-server port Kent will dial or listen on. Must match across clients attached to the same persistence root. Same-machine Unix socket optimization, when supported, is additive only and does not override an explicit TCP target. |
 | `web_search` | string | `native` | `KENT_WEB_SEARCH` |  | Web search backend. Allowed: `off`, `native`. `custom` (e.g. Brave Search) is not implemented yet, on the roadmap. |
 | `provider_override` | string | `""` | `KENT_PROVIDER_OVERRIDE` | `kent run --provider-override` | Forces provider family for custom or alias model names. Allowed: `openai`, `anthropic`. Requires an explicit `model` override. |
+| `provider_identifier` | string | `kent` | `KENT_PROVIDER_IDENTIFIER` |  | Sets the `originator` header and the `<provider_identifier>/<Kent version>` User-Agent on OpenAI, ChatGPT Codex, and OpenAI-compatible model-provider requests. The value must be a non-empty HTTP product token, such as `kent`, `my-agent`, or `acme_codex`. A restarted server applies the active value to resumed sessions. |
 | `openai_base_url` | string | `""` | `KENT_OPENAI_BASE_URL` | `kent run --openai-base-url` | OpenAI-compatible base URL. Must be used with `provider_override=openai` or with no explicit provider override. Cannot be changed mid-session. |
 | `store` | bool | `false` | `KENT_STORE` |  | Sets OpenAI Responses `store=true` for main model requests. |
 | `allow_non_cwd_edits` | bool | `false` | `KENT_ALLOW_NON_CWD_EDITS` |  | Lets first-class file edit tools edit files outside the workspace root. This is not sandboxing - model can still bypass this easily. |

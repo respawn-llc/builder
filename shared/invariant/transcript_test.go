@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/rollbacktarget"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -11,11 +12,12 @@ import (
 
 func TestValidateTranscriptCommittedRow(t *testing.T) {
 	streamID := uuid.New()
+	rollbackTargetID := rollbacktarget.EncodeUserMessageSeq(12)
 	validRows := []clientui.TranscriptCommittedRow{
 		{
 			Visibility: clientui.EntryVisibilityOngoing,
 			Kind:       clientui.TranscriptRowUser,
-			User:       &clientui.TranscriptUserRow{Text: "user"},
+			User:       &clientui.TranscriptUserRow{Text: "user", RollbackTargetID: &rollbackTargetID},
 		},
 		{
 			Visibility: clientui.EntryVisibilityOngoingCollapsed,
@@ -43,6 +45,7 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 	}
 
 	zeroStreamID := uuid.Nil
+	invalidRollbackTargetID := "not-a-rollback-target"
 	invalidRows := []clientui.TranscriptCommittedRow{
 		{Visibility: clientui.EntryVisibilityDetail, Integrity: transcript.RowIntegrity(255), Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{}},
 		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowUser},
@@ -52,6 +55,8 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{}, User: &clientui.TranscriptUserRow{}},
 		{Visibility: clientui.EntryVisibilityAuto, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{}},
 		{Visibility: clientui.EntryVisibility("unknown"), Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{}},
+		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "user", RollbackTargetID: &invalidRollbackTargetID}},
+		{Visibility: clientui.EntryVisibilityDetail, Integrity: transcript.RowIntegrityRecoverableMalformed, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{RollbackTargetID: &invalidRollbackTargetID}},
 	}
 	for _, row := range invalidRows {
 		if err := ValidateTranscriptCommittedRow(row); err == nil {
@@ -89,6 +94,10 @@ func TestValidateTranscriptPage(t *testing.T) {
 		HasMoreAbove: true,
 		NewerCursor:  &newerCursor,
 		HasMoreBelow: true,
+		LatestRollbackCandidate: &rollbacktarget.CandidateLocator{
+			UserMessageSeq:       7,
+			CandidatePageEndByte: 15,
+		},
 		Entries: []clientui.TranscriptCommittedRow{
 			{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "valid"}},
 			{Visibility: clientui.EntryVisibilityHidden, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{}},
@@ -128,6 +137,18 @@ func TestValidateTranscriptPage(t *testing.T) {
 		{SessionID: uuid.NewString(), NewerCursor: &negativeCursor, HasMoreBelow: true},
 		{SessionID: uuid.NewString(), HasMoreBelow: true},
 		{SessionID: uuid.NewString(), NewerCursor: &newerCursor},
+		{
+			SessionID: uuid.NewString(),
+			LatestRollbackCandidate: &rollbacktarget.CandidateLocator{
+				CandidatePageEndByte: 15,
+			},
+		},
+		{
+			SessionID: uuid.NewString(),
+			LatestRollbackCandidate: &rollbacktarget.CandidateLocator{
+				UserMessageSeq: 7,
+			},
+		},
 	}
 	for _, page := range invalidPages {
 		if err := ValidateTranscriptPage(page); err == nil {

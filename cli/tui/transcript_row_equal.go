@@ -21,7 +21,9 @@ func transcriptUserRowEqual(left, right *clientui.TranscriptUserRow) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
-	return *left == *right
+	return left.Text == right.Text &&
+		left.CondensedText == right.CondensedText &&
+		pointersEqual(left.RollbackTargetID, right.RollbackTargetID)
 }
 
 func transcriptAssistantRowEqual(left, right *clientui.TranscriptAssistantRow) bool {

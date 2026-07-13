@@ -176,6 +176,7 @@ func validLaunchSettings(model string) config.Settings {
 		NotificationMethod:               "auto",
 		Theme:                            "auto",
 		WebSearch:                        "native",
+		ProviderIdentifier:               config.Command,
 		ServerHost:                       "127.0.0.1",
 		ServerPort:                       53082,
 		Reviewer:                         config.ReviewerSettings{Frequency: "edits", Model: model, ThinkingLevel: "medium", ModelContextWindow: 272000, TimeoutSeconds: 60},

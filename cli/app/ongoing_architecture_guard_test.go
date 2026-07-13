@@ -46,6 +46,28 @@ type badMirror struct {
 		assertOngoingArchitectureViolation(t, violations, ongoingArchitectureViolationCommittedRowsRetained)
 	})
 
+	t.Run("committed row mirror nested behind projection", func(t *testing.T) {
+		source := `package app
+
+import "core/shared/clientui"
+
+type detailEntry struct {
+	row clientui.TranscriptCommittedRow
+}
+
+type badProjection struct {
+	entries []detailEntry
+}
+
+type DetailPresentationSnapshot struct {
+	projection badProjection
+}
+`
+		pkgs, root := parseOngoingArchitectureFixture(t, "cli/app/ui.go", source)
+		violations := collectOngoingArchitectureViolations(pkgs, root)
+		assertOngoingArchitectureViolation(t, violations, ongoingArchitectureViolationCommittedRowsRetained)
+	})
+
 	t.Run("bounded detail owner", func(t *testing.T) {
 		source := `package app
 
@@ -154,7 +176,10 @@ func committedRowStateViolations(pkg *packages.Package, spec *ast.TypeSpec, relP
 	}
 	var violations []ongoingArchitectureViolation
 	for _, field := range structType.Fields.List {
-		if !isCommittedRowCollectionType(pkg.TypesInfo.TypeOf(field.Type)) {
+		fieldType := pkg.TypesInfo.TypeOf(field.Type)
+		if !isCommittedRowCollectionType(fieldType) &&
+			!(spec.Name.Name == "DetailPresentationSnapshot" &&
+				typeTransitivelyContainsCommittedRow(fieldType, make(map[types.Type]struct{}))) {
 			continue
 		}
 		if len(field.Names) == 0 {
@@ -174,6 +199,38 @@ func committedRowStateViolations(pkg *packages.Package, spec *ast.TypeSpec, relP
 func isCommittedRowCollectionType(typ types.Type) bool {
 	slice, ok := typ.(*types.Slice)
 	return ok && typeName(slice.Elem()) == "core/shared/clientui.TranscriptCommittedRow"
+}
+
+func typeTransitivelyContainsCommittedRow(typ types.Type, seen map[types.Type]struct{}) bool {
+	if typeName(typ) == "core/shared/clientui.TranscriptCommittedRow" {
+		return true
+	}
+	if _, visited := seen[typ]; visited {
+		return false
+	}
+	seen[typ] = struct{}{}
+	switch typed := typ.(type) {
+	case *types.Alias:
+		return typeTransitivelyContainsCommittedRow(typed.Rhs(), seen)
+	case *types.Named:
+		return typeTransitivelyContainsCommittedRow(typed.Underlying(), seen)
+	case *types.Pointer:
+		return typeTransitivelyContainsCommittedRow(typed.Elem(), seen)
+	case *types.Struct:
+		for index := 0; index < typed.NumFields(); index++ {
+			if typeTransitivelyContainsCommittedRow(typed.Field(index).Type(), seen) {
+				return true
+			}
+		}
+	case *types.Slice:
+		return typeTransitivelyContainsCommittedRow(typed.Elem(), seen)
+	case *types.Array:
+		return typeTransitivelyContainsCommittedRow(typed.Elem(), seen)
+	case *types.Map:
+		return typeTransitivelyContainsCommittedRow(typed.Key(), seen) ||
+			typeTransitivelyContainsCommittedRow(typed.Elem(), seen)
+	}
+	return false
 }
 
 func isSanctionedDetailCommittedRowState(packagePath, ownerType, fieldName string) bool {

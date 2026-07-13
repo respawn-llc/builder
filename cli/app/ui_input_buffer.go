@@ -24,7 +24,7 @@ func (m *uiModel) replaceMainInput(text string, cursor int) {
 }
 
 func (m *uiModel) clearInput() {
-	m.replaceMainInput("", -1)
+	m.replaceMainInput("", 0)
 	m.resetPromptHistoryNavigation()
 }
 

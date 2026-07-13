@@ -30,16 +30,21 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 	meta := e.store.Meta()
 	recoveredHandoff := newPersistedHandoffRecovery()
 	reminderIssued := meta.CompactionSoonReminderIssued
-	activeListEvents, err := e.store.ReadEventsBackwardUntil(isCompactionSegmentBoundary)
+	activeWindow, err := e.store.ReadNewestSegmentBackward(isCompactionSegmentBoundary)
 	if err != nil {
 		return err
 	}
+	activeListEvents := activeWindow.Events
+	var rollbackLocator rollbackCandidateLocatorTracker
 	for _, evt := range activeListEvents {
 		switch evt.Kind {
 		case "message":
 			var msg llm.Message
 			if err := json.Unmarshal(evt.Payload, &msg); err != nil {
 				return fmt.Errorf("decode message event: %w", err)
+			}
+			if err := rollbackLocator.ObserveMessage(evt.Seq, msg); err != nil {
+				return err
 			}
 			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendMessage(msg)
 			recoveredHandoff.ApplyMessage(msg)
@@ -89,10 +94,18 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				e.compactionRuntimeState().IncrementCount()
 			}
 			e.compactionRuntimeState().SetLastWorkflowRunID(payload.WorkflowRunID)
+			rollbackLocator.ObserveHistoryReplacement(payload)
 			recoveredHandoff.ClearSatisfiedByCompaction()
 			recoveredHandoff.SeedFutureMessage(payload.PendingHandoffFutureMessage)
 			reminderIssued = false
 		}
+	}
+	restoredRollbackCandidate, err := rollbackLocator.Resolve(activeWindow.EndOffset)
+	if err != nil {
+		return fmt.Errorf("restore latest rollback candidate: %w", err)
+	}
+	if restoredRollbackCandidate != nil {
+		e.transcriptRuntimeState().SetLatestRollbackCandidate(*restoredRollbackCandidate)
 	}
 	e.compactionRuntimeState().SetSoonReminderIssued(reminderIssued)
 	if err := e.store.SetCompactionSoonReminderIssued(reminderIssued); err != nil {

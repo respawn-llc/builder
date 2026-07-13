@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"core/cli/tui"
 	"core/shared/clientui"
 
@@ -54,15 +56,36 @@ type uiProcessListState struct {
 type uiRollbackPhase string
 
 const (
-	uiRollbackPhaseInactive  uiRollbackPhase = "inactive"
-	uiRollbackPhaseSelection uiRollbackPhase = "selection"
-	uiRollbackPhaseEditing   uiRollbackPhase = "editing"
+	uiRollbackPhaseInactive               uiRollbackPhase = "inactive"
+	uiRollbackPhaseAwaitingNewest         uiRollbackPhase = "awaiting_newest"
+	uiRollbackPhaseAwaitingOlderCandidate uiRollbackPhase = "awaiting_older_candidate"
+	uiRollbackPhaseSelection              uiRollbackPhase = "selection"
+	uiRollbackPhaseEditing                uiRollbackPhase = "editing"
 )
+
+type rollbackCandidate struct {
+	RollbackTargetID string
+	Text             string
+}
+
+type uiRollbackPageNavigation struct {
+	direction                tui.DetailTranscriptPageDirection
+	anchorRollbackTargetID   string
+	request                  clientui.TranscriptPageRequest
+	deadline                 time.Time
+	skippedCandidateFreePage bool
+}
 
 type uiRollbackState struct {
 	phase                     uiRollbackPhase
-	suppressedAlternateScroll bool
-	selection                 int
+	restoreTranscriptMode     *tui.Mode
+	restoreDetailTranscript   *uiDetailTranscriptWindow
+	restoreDetailPresentation *tui.DetailPresentationSnapshot
+	candidates                []rollbackCandidate
+	selectedTargetID          *string
+	activationTargetID        *string
+	editingCandidate          *rollbackCandidate
+	pendingNavigation         *uiRollbackPageNavigation
 }
 
 type uiStatusOverlayState struct {
@@ -102,7 +125,19 @@ func (s uiRollbackState) isEditing() bool {
 }
 
 func (s uiRollbackState) isActive() bool {
-	return s.phase != uiRollbackPhaseInactive
+	return s.isSelecting() || s.isEditing()
+}
+
+func (s uiRollbackState) isAwaitingNewest() bool {
+	return s.phase == uiRollbackPhaseAwaitingNewest
+}
+
+func (s uiRollbackState) isAwaitingOlderCandidate() bool {
+	return s.phase == uiRollbackPhaseAwaitingOlderCandidate
+}
+
+func (s uiRollbackState) isAwaitingActivation() bool {
+	return s.isAwaitingNewest() || s.isAwaitingOlderCandidate()
 }
 
 type uiInputModeState struct {

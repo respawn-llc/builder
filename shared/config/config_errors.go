@@ -39,6 +39,7 @@ var (
 	// Validation-rule sentinels for individual settings fields.
 	errProviderOverrideRequiresModel      = newConfigError("provider_override requires an explicit model override")
 	errInvalidProviderOverride            = newConfigError("invalid provider_override")
+	errInvalidProviderIdentifier          = newConfigError("invalid provider_identifier")
 	errOpenAIBaseURLConflict              = newConfigError("provider_override conflicts with openai_base_url")
 	errProviderCapabilitiesNeedID         = newConfigError("provider_capabilities.provider_id must not be empty when provider capability overrides are set")
 	errReviewerProviderCapabilitiesNeedID = newConfigError("reviewer.provider_capabilities.provider_id must not be empty when reviewer provider capability overrides are set")

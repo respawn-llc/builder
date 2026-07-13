@@ -10,6 +10,7 @@ import (
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/valuecopy"
 )
 
 const dormantTranscriptCacheMaxEntries = 16
@@ -160,7 +161,16 @@ func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clien
 }
 
 func (e dormantTranscriptCacheEntry) newestSegmentPage(meta session.Meta, freshness clientui.ConversationFreshness) clientui.TranscriptPage {
-	return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, e.newestSegment)
+	return e.transcriptPage(meta, freshness, e.newestSegment)
+}
+
+func (e dormantTranscriptCacheEntry) transcriptPage(
+	meta session.Meta,
+	freshness clientui.ConversationFreshness,
+	segment runtime.TranscriptSegmentPage,
+) clientui.TranscriptPage {
+	segment.LatestRollbackCandidate = valuecopy.Pointer(e.newestSegment.LatestRollbackCandidate)
+	return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, segment)
 }
 
 func (e dormantTranscriptCacheEntry) newestSegmentTailEntries() []runtime.ChatEntry {

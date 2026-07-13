@@ -1,6 +1,10 @@
 package tui
 
-import "maps"
+import (
+	"fmt"
+	"maps"
+	"strings"
+)
 
 import tea "github.com/charmbracelet/bubbletea"
 
@@ -196,6 +200,55 @@ func (m *Model) setSelectedDetailIndex(index int) {
 
 func (m *Model) clearSelectedDetailIndex() {
 	m.selected = nil
+}
+
+func (m *Model) selectDetailRollbackTarget(rollbackTargetID string, center bool) {
+	if strings.TrimSpace(rollbackTargetID) == "" {
+		panic("detail rollback selection requires a rollback target id")
+	}
+	selected := 0
+	found := false
+	for index, entry := range m.detailProjection.entries {
+		row := entry.row()
+		if row.User == nil || row.User.RollbackTargetID == nil || *row.User.RollbackTargetID != rollbackTargetID {
+			continue
+		}
+		if found {
+			panic(fmt.Sprintf("detail rollback target %q matched multiple transcript rows", rollbackTargetID))
+		}
+		selected = index
+		found = true
+	}
+	if !found {
+		m.clearSelectedDetailIndex()
+		return
+	}
+	m.setSelectedDetailIndex(selected)
+	if center {
+		m.centerSelectedDetailEntry()
+		return
+	}
+	m.scrollSelectedDetailEntryIntoView()
+}
+
+func (m *Model) centerSelectedDetailEntry() {
+	if m == nil {
+		return
+	}
+	selected, ok := m.selectedDetailIndex()
+	if !ok {
+		return
+	}
+	lineRange, ok := m.detailEntryLineRange(selected)
+	if !ok {
+		return
+	}
+	selectedCenter := (lineRange.first + lineRange.last) / 2
+	m.detailScroll = clampInt(
+		selectedCenter-maxInt(1, m.viewportLines)/2,
+		0,
+		m.maxDetailScroll(),
+	)
 }
 
 func (m Model) detailNavigationViewportLines() []detailProjectedLine {
