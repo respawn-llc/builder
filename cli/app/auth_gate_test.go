@@ -227,14 +227,11 @@ func TestResolveSessionActionLogoutUsesBootstrapAuthInteractor(t *testing.T) {
 	if pickerCalls != 1 {
 		t.Fatalf("expected auth picker to be called once, got %d", pickerCalls)
 	}
-	if !resolved.ShouldContinue {
-		t.Fatal("expected logout flow to continue after reauth")
+	if got := requireSessionOpenDestination(t, resolved); got != store.Meta().SessionID {
+		t.Fatalf("expected session to continue in place, got %q", got)
 	}
-	if resolved.NextSessionID != store.Meta().SessionID {
-		t.Fatalf("expected session to continue in place, got %q", resolved.NextSessionID)
-	}
-	if resolved.InitialPrompt != "" || resolved.InitialInput.TransitionInput != "" || resolved.ParentSessionID != "" || resolved.ForceNewSession {
-		t.Fatalf("unexpected logout transition values prompt=%q input=%q parent=%q forceNew=%t", resolved.InitialPrompt, resolved.InitialInput.TransitionInput, resolved.ParentSessionID, resolved.ForceNewSession)
+	if resolved.InitialPrompt != nil || resolved.InitialInput.TransitionInput != "" {
+		t.Fatalf("unexpected logout transition values prompt=%+v input=%q", resolved.InitialPrompt, resolved.InitialInput.TransitionInput)
 	}
 
 	state, err := mgr.Load(ctx)
@@ -282,12 +279,7 @@ func TestResolveSessionActionLogoutAllowsNilStore(t *testing.T) {
 	if pickerCalls != 1 {
 		t.Fatalf("expected auth picker to be called once, got %d", pickerCalls)
 	}
-	if !resolved.ShouldContinue {
-		t.Fatal("expected logout flow to continue after reauth")
-	}
-	if resolved.NextSessionID != "" {
-		t.Fatalf("expected no next session id without a current store, got %q", resolved.NextSessionID)
-	}
+	requireSessionPickerDestination(t, resolved)
 }
 
 func TestResolveSessionActionLogoutCancelPreservesStoredAuth(t *testing.T) {
@@ -394,7 +386,7 @@ func TestResolveSessionActionLogoutRetryPreservesStoredAuthUntilSuccess(t *testi
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if !resolved.ShouldContinue {
+	if resolved == nil {
 		t.Fatal("expected successful retry to continue session")
 	}
 	if pickCalls != 2 {
@@ -626,7 +618,7 @@ func TestResolveSessionActionLoginSkipClearsStoredAuthOnOptionalAuthSetup(t *tes
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if !resolved.ShouldContinue {
+	if resolved == nil {
 		t.Fatal("expected login skip flow to continue")
 	}
 

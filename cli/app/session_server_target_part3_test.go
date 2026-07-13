@@ -49,8 +49,15 @@ func TestStartSessionServerUsesConfiguredDaemonForSessionLifecycleDraftPersisten
 	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "saved draft"}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
-	if got := sessionLaunchInitialInputFromServer(context.Background(), server, plan.SessionID, "transition draft"); got != "saved draft" {
-		t.Fatalf("sessionLaunchInitialInputFromServer = %q, want saved draft", got)
+	initialState, err := sessionLaunchInitialStateFromServer(context.Background(), server, plan.SessionID, sessionInitialInputDirective{
+		TransitionInput: "transition draft",
+		Precedence:      sessionInitialInputPreferStoredDraft,
+	})
+	if err != nil {
+		t.Fatalf("sessionLaunchInitialStateFromServer: %v", err)
+	}
+	if initialState.Input != "saved draft" {
+		t.Fatalf("sessionLaunchInitialStateFromServer input = %q, want saved draft", initialState.Input)
 	}
 	resolved, err := server.SessionLifecycleClient().ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: uuid.NewString(),
@@ -421,8 +428,15 @@ func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServe
 	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "workflow draft"}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
-	if got := sessionLaunchInitialInputFromServer(context.Background(), server, plan.SessionID, "transition draft"); got != "workflow draft" {
-		t.Fatalf("sessionLaunchInitialInputFromServer = %q, want workflow draft", got)
+	initialState, err := sessionLaunchInitialStateFromServer(context.Background(), server, plan.SessionID, sessionInitialInputDirective{
+		TransitionInput: "transition draft",
+		Precedence:      sessionInitialInputPreferStoredDraft,
+	})
+	if err != nil {
+		t.Fatalf("sessionLaunchInitialStateFromServer: %v", err)
+	}
+	if initialState.Input != "workflow draft" {
+		t.Fatalf("sessionLaunchInitialStateFromServer input = %q, want workflow draft", initialState.Input)
 	}
 }
 
