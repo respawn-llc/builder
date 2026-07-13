@@ -27,6 +27,7 @@ export type {
   BoardCard,
   BoardColumn,
   BoardGroup,
+  MarkdownPreview,
   PendingAsk,
   ProjectBinding,
   ProjectDeleteResponse,

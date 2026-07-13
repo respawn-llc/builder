@@ -326,16 +326,24 @@ function TaskCard({
           tabIndex={0}
         >
           <span className="flex min-w-0 items-center justify-between gap-[var(--space-2)] text-left text-[var(--color-on-island)]">
-            <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">{card.shortID}</span>
+            <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">
+              {card.shortID}
+            </span>
             <span className="min-w-0 truncate text-right text-sm text-[var(--color-muted)]">
               {formatRelativeTime(card.updatedAt)}
             </span>
           </span>
-          <strong className="task-card-title text-left text-[var(--color-on-island)]" data-testid="task-card-title">
+          <strong
+            className="task-card-title text-left text-[var(--color-on-island)]"
+            data-testid="task-card-title"
+          >
             {card.title}
           </strong>
-          <span className="task-card-body-preview text-sm text-[var(--color-muted)]" data-testid="task-card-body">
-            <MarkdownPlainText value={card.body} />
+          <span
+            className="task-card-body-preview text-sm text-[var(--color-muted)]"
+            data-testid="task-card-body"
+          >
+            <MarkdownPlainText value={card.preview.markdown} />
           </span>
           <div
             className="task-card-footer flex items-start justify-between gap-[var(--space-2)]"
@@ -353,7 +361,10 @@ function TaskCard({
                 />
               ) : null}
               {card.workspaceChipLabel !== null ? (
-                <span className="task-card-chip-slot inline-flex items-center" data-testid="task-card-chip-slot">
+                <span
+                  className="task-card-chip-slot inline-flex items-center"
+                  data-testid="task-card-chip-slot"
+                >
                   <Badge tone="neutral">{card.workspaceChipLabel}</Badge>
                 </span>
               ) : null}

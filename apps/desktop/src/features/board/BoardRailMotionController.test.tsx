@@ -10,7 +10,12 @@ import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 const animateElementMock = vi.fn(() => ({ finished: Promise.resolve() }));
 
 // ---- controllable fake board-node-cards query ----
-type NodeSnapshot = Readonly<{ cards: readonly BoardCard[]; isFetching: boolean; isPending: boolean; hasData: boolean }>;
+type NodeSnapshot = Readonly<{
+  cards: readonly BoardCard[];
+  isFetching: boolean;
+  isPending: boolean;
+  hasData: boolean;
+}>;
 const emptyNode: NodeSnapshot = { cards: [], isFetching: false, isPending: false, hasData: true };
 const nodeStore = new Map<string, NodeSnapshot>();
 const listeners = new Set<() => void>();
@@ -90,7 +95,14 @@ function board(backlogCount: number, reconCount: number): WorkflowBoard {
     workflows: [workflow],
     groups: [],
     columns: [
-      column({ id: "backlog", key: "backlog", kind: "backlog", name: "Backlog", isBacklog: true, taskCount: backlogCount }),
+      column({
+        id: "backlog",
+        key: "backlog",
+        kind: "backlog",
+        name: "Backlog",
+        isBacklog: true,
+        taskCount: backlogCount,
+      }),
       column({ id: "recon", key: "recon", name: "Recon", taskCount: reconCount }),
     ],
     generatedAt: 0,
@@ -102,10 +114,17 @@ function card(over: Partial<BoardCard>): BoardCard {
     id: "task-1",
     shortID: "T-1",
     title: "Task",
-    body: "Body",
+    preview: { markdown: "Body", truncated: false },
     workflowID: "wf1",
     activeNodeIDs: ["backlog"],
-    sourceWorkspace: { id: "w", name: "Main", rootPath: "", availability: "available", isPrimary: true, updatedAt: 0 },
+    sourceWorkspace: {
+      id: "w",
+      name: "Main",
+      rootPath: "",
+      availability: "available",
+      isPrimary: true,
+      updatedAt: 0,
+    },
     status: { kind: "backlog", nativeState: "", nodeIDs: [], runIDs: [], attentionTypes: [] },
     actions: {
       canStart: true,

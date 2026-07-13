@@ -99,10 +99,13 @@ const selectionRequiredResponseSchema = z
     selection_required: selectionRequirementSchema,
   })
   .strict()
-  .transform((value) => ({
-    outcome: value.outcome,
-    selectionRequired: value.selection_required,
-  }) as const);
+  .transform(
+    (value) =>
+      ({
+        outcome: value.outcome,
+        selectionRequired: value.selection_required,
+      }) as const,
+  );
 
 export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discriminatedUnion("outcome", [
   z
@@ -117,14 +120,17 @@ export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discrimin
         .strict(),
     })
     .strict()
-    .transform((value) => ({
-      outcome: value.outcome,
-      applied: {
-        transitionID: value.applied.transition_id,
-        placementID: value.applied.placement_id,
-        runID: value.applied.run_id,
-      },
-    }) as const),
+    .transform(
+      (value) =>
+        ({
+          outcome: value.outcome,
+          applied: {
+            transitionID: value.applied.transition_id,
+            placementID: value.applied.placement_id,
+            runID: value.applied.run_id,
+          },
+        }) as const,
+    ),
   selectionRequiredResponseSchema,
 ]);
 
@@ -142,15 +148,18 @@ export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminat
         .strict(),
     })
     .strict()
-    .transform((value) => ({
-      outcome: value.outcome,
-      applied: {
-        transitionID: value.applied.transition_id,
-        state: value.applied.state,
-        placementIDs: value.applied.placement_ids,
-        runIDs: value.applied.run_ids,
-      },
-    }) as const),
+    .transform(
+      (value) =>
+        ({
+          outcome: value.outcome,
+          applied: {
+            transitionID: value.applied.transition_id,
+            state: value.applied.state,
+            placementIDs: value.applied.placement_ids,
+            runIDs: value.applied.run_ids,
+          },
+        }) as const,
+    ),
   selectionRequiredResponseSchema,
 ]);
 
@@ -169,16 +178,19 @@ export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discr
         .strict(),
     })
     .strict()
-    .transform((value) => ({
-      outcome: value.outcome,
-      applied: {
-        transitionID: value.applied.transition_id,
-        taskID: value.applied.task_id,
-        state: value.applied.state,
-        placementIDs: value.applied.placement_ids,
-        runIDs: value.applied.run_ids,
-      },
-    }) as const),
+    .transform(
+      (value) =>
+        ({
+          outcome: value.outcome,
+          applied: {
+            transitionID: value.applied.transition_id,
+            taskID: value.applied.task_id,
+            state: value.applied.state,
+            placementIDs: value.applied.placement_ids,
+            runIDs: value.applied.run_ids,
+          },
+        }) as const,
+    ),
   selectionRequiredResponseSchema,
 ]);
 
@@ -207,21 +219,26 @@ export const projectWorkflowLinksSchema: z.ZodType<readonly ProjectWorkflowLink[
 
 export const workflowBoardSchema: z.ZodType<WorkflowBoard> = z
   .object({
-    board: z.object({
-      project_id: z.string(),
-      project: z.object({
-        project_key: z.string(),
-        display_name: z.string(),
-        default_workspace_id: z.string().min(1),
-        attached_workspace_count: z.number().int().positive(),
-      }),
-      selected_workflow: workflowPickerItemSchema,
-      workflows: workflowPickerSchema,
-      groups: boardGroupsSchema,
-      columns: boardColumnsSchema,
-      generated_at_unix_ms: z.number(),
-    }),
+    board: z
+      .object({
+        project_id: z.string(),
+        project: z
+          .object({
+            project_key: z.string(),
+            display_name: z.string(),
+            default_workspace_id: z.string().min(1),
+            attached_workspace_count: z.number().int().positive(),
+          })
+          .strict(),
+        selected_workflow: workflowPickerItemSchema,
+        workflows: workflowPickerSchema,
+        groups: boardGroupsSchema,
+        columns: boardColumnsSchema,
+        generated_at_unix_ms: z.number(),
+      })
+      .strict(),
   })
+  .strict()
   .transform((value) => {
     const columns = visibleBoardColumns(value.board.columns);
     return {
@@ -261,14 +278,17 @@ export const boardNodeCardsPageSchema: z.ZodType<BoardNodeCardsPage> = z
     workflow_id: z.string(),
     node_id: z.string(),
     cards: boardCardsSchema,
-    next_page_token: z.string().optional().default(""),
+    previous_page_token: z.string().nullable(),
+    next_page_token: z.string().nullable(),
     generated_at_unix_ms: z.number(),
   })
+  .strict()
   .transform((value) => ({
     projectID: value.project_id,
     workflowID: value.workflow_id,
     nodeID: value.node_id,
     cards: value.cards,
+    previousPageToken: value.previous_page_token,
     nextPageToken: value.next_page_token,
     generatedAt: value.generated_at_unix_ms,
   }));
@@ -307,9 +327,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       body: emptyString,
       source_url: emptyString,
       source_workspace: workspaceSummarySchema,
-      execution_target: workflowExecutionTargetSchema
-        .optional()
-        .transform((value) => value ?? null),
+      execution_target: workflowExecutionTargetSchema.optional().transform((value) => value ?? null),
       managed_worktree: z.never().optional(),
       status: taskStatusSchema,
       actions: taskActionsSchema,
@@ -398,16 +416,14 @@ export const pendingAskListSchema = z
             RecommendedOptionIndex: z.number().optional().default(0),
             CreatedAt: z.string().optional().default(""),
           })
-          .transform(
-            (value): PendingAsk => ({
-              askID: value.AskID,
-              sessionID: value.SessionID,
-              question: value.Question,
-              suggestions: value.Suggestions,
-              recommendedOptionIndex: value.RecommendedOptionIndex,
-              createdAt: value.CreatedAt,
-            }),
-          ),
+          .transform((value): PendingAsk => ({
+            askID: value.AskID,
+            sessionID: value.SessionID,
+            question: value.Question,
+            suggestions: value.Suggestions,
+            recommendedOptionIndex: value.RecommendedOptionIndex,
+            createdAt: value.CreatedAt,
+          })),
       )
       .optional()
       .default([]),

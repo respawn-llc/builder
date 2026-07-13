@@ -20,9 +20,12 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
   return useInfiniteQuery({
     queryKey: queryKeys.boardNodeCards(projectID, workflowID, nodeID),
     queryFn: async ({ pageParam }) => api.listBoardNodeCards(projectID, workflowID, nodeID, pageParam),
-    initialPageParam: "",
+    initialPageParam: null as string | null,
     enabled: enabled && projectID.length > 0 && workflowID.length > 0 && nodeID.length > 0,
-    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
+    getPreviousPageParam: (firstPage) => firstPage.previousPageToken ?? undefined,
+    getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
+    maxPages: 3,
+    gcTime: 0,
   });
 }
 
@@ -117,11 +120,7 @@ function isDeletedTaskEvent(params: unknown, taskID: string): boolean {
   if (trimmedTaskID.length === 0 || event === null) {
     return false;
   }
-  return (
-    event.resource === "task" &&
-    event.action === "deleted" &&
-    event.changedIDs.includes(trimmedTaskID)
-  );
+  return event.resource === "task" && event.action === "deleted" && event.changedIDs.includes(trimmedTaskID);
 }
 
 export function shouldRefreshBoardFromProjectEvent(

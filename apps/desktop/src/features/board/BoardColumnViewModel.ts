@@ -1,4 +1,4 @@
-import type { BoardCard, BoardColumn, BoardGroup, TaskStatusKind } from "../../api";
+import type { BoardCard, BoardColumn, BoardGroup, MarkdownPreview, TaskStatusKind } from "../../api";
 
 export type KanbanGroupVM = Readonly<{
   id: string;
@@ -17,7 +17,7 @@ export type KanbanCardVM = Readonly<{
   id: string;
   shortID: string;
   title: string;
-  body: string;
+  preview: MarkdownPreview;
   updatedAt: number;
   activeNodeIDs: readonly string[];
   statusKind: TaskStatusKind;
@@ -61,7 +61,7 @@ export function toKanbanCardVM(card: BoardCard, workspaceContext: BoardWorkspace
     id: card.id,
     shortID: card.shortID,
     title: card.title,
-    body: card.body,
+    preview: card.preview,
     updatedAt: card.updatedAt,
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.status.kind,

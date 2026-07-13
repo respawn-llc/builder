@@ -69,12 +69,11 @@ describe("ApiClient", () => {
   });
 
   it("normalizes empty workflow board metadata and node-card slices returned as null by Go JSON", async () => {
-    const client = new ApiClient(
-      new FakeRpcTransport([
-        { method: "workflow.board.get", result: emptyBoardResponse },
-        { method: "workflow.board.nodeCards.list", result: emptyBoardNodeCardsResponse },
-      ]),
-    );
+    const transport = new FakeRpcTransport([
+      { method: "workflow.board.get", result: emptyBoardResponse },
+      { method: "workflow.board.nodeCards.list", result: emptyBoardNodeCardsResponse },
+    ]);
+    const client = new ApiClient(transport);
 
     await expect(client.getBoard("project-1", "")).resolves.toMatchObject({
       projectID: "project-1",
@@ -82,14 +81,23 @@ describe("ApiClient", () => {
       groups: [],
       columns: [],
     });
-    await expect(
-      client.listBoardNodeCards("project-1", "workflow-1", "node-1", "cursor-1"),
-    ).resolves.toMatchObject({
+    await expect(client.listBoardNodeCards("project-1", "workflow-1", "node-1")).resolves.toMatchObject({
       projectID: "project-1",
       workflowID: "workflow-1",
       nodeID: "node-1",
       cards: [],
+      previousPageToken: null,
       nextPageToken: "cursor-2",
+    });
+    expect(transport.calls).toContainEqual({
+      method: "workflow.board.nodeCards.list",
+      params: {
+        project_id: "project-1",
+        workflow_id: "workflow-1",
+        node_id: "node-1",
+        page_size: 25,
+        page_token: null,
+      },
     });
   });
 
@@ -745,6 +753,7 @@ const emptyBoardNodeCardsResponse = {
   workflow_id: "workflow-1",
   node_id: "node-1",
   cards: null,
+  previous_page_token: null,
   next_page_token: "cursor-2",
   generated_at_unix_ms: 1,
 };

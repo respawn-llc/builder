@@ -40,7 +40,10 @@ const card = {
   task_id: "task-1",
   short_id: "KNT-1",
   title: "Task",
-  body: "Complete Markdown **body**",
+  preview: {
+    markdown: "Bounded Markdown **preview**",
+    truncated: true,
+  },
   workflow_id: "workflow-1",
   active_node_ids: [],
   source_workspace: workspace,
@@ -69,6 +72,20 @@ describe("workflow board schemas", () => {
     });
   });
 
+  it("rejects card and pagination fields on board metadata", () => {
+    expect(() =>
+      workflowBoardSchema.parse({
+        board: {
+          ...boardResponse.board,
+          cards: [],
+          done_preview: [],
+          has_hidden_done_cards: false,
+          next_page_token: null,
+        },
+      }),
+    ).toThrow();
+  });
+
   it("rejects missing or invalid parent workspace facts", () => {
     const projectWithoutDefaultWorkspaceID = {
       project_key: boardResponse.board.project.project_key,
@@ -89,7 +106,7 @@ describe("workflow board schemas", () => {
     expect(() => workflowBoardSchema.parse(invalidAttachedWorkspaceCount)).toThrow();
   });
 
-  it("decodes a full card body and canonical detached workspace availability", () => {
+  it("decodes nested Markdown previews, nullable cursors, and canonical detached workspace availability", () => {
     const page = boardNodeCardsPageSchema.parse({
       project_id: "project-1",
       workflow_id: "workflow-1",
@@ -103,26 +120,63 @@ describe("workflow board schemas", () => {
           },
         },
       ],
-      next_page_token: "",
+      previous_page_token: null,
+      next_page_token: null,
       generated_at_unix_ms: 1,
     });
 
     expect(page.cards[0]).toMatchObject({
-      body: "Complete Markdown **body**",
+      preview: {
+        markdown: "Bounded Markdown **preview**",
+        truncated: true,
+      },
       sourceWorkspace: { availability: "unlinked" },
     });
+    expect(page.previousPageToken).toBeNull();
+    expect(page.nextPageToken).toBeNull();
   });
 
-  it("rejects obsolete body previews and unknown workspace availability", () => {
-    const cardWithoutBody = { ...card, body_preview: card.body };
-    Reflect.deleteProperty(cardWithoutBody, "body");
+  it("rejects legacy full bodies, flat previews, missing nested preview facts, and unknown workspace availability", () => {
+    const legacyBodyCard = { ...card, body: "Complete Markdown **body**" };
+    Reflect.deleteProperty(legacyBodyCard, "preview");
     expect(() =>
       boardNodeCardsPageSchema.parse({
         project_id: "project-1",
         workflow_id: "workflow-1",
         node_id: "node-1",
-        cards: [cardWithoutBody],
-        next_page_token: "",
+        cards: [legacyBodyCard],
+        previous_page_token: null,
+        next_page_token: null,
+        generated_at_unix_ms: 1,
+      }),
+    ).toThrow();
+
+    const flatPreviewCard = {
+      ...card,
+      preview_markdown: card.preview.markdown,
+      preview_truncated: card.preview.truncated,
+    };
+    Reflect.deleteProperty(flatPreviewCard, "preview");
+    expect(() =>
+      boardNodeCardsPageSchema.parse({
+        project_id: "project-1",
+        workflow_id: "workflow-1",
+        node_id: "node-1",
+        cards: [flatPreviewCard],
+        previous_page_token: null,
+        next_page_token: null,
+        generated_at_unix_ms: 1,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      boardNodeCardsPageSchema.parse({
+        project_id: "project-1",
+        workflow_id: "workflow-1",
+        node_id: "node-1",
+        cards: [{ ...card, preview: { markdown: card.preview.markdown } }],
+        previous_page_token: null,
+        next_page_token: null,
         generated_at_unix_ms: 1,
       }),
     ).toThrow();
@@ -141,7 +195,8 @@ describe("workflow board schemas", () => {
             },
           },
         ],
-        next_page_token: "",
+        previous_page_token: null,
+        next_page_token: null,
         generated_at_unix_ms: 1,
       }),
     ).toThrow();

@@ -163,7 +163,7 @@ describe("KanbanColumn", () => {
     expect(within(questionCard).queryByTestId("task-card-active-run-spinner")).not.toBeInTheDocument();
   });
 
-  it("renders complete card bodies, workspace chips only when present, and distinct question/approval border tones", () => {
+  it("renders bounded card previews, workspace chips only when present, and distinct question/approval border tones", () => {
     render(
       <I18nextProvider i18n={appI18n}>
         <KanbanColumn
@@ -171,7 +171,10 @@ describe("KanbanColumn", () => {
           cards={[
             {
               ...card,
-              body: "Complete body beyond the old preview boundary: **semantic source remains intact**",
+              preview: {
+                markdown: "Bounded preview from the server: **semantic source remains intact**",
+                truncated: true,
+              },
               id: "task-question",
               borderTone: "primary",
               statusKind: "waiting_question",
@@ -208,7 +211,7 @@ describe("KanbanColumn", () => {
     const approvalCard = screen.getByRole("article", { name: "Approval task" });
 
     expect(within(questionCard).getByTestId("task-card-body")).toHaveTextContent(
-      "Complete body beyond the old preview boundary: semantic source remains intact",
+      "Bounded preview from the server: semantic source remains intact",
     );
     expect(within(questionCard).queryByTestId("task-card-chip-slot")).not.toBeInTheDocument();
     expect(within(approvalCard).getByTestId("task-card-chip-slot")).toHaveTextContent("Other workspace");
@@ -246,19 +249,29 @@ describe("KanbanColumn", () => {
     );
 
     expect(
-      within(screen.getByRole("article", { name: "Running task" })).getByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Running task" })).getByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByRole("article", { name: "Question task" })).queryByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Question task" })).queryByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).not.toBeInTheDocument();
     expect(
-      within(screen.getByRole("article", { name: "Approval task" })).queryByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Approval task" })).queryByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).not.toBeInTheDocument();
     expect(
-      within(screen.getByRole("article", { name: "Interrupted task" })).queryByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Interrupted task" })).queryByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).not.toBeInTheDocument();
     expect(
-      within(screen.getByRole("article", { name: "Canceled task" })).queryByTestId("task-card-active-run-spinner"),
+      within(screen.getByRole("article", { name: "Canceled task" })).queryByTestId(
+        "task-card-active-run-spinner",
+      ),
     ).not.toBeInTheDocument();
   });
 
@@ -462,7 +475,7 @@ const card: KanbanCardVM = {
     canStart: true,
     manualMoveTargetNodeIDs: [],
   },
-  body: "Body",
+  preview: { markdown: "Body", truncated: false },
   id: "task-1",
   shortID: "T-1",
   workspaceChipLabel: null,

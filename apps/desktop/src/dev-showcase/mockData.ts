@@ -227,7 +227,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.start,
     activeNodeIDs: ["node-backlog"],
-    body: "Capture primitives, cards, panes, task detail, and board interactions.",
+    preview: "Capture primitives, cards, panes, task detail, and board interactions.",
     id: "task-1",
     minutesAgo: 2,
     shortID: "BLDR-101",
@@ -237,7 +237,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.running,
     activeNodeIDs: ["node-design"],
-    body: "Keep workflow picker accessible by hover, focus, and pin states.",
+    preview: "Keep workflow picker accessible by hover, focus, and pin states.",
     id: "task-2",
     minutesAgo: 12,
     shortID: "BLDR-102",
@@ -247,7 +247,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.waiting,
     activeNodeIDs: ["node-build"],
-    body: "Approval card should include transition snapshot and target nodes.",
+    preview: "Approval card should include transition snapshot and target nodes.",
     id: "task-3",
     minutesAgo: 24,
     shortID: "BLDR-103",
@@ -257,7 +257,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.waiting,
     activeNodeIDs: ["node-review"],
-    body: "Question card exercises suggestions, recommended choice, and freeform answer.",
+    preview: "Question card exercises suggestions, recommended choice, and freeform answer.",
     id: "task-4",
     minutesAgo: 36,
     shortID: "BLDR-104",
@@ -267,7 +267,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.resume,
     activeNodeIDs: ["node-review"],
-    body: "Interrupted task exposes resume control.",
+    preview: "Interrupted task exposes resume control.",
     id: "task-5",
     minutesAgo: 48,
     shortID: "BLDR-105",
@@ -277,7 +277,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.done,
     activeNodeIDs: ["node-done"],
-    body: "Completed proof remains visible through the regular Done node card stream.",
+    preview: "Completed proof remains visible through the regular Done node card stream.",
     id: "task-6",
     minutesAgo: 70,
     shortID: "BLDR-090",
@@ -287,7 +287,7 @@ const mockCards: readonly BoardCard[] = [
   card({
     actions: taskActions.done,
     activeNodeIDs: ["node-done"],
-    body: "Older done task appears through Done pagination when needed.",
+    preview: "Older done task appears through Done pagination when needed.",
     id: "task-7",
     minutesAgo: 120,
     shortID: "BLDR-089",
@@ -385,7 +385,7 @@ function card(
   input: Readonly<{
     actions: TaskActions;
     activeNodeIDs: readonly string[];
-    body: string;
+    preview: string;
     id: string;
     minutesAgo: number;
     shortID: string;
@@ -396,7 +396,7 @@ function card(
   return {
     actions: input.actions,
     activeNodeIDs: input.activeNodeIDs,
-    body: input.body,
+    preview: { markdown: input.preview, truncated: false },
     id: input.id,
     shortID: input.shortID,
     sourceWorkspace: mockWorkspaces[0] ?? fallbackWorkspace,
