@@ -393,7 +393,7 @@ func pendingPromptLines(prompt *clientui.TranscriptPendingSessionPrompt) []strin
 	if prompt == nil || prompt.State != clientui.TranscriptPromptPending {
 		return nil
 	}
-	return joinFacts(compactNonEmptyStrings(prompt.Data.Question, prompt.Data.ToolName, humanizeTranscriptFact(string(prompt.Kind))))
+	return joinFacts(compactNonEmptyStrings(prompt.Data.Question))
 }
 
 func pendingPromptListLines(prompts []clientui.TranscriptPendingSessionPrompt) []string {

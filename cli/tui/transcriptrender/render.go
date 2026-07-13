@@ -1,6 +1,7 @@
 package transcriptrender
 
 import (
+	"fmt"
 	"strings"
 
 	"core/shared/clientui"
@@ -10,7 +11,10 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-const BackgroundedShellSuffix = "· backgrounded"
+const (
+	backgroundedShellStatus = "backgrounded"
+	BackgroundedShellSuffix = "· " + backgroundedShellStatus
+)
 
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
 	var syntax *syntaxProjector
@@ -106,15 +110,22 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 	return attachPrefixWithMeta(role, textLines(role, wrapLines(text, contentWidth(role, width)), meta, mode), width, false, mode, meta)
 }
 
-func RenderBackgroundedShell(command string, width int) Line {
+func renderBackgroundedShell(command string, width int, mode Mode) Line {
 	if width <= 0 {
 		return Line{}
 	}
-	command = strings.TrimSpace(firstDisplayLine(safeTranscriptText(command)))
+	command = safeTranscriptText(command)
+	inlineMeta := backgroundedShellStatus
+	if modeShowsShellContinuationMetadata(mode) {
+		if continuation, ok := shellCommandContinuationMetadata(command); ok {
+			inlineMeta = joinToolInlineMetadata(continuation, inlineMeta)
+		}
+	}
+	command = strings.TrimSpace(firstDisplayLine(command))
 	symbol := SemanticSpan("$", StyleRoleToolShellSecondary)
 	fixed := []Span{
 		SemanticSpan("  ", StyleRoleToolShell, SpanAttributeFaint),
-		SemanticSpan(BackgroundedShellSuffix, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
+		SemanticSpan("· "+inlineMeta, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
 	}
 	fixedWidth := lipgloss.Width(symbol.Text) + spansWidth(fixed)
 	if command == "" || width <= fixedWidth {
@@ -127,10 +138,7 @@ func RenderBackgroundedShell(command string, width int) Line {
 	}}, commandWidth, false)
 	spans := []Span{SemanticSpan(" ", StyleRoleToolShell, SpanAttributeFaint)}
 	spans = append(spans, commandLine.Spans...)
-	spans = append(spans,
-		SemanticSpan("  ", StyleRoleToolShell, SpanAttributeFaint),
-		SemanticSpan(BackgroundedShellSuffix, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
-	)
+	spans = append(spans, fixed...)
 	return Line{LeadingSymbol: &symbol, Spans: spans}
 }
 
@@ -166,6 +174,48 @@ func attachPrefixWithMeta(role StyleRole, lines []Line, width int, forceEllipsis
 }
 
 func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, firstLineMeta string, mode Mode, meta toolMeta) []Line {
+	return attachPrefixWithFirstLineMetaAndContinuation(
+		role,
+		lines,
+		width,
+		forceEllipsis,
+		firstLineMeta,
+		mode,
+		meta,
+		continuationForMode,
+	)
+}
+
+type continuationLayout uint8
+
+const (
+	continuationForMode continuationLayout = iota
+	continuationTree
+)
+
+func attachPrefixWithTree(role StyleRole, lines []Line, width int, mode Mode, meta toolMeta) []Line {
+	return attachPrefixWithFirstLineMetaAndContinuation(
+		role,
+		lines,
+		width,
+		false,
+		"",
+		mode,
+		meta,
+		continuationTree,
+	)
+}
+
+func attachPrefixWithFirstLineMetaAndContinuation(
+	role StyleRole,
+	lines []Line,
+	width int,
+	forceEllipsis bool,
+	firstLineMeta string,
+	mode Mode,
+	meta toolMeta,
+	continuation continuationLayout,
+) []Line {
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{SemanticSpan("", role)}}}
 	}
@@ -204,7 +254,7 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 			spans = append([]Span{contentRoleSpan(" ", role, mode)}, spans...)
 			line = Line{LeadingSymbol: &symbol, Spans: spans, Background: line.Background}
 		} else {
-			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
+			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex, continuation), spans...)
 			line = Line{Spans: spans, Background: line.Background}
 		}
 		if forceEllipsis || (mode != ModeOngoingStable && lipgloss.Width(line.Plain()) > max(1, width)) {
@@ -228,9 +278,18 @@ func ongoingInlineMetaSpans(command []Span, inlineMeta string, bodyWidth int) []
 	return append(command, suffix...)
 }
 
-func continuationPrefix(mode Mode, prefixWidth int, isLast bool) []Span {
-	if modeUsesOngoingContinuationPrefix(mode) {
-		return []Span{SemanticSpan(strings.Repeat(" ", max(0, prefixWidth)), StyleRoleNotice, SpanAttributeFaint)}
+func continuationPrefix(mode Mode, prefixWidth int, isLast bool, layout continuationLayout) []Span {
+	switch layout {
+	case continuationForMode:
+		if mode == ModeOngoingStable {
+			return nil
+		}
+		if modeUsesOngoingContinuationPrefix(mode) {
+			return []Span{SemanticSpan(strings.Repeat(" ", max(0, prefixWidth)), StyleRoleNotice, SpanAttributeFaint)}
+		}
+	case continuationTree:
+	default:
+		panic(fmt.Sprintf("render transcript continuation with invalid layout %d", layout))
 	}
 	// Detail continuations form a real tree: middle lines use the vertical "│"
 	// guide, the last continuation line of the entry closes the tree with "└".
@@ -302,6 +361,7 @@ func roleDefaultFaint(role StyleRole) bool {
 		StyleRoleToolShell,
 		StyleRoleToolShellSecondary,
 		StyleRoleToolQuestion,
+		StyleRoleToolQuestionAnswer,
 		StyleRoleToolWebSearch,
 		StyleRoleNotice,
 		StyleRoleNoticeForegroundFaint:
@@ -524,7 +584,12 @@ func wrapLines(text string, width int) []string {
 }
 
 func contentWidth(role StyleRole, width int) int {
-	return max(1, width-lipgloss.Width(roleSymbol(role)+" "))
+	return max(1, width-RolePrefixWidth(role))
+}
+
+// RolePrefixWidth returns the terminal cells reserved for a row's symbol and gap.
+func RolePrefixWidth(role StyleRole) int {
+	return lipgloss.Width(roleSymbol(role) + " ")
 }
 
 func firstNonEmpty(values ...string) string {

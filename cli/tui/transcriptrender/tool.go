@@ -32,9 +32,12 @@ func renderToolRow(
 	meta.syntax = syntax
 	meta.IsError = row.IsError || shellExitFailed(meta)
 	role := toolRole(meta)
+	if lines, ok := renderAnsweredQuestion(row, meta, width, mode); ok {
+		return lines
+	}
 	display := toolDisplayText(row, meta, mode)
 	if role == StyleRoleToolShell && meta.MovedToBackground && !meta.IsError {
-		return []Line{RenderBackgroundedShell(display.Text, width)}
+		return []Line{renderBackgroundedShell(firstNonEmpty(meta.Command, display.Text), width, mode)}
 	}
 	if isPatchTool(meta) {
 		input := display.Text
@@ -67,17 +70,41 @@ func renderToolRow(
 	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode, meta)
 }
 
+func renderAnsweredQuestion(row clientui.TranscriptToolRow, meta toolMeta, width int, mode Mode) ([]Line, bool) {
+	if meta.Presentation != transcript.ToolPresentationAskQuestion ||
+		meta.IsError ||
+		(mode != ModeOngoing && mode != ModeOngoingCollapsed) {
+		return nil, false
+	}
+	answer := strings.TrimSpace(safeTranscriptText(row.CondensedText))
+	if answer == "" {
+		return nil, false
+	}
+
+	question := strings.TrimSpace(safeTranscriptText(firstNonEmpty(meta.Question, meta.Command, meta.CompactText, "ask question")))
+	bodyWidth := contentWidth(StyleRoleToolQuestion, width)
+	lines := RenderMarkdownLines(StyleRoleUser, question, bodyWidth)
+	lines = append(lines, textLines(StyleRoleToolQuestionAnswer, wrapLines(answer, bodyWidth), meta, mode)...)
+	return attachPrefixWithTree(StyleRoleToolQuestion, lines, width, mode, meta), true
+}
+
 func RenderPendingTool(tool clientui.TranscriptToolStart, width int, themeName string, spinner string) Line {
 	meta := normalizeToolMeta(tool.ToolName, tool.ToolPresentation)
 	syntax := newSyntaxProjector(themeName)
 	meta.syntax = &syntax
 	role := toolRole(meta)
 	text := compactToolText(meta, tool.ToolName)
+	inlineMeta := ""
+	if meta.IsShell {
+		if continuation, ok := shellCommandContinuationMetadata(meta.Command); ok {
+			inlineMeta = continuation
+		}
+	}
 	var lines []Line
 	if isPatchTool(meta) {
 		lines = renderPatchTool(role, text, "", "", meta.PatchRender, width, ModeOngoing, meta, nil)
 	} else {
-		lines = renderTextBlockWithInlineMeta(role, text, "", width, ModeOngoing, meta)
+		lines = renderTextBlockWithInlineMeta(role, text, inlineMeta, width, ModeOngoing, meta)
 	}
 	if len(lines) == 0 {
 		return Line{}
@@ -169,7 +196,13 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) t
 		if meta.IsError && (mode == ModeOngoing || mode == ModeOngoingCollapsed) {
 			resultSummary = ""
 		}
-		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(shellExitStatus(meta), resultSummary, meta.InlineMeta)}
+		status := firstNonEmpty(shellExitStatus(meta), resultSummary, meta.InlineMeta)
+		if meta.IsShell && modeShowsShellContinuationMetadata(mode) {
+			if continuation, ok := shellCommandContinuationMetadata(meta.Command); ok {
+				status = joinToolInlineMetadata(continuation, status)
+			}
+		}
+		return toolDisplay{Text: text, InlineMeta: status}
 	}
 	if !meta.IsError &&
 		meta.RenderHint != nil &&
@@ -189,6 +222,49 @@ func shellExitStatus(meta toolMeta) string {
 		return ""
 	}
 	return fmt.Sprintf("exit %d", *meta.ShellExitCode)
+}
+
+func shellCommandContinuationMetadata(command string) (string, bool) {
+	hiddenLineCount := explicitCommandLineBreakCount(command)
+	switch hiddenLineCount {
+	case 0:
+		return "", false
+	case 1:
+		return "1 more line", true
+	default:
+		return fmt.Sprintf("%d more lines", hiddenLineCount), true
+	}
+}
+
+func modeShowsShellContinuationMetadata(mode Mode) bool {
+	return mode == ModeOngoing ||
+		mode == ModeOngoingCollapsed ||
+		mode == ModeDetailCollapsed
+}
+
+func explicitCommandLineBreakCount(command string) int {
+	count := 0
+	for index := 0; index < len(command); index++ {
+		switch command[index] {
+		case '\n':
+			count++
+		case '\r':
+			if index+1 >= len(command) || command[index+1] != '\n' {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func joinToolInlineMetadata(items ...string) string {
+	visible := make([]string, 0, len(items))
+	for _, item := range items {
+		if item = strings.TrimSpace(item); item != "" {
+			visible = append(visible, item)
+		}
+	}
+	return strings.Join(visible, " · ")
 }
 
 func compactToolText(meta toolMeta, fallback string) string {

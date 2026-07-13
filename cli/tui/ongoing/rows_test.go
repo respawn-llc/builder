@@ -287,6 +287,44 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 	}
 }
 
+func TestAnsweredQuestionRendersFullQuestionAndSelectedAnswer(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	row := clientui.TranscriptCommittedRow{
+		Kind:       clientui.TranscriptRowTool,
+		Visibility: clientui.EntryVisibilityOngoingCollapsed,
+		Tool: &clientui.TranscriptToolRow{
+			ToolName:      "ask_question",
+			Text:          "User chose option #2. They also said: include tests",
+			CondensedText: "Recursive scan\nUser also said:\ninclude tests",
+			ToolPresentation: &clientui.ToolCallMeta{
+				ToolName:       "ask_question",
+				Presentation:   clientui.ToolPresentationAskQuestion,
+				RenderBehavior: clientui.ToolCallRenderBehaviorAskQuestion,
+				Command:        "Choose scope?\nKeep generated files in scope?",
+				CompactText:    "Choose scope?\nKeep generated files in scope?",
+				Question:       "Choose scope?\nKeep generated files in scope?",
+				Suggestions:    []string{"flat scan", "Recursive scan"},
+			},
+		},
+	}
+
+	if _, err := surface.ApplyTerminalMessage(
+		committedMessage(row),
+		FrameInput{Size: Size{Width: 80, Height: 24}},
+	); err != nil {
+		t.Fatalf("apply answered question: %v", err)
+	}
+
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+		"? Choose scope?",
+		"│ Keep generated files in scope?",
+		"│ Recursive scan",
+		"│ User also said:",
+		"└ include tests",
+	})
+}
+
 func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
 	for _, phase := range []transcript.AssistantPhase{transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal} {
 		t.Run(string(phase), func(t *testing.T) {

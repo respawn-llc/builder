@@ -102,7 +102,11 @@ func (r terminalMarkdownRenderer) RenderStable(source string, width int) []strin
 	if strings.TrimSpace(source) == "" {
 		return nil
 	}
-	lines := transcriptrender.RenderMarkdownStableLines(transcriptrender.StyleRoleAssistant, source, width)
+	lines := transcriptrender.RenderMarkdownStableLines(
+		transcriptrender.StyleRoleAssistant,
+		source,
+		max(1, width-transcriptrender.RolePrefixWidth(transcriptrender.StyleRoleAssistant)),
+	)
 	return encodeTranscriptLines(lines, r.themeName)
 }
 
