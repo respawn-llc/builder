@@ -3,6 +3,7 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/shared/protocol"
@@ -177,7 +178,15 @@ func NewWorktreeSetupRetainedError(worktree WorktreeTopologyEntry, diagnostic st
 }
 
 func (e *WorktreeSetupRetainedError) Error() string {
-	return ErrWorktreeSetupRetained.Error()
+	base := ErrWorktreeSetupRetained.Error()
+	if e == nil {
+		return base
+	}
+	diagnostic := strings.TrimSpace(e.Diagnostic)
+	if diagnostic == "" {
+		return base
+	}
+	return fmt.Sprintf("%s: %s", base, diagnostic)
 }
 
 func (e *WorktreeSetupRetainedError) Unwrap() error {
@@ -265,7 +274,32 @@ type WorktreeDeletePreconditionError struct {
 }
 
 func (e *WorktreeDeletePreconditionError) Error() string {
-	return ErrWorktreeDeletePrecondition.Error()
+	base := ErrWorktreeDeletePrecondition.Error()
+	if e == nil {
+		return base
+	}
+	switch e.DirtyState.Kind {
+	case WorktreeDirtyStateDirty:
+		if e.DirtyState.DirtyFileCount != nil && *e.DirtyState.DirtyFileCount > 0 {
+			return fmt.Sprintf(
+				"%s: %d modified or untracked file(s); force folder removal to continue",
+				base,
+				*e.DirtyState.DirtyFileCount,
+			)
+		}
+	case WorktreeDirtyStateUnknown:
+		if e.DirtyState.UnknownCause != nil {
+			cause := strings.TrimSpace(*e.DirtyState.UnknownCause)
+			if cause != "" {
+				return fmt.Sprintf(
+					"%s: worktree cleanliness could not be determined: %s; force folder removal to continue",
+					base,
+					cause,
+				)
+			}
+		}
+	}
+	return base
 }
 
 func (e *WorktreeDeletePreconditionError) Is(target error) bool {

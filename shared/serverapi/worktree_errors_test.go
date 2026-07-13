@@ -2,10 +2,37 @@ package serverapi
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 
 	"core/shared/protocol"
 )
+
+func TestWorktreeActionErrorsRenderTypedDiagnostics(t *testing.T) {
+	setupDiagnostic := "setup command timed out after 17 seconds"
+	if rendered := (&WorktreeSetupRetainedError{Diagnostic: setupDiagnostic}).Error(); !strings.Contains(rendered, setupDiagnostic) {
+		t.Fatalf("retained setup error omitted diagnostic %q: %q", setupDiagnostic, rendered)
+	}
+
+	dirtyFileCount := 7
+	dirty := &WorktreeDeletePreconditionError{DirtyState: WorktreeDirtyState{
+		Kind:           WorktreeDirtyStateDirty,
+		DirtyFileCount: &dirtyFileCount,
+	}}
+	if rendered := dirty.Error(); !strings.Contains(rendered, strconv.Itoa(dirtyFileCount)) {
+		t.Fatalf("dirty delete precondition omitted file count %d: %q", dirtyFileCount, rendered)
+	}
+
+	unknownCause := "git status exited with code 128"
+	unknown := &WorktreeDeletePreconditionError{DirtyState: WorktreeDirtyState{
+		Kind:         WorktreeDirtyStateUnknown,
+		UnknownCause: &unknownCause,
+	}}
+	if rendered := unknown.Error(); !strings.Contains(rendered, unknownCause) {
+		t.Fatalf("unknown delete precondition omitted cause %q: %q", unknownCause, rendered)
+	}
+}
 
 func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 	selector := &WorktreeSelectorError{
