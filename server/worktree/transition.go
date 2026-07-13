@@ -31,6 +31,19 @@ type pendingWorktreeTransition struct {
 
 type transitionTargetSync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
 
+func (s *Service) replayPendingWorktreeTransition(request worktreeTransitionRequest) (serverapi.WorktreeScheduledAcknowledgement, bool) {
+	if s == nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, false
+	}
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+	pending, ok := s.transitions[request.sessionID]
+	if !ok || pending.request != request {
+		return serverapi.WorktreeScheduledAcknowledgement{}, false
+	}
+	return serverapi.WorktreeScheduledAcknowledgement{OperationID: pending.request.operationID}, true
+}
+
 func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, err

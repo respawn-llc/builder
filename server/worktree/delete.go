@@ -20,6 +20,20 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
 	}
+	transitionRequest := worktreeTransitionRequest{
+		operationID: req.OperationID,
+		sessionID:   strings.TrimSpace(req.SessionID),
+		kind:        clientui.WorktreeTransitionDelete,
+		selector:    strings.TrimSpace(req.Selector),
+		force:       req.ForceFolderRemoval,
+		cleanup:     req.BranchCleanupPolicy,
+	}
+	if ack, ok := s.replayPendingWorktreeTransition(transitionRequest); ok {
+		return serverapi.WorktreeDeleteResult{
+			Kind:      serverapi.WorktreeDeleteResultKindScheduled,
+			Scheduled: &ack,
+		}, nil
+	}
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
@@ -39,17 +53,14 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		return serverapi.WorktreeDeleteResult{}, fmt.Errorf("cannot delete main workspace worktree: %w", serverapi.ErrWorktreeBlocked)
 	}
 	if topologyIsCurrent(match.entry, workspaceCtx.target) {
-		release()
-		request := worktreeTransitionRequest{
-			operationID: req.OperationID,
-			sessionID:   strings.TrimSpace(req.SessionID),
-			kind:        clientui.WorktreeTransitionDelete,
-			selector:    strings.TrimSpace(req.Selector),
-			force:       req.ForceFolderRemoval,
-			cleanup:     req.BranchCleanupPolicy,
+		deleteTarget, err := scheduledDeleteTargetFromEntry(match.entry)
+		if err != nil {
+			release()
+			return serverapi.WorktreeDeleteResult{}, err
 		}
-		ack, err := s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, sync transitionTargetSync) error {
-			_, err := s.executeScheduledDelete(runCtx, req, sync)
+		release()
+		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, sync transitionTargetSync) error {
+			_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
 			return err
 		})
 		if err != nil {
@@ -74,6 +85,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 func (s *Service) executeScheduledDelete(
 	ctx context.Context,
 	req serverapi.WorktreeDeleteRequest,
+	deleteTarget scheduledWorktreeDeleteTarget,
 	sync transitionTargetSync,
 ) (serverapi.WorktreeDeleteCompletedResult, error) {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
@@ -85,11 +97,53 @@ func (s *Service) executeScheduledDelete(
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
-	match, err := resolveTopologySelector(topology, req.Selector)
+	entry, err := deleteTarget.resolve(topology)
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
-	return s.executeDeleteLocked(ctx, workspaceCtx, match.entry, req, sync)
+	return s.executeDeleteLocked(ctx, workspaceCtx, entry, req, sync)
+}
+
+type scheduledWorktreeDeleteTarget struct {
+	worktreeID    string
+	canonicalRoot string
+}
+
+func scheduledDeleteTargetFromEntry(entry serverapi.WorktreeTopologyEntry) (scheduledWorktreeDeleteTarget, error) {
+	worktreeID := topologyWorktreeID(entry)
+	if worktreeID == nil || strings.TrimSpace(*worktreeID) == "" {
+		return scheduledWorktreeDeleteTarget{}, errors.New("scheduled delete target requires a Kent worktree id")
+	}
+	root := strings.TrimSpace(topologyRoot(entry))
+	if root == "" {
+		return scheduledWorktreeDeleteTarget{}, errors.New("scheduled delete target requires a canonical root")
+	}
+	return scheduledWorktreeDeleteTarget{
+		worktreeID:    strings.TrimSpace(*worktreeID),
+		canonicalRoot: root,
+	}, nil
+}
+
+func (target scheduledWorktreeDeleteTarget) resolve(topology []serverapi.WorktreeTopologyEntry) (serverapi.WorktreeTopologyEntry, error) {
+	worktreeID := strings.TrimSpace(target.worktreeID)
+	root := strings.TrimSpace(target.canonicalRoot)
+	if worktreeID == "" || root == "" {
+		return serverapi.WorktreeTopologyEntry{}, errors.New("scheduled delete target identity is invalid")
+	}
+	entry, found := topologyEntryByWorktreeID(topology, worktreeID)
+	if !found {
+		return serverapi.WorktreeTopologyEntry{}, errors.Join(
+			serverapi.ErrWorktreeNotFound,
+			fmt.Errorf("scheduled delete target %q is no longer present", worktreeID),
+		)
+	}
+	if filepath.Clean(topologyRoot(entry)) != filepath.Clean(root) {
+		return serverapi.WorktreeTopologyEntry{}, errors.Join(
+			serverapi.ErrWorktreeNotFound,
+			fmt.Errorf("scheduled delete target %q changed root", worktreeID),
+		)
+	}
+	return entry, nil
 }
 
 func (s *Service) executeDeleteLocked(

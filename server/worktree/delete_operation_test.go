@@ -120,6 +120,58 @@ func TestDeleteCurrentWorktreeSchedulesRetargetAndRemoval(t *testing.T) {
 	}
 }
 
+func TestScheduledDeleteRemainsBoundToInitiallyResolvedWorktree(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/delete-bound")
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	gate := make(chan struct{})
+	env.runtime.transitionGate = gate
+
+	request := serverapi.WorktreeDeleteRequest{
+		OperationID:         serverapi.NewWorktreeOperationID(),
+		SessionID:           env.session.Meta().SessionID,
+		Selector:            created.BranchName,
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+	}
+	result, err := env.service.DeleteWorktree(env.ctx, request)
+	if err != nil {
+		t.Fatalf("DeleteWorktree: %v", err)
+	}
+	if result.Kind != serverapi.WorktreeDeleteResultKindScheduled {
+		t.Fatalf("result = %+v, want scheduled delete", result)
+	}
+
+	runGit(t, created.CanonicalRoot, "switch", "-c", "feature/delete-bound-moved")
+	selectorDriftRoot := filepath.Join(t.TempDir(), "selector-drift")
+	runGit(t, env.workspaceRoot, "worktree", "add", selectorDriftRoot, created.BranchName)
+	t.Cleanup(func() {
+		if _, err := os.Stat(selectorDriftRoot); err == nil {
+			runGit(t, env.workspaceRoot, "worktree", "remove", "--force", selectorDriftRoot)
+		}
+	})
+	retried, err := env.service.DeleteWorktree(env.ctx, request)
+	if err != nil {
+		t.Fatalf("DeleteWorktree retry: %v", err)
+	}
+	if retried.Kind != serverapi.WorktreeDeleteResultKindScheduled ||
+		retried.Scheduled == nil ||
+		retried.Scheduled.OperationID != request.OperationID {
+		t.Fatalf("retry result = %+v, want original scheduled acknowledgement", retried)
+	}
+
+	close(gate)
+	outcome := waitForWorktreeTransitionOutcome(t, env.runtime)
+	if outcome.State != clientui.WorktreeTransitionCompleted {
+		t.Fatalf("outcome = %+v, want completed delete", outcome)
+	}
+	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("initially resolved worktree still exists: %v", err)
+	}
+	if _, err := os.Stat(selectorDriftRoot); err != nil {
+		t.Fatalf("worktree that later acquired the selector was deleted: %v", err)
+	}
+}
+
 func TestDeleteBlocksActiveOtherSessionAndRetargetsIdleOtherSession(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-targeting-sessions")
