@@ -284,7 +284,7 @@ function BoardContent({
 
   function dropTask(event: DragEvent<HTMLElement>, column: BoardColumn): void {
     event.preventDefault();
-    const dragPayload = activeDrag?.payload ?? null;
+    const dragPayload = activeDrag === null ? null : activeDrag.payload;
     cancelActiveDrag();
     if (dragPayload === null || actionsDisabled || !board.selectedWorkflow.validForTaskCreation) {
       reportRejectedDrop();
