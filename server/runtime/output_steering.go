@@ -74,7 +74,7 @@ const (
 type completedResponseResolutionInstruction struct {
 	kind               completedResponseResolutionInstructionKind
 	committedAssistant *steeringCommittedAssistantMessage
-	abortReason        AssistantStreamAbortReason
+	abortReason        *AssistantStreamAbortReason
 }
 
 type completedResponseResolutionKind uint8
@@ -108,7 +108,7 @@ type steeringStreamingOutput struct {
 	reasoningDelta *llm.ReasoningSummaryDelta
 	clearState     bool
 	resetEvents    bool
-	abortReason    AssistantStreamAbortReason
+	abortReason    *AssistantStreamAbortReason
 }
 
 type steeringCacheWarning struct {
@@ -248,9 +248,10 @@ func cloneCommittedAssistantCoordinate(coordinate *committedAssistantCoordinate)
 }
 
 func completedResponseDiscardInstruction() completedResponseResolutionInstruction {
+	reason := AssistantStreamAbortSuperseded
 	return completedResponseResolutionInstruction{
 		kind:        completedResponseResolutionInstructionDiscard,
-		abortReason: AssistantStreamAbortSuperseded,
+		abortReason: &reason,
 	}
 }
 
@@ -281,9 +282,10 @@ func steerReasoningDeltaIntent(delta llm.ReasoningSummaryDelta) steeringIntent {
 }
 
 func steerClearStreamingStateIntent() steeringIntent {
+	reason := AssistantStreamAbortSuperseded
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: AssistantStreamAbortSuperseded}}},
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: &reason}}},
 	}
 }
 

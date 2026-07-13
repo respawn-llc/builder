@@ -43,7 +43,11 @@ type preparedCompletedResponse struct {
 	assistantCommittedCoordinate *committedAssistantCoordinate
 	executedToolCall             bool
 	patchEditsApplied            bool
-	preflightErr                 error
+	preflightRejection           *completedResponsePreflightRejection
+}
+
+type completedResponsePreflightRejection struct {
+	cause error
 }
 
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
@@ -119,7 +123,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{ExecutedToolCall: executedToolCall}, nil
 		case completedResponseNextWorkflowPreflightRejected:
-			terminal, err := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, prepared.preflightErr)
+			if prepared.preflightRejection == nil {
+				return stepLoopResult{}, errors.New("workflow preflight rejection action requires rejection details")
+			}
+			terminal, err := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, prepared.preflightRejection.cause)
 			if err != nil {
 				return stepLoopResult{}, err
 			}
@@ -338,7 +345,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	executedToolCall := len(localToolCalls) > 0 || len(hostedToolExecutions) > 0
 	noopFinalAnswer := isNoopFinalAnswer(assistantMsg)
 
-	if preflightErr := workflowPreflightError(e.workflowRunActive(), localToolCalls, hostedToolExecutions); preflightErr != nil {
+	if rejection := classifyCompletedResponsePreflightRejection(e.workflowRunActive(), localToolCalls, hostedToolExecutions); rejection != nil {
 		return preparedCompletedResponse{
 			next:                 completedResponseNextWorkflowPreflightRejected,
 			resolution:           completedResponseDiscardInstruction(),
@@ -349,7 +356,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			hostedToolExecutions: hostedToolExecutions,
 			noopFinalAnswer:      noopFinalAnswer,
 			executedToolCall:     executedToolCall,
-			preflightErr:         preflightErr,
+			preflightRejection:   rejection,
 		}, nil
 	}
 
@@ -451,6 +458,14 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		executedToolCall:             executedToolCall,
 		patchEditsApplied:            patchEditsApplied,
 	}, nil
+}
+
+func classifyCompletedResponsePreflightRejection(workflowActive bool, localToolCalls []llm.ToolCall, hostedToolExecutions []hostedToolExecution) *completedResponsePreflightRejection {
+	err := workflowPreflightError(workflowActive, localToolCalls, hostedToolExecutions)
+	if err == nil {
+		return nil
+	}
+	return &completedResponsePreflightRejection{cause: err}
 }
 
 func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Context, stepID string, localToolCalls []llm.ToolCall, hostedToolExecutions []hostedToolExecution) (bool, bool, error) {
