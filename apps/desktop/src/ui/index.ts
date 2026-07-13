@@ -68,5 +68,8 @@ export { Toaster } from "./Sonner";
 export { Popover, PopoverClose, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 export { dismissStatusToast, showStatusToast } from "./statusToast";
-export { VirtualizedInfiniteList } from "./VirtualizedInfiniteList";
+export {
+  VirtualizedInfiniteList,
+  type VirtualizedInfiniteListBoundaryState,
+} from "./VirtualizedInfiniteList";
 export type { StatusNotice, ToastTone } from "./statusToast";

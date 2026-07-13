@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
+import type { BoardNodeCardsPage } from "../../api";
 import { queryKeys } from "../../app/queryKeys";
 import { AppServicesProvider } from "../../app/servicesContext";
 import { createTestServices } from "../../testSupport/appServices";
@@ -66,27 +67,37 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
       );
     const view = renderHook(() => useBoardNodeCards("project-1", "workflow-1", "node-1", true), { wrapper });
 
-    await waitFor(() => expect(view.result.current.isSuccess).toBe(true));
-    let queryResult = view.result.current;
-    expect(queryResult.hasNextPage).toBe(true);
-    await act(async () => {
-      queryResult = await queryResult.fetchNextPage();
+    await waitFor(() => {
+      expect(view.result.current.isSuccess).toBe(true);
     });
-    expect(queryResult.data?.pages.map(pageTaskID)).toEqual(["task-0", "task-1"]);
+    expect(pageTaskIDs(view.result.current.data?.pages)).toEqual(["task-0"]);
+    expect(view.result.current.hasNextPage).toBe(true);
+    await act(async () => {
+      await view.result.current.fetchNextPage();
+    });
+    await waitFor(() => {
+      expect(pageTaskIDs(view.result.current.data?.pages)).toEqual(["task-0", "task-1"]);
+    });
     expect(services.transport.calls).toHaveLength(2);
     await act(async () => {
-      queryResult = await queryResult.fetchNextPage();
+      await view.result.current.fetchNextPage();
     });
-    expect(queryResult.data?.pages.map(pageTaskID)).toEqual(["task-0", "task-1", "task-2"]);
+    await waitFor(() => {
+      expect(pageTaskIDs(view.result.current.data?.pages)).toEqual(["task-0", "task-1", "task-2"]);
+    });
     await act(async () => {
-      queryResult = await queryResult.fetchNextPage();
+      await view.result.current.fetchNextPage();
     });
-    expect(queryResult.data?.pages.map(pageTaskID)).toEqual(["task-1", "task-2", "task-3"]);
+    await waitFor(() => {
+      expect(pageTaskIDs(view.result.current.data?.pages)).toEqual(["task-1", "task-2", "task-3"]);
+    });
 
     await act(async () => {
-      queryResult = await queryResult.fetchPreviousPage();
+      await view.result.current.fetchPreviousPage();
     });
-    expect(queryResult.data?.pages.map(pageTaskID)).toEqual(["task-0", "task-1", "task-2"]);
+    await waitFor(() => {
+      expect(pageTaskIDs(view.result.current.data?.pages)).toEqual(["task-0", "task-1", "task-2"]);
+    });
     expect(
       services.transport.calls
         .filter((call) => call.method === "workflow.board.nodeCards.list")
@@ -100,11 +111,11 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
     ]);
 
     view.unmount();
-    await waitFor(() =>
+    await waitFor(() => {
       expect(
         queryClient.getQueryData(queryKeys.boardNodeCards("project-1", "workflow-1", "node-1")),
-      ).toBeUndefined(),
-    );
+      ).toBeUndefined();
+    });
   });
 });
 
@@ -119,10 +130,10 @@ function boardCardsPage(index: number, previousPageToken: string | null, nextPag
     node_id: "node-1",
     cards: [
       {
-        task_id: `task-${index}`,
-        short_id: `KNT-${index}`,
-        title: `Task ${index}`,
-        preview: { markdown: `Preview ${index}`, truncated: false },
+        task_id: `task-${index.toString()}`,
+        short_id: `KNT-${index.toString()}`,
+        title: `Task ${index.toString()}`,
+        preview: { markdown: `Preview ${index.toString()}`, truncated: false },
         workflow_id: "workflow-1",
         active_node_ids: ["node-1"],
         source_workspace: {
@@ -168,4 +179,8 @@ function boardCardsParams(pageToken: string | null) {
 
 function pageTaskID(page: Readonly<{ cards: readonly Readonly<{ id: string }>[] }>) {
   return page.cards[0]?.id;
+}
+
+function pageTaskIDs(pages: readonly BoardNodeCardsPage[] | undefined) {
+  return pages?.map(pageTaskID) ?? [];
 }
