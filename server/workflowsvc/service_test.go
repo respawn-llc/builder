@@ -2395,7 +2395,7 @@ func TestServiceWorkflowProjectSubscriptionEmitsLiveEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkflowBoard: %v", err)
 	}
-	if board.Board.SelectedWorkflow.WorkflowID != created.Workflow.ID {
+	if board.Board.SelectedWorkflow == nil || board.Board.SelectedWorkflow.WorkflowID != created.Workflow.ID {
 		t.Fatalf("board selected workflow = %+v, want linked workflow", board.Board.SelectedWorkflow)
 	}
 }
@@ -2422,7 +2422,7 @@ func TestServiceWorkflowProjectSubscriptionEmitsRunCompletionEvent(t *testing.T)
 	if !sameStringSet(event.ChangedIDs, []string{task.Task.ID, string(completed.TransitionID), started.RunID}) {
 		t.Fatalf("changed IDs = %+v", event.ChangedIDs)
 	}
-	boardAfter, err := service.GetWorkflowBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID})
+	boardAfter, err := service.GetWorkflowBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: &workflowID})
 	if err != nil {
 		t.Fatalf("GetWorkflowBoard after completion: %v", err)
 	}
