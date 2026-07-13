@@ -73,6 +73,51 @@ describe("BoardRoute live refresh", () => {
     ).toEqual([]);
   });
 
+  it("closes a deleted task route while workflow selection is still loading", async () => {
+    window.history.pushState(
+      null,
+      "",
+      "/projects/project-1?workflowId=workflow-1&taskId=task-1",
+    );
+    const pendingBoard = new Promise<unknown>(() => {
+      // Keep selection pending until the project event exercises route cleanup.
+    });
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        result: pendingBoard,
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    await waitFor(() => {
+      expect(services.transport.subscriptions).toContainEqual({
+        method: "workflow.subscribeProject",
+        params: { project_id: "project-1" },
+      });
+    });
+
+    act(() => {
+      services.transport.emit("workflow.event", {
+        event: {
+          action: "deleted",
+          changed_ids: ["task-1"],
+          project_id: "project-1",
+          resource: "task",
+          workflow_id: "workflow-1",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      const search = new URLSearchParams(window.location.search);
+      expect(search.get("workflowId")).toBe("workflow-1");
+      expect(search.get("taskId")).not.toBe("task-1");
+    });
+  });
+
   it("mounts board content only when the server selects a workflow", async () => {
     window.history.pushState(null, "", "/projects/project-1");
     const services = createTestServices([

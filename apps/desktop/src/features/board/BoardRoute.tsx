@@ -94,19 +94,15 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
     if (activeDestination?.kind === "taskDetail" && activeDestination.taskID === selectedTaskId) {
       closeSidebar();
     }
-    if (selectedWorkflowID !== undefined) {
-      void navigation
-        .closeProjectTask(projectId, selectedWorkflowID)
-        .catch(reportBoardNavigationError);
-    }
+    void navigation.closeProjectTask(projectId, workflowId).catch(reportBoardNavigationError);
   }, [
     activeDestination,
     closeSidebar,
     navigation,
     projectId,
     reportBoardNavigationError,
-    selectedWorkflowID,
     selectedTaskId,
+    workflowId,
   ]);
   useProjectBoardSubscription(projectId, workflowId, {
     onBackgroundError: reportBoardLoadError,

@@ -168,6 +168,10 @@ describe("navigation stack state", () => {
     });
     expectRoute(router, "/projects/project-1", { taskId: "", workflowId: "workflow-1" });
     await act(async () => {
+      await navigation.closeProjectTask("project-unscoped");
+    });
+    expectRoute(router, "/projects/project-unscoped", { taskId: "" });
+    await act(async () => {
       await navigation.openHome();
     });
     expectRoute(router, "/", {});
