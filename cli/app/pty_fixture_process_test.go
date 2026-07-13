@@ -8,6 +8,7 @@ import (
 
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
+	"core/shared/serverapi"
 )
 
 type ptyCheckpointTerminalFile struct {
@@ -119,18 +120,19 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	server = boundServer
 
 	planner := newSessionLaunchPlanner(server)
-	destination, err := newSessionOpenDestination(sessionID)
+	handoff, err := initialSessionHandoff(sessionID, false)
 	if err != nil {
 		return err
 	}
-	plan, err := planner.PlanSession(ctx, sessionLaunchRequest{
-		Mode:        launchModeInteractive,
-		Destination: destination,
-	})
+	launchRequest, err := sessionLaunchRequestFromHandoff(handoff, serverapi.RunPromptOverrides{})
 	if err != nil {
 		return err
 	}
-	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, resolvedSessionHandoff{Destination: sessionPickerDestination{}}, true)
+	plan, err := planner.PlanSession(ctx, launchRequest)
+	if err != nil {
+		return err
+	}
+	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, handoff, true)
 	if err != nil {
 		return err
 	}
