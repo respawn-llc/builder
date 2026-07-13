@@ -92,6 +92,25 @@ func (m *uiModel) handleDetailTranscriptLoad(msg detailTranscriptLoadMsg) tea.Cm
 		return m.sendTransientStatusWithNoticeID(msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	clearLoadingCmd := m.clearDetailTranscriptLoadingNotice(msg.requestID)
+	if m.rollbackNavigationDeadlineExceeded(pending.request) {
+		m.rollback.pendingNavigation = nil
+		return m.sendTransientStatusWithNoticeID(
+			errRollbackNavigationTimedOut.Error(),
+			uiStatusNoticeError,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		)
+	}
+	if continuationCmd, consumed := m.continueRollbackNavigationAcrossCandidateFreePage(
+		pending.request,
+		msg.page,
+	); consumed {
+		if continuationCmd != nil {
+			return continuationCmd
+		}
+		return clearLoadingCmd
+	}
 	m.applyDetailTranscriptLoad(pending.sessionID.String(), pending.request, msg.page)
 	rollbackCmd := m.reconcileRollbackDetailPageLoad(pending.request)
 	return sequenceCmds(clearLoadingCmd, rollbackCmd)
@@ -108,9 +127,9 @@ func (m *uiModel) applyDetailTranscriptLoad(requestSessionID string, request cli
 	anchor := tui.DetailTranscriptAnchorDefault
 	prependedEntries := 0
 	var trimmedFrontEntries []clientui.TranscriptCommittedRow
-	if m.isRollbackLocatorActivationRequest(request) {
+	if isolatedAnchor, ok := m.rollbackIsolatedPageAnchor(request); ok {
 		m.detailTranscript.replace(responsePage)
-		anchor = tui.DetailTranscriptAnchorBottom
+		anchor = isolatedAnchor
 	} else if request.NewerCursor != nil {
 		result := m.detailTranscript.appendCursorPage(responsePage)
 		trimmedFrontEntries = result.trimmedFrontEntries

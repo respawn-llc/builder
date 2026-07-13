@@ -440,6 +440,202 @@ func TestRollbackSelectionPagesAcrossBoundedDetailWindowsAtCandidateEdges(t *tes
 	assertRollbackSelection(t, model, newestTarget)
 }
 
+func TestRollbackNavigationTraversesConsecutiveCandidateFreePages(t *testing.T) {
+	newestTarget := rollbacktarget.EncodeUserMessageSeq(30)
+	olderTarget := rollbacktarget.EncodeUserMessageSeq(10)
+	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		OlderCursor:  appInt64Ptr(300),
+		HasMoreAbove: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestRollbackUserRow("newest candidate", newestTarget),
+		},
+	}}
+	model := newSizedProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		100,
+		20,
+		WithUISessionID(detailTestSessionID),
+		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
+	)
+	model = openRollbackPicker(t, model)
+	originalWindow := model.detailTranscript.page()
+
+	sessionViews.page = clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		OlderCursor:  appInt64Ptr(200),
+		HasMoreAbove: true,
+		NewerCursor:  appInt64Ptr(300),
+		HasMoreBelow: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("candidate-free segment one"),
+		},
+	}
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(*uiModel)
+	model, cmd = applyRollbackDetailLoadWithFollowUp(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("first candidate-free page did not continue bounded rollback navigation")
+	}
+	assertRollbackSelection(t, model, newestTarget)
+	if !model.detailTranscript.matchesPage(originalWindow) {
+		t.Fatal("candidate-free traversal replaced the visible candidate window")
+	}
+
+	sessionViews.page = clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		OlderCursor:  appInt64Ptr(100),
+		HasMoreAbove: true,
+		NewerCursor:  appInt64Ptr(200),
+		HasMoreBelow: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("candidate-free segment two"),
+		},
+	}
+	model, cmd = applyRollbackDetailLoadWithFollowUp(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("second candidate-free page did not continue bounded rollback navigation")
+	}
+	assertRollbackSelection(t, model, newestTarget)
+	if !model.detailTranscript.matchesPage(originalWindow) {
+		t.Fatal("second candidate-free traversal replaced the visible candidate window")
+	}
+
+	sessionViews.page = clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		NewerCursor:  appInt64Ptr(100),
+		HasMoreBelow: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestRollbackUserRow("older candidate", olderTarget),
+		},
+	}
+	model, _ = applyRollbackDetailLoadWithFollowUp(t, model, cmd)
+	assertRollbackSelection(t, model, olderTarget)
+	if len(model.detailTranscript.segments) != 1 {
+		t.Fatalf(
+			"non-adjacent candidate result retained %d segments, want one isolated bounded page",
+			len(model.detailTranscript.segments),
+		)
+	}
+	olderWindow := model.detailTranscript.page()
+
+	sessionViews.page = clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		OlderCursor:  appInt64Ptr(100),
+		HasMoreAbove: true,
+		NewerCursor:  appInt64Ptr(200),
+		HasMoreBelow: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("candidate-free segment two"),
+		},
+	}
+	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = next.(*uiModel)
+	model, cmd = applyRollbackDetailLoadWithFollowUp(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("newer traversal stopped at the first candidate-free page")
+	}
+	assertRollbackSelection(t, model, olderTarget)
+	if !model.detailTranscript.matchesPage(olderWindow) {
+		t.Fatal("newer candidate-free traversal replaced the visible candidate window")
+	}
+
+	sessionViews.page = clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		OlderCursor:  appInt64Ptr(200),
+		HasMoreAbove: true,
+		NewerCursor:  appInt64Ptr(300),
+		HasMoreBelow: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("candidate-free segment one"),
+		},
+	}
+	model, cmd = applyRollbackDetailLoadWithFollowUp(t, model, cmd)
+	if cmd == nil {
+		t.Fatal("newer traversal stopped at the second candidate-free page")
+	}
+	assertRollbackSelection(t, model, olderTarget)
+	if !model.detailTranscript.matchesPage(olderWindow) {
+		t.Fatal("second newer candidate-free traversal replaced the visible candidate window")
+	}
+
+	sessionViews.page = clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		OlderCursor:  appInt64Ptr(300),
+		HasMoreAbove: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestRollbackUserRow("newest candidate", newestTarget),
+		},
+	}
+	model, _ = applyRollbackDetailLoadWithFollowUp(t, model, cmd)
+	assertRollbackSelection(t, model, newestTarget)
+	if len(model.detailTranscript.segments) != 1 {
+		t.Fatalf(
+			"newer non-adjacent candidate result retained %d segments, want one isolated bounded page",
+			len(model.detailTranscript.segments),
+		)
+	}
+	if got := sessionViews.pageCount.Load(); got != 7 {
+		t.Fatalf("transcript page reads = %d, want newest plus six bounded navigation reads", got)
+	}
+}
+
+func TestRollbackNavigationTimeoutKeepsCurrentCandidateAndStopsPaging(t *testing.T) {
+	targetID := rollbacktarget.EncodeUserMessageSeq(30)
+	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		OlderCursor:  appInt64Ptr(300),
+		HasMoreAbove: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestRollbackUserRow("current candidate", targetID),
+		},
+	}}
+	model := newSizedProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		100,
+		20,
+		WithUISessionID(detailTestSessionID),
+		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
+	)
+	model = openRollbackPicker(t, model)
+	originalWindow := model.detailTranscript.page()
+	sessionViews.page = clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		OlderCursor:  appInt64Ptr(200),
+		HasMoreAbove: true,
+		NewerCursor:  appInt64Ptr(300),
+		HasMoreBelow: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("candidate-free timeout page"),
+		},
+	}
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(*uiModel)
+	completion := rollbackDetailLoadCompletion(t, cmd)
+	model.rollback.pendingNavigation.deadline = time.Now().Add(-time.Second)
+	next, _ = model.Update(completion)
+	model = next.(*uiModel)
+
+	if model.rollback.pendingNavigation != nil || model.pendingDetailTranscript != nil {
+		t.Fatalf(
+			"timed-out rollback navigation remained pending: navigation=%#v request=%#v",
+			model.rollback.pendingNavigation,
+			model.pendingDetailTranscript,
+		)
+	}
+	assertRollbackSelection(t, model, targetID)
+	if !model.detailTranscript.matchesPage(originalWindow) {
+		t.Fatal("timed-out rollback navigation replaced the visible candidate window")
+	}
+	if model.transientStatusKind != uiStatusNoticeError {
+		t.Fatalf("rollback timeout notice kind = %q, want error", model.transientStatusKind)
+	}
+	if got := sessionViews.pageCount.Load(); got != 2 {
+		t.Fatalf("transcript page reads after timeout = %d, want newest plus one navigation read", got)
+	}
+}
+
 func TestRollbackPageKeysKeepVisibleSelectionAndForkTargetInSync(t *testing.T) {
 	oldestTarget := rollbacktarget.EncodeUserMessageSeq(1)
 	middleTarget := rollbacktarget.EncodeUserMessageSeq(2)
@@ -899,9 +1095,15 @@ func openRollbackPicker(t *testing.T, model *uiModel) *uiModel {
 
 func applyRollbackDetailLoad(t *testing.T, model *uiModel, cmd tea.Cmd) *uiModel {
 	t.Helper()
+	model, _ = applyRollbackDetailLoadWithFollowUp(t, model, cmd)
+	return model
+}
+
+func applyRollbackDetailLoadWithFollowUp(t *testing.T, model *uiModel, cmd tea.Cmd) (*uiModel, tea.Cmd) {
+	t.Helper()
 	completion := rollbackDetailLoadCompletion(t, cmd)
-	next, _ := model.Update(completion)
-	return next.(*uiModel)
+	next, followUp := model.Update(completion)
+	return next.(*uiModel), followUp
 }
 
 func assertRollbackSelection(t *testing.T, model *uiModel, wantTargetID string) {

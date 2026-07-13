@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"core/cli/tui"
 	"core/shared/clientui"
 
@@ -67,9 +69,11 @@ type rollbackCandidate struct {
 }
 
 type uiRollbackPageNavigation struct {
-	direction              tui.DetailTranscriptPageDirection
-	anchorRollbackTargetID string
-	request                clientui.TranscriptPageRequest
+	direction                tui.DetailTranscriptPageDirection
+	anchorRollbackTargetID   string
+	request                  clientui.TranscriptPageRequest
+	deadline                 time.Time
+	skippedCandidateFreePage bool
 }
 
 type uiRollbackState struct {

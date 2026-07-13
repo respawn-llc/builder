@@ -2,6 +2,8 @@ package tui
 
 import (
 	"maps"
+
+	"core/shared/valuecopy"
 )
 
 type DetailPresentationSnapshot struct {
@@ -15,7 +17,7 @@ func (m Model) DetailPresentationSnapshot() DetailPresentationSnapshot {
 	return DetailPresentationSnapshot{
 		loaded:   m.detailPageLoaded,
 		expanded: maps.Clone(m.expanded),
-		selected: cloneIntPointer(m.selected),
+		selected: valuecopy.Pointer(m.selected),
 		scroll:   m.detailScroll,
 	}
 }
@@ -39,12 +41,4 @@ func (m *Model) restoreDetailPresentation(snapshot DetailPresentationSnapshot) {
 		m.setSelectedDetailIndex(*snapshot.selected)
 	}
 	m.detailScroll = clampInt(snapshot.scroll, 0, m.maxDetailScroll())
-}
-
-func cloneIntPointer(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
 }

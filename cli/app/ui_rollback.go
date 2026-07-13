@@ -1,15 +1,22 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
+	"core/shared/valuecopy"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+const uiRollbackNavigationTimeout = 20 * time.Second
+
+var errRollbackNavigationTimedOut = errors.New("rollback history search timed out")
 
 func (m *uiModel) beginRollbackSelectionHydration() tea.Cmd {
 	if m == nil {
@@ -135,8 +142,18 @@ func (m *uiModel) refreshRollbackCandidates() {
 	if m == nil {
 		return
 	}
+	m.rollback.candidates = rollbackCandidatesFromRows(m.detailTranscript.entries)
+	if m.rollback.selectedTargetID == nil {
+		return
+	}
+	if _, _, ok := m.selectedRollbackCandidate(); !ok {
+		m.rollback.selectedTargetID = nil
+	}
+}
+
+func rollbackCandidatesFromRows(rows []clientui.TranscriptCommittedRow) []rollbackCandidate {
 	candidates := make([]rollbackCandidate, 0)
-	for _, row := range m.detailTranscript.entries {
+	for _, row := range rows {
 		if row.Visibility == clientui.EntryVisibilityHidden ||
 			row.Kind != clientui.TranscriptRowUser ||
 			row.User == nil ||
@@ -152,13 +169,7 @@ func (m *uiModel) refreshRollbackCandidates() {
 			Text:             row.User.Text,
 		})
 	}
-	m.rollback.candidates = candidates
-	if m.rollback.selectedTargetID == nil {
-		return
-	}
-	if _, _, ok := m.selectedRollbackCandidate(); !ok {
-		m.rollback.selectedTargetID = nil
-	}
+	return candidates
 }
 
 func (m *uiModel) stopRollbackSelectionMode() {
@@ -265,12 +276,25 @@ func (m *uiModel) requestRollbackSelectionPage(delta int) tea.Cmd {
 		direction:              direction,
 		anchorRollbackTargetID: selected.RollbackTargetID,
 		request:                request,
+		deadline:               time.Now().Add(uiRollbackNavigationTimeout),
 	}
-	cmd := m.loadDetailTranscriptPageCmd(request)
+	cmd := m.loadRollbackNavigationPageCmd(request)
 	if m.pendingDetailTranscript == nil {
 		m.rollback.pendingNavigation = nil
 	}
 	return cmd
+}
+
+func (m *uiModel) loadRollbackNavigationPageCmd(request clientui.TranscriptPageRequest) tea.Cmd {
+	if m == nil || m.rollback.pendingNavigation == nil ||
+		!pageRequestEqual(request, m.rollback.pendingNavigation.request) {
+		return nil
+	}
+	deadline := m.rollback.pendingNavigation.deadline
+	return m.loadDetailTranscriptPageWithOptionsCmd(request, uiDetailTranscriptLoadOptions{
+		noticePolicy: uiDetailTranscriptLoadingNoticeVisible,
+		deadline:     &deadline,
+	})
 }
 
 func (m *uiModel) isRollbackLocatorActivationRequest(request clientui.TranscriptPageRequest) bool {
@@ -317,7 +341,14 @@ func (m *uiModel) reconcileRollbackDetailPageLoad(request clientui.TranscriptPag
 	m.rollback.pendingNavigation = nil
 	m.refreshRollbackCandidates()
 	if len(m.rollback.candidates) == 0 {
-		return nil
+		m.resetRollbackState()
+		return m.sendTransientStatusWithNoticeID(
+			"Rollback navigation produced no selectable candidate",
+			uiStatusNoticeError,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		)
 	}
 	anchorIndex, anchorFound := m.rollbackCandidateIndex(pending.anchorRollbackTargetID)
 	nextIndex := 0
@@ -352,6 +383,81 @@ func (m *uiModel) reconcileRollbackDetailPageLoad(request clientui.TranscriptPag
 	m.setSelectedRollbackCandidate(m.rollback.candidates[nextIndex])
 	m.applyRollbackSelectionHighlight()
 	return nil
+}
+
+func (m *uiModel) continueRollbackNavigationAcrossCandidateFreePage(
+	request clientui.TranscriptPageRequest,
+	page clientui.TranscriptPage,
+) (tea.Cmd, bool) {
+	if m == nil || m.rollback.pendingNavigation == nil ||
+		!pageRequestEqual(request, m.rollback.pendingNavigation.request) ||
+		len(rollbackCandidatesFromRows(page.Entries)) > 0 {
+		return nil, false
+	}
+	nextRequest, ok := rollbackNavigationRequestAfterPage(
+		m.rollback.pendingNavigation.direction,
+		page,
+	)
+	if !ok {
+		m.rollback.pendingNavigation = nil
+		return nil, true
+	}
+	m.rollback.pendingNavigation.request = nextRequest
+	m.rollback.pendingNavigation.skippedCandidateFreePage = true
+	cmd := m.loadRollbackNavigationPageCmd(nextRequest)
+	if m.pendingDetailTranscript == nil {
+		m.rollback.pendingNavigation = nil
+	}
+	return cmd, true
+}
+
+func rollbackNavigationRequestAfterPage(
+	direction tui.DetailTranscriptPageDirection,
+	page clientui.TranscriptPage,
+) (clientui.TranscriptPageRequest, bool) {
+	switch direction {
+	case tui.DetailTranscriptPageOlder:
+		if page.HasMoreAbove && page.OlderCursor != nil {
+			return clientui.TranscriptPageRequest{
+				Cursor: valuecopy.Pointer(page.OlderCursor),
+			}, true
+		}
+	case tui.DetailTranscriptPageNewer:
+		if page.HasMoreBelow && page.NewerCursor != nil {
+			return clientui.TranscriptPageRequest{
+				NewerCursor: valuecopy.Pointer(page.NewerCursor),
+			}, true
+		}
+	}
+	return clientui.TranscriptPageRequest{}, false
+}
+
+func (m *uiModel) rollbackIsolatedPageAnchor(
+	request clientui.TranscriptPageRequest,
+) (tui.DetailTranscriptPageAnchor, bool) {
+	if m.isRollbackLocatorActivationRequest(request) {
+		return tui.DetailTranscriptAnchorBottom, true
+	}
+	pending := m.rollback.pendingNavigation
+	if pending == nil || !pending.skippedCandidateFreePage ||
+		!pageRequestEqual(request, pending.request) {
+		return tui.DetailTranscriptAnchorDefault, false
+	}
+	switch pending.direction {
+	case tui.DetailTranscriptPageOlder:
+		return tui.DetailTranscriptAnchorBottom, true
+	case tui.DetailTranscriptPageNewer:
+		return tui.DetailTranscriptAnchorTop, true
+	default:
+		panic(fmt.Sprintf("invalid rollback page navigation direction: %d", pending.direction))
+	}
+}
+
+func (m *uiModel) rollbackNavigationDeadlineExceeded(request clientui.TranscriptPageRequest) bool {
+	pending := m.rollback.pendingNavigation
+	return pending != nil &&
+		pageRequestEqual(request, pending.request) &&
+		!time.Now().Before(pending.deadline)
 }
 
 func (m *uiModel) rollbackDetailPageLoadFailed(request clientui.TranscriptPageRequest) {
