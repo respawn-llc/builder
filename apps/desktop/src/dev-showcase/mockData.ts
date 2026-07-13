@@ -4,7 +4,7 @@ import type {
   BoardGroup,
   TaskActions,
   TaskStatus,
-  WorkflowBoard,
+  SelectedWorkflowBoard,
   WorkflowPickerItem,
   WorkspaceSummary,
   WorkspaceUnlinkBlocker,
@@ -346,7 +346,7 @@ export const mockBoardNodeCards: Readonly<Record<string, readonly BoardCard[]>> 
   "node-done": mockCards.filter((card) => card.activeNodeIDs.includes("node-done")),
 };
 
-export const mockBoard: WorkflowBoard = {
+export const mockBoard: SelectedWorkflowBoard = {
   columns: mockColumns,
   generatedAt: now,
   groups: mockGroups,

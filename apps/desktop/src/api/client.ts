@@ -230,7 +230,7 @@ export class ApiClient {
     );
   }
 
-  async getBoard(projectID: string, workflowID: string): Promise<WorkflowBoard> {
+  async getBoard(projectID: string, workflowID: string | undefined): Promise<WorkflowBoard> {
     return parse(
       "workflow.board.get",
       workflowBoardSchema,
@@ -238,7 +238,7 @@ export class ApiClient {
         "workflow.board.get",
         compactJsonObject({
           project_id: projectID,
-          workflow_id: workflowID.length > 0 ? workflowID : undefined,
+          workflow_id: workflowID,
         }),
       ),
     );

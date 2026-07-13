@@ -134,9 +134,9 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 		return serverapi.WorkflowBoard{}, err
 	}
 	workspaceContext := boardProjectWorkspaceContext(project)
-	requestedWorkflowID := strings.TrimSpace(req.WorkflowID)
-	selected := selectWorkflow(picker, requestedWorkflowID)
-	if selected.WorkflowID == "" {
+	selector := workflowBoardSelectorFromRequest(req)
+	selected := selector.selectFrom(picker)
+	if selected == nil {
 		return serverapi.WorkflowBoard{ProjectID: projectID, Project: projectBoardProject(project, workspaceContext), WorkflowPicker: picker, GeneratedAtUnixMs: time.Now().UTC().UnixMilli()}, nil
 	}
 	def := definitions[selected.WorkflowID]
@@ -355,24 +355,19 @@ func (s *Service) workflowSelectionInputs(ctx context.Context, projectID string,
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	workflowIDs := make([]string, 0, len(links)+len(taskActivityRows))
-	seen := map[string]bool{}
+	workflowIDs := make([]string, 0, len(links))
 	linkByWorkflowID := map[string]sqlitegen.ProjectWorkflowLinkRecord{}
 	for _, link := range links {
-		if linkByWorkflowID[link.WorkflowID].ID == "" {
-			linkByWorkflowID[link.WorkflowID] = link
+		if _, exists := linkByWorkflowID[link.WorkflowID]; exists {
+			continue
 		}
-		if !seen[link.WorkflowID] {
-			workflowIDs = append(workflowIDs, link.WorkflowID)
-			seen[link.WorkflowID] = true
-		}
+		linkByWorkflowID[link.WorkflowID] = link
+		workflowIDs = append(workflowIDs, link.WorkflowID)
 	}
 	activityByWorkflowID := map[string]int64{}
 	for _, activity := range taskActivityRows {
-		activityByWorkflowID[activity.WorkflowID] = activity.LatestUpdatedAtUnixMs
-		if !seen[activity.WorkflowID] {
-			workflowIDs = append(workflowIDs, activity.WorkflowID)
-			seen[activity.WorkflowID] = true
+		if _, linked := linkByWorkflowID[activity.WorkflowID]; linked {
+			activityByWorkflowID[activity.WorkflowID] = activity.LatestUpdatedAtUnixMs
 		}
 	}
 	definitions := make(map[string]serverapi.WorkflowDefinition, len(workflowIDs))
@@ -385,15 +380,18 @@ func (s *Service) workflowSelectionInputs(ctx context.Context, projectID string,
 		}
 		definitions[workflowID] = def
 		nodeKindsByWorkflowID[workflowID] = nodeKinds
-		link := linkByWorkflowID[workflowID]
+		link, linked := linkByWorkflowID[workflowID]
+		if !linked {
+			return nil, nil, nil, fmt.Errorf("workflow selection invariant violated: active link missing for project_id=%q workflow_id=%q", projectID, workflowID)
+		}
 		validation := definitionExecutionValidation(def, roleResolver)
 		picker = append(picker, serverapi.WorkflowPickerItem{
 			WorkflowID:           workflowID,
 			DisplayName:          def.Workflow.Name,
 			Description:          def.Workflow.Description,
 			Version:              def.Workflow.Version,
-			IsProjectDefault:     link.ID != "" && link.IsDefault != 0,
-			ValidForTaskCreation: !validation.HasBlockingErrors() && link.ID != "",
+			IsProjectDefault:     link.IsDefault != 0,
+			ValidForTaskCreation: !validation.HasBlockingErrors(),
 			ValidationErrors:     ValidationErrors(def.Workflow.ID, validation.Errors),
 		})
 	}
@@ -2115,24 +2113,53 @@ func scriptPathDefinitionValidationErrors(def workflow.Definition, rootPath *str
 	return out
 }
 
-func selectWorkflow(picker []serverapi.WorkflowPickerItem, requested string) serverapi.WorkflowPickerItem {
-	trimmed := strings.TrimSpace(requested)
-	if trimmed != "" {
-		for _, item := range picker {
-			if item.WorkflowID == trimmed {
-				return item
-			}
+type workflowBoardSelector interface {
+	selectFrom(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem
+}
+
+type workflowBoardDefaultSelector struct{}
+
+func (workflowBoardDefaultSelector) selectFrom(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem {
+	return defaultWorkflowBoardSelection(picker)
+}
+
+type workflowBoardExplicitSelector struct {
+	workflowID string
+}
+
+func (s workflowBoardExplicitSelector) selectFrom(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem {
+	if selected := exactWorkflowBoardSelection(picker, s.workflowID); selected != nil {
+		return selected
+	}
+	return defaultWorkflowBoardSelection(picker)
+}
+
+func workflowBoardSelectorFromRequest(req serverapi.WorkflowBoardRequest) workflowBoardSelector {
+	if req.WorkflowID != nil {
+		return workflowBoardExplicitSelector{workflowID: *req.WorkflowID}
+	}
+	return workflowBoardDefaultSelector{}
+}
+
+func exactWorkflowBoardSelection(picker []serverapi.WorkflowPickerItem, workflowID string) *serverapi.WorkflowPickerItem {
+	for index := range picker {
+		if picker[index].WorkflowID == workflowID {
+			return &picker[index]
 		}
 	}
-	for _, item := range picker {
-		if item.IsProjectDefault {
-			return item
+	return nil
+}
+
+func defaultWorkflowBoardSelection(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem {
+	for index := range picker {
+		if picker[index].IsProjectDefault {
+			return &picker[index]
 		}
 	}
 	if len(picker) == 0 {
-		return serverapi.WorkflowPickerItem{}
+		return nil
 	}
-	return picker[0]
+	return &picker[0]
 }
 
 func boardGroups(def serverapi.WorkflowDefinition) []serverapi.WorkflowBoardGroup {

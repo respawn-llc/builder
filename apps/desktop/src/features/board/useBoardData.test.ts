@@ -41,6 +41,22 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
     ).toBe(true);
     expect(shouldRefreshBoardFromProjectEvent({}, "workflow-route", "workflow-active")).toBe(true);
   });
+  it("refreshes workflow links without a selected workflow and skips unrelated task events", () => {
+    expect(
+      shouldRefreshBoardFromProjectEvent(
+        eventParams({ resource: "workflow_link", workflow_id: "workflow-new" }),
+        undefined,
+        undefined,
+      ),
+    ).toBe(true);
+    expect(
+      shouldRefreshBoardFromProjectEvent(
+        eventParams({ resource: "task", workflow_id: "workflow-other" }),
+        undefined,
+        undefined,
+      ),
+    ).toBe(false);
+  });
 
   it("retains three bidirectional pages and releases them when the column owner unmounts", async () => {
     const pages = [

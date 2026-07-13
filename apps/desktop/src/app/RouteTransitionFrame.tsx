@@ -22,8 +22,8 @@ export function RouteTransitionFrame() {
 
 function routeTransitionKey(pathname: string, searchStr: string): string {
   if (pathname.startsWith("/projects/")) {
-    const workflowID = new URLSearchParams(searchStr).get("workflowId") ?? "";
-    return `${pathname}?workflowId=${workflowID}`;
+    const workflowID = new URLSearchParams(searchStr).get("workflowId");
+    return workflowID === null ? `${pathname}?` : `${pathname}?workflowId=${workflowID}`;
   }
   return `${pathname}?${searchStr}`;
 }

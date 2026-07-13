@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { BoardColumn, WorkflowBoard } from "../../api";
+import type { BoardColumn, SelectedWorkflowBoard } from "../../api";
 import { errorMessage } from "../../api/errors";
 import type { VirtualizedInfiniteListBoundaryState } from "../../ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
@@ -49,7 +49,7 @@ export function BoardColumnDataOwner({
   onInterruptedRunObserved,
   onReportColumnSnapshot,
 }: Readonly<{
-  board: WorkflowBoard;
+  board: SelectedWorkflowBoard;
   column: BoardColumn;
   onCardsLoadError: (error: unknown) => void;
   onDataViewChange: (view: BoardColumnDataView) => void;

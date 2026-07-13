@@ -153,6 +153,10 @@ describe("navigation stack state", () => {
     });
     expectRoute(router, "/projects/project-1", { taskId: "", workflowId: "workflow-1" });
     await act(async () => {
+      await navigation.openProject("project-unscoped");
+    });
+    expectRoute(router, "/projects/project-unscoped", { taskId: "" });
+    await act(async () => {
       await navigation.openProjectTask("project-1", "workflow-1", "task-1");
     });
     expectRoute(router, "/projects/project-1", {
@@ -164,11 +168,15 @@ describe("navigation stack state", () => {
     });
     expectRoute(router, "/projects/project-1", { taskId: "", workflowId: "workflow-1" });
     await act(async () => {
+      await navigation.closeProjectTask("project-unscoped");
+    });
+    expectRoute(router, "/projects/project-unscoped", { taskId: "" });
+    await act(async () => {
       await navigation.openHome();
     });
     expectRoute(router, "/", {});
 
-    expect(startViewTransition).toHaveBeenCalledTimes(5);
+    expect(startViewTransition).toHaveBeenCalledTimes(6);
   });
 });
 

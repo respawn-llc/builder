@@ -9,7 +9,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { BoardColumn, WorkflowBoard } from "../../api";
+import type { BoardColumn, SelectedWorkflowBoard } from "../../api";
 import { useStableCallback, type VirtualizedInfiniteListBoundaryState } from "../../ui";
 import {
   BoardColumnDataOwner,
@@ -27,7 +27,7 @@ import { useColumnVisibility } from "./useColumnVisibility";
 export type BoardColumnMotionBoundaryProps = Readonly<{
   activeDrag: ActiveBoardCardDrag | null;
   actionsDisabled: boolean;
-  board: WorkflowBoard;
+  board: SelectedWorkflowBoard;
   displayedCards: readonly KanbanCardVM[] | undefined;
   column: BoardColumn;
   dropState: BoardColumnDropState;

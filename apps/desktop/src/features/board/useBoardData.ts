@@ -13,7 +13,7 @@ import { useAppServices } from "../../app/useAppServices";
 import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
 import { workflowProjectEvent, workflowProjectQuestionTaskID } from "../../app/workflowProjectEvents";
 
-export function useBoard(projectID: string, workflowID: string) {
+export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
   return useQuery({
     queryKey: queryKeys.board(projectID, workflowID),
@@ -44,9 +44,9 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
 
 export function useProjectBoardSubscription(
   projectID: string,
-  boardQueryWorkflowID: string,
+  boardQueryWorkflowID: string | undefined,
   input: Readonly<{
-    selectedWorkflowID: string;
+    selectedWorkflowID: string | undefined;
     selectedTaskID?: string;
     onBackgroundError?: (error: unknown) => void;
     onSelectedTaskDeleted?: () => void;
@@ -69,12 +69,14 @@ export function useProjectBoardSubscription(
     }
     async function refresh(): Promise<void> {
       await queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, boardQueryWorkflowID) });
-      if (selectedWorkflowID !== boardQueryWorkflowID) {
+      if (selectedWorkflowID !== undefined && selectedWorkflowID !== boardQueryWorkflowID) {
         await queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, selectedWorkflowID) });
       }
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.boardNodeCardsRoot(projectID, selectedWorkflowID),
-      });
+      if (selectedWorkflowID !== undefined) {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.boardNodeCardsRoot(projectID, selectedWorkflowID),
+        });
+      }
       await queryClient.invalidateQueries({ queryKey: queryKeys.attention("") });
       await queryClient.invalidateQueries({ queryKey: queryKeys.attention(projectID) });
     }
@@ -138,8 +140,8 @@ function isDeletedTaskEvent(params: unknown, taskID: string): boolean {
 
 export function shouldRefreshBoardFromProjectEvent(
   params: unknown,
-  boardQueryWorkflowID: string,
-  selectedWorkflowID: string,
+  boardQueryWorkflowID: string | undefined,
+  selectedWorkflowID: string | undefined,
 ): boolean {
   const event = workflowProjectEvent(params);
   if (event === null) {
@@ -160,7 +162,7 @@ export function shouldRefreshBoardFromProjectEvent(
 
 export function useBoardTaskActions(
   projectID: string,
-  boardQueryWorkflowID: string,
+  boardQueryWorkflowID: string | undefined,
   selectedWorkflowID: string,
 ) {
   const { api } = useAppServices();

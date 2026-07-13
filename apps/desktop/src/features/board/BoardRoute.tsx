@@ -2,7 +2,7 @@ import type { DragEvent, SyntheticEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { BoardColumn, WorkflowBoard } from "../../api";
+import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "../../api";
 import { errorMessage } from "../../api/errors";
 import { useAppNavigation } from "../../app/navigation";
 import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
@@ -49,7 +49,7 @@ import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./us
 
 export type BoardRouteProps = Readonly<{
   projectId: string;
-  workflowId: string;
+  workflowId: string | undefined;
   selectedTaskId: string;
 }>;
 
@@ -86,6 +86,7 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
   );
   const boardQuery = useBoard(projectId, workflowId);
   const board = boardQuery.data;
+  const selectedWorkflowID = board?.selectedWorkflow?.id;
   const handleSelectedTaskDeleted = useCallback(() => {
     // The task detail sidebar is opened independently of the route, so closing
     // the route task alone would leave it mounted and refetching the now-deleted
@@ -93,12 +94,9 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
     if (activeDestination?.kind === "taskDetail" && activeDestination.taskID === selectedTaskId) {
       closeSidebar();
     }
-    void navigation
-      .closeProjectTask(projectId, board?.selectedWorkflow.id ?? workflowId)
-      .catch(reportBoardNavigationError);
+    void navigation.closeProjectTask(projectId, workflowId).catch(reportBoardNavigationError);
   }, [
     activeDestination,
-    board?.selectedWorkflow.id,
     closeSidebar,
     navigation,
     projectId,
@@ -110,7 +108,7 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
     onBackgroundError: reportBoardLoadError,
     onSelectedTaskDeleted: handleSelectedTaskDeleted,
     selectedTaskID: selectedTaskId,
-    selectedWorkflowID: board?.selectedWorkflow.id ?? workflowId,
+    selectedWorkflowID,
   });
 
   if (boardQuery.isPending) {
@@ -128,7 +126,7 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
       />
     );
   }
-  if (board === undefined || board.workflows.length === 0) {
+  if (board === undefined || !hasSelectedWorkflow(board)) {
     return <BoardNoWorkflowState projectID={projectId} />;
   }
 
@@ -140,8 +138,8 @@ function BoardContent({
   boardQueryWorkflowID,
   selectedTaskId,
 }: Readonly<{
-  board: WorkflowBoard;
-  boardQueryWorkflowID: string;
+  board: SelectedWorkflowBoard;
+  boardQueryWorkflowID: string | undefined;
   selectedTaskId: string;
 }>) {
   const { t } = useTranslation();

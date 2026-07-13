@@ -16,7 +16,7 @@ export type AppNavigation = Readonly<{
   openWorkflowLibrary(): Promise<void>;
   openTask(taskID: string): Promise<void>;
   openProjectTask(projectID: string, workflowID: string, taskID: string): Promise<void>;
-  closeProjectTask(projectID: string, workflowID: string): Promise<void>;
+  closeProjectTask(projectID: string, workflowID?: string): Promise<void>;
 }>;
 
 export type NavigationStackState = Readonly<{
@@ -66,7 +66,7 @@ export function useAppNavigation(): AppNavigation {
           await navigate({ to: "/" });
         });
       },
-      async openProject(projectID, workflowID = "") {
+      async openProject(projectID, workflowID) {
         await runNavigation(async () => {
           await navigate({
             to: "/projects/$projectId",

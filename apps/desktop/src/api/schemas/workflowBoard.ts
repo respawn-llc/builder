@@ -230,7 +230,9 @@ export const workflowBoardSchema: z.ZodType<WorkflowBoard> = z
             attached_workspace_count: z.number().int().positive(),
           })
           .strict(),
-        selected_workflow: workflowPickerItemSchema,
+        selected_workflow: workflowPickerItemSchema
+          .nullish()
+          .transform((value) => value ?? null),
         workflows: workflowPickerSchema,
         groups: boardGroupsSchema,
         columns: boardColumnsSchema,

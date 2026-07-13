@@ -926,8 +926,8 @@ type WorkflowTaskCommentDeleteRequest struct {
 }
 
 type WorkflowBoardRequest struct {
-	ProjectID  string `json:"project_id"`
-	WorkflowID string `json:"workflow_id,omitempty"`
+	ProjectID  string  `json:"project_id"`
+	WorkflowID *string `json:"workflow_id,omitempty"`
 }
 
 type WorkflowTaskStatusKind string
@@ -1143,7 +1143,7 @@ type WorkflowBoardNodeCardsListResponse struct {
 type WorkflowBoard struct {
 	ProjectID         string                `json:"project_id"`
 	Project           ProjectBoardProject   `json:"project"`
-	SelectedWorkflow  WorkflowPickerItem    `json:"selected_workflow"`
+	SelectedWorkflow  *WorkflowPickerItem   `json:"selected_workflow,omitempty"`
 	WorkflowPicker    []WorkflowPickerItem  `json:"workflows"`
 	Groups            []WorkflowBoardGroup  `json:"groups"`
 	Columns           []WorkflowBoardColumn `json:"columns"`
@@ -2087,7 +2087,10 @@ func (r WorkflowTaskCommentDeleteRequest) Validate() error {
 }
 
 func (r WorkflowBoardRequest) Validate() error {
-	return validateRequired("project_id", r.ProjectID)
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
+	return validateOptionalNonBlank("workflow_id", r.WorkflowID)
 }
 
 func (r WorkflowTaskListRequest) Validate() error {
@@ -2101,14 +2104,8 @@ func (r WorkflowTaskListRequest) Validate() error {
 		{field: "project_id", value: r.ProjectID},
 		{field: "workflow_id", value: r.WorkflowID},
 	} {
-		if scope.value == nil {
-			continue
-		}
-		if strings.TrimSpace(*scope.value) == "" {
-			return workflowRequestError(WorkflowRequestErrorRequired, scope.field, scope.field+" must not be blank")
-		}
-		if strings.TrimSpace(*scope.value) != *scope.value {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, scope.field, scope.field+" must not have leading or trailing whitespace")
+		if err := validateOptionalNonBlank(scope.field, scope.value); err != nil {
+			return err
 		}
 	}
 	if r.PageSize < 0 {
@@ -2231,6 +2228,19 @@ func (r WorkflowTaskActivityListRequest) Validate() error {
 func validateRequired(name string, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return workflowRequestError(WorkflowRequestErrorRequired, name, name+" is required")
+	}
+	return nil
+}
+
+func validateOptionalNonBlank(name string, value *string) error {
+	if value == nil {
+		return nil
+	}
+	if strings.TrimSpace(*value) == "" {
+		return workflowRequestError(WorkflowRequestErrorRequired, name, name+" must not be blank")
+	}
+	if strings.TrimSpace(*value) != *value {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, name, name+" must not have leading or trailing whitespace")
 	}
 	return nil
 }
