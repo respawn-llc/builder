@@ -469,7 +469,7 @@ func TestEmbeddedAppServerPrepareRuntimeRegistersRuntimeForSessionViews(t *testi
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test prepare runtime")
 	defer runtimePlan.Close()
 	if err := runtimePlan.Wiring.runtimeControls.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Level: "high"}); err != nil {
 		t.Fatalf("set thinking level: %v", err)
@@ -496,7 +496,7 @@ func TestEmbeddedAppServerPrepareRuntimeWiresProcessReadsForUIHydration(t *testi
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime process reads")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test prepare runtime process reads")
 	defer runtimePlan.Close()
 	if runtimePlan.Wiring.processViews == nil {
 		t.Fatal("expected PrepareRuntime to wire process view client")
@@ -550,7 +550,7 @@ func TestEmbeddedAppServerPrepareRuntimeExposesPendingAsksAndApprovals(t *testin
 	}
 	defer func() { _ = server.Close() }()
 
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime pending prompts")
+	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test prepare runtime pending prompts")
 	defer runtimePlan.Close()
 	if runtimePlan.Wiring.askViews == nil || runtimePlan.Wiring.approvalViews == nil || runtimePlan.Wiring.promptControl == nil {
 		t.Fatal("expected PrepareRuntime to wire shared prompt clients")
@@ -608,7 +608,7 @@ func TestEmbeddedAppServerPrepareRuntimeWiresSessionActivityForSharedClients(t *
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime session activity")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test prepare runtime session activity")
 	defer runtimePlan.Close()
 
 	reads := server.SessionViewClient()
@@ -668,10 +668,10 @@ func TestEmbeddedAppServerPrepareRuntimeIsolatesSessionActivityBetweenSessions(t
 	}
 	defer func() { _ = server.Close() }()
 
-	planA, runtimePlanA := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime session activity A")
+	planA, runtimePlanA := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test prepare runtime session activity A")
 	defer runtimePlanA.Close()
 
-	planB, runtimePlanB := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime session activity B")
+	planB, runtimePlanB := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test prepare runtime session activity B")
 	defer runtimePlanB.Close()
 
 	activity := server.inner.SessionActivityClient()
@@ -734,10 +734,10 @@ func TestEmbeddedAppServerRoutesBackgroundCompletionToOwningSessionOnly(t *testi
 	}
 	defer func() { _ = server.Close() }()
 
-	planA, runtimePlanA := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test background completion isolation A")
+	planA, runtimePlanA := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test background completion isolation A")
 	defer runtimePlanA.Close()
 
-	planB, runtimePlanB := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test background completion isolation B")
+	planB, runtimePlanB := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test background completion isolation B")
 	defer runtimePlanB.Close()
 
 	activity := server.inner.SessionActivityClient()

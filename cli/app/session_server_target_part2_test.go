@@ -76,7 +76,7 @@ func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *t
 
 	t.Log("planning interactive session")
 	planner := newSessionLaunchPlanner(bound)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 	if err != nil {
 		t.Fatalf("ensureInteractiveProjectBinding: %v", err)
 	}
-	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
+	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after rebound no auth")
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -277,7 +277,7 @@ func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
 	}
 
 	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	}
 	defer func() { _ = server.Close() }()
 
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote interactive runtime override")
+	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "test remote interactive runtime override")
 	defer runtimePlan.Close()
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive override")
@@ -474,7 +474,7 @@ func TestStartSessionServerPreservesExplicitCLIToolsWithCLIModelOverride(t *test
 	defer func() { _ = server.Close() }()
 
 	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 	defer func() { _ = server.Close() }()
 	promptViews := requirePromptViewServer(t, server)
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote prompt round trip")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "test remote prompt round trip")
 	defer runtimePlan.Close()
 
 	askDone := make(chan struct {

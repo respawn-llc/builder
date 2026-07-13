@@ -112,8 +112,12 @@ func resolveSessionTransition(ctx context.Context, req sessionTransitionResolveR
 	case serverapi.SessionTransitionActionResume:
 		return resolvedSessionTransition{ShouldContinue: true}, nil
 	case serverapi.SessionTransitionActionOpenSession:
+		targetSessionID := strings.TrimSpace(req.Transition.TargetSessionID)
+		if targetSessionID == "" {
+			return resolvedSessionTransition{}, errors.New("open-session target session id is required")
+		}
 		return resolvedSessionTransition{
-			NextSessionID:  strings.TrimSpace(req.Transition.TargetSessionID),
+			NextSessionID:  targetSessionID,
 			InitialInput:   req.Transition.InitialInput,
 			ShouldContinue: true,
 		}, nil

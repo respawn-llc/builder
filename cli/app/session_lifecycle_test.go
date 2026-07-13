@@ -20,7 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -680,20 +679,9 @@ func TestResolveSessionActionResumeReopensPicker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if !resolved.ShouldContinue {
-		t.Fatal("expected lifecycle to continue for resume action")
-	}
-	if resolved.NextSessionID != "" {
-		t.Fatalf("expected empty session id to force picker, got %q", resolved.NextSessionID)
-	}
-	if resolved.ForceNewSession {
-		t.Fatal("did not expect force-new for resume action")
-	}
-	if resolved.ParentSessionID != "" {
-		t.Fatalf("expected no parent session id on resume, got %q", resolved.ParentSessionID)
-	}
-	if resolved.InitialPrompt != "" || resolved.InitialInput != "" {
-		t.Fatalf("expected no initial payload on resume, got prompt=%q input=%q", resolved.InitialPrompt, resolved.InitialInput)
+	requireSessionPickerDestination(t, resolved)
+	if resolved.InitialPrompt != nil || resolved.InitialInput.TransitionInput != "" {
+		t.Fatalf("expected no initial payload on resume, got prompt=%+v input=%q", resolved.InitialPrompt, resolved.InitialInput.TransitionInput)
 	}
 }
 
@@ -708,7 +696,7 @@ func TestResolveSessionActionExitStaysClientLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if resolved.ShouldContinue {
+	if resolved != nil {
 		t.Fatal("expected exit transition not to continue")
 	}
 }
@@ -724,20 +712,12 @@ func TestResolveSessionActionNewSessionUsesForceNewFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if !resolved.ShouldContinue {
-		t.Fatal("expected lifecycle to continue for new session action")
+	parent := requireSessionCreateDestination(t, resolved)
+	if parent == nil || parent.SessionID() != "parent-1" {
+		t.Fatalf("expected parent session id passthrough, got %+v", parent)
 	}
-	if !resolved.ForceNewSession {
-		t.Fatal("expected force-new session flow")
-	}
-	if resolved.NextSessionID != "" {
-		t.Fatalf("expected empty session id for force-new flow, got %q", resolved.NextSessionID)
-	}
-	if resolved.ParentSessionID != "parent-1" {
-		t.Fatalf("expected parent session id passthrough, got %q", resolved.ParentSessionID)
-	}
-	if resolved.InitialPrompt != "hello" || resolved.InitialInput != "" {
-		t.Fatalf("expected initial prompt passthrough, got prompt=%q input=%q", resolved.InitialPrompt, resolved.InitialInput)
+	if resolved.InitialPrompt == nil || resolved.InitialPrompt.Text != "hello" || resolved.InitialInput.TransitionInput != "" {
+		t.Fatalf("expected initial prompt passthrough, got prompt=%+v input=%q", resolved.InitialPrompt, resolved.InitialInput.TransitionInput)
 	}
 }
 
@@ -766,7 +746,7 @@ func TestResolveSessionActionPreservesInitialPromptHistoryRecorded(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if !resolved.InitialPromptHistoryRecorded {
+	if resolved == nil || resolved.InitialPrompt == nil || !resolved.InitialPrompt.HistoryRecorded {
 		t.Fatal("expected resolved transition to preserve initial prompt-history flag")
 	}
 }
@@ -799,11 +779,12 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if !resolved.ShouldContinue || !resolved.ForceNewSession {
-		t.Fatalf("expected new-session transition, shouldContinue=%t forceNew=%t", resolved.ShouldContinue, resolved.ForceNewSession)
+	parent := requireSessionCreateDestination(t, resolved)
+	if parent == nil || parent.SessionID() != "parent-1" {
+		t.Fatalf("expected new-session parent, got %+v", parent)
 	}
-	if resolved.NextSessionID != "" || resolved.InitialPrompt != "hello" || resolved.InitialInput != "" {
-		t.Fatalf("unexpected transition payload nextSessionID=%q initialPrompt=%q initialInput=%q", resolved.NextSessionID, resolved.InitialPrompt, resolved.InitialInput)
+	if resolved.InitialPrompt == nil || resolved.InitialPrompt.Text != "hello" || resolved.InitialInput.TransitionInput != "" {
+		t.Fatalf("unexpected transition payload initialPrompt=%+v initialInput=%q", resolved.InitialPrompt, resolved.InitialInput.TransitionInput)
 	}
 
 	testServer := &testEmbeddedServer{
@@ -815,12 +796,11 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 		containerDir: root,
 	}
 	planner := &launchPlanner{server: testServer}
-	storePlan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{
-		Mode:              launchModeInteractive,
-		SelectedSessionID: resolved.NextSessionID,
-		ForceNewSession:   resolved.ForceNewSession,
-		ParentSessionID:   resolved.ParentSessionID,
-	})
+	launchRequest, err := sessionLaunchRequestFromHandoff(*resolved, serverapi.RunPromptOverrides{})
+	if err != nil {
+		t.Fatalf("build next-session launch request: %v", err)
+	}
+	storePlan, err := planner.PlanSession(context.Background(), launchRequest)
 	if err != nil {
 		t.Fatalf("open or create next session: %v", err)
 	}
@@ -921,11 +901,11 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 		t.Fatalf("resolve session action: %v", err)
 	}
 	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(ctx, sessionLaunchRequest{
-		Mode:            launchModeInteractive,
-		ForceNewSession: resolved.ForceNewSession,
-		ParentSessionID: resolved.ParentSessionID,
-	})
+	launchRequest, err := sessionLaunchRequestFromHandoff(*resolved, serverapi.RunPromptOverrides{})
+	if err != nil {
+		t.Fatalf("build child launch request: %v", err)
+	}
+	plan, err := planner.PlanSession(ctx, launchRequest)
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
 	}
@@ -963,35 +943,14 @@ func TestResolveSessionActionOpenSessionUsesTargetID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if !resolved.ShouldContinue {
-		t.Fatal("expected lifecycle to continue for open session action")
+	if got := requireSessionOpenDestination(t, resolved); got != "session-42" {
+		t.Fatalf("expected target session id passthrough, got %q", got)
 	}
-	if resolved.NextSessionID != "session-42" {
-		t.Fatalf("expected target session id passthrough, got %q", resolved.NextSessionID)
+	if resolved.InitialPrompt != nil {
+		t.Fatalf("expected no initial prompt, got %+v", resolved.InitialPrompt)
 	}
-	if resolved.InitialPrompt != "" {
-		t.Fatalf("expected no initial prompt, got %q", resolved.InitialPrompt)
-	}
-	if resolved.InitialInput != "draft reply" {
-		t.Fatalf("expected initial input passthrough, got %q", resolved.InitialInput)
-	}
-	if resolved.ParentSessionID != "" {
-		t.Fatalf("expected no parent session id, got %q", resolved.ParentSessionID)
-	}
-	if resolved.ForceNewSession {
-		t.Fatal("did not expect force-new session")
-	}
-}
-
-func TestSessionLaunchInitialInputUsesNarrowLifecycleClientFallback(t *testing.T) {
-	got := sessionLaunchInitialInputFromServer(
-		context.Background(),
-		narrowSessionLifecycleServer{},
-		"session-1",
-		"typed draft",
-	)
-	if got != "typed draft" {
-		t.Fatalf("initial input = %q, want fallback transition input", got)
+	if resolved.InitialInput.TransitionInput != "draft reply" {
+		t.Fatalf("expected initial input passthrough, got %q", resolved.InitialInput.TransitionInput)
 	}
 }
 
@@ -1055,7 +1014,7 @@ func TestResolveSessionActionReauthenticatesThroughNarrowServer(t *testing.T) {
 	if reauthCalls != 1 {
 		t.Fatalf("reauth calls = %d, want 1", reauthCalls)
 	}
-	if !resolved.ShouldContinue || resolved.NextSessionID != "next-1" {
+	if got := requireSessionOpenDestination(t, resolved); got != "next-1" {
 		t.Fatalf("resolved = %+v, want continue to next-1", resolved)
 	}
 }
@@ -1194,34 +1153,6 @@ func TestNormalExitUsesNormalRuntimePlanClose(t *testing.T) {
 	}
 }
 
-func TestResolveAndReleaseSessionActionReturnsReleaseFailureBeforeDestinationCanPlan(t *testing.T) {
-	releaseErr := errors.New("release failed")
-	events := make([]string, 0, 2)
-	server := narrowSessionLifecycleServer{
-		lifecycle: &recordingSessionLifecycleClient{
-			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-				events = append(events, "resolve")
-				return serverapi.SessionResolveTransitionResponse{ShouldContinue: true, NextSessionID: "destination"}, nil
-			},
-		},
-	}
-	plan := &runtimeLaunchPlan{close: func() error {
-		events = append(events, "release")
-		return releaseErr
-	}}
-
-	resolved, err := resolveAndReleaseSessionAction(context.Background(), server, nil, "origin", UITransition{Action: UIActionResume}, plan)
-	if !errors.Is(err, releaseErr) {
-		t.Fatalf("error = %v, want release failure", err)
-	}
-	if resolved.ShouldContinue || resolved.NextSessionID != "" {
-		t.Fatalf("release failure returned destination %+v", resolved)
-	}
-	if got := strings.Join(events, ","); got != "resolve,release" {
-		t.Fatalf("event order = %q, want resolve,release", got)
-	}
-}
-
 func TestExitReleaseFailureReturnsAfterUILoopResult(t *testing.T) {
 	releaseErr := errors.New("release failed")
 	uiLoopReturned := false
@@ -1261,7 +1192,7 @@ func TestResumeReleaseCompletesBeforePickerAndPickerCancelDoesNotReleaseAgain(t 
 		}
 		return sessionPickerResult{Canceled: true}, nil
 	}
-	resolved, err := resolveAndReleaseSessionAction(
+	resolved, err := resolveAndReleaseSessionHandoff(
 		context.Background(),
 		narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
 			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
@@ -1279,10 +1210,8 @@ func TestResumeReleaseCompletesBeforePickerAndPickerCancelDoesNotReleaseAgain(t 
 	if err != nil {
 		t.Fatalf("resolve and release resume: %v", err)
 	}
-	if !resolved.ShouldContinue || resolved.NextSessionID != "" {
-		t.Fatalf("resolved resume = %+v", resolved)
-	}
-	if _, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive}); !errors.Is(err, projectbinding.ErrStartupCanceledByUser) {
+	requireSessionPickerDestination(t, resolved)
+	if _, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}); !errors.Is(err, projectbinding.ErrStartupCanceledByUser) {
 		t.Fatalf("picker result error = %v, want cancellation", err)
 	}
 	if releaseCalls != 1 {

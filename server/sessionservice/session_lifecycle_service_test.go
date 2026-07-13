@@ -135,6 +135,68 @@ func TestServiceGetInitialInputPrefersStoredDraft(t *testing.T) {
 	}
 }
 
+func TestServiceGetInitialInputOverrideReturnsOnlyExactTransitionInput(t *testing.T) {
+	tests := []struct {
+		name            string
+		transitionInput string
+	}{
+		{
+			name:            "byte-sensitive input",
+			transitionInput: " \nExact café 👩🏽‍💻\n尾  ",
+		},
+		{
+			name:            "intentional empty input",
+			transitionInput: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, containerDir, store := createPersistedSession(t)
+			if err := store.SetName("parent session"); err != nil {
+				t.Fatalf("persist parent session: %v", err)
+			}
+			service := newTestSessionLifecycleService(containerDir, nil)
+			_, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
+				ClientRequestID: "persist-parent-draft",
+				SessionID:       store.Meta().SessionID,
+				Input:           "conflicting parent draft",
+				RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
+					{
+						Kind:            serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+						ID:              "pending-parent-input",
+						ClientRequestID: "pending-parent-request",
+						Text:            "conflicting pending input",
+					},
+					{
+						Kind: serverapi.SessionDraftRecoveryBufferQueuedInput,
+						ID:   "queued-parent-input",
+						Text: "conflicting queued input",
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("persist parent draft: %v", err)
+			}
+
+			resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
+				SessionID:           store.Meta().SessionID,
+				TransitionInput:     tt.transitionInput,
+				OverrideStoredDraft: true,
+			})
+			if err != nil {
+				t.Fatalf("GetInitialInput: %v", err)
+			}
+			if resp.Input != tt.transitionInput {
+				t.Fatalf("input = %q, want exact transition input %q", resp.Input, tt.transitionInput)
+			}
+			if len(resp.RecoveryBuffers) != 0 {
+				t.Fatalf("recovery buffers = %+v, want none from overridden parent draft", resp.RecoveryBuffers)
+			}
+		})
+	}
+}
+
 func TestServiceGetInitialInputAllowsEmptySessionID(t *testing.T) {
 	service := newTestSessionLifecycleService(t.TempDir(), nil)
 	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
@@ -356,6 +418,19 @@ func TestServiceResolveTransitionRejectsPathLikeSessionID(t *testing.T) {
 	})
 	if !errors.Is(err, serverapi.ErrSessionIDNotSingle) {
 		t.Fatalf("expected path-like session id rejection, got %v", err)
+	}
+}
+
+func TestServiceResolveTransitionOpenSessionRequiresTarget(t *testing.T) {
+	service := newTestSessionLifecycleService(t.TempDir(), nil)
+	response, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
+		ClientRequestID: "open-session-without-target",
+		Transition: serverapi.SessionTransition{
+			Action: serverapi.SessionTransitionActionOpenSession,
+		},
+	})
+	if err == nil {
+		t.Fatalf("open-session transition without target resolved as %+v", response)
 	}
 }
 

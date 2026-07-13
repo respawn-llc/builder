@@ -26,7 +26,7 @@ func TestEmbeddedAppServerDeliversBackgroundCompletionWhileIdle(t *testing.T) {
 		t.Fatalf("start embedded server: %v", err)
 	}
 	defer func() { _ = server.Close() }()
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test background completion while idle")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test background completion while idle")
 	defer runtimePlan.Close()
 
 	activity := server.inner.SessionActivityClient()
@@ -64,7 +64,7 @@ func TestPrepareRuntimeForwardsBackgroundCompletionIntoProjectedRuntimeEvents(t 
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test projected background completion while idle")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test projected background completion while idle")
 	defer runtimePlan.Close()
 
 	processID := "bg-1001"
@@ -94,7 +94,7 @@ func TestEmbeddedAppServerPrepareRuntimeWiresProcessControlForUIActions(t *testi
 	}
 	defer func() { _ = server.Close() }()
 
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime process control")
+	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test prepare runtime process control")
 	defer runtimePlan.Close()
 	if runtimePlan.Wiring.processControls == nil {
 		t.Fatal("expected PrepareRuntime to wire process control client")
@@ -128,7 +128,7 @@ func TestEmbeddedAppServerPrepareRuntimeWiresProcessOutputClient(t *testing.T) {
 	}
 	defer func() { _ = server.Close() }()
 
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime process output")
+	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionPickerDestination{}}, io.Discard, "test prepare runtime process output")
 	defer runtimePlan.Close()
 	if runtimePlan.Wiring.processOutput == nil {
 		t.Fatal("expected PrepareRuntime to wire process output client")
@@ -144,7 +144,7 @@ func TestEmbeddedAppServerPromptActivityStreamsAndHydratesPendingResources(t *te
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded prompt activity parity")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "test embedded prompt activity parity")
 	defer runtimePlan.Close()
 
 	askDone := make(chan struct {
@@ -228,7 +228,7 @@ func TestEmbeddedAppServerPendingPromptsKeepPromptActivityForAnsweringOnly(t *te
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded ask notification")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "test embedded ask notification")
 	defer runtimePlan.Close()
 
 	model := newProjectedTestUIModel(runtimePlan.Wiring.runtimeClient, closedProjectedRuntimeEvents(), runtimePlan.Wiring.askEvents)
@@ -276,7 +276,7 @@ func TestEmbeddedAppServerProcessOutputStreamsAndInlineSnapshot(t *testing.T) {
 	defer func() { _ = server.Close() }()
 
 	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
