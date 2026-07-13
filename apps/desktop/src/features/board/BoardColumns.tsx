@@ -19,8 +19,10 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
+  InfiniteListBoundary,
   MarkdownPlainText,
   Spinner,
+  type VirtualizedInfiniteListBoundaryState,
 } from "../../ui";
 import { cx } from "../../ui/classes";
 import {
@@ -37,6 +39,9 @@ export type KanbanColumnProps = Readonly<{
   column: KanbanColumnVM;
   hasMoreCards: boolean;
   isLoadingMoreCards: boolean;
+  initialBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
+  previousBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
+  nextBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   isFirstActive: boolean;
   isCollapsed?: boolean;
   dropState: BoardColumnDropState;
@@ -90,6 +95,9 @@ export function KanbanColumn({
   column,
   hasMoreCards,
   isLoadingMoreCards,
+  initialBoundary,
+  previousBoundary,
+  nextBoundary,
   isFirstActive,
   isCollapsed = false,
   dropState,
@@ -185,36 +193,53 @@ export function KanbanColumn({
             }}
           >
             <div className="grid gap-[var(--space-3)] pb-[var(--space-3)]">
-              {isFirstActive ? (
-                <p className="m-0 rounded-[var(--radius-m)] border border-dashed border-[var(--color-outline)] p-[var(--space-2)] text-sm text-[var(--color-muted)]">
-                  {t("board.dropToStart")}
-                </p>
-              ) : null}
-              {cards.map((card) => (
-                <TaskCard
-                  card={card}
-                  actionsDisabled={actionsDisabled}
-                  key={card.id}
-                  onClick={() => {
-                    onCardClick(card.id);
-                  }}
-                  onDragEnd={onCardDragEnd}
-                  onDragStart={onCardDragStart}
-                  onDelete={onDeleteTask}
-                  onInterrupt={() => {
-                    onInterruptTask(card.id);
-                  }}
-                  onResume={() => {
-                    onResumeTask(card.id);
-                  }}
-                />
-              ))}
-              {isLoadingMoreCards ? (
-                <div aria-label={t("app.loadingMore")} className="grid place-items-center" role="status">
-                  <Spinner size="sm" />
-                  <span className="sr-only">{t("app.loadingMore")}</span>
-                </div>
-              ) : null}
+              {initialBoundary === undefined ? (
+                <>
+                  {previousBoundary === undefined ? null : (
+                    <InfiniteListBoundary direction="previous" state={previousBoundary} />
+                  )}
+                  {isFirstActive ? (
+                    <p className="m-0 rounded-[var(--radius-m)] border border-dashed border-[var(--color-outline)] p-[var(--space-2)] text-sm text-[var(--color-muted)]">
+                      {t("board.dropToStart")}
+                    </p>
+                  ) : null}
+                  {cards.map((card) => (
+                    <TaskCard
+                      card={card}
+                      actionsDisabled={actionsDisabled}
+                      key={card.id}
+                      onClick={() => {
+                        onCardClick(card.id);
+                      }}
+                      onDragEnd={onCardDragEnd}
+                      onDragStart={onCardDragStart}
+                      onDelete={onDeleteTask}
+                      onInterrupt={() => {
+                        onInterruptTask(card.id);
+                      }}
+                      onResume={() => {
+                        onResumeTask(card.id);
+                      }}
+                    />
+                  ))}
+                  {nextBoundary === undefined ? (
+                    isLoadingMoreCards ? (
+                      <div
+                        aria-label={t("app.loadingMore")}
+                        className="grid place-items-center"
+                        role="status"
+                      >
+                        <Spinner size="sm" />
+                        <span className="sr-only">{t("app.loadingMore")}</span>
+                      </div>
+                    ) : null
+                  ) : (
+                    <InfiniteListBoundary direction="next" state={nextBoundary} />
+                  )}
+                </>
+              ) : (
+                <InfiniteListBoundary direction="initial" state={initialBoundary} />
+              )}
             </div>
           </div>
         </>

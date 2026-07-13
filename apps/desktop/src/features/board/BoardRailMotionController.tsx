@@ -9,9 +9,16 @@ import {
   type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
+import { useTranslation } from "react-i18next";
 
 import type { BoardColumn, WorkflowBoard } from "../../api";
 import { chromeContentPaddingClassName } from "../../ui/chromePadding";
+import {
+  BoardColumnDataOwner,
+  type BoardColumnDataView,
+  type BoardColumnQueryDataSnapshot,
+  type BoardColumnQuerySnapshot,
+} from "./BoardColumnDataOwner";
 import { runBoardCardMotionTransition } from "./BoardCardMotionAnimator";
 import { BoardCardMotionContext, type BoardCardMotionContextValue } from "./BoardCardMotionContext";
 import { KanbanColumn, KanbanGroup } from "./BoardColumns";
@@ -22,29 +29,17 @@ import {
   boardCardSnapshotsEqual,
   boardCardSnapshotFromEntries,
   boardRailLayoutSignature,
-  cardBelongsToColumn,
   dirtyBoardCardCountColumnIDs,
   dirtyBoardCardColumnIDs,
   type BoardCardColumnCountSnapshot,
   type BoardCardColumnsSnapshot,
   type PendingBoardCardMove,
 } from "./BoardCardMotionModel";
-import { toKanbanCardVM, toKanbanColumnVM, toKanbanGroupVM, type KanbanCardVM } from "./BoardColumnViewModel";
+import { toKanbanColumnVM, toKanbanGroupVM, type KanbanCardVM } from "./BoardColumnViewModel";
 import type { BoardCardDragPayload, BoardColumnDropState } from "./BoardDragTypes";
 import { registerCardElement } from "./BoardCardVisibilityRegistry";
 import { boardSections } from "./BoardModel";
-import { useBoardNodeCards } from "./useBoardData";
 import { useColumnVisibility } from "./useColumnVisibility";
-import { useObservedInterruptedRuns } from "./useObservedInterruptedRuns";
-
-type BoardColumnQuerySnapshot = Readonly<{
-  cards: readonly KanbanCardVM[];
-  generation: number;
-  hasData: boolean;
-  isFetching: boolean;
-  isSettled: boolean;
-  taskCount: number;
-}>;
 
 type BoardMotionPhase = "idle" | "arming" | "running";
 
@@ -130,7 +125,7 @@ export function BoardRailMotionController({
     }
     return new Set([...boardCardColumnIDsWithCards(displayedColumns), pendingCardMove.targetColumnID]);
   }, [displayedColumns, pendingCardMove]);
-  const latestColumnsRef = useRef<ReadonlyMap<string, BoardColumnQuerySnapshot>>(new Map());
+  const latestColumnsRef = useRef<ReadonlyMap<string, BoardColumnQueryDataSnapshot>>(new Map());
   const displayedColumnsRef = useRef(displayedColumns);
   const displayedColumnCountsRef = useRef(displayedColumnCounts);
   const boardColumnCountsRef = useRef(boardColumnCounts);
@@ -267,21 +262,49 @@ export function BoardRailMotionController({
 
   const reportColumnSnapshot = useCallback(
     (columnID: string, snapshot: BoardColumnQuerySnapshot): void => {
-      boardColumnCountsRef.current = boardColumnCounts;
       const current = latestColumnsRef.current;
-      const previous = current.get(columnID);
-      if (previous !== undefined && previous.generation > snapshot.generation) {
+      if (snapshot.cause === "deactivation") {
+        const nextLatest = new Map(current);
+        nextLatest.delete(columnID);
+        latestColumnsRef.current = nextLatest;
+        const nextDisplayed = new Map(displayedColumnsRef.current);
+        nextDisplayed.delete(columnID);
+        replaceDisplayedColumnsWithoutMotion(nextDisplayed);
         return;
       }
-      latestColumnsRef.current = new Map(current).set(columnID, snapshot);
-      if (!displayedColumnsRef.current.has(columnID)) {
-        const nextDisplayed = new Map(displayedColumnsRef.current).set(columnID, snapshot.cards);
-        displayedColumnsRef.current = nextDisplayed;
-        setDisplayedSnapshot({ columnCounts: displayedColumnCountsRef.current, columns: nextDisplayed, layoutSignature });
+      const data = snapshot.data;
+      const previous = current.get(columnID);
+      if (previous !== undefined && previous.generation > data.generation) {
+        return;
+      }
+      latestColumnsRef.current = new Map(current).set(columnID, data);
+      if (snapshot.cause !== "domain" || !displayedColumnsRef.current.has(columnID)) {
+        replaceDisplayedColumnsWithoutMotion(
+          new Map(displayedColumnsRef.current).set(columnID, data.cards),
+        );
+        return;
       }
       setColumnVersion((version) => version + 1);
+
+      function replaceDisplayedColumnsWithoutMotion(nextDisplayed: BoardCardColumnsSnapshot): void {
+        if (phaseRef.current !== "idle") {
+          runtimeGenerationRef.current += 1;
+          attemptIDRef.current += 1;
+          phaseRef.current = "idle";
+          followUpPendingRef.current = false;
+          setActiveNamesByCardID(new Map());
+          setHeldExpandedColumnIDs(new Set());
+          setArmedTransition(null);
+        }
+        displayedColumnsRef.current = nextDisplayed;
+        setDisplayedSnapshot({
+          columnCounts: displayedColumnCountsRef.current,
+          columns: nextDisplayed,
+          layoutSignature,
+        });
+      }
     },
-    [boardColumnCounts, layoutSignature],
+    [layoutSignature],
   );
 
   useEffect(() => {
@@ -506,7 +529,11 @@ function BoardColumnMotionBoundary({
   onResumeTask: (taskID: string) => void;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }>) {
+  const { t } = useTranslation();
   const [columnElement, setColumnElement] = useState<HTMLElement | null>(null);
+  const [dataView, setDataView] = useState<BoardColumnDataView | null>(null);
+  const columnScrollElementRef = useRef<HTMLElement | null>(null);
+  const wasDataOwnerActiveRef = useRef(false);
   const setRegisteredColumnElement = useCallback(
     (element: HTMLElement | null): void => {
       setColumnElement(element);
@@ -514,83 +541,84 @@ function BoardColumnMotionBoundary({
     },
     [column.id, onRegisterColumn],
   );
+  const setRegisteredScrollElement = useCallback(
+    (element: HTMLElement | null): void => {
+      columnScrollElementRef.current = element;
+      onRegisterColumnScrollport(column.id, element);
+    },
+    [column.id, onRegisterColumnScrollport],
+  );
   const isVisible = useColumnVisibility(scrollportRef, columnElement);
-  const queryEnabled = isVisible && !latestIsCollapsed;
-  const cardsQuery = useBoardNodeCards(board.projectID, board.selectedWorkflow.id, column.id, queryEnabled);
-  const generationRef = useRef(0);
-  const queryCards = useMemo(
-    () => cardsQuery.data?.pages.flatMap((page) => page.cards) ?? [],
-    [cardsQuery.data?.pages],
-  );
-  const workspaceContext = useMemo(
-    () => ({
-      attachedWorkspaceCount: board.attachedWorkspaceCount,
-      defaultWorkspaceID: board.defaultWorkspaceID,
-    }),
-    [board.attachedWorkspaceCount, board.defaultWorkspaceID],
-  );
-  const cardVMs = useMemo(
-    () =>
-      queryCards
-        .map((card) => toKanbanCardVM(card, workspaceContext))
-        .filter((card) => cardBelongsToColumn(column, card)),
-    [column, queryCards, workspaceContext],
-  );
-  const renderedCards = displayedCards ?? cardVMs;
+  const dataOwnerActive = isVisible && !latestIsCollapsed;
   const columnVM = useMemo(() => toKanbanColumnVM(column), [column]);
+  const loadingDataView = useMemo<BoardColumnDataView>(
+    () => ({
+      cards: [],
+      hasNextPage: false,
+      initialBoundary: { state: "loading", label: t("states.loading") },
+      isFetchingNextPage: false,
+      nextBoundary: { state: "idle" },
+      onLoadMore: () => undefined,
+      previousBoundary: { state: "idle" },
+    }),
+    [t],
+  );
+  const activeDataView = dataView ?? loadingDataView;
+  const renderedCards = dataOwnerActive ? (displayedCards ?? activeDataView.cards) : [];
 
-  useEffect(() => {
-    if (cardsQuery.isError) {
-      onCardsLoadError(cardsQuery.error);
+  useLayoutEffect(() => {
+    const scrollElement = columnScrollElementRef.current;
+    if (dataOwnerActive && !wasDataOwnerActiveRef.current && scrollElement !== null) {
+      scrollElement.scrollTop = 0;
     }
-  }, [cardsQuery.error, cardsQuery.isError, onCardsLoadError]);
-
-  useEffect(() => {
-    generationRef.current += 1;
-    onReportColumnSnapshot(column.id, {
-      cards: cardVMs,
-      generation: generationRef.current,
-      hasData: cardsQuery.data !== undefined,
-      isFetching: cardsQuery.isFetching,
-      isSettled: !queryEnabled || (!cardsQuery.isPending && !cardsQuery.isFetching),
-      taskCount: column.taskCount,
-    });
-  }, [cardVMs, cardsQuery.data, cardsQuery.isFetching, cardsQuery.isPending, column.id, column.taskCount, onReportColumnSnapshot, queryEnabled]);
-
-  useObservedInterruptedRuns(cardVMs, onInterruptedRunObserved);
+    wasDataOwnerActiveRef.current = dataOwnerActive;
+  }, [dataOwnerActive]);
+  const releaseDataView = useCallback(() => {
+    setDataView(null);
+  }, []);
 
   return (
-    <KanbanColumn
-      actionsDisabled={actionsDisabled}
-      cards={renderedCards}
-      column={columnVM}
-      columnRef={setRegisteredColumnElement}
-      scrollportRef={(element) => {
-        onRegisterColumnScrollport(column.id, element);
-      }}
-      dropState={dropState}
-      hasMoreCards={cardsQuery.hasNextPage}
-      isCollapsed={isCollapsed}
-      isFirstActive={isFirstActive}
-      isLoadingMoreCards={(queryEnabled && cardsQuery.isPending) || cardsQuery.isFetchingNextPage}
-      onCardClick={onCardClick}
-      onCardDragEnd={onCardDragEnd}
-      onCardDragStart={onCardDragStart}
-      onDeleteTask={onDeleteTask}
-      onDropTask={(event) => {
-        onDropTask(event, column);
-      }}
-      onExpandColumn={() => {
-        onExpandColumn(column.id);
-      }}
-      onInterruptTask={onInterruptTask}
-      onLoadMoreCards={() => {
-        if (cardsQuery.hasNextPage && !cardsQuery.isFetchingNextPage) {
-          void cardsQuery.fetchNextPage();
-        }
-      }}
-      onResumeTask={onResumeTask}
-    />
+    <>
+      {dataOwnerActive ? (
+        <BoardColumnDataOwner
+          board={board}
+          column={column}
+          onCardsLoadError={onCardsLoadError}
+          onDataViewChange={setDataView}
+          onDataViewRelease={releaseDataView}
+          onInterruptedRunObserved={onInterruptedRunObserved}
+          onReportColumnSnapshot={onReportColumnSnapshot}
+        />
+      ) : null}
+      <KanbanColumn
+        actionsDisabled={actionsDisabled}
+        cards={renderedCards}
+        column={columnVM}
+        columnRef={setRegisteredColumnElement}
+        scrollportRef={setRegisteredScrollElement}
+        dropState={dropState}
+        hasMoreCards={dataOwnerActive && activeDataView.hasNextPage}
+        initialBoundary={dataOwnerActive ? activeDataView.initialBoundary : undefined}
+        isCollapsed={isCollapsed}
+        isFirstActive={isFirstActive}
+        isLoadingMoreCards={dataOwnerActive && activeDataView.isFetchingNextPage}
+        nextBoundary={dataOwnerActive ? activeDataView.nextBoundary : undefined}
+        onCardClick={onCardClick}
+        onCardDragEnd={onCardDragEnd}
+        onCardDragStart={onCardDragStart}
+        onDeleteTask={onDeleteTask}
+        onDropTask={(event) => {
+          onDropTask(event, column);
+        }}
+        onExpandColumn={() => {
+          onExpandColumn(column.id);
+        }}
+        onInterruptTask={onInterruptTask}
+        onLoadMoreCards={activeDataView.onLoadMore}
+        onResumeTask={onResumeTask}
+        previousBoundary={dataOwnerActive ? activeDataView.previousBoundary : undefined}
+      />
+    </>
   );
 }
 
@@ -632,7 +660,7 @@ function unionColumnIDs(left: readonly string[], right: readonly string[]): read
 }
 
 function columnSnapshotSettledForBoardCount(
-  snapshot: BoardColumnQuerySnapshot | undefined,
+  snapshot: BoardColumnQueryDataSnapshot | undefined,
   taskCount: number,
   countDirty: boolean,
 ): boolean {

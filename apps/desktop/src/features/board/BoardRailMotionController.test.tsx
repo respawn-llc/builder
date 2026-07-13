@@ -410,6 +410,26 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
     expect(mountedQueryOwners).not.toContain("backlog");
   });
 
+  it("reactivates at the newest page and top inside the existing column shell", async () => {
+    setNode("backlog", { cards: [backlogCard], isFetching: false, isPending: false, hasData: true });
+    renderHarness();
+    const backlog = screen.getByRole("listitem", { name: "Backlog" });
+    intersect(backlog, true);
+    await flush();
+
+    const scrollport = screen.getByTestId("kanban-column-scroll-backlog");
+    scrollport.scrollTop = 420;
+    intersect(backlog, false);
+    await flush();
+    expect(screen.getByRole("listitem", { name: "Backlog" })).toBe(backlog);
+
+    intersect(backlog, true);
+    await flush();
+
+    expect(screen.getByRole("listitem", { name: "Backlog" })).toBe(backlog);
+    expect(scrollport.scrollTop).toBe(0);
+  });
+
   it("keeps expanded and collapsed shell state stable through initial loading and failure", async () => {
     setNode("backlog", { cards: [], isFetching: true, isPending: true, hasData: false });
     setNode("recon", { cards: [], isFetching: true, isPending: true, hasData: false });

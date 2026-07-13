@@ -70,6 +70,9 @@ export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../com
 export { dismissStatusToast, showStatusToast } from "./statusToast";
 export {
   VirtualizedInfiniteList,
-  type VirtualizedInfiniteListBoundaryState,
 } from "./VirtualizedInfiniteList";
+export {
+  InfiniteListBoundary,
+  type VirtualizedInfiniteListBoundaryState,
+} from "./InfiniteListBoundary";
 export type { StatusNotice, ToastTone } from "./statusToast";

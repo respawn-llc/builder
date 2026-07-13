@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import { type Range, type VirtualItem, useVirtualizer } from "@tanstack/react-virtual";
 
-import { Button } from "./Button";
 import { cx } from "./classes";
+import {
+  InfiniteListBoundary,
+  type VirtualizedInfiniteListBoundaryState,
+} from "./InfiniteListBoundary";
 import { Spinner } from "./Spinner";
 import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitialScroll";
 import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
 import { pinnedVirtualRangeExtractor } from "./virtualizedPinnedRange";
 import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolicy";
 
-export type VirtualizedInfiniteListBoundaryState =
-  | Readonly<{ state: "idle" }>
-  | Readonly<{ state: "loading"; label: string }>
-  | Readonly<{ state: "error"; message: string; retryLabel: string; onRetry: () => void }>;
+export type { VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 
 export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   items: readonly TItem[];
@@ -493,7 +493,7 @@ function renderVirtualRow<TItem>({
   virtualIndex: number;
 }>): ReactNode {
   if (previousBoundary !== undefined && virtualIndex === 0) {
-    return <VirtualizedBoundary direction="previous" state={previousBoundary} />;
+    return <InfiniteListBoundary direction="previous" state={previousBoundary} />;
   }
   if (header !== undefined && virtualIndex === (previousBoundary === undefined ? 0 : 1)) {
     return header;
@@ -502,7 +502,7 @@ function renderVirtualRow<TItem>({
     return empty;
   }
   if (nextBoundary !== undefined && virtualIndex === nextBoundaryIndex) {
-    return <VirtualizedBoundary direction="next" state={nextBoundary} />;
+    return <InfiniteListBoundary direction="next" state={nextBoundary} />;
   }
   if (legacyPlaceholderIndex === virtualIndex) {
     return <VirtualizedPlaceholder loading={isFetchingNextPage} loadingLabel={loadingLabel} />;
@@ -511,35 +511,6 @@ function renderVirtualRow<TItem>({
     return null;
   }
   return renderItem(item);
-}
-
-function VirtualizedBoundary({
-  direction,
-  state,
-}: Readonly<{
-  direction: "previous" | "next";
-  state: VirtualizedInfiniteListBoundaryState;
-}>) {
-  return (
-    <div
-      className="grid min-h-12 place-items-center"
-      data-testid={`virtual-boundary-${direction}`}
-      data-virtual-boundary={direction}
-    >
-      {state.state === "loading" ? (
-        <div aria-label={state.label} aria-live="polite" className="grid place-items-center" role="status">
-          <Spinner size="sm" />
-          <span className="sr-only">{state.label}</span>
-        </div>
-      ) : null}
-      {state.state === "error" ? (
-        <div className="flex flex-wrap items-center justify-center gap-[var(--space-2)]" role="alert">
-          <span className="text-sm text-[var(--color-muted)]">{state.message}</span>
-          <Button onClick={state.onRetry}>{state.retryLabel}</Button>
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 function VirtualizedPlaceholder({
