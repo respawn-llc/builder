@@ -1,4 +1,4 @@
-import type { BoardColumn, WorkflowBoard } from "../../api";
+import type { BoardColumn, SelectedWorkflowBoard } from "../../api";
 import type { KanbanCardVM } from "./BoardColumnViewModel";
 import type { BoardSection } from "./BoardModel";
 
@@ -113,7 +113,7 @@ export function boardCardColumnIDsWithCards(snapshot: BoardCardColumnsSnapshot):
 }
 
 export function boardRailLayoutSignature(
-  board: WorkflowBoard,
+  board: SelectedWorkflowBoard,
   sections: readonly BoardSection[],
   firstActiveID: string | undefined,
 ): string {

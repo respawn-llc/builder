@@ -16,7 +16,7 @@ export type {
   AttentionNotificationTaskDetailFocus,
   AttentionNotificationWorkflowTaskTarget,
 } from "./attentionNotifications";
-export { defaultWorkflowExecutionTargetPolicy, emptyWorkflowDerivedWiring } from "./models";
+export { defaultWorkflowExecutionTargetPolicy, emptyWorkflowDerivedWiring, hasSelectedWorkflow } from "./models";
 export { createJsonRpcTransport } from "./jsonRpc";
 export type {
   ActivityItem,
@@ -36,6 +36,7 @@ export type {
   ProjectMutationResponse,
   ProjectWorkflowLink,
   ProjectSummary,
+  SelectedWorkflowBoard,
   ServerReadiness,
   TaskComment,
   TaskDetail,

@@ -10,7 +10,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
-import type { BoardColumn, WorkflowBoard } from "../../api";
+import type { BoardColumn, SelectedWorkflowBoard } from "../../api";
 import { chromeContentPaddingClassName } from "../../ui/chromePadding";
 import { type BoardColumnQueryDataSnapshot, type BoardColumnQuerySnapshot } from "./BoardColumnDataOwner";
 import { BoardColumnMotionBoundary } from "./BoardColumnMotionBoundary";
@@ -56,7 +56,7 @@ type DisplayedSnapshot = Readonly<{
 export type BoardRailMotionControllerProps = Readonly<{
   activeDrag: ActiveBoardCardDrag | null;
   actionsDisabled: boolean;
-  board: WorkflowBoard;
+  board: SelectedWorkflowBoard;
   columnDropState: (column: BoardColumn) => BoardColumnDropState;
   columnIsCollapsed: (column: BoardColumn) => boolean;
   firstActiveID: string | undefined;

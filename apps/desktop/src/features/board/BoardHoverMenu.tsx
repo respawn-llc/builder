@@ -2,14 +2,14 @@ import { Pencil, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowBoard, WorkflowPickerItem } from "../../api";
+import type { SelectedWorkflowBoard, WorkflowPickerItem } from "../../api";
 import { Item, ItemContent, ItemGroup, ItemTitle } from "../../ui";
 import { cx } from "../../ui/classes";
 
 const collapseDelayMs = 500;
 
 export type BoardHoverMenuProps = Readonly<{
-    board: WorkflowBoard;
+    board: SelectedWorkflowBoard;
     canCreateTask: boolean;
     onNewTask: () => void;
     onWorkflowEdit: (workflowID: string) => void;

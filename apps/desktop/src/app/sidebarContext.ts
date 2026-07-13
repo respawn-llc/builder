@@ -51,7 +51,7 @@ export type SidebarDestination =
   | Readonly<{
       kind: "newTask";
       mode?: SidebarMode;
-      boardQueryWorkflowID: string;
+      boardQueryWorkflowID: string | undefined;
       projectID: string;
       workflowID: string;
     }>

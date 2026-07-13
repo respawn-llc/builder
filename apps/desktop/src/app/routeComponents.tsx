@@ -117,7 +117,7 @@ export function ProjectRoute() {
     <BoardRoute
       projectId={params.projectId}
       selectedTaskId={search.taskId}
-      workflowId={search.workflowId}
+      workflowId={search.workflowId.length === 0 ? undefined : search.workflowId}
     />
   );
 }

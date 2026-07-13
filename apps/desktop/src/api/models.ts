@@ -555,12 +555,19 @@ export type WorkflowBoard = Readonly<{
   projectName: string;
   defaultWorkspaceID: string;
   attachedWorkspaceCount: number;
-  selectedWorkflow: WorkflowPickerItem;
+  selectedWorkflow: WorkflowPickerItem | null;
   workflows: readonly WorkflowPickerItem[];
   groups: readonly BoardGroup[];
   columns: readonly BoardColumn[];
   generatedAt: number;
 }>;
+
+export type SelectedWorkflowBoard = Omit<WorkflowBoard, "selectedWorkflow"> &
+  Readonly<{ selectedWorkflow: WorkflowPickerItem }>;
+
+export function hasSelectedWorkflow(board: WorkflowBoard): board is SelectedWorkflowBoard {
+  return board.selectedWorkflow !== null;
+}
 
 export type BoardNodeCardsPage = Readonly<{
   projectID: string;

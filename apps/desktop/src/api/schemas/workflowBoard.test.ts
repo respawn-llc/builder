@@ -86,6 +86,37 @@ describe("workflow board schemas", () => {
     ).toThrow();
   });
 
+  it("decodes omitted and null board workflow selection as absence", () => {
+    const omittedSelection = structuredClone(boardResponse);
+    Reflect.deleteProperty(omittedSelection.board, "selected_workflow");
+    expect(workflowBoardSchema.parse(omittedSelection)).toMatchObject({
+      selectedWorkflow: null,
+    });
+
+    expect(
+      workflowBoardSchema.parse({
+        board: {
+          ...boardResponse.board,
+          selected_workflow: null,
+        },
+      }),
+    ).toMatchObject({ selectedWorkflow: null });
+  });
+
+  it("rejects a present board workflow selection with a blank ID", () => {
+    expect(() =>
+      workflowBoardSchema.parse({
+        board: {
+          ...boardResponse.board,
+          selected_workflow: {
+            ...selectedWorkflow,
+            workflow_id: " ",
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
   it("rejects missing or invalid parent workspace facts", () => {
     const projectWithoutDefaultWorkspaceID = {
       project_key: boardResponse.board.project.project_key,

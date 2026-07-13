@@ -502,6 +502,96 @@ func TestWorkflowBoardNodeCardsRequestCapsPageSizeAt25(t *testing.T) {
 	}
 }
 
+func TestWorkflowBoardRequestOptionalWorkflowSelectionJSONAndValidation(t *testing.T) {
+	omitted := WorkflowBoardRequest{ProjectID: "project-1"}
+	raw, err := json.Marshal(omitted)
+	if err != nil {
+		t.Fatalf("marshal omitted workflow selection: %v", err)
+	}
+	var omittedShape map[string]any
+	if err := json.Unmarshal(raw, &omittedShape); err != nil {
+		t.Fatalf("unmarshal omitted workflow selection: %v", err)
+	}
+	if _, ok := omittedShape["workflow_id"]; ok {
+		t.Fatalf("omitted workflow_id present in request JSON: %s", raw)
+	}
+	if err := omitted.Validate(); err != nil {
+		t.Fatalf("omitted workflow selection rejected: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name  string
+		value string
+		code  string
+	}{
+		{name: "empty", value: "", code: WorkflowRequestErrorRequired},
+		{name: "whitespace only", value: " \t", code: WorkflowRequestErrorRequired},
+		{name: "leading whitespace", value: " workflow-1", code: WorkflowRequestErrorInvalidValue},
+		{name: "trailing whitespace", value: "workflow-1 ", code: WorkflowRequestErrorInvalidValue},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			request := WorkflowBoardRequest{ProjectID: "project-1", WorkflowID: &tt.value}
+			if err := request.Validate(); !isWorkflowFieldError(err, "workflow_id", tt.code) {
+				t.Fatalf("validation error = %#v, want %s on workflow_id", err, tt.code)
+			}
+		})
+	}
+
+	workflowID := "workflow-1"
+	selected := WorkflowBoardRequest{ProjectID: "project-1", WorkflowID: &workflowID}
+	raw, err = json.Marshal(selected)
+	if err != nil {
+		t.Fatalf("marshal selected workflow: %v", err)
+	}
+	var selectedShape map[string]any
+	if err := json.Unmarshal(raw, &selectedShape); err != nil {
+		t.Fatalf("unmarshal selected workflow: %v", err)
+	}
+	if selectedShape["workflow_id"] != workflowID {
+		t.Fatalf("workflow_id = %#v, want %q", selectedShape["workflow_id"], workflowID)
+	}
+	if err := selected.Validate(); err != nil {
+		t.Fatalf("selected workflow rejected: %v", err)
+	}
+}
+
+func TestWorkflowBoardSelectedWorkflowJSONRepresentsAbsence(t *testing.T) {
+	selection := &WorkflowPickerItem{
+		WorkflowID:  "workflow-1",
+		DisplayName: "Main",
+		Version:     3,
+	}
+	selected := WorkflowBoard{ProjectID: "project-1", SelectedWorkflow: selection}
+	raw, err := json.Marshal(selected)
+	if err != nil {
+		t.Fatalf("marshal selected board: %v", err)
+	}
+	var selectedShape map[string]any
+	if err := json.Unmarshal(raw, &selectedShape); err != nil {
+		t.Fatalf("unmarshal selected board: %v", err)
+	}
+	selectedWorkflow, ok := selectedShape["selected_workflow"].(map[string]any)
+	if !ok {
+		t.Fatalf("selected_workflow = %#v, want object", selectedShape["selected_workflow"])
+	}
+	if selectedWorkflow["workflow_id"] != "workflow-1" {
+		t.Fatalf("selected workflow_id = %#v, want workflow-1", selectedWorkflow["workflow_id"])
+	}
+
+	absent := WorkflowBoard{ProjectID: "project-1"}
+	raw, err = json.Marshal(absent)
+	if err != nil {
+		t.Fatalf("marshal board without selection: %v", err)
+	}
+	var absentShape map[string]any
+	if err := json.Unmarshal(raw, &absentShape); err != nil {
+		t.Fatalf("unmarshal board without selection: %v", err)
+	}
+	if _, ok := absentShape["selected_workflow"]; ok {
+		t.Fatalf("selected_workflow present in board without selection: %s", raw)
+	}
+}
+
 func TestAskAnswerRequestValidatesNullableSelectedOption(t *testing.T) {
 	base := AskAnswerRequest{ClientRequestID: "req-1", SessionID: "session-1", AskID: "ask-1"}
 	freeform := base

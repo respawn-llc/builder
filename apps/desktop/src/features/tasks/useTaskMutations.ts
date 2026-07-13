@@ -13,7 +13,11 @@ export function useWorkspaces(projectID: string) {
   });
 }
 
-export function useCreateTask(projectID: string, boardQueryWorkflowID: string, selectedWorkflowID: string) {
+export function useCreateTask(
+  projectID: string,
+  boardQueryWorkflowID: string | undefined,
+  selectedWorkflowID: string,
+) {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   return useMutation({

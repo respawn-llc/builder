@@ -3,7 +3,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BoardCard, BoardColumn, WorkflowBoard, WorkflowPickerItem } from "../../api";
+import type { BoardCard, BoardColumn, SelectedWorkflowBoard, WorkflowPickerItem } from "../../api";
 import { appI18n, initializeI18n } from "../../i18n/setup";
 import { TestDataTransfer } from "../../test-support/board/TestDataTransfer";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
@@ -125,7 +125,7 @@ function column(over: Partial<BoardColumn>): BoardColumn {
   };
 }
 
-function board(backlogCount: number, reconCount: number): WorkflowBoard {
+function board(backlogCount: number, reconCount: number): SelectedWorkflowBoard {
   return {
     projectID: "p1",
     projectKey: "P",
@@ -211,7 +211,7 @@ type ActiveDragState = Readonly<{
 
 type HarnessState = Readonly<{
   activeDrag: ActiveDragState | null;
-  board: WorkflowBoard;
+  board: SelectedWorkflowBoard;
   collapsedColumnIDs: ReadonlySet<string>;
   pending: PendingBoardCardMove | null;
 }>;

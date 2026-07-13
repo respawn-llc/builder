@@ -22,7 +22,7 @@ const newTaskSchema = z.object({
 type NewTaskFormValues = z.output<typeof newTaskSchema>;
 
 export type NewTaskFallbackDialogProps = Readonly<{
-  boardQueryWorkflowID: string;
+  boardQueryWorkflowID: string | undefined;
   projectID: string;
   workflowID: string;
   onClose: () => void;
@@ -91,7 +91,7 @@ export function NewTaskForm({
   projectID,
   workflowID,
 }: Readonly<{
-  boardQueryWorkflowID: string;
+  boardQueryWorkflowID: string | undefined;
   className?: string;
   onSubmitted: () => void;
   projectID: string;

@@ -18,7 +18,7 @@ export const queryKeys = {
   allActivity: ["activity"],
   allComments: ["comments"],
   allPendingAsks: ["pending-asks"],
-  board: (projectID: string, workflowID: string) => ["board", projectID, workflowID],
+  board: (projectID: string, workflowID: string | undefined) => ["board", projectID, workflowID],
   workflows: (query: string) => ["workflow", query],
   workflowDefinition: (workflowID: string) => ["workflow-definition", workflowID],
   workflowDraftValidation: (

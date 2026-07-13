@@ -172,7 +172,7 @@ export const workflowParameterSchema: z.ZodType<WorkflowParameter> = z
 
 export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
   .object({
-    workflow_id: z.string(),
+    workflow_id: z.string().min(1).refine((value) => value.trim() === value),
     display_name: z.string(),
     description: emptyString,
     version: z.number(),

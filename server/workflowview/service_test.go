@@ -1055,11 +1055,12 @@ func TestBoardSelectsWorkflowAndReturnsPickerAndGroups(t *testing.T) {
 		t.Fatalf("CreateTask selected: %v", err)
 	}
 
-	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: string(selected.ID)}, workflow.StaticRoleResolver{"coder": true})
+	selectedWorkflowID := string(selected.ID)
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: &selectedWorkflowID}, workflow.StaticRoleResolver{"coder": true})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
-	if board.SelectedWorkflow.WorkflowID != string(selected.ID) {
+	if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(selected.ID) {
 		t.Fatalf("selected workflow = %+v, want %s", board.SelectedWorkflow, selected.ID)
 	}
 	if len(board.WorkflowPicker) != 2 || !board.WorkflowPicker[0].IsProjectDefault {
@@ -1078,6 +1079,129 @@ func TestBoardSelectsWorkflowAndReturnsPickerAndGroups(t *testing.T) {
 	}
 	if board.Project.ProjectKey != "WOR" || board.GeneratedAtUnixMs == 0 {
 		t.Fatalf("project/generated fields missing: %+v", board)
+	}
+}
+
+func TestBoardOmittedSelectorChoosesActiveDefault(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow first: %v", err)
+	}
+	defaultWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, defaultWorkflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow default: %v", err)
+	}
+
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(defaultWorkflowID) {
+		t.Fatalf("selected workflow = %+v, want active default %s", board.SelectedWorkflow, defaultWorkflowID)
+	}
+}
+
+func TestBoardOmittedSelectorChoosesFirstActiveLinkWithoutDefault(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(workflowID) {
+		t.Fatalf("selected workflow = %+v, want first active link %s", board.SelectedWorkflow, workflowID)
+	}
+}
+
+func TestBoardOmittedSelectorKeepsBlockingLinkedWorkflowEligible(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(workflowID) {
+		t.Fatalf("selected workflow = %+v, want linked workflow %s", board.SelectedWorkflow, workflowID)
+	}
+	if board.SelectedWorkflow.ValidForTaskCreation {
+		t.Fatalf("selected workflow = %+v, want blocking validation without losing link eligibility", board.SelectedWorkflow)
+	}
+}
+
+func TestBoardWithoutActiveLinksReturnsNoSelectionOrContent(t *testing.T) {
+	ctx, _, _, binding, view := newWorkflowViewTestContextService(t)
+
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	if board.SelectedWorkflow != nil {
+		t.Fatalf("selected workflow = %+v, want nil", board.SelectedWorkflow)
+	}
+	if len(board.WorkflowPicker) != 0 || len(board.Groups) != 0 || len(board.Columns) != 0 {
+		t.Fatalf("board content = picker:%+v groups:%+v columns:%+v, want empty", board.WorkflowPicker, board.Groups, board.Columns)
+	}
+}
+
+func TestBoardUnknownExplicitSelectorFallsBackToActiveSelection(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+		firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+		if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, false); err != nil {
+			t.Fatalf("LinkWorkflow first: %v", err)
+		}
+		defaultWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+		if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, defaultWorkflowID, true); err != nil {
+			t.Fatalf("LinkWorkflow default: %v", err)
+		}
+		unknownWorkflowID := "workflow-unknown"
+
+		board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID}, workflow.StaticRoleResolver{"coder": true})
+		if err != nil {
+			t.Fatalf("GetBoard: %v", err)
+		}
+		if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(defaultWorkflowID) {
+			t.Fatalf("selected workflow = %+v, want active default %s", board.SelectedWorkflow, defaultWorkflowID)
+		}
+	})
+
+	t.Run("first active link", func(t *testing.T) {
+		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+		workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+		if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, false); err != nil {
+			t.Fatalf("LinkWorkflow: %v", err)
+		}
+		unknownWorkflowID := "workflow-unknown"
+
+		board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID}, workflow.StaticRoleResolver{"coder": true})
+		if err != nil {
+			t.Fatalf("GetBoard: %v", err)
+		}
+		if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(workflowID) {
+			t.Fatalf("selected workflow = %+v, want first active link %s", board.SelectedWorkflow, workflowID)
+		}
+	})
+}
+
+func TestBoardUnknownExplicitSelectorWithoutLinksReturnsNoSelection(t *testing.T) {
+	ctx, _, _, binding, view := newWorkflowViewTestContextService(t)
+	unknownWorkflowID := "workflow-unknown"
+
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	if board.SelectedWorkflow != nil || len(board.WorkflowPicker) != 0 {
+		t.Fatalf("selection = %+v picker = %+v, want no active selection", board.SelectedWorkflow, board.WorkflowPicker)
 	}
 }
 

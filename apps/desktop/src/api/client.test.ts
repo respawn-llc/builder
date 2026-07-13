@@ -68,19 +68,28 @@ describe("ApiClient", () => {
     await expect(client.getReadiness()).rejects.toBeInstanceOf(ContractError);
   });
 
-  it("normalizes empty workflow board metadata and node-card slices returned as null by Go JSON", async () => {
+  it("preserves optional board workflow selectors and normalizes empty slices", async () => {
     const transport = new FakeRpcTransport([
+      { method: "workflow.board.get", result: emptyBoardResponse },
       { method: "workflow.board.get", result: emptyBoardResponse },
       { method: "workflow.board.nodeCards.list", result: emptyBoardNodeCardsResponse },
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.getBoard("project-1", "")).resolves.toMatchObject({
+    await expect(client.getBoard("project-1", undefined)).resolves.toMatchObject({
       projectID: "project-1",
+      selectedWorkflow: null,
       workflows: [],
       groups: [],
       columns: [],
     });
+    await expect(client.getBoard("project-1", " ")).resolves.toMatchObject({
+      selectedWorkflow: null,
+    });
+    expect(transport.calls.slice(0, 2)).toEqual([
+      { method: "workflow.board.get", params: { project_id: "project-1" } },
+      { method: "workflow.board.get", params: { project_id: "project-1", workflow_id: " " } },
+    ]);
     await expect(client.listBoardNodeCards("project-1", "workflow-1", "node-1")).resolves.toMatchObject({
       projectID: "project-1",
       workflowID: "workflow-1",
@@ -679,16 +688,6 @@ describe("ApiClient", () => {
   });
 });
 
-const emptyWorkflow = {
-  workflow_id: "",
-  display_name: "",
-  description: "",
-  version: 0,
-  is_project_default: false,
-  valid_for_task_creation: false,
-  validation_errors: null,
-};
-
 const emptyBoardResponse = {
   board: {
     project_id: "project-1",
@@ -698,7 +697,6 @@ const emptyBoardResponse = {
       default_workspace_id: "workspace-1",
       attached_workspace_count: 1,
     },
-    selected_workflow: emptyWorkflow,
     workflows: null,
     groups: null,
     columns: null,
@@ -709,6 +707,15 @@ const emptyBoardResponse = {
 const boardWithJoinResponse = {
   board: {
     ...emptyBoardResponse.board,
+    selected_workflow: {
+      workflow_id: "workflow-1",
+      display_name: "Workflow",
+      description: "",
+      version: 1,
+      is_project_default: true,
+      valid_for_task_creation: true,
+      validation_errors: [],
+    },
     groups: [
       {
         group_id: "group-1",

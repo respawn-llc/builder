@@ -134,9 +134,12 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 		return serverapi.WorkflowBoard{}, err
 	}
 	workspaceContext := boardProjectWorkspaceContext(project)
-	requestedWorkflowID := strings.TrimSpace(req.WorkflowID)
-	selected := selectWorkflow(picker, requestedWorkflowID)
-	if selected.WorkflowID == "" {
+	requestedWorkflowID := ""
+	if req.WorkflowID != nil {
+		requestedWorkflowID = *req.WorkflowID
+	}
+	selected := selectWorkflow(picker, requestedWorkflowID, false)
+	if selected == nil {
 		return serverapi.WorkflowBoard{ProjectID: projectID, Project: projectBoardProject(project, workspaceContext), WorkflowPicker: picker, GeneratedAtUnixMs: time.Now().UTC().UnixMilli()}, nil
 	}
 	def := definitions[selected.WorkflowID]
@@ -355,7 +358,7 @@ func (s *Service) workflowSelectionInputs(ctx context.Context, projectID string,
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	workflowIDs := make([]string, 0, len(links)+len(taskActivityRows))
+	workflowIDs := make([]string, 0, len(links))
 	seen := map[string]bool{}
 	linkByWorkflowID := map[string]sqlitegen.ProjectWorkflowLinkRecord{}
 	for _, link := range links {
@@ -369,10 +372,8 @@ func (s *Service) workflowSelectionInputs(ctx context.Context, projectID string,
 	}
 	activityByWorkflowID := map[string]int64{}
 	for _, activity := range taskActivityRows {
-		activityByWorkflowID[activity.WorkflowID] = activity.LatestUpdatedAtUnixMs
-		if !seen[activity.WorkflowID] {
-			workflowIDs = append(workflowIDs, activity.WorkflowID)
-			seen[activity.WorkflowID] = true
+		if seen[activity.WorkflowID] {
+			activityByWorkflowID[activity.WorkflowID] = activity.LatestUpdatedAtUnixMs
 		}
 	}
 	definitions := make(map[string]serverapi.WorkflowDefinition, len(workflowIDs))
@@ -2115,24 +2116,26 @@ func scriptPathDefinitionValidationErrors(def workflow.Definition, rootPath *str
 	return out
 }
 
-func selectWorkflow(picker []serverapi.WorkflowPickerItem, requested string) serverapi.WorkflowPickerItem {
-	trimmed := strings.TrimSpace(requested)
-	if trimmed != "" {
-		for _, item := range picker {
-			if item.WorkflowID == trimmed {
-				return item
+func selectWorkflow(picker []serverapi.WorkflowPickerItem, requested string, requireExact bool) *serverapi.WorkflowPickerItem {
+	if requested != "" {
+		for index := range picker {
+			if picker[index].WorkflowID == requested {
+				return &picker[index]
 			}
 		}
+		if requireExact {
+			return nil
+		}
 	}
-	for _, item := range picker {
-		if item.IsProjectDefault {
-			return item
+	for index := range picker {
+		if picker[index].IsProjectDefault {
+			return &picker[index]
 		}
 	}
 	if len(picker) == 0 {
-		return serverapi.WorkflowPickerItem{}
+		return nil
 	}
-	return picker[0]
+	return &picker[0]
 }
 
 func boardGroups(def serverapi.WorkflowDefinition) []serverapi.WorkflowBoardGroup {
