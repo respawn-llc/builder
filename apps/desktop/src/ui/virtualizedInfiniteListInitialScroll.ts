@@ -9,7 +9,7 @@ export function virtualizedInitialScrollIndex<TItem>({
   initialScrollKey: string | undefined;
   items: readonly TItem[];
 }>): number | null {
-  if (initialScrollKey === undefined || initialScrollKey.length === 0) {
+  if (initialScrollKey === undefined) {
     return null;
   }
   const itemIndex = items.findIndex((item) => getItemKey(item) === initialScrollKey);
@@ -31,7 +31,7 @@ export function resolveVirtualizedInitialScroll<TItem>({
   items: readonly TItem[];
   lastRequestKey: string | null;
 }>): Readonly<{ requestKey: string; scrollIndex: number }> | null {
-  if (initialScrollKey === undefined || initialScrollKey.length === 0) {
+  if (initialScrollKey === undefined) {
     return null;
   }
   const requestKey = initialScrollRequestKey ?? initialScrollKey;

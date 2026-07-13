@@ -214,7 +214,7 @@ export function VirtualizedInfiniteList<TItem>({
   }, [estimateSize, getItemKey, itemStartIndex, items, paddingStart, virtualizer]);
 
   useEffect(() => {
-    if (initialScrollKey === undefined || initialScrollKey.length === 0) {
+    if (initialScrollKey === undefined) {
       return;
     }
     const scroll = resolveVirtualizedInitialScroll({

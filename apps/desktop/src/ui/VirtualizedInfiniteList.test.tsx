@@ -106,12 +106,12 @@ describe("virtualizedInitialScrollIndex", () => {
     ).toBe(2);
   });
 
-  it("ignores missing or empty initial scroll keys", () => {
+  it("ignores absent or unmatched initial scroll keys", () => {
     expect(
       virtualizedInitialScrollIndex({
         getItemKey,
         headerCount: 1,
-        initialScrollKey: "",
+        initialScrollKey: undefined,
         items,
       }),
     ).toBeNull();
