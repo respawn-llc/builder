@@ -142,8 +142,8 @@ func TestLoadUsesDefaultsWithoutCreatingConfigOnFirstUse(t *testing.T) {
 	if cfg.Settings.Shell.PostprocessingMode != ShellPostprocessingModeBuiltin {
 		t.Fatalf("default shell.postprocessing_mode mismatch: %q", cfg.Settings.Shell.PostprocessingMode)
 	}
-	if cfg.Settings.Shell.PostprocessHook != "" {
-		t.Fatalf("default shell.postprocess_hook mismatch: %q", cfg.Settings.Shell.PostprocessHook)
+	if cfg.Settings.Shell.PostprocessHook != nil {
+		t.Fatalf("default shell.postprocess_hook mismatch: %#v", cfg.Settings.Shell.PostprocessHook)
 	}
 	if got := cfg.Settings.Worktrees.BaseDir; got != filepath.Join(cfg.PersistenceRoot, "worktrees") {
 		t.Fatalf("default worktrees.base_dir mismatch: %q", got)

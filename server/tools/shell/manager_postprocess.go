@@ -19,10 +19,10 @@ import (
 var ErrOutputLogExceedsFullReadLimit = errors.New("output log exceeds full-read limit")
 
 func (m *Manager) applyPostprocessing(ctx context.Context, entry *processEntry, output string, exitCode *int, backgrounded bool, maxOutputChars int) (postprocess.Result, error) {
-	if m == nil || m.postprocessor == nil {
-		return postprocess.Result{Output: output}, nil
+	if entry == nil || entry.postprocessor == nil {
+		return postprocess.Result{}, errors.New("shell process has no captured postprocessor")
 	}
-	return m.postprocessor.Apply(ctx, postprocess.Request{
+	return entry.postprocessor.Apply(ctx, postprocess.Request{
 		ToolName:        toolspec.ToolExecCommand,
 		CommandText:     entry.command,
 		Workdir:         entry.workdir,

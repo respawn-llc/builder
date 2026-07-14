@@ -6,6 +6,38 @@ import (
 	"core/shared/config"
 )
 
+func TestCloneSettingsCopiesShellPostprocessHook(t *testing.T) {
+	hook := "/tmp/role-hook"
+	settings := config.Settings{
+		Shell: config.ShellSettings{PostprocessHook: &hook},
+		Subagents: map[string]config.SubagentRole{
+			"worker": {
+				Settings: config.Settings{
+					Shell: config.ShellSettings{PostprocessHook: &hook},
+				},
+				Sources: map[string]string{"shell.postprocess_hook": "file"},
+			},
+		},
+	}
+
+	cloned := cloneSettings(settings)
+	if cloned.Shell.PostprocessHook == settings.Shell.PostprocessHook {
+		t.Fatal("top-level shell postprocess hook pointer was aliased")
+	}
+	role := cloned.Subagents["worker"]
+	if role.Settings.Shell.PostprocessHook == settings.Subagents["worker"].Settings.Shell.PostprocessHook {
+		t.Fatal("role shell postprocess hook pointer was aliased")
+	}
+	*cloned.Shell.PostprocessHook = "/tmp/changed-main-hook"
+	*role.Settings.Shell.PostprocessHook = "/tmp/changed-role-hook"
+	if *settings.Shell.PostprocessHook != "/tmp/role-hook" {
+		t.Fatalf("source main hook mutated to %q", *settings.Shell.PostprocessHook)
+	}
+	if *settings.Subagents["worker"].Settings.Shell.PostprocessHook != "/tmp/role-hook" {
+		t.Fatalf("source role hook mutated to %q", *settings.Subagents["worker"].Settings.Shell.PostprocessHook)
+	}
+}
+
 func TestApplyReviewerInheritanceRecomputesDefaultBaseURLWhenReviewerProviderExplicit(t *testing.T) {
 	settings := config.Settings{
 		ProviderOverride: "openai",
