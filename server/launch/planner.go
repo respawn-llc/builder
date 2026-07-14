@@ -34,6 +34,7 @@ const (
 // session execution target into a newly created child session.
 type MetadataExecutionTargetStore interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
+	GetWorktreeRecordByID(ctx context.Context, worktreeID string) (metadata.WorktreeRecord, error)
 	UpdateSessionExecutionTarget(ctx context.Context, update metadata.SessionExecutionTargetUpdate) error
 	DeleteSessionRecordByID(ctx context.Context, sessionID string) error
 	Close() error
@@ -43,11 +44,13 @@ type MetadataExecutionTargetStore interface {
 type MetadataExecutionTargetStoreOpener func(persistenceRoot string) (MetadataExecutionTargetStore, error)
 
 type Planner struct {
-	Config              config.App
-	ContainerDir        string
-	StoreOptions        []session.StoreOption
-	ReloadConfig        func() (config.App, error)
-	MetadataStoreOpener MetadataExecutionTargetStoreOpener
+	Config                        config.App
+	ContainerDir                  string
+	StoreOptions                  []session.StoreOption
+	ReloadConfig                  func() (config.App, error)
+	MetadataStoreOpener           MetadataExecutionTargetStoreOpener
+	RuntimeActive                 func(sessionID string) bool
+	RecoverMissingManagedWorktree bool
 }
 
 type SessionRequest struct {
@@ -71,6 +74,7 @@ type SessionPlan struct {
 	WorkspaceRoot                       string
 	Source                              config.SourceReport
 	BaseSource                          config.SourceReport
+	Recovery                            *serverapi.SessionPlanRecovery
 }
 
 type RunPromptOverrideOptions struct {
@@ -169,6 +173,13 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	if err != nil {
 		return SessionPlan{}, err
 	}
+	var recovery *serverapi.SessionPlanRecovery
+	if p.RecoverMissingManagedWorktree {
+		recovery, err = p.recoverMissingManagedWorktreeTarget(ctx, store)
+		if err != nil {
+			return SessionPlan{}, err
+		}
+	}
 	if req.Mode == ModeHeadless {
 		if err := EnsureSubagentSessionName(store); err != nil {
 			return SessionPlan{}, err
@@ -233,6 +244,82 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		WorkspaceRoot:                       p.Config.WorkspaceRoot,
 		Source:                              source,
 		BaseSource:                          baseSource,
+		Recovery:                            recovery,
+	}, nil
+}
+
+type MissingManagedWorktreeRecoveryError struct {
+	SessionID string
+	Root      string
+	Active    bool
+}
+
+func (e *MissingManagedWorktreeRecoveryError) Error() string {
+	if e == nil {
+		return "managed worktree recovery failed"
+	}
+	if e.Active {
+		return "managed worktree recovery requires an inactive runtime"
+	}
+	return "managed worktree recovery requires an available source workspace"
+}
+
+func (p Planner) recoverMissingManagedWorktreeTarget(ctx context.Context, store *session.Store) (*serverapi.SessionPlanRecovery, error) {
+	if store == nil {
+		return nil, errors.New("session store is required")
+	}
+	metadataStore, err := p.openMetadataStore()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = metadataStore.Close() }()
+	sessionID := strings.TrimSpace(store.Meta().SessionID)
+	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, session.ErrSessionNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if target.Worktree == nil || target.Worktree.Availability != string(clientui.ProjectAvailabilityMissing) {
+		return nil, nil
+	}
+	record, err := metadataStore.GetWorktreeRecordByID(ctx, target.Worktree.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !record.Managed {
+		return nil, nil
+	}
+	if strings.TrimSpace(target.WorkspaceID) == "" ||
+		strings.TrimSpace(target.WorkspaceRoot) == "" ||
+		target.WorkspaceAvailability != string(clientui.ProjectAvailabilityAvailable) {
+		return nil, &MissingManagedWorktreeRecoveryError{SessionID: sessionID, Root: target.WorkspaceRoot}
+	}
+	if p.RuntimeActive != nil && p.RuntimeActive(sessionID) {
+		return nil, &MissingManagedWorktreeRecoveryError{SessionID: sessionID, Root: target.WorkspaceRoot, Active: true}
+	}
+	previousReminder := session.CloneWorktreeReminderState(store.Meta().WorktreeReminder)
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
+		SessionID:  sessionID,
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: target.WorkspaceID},
+		CwdRelpath: ".",
+	}); err != nil {
+		return nil, err
+	}
+	if err := store.SetWorktreeReminderState(nil); err != nil {
+		rollbackErr := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdateFromReadModel(sessionID, target))
+		if rollbackErr != nil {
+			return nil, errors.Join(err, rollbackErr)
+		}
+		if previousReminder != nil {
+			_ = store.SetWorktreeReminderState(previousReminder)
+		}
+		return nil, err
+	}
+	return &serverapi.SessionPlanRecovery{
+		Kind:          serverapi.SessionPlanRecoveryKindDeletedManagedWorktree,
+		WorkspaceRoot: target.WorkspaceRoot,
 	}, nil
 }
 

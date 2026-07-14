@@ -2,15 +2,19 @@ package worktree
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"core/server/runtimewire"
+	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/toolspec"
 )
 
 func TestEnterWorktreePreflightObservesCancellationWhileWorkspaceMutationLocked(t *testing.T) {
@@ -137,11 +141,32 @@ func TestEnterWorktreeRejectsInvalidSelectorsBeforeScheduling(t *testing.T) {
 	}
 }
 
-func TestEnterWorktreeSchedulesSingleFlightAdoptsExternalAndPublishesOutcome(t *testing.T) {
+func TestEnterWorktreeAppliesBeforeAcknowledgementAndAdoptsExternal(t *testing.T) {
 	env := newServiceTestEnv(t)
 	externalRoot := createExternalWorktree(t, env, "feature/external-enter")
-	gate := make(chan struct{})
-	env.runtime.transitionGate = gate
+	binding, _, background, err := runtimewire.NewLocalToolRegistryBinding(runtimewire.LocalToolRegistryOptions{
+		WorkspaceRoot:       env.workspaceRoot,
+		Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
+		MinimumExecToBgTime: time.Second,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+	})
+	if err != nil {
+		t.Fatalf("NewLocalToolRegistryBinding: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := background.Close(); err != nil {
+			t.Fatalf("close background manager: %v", err)
+		}
+	})
+	env.runtime.mu.Lock()
+	env.runtime.activeSessions[env.session.Meta().SessionID] = true
+	env.runtime.rebindHook = func(_ context.Context, _ string, _ string, root string) {
+		if err := binding.Rebind(root); err != nil {
+			t.Errorf("Rebind(%q): %v", root, err)
+		}
+	}
+	env.runtime.mu.Unlock()
 	operationID := serverapi.NewWorktreeOperationID()
 	request := serverapi.WorktreeEnterRequest{
 		OperationID: operationID,
@@ -156,27 +181,6 @@ func TestEnterWorktreeSchedulesSingleFlightAdoptsExternalAndPublishesOutcome(t *
 	if ack.OperationID != operationID {
 		t.Fatalf("ack = %+v", ack)
 	}
-	replayed, err := env.service.EnterWorktree(env.ctx, request)
-	if err != nil || replayed != ack {
-		t.Fatalf("identical retry = %+v, %v; want replayed acknowledgement", replayed, err)
-	}
-	_, err = env.service.LeaveWorktree(env.ctx, serverapi.WorktreeLeaveRequest{
-		OperationID: serverapi.NewWorktreeOperationID(),
-		SessionID:   env.session.Meta().SessionID,
-	})
-	var pending *serverapi.WorktreeTransitionPendingError
-	if !errors.As(err, &pending) || pending.PendingOperationID != operationID {
-		t.Fatalf("different transition error = %v, want pending operation %s", err, operationID.String())
-	}
-	if target := mustResolveServiceTestTarget(t, env); target.Worktree != nil {
-		t.Fatalf("target changed before transition boundary: %+v", target)
-	}
-
-	close(gate)
-	outcome := waitForWorktreeTransitionOutcome(t, env.runtime)
-	if outcome.OperationID != operationID || outcome.State != clientui.WorktreeTransitionCompleted {
-		t.Fatalf("outcome = %+v", outcome)
-	}
 	target := mustResolveServiceTestTarget(t, env)
 	canonicalExternalRoot, err := config.CanonicalWorkspaceRoot(externalRoot)
 	if err != nil {
@@ -185,6 +189,12 @@ func TestEnterWorktreeSchedulesSingleFlightAdoptsExternalAndPublishesOutcome(t *
 	if target.Worktree == nil || target.Worktree.Root != canonicalExternalRoot {
 		t.Fatalf("target after enter = %+v, want %q", target, canonicalExternalRoot)
 	}
+	if got := worktreeTestExecOutput(t, binding.Registry(), "pwd"); got != canonicalExternalRoot {
+		t.Fatalf("following tool pwd = %q, want %q", got, canonicalExternalRoot)
+	}
+	if got := worktreeTestExecOutput(t, binding.Registry(), "git branch --show-current"); got != "feature/external-enter" {
+		t.Fatalf("following tool branch = %q, want %q", got, "feature/external-enter")
+	}
 	record, err := env.store.GetWorktreeRecordByID(env.ctx, target.Worktree.ID)
 	if err != nil {
 		t.Fatalf("GetWorktreeRecordByID: %v", err)
@@ -192,13 +202,43 @@ func TestEnterWorktreeSchedulesSingleFlightAdoptsExternalAndPublishesOutcome(t *
 	if record.Managed || record.CreatedBranch {
 		t.Fatalf("external adoption changed provenance: %+v", record)
 	}
+	outcome := waitForWorktreeTransitionOutcome(t, env.runtime)
+	if outcome.OperationID != operationID || outcome.State != clientui.WorktreeTransitionCompleted {
+		t.Fatalf("outcome = %+v", outcome)
+	}
 }
 
-func TestScheduledEnterRemainsBoundToInitiallyResolvedWorktree(t *testing.T) {
+func worktreeTestExecOutput(t *testing.T, registry *tools.Registry, command string) string {
+	t.Helper()
+	handler, ok := registry.Get(toolspec.ToolExecCommand)
+	if !ok {
+		t.Fatal("exec_command handler is unavailable")
+	}
+	input, err := json.Marshal(map[string]string{"cmd": command})
+	if err != nil {
+		t.Fatalf("marshal exec_command input: %v", err)
+	}
+	result, err := handler.Call(context.Background(), tools.Call{
+		ID:    "test-call",
+		Name:  toolspec.ToolExecCommand,
+		Input: input,
+	})
+	if err != nil {
+		t.Fatalf("exec_command %q: %v", command, err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command %q failed: %s", command, result.Output)
+	}
+	var output string
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("decode exec_command output: %v", err)
+	}
+	return strings.TrimSpace(output)
+}
+
+func TestImmediateEnterRemainsBoundToInitiallyResolvedWorktree(t *testing.T) {
 	env := newServiceTestEnv(t)
 	initialRoot := createExternalWorktree(t, env, "feature/enter-bound")
-	gate := make(chan struct{})
-	env.runtime.transitionGate = gate
 	operationID := serverapi.NewWorktreeOperationID()
 
 	if _, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
@@ -209,16 +249,6 @@ func TestScheduledEnterRemainsBoundToInitiallyResolvedWorktree(t *testing.T) {
 		t.Fatalf("EnterWorktree: %v", err)
 	}
 
-	runGit(t, initialRoot, "switch", "-c", "feature/enter-bound-moved")
-	selectorDriftRoot := filepath.Join(t.TempDir(), "selector-drift")
-	runGit(t, env.workspaceRoot, "worktree", "add", selectorDriftRoot, "feature/enter-bound")
-	t.Cleanup(func() { runGit(t, env.workspaceRoot, "worktree", "remove", "--force", selectorDriftRoot) })
-
-	close(gate)
-	outcome := waitForWorktreeTransitionOutcome(t, env.runtime)
-	if outcome.OperationID != operationID || outcome.State != clientui.WorktreeTransitionCompleted {
-		t.Fatalf("outcome = %+v", outcome)
-	}
 	target := mustResolveServiceTestTarget(t, env)
 	canonicalInitialRoot, err := config.CanonicalWorkspaceRoot(initialRoot)
 	if err != nil {
@@ -226,6 +256,10 @@ func TestScheduledEnterRemainsBoundToInitiallyResolvedWorktree(t *testing.T) {
 	}
 	if target.Worktree == nil || target.Worktree.Root != canonicalInitialRoot {
 		t.Fatalf("target after selector drift = %+v, want initially resolved root %q", target, canonicalInitialRoot)
+	}
+	outcome := waitForWorktreeTransitionOutcome(t, env.runtime)
+	if outcome.OperationID != operationID || outcome.State != clientui.WorktreeTransitionCompleted {
+		t.Fatalf("outcome = %+v", outcome)
 	}
 }
 
@@ -258,14 +292,15 @@ func TestLeaveWorktreeRunsAtTransitionBoundary(t *testing.T) {
 
 func TestCloseCancelsPendingWorktreeTransitionWithoutPublishingOutcome(t *testing.T) {
 	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/close-cancel")
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
 	gate := make(chan struct{})
 	env.runtime.transitionGate = gate
-	if _, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
+	if _, err := env.service.LeaveWorktree(env.ctx, serverapi.WorktreeLeaveRequest{
 		OperationID: serverapi.NewWorktreeOperationID(),
 		SessionID:   env.session.Meta().SessionID,
-		Selector:    env.workspaceRoot,
 	}); err != nil {
-		t.Fatalf("EnterWorktree: %v", err)
+		t.Fatalf("LeaveWorktree: %v", err)
 	}
 	if err := env.service.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -298,22 +333,22 @@ func TestCloseWaitsForTransitionSchedulingCriticalSection(t *testing.T) {
 	}
 }
 
-func TestScheduledWorktreeTransitionFailurePublishesAndSteersTypedOutcome(t *testing.T) {
+func TestImmediateEnterFailureIsReturnedAndPublishesTypedOutcome(t *testing.T) {
 	env := newServiceTestEnv(t)
-	externalRoot := filepath.Join(t.TempDir(), "removed-before-transition")
-	runGit(t, env.workspaceRoot, "worktree", "add", "-b", "feature/removed-before-transition", externalRoot, "HEAD")
-	gate := make(chan struct{})
-	env.runtime.transitionGate = gate
+	createExternalWorktree(t, env, "feature/immediate-enter-failure")
+	env.runtime.mu.Lock()
+	env.runtime.activeSessions[env.session.Meta().SessionID] = true
+	env.runtime.rebindErr = errors.New("immediate retarget failed")
+	env.runtime.mu.Unlock()
 	operationID := serverapi.NewWorktreeOperationID()
-	if _, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
+	_, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
 		OperationID: operationID,
 		SessionID:   env.session.Meta().SessionID,
-		Selector:    "feature/removed-before-transition",
-	}); err != nil {
-		t.Fatalf("EnterWorktree: %v", err)
+		Selector:    "feature/immediate-enter-failure",
+	})
+	if err == nil {
+		t.Fatal("EnterWorktree succeeded after immediate retarget failure")
 	}
-	runGit(t, env.workspaceRoot, "worktree", "remove", "--force", externalRoot)
-	close(gate)
 	outcome := waitForWorktreeTransitionOutcome(t, env.runtime)
 	if outcome.OperationID != operationID ||
 		outcome.State != clientui.WorktreeTransitionFailed ||

@@ -188,6 +188,20 @@ func prepareSessionUIRun(
 	if err != nil {
 		return nil, uiLoopRequest{}, err
 	}
+	if plan.Recovery != nil && plan.Recovery.Kind == serverapi.SessionPlanRecoveryKindDeletedManagedWorktree {
+		emitter, ok := runtimePlan.Wiring.runtimeClient.(interface {
+			AppendCommittedEntry(role, text string) error
+		})
+		if !ok {
+			return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, errors.New("runtime recovery notice emitter is unavailable"))
+		}
+		if err := emitter.AppendCommittedEntry(
+			"warning",
+			"Managed worktree no longer exists; resumed in project root "+plan.Recovery.WorkspaceRoot+". Worktree-only uncommitted changes are unavailable.",
+		); err != nil {
+			return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
+		}
+	}
 	promptRoots, err := server.ClientPromptRoots()
 	if err != nil {
 		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)

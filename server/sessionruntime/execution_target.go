@@ -56,6 +56,26 @@ func (s *Service) RunWorktreeTransition(
 	sessionID string,
 	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
 ) error {
+	return s.runWorktreeTransition(ctx, sessionID, false, fn)
+}
+
+// RunWorktreeTransitionImmediately applies a transition while the caller's
+// tool command is still active. The caller must not acknowledge that command
+// until this returns, so the next tool lookup observes the retargeted binding.
+func (s *Service) RunWorktreeTransitionImmediately(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+) error {
+	return s.runWorktreeTransition(ctx, sessionID, true, fn)
+}
+
+func (s *Service) runWorktreeTransition(
+	ctx context.Context,
+	sessionID string,
+	immediate bool,
+	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+) error {
 	if fn == nil {
 		return nil
 	}
@@ -86,6 +106,11 @@ func (s *Service) RunWorktreeTransition(
 		engine := guard.Engine()
 		if engine == nil {
 			return runtimeUnavailableErr(trimmedSessionID)
+		}
+		if immediate {
+			return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+				return s.syncGuardedExecutionTarget(syncCtx, trimmedSessionID, target, guard, reminder)
+			})
 		}
 		return engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, func() error {
 			return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {

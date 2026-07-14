@@ -61,7 +61,7 @@ func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnter
 	if err != nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, err
 	}
-	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, sync transitionTargetSync) error {
+	return s.scheduleWorktreeTransition(ctx, request, true, func(runCtx context.Context, sync transitionTargetSync) error {
 		return s.executeEnterWorktree(runCtx, request.sessionID, target, sync)
 	})
 }
@@ -75,7 +75,7 @@ func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeave
 		sessionID:   strings.TrimSpace(req.SessionID),
 		kind:        clientui.WorktreeTransitionLeave,
 	}
-	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, sync transitionTargetSync) error {
+	return s.scheduleWorktreeTransition(ctx, request, false, func(runCtx context.Context, sync transitionTargetSync) error {
 		return s.executeLeaveWorktree(runCtx, request.sessionID, sync)
 	})
 }
@@ -83,6 +83,7 @@ func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeave
 func (s *Service) scheduleWorktreeTransition(
 	_ context.Context,
 	request worktreeTransitionRequest,
+	immediate bool,
 	execute func(context.Context, transitionTargetSync) error,
 ) (serverapi.WorktreeScheduledAcknowledgement, error) {
 	if s == nil || s.runtime == nil {
@@ -110,15 +111,29 @@ func (s *Service) scheduleWorktreeTransition(
 	s.transitionWG.Add(1)
 	s.transitionMu.Unlock()
 
-	go s.runWorktreeTransition(request, execute)
+	if immediate {
+		if err := s.runWorktreeTransition(request, true, execute); err != nil {
+			return serverapi.WorktreeScheduledAcknowledgement{}, err
+		}
+	} else {
+		go func() {
+			_ = s.runWorktreeTransition(request, false, execute)
+		}()
+	}
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: request.operationID}, nil
 }
 
-func (s *Service) runWorktreeTransition(request worktreeTransitionRequest, execute func(context.Context, transitionTargetSync) error) {
+func (s *Service) runWorktreeTransition(
+	request worktreeTransitionRequest,
+	immediate bool,
+	execute func(context.Context, transitionTargetSync) error,
+) error {
 	defer s.transitionWG.Done()
-	err := s.runtime.RunWorktreeTransition(
-		s.transitionCtx,
-		request.sessionID,
+	run := s.runtime.RunWorktreeTransition
+	if immediate {
+		run = s.runtime.RunWorktreeTransitionImmediately
+	}
+	err := run(s.transitionCtx, request.sessionID,
 		func(ctx context.Context, sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error {
 			return execute(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 				return sync(syncCtx, target, reminder)
@@ -145,6 +160,7 @@ func (s *Service) runWorktreeTransition(request worktreeTransitionRequest, execu
 		delete(s.transitions, request.sessionID)
 	}
 	s.transitionMu.Unlock()
+	return err
 }
 
 func (s *Service) resolveScheduledEnterTarget(

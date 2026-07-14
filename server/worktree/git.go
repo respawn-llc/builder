@@ -200,6 +200,35 @@ type GitInspector struct {
 	runner gitCommandRunner
 }
 
+type PrunableWorktreeRecoveryErrorKind string
+
+const (
+	PrunableWorktreeRecoveryErrorGitMarkerPresent      PrunableWorktreeRecoveryErrorKind = "git_marker_present"
+	PrunableWorktreeRecoveryErrorRegistrationNotFound  PrunableWorktreeRecoveryErrorKind = "registration_not_found"
+	PrunableWorktreeRecoveryErrorRegistrationAmbiguous PrunableWorktreeRecoveryErrorKind = "registration_ambiguous"
+	PrunableWorktreeRecoveryErrorRegistrationInvalid   PrunableWorktreeRecoveryErrorKind = "registration_invalid"
+)
+
+type PrunableWorktreeRecoveryError struct {
+	Kind         PrunableWorktreeRecoveryErrorKind
+	WorktreeRoot string
+	Cause        error
+}
+
+func (e *PrunableWorktreeRecoveryError) Error() string {
+	if e == nil {
+		return "prunable worktree recovery failed"
+	}
+	return "prunable worktree recovery failed: " + string(e.Kind)
+}
+
+func (e *PrunableWorktreeRecoveryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 func NewGitInspector(runner gitCommandRunner) *GitInspector {
 	if runner == nil {
 		runner = execGitCommandRunner{}
@@ -803,6 +832,90 @@ func (i *GitInspector) Remove(ctx context.Context, workspaceRoot string, worktre
 	args = append(args, canonicalWorktreeRoot)
 	_, err = i.runner.Output(ctx, canonicalWorkspaceRoot, args...)
 	return err
+}
+
+// ForceRemovePrunableWorktree removes a linked-worktree folder whose .git
+// marker is already absent, then deletes only the matching Git administrative
+// registration. The caller must enforce explicit force authorization.
+func (i *GitInspector) ForceRemovePrunableWorktree(ctx context.Context, workspaceRoot string, worktreeRoot string) error {
+	if i == nil {
+		return fmt.Errorf("git inspector is required")
+	}
+	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(filepath.Join(canonicalWorktreeRoot, ".git")); err == nil {
+		return &PrunableWorktreeRecoveryError{
+			Kind:         PrunableWorktreeRecoveryErrorGitMarkerPresent,
+			WorktreeRoot: canonicalWorktreeRoot,
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return &PrunableWorktreeRecoveryError{
+			Kind:         PrunableWorktreeRecoveryErrorGitMarkerPresent,
+			WorktreeRoot: canonicalWorktreeRoot,
+			Cause:        err,
+		}
+	}
+	registrationRoot, err := i.prunableWorktreeRegistrationRoot(ctx, canonicalWorkspaceRoot, canonicalWorktreeRoot)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(canonicalWorktreeRoot); err != nil {
+		return err
+	}
+	return os.RemoveAll(registrationRoot)
+}
+
+func (i *GitInspector) prunableWorktreeRegistrationRoot(ctx context.Context, workspaceRoot string, worktreeRoot string) (string, error) {
+	inspection, err := i.InspectTarget(ctx, workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(filepath.Join(inspection.Identity.CommonDir, "worktrees"))
+	if err != nil {
+		return "", err
+	}
+	matches := make([]string, 0, 1)
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		registrationRoot := filepath.Join(inspection.Identity.CommonDir, "worktrees", entry.Name())
+		gitdir, err := os.ReadFile(filepath.Join(registrationRoot, "gitdir"))
+		if err != nil {
+			continue
+		}
+		gitfilePath := strings.TrimSpace(string(gitdir))
+		if !filepath.IsAbs(gitfilePath) {
+			continue
+		}
+		registeredRoot, err := config.CanonicalWorkspaceRoot(filepath.Dir(gitfilePath))
+		if err != nil {
+			continue
+		}
+		if registeredRoot == worktreeRoot {
+			matches = append(matches, registrationRoot)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", &PrunableWorktreeRecoveryError{
+			Kind:         PrunableWorktreeRecoveryErrorRegistrationNotFound,
+			WorktreeRoot: worktreeRoot,
+		}
+	default:
+		return "", &PrunableWorktreeRecoveryError{
+			Kind:         PrunableWorktreeRecoveryErrorRegistrationAmbiguous,
+			WorktreeRoot: worktreeRoot,
+		}
+	}
 }
 
 func countPorcelainStatusEntries(output []byte) int {

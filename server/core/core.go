@@ -278,6 +278,8 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 		ReloadConfig: func() (config.App, error) {
 			return s.configForWorkspace(projectCtx.projectRoot)
 		},
+		RuntimeActive:                 s.safeBundles().Runtime.runtimeRegistry.IsSessionRuntimeActive,
+		RecoverMissingManagedWorktree: true,
 	}, s.safeBundles().Persistence.sessionStores).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore)

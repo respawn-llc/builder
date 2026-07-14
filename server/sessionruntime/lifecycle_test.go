@@ -512,6 +512,158 @@ func TestSyncExecutionTargetRebindsActiveRuntime(t *testing.T) {
 	}
 }
 
+func TestImmediateWorktreeTransitionRetargetsBeforeQueuedUserSteer(t *testing.T) {
+	fixture, _ := newRuntimeServiceFixture(t)
+	sessionID := fixture.store.Meta().SessionID
+	client := newWorktreeTransitionSteerClient()
+	targetWorkdir := t.TempDir()
+	var (
+		engine    *runtimepkg.Engine
+		rebindDir atomic.Value
+	)
+	build := func(context.Context) (RuntimeBuildResult, error) {
+		created, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		engine = created
+		return RuntimeBuildResult{
+			Engine:      created,
+			LocalRebind: func(dir string) error { rebindDir.Store(dir); return nil },
+			Close:       func() { _ = created.Close() },
+		}, nil
+	}
+	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
+		t.Fatalf("AcquireRuntime: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("expected active engine")
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "start")
+		firstDone <- err
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first model step did not start")
+	}
+
+	reminder := &session.WorktreeReminderState{
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/immediate"),
+			WorktreePath:  targetWorkdir,
+			WorkspaceRoot: fixture.config.WorkspaceRoot,
+			EffectiveCwd:  targetWorkdir,
+		},
+	}
+	err := fixture.service.RunWorktreeTransitionImmediately(context.Background(), sessionID, func(
+		ctx context.Context,
+		syncTarget func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error,
+	) error {
+		return syncTarget(ctx, clientui.SessionExecutionTarget{
+			WorkspaceRoot:    fixture.config.WorkspaceRoot,
+			EffectiveWorkdir: targetWorkdir,
+		}, reminder)
+	})
+	if err != nil {
+		t.Fatalf("RunWorktreeTransitionImmediately: %v", err)
+	}
+	if got, _ := rebindDir.Load().(string); got != targetWorkdir {
+		t.Fatalf("immediate rebind workdir = %q, want %q", got, targetWorkdir)
+	}
+	if got := engine.TranscriptWorkingDir(); got != targetWorkdir {
+		t.Fatalf("engine workdir = %q, want %q", got, targetWorkdir)
+	}
+
+	engine.QueueUserMessageForAutoDrain("steered after enter", "req-steered")
+	close(client.releaseFirst)
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first model step: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first model step did not finish")
+	}
+	select {
+	case <-client.secondCall:
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued user steer did not begin a second model step")
+	}
+	request := client.request(t, 1)
+	hasSteer := false
+	hasTarget := false
+	for _, item := range request.Items {
+		if item.Type != llm.ResponseItemTypeMessage {
+			continue
+		}
+		if item.Role == llm.RoleUser && item.Content == "steered after enter" {
+			hasSteer = true
+		}
+		if item.Role == llm.RoleDeveloper &&
+			item.MessageType == llm.MessageTypeWorktreeMode &&
+			item.WorktreeContext != nil &&
+			item.WorktreeContext.EffectiveCwd == targetWorkdir {
+			hasTarget = true
+		}
+	}
+	if !hasSteer || !hasTarget {
+		t.Fatalf("queued model step missing steer or target context: %+v", request.Items)
+	}
+}
+
+type worktreeTransitionSteerClient struct {
+	mu           sync.Mutex
+	calls        []llm.Request
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+	secondCall   chan struct{}
+	firstOnce    sync.Once
+	secondOnce   sync.Once
+}
+
+func newWorktreeTransitionSteerClient() *worktreeTransitionSteerClient {
+	return &worktreeTransitionSteerClient{
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+		secondCall:   make(chan struct{}),
+	}
+}
+
+func (c *worktreeTransitionSteerClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.calls = append(c.calls, req)
+	callNumber := len(c.calls)
+	c.mu.Unlock()
+	if callNumber == 1 {
+		c.firstOnce.Do(func() { close(c.firstStarted) })
+		select {
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		case <-c.releaseFirst:
+		}
+	} else {
+		c.secondOnce.Do(func() { close(c.secondCall) })
+	}
+	return llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (c *worktreeTransitionSteerClient) request(t *testing.T, index int) llm.Request {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if index >= len(c.calls) {
+		t.Fatalf("request %d is unavailable in %+v", index, c.calls)
+	}
+	return c.calls[index]
+}
+
 type lifecycleRequestCaptureClient struct {
 	mu      sync.Mutex
 	calls   []llm.Request

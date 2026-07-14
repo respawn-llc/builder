@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,6 +48,7 @@ type LocalToolRuntimeContext struct {
 }
 
 type LocalToolRegistryBinding struct {
+	mu       sync.Mutex
 	registry *tools.Registry
 	ctx      LocalToolRuntimeContext
 	enabled  []toolspec.ID
@@ -140,6 +142,8 @@ func (b *LocalToolRegistryBinding) Rebind(workspaceRoot string) error {
 	if trimmedRoot == "" {
 		return errWorkspaceRootRequired
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.ctx.WorkspaceRoot = trimmedRoot
 	return b.rebuild()
 }

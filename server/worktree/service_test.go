@@ -121,6 +121,16 @@ func (r *serviceTestRuntime) RunWorktreeTransition(
 	})
 }
 
+func (r *serviceTestRuntime) RunWorktreeTransitionImmediately(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+) error {
+	return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+		return r.SyncExecutionTarget(syncCtx, sessionID, target, reminder)
+	})
+}
+
 func (r *serviceTestRuntime) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
 	r.mu.Lock()
 	r.transitionOutcomes = append(r.transitionOutcomes, outcome)
