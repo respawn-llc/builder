@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -32,11 +31,10 @@ type blockingStepLifecycleSink struct {
 	releaseEnded chan struct{}
 }
 
-type chmodStepLifecycleSink struct {
-	dir               string
-	chmodOnTransition StepLifecycleTransition
-	mu                sync.Mutex
-	transitions       []StepLifecycleTransition
+type callbackStepLifecycleSink struct {
+	onTransition func(StepLifecycleTransition) error
+	mu           sync.Mutex
+	transitions  []StepLifecycleTransition
 }
 
 func newBlockingStepLifecycleSink() *blockingStepLifecycleSink {
@@ -53,25 +51,25 @@ func (s *blockingStepLifecycleSink) StepEnded(_ context.Context, snapshot StepLi
 	return nil
 }
 
-func (s *chmodStepLifecycleSink) StepBegan(context.Context, StepLifecycleSnapshot) error {
+func (s *callbackStepLifecycleSink) StepBegan(context.Context, StepLifecycleSnapshot) error {
 	return s.record(StepLifecycleTransitionBegan)
 }
 
-func (s *chmodStepLifecycleSink) StepEnded(context.Context, StepLifecycleSnapshot) error {
+func (s *callbackStepLifecycleSink) StepEnded(context.Context, StepLifecycleSnapshot) error {
 	return s.record(StepLifecycleTransitionEnded)
 }
 
-func (s *chmodStepLifecycleSink) record(transition StepLifecycleTransition) error {
+func (s *callbackStepLifecycleSink) record(transition StepLifecycleTransition) error {
 	s.mu.Lock()
 	s.transitions = append(s.transitions, transition)
 	s.mu.Unlock()
-	if transition == s.chmodOnTransition {
-		return os.Chmod(s.dir, 0o555)
+	if s.onTransition != nil {
+		return s.onTransition(transition)
 	}
 	return nil
 }
 
-func (s *chmodStepLifecycleSink) seen(transition StepLifecycleTransition) bool {
+func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, item := range s.transitions {
@@ -619,10 +617,17 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 }
 
 func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceFailures(t *testing.T) {
-	store := mustCreateTestSession(t)
-	sessionDir := store.Dir()
-	defer func() { _ = os.Chmod(sessionDir, 0o755) }()
-	sink := &chmodStepLifecycleSink{dir: sessionDir, chmodOnTransition: StepLifecycleTransitionEnded}
+	observer := &armedTestPersistenceObserver{
+		delegate: runtimeTestSessionPersistence,
+		err:      errors.New("finish persistence failed"),
+	}
+	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(observer))
+	sink := &callbackStepLifecycleSink{onTransition: func(transition StepLifecycleTransition) error {
+		if transition == StepLifecycleTransitionEnded {
+			observer.armed.Store(true)
+		}
+		return nil
+	}}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5", StepLifecycle: sink})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 

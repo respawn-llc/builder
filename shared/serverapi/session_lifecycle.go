@@ -71,13 +71,15 @@ type SessionDraftRecoveryBuffer struct {
 }
 
 type SessionRetargetWorkspaceRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	WorkspaceRoot   string `json:"workspace_root"`
+	ClientRequestID string  `json:"client_request_id"`
+	SessionID       string  `json:"session_id"`
+	WorkspaceRoot   string  `json:"workspace_root"`
+	ProjectID       *string `json:"project_id,omitempty"`
 }
 
 type SessionRetargetWorkspaceResponse struct {
-	Binding ProjectBinding `json:"binding"`
+	Binding                 ProjectBinding `json:"binding"`
+	WorkspaceBindingCreated bool           `json:"workspace_binding_created,omitempty"`
 }
 
 type SessionResolveTransitionRequest struct {
@@ -143,6 +145,9 @@ func (r SessionRetargetWorkspaceRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.WorkspaceRoot) == "" {
 		return errors.New("workspace_root is required")
+	}
+	if r.ProjectID != nil && strings.TrimSpace(*r.ProjectID) == "" {
+		return errors.New("project_id must not be blank when provided")
 	}
 	return nil
 }

@@ -26,7 +26,7 @@ func TestSetGoalPersistsMetadataAndEvent(t *testing.T) {
 		t.Fatalf("status = %q, want active", goal.Status)
 	}
 
-	reopened, err := Open(store.Dir())
+	reopened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

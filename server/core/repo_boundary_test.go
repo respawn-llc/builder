@@ -516,9 +516,6 @@ func allowedCLIServerImports() map[string]map[string]string {
 			"core/server/auth":    "onboarding readiness requires server auth manager types",
 			"core/server/startup": "onboarding readiness delegates to the server-owned onboarding flow",
 		},
-		filepath.Join("cli", "kent", "server_bridge.go"): {
-			"core/server/sessionservice": "kent CLI bridge retains non-trivial fallback behavior",
-		},
 		filepath.Join("cli", "kent", "serve.go"): {
 			"core/server/startup": "kent serve command is a composition root",
 		},

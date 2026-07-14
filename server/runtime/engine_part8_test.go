@@ -5,8 +5,6 @@ import (
 	"errors"
 
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -202,11 +200,12 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 }
 
 func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
-	store := mustCreateTestSession(t)
+	observer := &armedTestPersistenceObserver{
+		delegate: runtimeTestSessionPersistence,
+		err:      errors.New("clear persistence failed"),
+	}
+	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(observer))
 	sessionDir := store.Dir()
-	defer func() {
-		_ = os.Chmod(sessionDir, 0o755)
-	}()
 
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
@@ -214,29 +213,22 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	}}}
 
 	var (
-		mu         sync.Mutex
-		events     []Event
-		chmodDone  bool
-		chmodError error
+		mu           sync.Mutex
+		events       []Event
+		failureArmed bool
 	)
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
 			events = append(events, evt)
-			shouldLockDir := evt.Kind == EventAssistantMessage && !chmodDone
-			if shouldLockDir {
-				chmodDone = true
+			shouldArmFailure := evt.Kind == EventAssistantMessage && !failureArmed
+			if shouldArmFailure {
+				failureArmed = true
 			}
 			mu.Unlock()
-			if shouldLockDir {
-				if chmodErr := os.Chmod(sessionDir, 0o555); chmodErr != nil {
-					mu.Lock()
-					if chmodError == nil {
-						chmodError = chmodErr
-					}
-					mu.Unlock()
-				}
+			if shouldArmFailure {
+				observer.armed.Store(true)
 			}
 		},
 	})
@@ -250,8 +242,7 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	}
 
 	mu.Lock()
-	gotChmodDone := chmodDone
-	gotChmodErr := chmodError
+	gotFailureArmed := failureArmed
 	seenClearFailureEvent := false
 	for _, evt := range events {
 		if evt.Kind == EventInFlightClearFailed && strings.Contains(evt.Error, "clear pending model recovery") {
@@ -261,20 +252,13 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	}
 	mu.Unlock()
 
-	if !gotChmodDone {
-		t.Fatal("expected permission flip hook to run")
-	}
-	if gotChmodErr != nil {
-		t.Fatalf("chmod hook failed: %v", gotChmodErr)
+	if !gotFailureArmed {
+		t.Fatal("expected persistence failure hook to run")
 	}
 	if !seenClearFailureEvent {
 		t.Fatalf("expected %s event, got %+v", EventInFlightClearFailed, events)
 	}
-	if err := os.Chmod(sessionDir, 0o755); err != nil {
-		t.Fatalf("restore session dir permissions: %v", err)
-	}
-
-	reopened, openErr := session.Open(sessionDir)
+	reopened, openErr := runtimeTestSessionPersistence.Open(sessionDir)
 	if openErr != nil {
 		t.Fatalf("re-open session store: %v", openErr)
 	}
@@ -292,7 +276,7 @@ func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 		t.Fatalf("set pending recovery: %v", err)
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("re-open store: %v", err)
 	}
@@ -342,7 +326,7 @@ func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testin
 		t.Fatalf("set pending recovery: %v", err)
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("re-open store: %v", err)
 	}
@@ -357,95 +341,13 @@ func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testin
 	}
 }
 
-func TestNewInfersLegacyPendingModelRecoveryFromBoundedActiveTail(t *testing.T) {
+func TestNewDiscardsPendingModelRecoveryWithoutConcreteStep(t *testing.T) {
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-step", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "legacy", Reason: "legacy_in_flight_step", CreatedAt: time.Now().UTC()}); err != nil {
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery", Reason: "missing_step", CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("set pending recovery: %v", err)
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
-	if err != nil {
-		t.Fatalf("re-open store: %v", err)
-	}
-	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if reopenedStore.Meta().PendingModelRecovery != nil {
-		t.Fatal("expected reopen path to clear pending model recovery")
-	}
-	messages := restored.transcriptRuntimeState().SnapshotMessages()
-	if len(messages) != 2 {
-		t.Fatalf("expected inferred legacy recovery to append interruption marker, got %+v", messages)
-	}
-	last := messages[len(messages)-1]
-	if last.Role != llm.RoleDeveloper || last.MessageType != llm.MessageTypeInterruption {
-		t.Fatalf("expected interruption developer message, got %+v", last)
-	}
-	events, err := sessiontest.CollectEvents(reopenedStore)
-	if err != nil {
-		t.Fatalf("read reopened events: %v", err)
-	}
-	seenMaterialized := false
-	for _, evt := range events {
-		if evt.Kind == "model_recovery_pending" && evt.StepID == "legacy-step" {
-			seenMaterialized = true
-		}
-	}
-	if !seenMaterialized {
-		t.Fatalf("expected materialized model recovery event with inferred step, got %+v", events)
-	}
-}
-
-func TestNewMaterializesLegacyInFlightStepFromSessionJSONOnlyOnRuntimeOpen(t *testing.T) {
-	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-json-step", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	metaPath := filepath.Join(store.Dir(), "session.json")
-	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		t.Fatalf("read meta: %v", err)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("unmarshal meta: %v", err)
-	}
-	raw["in_flight_step"] = true
-	delete(raw, "pending_model_recovery")
-	rewritten, err := json.Marshal(raw)
-	if err != nil {
-		t.Fatalf("marshal legacy meta: %v", err)
-	}
-	if err := os.WriteFile(metaPath, rewritten, 0o644); err != nil {
-		t.Fatalf("write legacy meta: %v", err)
-	}
-
-	reopenedStore, err := session.Open(store.Dir())
-	if err != nil {
-		t.Fatalf("re-open store: %v", err)
-	}
-	if reopenedStore.Meta().PendingModelRecovery != nil {
-		t.Fatalf("legacy JSON candidate serialized on metadata open: %+v", reopenedStore.Meta().PendingModelRecovery)
-	}
-	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	messages := restored.transcriptRuntimeState().SnapshotMessages()
-	if len(messages) != 2 {
-		t.Fatalf("expected materialized legacy JSON recovery to append interruption marker, got %+v", messages)
-	}
-	last := messages[len(messages)-1]
-	if last.Role != llm.RoleDeveloper || last.MessageType != llm.MessageTypeInterruption {
-		t.Fatalf("expected interruption developer message, got %+v", last)
-	}
-}
-
-func TestNewDiscardsLegacyPendingModelRecoveryWithoutConcreteStep(t *testing.T) {
-	store := mustCreateTestSession(t)
-	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "legacy", Reason: "legacy_in_flight_step", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("set pending recovery: %v", err)
-	}
-
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("re-open store: %v", err)
 	}
@@ -529,7 +431,7 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t *testing.T, c
 		t.Fatalf("set pending recovery: %v", err)
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("re-open store: %v", err)
 	}
@@ -1039,17 +941,14 @@ func TestExecuteToolCallsFailsOnToolCompletionPersistence(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
+			observer := &armedTestPersistenceObserver{
+				delegate: runtimeTestSessionPersistence,
+				err:      errors.New("tool completion persistence failed"),
+			}
+			store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(observer))
 
 			eng := mustNewTestEngine(t, store, &fakeClient{}, tc.registry, Config{Model: "gpt-5"})
-
-			sessionDir := store.Dir()
-			if err := os.Chmod(sessionDir, 0o555); err != nil {
-				t.Fatalf("chmod read-only session dir: %v", err)
-			}
-			defer func() {
-				_ = os.Chmod(sessionDir, 0o755)
-			}()
+			observer.armed.Store(true)
 
 			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{
 				{ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`)},

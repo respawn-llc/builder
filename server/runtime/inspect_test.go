@@ -25,8 +25,7 @@ func TestPrepareInspectionRequestKeepsMetaContextEphemeral(t *testing.T) {
 
 	inspectionStore, err := session.Open(
 		persisted.Dir(),
-		session.WithFilelessMetadataPersistence(),
-		session.WithFilelessEventPersistence(),
+		append(runtimeTestSessionPersistence.Options(), session.WithFilelessEventPersistence())...,
 	)
 	if err != nil {
 		t.Fatalf("open inspection session: %v", err)

@@ -9,6 +9,7 @@ import (
 	"core/server/launch"
 	"core/server/runprompt"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	serverstartup "core/server/startup"
 	askquestion "core/server/tools"
 	"core/shared/client"
@@ -457,7 +458,8 @@ func waitForConfiguredRunPromptDaemon(t *testing.T, workspace string) {
 
 func TestEnsureSubagentSessionNameSetsDefault(t *testing.T) {
 	containerDir := t.TempDir()
-	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("new lazy session: %v", err)
 	}
@@ -475,7 +477,8 @@ func TestEnsureSubagentSessionNameSetsDefault(t *testing.T) {
 
 func TestEnsureSubagentSessionNamePreservesExistingName(t *testing.T) {
 	containerDir := t.TempDir()
-	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("new lazy session: %v", err)
 	}

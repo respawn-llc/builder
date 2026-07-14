@@ -279,7 +279,7 @@ func TestChildSessionSnapshotsRoleSystemPromptOnFirstRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked parent: %v", err)
 	}
-	child, err := session.NewLazy(root, "child", workspace)
+	child, err := session.NewLazy(root, "child", workspace, runtimeTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("new child: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 		t.Fatalf("close engine: %v", err)
 	}
 	writeTestFile(t, systemPath, "changed")
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}

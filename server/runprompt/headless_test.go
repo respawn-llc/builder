@@ -24,6 +24,7 @@ import (
 	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
@@ -161,10 +162,15 @@ func (s *stubRunPromptService) CallCount() int {
 	return s.calls
 }
 
-func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManager *auth.Manager) *sessionlaunch.Service {
+func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManager *auth.Manager, persistences ...*sessiontest.Persistence) *sessionlaunch.Service {
+	persistence := sessiontest.NewPersistence()
+	if len(persistences) > 0 && persistences[0] != nil {
+		persistence = persistences[0]
+	}
 	return sessionlaunch.NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: persistence.Options(),
 	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(authManager)
 }
 
@@ -173,7 +179,8 @@ func newTestHeadlessSessionRuntime(root string, authManager *auth.Manager, runti
 }
 
 func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -195,7 +202,8 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 }
 
 func TestHeadlessRuntimeWorkdirRejectsReminderWithoutEffectiveCWD(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -262,7 +270,8 @@ func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.
 func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -303,7 +312,7 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 	}
 	runtimes := registry.NewRuntimeRegistry()
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
 		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
@@ -545,7 +554,8 @@ func findRunPromptFunctionCallOutput(payload map[string]any) (string, bool) {
 func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -562,7 +572,7 @@ func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 		Settings:        config.Settings{Model: "gpt-5"},
 	}
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, nil),
+		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, nil, persistence),
 	})
 
 	_, err = client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
@@ -578,7 +588,8 @@ func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -618,7 +629,7 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 		},
 	}
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
 		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
@@ -668,7 +679,8 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -708,7 +720,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
 	runtimes := registry.NewRuntimeRegistry()
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
 		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),

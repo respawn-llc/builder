@@ -87,10 +87,7 @@ func (c projectionPreciseClient) ProviderCapabilities(context.Context) (llm.Prov
 func newRuntimeViewStore(t *testing.T) *session.Store {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := session.Create(dir, projectionWorkspaceID, dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newRuntimeViewSession(t, dir, projectionWorkspaceID, dir)
 	return store
 }
 

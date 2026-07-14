@@ -17,9 +17,6 @@ func TestNewLazyDoesNotPersistUntilFirstWrite(t *testing.T) {
 	if _, _, err := store.AppendEvent("step1", "message", map[string]any{"a": 1}); err != nil {
 		t.Fatalf("append event: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(store.Dir(), sessionFile)); err != nil {
-		t.Fatalf("expected session metadata after first write: %v", err)
-	}
 	if _, err := os.Stat(filepath.Join(store.Dir(), eventsFile)); err != nil {
 		t.Fatalf("expected events file after first write: %v", err)
 	}
@@ -96,7 +93,7 @@ func TestSetInputDraftPersistsAcrossReopen(t *testing.T) {
 	if err := store.SetInputDraft(want); err != nil {
 		t.Fatalf("set input draft: %v", err)
 	}
-	reopened, err := Open(store.Dir())
+	reopened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -113,7 +110,7 @@ func TestSetInputDraftClearsPersistedValue(t *testing.T) {
 	if err := store.SetInputDraft(""); err != nil {
 		t.Fatalf("clear draft: %v", err)
 	}
-	reopened, err := Open(store.Dir())
+	reopened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -133,7 +130,7 @@ func TestSetInputDraftRecoveryPersistsAcrossReopenAndClearsWithDraft(t *testing.
 	}}); err != nil {
 		t.Fatalf("set input draft recovery: %v", err)
 	}
-	reopened, err := Open(store.Dir())
+	reopened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -146,7 +143,7 @@ func TestSetInputDraftRecoveryPersistsAcrossReopenAndClearsWithDraft(t *testing.
 	if err := reopened.SetInputDraft(""); err != nil {
 		t.Fatalf("clear input draft: %v", err)
 	}
-	cleared, err := Open(store.Dir())
+	cleared, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open cleared store: %v", err)
 	}
@@ -169,7 +166,7 @@ func TestSetUsageStatePersistsAcrossReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("set usage state: %v", err)
 	}
-	reopened, err := Open(store.Dir())
+	reopened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -181,31 +178,7 @@ func TestSetUsageStatePersistsAcrossReopen(t *testing.T) {
 	}
 }
 
-func TestListSessionsSortedByUpdatedAt(t *testing.T) {
-	root := t.TempDir()
-	s1 := newSessionTestStoreAt(t, root)
-	if _, _, err := s1.AppendEvent("step1", "message", map[string]any{"a": 1}); err != nil {
-		t.Fatalf("append event1: %v", err)
-	}
-
-	s2 := newSessionTestStoreAt(t, root)
-	if _, _, err := s2.AppendEvent("step1", "message", map[string]any{"b": 2}); err != nil {
-		t.Fatalf("append event2: %v", err)
-	}
-
-	items, err := ListSessions(root)
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
-	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 sessions, got %d", len(items))
-	}
-	if filepath.Base(items[0].Path) != s2.Meta().SessionID {
-		t.Fatalf("latest session expected first")
-	}
-}
-
-func TestLockedContractPersistenceIncludesSystemPromptButNotToolSchema(t *testing.T) {
+func TestLockedContractPersistenceIncludesPrompts(t *testing.T) {
 	store := newSessionTestStore(t)
 	if err := store.MarkModelDispatchLocked(LockedContract{
 		Model:             "gpt-5",
@@ -219,15 +192,7 @@ func TestLockedContractPersistenceIncludesSystemPromptButNotToolSchema(t *testin
 		t.Fatalf("mark model dispatch locked: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(store.Dir(), sessionFile))
-	if err != nil {
-		t.Fatalf("read session file: %v", err)
-	}
-	text := string(data)
-	if strings.Contains(text, "tools_json") {
-		t.Fatalf("session metadata must not persist tools_json: %s", text)
-	}
-	opened, err := Open(store.Dir())
+	opened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -254,7 +219,7 @@ func TestLockedContractPersistenceIncludesExplicitZeroToolsAndWebSearchMode(t *t
 	}); err != nil {
 		t.Fatalf("mark model dispatch locked: %v", err)
 	}
-	opened, err := Open(store.Dir())
+	opened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -288,7 +253,7 @@ func TestResetLockedContractForCompactionBoundaryPersistsFreshContractBoundary(t
 	if got := store.Meta().PromptCacheLineageGeneration; got != 1 {
 		t.Fatalf("prompt cache lineage generation = %d, want 1", got)
 	}
-	opened, err := Open(store.Dir())
+	opened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -373,7 +338,7 @@ func TestLockedRequestShapeBackfillPersistsTogether(t *testing.T) {
 	if !result.Committed || result.Locked == nil || !result.Locked.HasEnabledTools || strings.Join(result.Locked.EnabledTools, ",") != "shell,patch" || result.Locked.WebSearchMode != "native" {
 		t.Fatalf("request shape result = %+v", result)
 	}
-	opened, err := Open(store.Dir())
+	opened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -439,7 +404,7 @@ func TestSetContinuationContextAndLockedPromptFacingContractStalePersistsTogethe
 	if !result.Committed || result.Locked == nil {
 		t.Fatalf("mutation result = %+v, want committed lock", result)
 	}
-	opened, err := Open(store.Dir())
+	opened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -453,34 +418,22 @@ func TestSetContinuationContextAndLockedPromptFacingContractStalePersistsTogethe
 }
 
 func TestLockedContractMutationObserverCommitSemantics(t *testing.T) {
-	fileObserver := &recordingPersistenceObserver{err: os.ErrPermission}
-	fileStore, err := Create(t.TempDir(), "ws", t.TempDir(), WithPersistenceObserver(fileObserver))
+	observer := &recordingPersistenceObserver{}
+	store, err := Create(t.TempDir(), "ws", t.TempDir(), WithPersistenceObserver(observer))
 	if err != nil {
-		t.Fatalf("create file store: %v", err)
+		t.Fatalf("create store: %v", err)
 	}
-	if err := fileStore.MarkModelDispatchLocked(LockedContract{Model: "gpt-5", SystemPrompt: "prompt A", HasSystemPrompt: true}); err == nil {
+	observer.err = os.ErrPermission
+	if err := store.MarkModelDispatchLocked(LockedContract{Model: "gpt-5", SystemPrompt: "prompt A", HasSystemPrompt: true}); err == nil {
 		t.Fatal("expected observer error on initial lock")
 	}
-	result, err := fileStore.MarkLockedPromptFacingSnapshotsStale()
-	if err == nil || !result.Committed || result.Locked == nil || result.Locked.HasSystemPrompt {
-		t.Fatalf("file-backed observer result=%+v err=%v, want committed observer warning", result, err)
-	}
-
-	filelessObserver := &recordingPersistenceObserver{err: os.ErrPermission}
-	filelessStore, err := Create(t.TempDir(), "ws", t.TempDir(), WithFilelessMetadataPersistence(), WithPersistenceObserver(filelessObserver))
-	if err != nil {
-		t.Fatalf("create fileless store: %v", err)
-	}
-	if err := filelessStore.MarkModelDispatchLocked(LockedContract{Model: "gpt-5", SystemPrompt: "prompt A", HasSystemPrompt: true}); err == nil {
-		t.Fatal("expected observer error on initial fileless lock")
-	}
-	before := filelessStore.Meta().Locked
-	result, err = filelessStore.MarkLockedPromptFacingSnapshotsStale()
+	before := store.Meta().Locked
+	result, err := store.MarkLockedPromptFacingSnapshotsStale()
 	if err == nil || result.Committed {
-		t.Fatalf("fileless observer result=%+v err=%v, want uncommitted failure", result, err)
+		t.Fatalf("observer result=%+v err=%v, want uncommitted failure", result, err)
 	}
-	if after := filelessStore.Meta().Locked; before == nil || after == nil || after.SystemPrompt != before.SystemPrompt || !after.HasSystemPrompt {
-		t.Fatalf("fileless lock after failed mutation = %+v, before %+v", after, before)
+	if after := store.Meta().Locked; before == nil || after == nil || after.SystemPrompt != before.SystemPrompt || !after.HasSystemPrompt {
+		t.Fatalf("lock after failed mutation = %+v, before %+v", after, before)
 	}
 }
 
@@ -511,8 +464,7 @@ func TestReadEventsHandlesLargeJSONLines(t *testing.T) {
 }
 
 func TestAppendEventPersistsFirstPromptPreview(t *testing.T) {
-	root := t.TempDir()
-	store := newSessionTestStoreAt(t, root)
+	store := newSessionTestStore(t)
 	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "assistant", "content": "hello"}); err != nil {
 		t.Fatalf("append assistant event: %v", err)
 	}
@@ -526,7 +478,7 @@ func TestAppendEventPersistsFirstPromptPreview(t *testing.T) {
 		t.Fatalf("preview = %q, want %q", got, "Investigate config load failures")
 	}
 
-	opened, err := Open(store.Dir())
+	opened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -534,16 +486,6 @@ func TestAppendEventPersistsFirstPromptPreview(t *testing.T) {
 		t.Fatalf("reopened preview = %q, want %q", got, "Investigate config load failures")
 	}
 
-	items, err := ListSessions(root)
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("expected one session, got %d", len(items))
-	}
-	if items[0].FirstPromptPreview != "Investigate config load failures" {
-		t.Fatalf("list preview = %q, want %q", items[0].FirstPromptPreview, "Investigate config load failures")
-	}
 }
 
 func TestSetListingMetadataPersistsNameAndFirstPromptPreview(t *testing.T) {
@@ -587,19 +529,15 @@ func TestSetListingMetadataPersistsNameAndFirstPromptPreview(t *testing.T) {
 		t.Fatalf("cleared metadata = %+v, want empty name and preview", store.Meta())
 	}
 
-	reopened, err := Open(store.Dir())
+	reopened, err := Open(store.Dir(), WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+		SessionDir: observer.snapshot.SessionDir,
+		Meta:       &observer.snapshot.Meta,
+	}}))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	if reopened.Meta().Name != "" || reopened.Meta().FirstPromptPreview != "" {
 		t.Fatalf("reopened metadata = %+v, want empty name and preview", reopened.Meta())
-	}
-	items, err := ListSessions(root)
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
-	}
-	if len(items) != 1 || items[0].Name != "" || items[0].FirstPromptPreview != "" {
-		t.Fatalf("listed sessions = %+v, want cleared metadata persisted", items)
 	}
 }
 
@@ -634,7 +572,7 @@ func TestOpenRehydratesConversationFreshnessFromEvents(t *testing.T) {
 		t.Fatalf("append user event: %v", err)
 	}
 
-	opened, err := Open(store.Dir())
+	opened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -643,31 +581,23 @@ func TestOpenRehydratesConversationFreshnessFromEvents(t *testing.T) {
 	}
 }
 
-func TestOpenBackfillsConversationFreshnessForLegacyMetaFromTail(t *testing.T) {
+func TestOpenBackfillsConversationFreshnessFromTail(t *testing.T) {
 	store := newSessionTestStore(t)
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "legacy established session"}); err != nil {
+	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "established session"}); err != nil {
 		t.Fatalf("append user event: %v", err)
 	}
 
-	metaPath := filepath.Join(store.Dir(), sessionFile)
-	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		t.Fatalf("read session file: %v", err)
-	}
-	var meta Meta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		t.Fatalf("unmarshal meta: %v", err)
-	}
+	meta := store.Meta()
 	meta.ConversationEstablished = false
-	rewritten, err := json.Marshal(meta)
-	if err != nil {
-		t.Fatalf("marshal meta: %v", err)
-	}
-	if err := os.WriteFile(metaPath, rewritten, 0o644); err != nil {
-		t.Fatalf("write legacy meta: %v", err)
-	}
 
-	opened, err := Open(store.Dir())
+	opened, err := Open(
+		store.Dir(),
+		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+			SessionDir: store.Dir(),
+			Meta:       &meta,
+		}}),
+		WithPersistenceObserver(sessionTestPersistence),
+	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -688,80 +618,22 @@ func TestOpenRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
 	}
 	trueLastSeq := store.Meta().LastSequence
 
-	metaPath := filepath.Join(store.Dir(), sessionFile)
-	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		t.Fatalf("read session file: %v", err)
-	}
-	var meta Meta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		t.Fatalf("unmarshal meta: %v", err)
-	}
+	meta := store.Meta()
 	meta.LastSequence = 0
-	rewritten, err := json.Marshal(meta)
-	if err != nil {
-		t.Fatalf("marshal meta: %v", err)
-	}
-	if err := os.WriteFile(metaPath, rewritten, 0o644); err != nil {
-		t.Fatalf("write stale meta: %v", err)
-	}
 
-	opened, err := Open(store.Dir())
+	opened, err := Open(
+		store.Dir(),
+		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+			SessionDir: store.Dir(),
+			Meta:       &meta,
+		}}),
+		WithPersistenceObserver(sessionTestPersistence),
+	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	if got := opened.Meta().LastSequence; got != trueLastSeq {
 		t.Fatalf("recovered last sequence = %d, want %d", got, trueLastSeq)
-	}
-}
-
-func TestOpenLegacyInFlightStepDoesNotSerializePendingModelRecovery(t *testing.T) {
-	store := newSessionTestStore(t)
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "hello"}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
-	metaPath := filepath.Join(store.Dir(), sessionFile)
-	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		t.Fatalf("read session file: %v", err)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("unmarshal meta: %v", err)
-	}
-	raw["in_flight_step"] = true
-	delete(raw, "pending_model_recovery")
-	rewritten, err := json.Marshal(raw)
-	if err != nil {
-		t.Fatalf("marshal legacy meta: %v", err)
-	}
-	if err := os.WriteFile(metaPath, rewritten, 0o644); err != nil {
-		t.Fatalf("write legacy meta: %v", err)
-	}
-
-	opened, err := Open(store.Dir())
-	if err != nil {
-		t.Fatalf("open legacy store: %v", err)
-	}
-	if opened.Meta().PendingModelRecovery != nil {
-		t.Fatalf("legacy in_flight_step materialized serializable recovery on open: %+v", opened.Meta().PendingModelRecovery)
-	}
-	if !opened.Meta().LegacyInFlightStepRecovery {
-		t.Fatal("expected in-memory legacy recovery candidate")
-	}
-	if err := opened.SetName("renamed"); err != nil {
-		t.Fatalf("SetName: %v", err)
-	}
-	persisted, err := os.ReadFile(metaPath)
-	if err != nil {
-		t.Fatalf("read persisted meta: %v", err)
-	}
-	var persistedRaw map[string]json.RawMessage
-	if err := json.Unmarshal(persisted, &persistedRaw); err != nil {
-		t.Fatalf("unmarshal persisted meta: %v", err)
-	}
-	if _, exists := persistedRaw["pending_model_recovery"]; exists {
-		t.Fatalf("unrelated metadata persistence wrote pending_model_recovery: %s", string(persisted))
 	}
 }
 
@@ -791,51 +663,6 @@ func TestAppendTurnAtomicPersistsFirstPromptPreview(t *testing.T) {
 	}
 }
 
-func TestListSessionsUsesPersistedFirstPromptPreviewOnly(t *testing.T) {
-	root := t.TempDir()
-	store := newSessionTestStoreAt(t, root)
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "Preview source\nsecond line"}); err != nil {
-		t.Fatalf("append user event: %v", err)
-	}
-
-	metaPath := filepath.Join(store.Dir(), sessionFile)
-	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		t.Fatalf("read session file: %v", err)
-	}
-	var meta Meta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		t.Fatalf("decode session meta: %v", err)
-	}
-	meta.FirstPromptPreview = ""
-	rewritten, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		t.Fatalf("encode session meta: %v", err)
-	}
-	if err := os.WriteFile(metaPath, rewritten, 0o644); err != nil {
-		t.Fatalf("write session file: %v", err)
-	}
-
-	items, err := ListSessions(root)
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("expected one session, got %d", len(items))
-	}
-	if items[0].FirstPromptPreview != "" {
-		t.Fatalf("expected listed session preview to remain empty, got %q", items[0].FirstPromptPreview)
-	}
-
-	reloaded, err := Open(store.Dir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	if reloaded.Meta().FirstPromptPreview != "" {
-		t.Fatalf("expected persisted metadata preview to remain empty after list, got %q", reloaded.Meta().FirstPromptPreview)
-	}
-}
-
 func userMessageSeqAt(t *testing.T, store *Store, n int) int64 {
 	t.Helper()
 	events, err := collectEvents(store)
@@ -857,10 +684,7 @@ func userMessageSeqAt(t *testing.T, store *Store, n int) int64 {
 
 func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 	root := t.TempDir()
-	parent, err := Create(root, "workspace-x", "/tmp/work")
-	if err != nil {
-		t.Fatalf("create parent: %v", err)
-	}
+	parent := newSessionTestStoreAt(t, root)
 	if err := parent.MarkModelDispatchLocked(LockedContract{
 		Model:             "locked-parent",
 		SystemPrompt:      "parent prompt snapshot",
@@ -923,10 +747,7 @@ func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 }
 
 func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T) {
-	parent, err := Create(t.TempDir(), "ws", t.TempDir())
-	if err != nil {
-		t.Fatalf("create parent: %v", err)
-	}
+	parent := newSessionTestStore(t)
 	if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
 		t.Fatalf("append first user: %v", err)
 	}
@@ -957,10 +778,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 	}
 
 	t.Run("legacy reviewer rollback history replacement is ignored", func(t *testing.T) {
-		parent, err := Create(t.TempDir(), "ws", t.TempDir())
-		if err != nil {
-			t.Fatalf("create parent: %v", err)
-		}
+		parent := newSessionTestStore(t)
 		if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
 			t.Fatalf("append first user: %v", err)
 		}
@@ -989,10 +807,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 	})
 
 	t.Run("non-reviewer history replacement clears reminder state", func(t *testing.T) {
-		parent, err := Create(t.TempDir(), "ws", t.TempDir())
-		if err != nil {
-			t.Fatalf("create parent: %v", err)
-		}
+		parent := newSessionTestStore(t)
 		if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
 			t.Fatalf("append first user: %v", err)
 		}
@@ -1019,10 +834,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 	})
 
 	t.Run("legacy reviewer rollback preserves earlier reminder-issued state", func(t *testing.T) {
-		parent, err := Create(t.TempDir(), "ws", t.TempDir())
-		if err != nil {
-			t.Fatalf("create parent: %v", err)
-		}
+		parent := newSessionTestStore(t)
 		if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
 			t.Fatalf("append first user: %v", err)
 		}
@@ -1050,10 +862,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 }
 
 func TestForkAtUserMessageCopiesWorktreeReminderTarget(t *testing.T) {
-	parent, err := Create(t.TempDir(), "ws", t.TempDir())
-	if err != nil {
-		t.Fatalf("create parent: %v", err)
-	}
+	parent := newSessionTestStore(t)
 	if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
 		t.Fatalf("append first user: %v", err)
 	}
@@ -1157,7 +966,7 @@ func TestSetWorktreeReminderStateRejectsEmptyPresentBranch(t *testing.T) {
 
 func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testing.T) {
 	root := t.TempDir()
-	parent, err := Create(root, "workspace-parent", "/tmp/work-parent")
+	parent, err := Create(root, "workspace-parent", "/tmp/work-parent", sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
@@ -1251,7 +1060,7 @@ func TestSetContinuationContextStaysLazyUntilFirstWrite(t *testing.T) {
 	if _, _, err := store.AppendEvent("step1", "message", map[string]any{"a": 1}); err != nil {
 		t.Fatalf("append event: %v", err)
 	}
-	opened, err := Open(store.Dir())
+	opened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -1292,7 +1101,7 @@ func TestPendingModelRecoveryPersistsMetadataAndEvents(t *testing.T) {
 	}
 }
 
-func TestSessionMetadataDoesNotPersistModelVerbosityState(t *testing.T) {
+func TestContinuationPersistsAcrossAuthoritativeMetadataRoundTrip(t *testing.T) {
 	store := newSessionTestStore(t)
 	if err := store.MarkModelDispatchLocked(LockedContract{
 		Model:          "gpt-5",
@@ -1305,31 +1114,12 @@ func TestSessionMetadataDoesNotPersistModelVerbosityState(t *testing.T) {
 		t.Fatalf("set continuation context: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(store.Dir(), sessionFile))
-	if err != nil {
-		t.Fatalf("read session file: %v", err)
-	}
-	text := string(data)
-	if !strings.Contains(text, "openai_base_url") {
-		t.Fatalf("expected continuation openai_base_url to persist, got %q", text)
-	}
-	if strings.Contains(text, "model_verbosity") {
-		t.Fatalf("session metadata must not persist model_verbosity: %s", text)
-	}
-
-	opened, err := Open(store.Dir())
+	opened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	if opened.Meta().Continuation == nil || opened.Meta().Continuation.OpenAIBaseURL != "http://example.local/v1" {
 		t.Fatalf("expected persisted continuation context, got %+v", opened.Meta().Continuation)
-	}
-	reopenedMetaJSON, err := json.Marshal(opened.Meta())
-	if err != nil {
-		t.Fatalf("marshal reopened meta: %v", err)
-	}
-	if strings.Contains(string(reopenedMetaJSON), "model_verbosity") {
-		t.Fatal("expected reopened session metadata to remain free of model_verbosity")
 	}
 }
 

@@ -1,9 +1,20 @@
 Usage of kent rebind:
-  kent rebind <session-id> <new-path>
+  kent rebind [--project <project-id>] <session-id> <new-path>
 
-Move a session to another workspace.
-Use this after moving on-disk location of the session's workspace directory or to continue a session from another workdir while keeping it attached to the same project.
-`<new-path>` must exist and not be already bound to another project.
+Retarget a session to an existing workspace path.
 
-Example:
+Without --project, the session stays in its source project and Kent attaches an
+unbound target path to that project. If the path belongs only to another project,
+Kent prints complete commands for moving the session or attaching the path to
+the source project.
+
+--project moves the session to that project. Kent attaches an unbound target
+workspace automatically and reports the new attachment.
+
+Kent waits for active model work to reach its maintenance boundary. A running
+session-owned background process blocks rebinding. Workflow-owned sessions
+cannot move across projects.
+
+Examples:
   kent rebind <session-id> ../moved-workspace
+  kent rebind --project <project-id> <session-id> ../other-project

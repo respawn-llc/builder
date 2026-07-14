@@ -508,11 +508,7 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 		t.Fatalf("append user message: %v", err)
 	}
 
-	sessionPath := filepath.Join(store.Dir(), "session.json")
 	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
-	if _, err := os.Stat(sessionPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected session metadata file to be absent after 4B cutover, got err=%v", err)
-	}
 	beforeEvents, err := os.ReadFile(eventsPath)
 	if err != nil {
 		t.Fatalf("read events file before: %v", err)
@@ -526,9 +522,6 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 		t.Fatalf("unexpected main view: %+v", resp.MainView)
 	}
 
-	if _, err := os.Stat(sessionPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected session metadata file to remain absent after dormant read, got err=%v", err)
-	}
 	afterEvents, err := os.ReadFile(eventsPath)
 	if err != nil {
 		t.Fatalf("read events file after: %v", err)

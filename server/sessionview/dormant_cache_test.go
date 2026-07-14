@@ -13,10 +13,7 @@ import (
 
 func TestDormantTranscriptCacheReusesEntryForUnchangedRevision(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
@@ -55,10 +52,7 @@ func TestDormantTranscriptCacheReusesEntryForUnchangedRevision(t *testing.T) {
 
 func TestDormantTranscriptCacheInvalidatesOnRevisionAdvance(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
 		t.Fatalf("append first message: %v", err)
 	}
@@ -90,18 +84,9 @@ func TestDormantTranscriptCacheInvalidatesOnRevisionAdvance(t *testing.T) {
 
 func TestDormantTranscriptCacheEvictsLeastRecentlyUsedEntry(t *testing.T) {
 	root := t.TempDir()
-	storeA, err := session.Create(root, "ws", root)
-	if err != nil {
-		t.Fatalf("create store A: %v", err)
-	}
-	storeB, err := session.Create(root, "ws", root)
-	if err != nil {
-		t.Fatalf("create store B: %v", err)
-	}
-	storeC, err := session.Create(root, "ws", root)
-	if err != nil {
-		t.Fatalf("create store C: %v", err)
-	}
+	storeA := newSessionViewStore(t, root, "ws", root)
+	storeB := newSessionViewStore(t, root, "ws", root)
+	storeC := newSessionViewStore(t, root, "ws", root)
 	buildCalls := 0
 	cache := newDormantTranscriptCacheWithLimit(2, func(_ context.Context, store *session.Store) (dormantTranscriptCacheEntry, error) {
 		buildCalls++
@@ -131,10 +116,7 @@ func TestDormantTranscriptCacheEvictsLeastRecentlyUsedEntry(t *testing.T) {
 
 func TestServiceUsesDormantCacheForMainViewAndTailEntries(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if err := store.SetName("incident triage"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}

@@ -155,7 +155,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg)
 	updateStatusService := serverstatus.NewUpdateStatusService(config.Version)
 	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, metadataStore).WithOperationCoordinator(runtimeOperations).WithCacheWarningMode(cfg.Settings.CacheWarningMode).WithUpdateStatusProvider(updateStatusService)
-	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...)
+	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background)
+	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...).
+		WithWorkspaceRetargeter(sessionWorkspaceRetargeter)
 	sessionActivityService := sessionservice.NewSessionActivityService(runtimeRegistry)
 	var workflowRuntimeStarter *workflowrunner.Starter
 	var workflowScheduler *workflowrunner.SchedulerService

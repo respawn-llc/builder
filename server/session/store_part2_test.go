@@ -16,7 +16,7 @@ func ptrMeta(meta Meta) *Meta {
 func TestOpenByIDUsesPersistedSessionResolver(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "projects", "project-b", "sessions", "session-b")
-	target, err := Create(sessionDir, "sessions", "/tmp/work-b")
+	target, err := Create(sessionDir, "sessions", "/tmp/work-b", sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -52,9 +52,12 @@ func TestOpenByIDRejectsWithoutPersistedSessionResolver(t *testing.T) {
 
 func TestSetWorkspaceRootPreservesWorkspaceContainer(t *testing.T) {
 	root := t.TempDir()
-	store, err := Create(root, "workspace-container", "/tmp/work-a")
+	store, err := Create(root, "workspace-container", "/tmp/work-a", sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist store: %v", err)
 	}
 
 	if err := store.SetWorkspaceRoot("/tmp/work-b"); err != nil {
@@ -67,7 +70,7 @@ func TestSetWorkspaceRootPreservesWorkspaceContainer(t *testing.T) {
 		t.Fatalf("workspace root = %q, want /tmp/work-b", got)
 	}
 
-	reopened, err := Open(store.Dir())
+	reopened, err := openSessionTestStore(store)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -79,103 +82,97 @@ func TestSetWorkspaceRootPreservesWorkspaceContainer(t *testing.T) {
 	}
 }
 
-func TestEventLogOnlySessionDirectoryRemainsUndiscoverable(t *testing.T) {
-	root := t.TempDir()
-	container := filepath.Join(root, "projects", "project-1", "sessions")
-	sessionDir := filepath.Join(container, "ghost-session")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatalf("mkdir session dir: %v", err)
-	}
-	writeSessionFixtureEvents(t, sessionDir, []Event{{
-		Seq:       1,
-		Timestamp: time.Now().UTC(),
-		Kind:      "message",
-		StepID:    "legacy-step",
-		Payload:   mustFixtureJSON(t, map[string]any{"role": "user", "content": "hello"}),
-	}})
-
-	items, err := ListSessions(container)
+func TestRunArtifactRelocationUpdatesPathsAndWorkspaceAfterCallback(t *testing.T) {
+	container := t.TempDir()
+	store, err := Create(container, "source", "/workspace/source", sessionTestPersistence.options()...)
 	if err != nil {
-		t.Fatalf("list sessions: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
-	if len(items) != 0 {
-		t.Fatalf("expected event-log-only session to stay invisible in picker, got %+v", items)
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
 	}
-	if _, err := Open(sessionDir); err == nil || !errors.Is(err, ErrReadSessionMeta) {
-		t.Fatalf("expected direct open to fail on missing session meta, got %v", err)
-	}
-	if _, err := OpenByID(root, "ghost-session"); err == nil {
-		t.Fatal("expected event-log-only session to remain undiscoverable via OpenByID")
-	}
-}
+	oldDir := store.Dir()
+	targetContainer := t.TempDir()
+	targetDir := filepath.Join(targetContainer, store.Meta().SessionID)
 
-func TestListSessionsSkipsMalformedSessionMetadata(t *testing.T) {
-	root := t.TempDir()
-	sessionDir := filepath.Join(root, "bad-session")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatalf("mkdir session dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, sessionFile), []byte("{"), 0o644); err != nil {
-		t.Fatalf("write malformed session file: %v", err)
-	}
-
-	items, err := ListSessions(root)
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
-	}
-	if len(items) != 0 {
-		t.Fatalf("expected malformed metadata to be skipped, got %+v", items)
-	}
-}
-
-func TestListSessionsSkipsSymlinkedSessionMetadata(t *testing.T) {
-	root := t.TempDir()
-	targetDir := filepath.Join(t.TempDir(), "target-session")
-	writeSessionFixtureMeta(t, targetDir, Meta{
-		SessionID:          "target-session",
-		WorkspaceRoot:      "/tmp/work-target",
-		WorkspaceContainer: "workspace-target",
-		CreatedAt:          time.Now().UTC(),
+	err = store.RunArtifactRelocation(ArtifactRelocationTarget{
+		SessionDir:         targetDir,
+		WorkspaceRoot:      "/workspace/target",
+		WorkspaceContainer: "target",
 		UpdatedAt:          time.Now().UTC(),
+	}, func() error {
+		return os.Rename(oldDir, targetDir)
 	})
-	sessionDir := filepath.Join(root, "bad-session")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatalf("mkdir session dir: %v", err)
-	}
-	if err := os.Symlink(filepath.Join(targetDir, sessionFile), filepath.Join(sessionDir, sessionFile)); err != nil {
-		t.Fatalf("symlink session meta: %v", err)
+	if err != nil {
+		t.Fatalf("RunArtifactRelocation: %v", err)
 	}
 
-	items, err := ListSessions(root)
-	if err != nil {
-		t.Fatalf("list sessions: %v", err)
+	if got := store.Dir(); got != targetDir {
+		t.Fatalf("store dir = %q, want %q", got, targetDir)
 	}
-	if len(items) != 0 {
-		t.Fatalf("expected symlinked metadata to be skipped, got %+v", items)
+	meta := store.Meta()
+	if meta.WorkspaceRoot != "/workspace/target" || meta.WorkspaceContainer != "target" {
+		t.Fatalf("workspace metadata = %+v", meta)
+	}
+	if meta.WorktreeReminder != nil {
+		t.Fatalf("worktree reminder = %+v, want nil", meta.WorktreeReminder)
+	}
+	if _, _, err := store.AppendEvent("step-1", "message", map[string]string{"text": "after move"}); err != nil {
+		t.Fatalf("AppendEvent after move: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, eventsFile)); err != nil {
+		t.Fatalf("target events file: %v", err)
 	}
 }
 
-func TestOpenRejectsSymlinkedSessionMetadata(t *testing.T) {
-	root := t.TempDir()
-	targetDir := filepath.Join(root, "target-session")
-	writeSessionFixtureMeta(t, targetDir, Meta{
-		SessionID:          "target-session",
-		WorkspaceRoot:      "/tmp/work-target",
-		WorkspaceContainer: "workspace-target",
-		CreatedAt:          time.Now().UTC(),
-		UpdatedAt:          time.Now().UTC(),
+func TestRunArtifactRelocationRejectsZeroCommitTimeBeforeCallback(t *testing.T) {
+	container := t.TempDir()
+	store, err := Create(container, "source", "/workspace/source", sessionTestPersistence.options()...)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	oldDir := store.Dir()
+	targetDir := filepath.Join(t.TempDir(), store.Meta().SessionID)
+	callbackCalled := false
+	err = store.RunArtifactRelocation(ArtifactRelocationTarget{
+		SessionDir:         targetDir,
+		WorkspaceRoot:      "/workspace/target",
+		WorkspaceContainer: "target",
+	}, func() error {
+		callbackCalled = true
+		return nil
 	})
-	sessionDir := filepath.Join(root, "bad-session")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatalf("mkdir session dir: %v", err)
+	if err == nil {
+		t.Fatal("RunArtifactRelocation accepted a zero update time")
 	}
-	if err := os.Symlink(filepath.Join(targetDir, sessionFile), filepath.Join(sessionDir, sessionFile)); err != nil {
-		t.Fatalf("symlink session meta: %v", err)
+	if callbackCalled {
+		t.Fatal("RunArtifactRelocation called relocation before validating update time")
 	}
-	writeSessionFixtureEvents(t, sessionDir, nil)
+	if store.Dir() != oldDir || store.Meta().WorkspaceRoot != "/workspace/source" {
+		t.Fatalf("failed relocation mutated store: dir=%q meta=%+v", store.Dir(), store.Meta())
+	}
+}
 
-	if _, err := Open(sessionDir); err == nil || !errors.Is(err, ErrSessionFileSymlink) {
-		t.Fatalf("expected open to reject symlinked session meta, got %v", err)
+func TestRunArtifactRelocationDoesNotMutateStoreWhenCallbackFails(t *testing.T) {
+	store, err := Create(t.TempDir(), "source", "/workspace/source", sessionTestPersistence.options()...)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	oldDir := store.Dir()
+	callbackErr := errors.New("relocation failed")
+	err = store.RunArtifactRelocation(ArtifactRelocationTarget{
+		SessionDir:         filepath.Join(t.TempDir(), store.Meta().SessionID),
+		WorkspaceRoot:      "/workspace/target",
+		WorkspaceContainer: "target",
+		UpdatedAt:          time.Now().UTC(),
+	}, func() error {
+		return callbackErr
+	})
+	if !errors.Is(err, callbackErr) {
+		t.Fatalf("RunArtifactRelocation error = %v, want %v", err, callbackErr)
+	}
+	if store.Dir() != oldDir || store.Meta().WorkspaceRoot != "/workspace/source" {
+		t.Fatalf("failed relocation mutated store: dir=%q meta=%+v", store.Dir(), store.Meta())
 	}
 }
 
@@ -190,35 +187,52 @@ func TestOpenRejectsSymlinkedEventsFile(t *testing.T) {
 		Payload:   mustFixtureJSON(t, map[string]any{"role": "user", "content": "hello"}),
 	}})
 	sessionDir := filepath.Join(root, "bad-session")
-	writeSessionFixtureMeta(t, sessionDir, Meta{
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	meta := Meta{
 		SessionID:          "bad-session",
 		WorkspaceRoot:      "/tmp/work-bad",
 		WorkspaceContainer: "workspace-bad",
 		CreatedAt:          time.Now().UTC(),
 		UpdatedAt:          time.Now().UTC(),
-	})
+	}
 	if err := os.Symlink(filepath.Join(targetDir, eventsFile), filepath.Join(sessionDir, eventsFile)); err != nil {
 		t.Fatalf("symlink events file: %v", err)
 	}
 
-	if _, err := Open(sessionDir); err == nil || !errors.Is(err, ErrSessionFileSymlink) {
+	if _, err := Open(sessionDir, WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+		SessionDir: sessionDir,
+		Meta:       &meta,
+	}})); err == nil || !errors.Is(err, ErrSessionFileSymlink) {
 		t.Fatalf("expected open to reject symlinked events file, got %v", err)
 	}
 }
 
-func TestOpenInitializesMissingEventsFileFromSessionMetadata(t *testing.T) {
+func TestOpenMissingEventsFileWithObserverRepairsAndPublishes(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "session-without-events")
-	writeSessionFixtureMeta(t, sessionDir, Meta{
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	meta := Meta{
 		SessionID:          "session-without-events",
 		WorkspaceRoot:      "/tmp/work",
 		WorkspaceContainer: "workspace-x",
 		CreatedAt:          time.Now().UTC(),
 		UpdatedAt:          time.Now().UTC(),
 		LastSequence:       3,
-	})
+	}
+	observer := &recordingPersistenceObserver{}
 
-	opened, err := Open(sessionDir)
+	opened, err := Open(
+		sessionDir,
+		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+			SessionDir: sessionDir,
+			Meta:       &meta,
+		}}),
+		WithPersistenceObserver(observer),
+	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -228,12 +242,74 @@ func TestOpenInitializesMissingEventsFileFromSessionMetadata(t *testing.T) {
 	if opened.Meta().LastSequence != 0 {
 		t.Fatalf("expected reopened last sequence to reconcile to zero, got %d", opened.Meta().LastSequence)
 	}
+	if !observer.reconciled || observer.reconciliation.LastSequence != 0 {
+		t.Fatalf("observer reconciliation = %+v, called = %t", observer.reconciliation, observer.reconciled)
+	}
 	events, err := collectEvents(opened)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
 	if len(events) != 0 {
 		t.Fatalf("expected recreated events file to be empty, got %+v", events)
+	}
+}
+
+func TestOpenMissingEventsFileWithoutObserverFailsBeforeCreatingArtifact(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "session-without-events")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	meta := Meta{
+		SessionID:          "session-without-events",
+		WorkspaceRoot:      "/tmp/work",
+		WorkspaceContainer: "workspace-x",
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	}
+
+	_, err := Open(
+		sessionDir,
+		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+			SessionDir: sessionDir,
+			Meta:       &meta,
+		}}),
+	)
+	if !errors.Is(err, errPersistenceObserverRequired) {
+		t.Fatalf("Open error = %v, want persistence observer required", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(sessionDir, eventsFile)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("events artifact exists after rejected open: %v", statErr)
+	}
+}
+
+func TestFilelessOpenMissingEventsFileFailsWithoutCreatingArtifact(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "session-without-events")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	meta := Meta{
+		SessionID:          "session-without-events",
+		WorkspaceRoot:      "/tmp/work",
+		WorkspaceContainer: "workspace-x",
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	}
+
+	_, err := Open(
+		sessionDir,
+		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+			SessionDir: sessionDir,
+			Meta:       &meta,
+		}}),
+		WithFilelessEventPersistence(),
+	)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Open error = %v, want missing events artifact", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(sessionDir, eventsFile)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("events artifact exists after fileless open: %v", statErr)
 	}
 }
 
@@ -314,25 +390,17 @@ func TestOpenReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 		t.Fatalf("append event 2: %v", err)
 	}
 
-	sessionPath := filepath.Join(store.Dir(), sessionFile)
-	data, err := os.ReadFile(sessionPath)
-	if err != nil {
-		t.Fatalf("read session file: %v", err)
-	}
-	var meta Meta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		t.Fatalf("decode session meta: %v", err)
-	}
+	meta := store.Meta()
 	meta.LastSequence = 0
-	rewritten, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		t.Fatalf("encode session meta: %v", err)
-	}
-	if err := os.WriteFile(sessionPath, rewritten, 0o644); err != nil {
-		t.Fatalf("write session file: %v", err)
-	}
 
-	reopened, err := Open(store.Dir())
+	reopened, err := Open(
+		store.Dir(),
+		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+			SessionDir: store.Dir(),
+			Meta:       &meta,
+		}}),
+		WithPersistenceObserver(sessionTestPersistence),
+	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -345,20 +413,6 @@ func TestOpenReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 	}
 	if next.Seq != 3 {
 		t.Fatalf("expected seq=3 after reopen reconciliation, got %d", next.Seq)
-	}
-}
-
-func writeSessionFixtureMeta(t *testing.T, sessionDir string, meta Meta) {
-	t.Helper()
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatalf("mkdir session dir: %v", err)
-	}
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal session meta: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, sessionFile), data, 0o644); err != nil {
-		t.Fatalf("write session meta: %v", err)
 	}
 }
 
