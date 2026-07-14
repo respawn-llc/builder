@@ -24,6 +24,11 @@ const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
       const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
       const desktopAssets = [
         {
+          name: 'Windows x64 NSIS installer',
+          pattern: /^Kent_\d+\.\d+\.\d+_x64-setup\.exe$/,
+          platform: 'windows-x64',
+        },
+        {
           name: 'macOS Apple Silicon',
           pattern: /^Kent_\d+\.\d+\.\d+_aarch64\.dmg$/,
           platform: 'macos-arm64',
@@ -36,6 +41,18 @@ const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
       ];
 
       async function detectDesktopPlatform() {
+        const structuredPlatforms = [
+          navigator.userAgentData?.platform,
+          navigator.platform,
+        ].filter(Boolean);
+        if (
+          structuredPlatforms.some(
+            (platform) => platform === 'Windows' || platform === 'Win32' || platform === 'Win64',
+          )
+        ) {
+          return 'windows-x64';
+        }
+
         const platform = [
           navigator.userAgentData?.platform,
           navigator.platform,
