@@ -40,7 +40,7 @@ type hookResponse struct {
 }
 
 type userHookProcessor struct {
-	hookPath string
+	hookPath *string
 }
 
 func (p userHookProcessor) ID() string {
@@ -49,7 +49,10 @@ func (p userHookProcessor) ID() string {
 
 func (p userHookProcessor) Process(ctx context.Context, envelope Envelope) (Decision, error) {
 	req := envelope.Request
-	hookPath, ok := resolveHookPath(p.hookPath)
+	hookPath, ok, err := resolveHookPath(p.hookPath)
+	if err != nil {
+		return Decision{}, err
+	}
 	if !ok {
 		return Decision{}, ProcessorError{Severity: FailureRecoverable, Message: "command postprocess hook unavailable"}
 	}

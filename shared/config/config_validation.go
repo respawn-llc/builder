@@ -285,10 +285,13 @@ func validateBGShellsOutput(state settingsState, _ map[string]string) error {
 func validateShellPostprocessing(state settingsState, _ map[string]string) error {
 	switch normalizeShellPostprocessingMode(string(state.Settings.Shell.PostprocessingMode)) {
 	case ShellPostprocessingModeNone, ShellPostprocessingModeBuiltin, ShellPostprocessingModeUser, ShellPostprocessingModeAll:
-		return nil
 	default:
 		return fmt.Errorf("invalid shell.postprocessing_mode %q (expected none|builtin|user|all)", state.Settings.Shell.PostprocessingMode)
 	}
+	if state.Settings.Shell.PostprocessHook != nil && strings.TrimSpace(*state.Settings.Shell.PostprocessHook) == "" {
+		return fmt.Errorf("shell.postprocess_hook cannot be empty; remove the setting to leave it unset")
+	}
+	return nil
 }
 
 func validateCacheWarningMode(state settingsState, _ map[string]string) error {

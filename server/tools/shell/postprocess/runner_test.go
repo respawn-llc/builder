@@ -10,10 +10,25 @@ import (
 	"strings"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/shared/config"
 	"core/shared/sessionenv"
 	"core/shared/toolspec"
 )
+
+func mustNewRunner(t *testing.T, settings Settings) *Runner {
+	t.Helper()
+	runner, err := NewRunner(settings)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	return runner
+}
+
+func testStringPointer(value string) *string {
+	copy := value
+	return &copy
+}
 
 func TestWarningRejectsBlankMessageAndMergesImmutably(t *testing.T) {
 	if _, err := NewWarning(" \t\n "); err == nil {
@@ -44,7 +59,7 @@ func TestWarningRejectsBlankMessageAndMergesImmutably(t *testing.T) {
 }
 
 func TestRunnerBuiltinGoTestSuccessCollapsesToPass(t *testing.T) {
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	result, err := runner.Apply(context.Background(), Request{
 		ToolName:    toolspec.ToolExecCommand,
@@ -64,7 +79,7 @@ func TestRunnerBuiltinGoTestSuccessCollapsesToPass(t *testing.T) {
 }
 
 func TestRunnerBuiltinGoTestPreservesDetailedOutput(t *testing.T) {
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	tests := []struct {
 		name        string
@@ -123,7 +138,7 @@ func TestRunnerBuiltinFileReadAddsTotalLineCountForPartialSed(t *testing.T) {
 		"line 4",
 		"line 5",
 	}, "\n")+"\n")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 
 	result, err := runner.Apply(context.Background(), Request{
@@ -145,7 +160,7 @@ func TestRunnerBuiltinFileReadAddsTotalLineCountForPartialSed(t *testing.T) {
 
 func TestRunnerBuiltinFileReadHandlesReportedSedRangeShape(t *testing.T) {
 	path := writeNestedTextFile(t, filepath.Join("cli", "app", "ui_goal.go"), numberedLines(414))
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	output := numberedLines(414)
 
@@ -168,7 +183,7 @@ func TestRunnerBuiltinFileReadHandlesReportedSedRangeShape(t *testing.T) {
 
 func TestRunnerBuiltinFileReadAddsTotalLineCountWhenReportedSedRangeIsPartial(t *testing.T) {
 	path := writeNestedTextFile(t, filepath.Join("cli", "app", "ui_goal.go"), numberedLines(431))
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	output := numberedLines(430)
 
@@ -193,7 +208,7 @@ func TestRunnerBuiltinFileReadAddsTotalLineCountWhenReportedSedRangeIsPartial(t 
 func TestRunnerBuiltinFileReadAddsTotalLineCountForUnknownSedScriptFile(t *testing.T) {
 	path := writeTextFile(t, "example.txt", "line 1\nline 2\nline 3\n")
 	scriptPath := writeTextFile(t, "script.sed", "1,1p\n")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 
 	result, err := runner.Apply(context.Background(), Request{
@@ -215,7 +230,7 @@ func TestRunnerBuiltinFileReadAddsTotalLineCountForUnknownSedScriptFile(t *testi
 
 func TestRunnerBuiltinFileReadSkipsSedWhenFullFileIsKnown(t *testing.T) {
 	path := writeTextFile(t, "example.txt", "line 1\nline 2\n")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	tests := []struct {
 		name    string
@@ -252,7 +267,7 @@ func TestRunnerBuiltinFileReadSkipsSedWhenFullFileIsKnown(t *testing.T) {
 func TestRunnerBuiltinFileReadAddsTotalLineCountForSedRangeEdgeCases(t *testing.T) {
 	largePath := writeTextFile(t, "large.txt", numberedLines(431))
 	smallPath := writeTextFile(t, "small.txt", "line 1\nline 2\n")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	tests := []struct {
 		name      string
@@ -295,7 +310,7 @@ func TestRunnerBuiltinFileReadAddsTotalLineCountForHeadTailAndPowerShell(t *test
 		"line 4",
 		"line 5",
 	}, "\n"))
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	tests := []struct {
 		name    string
@@ -340,7 +355,7 @@ func TestRunnerBuiltinFileReadSkipsFullHeadTailAndLargeFiles(t *testing.T) {
 	if err := os.WriteFile(binaryPath, []byte("line 1\x00line 2\n"), 0o644); err != nil {
 		t.Fatalf("write binary file: %v", err)
 	}
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	tests := []struct {
 		name    string
@@ -385,7 +400,7 @@ func TestRunnerBuiltinFileReadSkipsFullHeadTailAndLargeFiles(t *testing.T) {
 
 func TestRunnerBuiltinFileReadSkipsWhenParsedArgsOmitCommandName(t *testing.T) {
 	path := writeTextFile(t, "example.txt", "line 1\nline 2\nline 3\n")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 
 	result, err := runner.Apply(context.Background(), Request{
@@ -406,7 +421,7 @@ func TestRunnerBuiltinFileReadSkipsWhenParsedArgsOmitCommandName(t *testing.T) {
 
 func TestRunnerBuiltinFileReadSkipsComposedCommandsAndWholeFileReads(t *testing.T) {
 	path := writeTextFile(t, "example.txt", "line 1\nline 2\n")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	tests := []struct {
 		name    string
@@ -441,7 +456,7 @@ func TestRunnerBuiltinFileReadSkipsComposedCommandsAndWholeFileReads(t *testing.
 }
 
 func TestRunnerRawBypassesBuiltinProcessing(t *testing.T) {
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	result, err := runner.Apply(context.Background(), Request{
 		ToolName:    toolspec.ToolExecCommand,
@@ -462,7 +477,7 @@ func TestRunnerRawBypassesBuiltinProcessing(t *testing.T) {
 }
 
 func TestRunnerAdvisesForEveryProvenGitWorktreeInvocation(t *testing.T) {
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	for _, command := range []string{
 		`printf ready; command -- git worktree list`,
 		`git -C /repo worktree list`,
@@ -485,7 +500,7 @@ func TestRunnerAdvisesForEveryProvenGitWorktreeInvocation(t *testing.T) {
 }
 
 func TestRunnerUserModeDoesNotRunGitWorktreeAdvisory(t *testing.T) {
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeUser})
 	runner.hookProcessor = testProcessor{id: "user-hook", fn: func(envelope Envelope) (Decision, error) {
 		return Skip(envelope), nil
 	}}
@@ -503,7 +518,7 @@ func TestRunnerUserModeDoesNotRunGitWorktreeAdvisory(t *testing.T) {
 }
 
 func TestRunnerDoesNotAdviseForTextOrDynamicGitWorktreeWords(t *testing.T) {
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	for _, command := range []string{
 		`printf 'git worktree list'`,
 		`git "$subcommand" list`,
@@ -523,7 +538,7 @@ func TestRunnerDoesNotAdviseForTextOrDynamicGitWorktreeWords(t *testing.T) {
 }
 
 func TestRunnerAggregateProcessorRequiresStandaloneInvocation(t *testing.T) {
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
 	exitCode := 0
 	output := "PASS\nok\texample.com/postprocess\t0.123s\ndone\n"
 	result, err := runner.Apply(context.Background(), Request{
@@ -542,7 +557,7 @@ func TestRunnerAggregateProcessorRequiresStandaloneInvocation(t *testing.T) {
 
 func TestRunnerUserHookReplacesOutput(t *testing.T) {
 	hookPath := writeHookScript(t, "#!/bin/sh\nprintf '{\"processed\":true,\"replaced_output\":\"HOOKED\"}\n'")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser, HookPath: hookPath})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeUser, HookPath: testStringPointer(hookPath)})
 	result, err := runner.Apply(context.Background(), Request{
 		ToolName:    toolspec.ToolExecCommand,
 		CommandText: "printf hi",
@@ -563,7 +578,7 @@ func TestRunnerUserHookInheritsOwnerSessionID(t *testing.T) {
 	hookPath := writeHookScript(t, `#!/bin/sh
 printf '{"processed":true,"replaced_output":"%s"}' "$`+sessionenv.SessionIDEnv+`"
 `)
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser, HookPath: hookPath})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeUser, HookPath: testStringPointer(hookPath)})
 	result, err := runner.Apply(context.Background(), Request{
 		ToolName:       toolspec.ToolExecCommand,
 		CommandText:    "printf hi",
@@ -583,7 +598,7 @@ printf '{"processed":true,"replaced_output":"%s"}' "$`+sessionenv.SessionIDEnv+`
 
 func TestRunnerAllModeFallsBackToBuiltinWhenHookFails(t *testing.T) {
 	hookPath := writeHookScript(t, "#!/bin/sh\nprintf 'not-json\n'")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeAll, HookPath: hookPath})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeAll, HookPath: testStringPointer(hookPath)})
 	exitCode := 0
 	result, err := runner.Apply(context.Background(), Request{
 		ToolName:    toolspec.ToolExecCommand,
@@ -604,7 +619,7 @@ func TestRunnerAllModeFallsBackToBuiltinWhenHookFails(t *testing.T) {
 
 func TestRunnerUserModeBrokenHookFallsBackToOriginal(t *testing.T) {
 	hookPath := writeHookScript(t, "#!/bin/sh\nprintf 'not-json\n'")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser, HookPath: hookPath})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeUser, HookPath: testStringPointer(hookPath)})
 	result, err := runner.Apply(context.Background(), Request{
 		ToolName:    toolspec.ToolExecCommand,
 		CommandText: "printf hi",
@@ -623,7 +638,7 @@ func TestRunnerUserModeBrokenHookFallsBackToOriginal(t *testing.T) {
 
 func TestRunnerUserHookCancellationPropagates(t *testing.T) {
 	hookPath := writeHookScript(t, "#!/bin/sh\nsleep 5\n")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser, HookPath: hookPath})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeUser, HookPath: testStringPointer(hookPath)})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -642,7 +657,7 @@ func TestRunnerUserHookCancellationPropagates(t *testing.T) {
 
 func TestRunnerUserHookFailureWarningTruncatesStderr(t *testing.T) {
 	hookPath := writeHookScript(t, "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 5000 ]; do\n  printf 'xxxxxxxxxx' 1>&2\n  i=$((i + 1))\ndone\nexit 1\n")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeUser, HookPath: hookPath})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeUser, HookPath: testStringPointer(hookPath)})
 	result, err := runner.Apply(context.Background(), Request{
 		ToolName:    toolspec.ToolExecCommand,
 		CommandText: "printf hi",
@@ -667,11 +682,7 @@ func writeHookScript(t *testing.T, contents string) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("hook tests require POSIX shell")
 	}
-	path := filepath.Join(t.TempDir(), "hook.sh")
-	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
-		t.Fatalf("write hook: %v", err)
-	}
-	return path
+	return testsetup.WriteExecutable(t, "hook.sh", contents)
 }
 
 func writeTextFile(t *testing.T, name string, contents string) string {
@@ -709,7 +720,7 @@ func shellQuote(value string) string {
 
 func TestRunnerAllModeAccumulatesWarnings(t *testing.T) {
 	missingHookPath := filepath.Join(t.TempDir(), "missing-hook")
-	runner := NewRunner(Settings{Mode: config.ShellPostprocessingModeAll, HookPath: missingHookPath})
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeAll, HookPath: testStringPointer(missingHookPath)})
 	runner.processors = []Processor{warningProcessor{}}
 	result, err := runner.Apply(context.Background(), Request{
 		ToolName:    toolspec.ToolExecCommand,

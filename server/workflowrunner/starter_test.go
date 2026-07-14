@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/scriptedllm"
+	"core/internal/testharness/testsetup"
 	"core/server/attentionnotify"
 	"core/server/auth"
 	"core/server/launch"
@@ -28,6 +30,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowattention"
 	"core/server/workflowruntime"
@@ -40,6 +43,107 @@ import (
 )
 
 const workflowRunnerTestWaitTimeout = 15 * time.Second
+
+func TestWorkflowRuntimeExecCommandUsesRoleShellSettingsWithSharedGlobalManager(t *testing.T) {
+	hookPath := writeWorkflowShellPostprocessHook(t, `#!/bin/sh
+printf '{"processed":true,"replaced_output":"ROLE_ACTIVE:%s"}' "$KENT_SESSION_ID"
+`)
+	fixture := newStarterFixture(
+		t,
+		config.WorkflowCompletionModeStructuredOutput,
+		ScriptedToolBatch("shell", llm.ToolCall{
+			ID:    "call-shell",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"printf 'role-output'","shell":"/bin/sh","login":false,"yield_time_ms":5000}`),
+		}),
+		ScriptedRuntimeStep{
+			Response: ScriptedFinalAnswer(`{"commentary":"done"}`).Response,
+			ExpectedToolResults: []scriptedllm.ExpectedToolResult{{
+				CallID: "call-shell",
+				Name:   string(toolspec.ToolExecCommand),
+			}},
+		},
+	)
+	role := fixture.cfg.Settings.Subagents["coder"]
+	role.Settings.Shell = config.ShellSettings{
+		PostprocessingMode: config.ShellPostprocessingModeUser,
+		PostprocessHook:    &hookPath,
+	}
+	role.Sources["shell.postprocessing_mode"] = "test"
+	role.Sources["shell.postprocess_hook"] = "test"
+	fixture.cfg.Settings.Subagents["coder"] = role
+	fixture.rebuildStarter(t)
+
+	globalManager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(250 * time.Millisecond))
+	if err != nil {
+		t.Fatalf("shell.NewManager: %v", err)
+	}
+	t.Cleanup(func() { _ = globalManager.Close() })
+
+	var factoryRequest runtimewire.RuntimeClientRequest
+	fixture.starter.background = globalManager
+	fixture.starter.clientFactory = nil
+	fixture.starter.runtimeClientFactory = runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
+		factoryRequest = req
+		return fixture.client, nil
+	})
+
+	task := fixture.createStartedTask(t)
+	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	fixture.waitForCompletedRun(t, task.ID)
+
+	if factoryRequest.Purpose != runtimewire.RuntimeClientPurposeWorkflow {
+		t.Fatalf("runtime client purpose = %v, want workflow", factoryRequest.Purpose)
+	}
+	if got := factoryRequest.ActiveSettings.Shell.PostprocessingMode; got != config.ShellPostprocessingModeUser {
+		t.Fatalf("active shell postprocessing mode = %q, want user", got)
+	}
+	if factoryRequest.ActiveSettings.Shell.PostprocessHook == nil ||
+		*factoryRequest.ActiveSettings.Shell.PostprocessHook != hookPath {
+		t.Fatalf("active shell postprocess hook = %#v, want %q", factoryRequest.ActiveSettings.Shell.PostprocessHook, hookPath)
+	}
+	if !containsToolID(factoryRequest.EnabledTools, toolspec.ToolExecCommand) {
+		t.Fatalf("workflow runtime tools = %v, want exec_command", factoryRequest.EnabledTools)
+	}
+
+	requests := fixture.client.Requests()
+	if len(requests) < 2 {
+		t.Fatalf("scripted requests = %d, want tool call and follow-up", len(requests))
+	}
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].SessionID == "" {
+		t.Fatalf("workflow runs = %+v, want one session-backed run", runs)
+	}
+	var toolOutput string
+	for _, msg := range llm.MessagesFromItems(requests[1].Items) {
+		if msg.Role != llm.RoleTool || msg.Name != string(toolspec.ToolExecCommand) {
+			continue
+		}
+		toolOutput = msg.Content
+	}
+	if want := "ROLE_ACTIVE:" + runs[0].SessionID; toolOutput != want {
+		t.Fatalf("exec_command tool output = %q, want role postprocess output with owner session %q", toolOutput, want)
+	}
+}
+
+func writeWorkflowShellPostprocessHook(t *testing.T, contents string) string {
+	t.Helper()
+	return testsetup.WriteExecutable(t, "shell-postprocess-hook", contents)
+}
+
+func containsToolID(ids []toolspec.ID, target toolspec.ID) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
+}
 
 func TestSchedulerRunsNewSessionWorkflowNodeWithStructuredOutput(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"finished structured"}`))

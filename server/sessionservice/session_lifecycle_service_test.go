@@ -634,6 +634,7 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	activateSettings := cfg.Settings
 	activateSettings.Model = "gpt-5.4"
 	activateSettings.OpenAIBaseURL = "http://127.0.0.1:1/v1"
+	activateSettings.Shell.PostprocessingMode = config.ShellPostprocessingModeBuiltin
 	if _, err := runtimeService.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-1",
 		SessionID:       resolved.NextSessionID,

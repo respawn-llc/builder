@@ -59,7 +59,7 @@ web_search = true
 trigger_handoff = true # proactive compaction by the model
 
 [shell]
-postprocessing_mode = "all" # shell output token optimizations by Kent, or "all" | "none" | "user"
+postprocessing_mode = "all" # shell output token optimizations by Kent: none | builtin | user | all
 # postprocess_hook = "~/.kent/shell_postprocess_hook" # custom processor, see docs
 
 [workflow]
@@ -145,7 +145,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `shell_output_max_chars` | int | `16000` | `KENT_SHELL_OUTPUT_MAX_CHARS` |  | Output budget for shell tools and background-shell notices before they are truncated. |
 | `bg_shells_output` | string | `default` | `KENT_BG_SHELLS_OUTPUT` |  | Background-shell output mode (injection of shell outputs into model context). Allowed: `default`, `verbose`, `concise`. Verbose dumps all output into the main agent's model. Concise forces it to read output files. Default outputs truncated previews + gives a file path. |
 | `shell.postprocessing_mode` | string | `builtin` | `KENT_SHELL_POSTPROCESSING_MODE` |  | Semantic post-processing mode for `exec_command`. Allowed: `none`, `builtin`, `user`, `all`. `builtin` enables Kent processors only. `all` runs Kent processors first, then your hook. |
-| `shell.postprocess_hook` | string | `""` | `KENT_SHELL_POSTPROCESS_HOOK` |  | Optional executable/script path for a single local command post-processing hook. Kent sends JSON on stdin and expects JSON on stdout. |
+| `shell.postprocess_hook` | optional string | unset | `KENT_SHELL_POSTPROCESS_HOOK` |  | Executable/script path for a single local command post-processing hook. Omit the TOML key or unset the environment variable when unused; empty and whitespace-only values are invalid. Kent sends JSON on stdin and expects JSON on stdout. |
 | `prevent_sleep` | string | `active` | `KENT_PREVENT_SLEEP` |  | Prevent system sleep while Kent is running. Allowed: `always` (while the server process is live), `active` (while any agent is working, plus up to one minute of idle-confirmation grace), `never` (disabled). Only system sleep is inhibited; screensaver and display sleep are unaffected. |
 | `timeouts.model_request_seconds` | int | `400` | `KENT_TIMEOUTS_MODEL_REQUEST_SECONDS` | `kent run --model-timeout-seconds` | Model request timeout. Must be `> 0`. For non-streaming requests it bounds the whole request. For streaming responses it is a per-event idle window: the request is only aborted when no streaming activity arrives within this duration (measured from dispatch, so it also bounds time-to-first-event), letting a healthy long generation stream past it while a dead stream fails fast. |
 

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -123,12 +124,16 @@ func BuildAuthSupport(store auth.Store, lookupEnv func(string) string, now func(
 }
 
 func BuildRuntimeSupport(cfg config.App) (RuntimeSupport, error) {
+	runner, err := postprocess.NewRunner(postprocess.Settings{
+		Mode:     cfg.Settings.Shell.PostprocessingMode,
+		HookPath: cfg.Settings.Shell.PostprocessHook,
+	})
+	if err != nil {
+		return RuntimeSupport{}, fmt.Errorf("compile shell postprocessor: %w", err)
+	}
 	background, err := shelltool.NewManager(
 		shelltool.WithMinimumExecToBgTime(time.Duration(cfg.Settings.MinimumExecToBgSeconds)*time.Second),
-		shelltool.WithPostprocessor(postprocess.NewRunner(postprocess.Settings{
-			Mode:     cfg.Settings.Shell.PostprocessingMode,
-			HookPath: cfg.Settings.Shell.PostprocessHook,
-		})),
+		shelltool.WithPostprocessor(runner),
 	)
 	if err != nil {
 		return RuntimeSupport{}, err

@@ -12,6 +12,7 @@ import (
 	patchtool "core/server/tools/patch"
 	readimagetool "core/server/tools/readimage"
 	shelltool "core/server/tools/shell"
+	"core/server/tools/shell/postprocess"
 	"core/shared/config"
 	"core/shared/toolspec"
 	"errors"
@@ -40,6 +41,7 @@ type LocalToolRuntimeContext struct {
 	AskQuestionBroker               *askquestion.AskQuestionBroker
 	QuestionsEnabledGetter          func() bool
 	BackgroundShellManager          *shelltool.Manager
+	ShellPostprocessor              *postprocess.Runner
 	TriggerHandoffController        func() triggerhandofftool.TriggerHandoffController
 	OutsideWorkspaceEditApprover    patchtool.OutsideWorkspaceApprover
 	OutsideWorkspaceReadApprover    patchtool.OutsideWorkspaceApprover
@@ -60,7 +62,7 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 		if ctx.BackgroundShellManager == nil {
 			return nil, fmt.Errorf("exec_command background manager is unavailable")
 		}
-		return shelltool.NewExecCommandTool(ctx.WorkspaceRoot, ctx.ShellOutputMaxChars, ctx.BackgroundShellManager, ctx.OwnerSessionID), nil
+		return shelltool.NewExecCommandToolWithPostprocessor(ctx.WorkspaceRoot, ctx.ShellOutputMaxChars, ctx.BackgroundShellManager, ctx.OwnerSessionID, ctx.ShellPostprocessor), nil
 	case tools.LocalRuntimeBuilderWriteStdin:
 		if ctx.BackgroundShellManager == nil {
 			return nil, fmt.Errorf("write_stdin background manager is unavailable")
@@ -191,6 +193,7 @@ type LocalToolRegistryOptions struct {
 	SupportsVision           bool
 	Logger                   Logger
 	Background               *shelltool.Manager
+	ShellPostprocessor       *postprocess.Runner
 	TriggerHandoffController func() triggerhandofftool.TriggerHandoffController
 	QuestionsEnabledGetter   func() bool
 	GlobalConfigDir          string
@@ -231,6 +234,7 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 		AskQuestionBroker:            broker,
 		QuestionsEnabledGetter:       opts.QuestionsEnabledGetter,
 		BackgroundShellManager:       background,
+		ShellPostprocessor:           opts.ShellPostprocessor,
 		TriggerHandoffController:     opts.TriggerHandoffController,
 		OutsideWorkspaceEditApprover: patchtool.OutsideWorkspaceApprover(patchOutsideWorkspaceApprover.Approve),
 		OutsideWorkspaceReadApprover: patchtool.OutsideWorkspaceApprover(readOutsideWorkspaceApprover.Approve),

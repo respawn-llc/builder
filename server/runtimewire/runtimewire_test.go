@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"core/internal/testharness/runtimewirefixture"
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/runtime"
@@ -23,6 +24,7 @@ import (
 	askquestion "core/server/tools"
 	patchtool "core/server/tools/patch"
 	shelltool "core/server/tools/shell"
+	"core/server/tools/shell/postprocess"
 	"core/shared/config"
 	"core/shared/invariant"
 	"core/shared/toolspec"
@@ -374,6 +376,162 @@ func TestLocalToolRegistryBindingRebindUpdatesExecCommandRoot(t *testing.T) {
 	}
 }
 
+func TestRuntimeWiringExecCommandUsesEffectiveBuiltinInsteadOfBootstrapNone(t *testing.T) {
+	root := t.TempDir()
+	store := newRuntimeWireSession(t, root, "effective-builtin")
+	background := newRuntimeWireShellManager(t, runtimeWirePostprocessor(t, config.ShellPostprocessingModeNone, nil))
+	active := runtimeWireShellSettings(config.ShellPostprocessingModeBuiltin, nil)
+
+	wiring, err := NewRuntimeWiringWithBackground(
+		store,
+		active,
+		[]toolspec.ID{toolspec.ToolExecCommand},
+		root,
+		nil,
+		nil,
+		background,
+		RuntimeWiringOptions{Client: &runtimewireCaptureClient{}},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
+	}
+	t.Cleanup(func() { _ = wiring.Close() })
+	if wiring.Background != background {
+		t.Fatal("runtime wiring replaced the supplied global shell manager")
+	}
+
+	output := callRuntimeWireExec(t, wiring.LocalTools.Registry(), "printf '\\033[31mcolor\\033[0m'")
+	if output != "color" {
+		t.Fatalf("exec_command output = %q, want builtin output from supplied active settings", output)
+	}
+	if active.Shell.PostprocessingMode != config.ShellPostprocessingModeBuiltin {
+		t.Fatalf("reported active shell mode = %q, want builtin", active.Shell.PostprocessingMode)
+	}
+}
+
+func TestRuntimeWiringExecCommandUsesEffectiveHookAcrossWorkspaceRebind(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	store := newRuntimeWireSession(t, rootA, "effective-hook")
+	bootstrapHook := "BOOTSTRAP"
+	effectiveHook := "EFFECTIVE"
+	background := newRuntimeWireShellManager(t, runtimeWirePostprocessor(t, config.ShellPostprocessingModeUser, &bootstrapHook))
+	effectiveHookPath := runtimeWireHookScript(t, effectiveHook)
+	active := runtimeWireShellSettings(config.ShellPostprocessingModeUser, &effectiveHookPath)
+
+	wiring, err := NewRuntimeWiringWithBackground(
+		store,
+		active,
+		[]toolspec.ID{toolspec.ToolExecCommand},
+		rootA,
+		nil,
+		nil,
+		background,
+		RuntimeWiringOptions{Client: &runtimewireCaptureClient{}},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
+	}
+	t.Cleanup(func() { _ = wiring.Close() })
+	if got := callRuntimeWireExec(t, wiring.LocalTools.Registry(), "printf original"); got != effectiveHook {
+		t.Fatalf("effective hook output = %q, want %q", got, effectiveHook)
+	}
+	if err := wiring.LocalTools.Rebind(rootB); err != nil {
+		t.Fatalf("rebind: %v", err)
+	}
+	if got := callRuntimeWireExec(t, wiring.LocalTools.Registry(), "printf rebound"); got != effectiveHook {
+		t.Fatalf("effective hook output after rebind = %q, want %q", got, effectiveHook)
+	}
+	if active.Shell.PostprocessHook == nil || *active.Shell.PostprocessHook != effectiveHookPath {
+		t.Fatalf("reported active hook = %#v, want %q", active.Shell.PostprocessHook, effectiveHookPath)
+	}
+}
+
+func runtimeWireShellSettings(mode config.ShellPostprocessingMode, hookPath *string) config.Settings {
+	var hook *string
+	if hookPath != nil {
+		copy := *hookPath
+		hook = &copy
+	}
+	return config.Settings{
+		Model:               "gpt-5",
+		ModelContextWindow:  200_000,
+		Reviewer:            config.ReviewerSettings{Frequency: "off"},
+		Timeouts:            config.Timeouts{ModelRequestSeconds: 1},
+		ShellOutputMaxChars: 16_000,
+		Shell: config.ShellSettings{
+			PostprocessingMode: mode,
+			PostprocessHook:    hook,
+		},
+	}
+}
+
+func runtimeWirePostprocessor(t *testing.T, mode config.ShellPostprocessingMode, hookReplacement *string) *postprocess.Runner {
+	t.Helper()
+	var hookPath *string
+	if hookReplacement != nil {
+		path := runtimeWireHookScript(t, *hookReplacement)
+		hookPath = &path
+	}
+	runner, err := postprocess.NewRunner(postprocess.Settings{Mode: mode, HookPath: hookPath})
+	if err != nil {
+		t.Fatalf("new postprocess runner: %v", err)
+	}
+	return runner
+}
+
+func runtimeWireHookScript(t *testing.T, replacement string) string {
+	t.Helper()
+	script := "#!/bin/sh\nprintf '{\"processed\":true,\"replaced_output\":\"" + replacement + "\"}'\n"
+	return testsetup.WriteExecutable(t, "hook.sh", script)
+}
+
+func newRuntimeWireShellManager(t *testing.T, runner *postprocess.Runner) *shelltool.Manager {
+	t.Helper()
+	manager, err := shelltool.NewManager(
+		shelltool.WithMinimumExecToBgTime(250*time.Millisecond),
+		shelltool.WithPostprocessor(runner),
+	)
+	if err != nil {
+		t.Fatalf("new shell manager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	return manager
+}
+
+func callRuntimeWireExec(t *testing.T, registry *tools.Registry, command string) string {
+	t.Helper()
+	handler, ok := registry.Get(toolspec.ToolExecCommand)
+	if !ok {
+		t.Fatal("expected exec_command handler")
+	}
+	input, err := json.Marshal(map[string]any{
+		"cmd":           command,
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 1_000,
+	})
+	if err != nil {
+		t.Fatalf("marshal exec_command input: %v", err)
+	}
+	result, err := handler.Call(context.Background(), tools.Call{
+		ID:    "runtimewire-exec",
+		Name:  toolspec.ToolExecCommand,
+		Input: input,
+	})
+	if err != nil {
+		t.Fatalf("exec_command call: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("exec_command result error: %s", string(result.Output))
+	}
+	var output string
+	if err := json.Unmarshal(result.Output, &output); err != nil {
+		t.Fatalf("decode exec_command output: %v", err)
+	}
+	return output
+}
+
 func TestNewLocalToolRegistryBindingRejectsEmptyWorkspaceRoot(t *testing.T) {
 	_, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:       "   ",
@@ -661,6 +819,7 @@ func TestNewRuntimeWiringRejectsEmptyModelAfterBypassingConfigDefaults(t *testin
 			Timeouts: config.Timeouts{
 				ModelRequestSeconds: 1,
 			},
+			Shell: config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		[]toolspec.ID{toolspec.ToolExecCommand},
 		root,
