@@ -40,9 +40,8 @@
 ## Desktop Bundle Artifacts
 
 - The desktop app ships arm64 macOS, x86_64 Linux, and x86_64 Windows bundles.
-  Windows desktop supports Windows 11. Per-release assets, built by
-  `scripts/desktop-release.sh build` and published by the `release.yml`
-  `build_desktop` → `publish_desktop` jobs:
+  Per-release assets, built by `scripts/desktop-release.sh build` and published
+  by the `release.yml` `build_desktop` → `publish_desktop` jobs:
   - `Kent_<ver>_aarch64.dmg` (macOS installer),
   - `Kent_<ver>_aarch64.app.tar.gz` (+`.sig`) — macOS updater artifact (Tauri emits
     it as `Kent.app.tar.gz`; the build step renames it to this versioned asset),
@@ -60,9 +59,6 @@
   build runner is pinned `macos-26` for the liquid-glass icon toolchain. Minimum
   deployment target is macOS 15 (Sequoia); Liquid Glass UI falls back to
   `NSVisualEffectView` on pre-26 macOS.
-- Windows installers are not Authenticode-signed. Their Tauri updater signatures
-  remain mandatory for self-update verification.
-
 ## Desktop App Updates
 
 The desktop GUI is a thin remote-control client over a separately-installed Kent

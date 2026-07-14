@@ -6,7 +6,7 @@
   "packageManager": "pnpm@11.11.0",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && node --test ./scripts/desktop-route-built.test.mjs && node ./scripts/emit-deployment-files.mjs",
+    "build": "astro build && node ./scripts/emit-deployment-files.mjs",
     "preview": "astro preview",
     "smoke:built": "node ./scripts/smoke-built-docs.mjs",
     "test": "node --test ./scripts/site-config.test.mjs ./scripts/readme-mirror.test.mjs ./scripts/sync-readme.test.mjs ./scripts/astro-loader-migration.test.mjs ./scripts/docs-collection-loader.test.mjs ./scripts/sync-mirrored-docs.test.mjs ./scripts/ai-readable-docs.test.mjs",

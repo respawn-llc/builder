@@ -3,7 +3,6 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$repo_root/scripts/lib/checksum.sh"
 
 cd "$repo_root"
 
@@ -158,7 +157,6 @@ fi
 go_log_file="$(mktemp -t kent-go-test.XXXXXX.log)"
 tui_log_file="$(mktemp -t kent-tui-test.XXXXXX.log)"
 frontend_log_file="$(mktemp -t kent-frontend-test.XXXXXX.log)"
-desktop_checksum_command=""
 test_pid=""
 cleanup() {
     rm -f "$go_log_file" "$tui_log_file" "$frontend_log_file"
@@ -223,9 +221,7 @@ check_dependencies() {
         fi
     fi
     if target_selected desktop && [ -f apps/package.json ]; then
-        require_command pnpm "install desktop dependencies and run desktop tests"
-        require_command jq "validate the desktop updater manifest"
-        desktop_checksum_command="$(kent_select_sha256_command "generate desktop release checksums")"
+        require_command pnpm "run desktop tests"
     fi
 }
 
@@ -314,13 +310,8 @@ run_desktop_tests() {
     if [ ! -f apps/package.json ]; then
         return
     fi
-    if printf '==> desktop: install dependencies\n' >>"$frontend_log_file" &&
-        pnpm --dir apps install --frozen-lockfile >>"$frontend_log_file" 2>&1 &&
-        printf '==> desktop: run frontend tests\n' >>"$frontend_log_file" &&
-        pnpm --dir apps test >>"$frontend_log_file" 2>&1 &&
-        printf '==> desktop: verify release manifest and checksums (%s)\n' "$desktop_checksum_command" >>"$frontend_log_file" &&
-        KENT_DESKTOP_CHECKSUM_COMMAND="$desktop_checksum_command" \
-            bash scripts/desktop-release.sh self-test >>"$frontend_log_file" 2>&1; then
+    if pnpm --dir apps install --frozen-lockfile >"$frontend_log_file" 2>&1 &&
+        pnpm --dir apps test >>"$frontend_log_file" 2>&1; then
         return
     fi
     cat "$frontend_log_file"

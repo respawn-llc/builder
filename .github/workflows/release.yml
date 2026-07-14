@@ -362,8 +362,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # All platforms' staged bundles merge into one dist dir so assembly sees every
-      # updater signature and emits one cross-platform manifest.
+      # All three platforms' staged bundles merge into one dist dir so assemble sees
+      # every updater .sig file and emits one cross-platform latest.json.
       - name: Download macOS desktop artifacts
         uses: actions/download-artifact@v8.0.1
         with:
@@ -383,7 +383,6 @@ jobs:
           path: dist/desktop
 
       - name: Assemble updater manifest + checksums
-        id: assemble_desktop
         env:
           KENT_VERSION: ${{ needs.prepare_release.outputs.version }}
           TAG: ${{ needs.prepare_release.outputs.tag }}
@@ -391,7 +390,7 @@ jobs:
           bash scripts/desktop-release.sh assemble \
             --version "$KENT_VERSION" \
             --dist-dir dist/desktop \
-            --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+            --base-url "https://github.com/${{ github.repository }}/releases/download/${TAG}"
 
       # Uploads the desktop bundles and flips the release public (draft: false) — the
       # last step, so the release only goes live once every platform's assets exist.

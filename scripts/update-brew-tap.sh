@@ -33,6 +33,18 @@ require_option_value() {
 	exit 1
 }
 
+sha256_of() {
+	local file="$1"
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$file" | awk '{print $1}'
+	elif command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$file" | awk '{print $1}'
+	else
+		echo "sha256sum or shasum required" >&2
+		exit 1
+	fi
+}
+
 cask_versioned_url() {
 	local source_url="$1"
 	local cask_version="$2"
@@ -142,7 +154,6 @@ if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
 	echo "Not inside a git repo" >&2
 	exit 1
 fi
-source "$repo_root/scripts/lib/checksum.sh"
 
 if [[ -z "$version" ]]; then
 	if [[ -n "${KENT_VERSION:-}" ]]; then
@@ -181,7 +192,6 @@ release_base="https://github.com/${repo}/releases/download/${tag}"
 tmp_file="$(mktemp)"
 tmp_formula="$(mktemp)"
 tmp_cask=""
-checksum_command="$(kent_select_sha256_command "generate Homebrew release checksums")"
 cleanup() {
 	rm -f "$tmp_file" "$tmp_formula" "$tmp_cask"
 }
@@ -189,7 +199,7 @@ trap cleanup EXIT
 
 binary_sha256() {
 	curl -fsSL "${release_base}/$1" -o "$tmp_file"
-	kent_sha256_file "$checksum_command" "$tmp_file"
+	sha256_of "$tmp_file"
 }
 
 darwin_arm64_sha256="$(binary_sha256 "kent_${bare_version}_darwin_arm64.tar.gz")"
@@ -271,7 +281,7 @@ if [[ -n "$desktop_url" ]]; then
 	cask_path="$tap_dir/Casks/${desktop_cask}.rb"
 	tmp_cask="$(mktemp)"
 	curl -fsSL "$desktop_url" -o "$tmp_file"
-	dmg_sha256="$(kent_sha256_file "$checksum_command" "$tmp_file")"
+	dmg_sha256="$(sha256_of "$tmp_file")"
 	cask_url="$(cask_versioned_url "$desktop_url" "$cask_version")"
 	mkdir -p "$(dirname "$cask_path")"
 	cat >"$tmp_cask" <<EOF

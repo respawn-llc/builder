@@ -3,7 +3,6 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$repo_root/scripts/lib/checksum.sh"
 
 cd "$repo_root"
 
@@ -66,16 +65,15 @@ EOF
 build_archives() {
 	require_value "--version" "$version"
 
-	local dist_path checksum_command
+	local dist_path
 	dist_path="$(resolve_path "$dist_dir")"
-	checksum_command="$(kent_select_sha256_command "generate release archive checksums")"
 	mkdir -p "$dist_path"
 	clean_dist_release_artifacts "$dist_path"
 
 	local staging_dir
 	staging_dir="$(mktemp -d)"
 
-	local build_os build_arch ext archive_ext out archive frontend_build_done
+	local build_os build_arch ext archive_ext out frontend_build_done
 	frontend_build_done=0
 	while read -r build_os build_arch; do
 		if [ "$build_os" = "windows" ]; then
@@ -111,20 +109,16 @@ build_archives() {
 
 	(
 		cd "$dist_path"
-		: >checksums.txt
-		for archive in "kent_${version}_"*.tar.gz "kent_${version}_"*.zip; do
-			printf '%s  %s\n' "$(kent_sha256_file "$checksum_command" "$archive")" "$archive" >>checksums.txt
-		done
+		shasum -a 256 "kent_${version}_"*.tar.gz "kent_${version}_"*.zip >checksums.txt
 	)
 }
 
 verify_manifest() {
-	local dist_path checksum_command
+	local dist_path
 	dist_path="$(resolve_path "$dist_dir")"
-	checksum_command="$(kent_select_sha256_command "verify release archive checksums")"
 	(
 		cd "$dist_path"
-		kent_verify_sha256_manifest "$checksum_command" checksums.txt
+		shasum -a 256 -c checksums.txt
 	)
 }
 

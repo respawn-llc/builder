@@ -35,9 +35,6 @@ USAGE
 }
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$repo_root/scripts/lib/checksum.sh"
-
-desktop_checksum_command=""
 
 require_value() {
 	local flag="$1" value="${2:-}"
@@ -53,6 +50,14 @@ resolve_version() {
 		version="$(tr -d '[:space:]' <"$repo_root/VERSION")"
 	fi
 	printf '%s' "${version#v}"
+}
+
+sha256_file() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{print $1}'
+	else
+		shasum -a 256 "$1" | awk '{print $1}'
+	fi
 }
 
 # stage_artifact <src> <dist_dir>/<dest-name>: copy if the source exists, else fail
@@ -169,11 +174,6 @@ cmd_assemble() {
 	[[ -d "$dist_dir" ]] || { echo "dist dir not found: $dist_dir" >&2; exit 1; }
 	[[ -n "$base_url" ]] || base_url="https://github.com/respawn-llc/kent/releases/download/v${version}"
 	[[ -n "$pub_date" ]] || pub_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-	desktop_checksum_command="$(
-		kent_select_sha256_command \
-			"generate desktop release checksums" \
-			"${KENT_DESKTOP_CHECKSUM_COMMAND:-}"
-	)"
 
 	emit_latest_json "$dist_dir" "$version" "$base_url" "$pub_date" "$notes" >"$dist_dir/latest.json"
 
@@ -184,7 +184,7 @@ cmd_assemble() {
 		cd "$dist_dir"
 		for f in *.dmg *.AppImage *.deb *.app.tar.gz *-setup.exe; do
 			[[ -f "$f" ]] || continue
-			printf '%s  %s\n' "$(kent_sha256_file "$desktop_checksum_command" "$f")" "$f"
+			printf '%s  %s\n' "$(sha256_file "$f")" "$f"
 		done | sort -k2 >desktop-checksums.txt
 	)
 

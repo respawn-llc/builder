@@ -56,7 +56,7 @@ The desktop app lets you use Kent's [Workflows and Tasks](../workflows/) feature
 
 ### Manual Install
 
-Download the installer for macOS Apple Silicon, Linux x86_64, or Windows 11 x64 at [kent.sh/desktop](https://kent.sh/desktop), or install the macOS app via Homebrew:
+Download the installer for macOS Apple Silicon, Linux x86_64, or Windows x64 at [kent.sh/desktop](https://kent.sh/desktop), or install the macOS app via Homebrew:
 
 ```bash
 brew install --cask respawn-llc/tap/kent-desktop
