@@ -560,7 +560,10 @@ func TestParseOutputItems_PreservesCompactionItem(t *testing.T) {
 	if err := json.Unmarshal(raw, &output); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
-	items, assistantText, assistantPhase, toolCalls, reasoning, reasoningItems := parseOutputItems(output)
+	items, assistantText, assistantPhase, _, toolCalls, reasoning, reasoningItems, err := parseOutputItems(output)
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
 	if assistantText != "" {
 		t.Fatalf("expected no assistant text, got %q", assistantText)
 	}
@@ -597,7 +600,10 @@ func TestParseOutputItems_UsesLastAssistantMessageWhenMultipleUnphased(t *testin
 	if err := json.Unmarshal(raw, &output); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
-	_, assistantText, assistantPhase, _, _, _ := parseOutputItems(output)
+	_, assistantText, assistantPhase, _, _, _, _, err := parseOutputItems(output)
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
 	if assistantText != "done" {
 		t.Fatalf("assistantText = %q, want done", assistantText)
 	}
@@ -634,7 +640,10 @@ func TestParseOutputItems_UsesTrailingAssistantPhaseBlock(t *testing.T) {
 	if err := json.Unmarshal(raw, &output); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
-	_, assistantText, assistantPhase, _, _, _ := parseOutputItems(output)
+	_, assistantText, assistantPhase, _, _, _, _, err := parseOutputItems(output)
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
 	if assistantText != "final-1final-2" {
 		t.Fatalf("assistantText = %q, want final-1final-2", assistantText)
 	}

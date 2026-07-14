@@ -368,7 +368,12 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 	case OutcomeProviderFailure:
 	case OutcomeStream:
 		writer.Header().Set("Content-Type", "text/event-stream")
-		if !s.writeSSE(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n") {
+		addedItem, err := json.Marshal(assistantMessageOutputItem(nil, *operation.ResponsePhase))
+		if err != nil {
+			s.recordFailure(fmt.Errorf("encode response output item: %w", err))
+			return
+		}
+		if !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":%s}\n\n", addedItem)) {
 			return
 		}
 		if operation.Output != nil {
@@ -381,7 +386,7 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 				return
 			}
 		}
-		if !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.completed\",\"response\":{\"output\":%s}}\n\n", responseOutputJSON(operation.Output))) {
+		if !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.completed\",\"response\":{\"output\":%s}}\n\n", responseOutputJSON(operation.Output, operation.ResponsePhase))) {
 			return
 		}
 		s.writeSSE(writer, "data: [DONE]\n\n")
@@ -396,27 +401,83 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 		return
 	default:
 	}
-	if err := writeJSON(writer, http.StatusOK, map[string]any{"output": responseOutput(operation.Output)}); err != nil {
+	if err := writeJSON(writer, http.StatusOK, map[string]any{"output": responseOutput(operation.Output, operation.ResponsePhase)}); err != nil {
 		s.recordFailure(fmt.Errorf("write JSON response: %w", err))
 	}
 }
 
-func responseOutput(value *string) []any {
+func responseOutput(value *string, phase *ResponsePhase) []any {
 	if value == nil {
 		return []any{}
 	}
-	return []any{map[string]any{
-		"type": "message", "role": "assistant", "phase": "final_answer",
-		"content": []any{map[string]any{"type": "output_text", "text": *value}},
-	}}
+	return []any{assistantMessageOutputItem(value, *phase)}
 }
 
-func responseOutputJSON(value *string) string {
-	encoded, err := json.Marshal(responseOutput(value))
+func assistantMessageOutputItem(value *string, phase ResponsePhase) map[string]any {
+	content := []any{}
+	if value != nil {
+		content = append(content, map[string]any{"type": "output_text", "text": *value})
+	}
+	item := map[string]any{
+		"type": "message", "role": "assistant", "content": content,
+	}
+	if phase != ResponsePhaseAbsent {
+		item["phase"] = string(phase)
+	}
+	return item
+}
+
+func responseOutputJSON(value *string, phase *ResponsePhase) string {
+	encoded, err := json.Marshal(responseOutput(value, phase))
 	if err != nil {
 		panic(fmt.Sprintf("marshal fixed response output: %v", err))
 	}
 	return string(encoded)
+}
+
+func HandleInputTokenCount(writer http.ResponseWriter, request *http.Request, inputTokens int) bool {
+	if request.URL.Path != "/responses/input_tokens" {
+		return false
+	}
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return true
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	mustWriteFixtureResponse(writer, fmt.Sprintf(`{"object":"response.input_tokens","input_tokens":%d}`, inputTokens))
+	return true
+}
+
+func WriteCompletedResponseStream(writer http.ResponseWriter, assistantText string, inputTokens, outputTokens int) {
+	totalTokens := inputTokens + outputTokens
+	phase := ResponsePhaseFinal
+	output := responseOutput(&assistantText, &phase)
+	payload, err := json.Marshal(map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"usage": map[string]any{
+				"input_tokens":  inputTokens,
+				"output_tokens": outputTokens,
+				"total_tokens":  totalTokens,
+			},
+			"output": output,
+		},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshal completed Responses fixture: %v", err))
+	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	mustWriteFixtureResponse(writer, "data: "+string(payload)+"\n\ndata: [DONE]\n\n")
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func mustWriteFixtureResponse(writer io.Writer, payload string) {
+	if _, err := io.WriteString(writer, payload); err != nil {
+		panic(fmt.Sprintf("write Responses fixture: %v", err))
+	}
 }
 
 func (s *ResponsesStub) writeSSE(writer http.ResponseWriter, payload string) bool {

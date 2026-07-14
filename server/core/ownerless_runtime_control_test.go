@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
@@ -84,7 +85,7 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseRun()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -98,10 +99,10 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 		startOnce.Do(func() { close(started) })
 		if currentRequest == 1 {
 			<-release
-			writeTestOpenAICompletedResponseStream(w, "first answer before steering", 1, 1)
+			modelstub.WriteCompletedResponseStream(w, "first answer before steering", 1, 1)
 			return
 		}
-		writeTestOpenAICompletedResponseStream(w, "steered final answer", 1, 1)
+		modelstub.WriteCompletedResponseStream(w, "steered final answer", 1, 1)
 	}))
 	defer server.Close()
 

@@ -20,7 +20,7 @@ func (streamingOnlyTransport) GenerateStream(_ context.Context, _ OpenAIRequest,
 		onDelta("Hel")
 		onDelta("lo")
 	}
-	return OpenAIResponse{AssistantText: "Hello"}, nil
+	return OpenAIResponse{AssistantText: "Hello", ProviderPhase: AbsentProviderPhase()}, nil
 }
 
 type capturingInputTokenTransport struct {

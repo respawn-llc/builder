@@ -160,7 +160,8 @@ func TestHostedToolOnlyMissingPhaseTurnEmitsCommittedConversationUpdatedAfterHos
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: ""},
+			Assistant:     llm.Message{Role: llm.RoleAssistant, Content: ""},
+			ProviderPhase: llm.AbsentProviderPhase(),
 			OutputItems: []llm.ResponseItem{
 				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleAssistant, Content: "working"},
 				{Type: llm.ResponseItemTypeOther, Raw: json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`)},

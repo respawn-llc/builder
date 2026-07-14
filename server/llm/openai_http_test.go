@@ -729,6 +729,18 @@ func TestSupportsRequestInputTokenCount_AllowsStandardOpenAI(t *testing.T) {
 	}
 }
 
+func TestNewOpenAIProviderContractErrorPreservesMissingResponseStatus(t *testing.T) {
+	cause := errors.New("invalid provider response")
+	err := newOpenAIProviderContractError("openai-compatible", nil, cause)
+	if !errors.Is(err, cause) {
+		t.Fatalf("provider contract error does not preserve cause: %v", err)
+	}
+	var missingStatus *providerContractErrorWithoutStatus
+	if !errors.As(err, &missingStatus) {
+		t.Fatalf("error = %T, want typed missing-status provider contract error", err)
+	}
+}
+
 func TestBuildRequestOptions_OmitsAuthorizationHeaderWhenAuthHeaderEmpty(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "")) != 2 {

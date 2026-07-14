@@ -94,6 +94,7 @@ type reviewerFollowUpResult struct {
 
 type phaseProtocolTurn struct {
 	Assistant             llm.Message
+	EffectivePhase        *llm.ProviderPhase
 	LocalToolCalls        []llm.ToolCall
 	HostedToolExecutions  []hostedToolExecution
 	EnforcePhaseProtocol  bool
@@ -102,7 +103,7 @@ type phaseProtocolTurn struct {
 
 type phaseProtocolEnforcer interface {
 	EnabledForModel(ctx context.Context) bool
-	Apply(ctx context.Context, resp llm.Response, assistant llm.Message, localToolCalls []llm.ToolCall, hostedToolExecutions []hostedToolExecution) phaseProtocolTurn
+	Apply(ctx context.Context, resp llm.Response, assistant llm.Message, localToolCalls []llm.ToolCall, hostedToolExecutions []hostedToolExecution) (phaseProtocolTurn, error)
 }
 
 func (e *Engine) ensureOrchestrationCollaborators() {
