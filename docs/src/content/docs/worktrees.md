@@ -3,7 +3,7 @@ title: Worktrees
 description: Create, enter, and delete Git worktrees from Kent.
 ---
 
-Kent creates and manages Git worktrees for a session. Use `/wt` in the TUI or the CLI:
+Kent creates and manages Git worktrees for a workspace and lets sessions select their execution target. Use `/wt` in the TUI or the CLI:
 
 ```bash
 kent worktree status
@@ -14,7 +14,7 @@ kent worktree leave
 kent worktree delete <selector>
 ```
 
-Use `--session <id>` to target a session explicitly. Every command supports `--json`.
+Every command supports `--json`. Session-scoped commands use `KENT_SESSION_ID` inside a Kent shell or accept `--session <id>` explicitly.
 
 ## Select
 
@@ -25,6 +25,8 @@ Select a worktree by its exact ID, branch, display name, or path. IDs take prece
 - **registered**: available to Git and managed by Kent
 - **external**: available to Git but not managed by Kent; entering it registers it
 - **missing**: managed by Kent, but absent from Git
+
+`list` resolves the workspace bound to the current directory and does not require a session. When `KENT_SESSION_ID` or `--session` is present, it marks that session's current worktree with `*`; Kent does not infer a session from workspace history.
 
 `status` reports a missing checkout or branch without changing the session's worktree.
 

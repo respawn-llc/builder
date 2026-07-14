@@ -25,6 +25,10 @@ func (c *loopbackWorktreeClient) ListWorktrees(ctx context.Context, req serverap
 	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.ListWorktrees)
 }
 
+func (c *loopbackWorktreeClient) ListWorkspaceWorktrees(ctx context.Context, req serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
+	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.ListWorkspaceWorktrees)
+}
+
 func (c *loopbackWorktreeClient) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
 	return callLoopbackClient(c, "worktree service is required", ctx, req, servicecontract.WorktreeService.ResolveWorktreeSelector)
 }

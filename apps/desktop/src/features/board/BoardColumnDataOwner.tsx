@@ -34,10 +34,10 @@ export type BoardColumnDataView = Readonly<{
   initialBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   isFetchingNextPage: boolean;
   isFetchingPreviousPage: boolean;
-  nextBoundary: VirtualizedInfiniteListBoundaryState;
+  nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   onLoadMore: () => void;
   onLoadPrevious: () => void;
-  previousBoundary: VirtualizedInfiniteListBoundaryState;
+  previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
 }>;
 
 export function BoardColumnDataOwner({
@@ -249,7 +249,7 @@ function directionalBoundary(
     onRetry: () => void;
     retryLabel: string;
   }>,
-): VirtualizedInfiniteListBoundaryState {
+): VirtualizedInfiniteListBoundaryState | undefined {
   if (input.failed) {
     return {
       state: "error",
@@ -261,5 +261,5 @@ function directionalBoundary(
   if (input.loading) {
     return { state: "loading", label: input.loadingLabel };
   }
-  return { state: "idle" };
+  return undefined;
 }

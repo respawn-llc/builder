@@ -98,6 +98,24 @@ describe("task detail execution target contract", () => {
         }),
       ),
     ).toThrow();
+    expect(() =>
+      taskDetailSchema.parse(
+        withExecutionTarget({
+          mode: "head",
+          effective_root: "/tmp/worktree",
+          requested_ref: "HEAD",
+          commit_oid: "0123456789abcdef0123456789abcdef01234567",
+          provenance: "resolved",
+          current_branch: "T-1",
+          managed_worktree: {
+            worktree_id: "worktree-1",
+            display_name: "T-1",
+            canonical_root: "/tmp/worktree",
+            availability: "missing",
+          },
+        }),
+      ),
+    ).toThrow();
   });
 });
 

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -49,6 +50,10 @@ func (c *worktreeCommandTestClient) ListWorktrees(ctx context.Context, req serve
 	c.listCtx = ctx
 	c.listRequests = append(c.listRequests, req)
 	return c.listResp, c.listErr
+}
+
+func (c *worktreeCommandTestClient) ListWorkspaceWorktrees(context.Context, serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
+	return serverapi.WorktreeWorkspaceListResponse{}, errors.New("unexpected workspace worktree list request")
 }
 
 func (c *worktreeCommandTestClient) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {

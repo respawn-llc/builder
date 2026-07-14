@@ -951,11 +951,39 @@ func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListR
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
-	worktrees, err := projectWorktreeList(topology, workspaceCtx.target)
+	worktrees, err := projectWorktreeList(topology, &workspaceCtx.target)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
 	return serverapi.WorktreeListResponse{Target: workspaceCtx.target, Worktrees: worktrees}, nil
+}
+
+func (s *Service) ListWorkspaceWorktrees(ctx context.Context, req serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorktreeWorkspaceListResponse{}, err
+	}
+	if s == nil || s.metadata == nil {
+		return serverapi.WorktreeWorkspaceListResponse{}, errors.New("worktree service metadata store is required")
+	}
+	binding, err := s.metadata.LookupWorkspaceBindingByID(ctx, strings.TrimSpace(req.WorkspaceID))
+	if err != nil {
+		return serverapi.WorktreeWorkspaceListResponse{}, err
+	}
+	if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(req.ProjectID) {
+		return serverapi.WorktreeWorkspaceListResponse{}, serverapi.ErrWorkspaceNotRegistered
+	}
+	topology, err := s.projectTopology(ctx, binding.WorkspaceID, binding.CanonicalRoot)
+	if err != nil {
+		return serverapi.WorktreeWorkspaceListResponse{}, err
+	}
+	worktrees, err := projectWorktreeList(topology, nil)
+	if err != nil {
+		return serverapi.WorktreeWorkspaceListResponse{}, err
+	}
+	return serverapi.WorktreeWorkspaceListResponse{
+		WorkspaceID: binding.WorkspaceID,
+		Worktrees:   worktrees,
+	}, nil
 }
 
 func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
@@ -1075,7 +1103,7 @@ func (s *Service) createdWorktreeListEntry(ctx context.Context, workspaceCtx ses
 	if err != nil {
 		return serverapi.WorktreeListEntry{}, err
 	}
-	entries, err := projectWorktreeList(topology, workspaceCtx.target)
+	entries, err := projectWorktreeList(topology, &workspaceCtx.target)
 	if err != nil {
 		return serverapi.WorktreeListEntry{}, err
 	}
@@ -1117,7 +1145,7 @@ func (s *Service) registerCreatedWorktree(ctx context.Context, req createdWorktr
 		WorkspaceID:           strings.TrimSpace(req.WorkspaceID),
 		CanonicalRoot:         strings.TrimSpace(gitEntry.Root),
 		DisplayName:           filepath.Base(strings.TrimSpace(gitEntry.Root)),
-		Availability:          pathAvailability(gitEntry.Root),
+		Availability:          string(PathAvailability(gitEntry.Root)),
 		IsMain:                gitEntry.IsMain,
 		Managed:               req.Managed,
 		CreatedBranch:         req.CreatedBranch,

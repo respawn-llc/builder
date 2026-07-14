@@ -1,10 +1,10 @@
 .board-task-card {
-  --board-card-height: 10rem;
+  --board-card-height: 12.5rem;
 
   height: var(--board-card-height);
   min-height: var(--board-card-height);
   max-height: var(--board-card-height);
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .board-task-card[data-task-card-border-tone="primary"] {
@@ -23,34 +23,10 @@
   line-clamp: 2;
 }
 
-.task-card-chip-row {
-  /* Matches current board action button height so wrapped chip rows align to the button box. */
-  --task-card-action-row-height: 30px;
-}
-
-.task-card-chip-slot {
-  height: var(--task-card-action-row-height);
-}
-
-.task-card-body-preview {
-  min-height: 0;
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    var(--color-on-island) 0,
-    var(--color-on-island) calc(100% - 1lh),
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    to bottom,
-    var(--color-on-island) 0,
-    var(--color-on-island) calc(100% - 1lh),
-    transparent 100%
-  );
-}
-
 .task-card-footer {
   align-self: end;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-outline);
 }
 
 .board-card-drag-image {
@@ -70,7 +46,7 @@
 }
 
 .board-horizontal-scrollbar {
-  height: 16px;
+  height: 12px;
   margin: 0;
   appearance: none;
   background: transparent;

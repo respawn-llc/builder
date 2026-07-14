@@ -4,7 +4,7 @@ import type { BoardCardInstance } from "./BoardCardInstance";
 
 export type ActiveBoardCardDrag = Readonly<{
   instance: BoardCardInstance;
-  lastVirtualIndex: number;
+  lastCardIndex: number;
   payload: BoardCardDragPayload;
   snapshot: KanbanCardVM;
 }>;

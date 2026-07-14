@@ -126,10 +126,10 @@ export function BoardColumnMotionBoundary({
       initialBoundary: { state: "loading", label: t("states.loading") },
       isFetchingNextPage: false,
       isFetchingPreviousPage: false,
-      nextBoundary: { state: "idle" },
+      nextBoundary: undefined,
       onLoadMore: () => undefined,
       onLoadPrevious: () => undefined,
-      previousBoundary: { state: "idle" },
+      previousBoundary: undefined,
     }),
     [t],
   );
@@ -265,7 +265,7 @@ function retainDragSourceSnapshot(
   if (sourceDrag === null || cards.some((card) => card.id === sourceDrag.instance.taskID)) {
     return cards;
   }
-  const insertionIndex = Math.min(Math.max(sourceDrag.lastVirtualIndex, 0), cards.length);
+  const insertionIndex = Math.min(Math.max(sourceDrag.lastCardIndex, 0), cards.length);
   return [...cards.slice(0, insertionIndex), sourceDrag.snapshot, ...cards.slice(insertionIndex)];
 }
 

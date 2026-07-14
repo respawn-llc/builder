@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { MouseEventHandler, ReactNode } from "react";
 
 import { Button, type ButtonSize, type ButtonVariant } from "./Button";
 import {
@@ -10,7 +10,7 @@ import {
 
 export type IconTooltipButtonProps = Readonly<{
   label: string;
-  onClick: () => void;
+  onClick: MouseEventHandler<HTMLButtonElement>;
   children: ReactNode;
   disabled?: boolean | undefined;
   size?: ButtonSize | undefined;

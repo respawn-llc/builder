@@ -533,7 +533,11 @@ func (m *uiModel) worktreeSwitchCmd(target worktreeui.Item) tea.Cmd {
 	if m == nil {
 		return nil
 	}
-	selector := target.Entry.Projection.Selector
+	selector, err := worktreeui.StableMutationSelector(target)
+	if err != nil {
+		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		return nil
+	}
 	if m.worktrees.switchPending {
 		m.worktrees.queuedSwitch = uiWorktreeQueuedSwitch{TargetToken: selector}
 		return nil

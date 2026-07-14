@@ -44,7 +44,15 @@ type WorkflowExecutionTarget struct {
 	CommitOID       *string                           `json:"commit_oid,omitempty"`
 	Provenance      WorkflowExecutionTargetProvenance `json:"provenance"`
 	CurrentBranch   *string                           `json:"current_branch,omitempty"`
-	ManagedWorktree *WorktreeKentFacts                `json:"managed_worktree,omitempty"`
+	ManagedWorktree *WorkflowExecutionTargetWorktree  `json:"managed_worktree,omitempty"`
+}
+
+type WorkflowExecutionTargetWorktree struct {
+	WorktreeID    string                   `json:"worktree_id"`
+	DisplayName   string                   `json:"display_name"`
+	CanonicalRoot string                   `json:"canonical_root"`
+	Availability  WorktreePathAvailability `json:"availability"`
+	Managed       bool                     `json:"managed"`
 }
 
 type WorkflowExecutionTargetConfiguredTarget struct {
@@ -277,12 +285,29 @@ func (t WorkflowExecutionTarget) Validate() error {
 		if t.ManagedWorktree == nil {
 			return errors.New("managed execution target effective_root requires managed_worktree")
 		}
+		if t.ManagedWorktree.Availability != WorktreePathAvailabilityAvailable {
+			return errors.New("managed execution target effective_root requires an available managed_worktree")
+		}
 		if strings.TrimSpace(t.ManagedWorktree.CanonicalRoot) != strings.TrimSpace(*t.EffectiveRoot) {
 			return errors.New("managed execution target effective_root must match managed_worktree canonical_root")
 		}
 	}
 	if t.CurrentBranch != nil && t.EffectiveRoot == nil {
 		return errors.New("managed execution target current_branch requires effective_root")
+	}
+	return nil
+}
+
+func (t WorkflowExecutionTargetWorktree) Validate() error {
+	if strings.TrimSpace(t.WorktreeID) == "" ||
+		strings.TrimSpace(t.DisplayName) == "" ||
+		strings.TrimSpace(t.CanonicalRoot) == "" {
+		return errors.New("execution target worktree identity is required")
+	}
+	switch t.Availability {
+	case WorktreePathAvailabilityAvailable, WorktreePathAvailabilityMissing, WorktreePathAvailabilityInaccessible:
+	default:
+		return errors.New("execution target worktree availability is invalid")
 	}
 	return nil
 }

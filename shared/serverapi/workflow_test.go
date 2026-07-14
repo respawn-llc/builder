@@ -381,7 +381,6 @@ func TestWorkflowBoardJSONContainsMetadataOnly(t *testing.T) {
 	board := WorkflowBoard{
 		ProjectID: "project-1",
 		Project: ProjectBoardProject{
-			ProjectID:              "project-1",
 			ProjectKey:             "KNT",
 			DisplayName:            "Kent",
 			DefaultWorkspaceID:     "workspace-default",
@@ -400,6 +399,9 @@ func TestWorkflowBoardJSONContainsMetadataOnly(t *testing.T) {
 	project, ok := shape["project"].(map[string]any)
 	if !ok || project["default_workspace_id"] != "workspace-default" || project["attached_workspace_count"] != float64(2) {
 		t.Fatalf("project JSON = %#v, want workspace facts", shape["project"])
+	}
+	if _, exists := project["project_id"]; exists {
+		t.Fatalf("board project JSON duplicates outer project_id: %#v", project)
 	}
 	for _, forbidden := range []string{"cards", "done_preview", "has_hidden_done_cards", "next_page_token"} {
 		if _, ok := shape[forbidden]; ok {

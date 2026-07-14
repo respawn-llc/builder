@@ -287,6 +287,28 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, projectWorkspaceRoute, serverapi.SessionPlanRequest{}); err != nil {
 		t.Fatalf("project workspace with attached project: %v", err)
 	}
+	workspaceListRoute := routeForTest(t, protocol.MethodWorktreeWorkspaceList)
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
+		workspaceListRoute,
+		serverapi.WorktreeWorkspaceListRequest{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingA.WorkspaceID},
+	); err != nil {
+		t.Fatalf("workspace list with matching project/workspace: %v", err)
+	}
+	for _, request := range []serverapi.WorktreeWorkspaceListRequest{
+		{ProjectID: fixture.bindingB.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
+		{ProjectID: fixture.bindingA.ProjectID, WorkspaceID: fixture.bindingB.WorkspaceID},
+	} {
+		if err := executor.authorizeScope(
+			ctx,
+			&connectionState{attachedProject: fixture.bindingA.ProjectID, attachedWorkspaceID: fixture.bindingA.WorkspaceID},
+			workspaceListRoute,
+			request,
+		); err == nil {
+			t.Fatalf("foreign workspace list unexpectedly allowed: %+v", request)
+		}
+	}
 	unboundCore, unboundServer := newUnboundGatewayTestServer(t)
 	unboundServer.Close()
 	unboundGateway, err := NewGateway(unboundCore, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
@@ -302,6 +324,7 @@ type routePolicyFixture struct {
 	appCore          *core.Core
 	gateway          *Gateway
 	bindingA         metadata.Binding
+	bindingB         metadata.Binding
 	ownSessionID     string
 	foreignSessionID string
 	workspaceB       string
@@ -369,6 +392,7 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 		appCore:          appCore,
 		gateway:          gateway,
 		bindingA:         bindingA,
+		bindingB:         bindingB,
 		ownSessionID:     ownStore.Meta().SessionID,
 		foreignSessionID: foreignStore.Meta().SessionID,
 		workspaceB:       resolvedB.Config.WorkspaceRoot,

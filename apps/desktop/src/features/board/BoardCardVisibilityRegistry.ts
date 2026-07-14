@@ -125,10 +125,15 @@ export const BoardCardVisibilityContext = createContext<BoardCardVisibilityStore
 
 export function useBoardCardInstanceVisibility(instance: BoardCardInstance): boolean {
   const store = useContext(BoardCardVisibilityContext);
+  const columnID = instance.columnID;
+  const taskID = instance.taskID;
   const subscribe = useCallback(
-    (listener: () => void) => store?.subscribe(instance, listener) ?? (() => undefined),
-    [instance, store],
+    (listener: () => void) => store?.subscribe({ columnID, taskID }, listener) ?? (() => undefined),
+    [columnID, store, taskID],
   );
-  const getSnapshot = useCallback(() => store?.isVisible(instance) ?? true, [instance, store]);
+  const getSnapshot = useCallback(
+    () => store?.isVisible({ columnID, taskID }) ?? true,
+    [columnID, store, taskID],
+  );
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

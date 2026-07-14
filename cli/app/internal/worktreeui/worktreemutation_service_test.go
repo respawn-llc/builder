@@ -43,6 +43,10 @@ func (c *testWorktreeClient) ListWorktrees(ctx context.Context, req serverapi.Wo
 	return c.listResp, c.listErr
 }
 
+func (c *testWorktreeClient) ListWorkspaceWorktrees(context.Context, serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
+	return serverapi.WorktreeWorkspaceListResponse{}, c.nextErr()
+}
+
 func (c *testWorktreeClient) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
 	c.selectorCtx = ctx
 	c.selectorRequests = append(c.selectorRequests, req)

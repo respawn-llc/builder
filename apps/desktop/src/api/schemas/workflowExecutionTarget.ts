@@ -85,6 +85,17 @@ const managedTargetSchema = z
         path: ["effective_root"],
       });
     }
+    if (
+      value.effective_root !== null &&
+      value.managed_worktree !== null &&
+      value.managed_worktree.availability !== "available"
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Managed execution root requires an available worktree.",
+        path: ["managed_worktree", "availability"],
+      });
+    }
     if (value.current_branch !== null && value.effective_root === null) {
       context.addIssue({
         code: "custom",

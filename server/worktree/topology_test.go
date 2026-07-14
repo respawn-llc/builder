@@ -104,6 +104,39 @@ func TestListWorktreesProjectsSelectorsAndCurrentStateWithoutReconcilingMissingM
 	}
 }
 
+func TestListWorkspaceWorktreesProjectsMarkerlessTopology(t *testing.T) {
+	env := newServiceTestEnv(t)
+
+	response, err := env.service.ListWorkspaceWorktrees(env.ctx, serverapi.WorktreeWorkspaceListRequest{
+		ProjectID:   env.binding.ProjectID,
+		WorkspaceID: env.binding.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkspaceWorktrees: %v", err)
+	}
+	if response.WorkspaceID != env.binding.WorkspaceID || len(response.Worktrees) != 1 {
+		t.Fatalf("workspace list = %+v", response)
+	}
+	if response.Worktrees[0].Projection.IsCurrent {
+		t.Fatalf("workspace projection = %+v, want no session marker", response.Worktrees[0].Projection)
+	}
+	if strings.TrimSpace(response.Worktrees[0].Projection.Selector) == "" {
+		t.Fatalf("workspace projection = %+v, want selector", response.Worktrees[0].Projection)
+	}
+}
+
+func TestListWorkspaceWorktreesRejectsWorkspaceFromAnotherProject(t *testing.T) {
+	env := newServiceTestEnv(t)
+
+	_, err := env.service.ListWorkspaceWorktrees(env.ctx, serverapi.WorktreeWorkspaceListRequest{
+		ProjectID:   "another-project",
+		WorkspaceID: env.binding.WorkspaceID,
+	})
+	if err == nil {
+		t.Fatal("ListWorkspaceWorktrees succeeded for a workspace from another project")
+	}
+}
+
 func TestProjectTopologyRejectsDuplicateGitAndKentRoots(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "worktree")
 	gitEntry := GitWorktree{Root: root, HeadOID: strings.Repeat("a", 40)}

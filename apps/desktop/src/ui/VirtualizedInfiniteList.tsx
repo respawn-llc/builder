@@ -14,7 +14,7 @@ export type { VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundar
 export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   items: readonly TItem[];
   getItemKey: (item: TItem) => string;
-  renderItem: (item: TItem) => ReactNode;
+  renderItem: (item: TItem, itemIndex: number) => ReactNode;
   header?: ReactNode | undefined;
   empty?: ReactNode | undefined;
   hasNextPage: boolean;
@@ -489,7 +489,7 @@ function renderVirtualRow<TItem>({
   nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   nextBoundaryIndex: number | null;
   previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
-  renderItem: (item: TItem) => ReactNode;
+  renderItem: (item: TItem, itemIndex: number) => ReactNode;
   virtualIndex: number;
 }>): ReactNode {
   if (previousBoundary !== undefined && virtualIndex === 0) {
@@ -510,7 +510,7 @@ function renderVirtualRow<TItem>({
   if (item === undefined) {
     return null;
   }
-  return renderItem(item);
+  return renderItem(item, virtualIndex - itemStartIndex);
 }
 
 function VirtualizedPlaceholder({

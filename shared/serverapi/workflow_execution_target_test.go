@@ -133,16 +133,22 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 		CommitOID:     stringPointer("0123456789abcdef"),
 		Provenance:    WorkflowExecutionTargetProvenanceResolved,
 		CurrentBranch: stringPointer("operator-renamed"),
-		ManagedWorktree: &WorktreeKentFacts{
+		ManagedWorktree: &WorkflowExecutionTargetWorktree{
 			WorktreeID:    "worktree-1",
 			CanonicalRoot: "/worktree",
 			DisplayName:   "worktree",
+			Availability:  WorktreePathAvailabilityAvailable,
 			Managed:       true,
 		},
 	}
 	if err := target.Validate(); err != nil {
 		t.Fatalf("target invalid: %v", err)
 	}
+	target.ManagedWorktree.Availability = WorktreePathAvailabilityMissing
+	if err := target.Validate(); err == nil {
+		t.Fatal("managed target accepted an unavailable worktree with an effective root")
+	}
+	target.ManagedWorktree.Availability = WorktreePathAvailabilityAvailable
 	legacy := target
 	legacy.Provenance = WorkflowExecutionTargetProvenanceLegacyObserved
 	if err := legacy.Validate(); err != nil {
@@ -164,6 +170,17 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 	}
 	if string(data) == "" || !jsonFieldPresent(t, data, "execution_target") {
 		t.Fatalf("detail JSON = %s", data)
+	}
+	var taskDetailWire struct {
+		ExecutionTarget struct {
+			ManagedWorktree map[string]json.RawMessage `json:"managed_worktree"`
+		} `json:"execution_target"`
+	}
+	if err := json.Unmarshal(data, &taskDetailWire); err != nil {
+		t.Fatalf("decode detail JSON: %v", err)
+	}
+	if _, ok := taskDetailWire.ExecutionTarget.ManagedWorktree["availability"]; !ok {
+		t.Fatalf("managed execution target omitted availability: %s", data)
 	}
 
 	sourceRoot := "/source"
@@ -240,8 +257,8 @@ func TestWorkflowTaskDetailDoesNotDuplicateManagedWorktreeOrChangeBoardCards(t *
 	}
 	targetType := reflect.TypeOf(WorkflowExecutionTarget{})
 	managedWorktree, exists := targetType.FieldByName("ManagedWorktree")
-	if !exists || managedWorktree.Type != reflect.TypeOf((*WorktreeKentFacts)(nil)) {
-		t.Fatalf("WorkflowExecutionTarget managed worktree contract = %v, want *WorktreeKentFacts", managedWorktree.Type)
+	if !exists || managedWorktree.Type != reflect.TypeOf((*WorkflowExecutionTargetWorktree)(nil)) {
+		t.Fatalf("WorkflowExecutionTarget managed worktree contract = %v, want *WorkflowExecutionTargetWorktree", managedWorktree.Type)
 	}
 	for _, boardType := range []reflect.Type{
 		reflect.TypeOf(WorkflowBoardTaskCard{}),

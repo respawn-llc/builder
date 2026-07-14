@@ -33,6 +33,62 @@ func TestDeleteWorktreeRequiresExplicitForceForDirtyTarget(t *testing.T) {
 	}
 }
 
+func TestDeleteCurrentWorktreeRequiresExplicitForceBeforeScheduling(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/delete-current-precondition")
+	if err := os.WriteFile(filepath.Join(created.CanonicalRoot, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	gate := make(chan struct{})
+	env.runtime.transitionGate = gate
+	gateClosed := false
+	t.Cleanup(func() {
+		if !gateClosed {
+			close(gate)
+		}
+	})
+
+	request := serverapi.WorktreeDeleteRequest{
+		OperationID:         serverapi.NewWorktreeOperationID(),
+		SessionID:           env.session.Meta().SessionID,
+		Selector:            created.WorktreeID,
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+	}
+	_, err := env.service.DeleteWorktree(env.ctx, request)
+	var precondition *serverapi.WorktreeDeletePreconditionError
+	if !errors.As(err, &precondition) || precondition.DirtyState.Kind != serverapi.WorktreeDirtyStateDirty {
+		t.Fatalf("delete error = %v, want synchronous dirty precondition", err)
+	}
+	env.service.transitionMu.Lock()
+	pendingTransitions := len(env.service.transitions)
+	env.service.transitionMu.Unlock()
+	if pendingTransitions != 0 {
+		t.Fatalf("pending transitions = %d, want none after rejected delete", pendingTransitions)
+	}
+	if _, err := os.Stat(created.CanonicalRoot); err != nil {
+		t.Fatalf("dirty current worktree changed after rejected delete: %v", err)
+	}
+
+	request.ForceFolderRemoval = true
+	result, err := env.service.DeleteWorktree(env.ctx, request)
+	if err != nil {
+		t.Fatalf("forced DeleteWorktree: %v", err)
+	}
+	if result.Kind != serverapi.WorktreeDeleteResultKindScheduled {
+		t.Fatalf("forced delete result = %+v, want scheduled", result)
+	}
+	close(gate)
+	gateClosed = true
+	outcome := waitForWorktreeTransitionOutcome(t, env.runtime)
+	if outcome.State != clientui.WorktreeTransitionCompleted {
+		t.Fatalf("forced delete outcome = %+v, want completed", outcome)
+	}
+	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("forced dirty worktree root still exists: %v", err)
+	}
+}
+
 func TestDeleteWorktreeCompletesNonCurrentDeletionAndRetainsBranch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-completed")

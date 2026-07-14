@@ -141,7 +141,7 @@ func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error 
 	fmt.Fprintln(stdout, task.Body)
 	fmt.Fprintln(stdout, "```")
 	fmt.Fprintf(stdout, "Status: %s\n", statusText)
-	fmt.Fprintf(stdout, "Project: %q (%s)\n", task.Project.DisplayName, task.Project.ProjectID)
+	fmt.Fprintf(stdout, "Project: %q (%s)\n", task.Project.DisplayName, task.Summary.ProjectID)
 	fmt.Fprintf(stdout, "Workflow: %q (%s)\n", task.Workflow.DisplayName, task.Workflow.WorkflowID)
 	fmt.Fprintf(stdout, "Created at %s UTC\n", time.UnixMilli(task.Summary.CreatedAtUnixMs).UTC().Format(time.RFC3339))
 	if len(task.Runs) > 0 {

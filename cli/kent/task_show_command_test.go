@@ -237,7 +237,7 @@ func (r *crossProjectTaskShowRemote) GetWorkflowTask(_ context.Context, req serv
 		}
 		return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: "task-other", ProjectID: "project-other", WorkflowID: "workflow-other", ShortID: "OTH-1", Title: "Other Task"},
-			Project: serverapi.ProjectBoardProject{ProjectID: "project-other", ProjectKey: "OTH", DisplayName: "Other"},
+			Project: serverapi.ProjectBoardProject{ProjectKey: "OTH", DisplayName: "Other"},
 			Status:  serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 		}}, nil
 	}
@@ -249,21 +249,23 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 	if err := writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
 		Summary: serverapi.WorkflowTaskSummary{
 			ID:              "task-1",
+			ProjectID:       "project-1",
 			ShortID:         "WOR-1",
 			WorkflowID:      "workflow-1",
 			Title:           "Task",
 			CreatedAtUnixMs: 1735689600000,
 		},
-		Project:         serverapi.ProjectBoardProject{ProjectID: "project-1", DisplayName: "Project"},
+		Project:         serverapi.ProjectBoardProject{DisplayName: "Project"},
 		Workflow:        serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		Body:            "Do the work.",
 		SourceWorkspace: serverapi.ProjectWorkspaceSummary{RootPath: "/workspace"},
 		ExecutionTarget: &serverapi.WorkflowExecutionTarget{
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
-			ManagedWorktree: &serverapi.WorktreeKentFacts{
+			ManagedWorktree: &serverapi.WorkflowExecutionTargetWorktree{
 				WorktreeID:    "worktree-1",
 				CanonicalRoot: "/workspace-task",
 				DisplayName:   "workspace-task",
+				Availability:  serverapi.WorktreePathAvailabilityAvailable,
 				Managed:       true,
 			},
 		},
@@ -305,8 +307,8 @@ func TestTaskDetailExecutionTargetHumanAndJSONFacts(t *testing.T) {
 	commitOID := "0123456789abcdef0123456789abcdef01234567"
 	currentBranch := "operator-renamed"
 	task := serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
-		Project:  serverapi.ProjectBoardProject{ProjectID: "project-1", DisplayName: "Project"},
+		Summary:  serverapi.WorkflowTaskSummary{ID: "task-1", ProjectID: "project-1", ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
+		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
 		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		SourceWorkspace: serverapi.ProjectWorkspaceSummary{
 			RootPath: "/workspace",
@@ -319,10 +321,11 @@ func TestTaskDetailExecutionTargetHumanAndJSONFacts(t *testing.T) {
 			CommitOID:     &commitOID,
 			Provenance:    serverapi.WorkflowExecutionTargetProvenanceLegacyObserved,
 			CurrentBranch: &currentBranch,
-			ManagedWorktree: &serverapi.WorktreeKentFacts{
+			ManagedWorktree: &serverapi.WorkflowExecutionTargetWorktree{
 				WorktreeID:    "worktree-1",
 				CanonicalRoot: effectiveRoot,
 				DisplayName:   "workspace-task",
+				Availability:  serverapi.WorktreePathAvailabilityAvailable,
 				Managed:       true,
 			},
 		},
@@ -361,8 +364,8 @@ func TestTaskDetailExecutionTargetHumanAndJSONFacts(t *testing.T) {
 func TestWriteTaskDetailComments(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
-		Project:  serverapi.ProjectBoardProject{ProjectID: "project-1", DisplayName: "Project"},
+		Summary:  serverapi.WorkflowTaskSummary{ProjectID: "project-1", ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
+		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
 		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		Status:   serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 		Comments: []serverapi.WorkflowTaskComment{
@@ -387,8 +390,8 @@ func TestWriteTaskDetailCommentOverflowPointsToCommentCommand(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	if err := writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
-		Project:  serverapi.ProjectBoardProject{ProjectID: "project-1", DisplayName: "Project"},
+		Summary:  serverapi.WorkflowTaskSummary{ProjectID: "project-1", ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
+		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
 		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		Status:   serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 		Comments: comments,

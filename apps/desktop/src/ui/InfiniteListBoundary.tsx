@@ -2,7 +2,6 @@ import { Button } from "./Button";
 import { Spinner } from "./Spinner";
 
 export type VirtualizedInfiniteListBoundaryState =
-  | Readonly<{ state: "idle" }>
   | Readonly<{ state: "loading"; label: string }>
   | Readonly<{ state: "error"; message: string; retryLabel: string; onRetry: () => void }>;
 

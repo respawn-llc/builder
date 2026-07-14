@@ -67,7 +67,7 @@ func projectTopologyEntries(gitEntries []GitWorktree, records []metadata.Worktre
 	return out, nil
 }
 
-func projectWorktreeList(entries []serverapi.WorktreeTopologyEntry, target clientui.SessionExecutionTarget) ([]serverapi.WorktreeListEntry, error) {
+func projectWorktreeList(entries []serverapi.WorktreeTopologyEntry, target *clientui.SessionExecutionTarget) ([]serverapi.WorktreeListEntry, error) {
 	out := make([]serverapi.WorktreeListEntry, 0, len(entries))
 	for index, topology := range entries {
 		selector, err := topologySelectorFor(entries, index)
@@ -78,7 +78,7 @@ func projectWorktreeList(entries []serverapi.WorktreeTopologyEntry, target clien
 			Topology: topology,
 			Projection: serverapi.WorktreeListProjection{
 				Selector:  selector,
-				IsCurrent: topologyIsCurrent(topology, target),
+				IsCurrent: target != nil && topologyIsCurrent(topology, *target),
 			},
 		}
 		if err := entry.Validate(); err != nil {
@@ -134,7 +134,7 @@ func gitFactsFromEntry(entry GitWorktree) serverapi.WorktreeGitFacts {
 		Detached:      entry.Detached,
 		Bare:          entry.Bare,
 		IsMain:        entry.IsMain,
-		PathAvailable: pathAvailability(entry.Root) == "available",
+		PathAvailable: PathAvailability(entry.Root) == serverapi.WorktreePathAvailabilityAvailable,
 	}
 	if value := strings.TrimSpace(entry.BranchRef); value != "" {
 		facts.BranchRef = &value

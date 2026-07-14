@@ -46,6 +46,14 @@ type WorktreeKentFacts struct {
 	OriginSessionID *string `json:"origin_session_id,omitempty"`
 }
 
+type WorktreePathAvailability string
+
+const (
+	WorktreePathAvailabilityAvailable    WorktreePathAvailability = "available"
+	WorktreePathAvailabilityMissing      WorktreePathAvailability = "missing"
+	WorktreePathAvailabilityInaccessible WorktreePathAvailability = "inaccessible"
+)
+
 type WorktreeRegisteredFacts struct {
 	Git  WorktreeGitFacts  `json:"git"`
 	Kent WorktreeKentFacts `json:"kent"`
@@ -488,6 +496,16 @@ type WorktreeListResponse struct {
 	Worktrees []WorktreeListEntry             `json:"worktrees"`
 }
 
+type WorktreeWorkspaceListRequest struct {
+	ProjectID   string `json:"project_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+type WorktreeWorkspaceListResponse struct {
+	WorkspaceID string              `json:"workspace_id"`
+	Worktrees   []WorktreeListEntry `json:"worktrees"`
+}
+
 type WorktreeCreateTargetResolutionKind string
 
 const (
@@ -529,6 +547,16 @@ type WorktreeCreateResponse struct {
 func (r WorktreeListRequest) Validate() error {
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (r WorktreeWorkspaceListRequest) Validate() error {
+	if strings.TrimSpace(r.ProjectID) == "" {
+		return errors.New("project_id is required")
+	}
+	if strings.TrimSpace(r.WorkspaceID) == "" {
+		return errors.New("workspace_id is required")
 	}
 	return nil
 }
