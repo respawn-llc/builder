@@ -59,3 +59,16 @@ func (id uuidv4Value) String() string {
 func (id uuidv4Value) IsZero() bool {
 	return id.value == uuid.Nil
 }
+
+func (id uuidv4Value) MarshalText() ([]byte, error) {
+	return []byte(id.String()), nil
+}
+
+func (id *uuidv4Value) UnmarshalText(raw []byte) error {
+	parsed, err := parseUUIDv4Value(string(raw), "id")
+	if err != nil {
+		return err
+	}
+	*id = parsed
+	return nil
+}

@@ -121,14 +121,20 @@ func (r *serviceTestRuntime) RunWorktreeTransition(
 	})
 }
 
-func (r *serviceTestRuntime) RunWorktreeTransitionImmediately(
+func (r *serviceTestRuntime) RunWorktreeTransitionAtStepBoundary(
 	ctx context.Context,
 	sessionID string,
+	_ serverapi.RuntimeStepOrigin,
 	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+	complete func(error),
 ) error {
-	return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+	err := fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 		return r.SyncExecutionTarget(syncCtx, sessionID, target, reminder)
 	})
+	if complete != nil {
+		complete(err)
+	}
+	return nil
 }
 
 func (r *serviceTestRuntime) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {

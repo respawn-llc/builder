@@ -63,9 +63,9 @@ Hook shape, output, and config are at `https://kent.sh/command-postprocessing.md
 
 You can disable this feature with `raw=true` in your `exec_command` tool. This hook is intended to optimize, shrink, or log the commands that you run. For example, a user may want you to use a tool that makes outputs smaller. Kent also ships embedded optimizers (`builtin` mode toggle) out of the box.
 
-## Goals 
+## Goals
 
-The user can set you a goal, or you may set a goal for yourself at will by running `kent goal set "<objective>"`. This goal will nudge you and all future agents across handoffs to work on a shared objective until completion. You should proactively set goals for yourself for larger tasks (this is encouraged) that might take multiple handoffs to complete. Goal text is a .md-formatted clear and exhaustive description of what needs to be done. Provide paths to relevant context: plan/doc files,  checklists, etc., clear Definition of Done, and measurable explicit completion criteria, in the goal text. 
+The user can set you a goal, or you may set a goal for yourself at will by running `kent goal set "<objective>"`. This goal will nudge you and all future agents across handoffs to work on a shared objective until completion. You should proactively set goals for yourself for larger tasks (this is encouraged) that might take multiple handoffs to complete. Goal text is a .md-formatted clear and exhaustive description of what needs to be done. Provide paths to relevant context: plan/doc files, checklists, etc., clear Definition of Done, and measurable explicit completion criteria, in the goal text.
 
 Assume the agents that will read your goal text will know nothing about this conversation or session. Avoid assigning subtasks, phases of a larger plan, or implementation slices, as goals - instead, assign the overall task as a goal and keep a file-based worklog or checklist. If you are blocked and unable to complete your goal, ask the User a question to summon them to help you.
 
@@ -79,4 +79,3 @@ Every ticket must include this exact line:
 `Filed by Kent on behalf of the user`
 
 For suspected security vulnerabilities, follow the repository's `SECURITY.md` instead of filing a public issue.
-

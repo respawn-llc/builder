@@ -23,6 +23,7 @@ type worktreeTransitionRequest struct {
 	selector    string
 	force       bool
 	cleanup     serverapi.WorktreeBranchCleanupMode
+	origin      *serverapi.RuntimeStepOrigin
 }
 
 type pendingWorktreeTransition struct {
@@ -53,6 +54,7 @@ func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnter
 		sessionID:   strings.TrimSpace(req.SessionID),
 		kind:        clientui.WorktreeTransitionEnter,
 		selector:    strings.TrimSpace(req.Selector),
+		origin:      cloneWorktreeRuntimeStepOrigin(req.Origin),
 	}
 	if ack, ok := s.replayPendingWorktreeTransition(request); ok {
 		return ack, nil
@@ -61,7 +63,7 @@ func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnter
 	if err != nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, err
 	}
-	return s.scheduleWorktreeTransition(ctx, request, true, func(runCtx context.Context, sync transitionTargetSync) error {
+	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, sync transitionTargetSync) error {
 		return s.executeEnterWorktree(runCtx, request.sessionID, target, sync)
 	})
 }
@@ -74,8 +76,9 @@ func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeave
 		operationID: req.OperationID,
 		sessionID:   strings.TrimSpace(req.SessionID),
 		kind:        clientui.WorktreeTransitionLeave,
+		origin:      cloneWorktreeRuntimeStepOrigin(req.Origin),
 	}
-	return s.scheduleWorktreeTransition(ctx, request, false, func(runCtx context.Context, sync transitionTargetSync) error {
+	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, sync transitionTargetSync) error {
 		return s.executeLeaveWorktree(runCtx, request.sessionID, sync)
 	})
 }
@@ -83,7 +86,6 @@ func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeave
 func (s *Service) scheduleWorktreeTransition(
 	_ context.Context,
 	request worktreeTransitionRequest,
-	immediate bool,
 	execute func(context.Context, transitionTargetSync) error,
 ) (serverapi.WorktreeScheduledAcknowledgement, error) {
 	if s == nil || s.runtime == nil {
@@ -111,13 +113,22 @@ func (s *Service) scheduleWorktreeTransition(
 	s.transitionWG.Add(1)
 	s.transitionMu.Unlock()
 
-	if immediate {
-		if err := s.runWorktreeTransition(request, true, execute); err != nil {
+	if request.origin != nil {
+		if err := s.runtime.RunWorktreeTransitionAtStepBoundary(s.transitionCtx, request.sessionID, *request.origin, func(ctx context.Context, sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error {
+			return execute(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+				return sync(syncCtx, target, reminder)
+			})
+		}, func(err error) {
+			s.finishWorktreeTransition(request, err)
+			s.transitionWG.Done()
+		}); err != nil {
+			s.discardWorktreeTransition(request)
+			s.transitionWG.Done()
 			return serverapi.WorktreeScheduledAcknowledgement{}, err
 		}
 	} else {
 		go func() {
-			_ = s.runWorktreeTransition(request, false, execute)
+			_ = s.runWorktreeTransition(request, execute)
 		}()
 	}
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: request.operationID}, nil
@@ -125,21 +136,21 @@ func (s *Service) scheduleWorktreeTransition(
 
 func (s *Service) runWorktreeTransition(
 	request worktreeTransitionRequest,
-	immediate bool,
 	execute func(context.Context, transitionTargetSync) error,
 ) error {
 	defer s.transitionWG.Done()
-	run := s.runtime.RunWorktreeTransition
-	if immediate {
-		run = s.runtime.RunWorktreeTransitionImmediately
-	}
-	err := run(s.transitionCtx, request.sessionID,
+	err := s.runtime.RunWorktreeTransition(s.transitionCtx, request.sessionID,
 		func(ctx context.Context, sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error {
 			return execute(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 				return sync(syncCtx, target, reminder)
 			})
 		},
 	)
+	s.finishWorktreeTransition(request, err)
+	return err
+}
+
+func (s *Service) finishWorktreeTransition(request worktreeTransitionRequest, err error) {
 	if s.transitionCtx.Err() == nil {
 		outcome := clientui.WorktreeTransitionOutcome{
 			OperationID: request.operationID,
@@ -155,12 +166,23 @@ func (s *Service) runWorktreeTransition(
 			_ = s.runtime.SteerWorktreeTransitionFailure(s.transitionCtx, request.sessionID, outcome)
 		}
 	}
+	s.discardWorktreeTransition(request)
+}
+
+func (s *Service) discardWorktreeTransition(request worktreeTransitionRequest) {
 	s.transitionMu.Lock()
 	if pending, ok := s.transitions[request.sessionID]; ok && pending.request == request {
 		delete(s.transitions, request.sessionID)
 	}
 	s.transitionMu.Unlock()
-	return err
+}
+
+func cloneWorktreeRuntimeStepOrigin(origin *serverapi.RuntimeStepOrigin) *serverapi.RuntimeStepOrigin {
+	if origin == nil {
+		return nil
+	}
+	copyOrigin := *origin
+	return &copyOrigin
 }
 
 func (s *Service) resolveScheduledEnterTarget(

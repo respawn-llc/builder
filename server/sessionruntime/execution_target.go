@@ -59,15 +59,87 @@ func (s *Service) RunWorktreeTransition(
 	return s.runWorktreeTransition(ctx, sessionID, false, fn)
 }
 
-// RunWorktreeTransitionImmediately applies a transition while the caller's
-// tool command is still active. The caller must not acknowledge that command
-// until this returns, so the next tool lookup observes the retargeted binding.
-func (s *Service) RunWorktreeTransitionImmediately(
+func (s *Service) RunWorktreeTransitionAtStepBoundary(
 	ctx context.Context,
 	sessionID string,
+	origin serverapi.RuntimeStepOrigin,
 	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+	complete func(error),
 ) error {
-	return s.runWorktreeTransition(ctx, sessionID, true, fn)
+	if fn == nil {
+		return nil
+	}
+	if err := origin.Validate(); err != nil {
+		return err
+	}
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return errors.New("session id is required")
+	}
+	for {
+		guard, err := s.activeRuntimeGuard(ctx, trimmedSessionID)
+		if errors.Is(err, ErrAcquiredRuntimeOvertaken) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if guard == nil {
+			return runtimeUnavailableErr(trimmedSessionID)
+		}
+		engine := guard.Engine()
+		if engine == nil {
+			guard.Release()
+			return runtimeUnavailableErr(trimmedSessionID)
+		}
+		effect := &worktreeTransitionBoundaryEffect{
+			apply: func(stepCtx context.Context) error {
+				defer guard.Release()
+				return fn(stepCtx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+					if err := s.syncGuardedExecutionTarget(syncCtx, trimmedSessionID, target, guard, reminder); err != nil {
+						return err
+					}
+					if s.runtimes != nil {
+						s.runtimes.PublishSessionIdentity(trimmedSessionID, &target)
+					}
+					return nil
+				})
+			},
+			complete: complete,
+			cancel:   guard.Release,
+		}
+		if err := engine.QueueActiveStepEffect(origin.RunID, origin.StepID, effect); err != nil {
+			guard.Release()
+			return err
+		}
+		return nil
+	}
+}
+
+type worktreeTransitionBoundaryEffect struct {
+	apply    func(context.Context) error
+	complete func(error)
+	cancel   func()
+}
+
+func (effect *worktreeTransitionBoundaryEffect) Apply(ctx context.Context) error {
+	if effect == nil || effect.apply == nil {
+		return errors.New("worktree transition boundary effect is required")
+	}
+	err := effect.apply(ctx)
+	if effect.complete != nil {
+		effect.complete(err)
+	}
+	return nil
+}
+
+func (effect *worktreeTransitionBoundaryEffect) Cancel(cause error) {
+	if effect != nil && effect.cancel != nil {
+		effect.cancel()
+	}
+	if effect != nil && effect.complete != nil {
+		effect.complete(cause)
+	}
 }
 
 func (s *Service) runWorktreeTransition(
@@ -106,11 +178,6 @@ func (s *Service) runWorktreeTransition(
 		engine := guard.Engine()
 		if engine == nil {
 			return runtimeUnavailableErr(trimmedSessionID)
-		}
-		if immediate {
-			return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-				return s.syncGuardedExecutionTarget(syncCtx, trimmedSessionID, target, guard, reminder)
-			})
 		}
 		return engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, func() error {
 			return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {

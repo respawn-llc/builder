@@ -71,6 +71,7 @@ func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusi
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
 	s.closeActiveStepQueue(stepID)
+	s.engine.cancelActiveStepEffects(stepID, err)
 	if drainErr := s.engine.drainActiveStepGoalMutations(stepID); drainErr != nil {
 		err = errors.Join(err, fmt.Errorf("drain active-step goal mutations: %w", drainErr))
 	}

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -169,11 +170,18 @@ type WorktreeEnterRequest struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`
 	Selector    string              `json:"selector"`
+	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
 }
 
 type WorktreeLeaveRequest struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`
+	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
+}
+
+type RuntimeStepOrigin struct {
+	RunID  runtimeids.RunID  `json:"run_id"`
+	StepID runtimeids.StepID `json:"step_id"`
 }
 
 type WorktreeDeleteRequest struct {
@@ -399,6 +407,11 @@ func (request WorktreeEnterRequest) Validate() error {
 	if err := request.OperationID.Validate(); err != nil {
 		return err
 	}
+	if request.Origin != nil {
+		if err := request.Origin.Validate(); err != nil {
+			return err
+		}
+	}
 	return (WorktreeSelectorPreviewRequest{
 		SessionID: request.SessionID,
 		Selector:  request.Selector,
@@ -409,7 +422,19 @@ func (request WorktreeLeaveRequest) Validate() error {
 	if err := request.OperationID.Validate(); err != nil {
 		return err
 	}
+	if request.Origin != nil {
+		if err := request.Origin.Validate(); err != nil {
+			return err
+		}
+	}
 	return validateRequiredSessionID(request.SessionID)
+}
+
+func (origin RuntimeStepOrigin) Validate() error {
+	if origin.RunID.String() == "" || origin.StepID.String() == "" {
+		return errors.New("worktree runtime origin requires run_id and step_id")
+	}
+	return nil
 }
 
 func (request WorktreeDeleteRequest) Validate() error {

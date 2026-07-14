@@ -573,6 +573,9 @@ func (s *defaultStepExecutor) executeLocalToolCallsAndAppendResults(ctx context.
 			return false, false, err
 		}
 	}
+	if err := e.drainActiveStepEffects(ctx, stepID); err != nil {
+		return false, false, err
+	}
 	durableTerminal, err := s.engine.observeWorkflowDurableCompletion(ctx)
 	if err != nil {
 		return false, false, err
