@@ -27,6 +27,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		selector:    strings.TrimSpace(req.Selector),
 		force:       req.ForceFolderRemoval,
 		cleanup:     req.BranchCleanupPolicy,
+		origin:      cloneWorktreeRuntimeStepOrigin(req.Origin),
 	}
 	if ack, ok := s.replayPendingWorktreeTransition(transitionRequest); ok {
 		return serverapi.WorktreeDeleteResult{

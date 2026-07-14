@@ -190,6 +190,7 @@ type WorktreeDeleteRequest struct {
 	Selector            string                    `json:"selector"`
 	ForceFolderRemoval  bool                      `json:"force_folder_removal"`
 	BranchCleanupPolicy WorktreeBranchCleanupMode `json:"branch_cleanup_policy"`
+	Origin              *RuntimeStepOrigin        `json:"origin,omitempty"`
 }
 
 type WorktreeScheduledAcknowledgement struct {
@@ -446,6 +447,11 @@ func (request WorktreeDeleteRequest) Validate() error {
 		Selector:  request.Selector,
 	}).Validate(); err != nil {
 		return err
+	}
+	if request.Origin != nil {
+		if err := request.Origin.Validate(); err != nil {
+			return err
+		}
 	}
 	return request.BranchCleanupPolicy.Validate()
 }
