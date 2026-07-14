@@ -59,6 +59,7 @@
   build runner is pinned `macos-26` for the liquid-glass icon toolchain. Minimum
   deployment target is macOS 15 (Sequoia); Liquid Glass UI falls back to
   `NSVisualEffectView` on pre-26 macOS.
+
 ## Desktop App Updates
 
 The desktop GUI is a thin remote-control client over a separately-installed Kent
