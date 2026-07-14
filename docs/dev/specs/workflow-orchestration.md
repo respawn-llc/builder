@@ -134,7 +134,7 @@
 - Manually moving a task that is awaiting approval overrides the proposed transition: the pending approval is marked `rejected` (auditable, not deleted) and the task moves from the approval's source node to the chosen target. This is the operator path to reject a proposed transition (e.g. sending an awaiting-approval plan back to Backlog).
 - Missing-edge manual overrides cannot target executable nodes. Manual movement into an agent or script node requires a concrete workflow edge so the target run has a real prompt/contract.
 - Task start and manual movement into an executable node apply no movement or scheduling when target selection is required. A valid selection retries and applies the original action once; dismissal leaves it unchanged.
-- Approvals occur only after a task has reached an executable node and therefore always reuse the task's locked execution target.
+- Approval permits the frozen transition group to proceed. Target selection remains lazy: when the approved transition first reaches an executable node, its execution-target policy resolves and locks the target before that node's run starts.
 
 ## Context Preservation And Bindings
 

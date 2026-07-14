@@ -204,6 +204,7 @@ type PrunableWorktreeRecoveryErrorKind string
 
 const (
 	PrunableWorktreeRecoveryErrorGitMarkerPresent      PrunableWorktreeRecoveryErrorKind = "git_marker_present"
+	PrunableWorktreeRecoveryErrorMarkerCheckFailed     PrunableWorktreeRecoveryErrorKind = "marker_check_failed"
 	PrunableWorktreeRecoveryErrorRegistrationNotFound  PrunableWorktreeRecoveryErrorKind = "registration_not_found"
 	PrunableWorktreeRecoveryErrorRegistrationAmbiguous PrunableWorktreeRecoveryErrorKind = "registration_ambiguous"
 	PrunableWorktreeRecoveryErrorRegistrationInvalid   PrunableWorktreeRecoveryErrorKind = "registration_invalid"
@@ -218,6 +219,9 @@ type PrunableWorktreeRecoveryError struct {
 func (e *PrunableWorktreeRecoveryError) Error() string {
 	if e == nil {
 		return "prunable worktree recovery failed"
+	}
+	if e.Cause != nil {
+		return "prunable worktree recovery failed: " + string(e.Kind) + ": " + e.Cause.Error()
 	}
 	return "prunable worktree recovery failed: " + string(e.Kind)
 }
@@ -856,7 +860,7 @@ func (i *GitInspector) ForceRemovePrunableWorktree(ctx context.Context, workspac
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return &PrunableWorktreeRecoveryError{
-			Kind:         PrunableWorktreeRecoveryErrorGitMarkerPresent,
+			Kind:         PrunableWorktreeRecoveryErrorMarkerCheckFailed,
 			WorktreeRoot: canonicalWorktreeRoot,
 			Cause:        err,
 		}
