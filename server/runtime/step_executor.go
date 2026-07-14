@@ -175,8 +175,11 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			continue
 		}
 
-		if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
-			handled, terminal, err := s.handleWorkflowAssistantWithoutTools(ctx, stepID, assistantMsg)
+		if len(localToolCalls) == 0 &&
+			len(hostedToolExecutions) == 0 &&
+			phaseTurn.EffectivePhase.Is(llm.MessagePhaseFinal) &&
+			strings.TrimSpace(assistantMsg.Content) != "" {
+			handled, terminal, err := s.handleWorkflowCompletionSubmission(ctx, stepID, assistantMsg.Content)
 			if err != nil {
 				return stepLoopResult{}, err
 			}
@@ -207,7 +210,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				}
 				continue
 			}
-			if phaseTurn.EnforcePhaseProtocol && assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) == "" && !noopFinalAnswer {
+			if !e.workflowRunActive() && phaseTurn.EnforcePhaseProtocol && assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) == "" && !noopFinalAnswer {
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: finalWithoutContentWarning}})); err != nil {
 					return stepLoopResult{}, err
 				}
@@ -233,6 +236,30 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			if len(hostedToolExecutions) > 0 {
 				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
 				continue
+			}
+			if e.workflowRunActive() && e.cfg.WorkflowRun.Controller != nil {
+				content := strings.TrimSpace(assistantMsg.Content)
+				if content == "" && !noopFinalAnswer {
+					if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: finalWithoutContentWarning}})); err != nil {
+						return stepLoopResult{}, err
+					}
+					continue
+				}
+				if phaseTurn.EffectivePhase == nil || phaseTurn.EffectivePhase.IsAbsent() {
+					handled, terminal, err := s.handleWorkflowCompletionSubmission(ctx, stepID, content)
+					if err != nil {
+						return stepLoopResult{}, err
+					}
+					if terminal {
+						return stepLoopResult{Message: assistantMsg, ExecutedToolCall: executedToolCall}, nil
+					}
+					if handled {
+						continue
+					}
+				}
+				if phaseTurn.EffectivePhase.Is(llm.MessagePhaseCommentary) {
+					continue
+				}
 			}
 
 			resolved := assistantMsg
@@ -338,7 +365,10 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		return preparedCompletedResponse{}, err
 	}
 	hostedToolExecutions := hostedToolExecutionsFromOutputItems(resp.OutputItems, tools.DefinitionsFor(shape.EnabledTools))
-	phaseTurn := s.phase.Apply(ctx, resp, resp.Assistant, localToolCalls, hostedToolExecutions)
+	phaseTurn, err := s.phase.Apply(ctx, resp, resp.Assistant, localToolCalls, hostedToolExecutions)
+	if err != nil {
+		return preparedCompletedResponse{}, err
+	}
 	assistantMsg := phaseTurn.Assistant
 	localToolCalls = phaseTurn.LocalToolCalls
 	hostedToolExecutions = phaseTurn.HostedToolExecutions
@@ -588,15 +618,12 @@ func (s *defaultStepExecutor) publishHostedToolStart(stepID string, call llm.Too
 	}))
 }
 
-func (s *defaultStepExecutor) handleWorkflowAssistantWithoutTools(ctx context.Context, stepID string, assistantMsg llm.Message) (bool, bool, error) {
+func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Context, stepID string, content string) (bool, bool, error) {
 	e := s.engine
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
 		return false, false, nil
 	}
-	if assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) == "" {
-		return false, false, nil
-	}
-	outcome, err := s.workflowCompletionAdapter().Evaluate(ctx, assistantMsg)
+	outcome, err := s.workflowCompletionAdapter().Evaluate(ctx, content)
 	if err != nil {
 		return false, false, err
 	}
@@ -615,12 +642,12 @@ func (s *defaultStepExecutor) handleWorkflowAssistantWithoutTools(ctx context.Co
 	if err != nil {
 		return false, false, err
 	}
-	content := strings.TrimSpace(assistantMsg.Content)
-	if mode == workflowruntime.CompletionModeShellCommand && assistantMsg.Phase == llm.MessagePhaseFinal {
+	content = strings.TrimSpace(content)
+	if mode == workflowruntime.CompletionModeShellCommand {
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, errors.New("normal final answers do not complete shell-command workflow nodes"))
 		return true, terminal, nudgeErr
 	}
-	if mode == workflowruntime.CompletionModeTool && assistantMsg.Phase == llm.MessagePhaseFinal {
+	if mode == workflowruntime.CompletionModeTool {
 		record, recordErr := e.recordWorkflowProtocolViolation(ctx, workflowruntime.ViolationKindInvalidCompletion, content)
 		if recordErr != nil {
 			return true, false, recordErr
@@ -705,7 +732,6 @@ func customToolCallIDs(calls []llm.ToolCall) map[string]bool {
 
 func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID string) error {
 	e := s.engine
-	compactionCountBeforeReminder := e.compactionRuntimeState().Count()
 	handoffRequestPending := e.handoffRuntimeState().RequestSnapshot() != nil
 	if !handoffRequestPending {
 		if err := e.materializePendingWorktreeReminder(stepID); err != nil {
@@ -733,7 +759,7 @@ func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID strin
 	if err := e.autoCompactIfNeeded(ctx, stepID, compactionModeAuto); err != nil {
 		return err
 	}
-	if err := e.materializePendingWorktreeReminderAfterCompaction(stepID, compactionCountBeforeReminder); err != nil {
+	if err := e.materializePendingWorktreeReminder(stepID); err != nil {
 		return err
 	}
 	return newCompactionReminderCoordinator(e).maybeAppend(ctx, stepID)

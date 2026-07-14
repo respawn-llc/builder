@@ -1,10 +1,12 @@
 package runtimeview
 
 import (
+	"reflect"
 	"testing"
 
 	"core/server/llm"
 	"core/server/runtime"
+	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/transcript"
@@ -248,6 +250,74 @@ func TestTranscriptBackgroundNoticeCarriesTypedExitCode(t *testing.T) {
 	got := messages[0].CommittedRow.Notice.Data.BackgroundExitCode
 	if got == nil || *got != exitCode {
 		t.Fatalf("background exit code = %+v, want %d", got, exitCode)
+	}
+}
+
+func TestTranscriptWorktreeNoticeCarriesTypedContextWithoutServerPresentation(t *testing.T) {
+	target := session.WorktreeReminderState{
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/transcript"),
+			WorktreePath:  "/tmp/worktree",
+			WorkspaceRoot: "/tmp/workspace",
+			EffectiveCwd:  "/tmp/worktree/pkg",
+		},
+	}
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind: runtime.EventConversationUpdated,
+		Message: llm.Message{
+			Role:            llm.RoleDeveloper,
+			MessageType:     llm.MessageTypeWorktreeMode,
+			SourcePath:      target.EffectiveCwd,
+			WorktreeContext: &target.WorktreeContext,
+			Content:         "model-visible worktree context",
+		},
+	})
+
+	if len(messages) != 1 || messages[0].CommittedRow == nil || messages[0].CommittedRow.Notice == nil {
+		t.Fatalf("messages = %+v, want one worktree notice", messages)
+	}
+	data := messages[0].CommittedRow.Notice.Data
+	if data.WorktreeContext == nil {
+		t.Fatal("worktree transcript context is missing")
+	}
+	wantContext := &clientui.TranscriptWorktreeContext{
+		Branch:        target.Branch,
+		WorktreePath:  target.WorktreePath,
+		WorkspaceRoot: target.WorkspaceRoot,
+		EffectiveCwd:  target.EffectiveCwd,
+	}
+	if !reflect.DeepEqual(data.WorktreeContext, wantContext) {
+		t.Fatalf("worktree transcript context = %+v, want %+v", data.WorktreeContext, wantContext)
+	}
+	if data.CondensedText != "" || data.CompactLabel != "" {
+		t.Fatalf("server-authored worktree presentation leaked into client contract: %+v", data)
+	}
+}
+
+func TestTranscriptWorktreeNoticeKeepsMissingBranchNullable(t *testing.T) {
+	context := session.WorktreeContext{
+		WorktreePath:  "/tmp/detached-worktree",
+		WorkspaceRoot: "/tmp/workspace",
+		EffectiveCwd:  "/tmp/detached-worktree",
+	}
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind: runtime.EventConversationUpdated,
+		Message: llm.Message{
+			Role:            llm.RoleDeveloper,
+			MessageType:     llm.MessageTypeWorktreeMode,
+			WorktreeContext: &context,
+			Content:         "model-visible detached worktree context",
+		},
+	})
+	if len(messages) != 1 ||
+		messages[0].CommittedRow == nil ||
+		messages[0].CommittedRow.Notice == nil ||
+		messages[0].CommittedRow.Notice.Data.WorktreeContext == nil {
+		t.Fatalf("messages = %+v, want one typed worktree notice", messages)
+	}
+	if branch := messages[0].CommittedRow.Notice.Data.WorktreeContext.Branch; branch != nil {
+		t.Fatalf("projected detached worktree branch = %v, want null", branch)
 	}
 }
 

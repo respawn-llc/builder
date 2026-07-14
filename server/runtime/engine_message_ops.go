@@ -172,6 +172,11 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 
 func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy steeringMessageEventPolicy, persist bool) error {
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
+	var err error
+	msg, err = normalizePersistedMessageWorktreeContext(msg)
+	if err != nil {
+		return err
+	}
 	previousCommittedCount := e.CommittedTranscriptEntryCount()
 	if e.beforePersistMessage != nil {
 		if err := e.beforePersistMessage(msg); err != nil {

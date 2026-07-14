@@ -1,19 +1,20 @@
 package llm
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 
-	"core/shared/clientui"
 	"core/shared/textutil"
 
 	"github.com/openai/openai-go/v3/responses"
 )
 
 type responseOutputItemParser interface {
-	Parse(item responses.ResponseOutputItemUnion) parsedResponseOutputItem
+	Parse(item responses.ResponseOutputItemUnion, providerPhase *ProviderPhase) parsedResponseOutputItem
 }
 
 type parsedResponseOutputItem struct {
@@ -41,7 +42,7 @@ func newResponseOutputItemParsers(registrations ...responseOutputItemParserRegis
 	return responseOutputItemParsers{byType: byType}
 }
 
-func parseOutputItems(items []responses.ResponseOutputItemUnion) ([]ResponseItem, string, MessagePhase, []ToolCall, []ReasoningEntry, []ReasoningItem) {
+func parseOutputItems(items []responses.ResponseOutputItemUnion) ([]ResponseItem, string, MessagePhase, *ProviderPhase, []ToolCall, []ReasoningEntry, []ReasoningItem, error) {
 	parsers := newResponseOutputItemParsers(
 		responseOutputItemParserRegistration{itemType: "message", parser: messageOutputItemParser{}},
 		responseOutputItemParserRegistration{itemType: "function_call", parser: functionCallOutputItemParser{}},
@@ -64,7 +65,15 @@ func parseOutputItems(items []responses.ResponseOutputItemUnion) ([]ResponseItem
 			}
 			continue
 		}
-		contribution := parsed.Parse(item)
+		providerPhase := AbsentProviderPhase()
+		if item.Type == "message" {
+			var err error
+			providerPhase, err = decodeProviderPhase(item.RawJSON())
+			if err != nil {
+				return nil, "", "", nil, nil, nil, nil, err
+			}
+		}
+		contribution := parsed.Parse(item, providerPhase)
 		stampParsedOutputIndex(&contribution, int64(outputIndex))
 		canonical = append(canonical, contribution.CanonicalItems...)
 		assistantSegments = append(assistantSegments, contribution.AssistantSegments...)
@@ -73,8 +82,49 @@ func parseOutputItems(items []responses.ResponseOutputItemUnion) ([]ResponseItem
 		reasoningItems = append(reasoningItems, contribution.ReasoningItems...)
 	}
 
-	assistantText, assistantPhase, _, _ := resolveAssistantOutput(assistantSegments)
-	return canonical, assistantText, assistantPhase, toolCalls, reasoning, reasoningItems
+	assistantText, assistantPhase, providerPhase, _, _ := resolveAssistantOutput(assistantSegments)
+	return canonical, assistantText, assistantPhase, providerPhase, toolCalls, reasoning, reasoningItems, nil
+}
+
+type providerPhaseEnvelope struct {
+	Phase nullableProviderPhase `json:"phase"`
+}
+
+type nullableProviderPhase struct {
+	phase   *ProviderPhase
+	present bool
+}
+
+func (p *nullableProviderPhase) UnmarshalJSON(data []byte) error {
+	p.present = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		p.phase = AbsentProviderPhase()
+		return nil
+	}
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("assistant phase must be commentary, final_answer, or null: %w", err)
+	}
+	switch MessagePhase(raw) {
+	case MessagePhaseCommentary:
+		p.phase = CommentaryProviderPhase()
+	case MessagePhaseFinal:
+		p.phase = FinalProviderPhase()
+	default:
+		return fmt.Errorf("assistant phase has unsupported value %q", raw)
+	}
+	return nil
+}
+
+func decodeProviderPhase(raw string) (*ProviderPhase, error) {
+	var envelope providerPhaseEnvelope
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		return nil, fmt.Errorf("decode assistant phase: %w", err)
+	}
+	if !envelope.Phase.present {
+		return AbsentProviderPhase(), nil
+	}
+	return envelope.Phase.phase, nil
 }
 
 func stampParsedOutputIndex(parsed *parsedResponseOutputItem, outputIndex int64) {
@@ -91,7 +141,7 @@ func stampParsedOutputIndex(parsed *parsedResponseOutputItem, outputIndex int64)
 
 type messageOutputItemParser struct{}
 
-func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion) parsedResponseOutputItem {
+func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, providerPhase *ProviderPhase) parsedResponseOutputItem {
 	role := Role(strings.TrimSpace(string(item.Role)))
 	if role == "" {
 		role = RoleAssistant
@@ -103,7 +153,7 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion) par
 		}
 	}
 	text := strings.Join(textParts, "")
-	phase := clientui.NormalizeMessagePhase(string(item.Phase))
+	phase := providerPhaseProjection(providerPhase)
 	raw := json.RawMessage(item.RawJSON())
 	parsed := parsedResponseOutputItem{
 		CanonicalItems: []ResponseItem{{
@@ -116,14 +166,14 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion) par
 		}},
 	}
 	if role == RoleAssistant {
-		parsed.AssistantSegments = append(parsed.AssistantSegments, assistantOutputSegment{Text: text, Phase: phase})
+		parsed.AssistantSegments = append(parsed.AssistantSegments, assistantOutputSegment{Text: text, Phase: phase, ProviderPhase: providerPhase})
 	}
 	return parsed
 }
 
 type functionCallOutputItemParser struct{}
 
-func (functionCallOutputItemParser) Parse(item responses.ResponseOutputItemUnion) parsedResponseOutputItem {
+func (functionCallOutputItemParser) Parse(item responses.ResponseOutputItemUnion, _ *ProviderPhase) parsedResponseOutputItem {
 	call := item.AsFunctionCall()
 	callID := textutil.FirstNonEmpty(strings.TrimSpace(call.CallID), strings.TrimSpace(call.ID))
 	name := strings.TrimSpace(call.Name)
@@ -153,7 +203,7 @@ type reasoningOutputItemParser struct{}
 
 type customToolCallOutputItemParser struct{}
 
-func (customToolCallOutputItemParser) Parse(item responses.ResponseOutputItemUnion) parsedResponseOutputItem {
+func (customToolCallOutputItemParser) Parse(item responses.ResponseOutputItemUnion, _ *ProviderPhase) parsedResponseOutputItem {
 	call := item.AsCustomToolCall()
 	callID := textutil.FirstNonEmpty(strings.TrimSpace(call.CallID), strings.TrimSpace(call.ID))
 	name := strings.TrimSpace(call.Name)
@@ -180,7 +230,7 @@ func (customToolCallOutputItemParser) Parse(item responses.ResponseOutputItemUni
 	}
 }
 
-func (reasoningOutputItemParser) Parse(item responses.ResponseOutputItemUnion) parsedResponseOutputItem {
+func (reasoningOutputItemParser) Parse(item responses.ResponseOutputItemUnion, _ *ProviderPhase) parsedResponseOutputItem {
 	reasoningItem := item.AsReasoning()
 	summaries := make([]ReasoningEntry, 0, len(reasoningItem.Summary))
 	reasoning := make([]ReasoningEntry, 0, len(reasoningItem.Summary))
@@ -214,7 +264,7 @@ func (reasoningOutputItemParser) Parse(item responses.ResponseOutputItemUnion) p
 
 type compactionOutputItemParser struct{}
 
-func (compactionOutputItemParser) Parse(item responses.ResponseOutputItemUnion) parsedResponseOutputItem {
+func (compactionOutputItemParser) Parse(item responses.ResponseOutputItemUnion, _ *ProviderPhase) parsedResponseOutputItem {
 	compactionItem := item.AsCompaction()
 	return parsedResponseOutputItem{
 		CanonicalItems: []ResponseItem{{
@@ -227,14 +277,15 @@ func (compactionOutputItemParser) Parse(item responses.ResponseOutputItemUnion) 
 }
 
 type assistantOutputSegment struct {
-	Text        string
-	Phase       MessagePhase
-	OutputIndex int64
+	Text          string
+	Phase         MessagePhase
+	ProviderPhase *ProviderPhase
+	OutputIndex   int64
 }
 
-func resolveAssistantOutput(segments []assistantOutputSegment) (string, MessagePhase, int64, bool) {
+func resolveAssistantOutput(segments []assistantOutputSegment) (string, MessagePhase, *ProviderPhase, int64, bool) {
 	if len(segments) == 0 {
-		return "", "", 0, false
+		return "", "", AbsentProviderPhase(), 0, false
 	}
 	sorted := append([]assistantOutputSegment(nil), segments...)
 	slices.SortFunc(sorted, func(a, b assistantOutputSegment) int {
@@ -242,7 +293,7 @@ func resolveAssistantOutput(segments []assistantOutputSegment) (string, MessageP
 	})
 	last := len(sorted) - 1
 	if sorted[last].Phase == "" {
-		return sorted[last].Text, "", sorted[last].OutputIndex, true
+		return sorted[last].Text, "", sorted[last].ProviderPhase, sorted[last].OutputIndex, true
 	}
 	phase := sorted[last].Phase
 	start := last
@@ -256,5 +307,5 @@ func resolveAssistantOutput(segments []assistantOutputSegment) (string, MessageP
 	for i := start; i <= last; i++ {
 		textParts = append(textParts, sorted[i].Text)
 	}
-	return strings.Join(textParts, ""), phase, sorted[start].OutputIndex, true
+	return strings.Join(textParts, ""), phase, sorted[last].ProviderPhase, sorted[start].OutputIndex, true
 }

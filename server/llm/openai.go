@@ -49,7 +49,7 @@ func RequestAsOpenAI(request Request) OpenAIRequest {
 
 type OpenAIResponse struct {
 	AssistantText  string
-	AssistantPhase MessagePhase
+	ProviderPhase  *ProviderPhase
 	ToolCalls      []ToolCall
 	Reasoning      []ReasoningEntry
 	ReasoningItems []ReasoningItem
@@ -122,14 +122,23 @@ func (c *OpenAIClient) Generate(ctx context.Context, request Request) (Response,
 		return Response{}, fmt.Errorf("openai generate: %w", err)
 	}
 
+	return responseFromOpenAI(providerResp)
+}
+
+func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
+	if providerResp.ProviderPhase == nil {
+		return Response{}, fmt.Errorf("openai response omitted authoritative provider phase fact")
+	}
+	assistantPhase := providerPhaseProjection(providerResp.ProviderPhase)
 	return Response{
 		Assistant: Message{
 			Role:           RoleAssistant,
 			Content:        providerResp.AssistantText,
-			Phase:          providerResp.AssistantPhase,
+			Phase:          assistantPhase,
 			ToolCalls:      append([]ToolCall(nil), providerResp.ToolCalls...),
 			ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
 		},
+		ProviderPhase:  providerResp.ProviderPhase,
 		ToolCalls:      providerResp.ToolCalls,
 		Reasoning:      append([]ReasoningEntry(nil), providerResp.Reasoning...),
 		ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
@@ -163,20 +172,7 @@ func (c *OpenAIClient) GenerateStreamWithEvents(ctx context.Context, request Req
 		if err != nil {
 			return Response{}, fmt.Errorf("openai generate stream: %w", err)
 		}
-		return Response{
-			Assistant: Message{
-				Role:           RoleAssistant,
-				Content:        providerResp.AssistantText,
-				Phase:          providerResp.AssistantPhase,
-				ToolCalls:      append([]ToolCall(nil), providerResp.ToolCalls...),
-				ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
-			},
-			ToolCalls:      providerResp.ToolCalls,
-			Reasoning:      append([]ReasoningEntry(nil), providerResp.Reasoning...),
-			ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
-			OutputItems:    CloneResponseItems(providerResp.OutputItems),
-			Usage:          providerResp.Usage,
-		}, nil
+		return responseFromOpenAI(providerResp)
 	}
 
 	if streamTransport, ok := c.transport.(OpenAIStreamingTransport); ok {
@@ -190,20 +186,7 @@ func (c *OpenAIClient) GenerateStreamWithEvents(ctx context.Context, request Req
 		if err != nil {
 			return Response{}, fmt.Errorf("openai generate stream: %w", err)
 		}
-		return Response{
-			Assistant: Message{
-				Role:           RoleAssistant,
-				Content:        providerResp.AssistantText,
-				Phase:          providerResp.AssistantPhase,
-				ToolCalls:      append([]ToolCall(nil), providerResp.ToolCalls...),
-				ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
-			},
-			ToolCalls:      providerResp.ToolCalls,
-			Reasoning:      append([]ReasoningEntry(nil), providerResp.Reasoning...),
-			ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
-			OutputItems:    CloneResponseItems(providerResp.OutputItems),
-			Usage:          providerResp.Usage,
-		}, nil
+		return responseFromOpenAI(providerResp)
 	}
 
 	resp, err := c.Generate(ctx, request)

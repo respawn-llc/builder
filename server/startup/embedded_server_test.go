@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/auth"
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
@@ -307,7 +308,7 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 	workspace := newRegisteredEmbeddedWorkspace(t)
 
 	responseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 11) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -316,7 +317,7 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 		if got := strings.TrimSpace(r.Header.Get("Authorization")); got == "" {
 			t.Fatal("expected authorization header")
 		}
-		writeTestOpenAICompletedResponseStream(w, "hello from embedded", 11, 7)
+		modelstub.WriteCompletedResponseStream(w, "hello from embedded", 11, 7)
 	}))
 	defer responseServer.Close()
 
@@ -381,7 +382,7 @@ func TestRunPromptClientPublishesHeadlessSessionActivity(t *testing.T) {
 
 	releaseResponse := make(chan struct{})
 	responseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 11) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -394,7 +395,7 @@ func TestRunPromptClientPublishesHeadlessSessionActivity(t *testing.T) {
 		case <-ctx.Done():
 			return
 		}
-		writeTestOpenAICompletedResponseStream(w, "hello from headless activity", 11, 7)
+		modelstub.WriteCompletedResponseStream(w, "hello from headless activity", 11, 7)
 	}))
 	defer responseServer.Close()
 

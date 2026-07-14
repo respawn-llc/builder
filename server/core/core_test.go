@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"testing"
 
+	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
@@ -375,7 +376,7 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	t.Setenv("HOME", home)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -384,7 +385,7 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 		if got := r.Header.Get("Authorization"); got == "" {
 			t.Fatal("expected authorization header")
 		}
-		writeTestOpenAICompletedResponseStream(w, "ok", 1, 1)
+		modelstub.WriteCompletedResponseStream(w, "ok", 1, 1)
 	}))
 	defer server.Close()
 

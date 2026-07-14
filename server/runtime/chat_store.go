@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -23,6 +24,7 @@ type ChatEntry struct {
 	Phase              llm.MessagePhase
 	MessageType        llm.MessageType
 	SourcePath         string
+	WorktreeContext    *session.WorktreeContext
 	CompactLabel       string
 	ToolResultSummary  string
 	ToolCallID         string

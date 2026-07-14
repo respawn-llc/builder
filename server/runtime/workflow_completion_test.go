@@ -12,6 +12,7 @@ import (
 
 	"core/prompts"
 	"core/server/llm"
+	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/server/workflow"
@@ -197,6 +198,64 @@ func completeNodeCall(id string, input json.RawMessage) llm.ToolCall {
 
 func structuredFinalResponse(content string) llm.Response {
 	return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: content, Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}
+}
+
+func compatibleResponsesCapabilities() llm.ProviderCapabilities {
+	return llm.ProviderCapabilities{
+		ProviderID:           "openai-compatible",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   false,
+	}
+}
+
+func compatiblePhaseAbsentResponse(content string) llm.Response {
+	return llm.Response{
+		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: content},
+		ProviderPhase: llm.AbsentProviderPhase(),
+		Usage:         llm.Usage{WindowTokens: 200000},
+	}
+}
+
+func compatibleUnavailablePhaseResponse(content string) llm.Response {
+	return llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: content},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}
+}
+
+func compatibleFinalResponse(content string) llm.Response {
+	return llm.Response{
+		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: content, Phase: llm.MessagePhaseFinal},
+		ProviderPhase: llm.FinalProviderPhase(),
+		Usage:         llm.Usage{WindowTokens: 200000},
+	}
+}
+
+func compatibleCommentaryResponse(content string, toolCalls ...llm.ToolCall) llm.Response {
+	return llm.Response{
+		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: content, Phase: llm.MessagePhaseCommentary, ToolCalls: toolCalls},
+		ProviderPhase: llm.CommentaryProviderPhase(),
+		ToolCalls:     toolCalls,
+		Usage:         llm.Usage{WindowTokens: 200000},
+	}
+}
+
+func TestPhaseProtocolRejectsInconsistentProviderAndLegacyPhaseFacts(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{
+		caps: compatibleResponsesCapabilities(),
+		responses: []llm.Response{{
+			Assistant:     llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseCommentary},
+			ProviderPhase: llm.FinalProviderPhase(),
+			Usage:         llm.Usage{WindowTokens: 200000},
+		}},
+	}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{})
+
+	_, err := eng.SubmitUserMessage(context.Background(), "run")
+	if err == nil {
+		t.Fatal("expected inconsistent provider and legacy phase facts to fail")
+	}
 }
 
 func TestWorkflowToolModeExposesCompleteNodeDespiteEnabledTools(t *testing.T) {
@@ -854,6 +913,185 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 	}
 }
 
+func TestCompatibleProviderPhaseAbsentWorkflowOutputCompletes(t *testing.T) {
+	tests := []struct {
+		name   string
+		mode   config.WorkflowCompletionMode
+		source WorkflowCompletionSource
+	}{
+		{name: "structured", mode: config.WorkflowCompletionModeStructuredOutput, source: WorkflowCompletionSourceStructuredOutput},
+		{name: "unstructured", mode: config.WorkflowCompletionModeUnstructured, source: WorkflowCompletionSourceUnstructured},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			controller := &fakeWorkflowController{}
+			client := &fakeClient{
+				caps: compatibleResponsesCapabilities(),
+				responses: []llm.Response{
+					compatiblePhaseAbsentResponse(`{"commentary":"complete","summary":"done"}`),
+					compatiblePhaseAbsentResponse("must not be requested"),
+				},
+			}
+			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, tt.mode), Config{})
+
+			if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+
+			assertModelCallCount(t, client, 1)
+			if got := controller.completed.Load(); got != 1 {
+				t.Fatalf("completions = %d, want 1", got)
+			}
+			if got := controller.violations.Load(); got != 0 {
+				t.Fatalf("violations = %d, want 0", got)
+			}
+			requests := controller.completionRequests()
+			if len(requests) != 1 {
+				t.Fatalf("completion requests = %+v, want exactly one", requests)
+			}
+			if requests[0].TransitionID != "done" || requests[0].OutputValues["summary"] != "done" || requests[0].Commentary != "complete" {
+				t.Fatalf("completion request = %+v, want decoded workflow submission", requests[0])
+			}
+			terminal := eng.WorkflowTerminalState()
+			if !terminal.Completed || terminal.Source != tt.source || terminal.RunID != "run-1" {
+				t.Fatalf("terminal state = %+v, want %s completion", terminal, tt.source)
+			}
+		})
+	}
+}
+
+func TestCompatibleProviderInvalidPhaseAbsentWorkflowOutputCanRetry(t *testing.T) {
+	for _, mode := range []config.WorkflowCompletionMode{
+		config.WorkflowCompletionModeStructuredOutput,
+		config.WorkflowCompletionModeUnstructured,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			controller := &fakeWorkflowController{}
+			client := &fakeClient{
+				caps: compatibleResponsesCapabilities(),
+				responses: []llm.Response{
+					compatiblePhaseAbsentResponse(`{"summary":""}`),
+					compatiblePhaseAbsentResponse(`{"commentary":"complete","summary":"done"}`),
+				},
+			}
+			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, mode), Config{})
+
+			if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+
+			assertModelCallCount(t, client, 2)
+			if got := controller.violations.Load(); got != 1 {
+				t.Fatalf("violations = %d, want 1", got)
+			}
+			if got := controller.completed.Load(); got != 1 {
+				t.Fatalf("completions = %d, want 1", got)
+			}
+			if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+				t.Fatal("invalid phase-absent submission did not append workflow continuation feedback")
+			}
+			if !eng.WorkflowTerminalState().Completed {
+				t.Fatalf("terminal state = %+v, want completion after retry", eng.WorkflowTerminalState())
+			}
+		})
+	}
+}
+
+func TestCompatibleProviderCommentaryContinuesWithoutCompletionSideEffects(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	client := &fakeClient{
+		caps: compatibleResponsesCapabilities(),
+		responses: []llm.Response{
+			compatibleCommentaryResponse("continuing"),
+			compatiblePhaseAbsentResponse(`{"commentary":"complete","summary":"done"}`),
+		},
+	}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	assertModelCallCount(t, client, 2)
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("completions = %d, want only the later valid completion", got)
+	}
+	if got := controller.violations.Load(); got != 0 {
+		t.Fatalf("violations = %d, want 0", got)
+	}
+	assertPersistedAssistantContentCount(t, eng, "continuing", 1)
+}
+
+func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	var client *hookClient
+	client = &hookClient{
+		response: compatibleCommentaryResponse("continuing"),
+		caps:     compatibleResponsesCapabilities(),
+		beforeReturn: func() error {
+			once.Do(func() {
+				close(started)
+				<-release
+				client.mu.Lock()
+				client.response = compatiblePhaseAbsentResponse(`{"commentary":"complete","summary":"done"}`)
+				client.beforeReturn = nil
+				client.mu.Unlock()
+			})
+			return nil
+		},
+	}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{})
+
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := eng.SubmitWorkflowTurn(context.Background())
+		submitDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for commentary response")
+	}
+	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "accepted steering", liveRunTestRequestID(t), nil)
+	if err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	close(release)
+	if err := <-submitDone; err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if got := hookClientCallCount(client); got != 2 {
+		t.Fatalf("model calls = %d, want 2", got)
+	}
+	client.mu.Lock()
+	second := client.calls[1]
+	client.mu.Unlock()
+	hasAcceptedSteering := false
+	for _, message := range requestMessages(second) {
+		if message.Role == llm.RoleUser && message.Content == "accepted steering" {
+			hasAcceptedSteering = true
+			break
+		}
+	}
+	if !hasAcceptedSteering {
+		t.Fatalf("second request omitted accepted steering: %+v", requestMessages(second))
+	}
+	if got := controller.violations.Load(); got != 0 {
+		t.Fatalf("violations = %d, want 0", got)
+	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("completions = %d, want 1", got)
+	}
+}
+
 func TestWorkflowUnstructuredTerminalCompletionFailsQueuedSteeringDuringCloseDrain(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
@@ -1288,6 +1526,187 @@ func TestWorkflowFinalAnswersUseInvalidCompletionCap(t *testing.T) {
 	assertDeveloperErrorFeedbackAfterAssistantFinal(t, eng, "done 1", strings.TrimSpace(prompts.WorkflowFinalAnswerNudgePrompt))
 }
 
+func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecover(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      config.WorkflowCompletionMode
+		newEngine func(*testing.T, *session.Store, *fakeClient, *fakeWorkflowController) *Engine
+	}{
+		{
+			name: "tool",
+			mode: config.WorkflowCompletionModeTool,
+			newEngine: func(t *testing.T, store *session.Store, client *fakeClient, controller *fakeWorkflowController) *Engine {
+				return mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
+			},
+		},
+		{
+			name: "shell command",
+			mode: config.WorkflowCompletionModeShellCommand,
+			newEngine: func(t *testing.T, store *session.Store, client *fakeClient, controller *fakeWorkflowController) *Engine {
+				shellTool := &externalCompletionTool{controller: controller}
+				return mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
+					WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+				})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			controller := &fakeWorkflowController{}
+			valid := compatibleCommentaryResponse("complete",
+				completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+			)
+			if tt.mode == config.WorkflowCompletionModeShellCommand {
+				valid = compatibleCommentaryResponse("complete",
+					llm.ToolCall{ID: "call_shell", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"kent task complete"}`)},
+				)
+			}
+			client := &fakeClient{
+				caps: compatibleResponsesCapabilities(),
+				responses: []llm.Response{
+					compatiblePhaseAbsentResponse("ordinary prose"),
+					valid,
+				},
+			}
+			eng := tt.newEngine(t, store, client, controller)
+
+			if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+
+			assertModelCallCount(t, client, 2)
+			if got := controller.violations.Load(); got != 1 {
+				t.Fatalf("violations = %d, want 1", got)
+			}
+			if got := controller.maxHits.Load(); got != 0 {
+				t.Fatalf("max hits = %d, want 0", got)
+			}
+			if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+				t.Fatal("phase-absent prose did not append workflow continuation feedback")
+			}
+			assertPersistedAssistantContentCount(t, eng, "ordinary prose", 1)
+			terminal := eng.WorkflowTerminalState()
+			if !terminal.Completed {
+				t.Fatalf("terminal state = %+v, want later valid completion", terminal)
+			}
+		})
+	}
+}
+
+func TestCompatibleProviderUnavailablePhaseFactCannotResolveActiveWorkflow(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	client := &fakeClient{
+		caps: compatibleResponsesCapabilities(),
+		responses: []llm.Response{
+			compatibleUnavailablePhaseResponse("ordinary prose"),
+			compatibleCommentaryResponse("complete",
+				completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+			),
+		},
+	}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	assertModelCallCount(t, client, 2)
+	if got := controller.violations.Load(); got != 1 {
+		t.Fatalf("violations = %d, want 1", got)
+	}
+	if terminal := eng.WorkflowTerminalState(); !terminal.Completed || terminal.Source != WorkflowCompletionSourceTool {
+		t.Fatalf("terminal state = %+v, want later tool completion", terminal)
+	}
+}
+
+func TestCompatibleProviderRepeatedPhaseAbsentProseInterruptsAtWorkflowCap(t *testing.T) {
+	for _, mode := range []config.WorkflowCompletionMode{
+		config.WorkflowCompletionModeTool,
+		config.WorkflowCompletionModeShellCommand,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			controller := &fakeWorkflowController{}
+			client := &fakeClient{
+				caps: compatibleResponsesCapabilities(),
+				responses: []llm.Response{
+					compatiblePhaseAbsentResponse("ordinary prose 1"),
+					compatiblePhaseAbsentResponse("ordinary prose 2"),
+					compatiblePhaseAbsentResponse("must not be requested"),
+				},
+			}
+			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, mode), Config{})
+
+			if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+
+			assertModelCallCount(t, client, 2)
+			if got := controller.violations.Load(); got != 2 {
+				t.Fatalf("violations = %d, want 2", got)
+			}
+			if got := controller.maxHits.Load(); got != 1 {
+				t.Fatalf("max hits = %d, want 1", got)
+			}
+			if got := controller.completed.Load(); got != 0 {
+				t.Fatalf("completions = %d, want 0", got)
+			}
+			if eng.WorkflowTerminalState().Completed {
+				t.Fatalf("invalid prose must not record successful workflow completion: %+v", eng.WorkflowTerminalState())
+			}
+			assertPersistedAssistantContentCount(t, eng, "ordinary prose 1", 1)
+			assertPersistedAssistantContentCount(t, eng, "ordinary prose 2", 1)
+		})
+	}
+}
+
+func TestCompatibleProviderEmptyNoToolResponsesContinueWithoutWorkflowViolation(t *testing.T) {
+	tests := []struct {
+		name     string
+		response func(string) llm.Response
+		content  string
+	}{
+		{name: "absent empty", response: compatiblePhaseAbsentResponse, content: ""},
+		{name: "absent whitespace", response: compatiblePhaseAbsentResponse, content: " \n\t "},
+		{name: "final empty", response: compatibleFinalResponse, content: ""},
+		{name: "final whitespace", response: compatibleFinalResponse, content: " \n\t "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			controller := &fakeWorkflowController{}
+			client := &fakeClient{
+				caps: compatibleResponsesCapabilities(),
+				responses: []llm.Response{
+					tt.response(tt.content),
+					compatibleCommentaryResponse("complete",
+						completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+					),
+				},
+			}
+			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
+
+			if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+
+			assertModelCallCount(t, client, 2)
+			if got := controller.violations.Load(); got != 0 {
+				t.Fatalf("violations = %d, want 0", got)
+			}
+			if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+				t.Fatal("empty response did not append generic developer feedback")
+			}
+			terminal := eng.WorkflowTerminalState()
+			if !terminal.Completed || terminal.Source != WorkflowCompletionSourceTool {
+				t.Fatalf("terminal state = %+v, want later tool completion", terminal)
+			}
+		})
+	}
+}
+
 func TestWorkflowToolModeEmptyFinalUsesGenericFeedback(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
@@ -1341,6 +1760,19 @@ func requestHasDeveloperErrorFeedback(request llm.Request) bool {
 		}
 	}
 	return false
+}
+
+func assertPersistedAssistantContentCount(t *testing.T, eng *Engine, content string, want int) {
+	t.Helper()
+	got := 0
+	for _, message := range eng.transcriptRuntimeState().SnapshotMessages() {
+		if message.Role == llm.RoleAssistant && message.Content == content {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("persisted assistant content %q count = %d, want %d", content, got, want)
+	}
 }
 
 func assertCompletionSchema(t *testing.T, schema json.RawMessage, parameterDescriptions map[string]string) {

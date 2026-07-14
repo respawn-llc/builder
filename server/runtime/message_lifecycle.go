@@ -412,7 +412,7 @@ type activeMetaContextRoots struct {
 func activeMetaContextRootsForMeta(meta session.Meta) activeMetaContextRoots {
 	workspaceRoot := strings.TrimSpace(meta.WorkspaceRoot)
 	roots := activeMetaContextRoots{discoveryRoot: workspaceRoot, environmentCWD: workspaceRoot}
-	state := cloneRuntimeWorktreeReminderState(meta.WorktreeReminder)
+	state := session.CloneWorktreeReminderState(meta.WorktreeReminder)
 	if state == nil {
 		return roots
 	}

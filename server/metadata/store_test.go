@@ -575,11 +575,13 @@ func TestRetargetSessionWorkspaceAttachesTargetAndUpdatesSession(t *testing.T) {
 		t.Fatalf("UpdateSessionExecutionTarget before retarget: %v", err)
 	}
 	if err := sess.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		Branch:        "feature/a",
-		WorktreePath:  canonicalWorktreeRootA,
-		WorkspaceRoot: cfg.WorkspaceRoot,
-		EffectiveCwd:  filepath.Join(canonicalWorktreeRootA, "pkg"),
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/a"),
+			WorktreePath:  canonicalWorktreeRootA,
+			WorkspaceRoot: cfg.WorkspaceRoot,
+			EffectiveCwd:  filepath.Join(canonicalWorktreeRootA, "pkg"),
+		},
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState before retarget: %v", err)
 	}
@@ -664,11 +666,13 @@ func TestRetargetSessionWorkspaceClearsSameWorkspaceStaleWorktreeTarget(t *testi
 		t.Fatalf("UpdateSessionExecutionTarget before retarget: %v", err)
 	}
 	if err := sess.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		Branch:        "task/stale",
-		WorktreePath:  canonicalWorktreeRoot,
-		WorkspaceRoot: cfg.WorkspaceRoot,
-		EffectiveCwd:  filepath.Join(canonicalWorktreeRoot, "pkg"),
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("task/stale"),
+			WorktreePath:  canonicalWorktreeRoot,
+			WorkspaceRoot: cfg.WorkspaceRoot,
+			EffectiveCwd:  filepath.Join(canonicalWorktreeRoot, "pkg"),
+		},
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState before retarget: %v", err)
 	}
@@ -727,17 +731,18 @@ func TestResolvePersistedSessionPreservesWorktreeReminderStateFromMetadata(t *te
 		t.Fatalf("session.Create: %v", err)
 	}
 	reminder := &session.WorktreeReminderState{
-		Mode:                  session.WorktreeReminderModeEnter,
-		Branch:                "feature/reminder",
-		WorktreePath:          "/tmp/wt-reminder",
-		WorkspaceRoot:         cfg.WorkspaceRoot,
-		EffectiveCwd:          "/tmp/wt-reminder/pkg",
-		HasIssuedInGeneration: true,
-		IssuedCompactionCount: 7,
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/reminder"),
+			WorktreePath:  "/tmp/wt-reminder",
+			WorkspaceRoot: cfg.WorkspaceRoot,
+			EffectiveCwd:  "/tmp/wt-reminder/pkg",
+		},
 	}
 	if err := sess.SetWorktreeReminderState(reminder); err != nil {
 		t.Fatalf("SetWorktreeReminderState: %v", err)
 	}
+	reminder = session.CloneWorktreeReminderState(sess.Meta().WorktreeReminder)
 
 	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
@@ -747,7 +752,7 @@ func TestResolvePersistedSessionPreservesWorktreeReminderStateFromMetadata(t *te
 	if state == nil {
 		t.Fatal("expected persisted worktree reminder state")
 	}
-	if *state != *reminder {
+	if !session.WorktreeReminderStateEqual(*state, *reminder) {
 		t.Fatalf("worktree reminder = %+v, want %+v", *state, *reminder)
 	}
 }

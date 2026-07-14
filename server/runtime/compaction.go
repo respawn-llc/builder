@@ -633,10 +633,10 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
 		return compactionResult{}, errors.Join(err, statusErr)
 	}
-	// Reinject base meta as part of the single history_replaced commit so the
-	// rebuilt active list is born with it atomically: a restart can never observe
-	// a compacted session that has a summary but no base meta, and the summary
-	// precedes the reinjected meta in both provider and transcript order.
+	// Reinject canonical generation context as part of the single
+	// history_replaced commit. The rebuilt active list is born with all runtime
+	// context atomically, and the summary precedes it in both provider and
+	// transcript order.
 	replacementItems := append(llm.CloneResponseItems(result.items), llm.ItemsFromMessages(postReplacementMeta)...)
 	if err := newCompactionPersistence(e).replaceHistory(stepID, result.engine, mode, replacementItems); err != nil {
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
@@ -660,7 +660,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 			return compactionResult{}, errors.Join(err, statusErr)
 		}
 	}
-	if err := newCompactionCarryoverCoordinator(e).appendPostCompactionMessages(stepID, newCompactionCarryoverCoordinator(e).postCompactionMessages(mode, manualCarryover, e.store.Meta().HeadlessActive)); err != nil {
+	if err := newCompactionCarryoverCoordinator(e).appendPostCompactionMessages(stepID, newCompactionCarryoverCoordinator(e).postCompactionMessages(mode, manualCarryover)); err != nil {
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
 		return compactionResult{}, errors.Join(err, statusErr)
 	}

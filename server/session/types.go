@@ -3,6 +3,8 @@ package session
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type LockedContract struct {
@@ -91,14 +93,17 @@ const (
 	WorktreeReminderModeExit  WorktreeReminderMode = "exit"
 )
 
+type WorktreeContext struct {
+	ContextID     *uuid.UUID `json:"context_id,omitempty"`
+	Branch        *string    `json:"branch,omitempty"`
+	WorktreePath  string     `json:"worktree_path,omitempty"`
+	WorkspaceRoot string     `json:"workspace_root,omitempty"`
+	EffectiveCwd  string     `json:"effective_cwd,omitempty"`
+}
+
 type WorktreeReminderState struct {
-	Mode                  WorktreeReminderMode `json:"mode,omitempty"`
-	Branch                string               `json:"branch,omitempty"`
-	WorktreePath          string               `json:"worktree_path,omitempty"`
-	WorkspaceRoot         string               `json:"workspace_root,omitempty"`
-	EffectiveCwd          string               `json:"effective_cwd,omitempty"`
-	HasIssuedInGeneration bool                 `json:"has_issued_in_generation,omitempty"`
-	IssuedCompactionCount int                  `json:"issued_compaction_count,omitempty"`
+	Mode WorktreeReminderMode `json:"mode,omitempty"`
+	WorktreeContext
 }
 
 type GoalStatus string

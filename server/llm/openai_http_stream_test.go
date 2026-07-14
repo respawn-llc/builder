@@ -312,8 +312,8 @@ func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
 	if resp.AssistantText != "Hello" {
 		t.Fatalf("unexpected assistant text: %q", resp.AssistantText)
 	}
-	if resp.AssistantPhase != MessagePhaseCommentary {
-		t.Fatalf("unexpected assistant phase: %q", resp.AssistantPhase)
+	if !resp.ProviderPhase.Is(MessagePhaseCommentary) {
+		t.Fatalf("unexpected provider phase: %#v", resp.ProviderPhase)
 	}
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
@@ -372,8 +372,8 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	if deltas[1].Phase != MessagePhaseFinal {
 		t.Fatalf("expected structured phase after assistant item, got %+v", deltas[1])
 	}
-	if resp.AssistantPhase != MessagePhaseFinal {
-		t.Fatalf("unexpected final assistant phase: %q", resp.AssistantPhase)
+	if !resp.ProviderPhase.Is(MessagePhaseFinal) {
+		t.Fatalf("unexpected final provider phase: %#v", resp.ProviderPhase)
 	}
 }
 
@@ -583,8 +583,8 @@ func TestGenerateStream_PreservesStreamedAssistantTextWhenCompletedMessageIsEmpt
 	if resp.AssistantText != "Hello" {
 		t.Fatalf("assistant text = %q, want Hello", resp.AssistantText)
 	}
-	if resp.AssistantPhase != MessagePhaseCommentary {
-		t.Fatalf("assistant phase = %q, want %q", resp.AssistantPhase, MessagePhaseCommentary)
+	if !resp.ProviderPhase.Is(MessagePhaseCommentary) {
+		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseCommentary)
 	}
 	if len(resp.OutputItems) != 2 {
 		t.Fatalf("expected 2 output items, got %+v", resp.OutputItems)
@@ -612,8 +612,8 @@ func TestGenerateStream_PreservesAssistantOutputItemPhaseWhenCompletedPhaseIsMis
 	if resp.AssistantText != "Done" {
 		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
 	}
-	if resp.AssistantPhase != MessagePhaseFinal {
-		t.Fatalf("assistant phase = %q, want %q", resp.AssistantPhase, MessagePhaseFinal)
+	if !resp.ProviderPhase.Is(MessagePhaseFinal) {
+		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseFinal)
 	}
 	if len(resp.OutputItems) != 1 {
 		t.Fatalf("expected 1 output item, got %+v", resp.OutputItems)
@@ -641,8 +641,8 @@ func TestGenerateStream_PrefersPhaseResolvedAssistantTextOverRawDeltaConcatenati
 	if resp.AssistantText != "Done" {
 		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
 	}
-	if resp.AssistantPhase != MessagePhaseFinal {
-		t.Fatalf("assistant phase = %q, want %q", resp.AssistantPhase, MessagePhaseFinal)
+	if !resp.ProviderPhase.Is(MessagePhaseFinal) {
+		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseFinal)
 	}
 }
 

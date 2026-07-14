@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	modelstub "core/internal/testharness/pty/blackbox"
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/launch"
@@ -177,10 +178,12 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 		t.Fatalf("session.Create: %v", err)
 	}
 	if err := store.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		WorktreePath:  "/tmp/worktree",
-		WorkspaceRoot: "/tmp/workspace",
-		EffectiveCwd:  "/tmp/worktree/pkg",
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			WorktreePath:  "/tmp/worktree",
+			WorkspaceRoot: "/tmp/workspace",
+			EffectiveCwd:  "/tmp/worktree/pkg",
+		},
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState: %v", err)
 	}
@@ -191,22 +194,20 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 	}
 }
 
-func TestHeadlessRuntimeWorkdirFallsBackToInheritedWorktreePath(t *testing.T) {
+func TestHeadlessRuntimeWorkdirRejectsReminderWithoutEffectiveCWD(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace")
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if err := store.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:          session.WorktreeReminderModeEnter,
-		WorktreePath:  "/tmp/worktree",
-		WorkspaceRoot: "/tmp/workspace",
-	}); err != nil {
-		t.Fatalf("SetWorktreeReminderState: %v", err)
-	}
-
-	got := headlessRuntimeWorkdir(launch.SessionPlan{Store: store, WorkspaceRoot: "/tmp/workspace"})
-	if got != "/tmp/worktree" {
-		t.Fatalf("headless runtime workdir = %q, want /tmp/worktree", got)
+	err = store.SetWorktreeReminderState(&session.WorktreeReminderState{
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			WorktreePath:  "/tmp/worktree",
+			WorkspaceRoot: "/tmp/workspace",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing effective cwd to be rejected")
 	}
 }
 
@@ -270,7 +271,7 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -279,7 +280,7 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 		if got := r.Header.Get("Authorization"); got == "" {
 			t.Fatal("expected authorization header")
 		}
-		writeTestOpenAICompletedResponseStream(w, "from persisted continuation", 1, 1)
+		modelstub.WriteCompletedResponseStream(w, "from persisted continuation", 1, 1)
 	}))
 	defer server.Close()
 
@@ -362,7 +363,7 @@ func TestLoopbackRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgrou
 	var responseCount int
 	var responseMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -397,7 +398,7 @@ func TestLoopbackRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgrou
 				t.Fatalf("second provider request has no function_call_output: %#v", payload)
 			}
 			toolOutput <- output
-			writeTestOpenAICompletedResponseStream(w, "done", 1, 1)
+			modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
 		default:
 			t.Fatalf("unexpected provider response request %d", currentResponse)
 		}
@@ -591,7 +592,7 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -599,7 +600,7 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 		}
 		startedOnce.Do(func() { close(started) })
 		<-release
-		writeTestOpenAICompletedResponseStream(w, "done", 1, 1)
+		modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
 	}))
 	defer server.Close()
 
@@ -677,7 +678,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 
 	requestBodies := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		if r.URL.Path != "/responses" {
@@ -689,7 +690,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 			t.Fatalf("decode request payload: %v", err)
 		}
 		requestBodies <- payload
-		writeTestOpenAICompletedResponseStream(w, "locked response", 1, 1)
+		modelstub.WriteCompletedResponseStream(w, "locked response", 1, 1)
 	}))
 	defer server.Close()
 

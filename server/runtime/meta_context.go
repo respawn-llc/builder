@@ -34,10 +34,11 @@ const (
 )
 
 type metaContextClassification struct {
-	kind        metaContextKind
-	key         string
-	sourcePath  string
-	messageType llm.MessageType
+	kind            metaContextKind
+	key             string
+	sourcePath      string
+	worktreeContext *session.WorktreeContext
+	messageType     llm.MessageType
 }
 
 type metaContextBuildOptions struct {
@@ -53,6 +54,7 @@ type metaContextBuildOptions struct {
 	WorkflowCompletionMode    workflowruntime.CompletionMode
 	WorkflowRun               *workflowruntime.Config
 	WorkflowTaskCommentCount  int64
+	WorktreeReminder          *session.WorktreeReminderState
 	IncludeSkillWarnings      bool
 	PermissiveAgentsReadError bool
 }
@@ -217,6 +219,21 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 			if opts.WorkflowRun != nil {
 				message.SourcePath = strings.TrimSpace(string(opts.WorkflowRun.Contract.RunID))
 			}
+			collector.addMessages([]llm.Message{message})
+		}
+	}
+	if opts.WorktreeReminder != nil {
+		var (
+			message llm.Message
+			ok      bool
+		)
+		switch opts.WorktreeReminder.Mode {
+		case session.WorktreeReminderModeEnter:
+			message, ok = worktreeModeMetaMessage(*opts.WorktreeReminder)
+		case session.WorktreeReminderModeExit:
+			message, ok = worktreeModeExitMetaMessage(*opts.WorktreeReminder)
+		}
+		if ok {
 			collector.addMessages([]llm.Message{message})
 		}
 	}
@@ -505,43 +522,36 @@ func workflowInstructionTransitions(in []workflowruntime.TransitionInstruction) 
 }
 
 func worktreeModeMetaMessage(state session.WorktreeReminderState) (llm.Message, bool) {
-	content := prompts.RenderWorktreeModePrompt(state.Branch, state.EffectiveCwd, state.WorktreePath, state.WorkspaceRoot)
+	content := prompts.RenderWorktreeModePrompt(worktreeBranchPromptValue(state.Branch), state.EffectiveCwd, state.WorktreePath, state.WorkspaceRoot)
 	if strings.TrimSpace(content) == "" {
 		return llm.Message{}, false
 	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorktreeMode, Content: content, CompactContent: worktreeReminderCondensedText(state), SourcePath: strings.TrimSpace(state.EffectiveCwd)}, true
+	return llm.Message{
+		Role:            llm.RoleDeveloper,
+		MessageType:     llm.MessageTypeWorktreeMode,
+		WorktreeContext: session.CloneWorktreeContext(&state.WorktreeContext),
+		Content:         content,
+	}, true
 }
 
 func worktreeModeExitMetaMessage(state session.WorktreeReminderState) (llm.Message, bool) {
-	content := prompts.RenderWorktreeModeExitPrompt(state.Branch, state.EffectiveCwd, state.WorktreePath, state.WorkspaceRoot)
+	content := prompts.RenderWorktreeModeExitPrompt(worktreeBranchPromptValue(state.Branch), state.EffectiveCwd, state.WorktreePath, state.WorkspaceRoot)
 	if strings.TrimSpace(content) == "" {
 		return llm.Message{}, false
 	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorktreeModeExit, Content: content, CompactContent: worktreeReminderCondensedText(state), SourcePath: strings.TrimSpace(state.EffectiveCwd)}, true
+	return llm.Message{
+		Role:            llm.RoleDeveloper,
+		MessageType:     llm.MessageTypeWorktreeModeExit,
+		WorktreeContext: session.CloneWorktreeContext(&state.WorktreeContext),
+		Content:         content,
+	}, true
 }
 
-func worktreeReminderCondensedText(state session.WorktreeReminderState) string {
-	effectiveCwd := strings.TrimSpace(state.EffectiveCwd)
-	if effectiveCwd == "" {
-		effectiveCwd = strings.TrimSpace(state.WorktreePath)
+func worktreeBranchPromptValue(branch *string) string {
+	if branch == nil {
+		return ""
 	}
-	if state.Mode == session.WorktreeReminderModeExit {
-		if effectiveCwd == "" {
-			return "Switched worktree to main workspace"
-		}
-		return "Switched worktree to main workspace: " + effectiveCwd
-	}
-	name := strings.TrimSpace(state.Branch)
-	if name == "" {
-		name = strings.TrimSpace(filepath.Base(strings.TrimSpace(state.WorktreePath)))
-	}
-	if name == "" || name == "." || name == string(filepath.Separator) {
-		name = "worktree"
-	}
-	if effectiveCwd == "" {
-		return "Switched worktree to " + name
-	}
-	return "Switched worktree to " + name + ": " + effectiveCwd
+	return *branch
 }
 
 func skillDiscoveryWarningTexts(issues []skillDiscoveryIssue) []string {
@@ -741,11 +751,28 @@ func classifyMetaContextMessage(message llm.Message) (metaContextClassification,
 	case llm.MessageTypeHeadlessModeExit:
 		return metaContextClassification{kind: metaContextKindHeadlessExit, key: "headless_exit", messageType: llm.MessageTypeHeadlessModeExit}, true
 	case llm.MessageTypeWorkflowMode:
-		return metaContextClassification{kind: metaContextKindWorkflow, key: "workflow", messageType: llm.MessageTypeWorkflowMode}, true
+		return metaContextClassification{
+			kind:        metaContextKindWorkflow,
+			key:         "workflow",
+			sourcePath:  strings.TrimSpace(message.SourcePath),
+			messageType: llm.MessageTypeWorkflowMode,
+		}, true
 	case llm.MessageTypeWorktreeMode:
-		return metaContextClassification{kind: metaContextKindWorktree, key: "worktree", messageType: llm.MessageTypeWorktreeMode}, true
+		return metaContextClassification{
+			kind:            metaContextKindWorktree,
+			key:             "worktree",
+			sourcePath:      strings.TrimSpace(message.SourcePath),
+			worktreeContext: message.WorktreeContext,
+			messageType:     llm.MessageTypeWorktreeMode,
+		}, true
 	case llm.MessageTypeWorktreeModeExit:
-		return metaContextClassification{kind: metaContextKindWorktreeExit, key: "worktree_exit", messageType: llm.MessageTypeWorktreeModeExit}, true
+		return metaContextClassification{
+			kind:            metaContextKindWorktreeExit,
+			key:             "worktree_exit",
+			sourcePath:      strings.TrimSpace(message.SourcePath),
+			worktreeContext: message.WorktreeContext,
+			messageType:     llm.MessageTypeWorktreeModeExit,
+		}, true
 	}
 	return metaContextClassification{}, false
 }

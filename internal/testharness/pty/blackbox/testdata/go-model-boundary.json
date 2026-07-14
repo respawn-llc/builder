@@ -9,6 +9,7 @@
       "probe": "6fb17b47-d43a-43e8-9d25-8504410b0e19",
       "outcome": "stream",
       "output": "ok",
+      "response_phase": "final_answer",
       "session_cache_key": true
     }
   ],

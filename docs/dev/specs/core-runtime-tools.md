@@ -193,7 +193,7 @@
 ## Compaction
 
 - Compaction starts a new active conversation list from compacting output seed items. Full persisted session events remain in the durable session log.
-- Runtime context needed after compaction, including workflow prompts and reminders, is steered into the new active list after replacement.
+- One unified meta-context builder composes generation-scoped environment, AGENTS.md, skills, subagents, active headless/workflow modes, and worktree context. The typed history-replacement steer commits compacting output followed by that canonical context in one durable `history_replaced` event, so the new active generation is born atomically and runtime resume cannot re-arm its context.
 - Kent may compact before submitting a queued user prompt when current context usage is high enough that the next user task likely causes compaction. this threshold uses defaults and is configurable. When pre-submit compaction happens, the runtime detects it, session compaction begins first, and then user message is steered using regular mechanisms to arrive as compaction finishes.
 - Pre-submit compaction uses `context_compaction_threshold_tokens - pre_submit_compaction_lead_tokens`, with default lead value.
 - Startup rejects compaction settings that begin normal or pre-submit compaction below 50% of `model_context_window`; this is separate from the `40000` minimum context window.

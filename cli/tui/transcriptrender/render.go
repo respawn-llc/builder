@@ -2,6 +2,7 @@ package transcriptrender
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"core/shared/clientui"
@@ -423,6 +424,9 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
+	if text, ok := worktreeNoticeText(row.Data); ok {
+		return noticeStyleRole(row), text
+	}
 	cacheWarningText := cacheWarningNoticeText(row.Data.CacheWarning)
 	typedCompactText := firstNonEmpty(row.Data.CompactLabel, row.Data.CondensedText, noticeLegacyText(row), cacheWarningText, row.Data.SourcePath)
 	compactText := firstNonEmpty(typedCompactText, string(row.Reason), "notice")
@@ -437,6 +441,41 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		text = firstNonEmpty(row.Diagnostic.Detail, row.Diagnostic.Code, text)
 	}
 	return noticeStyleRole(row), text
+}
+
+func worktreeNoticeText(data clientui.TranscriptNoticeData) (string, bool) {
+	context := data.WorktreeContext
+	if context == nil {
+		return "", false
+	}
+	effectiveCWD := strings.TrimSpace(context.EffectiveCwd)
+	if effectiveCWD == "" {
+		effectiveCWD = strings.TrimSpace(context.WorktreePath)
+	}
+	switch data.MessageType {
+	case clientui.MessageTypeWorktreeMode:
+		name := ""
+		if context.Branch != nil {
+			name = strings.TrimSpace(*context.Branch)
+		}
+		if name == "" {
+			name = strings.TrimSpace(filepath.Base(strings.TrimSpace(context.WorktreePath)))
+		}
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			name = "worktree"
+		}
+		if effectiveCWD == "" {
+			return "Switched worktree to " + name, true
+		}
+		return "Switched worktree to " + name + ": " + effectiveCWD, true
+	case clientui.MessageTypeWorktreeModeExit:
+		if effectiveCWD == "" {
+			return "Switched worktree to main workspace", true
+		}
+		return "Switched worktree to main workspace: " + effectiveCWD, true
+	default:
+		return "", false
+	}
 }
 
 func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {

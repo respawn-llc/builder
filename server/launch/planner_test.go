@@ -825,13 +825,13 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 	if err := parent.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:                  session.WorktreeReminderModeEnter,
-		Branch:                "feature/review",
-		WorktreePath:          canonicalWorktreeRoot,
-		WorkspaceRoot:         cfg.WorkspaceRoot,
-		EffectiveCwd:          filepath.Join(canonicalWorktreeRoot, "pkg"),
-		HasIssuedInGeneration: true,
-		IssuedCompactionCount: 3,
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/review"),
+			WorktreePath:  canonicalWorktreeRoot,
+			WorkspaceRoot: cfg.WorkspaceRoot,
+			EffectiveCwd:  filepath.Join(canonicalWorktreeRoot, "pkg"),
+		},
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
@@ -874,11 +874,10 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	if childMeta.WorktreeReminder == nil {
 		t.Fatal("expected child worktree reminder")
 	}
-	if childMeta.WorktreeReminder.Branch != "feature/review" || childMeta.WorktreeReminder.WorktreePath != canonicalWorktreeRoot {
+	if childMeta.WorktreeReminder.Branch == nil ||
+		*childMeta.WorktreeReminder.Branch != "feature/review" ||
+		childMeta.WorktreeReminder.WorktreePath != canonicalWorktreeRoot {
 		t.Fatalf("child worktree reminder = %+v", childMeta.WorktreeReminder)
-	}
-	if childMeta.WorktreeReminder.HasIssuedInGeneration || childMeta.WorktreeReminder.IssuedCompactionCount != 0 {
-		t.Fatalf("child worktree reminder generation flags = %+v, want reset", childMeta.WorktreeReminder)
 	}
 	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, childMeta.SessionID)
 	if err != nil {
@@ -976,13 +975,13 @@ func TestPlannerNewChildSessionFallsBackWhenParentExecutionTargetIsNotMetadataBa
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	parent := createTestSessionInContainer(t, containerDir, "workspace-a", "/tmp/workspace-a")
 	if err := parent.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode:                  session.WorktreeReminderModeEnter,
-		Branch:                "feature/file-backed",
-		WorktreePath:          "/tmp/worktree-a",
-		WorkspaceRoot:         "/tmp/workspace-a",
-		EffectiveCwd:          "/tmp/worktree-a/pkg",
-		HasIssuedInGeneration: true,
-		IssuedCompactionCount: 4,
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/file-backed"),
+			WorktreePath:  "/tmp/worktree-a",
+			WorkspaceRoot: "/tmp/workspace-a",
+			EffectiveCwd:  "/tmp/worktree-a/pkg",
+		},
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
@@ -1006,11 +1005,10 @@ func TestPlannerNewChildSessionFallsBackWhenParentExecutionTargetIsNotMetadataBa
 	if childMeta.ParentSessionID != parent.Meta().SessionID {
 		t.Fatalf("parent session id = %q, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
 	}
-	if childMeta.WorktreeReminder == nil || childMeta.WorktreeReminder.Branch != "feature/file-backed" {
+	if childMeta.WorktreeReminder == nil ||
+		childMeta.WorktreeReminder.Branch == nil ||
+		*childMeta.WorktreeReminder.Branch != "feature/file-backed" {
 		t.Fatalf("worktree reminder = %+v, want parent reminder copied", childMeta.WorktreeReminder)
-	}
-	if childMeta.WorktreeReminder.HasIssuedInGeneration || childMeta.WorktreeReminder.IssuedCompactionCount != 0 {
-		t.Fatalf("worktree reminder generation flags = %+v, want reset", childMeta.WorktreeReminder)
 	}
 }
 

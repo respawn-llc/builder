@@ -64,10 +64,21 @@ func transcriptNoticeRowEqual(left, right *clientui.TranscriptNoticeRow) bool {
 		pointersEqual(left.Data.RuntimeDiagnostic, right.Data.RuntimeDiagnostic) &&
 		left.Data.MessageType == right.Data.MessageType &&
 		left.Data.SourcePath == right.Data.SourcePath &&
+		transcriptWorktreeContextEqual(left.Data.WorktreeContext, right.Data.WorktreeContext) &&
 		left.Data.CondensedText == right.Data.CondensedText &&
 		left.Data.CompactLabel == right.Data.CompactLabel &&
 		pointersEqual(left.Data.BackgroundExitCode, right.Data.BackgroundExitCode) &&
 		pointersEqual(left.Diagnostic, right.Diagnostic)
+}
+
+func transcriptWorktreeContextEqual(left, right *clientui.TranscriptWorktreeContext) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return pointersEqual(left.Branch, right.Branch) &&
+		left.WorktreePath == right.WorktreePath &&
+		left.WorkspaceRoot == right.WorkspaceRoot &&
+		left.EffectiveCwd == right.EffectiveCwd
 }
 
 func pointersEqual[T comparable](left, right *T) bool {

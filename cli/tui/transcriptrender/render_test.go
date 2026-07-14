@@ -455,6 +455,41 @@ func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) 
 	}
 }
 
+func TestWorktreeNoticeRendersTypedClientContext(t *testing.T) {
+	branch := "feature/client-rendered-context"
+	effectiveCWD := "/tmp/worktree/client-rendered-context"
+	row := clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: clientui.TranscriptNoticeInfo,
+			Data: clientui.TranscriptNoticeData{
+				MessageType: clientui.MessageTypeWorktreeMode,
+				WorktreeContext: &clientui.TranscriptWorktreeContext{
+					Branch:        &branch,
+					WorktreePath:  "/tmp/worktree",
+					WorkspaceRoot: "/tmp/workspace",
+					EffectiveCwd:  effectiveCWD,
+				},
+			},
+			Diagnostic: &clientui.TranscriptDiagnosticData{Detail: "model-only instructions"},
+		},
+	}
+
+	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed, ModeDetailExpanded} {
+		rendered := RenderCommittedRow(row, 120, "", mode)
+		if len(rendered.Lines) != 1 {
+			t.Fatalf("mode %v rendered lines = %+v, want one client-composed notice", mode, rendered.Lines)
+		}
+		text := rendered.Lines[0].Plain()
+		if !strings.Contains(text, branch) || !strings.Contains(text, effectiveCWD) {
+			t.Fatalf("mode %v rendered worktree facts = %q, want branch and effective cwd", mode, text)
+		}
+		if strings.Contains(text, row.Notice.Diagnostic.Detail) {
+			t.Fatalf("mode %v rendered model instructions instead of client presentation: %q", mode, text)
+		}
+	}
+}
+
 func TestResolveSpanStyleCarriesSemanticColorAndAttributes(t *testing.T) {
 	span := SemanticSpan(
 		"semantic",

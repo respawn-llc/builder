@@ -6,13 +6,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	modelstub "core/internal/testharness/pty/blackbox"
 )
 
 func TestHandleInputTokenCountHandlesResponsesInputTokensPath(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/responses/input_tokens", nil)
 
-	handled := handleTestOpenAIInputTokenCount(recorder, req, 123)
+	handled := modelstub.HandleInputTokenCount(recorder, req, 123)
 	if !handled {
 		t.Fatal("expected request to be handled")
 	}
@@ -39,7 +41,7 @@ func TestHandleInputTokenCountIgnoresOtherPaths(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/responses", nil)
 
-	handled := handleTestOpenAIInputTokenCount(recorder, req, 123)
+	handled := modelstub.HandleInputTokenCount(recorder, req, 123)
 	if handled {
 		t.Fatal("expected non-input-token path to be ignored")
 	}
@@ -55,7 +57,7 @@ func TestHandleInputTokenCountSetsAllowHeaderForWrongMethod(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/responses/input_tokens", nil)
 
-	handled := handleTestOpenAIInputTokenCount(recorder, req, 123)
+	handled := modelstub.HandleInputTokenCount(recorder, req, 123)
 	if !handled {
 		t.Fatal("expected wrong-method request to be handled")
 	}
@@ -70,7 +72,7 @@ func TestHandleInputTokenCountSetsAllowHeaderForWrongMethod(t *testing.T) {
 func TestWriteCompletedResponseStreamWritesExpectedEvent(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	writeTestOpenAICompletedResponseStream(recorder, "hello", 11, 7)
+	modelstub.WriteCompletedResponseStream(recorder, "hello", 11, 7)
 
 	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("content type = %q, want text/event-stream", got)

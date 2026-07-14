@@ -210,9 +210,17 @@ type TranscriptNoticeData struct {
 	RuntimeDiagnostic  *TranscriptDiagnosticData
 	MessageType        MessageType
 	SourcePath         string
+	WorktreeContext    *TranscriptWorktreeContext
 	CondensedText      string
 	CompactLabel       string
 	BackgroundExitCode *int
+}
+
+type TranscriptWorktreeContext struct {
+	Branch        *string
+	WorktreePath  string
+	WorkspaceRoot string
+	EffectiveCwd  string
 }
 
 type TranscriptCacheWarningData struct {

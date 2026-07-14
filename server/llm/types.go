@@ -61,17 +61,18 @@ const (
 )
 
 type Message struct {
-	Role               Role            `json:"role"`
-	MessageType        MessageType     `json:"message_type,omitempty"`
-	SourcePath         string          `json:"source_path,omitempty"`
-	Content            string          `json:"content,omitempty"`
-	CompactContent     string          `json:"compact_content,omitempty"`
-	Name               string          `json:"name,omitempty"`
-	ToolCallID         string          `json:"tool_call_id,omitempty"`
-	Phase              MessagePhase    `json:"phase,omitempty"`
-	BackgroundExitCode *int            `json:"background_exit_code,omitempty"`
-	ToolCalls          []ToolCall      `json:"tool_calls,omitempty"`
-	ReasoningItems     []ReasoningItem `json:"reasoning_items,omitempty"`
+	Role               Role                     `json:"role"`
+	MessageType        MessageType              `json:"message_type,omitempty"`
+	SourcePath         string                   `json:"source_path,omitempty"`
+	WorktreeContext    *session.WorktreeContext `json:"worktree_context,omitempty"`
+	Content            string                   `json:"content,omitempty"`
+	CompactContent     string                   `json:"compact_content,omitempty"`
+	Name               string                   `json:"name,omitempty"`
+	ToolCallID         string                   `json:"tool_call_id,omitempty"`
+	Phase              MessagePhase             `json:"phase,omitempty"`
+	BackgroundExitCode *int                     `json:"background_exit_code,omitempty"`
+	ToolCalls          []ToolCall               `json:"tool_calls,omitempty"`
+	ReasoningItems     []ReasoningItem          `json:"reasoning_items,omitempty"`
 }
 
 type ResponseItemType string
@@ -111,27 +112,28 @@ func ToolOutputMessageType(custom bool) MessageType {
 }
 
 type ResponseItem struct {
-	Type               ResponseItemType     `json:"type"`
-	OutputIndex        int64                `json:"output_index,omitempty"`
-	Role               Role                 `json:"role,omitempty"`
-	MessageType        MessageType          `json:"message_type,omitempty"`
-	SourcePath         string               `json:"source_path,omitempty"`
-	Phase              MessagePhase         `json:"phase,omitempty"`
-	ID                 string               `json:"id,omitempty"`
-	Name               string               `json:"name,omitempty"`
-	CallID             string               `json:"call_id,omitempty"`
-	Content            string               `json:"content,omitempty"`
-	CompactContent     string               `json:"compact_content,omitempty"`
-	BackgroundExitCode *int                 `json:"background_exit_code,omitempty"`
-	ToolPresentation   json.RawMessage      `json:"tool_presentation,omitempty"`
-	Arguments          json.RawMessage      `json:"arguments,omitempty"`
-	CustomInput        string               `json:"custom_input,omitempty"`
-	Output             json.RawMessage      `json:"output,omitempty"`
-	ReasoningSummary   []ReasoningEntry     `json:"reasoning_summary,omitempty"`
-	EncryptedContent   string               `json:"encrypted_content,omitempty"`
-	Raw                json.RawMessage      `json:"raw,omitempty"`
-	LinkedCallID       string               `json:"linked_call_id,omitempty"`
-	LinkKind           ResponseItemLinkKind `json:"link_kind,omitempty"`
+	Type               ResponseItemType         `json:"type"`
+	OutputIndex        int64                    `json:"output_index,omitempty"`
+	Role               Role                     `json:"role,omitempty"`
+	MessageType        MessageType              `json:"message_type,omitempty"`
+	SourcePath         string                   `json:"source_path,omitempty"`
+	WorktreeContext    *session.WorktreeContext `json:"worktree_context,omitempty"`
+	Phase              MessagePhase             `json:"phase,omitempty"`
+	ID                 string                   `json:"id,omitempty"`
+	Name               string                   `json:"name,omitempty"`
+	CallID             string                   `json:"call_id,omitempty"`
+	Content            string                   `json:"content,omitempty"`
+	CompactContent     string                   `json:"compact_content,omitempty"`
+	BackgroundExitCode *int                     `json:"background_exit_code,omitempty"`
+	ToolPresentation   json.RawMessage          `json:"tool_presentation,omitempty"`
+	Arguments          json.RawMessage          `json:"arguments,omitempty"`
+	CustomInput        string                   `json:"custom_input,omitempty"`
+	Output             json.RawMessage          `json:"output,omitempty"`
+	ReasoningSummary   []ReasoningEntry         `json:"reasoning_summary,omitempty"`
+	EncryptedContent   string                   `json:"encrypted_content,omitempty"`
+	Raw                json.RawMessage          `json:"raw,omitempty"`
+	LinkedCallID       string                   `json:"linked_call_id,omitempty"`
+	LinkKind           ResponseItemLinkKind     `json:"link_kind,omitempty"`
 }
 
 func CloneResponseItems(items []ResponseItem) []ResponseItem {
@@ -142,6 +144,7 @@ func CloneResponseItems(items []ResponseItem) []ResponseItem {
 	for _, item := range items {
 		copyItem := item
 		copyItem.BackgroundExitCode = valuecopy.Pointer(item.BackgroundExitCode)
+		copyItem.WorktreeContext = session.CloneWorktreeContext(item.WorktreeContext)
 		if len(item.Arguments) > 0 {
 			copyItem.Arguments = append(json.RawMessage(nil), item.Arguments...)
 		}
@@ -173,6 +176,7 @@ func ItemsFromMessages(messages []Message) []ResponseItem {
 					Role:               RoleAssistant,
 					MessageType:        msg.MessageType,
 					SourcePath:         msg.SourcePath,
+					WorktreeContext:    session.CloneWorktreeContext(msg.WorktreeContext),
 					Phase:              msg.Phase,
 					Content:            msg.Content,
 					CompactContent:     msg.CompactContent,
@@ -236,6 +240,7 @@ func ItemsFromMessages(messages []Message) []ResponseItem {
 				Role:               msg.Role,
 				MessageType:        msg.MessageType,
 				SourcePath:         msg.SourcePath,
+				WorktreeContext:    session.CloneWorktreeContext(msg.WorktreeContext),
 				Content:            msg.Content,
 				CompactContent:     msg.CompactContent,
 				BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode),
@@ -265,6 +270,7 @@ func MessagesFromItems(items []ResponseItem) []Message {
 				Role:               role,
 				MessageType:        item.MessageType,
 				SourcePath:         item.SourcePath,
+				WorktreeContext:    session.CloneWorktreeContext(item.WorktreeContext),
 				Phase:              item.Phase,
 				Content:            item.Content,
 				CompactContent:     item.CompactContent,
@@ -612,6 +618,7 @@ func (u Usage) CacheHitPercent() (int, bool) {
 
 type Response struct {
 	Assistant      Message          `json:"assistant"`
+	ProviderPhase  *ProviderPhase   `json:"-"`
 	ToolCalls      []ToolCall       `json:"tool_calls,omitempty"`
 	Reasoning      []ReasoningEntry `json:"reasoning,omitempty"`
 	ReasoningItems []ReasoningItem  `json:"reasoning_items,omitempty"`

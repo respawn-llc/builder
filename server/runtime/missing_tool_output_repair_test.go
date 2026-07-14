@@ -136,12 +136,10 @@ func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T)
 	})
 	client := &fakeClient{
 		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}},
-		responses: []llm.Response{{
-			Assistant: llm.Message{
-				Role:      llm.RoleAssistant,
-				ToolCalls: []llm.ToolCall{{ID: "complete", Name: "complete_node", Input: json.RawMessage(`{"commentary":"repaired"}`)}},
-			},
-		}},
+		responses: []llm.Response{commentaryResponse(
+			"",
+			llm.ToolCall{ID: "complete", Name: "complete_node", Input: json.RawMessage(`{"commentary":"repaired","summary":"repaired"}`)},
+		)},
 	}
 	eng := mustNewWorkflowTestEngine(
 		t,

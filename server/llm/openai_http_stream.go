@@ -58,7 +58,12 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 			a.callbacks.OnAssistantDelta(AssistantDelta{Text: evt.Delta, Phase: a.assistantMessages.Phase(evt.OutputIndex)})
 		}
 	case "response.output_item.added", "response.output_item.done":
-		a.assistantMessages.Upsert(evt.Item, evt.OutputIndex)
+		if err := a.assistantMessages.Upsert(evt.Item, evt.OutputIndex); err != nil {
+			a.responseError = &responseStreamError{
+				ProviderContract: &responseStreamProviderContract{Message: err.Error()},
+			}
+			return
+		}
 		a.toolCalls.UpsertFromOutput(evt.Item)
 		a.reasoning.UpsertReasoningItem(evt.Item)
 		a.passthrough.Upsert(evt.Item, evt.OutputIndex)
@@ -170,9 +175,9 @@ func (a *responseStreamAccumulator) emitReasoningSummaryDelta(key string) {
 	a.callbacks.OnReasoningSummaryDelta(reasoningSummaryDeltaFromText(key, reasoningRoleSummary, a.reasoning.Current(reasoningRoleSummary, key)))
 }
 
-func (a *responseStreamAccumulator) Response() OpenAIResponse {
+func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	usage := Usage{WindowTokens: a.windowTokens}
-	streamText, streamPhase, streamOutputIndex, hasResolvedStream := a.assistantMessages.Resolve()
+	streamText, streamPhase, streamProviderPhase, streamOutputIndex, hasResolvedStream := a.assistantMessages.Resolve()
 	rawDeltaText := a.assistantText.String()
 	streamedDeltaText := ""
 	if a.callbacks.OnAssistantDelta != nil {
@@ -183,6 +188,7 @@ func (a *responseStreamAccumulator) Response() OpenAIResponse {
 		finalText = streamText
 	}
 	finalPhase := streamPhase
+	finalProviderPhase := streamProviderPhase
 	finalCalls := a.toolCalls.ToToolCalls()
 	finalReasoning := a.reasoning.Entries()
 	finalReasoningItems := a.reasoning.Items()
@@ -191,24 +197,28 @@ func (a *responseStreamAccumulator) Response() OpenAIResponse {
 	if a.completed == nil {
 		return OpenAIResponse{
 			AssistantText:  finalText,
-			AssistantPhase: finalPhase,
+			ProviderPhase:  finalProviderPhase,
 			ToolCalls:      finalCalls,
 			Reasoning:      normalizeReasoningEntries(finalReasoning),
 			ReasoningItems: finalReasoningItems,
 			OutputItems:    finalOutputItems,
 			Usage:          usage,
-		}
+		}, nil
 	}
 
 	if a.completed.Usage.InputTokens > 0 || a.completed.Usage.OutputTokens > 0 {
 		usage = usageFromSDK(a.completed.Usage, a.windowTokens)
 	}
-	parsedItems, parsedText, parsedPhase, parsedCalls, parsedReasoning, parsedReasoningItems := parseOutputItems(a.completed.Output)
+	parsedItems, parsedText, parsedPhase, parsedProviderPhase, parsedCalls, parsedReasoning, parsedReasoningItems, err := parseOutputItems(a.completed.Output)
+	if err != nil {
+		return OpenAIResponse{}, err
+	}
 	if assistantResponseTextExtendsStream(streamedDeltaText, parsedText) {
 		finalText = parsedText
 	}
 	if parsedPhase != "" {
 		finalPhase = parsedPhase
+		finalProviderPhase = parsedProviderPhase
 	}
 	a.toolCalls.Merge(parsedCalls)
 	finalCalls = a.toolCalls.ToToolCalls()
@@ -220,13 +230,13 @@ func (a *responseStreamAccumulator) Response() OpenAIResponse {
 
 	return OpenAIResponse{
 		AssistantText:  finalText,
-		AssistantPhase: finalPhase,
+		ProviderPhase:  finalProviderPhase,
 		ToolCalls:      finalCalls,
 		Reasoning:      finalReasoning,
 		ReasoningItems: finalReasoningItems,
 		OutputItems:    finalOutputItems,
 		Usage:          usage,
-	}
+	}, nil
 }
 
 func assistantResponseTextExtendsStream(streamed string, candidate string) bool {
@@ -355,46 +365,60 @@ type reasoningAccumulator struct {
 }
 
 type assistantMessageAccumulator struct {
-	byIndex map[int64]ResponseItem
+	byIndex map[int64]assistantAccumulatorItem
 	order   []int64
+}
+
+type assistantAccumulatorItem struct {
+	message       ResponseItem
+	providerPhase *ProviderPhase
 }
 
 func newAssistantMessageAccumulator() *assistantMessageAccumulator {
 	return &assistantMessageAccumulator{
-		byIndex: make(map[int64]ResponseItem),
+		byIndex: make(map[int64]assistantAccumulatorItem),
 		order:   make([]int64, 0, 4),
 	}
 }
 
-func (a *assistantMessageAccumulator) Upsert(item responses.ResponseOutputItemUnion, outputIndex int64) {
+func (a *assistantMessageAccumulator) Upsert(item responses.ResponseOutputItemUnion, outputIndex int64) error {
 	if a == nil || item.Type != "message" {
-		return
+		return nil
 	}
-	parsedItems, _, _, _, _, _ := parseOutputItems([]responses.ResponseOutputItemUnion{item})
+	parsedItems, _, _, providerPhase, _, _, _, err := parseOutputItems([]responses.ResponseOutputItemUnion{item})
+	if err != nil {
+		return err
+	}
 	if len(parsedItems) == 0 {
-		return
+		return nil
 	}
 	assistant := parsedItems[0]
 	if assistant.Type != ResponseItemTypeMessage || assistant.Role != RoleAssistant {
-		return
+		return nil
 	}
 	if _, exists := a.byIndex[outputIndex]; !exists {
 		a.order = append(a.order, outputIndex)
 	}
-	a.byIndex[outputIndex] = assistant
+	a.byIndex[outputIndex] = assistantAccumulatorItem{message: assistant, providerPhase: providerPhase}
+	return nil
 }
 
-func (a *assistantMessageAccumulator) Resolve() (string, MessagePhase, int64, bool) {
+func (a *assistantMessageAccumulator) Resolve() (string, MessagePhase, *ProviderPhase, int64, bool) {
 	if a == nil {
-		return "", "", 0, false
+		return "", "", AbsentProviderPhase(), 0, false
 	}
 	segments := make([]assistantOutputSegment, 0, len(a.order))
 	for _, outputIndex := range a.order {
 		item, ok := a.byIndex[outputIndex]
-		if !ok || item.Type != ResponseItemTypeMessage || item.Role != RoleAssistant {
+		if !ok || item.message.Type != ResponseItemTypeMessage || item.message.Role != RoleAssistant {
 			continue
 		}
-		segments = append(segments, assistantOutputSegment{Text: item.Content, Phase: item.Phase, OutputIndex: outputIndex})
+		segments = append(segments, assistantOutputSegment{
+			Text:          item.message.Content,
+			Phase:         item.message.Phase,
+			ProviderPhase: item.providerPhase,
+			OutputIndex:   outputIndex,
+		})
 	}
 	return resolveAssistantOutput(segments)
 }
@@ -404,10 +428,10 @@ func (a *assistantMessageAccumulator) Phase(outputIndex int64) MessagePhase {
 		return ""
 	}
 	item, ok := a.byIndex[outputIndex]
-	if !ok || item.Type != ResponseItemTypeMessage || item.Role != RoleAssistant {
+	if !ok || item.message.Type != ResponseItemTypeMessage || item.message.Role != RoleAssistant {
 		return ""
 	}
-	return item.Phase
+	return providerPhaseProjection(item.providerPhase)
 }
 
 func newReasoningAccumulator() *reasoningAccumulator {

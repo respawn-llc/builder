@@ -1049,7 +1049,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 	})
 }
 
-func TestForkAtUserMessageResetsWorktreeReminderGenerationFlags(t *testing.T) {
+func TestForkAtUserMessageCopiesWorktreeReminderTarget(t *testing.T) {
 	parent, err := Create(t.TempDir(), "ws", t.TempDir())
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
@@ -1058,13 +1058,13 @@ func TestForkAtUserMessageResetsWorktreeReminderGenerationFlags(t *testing.T) {
 		t.Fatalf("append first user: %v", err)
 	}
 	if err := parent.SetWorktreeReminderState(&WorktreeReminderState{
-		Mode:                  WorktreeReminderModeEnter,
-		Branch:                "feature/fork",
-		WorktreePath:          "/tmp/wt-fork",
-		WorkspaceRoot:         "/tmp/workspace",
-		EffectiveCwd:          "/tmp/wt-fork",
-		HasIssuedInGeneration: true,
-		IssuedCompactionCount: 7,
+		Mode: WorktreeReminderModeEnter,
+		WorktreeContext: WorktreeContext{
+			Branch:        OptionalWorktreeBranch("feature/fork"),
+			WorktreePath:  "/tmp/wt-fork",
+			WorkspaceRoot: "/tmp/workspace",
+			EffectiveCwd:  "/tmp/wt-fork",
+		},
 	}); err != nil {
 		t.Fatalf("persist worktree reminder state: %v", err)
 	}
@@ -1080,15 +1080,78 @@ func TestForkAtUserMessageResetsWorktreeReminderGenerationFlags(t *testing.T) {
 	if state == nil {
 		t.Fatal("expected forked worktree reminder state")
 	}
-	if state.Mode != WorktreeReminderModeEnter || state.Branch != "feature/fork" {
+	if state.Mode != WorktreeReminderModeEnter ||
+		state.Branch == nil ||
+		*state.Branch != "feature/fork" ||
+		state.WorktreePath != "/tmp/wt-fork" ||
+		state.EffectiveCwd != "/tmp/wt-fork" ||
+		state.ContextID == nil {
 		t.Fatalf("unexpected forked reminder payload: %+v", state)
 	}
-	if state.HasIssuedInGeneration || state.IssuedCompactionCount != 0 {
-		t.Fatalf("expected forked reminder generation flags reset, got %+v", state)
-	}
 	parentState := parent.Meta().WorktreeReminder
-	if parentState == nil || !parentState.HasIssuedInGeneration || parentState.IssuedCompactionCount != 7 {
+	if parentState == nil || !WorktreeReminderStateEqual(*parentState, *state) {
 		t.Fatalf("expected parent reminder state unchanged, got %+v", parentState)
+	}
+	if parentState.ContextID == state.ContextID || parentState.Branch == state.Branch {
+		t.Fatal("expected forked reminder pointers to be deep-copied")
+	}
+}
+
+func TestSetWorktreeReminderStateOwnsStableTargetContextID(t *testing.T) {
+	store := newSessionTestStore(t)
+	firstTarget := WorktreeReminderState{
+		Mode: WorktreeReminderModeEnter,
+		WorktreeContext: WorktreeContext{
+			Branch:        OptionalWorktreeBranch("feature/first"),
+			WorktreePath:  "/tmp/worktree-first",
+			WorkspaceRoot: "/tmp/workspace",
+			EffectiveCwd:  "/tmp/shared-cwd",
+		},
+	}
+	if err := store.SetWorktreeReminderState(&firstTarget); err != nil {
+		t.Fatalf("set first target: %v", err)
+	}
+	first := CloneWorktreeReminderState(store.Meta().WorktreeReminder)
+	if first == nil || first.ContextID == nil || first.ContextID.Version() != 4 {
+		t.Fatalf("first worktree context id = %v, want UUID v4", first)
+	}
+
+	if err := store.SetWorktreeReminderState(&firstTarget); err != nil {
+		t.Fatalf("reapply first target: %v", err)
+	}
+	reapplied := store.Meta().WorktreeReminder
+	if reapplied == nil || !WorktreeReminderStateEqual(*first, *reapplied) {
+		t.Fatalf("reapplied target = %+v, want stable identity %+v", reapplied, first)
+	}
+
+	changedTarget := firstTarget
+	changedTarget.Branch = OptionalWorktreeBranch("feature/second")
+	if err := store.SetWorktreeReminderState(&changedTarget); err != nil {
+		t.Fatalf("set changed target: %v", err)
+	}
+	changed := store.Meta().WorktreeReminder
+	if changed == nil || changed.ContextID == nil || *changed.ContextID == *first.ContextID {
+		t.Fatalf("changed target context id = %v, want new identity after target change", changed)
+	}
+	if changed.EffectiveCwd != first.EffectiveCwd {
+		t.Fatalf("changed target effective cwd = %q, want same cwd %q", changed.EffectiveCwd, first.EffectiveCwd)
+	}
+}
+
+func TestSetWorktreeReminderStateRejectsEmptyPresentBranch(t *testing.T) {
+	store := newSessionTestStore(t)
+	emptyBranch := " "
+	err := store.SetWorktreeReminderState(&WorktreeReminderState{
+		Mode: WorktreeReminderModeEnter,
+		WorktreeContext: WorktreeContext{
+			Branch:        &emptyBranch,
+			WorktreePath:  "/tmp/worktree",
+			WorkspaceRoot: "/tmp/workspace",
+			EffectiveCwd:  "/tmp/worktree",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected empty present worktree branch to be rejected")
 	}
 }
 
@@ -1117,13 +1180,13 @@ func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testi
 		t.Fatalf("SetUsageState parent: %v", err)
 	}
 	if err := parent.SetWorktreeReminderState(&WorktreeReminderState{
-		Mode:                  WorktreeReminderModeEnter,
-		Branch:                "feature/child-context",
-		WorktreePath:          "/tmp/work-parent-wt",
-		WorkspaceRoot:         "/tmp/work-parent",
-		EffectiveCwd:          "/tmp/work-parent-wt/pkg",
-		HasIssuedInGeneration: true,
-		IssuedCompactionCount: 2,
+		Mode: WorktreeReminderModeEnter,
+		WorktreeContext: WorktreeContext{
+			Branch:        OptionalWorktreeBranch("feature/child-context"),
+			WorktreePath:  "/tmp/work-parent-wt",
+			WorkspaceRoot: "/tmp/work-parent",
+			EffectiveCwd:  "/tmp/work-parent-wt/pkg",
+		},
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
@@ -1169,11 +1232,8 @@ func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testi
 	if meta.WorktreeReminder == nil {
 		t.Fatal("expected worktree reminder")
 	}
-	if meta.WorktreeReminder.Branch != "feature/child-context" {
+	if meta.WorktreeReminder.Branch == nil || *meta.WorktreeReminder.Branch != "feature/child-context" {
 		t.Fatalf("worktree reminder = %+v, want parent branch", meta.WorktreeReminder)
-	}
-	if meta.WorktreeReminder.HasIssuedInGeneration || meta.WorktreeReminder.IssuedCompactionCount != 0 {
-		t.Fatalf("worktree reminder generation flags = %+v, want reset", meta.WorktreeReminder)
 	}
 }
 

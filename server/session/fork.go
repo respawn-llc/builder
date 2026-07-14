@@ -63,7 +63,7 @@ func streamChildFromParent(parent *Store, parentMeta Meta, forkName string, targ
 
 	child.mu.Lock()
 	child.meta.Locked = cloneLockedContract(parentMeta.Locked)
-	child.meta.WorktreeReminder = forkedWorktreeReminderState(parentMeta.WorktreeReminder)
+	child.meta.WorktreeReminder = CloneWorktreeReminderState(parentMeta.WorktreeReminder)
 	child.meta.UsageState = nil
 	child.meta.ParentSessionID = parentMeta.SessionID
 	child.meta.Name = strings.TrimSpace(forkName)
@@ -288,7 +288,7 @@ func InitializeChildFromParentWithOptions(child *Store, parent *Store, opts Chil
 	}
 	child.meta.WorkspaceRoot = parentMeta.WorkspaceRoot
 	child.meta.WorkspaceContainer = parentMeta.WorkspaceContainer
-	child.meta.WorktreeReminder = forkedWorktreeReminderState(parentMeta.WorktreeReminder)
+	child.meta.WorktreeReminder = CloneWorktreeReminderState(parentMeta.WorktreeReminder)
 	child.meta.UsageState = nil
 	child.meta.ParentSessionID = parentMeta.SessionID
 	if opts.InheritContinuation {
@@ -299,24 +299,6 @@ func InitializeChildFromParentWithOptions(child *Store, parent *Store, opts Chil
 	child.meta.UpdatedAt = time.Now().UTC()
 	child.mu.Unlock()
 	return nil
-}
-
-func cloneWorktreeReminderState(in *WorktreeReminderState) *WorktreeReminderState {
-	if in == nil {
-		return nil
-	}
-	copyState := *in
-	return &copyState
-}
-
-func forkedWorktreeReminderState(in *WorktreeReminderState) *WorktreeReminderState {
-	copyState := cloneWorktreeReminderState(in)
-	if copyState == nil {
-		return nil
-	}
-	copyState.HasIssuedInGeneration = false
-	copyState.IssuedCompactionCount = 0
-	return copyState
 }
 
 // replayDerivedState folds the fork-derived child metadata over the replayed

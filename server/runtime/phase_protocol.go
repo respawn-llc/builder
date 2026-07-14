@@ -2,7 +2,7 @@ package runtime
 
 import (
 	"context"
-	"strings"
+	"fmt"
 
 	"core/server/llm"
 )
@@ -35,13 +35,39 @@ func (e *Engine) phaseProtocolState() *phaseProtocolState {
 	return e.phaseState
 }
 
-func (p *defaultPhaseProtocol) Apply(ctx context.Context, resp llm.Response, assistant llm.Message, localToolCalls []llm.ToolCall, hostedToolExecutions []hostedToolExecution) phaseProtocolTurn {
+func (p *defaultPhaseProtocol) Apply(ctx context.Context, resp llm.Response, assistant llm.Message, localToolCalls []llm.ToolCall, hostedToolExecutions []hostedToolExecution) (phaseProtocolTurn, error) {
 	phaseProtocolEnabled := p.EnabledForModel(ctx)
 	structuredPhaseProtocol := shouldTreatMissingAssistantPhaseAsCommentary(resp)
-	hasExplicitAssistantPhase := strings.TrimSpace(string(assistant.Phase)) != ""
-	enforcePhaseProtocol := phaseProtocolEnabled && (structuredPhaseProtocol || hasExplicitAssistantPhase)
-	missingAssistantPhase := enforcePhaseProtocol && assistant.Phase == ""
+	effectivePhase := resp.ProviderPhase
+	providerPhase := effectivePhase.Value()
+	if effectivePhase != nil {
+		if providerPhase != nil {
+			if assistant.Phase != *providerPhase {
+				return phaseProtocolTurn{}, fmt.Errorf(
+					"assistant phase projection mismatch: provider phase %q, assistant phase %q",
+					*providerPhase,
+					assistant.Phase,
+				)
+			}
+		} else if assistant.Phase != "" {
+			return phaseProtocolTurn{}, fmt.Errorf(
+				"assistant phase projection mismatch: provider phase absent, assistant phase %q",
+				assistant.Phase,
+			)
+		}
+	} else {
+		switch assistant.Phase {
+		case llm.MessagePhaseCommentary:
+			effectivePhase = llm.CommentaryProviderPhase()
+		case llm.MessagePhaseFinal:
+			effectivePhase = llm.FinalProviderPhase()
+		}
+	}
+	effectivePhasePresent := effectivePhase.Value() != nil
+	enforcePhaseProtocol := phaseProtocolEnabled && (structuredPhaseProtocol || effectivePhasePresent)
+	missingAssistantPhase := enforcePhaseProtocol && effectivePhase.IsAbsent()
 	if missingAssistantPhase {
+		effectivePhase = llm.CommentaryProviderPhase()
 		assistant.Phase = llm.MessagePhaseCommentary
 	}
 	if len(localToolCalls) > 0 {
@@ -57,11 +83,12 @@ func (p *defaultPhaseProtocol) Apply(ctx context.Context, resp llm.Response, ass
 	}
 	return phaseProtocolTurn{
 		Assistant:             assistant,
+		EffectivePhase:        effectivePhase,
 		LocalToolCalls:        localToolCalls,
 		HostedToolExecutions:  hostedToolExecutions,
 		EnforcePhaseProtocol:  enforcePhaseProtocol,
 		MissingAssistantPhase: missingAssistantPhase,
-	}
+	}, nil
 }
 
 func shouldTreatMissingAssistantPhaseAsCommentary(resp llm.Response) bool {

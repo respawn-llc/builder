@@ -79,6 +79,7 @@
 - `complete_node` is workflow-control infrastructure and is available in tool completion mode regardless of subagent role tool config.
 - `shell_command` mode keeps dynamic completion contracts out of request metadata and instructs the agent to run `kent task complete` from the shell. The command infers the current run from `KENT_SESSION_ID` in agent sessions; outside agent sessions it requires `--force` plus one explicit selector.
 - `unstructured_output` mode keeps dynamic completion contracts out of request metadata and requires the assistant final answer to be exactly one raw JSON object.
+- Any assistant answer that would otherwise resolve an active workflow run must pass through the run's selected completion contract in every completion mode, whether or not the answer carries an explicit final-phase designation.
 - Normal assistant final answers are invalid in tool and shell-command workflow modes. Runtime appends a nudge and continues until valid completion, `ask_question`, interruption, cancellation, protocol cap, or runtime error.
 - Completion payloads expose only optional `transition`, optional `commentary`, and server-derived possible provision fields as top-level properties. They never expose raw `next_node`.
 - Provision field outputs are flat strings. Completion payload parsers accept any JSON value for a provision field and serialize non-string values into that flat string slot; downstream input bindings never receive structured values.
@@ -88,6 +89,7 @@
 - Dynamic request metadata in `structured_output` and `tool` modes can affect prompt-cache continuity when workflow completion contracts change. `shell_command` and `unstructured_output` keep completion contracts in appended prompt text instead of request metadata.
 - Runtime observes durable external completion before each model turn, immediately after a model response returns and before assistant/tool persistence, and after local tool results are persisted.
 - Runtime enforces one protocol cap. Repeated final answers in invalid modes or invalid completion attempts interrupt the run after `[workflow].max_invalid_completion_attempts = 5`.
+- Every workflow execution-loop exit represents successful completion, a typed resumable blocked state, a typed non-success terminal outcome, or explicit transfer to interactive ownership. The loop must not return normally while its durable run remains active without an owner.
 - No wall-clock runtime cap is required for v1.
 
 ## Script Nodes

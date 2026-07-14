@@ -270,12 +270,19 @@ func TestMessagesFromItems_PreservesHeadlessExitMessageType(t *testing.T) {
 }
 
 func TestMessagesFromItems_PreservesWorktreeExitMessageType(t *testing.T) {
+	worktreeContext := &session.WorktreeContext{
+		Branch:        session.OptionalWorktreeBranch("feature/typed-context"),
+		WorktreePath:  "/tmp/worktree",
+		WorkspaceRoot: "/tmp/workspace",
+		EffectiveCwd:  "/tmp/workspace/pkg",
+	}
 	items := []ResponseItem{
 		{
-			Type:        ResponseItemTypeMessage,
-			Role:        RoleDeveloper,
-			MessageType: MessageTypeWorktreeModeExit,
-			Content:     "returned to main workspace",
+			Type:            ResponseItemTypeMessage,
+			Role:            RoleDeveloper,
+			MessageType:     MessageTypeWorktreeModeExit,
+			WorktreeContext: worktreeContext,
+			Content:         "returned to main workspace",
 		},
 	}
 	msgs := MessagesFromItems(items)
@@ -285,12 +292,55 @@ func TestMessagesFromItems_PreservesWorktreeExitMessageType(t *testing.T) {
 	if msgs[0].MessageType != MessageTypeWorktreeModeExit {
 		t.Fatalf("expected message type to round-trip, got %q", msgs[0].MessageType)
 	}
+	if msgs[0].WorktreeContext == nil || !session.WorktreeContextEqual(*msgs[0].WorktreeContext, *worktreeContext) {
+		t.Fatalf("worktree context = %+v, want %+v", msgs[0].WorktreeContext, worktreeContext)
+	}
 	roundTrip := ItemsFromMessages(msgs)
 	if len(roundTrip) != 1 {
 		t.Fatalf("expected one round-trip item, got %d", len(roundTrip))
 	}
 	if roundTrip[0].MessageType != MessageTypeWorktreeModeExit {
 		t.Fatalf("expected round-trip item message type, got %q", roundTrip[0].MessageType)
+	}
+	if roundTrip[0].WorktreeContext == nil || !session.WorktreeContextEqual(*roundTrip[0].WorktreeContext, *worktreeContext) {
+		t.Fatalf("round-trip worktree context = %+v, want %+v", roundTrip[0].WorktreeContext, worktreeContext)
+	}
+
+	cloned := CloneResponseItems(roundTrip)
+	*roundTrip[0].WorktreeContext.Branch = "mutated"
+	if cloned[0].WorktreeContext == nil ||
+		cloned[0].WorktreeContext.Branch == nil ||
+		worktreeContext.Branch == nil ||
+		*cloned[0].WorktreeContext.Branch != *worktreeContext.Branch {
+		t.Fatalf("cloned worktree context aliased source: %+v", cloned[0].WorktreeContext)
+	}
+}
+
+func TestPreparedOpenAIItemKeepsWorktreeContextOutOfProviderPayload(t *testing.T) {
+	target := &session.WorktreeContext{
+		Branch:        session.OptionalWorktreeBranch("feature/internal-metadata"),
+		WorktreePath:  "/tmp/worktree",
+		WorkspaceRoot: "/tmp/workspace",
+		EffectiveCwd:  "/tmp/worktree",
+	}
+	items := ItemsFromMessages([]Message{{
+		Role:            RoleDeveloper,
+		MessageType:     MessageTypeWorktreeMode,
+		WorktreeContext: target,
+		Content:         "worktree context",
+	}})
+	if len(items) != 1 ||
+		items[0].WorktreeContext == nil ||
+		!session.WorktreeContextEqual(*items[0].WorktreeContext, *target) {
+		t.Fatalf("prepared canonical items lost worktree context: %+v", items)
+	}
+
+	var providerPayload map[string]json.RawMessage
+	if err := json.Unmarshal(items[0].Raw, &providerPayload); err != nil {
+		t.Fatalf("decode prepared provider payload: %v", err)
+	}
+	if _, exists := providerPayload["worktree_context"]; exists {
+		t.Fatalf("provider payload contains internal worktree context: %s", items[0].Raw)
 	}
 }
 

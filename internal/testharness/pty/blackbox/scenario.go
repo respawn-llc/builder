@@ -35,12 +35,25 @@ type Dimensions struct {
 }
 
 type RequiredOperation struct {
-	ID              uuid.UUID `json:"id"`
-	Route           Route     `json:"route"`
-	Probe           *string   `json:"probe,omitempty"`
-	Outcome         Outcome   `json:"outcome"`
-	Output          *string   `json:"output,omitempty"`
-	SessionCacheKey bool      `json:"session_cache_key"`
+	ID              uuid.UUID      `json:"id"`
+	Route           Route          `json:"route"`
+	Probe           *string        `json:"probe,omitempty"`
+	Outcome         Outcome        `json:"outcome"`
+	Output          *string        `json:"output,omitempty"`
+	ResponsePhase   *ResponsePhase `json:"response_phase,omitempty"`
+	SessionCacheKey bool           `json:"session_cache_key"`
+}
+
+type ResponsePhase string
+
+const (
+	ResponsePhaseAbsent     ResponsePhase = "absent"
+	ResponsePhaseCommentary ResponsePhase = "commentary"
+	ResponsePhaseFinal      ResponsePhase = "final_answer"
+)
+
+func NewResponsePhase(phase ResponsePhase) *ResponsePhase {
+	return &phase
 }
 
 type Outcome string
@@ -185,8 +198,21 @@ func (operation RequiredOperation) Validate() error {
 	if operation.Output != nil && len(*operation.Output) > maxScenarioPayload {
 		return errors.New("model payload exceeds limit")
 	}
-	if operation.Route != RouteResponses && (operation.Probe != nil || operation.Output != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
+	if operation.Route != RouteResponses && (operation.Probe != nil || operation.Output != nil || operation.ResponsePhase != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
 		return errors.New("only responses operations may declare probe, output, session cache key, stream, or hold outcome")
+	}
+	emitsAssistantMessage := operation.Route == RouteResponses && (operation.Output != nil || operation.Outcome == OutcomeStream)
+	if emitsAssistantMessage {
+		if operation.ResponsePhase == nil {
+			return errors.New("responses operation emitting an assistant message requires response_phase")
+		}
+		switch *operation.ResponsePhase {
+		case ResponsePhaseAbsent, ResponsePhaseCommentary, ResponsePhaseFinal:
+		default:
+			return errors.New("responses operation emitting an assistant message requires a valid response_phase")
+		}
+	} else if operation.ResponsePhase != nil {
+		return errors.New("response_phase requires an emitted assistant message")
 	}
 	if operation.Probe != nil {
 		probe, err := uuid.Parse(*operation.Probe)
@@ -204,12 +230,13 @@ func (operation RequiredOperation) Validate() error {
 
 func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		ID              uuid.UUID `json:"id"`
-		Route           Route     `json:"route"`
-		Probe           *string   `json:"probe"`
-		Outcome         Outcome   `json:"outcome"`
-		Output          *string   `json:"output"`
-		SessionCacheKey bool      `json:"session_cache_key"`
+		ID              uuid.UUID      `json:"id"`
+		Route           Route          `json:"route"`
+		Probe           *string        `json:"probe"`
+		Outcome         Outcome        `json:"outcome"`
+		Output          *string        `json:"output"`
+		ResponsePhase   *ResponsePhase `json:"response_phase"`
+		SessionCacheKey bool           `json:"session_cache_key"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -217,6 +244,7 @@ func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 	allowed := map[string]struct{}{"id": {}, "route": {}, "output": {}}
 	if raw.Route == RouteResponses {
 		allowed["probe"] = struct{}{}
+		allowed["response_phase"] = struct{}{}
 		allowed["session_cache_key"] = struct{}{}
 	}
 	allowed["outcome"] = struct{}{}
@@ -229,6 +257,7 @@ func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 		Probe:           raw.Probe,
 		Outcome:         raw.Outcome,
 		Output:          raw.Output,
+		ResponsePhase:   raw.ResponsePhase,
 		SessionCacheKey: raw.SessionCacheKey,
 	}
 	return nil

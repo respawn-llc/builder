@@ -376,8 +376,9 @@ func TestSubmitUserMessageMissingPhaseWithToolCallsPublishesContiguousAssistantE
 				Role:    llm.RoleAssistant,
 				Content: "working without phase",
 			},
-			ToolCalls: []llm.ToolCall{{ID: "call_shell_missing_phase", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
-			Usage:     llm.Usage{WindowTokens: 200000},
+			ProviderPhase: llm.AbsentProviderPhase(),
+			ToolCalls:     []llm.ToolCall{{ID: "call_shell_missing_phase", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
+			Usage:         llm.Usage{WindowTokens: 200000},
 		},
 		{
 			Assistant: llm.Message{
