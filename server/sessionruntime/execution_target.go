@@ -130,7 +130,7 @@ func (effect *worktreeTransitionBoundaryEffect) Apply(ctx context.Context) error
 	if effect.complete != nil {
 		effect.complete(err)
 	}
-	return nil
+	return err
 }
 
 func (effect *worktreeTransitionBoundaryEffect) Cancel(cause error) {
