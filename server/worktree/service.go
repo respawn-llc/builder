@@ -246,6 +246,17 @@ func (s *Service) Close() error {
 	if s.cancelTransitions != nil {
 		s.cancelTransitions()
 	}
+	s.transitionMu.Lock()
+	completions := make([]func(error), 0, len(s.transitions))
+	for _, pending := range s.transitions {
+		if pending.complete != nil {
+			completions = append(completions, pending.complete)
+		}
+	}
+	s.transitionMu.Unlock()
+	for _, complete := range completions {
+		complete(context.Canceled)
+	}
 	s.transitionWG.Wait()
 	return nil
 }
