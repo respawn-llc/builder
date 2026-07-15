@@ -35,7 +35,7 @@ func (e *Engine) materializePendingWorktreeReminder(stepID string) error {
 	if state == nil {
 		return nil
 	}
-	metaResult, err := e.activeMetaContextBuilder(e.currentModel()).Build(metaContextBuildOptions{WorktreeReminder: state})
+	metaResult, err := e.activeMetaContextBuilder(e.currentModel(), e.cfg.SkillPolicy).Build(metaContextBuildOptions{WorktreeReminder: state})
 	if err != nil {
 		return err
 	}
