@@ -10,6 +10,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/config"
 	"core/shared/transcript"
 )
 
@@ -413,10 +414,10 @@ func reviewerSessionID(sessionID string) string {
 	return trimmed + "/supervisor"
 }
 
-func appendMissingReviewerMetaContext(messages []llm.Message, workspaceRoot string, model string, thinkingLevel string, globalConfigDir string, headless bool, disabledSkills map[string]bool) ([]llm.Message, error) {
+func appendMissingReviewerMetaContext(messages []llm.Message, workspaceRoot string, model string, thinkingLevel string, globalConfigDir string, headless bool, skillPolicy config.SkillPolicy) ([]llm.Message, error) {
 	metaMessages, transcript := splitMetaContextMessages(messages)
 	metaMessages = filterReviewerMetaMessages(metaMessages)
-	builder := newMetaContextBuilder(workspaceRoot, model, thinkingLevel, disabledSkills, time.Now()).withGlobalConfigDir(globalConfigDir)
+	builder := newMetaContextBuilder(workspaceRoot, model, thinkingLevel, skillPolicy, time.Now()).withGlobalConfigDir(globalConfigDir)
 	metaResult, err := builder.Build(metaContextBuildOptions{
 		ExistingMessages:          metaMessages,
 		IncludeAgents:             true,
@@ -438,8 +439,11 @@ func filterReviewerMetaMessages(messages []llm.Message) []llm.Message {
 	}
 	out := make([]llm.Message, 0, len(messages))
 	for _, message := range messages {
-		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeSubagents {
-			continue
+		if message.Role == llm.RoleDeveloper {
+			switch message.MessageType {
+			case llm.MessageTypeSkills, llm.MessageTypeSubagents:
+				continue
+			}
 		}
 		out = append(out, message)
 	}

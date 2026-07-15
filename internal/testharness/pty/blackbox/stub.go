@@ -1,6 +1,7 @@
 package blackbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -307,6 +308,12 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 	}
 	if required.Probe != nil && !requestContainsProbe(body, *required.Probe) {
 		return nil, errors.New("required response probe was not present in typed input")
+	}
+	if required.InputProbe != nil && !requestInputContainsProbe(body, *required.InputProbe) {
+		return nil, errors.New("required probe was not present in request input")
+	}
+	if required.ForbiddenProbe != nil && requestInputContainsProbe(body, *required.ForbiddenProbe) {
+		return nil, errors.New("forbidden response probe was present in typed input")
 	}
 	if required.SessionCacheKey && !hasMatchingSessionCacheKey(body, headers) {
 		return nil, errors.New("required response session_id and prompt_cache_key relation was not present")
@@ -673,6 +680,16 @@ func requestContainsProbe(body []byte, probe string) bool {
 		}
 	}
 	return false
+}
+
+func requestInputContainsProbe(body []byte, probe string) bool {
+	var request struct {
+		Input json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(body, &request) != nil || len(request.Input) == 0 {
+		return false
+	}
+	return bytes.Contains(request.Input, []byte(probe))
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) error {

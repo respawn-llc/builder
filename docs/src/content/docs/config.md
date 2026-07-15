@@ -268,14 +268,23 @@ More info on the [Subagents page](../headless/).
 
 ### Skills
 
-`[skills]` is a file-only per-skill boolean table in `config.toml` to disable unneeded skills. Keys are matched case-insensitively.
+`[skills]` is a file-only boolean table in `config.toml`. Set the reserved `enabled` key to `false` to disable skill discovery and model-visible skill reminders globally. Skills are enabled when this key is omitted.
 
 ```toml
 [skills]
-"<skill name>" = true # | false
+enabled = false
+"<skill name>" = false
+
+[subagents.worker.skills]
+enabled = true
+"<skill name>" = false
 ```
 
 Notes:
 
-- Skill toggles are only applied when Kent creates a new conversation/session.
+- `[subagents.<role>.skills].enabled` overrides the global setting for that role. An omitted role setting inherits the global policy, while an explicit `true` re-enables skills for the role.
+- Per-skill toggles remain configured while the subsystem is disabled and apply again when it is re-enabled.
+- Skill keys are matched case-insensitively. Every case variant of `enabled` is reserved, so a skill with that normalized name cannot be toggled individually.
 - Use `"quoted names"` to refer to skill keys containing spaces.
+- Restart Kent after editing `config.toml`. Newly launched or resumed agents then use the effective policy. An active main transcript keeps its existing skills reminder until context is reconstructed during compaction; reviewer context is reconstructed independently.
+- When the subsystem is disabled, `/status` reports a neutral disabled state without scanning or enumerating skills or showing skill-discovery warnings.

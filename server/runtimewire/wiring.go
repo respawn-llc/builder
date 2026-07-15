@@ -203,7 +203,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 		PromptFacingSnapshotReloader:  promptReloader,
 		ProviderCapabilitiesOverride:  providerCapabilitiesOverride,
 		EnabledTools:                  enabledTools,
-		DisabledSkills:                config.DisabledSkillToggles(active),
+		SkillPolicy:                   config.ResolveSkillPolicy(active),
 		SubagentCatalogSettings:       active,
 		SystemPromptFiles:             active.SystemPromptFiles,
 		AutoCompactTokenLimit:         active.ContextCompactionThresholdTokens,

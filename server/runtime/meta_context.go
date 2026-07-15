@@ -98,20 +98,20 @@ type metaContextBuilder struct {
 	globalConfigDir  string
 	model            string
 	thinkingLevel    string
-	disabledSkills   map[string]bool
+	skillPolicy      config.SkillPolicy
 	subagentSettings config.Settings
 	enabledTools     []toolspec.ID
 	now              time.Time
 }
 
-func newMetaContextBuilder(workspaceRoot, model, thinkingLevel string, disabledSkills map[string]bool, now time.Time) metaContextBuilder {
+func newMetaContextBuilder(workspaceRoot, model, thinkingLevel string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
 	trimmedRoot := strings.TrimSpace(workspaceRoot)
 	return metaContextBuilder{
 		workspaceRoot:  trimmedRoot,
 		environmentCWD: trimmedRoot,
 		model:          strings.TrimSpace(model),
 		thinkingLevel:  strings.TrimSpace(thinkingLevel),
-		disabledSkills: normalizedDisabledSkills(disabledSkills),
+		skillPolicy:    skillPolicy,
 		now:            now,
 	}
 }
@@ -165,18 +165,18 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 	}
 
 	if opts.IncludeSkills {
-		skills, issues, err := discoverInjectedSkills(b.workspaceRoot, b.globalConfigDir, b.disabledSkills)
+		discovery, err := discoverInjectedSkills(b.workspaceRoot, b.globalConfigDir, b.skillPolicy)
 		if err != nil {
 			return metaContextBuildResult{}, err
 		}
 		if opts.IncludeSkillWarnings {
-			collector.addWarnings(skillDiscoveryWarningTexts(issues))
+			collector.addWarnings(skillDiscoveryWarningTexts(discovery.Issues))
 		}
-		if len(skills) > 0 {
+		if len(discovery.Skills) > 0 {
 			collector.addMessages([]llm.Message{{
 				Role:        llm.RoleDeveloper,
 				MessageType: llm.MessageTypeSkills,
-				Content:     renderSkillsContext(skills),
+				Content:     renderSkillsContext(discovery.Skills),
 			}})
 		}
 	}

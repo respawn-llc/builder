@@ -87,6 +87,77 @@ func TestApplySubagentRoleOverridesAppliesProviderVerbosityCapability(t *testing
 	}
 }
 
+func TestApplySubagentRoleOverridesResolvesSkillsPolicyAndDormantToggles(t *testing.T) {
+	tests := []struct {
+		name              string
+		base              config.Settings
+		role              config.SubagentRole
+		wantEnabled       bool
+		wantAPIResult     bool
+		wantInheritedTool bool
+	}{
+		{
+			name: "omitted role policy inherits global disabled",
+			base: config.Settings{
+				SkillSubsystem: config.SkillSubsystemDisabled,
+			},
+			role:        config.SubagentRole{},
+			wantEnabled: false,
+		},
+		{
+			name: "explicit role false overrides global enabled",
+			base: config.Settings{},
+			role: config.SubagentRole{
+				Settings: config.Settings{SkillSubsystem: config.SkillSubsystemDisabled},
+				Sources:  map[string]string{"skills.enabled": "file"},
+			},
+			wantEnabled: false,
+		},
+		{
+			name: "explicit role true re-enables and applies ordinary toggles",
+			base: config.Settings{
+				SkillSubsystem: config.SkillSubsystemDisabled,
+				SkillToggles: map[string]bool{
+					"apiresult": false,
+					"inherited": false,
+				},
+			},
+			role: config.SubagentRole{
+				Settings: config.Settings{
+					SkillSubsystem: config.SkillSubsystemEnabled,
+					SkillToggles:   map[string]bool{"apiresult": true},
+				},
+				Sources: map[string]string{
+					"skills.enabled":   "file",
+					"skills.apiresult": "file",
+				},
+			},
+			wantEnabled:       true,
+			wantAPIResult:     true,
+			wantInheritedTool: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settings := cloneSettings(tt.base)
+			applySubagentRoleOverrides(&settings, tt.role, true)
+			policy := config.ResolveSkillPolicy(settings)
+			if policy.Enabled() != tt.wantEnabled {
+				t.Fatalf("skills policy enabled = %t, want %t", policy.Enabled(), tt.wantEnabled)
+			}
+			if tt.wantEnabled {
+				if got := policy.SkillEnabled("apiresult"); got != tt.wantAPIResult {
+					t.Fatalf("apiresult enabled = %t, want %t", got, tt.wantAPIResult)
+				}
+				if got := policy.SkillEnabled("inherited"); got != tt.wantInheritedTool {
+					t.Fatalf("inherited skill enabled = %t, want %t", got, tt.wantInheritedTool)
+				}
+			}
+		})
+	}
+}
+
 func TestApplyReviewerInheritanceDoesNotCopyMainProviderCapabilitiesForExplicitReviewerEndpoint(t *testing.T) {
 	settings := config.Settings{
 		ProviderCapabilities: config.ProviderCapabilitiesOverride{

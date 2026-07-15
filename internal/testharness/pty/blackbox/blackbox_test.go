@@ -74,6 +74,62 @@ func TestDecodeScenarioRejectsInvalidIdentitiesPayloadsAndRouteCombinations(t *t
 	}
 }
 
+func TestResponsesStubRejectsForbiddenTypedInputProbe(t *testing.T) {
+	forbidden := uuid.New().String()
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID:             uuid.New(),
+		Route:          blackbox.RouteResponses,
+		ForbiddenProbe: &forbidden,
+		Outcome:        blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(func() { stub.Close() })
+
+	response, err := http.Post(stub.URL()+"/responses", "application/json", strings.NewReader(`{"input":[{"role":"user","content":[{"type":"input_text","text":"`+forbidden+`"}]}]}`))
+	if err != nil {
+		t.Fatalf("POST responses: %v", err)
+	}
+	if closeErr := response.Body.Close(); closeErr != nil {
+		t.Fatalf("close response: %v", closeErr)
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+	if err := stub.Verify(); err == nil {
+		t.Fatal("Verify accepted a forbidden typed input probe")
+	}
+}
+
+func TestResponsesStubRequiresProbeAnywhereInTypedRequestInput(t *testing.T) {
+	probe := uuid.New().String()
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID:         uuid.New(),
+		Route:      blackbox.RouteResponses,
+		InputProbe: &probe,
+		Outcome:    blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(func() { stub.Close() })
+
+	response, err := http.Post(stub.URL()+"/responses", "application/json", strings.NewReader(`{"input":[{"role":"developer","content":[{"type":"input_text","text":"skill `+probe+`"}]}]}`))
+	if err != nil {
+		t.Fatalf("POST responses: %v", err)
+	}
+	if closeErr := response.Body.Close(); closeErr != nil {
+		t.Fatalf("close response: %v", closeErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	if err := stub.Verify(); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
 func TestPredicateVocabularyAndCompositesUseStructuredObservation(t *testing.T) {
 	t.Parallel()
 

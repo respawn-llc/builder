@@ -218,6 +218,8 @@ func SubagentRoleHasMeaningfulDiff(base Settings, role SubagentRole) bool {
 
 func subagentSourceDiffers(base Settings, role SubagentRole, key string) bool {
 	switch key {
+	case skillsEnabledSourceKey:
+		return false
 	case "model":
 		return strings.TrimSpace(base.Model) != strings.TrimSpace(role.Settings.Model)
 	case "thinking_level":

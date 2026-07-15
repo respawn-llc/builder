@@ -221,6 +221,88 @@ func TestPlannerReappliesPersistedSubagentRoleSettingsOnResume(t *testing.T) {
 	}
 }
 
+func TestPlannerReappliesPersistedSubagentSkillsPolicyOnResume(t *testing.T) {
+	tests := []struct {
+		name                string
+		configLines         []string
+		wantEnabled         bool
+		wantAPIResult       bool
+		wantEnabledSource   string
+		wantAPIResultSource string
+	}{
+		{
+			name: "omitted role policy inherits global disabled",
+			configLines: []string{
+				"[skills]",
+				"enabled = false",
+				"apiresult = false",
+				"",
+				"[subagents.worker]",
+				"thinking_level = \"high\"",
+			},
+			wantEnabled:         false,
+			wantEnabledSource:   "file",
+			wantAPIResultSource: "file",
+		},
+		{
+			name: "explicit role true re-enables global disabled",
+			configLines: []string{
+				"[skills]",
+				"enabled = false",
+				"apiresult = false",
+				"",
+				"[subagents.worker.skills]",
+				"enabled = true",
+				"apiresult = true",
+			},
+			wantEnabled:         true,
+			wantAPIResult:       true,
+			wantEnabledSource:   "subagent",
+			wantAPIResultSource: "subagent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			workspace := t.TempDir()
+			loaded := loadLaunchConfig(t, workspace, tt.configLines...)
+			containerDir := filepath.Join(root, "projects", "project-a", "sessions")
+			store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
+			if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
+				t.Fatalf("SetContinuationContext: %v", err)
+			}
+			planner := Planner{
+				Config: config.App{
+					WorkspaceRoot:   workspace,
+					PersistenceRoot: root,
+					Settings:        loaded.Settings,
+					Source:          loaded.Source,
+				},
+				ContainerDir: containerDir,
+			}
+
+			plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+			if err != nil {
+				t.Fatalf("PlanSession: %v", err)
+			}
+			policy := config.ResolveSkillPolicy(plan.ActiveSettings)
+			if policy.Enabled() != tt.wantEnabled {
+				t.Fatalf("skills policy enabled = %t, want %t", policy.Enabled(), tt.wantEnabled)
+			}
+			if tt.wantEnabled && policy.SkillEnabled("apiresult") != tt.wantAPIResult {
+				t.Fatalf("apiresult enabled = %t, want %t", policy.SkillEnabled("apiresult"), tt.wantAPIResult)
+			}
+			if got := plan.Source.Sources["skills.enabled"]; got != tt.wantEnabledSource {
+				t.Fatalf("skills.enabled source = %q, want %q", got, tt.wantEnabledSource)
+			}
+			if got := plan.Source.Sources["skills.apiresult"]; got != tt.wantAPIResultSource {
+				t.Fatalf("skills.apiresult source = %q, want %q", got, tt.wantAPIResultSource)
+			}
+		})
+	}
+}
+
 func TestResumedSessionUsesActiveProviderIdentifierWithoutPersistingIt(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)

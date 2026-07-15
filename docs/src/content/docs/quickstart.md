@@ -116,13 +116,14 @@ Kent discovers skills from:
 
 Kent also seeds preinstalled skills into `~/.kent/.generated/skills`. Do not edit `~/.kent/.generated`; copy a generated skill into a workspace or global skill root to customize it.
 
-You can disable skills for new sessions in `config.toml`:
+You can disable individual skills in `config.toml`:
 
 ```toml
 [skills]
 creating-skills = false
 ```
-Changes take effect when you start a new session.
+
+For whole-subsystem and role-specific controls, see [Configuration](../config/#skills).
 
 Kent discovers custom slash commands from Markdown files in:
 

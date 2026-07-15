@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"core/server/skillcatalog"
+	"core/shared/config"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,19 +24,24 @@ type SkillInspection struct {
 	Reason      string
 }
 
+type SkillInspectionResult struct {
+	State       skillcatalog.DiscoveryState
+	Inspections []SkillInspection
+}
+
 func (e *Engine) CompactionCount() int {
 	return e.compactionRuntimeState().Count()
 }
 
-func InspectSkills(workspaceRoot, globalConfigDir string, disabledSkills map[string]bool) ([]SkillInspection, error) {
+func InspectSkills(workspaceRoot, globalConfigDir string, policy config.SkillPolicy) (SkillInspectionResult, error) {
 	result, err := skillcatalog.Discover(skillcatalog.Options{
-		WorkspaceRoot:  workspaceRoot,
-		ConfigRoot:     globalConfigDir,
-		DisabledSkills: disabledSkills,
-		ReadDir:        readSkillsDir,
+		WorkspaceRoot: workspaceRoot,
+		ConfigRoot:    globalConfigDir,
+		Policy:        policy,
+		ReadDir:       readSkillsDir,
 	})
 	if err != nil {
-		return nil, err
+		return SkillInspectionResult{}, err
 	}
 	inspections := make([]SkillInspection, 0, len(result.Inspections))
 	for _, inspection := range result.Inspections {
@@ -50,7 +56,7 @@ func InspectSkills(workspaceRoot, globalConfigDir string, disabledSkills map[str
 			Reason:      inspection.Reason,
 		})
 	}
-	return inspections, nil
+	return SkillInspectionResult{State: result.State, Inspections: inspections}, nil
 }
 
 func inspectSkillAtPath(fallbackName, skillPath string) SkillInspection {

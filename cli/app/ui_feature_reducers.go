@@ -87,6 +87,8 @@ func (r uiStatusFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		if m.status.snapshot.Git.Visible {
 			snapshot.Git = m.status.snapshot.Git
 		}
+		snapshot.SkillPolicy = m.status.snapshot.SkillPolicy
+		snapshot.SkillDiscoveryState = m.status.snapshot.SkillDiscoveryState
 		if m.status.snapshot.Skills != nil {
 			snapshot.Skills = m.status.snapshot.Skills
 		}
@@ -136,6 +138,8 @@ func (r uiStatusFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, nil)
 		}
+		m.status.snapshot.SkillPolicy = msg.result.SkillPolicy
+		m.status.snapshot.SkillDiscoveryState = msg.result.SkillDiscoveryState
 		m.status.snapshot.Skills = msg.result.Skills
 		m.status.snapshot.SkillTokenCounts = msg.result.SkillTokenCounts
 		m.status.snapshot.AgentsPaths = msg.result.AgentsPaths

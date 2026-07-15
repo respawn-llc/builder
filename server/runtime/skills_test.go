@@ -10,8 +10,17 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/skillcatalog"
 	brand "core/shared/config"
 )
+
+func skillPolicyWithDisabled(names ...string) brand.SkillPolicy {
+	toggles := make(map[string]bool, len(names))
+	for _, name := range names {
+		toggles[name] = false
+	}
+	return brand.ResolveSkillPolicy(brand.Settings{SkillToggles: toggles})
+}
 
 func TestSkillsContextMessageIncludesCodexPromptAndSkillEntries(t *testing.T) {
 	home := t.TempDir()
@@ -21,7 +30,7 @@ func TestSkillsContextMessageIncludesCodexPromptAndSkillEntries(t *testing.T) {
 	homeSkillPath := writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, "skills", "home-skill"), "home-skill", "from home")
 	workspaceSkillPath := writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "workspace-skill"), "workspace-skill", "from workspace")
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, nil)
+	content, found, err := skillsContextMessage(workspace, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("skillsContextMessage: %v", err)
 	}
@@ -60,7 +69,7 @@ func TestSkillsContextMessageSkipsInvalidSkills(t *testing.T) {
 		t.Fatalf("write invalid skill: %v", err)
 	}
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, nil)
+	content, found, err := skillsContextMessage(workspace, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("skillsContextMessage: %v", err)
 	}
@@ -83,7 +92,7 @@ func TestSkillsContextMessageLoadsSymlinkedSkillDirectory(t *testing.T) {
 		t.Fatalf("symlink skill dir: %v", err)
 	}
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, nil)
+	content, found, err := skillsContextMessage(workspace, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("skillsContextMessage: %v", err)
 	}
@@ -117,7 +126,7 @@ func TestSkillsContextMessageLoadsSkillFromSymlinkedGlobalSkillsRoot(t *testing.
 		t.Fatalf("symlink global skills root: %v", err)
 	}
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, nil)
+	content, found, err := skillsContextMessage(workspace, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("skillsContextMessage: %v", err)
 	}
@@ -169,7 +178,7 @@ func TestSkillsContextMessageSkipsBrokenSymlinkedSkillDirectory(t *testing.T) {
 		t.Fatalf("symlink broken skill dir: %v", err)
 	}
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, nil)
+	content, found, err := skillsContextMessage(workspace, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("skillsContextMessage: %v", err)
 	}
@@ -192,7 +201,7 @@ func TestAppendMissingReviewerMetaContextPrependsSkillsWhenMissing(t *testing.T)
 	writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "workspace-skill"), "workspace-skill", "from workspace")
 
 	in := []llm.Message{{Role: llm.RoleUser, Content: "request"}}
-	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, nil)
+	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}
@@ -226,9 +235,39 @@ func TestSkillsContextMessageFailsOnUnreadableSkillsDirectory(t *testing.T) {
 		readSkillsDir = prev
 	})
 
-	_, _, err := skillsContextMessageWithDisabled(workspace, nil)
+	_, _, err := skillsContextMessage(workspace, brand.SkillPolicy{})
 	if !errors.Is(err, errReadSkillsDirectory) {
 		t.Fatalf("expected errReadSkillsDirectory, got %v", err)
+	}
+}
+
+func TestDisabledSkillPolicySkipsDiscoveryAndWarnings(t *testing.T) {
+	previous := readSkillsDir
+	readSkillsDir = func(string) ([]os.DirEntry, error) {
+		t.Fatal("disabled skills policy must not read directories")
+		return nil, os.ErrPermission
+	}
+	t.Cleanup(func() {
+		readSkillsDir = previous
+	})
+
+	policy := brand.ResolveSkillPolicy(brand.Settings{SkillSubsystem: brand.SkillSubsystemDisabled})
+	discovery, err := discoverInjectedSkills(t.TempDir(), "\x00invalid", policy)
+	if err != nil {
+		t.Fatalf("discover disabled skills: %v", err)
+	}
+	if discovery.State != skillcatalog.DiscoveryStateDisabled {
+		t.Fatalf("discovery state = %q, want disabled", discovery.State)
+	}
+	if len(discovery.Skills) != 0 || len(discovery.Issues) != 0 {
+		t.Fatalf("disabled discovery must not expose skills or warnings: %+v", discovery)
+	}
+	content, found, err := skillsContextMessage(t.TempDir(), policy)
+	if err != nil {
+		t.Fatalf("disabled skills context: %v", err)
+	}
+	if found || content != "" {
+		t.Fatalf("disabled skills context = (%q, %t), want absent", content, found)
 	}
 }
 
@@ -260,15 +299,15 @@ func TestSplitMetaContextMessagesSeparatesMetaContextWithoutDeduplication(t *tes
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	rebuilt, err := appendMissingReviewerMetaContext(messages, t.TempDir(), "gpt-5", "high", "", false, nil)
+	rebuilt, err := appendMissingReviewerMetaContext(messages, t.TempDir(), "gpt-5", "high", "", false, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}
-	if len(rebuilt) != 3 {
-		t.Fatalf("expected builder to canonicalize duplicate meta messages, got %d", len(rebuilt))
+	if len(rebuilt) != 2 {
+		t.Fatalf("expected reviewer builder to replace persisted skills with current discovery, got %d", len(rebuilt))
 	}
-	if rebuilt[0].MessageType != llm.MessageTypeEnvironment || rebuilt[1].MessageType != llm.MessageTypeSkills {
-		t.Fatalf("expected canonical environment -> skills ordering, got %+v", rebuilt)
+	if rebuilt[0].MessageType != llm.MessageTypeEnvironment || rebuilt[1].Role != llm.RoleUser {
+		t.Fatalf("expected environment followed by transcript when current discovery is empty, got %+v", rebuilt)
 	}
 }
 
@@ -293,7 +332,7 @@ func TestSplitMetaContextMessagesTreatsHeadlessContextAsMeta(t *testing.T) {
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	rebuilt, err := appendMissingReviewerMetaContext(messages, t.TempDir(), "gpt-5", "high", "", true, nil)
+	rebuilt, err := appendMissingReviewerMetaContext(messages, t.TempDir(), "gpt-5", "high", "", true, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}
@@ -326,7 +365,7 @@ func TestSplitMetaContextMessagesTreatsHeadlessExitContextAsMeta(t *testing.T) {
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	rebuilt, err := appendMissingReviewerMetaContext(messages, t.TempDir(), "gpt-5", "high", "", false, nil)
+	rebuilt, err := appendMissingReviewerMetaContext(messages, t.TempDir(), "gpt-5", "high", "", false, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}
@@ -364,7 +403,7 @@ func TestSkillsContextMessageSkipsConfigDisabledSkills(t *testing.T) {
 	writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, "skills", "home-skill"), "Home Skill", "from home")
 	writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "workspace-skill"), "Workspace Skill", "from workspace")
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, map[string]bool{"workspace skill": true})
+	content, found, err := skillsContextMessage(workspace, skillPolicyWithDisabled("workspace skill"))
 	if err != nil {
 		t.Fatalf("skillsContextMessageWithDisabled: %v", err)
 	}
@@ -388,7 +427,7 @@ func TestGeneratedSkillsAreInjectedAfterUserSkills(t *testing.T) {
 	workspaceSkillPath := writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "workspace-skill"), "Workspace Skill", "from workspace")
 	generatedSkillPath := writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, ".generated", "skills", "skill-creator"), "skill-creator", "generated")
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, nil)
+	content, found, err := skillsContextMessage(workspace, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("skillsContextMessage: %v", err)
 	}
@@ -421,7 +460,7 @@ func TestUserSkillDuplicateNameBehaviorIsUnchanged(t *testing.T) {
 	homeSkillPath := writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, "skills", "same-skill-global"), "same-skill", "from home")
 	workspaceSkillPath := writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "same-skill-workspace"), "same-skill", "from workspace")
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, nil)
+	content, found, err := skillsContextMessage(workspace, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("skillsContextMessage: %v", err)
 	}
@@ -448,7 +487,7 @@ func TestGeneratedSkillIsShadowedByUserSkillName(t *testing.T) {
 	userSkillPath := writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "skill-creator"), "skill-creator", "workspace")
 	writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, ".generated", "skills", "skill-creator"), "skill-creator", "generated")
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, nil)
+	content, found, err := skillsContextMessage(workspace, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("skillsContextMessage: %v", err)
 	}
@@ -470,7 +509,7 @@ func TestGeneratedSkillIsDisabledBySkillToggle(t *testing.T) {
 	workspace := t.TempDir()
 	writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, ".generated", "skills", "skill-creator"), "skill-creator", "generated")
 
-	content, found, err := skillsContextMessageWithDisabled(workspace, map[string]bool{"skill-creator": true})
+	content, found, err := skillsContextMessage(workspace, skillPolicyWithDisabled("skill-creator"))
 	if err != nil {
 		t.Fatalf("skillsContextMessageWithDisabled: %v", err)
 	}
@@ -486,10 +525,11 @@ func TestInspectSkillsMarksConfigDisabledSkills(t *testing.T) {
 	workspace := t.TempDir()
 	writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "workspace-skill"), "Workspace Skill", "from workspace")
 
-	inspections, err := InspectSkills(workspace, "", map[string]bool{"workspace skill": true})
+	result, err := InspectSkills(workspace, "", skillPolicyWithDisabled("workspace skill"))
 	if err != nil {
 		t.Fatalf("InspectSkills: %v", err)
 	}
+	inspections := result.Inspections
 	if len(inspections) != 1 {
 		t.Fatalf("expected one inspection, got %d", len(inspections))
 	}
@@ -501,6 +541,25 @@ func TestInspectSkillsMarksConfigDisabledSkills(t *testing.T) {
 	}
 }
 
+func TestInspectSkillsDistinguishesDisabledFromEnabledEmpty(t *testing.T) {
+	disabledPolicy := brand.ResolveSkillPolicy(brand.Settings{SkillSubsystem: brand.SkillSubsystemDisabled})
+	disabled, err := InspectSkills(t.TempDir(), "\x00invalid", disabledPolicy)
+	if err != nil {
+		t.Fatalf("InspectSkills disabled: %v", err)
+	}
+	if disabled.State != skillcatalog.DiscoveryStateDisabled || len(disabled.Inspections) != 0 {
+		t.Fatalf("disabled inspection result = %+v", disabled)
+	}
+
+	enabled, err := InspectSkills(t.TempDir(), t.TempDir(), brand.SkillPolicy{})
+	if err != nil {
+		t.Fatalf("InspectSkills enabled empty: %v", err)
+	}
+	if enabled.State != skillcatalog.DiscoveryStateEnabled {
+		t.Fatalf("enabled empty state = %q, want enabled", enabled.State)
+	}
+}
+
 func TestInspectSkillsMarksGeneratedShadowedAndDisabled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -509,10 +568,11 @@ func TestInspectSkillsMarksGeneratedShadowedAndDisabled(t *testing.T) {
 	writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "skill-creator"), "skill-creator", "workspace")
 	generatedPath := writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, ".generated", "skills", "skill-creator"), "skill-creator", "generated")
 
-	inspections, err := InspectSkills(workspace, "", map[string]bool{"skill-creator": true})
+	result, err := InspectSkills(workspace, "", skillPolicyWithDisabled("skill-creator"))
 	if err != nil {
 		t.Fatalf("InspectSkills: %v", err)
 	}
+	inspections := result.Inspections
 	var generatedInspection *SkillInspection
 	for idx := range inspections {
 		if inspections[idx].Path == filepath.ToSlash(generatedPath) {
@@ -542,10 +602,11 @@ func TestInspectSkillsLoadsSymlinkedSkillDirectory(t *testing.T) {
 		t.Fatalf("symlink skill dir: %v", err)
 	}
 
-	inspections, err := InspectSkills(workspace, "", nil)
+	result, err := InspectSkills(workspace, "", brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("InspectSkills: %v", err)
 	}
+	inspections := result.Inspections
 	if len(inspections) != 1 {
 		t.Fatalf("expected one inspection, got %d", len(inspections))
 	}
@@ -570,10 +631,11 @@ func TestInspectSkillsReportsBrokenSymlinkedSkillDirectory(t *testing.T) {
 		t.Fatalf("symlink broken skill dir: %v", err)
 	}
 
-	inspections, err := InspectSkills(workspace, "", nil)
+	result, err := InspectSkills(workspace, "", brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("InspectSkills: %v", err)
 	}
+	inspections := result.Inspections
 	if len(inspections) != 1 {
 		t.Fatalf("expected one inspection, got %d", len(inspections))
 	}
@@ -600,7 +662,7 @@ func TestBuildReviewerRequestMessagesSkipsDisabledSkillsWhenBackfillingMeta(t *t
 	messages := []llm.Message{{Role: llm.RoleUser, Content: "request"}}
 	got, err := buildReviewerRequestMessagesWithBuilder(
 		messages,
-		newMetaContextBuilder(workspace, "gpt-5", "high", map[string]bool{"workspace skill": true}, time.Now()),
+		newMetaContextBuilder(workspace, "gpt-5", "high", skillPolicyWithDisabled("workspace skill"), time.Now()),
 		false,
 	)
 	if err != nil {

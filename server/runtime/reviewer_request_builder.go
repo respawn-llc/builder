@@ -29,7 +29,11 @@ func reviewerSuggestionsStructuredOutput() *llm.StructuredOutput {
 
 func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Client) (llm.Request, error) {
 	reviewerCfg := e.reviewerRequestConfigSnapshot()
-	reviewerItems, err := buildReviewerRequestItemsWithBuilder(e.transcriptRuntimeState().SnapshotItems(), newActiveMetaContextBuilder(e.store.Meta(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.DisabledSkills, e.reviewerMetaTimestamp()), e.cfg.HeadlessMode)
+	skillPolicy, err := e.reconstructionSkillPolicy(ctx)
+	if err != nil {
+		return llm.Request{}, err
+	}
+	reviewerItems, err := buildReviewerRequestItemsWithBuilder(e.transcriptRuntimeState().SnapshotItems(), newActiveMetaContextBuilder(e.store.Meta(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, skillPolicy, e.reviewerMetaTimestamp()), e.cfg.HeadlessMode)
 	if err != nil {
 		return llm.Request{}, err
 	}

@@ -7,6 +7,7 @@ import (
 	"core/server/sessionview"
 	"core/shared/client"
 	"core/shared/clientui"
+	"core/shared/config"
 	"os"
 	"os/exec"
 	"strings"
@@ -234,6 +235,33 @@ func TestStatusOverlayOmitsServerOwnershipRow(t *testing.T) {
 	plain := stripANSIAndTrimRight(strings.Join(lines, "\n"))
 	if strings.Contains(plain, "Server: owned by this CLI") || strings.Contains(plain, "server owned") {
 		t.Fatalf("status overlay contains forbidden server ownership row: %q", plain)
+	}
+}
+
+func TestStatusOverlayDisabledSkillsUsesNeutralStateWithoutEnumeration(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	m.status.snapshot = uiStatusSnapshot{
+		Workdir:             "/workspace",
+		Model:               uiStatusModelInfo{Summary: "gpt-5"},
+		SkillDiscoveryState: config.SkillSubsystemDisabled,
+		Skills: []uiStatusSkillInspection{{
+			Name:   "must-not-render",
+			Path:   "/workspace/.kent/skills/must-not-render/SKILL.md",
+			Loaded: true,
+		}},
+		SkillTokenCounts: map[string]int{
+			"/workspace/.kent/skills/must-not-render/SKILL.md": 123,
+		},
+	}
+	if got := statusSkillsPresentation(m.status.snapshot, false); got != statusSkillsPresentationDisabled {
+		t.Fatalf("skills presentation mode = %d, want disabled", got)
+	}
+
+	plain := stripANSIAndTrimRight(strings.Join(m.layout().statusOverlayContentLines(80), "\n"))
+	for _, forbidden := range []string{"must-not-render", "/workspace/.kent/skills", "1 skills", "123"} {
+		if strings.Contains(plain, forbidden) {
+			t.Fatalf("disabled skills rendered dynamic enumeration %q: %q", forbidden, plain)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -680,6 +681,7 @@ func newSettingsRegistry() settingsRegistry {
 			validateBGShellsOutput,
 			validateShellPostprocessing,
 			validateCacheWarningMode,
+			validateSkillSubsystemState,
 			validateContextWindow,
 			validateCompactionMode,
 			validateReviewer,
@@ -1149,7 +1151,12 @@ func (toolsSetting) appendDefaultLines(lines *[]defaultConfigLine, state setting
 }
 
 func (skillsSetting) applyDefault(state *settingsState) {
+	state.Settings.SkillSubsystem = SkillSubsystemEnabled
 	state.Settings.SkillToggles = map[string]bool{}
+}
+
+func (skillsSetting) initSources(sources map[string]string) {
+	sources[skillsEnabledSourceKey] = "default"
 }
 
 func (skillsSetting) applyFile(raw settingsFile, settingsPath string, state *settingsState, sources map[string]string) error {
@@ -1177,6 +1184,11 @@ func (skillsSetting) applyFile(raw settingsFile, settingsPath string, state *set
 			return &SettingsKeyTypeError{Key: strings.Join(append([]string{"skills"}, key), "."), ExpectedType: "boolean"}
 		}
 		seenNormalized[normalized] = key
+		if normalized == skillsEnabledKey {
+			state.Settings.SkillSubsystem = skillSubsystemStateFromEnabled(enabled)
+			sources[skillsEnabledSourceKey] = "file"
+			continue
+		}
 		state.Settings.SkillToggles[normalized] = enabled
 		sources[skillSourceKey(normalized)] = "file"
 	}
@@ -1272,7 +1284,7 @@ func parseSubagentRole(raw settingsFile, settingsPath string, roleKey string) (S
 			continue
 		}
 		if err := setting.applyFile(raw, settingsPath, &roleState, roleSources); err != nil {
-			return SubagentRole{}, fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, err)
+			return SubagentRole{}, wrapSubagentRoleError(roleKey, err)
 		}
 	}
 	explicitSources := map[string]string{}
@@ -1307,6 +1319,18 @@ func parseSubagentRole(raw settingsFile, settingsPath string, roleKey string) (S
 		WorkflowSubagent:    workflowSubagent,
 		WorkflowSubagentSet: workflowSubagentSet,
 	}, nil
+}
+
+func wrapSubagentRoleError(roleKey string, err error) error {
+	var typeErr *SettingsKeyTypeError
+	if errors.As(err, &typeErr) {
+		scoped := &SettingsKeyTypeError{
+			Key:          strings.Join([]string{"subagents", roleKey, typeErr.Key}, "."),
+			ExpectedType: typeErr.ExpectedType,
+		}
+		return fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, scoped)
+	}
+	return fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, err)
 }
 
 func subagentRoleKeyTree(settings []registrySetting) *fileKeyTree {

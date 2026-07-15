@@ -25,6 +25,18 @@ type RunRequest struct {
 	Profile      ClientProfile
 	ClientBinary string
 	ServerBinary string
+	ClientArgs   []string
+	Fixture      RunFixture
+}
+
+type RunFixture struct {
+	Config         []byte
+	WorkspaceFiles []WorkspaceFixtureFile
+}
+
+type WorkspaceFixtureFile struct {
+	Path    string
+	Content []byte
 }
 
 type RunResult struct {
@@ -75,7 +87,7 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	defer func() {
 		supervisor.finish(&result, request.Scenario.Dimensions)
 	}()
-	environment, err = NewIsolatedEnvironment(request.ServerBinary, request.Scenario.ModelOperations)
+	environment, err = newIsolatedEnvironment(request.ServerBinary, request.Scenario.ModelOperations, request.Fixture)
 	if environment != nil {
 		result.RunRoot = environment.Root
 	}
@@ -96,9 +108,11 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 		result.Err = fmt.Errorf("build client environment: %w", err)
 		return result
 	}
+	args := []string{"--force-interactive", "--persistence-root", environment.Root}
+	args = append(args, request.ClientArgs...)
 	session, err = driver.StartSession(driver.SessionSpec{
 		Path:       request.ClientBinary,
-		Args:       []string{"--force-interactive", "--persistence-root", environment.Root},
+		Args:       args,
 		Env:        clientEnvironment,
 		Dir:        environment.Workspace,
 		Dimensions: analyzer.MustDimensions(request.Scenario.Dimensions.Rows, request.Scenario.Dimensions.Cols),
@@ -281,6 +295,13 @@ func dispatchAction(session *driver.Session, action Action) (uuid.UUID, bool, er
 		return uuid.Nil, false, nil
 	case ActionEnterInput:
 		return enqueue(session, driver.SessionCommandWrite, []byte(*action.Input), nil)
+	case ActionPressKey:
+		switch *action.Key {
+		case KeyEnd:
+			return enqueue(session, driver.SessionCommandWrite, []byte("\x1b[F"), nil)
+		default:
+			return uuid.Nil, false, fmt.Errorf("unsupported key %s", *action.Key)
+		}
 	case ActionSubmitPrompt:
 		return enqueue(session, driver.SessionCommandWrite, []byte("\r"), nil)
 	case ActionCancel:

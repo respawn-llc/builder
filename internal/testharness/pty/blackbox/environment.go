@@ -57,6 +57,10 @@ type ServerHandle struct {
 }
 
 func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation) (*IsolatedEnvironment, error) {
+	return newIsolatedEnvironment(serverBinary, operations, RunFixture{})
+}
+
+func newIsolatedEnvironment(serverBinary string, operations []RequiredOperation, fixture RunFixture) (*IsolatedEnvironment, error) {
 	if err := requirePTYPlatform(); err != nil {
 		return nil, err
 	}
@@ -75,8 +79,24 @@ func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation)
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		return fail(fmt.Errorf("create isolated workspace: %w", err))
 	}
-	if err := os.WriteFile(filepath.Join(root, "config.toml"), harnessConfigTemplate, 0o600); err != nil {
+	config := fixture.Config
+	if len(config) == 0 {
+		config = harnessConfigTemplate
+	}
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), config, 0o600); err != nil {
 		return fail(fmt.Errorf("copy harness config template: %w", err))
+	}
+	for _, file := range fixture.WorkspaceFiles {
+		if !filepath.IsLocal(file.Path) || filepath.Clean(file.Path) == "." {
+			return fail(fmt.Errorf("workspace fixture path must be local: %q", file.Path))
+		}
+		target := filepath.Join(workspace, filepath.Clean(file.Path))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fail(fmt.Errorf("create workspace fixture parent: %w", err))
+		}
+		if err := os.WriteFile(target, file.Content, 0o644); err != nil {
+			return fail(fmt.Errorf("write workspace fixture %q: %w", file.Path, err))
+		}
 	}
 	stub, err := StartResponsesStub(operations)
 	if err != nil {

@@ -43,13 +43,46 @@ func TestDiscoverOrdersRootsAndReadsEmbeddedGeneratedWhenUnseeded(t *testing.T) 
 	}
 }
 
+func TestDiscoverDisabledPolicyReturnsBeforeResolvingOrReadingRoots(t *testing.T) {
+	readCalled := false
+	result, err := Discover(Options{
+		ConfigRoot: "\x00invalid",
+		Policy: brand.ResolveSkillPolicy(brand.Settings{
+			SkillSubsystem: brand.SkillSubsystemDisabled,
+		}),
+		ReadDir: func(string) ([]os.DirEntry, error) {
+			readCalled = true
+			t.Fatal("disabled discovery must not read skill roots")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Discover disabled policy: %v", err)
+	}
+	if readCalled {
+		t.Fatal("disabled discovery touched the filesystem")
+	}
+	if result.State != DiscoveryStateDisabled {
+		t.Fatalf("discovery state = %q, want disabled", result.State)
+	}
+	if len(result.Roots) != 0 || len(result.Skills) != 0 || len(result.Issues) != 0 || len(result.Inspections) != 0 {
+		t.Fatalf("disabled result must be empty: %+v", result)
+	}
+}
+
 func TestDiscoverGeneratedShadowedByUserSkillAndDisabled(t *testing.T) {
 	root := t.TempDir()
 	workspace := t.TempDir()
 	writeSkill(t, filepath.Join(workspace, brand.ConfigDirName, SkillsDirName, "skill-creator"), "skill-creator", "workspace")
 	writeSkill(t, filepath.Join(root, ".generated", SkillsDirName, "skill-creator"), "skill-creator", "generated")
 
-	result, err := Discover(Options{WorkspaceRoot: workspace, ConfigRoot: root, DisabledSkills: map[string]bool{"skill-creator": true}})
+	result, err := Discover(Options{
+		WorkspaceRoot: workspace,
+		ConfigRoot:    root,
+		Policy: brand.ResolveSkillPolicy(brand.Settings{
+			SkillToggles: map[string]bool{"skill-creator": false},
+		}),
+	})
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
