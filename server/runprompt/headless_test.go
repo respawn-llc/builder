@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +45,63 @@ type stubRunPromptService struct {
 	calls    int
 	run      func(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error)
 	callHook func()
+}
+
+type headlessLaunchArtifactSnapshot struct {
+	SessionIDs       []string
+	SessionArtifacts []string
+	PersistenceFiles []string
+	WorktreeFiles    []string
+	StoreIDs         []string
+	RuntimeIDs       []string
+}
+
+func snapshotHeadlessLaunchArtifacts(t *testing.T, ctx context.Context, meta *metadata.Store, projectID string, containerDir string, persistenceRoot string, worktreeRoot string, stores *registry.SessionStoreRegistry, runtimes *registry.RuntimeRegistry) headlessLaunchArtifactSnapshot {
+	t.Helper()
+	sessionIDs, err := meta.ListProjectSessionIDs(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListProjectSessionIDs snapshot: %v", err)
+	}
+	return headlessLaunchArtifactSnapshot{
+		SessionIDs:       sessionIDs,
+		SessionArtifacts: snapshotArtifactPaths(t, containerDir),
+		PersistenceFiles: snapshotArtifactPaths(t, persistenceRoot),
+		WorktreeFiles:    snapshotArtifactPaths(t, worktreeRoot),
+		StoreIDs:         stores.SessionIDs(),
+		RuntimeIDs:       runtimes.RuntimeSessionIDs(),
+	}
+}
+
+func snapshotArtifactPaths(t *testing.T, root string) []string {
+	t.Helper()
+	paths := make([]string, 0)
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return paths
+	} else if err != nil {
+		t.Fatalf("Stat %s: %v", root, err)
+	}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		kind := "file"
+		if entry.IsDir() {
+			kind = "dir"
+		}
+		paths = append(paths, kind+":"+filepath.ToSlash(relative))
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkDir %s: %v", root, err)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func TestRunPromptProgressFromRuntimeEventPublishesUserVisibleEvents(t *testing.T) {
@@ -300,6 +359,7 @@ func TestMemoizingPromptServiceCanonicalizesNullableRequestValues(t *testing.T) 
 }
 
 func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
 	root := t.TempDir()
 	workspace := t.TempDir()
@@ -324,36 +384,38 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		t.Fatalf("EnsureDurable parent: %v", err)
 	}
 
-	cfg := config.App{
-		WorkspaceRoot:   workspace,
-		PersistenceRoot: root,
-		Settings: config.Settings{
-			Model:    "gpt-5.6-sol",
-			Workflow: config.WorkflowSettings{Subagents: false},
-			Subagents: map[string]config.SubagentRole{
-				"hidden": {
-					Settings:         config.Settings{ThinkingLevel: "high"},
-					Sources:          map[string]string{"thinking_level": "file"},
-					AgentCallable:    true,
-					AgentCallableSet: true,
-				},
-			},
+	cfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.PersistenceRoot = root
+	cfg.Settings.Model = "gpt-5.6-sol"
+	cfg.Settings.Workflow = config.WorkflowSettings{Subagents: false}
+	hiddenSettings := cfg.Settings
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"hidden": {
+			Settings:         hiddenSettings,
+			Sources:          map[string]string{"thinking_level": "file"},
+			AgentCallable:    true,
+			AgentCallableSet: true,
 		},
+	}
+	worktreeRoot := filepath.Join(root, "worktrees")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree root: %v", err)
 	}
 	stores := registry.NewSessionStoreRegistry()
 	runtimes := registry.NewRuntimeRegistry()
+	sessionLauncher := sessionlaunch.NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: meta.AuthoritativeSessionStoreOptions(),
+	}, stores)
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: sessionlaunch.NewService(launch.Planner{
-			Config:       cfg,
-			ContainerDir: containerDir,
-			StoreOptions: meta.AuthoritativeSessionStoreOptions(),
-		}, stores),
+		SessionLaunch:   sessionLauncher,
 		RuntimeRegistry: runtimes,
 	})
-	before, err := meta.ListProjectSessionIDs(ctx, binding.ProjectID)
-	if err != nil {
-		t.Fatalf("ListProjectSessionIDs before: %v", err)
-	}
+	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
 	role := "hidden"
 	parentID := parent.Meta().SessionID
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
@@ -367,22 +429,37 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
 		t.Fatalf("RunPrompt error = %T %v, want workflow policy denial", err, err)
 	}
-	after, err := meta.ListProjectSessionIDs(ctx, binding.ProjectID)
-	if err != nil {
-		t.Fatalf("ListProjectSessionIDs after: %v", err)
+	after := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("denied new-child launch changed artifacts: before=%+v after=%+v", before, after)
 	}
-	if strings.Join(after, ",") != strings.Join(before, ",") {
-		t.Fatalf("session records changed on denied launch: before=%v after=%v", before, after)
+	unknownCaller := "unknown-caller"
+	beforeUnknownCaller := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID: "workflow-unknown-caller",
+		CallerSessionID: &unknownCaller,
+		ParentSessionID: &unknownCaller,
+		Prompt:          "delegate this",
+	}, nil)
+	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialCallerMissing {
+		t.Fatalf("unknown caller error = %T %v, want caller-missing denial", err, err)
 	}
-	entries, err := os.ReadDir(containerDir)
-	if err != nil {
-		t.Fatalf("ReadDir sessions: %v", err)
+	if afterUnknownCaller := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterUnknownCaller, beforeUnknownCaller) {
+		t.Fatalf("unknown caller changed artifacts: before=%+v after=%+v", beforeUnknownCaller, afterUnknownCaller)
 	}
-	if len(entries) != 1 || entries[0].Name() != parent.Meta().SessionID {
-		t.Fatalf("session artifacts changed on denied launch: %+v", entries)
+	mismatchedParent := "other-parent"
+	beforeMismatch := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID: "workflow-caller-parent-mismatch",
+		CallerSessionID: &parentID,
+		ParentSessionID: &mismatchedParent,
+		Prompt:          "delegate this",
+	}, nil)
+	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialInvalidTarget {
+		t.Fatalf("caller/parent mismatch error = %T %v, want invalid-target denial", err, err)
 	}
-	if runtimes.IsSessionRuntimeActive(parent.Meta().SessionID) {
-		t.Fatal("denied launch registered a runtime")
+	if afterMismatch := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterMismatch, beforeMismatch) {
+		t.Fatalf("caller/parent mismatch changed artifacts: before=%+v after=%+v", beforeMismatch, afterMismatch)
 	}
 
 	selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, meta.AuthoritativeSessionStoreOptions()...)
@@ -393,10 +470,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		t.Fatalf("SetName selected: %v", err)
 	}
 	selectedBefore := selected.Meta()
-	beforeSelectedDenial, err := meta.ListProjectSessionIDs(ctx, binding.ProjectID)
-	if err != nil {
-		t.Fatalf("ListProjectSessionIDs selected before: %v", err)
-	}
+	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID:   "workflow-selected-denial-1",
 		SelectedSessionID: selectedBefore.SessionID,
@@ -418,12 +492,27 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		got.LastSequence != selectedBefore.LastSequence {
 		t.Fatalf("selected session changed on denied launch: before=%+v after=%+v", selectedBefore, got)
 	}
-	afterSelectedDenial, err := meta.ListProjectSessionIDs(ctx, binding.ProjectID)
-	if err != nil {
-		t.Fatalf("ListProjectSessionIDs selected after: %v", err)
+	afterSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	if !reflect.DeepEqual(afterSelectedDenial, beforeSelectedDenial) {
+		t.Fatalf("denied selected-session launch changed artifacts: before=%+v after=%+v", beforeSelectedDenial, afterSelectedDenial)
 	}
-	if strings.Join(afterSelectedDenial, ",") != strings.Join(beforeSelectedDenial, ",") {
-		t.Fatalf("session records changed on selected denial: before=%v after=%v", beforeSelectedDenial, afterSelectedDenial)
+	substitutedCaller := selectedBefore.SessionID
+	substitutedPlan, err := sessionLauncher.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
+		ClientRequestID: "substituted-ordinary-caller",
+		Mode:            serverapi.SessionLaunchModeHeadless,
+		ForceNewSession: true,
+		CallerSessionID: &substitutedCaller,
+		ParentSessionID: &substitutedCaller,
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
+	})
+	if err != nil {
+		t.Fatalf("substituted ordinary caller PlanLaunchSession: %v", err)
+	}
+	if got := substitutedPlan.Plan.Store.Meta().ParentSessionID; got == nil || *got != substitutedCaller {
+		t.Fatalf("substituted caller child parent = %v, want %q", got, substitutedCaller)
+	}
+	if got := substitutedPlan.Plan.Store.Meta().Continuation; got == nil || got.AgentRole == nil || *got.AgentRole != role {
+		t.Fatalf("substituted caller continuation = %+v, want hidden role", got)
 	}
 }
 

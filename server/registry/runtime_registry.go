@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 
@@ -423,6 +424,17 @@ func (r *RuntimeRegistry) IsSessionRuntimeActive(sessionID string) bool {
 		return false
 	}
 	return r.directory.Active(sessionID)
+}
+
+// RuntimeSessionIDs returns a stable snapshot of sessions with registered
+// runtime state, including an in-flight runtime build.
+func (r *RuntimeRegistry) RuntimeSessionIDs() []string {
+	if r == nil {
+		return nil
+	}
+	ids := r.directory.IDs()
+	sort.Strings(ids)
+	return ids
 }
 
 func (r *RuntimeRegistry) RuntimeActivity(sessionID string) (clientui.RuntimeActivity, error) {

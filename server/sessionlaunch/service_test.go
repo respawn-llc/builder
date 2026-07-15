@@ -285,6 +285,52 @@ func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T
 	}
 }
 
+func TestServicePlanSessionPreparesOmittedSelectedRoleBeforeMaterialization(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	containerDir := t.TempDir()
+	store, err := session.Create(containerDir, "workspace-a", workspace)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	role := "worker"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	roleSettings := cfg.Settings
+	roleSettings.ThinkingLevel = "high"
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		role: {
+			Settings:         roleSettings,
+			Sources:          map[string]string{"thinking_level": "file"},
+			AgentCallable:    true,
+			AgentCallableSet: true,
+		},
+	}
+	service := NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+	}, registry.NewSessionStoreRegistry())
+
+	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
+		ClientRequestID:   "omitted-selected-role",
+		Mode:              serverapi.SessionLaunchModeHeadless,
+		SelectedSessionID: store.Meta().SessionID,
+		Overrides:         serverapi.RunPromptOverrides{Tools: "patch"},
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if resp.Plan.ActiveSettings.ThinkingLevel != "high" {
+		t.Fatalf("thinking level = %q, want persisted worker role value", resp.Plan.ActiveSettings.ThinkingLevel)
+	}
+	if strings.Join(resp.Plan.EnabledToolIDs, ",") != "patch" {
+		t.Fatalf("enabled tools = %+v, want prepared patch target", resp.Plan.EnabledToolIDs)
+	}
+}
+
 func TestServicePlanSessionPropagatesOverrideToolConflict(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
@@ -308,6 +354,42 @@ func TestServicePlanSessionPropagatesOverrideToolConflict(t *testing.T) {
 	})
 	if err == nil || !errors.Is(err, launch.ErrPatchEditToolsConflict) {
 		t.Fatalf("error = %v, want tool conflict", err)
+	}
+}
+
+func TestPlanLaunchSessionRejectsOmittedTargetBeforeMaterializingSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Model = "claude-sonnet-4.5"
+	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
+	cfg.Source.Sources["tools.patch"] = "default"
+	cfg.Source.Sources["tools.edit"] = "default"
+	stores := registry.NewSessionStoreRegistry()
+	service := NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+	}, stores)
+
+	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
+		ClientRequestID: "omitted-target-conflict",
+		Mode:            serverapi.SessionLaunchModeHeadless,
+		ForceNewSession: true,
+		Overrides:       serverapi.RunPromptOverrides{Tools: "patch,edit"},
+	})
+	if !errors.Is(err, launch.ErrPatchEditToolsConflict) {
+		t.Fatalf("PlanLaunchSession error = %v, want patch/edit conflict", err)
+	}
+	entries, readErr := os.ReadDir(containerDir)
+	if readErr != nil {
+		t.Fatalf("ReadDir session container: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("omitted target failure created session artifacts: %+v", entries)
+	}
+	if ids := stores.SessionIDs(); len(ids) != 0 {
+		t.Fatalf("omitted target failure registered stores: %v", ids)
 	}
 }
 

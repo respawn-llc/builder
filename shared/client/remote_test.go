@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http/httptest"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +18,15 @@ import (
 	"core/shared/sessioncontract"
 	"golang.org/x/net/websocket"
 )
+
+type capturedRunPromptService struct {
+	request serverapi.RunPromptRequest
+}
+
+func (s *capturedRunPromptService) RunPrompt(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+	s.request = req
+	return serverapi.RunPromptResponse{SessionID: "session-1", Result: "done"}, nil
+}
 
 func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeModelStreamStalled, Message: "model generation failed after retries: model stream stalled"})
@@ -156,13 +166,122 @@ func TestRemoteRunPromptCarriesCallerLineageAndExplicitDefault(t *testing.T) {
 	parent := "parent-session"
 	role := "default"
 	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID:   "present",
-		CallerSessionID:   &caller,
-		ParentSessionID:   &parent,
-		Prompt:            "hello",
-		Overrides:         serverapi.RunPromptOverrides{AgentRole: &role},
+		ClientRequestID: "present",
+		CallerSessionID: &caller,
+		ParentSessionID: &parent,
+		Prompt:          "hello",
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
 	}, nil); err != nil {
 		t.Fatalf("RunPrompt present provenance: %v", err)
+	}
+}
+
+func TestLoopbackAndRemoteRunPromptPreserveNullableProvenanceAndSelectors(t *testing.T) {
+	caller := "caller-session"
+	parent := "parent-session"
+	defaultRole := "default"
+	worker := "worker"
+	cases := []struct {
+		name string
+		req  serverapi.RunPromptRequest
+	}{
+		{name: "human omitted", req: serverapi.RunPromptRequest{ClientRequestID: "human-omitted", Prompt: "hello"}},
+		{name: "new child omitted selector", req: serverapi.RunPromptRequest{ClientRequestID: "new-omitted", CallerSessionID: &caller, ParentSessionID: &parent, Prompt: "hello"}},
+		{name: "selected explicit default", req: serverapi.RunPromptRequest{ClientRequestID: "selected-default", SelectedSessionID: "selected-session", CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}}},
+		{name: "selected custom", req: serverapi.RunPromptRequest{ClientRequestID: "selected-worker", SelectedSessionID: "selected-session", CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &worker}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			loopbackService := &capturedRunPromptService{}
+			loopback := NewLoopbackRunPromptClient(loopbackService)
+			if _, err := loopback.RunPrompt(context.Background(), tc.req, nil); err != nil {
+				t.Fatalf("loopback RunPrompt: %v", err)
+			}
+			assertSameRunPromptWireContract(t, loopbackService.request, tc.req)
+
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					if errors.Is(err, io.EOF) {
+						return
+					}
+					t.Fatalf("receive run prompt: %v", err)
+				}
+				var decoded serverapi.RunPromptRequest
+				if err := json.Unmarshal(request.Params, &decoded); err != nil {
+					t.Fatalf("decode run prompt: %v", err)
+				}
+				assertSameRunPromptWireContract(t, decoded, tc.req)
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.RunPromptResponse{SessionID: "session-1", Result: "done"})); err != nil {
+					t.Fatalf("send response: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+			if _, err := remote.RunPrompt(context.Background(), tc.req, nil); err != nil {
+				t.Fatalf("remote RunPrompt: %v", err)
+			}
+		})
+	}
+}
+
+func TestRemoteRunPromptDecodesTypedPolicyDenial(t *testing.T) {
+	target := "hidden"
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Fatalf("receive run prompt: %v", err)
+		}
+		data, err := json.Marshal(serverapi.SubagentLaunchDeniedError{
+			Kind:   serverapi.SubagentLaunchDenialNotCallable,
+			Target: &target,
+		})
+		if err != nil {
+			t.Fatalf("marshal typed denial: %v", err)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(request.ID, protocol.ErrCodeSubagentLaunchDenied, "denied", data)); err != nil {
+			t.Fatalf("send typed denial: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	_, err = remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "denied", Prompt: "hello"}, nil)
+	var denied *serverapi.SubagentLaunchDeniedError
+	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable || denied.Target == nil || *denied.Target != target {
+		t.Fatalf("RunPrompt error = %T %v, want typed hidden-target denial", err, err)
+	}
+}
+
+func assertSameRunPromptWireContract(t *testing.T, got serverapi.RunPromptRequest, want serverapi.RunPromptRequest) {
+	t.Helper()
+	if got.ClientRequestID != want.ClientRequestID ||
+		got.SelectedSessionID != want.SelectedSessionID ||
+		got.Prompt != want.Prompt ||
+		serverapi.CanonicalOptionalString(got.CallerSessionID) != serverapi.CanonicalOptionalString(want.CallerSessionID) ||
+		serverapi.CanonicalOptionalString(got.ParentSessionID) != serverapi.CanonicalOptionalString(want.ParentSessionID) {
+		t.Fatalf("provenance request = %+v, want %+v", got, want)
+	}
+	gotOverrides, err := got.Overrides.CanonicalKey()
+	if err != nil {
+		t.Fatalf("got overrides canonical key: %v", err)
+	}
+	wantOverrides, err := want.Overrides.CanonicalKey()
+	if err != nil {
+		t.Fatalf("want overrides canonical key: %v", err)
+	}
+	if !reflect.DeepEqual(gotOverrides, wantOverrides) {
+		t.Fatalf("selector/overrides = %+v, want %+v", gotOverrides, wantOverrides)
 	}
 }
 

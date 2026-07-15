@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -59,4 +60,19 @@ func (r *SessionStoreRegistry) ResolveStore(_ context.Context, sessionID string)
 		return nil, nil
 	}
 	return store, nil
+}
+
+// SessionIDs returns a stable snapshot of registered session stores.
+func (r *SessionStoreRegistry) SessionIDs() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	ids := make([]string, 0, len(r.stores))
+	for sessionID := range r.stores {
+		ids = append(ids, sessionID)
+	}
+	r.mu.RUnlock()
+	sort.Strings(ids)
+	return ids
 }
