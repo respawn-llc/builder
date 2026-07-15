@@ -26,6 +26,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
@@ -47,28 +48,58 @@ type stubRunPromptService struct {
 	callHook func()
 }
 
-type headlessLaunchArtifactSnapshot struct {
-	SessionIDs       []string
-	SessionArtifacts []string
-	PersistenceFiles []string
-	WorktreeFiles    []string
-	StoreIDs         []string
-	RuntimeIDs       []string
+type recordingStoreRegistrar struct {
+	registered []*session.Store
 }
 
-func snapshotHeadlessLaunchArtifacts(t *testing.T, ctx context.Context, meta *metadata.Store, projectID string, containerDir string, persistenceRoot string, worktreeRoot string, stores *registry.SessionStoreRegistry, runtimes *registry.RuntimeRegistry) headlessLaunchArtifactSnapshot {
+func (r *recordingStoreRegistrar) RegisterStore(store *session.Store) {
+	r.registered = append(r.registered, store)
+}
+
+type recordingRuntimePublisher struct {
+	publications int
+}
+
+func (r *recordingRuntimePublisher) PublishRuntimeEvent(string, runtime.Event) {
+	r.publications++
+}
+
+func (r *recordingRuntimePublisher) PublishRuntimeEventForEngine(string, *runtime.Engine, runtime.Event) {
+	r.publications++
+}
+
+func (r *recordingRuntimePublisher) PublishRuntimeActivitySnapshot(string, runtimeactivity.ResponseSnapshot) {
+	r.publications++
+}
+
+type headlessLaunchArtifactSnapshot struct {
+	SessionIDs          []string
+	SessionArtifacts    []string
+	PersistenceFiles    []string
+	WorktreeFiles       []string
+	WorktreeRecords     []metadata.WorktreeRecord
+	StoreRegistrations  int
+	RuntimePublications int
+}
+
+func snapshotHeadlessLaunchArtifacts(t *testing.T, ctx context.Context, meta *metadata.Store, projectID string, workspaceID string, containerDir string, persistenceRoot string, worktreeRoot string, stores *recordingStoreRegistrar, runtimes *recordingRuntimePublisher) headlessLaunchArtifactSnapshot {
 	t.Helper()
 	sessionIDs, err := meta.ListProjectSessionIDs(ctx, projectID)
 	if err != nil {
 		t.Fatalf("ListProjectSessionIDs snapshot: %v", err)
 	}
+	worktreeRecords, err := meta.ListWorktreeRecordsByWorkspaceID(ctx, workspaceID)
+	if err != nil {
+		t.Fatalf("ListWorktreeRecordsByWorkspaceID snapshot: %v", err)
+	}
 	return headlessLaunchArtifactSnapshot{
-		SessionIDs:       sessionIDs,
-		SessionArtifacts: snapshotArtifactPaths(t, containerDir),
-		PersistenceFiles: snapshotArtifactPaths(t, persistenceRoot),
-		WorktreeFiles:    snapshotArtifactPaths(t, worktreeRoot),
-		StoreIDs:         stores.SessionIDs(),
-		RuntimeIDs:       runtimes.RuntimeSessionIDs(),
+		SessionIDs:          sessionIDs,
+		SessionArtifacts:    snapshotArtifactPaths(t, containerDir),
+		PersistenceFiles:    snapshotArtifactPaths(t, persistenceRoot),
+		WorktreeFiles:       snapshotArtifactPaths(t, worktreeRoot),
+		WorktreeRecords:     worktreeRecords,
+		StoreRegistrations:  len(stores.registered),
+		RuntimePublications: runtimes.publications,
 	}
 }
 
@@ -404,8 +435,22 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll worktree root: %v", err)
 	}
-	stores := registry.NewSessionStoreRegistry()
-	runtimes := registry.NewRuntimeRegistry()
+	worktreeRoot, err = config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot worktree root: %v", err)
+	}
+	if err := meta.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:              "workflow-parent-worktree",
+		WorkspaceID:     binding.WorkspaceID,
+		CanonicalRoot:   worktreeRoot,
+		DisplayName:     filepath.Base(worktreeRoot),
+		Availability:    "available",
+		GitMetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	stores := &recordingStoreRegistrar{}
+	runtimes := &recordingRuntimePublisher{}
 	sessionLauncher := sessionlaunch.NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
@@ -415,7 +460,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		SessionLaunch:   sessionLauncher,
 		RuntimeRegistry: runtimes,
 	})
-	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
 	role := "hidden"
 	parentID := parent.Meta().SessionID
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
@@ -429,12 +474,12 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
 		t.Fatalf("RunPrompt error = %T %v, want workflow policy denial", err, err)
 	}
-	after := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	after := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("denied new-child launch changed artifacts: before=%+v after=%+v", before, after)
 	}
 	unknownCaller := "unknown-caller"
-	beforeUnknownCaller := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	beforeUnknownCaller := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "workflow-unknown-caller",
 		CallerSessionID: &unknownCaller,
@@ -444,11 +489,11 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialCallerMissing {
 		t.Fatalf("unknown caller error = %T %v, want caller-missing denial", err, err)
 	}
-	if afterUnknownCaller := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterUnknownCaller, beforeUnknownCaller) {
+	if afterUnknownCaller := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterUnknownCaller, beforeUnknownCaller) {
 		t.Fatalf("unknown caller changed artifacts: before=%+v after=%+v", beforeUnknownCaller, afterUnknownCaller)
 	}
 	mismatchedParent := "other-parent"
-	beforeMismatch := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	beforeMismatch := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "workflow-caller-parent-mismatch",
 		CallerSessionID: &parentID,
@@ -458,7 +503,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialInvalidTarget {
 		t.Fatalf("caller/parent mismatch error = %T %v, want invalid-target denial", err, err)
 	}
-	if afterMismatch := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterMismatch, beforeMismatch) {
+	if afterMismatch := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterMismatch, beforeMismatch) {
 		t.Fatalf("caller/parent mismatch changed artifacts: before=%+v after=%+v", beforeMismatch, afterMismatch)
 	}
 
@@ -470,7 +515,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		t.Fatalf("SetName selected: %v", err)
 	}
 	selectedBefore := selected.Meta()
-	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID:   "workflow-selected-denial-1",
 		SelectedSessionID: selectedBefore.SessionID,
@@ -492,7 +537,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		got.LastSequence != selectedBefore.LastSequence {
 		t.Fatalf("selected session changed on denied launch: before=%+v after=%+v", selectedBefore, got)
 	}
-	afterSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, containerDir, root, worktreeRoot, stores, runtimes)
+	afterSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
 	if !reflect.DeepEqual(afterSelectedDenial, beforeSelectedDenial) {
 		t.Fatalf("denied selected-session launch changed artifacts: before=%+v after=%+v", beforeSelectedDenial, afterSelectedDenial)
 	}
