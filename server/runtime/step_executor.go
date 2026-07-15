@@ -628,24 +628,21 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 		return false, false, err
 	}
 	content = strings.TrimSpace(content)
-	completion, applicable := evaluateWorkflowOutputCompletion(mode, e.cfg.WorkflowRun.Contract, content)
-	if applicable {
-		if completion.Invalid != nil {
-			terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completion.Invalid)
-			return true, terminal, nudgeErr
-		}
-		if completeErr := s.completeWorkflowRunFromParsed(ctx, completion.Parsed); completeErr != nil {
-			terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
-			return true, terminal, nudgeErr
-		}
-		e.setWorkflowTerminalState(completion.Source)
-		return true, true, nil
-	}
-	if mode == workflowruntime.CompletionModeShellCommand {
+	var (
+		parsed workflowruntime.ParsedCompletion
+		source WorkflowCompletionSource
+	)
+	switch mode {
+	case workflowruntime.CompletionModeStructuredOutput:
+		parsed, err = workflowruntime.DecodeCompletion([]byte(content), e.cfg.WorkflowRun.Contract)
+		source = WorkflowCompletionSourceStructuredOutput
+	case workflowruntime.CompletionModeUnstructuredOutput:
+		parsed, err = workflowruntime.DecodeUnstructuredCompletion(content, e.cfg.WorkflowRun.Contract)
+		source = WorkflowCompletionSourceUnstructured
+	case workflowruntime.CompletionModeShellCommand:
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, errors.New("normal final answers do not complete shell-command workflow nodes"))
 		return true, terminal, nudgeErr
-	}
-	if mode == workflowruntime.CompletionModeTool {
+	case workflowruntime.CompletionModeTool:
 		record, recordErr := e.recordWorkflowProtocolViolation(ctx, workflowruntime.ViolationKindInvalidCompletion, content)
 		if recordErr != nil {
 			return true, false, recordErr
@@ -657,8 +654,19 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 			return true, false, err
 		}
 		return true, false, nil
+	default:
+		return false, false, nil
 	}
-	return false, false, nil
+	if err != nil {
+		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, err)
+		return true, terminal, nudgeErr
+	}
+	if completeErr := s.completeWorkflowRunFromParsed(ctx, parsed); completeErr != nil {
+		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
+		return true, terminal, nudgeErr
+	}
+	e.setWorkflowTerminalState(source)
+	return true, true, nil
 }
 
 func (s *defaultStepExecutor) completeWorkflowRunFromParsed(ctx context.Context, parsed workflowruntime.ParsedCompletion) error {
