@@ -115,6 +115,73 @@ type SystemPromptFile struct {
 	Scope SystemPromptFileScope
 }
 
+type SkillSubsystemState uint8
+
+const (
+	SkillSubsystemEnabled SkillSubsystemState = iota
+	SkillSubsystemDisabled
+
+	skillsEnabledKey       = "enabled"
+	skillsEnabledSourceKey = "skills.enabled"
+)
+
+type SkillPolicy struct {
+	subsystemState SkillSubsystemState
+	disabledNames  map[string]struct{}
+}
+
+func ResolveSkillPolicy(settings Settings) SkillPolicy {
+	disabledNames := make(map[string]struct{}, len(settings.SkillToggles))
+	for name, enabled := range settings.SkillToggles {
+		if enabled {
+			continue
+		}
+		normalized := NormalizeSkillName(name)
+		if normalized == "" || normalized == skillsEnabledKey {
+			continue
+		}
+		disabledNames[normalized] = struct{}{}
+	}
+	if len(disabledNames) == 0 {
+		disabledNames = nil
+	}
+	return SkillPolicy{
+		subsystemState: settings.SkillSubsystem,
+		disabledNames:  disabledNames,
+	}
+}
+
+func (p SkillPolicy) Enabled() bool {
+	return p.subsystemState == SkillSubsystemEnabled
+}
+
+func (p SkillPolicy) SkillEnabled(name string) bool {
+	if !p.Enabled() {
+		return false
+	}
+	_, disabled := p.disabledNames[NormalizeSkillName(name)]
+	return !disabled
+}
+
+func (p SkillPolicy) Equivalent(other SkillPolicy) bool {
+	if p.subsystemState != other.subsystemState || len(p.disabledNames) != len(other.disabledNames) {
+		return false
+	}
+	for name := range p.disabledNames {
+		if _, exists := other.disabledNames[name]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func skillSubsystemStateFromEnabled(enabled bool) SkillSubsystemState {
+	if enabled {
+		return SkillSubsystemEnabled
+	}
+	return SkillSubsystemDisabled
+}
+
 type Settings struct {
 	Model                            string
 	ThinkingLevel                    string
@@ -142,6 +209,7 @@ type Settings struct {
 	MinimumExecToBgSeconds           int
 	CompactionMode                   CompactionMode
 	EnabledTools                     map[toolspec.ID]bool
+	SkillSubsystem                   SkillSubsystemState
 	SkillToggles                     map[string]bool
 	Timeouts                         Timeouts
 	ShellOutputMaxChars              int

@@ -17,6 +17,7 @@ import (
 	"core/internal/testharness/runtimewirefixture"
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
+	"core/server/launch"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
@@ -790,6 +791,77 @@ func TestNewRuntimeWiringRejectsEmptyModelAfterBypassingConfigDefaults(t *testin
 	}
 }
 
+func TestRuntimeWiringUsesResolvedParentAndSubagentSkillsPolicies(t *testing.T) {
+	tests := []struct {
+		name             string
+		globalEnabled    bool
+		roleEnabled      bool
+		wantParentSkills bool
+		wantRoleSkills   bool
+	}{
+		{
+			name:             "role disables globally enabled skills",
+			globalEnabled:    true,
+			roleEnabled:      false,
+			wantParentSkills: true,
+			wantRoleSkills:   false,
+		},
+		{
+			name:             "role re-enables globally disabled skills",
+			globalEnabled:    false,
+			roleEnabled:      true,
+			wantParentSkills: false,
+			wantRoleSkills:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configRoot := t.TempDir()
+			workspace := t.TempDir()
+			configPath := filepath.Join(configRoot, "config.toml")
+			configBody := fmt.Sprintf("[skills]\nenabled = %t\n\n[subagents.worker.skills]\nenabled = %t\n", tt.globalEnabled, tt.roleEnabled)
+			if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			skillDir := filepath.Join(workspace, config.ConfigDirName, "skills")
+			if err := os.MkdirAll(skillDir, 0o755); err != nil {
+				t.Fatalf("mkdir skills: %v", err)
+			}
+			validSkillDir := filepath.Join(skillDir, "workspace-skill")
+			if err := os.MkdirAll(validSkillDir, 0o755); err != nil {
+				t.Fatalf("mkdir valid skill: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(validSkillDir, "SKILL.md"), []byte("---\nname: workspace-skill\ndescription: workspace skill\n---\n"), 0o644); err != nil {
+				t.Fatalf("write skill: %v", err)
+			}
+			if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), filepath.Join(skillDir, "broken-skill")); err != nil {
+				t.Fatalf("create broken skill symlink: %v", err)
+			}
+
+			app, err := config.Load(workspace, config.LoadOptions{ConfigRoot: configRoot})
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			if !config.SubagentRoleCallableInContext(app.Settings, "worker", config.SubagentInvocationContextOrdinary) {
+				t.Fatal("skills policy must not affect role callability")
+			}
+
+			parentStore := newRuntimeWireSessionForWorkspace(t, t.TempDir(), "parent", workspace)
+			roleStore := newRuntimeWireSessionForWorkspace(t, t.TempDir(), "role", workspace)
+			roleName := "worker"
+			if err := roleStore.SetContinuationContext(session.ContinuationContext{AgentRole: &roleName}); err != nil {
+				t.Fatalf("set role continuation: %v", err)
+			}
+
+			parentRequest, parentWarning := runResolvedSkillsRequest(t, app, parentStore, workspace, configRoot)
+			roleRequest, roleWarning := runResolvedSkillsRequest(t, app, roleStore, workspace, configRoot)
+			assertSkillsRequestState(t, parentRequest, parentWarning, tt.wantParentSkills)
+			assertSkillsRequestState(t, roleRequest, roleWarning, tt.wantRoleSkills)
+		})
+	}
+}
+
 func TestReviewerProviderSettingsFallbacks(t *testing.T) {
 	resolved := config.ResolveReviewerProviderSettings(config.Settings{
 		ProviderOverride: "openai",
@@ -1038,6 +1110,84 @@ func newRuntimeWireSession(t *testing.T, root string, name string) *session.Stor
 		t.Fatalf("create store %s: %v", name, err)
 	}
 	return store
+}
+
+func newRuntimeWireSessionForWorkspace(t *testing.T, root string, name string, workspace string) *session.Store {
+	t.Helper()
+	store, err := session.Create(root, name, workspace, sessioncontract.SessionCategoryMain, runtimeWireTestSessionPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("create store %s: %v", name, err)
+	}
+	return store
+}
+
+func runResolvedSkillsRequest(t *testing.T, app config.App, store *session.Store, workspace string, configRoot string) (llm.Request, bool) {
+	t.Helper()
+	resolved, err := launch.ResolvePromptFacingSnapshotConfig(app, store, false)
+	if err != nil {
+		t.Fatalf("resolve prompt-facing settings: %v", err)
+	}
+	client := &runtimewireCaptureClient{
+		caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true},
+		responses: []llm.Response{{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+			Usage:     llm.Usage{WindowTokens: 200_000},
+		}},
+	}
+	var eventMu sync.Mutex
+	hasWarning := false
+	wiring, err := NewRuntimeWiring(
+		store,
+		resolved.Settings,
+		resolved.ActiveToolIDs,
+		workspace,
+		auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, nil),
+		nil,
+		RuntimeWiringOptions{
+			Client:          client,
+			Sources:         resolved.Source.Sources,
+			GlobalConfigDir: configRoot,
+			OnEvent: func(event runtime.Event) {
+				if event.Kind != runtime.EventLocalEntryAdded || event.LocalEntry == nil || event.LocalEntry.Role != "warning" {
+					return
+				}
+				eventMu.Lock()
+				hasWarning = true
+				eventMu.Unlock()
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("new runtime wiring: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := wiring.Close(); err != nil {
+			t.Errorf("close runtime wiring: %v", err)
+		}
+	})
+	if _, err := wiring.Engine.SubmitUserMessage(context.Background(), "hello"); err != nil {
+		t.Fatalf("submit user message: %v", err)
+	}
+	eventMu.Lock()
+	defer eventMu.Unlock()
+	return client.LastRequest(), hasWarning
+}
+
+func assertSkillsRequestState(t *testing.T, request llm.Request, hasWarning bool, wantSkills bool) {
+	t.Helper()
+	foundSkills := false
+	for _, message := range llm.MessagesFromItems(request.Items) {
+		if message.MessageType == llm.MessageTypeSkills {
+			foundSkills = true
+			break
+		}
+	}
+	if foundSkills != wantSkills {
+		t.Fatalf("skills context present = %t, want %t; messages=%+v", foundSkills, wantSkills, llm.MessagesFromItems(request.Items))
+	}
+	if hasWarning != wantSkills {
+		t.Fatalf("skill discovery warning present = %t, want %t", hasWarning, wantSkills)
+	}
 }
 
 func newRuntimeWireToolRegistry(t *testing.T, workspace string, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {

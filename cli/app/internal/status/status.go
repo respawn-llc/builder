@@ -64,26 +64,28 @@ type Request struct {
 }
 
 type Snapshot struct {
-	CollectedAt       time.Time
-	Workdir           string
-	SessionName       string
-	SessionID         string
-	ParentSessionID   string
-	ParentSessionName string
-	OwnsServer        bool
-	Git               GitInfo
-	Auth              AuthInfo
-	Context           ContextInfo
-	Model             ModelInfo
-	Update            UpdateInfo
-	Config            ConfigInfo
-	Subscription      SubscriptionInfo
-	Skills            []SkillInspection
-	SkillTokenCounts  map[string]int
-	AgentsPaths       []string
-	AgentTokenCounts  map[string]int
-	CompactionCount   int
-	CollectorWarning  string
+	CollectedAt         time.Time
+	Workdir             string
+	SessionName         string
+	SessionID           string
+	ParentSessionID     string
+	ParentSessionName   string
+	OwnsServer          bool
+	Git                 GitInfo
+	Auth                AuthInfo
+	Context             ContextInfo
+	Model               ModelInfo
+	Update              UpdateInfo
+	Config              ConfigInfo
+	Subscription        SubscriptionInfo
+	SkillPolicy         config.SkillPolicy
+	SkillDiscoveryState config.SkillSubsystemState
+	Skills              []SkillInspection
+	SkillTokenCounts    map[string]int
+	AgentsPaths         []string
+	AgentTokenCounts    map[string]int
+	CompactionCount     int
+	CollectorWarning    string
 }
 
 type AuthInfo struct {
@@ -181,11 +183,13 @@ type GitStageResult struct {
 }
 
 type EnvironmentStageResult struct {
-	Skills           []SkillInspection
-	SkillTokenCounts map[string]int
-	AgentsPaths      []string
-	AgentTokenCounts map[string]int
-	CollectorWarning string
+	SkillPolicy         config.SkillPolicy
+	SkillDiscoveryState config.SkillSubsystemState
+	Skills              []SkillInspection
+	SkillTokenCounts    map[string]int
+	AgentsPaths         []string
+	AgentTokenCounts    map[string]int
+	CollectorWarning    string
 }
 
 type memoryRepository struct {
@@ -248,7 +252,13 @@ func (r *memoryRepository) SeedSnapshot(req Request, base Snapshot, now time.Tim
 	}
 
 	envEntry, envCached := r.envByKey[strings.TrimSpace(req.CacheKeys.Environment)]
+	requestedSkillPolicy := config.ResolveSkillPolicy(req.Settings)
+	if envCached && !envEntry.result.SkillPolicy.Equivalent(requestedSkillPolicy) {
+		envCached = false
+	}
 	if envCached {
+		seed.Snapshot.SkillPolicy = envEntry.result.SkillPolicy
+		seed.Snapshot.SkillDiscoveryState = envEntry.result.SkillDiscoveryState
 		seed.Snapshot.Skills = append([]SkillInspection(nil), envEntry.result.Skills...)
 		seed.Snapshot.SkillTokenCounts = CloneTokenMap(envEntry.result.SkillTokenCounts)
 		seed.Snapshot.AgentsPaths = append([]string(nil), envEntry.result.AgentsPaths...)
@@ -291,6 +301,10 @@ func (r *memoryRepository) StoreEnvironment(cacheKey string, result EnvironmentS
 	if strings.TrimSpace(cacheKey) == "" {
 		return
 	}
+	result.Skills = append([]SkillInspection(nil), result.Skills...)
+	result.SkillTokenCounts = CloneTokenMap(result.SkillTokenCounts)
+	result.AgentsPaths = append([]string(nil), result.AgentsPaths...)
+	result.AgentTokenCounts = CloneTokenMap(result.AgentTokenCounts)
 	r.envByKey[cacheKey] = environmentCacheEntry{fetchedAt: repositoryTime(now), result: result}
 }
 

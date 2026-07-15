@@ -346,7 +346,14 @@ func discoverDirectCommands(providerID ProviderID, root string) ([]Item, error) 
 }
 
 func generatedSkillItems(configRoot string, disabled map[string]bool) ([]Item, error) {
-	inspections, err := skillcatalog.DiscoverGenerated(configRoot, disabled)
+	toggles := make(map[string]bool, len(disabled))
+	for name, isDisabled := range disabled {
+		if isDisabled {
+			toggles[name] = false
+		}
+	}
+	policy := brand.ResolveSkillPolicy(brand.Settings{SkillToggles: toggles})
+	inspections, err := skillcatalog.DiscoverGenerated(configRoot, policy)
 	if err != nil {
 		return nil, err
 	}

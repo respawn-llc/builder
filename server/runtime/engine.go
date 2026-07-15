@@ -105,7 +105,7 @@ type Config struct {
 	PromptFacingSnapshotReloader  PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride  *llm.ProviderCapabilities
 	EnabledTools                  []toolspec.ID
-	DisabledSkills                map[string]bool
+	SkillPolicy                   config.SkillPolicy
 	SubagentCatalogSettings       config.Settings
 	SystemPromptFiles             []config.SystemPromptFile
 	AutoCompactTokenLimit         int
@@ -276,21 +276,6 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	if !cfg.ModelCapabilities.SupportsReasoningEffort && !cfg.ModelCapabilities.SupportsVisionInputs {
 		cfg.ModelCapabilities = llm.LockedModelCapabilitiesForModel(cfg.Model)
 	}
-	if cfg.DisabledSkills != nil {
-		cloned := make(map[string]bool, len(cfg.DisabledSkills))
-		for name, disabled := range cfg.DisabledSkills {
-			if !disabled {
-				continue
-			}
-			normalized := config.NormalizeSkillName(name)
-			if normalized == "" {
-				continue
-			}
-			cloned[normalized] = true
-		}
-		cfg.DisabledSkills = cloned
-	}
-
 	eng := &Engine{
 		store:              store,
 		llm:                client,

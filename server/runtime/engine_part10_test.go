@@ -309,8 +309,8 @@ func TestDisabledSkillsAreNotInjectedIntoNewSessions(t *testing.T) {
 
 	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"}, Usage: llm.Usage{WindowTokens: 200000}}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:          "gpt-5",
-		DisabledSkills: map[string]bool{"workspace skill": true},
+		Model:       "gpt-5",
+		SkillPolicy: skillPolicyWithDisabled("workspace skill"),
 	})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {
@@ -333,6 +333,43 @@ func TestDisabledSkillsAreNotInjectedIntoNewSessions(t *testing.T) {
 		return
 	}
 	t.Fatalf("expected skills developer message in first request, messages=%+v", requestMessages(client.calls[0]))
+}
+
+func TestDisabledSkillsSubsystemOmitsFreshContextWarningsAndDirectoryReads(t *testing.T) {
+	previous := readSkillsDir
+	readSkillsDir = func(string) ([]os.DirEntry, error) {
+		t.Fatal("disabled skills subsystem must not read directories")
+		return nil, os.ErrPermission
+	}
+	t.Cleanup(func() {
+		readSkillsDir = previous
+	})
+
+	workspace := t.TempDir()
+	store := mustCreateNamedTestSessionAt(t, t.TempDir(), "ws", workspace)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+	policy := brand.ResolveSkillPolicy(brand.Settings{SkillSubsystem: brand.SkillSubsystemDisabled})
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeTool{name: toolspec.ToolExecCommand},
+	}), Config{Model: "gpt-5", SkillPolicy: policy})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	for _, message := range requestMessages(client.calls[0]) {
+		if message.MessageType == llm.MessageTypeSkills {
+			t.Fatalf("disabled subsystem injected skills context: %+v", requestMessages(client.calls[0]))
+		}
+	}
+	for _, entry := range eng.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleWarning) {
+			t.Fatalf("disabled subsystem emitted a discovery warning: %+v", entry)
+		}
+	}
 }
 
 func TestBrokenSymlinkedSkillsAreSkippedAndWarnedInTranscript(t *testing.T) {

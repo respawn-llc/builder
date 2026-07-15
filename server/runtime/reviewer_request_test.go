@@ -2,13 +2,16 @@ package runtime
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/config"
 	"core/shared/toolspec"
 )
 
@@ -121,6 +124,38 @@ func TestBuildReviewerRequestPreservesTranscriptBytes(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected reviewer request to preserve exact ANSI transcript bytes %q, messages=%+v", seedContent, requestMessages(req))
+	}
+}
+
+func TestReviewerRebuildUsesCurrentDisabledSkillsPolicyWithoutMutatingMainTranscript(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	writeTestSkill(t, filepath.Join(workspace, config.ConfigDirName, "skills", "review-skill"), "review-skill", "review skill")
+
+	persistedSkills := llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: llm.MessageTypeSkills,
+		Content:     "persisted skills context",
+	}
+	messages := []llm.Message{
+		persistedSkills,
+		{Role: llm.RoleUser, Content: "request"},
+	}
+	original := append([]llm.Message(nil), messages...)
+	disabledPolicy := config.ResolveSkillPolicy(config.Settings{SkillSubsystem: config.SkillSubsystemDisabled})
+	rebuilt, err := buildReviewerRequestMessagesWithBuilder(
+		messages,
+		newMetaContextBuilder(workspace, "gpt-5", "medium", disabledPolicy, time.Now()),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("build reviewer request messages: %v", err)
+	}
+	if _, found := skillMessageContent(rebuilt); found {
+		t.Fatalf("disabled reviewer rebuild retained skills context: %+v", rebuilt)
+	}
+	if !reflect.DeepEqual(messages, original) {
+		t.Fatalf("reviewer rebuild mutated main transcript\nbefore=%+v\nafter=%+v", original, messages)
 	}
 }
 

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
 			},
 		},
 	}
-	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
+	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", config.SkillPolicy{}, time.Unix(0, 0)).
 		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand})
 	result, err := builder.Build(metaContextBuildOptions{
 		IncludeSubagents:          true,
@@ -105,7 +106,7 @@ func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
 			},
 		},
 	}
-	withShell := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
+	withShell := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", config.SkillPolicy{}, time.Unix(0, 0)).
 		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand})
 	result, err := withShell.Build(metaContextBuildOptions{
 		IncludeSubagents:          true,
@@ -118,7 +119,7 @@ func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
 		t.Fatalf("unexpected fallback content: %+v", result.Subagents)
 	}
 
-	withoutShell := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
+	withoutShell := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", config.SkillPolicy{}, time.Unix(0, 0)).
 		withSubagents(settings, []toolspec.ID{toolspec.ToolPatch})
 	result, err = withoutShell.Build(metaContextBuildOptions{
 		IncludeSubagents:          true,
@@ -153,7 +154,7 @@ func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *t
 			},
 		},
 	}
-	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
+	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", config.SkillPolicy{}, time.Unix(0, 0)).
 		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand})
 	result, err := builder.Build(metaContextBuildOptions{
 		IncludeSubagents:          true,
@@ -211,7 +212,7 @@ func TestSubagentCatalogAppliesInvocationContextPolicy(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder := newMetaContextBuilder("/tmp/work", "gpt-5.5", "medium", nil, time.Unix(0, 0)).
+			builder := newMetaContextBuilder("/tmp/work", "gpt-5.5", "medium", config.SkillPolicy{}, time.Unix(0, 0)).
 				withSubagents(tt.settings, []toolspec.ID{toolspec.ToolExecCommand})
 			result, err := builder.Build(metaContextBuildOptions{
 				IncludeSubagents:          true,
@@ -325,6 +326,56 @@ func TestCompactionReinjectsSubagentsMetaContext(t *testing.T) {
 	}
 }
 
+func TestCompactionReinjectedSkillsFollowCurrentPolicy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	writeTestSkill(t, filepath.Join(workspace, config.ConfigDirName, "skills", "allowed"), "allowed", "allowed skill")
+	writeTestSkill(t, filepath.Join(workspace, config.ConfigDirName, "skills", "blocked"), "blocked", "blocked skill")
+
+	tests := []struct {
+		name       string
+		policy     config.SkillPolicy
+		wantSkills bool
+	}{
+		{
+			name:   "disabled policy omits skills",
+			policy: config.ResolveSkillPolicy(config.Settings{SkillSubsystem: config.SkillSubsystemDisabled}),
+		},
+		{
+			name: "role re-enabled policy applies ordinary toggles",
+			policy: config.ResolveSkillPolicy(config.Settings{
+				SkillSubsystem: config.SkillSubsystemEnabled,
+				SkillToggles:   map[string]bool{"blocked": false},
+			}),
+			wantSkills: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateNamedTestSession(t, "ws", workspace)
+			eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+				Model:       "gpt-5",
+				SkillPolicy: tt.policy,
+			})
+			messages, err := eng.compactionReinjectedMetaMessages(context.Background())
+			if err != nil {
+				t.Fatalf("compaction reinjection: %v", err)
+			}
+			_, found := skillMessageContent(messages)
+			if found != tt.wantSkills {
+				t.Fatalf("skills message present = %t, want %t; messages=%+v", found, tt.wantSkills, messages)
+			}
+			inspection, err := InspectSkills(workspace, "", tt.policy)
+			if err != nil {
+				t.Fatalf("inspect skills policy: %v", err)
+			}
+			if tt.wantSkills && (!skillInspectionMatches(inspection.Inspections, "allowed", false) || !skillInspectionMatches(inspection.Inspections, "blocked", true)) {
+				t.Fatalf("ordinary toggles not reflected in typed inspection: %+v", inspection.Inspections)
+			}
+		})
+	}
+}
+
 func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
@@ -415,6 +466,24 @@ func hasSubagentMetaMessage(messages []llm.Message) bool {
 	return false
 }
 
+func skillMessageContent(messages []llm.Message) (string, bool) {
+	for _, message := range messages {
+		if message.MessageType == llm.MessageTypeSkills {
+			return message.Content, true
+		}
+	}
+	return "", false
+}
+
+func skillInspectionMatches(inspections []SkillInspection, name string, disabled bool) bool {
+	for _, inspection := range inspections {
+		if inspection.Name == name {
+			return inspection.Loaded && inspection.Disabled == disabled
+		}
+	}
+	return false
+}
+
 func renderableSubagentRolesContain(roles []renderedSubagentRole, name string) bool {
 	for _, role := range roles {
 		if role.Name == name {
@@ -429,7 +498,7 @@ func TestReviewerPromptFiltersSubagentsMetaContext(t *testing.T) {
 		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeSubagents, Content: "Available subagent roles:\n- worker: specialist"},
 		{Role: llm.RoleUser, Content: "request"},
 	}
-	got, err := buildReviewerRequestMessagesWithBuilder(messages, newMetaContextBuilder(t.TempDir(), "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)), false)
+	got, err := buildReviewerRequestMessagesWithBuilder(messages, newMetaContextBuilder(t.TempDir(), "gpt-5.6-sol", "medium", config.SkillPolicy{}, time.Unix(0, 0)), false)
 	if err != nil {
 		t.Fatalf("buildReviewerRequestMessagesWithBuilder: %v", err)
 	}

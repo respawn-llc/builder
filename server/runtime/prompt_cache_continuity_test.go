@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -17,6 +18,14 @@ import (
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
+
+type mutablePromptFacingSnapshotReloader struct {
+	settings brand.Settings
+}
+
+func (r *mutablePromptFacingSnapshotReloader) ReloadPromptFacingSnapshotConfig(context.Context, string) (PromptFacingSnapshotConfig, error) {
+	return PromptFacingSnapshotConfig{Settings: r.settings}, nil
+}
 
 // This regression test guards prompt-cache continuity across restarts. It
 // seeds a realistic live runtime conversation, relies on production persistence,
@@ -102,6 +111,202 @@ func TestHeadlessToInteractiveReopenPreservesPromptCachePrefix(t *testing.T) {
 	assertModelCallCount(t, interactiveClient, 1)
 
 	assertPromptCacheChunkPrefix(t, lastHeadlessRequest, interactiveClient.calls[0])
+}
+
+func TestSkillsPolicyChangesOnlyAtReviewerOrMainContextReconstruction(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	workspace := filepath.Join(root, "workspace")
+	persistence := filepath.Join(root, "sessions")
+	for _, dir := range []string{
+		home,
+		workspace,
+		persistence,
+		filepath.Join(workspace, brand.ConfigDirName, "skills", "cache-skill"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	t.Setenv("HOME", home)
+	writeTestFile(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "cache-skill", "SKILL.md"), skillFixtureMarkdown("cache-skill", "cache skill"))
+
+	store := mustCreateNamedTestSessionAt(t, persistence, "ws", workspace)
+	caps := llm.ProviderCapabilities{
+		ProviderID:               "openai",
+		SupportsResponsesAPI:     true,
+		SupportsResponsesCompact: true,
+		SupportsPromptCacheKey:   true,
+		IsOpenAIFirstParty:       true,
+	}
+	registry := tools.NewRegistry()
+	enabledClient := &fakeClient{
+		caps:      caps,
+		responses: []llm.Response{finalOutputItemResponse("enabled response")},
+	}
+	enabled := mustNewTestEngine(t, store, enabledClient, registry, Config{
+		Model:    "gpt-5",
+		Reviewer: ReviewerConfig{Model: "gpt-5"},
+	})
+	if _, err := enabled.SubmitUserMessage(context.Background(), "first"); err != nil {
+		t.Fatalf("enabled submit: %v", err)
+	}
+	firstRequest := enabledClient.calls[0]
+	if _, found := skillMessageContent(requestMessages(firstRequest)); !found {
+		t.Fatalf("fresh enabled request omitted skills: %+v", requestMessages(firstRequest))
+	}
+	if firstRequest.PromptCacheKey == "" {
+		t.Fatal("fresh request must have a prompt cache key")
+	}
+	if err := enabled.Close(); err != nil {
+		t.Fatalf("close enabled engine: %v", err)
+	}
+
+	reopenedStore := mustOpenTestSession(t, store.Dir())
+	disabledPolicy := brand.ResolveSkillPolicy(brand.Settings{SkillSubsystem: brand.SkillSubsystemDisabled})
+	disabledClient := &fakeCompactionClient{
+		caps:      caps,
+		responses: []llm.Response{finalOutputItemResponse("disabled response")},
+		compactionResponses: []llm.CompactionResponse{{
+			OutputItems: []llm.ResponseItem{
+				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "condensed summary"},
+				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_skills_policy", EncryptedContent: "encrypted"},
+			},
+			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
+		}},
+	}
+	disabled := mustNewTestEngine(t, reopenedStore, disabledClient, registry, Config{
+		Model:          "gpt-5",
+		CompactionMode: "native",
+		SkillPolicy:    disabledPolicy,
+		Reviewer:       ReviewerConfig{Model: "gpt-5"},
+	})
+	if _, err := disabled.SubmitUserMessage(context.Background(), "second"); err != nil {
+		t.Fatalf("disabled reopened submit: %v", err)
+	}
+	reopenedRequest := disabledClient.calls[0]
+	if _, found := skillMessageContent(requestMessages(reopenedRequest)); !found {
+		t.Fatalf("reopened active list must retain persisted skills until compaction: %+v", requestMessages(reopenedRequest))
+	}
+	if reopenedRequest.PromptCacheKey != firstRequest.PromptCacheKey {
+		t.Fatalf("policy-only reopen rotated cache key: got %q want %q", reopenedRequest.PromptCacheKey, firstRequest.PromptCacheKey)
+	}
+
+	mainBeforeReviewer := disabled.transcriptRuntimeState().SnapshotMessages()
+	reviewerRequest, err := disabled.buildReviewerRequest(context.Background(), disabledClient)
+	if err != nil {
+		t.Fatalf("build reviewer request: %v", err)
+	}
+	if _, found := skillMessageContent(requestMessages(reviewerRequest)); found {
+		t.Fatalf("reviewer must rebuild current disabled skills context: %+v", requestMessages(reviewerRequest))
+	}
+	if !reflect.DeepEqual(disabled.transcriptRuntimeState().SnapshotMessages(), mainBeforeReviewer) {
+		t.Fatal("reviewer reconstruction mutated the main transcript")
+	}
+
+	if err := disabled.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("compact disabled context: %v", err)
+	}
+	postCompactionRequest, err := disabled.buildRequest(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("build post-compaction request: %v", err)
+	}
+	if _, found := skillMessageContent(requestMessages(postCompactionRequest)); found {
+		t.Fatalf("post-compaction context retained disabled skills: %+v", requestMessages(postCompactionRequest))
+	}
+	if postCompactionRequest.PromptCacheKey == reopenedRequest.PromptCacheKey {
+		t.Fatalf("compaction did not rotate cache key %q", postCompactionRequest.PromptCacheKey)
+	}
+}
+
+func TestLiveReloadedSkillsPolicyAppliesAtCompactionAndReviewerReconstruction(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	persistence := filepath.Join(root, "sessions")
+	for _, dir := range []string{
+		workspace,
+		persistence,
+		filepath.Join(workspace, brand.ConfigDirName, "skills", "allowed"),
+		filepath.Join(workspace, brand.ConfigDirName, "skills", "blocked"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	writeTestFile(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "allowed", "SKILL.md"), skillFixtureMarkdown("allowed", "allowed skill"))
+	writeTestFile(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "blocked", "SKILL.md"), skillFixtureMarkdown("blocked", "blocked skill"))
+
+	store := mustCreateNamedTestSessionAt(t, persistence, "ws", workspace)
+	reloader := &mutablePromptFacingSnapshotReloader{settings: brand.Settings{}}
+	client := &fakeCompactionClient{
+		responses: []llm.Response{finalOutputItemResponse("enabled response")},
+		compactionResponses: []llm.CompactionResponse{{
+			OutputItems: []llm.ResponseItem{
+				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "condensed summary"},
+				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_live_reload_skills", EncryptedContent: "encrypted"},
+			},
+			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
+		}},
+	}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+		Model:                        "gpt-5",
+		CompactionMode:               "native",
+		PromptFacingSnapshotReloader: reloader,
+		Reviewer:                     ReviewerConfig{Model: "gpt-5"},
+	})
+	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {
+		t.Fatalf("enabled submit: %v", err)
+	}
+	if _, found := skillMessageContent(eng.transcriptRuntimeState().SnapshotMessages()); !found {
+		t.Fatal("fresh enabled transcript omitted skills")
+	}
+
+	mainBeforeReload := eng.transcriptRuntimeState().SnapshotMessages()
+	reloader.settings = brand.Settings{SkillSubsystem: brand.SkillSubsystemDisabled}
+	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeReload) {
+		t.Fatal("changing reloaded settings mutated the active main transcript")
+	}
+
+	reviewerDisabled, err := eng.buildReviewerRequest(context.Background(), client)
+	if err != nil {
+		t.Fatalf("build disabled reviewer request: %v", err)
+	}
+	if _, found := skillMessageContent(requestMessages(reviewerDisabled)); found {
+		t.Fatalf("live-reloaded disabled reviewer retained skills: %+v", requestMessages(reviewerDisabled))
+	}
+	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeReload) {
+		t.Fatal("disabled reviewer reconstruction mutated the main transcript")
+	}
+
+	reloader.settings = brand.Settings{
+		SkillSubsystem: brand.SkillSubsystemEnabled,
+		SkillToggles:   map[string]bool{"blocked": false},
+	}
+	reviewerReenabled, err := eng.buildReviewerRequest(context.Background(), client)
+	if err != nil {
+		t.Fatalf("build re-enabled reviewer request: %v", err)
+	}
+	if _, found := skillMessageContent(requestMessages(reviewerReenabled)); !found {
+		t.Fatalf("role-resolved re-enabled reviewer omitted typed skills message: %+v", requestMessages(reviewerReenabled))
+	}
+	inspection, err := InspectSkills(workspace, "", brand.ResolveSkillPolicy(reloader.settings))
+	if err != nil {
+		t.Fatalf("inspect role-resolved re-enabled skills: %v", err)
+	}
+	if !skillInspectionMatches(inspection.Inspections, "allowed", false) || !skillInspectionMatches(inspection.Inspections, "blocked", true) {
+		t.Fatalf("role-resolved ordinary toggles not reflected in typed inspection: %+v", inspection.Inspections)
+	}
+	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeReload) {
+		t.Fatal("re-enabled reviewer reconstruction mutated the main transcript")
+	}
+
+	reloader.settings = brand.Settings{SkillSubsystem: brand.SkillSubsystemDisabled}
+	if err := eng.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("compact with live-reloaded disabled policy: %v", err)
+	}
+	if _, found := skillMessageContent(eng.transcriptRuntimeState().SnapshotMessages()); found {
+		t.Fatalf("post-compaction active transcript retained live-reloaded disabled skills: %+v", eng.transcriptRuntimeState().SnapshotMessages())
+	}
 }
 
 func TestBuildRequest_ReopenPreservesShellStringToolOutputPayload(t *testing.T) {

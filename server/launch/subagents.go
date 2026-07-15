@@ -176,6 +176,8 @@ func applySubagentRoleOverrides(settings *config.Settings, role config.SubagentR
 			settings.Shell.PostprocessHook = valuecopy.Pointer(role.Settings.Shell.PostprocessHook)
 		case "cache_warning_mode":
 			settings.CacheWarningMode = role.Settings.CacheWarningMode
+		case "skills.enabled":
+			settings.SkillSubsystem = role.Settings.SkillSubsystem
 		default:
 			if applyReviewerRoleOverride(settings, role.Settings, key) {
 				continue

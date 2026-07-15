@@ -5,6 +5,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
@@ -850,7 +851,7 @@ func TestAppendMissingReviewerMetaContextPrependsAgentsAndEnvironmentWhenMissing
 	}
 
 	in := []llm.Message{{Role: llm.RoleUser, Content: "request"}}
-	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, nil)
+	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, config.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}

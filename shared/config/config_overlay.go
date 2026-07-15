@@ -281,22 +281,13 @@ func resetEnabledToolMap(enabled []toolspec.ID) map[toolspec.ID]bool {
 }
 
 func DisabledSkillToggles(settings Settings) map[string]bool {
-	if len(settings.SkillToggles) == 0 {
+	policy := ResolveSkillPolicy(settings)
+	if len(policy.disabledNames) == 0 {
 		return nil
 	}
-	disabled := make(map[string]bool, len(settings.SkillToggles))
-	for name, enabled := range settings.SkillToggles {
-		if enabled {
-			continue
-		}
-		normalized := NormalizeSkillName(name)
-		if normalized == "" {
-			continue
-		}
-		disabled[normalized] = true
-	}
-	if len(disabled) == 0 {
-		return nil
+	disabled := make(map[string]bool, len(policy.disabledNames))
+	for name := range policy.disabledNames {
+		disabled[name] = true
 	}
 	return disabled
 }

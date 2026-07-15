@@ -44,6 +44,7 @@ var (
 	errProviderCapabilitiesNeedID         = newConfigError("provider_capabilities.provider_id must not be empty when provider capability overrides are set")
 	errReviewerProviderCapabilitiesNeedID = newConfigError("reviewer.provider_capabilities.provider_id must not be empty when reviewer provider capability overrides are set")
 	errInvalidModelVerbosity              = newConfigError("invalid model_verbosity")
+	errInvalidSkillSubsystemState         = newConfigError("invalid skills subsystem state")
 	errInvalidReviewerProvider            = newConfigError("invalid reviewer.provider_override")
 	errReviewerContextWindowNegative      = newConfigError("reviewer.model_context_window must be >= 0")
 	errModelContextWindowBelowMinimum     = newConfigError("model context window below minimum")

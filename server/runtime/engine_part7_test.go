@@ -36,7 +36,7 @@ func TestAppendMissingReviewerMetaContextKeepsExistingMetaMessages(t *testing.T)
 		existingEnv,
 		{Role: llm.RoleUser, Content: "request"},
 	}
-	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, nil)
+	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestAppendMissingReviewerMetaContextBackfillsSkillsBetweenAgentsAndEnvironm
 		{Role: llm.RoleUser, Content: "request"},
 	}
 
-	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, nil)
+	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestAppendMissingReviewerMetaContextBackfillsSkillsBeforeEnvironmentWhenNoA
 		{Role: llm.RoleUser, Content: "request"},
 	}
 
-	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, nil)
+	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestAppendMissingReviewerMetaContextBackfillsMissingWorkspaceAgentsSource(t
 		},
 		{Role: llm.RoleUser, Content: "request"},
 	}
-	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, nil)
+	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestAppendMissingReviewerMetaContextLeavesUntypedLegacyMetaInTranscript(t *
 		{Role: llm.RoleUser, Content: "request"},
 	}
 
-	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, nil)
+	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, brand.SkillPolicy{})
 	if err != nil {
 		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
 	}

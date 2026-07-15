@@ -52,6 +52,12 @@ type skillDiscoveryIssue struct {
 	Reason string
 }
 
+type injectedSkillDiscovery struct {
+	State  skillcatalog.DiscoveryState
+	Skills []injectedSkill
+	Issues []skillDiscoveryIssue
+}
+
 type skillSourceKind string
 
 const (
@@ -65,8 +71,8 @@ type skillRoot struct {
 	Kind skillSourceKind
 }
 
-func skillsContextMessageWithDisabled(workspaceRoot string, disabledSkills map[string]bool) (string, bool, error) {
-	builder := newMetaContextBuilder(workspaceRoot, "", "", disabledSkills, time.Now())
+func skillsContextMessage(workspaceRoot string, policy config.SkillPolicy) (string, bool, error) {
+	builder := newMetaContextBuilder(workspaceRoot, "", "", policy, time.Now())
 	metaResult, err := builder.Build(metaContextBuildOptions{IncludeSkills: true})
 	if err != nil {
 		return "", false, err
@@ -77,15 +83,15 @@ func skillsContextMessageWithDisabled(workspaceRoot string, disabledSkills map[s
 	return metaResult.Skills[0].Content, true, nil
 }
 
-func discoverInjectedSkills(workspaceRoot, globalConfigDir string, disabledSkills map[string]bool) ([]injectedSkill, []skillDiscoveryIssue, error) {
+func discoverInjectedSkills(workspaceRoot, globalConfigDir string, policy config.SkillPolicy) (injectedSkillDiscovery, error) {
 	result, err := skillcatalog.Discover(skillcatalog.Options{
-		WorkspaceRoot:  workspaceRoot,
-		ConfigRoot:     globalConfigDir,
-		DisabledSkills: disabledSkills,
-		ReadDir:        readSkillsDir,
+		WorkspaceRoot: workspaceRoot,
+		ConfigRoot:    globalConfigDir,
+		Policy:        policy,
+		ReadDir:       readSkillsDir,
 	})
 	if err != nil {
-		return nil, nil, err
+		return injectedSkillDiscovery{}, err
 	}
 	out := make([]injectedSkill, 0, len(result.Skills))
 	for _, skill := range result.Skills {
@@ -95,7 +101,7 @@ func discoverInjectedSkills(workspaceRoot, globalConfigDir string, disabledSkill
 	for _, issue := range result.Issues {
 		issues = append(issues, skillDiscoveryIssue{Name: issue.Name, Path: issue.Path, Reason: issue.Reason})
 	}
-	return out, issues, nil
+	return injectedSkillDiscovery{State: result.State, Skills: out, Issues: issues}, nil
 }
 
 type skillDirResolution struct {
@@ -239,24 +245,6 @@ func sanitizeSkillSingleLine(raw string) string {
 		return ""
 	}
 	return strings.Join(parts, " ")
-}
-
-func normalizedDisabledSkills(disabledSkills map[string]bool) map[string]bool {
-	if len(disabledSkills) == 0 {
-		return nil
-	}
-	normalized := make(map[string]bool, len(disabledSkills))
-	for name, disabled := range disabledSkills {
-		if !disabled {
-			continue
-		}
-		key := config.NormalizeSkillName(name)
-		if key == "" {
-			continue
-		}
-		normalized[key] = true
-	}
-	return normalized
 }
 
 func renderSkillsContext(skills []injectedSkill) string {

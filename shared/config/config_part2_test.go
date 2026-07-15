@@ -855,6 +855,114 @@ func TestLoadSkillTogglesFromFile(t *testing.T) {
 	}
 }
 
+func TestResolveSkillPolicyEnablesZeroValueSettings(t *testing.T) {
+	policy := ResolveSkillPolicy(Settings{})
+	if !policy.Enabled() {
+		t.Fatal("zero-value settings must keep the skills subsystem enabled")
+	}
+	defaultPolicy := ResolveSkillPolicy(configRegistry.defaultState().Settings)
+	if !defaultPolicy.Enabled() {
+		t.Fatal("registry-default settings must keep the skills subsystem enabled")
+	}
+	if got := configRegistry.defaultSourceMap()["skills.enabled"]; got != "default" {
+		t.Fatalf("expected skills.enabled default source, got %q", got)
+	}
+}
+
+func TestValidateSettingsRejectsInvalidSkillSubsystemState(t *testing.T) {
+	settings := configRegistry.defaultState().Settings
+	settings.SkillSubsystem = SkillSubsystemState(99)
+	err := ValidateSettingsWithSources(settings, configRegistry.defaultSourceMap())
+	if !errors.Is(err, errInvalidSkillSubsystemState) {
+		t.Fatalf("expected invalid skill subsystem state error, got %v", err)
+	}
+}
+
+func TestLoadReservedSkillsEnabledPolicyFromFile(t *testing.T) {
+	_, _, cfg := loadConfigTestFileApp(t, "[skills]\nenabled = false\napiresult = false\n", LoadOptions{})
+	policy := ResolveSkillPolicy(cfg.Settings)
+	if policy.Enabled() {
+		t.Fatal("skills.enabled=false must disable the skills subsystem")
+	}
+	if _, exists := cfg.Settings.SkillToggles["enabled"]; exists {
+		t.Fatalf("reserved enabled key must not be an ordinary skill toggle: %+v", cfg.Settings.SkillToggles)
+	}
+	if got := cfg.Source.Sources["skills.enabled"]; got != "file" {
+		t.Fatalf("expected skills.enabled source file, got %q", got)
+	}
+}
+
+func TestLoadReservedSkillsEnabledIsCaseInsensitive(t *testing.T) {
+	_, _, cfg := loadConfigTestFileApp(t, "[skills]\n\" EnAbLeD \" = false\n", LoadOptions{})
+	if ResolveSkillPolicy(cfg.Settings).Enabled() {
+		t.Fatal("normalized enabled key must disable the skills subsystem")
+	}
+	if len(cfg.Settings.SkillToggles) != 0 {
+		t.Fatalf("case variants of reserved enabled must not be ordinary toggles: %+v", cfg.Settings.SkillToggles)
+	}
+}
+
+func TestLoadReservedSkillsEnabledExplicitTrue(t *testing.T) {
+	_, _, cfg := loadConfigTestFileApp(t, "[skills]\nenabled = true\n", LoadOptions{})
+	if !ResolveSkillPolicy(cfg.Settings).Enabled() {
+		t.Fatal("skills.enabled=true must enable the skills subsystem")
+	}
+	if got := cfg.Source.Sources["skills.enabled"]; got != "file" {
+		t.Fatalf("expected explicit skills.enabled source file, got %q", got)
+	}
+}
+
+func TestResolveSkillPolicyKeepsIndividualTogglesDormantAndDefensivelyCopied(t *testing.T) {
+	settings := Settings{
+		SkillToggles: map[string]bool{
+			" ApiResult ": false,
+			"enabled":     false,
+		},
+	}
+	original := ResolveSkillPolicy(settings)
+	settings.SkillToggles[" ApiResult "] = true
+	settings.SkillToggles["new skill"] = false
+
+	if original.SkillEnabled("apiresult") {
+		t.Fatal("resolved policy must retain its defensively copied disabled names")
+	}
+	if !original.SkillEnabled("new skill") {
+		t.Fatal("resolved policy must not observe later map additions")
+	}
+
+	settings.SkillSubsystem = SkillSubsystemDisabled
+	disabled := ResolveSkillPolicy(settings)
+	if disabled.SkillEnabled("unconfigured") {
+		t.Fatal("disabled subsystem must suppress every skill")
+	}
+
+	settings.SkillSubsystem = SkillSubsystemEnabled
+	enabled := ResolveSkillPolicy(settings)
+	if !enabled.SkillEnabled("apiresult") {
+		t.Fatal("re-enabled policy must use the current ordinary toggle values")
+	}
+	if enabled.SkillEnabled("NEW   SKILL") {
+		t.Fatal("re-enabled policy must apply normalized ordinary toggles")
+	}
+	if !enabled.SkillEnabled("enabled") {
+		t.Fatal("reserved enabled name must never become an ordinary disabled toggle")
+	}
+}
+
+func TestSkillPolicyEquivalenceUsesNormalizedDisabledNameSet(t *testing.T) {
+	left := ResolveSkillPolicy(Settings{SkillToggles: map[string]bool{" APIResult ": false}})
+	right := ResolveSkillPolicy(Settings{SkillToggles: map[string]bool{"apiresult": false, "other": true}})
+	if !left.Equivalent(right) || !right.Equivalent(left) {
+		t.Fatal("policies with the same normalized disabled names must be equivalent")
+	}
+	if left.Equivalent(ResolveSkillPolicy(Settings{SkillSubsystem: SkillSubsystemDisabled, SkillToggles: map[string]bool{"apiresult": false}})) {
+		t.Fatal("subsystem state must participate in policy equivalence")
+	}
+	if left.Equivalent(ResolveSkillPolicy(Settings{SkillToggles: map[string]bool{"different": false}})) {
+		t.Fatal("disabled-name set must participate in policy equivalence")
+	}
+}
+
 func TestLoadRejectsNonBooleanSkillToggle(t *testing.T) {
 	if err := loadConfigTestFileError(t, "[skills]\napiresult = \"off\"\n", LoadOptions{}); err == nil {
 		t.Fatal("expected invalid skills type error")
@@ -863,6 +971,17 @@ func TestLoadRejectsNonBooleanSkillToggle(t *testing.T) {
 		if !errors.As(err, &typeErr) || typeErr.Key != "skills.apiresult" {
 			t.Fatalf("expected skills.apiresult type error, got %v", err)
 		}
+	}
+}
+
+func TestLoadRejectsNonBooleanReservedSkillsEnabled(t *testing.T) {
+	err := loadConfigTestFileError(t, "[skills]\nenabled = \"off\"\n", LoadOptions{})
+	if err == nil {
+		t.Fatal("expected invalid skills.enabled type error")
+	}
+	var typeErr *SettingsKeyTypeError
+	if !errors.As(err, &typeErr) || typeErr.Key != "skills.enabled" {
+		t.Fatalf("expected skills.enabled type error, got %v", err)
 	}
 }
 
@@ -875,6 +994,18 @@ func TestLoadRejectsDuplicateNormalizedSkillToggleKeys(t *testing.T) {
 			dupErr.KeyA != "ApiResult" || dupErr.KeyB != "apiresult" || dupErr.Normalized != "apiresult" {
 			t.Fatalf("expected duplicate skills key error, got %v", err)
 		}
+	}
+}
+
+func TestLoadRejectsDuplicateNormalizedReservedSkillsEnabledKeys(t *testing.T) {
+	err := loadConfigTestFileError(t, "[skills]\nEnabled = false\nenabled = true\n", LoadOptions{})
+	if err == nil {
+		t.Fatal("expected duplicate normalized reserved skills key error")
+	}
+	var dupErr *DuplicateSettingsKeysError
+	if !errors.As(err, &dupErr) || dupErr.Scope != "skills" ||
+		dupErr.KeyA != "Enabled" || dupErr.KeyB != "enabled" || dupErr.Normalized != "enabled" {
+		t.Fatalf("expected duplicate reserved skills key error, got %v", err)
 	}
 }
 

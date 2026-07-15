@@ -1,6 +1,7 @@
 package app
 
 import (
+	"core/shared/config"
 	sharedtheme "core/shared/theme"
 	"fmt"
 	"strings"
@@ -43,6 +44,24 @@ const (
 type statusOverlayLine struct {
 	Text  string
 	Style statusOverlayLineStyle
+}
+
+type statusSkillsPresentationMode uint8
+
+const (
+	statusSkillsPresentationEnumerated statusSkillsPresentationMode = iota
+	statusSkillsPresentationLoading
+	statusSkillsPresentationDisabled
+)
+
+func statusSkillsPresentation(snapshot uiStatusSnapshot, loading bool) statusSkillsPresentationMode {
+	if snapshot.SkillDiscoveryState == config.SkillSubsystemDisabled {
+		return statusSkillsPresentationDisabled
+	}
+	if loading && len(snapshot.Skills) == 0 {
+		return statusSkillsPresentationLoading
+	}
+	return statusSkillsPresentationEnumerated
 }
 
 func statusOverlaySessionLines(snapshot uiStatusSnapshot) []statusOverlayLine {
@@ -189,10 +208,15 @@ func (l uiViewLayout) statusOverlayContentLines(width int) []string {
 	treeStyle := lipgloss.NewStyle().Foreground(palette.muted).Faint(true)
 	errorStyle := lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Error.Adaptive()).Bold(true)
 	appendGap()
-	appendWrapped(fmt.Sprintf("%d skills", len(snapshot.Skills)), subheaderStyle)
-	if l.statusSectionLoading(uiStatusSectionEnvironment) && len(snapshot.Skills) == 0 {
+	switch statusSkillsPresentation(snapshot, l.statusSectionLoading(uiStatusSectionEnvironment)) {
+	case statusSkillsPresentationDisabled:
+		appendWrapped("Skills", subheaderStyle)
+		appendWrapped("Disabled in config", lipgloss.Style{})
+	case statusSkillsPresentationLoading:
+		appendWrapped("Skills", subheaderStyle)
 		appendWrapped("Loading skills...", subtleStyle)
-	} else {
+	case statusSkillsPresentationEnumerated:
+		appendWrapped(fmt.Sprintf("%d skills", len(snapshot.Skills)), subheaderStyle)
 		visibleSkills := append(append([]uiStatusSkillInspection(nil), loadedSkills...), failedSkills...)
 		for _, group := range statusGroupSkillsByDirectory(visibleSkills) {
 			appendWrapped(statusDisplayPath(group.Directory, snapshot.Workdir), directoryStyle)
