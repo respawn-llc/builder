@@ -53,7 +53,6 @@ It uses 20 MB of RAM when idle, lets unlimited frontends stay lightweight by con
 The desktop app lets you use Kent's [Workflows and Tasks](../workflows/) feature to build agentic loops and deterministic pipelines to **fully automate** processes and scale to 10s or 100s of agents.
 
 ![Kent Desktop showing a project kanban board with tasks grouped by workflow stage](/desktop/desktop-kanban.webp)
-
 ### Manual Install
 
 Download the installer for macOS Apple Silicon, Linux x86_64, or Windows x64 at [kent.sh/desktop](https://kent.sh/desktop), or install the macOS app via Homebrew:
@@ -79,7 +78,8 @@ Start Kent CLI with: `kent`. The first run will ask you to pick auth option and 
 Supported auth options:
 
 - OpenAI/Codex subscription OAuth via the startup sign-in picker.
-- OpenAI API-key auth via `OPENAI_API_KEY`. If you prefer API-key auth, export `OPENAI_API_KEY` before launch and kent will ask to use it.
+- OpenAI-based API-key auth via `OPENAI_API_KEY`. If you prefer API-key auth, export `OPENAI_API_KEY` before launch and kent will ask to use it.
+- No auth for custom providers. This option supports any provider like `ollama`, `omlx` local models, or third-party providers like GLM coding plan. The only requirement is that the provider supports the OpenAI Responses format.
 
 :::note
 Anthropic or Gemini subscriptions/models will not be supported until these companies allow third-party harnesses in their ToS.
@@ -88,7 +88,7 @@ Anthropic or Gemini subscriptions/models will not be supported until these compa
 ## Main Workflows
 
 - Press `F1` to invoke the help menu.
-- Use `Enter` to steer the model, `Tab` to queue messages. Slash commands also work!
+- Use `Enter` to steer the model, `Tab` to queue messages. Slash commands can be queued too!
 - Use `Shift+Tab` to toggle between detailed transcript mode and lean ongoing mode.
 - Type `$ <command>` to execute a shell command and show its output to the model.
 - Press `Esc` twice to enter Edit mode, which lets you go back in time, edit a previous message, and fork the session starting with it. Use `Up`/`Down` to walk through user messages. File edits are **not** rolled back.
@@ -113,8 +113,6 @@ Kent discovers skills from:
 
 - `<workspace>/.kent/skills`
 - `~/.kent/skills`
-
-Kent also seeds preinstalled skills into `~/.kent/.generated/skills`. Do not edit `~/.kent/.generated`; copy a generated skill into a workspace or global skill root to customize it.
 
 You can disable skills for new sessions in `config.toml`:
 

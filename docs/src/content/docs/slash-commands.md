@@ -3,7 +3,8 @@ title: Slash Commands
 description: Available slash commands, how their input is parsed, and how file-backed custom commands are discovered.
 ---
 
-Press Tab to autocomplete a command, and Enter to autocomplete and send. Press Tab again when command matches clearly to **queue** the command. This allows chains like `"commit" -> [Tab] -> "/compact" -> [Tab] -> "/prompts:open_pr"`.
+
+Press Tab to autocomplete a command, and Enter to autocomplete and send. Press Tab again when command matches fully to **queue** the command. This allows chains like `"commit" -> [Tab] -> "/compact" -> [Tab] -> "/prompts:open_pr" -> [Tab]`.
 
 
 | Command | Input | What it does |
@@ -31,20 +32,6 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 | `/init <instructions>` | optional free-form text | Run repository initialization. It reuses an empty session; otherwise it starts a fresh child session. |
 | `/prompt:<name>` | optional free-form text | Run a custom Markdown prompt (see [prompts](../prompts/)). |
 
-
-## Input Behavior
-
-- `Enter` runs the selected command immediately, even when the name is only partially typed.
-- `Tab` on a partial command autocompletes the selected command and inserts a trailing space so you can continue with arguments.
-- `Tab` on an exact known command adds it into the queue. Use this to make chains of prompts and slash commands like /compact -> /review -> /prompts:commit.
-- During active work, `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` remain available and do not interrupt the originating run. Busy `Ctrl+C` interrupts the current turn and keeps the TUI open.
-- `/resume` always opens the session picker. In that picker, `Esc` does nothing and `Ctrl+C` exits.
-- `/copy` looks up the latest committed final answer from the active transcript segment. Kent blocks input during the lookup and bounded clipboard write; a missing answer is reported without using cached transcript state.
-- `/back` uses the same lookup for its prefill. If the child has no committed final answer in the active segment, the parent opens with an empty prefill.
-- While the model is working on an active goal, `/goal` still opens the read-only goal page. `/goal pause` and `/goal clear` run immediately and append one persistent goal info line; setting or resuming a goal is rejected until the runtime is idle.
-- If `ask_question` is disabled, Kent opens sessions with active goals for management, but goal set/resume fails until `ask_question` is enabled; pause and clear remain available.
-
-### 2. Built-In and Custom Prompts
 
 Kent supports markdown file-backed custom prompt commands.
 
