@@ -348,7 +348,8 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 func TestLoopbackRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgroundManager(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-	store, err := session.Create(containerDir, "workspace-a", t.TempDir())
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", t.TempDir(), persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -433,7 +434,7 @@ func TestLoopbackRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgrou
 	}
 	runtimes := registry.NewRuntimeRegistry()
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		Background:      background,
 		RuntimeRegistry: runtimes,
