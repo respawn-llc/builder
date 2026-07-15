@@ -1,6 +1,7 @@
 -- +goose Up
+-- +goose NO TRANSACTION
 
-PRAGMA defer_foreign_keys = ON;
+PRAGMA foreign_keys = OFF;
 
 DROP TRIGGER IF EXISTS workspaces_child_refs_delete_cleanup;
 DROP TRIGGER IF EXISTS workspaces_session_project_update;
@@ -222,3 +223,5 @@ BEGIN
     SELECT RAISE(ABORT, 'session worktree must belong to session workspace');
 END;
 -- +goose StatementEnd
+
+PRAGMA foreign_keys = ON;
