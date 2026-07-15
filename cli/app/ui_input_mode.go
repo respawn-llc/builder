@@ -5,8 +5,6 @@ import (
 
 	"core/cli/tui"
 	"core/shared/clientui"
-
-	"charm.land/glamour/v2"
 )
 
 type uiInputMode string
@@ -107,9 +105,6 @@ type uiGoalOverlayState struct {
 	confirmSelection int
 	pendingObjective string
 	error            string
-	markdownTheme    string
-	markdownWidth    int
-	markdownRenderer *glamour.TermRenderer
 }
 
 func (s uiAskState) hasCurrent() bool {

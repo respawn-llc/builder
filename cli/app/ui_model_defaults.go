@@ -7,6 +7,7 @@ import (
 	"core/cli/app/commands"
 	"core/cli/app/internal/status"
 	"core/cli/tui"
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/theme"
 )
@@ -50,6 +51,7 @@ func newUIInputFeatureState() uiInputFeatureState {
 func newUIPresentationFeatureState() uiPresentationFeatureState {
 	return uiPresentationFeatureState{
 		theme:         theme.Auto,
+		markdownLinks: transcriptrender.MarkdownLinkLabelOnly,
 		terminalFocus: newTerminalFocusState(),
 	}
 }

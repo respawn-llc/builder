@@ -29,6 +29,14 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - Alt-screen surfaces enable alternate scroll while active and disable it on exit; the rollback picker is the exception (detail rendering without alternate scroll). (owner: terminology :: Alternate Scroll; tui-transcript :: Detail Mode)
 - No surface enables mouse capture, on any surface. (extends tui-startup :: Surface Architecture app-wide)
 
+## Markdown Hyperlinks
+
+- Kent emits OSC 8 for valid Markdown link destinations on every terminal.
+- Exact terminal whitelisting controls only destination visibility. Ghostty and libghostty embedders (`TERM_PROGRAM=ghostty`), kitty (`KITTY_WINDOW_ID` or `TERM=xterm-kitty`), iTerm2, WezTerm, Alacritty, Windows Terminal, VS Code-compatible terminals, and Zed render an explicit Markdown link as its clickable label. Version strings do not participate in detection.
+- Terminal.app, terminals outside the whitelist, and sessions inside tmux, Zellij, or GNU screen render an explicit Markdown link as clickable `label destination`; unsupported terminals ignore OSC 8 and retain the visible destination.
+- GFM table layout remains library-owned. Explicit links inside table cells render clickable `label destination` on every terminal, independent of the terminal whitelist.
+- Autolinks render the destination once in both modes.
+
 ## Shipping Go TUI
 
 - Go startup surfaces use independent lifecycles; the shared navigation stack is a future Rust TUI requirement.

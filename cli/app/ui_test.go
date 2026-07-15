@@ -2,6 +2,8 @@ package app
 
 import (
 	"core/cli/tui"
+	"core/cli/tui/transcriptrender"
+	tuitest "core/internal/testharness/pty"
 	"core/server/runtime"
 	"core/shared/clientui"
 	goruntime "runtime"
@@ -800,37 +802,58 @@ func TestAskQuestionPickerMarkdownQuestionWrapsWithoutSourceMarkers(t *testing.T
 
 func TestAskQuestionMarkdownLinksWrapIntoIndependentBoundedRows(t *testing.T) {
 	const target = "https://github.com/org/repo/pull/456"
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(24, 12)
-	m.layout().syncViewport()
-	testSetActiveAsk(m, &askEvent{
-		req:   clientui.PendingPromptEvent{Question: "[PR #456](https://github.com/org/repo/pull/456)"},
-		reply: make(chan askReply, 1),
-	})
-	m.ask.input = "answer"
-	m.ask.inputCursor = len([]rune(m.ask.input))
+	for _, presentation := range []struct {
+		name           string
+		links          transcriptrender.MarkdownLinkPresentation
+		wantLinkedText string
+	}{
+		{
+			name:           "supported terminal",
+			links:          transcriptrender.MarkdownLinkLabelOnly,
+			wantLinkedText: "PR #456",
+		},
+		{
+			name:           "fallback terminal",
+			links:          transcriptrender.MarkdownLinkLabelAndDestination,
+			wantLinkedText: "PR #456" + target,
+		},
+	} {
+		t.Run(presentation.name, func(t *testing.T) {
+			m := newProjectedStaticUIModel(
+				WithUIMarkdownLinkPresentation(presentation.links),
+			)
+			m.terminalGeometry = terminalGeometryKnown(24, 12)
+			m.layout().syncViewport()
+			testSetActiveAsk(m, &askEvent{
+				req:   clientui.PendingPromptEvent{Question: "[PR #456](https://github.com/org/repo/pull/456)"},
+				reply: make(chan askReply, 1),
+			})
+			m.ask.input = "answer"
+			m.ask.inputCursor = len([]rune(m.ask.input))
 
-	wrapped, cursorLine := m.layout().wrappedAskPromptLines(12)
-	if cursorLine < 0 || wrapped[cursorLine].Line.Kind != askPromptLineKindInput {
-		t.Fatalf("cursor=%d should remain on answer input: %+v", cursorLine, wrapped)
-	}
+			wrapped, cursorLine := m.layout().wrappedAskPromptLines(12)
+			if cursorLine < 0 || wrapped[cursorLine].Line.Kind != askPromptLineKindInput {
+				t.Fatalf("cursor=%d should remain on answer input: %+v", cursorLine, wrapped)
+			}
 
-	var linked strings.Builder
-	for _, line := range wrapped {
-		if width := lipgloss.Width(line.Text); width > 12 {
-			t.Fatalf("line width=%d want <=12: %+v", width, line)
-		}
-		trace := traceTerminalHyperlinks(t, line.Text)
-		if line.Line.Kind == askPromptLineKindQuestion {
-			linked.WriteString(trace.linkedText(target))
-			continue
-		}
-		if len(trace.Events) != 0 {
-			t.Fatalf("non-question row inherited hyperlink metadata: %+v", line)
-		}
-	}
-	if got := linked.String(); !strings.Contains(got, "PR") || !strings.Contains(got, "#456") || !strings.Contains(got, target) {
-		t.Fatalf("linked visible content=%q want label and destination", got)
+			var linked strings.Builder
+			for _, line := range wrapped {
+				if width := lipgloss.Width(line.Text); width > 12 {
+					t.Fatalf("line width=%d want <=12: %+v", width, line)
+				}
+				trace := tuitest.TraceTerminalHyperlinks(t, line.Text)
+				if line.Line.Kind == askPromptLineKindQuestion {
+					linked.WriteString(trace.LinkedText(target))
+					continue
+				}
+				if len(trace.Events) != 0 {
+					t.Fatalf("non-question row inherited hyperlink metadata: %+v", line)
+				}
+			}
+			if got := linked.String(); got != presentation.wantLinkedText {
+				t.Fatalf("linked visible content = %q, want %q", got, presentation.wantLinkedText)
+			}
+		})
 	}
 }
 
@@ -846,7 +869,7 @@ func TestAskQuestionPlainPRReferenceDoesNotCreateHyperlink(t *testing.T) {
 		if line.Line.Kind != askPromptLineKindQuestion {
 			continue
 		}
-		if trace := traceTerminalHyperlinks(t, line.Text); len(trace.Events) != 0 {
+		if trace := tuitest.TraceTerminalHyperlinks(t, line.Text); len(trace.Events) != 0 {
 			t.Fatalf("plain PR reference emitted hyperlink events: %+v", trace.Events)
 		}
 	}
@@ -867,7 +890,7 @@ func TestAskQuestionOptionRowsDoNotInheritMarkdownHyperlinks(t *testing.T) {
 		if line.Line.Kind == askPromptLineKindQuestion {
 			continue
 		}
-		if trace := traceTerminalHyperlinks(t, line.Text); len(trace.Events) != 0 {
+		if trace := tuitest.TraceTerminalHyperlinks(t, line.Text); len(trace.Events) != 0 {
 			t.Fatalf("option or hint row inherited hyperlink metadata: %+v", line)
 		}
 	}

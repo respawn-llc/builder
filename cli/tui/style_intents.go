@@ -73,5 +73,8 @@ func transcriptSpanStyle(span transcriptrender.Span, themeName string) lipgloss.
 	if resolved.Underline {
 		style = style.Underline(true)
 	}
+	if resolved.Strikethrough {
+		style = style.Strikethrough(true)
+	}
 	return style
 }

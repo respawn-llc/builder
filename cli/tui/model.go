@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/theme"
 
@@ -91,11 +92,21 @@ func WithTheme(themeName string) Option {
 	}
 }
 
+func WithMarkdownLinkPresentation(linkPresentation transcriptrender.MarkdownLinkPresentation) Option {
+	return func(m *Model) {
+		if !linkPresentation.Valid() {
+			panic(fmt.Sprintf("create TUI model with invalid Markdown link presentation %d", linkPresentation))
+		}
+		m.markdownLinks = linkPresentation
+	}
+}
+
 type Model struct {
 	mode             Mode
 	viewportLines    int
 	viewportWidth    int
 	theme            string
+	markdownLinks    transcriptrender.MarkdownLinkPresentation
 	detailScroll     int
 	detailPageLoaded bool
 	detailProjection detailProjection
@@ -109,13 +120,18 @@ func NewModel(opts ...Option) Model {
 		viewportLines: 24,
 		viewportWidth: 80,
 		theme:         theme.Resolve(""),
+		markdownLinks: transcriptrender.MarkdownLinkLabelOnly,
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&m)
 		}
 	}
-	m.detailProjection = newDetailProjection(m.detailContentWidth(), m.theme)
+	m.detailProjection = newDetailProjection(
+		m.detailContentWidth(),
+		m.theme,
+		m.markdownLinks,
+	)
 	return m
 }
 
