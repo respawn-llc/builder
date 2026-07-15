@@ -197,7 +197,7 @@ func TestSubagentsMetaMessageHidesCatalogForPersistedNonCallableCaller(t *testin
 		},
 	}
 	current := "current"
-	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
+	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", config.ResolveSkillPolicy(settings), time.Unix(0, 0)).
 		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand}).
 		withSubagentCallerRole(&current)
 	result, err := builder.Build(metaContextBuildOptions{

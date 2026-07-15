@@ -22,6 +22,7 @@ import (
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/subagentpolicy"
 	"core/server/tools"
 	askquestion "core/server/tools"
 	patchtool "core/server/tools/patch"
@@ -843,7 +844,7 @@ func TestRuntimeWiringUsesResolvedParentAndSubagentSkillsPolicies(t *testing.T) 
 			if err != nil {
 				t.Fatalf("load config: %v", err)
 			}
-			if !config.SubagentRoleCallableInContext(app.Settings, "worker", config.SubagentInvocationContextOrdinary) {
+			if err := subagentpolicy.Authorize(app.Settings, &subagentpolicy.Caller{}, subagentpolicy.Target{Kind: subagentpolicy.TargetNamed, Selector: "worker"}); err != nil {
 				t.Fatal("skills policy must not affect role callability")
 			}
 
