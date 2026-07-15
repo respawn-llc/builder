@@ -18,9 +18,12 @@ func TestTaskStartRejectsCurrentInvalidWorkflow(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-terminal-invalid", WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(done), TransitionID: "invalid", DisplayName: "Invalid"}); err != nil {
-		t.Fatalf("AddTransitionGroup invalid terminal group: %v", err)
-	}
+	// Intentional invalid-state fixture: batch graph saves reject terminal
+	// transitions, while task start must still reject invalid persisted graphs.
+	forceWorkflowGraphRowsForSnapshotTest(t, ctx, store, workflowID, nil,
+		[]TransitionGroupRecord{{ID: "group-terminal-invalid", WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(done), TransitionID: "invalid", DisplayName: "Invalid"}},
+		nil,
+	)
 	var terminalErr WorkflowValidationError
 	if _, err := store.StartTask(ctx, task.ID); !errors.As(err, &terminalErr) || !terminalErr.HasCode(workflow.CodeTerminalHasOutgoingEdge) {
 		t.Fatalf("expected current workflow validation error, got %v", err)
@@ -171,12 +174,16 @@ func TestWorkflowDeletePreviewAndConfirmedApplyDeleteDatabaseRows(t *testing.T) 
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	_, current, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
 
 	impact, err := store.PreviewWorkflowDelete(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("PreviewWorkflowDelete: %v", err)
 	}
-	if impact.WorkflowID != workflowID || impact.Version != 6 || impact.ProjectCount != 1 || impact.LinkCount != 1 || impact.TaskCount != 1 || impact.ActiveRunCount != 0 || impact.RunnableRunCount != 0 || impact.BlockedTaskCount != 0 {
+	if impact.WorkflowID != workflowID || impact.Version != current.Version || impact.ProjectCount != 1 || impact.LinkCount != 1 || impact.TaskCount != 1 || impact.ActiveRunCount != 0 || impact.RunnableRunCount != 0 || impact.BlockedTaskCount != 0 {
 		t.Fatalf("delete impact = %+v, want one linked project/link/task and no run blockers", impact)
 	}
 
@@ -369,9 +376,13 @@ func TestGuardedGraphDeletesRespectTaskHistory(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	if _, err := store.AddNode(ctx, NodeRecord{ID: "node-unused", WorkflowID: workflowID, Key: "unused", Kind: workflow.NodeKindTerminal, DisplayName: "Unused"}); err != nil {
-		t.Fatalf("AddNode unused: %v", err)
-	}
+	// Intentional intermediate-state fixture: the preceding guarded deletions
+	// leave a graph that the atomic save seam correctly refuses to persist.
+	forceWorkflowGraphRowsForSnapshotTest(t, ctx, store, workflowID,
+		[]NodeRecord{{ID: "node-unused", WorkflowID: workflowID, Key: "unused", Kind: workflow.NodeKindTerminal, DisplayName: "Unused"}},
+		[]TransitionGroupRecord{{ID: "group-unused", WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "unused", DisplayName: "Unused"}},
+		[]EdgeRecord{{ID: "edge-unused", WorkflowID: workflowID, TransitionGroupID: "group-unused", Key: "unused", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}},
+	)
 	if err := store.DeleteNode(ctx, workflow.NodeIDOf(done)); !errors.Is(err, ErrNodeHasTaskHistory) {
 		t.Fatalf("expected terminal physical delete guard, got %v", err)
 	}
@@ -380,12 +391,6 @@ func TestGuardedGraphDeletesRespectTaskHistory(t *testing.T) {
 	}
 	if _, err := store.queries.GetWorkflowNode(ctx, "node-unused"); err == nil {
 		t.Fatalf("unused node still exists after guarded delete")
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-unused", WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "unused", DisplayName: "Unused"}); err != nil {
-		t.Fatalf("AddTransitionGroup unused: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-unused", WorkflowID: workflowID, TransitionGroupID: "group-unused", Key: "unused", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge unused: %v", err)
 	}
 	if err := store.DeleteEdge(ctx, "edge-unused"); err != nil {
 		t.Fatalf("DeleteEdge unused: %v", err)
