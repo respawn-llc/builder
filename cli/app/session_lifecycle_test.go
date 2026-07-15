@@ -53,7 +53,7 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 		},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
 			_, _, _, err := buildToolRegistry(
-				plan.WorkspaceRoot,
+				plan.ExecutionTarget.EffectiveWorkdir,
 				plan.SessionID,
 				[]toolspec.ID{toolspec.ToolPatch},
 				15*time.Second,
@@ -325,9 +325,14 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 			if req.SessionID != store.Meta().SessionID {
 				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
 			}
+			targetRoot := previousWorkspace
+			if launchCalls > 0 {
+				targetRoot = cfg.WorkspaceRoot
+			}
 			return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{
-				WorkspaceRoot:         previousWorkspace,
+				WorkspaceRoot:         targetRoot,
 				WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+				EffectiveWorkdir:      targetRoot,
 			}}}}, nil
 		}},
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
@@ -342,7 +347,6 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 			}
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
 				SessionID:      store.Meta().SessionID,
-				WorkspaceRoot:  cfg.WorkspaceRoot,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
@@ -351,8 +355,8 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 			if plan.SessionID != store.Meta().SessionID {
 				t.Fatalf("prepared session = %q, want %q", plan.SessionID, store.Meta().SessionID)
 			}
-			if plan.WorkspaceRoot != cfg.WorkspaceRoot {
-				t.Fatalf("prepared workspace = %q, want %q", plan.WorkspaceRoot, cfg.WorkspaceRoot)
+			if plan.ExecutionTarget.EffectiveWorkdir != cfg.WorkspaceRoot {
+				t.Fatalf("prepared workspace = %q, want %q", plan.ExecutionTarget.EffectiveWorkdir, cfg.WorkspaceRoot)
 			}
 			return nil, stopErr
 		},
@@ -428,6 +432,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 			return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{
 				WorkspaceRoot:         previousWorkspace,
 				WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+				EffectiveWorkdir:      previousWorkspace,
 			}}}}, nil
 		}},
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
@@ -438,7 +443,6 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 			}
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
 				SessionID:      store.Meta().SessionID,
-				WorkspaceRoot:  cfg.WorkspaceRoot,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
@@ -489,14 +493,23 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 
 	launchCalls := 0
 	pickerCalls := 0
-	runSessionPickerFlow = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	runSessionPickerFlow = func(_ sessionPageLoader, _ string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
 		switch pickerCalls {
 		case 1:
+			if header.Notice != nil {
+				t.Fatalf("first picker notice = %+v, want none", header.Notice)
+			}
 			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, staleSessionID)), nil
 		case 2:
 			if launchCalls != 0 {
 				t.Fatalf("workspace lookup failure planned before picker retry: launchCalls=%d", launchCalls)
+			}
+			if header.Notice == nil ||
+				header.Notice.Kind != startupPickerNoticeError ||
+				header.Notice.Text == "" ||
+				!errors.Is(header.Notice.Diagnostic, session.ErrSessionNotFound) {
+				t.Fatalf("workspace lookup notice = %+v, want generic surfaced failure", header.Notice)
 			}
 			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, validStore.Meta().SessionID)), nil
 		}
@@ -527,6 +540,7 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 				return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{
 					WorkspaceRoot:         cfg.WorkspaceRoot,
 					WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+					EffectiveWorkdir:      cfg.WorkspaceRoot,
 				}}}}, nil
 			default:
 				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
@@ -537,7 +551,6 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 			selectedID, _ := req.Intent.SessionID()
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
 				SessionID:      selectedID.String(),
-				WorkspaceRoot:  cfg.WorkspaceRoot,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
@@ -610,13 +623,12 @@ func TestRunSessionLifecycleExplicitSessionIDBypassesWorkspaceChangePrompt(t *te
 			}
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
 				SessionID:      store.Meta().SessionID,
-				WorkspaceRoot:  cfg.WorkspaceRoot,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
-			if plan.WorkspaceRoot != cfg.WorkspaceRoot {
-				t.Fatalf("prepared workspace = %q, want %q", plan.WorkspaceRoot, cfg.WorkspaceRoot)
+			if plan.ExecutionTarget.EffectiveWorkdir != cfg.WorkspaceRoot {
+				t.Fatalf("prepared workspace = %q, want %q", plan.ExecutionTarget.EffectiveWorkdir, cfg.WorkspaceRoot)
 			}
 			return nil, stopErr
 		},

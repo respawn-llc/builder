@@ -87,6 +87,70 @@ func TestApplySubagentRoleOverridesAppliesProviderVerbosityCapability(t *testing
 	}
 }
 
+func TestApplySubagentRoleOverridesResolvesPerSkillToggles(t *testing.T) {
+	tests := []struct {
+		name          string
+		base          config.Settings
+		role          config.SubagentRole
+		wantAPIResult bool
+		wantInherited bool
+		wantEnabled   bool
+	}{
+		{
+			name: "omitted role toggles inherit global values",
+			base: config.Settings{
+				SkillToggles: map[string]bool{
+					"apiresult": false,
+					"inherited": false,
+					"enabled":   true,
+				},
+			},
+			role:        config.SubagentRole{},
+			wantEnabled: true,
+		},
+		{
+			name: "explicit role toggles override named skills only",
+			base: config.Settings{
+				SkillToggles: map[string]bool{
+					"apiresult": false,
+					"inherited": false,
+					"enabled":   true,
+				},
+			},
+			role: config.SubagentRole{
+				Settings: config.Settings{
+					SkillToggles: map[string]bool{
+						"apiresult": true,
+						"enabled":   false,
+					},
+				},
+				Sources: map[string]string{
+					"skills.apiresult": "file",
+					"skills.enabled":   "file",
+				},
+			},
+			wantAPIResult: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settings := cloneSettings(tt.base)
+			applySubagentRoleOverrides(&settings, tt.role, true)
+			policy := config.ResolveSkillPolicy(settings)
+			if got := policy.SkillEnabled("apiresult"); got != tt.wantAPIResult {
+				t.Fatalf("apiresult enabled = %t, want %t", got, tt.wantAPIResult)
+			}
+			if got := policy.SkillEnabled("inherited"); got != tt.wantInherited {
+				t.Fatalf("inherited skill enabled = %t, want %t", got, tt.wantInherited)
+			}
+			if got := policy.SkillEnabled("enabled"); got != tt.wantEnabled {
+				t.Fatalf("skill named enabled = %t, want %t", got, tt.wantEnabled)
+			}
+		})
+	}
+}
+
 func TestApplyReviewerInheritanceDoesNotCopyMainProviderCapabilitiesForExplicitReviewerEndpoint(t *testing.T) {
 	settings := config.Settings{
 		ProviderCapabilities: config.ProviderCapabilitiesOverride{

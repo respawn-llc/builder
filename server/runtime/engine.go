@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,7 +105,7 @@ type Config struct {
 	PromptFacingSnapshotReloader  PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride  *llm.ProviderCapabilities
 	EnabledTools                  []toolspec.ID
-	DisabledSkills                map[string]bool
+	SkillPolicy                   config.SkillPolicy
 	SubagentCatalogSettings       config.Settings
 	SystemPromptFiles             []config.SystemPromptFile
 	AutoCompactTokenLimit         int
@@ -271,8 +270,6 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	if !cfg.ModelCapabilities.SupportsReasoningEffort && !cfg.ModelCapabilities.SupportsVisionInputs {
 		cfg.ModelCapabilities = llm.LockedModelCapabilitiesForModel(cfg.Model)
 	}
-	cfg.DisabledSkills = maps.Clone(cfg.DisabledSkills)
-
 	eng := &Engine{
 		store:              store,
 		llm:                client,

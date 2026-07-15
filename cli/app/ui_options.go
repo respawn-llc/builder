@@ -1,10 +1,12 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
 	"core/cli/app/commands"
 	"core/cli/tui"
+	"core/cli/tui/transcriptrender"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -120,8 +122,27 @@ func WithUIModelContractLocked(locked bool) UIOption {
 func WithUITheme(theme string) UIOption {
 	return func(m *uiModel) {
 		m.theme = strings.TrimSpace(theme)
-		m.view = tui.NewModel(tui.WithTheme(theme))
+		m.rebuildTranscriptView()
 	}
+}
+
+func WithUIMarkdownLinkPresentation(
+	linkPresentation transcriptrender.MarkdownLinkPresentation,
+) UIOption {
+	if !linkPresentation.Valid() {
+		panic(fmt.Sprintf("configure UI with invalid Markdown link presentation %d", linkPresentation))
+	}
+	return func(m *uiModel) {
+		m.markdownLinks = linkPresentation
+		m.rebuildTranscriptView()
+	}
+}
+
+func (m *uiModel) rebuildTranscriptView() {
+	m.view = tui.NewModel(
+		tui.WithTheme(m.theme),
+		tui.WithMarkdownLinkPresentation(m.markdownLinks),
+	)
 }
 
 func WithUICommandRegistry(registry *commands.Registry) UIOption {

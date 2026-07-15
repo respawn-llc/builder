@@ -3,7 +3,7 @@ title: Worktrees
 description: Create, enter, and delete Git worktrees from Kent.
 ---
 
-Kent creates and manages Git worktrees for a workspace and lets sessions select their execution target. Use `/wt` in the TUI or the CLI:
+Kent can create and manage worktrees for you. Agents will enter new worktrees if they need to, and workflows can automatically create worktrees for their tasks (see [workflows](../workflows)). If you want to manually manage worktrees, run `/wt` in the TUI, or ask the agent to use the CLI:
 
 ```bash
 kent worktree status
@@ -46,7 +46,7 @@ If Git retains the branch, deletion succeeds and the CLI prints `Kept branch <na
 
 ## Configuration
 
-Use a setup script to prepare new worktrees with local data such as `.env`, encryption credentials, Gradle wrappers, installed dependencies, local skills, docs, or config.
+Use a setup script to prepare new worktrees with local data such as `.env` files, encryption credentials, Gradle wrappers, installed dependencies, local skills, docs, or config.
 
 ```toml
 [worktrees]

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/server/workflowscript"
@@ -93,6 +94,19 @@ func TestWorkflowCreateUpdateReadAndGraphPersistence(t *testing.T) {
 	}
 	if len(workflows.Workflows) != 1 || workflows.Workflows[0].ID != created.ID {
 		t.Fatalf("ListWorkflows = %+v", workflows)
+	}
+}
+
+func TestAddNodeRejectsSecondStartWithDomainError(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+
+	_, err = store.AddNode(ctx, NodeRecord{WorkflowID: created.ID, Key: "second_start", Kind: workflow.NodeKindStart, DisplayName: "Second Start"})
+	if !errors.Is(err, ErrWorkflowStartNodeExists) {
+		t.Fatalf("AddNode second Start error = %v, want typed duplicate-Start rejection", err)
 	}
 }
 
@@ -300,7 +314,7 @@ func TestResumeTaskRunsSkipsAgentRoleValidationForScriptRun(t *testing.T) {
 	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRun: %v", err)
 	}
-	store.roleResolver = workflow.StaticRoleResolver{}
+	store.roleResolver = testsetup.QuestionsEnabled()
 
 	resumed, err := store.ResumeTaskRuns(ctx, task.ID)
 	if err != nil {

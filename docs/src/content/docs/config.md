@@ -16,7 +16,7 @@ Kent resolves settings in this order (ascending priority):
 Interactive session flows resolve workspace-local config from the session workspace root. 
 
 :::tip
-`kent serve` starts without a workspace root and applies workspace config only when a project/session selects a workspace, so it doesn't matter where you run `kent serve`
+`kent serve` starts without a workspace root, so it doesn't matter where you run the server.
 :::
 
 ## Locations
@@ -24,12 +24,8 @@ Interactive session flows resolve workspace-local config from the session worksp
 ### Persistence root
 
 - Workspace settings live at: `<workspace-root>/.kent/config.toml`. Note that workspace root is not necessarily the same as where you might have started the TUI - it's where the agent will actually do the work.
-
 - Global settings live at: `~/.kent/config.toml`, and this location (along with all other data storage) is overridable via `--persistence-root`. The flag also relocates the root's model-visible global context — global `AGENTS.md`, the global system-prompt file, global skills, and generated assets.
-When you select a non-default root via the flag, Kent normalizes it to an absolute path and publishes it as the `KENT_PERSISTENCE_ROOT` environment variable, so subagents launched via `kent run` and shell tools inherit the same isolated root.
 `kent service` is also root-aware. Each `--persistence-root` install bakes the root into the registration. The OS still holds a single service, so install with the root you want managed.
-
-Selecting a non-default root also makes client attach root-aware: a client only attaches to a server that actually serves that root, and the check is re-applied if the connection drops and reconnects, so a run can never silently switch to a different instance that later takes over the same host and port. This prevents an isolated-root invocation (for example `kent run --persistence-root /tmp/root`) from attaching to your default `~/.kent` server when both resolve to the same host and port. If no server is serving the selected root, start one with `kent serve --persistence-root <root>` (or install the service with that root).
 
 ## Example
 
@@ -94,9 +90,9 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 
 ### Workflow subagent delegation
 
-`[workflow] subagents` defaults to `false` and has no environment override. Set it to `true` to let workflow agents launch eligible custom roles.
+`[workflow] subagents` defaults to `false` and has no environment override. Set it to `true` to let workflow agents delegate to eligible custom roles. This setting does not affect direct workflow-node assignment.
 
-`workflow_subagent` is optional role metadata and defaults to `true`. A custom role is workflow-callable only when `agent_callable`, `[workflow] subagents`, and its effective `workflow_subagent` value all permit it. The global workflow setting remains authoritative.
+`workflow_subagent` is optional role metadata and defaults to `true`. A custom role is callable by a workflow agent only when `agent_callable`, `[workflow] subagents`, and its effective `workflow_subagent` value all permit it. The global workflow setting remains authoritative.
 
 ## CLI Overrides
 
@@ -110,8 +106,6 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `kent run --tools` | entire tool set | CSV replacement, not a merge |
 | `kent run --openai-base-url` | `openai_base_url` | Also affects continuation behavior |
 
-
-`kent run` also accepts the headless-only selectors `--agent <role>` and `--fast`, which choose a subagent role rather than directly overriding one config key.
 
 ## Reference
 
@@ -248,7 +242,7 @@ File-based tool toggles merge with defaults. `KENT_TOOLS` and `kent run --tools`
 Notes:
 
 - `tools.web_search = true` does not force web search on. Native search still depends on `web_search = "native"` and provider support.
-- `tools.patch` and `tools.edit` are mutually exclusive. If both are left at their defaults, Kent chooses `patch` for first-party OpenAI providers or `gpt-*` model names, and `edit` otherwise. To force `edit`, set `edit = true` and `patch = false`.
+- `tools.patch` and `tools.edit` are mutually exclusive. If both are left at their defaults, Kent chooses `patch` for models that are trained on freeform patch syntax, otherwise `edit`. To force `edit`, set `edit = true` and `patch = false`.
 
 ## Ripgrep config
 
@@ -258,7 +252,7 @@ Kent also installs an optimized, editable ripgrep config at:
 ~/.kent/rg.conf
 ```
 
-Kent creates `rg.conf` in the config+data root when missing and exports it to shell tools via `RIPGREP_CONFIG_PATH` only when you have not already set `RIPGREP_CONFIG_PATH` yourself. In an isolated root this is the root's own `rg.conf`, not the default `~/.kent/rg.conf`.
+Kent creates `rg.conf` in the config+data root when missing and exports it to shell tools via `RIPGREP_CONFIG_PATH` only when you have not already set `RIPGREP_CONFIG_PATH` yourself.
 
 ### Subagents
 
@@ -268,14 +262,17 @@ More info on the [Subagents page](../headless/).
 
 ### Skills
 
-`[skills]` is a file-only per-skill boolean table in `config.toml` to disable unneeded skills. Keys are matched case-insensitively.
+`[skills]` is a file-only per-skill boolean table in `config.toml`. Disabled skills remain visible in clients but are omitted from model context. Keys are matched case-insensitively.
 
 ```toml
 [skills]
-"<skill name>" = true # | false
+"<skill name>" = false
+
+[subagents.worker.skills]
+"<skill name>" = false
 ```
 
 Notes:
 
-- Skill toggles are only applied when Kent creates a new conversation/session.
+- `[subagents.<role>.skills]` overlays per-skill toggles for that role.
 - Use `"quoted names"` to refer to skill keys containing spaces.

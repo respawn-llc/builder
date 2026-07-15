@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -1272,7 +1273,7 @@ func parseSubagentRole(raw settingsFile, settingsPath string, roleKey string) (S
 			continue
 		}
 		if err := setting.applyFile(raw, settingsPath, &roleState, roleSources); err != nil {
-			return SubagentRole{}, fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, err)
+			return SubagentRole{}, wrapSubagentRoleError(roleKey, err)
 		}
 	}
 	explicitSources := map[string]string{}
@@ -1307,6 +1308,18 @@ func parseSubagentRole(raw settingsFile, settingsPath string, roleKey string) (S
 		WorkflowSubagent:    workflowSubagent,
 		WorkflowSubagentSet: workflowSubagentSet,
 	}, nil
+}
+
+func wrapSubagentRoleError(roleKey string, err error) error {
+	var typeErr *SettingsKeyTypeError
+	if errors.As(err, &typeErr) {
+		scoped := &SettingsKeyTypeError{
+			Key:          strings.Join([]string{"subagents", roleKey, typeErr.Key}, "."),
+			ExpectedType: typeErr.ExpectedType,
+		}
+		return fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, scoped)
+	}
+	return fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, err)
 }
 
 func subagentRoleKeyTree(settings []registrySetting) *fileKeyTree {

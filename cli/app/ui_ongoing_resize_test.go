@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"core/cli/tui/ongoing"
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -107,9 +108,12 @@ func TestWindowResizeWhileDetailOwnsTerminalRepaintsOnReturn(t *testing.T) {
 
 func TestAppleTerminalWidthResizeWhileDetailOwnsTerminalRehydratesOnReturn(t *testing.T) {
 	var raw bytes.Buffer
-	nativeSurface := ongoing.NewSurfaceWithTerminalResizePolicy(
+	nativeSurface := ongoing.NewSurfaceWithOptions(
 		&raw,
-		ongoing.TerminalResizeWidthRehydration,
+		ongoing.SurfaceOptions{
+			TerminalResize: ongoing.TerminalResizeWidthRehydration,
+			MarkdownLinks:  transcriptrender.MarkdownLinkLabelOnly,
+		},
 	)
 	if _, err := nativeSurface.ApplyTerminalMessage(
 		committedMessageForOngoingResizeTest(),

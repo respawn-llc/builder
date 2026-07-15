@@ -138,7 +138,7 @@ func newTestStoreWithConfig(t *testing.T) (*Store, metadata.Binding, config.App)
 	if err := metadataStore.SetProjectKey(context.Background(), binding.ProjectID, "WOR"); err != nil {
 		t.Fatalf("SetProjectKey: %v", err)
 	}
-	store, err := New(metadataStore, WithRoleResolver(workflow.StaticRoleResolver{"coder": true, "reviewer": true}))
+	store, err := New(metadataStore, WithRoleResolver(testsetup.QuestionsEnabled("coder", "reviewer")))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}

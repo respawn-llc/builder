@@ -174,7 +174,6 @@ type SessionPlan struct {
 	SessionName         string              `json:"session_name,omitempty"`
 	PromptHistory       []string            `json:"prompt_history,omitempty"`
 	ModelContractLocked bool                `json:"model_contract_locked,omitempty"`
-	WorkspaceRoot       string              `json:"workspace_root,omitempty"`
 	Source              config.SourceReport `json:"source"`
 }
 

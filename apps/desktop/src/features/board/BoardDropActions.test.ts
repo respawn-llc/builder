@@ -5,6 +5,10 @@ import type { BoardCardDragPayload } from "./BoardDragTypes";
 import { classifyDrop } from "./BoardDropActions";
 
 describe("classifyDrop", () => {
+  it("prioritizes Backlog start over the same server-provided manual target", () => {
+    expect(classifyDrop(baseColumn, { ...baseDragPayload, canStart: true, manualMoveTargetNodeIDs: ["node-target"] }, "node-target")).toEqual({ kind: "start" });
+  });
+
   it("does not force target-union output fields onto allowed manual moves", () => {
     expect(
       classifyDrop(

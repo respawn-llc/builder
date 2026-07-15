@@ -3,7 +3,6 @@ package runtime
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -100,20 +99,20 @@ type metaContextBuilder struct {
 	globalConfigDir  string
 	model            string
 	thinkingLevel    string
-	disabledSkills   map[string]bool
+	skillPolicy      config.SkillPolicy
 	subagentSettings config.Settings
 	enabledTools     []toolspec.ID
 	now              time.Time
 }
 
-func newMetaContextBuilder(workspaceRoot, model, thinkingLevel string, disabledSkills map[string]bool, now time.Time) metaContextBuilder {
+func newMetaContextBuilder(workspaceRoot, model, thinkingLevel string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
 	trimmedRoot := strings.TrimSpace(workspaceRoot)
 	return metaContextBuilder{
 		workspaceRoot:  trimmedRoot,
 		environmentCWD: trimmedRoot,
 		model:          strings.TrimSpace(model),
 		thinkingLevel:  strings.TrimSpace(thinkingLevel),
-		disabledSkills: maps.Clone(disabledSkills),
+		skillPolicy:    skillPolicy,
 		now:            now,
 	}
 }
@@ -168,9 +167,9 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 
 	if opts.IncludeSkills {
 		result, err := skillcatalog.Discover(skillcatalog.Options{
-			WorkspaceRoot:  b.workspaceRoot,
-			ConfigRoot:     b.globalConfigDir,
-			DisabledSkills: b.disabledSkills,
+			WorkspaceRoot: b.workspaceRoot,
+			ConfigRoot:    b.globalConfigDir,
+			Policy:        b.skillPolicy,
 		})
 		if err != nil {
 			return metaContextBuildResult{}, err
@@ -355,7 +354,7 @@ func fallbackSubagentDescription(base config.Settings, role config.SubagentRole)
 	if role.Sources["priority_request_mode"] == "file" && role.Settings.PriorityRequestMode {
 		parts = append(parts, "fast mode on")
 	}
-	tools := effectiveRoleToolMap(base.EnabledTools, role)
+	tools := config.EffectiveSubagentRoleTools(base.EnabledTools, role)
 	if tools[toolspec.ToolPatch] || tools[toolspec.ToolEdit] {
 		parts = append(parts, "can edit")
 	}
@@ -370,20 +369,6 @@ func fallbackSubagentDescription(base config.Settings, role config.SubagentRole)
 		}
 	}
 	return strings.Join(filtered, ", ")
-}
-
-func effectiveRoleToolMap(base map[toolspec.ID]bool, role config.SubagentRole) map[toolspec.ID]bool {
-	out := make(map[toolspec.ID]bool, len(base))
-	for key, enabled := range base {
-		out[key] = enabled
-	}
-	for _, id := range toolspec.CatalogIDs() {
-		sourceKey := "tools." + toolspec.ConfigName(id)
-		if _, ok := role.Sources[sourceKey]; ok {
-			out[id] = role.Settings.EnabledTools[id]
-		}
-	}
-	return out
 }
 
 func toolEnabled(enabled []toolspec.ID, want toolspec.ID) bool {

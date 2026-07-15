@@ -220,6 +220,92 @@ func TestPlannerReappliesPersistedSubagentRoleSettingsOnResume(t *testing.T) {
 	}
 }
 
+func TestPlannerReappliesPersistedSubagentSkillTogglesOnResume(t *testing.T) {
+	tests := []struct {
+		name                string
+		configLines         []string
+		wantEnabledSkill    bool
+		wantAPIResult       bool
+		wantEnabledSource   string
+		wantAPIResultSource string
+	}{
+		{
+			name: "omitted role toggles inherit global values",
+			configLines: []string{
+				"[skills]",
+				"enabled = false",
+				"apiresult = false",
+				"",
+				"[subagents.worker]",
+				"thinking_level = \"high\"",
+			},
+			wantEnabledSource:   "file",
+			wantAPIResultSource: "file",
+		},
+		{
+			name: "explicit role toggles override global values",
+			configLines: []string{
+				"[skills]",
+				"enabled = false",
+				"apiresult = false",
+				"",
+				"[subagents.worker.skills]",
+				"enabled = true",
+				"apiresult = true",
+			},
+			wantEnabledSkill:    true,
+			wantAPIResult:       true,
+			wantEnabledSource:   "subagent",
+			wantAPIResultSource: "subagent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			workspace := t.TempDir()
+			loaded := loadLaunchConfig(t, workspace, tt.configLines...)
+			containerDir := filepath.Join(root, "projects", "project-a", "sessions")
+			persistence := sessiontest.NewPersistence()
+			store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace, persistence.Options()...)
+			if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
+				t.Fatalf("SetContinuationContext: %v", err)
+			}
+			planner := Planner{
+				Config: config.App{
+					WorkspaceRoot:   workspace,
+					PersistenceRoot: root,
+					Settings:        loaded.Settings,
+					Source:          loaded.Source,
+				},
+				ContainerDir: containerDir,
+				StoreOptions: persistence.Options(),
+			}
+
+			plan, err := planner.PlanSession(context.Background(), SessionRequest{
+				Mode:   ModeInteractive,
+				Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID)),
+			})
+			if err != nil {
+				t.Fatalf("PlanSession: %v", err)
+			}
+			policy := config.ResolveSkillPolicy(plan.ActiveSettings)
+			if got := policy.SkillEnabled("enabled"); got != tt.wantEnabledSkill {
+				t.Fatalf("skill named enabled = %t, want %t", got, tt.wantEnabledSkill)
+			}
+			if got := policy.SkillEnabled("apiresult"); got != tt.wantAPIResult {
+				t.Fatalf("apiresult enabled = %t, want %t", policy.SkillEnabled("apiresult"), tt.wantAPIResult)
+			}
+			if got := plan.Source.Sources["skills.enabled"]; got != tt.wantEnabledSource {
+				t.Fatalf("skills.enabled source = %q, want %q", got, tt.wantEnabledSource)
+			}
+			if got := plan.Source.Sources["skills.apiresult"]; got != tt.wantAPIResultSource {
+				t.Fatalf("skills.apiresult source = %q, want %q", got, tt.wantAPIResultSource)
+			}
+		})
+	}
+}
+
 func TestResumedSessionUsesActiveProviderIdentifierWithoutPersistingIt(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)
@@ -470,6 +556,41 @@ func TestApplyRunPromptOverridesExplicitDefaultClearsPersistedRole(t *testing.T)
 	}
 	if got := store.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared role", got)
+	}
+}
+
+func TestApplyRunPromptOverridesDefaultCannotClearLockedRoleAfterSkippingPersistedRoleLookup(t *testing.T) {
+	workspace := t.TempDir()
+	store := createTestSession(t, workspace)
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	settings := config.Settings{
+		Model:         "gpt-5.6-sol",
+		ThinkingLevel: "medium",
+		EnabledTools:  map[toolspec.ID]bool{toolspec.ToolExecCommand: true},
+	}
+	plan := SessionPlan{
+		Store:                               store,
+		ActiveSettings:                      settings,
+		BaseSettings:                        settings,
+		EnabledTools:                        []toolspec.ID{toolspec.ToolExecCommand},
+		ConfiguredModelName:                 settings.Model,
+		ModelContractLocked:                 true,
+		SkipContinuationAgentRoleValidation: true,
+		WorkspaceRoot:                       workspace,
+	}
+
+	_, _, err := ApplyRunPromptOverrides(
+		plan,
+		serverapi.RunPromptOverrides{AgentRole: config.DefaultSubagentRole},
+		auth.EmptyState(),
+	)
+	if !errors.Is(err, ErrLockedAgentRoleChange) {
+		t.Fatalf("default locked-role clear error = %v, want %v", err, ErrLockedAgentRoleChange)
+	}
+	if got := store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("worker")) {
+		t.Fatalf("locked continuation changed after rejected clear: %+v", got)
 	}
 }
 

@@ -3,12 +3,16 @@ title: Prompts
 description: Prompt customization files, precedence, placeholders, and session snapshot behavior.
 ---
 
-Kent supports customizing system prompts, supervisor instructions, subagent system prompts, and repo guidance.
+Learn how to customize system prompts, supervisor instructions, subagent system prompts, workflow prompts, and repo guidance.
+
+Models will follow the instructions by role: `system -> developer -> user`, from most authoritative to least authoritative. With kent, you can customize all three levels:
 
 ## Instruction Files
 
 - `~/.kent/AGENTS.md` is a global instructions file injected into every session automatically.
 - `<workspace>/AGENTS.md` adds developer instructions that are specific to the current project.
+
+These files are `developer`-level instructions.
 
 ## System Prompt
 
@@ -23,11 +27,11 @@ System prompt files replace Kent's built-in default "product engineer" / SWE-foc
 
 `system_prompt_file` paths are resolved relative to the containing `config.toml` directory unless absolute.
 
-Kent snapshots the rendered system prompt for each compaction generation. Edits to system prompt files take effect after a successful compaction and the next model request. Model/provider settings, enabled tool IDs, and native web search mode stay locked for the session.
+Kent snapshots the rendered system prompt on each compaction to prevent cache misses. Edits to system prompt files take effect after a successful compaction and the next model request.
 
 ## Placeholders
 
-You can assemble your own system prompt from building blocks provided by Kent. It's highly recommended to leave the  instructions about the harness (`HarnessWorkflowAutonomy`) intact.
+You can assemble your own system prompt from building blocks provided by Kent. It's highly recommended to leave the instructions about the harness (`HarnessWorkflowAutonomy`) intact.
 
 System prompt files use Go template syntax with these fields:
 
@@ -62,4 +66,4 @@ Additionally, if `tool_preambles = true` in the [config](../config/), another bl
 - `~/.kent/config.toml`
 - `<workspace-root>/.kent/config.toml`
 
-The workspace config value takes priority. Kent snapshots the rendered supervisor prompt independently when a supervisor request is built; edits take effect for supervisor requests after successful compaction. Developer context already written into the transcript is not reloaded by prompt snapshot refresh.
+The workspace config value takes priority. Kent snapshots the rendered supervisor prompt independently when a supervisor request is built; edits take effect for supervisor requests after successful compaction.

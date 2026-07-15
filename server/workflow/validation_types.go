@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/toolspec"
 )
 
 type ValidationContext string
@@ -16,21 +17,13 @@ const (
 
 type RoleResolver interface {
 	RoleExists(role string) bool
+	RoleToolEnabled(role string, tool toolspec.ID) bool
 }
 
 const DefaultAgentRole = config.DefaultSubagentRole
 
 func IsDefaultAgentRole(role string) bool {
 	return strings.TrimSpace(role) == DefaultAgentRole
-}
-
-type StaticRoleResolver map[string]bool
-
-func (r StaticRoleResolver) RoleExists(role string) bool {
-	if IsDefaultAgentRole(role) {
-		return true
-	}
-	return r[role]
 }
 
 type ValidationOptions struct {
@@ -104,6 +97,7 @@ const (
 	CodeUnsupportedJoinBinding           ValidationErrorCode = "workflow.validation.unsupported_join_binding"
 	CodeAgentRoleRequired                ValidationErrorCode = "workflow.validation.agent_role_required"
 	CodeAgentRoleMissing                 ValidationErrorCode = "workflow.validation.agent_role_missing"
+	CodeAgentRoleRequiredToolDisabled    ValidationErrorCode = "workflow.validation.agent_role_required_tool_disabled"
 	CodeInvalidNodeKind                  ValidationErrorCode = "workflow.validation.invalid_node_kind"
 	CodeInvalidDisplayName               ValidationErrorCode = "workflow.validation.invalid_display_name"
 	CodeInvalidExecutionTargetPolicy     ValidationErrorCode = "workflow.validation.invalid_execution_target_policy"
@@ -122,6 +116,8 @@ type ValidationError struct {
 	Placeholder       string
 	ProviderEdgeID    EdgeID
 	RelatedIDs        []string
+	AgentRole         *string
+	RequiredTool      *toolspec.ID
 	BlocksContext     bool
 }
 

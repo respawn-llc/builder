@@ -5,6 +5,8 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/theme"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 type Mode uint8
@@ -109,8 +111,29 @@ type Line struct {
 }
 
 type Span struct {
-	Text  string
-	Style SpanStyle
+	Text      string
+	Style     SpanStyle
+	Hyperlink *Hyperlink
+}
+
+type Hyperlink struct {
+	URL string
+}
+
+type MarkdownLinkPresentation uint8
+
+const (
+	MarkdownLinkLabelOnly MarkdownLinkPresentation = iota
+	MarkdownLinkLabelAndDestination
+)
+
+func (p MarkdownLinkPresentation) Valid() bool {
+	switch p {
+	case MarkdownLinkLabelOnly, MarkdownLinkLabelAndDestination:
+		return true
+	default:
+		return false
+	}
 }
 
 type LineBackground uint8
@@ -135,6 +158,7 @@ const (
 	SpanAttributeBold
 	SpanAttributeItalic
 	SpanAttributeUnderline
+	SpanAttributeStrikethrough
 )
 
 type RGBColor struct {
@@ -176,6 +200,13 @@ func SemanticSpan(text string, role StyleRole, attributes ...SpanAttribute) Span
 
 func ExplicitRGBSpan(text string, foreground RGBColor, attributes ...SpanAttribute) Span {
 	return Span{Text: text, Style: ExplicitRGBStyle(foreground, attributes...)}
+}
+
+func EncodeSpanHyperlink(span Span, rendered string) string {
+	if rendered == "" || span.Hyperlink == nil || span.Hyperlink.URL == "" {
+		return rendered
+	}
+	return xansi.SetHyperlink(span.Hyperlink.URL) + rendered + xansi.ResetHyperlink()
 }
 
 func combineSpanAttributes(attributes []SpanAttribute) SpanAttribute {
@@ -223,11 +254,12 @@ func (f ResolvedForeground) TrueColor() string {
 }
 
 type ResolvedSpanStyle struct {
-	Foreground ResolvedForeground
-	Faint      bool
-	Bold       bool
-	Italic     bool
-	Underline  bool
+	Foreground    ResolvedForeground
+	Faint         bool
+	Bold          bool
+	Italic        bool
+	Underline     bool
+	Strikethrough bool
 }
 
 func ResolveSpanStyle(span Span, themeName string) ResolvedSpanStyle {
@@ -247,11 +279,12 @@ func ResolveSpanStyle(span Span, themeName string) ResolvedSpanStyle {
 		panic(fmt.Sprintf("resolve transcript span with invalid style kind %d", span.Style.Kind))
 	}
 	return ResolvedSpanStyle{
-		Foreground: foreground,
-		Faint:      span.Style.Has(SpanAttributeFaint),
-		Bold:       span.Style.Has(SpanAttributeBold),
-		Italic:     span.Style.Has(SpanAttributeItalic),
-		Underline:  span.Style.Has(SpanAttributeUnderline),
+		Foreground:    foreground,
+		Faint:         span.Style.Has(SpanAttributeFaint),
+		Bold:          span.Style.Has(SpanAttributeBold),
+		Italic:        span.Style.Has(SpanAttributeItalic),
+		Underline:     span.Style.Has(SpanAttributeUnderline),
+		Strikethrough: span.Style.Has(SpanAttributeStrikethrough),
 	}
 }
 

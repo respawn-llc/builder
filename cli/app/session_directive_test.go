@@ -155,7 +155,7 @@ func TestSessionLifecycleResultResumeReleasesThenUsesSamePickerWithoutPlan(t *te
 	if result.Kind() != serverapi.SessionDirectiveSelectSession {
 		t.Fatalf("result kind = %q, want select session", result.Kind())
 	}
-	if _, err := planner.selectSession(context.Background()); err != nil {
+	if _, err := planner.selectSession(context.Background(), nil); err != nil {
 		t.Fatalf("selectSession: %v", err)
 	}
 	if planCalls != 0 {

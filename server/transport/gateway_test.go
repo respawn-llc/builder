@@ -32,6 +32,20 @@ import (
 	"core/shared/sessioncontract"
 )
 
+func gatewaySessionExecutionTarget(t *testing.T, conn *websocket.Conn, requestID, sessionID string) clientui.SessionExecutionTarget {
+	t.Helper()
+	var response serverapi.SessionMainViewResponse
+	callGateway(
+		t,
+		conn,
+		requestID,
+		protocol.MethodSessionGetMainView,
+		serverapi.SessionMainViewRequest{SessionID: sessionID},
+		&response,
+	)
+	return response.MainView.Session.ExecutionTarget
+}
+
 func registerGatewayWorkspace(t *testing.T, workspace string) {
 	t.Helper()
 	configureGatewayTestServerPort(t)
@@ -716,8 +730,9 @@ func TestGatewayAuthBootstrapNoneAuthorizesSameConnectionOnly(t *testing.T) {
 
 	var plan serverapi.SessionPlanResponse
 	callGateway(t, conn, "plan-after-no-auth", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-after-no-auth"), &plan)
-	if strings.TrimSpace(plan.Plan.WorkspaceRoot) == "" {
-		t.Fatalf("session.plan after no-auth returned empty workspace root: %+v", plan)
+	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-no-auth", plan.Plan.SessionID)
+	if strings.TrimSpace(target.EffectiveWorkdir) == "" {
+		t.Fatalf("typed session target after no-auth has empty effective workdir: %+v", target)
 	}
 }
 

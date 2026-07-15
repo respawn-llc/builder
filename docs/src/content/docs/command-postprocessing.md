@@ -5,12 +5,6 @@ description: Configure Kent's shell command post-processing and ship your own ho
 
 Kent post-processes shell command output before it is shown to the model to normalize output, reduce command noise, and add useful execution context.
 
-Successful commands with visible output return that output. A completed command without visible output reports its exit code and explicit no-output completion.
-
-Use `kent worktree` for worktree operations. Kent warns about direct `git worktree` commands.
-
-Raw shell output skips post-processing.
-
 ## Config
 
 Configure command post-processing under `[shell]` in `~/.kent/config.toml`:
@@ -21,7 +15,7 @@ postprocessing_mode = "all" # none | builtin | user | all
 postprocess_hook = "~/.kent/shell_postprocess_hook"
 ```
 
-Omit `postprocess_hook` when no hook is configured. `postprocess_hook = ""`, whitespace-only values, and an empty `KENT_SHELL_POSTPROCESS_HOOK` are configuration errors; remove the key or unset the environment variable instead.
+Omit `postprocess_hook` when no hook is configured.
 
 ### `postprocessing_mode`
 
@@ -31,8 +25,6 @@ Allowed values:
 - `builtin`: run Kent's output cleanup and built-in processing.
 - `user`: run Kent's output cleanup, then your configured hook.
 - `all`: run Kent's output cleanup, built-in processing, then your configured hook.
-
-Kent captures the effective mode and hook when each process starts. Foreground output, background transitions, later polling, and automatic completion keep that policy even if another session or role uses different shell settings.
 
 ## Protocol
 

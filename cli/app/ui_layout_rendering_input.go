@@ -2,6 +2,7 @@ package app
 
 import (
 	"core/cli/tui"
+	"core/cli/tui/transcriptrender"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -125,7 +126,12 @@ func (l uiViewLayout) wrappedAskPromptLines(width int) ([]wrappedAskPromptLine, 
 	if len(promptLines) == 0 {
 		promptLines = []askPromptLine{{Text: "", Kind: askPromptLineKindQuestion}}
 	}
-	promptLines = renderMarkdownAskQuestionPromptLines(promptLines, l.model.theme, width)
+	promptLines = renderMarkdownAskQuestionPromptLines(
+		promptLines,
+		l.model.theme,
+		width,
+		l.model.markdownLinks,
+	)
 	out := make([]wrappedAskPromptLine, 0, len(promptLines)*2)
 	cursorLineIndex := -1
 	for _, line := range promptLines {
@@ -168,7 +174,12 @@ func (l uiViewLayout) wrappedAskPromptLines(width int) ([]wrappedAskPromptLine, 
 	return out, cursorLineIndex
 }
 
-func renderMarkdownAskQuestionPromptLines(lines []askPromptLine, theme string, width int) []askPromptLine {
+func renderMarkdownAskQuestionPromptLines(
+	lines []askPromptLine,
+	theme string,
+	width int,
+	linkPresentation transcriptrender.MarkdownLinkPresentation,
+) []askPromptLine {
 	if len(lines) == 0 {
 		return nil
 	}
@@ -186,7 +197,12 @@ func renderMarkdownAskQuestionPromptLines(lines []askPromptLine, theme string, w
 			parts = append(parts, lines[idx].Text)
 			idx++
 		}
-		rendered := tui.RenderAskQuestionMarkdownLines(strings.Join(parts, "\n"), theme, width)
+		rendered := tui.RenderAskQuestionMarkdownLines(
+			strings.Join(parts, "\n"),
+			theme,
+			width,
+			linkPresentation,
+		)
 		if len(rendered) == 0 {
 			out = append(out, lines[start:idx]...)
 			continue

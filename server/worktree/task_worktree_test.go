@@ -1016,7 +1016,7 @@ func (r *selectedCommandFailingGitRunner) Run(ctx context.Context, dir string, a
 
 func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sourceWorkspaceID string) (workflowstore.TaskRecord, *workflowstore.Store) {
 	t.Helper()
-	resolver := workflow.StaticRoleResolver{"workflow-test": true}
+	resolver := testsetup.QuestionsEnabled("workflow-test")
 	store, err := workflowstore.New(env.store, workflowstore.WithRoleResolver(resolver))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)

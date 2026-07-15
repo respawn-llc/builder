@@ -237,6 +237,23 @@ func TestStatusOverlayOmitsServerOwnershipRow(t *testing.T) {
 	}
 }
 
+func TestStatusOverlayDisabledSkillUsesEnumeratedPresentation(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	m.status.snapshot = uiStatusSnapshot{
+		Workdir: "/workspace",
+		Model:   uiStatusModelInfo{Summary: "gpt-5"},
+		Skills: []uiStatusSkillInspection{{
+			Name:     "visible-disabled",
+			Path:     "/workspace/.kent/skills/visible-disabled/SKILL.md",
+			Loaded:   true,
+			Disabled: true,
+		}},
+	}
+	if got := statusSkillsPresentation(m.status.snapshot, false); got != statusSkillsPresentationEnumerated {
+		t.Fatalf("skills presentation mode = %d, want enumerated", got)
+	}
+}
+
 func initStatusLineGitRepo(t *testing.T, branch string) string {
 	t.Helper()
 	repoRoot := t.TempDir()

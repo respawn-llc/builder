@@ -38,9 +38,21 @@ type markdownProjector struct {
 	renderer markdownRenderer
 }
 
-func newMarkdownProjector(renderer markdownRenderer, themeName string) markdownProjector {
+func newMarkdownProjector(
+	renderer markdownRenderer,
+	themeName string,
+	linkPresentation transcriptrender.MarkdownLinkPresentation,
+) markdownProjector {
+	if !linkPresentation.Valid() {
+		panicOngoingDeveloperError("markdown_projection", "invalid Markdown link presentation", map[string]any{
+			"link_presentation": linkPresentation,
+		})
+	}
 	if renderer == nil {
-		renderer = terminalMarkdownRenderer{themeName: themeName}
+		renderer = terminalMarkdownRenderer{
+			themeName:        themeName,
+			linkPresentation: linkPresentation,
+		}
 	}
 	return markdownProjector{renderer: renderer}
 }
@@ -85,7 +97,8 @@ func (p markdownProjector) Project(input markdownProjectionInput) markdownProjec
 }
 
 type terminalMarkdownRenderer struct {
-	themeName string
+	themeName        string
+	linkPresentation transcriptrender.MarkdownLinkPresentation
 }
 
 func (r terminalMarkdownRenderer) Render(source string, width int) []string {
@@ -93,7 +106,12 @@ func (r terminalMarkdownRenderer) Render(source string, width int) []string {
 	if strings.TrimSpace(source) == "" {
 		return nil
 	}
-	lines := transcriptrender.RenderMarkdownLines(transcriptrender.StyleRoleAssistant, source, width)
+	lines := transcriptrender.RenderMarkdownLinesWithLinkPresentation(
+		transcriptrender.StyleRoleAssistant,
+		source,
+		width,
+		r.linkPresentation,
+	)
 	return encodeTranscriptLines(lines, r.themeName)
 }
 
@@ -102,10 +120,11 @@ func (r terminalMarkdownRenderer) RenderStable(source string, width int) []strin
 	if strings.TrimSpace(source) == "" {
 		return nil
 	}
-	lines := transcriptrender.RenderMarkdownStableLines(
+	lines := transcriptrender.RenderMarkdownStableLinesWithLinkPresentation(
 		transcriptrender.StyleRoleAssistant,
 		source,
 		max(1, width-transcriptrender.RolePrefixWidth(transcriptrender.StyleRoleAssistant)),
+		r.linkPresentation,
 	)
 	return encodeTranscriptLines(lines, r.themeName)
 }

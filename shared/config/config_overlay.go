@@ -280,27 +280,6 @@ func resetEnabledToolMap(enabled []toolspec.ID) map[toolspec.ID]bool {
 	return out
 }
 
-func DisabledSkillToggles(settings Settings) map[string]bool {
-	if len(settings.SkillToggles) == 0 {
-		return nil
-	}
-	disabled := make(map[string]bool, len(settings.SkillToggles))
-	for name, enabled := range settings.SkillToggles {
-		if enabled {
-			continue
-		}
-		normalized := NormalizeSkillName(name)
-		if normalized == "" {
-			continue
-		}
-		disabled[normalized] = true
-	}
-	if len(disabled) == 0 {
-		return nil
-	}
-	return disabled
-}
-
 func parsePositiveIntString(raw string, envName string) (*int, error) {
 	parsed, err := strconv.Atoi(raw)
 	if err != nil || parsed <= 0 {

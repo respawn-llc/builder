@@ -115,6 +115,17 @@ func (e *Engine) reloadPromptFacingSnapshotConfig(ctx context.Context) (PromptFa
 	}, nil
 }
 
+func (e *Engine) reconstructionSkillPolicy(ctx context.Context) (config.SkillPolicy, error) {
+	if e.cfg.PromptFacingSnapshotReloader == nil {
+		return e.cfg.SkillPolicy, nil
+	}
+	reloaded, err := e.reloadPromptFacingSnapshotConfig(ctx)
+	if err != nil {
+		return config.SkillPolicy{}, err
+	}
+	return config.ResolveSkillPolicy(reloaded.Settings), nil
+}
+
 func (e *Engine) promptRefreshToolPreambles(enabled bool) *bool {
 	value := !e.cfg.HeadlessMode && enabled
 	return &value

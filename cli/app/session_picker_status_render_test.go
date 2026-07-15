@@ -31,7 +31,6 @@ func (p *sessionPickerFailureProjection) Record(failure sessionPickerStatusFailu
 	p.status.Record(startupPickerStatusFailure{
 		Tab: failure.Tab, Operation: failure.Operation, Generation: failure.Generation,
 		Kind: failure.Kind, Diagnostic: failure.Diagnostic,
-		ActiveEligible: true,
 	})
 }
 
@@ -83,16 +82,36 @@ func TestStartupPickersUseSharedStatusRenderer(t *testing.T) {
 	}
 }
 
+func TestSessionPickerInitialNoticeUsesSharedStatusSurface(t *testing.T) {
+	t.Parallel()
+
+	diagnostic := errors.New("workspace lookup failed")
+	notice := startupPickerNotice{
+		Text:       "retry",
+		Kind:       startupPickerNoticeError,
+		Diagnostic: diagnostic,
+	}
+	model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{Notice: &notice})
+	projection := projectStartupPickerStatus(model.startupStatus)
+	if projection.Notice.Kind != startupPickerNoticeError ||
+		!errors.Is(projection.Notice.Diagnostic, diagnostic) {
+		t.Fatalf("initial notice projection = %+v", projection.Notice)
+	}
+	if got := newSessionPickerStatusSurface(model.startupStatus).RenderStatus(80); strings.TrimSpace(ansi.Strip(got)) == "" {
+		t.Fatal("initial notice rendered empty")
+	}
+}
+
 func TestSessionPickerResumeUsesSharedStartupStatusSurface(t *testing.T) {
 	t.Parallel()
 
 	authStatus := newStartupPickerStatusModel()
 	authStatus.Record(startupPickerStatusFailure{
 		Tab:        sessioncontract.SessionCategoryMain,
-		Operation:  sessionPickerOperationSelectedDetail,
+		Operation:  sessionPickerOperationBodyPage,
 		Generation: 7,
-		Kind:       sessionPickerFailureDetailRequest,
-		Diagnostic: errors.New("detail failed"),
+		Kind:       sessionPickerFailurePageRequest,
+		Diagnostic: errors.New("page failed"),
 	})
 	resume := newSessionPickerStatusSurface(authStatus)
 	if resume.model != authStatus {
@@ -121,20 +140,8 @@ func TestSessionPickerFailureProjectionKeepsOverlappingSourcesKeyed(t *testing.T
 		Kind:       sessionPickerFailurePageRequest,
 		Diagnostic: errors.New("directional failed"),
 	})
-	failures.Record(sessionPickerStatusFailure{
-		Tab:        sessioncontract.SessionCategoryMain,
-		Operation:  sessionPickerOperationSelectedDetail,
-		Generation: 6,
-		Kind:       sessionPickerFailureDetailRequest,
-		Diagnostic: errors.New("detail failed"),
-	})
-
-	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationSelectedDetail {
-		t.Fatalf("newest active failure = %q, want selected detail", got.Operation)
-	}
-	failures.Clear(sessioncontract.SessionCategoryMain, sessionPickerOperationSelectedDetail, 6)
 	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationDirectionalPage {
-		t.Fatalf("after detail recovery = %q, want directional page", got.Operation)
+		t.Fatalf("newest failure = %q, want directional page", got.Operation)
 	}
 	failures.Clear(sessioncontract.SessionCategoryMain, sessionPickerOperationDirectionalPage, 5)
 	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationBodyPage {
@@ -159,17 +166,17 @@ func TestSessionPickerFailureProjectionPrefersActiveTabThenInactiveRecency(t *te
 	})
 	failures.Record(sessionPickerStatusFailure{
 		Tab:        sessioncontract.SessionCategorySubagent,
-		Operation:  sessionPickerOperationSelectedDetail,
+		Operation:  sessionPickerOperationDirectionalPage,
 		Generation: 2,
-		Kind:       sessionPickerFailureDetailRequest,
+		Kind:       sessionPickerFailurePageRequest,
 		Diagnostic: errors.New("subagent"),
 	})
 
 	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationBodyPage {
 		t.Fatalf("active tab failure = %q, want body page", got.Operation)
 	}
-	if got := failures.Status(sessioncontract.SessionCategorySubagent); got == nil || got.Operation != sessionPickerOperationSelectedDetail {
-		t.Fatalf("switched tab failure = %q, want selected detail", got.Operation)
+	if got := failures.Status(sessioncontract.SessionCategorySubagent); got == nil || got.Operation != sessionPickerOperationDirectionalPage {
+		t.Fatalf("switched tab failure = %q, want directional page", got.Operation)
 	}
 }
 
@@ -186,17 +193,17 @@ func TestSessionPickerFailureProjectionRetryRetainsUnrelatedFailure(t *testing.T
 	})
 	failures.Record(sessionPickerStatusFailure{
 		Tab:        sessioncontract.SessionCategoryMain,
-		Operation:  sessionPickerOperationSelectedDetail,
+		Operation:  sessionPickerOperationDirectionalPage,
 		Generation: 9,
-		Kind:       sessionPickerFailureDetailRequest,
-		Diagnostic: errors.New("detail"),
+		Kind:       sessionPickerFailurePageRequest,
+		Diagnostic: errors.New("directional"),
 	})
-	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationSelectedDetail {
-		t.Fatalf("retry status = %q, want selected detail", got.Operation)
+	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationDirectionalPage {
+		t.Fatalf("retry status = %q, want directional page", got.Operation)
 	}
-	failures.Clear(sessioncontract.SessionCategoryMain, sessionPickerOperationSelectedDetail, 9)
+	failures.Clear(sessioncontract.SessionCategoryMain, sessionPickerOperationDirectionalPage, 9)
 	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationBodyPage {
-		t.Fatalf("after detail recovery = %+v, want retained body failure", got)
+		t.Fatalf("after directional recovery = %+v, want retained body failure", got)
 	}
 }
 
@@ -206,20 +213,16 @@ func TestSessionPickerFailureRenderProjectionExcludesDiagnostics(t *testing.T) {
 	for _, kind := range []sessionPickerFailureKind{
 		sessionPickerFailurePageRequest,
 		sessionPickerFailurePageContract,
-		sessionPickerFailureDetailRequest,
-		sessionPickerFailureDetailContract,
-		sessionPickerFailureDetailField,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			diagnostic := errors.New("opaque internal diagnostic /tmp/private read tcp 127.0.0.1:1")
 			status := newStartupPickerStatusModel()
 			status.Record(startupPickerStatusFailure{
-				Tab:            sessioncontract.SessionCategoryMain,
-				Operation:      sessionPickerOperationBodyPage,
-				Generation:     1,
-				Kind:           kind,
-				Diagnostic:     diagnostic,
-				ActiveEligible: true,
+				Tab:        sessioncontract.SessionCategoryMain,
+				Operation:  sessionPickerOperationBodyPage,
+				Generation: 1,
+				Kind:       kind,
+				Diagnostic: diagnostic,
 			})
 
 			projection := projectStartupPickerStatus(status)

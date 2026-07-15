@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -47,7 +48,7 @@ func (l *recordingSessionPageLoader) ListSessionPage(_ context.Context, request 
 	return result.response, result.err
 }
 
-func TestSessionPickerInitialHydrationKeepsCreateNewSelectedWithDetailClient(t *testing.T) {
+func TestSessionPickerInitialHydrationKeepsCreateNewSelected(t *testing.T) {
 	main := pickerTestSummary(t, "initial-main", time.Unix(1_900_000_000, 0).UTC())
 	subagent := pickerTestSummary(t, "initial-subagent", time.Unix(1_899_999_000, 0).UTC())
 	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
@@ -61,27 +62,13 @@ func TestSessionPickerInitialHydrationKeepsCreateNewSelectedWithDetailClient(t *
 			return sessionPageLoadResult{}
 		}
 	}}
-	environmentClient := &sessionPickerEnvironmentClient{
-		responses: map[runtimeids.SessionID]serverapi.SessionExecutionEnvironmentResponse{
-			main.SessionID:     sessionPickerDetailEnvironment(t, main.SessionID),
-			subagent.SessionID: sessionPickerDetailEnvironment(t, subagent.SessionID),
-		},
-		errs: map[runtimeids.SessionID]error{},
-	}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, environmentClient, "dark", sessionPickerHeaderInfo{})
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 
 	runSessionPickerCommands(t, model, model.Init())
 
 	if _, ok := model.main.selected.(sessionPickerCreateSelection); !ok {
 		t.Fatalf("main selection after hydration = %T, want create-new", model.main.selected)
 	}
-	if model.main.selectedDetail != nil || model.main.detailRequest != nil {
-		t.Fatal("initial hydration started selected detail before a session row was selected")
-	}
-	if got := environmentClient.requestCount(); got != 0 {
-		t.Fatalf("selected-detail requests after initial hydration = %d, want 0", got)
-	}
-
 	runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, tea.KeyMsg{Type: tea.KeyEnter}))
 	if _, ok := model.result.(sessionPickerCreateResult); !ok {
 		t.Fatalf("initial Enter result = %T, want create-new", model.result)
@@ -106,7 +93,7 @@ func TestSessionPickerLoadsBothTabsAndKeepsTabLocalSelection(t *testing.T) {
 			return sessionPageLoadResult{}
 		}
 	}}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 	runSessionPickerCommands(t, model, model.Init())
 
 	calls := loader.snapshotCalls()
@@ -157,7 +144,7 @@ func TestSessionPickerRejectsPageCategoryMismatch(t *testing.T) {
 		}
 		return sessionPageLoadResult{response: response}
 	}}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 
 	runSessionPickerCommands(t, model, model.Init())
 
@@ -174,6 +161,36 @@ func TestSessionPickerRejectsPageCategoryMismatch(t *testing.T) {
 	}
 }
 
+func TestSessionPickerRejectsPageLargerThanRequestedBound(t *testing.T) {
+	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+		sessionIDs := make([]string, sessionPickerPageSize+1)
+		for index := range sessionIDs {
+			sessionIDs[index] = fmt.Sprintf("oversized-%d", index)
+		}
+		return sessionPageLoadResult{response: pickerPageResponse(t, request, sessionIDs...)}
+	}}
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
+
+	runSessionPickerCommands(t, model, model.Init())
+
+	for _, category := range []sessioncontract.SessionCategory{
+		sessioncontract.SessionCategoryMain,
+		sessioncontract.SessionCategorySubagent,
+	} {
+		tab := model.tab(category)
+		if tab.bodyPhase != sessionPickerBodyFailed {
+			t.Fatalf("%s body phase = %q, want failed", category, tab.bodyPhase)
+		}
+		if got := tab.residentSessionCount(); got != 0 {
+			t.Fatalf("%s resident sessions after oversized page = %d, want 0", category, got)
+		}
+		failure, ok := model.startupStatus.failure(category, sessionPickerOperationBodyPage)
+		if !ok || failure.Kind != sessionPickerFailurePageContract {
+			t.Fatalf("%s oversized page failure = %+v/%v, want typed contract failure", category, failure, ok)
+		}
+	}
+}
+
 func TestSessionPickerPageRequestFailureKeepsDiagnosticOutOfOperatorProjection(t *testing.T) {
 	diagnostic := errors.New("read tcp 127.0.0.1:1234: connection reset by peer")
 	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
@@ -182,10 +199,9 @@ func TestSessionPickerPageRequestFailureKeepsDiagnosticOutOfOperatorProjection(t
 		}
 		return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 	}}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(
+	model := newSessionPickerModel(
 		context.Background(),
 		loader,
-		nil,
 		"dark",
 		sessionPickerHeaderInfo{},
 	)
@@ -210,7 +226,7 @@ func TestSessionPickerRejectsPageProjectMismatch(t *testing.T) {
 			return sessionPageLoadResult{response: response}
 		},
 	}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 
 	runSessionPickerCommands(t, model, model.Init())
 
@@ -244,7 +260,7 @@ func TestSessionPickerResultsAreDiscriminated(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+			model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 			runSessionPickerCommands(t, model, model.Init())
 			for _, key := range test.keys {
 				runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, key))
@@ -277,7 +293,7 @@ func TestSessionPickerRetriesFailedTabFromNewest(t *testing.T) {
 		}
 		return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 	}}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 	runSessionPickerCommands(t, model, model.Init())
 	if model.tab(sessioncontract.SessionCategorySubagent).bodyPhase != sessionPickerBodyFailed {
 		t.Fatalf("subagent body phase = %q, want failed", model.tab(sessioncontract.SessionCategorySubagent).bodyPhase)
@@ -297,10 +313,9 @@ func TestSessionPickerRetriesFailedTabFromNewest(t *testing.T) {
 }
 
 func TestSessionPickerRetrySchedulesFreshSpinnerTick(t *testing.T) {
-	model := newSessionPickerModelWithExecutionEnvironmentClient(
+	model := newSessionPickerModel(
 		context.Background(),
 		&recordingSessionPageLoader{},
-		nil,
 		"dark",
 		sessionPickerHeaderInfo{},
 	)
@@ -342,7 +357,7 @@ func TestSessionPickerPageDownTraversesOlderBoundedPage(t *testing.T) {
 			return sessionPageLoadResult{}
 		}
 	}}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 	runSessionPickerCommands(t, model, model.Init())
 
 	runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, tea.KeyMsg{Type: tea.KeyPgDown}))
@@ -361,7 +376,7 @@ func TestSessionPickerFreshRetryClearsObsoleteDirectionalFailure(t *testing.T) {
 	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
 		return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 	}}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 	tab := model.tab(sessioncontract.SessionCategorySubagent)
 	tab.generation = 3
 	tab.bodyPhase = sessionPickerBodyFailed
@@ -424,7 +439,7 @@ func TestSessionPickerKeepsTwoPageResidentBoundAcrossOlderAndNewerTraversal(t *t
 		t.Fatalf("unexpected page request: %+v", request)
 		return sessionPageLoadResult{}
 	}}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 	runSessionPickerCommands(t, model, model.Init())
 	for range 10 {
 		runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, tea.KeyMsg{Type: tea.KeyDown}))
@@ -452,6 +467,50 @@ func TestSessionPickerKeepsTwoPageResidentBoundAcrossOlderAndNewerTraversal(t *t
 	}
 }
 
+func TestSessionPickerPageDownTraversesFiftySessionPage(t *testing.T) {
+	older := mustPickerContinuation(t, "page-down-older")
+	newer := mustPickerContinuation(t, "page-down-newer")
+	newestIDs := make([]string, 50)
+	for index := range newestIDs {
+		newestIDs[index] = fmt.Sprintf("page-down-%02d", index)
+	}
+	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+		if request.PageSize != 50 {
+			t.Fatalf("page size = %d, want 50", request.PageSize)
+		}
+		if request.Category == sessioncontract.SessionCategorySubagent {
+			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
+		}
+		switch request.Position.Kind() {
+		case serverapi.SessionPagePositionNewest:
+			response := pickerPageResponse(t, request, newestIDs...)
+			response.Older = &older
+			return sessionPageLoadResult{response: response}
+		case serverapi.SessionPagePositionOlder:
+			response := pickerPageResponse(t, request, "page-down-older-row")
+			response.Newer = &newer
+			return sessionPageLoadResult{response: response}
+		default:
+			t.Fatalf("unexpected page request: %+v", request)
+			return sessionPageLoadResult{}
+		}
+	}}
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
+	model.width = 80
+	model.height = 24
+	runSessionPickerCommands(t, model, model.Init())
+
+	for range 20 {
+		runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, tea.KeyMsg{Type: tea.KeyPgDown}))
+		for _, call := range loader.snapshotCalls() {
+			if call.Position.Kind() == serverapi.SessionPagePositionOlder {
+				return
+			}
+		}
+	}
+	t.Fatal("PageDown did not request the older continuation")
+}
+
 func TestSessionPickerDirectionalOverlapSelectsFirstNewResidentRow(t *testing.T) {
 	older := mustPickerContinuation(t, "overlap-older")
 	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
@@ -470,7 +529,7 @@ func TestSessionPickerDirectionalOverlapSelectsFirstNewResidentRow(t *testing.T)
 			return sessionPageLoadResult{}
 		}
 	}}
-	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
 	runSessionPickerCommands(t, model, model.Init())
 
 	for range 3 {

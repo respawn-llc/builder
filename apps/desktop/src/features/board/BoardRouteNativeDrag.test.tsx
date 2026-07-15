@@ -51,6 +51,26 @@ describe("BoardRoute native drag lifecycle", () => {
     });
   });
 
+  it("allows a server-authorized post-start move when initial execution validation is blocked", async () => {
+    const services = boardTestServices(() => true, false);
+    render(<App services={services} />);
+    const source = await screen.findByRole("article", { name: "Drag source" });
+    const recon = screen.getByRole("listitem", { name: "Recon" });
+    const dataTransfer = new TestDataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.drop(recon, { dataTransfer });
+
+    await waitFor(() => {
+      const calls = taskActionCalls(services.transport.calls);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        method: "workflow.task.move",
+        params: { task_id: "task-1", target_node_id: "recon" },
+      });
+    });
+  });
+
   it("activates from a real card and keeps both scrollports moving through an in-board null-target dragleave", async () => {
     const { source, root, backlogScrollport: column, dataTransfer } = await renderActiveBoard(frames);
     setScrollportGeometry(root, {
@@ -296,12 +316,15 @@ async function renderActiveBoard(frames: FakeAnimationFrames) {
   };
 }
 
-function boardTestServices(sourcePresent: () => boolean = () => true) {
+function boardTestServices(
+  sourcePresent: () => boolean = () => true,
+  validForTaskCreation = true,
+) {
   return createTestServices([
     ...startupRoutes,
     {
       method: "workflow.board.get",
-      handler: () => boardResponse(sourcePresent() ? 1 : 0),
+      handler: () => boardResponse(sourcePresent() ? 1 : 0, validForTaskCreation),
     },
     {
       method: "workflow.board.nodeCards.list",
@@ -354,11 +377,11 @@ const workflow = {
   description: "Board drag QA workflow",
   version: 1,
   is_project_default: true,
-  valid_for_task_creation: true,
   validation_errors: [],
 };
 
-function boardResponse(backlogTaskCount: number) {
+function boardResponse(backlogTaskCount: number, validForTaskCreation = true) {
+  const selectedWorkflow = { ...workflow, valid_for_task_creation: validForTaskCreation };
   return {
     board: {
       project_id: "project-1",
@@ -368,8 +391,8 @@ function boardResponse(backlogTaskCount: number) {
         default_workspace_id: "workspace-1",
         attached_workspace_count: 1,
       },
-      selected_workflow: workflow,
-      workflows: [workflow],
+      selected_workflow: selectedWorkflow,
+      workflows: [selectedWorkflow],
       groups: [
         {
           group_id: boardGroupID,

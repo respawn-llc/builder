@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/workflow"
 )
 
@@ -16,7 +17,7 @@ func TestDefinitionRejectsInvalidExecutionTargetPolicies(t *testing.T) {
 		def.ExecutionTargetPolicy = policy
 		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
 			Context:      workflow.ValidationContextDraft,
-			RoleResolver: workflow.StaticRoleResolver{"coder": true},
+			RoleResolver: testsetup.QuestionsEnabled("coder"),
 		})
 		if !hasValidationCode(result, workflow.CodeInvalidExecutionTargetPolicy) {
 			t.Fatalf("policy %+v validation codes = %v, want invalid policy", policy, result.Codes())
@@ -57,7 +58,7 @@ func TestDefinitionReportsCustomRefDraftIssueWithoutBlockingDraft(t *testing.T) 
 	def := parameterWorkflow()
 	def.ExecutionTargetPolicy = workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeCustomRef}
 
-	draft := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+	draft := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 	if !hasValidationCode(draft, workflow.CodeExecutionTargetCustomRefRequired) {
 		t.Fatalf("draft validation codes = %v, want custom-ref requirement", draft.Codes())
 	}
@@ -65,7 +66,7 @@ func TestDefinitionReportsCustomRefDraftIssueWithoutBlockingDraft(t *testing.T) 
 		t.Fatalf("draft validation unexpectedly blocks: %+v", draft.BlockingErrors())
 	}
 
-	execution := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+	execution := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: testsetup.QuestionsEnabled("coder")})
 	if !hasValidationCode(execution, workflow.CodeExecutionTargetCustomRefRequired) || !execution.HasBlockingErrors() {
 		t.Fatalf("execution validation = %+v, want blocking custom-ref requirement", execution)
 	}

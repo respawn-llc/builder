@@ -5,7 +5,7 @@ description: Headless Kent runs, scriptable output modes, and how interactive Ke
 
 Kent supports a headless, non-interactive run mode via `kent run`.
 When the interactive Kent session uses subagents, it does so by launching separate headless Kent runs.
-This keeps the subagent path transparent and scriptable: the feature Kent uses internally is scriptable and contextual.
+This keeps the subagent path contextual and scriptable: subagent invocation are not new tools and consume no extra tokens in model context.
 
 Run a single prompt:
 
@@ -22,39 +22,29 @@ kent run --continue <session-id> "<follow-up>"
 Control an active shared run from another shell or agent:
 
 ```bash
-kent run steer <session-id> "adjust the next step"
-kent run stop <session-id>
-kent run wait <session-id>
+kent run steer <session-id> "adjust the next step" # inject a user message into a running agent
+kent run stop <session-id> # gracefully interrupt the riun
+kent run wait <session-id> # wait for the model's turn to end
 ```
 
+:::tip
 `kent run` needs a server connection to keep long-running shells and agents properly orchestrated. If you want to script kent runs, make sure the [Server](../server/) is running.
-
-## Live Controls
-
-Live controls target an explicitly named active session. They do not use `KENT_SESSION_ID` as a default, and they reject targeting their own `KENT_SESSION_ID`.
-
-`kent run steer <session-id> <message...>` queues a non-empty message into an already-active run and prints `ok`. The active `kent run` process prints `Steered message: <full text>` when it accepts the message. If the run is idle, Kent reports the equivalent `kent run --continue <session-id> <message>` command instead of starting a new turn.
-
-`kent run stop <session-id>` interrupts the active shared runtime. It prints `Stopped` when it interrupts work, and `No active run` when the session is idle or nonexistent.
-
-`kent run wait <session-id>` waits for the active run's final answer and prints the same final-text shape as `kent run`. `kent run wait --output-mode=json <session-id>` uses the same JSON result object as ordinary JSON headless runs.
-
-Live steering is command-based only; standard input is not interpreted as steering.
+:::
 
 ## Subagent Roles
 
-Roles are needed to create specialized subagent types for different tasks. Treat them like different employees or specialists.
+Roles are needed to create specialized subagent types for different tasks and workflows. Treat them like different employees or specialists.
 
-`--agent <role>` selects a named subagent role from `[subagents.<role>]` in the local or global config file. `--agent default` clears a resumed role and uses the base settings; `none` and `self` are not run-agent selectors. To define a new role, edit the config:
-
+`--agent <role>` selects a named subagent role from `[subagents.<role>]` in the local or global config file. `--agent default` clears a resumed role and uses the base settings; `none` and `self` are not run-agent selectors.
 To open an interactive session with a role, run:
 
 ```bash
 kent --agent research
 ```
 
-To apply a role while reopening a specific session, combine it with `--session` or `--continue`.
-If that session has a locked model request shape, the role must match the session's persisted role; `--agent default` cannot clear a locked role.
+To apply a role while reopening a specific session, combine it with `--session` or `--continue`. Unlocked sessions may select another role or clear the role with `--agent default`. If the session has a locked model request shape, the selected role must match the persisted role and `--agent default` cannot clear it.
+
+Example subagent config:
 
 ```toml
 [subagents.research]
@@ -90,15 +80,9 @@ Useful role-specific keys include:
 
 For the full list of shared overrides, see [Configuration](../config/).
 
-Workflow-agent launches of hidden custom roles fail. Direct `kent run --agent <role>` commands from a human shell remain available, and `fast` is exempt from workflow-specific controls.
-
 ## Session Behavior
 
-Headless runs are non-interactive. They do not stop to ask the human operator questions mid-run, issue tool preambles, or support the Supervisor. That makes them more suitable for background execution, automation, and saves tokens.
-
-You can talk to a headless agent if you select it in the `/resume` (session picker), but if expect the model to be less talkative overall due to how the run was started.
-
-Sessions with a goal cannot be continued headlessly. Clear the goal from the interactive session before using `kent run --continue`.
+Headless runs are non-interactive. They do not stop to ask the human operator questions mid-run, issue tool preambles, or support the Supervisor. That makes them more suitable for background execution, automation, and saves tokens. You can talk to a headless agent if you select it in the `/resume` (session picker).
 
 ## Workspace Binding
 
@@ -111,19 +95,15 @@ This is needed to enable functionality related to project management and allows 
 - `kent rebind <session-id> <new-path>` retargets a session while keeping its source project and attaches an unbound target workspace to that project.
 - `kent rebind --project <project-id> <session-id> <new-path>` moves a non-workflow session to another project and attaches an unbound target workspace.
 
-If a default rebind targets a path attached only to another project, Kent prints executable commands for either moving the session or attaching the path to its source project.
-
 ## Output Modes
 
-By default, `kent run` writes each finalized assistant commentary or final response to `stdout` as it is committed. It does not stream token deltas. New sessions print a ready-to-use steering command to `stderr` after the run becomes steerable; resumed sessions omit that notice. Compaction and accepted-steering notices also use `stderr`.
-
-Use `-q`, `--quiet`, or `--progress-mode=quiet` to suppress live output and print only the terminal result. For scripting, use JSON mode:
+By default, `kent run` writes each finalized assistant commentary or final response to `stdout` as it is committed. Use `--quiet` to suppress live output and print only the terminal result. For scripting, use JSON mode:
 
 ```bash
 kent run --output-mode=json "summarize the repo" | jq
 ```
 
-JSON mode implicitly uses quiet progress behavior and emits exactly one final object on `stdout`.
+JSON mode emits exactly one final object on `stdout`.
 
 ```json
 {
@@ -139,7 +119,6 @@ JSON mode implicitly uses quiet progress behavior and emits exactly one final ob
 ```
 
 On failure, JSON mode emits `status: "error"` and an `error` object instead of `result`.
-Final-text mode surfaces run warnings, while JSON mode returns them in `warnings`.
 
 ---
 

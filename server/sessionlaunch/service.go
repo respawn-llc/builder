@@ -132,7 +132,6 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		SessionName:         result.Plan.SessionName,
 		PromptHistory:       append([]string(nil), result.Plan.PromptHistory...),
 		ModelContractLocked: result.Plan.ModelContractLocked,
-		WorkspaceRoot:       result.Plan.WorkspaceRoot,
 		Source:              result.Plan.Source,
 	}, Warnings: result.Warnings}
 }

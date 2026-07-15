@@ -7,6 +7,7 @@ import (
 	"core/cli/app/internal/runtimestate"
 	"core/cli/tui"
 	"core/cli/tui/ongoing"
+	"core/cli/tui/transcriptrender"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -126,6 +127,7 @@ type uiInputFeatureState struct {
 
 type uiPresentationFeatureState struct {
 	theme                       string
+	markdownLinks               transcriptrender.MarkdownLinkPresentation
 	activeSurface               uiSurface
 	altScreenActive             bool
 	terminalFocus               *terminalFocusState

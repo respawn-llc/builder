@@ -1,110 +1,197 @@
 package app
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
+	"core/cli/tui/ongoing"
+	"core/cli/tui/transcriptrender"
+	tuitest "core/internal/testharness/pty"
 	"core/shared/clientui"
 
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/cellbuf"
+	"github.com/google/uuid"
 )
-
-type terminalHyperlinkEvent struct {
-	Target string
-	Active bool
-}
-
-type terminalHyperlinkFragment struct {
-	Text   string
-	Target string
-}
-
-type terminalHyperlinkTrace struct {
-	Events    []terminalHyperlinkEvent
-	Fragments []terminalHyperlinkFragment
-}
-
-func (t terminalHyperlinkTrace) linkedText(target string) string {
-	var out strings.Builder
-	for _, fragment := range t.Fragments {
-		if fragment.Target == target {
-			out.WriteString(fragment.Text)
-		}
-	}
-	return out.String()
-}
-
-func traceTerminalHyperlinks(t *testing.T, output string) terminalHyperlinkTrace {
-	t.Helper()
-
-	var trace terminalHyperlinkTrace
-	activeTarget := ""
-	parser := xansi.NewParser()
-	parser.SetHandler(xansi.Handler{
-		Print: func(r rune) {
-			trace.Fragments = append(trace.Fragments, terminalHyperlinkFragment{
-				Text:   string(r),
-				Target: activeTarget,
-			})
-		},
-		HandleOsc: func(command int, data []byte) {
-			if command != 8 {
-				return
-			}
-			var link cellbuf.Link
-			cellbuf.ReadLink(data, &link)
-			activeTarget = link.URL
-			trace.Events = append(trace.Events, terminalHyperlinkEvent{
-				Target: link.URL,
-				Active: !link.Empty(),
-			})
-		},
-	})
-	parser.Parse([]byte(output))
-	if activeTarget != "" {
-		t.Fatalf("unbalanced OSC 8 hyperlink target %q", activeTarget)
-	}
-	return trace
-}
 
 func TestStartupMarkdownRendererEmitsMarkdownHyperlinks(t *testing.T) {
 	const target = "https://github.com/org/repo/pull/456"
 
-	for _, theme := range []string{"dark", "light"} {
-		t.Run(theme, func(t *testing.T) {
-			renderer := newStartupMarkdownRendererWithWordWrap(theme, 80)
-			if renderer == nil {
-				t.Fatal("expected markdown renderer")
+	for _, presentation := range []struct {
+		name           string
+		links          transcriptrender.MarkdownLinkPresentation
+		wantLinkedText string
+	}{
+		{
+			name:           "supported terminal",
+			links:          transcriptrender.MarkdownLinkLabelOnly,
+			wantLinkedText: "PR #456",
+		},
+		{
+			name:           "fallback terminal",
+			links:          transcriptrender.MarkdownLinkLabelAndDestination,
+			wantLinkedText: "PR #456" + target,
+		},
+	} {
+		for _, theme := range []string{"dark", "light"} {
+			t.Run(presentation.name+"/"+theme, func(t *testing.T) {
+				renderer := newStartupMarkdownRendererWithLinkPresentation(
+					theme,
+					presentation.links,
+				)
+				rendered := renderer.Render("[PR #456](https://github.com/org/repo/pull/456)", 80)
+
+				trace := tuitest.TraceTerminalHyperlinks(t, rendered)
+				if got := trace.LinkedText(target); got != presentation.wantLinkedText {
+					t.Fatalf("linked text = %q, want %q", got, presentation.wantLinkedText)
+				}
+			})
+		}
+	}
+}
+
+func TestStartupMarkdownRendererUsesLiveRenderWidth(t *testing.T) {
+	renderer := newStartupMarkdownRendererWithLinkPresentation(
+		"dark",
+		transcriptrender.MarkdownLinkLabelOnly,
+	)
+	const source = "alpha beta gamma delta"
+	narrow := strings.Split(strings.TrimSpace(xansi.Strip(renderer.Render(source, 8))), "\n")
+	wide := strings.Split(strings.TrimSpace(xansi.Strip(renderer.Render(source, 80))), "\n")
+	if len(narrow) <= len(wide) {
+		t.Fatalf("narrow lines = %q, wide lines = %q; want live width to change wrapping", narrow, wide)
+	}
+	for index, line := range narrow {
+		if width := lipgloss.Width(line); width > 8 {
+			t.Fatalf("narrow line %d width = %d, want <= 8: %q", index, width, line)
+		}
+	}
+}
+
+func TestStartupMarkdownHeadersUseCurrentSurfaceWidths(t *testing.T) {
+	const width = 8
+	const source = "**alpha beta gamma delta**"
+	tests := []struct {
+		name   string
+		render func() string
+	}{
+		{
+			name: "auth picker",
+			render: func() string {
+				model := newStartupPickerModel(source, "fallback", "dark", startupPickerNotice{}, nil)
+				model.width = width
+				return model.renderHeader()
+			},
+		},
+		{
+			name: "project picker",
+			render: func() string {
+				model := newProjectBindingPickerModel(nil, "dark", projectPickerOptions{
+					HeaderMarkdown: source,
+					HeaderFallback: "fallback",
+				})
+				model.width = width
+				return model.renderHeader()
+			},
+		},
+		{
+			name: "workspace picker",
+			render: func() string {
+				model := newProjectWorkspacePickerModel(nil, "dark")
+				model.width = width
+				return model.renderHeader()
+			},
+		},
+		{
+			name: "project name prompt",
+			render: func() string {
+				model := newProjectNamePromptModel("", "dark")
+				model.width = width
+				return model.renderHeader()
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lines := strings.Split(strings.TrimSpace(xansi.Strip(test.render())), "\n")
+			if len(lines) < 2 {
+				t.Fatalf("header lines = %q, want wrapping at current width %d", lines, width)
 			}
-			rendered, err := renderer.Render("[PR #456](https://github.com/org/repo/pull/456)")
-			if err != nil {
-				t.Fatalf("render markdown: %v", err)
+			for index, line := range lines {
+				if got := lipgloss.Width(line); got > width {
+					t.Fatalf("header line %d width = %d, want <= %d: %q", index, got, width, line)
+				}
+			}
+		})
+	}
+}
+
+func TestResolvedTerminalCapabilitiesControlBoundedAndOngoingMarkdownLinks(t *testing.T) {
+	const target = "https://example.com/composition"
+	for _, test := range []struct {
+		name           string
+		environment    map[string]string
+		wantLinkedText string
+	}{
+		{
+			name:           "whitelisted terminal",
+			environment:    map[string]string{"TERM_PROGRAM": "ghostty"},
+			wantLinkedText: "label",
+		},
+		{
+			name:           "fallback terminal",
+			environment:    map[string]string{"TERM_PROGRAM": "Apple_Terminal"},
+			wantLinkedText: "label" + target,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capabilities := resolveTerminalCapabilities(func(name string) (string, bool) {
+				value, present := test.environment[name]
+				return value, present
+			})
+
+			bounded := newStartupMarkdownRendererWithLinkPresentation(
+				"dark",
+				capabilities.MarkdownLinks,
+			).Render("[label]("+target+")", 80)
+			if got := tuitest.TraceTerminalHyperlinks(t, bounded).LinkedText(target); got != test.wantLinkedText {
+				t.Fatalf("bounded linked text = %q, want %q", got, test.wantLinkedText)
 			}
 
-			trace := traceTerminalHyperlinks(t, rendered)
-			if linked := trace.linkedText(target); !strings.Contains(linked, "PR #456") {
-				t.Fatalf("linked text %q missing label", linked)
+			var output bytes.Buffer
+			surface := ongoing.NewSurfaceWithOptions(&output, ongoing.SurfaceOptions{
+				TerminalResize: capabilities.ResizePolicy,
+				MarkdownLinks:  capabilities.MarkdownLinks,
+			})
+			_, err := surface.ApplyTerminalMessage(
+				clientui.TranscriptMessage{
+					Kind: clientui.TranscriptMessageAssistantDelta,
+					AssistantDelta: &clientui.TranscriptAssistantDelta{
+						StreamID: uuid.New(),
+						Delta:    "[label](" + target + ")\n\n",
+					},
+				},
+				ongoing.FrameInput{Size: ongoing.Size{Width: 80, Height: 12}},
+			)
+			if err != nil {
+				t.Fatalf("render ongoing Markdown: %v", err)
 			}
-			if linked := trace.linkedText(target); !strings.Contains(linked, target) {
-				t.Fatalf("linked text %q missing displayed destination", linked)
+			if got := tuitest.TraceTerminalHyperlinks(t, output.String()).LinkedText(target); got != test.wantLinkedText {
+				t.Fatalf("ongoing linked text = %q, want %q", got, test.wantLinkedText)
 			}
 		})
 	}
 }
 
 func TestStartupMarkdownRendererLeavesPlainPRReferenceUnlinked(t *testing.T) {
-	renderer := newStartupMarkdownRendererWithWordWrap("dark", 80)
-	if renderer == nil {
-		t.Fatal("expected markdown renderer")
-	}
-	rendered, err := renderer.Render("PR #456")
-	if err != nil {
-		t.Fatalf("render markdown: %v", err)
-	}
+	renderer := newStartupMarkdownRendererWithLinkPresentation(
+		"dark",
+		transcriptrender.MarkdownLinkLabelOnly,
+	)
+	rendered := renderer.Render("PR #456", 80)
 
-	if trace := traceTerminalHyperlinks(t, rendered); len(trace.Events) != 0 {
+	if trace := tuitest.TraceTerminalHyperlinks(t, rendered); len(trace.Events) != 0 {
 		t.Fatalf("plain PR reference emitted hyperlink events: %+v", trace.Events)
 	}
 }
@@ -118,8 +205,8 @@ func TestTruncateANSIRightClosesHyperlinksBeforeEllipsis(t *testing.T) {
 		t.Fatalf("truncated width=%d want 5", got)
 	}
 
-	trace := traceTerminalHyperlinks(t, truncated+" tail")
-	if linked := trace.linkedText(target); linked != "abcd" {
+	trace := tuitest.TraceTerminalHyperlinks(t, truncated+" tail")
+	if linked := trace.LinkedText(target); linked != "abcd" {
 		t.Fatalf("retained linked text=%q want %q", linked, "abcd")
 	}
 	afterEllipsis := false
@@ -127,7 +214,7 @@ func TestTruncateANSIRightClosesHyperlinksBeforeEllipsis(t *testing.T) {
 		if fragment.Text == "…" {
 			afterEllipsis = true
 		}
-		if afterEllipsis && fragment.Target != "" {
+		if afterEllipsis && fragment.Link != nil {
 			t.Fatalf("unrelated fragment %+v inherited hyperlink target", fragment)
 		}
 	}
@@ -162,7 +249,7 @@ func TestTruncateANSIRightPreservesGenericBounds(t *testing.T) {
 			if tt.wantExact != "" && got != tt.wantExact {
 				t.Fatalf("truncate=%q want %q", got, tt.wantExact)
 			}
-			traceTerminalHyperlinks(t, got+" plain")
+			tuitest.TraceTerminalHyperlinks(t, got+" plain")
 		})
 	}
 }
@@ -170,49 +257,91 @@ func TestTruncateANSIRightPreservesGenericBounds(t *testing.T) {
 func TestGoalMarkdownLinksStayBoundedAndDoNotReachPadding(t *testing.T) {
 	const target = "https://github.com/org/repo/pull/456"
 
-	for _, theme := range []string{"dark", "light"} {
-		t.Run(theme, func(t *testing.T) {
-			m := newProjectedStaticUIModel()
-			m.theme = theme
-			m.goal.goal = &clientui.RuntimeGoal{
-				Objective: "[PR #456](https://github.com/org/repo/pull/456)",
-				Status:    clientui.RuntimeGoalStatusActive,
-			}
-
-			var linked strings.Builder
-			for _, line := range m.layout().goalOverlayContentLines(12) {
-				if width := lipgloss.Width(line); width != 12 {
-					t.Fatalf("goal row width=%d want 12: %q", width, line)
+	for _, presentation := range []struct {
+		name           string
+		links          transcriptrender.MarkdownLinkPresentation
+		wantLinkedText string
+	}{
+		{
+			name:           "supported terminal",
+			links:          transcriptrender.MarkdownLinkLabelOnly,
+			wantLinkedText: "PR #456",
+		},
+		{
+			name:           "fallback terminal",
+			links:          transcriptrender.MarkdownLinkLabelAndDestination,
+			wantLinkedText: "PR #456" + target,
+		},
+	} {
+		for _, theme := range []string{"dark", "light"} {
+			t.Run(presentation.name+"/"+theme, func(t *testing.T) {
+				m := newProjectedStaticUIModel(
+					WithUIMarkdownLinkPresentation(presentation.links),
+				)
+				m.theme = theme
+				m.goal.goal = &clientui.RuntimeGoal{
+					Objective: "[PR #456](https://github.com/org/repo/pull/456)",
+					Status:    clientui.RuntimeGoalStatusActive,
 				}
-				trace := traceTerminalHyperlinks(t, line)
-				linked.WriteString(trace.linkedText(target))
-				assertTrailingPaddingIsUnlinked(t, trace)
-			}
-			if got := linked.String(); !strings.Contains(got, "PR") || !strings.Contains(got, "#456") || !strings.Contains(got, target) {
-				t.Fatalf("goal linked content=%q want label and destination", got)
-			}
-		})
+
+				var linked strings.Builder
+				for _, line := range m.layout().goalOverlayContentLines(12) {
+					if width := lipgloss.Width(line); width != 12 {
+						t.Fatalf("goal row width=%d want 12: %q", width, line)
+					}
+					trace := tuitest.TraceTerminalHyperlinks(t, line)
+					linked.WriteString(trace.LinkedText(target))
+					assertTrailingPaddingIsUnlinked(t, trace)
+				}
+				if got := linked.String(); got != presentation.wantLinkedText {
+					t.Fatalf("goal linked content = %q, want %q", got, presentation.wantLinkedText)
+				}
+			})
+		}
 	}
 }
 
 func TestStartupHeaderTrimmingPreservesMarkdownHyperlinks(t *testing.T) {
 	const target = "https://github.com/org/repo/pull/456"
-	m := newStartupPickerModel("[PR #456](https://github.com/org/repo/pull/456)", "PR #456", "dark", startupPickerNotice{}, nil)
+	for _, presentation := range []struct {
+		name           string
+		links          transcriptrender.MarkdownLinkPresentation
+		wantLinkedText string
+	}{
+		{
+			name:           "supported terminal",
+			links:          transcriptrender.MarkdownLinkLabelOnly,
+			wantLinkedText: "PR #456",
+		},
+		{
+			name:           "fallback terminal",
+			links:          transcriptrender.MarkdownLinkLabelAndDestination,
+			wantLinkedText: "PR #456" + target,
+		},
+	} {
+		t.Run(presentation.name, func(t *testing.T) {
+			m := newStartupPickerModel("[PR #456](https://github.com/org/repo/pull/456)", "PR #456", "dark", startupPickerNotice{}, nil)
+			m.headerMD = newStartupMarkdownRendererWithLinkPresentation(
+				"dark",
+				presentation.links,
+			)
 
-	trace := traceTerminalHyperlinks(t, m.renderHeader())
-	if got := trace.linkedText(target); !strings.Contains(got, "PR #456") || !strings.Contains(got, target) {
-		t.Fatalf("header linked content=%q want label and destination", got)
+			got := tuitest.TraceTerminalHyperlinks(t, m.renderHeader()).LinkedText(target)
+			if got != presentation.wantLinkedText {
+				t.Fatalf("header linked content = %q, want %q", got, presentation.wantLinkedText)
+			}
+		})
 	}
 }
 
-func assertTrailingPaddingIsUnlinked(t *testing.T, trace terminalHyperlinkTrace) {
+func assertTrailingPaddingIsUnlinked(t *testing.T, trace tuitest.HyperlinkTrace) {
 	t.Helper()
 	for index := len(trace.Fragments) - 1; index >= 0; index-- {
 		fragment := trace.Fragments[index]
 		if fragment.Text != " " {
 			return
 		}
-		if fragment.Target != "" {
+		if fragment.Link != nil {
 			t.Fatalf("trailing padding inherited hyperlink target: %+v", fragment)
 		}
 	}

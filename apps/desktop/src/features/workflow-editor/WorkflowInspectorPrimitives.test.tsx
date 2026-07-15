@@ -44,6 +44,8 @@ describe("ValidationDetails", () => {
               inputName: "summary",
               placeholder: "",
               providerEdgeID: "edge-provider",
+              role: null,
+              requiredTool: null,
             },
             edgeID: "edge-provider",
             message: "Join input provider is invalid.",

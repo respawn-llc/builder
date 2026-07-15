@@ -344,7 +344,7 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 	if roleOverride.Present && !roleOverride.Default {
 		requestedContinuationRole = cloneContinuationRole(&roleOverride.Role)
 	}
-	if roleOverride.Present && plan.ModelContractLocked && !sameContinuationRole(continuationAgentRole, requestedContinuationRole) && !options.AllowLockedAgentRoleChange && !plan.SkipContinuationAgentRoleValidation {
+	if roleOverride.Present && plan.ModelContractLocked && !sameContinuationRole(continuationAgentRole, requestedContinuationRole) && !options.AllowLockedAgentRoleChange {
 		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationRoleDisplay(continuationAgentRole), roleOverride.Role)
 	}
 	if roleOverride.Present && plan.ModelContractLocked && !sameContinuationRole(continuationAgentRole, requestedContinuationRole) && options.AllowLockedAgentRoleChange {

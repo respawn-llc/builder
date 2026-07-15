@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"core/server/skillcatalog"
+	"core/shared/config"
 )
 
 type SkillInspection struct {
@@ -25,11 +26,11 @@ func (e *Engine) CompactionCount() int {
 	return e.compactionRuntimeState().Count()
 }
 
-func InspectSkills(workspaceRoot, globalConfigDir string, disabledSkills map[string]bool) ([]SkillInspection, error) {
+func InspectSkills(workspaceRoot, globalConfigDir string, policy config.SkillPolicy) ([]SkillInspection, error) {
 	result, err := skillcatalog.Discover(skillcatalog.Options{
-		WorkspaceRoot:  workspaceRoot,
-		ConfigRoot:     globalConfigDir,
-		DisabledSkills: disabledSkills,
+		WorkspaceRoot: workspaceRoot,
+		ConfigRoot:    globalConfigDir,
+		Policy:        policy,
 	})
 	if err != nil {
 		return nil, err

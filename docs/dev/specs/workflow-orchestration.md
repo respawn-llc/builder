@@ -30,7 +30,7 @@
 - V1 workflow definitions may be created/edited through backend API plus minimal CLI.
 - Workflow definitions may be saved, linked, and made project default while semantic validation fails.
 - Draft saving still enforces storage invariants: valid IDs, valid references, valid enum values, unique keys, and exactly one start node.
-- Backlog task creation can persist tasks for an invalid linked/default workflow so users can collect work while fixing the graph. Task start and runtime scheduling require project-context validation and reject invalid workflows with accumulated safe actionable errors.
+- Backlog task creation can persist tasks for an invalid linked/default workflow so users can collect work while fixing the graph. Task start and runtime scheduling require project-context validation and reject invalid workflows with accumulated safe actionable errors; the effective-role `ask_question` rule below is an explicit initial-execution-only exception.
 - A project can link multiple workflows and has one default workflow for task creation.
 - Invalid default workflows are allowed. Task creation against an invalid default creates Backlog tasks, while starting/running those tasks fails with accumulated validation errors until the workflow is fixed.
 - Every workflow has exactly one execution target policy: no managed worktree, source `HEAD`, repository default branch, custom Git ref, or operator selection when execution first begins.
@@ -50,6 +50,7 @@
 - Subagent role is the executable node assignee. There is no separate assignee field.
 - Workflow nodes select existing subagent roles only. There are no per-node model/provider/tool/auth overrides.
 - Agent nodes do not own invocation prompts. Each transition branch into an agent node owns its prompt template; node add/update contracts and persistence contain no node prompt or prompt fallback.
+- Every agent node's effective subagent role, including the default and built-in roles, must have `ask_question` enabled. Validation reports every affected node without rewriting role configuration; drafts and Backlog tasks remain allowed. Ordinary task start and every manual move from Start/Backlog to an executable target validate before execution-target, placement, transition, approval, or run mutation, regardless of automatic or edge-required approval. Tasks that have already left Start continue under their existing run/session contracts and are not revalidated against later role-tool configuration changes.
 - Visible executable/terminal node identity is Kanban column/status identity. Join nodes are internal merge plumbing omitted from board read models.
 - Workflows can contain start, agent, script, join, and terminal nodes. Approval is an edge property, not a manual-node requirement.
 - V1 has exactly one start node. The start node is non-executable and has no inputs.

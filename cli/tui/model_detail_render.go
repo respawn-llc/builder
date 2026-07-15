@@ -247,12 +247,20 @@ func renderDetailProjectedLines(lines []detailProjectedLine, themeName string) [
 func renderDetailSemanticLine(line transcriptrender.Line, themeName string, selected bool) string {
 	palette := theme.ResolvePalette(themeName)
 	background := resolveDetailLineBackground(line.Background, palette, selected)
+	return renderTranscriptSemanticLine(line, themeName, background)
+}
+
+func renderTranscriptSemanticLine(
+	line transcriptrender.Line,
+	themeName string,
+	background detailResolvedBackground,
+) string {
 	var out strings.Builder
 	if line.LeadingSymbol != nil {
-		out.WriteString(renderDetailSpan(*line.LeadingSymbol, themeName, background))
+		out.WriteString(renderTranscriptSemanticSpan(*line.LeadingSymbol, themeName, background))
 	}
 	for _, span := range line.Spans {
-		out.WriteString(renderDetailSpan(span, themeName, background))
+		out.WriteString(renderTranscriptSemanticSpan(span, themeName, background))
 	}
 	return out.String()
 }
@@ -291,7 +299,7 @@ func resolveDetailLineBackground(
 	}
 }
 
-func renderDetailSpan(
+func renderTranscriptSemanticSpan(
 	span transcriptrender.Span,
 	themeName string,
 	background detailResolvedBackground,
@@ -300,5 +308,5 @@ func renderDetailSpan(
 	if background.present {
 		style = style.Background(background.color.Lipgloss())
 	}
-	return style.Render(span.Text)
+	return transcriptrender.EncodeSpanHyperlink(span, style.Render(span.Text))
 }

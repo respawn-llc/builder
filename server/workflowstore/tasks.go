@@ -536,9 +536,12 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	validation := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: s.roleResolver})
-	if validation.HasBlockingErrors() {
-		return preparedTaskStart{}, WorkflowValidationError{Codes: validation.Codes()}
+	startPlacement, err := s.queries.GetActiveStartPlacementForTask(ctx, string(taskID))
+	if err != nil {
+		return preparedTaskStart{}, err
+	}
+	if err := s.preflightInitialExecution(def); err != nil {
+		return preparedTaskStart{}, err
 	}
 	start, err := startNode(def)
 	if err != nil {
@@ -548,11 +551,18 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	startPlacement, err := s.queries.GetActiveStartPlacementForTask(ctx, string(taskID))
-	if err != nil {
-		return preparedTaskStart{}, err
-	}
 	return preparedTaskStart{task: task, definition: def, workflow: wf, start: start, group: group, edge: edge, target: target, startPlacement: startPlacement}, nil
+}
+
+func (s *Store) preflightInitialExecution(def workflow.Definition) error {
+	validation := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+		Context:      workflow.ValidationContextExecution,
+		RoleResolver: s.roleResolver,
+	})
+	if !validation.HasBlockingErrors() {
+		return nil
+	}
+	return WorkflowValidationError{Diagnostics: validation.BlockingErrors()}
 }
 
 func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (CompleteRunResult, error) {

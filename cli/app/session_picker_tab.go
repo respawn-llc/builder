@@ -72,9 +72,6 @@ type sessionPickerTab struct {
 	residentIDs map[runtimeids.SessionID]struct{}
 	selected    sessionPickerSelection
 	offset      int
-
-	selectedDetail sessionPickerSelectedDetail
-	detailRequest  *sessionPickerDetailRequest
 }
 
 func newSessionPickerTab(category sessioncontract.SessionCategory) sessionPickerTab {

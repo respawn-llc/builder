@@ -1,16 +1,16 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
+	"core/cli/tui"
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	sharedtheme "core/shared/theme"
 
-	"charm.land/glamour/v2"
-	glamouransi "charm.land/glamour/v2/ansi"
-	glamourstyles "charm.land/glamour/v2/styles"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -55,8 +55,6 @@ func (m *sessionPickerModel) View() string {
 		}
 		out.WriteString(row)
 	}
-	out.WriteString("\n")
-	out.WriteString(m.styles.preview.Render("Tab/Shift+Tab or ←/→ to switch"))
 	out.WriteString("\n\n")
 
 	tab := m.tab(m.activeTab)
@@ -91,10 +89,6 @@ func (m *sessionPickerModel) View() string {
 			}
 			out.WriteString(m.styles.row.Render(pendingToolSpinnerFrame(m.spinnerFrame) + " Loading older sessions"))
 		}
-		if detail := m.renderSelectedDetail(tab); detail != "" {
-			out.WriteString("\n\n")
-			out.WriteString(detail)
-		}
 	}
 	return out.String()
 }
@@ -110,7 +104,7 @@ func (m *sessionPickerModel) visibleLineBudget() int {
 	if newSessionPickerStatusSurface(m.startupStatus).RenderStatus(m.width) != "" {
 		statusLines = 2
 	}
-	rows := m.height - lipgloss.Height(m.renderHeader()) - tabLines - 3 - statusLines - m.selectedDetailLineCount(m.tab(m.activeTab))
+	rows := m.height - lipgloss.Height(m.renderHeader()) - tabLines - 2 - statusLines
 	if rows < 1 {
 		return 1
 	}
@@ -200,27 +194,44 @@ func newSessionPickerStyles(theme string) sessionPickerStyles {
 	}
 }
 
-func newStartupMarkdownRendererWithWordWrap(theme string, width int) *glamour.TermRenderer {
-	if width < 0 {
-		width = 0
-	}
-	style := startupMarkdownStyle(theme)
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithWordWrap(width),
-		glamour.WithStyles(style),
-	)
-	if err != nil {
-		return nil
-	}
-	return renderer
+type startupMarkdownRenderer struct {
+	theme            string
+	linkPresentation transcriptrender.MarkdownLinkPresentation
 }
 
-func startupMarkdownStyle(theme string) glamouransi.StyleConfig {
-	style := glamourstyles.DarkStyleConfig
-	if strings.EqualFold(strings.TrimSpace(theme), "light") {
-		style = glamourstyles.LightStyleConfig
+func newStartupMarkdownRendererWithWordWrap(theme string) *startupMarkdownRenderer {
+	return newStartupMarkdownRendererWithLinkPresentation(
+		theme,
+		currentTerminalCapabilities().MarkdownLinks,
+	)
+}
+
+func newStartupMarkdownRendererWithLinkPresentation(
+	theme string,
+	linkPresentation transcriptrender.MarkdownLinkPresentation,
+) *startupMarkdownRenderer {
+	if !linkPresentation.Valid() {
+		panic(fmt.Sprintf("create startup Markdown renderer with invalid link presentation %d", linkPresentation))
 	}
-	zero := uint(0)
-	style.Document.Margin = &zero
-	return style
+	return &startupMarkdownRenderer{
+		theme:            theme,
+		linkPresentation: linkPresentation,
+	}
+}
+
+func (r *startupMarkdownRenderer) Render(source string, width int) string {
+	if r == nil {
+		return ""
+	}
+	if width < 1 {
+		panic(fmt.Sprintf("render startup Markdown with invalid width %d", width))
+	}
+	lines := tui.RenderStyledMarkdownLines(
+		source,
+		r.theme,
+		width,
+		transcriptrender.StyleRoleNoticeForeground,
+		r.linkPresentation,
+	)
+	return strings.Join(lines, "\n") + "\n"
 }

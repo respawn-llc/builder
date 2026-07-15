@@ -102,8 +102,9 @@ func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *te
 		Mode:            serverapi.SessionLaunchModeInteractive,
 		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
 	}, &planResp)
-	if got, want := planResp.Plan.WorkspaceRoot, bindingB.CanonicalRoot; got != want {
-		t.Fatalf("planned workspace root = %q, want %q", got, want)
+	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-explicit-workspace", planResp.Plan.SessionID)
+	if got, want := target.EffectiveWorkdir, bindingB.CanonicalRoot; got != want {
+		t.Fatalf("planned execution workdir = %q, want %q", got, want)
 	}
 }
 
@@ -156,8 +157,9 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot B: %v", err)
 	}
-	if got, want := planResp.Plan.WorkspaceRoot, wantWorkspaceRoot; got != want {
-		t.Fatalf("planned workspace root = %q, want %q", got, want)
+	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-attach-session", planResp.Plan.SessionID)
+	if got, want := target.EffectiveWorkdir, wantWorkspaceRoot; got != want {
+		t.Fatalf("planned execution workdir = %q, want %q", got, want)
 	}
 }
 

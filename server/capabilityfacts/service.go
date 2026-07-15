@@ -61,10 +61,10 @@ func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.Capabili
 		return serverapi.CapabilityFactsResponse{}, err
 	}
 	imports, err := onboardingimports.Discover(onboardingimports.Options{
-		ConfigRoot:     s.cfg.PersistenceRoot,
-		WorkspaceRoot:  req.WorkspaceRoot,
-		HomeDir:        s.homeDir,
-		DisabledSkills: config.DisabledSkillToggles(s.cfg.Settings),
+		ConfigRoot:    s.cfg.PersistenceRoot,
+		WorkspaceRoot: req.WorkspaceRoot,
+		HomeDir:       s.homeDir,
+		SkillPolicy:   config.ResolveSkillPolicy(s.cfg.Settings),
 	})
 	if err != nil {
 		return serverapi.CapabilityFactsResponse{}, err

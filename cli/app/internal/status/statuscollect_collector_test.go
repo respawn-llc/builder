@@ -4,10 +4,48 @@ import (
 	"context"
 	"core/server/auth"
 	"core/shared/config"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestCollectEnvironmentDisabledSkillRemainsVisibleAndStillCollectsAgents(t *testing.T) {
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("workspace guidance"), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	skillDir := filepath.Join(workspace, config.ConfigDirName, "skills", "hidden-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: hidden-skill\ndescription: hidden\n---\n"), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+
+	result := (Collector{}).CollectEnvironment(context.Background(), Request{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: persistenceRoot,
+		Settings: config.Settings{
+			SkillToggles: map[string]bool{"hidden-skill": false},
+		},
+	}, Snapshot{})
+
+	if len(result.Skills) != 1 || result.Skills[0].Name != "hidden-skill" || !result.Skills[0].Loaded || !result.Skills[0].Disabled {
+		t.Fatalf("disabled skill inspection = %+v, want visible loaded disabled skill", result.Skills)
+	}
+	if len(result.SkillTokenCounts) != 0 {
+		t.Fatalf("disabled skill must not be tokenized for model visibility: %+v", result.SkillTokenCounts)
+	}
+	if result.CollectorWarning != "" {
+		t.Fatalf("disabled skills emitted a collector warning: %q", result.CollectorWarning)
+	}
+	if len(result.AgentsPaths) == 0 || len(result.AgentTokenCounts) == 0 {
+		t.Fatalf("AGENTS.md collection did not run: %+v", result)
+	}
+}
 
 func TestCollectorUsesRefreshedOAuthStateForUsageFetch(t *testing.T) {
 	now := time.Date(2026, time.January, 1, 10, 0, 0, 0, time.UTC)

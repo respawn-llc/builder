@@ -414,7 +414,20 @@ func (s *testEmbeddedServer) SessionRuntimeClient() apicontract.SessionRuntimeSe
 }
 
 func (s *testEmbeddedServer) SessionViewClient() apicontract.SessionViewService {
-	return s.sessionViewClient
+	if s.sessionViewClient != nil {
+		return s.sessionViewClient
+	}
+	return stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+		root := strings.TrimSpace(s.cfg.WorkspaceRoot)
+		return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
+			SessionID: req.SessionID,
+			ExecutionTarget: clientui.SessionExecutionTarget{
+				WorkspaceRoot:         root,
+				WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+				EffectiveWorkdir:      root,
+			},
+		}}}, nil
+	}}
 }
 
 func (s *testEmbeddedServer) WorktreeClient() apicontract.WorktreeService {

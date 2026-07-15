@@ -143,7 +143,7 @@ func (l uiViewLayout) renderQueuedMessagesPane(width int) []string {
 			if span.Style.Has(transcriptrender.SpanAttributeUnderline) {
 				style = style.Underline(true)
 			}
-			rendered += style.Render(span.Text)
+			rendered += transcriptrender.EncodeSpanHyperlink(span, style.Render(span.Text))
 		}
 		out = append(out, padANSIRight(rendered, width))
 	}

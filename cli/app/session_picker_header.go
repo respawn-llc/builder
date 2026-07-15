@@ -20,6 +20,7 @@ type sessionPickerHeaderInfo struct {
 	AuthManager   status.AuthStateResolver
 	OwnsServer    bool
 	ServerAddress string
+	Notice        *startupPickerNotice
 }
 
 type sessionPickerHeaderLine struct {

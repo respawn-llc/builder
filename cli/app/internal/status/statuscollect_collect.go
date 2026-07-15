@@ -36,6 +36,7 @@ func (c Collector) Collect(ctx context.Context, req Request) (Snapshot, error) {
 	snapshot.Auth = authResult.Auth
 	snapshot.Subscription = authResult.Subscription
 	snapshot.Git = gitResult.Git
+	snapshot.SkillPolicy = envResult.SkillPolicy
 	snapshot.Skills = envResult.Skills
 	snapshot.SkillTokenCounts = envResult.SkillTokenCounts
 	snapshot.AgentsPaths = envResult.AgentsPaths
@@ -214,7 +215,8 @@ func (c Collector) CollectGit(ctx context.Context, req Request, _ Snapshot) GitS
 }
 
 func (Collector) CollectEnvironment(_ context.Context, req Request, _ Snapshot) EnvironmentStageResult {
-	result := EnvironmentStageResult{}
+	policy := config.ResolveSkillPolicy(req.Settings)
+	result := EnvironmentStageResult{SkillPolicy: policy}
 	warnings := make([]string, 0, 3)
 	workspaceRoot := EnvironmentRoot(req.WorkspaceRoot, ExecutionTarget(req))
 	if recovered, err := prompts.RecoveredRootNonEmptyFor(req.PersistenceRoot); err != nil {
@@ -226,7 +228,7 @@ func (Collector) CollectEnvironment(_ context.Context, req Request, _ Snapshot) 
 			warnings = append(warnings, warning)
 		}
 	}
-	inspectedSkills, skillsErr := runtime.InspectSkills(workspaceRoot, req.PersistenceRoot, config.DisabledSkillToggles(req.Settings))
+	inspectedSkills, skillsErr := runtime.InspectSkills(workspaceRoot, req.PersistenceRoot, policy)
 	if skillsErr != nil {
 		warnings = append(warnings, "skills: "+skillsErr.Error())
 	} else {

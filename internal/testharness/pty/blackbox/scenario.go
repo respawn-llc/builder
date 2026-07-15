@@ -35,13 +35,14 @@ type Dimensions struct {
 }
 
 type RequiredOperation struct {
-	ID              uuid.UUID      `json:"id"`
-	Route           Route          `json:"route"`
-	Probe           *string        `json:"probe,omitempty"`
-	Outcome         Outcome        `json:"outcome"`
-	Output          *string        `json:"output,omitempty"`
-	ResponsePhase   *ResponsePhase `json:"response_phase,omitempty"`
-	SessionCacheKey bool           `json:"session_cache_key"`
+	ID                    uuid.UUID      `json:"id"`
+	Route                 Route          `json:"route"`
+	Probe                 *string        `json:"probe,omitempty"`
+	DeveloperMessageCount *int           `json:"developer_message_count,omitempty"`
+	Outcome               Outcome        `json:"outcome"`
+	Output                *string        `json:"output,omitempty"`
+	ResponsePhase         *ResponsePhase `json:"response_phase,omitempty"`
+	SessionCacheKey       bool           `json:"session_cache_key"`
 }
 
 type ResponsePhase string
@@ -78,6 +79,7 @@ type Action struct {
 	ID         uuid.UUID   `json:"id"`
 	Kind       ActionKind  `json:"kind"`
 	Input      *string     `json:"input,omitempty"`
+	Key        *Key        `json:"key,omitempty"`
 	Dimensions *Dimensions `json:"dimensions,omitempty"`
 	Predicate  *Predicate  `json:"predicate,omitempty"`
 }
@@ -87,12 +89,19 @@ type ActionKind string
 const (
 	ActionWait         ActionKind = "wait"
 	ActionEnterInput   ActionKind = "enter_input"
+	ActionPressKey     ActionKind = "press_key"
 	ActionSubmitPrompt ActionKind = "submit_prompt"
 	ActionResize       ActionKind = "resize"
 	ActionAssert       ActionKind = "assert"
 	ActionCancel       ActionKind = "runtime_cancel"
 	ActionTerminate    ActionKind = "terminate_process"
 	ActionWaitExit     ActionKind = "wait_exit"
+)
+
+type Key string
+
+const (
+	KeyEnd Key = "end"
 )
 
 type Predicate struct {
@@ -198,8 +207,11 @@ func (operation RequiredOperation) Validate() error {
 	if operation.Output != nil && len(*operation.Output) > maxScenarioPayload {
 		return errors.New("model payload exceeds limit")
 	}
-	if operation.Route != RouteResponses && (operation.Probe != nil || operation.Output != nil || operation.ResponsePhase != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
-		return errors.New("only responses operations may declare probe, output, session cache key, stream, or hold outcome")
+	if operation.DeveloperMessageCount != nil && *operation.DeveloperMessageCount < 0 {
+		return errors.New("developer message count must be nonnegative")
+	}
+	if operation.Route != RouteResponses && (operation.Probe != nil || operation.DeveloperMessageCount != nil || operation.Output != nil || operation.ResponsePhase != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
+		return errors.New("only responses operations may declare input shape, output, response phase, session cache key, stream, or hold outcome")
 	}
 	emitsAssistantMessage := operation.Route == RouteResponses && (operation.Output != nil || operation.Outcome == OutcomeStream)
 	if emitsAssistantMessage {
@@ -230,13 +242,14 @@ func (operation RequiredOperation) Validate() error {
 
 func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		ID              uuid.UUID      `json:"id"`
-		Route           Route          `json:"route"`
-		Probe           *string        `json:"probe"`
-		Outcome         Outcome        `json:"outcome"`
-		Output          *string        `json:"output"`
-		ResponsePhase   *ResponsePhase `json:"response_phase"`
-		SessionCacheKey bool           `json:"session_cache_key"`
+		ID                    uuid.UUID      `json:"id"`
+		Route                 Route          `json:"route"`
+		Probe                 *string        `json:"probe"`
+		DeveloperMessageCount *int           `json:"developer_message_count"`
+		Outcome               Outcome        `json:"outcome"`
+		Output                *string        `json:"output"`
+		ResponsePhase         *ResponsePhase `json:"response_phase"`
+		SessionCacheKey       bool           `json:"session_cache_key"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -244,6 +257,7 @@ func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 	allowed := map[string]struct{}{"id": {}, "route": {}, "output": {}}
 	if raw.Route == RouteResponses {
 		allowed["probe"] = struct{}{}
+		allowed["developer_message_count"] = struct{}{}
 		allowed["response_phase"] = struct{}{}
 		allowed["session_cache_key"] = struct{}{}
 	}
@@ -252,13 +266,14 @@ func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*operation = RequiredOperation{
-		ID:              raw.ID,
-		Route:           raw.Route,
-		Probe:           raw.Probe,
-		Outcome:         raw.Outcome,
-		Output:          raw.Output,
-		ResponsePhase:   raw.ResponsePhase,
-		SessionCacheKey: raw.SessionCacheKey,
+		ID:                    raw.ID,
+		Route:                 raw.Route,
+		Probe:                 raw.Probe,
+		DeveloperMessageCount: raw.DeveloperMessageCount,
+		Outcome:               raw.Outcome,
+		Output:                raw.Output,
+		ResponsePhase:         raw.ResponsePhase,
+		SessionCacheKey:       raw.SessionCacheKey,
 	}
 	return nil
 }
@@ -277,11 +292,20 @@ func (action Action) Validate() error {
 		}
 		return action.Predicate.Validate()
 	case ActionEnterInput:
-		if action.Input == nil || *action.Input == "" || action.Predicate != nil || action.Dimensions != nil {
+		if action.Input == nil || *action.Input == "" || action.Key != nil || action.Predicate != nil || action.Dimensions != nil {
 			return errors.New("enter_input must contain only nonempty input")
 		}
+	case ActionPressKey:
+		if action.Input != nil || action.Key == nil || action.Predicate != nil || action.Dimensions != nil {
+			return errors.New("press_key must contain only a key")
+		}
+		switch *action.Key {
+		case KeyEnd:
+		default:
+			return fmt.Errorf("unsupported key %q", *action.Key)
+		}
 	case ActionSubmitPrompt, ActionCancel, ActionTerminate, ActionWaitExit:
-		if action.Input != nil || action.Predicate != nil || action.Dimensions != nil {
+		if action.Input != nil || action.Key != nil || action.Predicate != nil || action.Dimensions != nil {
 			return fmt.Errorf("%s must not include payload", action.Kind)
 		}
 	case ActionResize:
@@ -302,6 +326,7 @@ func (action *Action) UnmarshalJSON(data []byte) error {
 		ID         uuid.UUID   `json:"id"`
 		Kind       ActionKind  `json:"kind"`
 		Input      *string     `json:"input"`
+		Key        *Key        `json:"key"`
 		Dimensions *Dimensions `json:"dimensions"`
 		Predicate  *Predicate  `json:"predicate"`
 	}
@@ -314,6 +339,8 @@ func (action *Action) UnmarshalJSON(data []byte) error {
 		allowed["predicate"] = struct{}{}
 	case ActionEnterInput:
 		allowed["input"] = struct{}{}
+	case ActionPressKey:
+		allowed["key"] = struct{}{}
 	case ActionResize:
 		allowed["dimensions"] = struct{}{}
 	case ActionSubmitPrompt, ActionCancel, ActionTerminate, ActionWaitExit:
@@ -326,13 +353,16 @@ func (action *Action) UnmarshalJSON(data []byte) error {
 	if raw.Kind == ActionEnterInput && raw.Input == nil {
 		return errors.New("enter_input input is required")
 	}
+	if raw.Kind == ActionPressKey && raw.Key == nil {
+		return errors.New("press_key key is required")
+	}
 	if (raw.Kind == ActionWait || raw.Kind == ActionAssert) && raw.Predicate == nil {
 		return errors.New("predicate action predicate is required")
 	}
 	if raw.Kind == ActionResize && raw.Dimensions == nil {
 		return errors.New("resize dimensions are required")
 	}
-	*action = Action{ID: raw.ID, Kind: raw.Kind, Input: raw.Input, Dimensions: raw.Dimensions, Predicate: raw.Predicate}
+	*action = Action{ID: raw.ID, Kind: raw.Kind, Input: raw.Input, Key: raw.Key, Dimensions: raw.Dimensions, Predicate: raw.Predicate}
 	return nil
 }
 

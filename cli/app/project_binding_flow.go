@@ -12,7 +12,6 @@ import (
 	"core/cli/tui"
 	"core/shared/clientui"
 
-	"charm.land/glamour/v2"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
@@ -61,7 +60,7 @@ type projectBindingPickerModel struct {
 	height   int
 	theme    string
 	styles   sessionPickerStyles
-	headerMD *glamour.TermRenderer
+	headerMD *startupMarkdownRenderer
 	result   projectBindingPickerResult
 }
 
@@ -77,7 +76,7 @@ func newProjectBindingPickerModel(projects []clientui.ProjectSummary, theme stri
 		height:   defaultPickerHeight,
 		theme:    theme,
 		styles:   newSessionPickerStyles(theme),
-		headerMD: newStartupMarkdownRendererWithWordWrap(theme, 0),
+		headerMD: newStartupMarkdownRendererWithWordWrap(theme),
 	}
 }
 
@@ -206,10 +205,8 @@ func (m *projectBindingPickerModel) moveCursor(delta int) {
 
 func (m *projectBindingPickerModel) renderHeader() string {
 	if m.headerMD != nil {
-		rendered, err := m.headerMD.Render(m.options.HeaderMarkdown)
-		if err == nil {
-			return tui.ApplyThemeStyleIntents(trimRenderedHeaderInset(rendered), m.theme, tui.ThemeForeground)
-		}
+		rendered := m.headerMD.Render(m.options.HeaderMarkdown, m.width)
+		return tui.ApplyThemeStyleIntents(trimRenderedHeaderInset(rendered), m.theme, tui.ThemeForeground)
 	}
 	return m.styles.headerFallback.Render(m.options.HeaderFallback)
 }
@@ -316,7 +313,7 @@ type projectWorkspacePickerModel struct {
 	height     int
 	theme      string
 	styles     sessionPickerStyles
-	headerMD   *glamour.TermRenderer
+	headerMD   *startupMarkdownRenderer
 	result     projectWorkspacePickerResult
 }
 
@@ -334,7 +331,7 @@ func newProjectWorkspacePickerModel(workspaces []clientui.ProjectWorkspaceSummar
 		height:     defaultPickerHeight,
 		theme:      theme,
 		styles:     newSessionPickerStyles(theme),
-		headerMD:   newStartupMarkdownRendererWithWordWrap(theme, 0),
+		headerMD:   newStartupMarkdownRendererWithWordWrap(theme),
 	}
 }
 
@@ -436,10 +433,8 @@ func (m *projectWorkspacePickerModel) moveCursor(delta int) {
 
 func (m *projectWorkspacePickerModel) renderHeader() string {
 	if m.headerMD != nil {
-		rendered, err := m.headerMD.Render(projectWorkspacePickerHeaderMarkdown)
-		if err == nil {
-			return tui.ApplyThemeStyleIntents(trimRenderedHeaderInset(rendered), m.theme, tui.ThemeForeground)
-		}
+		rendered := m.headerMD.Render(projectWorkspacePickerHeaderMarkdown, m.width)
+		return tui.ApplyThemeStyleIntents(trimRenderedHeaderInset(rendered), m.theme, tui.ThemeForeground)
 	}
 	return m.styles.headerFallback.Render(projectWorkspacePickerHeaderFallback)
 }

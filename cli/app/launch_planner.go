@@ -41,7 +41,7 @@ type sessionLaunchPlan struct {
 	PromptHistory       []string
 	ModelContractLocked bool
 	StatusConfig        uiStatusConfig
-	WorkspaceRoot       string
+	ExecutionTarget     clientui.SessionExecutionTarget
 	Source              config.SourceReport
 }
 
@@ -119,9 +119,8 @@ func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
 }
 
 type projectScopedSessionPageLoader struct {
-	projectID   string
-	client      apicontract.ProjectViewService
-	sessionView apicontract.SessionViewService
+	projectID string
+	client    apicontract.ProjectViewService
 }
 
 func (l projectScopedSessionPageLoader) ProjectID() string {
@@ -130,10 +129,6 @@ func (l projectScopedSessionPageLoader) ProjectID() string {
 
 func (l projectScopedSessionPageLoader) ListSessionPage(ctx context.Context, request serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
 	return l.client.ListSessionPage(ctx, request)
-}
-
-func (l projectScopedSessionPageLoader) SessionViewClient() apicontract.SessionViewService {
-	return l.sessionView
 }
 
 func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchRequest) (sessionLaunchPlan, error) {
@@ -145,6 +140,10 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		return sessionLaunchPlan{}, err
 	}
 	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, resolved.request)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
+	executionTarget, err := loadSelectedSessionExecutionTarget(ctx, p.server.SessionViewClient(), resp.Plan.SessionID)
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
@@ -166,7 +165,8 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{
-			WorkspaceRoot:   resp.Plan.WorkspaceRoot,
+			WorkspaceRoot:   executionTarget.EffectiveWorkdir,
+			ExecutionTarget: executionTarget,
 			PersistenceRoot: cfg.PersistenceRoot,
 			SessionViews:    p.server.SessionViewClient(),
 			Settings:        resp.Plan.ActiveSettings,
@@ -176,8 +176,8 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 			AuthStatePath:   authState.Path,
 			OwnsServer:      p.server.OwnsServer(),
 		},
-		WorkspaceRoot: resp.Plan.WorkspaceRoot,
-		Source:        resp.Plan.Source,
+		ExecutionTarget: executionTarget,
+		Source:          resp.Plan.Source,
 	}, nil
 }
 
@@ -231,7 +231,7 @@ func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunc
 	}}, nil
 }
 
-func (p *launchPlanner) selectSession(ctx context.Context) (sessionPickerResult, error) {
+func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPickerNotice) (sessionPickerResult, error) {
 	if p == nil || p.server == nil || p.server.ProjectViewClient() == nil {
 		return nil, errors.New("session picker project view client is required")
 	}
@@ -243,15 +243,12 @@ func (p *launchPlanner) selectSession(ctx context.Context) (sessionPickerResult,
 		return nil, errors.New("session picker project ID is required")
 	}
 	loader := projectScopedSessionPageLoader{
-		projectID:   projectID,
-		client:      p.server.ProjectViewClient(),
-		sessionView: p.server.SessionViewClient(),
+		projectID: projectID,
+		client:    p.server.ProjectViewClient(),
 	}
-	return p.pickSession(
-		loader,
-		p.server.PresentationTheme(),
-		p.sessionPickerHeaderInfo(p.server.Config()),
-	)
+	header := p.sessionPickerHeaderInfo(p.server.Config())
+	header.Notice = notice
+	return p.pickSession(loader, p.server.PresentationTheme(), header)
 }
 
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {

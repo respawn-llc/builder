@@ -7,7 +7,6 @@ import (
 	"core/cli/app/internal/authui"
 	"core/cli/tui"
 
-	"charm.land/glamour/v2"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
@@ -33,8 +32,9 @@ const (
 )
 
 type startupPickerNotice struct {
-	Text string
-	Kind startupPickerNoticeKind
+	Text       string
+	Kind       startupPickerNoticeKind
+	Diagnostic error
 }
 
 type startupPickerResult struct {
@@ -61,7 +61,7 @@ type startupPickerModel struct {
 	height         int
 	theme          string
 	styles         startupPickerStyles
-	headerMD       *glamour.TermRenderer
+	headerMD       *startupMarkdownRenderer
 	notice         startupPickerNotice
 	result         startupPickerResult
 }
@@ -77,7 +77,7 @@ func newStartupPickerModel(headerMarkdown, headerFallback, theme string, notice 
 		styles:         newStartupPickerStyles(theme),
 		notice:         notice,
 	}
-	m.headerMD = newStartupMarkdownRendererWithWordWrap(theme, 0)
+	m.headerMD = newStartupMarkdownRendererWithWordWrap(theme)
 	return m
 }
 
@@ -189,10 +189,8 @@ func (m *startupPickerModel) ensureCursorVisible() {
 
 func (m *startupPickerModel) renderHeader() string {
 	if m.headerMD != nil {
-		rendered, err := m.headerMD.Render(m.headerMarkdown)
-		if err == nil {
-			return tui.ApplyThemeStyleIntents(strings.TrimRight(rendered, "\n"), m.theme, tui.ThemeForeground)
-		}
+		rendered := m.headerMD.Render(m.headerMarkdown, m.contentWidth())
+		return tui.ApplyThemeStyleIntents(strings.TrimRight(rendered, "\n"), m.theme, tui.ThemeForeground)
 	}
 	return m.styles.headerFallback.Render(m.headerFallback)
 }

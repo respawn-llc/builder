@@ -308,6 +308,9 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 	if required.Probe != nil && !requestContainsProbe(body, *required.Probe) {
 		return nil, errors.New("required response probe was not present in typed input")
 	}
+	if required.DeveloperMessageCount != nil && responseDeveloperMessageCount(body) != *required.DeveloperMessageCount {
+		return nil, fmt.Errorf("developer message count mismatch: got=%d want=%d", responseDeveloperMessageCount(body), *required.DeveloperMessageCount)
+	}
 	if required.SessionCacheKey && !hasMatchingSessionCacheKey(body, headers) {
 		return nil, errors.New("required response session_id and prompt_cache_key relation was not present")
 	}
@@ -673,6 +676,20 @@ func requestContainsProbe(body []byte, probe string) bool {
 		}
 	}
 	return false
+}
+
+func responseDeveloperMessageCount(body []byte) int {
+	var request responseRequest
+	if json.Unmarshal(body, &request) != nil {
+		return 0
+	}
+	count := 0
+	for _, item := range request.Input {
+		if item.Role == "developer" {
+			count++
+		}
+	}
+	return count
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) error {

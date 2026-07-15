@@ -43,13 +43,55 @@ func TestDiscoverOrdersRootsAndReadsEmbeddedGeneratedWhenUnseeded(t *testing.T) 
 	}
 }
 
+func TestDiscoverDisabledSkillNamedEnabledStillEnumeratesCatalog(t *testing.T) {
+	root := t.TempDir()
+	enabledPath := writeSkill(t, filepath.Join(root, SkillsDirName, "enabled"), "enabled", "enabled skill")
+	otherPath := writeSkill(t, filepath.Join(root, SkillsDirName, "other"), "other", "other skill")
+
+	result, err := Discover(Options{
+		ConfigRoot: root,
+		Policy: brand.ResolveSkillPolicy(brand.Settings{
+			SkillToggles: map[string]bool{"enabled": false},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(result.Roots) != 2 {
+		t.Fatalf("roots = %+v, want global and generated roots", result.Roots)
+	}
+	disabledPath := canonicalSlashPath(t, enabledPath)
+	requireSkillPath(t, result.Skills, canonicalSlashPath(t, otherPath))
+	for _, skill := range result.Skills {
+		if skill.Path == disabledPath {
+			t.Fatalf("disabled skill named enabled remained model-visible: %+v", result.Skills)
+		}
+	}
+	var disabled Inspection
+	for _, inspection := range result.Inspections {
+		if inspection.Path == disabledPath {
+			disabled = inspection
+			break
+		}
+	}
+	if !disabled.Loaded || !disabled.Disabled {
+		t.Fatalf("disabled inspection = %+v, want loaded and disabled", disabled)
+	}
+}
+
 func TestDiscoverGeneratedShadowedByUserSkillAndDisabled(t *testing.T) {
 	root := t.TempDir()
 	workspace := t.TempDir()
 	writeSkill(t, filepath.Join(workspace, brand.ConfigDirName, SkillsDirName, "skill-creator"), "skill-creator", "workspace")
 	writeSkill(t, filepath.Join(root, ".generated", SkillsDirName, "skill-creator"), "skill-creator", "generated")
 
-	result, err := Discover(Options{WorkspaceRoot: workspace, ConfigRoot: root, DisabledSkills: map[string]bool{"skill-creator": true}})
+	result, err := Discover(Options{
+		WorkspaceRoot: workspace,
+		ConfigRoot:    root,
+		Policy: brand.ResolveSkillPolicy(brand.Settings{
+			SkillToggles: map[string]bool{"skill-creator": false},
+		}),
+	})
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}

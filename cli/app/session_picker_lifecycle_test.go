@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -19,17 +18,8 @@ type blockingSessionPageLoader struct {
 	started chan context.Context
 }
 
-type blockingSessionDetailClient struct {
-	apicontract.SessionViewService
-	started chan context.Context
-}
-
 func newBlockingSessionPageLoader() *blockingSessionPageLoader {
 	return &blockingSessionPageLoader{started: make(chan context.Context, 1)}
-}
-
-func newBlockingSessionDetailClient() *blockingSessionDetailClient {
-	return &blockingSessionDetailClient{started: make(chan context.Context, 1)}
 }
 
 func (*blockingSessionPageLoader) ProjectID() string {
@@ -40,15 +30,6 @@ func (l *blockingSessionPageLoader) ListSessionPage(ctx context.Context, _ serve
 	l.started <- ctx
 	<-ctx.Done()
 	return serverapi.SessionPageResponse{}, ctx.Err()
-}
-
-func (c *blockingSessionDetailClient) GetSessionExecutionEnvironment(
-	ctx context.Context,
-	_ serverapi.SessionExecutionEnvironmentRequest,
-) (serverapi.SessionExecutionEnvironmentResponse, error) {
-	c.started <- ctx
-	<-ctx.Done()
-	return serverapi.SessionExecutionEnvironmentResponse{}, ctx.Err()
 }
 
 func lifecycleTestOptions(t *testing.T) sessionPickerLifecycleOptions {
@@ -250,52 +231,6 @@ func TestSessionPickerLifecycleCloseCancelsInitialAndDirectionalPageRequestsOnEv
 				}
 			})
 		}
-	}
-}
-
-func TestSessionPickerLifecycleCloseCancelsSelectedDetailIdempotently(t *testing.T) {
-	t.Parallel()
-
-	detailClient := newBlockingSessionDetailClient()
-	lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
-		Loader:                     &recordingSessionPageLoader{},
-		ExecutionEnvironmentClient: detailClient,
-		Theme:                      "dark",
-		Header:                     sessionPickerHeaderInfo{},
-	})
-	command := lifecycle.picker.startSelectedDetailForTabWithID(
-		lifecycle.picker.tab(sessioncontract.SessionCategoryMain),
-		mustPickerSessionID(t, "detail-repeated-close"),
-	)
-	completed := make(chan tea.Msg, 1)
-	go func() {
-		completed <- command()
-	}()
-	var requestContext context.Context
-	select {
-	case requestContext = <-detailClient.started:
-	case <-time.After(time.Second):
-		t.Fatal("selected-detail request did not start")
-	}
-
-	lifecycle.Close()
-	lifecycle.Close()
-	select {
-	case <-requestContext.Done():
-		if !errors.Is(requestContext.Err(), context.Canceled) {
-			t.Fatalf("selected-detail request context error = %v, want canceled", requestContext.Err())
-		}
-	case <-time.After(time.Second):
-		t.Fatal("repeated lifecycle close did not cancel selected-detail request")
-	}
-	select {
-	case message := <-completed:
-		loaded, ok := message.(sessionPickerSelectedDetailLoadedMsg)
-		if !ok || !errors.Is(loaded.Err, context.Canceled) {
-			t.Fatalf("selected-detail completion = %#v, want canceled load", message)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("canceled selected-detail command did not complete")
 	}
 }
 

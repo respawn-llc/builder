@@ -32,8 +32,8 @@ func (e *Engine) ensureMetaContextForCompaction(ctx context.Context, stepID stri
 	return e.steerBaseMetaContextIfNeeded(stepID)
 }
 
-func (e *Engine) activeMetaContextBuilder(model string) metaContextBuilder {
-	return newActiveMetaContextBuilder(e.store.Meta(), model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.DisabledSkills, time.Now()).
+func (e *Engine) activeMetaContextBuilder(model string, skillPolicy config.SkillPolicy) metaContextBuilder {
+	return newActiveMetaContextBuilder(e.store.Meta(), model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, skillPolicy, time.Now()).
 		withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
 }
 
@@ -127,7 +127,7 @@ func (e *Engine) steerBaseMetaContextIfNeeded(stepID string) error {
 	if e.baseMetaInjected {
 		return nil
 	}
-	builder := e.activeMetaContextBuilder(e.cfg.Model)
+	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
 	opts := baseMetaContextBuildOptions(true)
 	if e.workflowRunActive() {
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
@@ -167,7 +167,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 	if e.cfg.HeadlessMode == e.store.Meta().HeadlessActive {
 		return nil
 	}
-	builder := e.activeMetaContextBuilder(e.cfg.Model)
+	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
 	if e.cfg.HeadlessMode {
 		metaResult, err := builder.Build(metaContextBuildOptions{IncludeHeadless: true})
 		if err != nil {
@@ -208,7 +208,7 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	if err != nil {
 		return err
 	}
-	metaResult, err := e.activeMetaContextBuilder(e.cfg.Model).Build(metaContextBuildOptions{
+	metaResult, err := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy).Build(metaContextBuildOptions{
 		IncludeWorkflow:          true,
 		WorkflowCompletionMode:   mode,
 		WorkflowRun:              e.cfg.WorkflowRun,
@@ -222,7 +222,11 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 
 func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Message, error) {
 	meta := e.store.Meta()
-	builder := e.activeMetaContextBuilder(e.currentModel())
+	skillPolicy, err := e.reconstructionSkillPolicy(ctx)
+	if err != nil {
+		return nil, err
+	}
+	builder := e.activeMetaContextBuilder(e.currentModel(), skillPolicy)
 	opts := baseMetaContextBuildOptions(false)
 	opts.IncludeHeadless = meta.HeadlessActive
 	opts.WorktreeReminder = session.CloneWorktreeReminderState(meta.WorktreeReminder)

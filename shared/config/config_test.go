@@ -8,10 +8,33 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
+}
+
+func TestGeneratedSettingsTOMLRendersSkillNamedEnabled(t *testing.T) {
+	settings := configRegistry.defaultState().Settings
+	settings.SkillToggles["enabled"] = false
+	rendered := settingsTOMLWithRenderingOptions(settings, true, nil, nil)
+	var decoded map[string]any
+	if _, err := toml.Decode(rendered, &decoded); err != nil {
+		t.Fatalf("decode generated settings TOML: %v", err)
+	}
+	skillsValue, exists := decoded["skills"]
+	if !exists {
+		t.Fatal("generated settings TOML omitted configured skills table")
+	}
+	skills, ok := skillsValue.(map[string]any)
+	if !ok {
+		t.Fatalf("decoded skills section = %T, want table", skillsValue)
+	}
+	if enabled, exists := skills["enabled"]; !exists || enabled != false {
+		t.Fatalf("generated settings TOML skills.enabled = %v, want ordinary false toggle", enabled)
+	}
 }
 
 func TestPreparePersistenceRootRefusesProcessStartRootUnderGoTest(t *testing.T) {
@@ -579,6 +602,59 @@ func TestLoadSubagentRoleFromFile(t *testing.T) {
 	}
 }
 
+func TestLoadSubagentRoleSkillNamedEnabledToggle(t *testing.T) {
+	_, _, cfg := loadConfigTestFileApp(t, strings.Join([]string{
+		"[skills]",
+		"enabled = false",
+		"apiresult = false",
+		"",
+		"[subagents.inherits]",
+		"thinking_level = \"high\"",
+		"",
+		"[subagents.reenabled.skills]",
+		"enabled = true",
+		"apiresult = true",
+		"",
+		"[subagents.disabled.skills]",
+		"enabled = false",
+	}, "\n"), LoadOptions{})
+
+	inherited := cfg.Settings.Subagents["inherits"]
+	if _, exists := inherited.Sources["skills.enabled"]; exists {
+		t.Fatalf("omitted role toggle must not have an explicit source: %+v", inherited.Sources)
+	}
+
+	reenabled := cfg.Settings.Subagents["reenabled"]
+	if !ResolveSkillPolicy(reenabled.Settings).SkillEnabled("enabled") {
+		t.Fatal("explicit role skills.enabled=true must enable the skill named enabled")
+	}
+	if got := reenabled.Sources["skills.enabled"]; got != "file" {
+		t.Fatalf("expected role skills.enabled source file, got %q", got)
+	}
+	if enabled, exists := reenabled.Settings.SkillToggles["enabled"]; !exists || !enabled {
+		t.Fatalf("role enabled key must be an ordinary enabled toggle: %+v", reenabled.Settings.SkillToggles)
+	}
+
+	disabled := cfg.Settings.Subagents["disabled"]
+	if ResolveSkillPolicy(disabled.Settings).SkillEnabled("enabled") {
+		t.Fatal("explicit role skills.enabled=false must disable the skill named enabled")
+	}
+}
+
+func TestLoadSubagentRoleRejectsNonBooleanSkillNamedEnabledWithScopedPath(t *testing.T) {
+	err := loadConfigTestFileError(t, "[subagents.worker.skills]\nenabled = \"off\"\n", LoadOptions{})
+	if err == nil {
+		t.Fatal("expected invalid role skills.enabled type")
+	}
+	if !errors.Is(err, errSubagentRole) {
+		t.Fatalf("expected subagent role wrapper, got %v", err)
+	}
+	var typeErr *SettingsKeyTypeError
+	if !errors.As(err, &typeErr) || typeErr.Key != "subagents.worker.skills.enabled" {
+		t.Fatalf("expected scoped subagents.worker.skills.enabled type error, got %v", err)
+	}
+}
+
 func TestLoadSubagentRoleMetadataFromFile(t *testing.T) {
 	_, workspace, configPath := newConfigTestFile(t)
 	contents := strings.Join([]string{
@@ -819,6 +895,49 @@ func TestAvailableSubagentRoleNamesRemainsPresentationOnly(t *testing.T) {
 	callable := strings.Join(AvailableSubagentRoleNames(settings, true), ",")
 	if callable != "fast,callable" {
 		t.Fatalf("callable presentation roles = %q, want no no-op or non-callable roles", callable)
+	}
+}
+
+func TestSkillOnlyRoleAffectsCatalogWithoutChangingCallability(t *testing.T) {
+	settings := Settings{
+		SkillToggles: map[string]bool{"enabled": true},
+		Subagents: map[string]SubagentRole{
+			"worker": {
+				Settings: Settings{SkillToggles: map[string]bool{"enabled": false}},
+				Sources:  map[string]string{"skills.enabled": "file"},
+			},
+			"blocked": {
+				Settings:         Settings{SkillToggles: map[string]bool{"enabled": false}},
+				Sources:          map[string]string{"skills.enabled": "file"},
+				AgentCallableSet: true,
+			},
+			"visible": {
+				Settings: Settings{
+					ThinkingLevel: "high",
+					SkillToggles:  map[string]bool{"enabled": true},
+				},
+				Sources: map[string]string{
+					"thinking_level": "file",
+					"skills.enabled": "file",
+				},
+			},
+		},
+	}
+
+	if lookup := LookupSubagentRole(settings, "worker"); lookup.Status != SubagentRoleLookupPresent {
+		t.Fatalf("worker lookup = %q, want present", lookup.Status)
+	}
+	if !SubagentRoleCallableInContext(settings, "worker", SubagentInvocationContextOrdinary) {
+		t.Fatal("skill policy must not block directly callable role")
+	}
+	if SubagentRoleCallableInContext(settings, "blocked", SubagentInvocationContextOrdinary) {
+		t.Fatal("callability metadata must remain authoritative")
+	}
+	if got := strings.Join(AvailableSubagentRoleNames(settings, false), ","); got != "fast,blocked,visible,worker" {
+		t.Fatalf("available roles = %q, want all meaningful roles", got)
+	}
+	if got := strings.Join(AvailableCallableSubagentRoleNames(settings, SubagentInvocationContextOrdinary), ","); got != "fast,visible,worker" {
+		t.Fatalf("callable roles = %q, want skill-only role and independent visible role", got)
 	}
 }
 

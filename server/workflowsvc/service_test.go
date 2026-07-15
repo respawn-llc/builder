@@ -26,6 +26,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/toolspec"
 )
 
 func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscription) serverapi.WorkflowProjectEvent {
@@ -856,6 +857,34 @@ func TestServiceStartTaskAutomationNotifiesScheduler(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsUnsafeTaskStartBeforeExecutionTargetOrScheduler(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	resolver, ok := service.roleResolver.(testsetup.RoleResolver)
+	if !ok {
+		t.Fatalf("role resolver type = %T, want test resolver", service.roleResolver)
+	}
+	resolver["coder"][toolspec.ToolAskQuestion] = false
+	infrastructure := &recordingExecutionTargetInfrastructure{}
+	notifier := &recordingSchedulerNotifier{}
+	service.executionTargets = infrastructure
+	service.schedulerWake = notifier
+
+	_, err := service.StartTaskAutomation(ctx, task.Task.ID)
+	var validationErr workflowstore.WorkflowValidationError
+	if !errors.As(err, &validationErr) || !validationErr.HasCode(workflow.CodeAgentRoleRequiredToolDisabled) {
+		t.Fatalf("StartTaskAutomation error = %v, want required-tool validation", err)
+	}
+	if infrastructure.resolveSelection.Mode != "" || infrastructure.materializeTaskID != "" || infrastructure.restoreTaskID != "" {
+		t.Fatalf("execution-target infrastructure called: %+v", infrastructure)
+	}
+	if notifier.count != 0 {
+		t.Fatalf("scheduler notifications = %d, want none", notifier.count)
+	}
+}
+
 func TestServiceMoveTaskRejectsMissingEdgeExecutableOverride(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
@@ -1332,6 +1361,91 @@ func TestServiceMoveTaskAutoApproveDoesNotBypassApprovalGatedEdge(t *testing.T) 
 	moved := workflowServiceMoveApplied(t, movedResponse)
 	if moved.State != "pending_approval" || len(moved.PlacementIDs) != 0 || len(moved.RunIDs) != 0 {
 		t.Fatalf("approval-gated move = %+v, want pending approval without automation", moved)
+	}
+}
+
+func TestServiceRejectsUnsafeInitialManualMovesBeforeSideEffects(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		autoApprove      bool
+		requiresApproval bool
+	}{
+		{name: "auto approved", autoApprove: true},
+		{name: "pending approval"},
+		{name: "approval gated despite auto approve", autoApprove: true, requiresApproval: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, service, binding := newWorkflowServiceTestContext(t)
+			workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+			linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+			task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+			def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+			if err != nil {
+				t.Fatalf("GetWorkflow: %v", err)
+			}
+			agentID := workflowServiceNodeIDByKey(t, def.Definition, "agent")
+			if test.requiresApproval {
+				startEdge := workflowServiceEdgeByID(t, def.Definition, "edge-start-"+workflowID)
+				if _, err := service.store.UpdateEdge(ctx, workflowstore.EdgeRecord{
+					ID:                workflow.EdgeID(startEdge.ID),
+					WorkflowID:        workflow.WorkflowID(workflowID),
+					TransitionGroupID: workflow.TransitionGroupID(startEdge.TransitionGroupID),
+					Key:               workflow.ModelKey(startEdge.Key),
+					TargetNodeID:      workflow.NodeID(startEdge.TargetNodeID),
+					RequiresApproval:  true,
+					ContextMode:       workflow.ContextMode(startEdge.ContextMode),
+					ContextSource:     workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(startEdge.ContextSource.Kind), NodeKey: workflow.ModelKey(startEdge.ContextSource.NodeKey)}),
+					PromptTemplate:    startEdge.PromptTemplate,
+					Parameters:        domainParameters(startEdge.Parameters),
+				}); err != nil {
+					t.Fatalf("enable start edge approval: %v", err)
+				}
+			}
+			resolver, ok := service.roleResolver.(testsetup.RoleResolver)
+			if !ok {
+				t.Fatalf("role resolver type = %T, want test resolver", service.roleResolver)
+			}
+			resolver["coder"][toolspec.ToolAskQuestion] = false
+			infrastructure := &recordingExecutionTargetInfrastructure{}
+			notifier := &recordingSchedulerNotifier{}
+			finalizer := &recordingWorkflowAttentionFinalizer{}
+			service.executionTargets = infrastructure
+			service.schedulerWake = notifier
+			service.attentionFinalizer = finalizer
+
+			_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+				SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+				TaskID:           task.Task.ID,
+				TargetNodeID:     agentID,
+				AllowMissingEdge: true,
+				AutoApprove:      test.autoApprove,
+			})
+			var validationErr workflowstore.WorkflowValidationError
+			if !errors.As(err, &validationErr) || !validationErr.HasCode(workflow.CodeAgentRoleRequiredToolDisabled) {
+				t.Fatalf("MoveWorkflowTask error = %v, want required-tool validation", err)
+			}
+			if infrastructure.resolveSelection.Mode != "" || infrastructure.materializeTaskID != "" || infrastructure.restoreTaskID != "" {
+				t.Fatalf("execution-target infrastructure called: %+v", infrastructure)
+			}
+			if notifier.count != 0 || len(finalizer.results) != 0 {
+				t.Fatalf("side effects after rejection: scheduler=%d attention=%+v", notifier.count, finalizer.results)
+			}
+			placements, err := service.store.ListPlacements(ctx, workflow.TaskID(task.Task.ID))
+			if err != nil {
+				t.Fatalf("ListPlacements: %v", err)
+			}
+			transitions, err := service.store.ListTransitions(ctx, workflow.TaskID(task.Task.ID))
+			if err != nil {
+				t.Fatalf("ListTransitions: %v", err)
+			}
+			runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+			if err != nil {
+				t.Fatalf("ListRuns: %v", err)
+			}
+			if len(placements) != 1 || placements[0].State != "active" || len(transitions) != 0 || len(runs) != 0 {
+				t.Fatalf("rejected move mutated task: placements=%+v transitions=%+v runs=%+v", placements, transitions, runs)
+			}
+		})
 	}
 }
 
@@ -2819,7 +2933,7 @@ func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata
 	if err := metadataStore.SetProjectKey(context.Background(), binding.ProjectID, "WOR"); err != nil {
 		t.Fatalf("SetProjectKey: %v", err)
 	}
-	resolver := workflow.StaticRoleResolver{"coder": true}
+	resolver := testsetup.QuestionsEnabled("coder")
 	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(resolver))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)

@@ -498,6 +498,7 @@ func TestResolveSpanStyleCarriesSemanticColorAndAttributes(t *testing.T) {
 		SpanAttributeBold,
 		SpanAttributeItalic,
 		SpanAttributeUnderline,
+		SpanAttributeStrikethrough,
 	)
 
 	resolved := ResolveSpanStyle(span, "dark")
@@ -505,7 +506,7 @@ func TestResolveSpanStyleCarriesSemanticColorAndAttributes(t *testing.T) {
 		resolved.Foreground.Theme != ColorForRole(ColorRoleForStyle(span.Style.SemanticRole), "dark") {
 		t.Fatalf("resolved foreground = %+v, want role color", resolved.Foreground)
 	}
-	if !resolved.Faint || !resolved.Bold || !resolved.Italic || !resolved.Underline {
+	if !resolved.Faint || !resolved.Bold || !resolved.Italic || !resolved.Underline || !resolved.Strikethrough {
 		t.Fatalf("resolved attributes = %+v, want every semantic attribute", resolved)
 	}
 }
@@ -1271,6 +1272,81 @@ func TestStableMarkdownTableUsesContinuousUnicodeSeparators(t *testing.T) {
 	}
 }
 
+func TestMarkdownTableLinksRemainVerboseAcrossTerminalPresentations(t *testing.T) {
+	const target = "https://example.com/table"
+	const source = "| Link |\n| --- |\n| [label](" + target + ") |"
+	for _, test := range []struct {
+		name         string
+		presentation MarkdownLinkPresentation
+	}{
+		{
+			name:         "supported terminal",
+			presentation: MarkdownLinkLabelOnly,
+		},
+		{
+			name:         "fallback terminal",
+			presentation: MarkdownLinkLabelAndDestination,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lines := RenderMarkdownLinesWithLinkPresentation(
+				StyleRoleAssistant,
+				source,
+				80,
+				test.presentation,
+			)
+			var linked strings.Builder
+			for _, line := range lines {
+				for _, span := range line.Spans {
+					if span.Hyperlink != nil && span.Hyperlink.URL == target {
+						linked.WriteString(span.Text)
+					}
+				}
+			}
+			if got, want := linked.String(), "label"+target; got != want {
+				t.Fatalf("linked table content = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestMarkdownAutolinksRenderDestinationOnceInProseAndTables(t *testing.T) {
+	const target = "https://example.com/autolink"
+	for _, source := range []string{
+		"<" + target + ">",
+		"| Link |\n| --- |\n| <" + target + "> |",
+	} {
+		for _, presentation := range []MarkdownLinkPresentation{
+			MarkdownLinkLabelOnly,
+			MarkdownLinkLabelAndDestination,
+		} {
+			lines := RenderMarkdownLinesWithLinkPresentation(
+				StyleRoleAssistant,
+				source,
+				80,
+				presentation,
+			)
+			var linked strings.Builder
+			for _, line := range lines {
+				for _, span := range line.Spans {
+					if span.Hyperlink != nil && span.Hyperlink.URL == target {
+						linked.WriteString(span.Text)
+					}
+				}
+			}
+			if got := linked.String(); got != target {
+				t.Fatalf(
+					"linked autolink text = %q, want %q for presentation %d and source %q",
+					got,
+					target,
+					presentation,
+					source,
+				)
+			}
+		}
+	}
+}
+
 func TestStableMarkdownOnlyWidthFormatsTableBlocks(t *testing.T) {
 	lines := RenderMarkdownStableLines(
 		StyleRoleAssistant,
@@ -1291,6 +1367,205 @@ func TestStableMarkdownOnlyWidthFormatsTableBlocks(t *testing.T) {
 		if got := lipgloss.Width(line); got > 18 {
 			t.Fatalf("table line %d width = %d, want <= 18: %q", index, got, line)
 		}
+	}
+}
+
+func TestNestedMarkdownTablesPreserveEnclosingContent(t *testing.T) {
+	const table = "| Name | Result |\n| --- | --- |\n| alpha | pass |"
+	for _, test := range []struct {
+		name            string
+		source          string
+		wantPrefixFaint bool
+	}{
+		{
+			name:            "blockquote",
+			source:          "> before\n>\n> " + strings.ReplaceAll(table, "\n", "\n> ") + "\n>\n> after",
+			wantPrefixFaint: true,
+		},
+		{
+			name:   "list",
+			source: "- before\n\n  " + strings.ReplaceAll(table, "\n", "\n  ") + "\n\n  after",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lines := RenderMarkdownStableLines(StyleRoleAssistant, test.source, 30)
+			if len(lines) != 5 {
+				t.Fatalf("nested Markdown line count = %d, want 5: %+v", len(lines), lines)
+			}
+			prefixWidth := spansWidth(lines[0].Spans[:1])
+			for index, line := range lines {
+				if len(line.Spans) != 2 {
+					t.Fatalf("nested Markdown line %d spans = %+v, want container prefix plus content", index, line.Spans)
+				}
+				prefix := line.Spans[0]
+				if got := spansWidth([]Span{prefix}); got == 0 || got != prefixWidth {
+					t.Fatalf("nested Markdown line %d prefix width = %d, want structural width %d", index, got, prefixWidth)
+				}
+				if index == 0 && strings.TrimSpace(prefix.Text) == "" {
+					t.Fatalf("nested Markdown first-line prefix = %+v, want visible container marker", prefix)
+				}
+				if index > 0 && strings.TrimSpace(prefix.Text) != "" {
+					t.Fatalf("nested Markdown continuation prefix = %+v, want structural indentation", prefix)
+				}
+				if prefix.Style.Has(SpanAttributeFaint) != test.wantPrefixFaint {
+					t.Fatalf("nested Markdown line %d prefix faint = %v, want %v", index, prefix.Style.Has(SpanAttributeFaint), test.wantPrefixFaint)
+				}
+				if width := spansWidth(line.Spans); width > 30 {
+					t.Fatalf("nested Markdown line %d width = %d, want <= 30", index, width)
+				}
+			}
+			if got := lines[0].Spans[1].Text; got != "before" {
+				t.Fatalf("nested leading content = %q, want authored prose", got)
+			}
+			if got := lines[4].Spans[1].Text; got != "after" {
+				t.Fatalf("nested trailing content = %q, want authored prose", got)
+			}
+			if got, want := strings.Fields(lines[1].Spans[1].Text), []string{"Name", "│", "Result"}; !slices.Equal(got, want) {
+				t.Fatalf("nested table header tokens = %q, want %q", got, want)
+			}
+			if got, want := strings.Fields(lines[3].Spans[1].Text), []string{"alpha", "│", "pass"}; !slices.Equal(got, want) {
+				t.Fatalf("nested table row tokens = %q, want %q", got, want)
+			}
+			separator := []rune(strings.TrimSpace(lines[2].Spans[1].Text))
+			centerCount := 0
+			for _, character := range separator {
+				switch character {
+				case '─':
+				case '┼':
+					centerCount++
+				default:
+					t.Fatalf("nested table separator contains unexpected rune %U", character)
+				}
+			}
+			if centerCount != 1 {
+				t.Fatalf("nested table separator center count = %d, want 1", centerCount)
+			}
+		})
+	}
+}
+
+func TestMarkdownRendererPreservesGFMSemantics(t *testing.T) {
+	t.Run("linkify", func(t *testing.T) {
+		const target = "https://example.com/linkified"
+		lines := RenderMarkdownLines(StyleRoleAssistant, "Visit "+target, 80)
+		var linked strings.Builder
+		for _, line := range lines {
+			for _, span := range line.Spans {
+				if span.Hyperlink != nil && span.Hyperlink.URL == target {
+					linked.WriteString(span.Text)
+				}
+			}
+		}
+		if got := linked.String(); got != target {
+			t.Fatalf("linked GFM URL text = %q, want %q", got, target)
+		}
+	})
+
+	t.Run("strikethrough", func(t *testing.T) {
+		lines := RenderMarkdownLines(StyleRoleAssistant, "before ~~removed~~ after", 80)
+		for _, line := range lines {
+			for _, span := range line.Spans {
+				if span.Text == "removed" && span.Style.Has(SpanAttributeStrikethrough) {
+					return
+				}
+			}
+		}
+		t.Fatalf("strikethrough Markdown lost semantic attribute: %+v", lines)
+	})
+
+	t.Run("task list", func(t *testing.T) {
+		lines := RenderMarkdownLines(StyleRoleAssistant, "- [x] done\n- [ ] todo", 80)
+		if len(lines) != 2 {
+			t.Fatalf("task-list line count = %d, want 2: %+v", len(lines), lines)
+		}
+		for index, wantLabel := range []string{"done", "todo"} {
+			if len(lines[index].Spans) != 1 {
+				t.Fatalf("task-list line %d spans = %+v, want one task-owned span", index, lines[index].Spans)
+			}
+			fields := strings.Fields(lines[index].Spans[0].Text)
+			if len(fields) < 2 || fields[len(fields)-1] != wantLabel {
+				t.Fatalf("task-list line %d fields = %q, want authored label %q", index, fields, wantLabel)
+			}
+		}
+		if lines[0].Spans[0].Text == lines[1].Spans[0].Text {
+			t.Fatalf("checked and unchecked task states rendered identically: %+v", lines)
+		}
+	})
+
+	t.Run("definition list", func(t *testing.T) {
+		lines := RenderMarkdownLines(StyleRoleAssistant, "Term\n: Definition", 80)
+		if len(lines) != 2 || len(lines[0].Spans) != 1 || len(lines[1].Spans) != 1 {
+			t.Fatalf("definition-list typed lines = %+v, want term and indented description", lines)
+		}
+		if got := lines[0].Spans[0].Text; got != "Term" {
+			t.Fatalf("definition term = %q, want authored term", got)
+		}
+		description := []rune(lines[1].Spans[0].Text)
+		contentStart := 0
+		for contentStart < len(description) && unicode.IsSpace(description[contentStart]) {
+			contentStart++
+		}
+		if contentStart == 0 {
+			t.Fatalf("definition description = %q, want structural indentation", string(description))
+		}
+		if got := string(description[contentStart:]); got != "Definition" {
+			t.Fatalf("definition description = %q, want authored description", got)
+		}
+	})
+}
+
+func TestCommittedMarkdownLinksAdaptToTerminalPresentation(t *testing.T) {
+	const target = "https://example.com/committed"
+	row := clientui.TranscriptCommittedRow{
+		Kind:       clientui.TranscriptRowAssistant,
+		Visibility: clientui.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
+		Assistant: &clientui.TranscriptAssistantRow{
+			Text: "[label](" + target + ")",
+		},
+	}
+	for _, test := range []struct {
+		name            string
+		presentation    MarkdownLinkPresentation
+		wantPlain       string
+		wantLinkedSpans int
+	}{
+		{
+			name:            "supported terminal",
+			presentation:    MarkdownLinkLabelOnly,
+			wantPlain:       AssistantSymbol + " label",
+			wantLinkedSpans: 1,
+		},
+		{
+			name:            "fallback terminal",
+			presentation:    MarkdownLinkLabelAndDestination,
+			wantPlain:       AssistantSymbol + " label " + target,
+			wantLinkedSpans: 2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rendered := RenderCommittedRowWithLinkPresentation(
+				row,
+				120,
+				"dark",
+				ModeOngoingStable,
+				test.presentation,
+			)
+			if got := strings.Join(PlainLines(rendered.Lines), "\n"); got != test.wantPlain {
+				t.Fatalf("plain committed row = %q, want %q", got, test.wantPlain)
+			}
+			linkedSpans := 0
+			for _, line := range rendered.Lines {
+				for _, span := range line.Spans {
+					if span.Hyperlink != nil && span.Hyperlink.URL == target {
+						linkedSpans++
+					}
+				}
+			}
+			if linkedSpans != test.wantLinkedSpans {
+				t.Fatalf("linked span count = %d, want %d", linkedSpans, test.wantLinkedSpans)
+			}
+		})
 	}
 }
 

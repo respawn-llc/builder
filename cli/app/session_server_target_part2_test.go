@@ -84,8 +84,8 @@ func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *t
 	if err != nil {
 		t.Fatalf("EvalSymlinks workspace: %v", err)
 	}
-	if plan.WorkspaceRoot != canonicalWorkspace {
-		t.Fatalf("plan workspace root = %q, want %q", plan.WorkspaceRoot, canonicalWorkspace)
+	if plan.ExecutionTarget.EffectiveWorkdir != canonicalWorkspace {
+		t.Fatalf("plan execution workdir = %q, want %q", plan.ExecutionTarget.EffectiveWorkdir, canonicalWorkspace)
 	}
 	resolved, err := bound.ProjectViewClient().ResolveProjectPath(context.Background(), serverapi.ProjectResolvePathRequest{Path: workspace})
 	if err != nil {

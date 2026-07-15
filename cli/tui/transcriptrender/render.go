@@ -18,12 +18,31 @@ const (
 )
 
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
+	return RenderCommittedRowWithLinkPresentation(
+		row,
+		width,
+		themeName,
+		mode,
+		MarkdownLinkLabelOnly,
+	)
+}
+
+func RenderCommittedRowWithLinkPresentation(
+	row clientui.TranscriptCommittedRow,
+	width int,
+	themeName string,
+	mode Mode,
+	linkPresentation MarkdownLinkPresentation,
+) Row {
+	if !linkPresentation.Valid() {
+		panic(fmt.Sprintf("render committed row with invalid Markdown link presentation %d", linkPresentation))
+	}
 	var syntax *syntaxProjector
 	if row.Kind == clientui.TranscriptRowTool {
 		configured := newSyntaxProjector(themeName)
 		syntax = &configured
 	}
-	return renderCommittedRow(row, width, mode, syntax)
+	return renderCommittedRow(row, width, mode, syntax, linkPresentation)
 }
 
 func renderCommittedRow(
@@ -31,14 +50,42 @@ func renderCommittedRow(
 	width int,
 	mode Mode,
 	syntax *syntaxProjector,
+	linkPresentation MarkdownLinkPresentation,
 ) Row {
 	switch row.Kind {
 	case clientui.TranscriptRowUser:
-		return Row{Group: clientui.TranscriptRowUser, Lines: renderUserAssistantTextBlock(StyleRoleUser, userAssistantDisplayText(row.User.Text, row.User.CondensedText, mode), width, mode)}
+		return Row{
+			Group: clientui.TranscriptRowUser,
+			Lines: renderUserAssistantTextBlock(
+				StyleRoleUser,
+				userAssistantDisplayText(row.User.Text, row.User.CondensedText, mode),
+				width,
+				mode,
+				linkPresentation,
+			),
+		}
 	case clientui.TranscriptRowAssistant:
-		return Row{Group: clientui.TranscriptRowAssistant, Lines: renderUserAssistantTextBlock(StyleRoleAssistant, userAssistantDisplayText(row.Assistant.Text, row.Assistant.CondensedText, mode), width, mode)}
+		return Row{
+			Group: clientui.TranscriptRowAssistant,
+			Lines: renderUserAssistantTextBlock(
+				StyleRoleAssistant,
+				userAssistantDisplayText(row.Assistant.Text, row.Assistant.CondensedText, mode),
+				width,
+				mode,
+				linkPresentation,
+			),
+		}
 	case clientui.TranscriptRowTool:
-		return Row{Group: clientui.TranscriptRowTool, Lines: renderToolRow(*row.Tool, width, mode, syntax)}
+		return Row{
+			Group: clientui.TranscriptRowTool,
+			Lines: renderToolRowWithLinkPresentation(
+				*row.Tool,
+				width,
+				mode,
+				syntax,
+				linkPresentation,
+			),
+		}
 	case clientui.TranscriptRowNotice:
 		role, text := noticeRoleAndText(row.Notice, row.Visibility, mode)
 		meta := toolMeta{}
@@ -72,26 +119,73 @@ func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
 	return renderTextBlockWithInlineMeta(role, text, "", width, mode, toolMeta{})
 }
 
-func renderUserAssistantTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
+func renderUserAssistantTextBlock(
+	role StyleRole,
+	text string,
+	width int,
+	mode Mode,
+	linkPresentation MarkdownLinkPresentation,
+) []Line {
 	text = safeTranscriptText(text)
 	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	if text == "" {
 		text = labelForRole(role)
 	}
 	if mode == ModeOngoingStable {
-		return attachPrefixWithMeta(role, RenderMarkdownStableLines(role, text, contentWidth(role, width)), width, false, mode, toolMeta{})
+		return attachPrefixWithMeta(
+			role,
+			RenderMarkdownStableLinesWithLinkPresentation(
+				role,
+				text,
+				contentWidth(role, width),
+				linkPresentation,
+			),
+			width,
+			false,
+			mode,
+			toolMeta{},
+		)
 	}
 	if modeUsesCompactTextBlock(mode) {
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
-			lines := RenderMarkdownLines(role, text, contentWidth(role, width))
+			lines := RenderMarkdownLinesWithLinkPresentation(
+				role,
+				text,
+				contentWidth(role, width),
+				linkPresentation,
+			)
 			if len(lines) > 3 {
 				lines = lines[:3]
 			}
 			return attachPrefixWithMeta(role, lines, width, false, mode, toolMeta{})
 		}
-		return attachPrefixWithMeta(role, RenderMarkdownLines(role, firstDisplayLine(text), contentWidth(role, width)), width, len(strings.Split(text, "\n")) > 1, mode, toolMeta{})
+		return attachPrefixWithMeta(
+			role,
+			RenderMarkdownLinesWithLinkPresentation(
+				role,
+				firstDisplayLine(text),
+				contentWidth(role, width),
+				linkPresentation,
+			),
+			width,
+			len(strings.Split(text, "\n")) > 1,
+			mode,
+			toolMeta{},
+		)
 	}
-	return attachPrefixWithMeta(role, RenderMarkdownLines(role, text, contentWidth(role, width)), width, false, mode, toolMeta{})
+	return attachPrefixWithMeta(
+		role,
+		RenderMarkdownLinesWithLinkPresentation(
+			role,
+			text,
+			contentWidth(role, width),
+			linkPresentation,
+		),
+		width,
+		false,
+		mode,
+		toolMeta{},
+	)
 }
 
 func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta string, width int, mode Mode, meta toolMeta) []Line {

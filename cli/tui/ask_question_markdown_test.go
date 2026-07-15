@@ -1,98 +1,57 @@
 package tui
 
 import (
-	"errors"
 	"strings"
 	"testing"
-	"unicode"
 
-	"github.com/charmbracelet/lipgloss"
-	xansi "github.com/charmbracelet/x/ansi"
+	"core/cli/tui/transcriptrender"
+	tuitest "core/internal/testharness/pty"
 )
 
-func TestResolveAskQuestionMarkdownLinesFallsBackForRenderErrorAndEmptyOutput(t *testing.T) {
-	source := "**lit**\nnext"
-	tests := []struct {
-		name    string
-		outcome askQuestionMarkdownRenderOutcome
+func TestAskQuestionMarkdownLinksAdaptToTerminalPresentation(t *testing.T) {
+	const target = "https://example.com/question"
+	for _, test := range []struct {
+		name                string
+		presentation        transcriptrender.MarkdownLinkPresentation
+		wantVisibleText     string
+		wantLinkedText      string
+		wantHyperlinkStarts int
 	}{
-		{name: "render error", outcome: askQuestionMarkdownRenderOutcome{rendered: "partial", err: errors.New("render failed")}},
-		{name: "zero visible output", outcome: askQuestionMarkdownRenderOutcome{rendered: "\n\t\n"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lines := resolveAskQuestionMarkdownLines(source, 8, tt.outcome)
-			assertPlainAskQuestionSource(t, lines, source, 8)
+		{
+			name:                "supported terminal",
+			presentation:        transcriptrender.MarkdownLinkLabelOnly,
+			wantVisibleText:     "question",
+			wantLinkedText:      "question",
+			wantHyperlinkStarts: 1,
+		},
+		{
+			name:                "fallback terminal",
+			presentation:        transcriptrender.MarkdownLinkLabelAndDestination,
+			wantVisibleText:     "question " + target,
+			wantLinkedText:      "question" + target,
+			wantHyperlinkStarts: 2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded := strings.Join(
+				RenderAskQuestionMarkdownLines(
+					"[question]("+target+")",
+					"dark",
+					80,
+					test.presentation,
+				),
+				"\n",
+			)
+			trace := tuitest.TraceTerminalHyperlinks(t, encoded)
+			if got := trace.VisibleText(); got != test.wantVisibleText {
+				t.Fatalf("visible text = %q, want %q", got, test.wantVisibleText)
+			}
+			if got := trace.LinkedText(target); got != test.wantLinkedText {
+				t.Fatalf("linked text = %q, want %q", got, test.wantLinkedText)
+			}
+			if got := trace.OpenCount(target); got != test.wantHyperlinkStarts {
+				t.Fatalf("OSC 8 start count = %d, want %d: %q", got, test.wantHyperlinkStarts, encoded)
+			}
 		})
-	}
-}
-
-func TestResolveAskQuestionMarkdownLinesUsesVisibleRenderedOutput(t *testing.T) {
-	lines := resolveAskQuestionMarkdownLines("**literal**", 16, askQuestionMarkdownRenderOutcome{rendered: "rendered\n"})
-	if got := strings.Join(lines, "\n"); got != "rendered" {
-		t.Fatalf("resolved rendered rows=%q want %q", got, "rendered")
-	}
-}
-
-func TestAskQuestionHyperlinkDecoderReadsStructuredOSC8Metadata(t *testing.T) {
-	parser := xansi.NewParser()
-	sequence := xansi.SetHyperlink("https://example.com/pull/456", "id=456")
-	_, _, _, _ = xansi.GraphemeWidth.DecodeSequenceInString(sequence, 0, parser)
-
-	link, isHyperlink := askQuestionHyperlinkFromParser(parser)
-	if !isHyperlink {
-		t.Fatal("expected OSC 8 hyperlink event")
-	}
-	if link.URL != "https://example.com/pull/456" || link.Params != "id=456" {
-		t.Fatalf("decoded hyperlink=%+v", link)
-	}
-}
-
-func TestPlainAskQuestionMarkdownFallbackPreservesSourceAndBoundsRows(t *testing.T) {
-	source := "\x1b[31m**literal**\x1b[0m" +
-		xansi.SetHyperlink("https://example.com/unsafe", "id=unsafe") +
-		xansi.ResetHyperlink() +
-		"\a\r\b\nlong-source-line"
-	lines := renderPlainAskQuestionMarkdownSource(source, 6)
-	if len(lines) < 3 {
-		t.Fatalf("fallback rows=%q want wrapped explicit source lines", lines)
-	}
-	plain := strings.Join(lines, "\n")
-	for _, r := range plain {
-		if r != '\n' && unicode.IsControl(r) {
-			t.Fatalf("fallback retained terminal control character %q in %q", r, plain)
-		}
-	}
-	if strings.Contains(plain, "https://example.com/unsafe") {
-		t.Fatalf("fallback retained OSC hyperlink metadata: %q", plain)
-	}
-	if !strings.Contains(strings.ReplaceAll(plain, "\n", ""), "**literal**") {
-		t.Fatalf("fallback lost literal markdown punctuation: %q", plain)
-	}
-	for _, line := range lines {
-		if width := lipgloss.Width(line); width > 6 {
-			t.Fatalf("fallback row width=%d want <=6: %q", width, line)
-		}
-	}
-}
-
-func TestPlainAskQuestionMarkdownFallbackKeepsEmptySourceRow(t *testing.T) {
-	lines := renderPlainAskQuestionMarkdownSource("", 8)
-	if len(lines) != 1 || lines[0] != "" {
-		t.Fatalf("empty fallback rows=%q want one empty row", lines)
-	}
-}
-
-func assertPlainAskQuestionSource(t *testing.T, lines []string, source string, width int) {
-	t.Helper()
-	plainSource := xansi.Strip(source)
-	plainRows := strings.Join(lines, "\n")
-	if !strings.Contains(plainRows, plainSource) {
-		t.Fatalf("fallback rows=%q missing literal source=%q", plainRows, plainSource)
-	}
-	for _, line := range lines {
-		if rowWidth := lipgloss.Width(line); rowWidth > width {
-			t.Fatalf("fallback row width=%d want <=%d: %q", rowWidth, width, line)
-		}
 	}
 }

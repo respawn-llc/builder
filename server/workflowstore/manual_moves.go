@@ -264,6 +264,11 @@ func (s *Store) prepareManualMove(ctx context.Context, req ManualMoveRequest) (p
 	if !ok {
 		return preparedManualMove{}, fmt.Errorf("target node %q missing", req.TargetNodeID)
 	}
+	if pendingApprovalTransitionID == "" && sourceNode.Kind() == workflow.NodeKindStart && executableNodeKind(targetNode.Kind()) {
+		if err := s.preflightInitialExecution(def); err != nil {
+			return preparedManualMove{}, err
+		}
+	}
 	group, edge, ok := definitionEdgeBetween(def, workflow.NodeIDOf(sourceNode), workflow.NodeIDOf(targetNode))
 	sourceRunID, sourceSessionID, err := s.latestRunForPlacement(ctx, sourcePlacement)
 	if err != nil {

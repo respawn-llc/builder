@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -23,6 +24,7 @@ func disableTransientStatusClearForTest(t *testing.T) {
 }
 
 type stubSessionViewClient struct {
+	apicontract.SessionViewService
 	getSessionMainView   func(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
 	getLatestFinalAnswer func(context.Context, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
 }

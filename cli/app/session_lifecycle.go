@@ -106,15 +106,17 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 	}
 	nextSessionOverrides := opts.Overrides
 	showStartupUpdateNotice := true
+	var pickerNotice *startupPickerNotice
 	for {
 		switch next.Kind() {
 		case serverapi.SessionDirectiveStop:
 			return nil
 		case serverapi.SessionDirectiveSelectSession:
-			picked, err := planner.selectSession(ctx)
+			picked, err := planner.selectSession(ctx, pickerNotice)
 			if err != nil {
 				return err
 			}
+			pickerNotice = nil
 			switch picked := picked.(type) {
 			case sessionPickerCancelResult:
 				next = serverapi.StopSessionDirective()
@@ -131,6 +133,11 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 				sessionID := picked.sessionID
 				executionTarget, err := loadSelectedSessionExecutionTarget(ctx, server.SessionViewClient(), sessionID.String())
 				if err != nil {
+					pickerNotice = &startupPickerNotice{
+						Text:       "Could not inspect the selected session. Try again.",
+						Kind:       startupPickerNoticeError,
+						Diagnostic: err,
+					}
 					next = serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent)
 					continue
 				}
@@ -249,7 +256,7 @@ func prepareSessionUIRun(
 	overrideStoredDraft bool,
 	startupUpdateNotice bool,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
-	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.WorkspaceRoot+" model="+plan.ActiveSettings.Model)
+	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
 	if err != nil {
 		return nil, uiLoopRequest{}, err
 	}

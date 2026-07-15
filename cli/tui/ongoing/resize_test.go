@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 
+	"core/cli/tui/transcriptrender"
+
 	"github.com/google/uuid"
 )
 
@@ -72,7 +74,10 @@ func TestWidthChangeAfterAssistantPromotionRepaintsWithoutRehydration(t *testing
 
 func TestAppleTerminalWidthChangeSchedulesRehydrationAfterImmutableScrollback(t *testing.T) {
 	var out bytes.Buffer
-	surface := NewSurfaceWithTerminalResizePolicy(&out, TerminalResizeWidthRehydration)
+	surface := NewSurfaceWithOptions(&out, SurfaceOptions{
+		TerminalResize: TerminalResizeWidthRehydration,
+		MarkdownLinks:  transcriptrender.MarkdownLinkLabelOnly,
+	})
 	if _, err := surface.ApplyTerminalMessage(
 		committedMessage(userRow("immutable")),
 		FrameInput{Size: Size{Width: 20, Height: 3}},
@@ -98,7 +103,10 @@ func TestAppleTerminalWidthChangeSchedulesRehydrationAfterImmutableScrollback(t 
 
 func TestAppleTerminalWidthChangeBeforeImmutableScrollbackRepaints(t *testing.T) {
 	var out bytes.Buffer
-	surface := NewSurfaceWithTerminalResizePolicy(&out, TerminalResizeWidthRehydration)
+	surface := NewSurfaceWithOptions(&out, SurfaceOptions{
+		TerminalResize: TerminalResizeWidthRehydration,
+		MarkdownLinks:  transcriptrender.MarkdownLinkLabelOnly,
+	})
 	if _, err := surface.Render(FrameInput{Size: Size{Width: 20, Height: 3}}); err != nil {
 		t.Fatalf("render initial frame: %v", err)
 	}

@@ -78,6 +78,7 @@ type Snapshot struct {
 	Update            UpdateInfo
 	Config            ConfigInfo
 	Subscription      SubscriptionInfo
+	SkillPolicy       config.SkillPolicy
 	Skills            []SkillInspection
 	SkillTokenCounts  map[string]int
 	AgentsPaths       []string
@@ -181,6 +182,7 @@ type GitStageResult struct {
 }
 
 type EnvironmentStageResult struct {
+	SkillPolicy      config.SkillPolicy
 	Skills           []SkillInspection
 	SkillTokenCounts map[string]int
 	AgentsPaths      []string
@@ -248,7 +250,12 @@ func (r *memoryRepository) SeedSnapshot(req Request, base Snapshot, now time.Tim
 	}
 
 	envEntry, envCached := r.envByKey[strings.TrimSpace(req.CacheKeys.Environment)]
+	requestedSkillPolicy := config.ResolveSkillPolicy(req.Settings)
+	if envCached && !envEntry.result.SkillPolicy.Equivalent(requestedSkillPolicy) {
+		envCached = false
+	}
 	if envCached {
+		seed.Snapshot.SkillPolicy = envEntry.result.SkillPolicy
 		seed.Snapshot.Skills = append([]SkillInspection(nil), envEntry.result.Skills...)
 		seed.Snapshot.SkillTokenCounts = CloneTokenMap(envEntry.result.SkillTokenCounts)
 		seed.Snapshot.AgentsPaths = append([]string(nil), envEntry.result.AgentsPaths...)
@@ -291,6 +298,10 @@ func (r *memoryRepository) StoreEnvironment(cacheKey string, result EnvironmentS
 	if strings.TrimSpace(cacheKey) == "" {
 		return
 	}
+	result.Skills = append([]SkillInspection(nil), result.Skills...)
+	result.SkillTokenCounts = CloneTokenMap(result.SkillTokenCounts)
+	result.AgentsPaths = append([]string(nil), result.AgentsPaths...)
+	result.AgentTokenCounts = CloneTokenMap(result.AgentTokenCounts)
 	r.envByKey[cacheKey] = environmentCacheEntry{fetchedAt: repositoryTime(now), result: result}
 }
 

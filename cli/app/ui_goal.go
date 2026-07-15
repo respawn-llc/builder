@@ -8,7 +8,6 @@ import (
 	"core/shared/clientui"
 	sharedtheme "core/shared/theme"
 
-	"charm.land/glamour/v2"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -403,33 +402,20 @@ func (b *goalOverlayLineBuilder) appendMarkdown(text string) {
 		b.appendWrapped(text, lipgloss.Style{})
 		return
 	}
-	rendered, err := renderer.Render(text)
-	if err != nil {
-		b.appendWrapped(text, lipgloss.Style{})
-		return
-	}
+	rendered := renderer.Render(text, b.width)
 	for _, line := range strings.Split(strings.TrimRight(rendered, "\n"), "\n") {
 		b.lines = append(b.lines, padANSIRight(line, b.width))
 	}
 }
 
-func (b *goalOverlayLineBuilder) goalMarkdownRenderer() *glamour.TermRenderer {
+func (b *goalOverlayLineBuilder) goalMarkdownRenderer() *startupMarkdownRenderer {
 	if b.model == nil {
 		return nil
 	}
-	theme := strings.TrimSpace(b.model.theme)
-	width := b.width
-	if width < 1 {
-		width = 1
-	}
-	if b.model.goal.markdownRenderer != nil && b.model.goal.markdownTheme == theme && b.model.goal.markdownWidth == width {
-		return b.model.goal.markdownRenderer
-	}
-	renderer := newStartupMarkdownRendererWithWordWrap(theme, width)
-	b.model.goal.markdownTheme = theme
-	b.model.goal.markdownWidth = width
-	b.model.goal.markdownRenderer = renderer
-	return renderer
+	return newStartupMarkdownRendererWithLinkPresentation(
+		strings.TrimSpace(b.model.theme),
+		b.model.markdownLinks,
+	)
 }
 
 func (b *goalOverlayLineBuilder) appendGap() {

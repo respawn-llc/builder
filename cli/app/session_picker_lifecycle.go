@@ -4,16 +4,13 @@ import (
 	"context"
 	"errors"
 
-	"core/shared/apicontract"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type sessionPickerLifecycleOptions struct {
-	Loader                     sessionPageLoader
-	ExecutionEnvironmentClient apicontract.SessionViewService
-	Theme                      string
-	Header                     sessionPickerHeaderInfo
+	Loader sessionPageLoader
+	Theme  string
+	Header sessionPickerHeaderInfo
 }
 
 type sessionPickerLifecycle struct {
@@ -30,10 +27,9 @@ func newSessionPickerLifecycle(options sessionPickerLifecycleOptions) *sessionPi
 	}
 	requestContext, cancel := context.WithCancel(context.Background())
 	return &sessionPickerLifecycle{
-		picker: newSessionPickerModelWithExecutionEnvironmentClient(
+		picker: newSessionPickerModel(
 			requestContext,
 			options.Loader,
-			options.ExecutionEnvironmentClient,
 			options.Theme,
 			options.Header,
 		),
@@ -92,7 +88,6 @@ func (l *sessionPickerLifecycle) Close() {
 	if l == nil || l.closed {
 		return
 	}
-	l.picker.cancelSelectedDetailRequests()
 	l.cancel()
 	l.closed = true
 }

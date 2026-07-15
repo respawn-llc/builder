@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/config"
 	"core/shared/toolspec"
 )
 
@@ -407,9 +408,9 @@ func (m *defaultMessageLifecycle) HasPendingUserInjections() bool {
 	return m != nil && m.queue != nil && m.queue.HasPending()
 }
 
-func newActiveMetaContextBuilder(meta session.Meta, model, thinkingLevel, globalConfigDir string, disabledSkills map[string]bool, now time.Time) metaContextBuilder {
+func newActiveMetaContextBuilder(meta session.Meta, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
 	roots := activeMetaContextRootsForMeta(meta)
-	return newMetaContextBuilder(roots.discoveryRoot, model, thinkingLevel, disabledSkills, now).withEnvironmentCWD(roots.environmentCWD).withGlobalConfigDir(globalConfigDir)
+	return newMetaContextBuilder(roots.discoveryRoot, model, thinkingLevel, skillPolicy, now).withEnvironmentCWD(roots.environmentCWD).withGlobalConfigDir(globalConfigDir)
 }
 
 type activeMetaContextRoots struct {

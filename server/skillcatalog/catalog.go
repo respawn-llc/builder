@@ -31,7 +31,7 @@ const (
 type Options struct {
 	WorkspaceRoot            string
 	ConfigRoot               string
-	DisabledSkills           map[string]bool
+	Policy                   brand.SkillPolicy
 	IncludeEmbeddedGenerated bool
 }
 
@@ -84,7 +84,6 @@ func Discover(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	disabled := normalizedDisabledSkills(opts.DisabledSkills)
 	candidates := make([]Skill, 0)
 	issues := make([]Issue, 0)
 	inspections := make([]Inspection, 0)
@@ -97,8 +96,8 @@ func Discover(opts Options) (Result, error) {
 		}
 		for _, inspection := range rootInspections {
 			if inspection.Loaded {
-				nameKey := normalizedSkillName(inspection.Name)
-				if disabled[nameKey] {
+				nameKey := brand.NormalizeSkillName(inspection.Name)
+				if !opts.Policy.SkillEnabled(nameKey) {
 					inspection.Disabled = true
 				}
 				if seenLoadedPaths[inspection.Path] {
@@ -118,15 +117,15 @@ func Discover(opts Options) (Result, error) {
 		issues = append(issues, rootIssues...)
 	}
 	for idx := range inspections {
-		if inspections[idx].Loaded && inspections[idx].SourceKind == SourceKindGenerated && userSkillNames[normalizedSkillName(inspections[idx].Name)] {
+		if inspections[idx].Loaded && inspections[idx].SourceKind == SourceKindGenerated && userSkillNames[brand.NormalizeSkillName(inspections[idx].Name)] {
 			inspections[idx].Shadowed = true
 		}
 	}
 	loaded := make([]Skill, 0, len(candidates))
 	seenPaths := map[string]bool{}
 	for _, skill := range candidates {
-		nameKey := normalizedSkillName(skill.Name)
-		if disabled[nameKey] {
+		nameKey := brand.NormalizeSkillName(skill.Name)
+		if !opts.Policy.SkillEnabled(nameKey) {
 			continue
 		}
 		if skill.SourceKind == SourceKindGenerated && userSkillNames[nameKey] {
@@ -153,7 +152,7 @@ func Discover(opts Options) (Result, error) {
 	return Result{Roots: roots, Skills: loaded, Issues: issues, Inspections: inspections}, nil
 }
 
-func DiscoverGenerated(configRoot string, disabledSkills map[string]bool) ([]Inspection, error) {
+func DiscoverGenerated(configRoot string, policy brand.SkillPolicy) ([]Inspection, error) {
 	roots, err := Roots("", configRoot)
 	if err != nil {
 		return nil, err
@@ -172,9 +171,8 @@ func DiscoverGenerated(configRoot string, disabledSkills map[string]bool) ([]Ins
 	if err != nil {
 		return nil, err
 	}
-	disabled := normalizedDisabledSkills(disabledSkills)
 	for idx := range inspections {
-		if disabled[normalizedSkillName(inspections[idx].Name)] {
+		if !policy.SkillEnabled(inspections[idx].Name) {
 			inspections[idx].Disabled = true
 		}
 	}
@@ -362,27 +360,6 @@ func extractSkillFrontmatter(contents string) (string, bool) {
 		frontmatterLines = append(frontmatterLines, line)
 	}
 	return "", false
-}
-
-func normalizedDisabledSkills(disabledSkills map[string]bool) map[string]bool {
-	if len(disabledSkills) == 0 {
-		return nil
-	}
-	normalized := make(map[string]bool, len(disabledSkills))
-	for name, disabled := range disabledSkills {
-		if !disabled {
-			continue
-		}
-		key := normalizedSkillName(name)
-		if key != "" {
-			normalized[key] = true
-		}
-	}
-	return normalized
-}
-
-func normalizedSkillName(raw string) string {
-	return brand.NormalizeSkillName(raw)
 }
 
 func sanitizeSkillSingleLine(raw string) string {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -72,7 +71,6 @@ func buildReviewerRequestMessagesWithBuilder(messages []llm.Message, builder met
 	metaResult, err := builder.Build(metaContextBuildOptions{
 		ExistingMessages:          metaMessages,
 		IncludeAgents:             true,
-		IncludeSkills:             true,
 		IncludeEnvironment:        true,
 		IncludeHeadless:           headless,
 		PermissiveAgentsReadError: true,
@@ -94,7 +92,6 @@ func buildReviewerRequestItemsWithBuilder(items []llm.ResponseItem, builder meta
 	metaResult, err := builder.Build(metaContextBuildOptions{
 		ExistingMessages:          metaMessages,
 		IncludeAgents:             true,
-		IncludeSkills:             true,
 		IncludeEnvironment:        true,
 		IncludeHeadless:           headless,
 		PermissiveAgentsReadError: true,
@@ -411,25 +408,6 @@ func reviewerSessionID(sessionID string) string {
 		return ""
 	}
 	return trimmed + "/supervisor"
-}
-
-func appendMissingReviewerMetaContext(messages []llm.Message, workspaceRoot string, model string, thinkingLevel string, globalConfigDir string, headless bool, disabledSkills map[string]bool) ([]llm.Message, error) {
-	metaMessages, transcript := splitMetaContextMessages(messages)
-	metaMessages = filterReviewerMetaMessages(metaMessages)
-	builder := newMetaContextBuilder(workspaceRoot, model, thinkingLevel, disabledSkills, time.Now()).withGlobalConfigDir(globalConfigDir)
-	metaResult, err := builder.Build(metaContextBuildOptions{
-		ExistingMessages:          metaMessages,
-		IncludeAgents:             true,
-		IncludeSkills:             true,
-		IncludeEnvironment:        true,
-		IncludeHeadless:           headless,
-		PermissiveAgentsReadError: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := append(metaResult.OrderedMetaMessages(), transcript...)
-	return out, nil
 }
 
 func filterReviewerMetaMessages(messages []llm.Message) []llm.Message {

@@ -309,8 +309,8 @@ func TestDisabledSkillsAreNotInjectedIntoNewSessions(t *testing.T) {
 
 	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"}, Usage: llm.Usage{WindowTokens: 200000}}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:          "gpt-5",
-		DisabledSkills: map[string]bool{"workspace skill": true},
+		Model:       "gpt-5",
+		SkillPolicy: skillPolicyWithDisabled("workspace skill"),
 	})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {

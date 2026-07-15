@@ -373,7 +373,7 @@ func TestPrepareSharedRuntimeUsesCallerContextForAttachRPCs(t *testing.T) {
 		},
 	}
 
-	_, err := prepareSharedRuntime(context.WithValue(context.Background(), ctxKey, ctxValue), server, sessionLaunchPlan{SessionID: "session-1", WorkspaceRoot: "/tmp/workspace"}, io.Discard, "test")
+	_, err := prepareSharedRuntime(context.WithValue(context.Background(), ctxKey, ctxValue), server, sessionLaunchPlan{SessionID: "session-1", ExecutionTarget: clientui.SessionExecutionTarget{EffectiveWorkdir: "/tmp/workspace"}}, io.Discard, "test")
 	if !errors.Is(err, promptErr) {
 		t.Fatalf("prepareSharedRuntime error = %v, want %v", err, promptErr)
 	}
@@ -426,7 +426,7 @@ func TestPrepareSharedRuntimeSubscribeFailureReleasesOnceWithBoundedContext(t *t
 				},
 			}
 
-			_, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-1", WorkspaceRoot: "/tmp/workspace"}, io.Discard, "test")
+			_, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-1", ExecutionTarget: clientui.SessionExecutionTarget{EffectiveWorkdir: "/tmp/workspace"}}, io.Discard, "test")
 			wantErr := tc.sessionErr
 			if wantErr == nil {
 				wantErr = tc.promptErr
@@ -480,7 +480,7 @@ func TestPrepareSharedRuntimeInstallsTurnQueueHook(t *testing.T) {
 		sessionViewClient: &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionName: "shared session"}}},
 	}
 
-	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-1", SessionName: "fallback session", WorkspaceRoot: "/tmp/workspace", ActiveSettings: config.Settings{NotificationMethod: "bel"}}, io.Discard, "test")
+	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-1", SessionName: "fallback session", ExecutionTarget: clientui.SessionExecutionTarget{EffectiveWorkdir: "/tmp/workspace"}, ActiveSettings: config.Settings{NotificationMethod: "bel"}}, io.Discard, "test")
 	if err != nil {
 		t.Fatalf("prepareSharedRuntime: %v", err)
 	}

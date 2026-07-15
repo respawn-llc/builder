@@ -1,4 +1,5 @@
-import { attentionItemSchema, runSchema, taskStatusSchema, transitionSchema } from "./common";
+import { attentionItemSchema, runSchema, taskStatusSchema, transitionSchema, validationErrorSchema } from "./common";
+import { normalizeWorkflowValidationErrors } from "../../features/workflow/workflowValidationIssueNormalization";
 
 const baseAttentionItem = {
   id: "question:run-1:ask-1",
@@ -124,5 +125,22 @@ describe("workflow lifecycle schemas", () => {
     });
     expect(transitionSchema.parse(baseTransition).appliedAt).toBeNull();
     expect(transitionSchema.parse({ ...baseTransition, applied_at_unix_ms: null }).appliedAt).toBeNull();
+  });
+});
+
+describe("validationErrorSchema", () => {
+  const base = { code: "code", message: "message", blocks_context: true };
+
+  it("normalizes omitted or null role-tool details to null", () => {
+    const omitted = validationErrorSchema.parse(base);
+    const present = validationErrorSchema.parse({ ...base, details: { role: "coder", required_tool: "ask_question" } });
+    expect(omitted.details).toMatchObject({ role: null, requiredTool: null });
+    expect(normalizeWorkflowValidationErrors([omitted, present])).toHaveLength(2);
+  });
+
+  it("rejects present blank role-tool details", () => {
+    for (const details of [{ role: "" }, { role: " " }, { required_tool: "" }, { required_tool: " " }]) {
+      expect(() => validationErrorSchema.parse({ ...base, details })).toThrow();
+    }
   });
 });
