@@ -9,23 +9,11 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
-func useFastStreamResubscribeDelays(t *testing.T) {
-	t.Helper()
-	originalSessionDelay := sessionActivityResubscribeDelay
-	originalPromptDelay := promptActivityResubscribeDelay
-	sessionActivityResubscribeDelay = time.Millisecond
-	promptActivityResubscribeDelay = time.Millisecond
-	t.Cleanup(func() {
-		sessionActivityResubscribeDelay = originalSessionDelay
-		promptActivityResubscribeDelay = originalPromptDelay
-	})
-}
-
 func TestStartSessionActivityEventsResubscribesFromLastSequenceAfterStreamGap(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -60,7 +48,6 @@ func TestStartSessionActivityEventsResubscribesFromLastSequenceAfterStreamGap(t 
 }
 
 func TestStartSessionActivityEventsEmitsExplicitGapWhenCursorReplayUnavailable(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -97,7 +84,6 @@ func TestStartSessionActivityEventsEmitsExplicitGapWhenCursorReplayUnavailable(t
 }
 
 func TestStartSessionActivityEventsKeepsRetryingFreshSubscribeAfterCursorReplayGap(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -139,7 +125,6 @@ func TestStartSessionActivityEventsKeepsRetryingFreshSubscribeAfterCursorReplayG
 }
 
 func TestStartSessionActivityEventsEmitsExplicitGapWhenInitialStreamDropsWithoutCursor(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -169,7 +154,6 @@ func TestStartSessionActivityEventsEmitsExplicitGapWhenInitialStreamDropsWithout
 }
 
 func TestStartSessionActivityEventsKeepsResubscribingAfterTransientSubscribeTimeout(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -199,7 +183,6 @@ func TestStartSessionActivityEventsKeepsResubscribingAfterTransientSubscribeTime
 }
 
 func TestStartSessionActivityEventsStopsRetryingWhenParentContextCancelsDuringResubscribe(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	initial := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{err: io.EOF}}}
 	subscribeCalled := make(chan struct{})
@@ -231,7 +214,6 @@ func TestStartSessionActivityEventsStopsRetryingWhenParentContextCancelsDuringRe
 }
 
 func TestStartSessionActivityEventsResubscribeStaysIsolatedAcrossStreams(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -277,7 +259,6 @@ func TestStartSessionActivityEventsResubscribeStaysIsolatedAcrossStreams(t *test
 }
 
 func TestStartPendingPromptEventsResubscribesWithoutDuplicatingPendingPrompt(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -313,7 +294,6 @@ func TestStartPendingPromptEventsResubscribesWithoutDuplicatingPendingPrompt(t *
 }
 
 func TestStartPendingPromptEventsResubscribeEmitsResolutionForPromptMissingFromSnapshot(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -346,7 +326,6 @@ func TestStartPendingPromptEventsResubscribeEmitsResolutionForPromptMissingFromS
 }
 
 func TestStartPendingPromptEventsRetriesResubscribeWhenSnapshotStreamFails(t *testing.T) {
-	useFastStreamResubscribeDelays(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -387,12 +366,12 @@ func TestStartPendingPromptEventsRetriesResubscribeWhenSnapshotStreamFails(t *te
 	}
 }
 
-func TestPendingPromptEventRequeuesWhenAnswerRPCFails(t *testing.T) {
+func TestPendingPromptAnswerRetriesOneImmutableOperation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Sequence: 1, Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}}}
-	control := &retryingPromptControlClient{askErr: errors.New("transport down")}
+	control := &retryingPromptControlClient{askErrors: []error{errors.New("transport down"), nil}}
 
 	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
@@ -405,32 +384,79 @@ func TestPendingPromptEventRequeuesWhenAnswerRPCFails(t *testing.T) {
 	}
 	first.reply <- askReply{response: clientui.PromptAnswer{PromptID: first.req.PromptID, Answer: "handled"}}
 
-	retried := waitPromptEventWithin(t, events, time.Second)
-	if retried.req.PromptID != "ask-1" || retried.req.Question != "First?" {
-		t.Fatalf("unexpected retried prompt event: %+v", retried.req)
+	waitForPromptAskCallCount(t, control, 2)
+	requests := control.askRequestsSnapshot()
+	if len(requests) != 2 {
+		t.Fatalf("AnswerAsk requests = %d, want 2", len(requests))
 	}
-	if got := control.askCallCount(); got != 1 {
-		t.Fatalf("AnswerAsk call count = %d, want 1", got)
+	if requests[0] != requests[1] {
+		t.Fatalf("retried request changed: first=%+v second=%+v", requests[0], requests[1])
 	}
-	if retried.reply == nil {
-		t.Fatal("retried prompt reply channel is nil")
+	if _, err := runtimeids.ParseRuntimeClientRequestID(requests[0].ClientRequestID); err != nil {
+		t.Fatalf("client request id is not UUIDv4: %v", err)
 	}
-	if retried.reply == first.reply {
-		t.Fatal("retried prompt should use a fresh reply channel")
+	if requests[0].SessionID != "session-1" || requests[0].AskID != "ask-1" || requests[0].Answer != "handled" {
+		t.Fatalf("unexpected answer operation: %+v", requests[0])
 	}
-	close(retried.reply)
-	stop()
 	select {
-	case _, ok := <-events:
-		if ok {
-			t.Fatal("expected prompt channel to close after stop")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for prompt channel to close")
+	case retried := <-events:
+		t.Fatalf("submitted answer must not be re-presented: %+v", retried.req)
+	default:
 	}
 }
 
-func TestPendingPromptEventRetryAfterStopDoesNotPanic(t *testing.T) {
+func TestPendingApprovalAnswerRetriesOneImmutableOperation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{
+		Sequence:  1,
+		Type:      clientui.PendingPromptEventPending,
+		PromptID:  "approval-1",
+		SessionID: "session-1",
+		Question:  "Proceed?",
+		Approval:  true,
+		ApprovalOptions: []clientui.ApprovalOption{
+			{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: clientui.ApprovalDecisionDeny, Label: "Deny"},
+		},
+	}}}}
+	control := &retryingPromptControlClient{approvalErrors: []error{errors.New("transport down"), nil}}
+
+	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
+		return nil, context.Canceled
+	}, control, nil)
+	defer stop()
+
+	first := waitPromptEventWithin(t, events, time.Second)
+	first.reply <- askReply{response: clientui.PromptAnswer{
+		PromptID: first.req.PromptID,
+		Approval: &clientui.ApprovalPromptAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: "carefully",
+		},
+	}}
+
+	waitForPromptApprovalCallCount(t, control, 2)
+	requests := control.approvalRequestsSnapshot()
+	if len(requests) != 2 {
+		t.Fatalf("AnswerApproval requests = %d, want 2", len(requests))
+	}
+	if requests[0] != requests[1] {
+		t.Fatalf("retried request changed: first=%+v second=%+v", requests[0], requests[1])
+	}
+	if _, err := runtimeids.ParseRuntimeClientRequestID(requests[0].ClientRequestID); err != nil {
+		t.Fatalf("client request id is not UUIDv4: %v", err)
+	}
+	if requests[0].SessionID != "session-1" ||
+		requests[0].ApprovalID != "approval-1" ||
+		requests[0].Decision != clientui.ApprovalDecisionAllowOnce ||
+		requests[0].Commentary != "carefully" {
+		t.Fatalf("unexpected approval operation: %+v", requests[0])
+	}
+}
+
+func TestPendingPromptAnswerAfterStopDoesNotPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -505,7 +531,7 @@ func TestStartPendingPromptEventsFallbackNotifiesFromPromptActivity(t *testing.T
 	}
 }
 
-func TestPendingPromptEventDoesNotRequeueOnTerminalAnswerError(t *testing.T) {
+func TestPendingPromptAnswerDoesNotRetryTerminalError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -530,7 +556,7 @@ func TestPendingPromptEventDoesNotRequeueOnTerminalAnswerError(t *testing.T) {
 	}
 }
 
-func TestPendingPromptEventDoesNotRequeueAfterPromptAlreadyResolvedLocally(t *testing.T) {
+func TestPendingPromptAnswerRejectsCompletionAfterPromptResolved(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -549,20 +575,68 @@ func TestPendingPromptEventDoesNotRequeueAfterPromptAlreadyResolvedLocally(t *te
 	if first.req.PromptID != "ask-1" {
 		t.Fatalf("unexpected first prompt event: %+v", first.req)
 	}
-	first.reply <- askReply{response: clientui.PromptAnswer{PromptID: first.req.PromptID, Answer: "handled"}}
 
 	resolved := waitPromptEventWithin(t, events, time.Second)
 	if !resolved.isResolution() || resolved.promptID() != "ask-1" {
 		t.Fatalf("expected prompt resolution event, got %+v", resolved)
 	}
-	waitForPromptAskCallCount(t, control, 1)
+	first.reply <- askReply{response: clientui.PromptAnswer{PromptID: first.req.PromptID, Answer: "handled"}}
+	time.Sleep(20 * time.Millisecond)
 	select {
 	case retried := <-events:
 		t.Fatalf("did not expect stale retry after local resolution: %+v", retried.req)
 	default:
 	}
-	if got := control.askCallCount(); got != 1 {
-		t.Fatalf("AnswerAsk call count = %d, want 1", got)
+	if got := control.askCallCount(); got != 0 {
+		t.Fatalf("AnswerAsk call count = %d, want 0 for stale completion", got)
+	}
+}
+
+func TestPendingPromptAnswerDoesNotRetryFailureCompletedAfterResolution(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	subscription := newChannelPromptActivitySubscription()
+	subscription.events <- clientui.PendingPromptEvent{
+		Type:      clientui.PendingPromptEventPending,
+		PromptID:  "ask-1",
+		SessionID: "session-1",
+		Question:  "First?",
+	}
+	control := newBlockingPromptControlClient()
+	events, stop := startPendingPromptEvents(ctx, subscription, func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
+		return nil, context.Canceled
+	}, control, nil)
+	defer stop()
+
+	first := waitPromptEventWithin(t, events, time.Second)
+	first.reply <- askReply{response: clientui.PromptAnswer{PromptID: first.req.PromptID, Answer: "handled"}}
+	select {
+	case <-control.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first AnswerAsk attempt")
+	}
+
+	subscription.events <- clientui.PendingPromptEvent{
+		Type:      clientui.PendingPromptEventResolved,
+		PromptID:  "ask-1",
+		SessionID: "session-1",
+	}
+	resolved := waitPromptEventWithin(t, events, time.Second)
+	if !resolved.isResolution() || resolved.promptID() != "ask-1" {
+		t.Fatalf("expected prompt resolution event, got %+v", resolved)
+	}
+
+	close(control.release)
+	select {
+	case <-control.returned:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale AnswerAsk attempt to return")
+	}
+	select {
+	case req := <-control.started:
+		t.Fatalf("stale failure retried after prompt resolution: %+v", req)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -622,6 +696,27 @@ func (s *stubPromptActivitySubscription) Close() error {
 	return nil
 }
 
+type channelPromptActivitySubscription struct {
+	events chan clientui.PendingPromptEvent
+}
+
+func newChannelPromptActivitySubscription() *channelPromptActivitySubscription {
+	return &channelPromptActivitySubscription{events: make(chan clientui.PendingPromptEvent, 2)}
+}
+
+func (s *channelPromptActivitySubscription) Next(ctx context.Context) (clientui.PendingPromptEvent, error) {
+	select {
+	case <-ctx.Done():
+		return clientui.PendingPromptEvent{}, ctx.Err()
+	case evt := <-s.events:
+		return evt, nil
+	}
+}
+
+func (*channelPromptActivitySubscription) Close() error {
+	return nil
+}
+
 type stubPromptControlClient struct{}
 
 func (stubPromptControlClient) AnswerAsk(context.Context, serverapi.AskAnswerRequest) error {
@@ -659,9 +754,37 @@ type retryingPromptControlClient struct {
 	mu                 sync.Mutex
 	askErr             error
 	askErrors          []error
+	askRequests        []serverapi.AskAnswerRequest
 	approvalErr        error
+	approvalErrors     []error
+	approvalRequests   []serverapi.ApprovalAnswerRequest
 	askCalls           int
 	approvalCallCountV int
+}
+
+type blockingPromptControlClient struct {
+	started  chan serverapi.AskAnswerRequest
+	release  chan struct{}
+	returned chan struct{}
+}
+
+func newBlockingPromptControlClient() *blockingPromptControlClient {
+	return &blockingPromptControlClient{
+		started:  make(chan serverapi.AskAnswerRequest, 2),
+		release:  make(chan struct{}),
+		returned: make(chan struct{}, 2),
+	}
+}
+
+func (c *blockingPromptControlClient) AnswerAsk(_ context.Context, req serverapi.AskAnswerRequest) error {
+	c.started <- req
+	<-c.release
+	c.returned <- struct{}{}
+	return errors.New("transport down")
+}
+
+func (*blockingPromptControlClient) AnswerApproval(context.Context, serverapi.ApprovalAnswerRequest) error {
+	return nil
 }
 
 func (c *retryingPromptControlClient) askCallCount() int {
@@ -670,10 +793,29 @@ func (c *retryingPromptControlClient) askCallCount() int {
 	return c.askCalls
 }
 
-func (c *retryingPromptControlClient) AnswerAsk(_ context.Context, _ serverapi.AskAnswerRequest) error {
+func (c *retryingPromptControlClient) askRequestsSnapshot() []serverapi.AskAnswerRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]serverapi.AskAnswerRequest(nil), c.askRequests...)
+}
+
+func (c *retryingPromptControlClient) approvalCallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.approvalCallCountV
+}
+
+func (c *retryingPromptControlClient) approvalRequestsSnapshot() []serverapi.ApprovalAnswerRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]serverapi.ApprovalAnswerRequest(nil), c.approvalRequests...)
+}
+
+func (c *retryingPromptControlClient) AnswerAsk(_ context.Context, req serverapi.AskAnswerRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.askCalls++
+	c.askRequests = append(c.askRequests, req)
 	if len(c.askErrors) > 0 {
 		err := c.askErrors[0]
 		c.askErrors = c.askErrors[1:]
@@ -682,10 +824,16 @@ func (c *retryingPromptControlClient) AnswerAsk(_ context.Context, _ serverapi.A
 	return c.askErr
 }
 
-func (c *retryingPromptControlClient) AnswerApproval(context.Context, serverapi.ApprovalAnswerRequest) error {
+func (c *retryingPromptControlClient) AnswerApproval(_ context.Context, req serverapi.ApprovalAnswerRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.approvalCallCountV++
+	c.approvalRequests = append(c.approvalRequests, req)
+	if len(c.approvalErrors) > 0 {
+		err := c.approvalErrors[0]
+		c.approvalErrors = c.approvalErrors[1:]
+		return err
+	}
 	return c.approvalErr
 }
 
@@ -712,6 +860,18 @@ func waitPromptEventWithin(t *testing.T, events <-chan askEvent, timeout time.Du
 		t.Fatal("timed out waiting for prompt event")
 		return askEvent{}
 	}
+}
+
+func waitForPromptApprovalCallCount(t *testing.T, control *retryingPromptControlClient, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if control.approvalCallCount() >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("AnswerApproval call count = %d, want %d", control.approvalCallCount(), want)
 }
 
 func mustPromptReadModelVersionForTest(t *testing.T, sequence uint64) clientui.ReadModelVersion {

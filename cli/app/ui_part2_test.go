@@ -210,6 +210,60 @@ func TestApprovalAskAnswersWhenQueuedCommentarySubmitsBeforeCreateAck(t *testing
 	}
 }
 
+func TestApprovalCommentaryCompletionCannotAnswerNewerPrompt(t *testing.T) {
+	client := &runtimeControlFakeClient{queueUserMessageID: "server-commentary-1"}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m.startupCmds = nil
+	m.setRuntimeActivityBusyForTest(true)
+	firstReply := make(chan askReply, 1)
+	secondReply := make(chan askReply, 1)
+	first := askEvent{req: clientui.PendingPromptEvent{
+		PromptID:  "approval-1",
+		SessionID: "session-1",
+		Question:  "Approve first?",
+		Approval:  true,
+		ApprovalOptions: []clientui.ApprovalOption{
+			{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: clientui.ApprovalDecisionDeny, Label: "Deny"},
+		},
+	}, reply: firstReply}
+	second := askEvent{req: clientui.PendingPromptEvent{
+		PromptID:    "ask-2",
+		SessionID:   "session-1",
+		Question:    "Answer second?",
+		Suggestions: []string{"Yes"},
+	}, reply: secondReply}
+
+	updated := updateUIModel(t, m, askEventMsg{event: first})
+	updated = updateUIModel(t, updated, tea.KeyMsg{Type: tea.KeyTab})
+	updated = updateUIModel(t, updated, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first commentary")})
+	next, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = next.(*uiModel)
+	if cmd == nil {
+		t.Fatal("expected deferred approval commentary command")
+	}
+	completions := collectCmdMessages(t, cmd)
+
+	updated = updateUIModel(t, updated, askEventMsg{event: second})
+	updated = updateUIModel(t, updated, askEventMsg{event: askEvent{resolvedPromptID: "approval-1"}})
+	if current := testActiveAsk(updated); current == nil || current.req.PromptID != "ask-2" {
+		t.Fatalf("active prompt = %#v, want ask-2", current)
+	}
+
+	for _, completion := range completions {
+		updated = updateUIModel(t, updated, completion)
+	}
+
+	select {
+	case stale := <-secondReply:
+		t.Fatalf("newer prompt received stale approval completion: %+v", stale)
+	default:
+	}
+	if current := testActiveAsk(updated); current == nil || current.req.PromptID != "ask-2" || updated.ask.answerPending {
+		t.Fatalf("newer prompt changed by stale completion: current=%#v answerPending=%t", current, updated.ask.answerPending)
+	}
+}
+
 func TestAskEventsQueueUntilCurrentQuestionAnswered(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply1 := make(chan askReply, 1)

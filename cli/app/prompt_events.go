@@ -9,12 +9,11 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
-var promptActivityResubscribeDelay = 250 * time.Millisecond
+const promptRetryDelay = 250 * time.Millisecond
 
 type promptActivitySubscriber func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error)
 
@@ -78,16 +77,6 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 		_, exists := pendingPromptIDs[promptID]
 		return exists
 	}
-	var requeue func(clientui.PendingPromptEvent)
-	requeue = func(item clientui.PendingPromptEvent) {
-		if pollCtx.Err() != nil {
-			return
-		}
-		if !isPromptPending(item.PromptID) {
-			return
-		}
-		_ = emitter.emit(pollCtx, pendingPromptEvent(pollCtx, item, control, requeue))
-	}
 	go func() {
 		defer emitter.close()
 		current := sub
@@ -140,7 +129,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 					}
 				}
 				for _, pendingEvt := range pendingEvents {
-					askEvt := pendingPromptEvent(pollCtx, pendingEvt, control, requeue)
+					askEvt := pendingPromptEvent(pollCtx, pendingEvt, control, isPromptPending)
 					notifyPromptActivityFallback(notificationFallback, pendingEvt, clientui.AttentionNotificationSourceSnapshot)
 					if !emitter.emit(pollCtx, askEvt) {
 						_ = current.Close()
@@ -184,7 +173,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 			default:
 				continue
 			}
-			askEvt := pendingPromptEvent(pollCtx, evt, control, requeue)
+			askEvt := pendingPromptEvent(pollCtx, evt, control, isPromptPending)
 			notifyPromptActivityFallback(notificationFallback, evt, clientui.AttentionNotificationSourceLive)
 			if !emitter.emit(pollCtx, askEvt) {
 				_ = current.Close()
@@ -243,7 +232,7 @@ func notifyPromptActivityFallback(hook attentionNotificationHook, evt clientui.P
 
 func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubscriber, afterVersion clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, bool, error) {
 	for {
-		if !waitPromptActivityRetry(ctx) {
+		if !waitPromptRetry(ctx) {
 			return nil, false, ctx.Err()
 		}
 		sub, err := subscribe(ctx, afterVersion)
@@ -272,8 +261,8 @@ func newestPromptReadModelVersion(current clientui.ReadModelVersion, incoming cl
 	return current
 }
 
-func waitPromptActivityRetry(ctx context.Context) bool {
-	timer := time.NewTimer(promptActivityResubscribeDelay)
+func waitPromptRetry(ctx context.Context) bool {
+	timer := time.NewTimer(promptRetryDelay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -283,7 +272,7 @@ func waitPromptActivityRetry(ctx context.Context) bool {
 	}
 }
 
-func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, control apicontract.PromptControlService, retry func(clientui.PendingPromptEvent)) askEvent {
+func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, control apicontract.PromptControlService, isPromptPending func(string) bool) askEvent {
 	req := item
 	req.Suggestions = append([]string(nil), item.Suggestions...)
 	req.ApprovalOptions = append([]clientui.ApprovalOption(nil), item.ApprovalOptions...)
@@ -302,8 +291,12 @@ func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, c
 				return
 			}
 		}
+		if promptCtx.Err() != nil {
+			return
+		}
+		operationID := runtimeids.NewRuntimeClientRequestID()
 		if item.Approval {
-			answerReq := serverapi.ApprovalAnswerRequest{ClientRequestID: uuid.NewString(), SessionID: item.SessionID, ApprovalID: item.PromptID}
+			answerReq := serverapi.ApprovalAnswerRequest{ClientRequestID: operationID.String(), SessionID: item.SessionID, ApprovalID: item.PromptID}
 			if result.err != nil {
 				answerReq.ErrorMessage = result.err.Error()
 			} else if result.response.Approval != nil {
@@ -312,14 +305,12 @@ func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, c
 			} else {
 				answerReq.ErrorMessage = errors.New("approval response is required").Error()
 			}
-			if err := control.AnswerApproval(promptCtx, answerReq); err != nil {
-				if retry != nil && shouldRetryPromptAnswerError(err) {
-					retry(item)
-				}
-			}
+			retryPromptAnswerOperation(promptCtx, item.PromptID, isPromptPending, func() error {
+				return control.AnswerApproval(promptCtx, answerReq)
+			})
 			return
 		}
-		answerReq := serverapi.AskAnswerRequest{ClientRequestID: uuid.NewString(), SessionID: item.SessionID, AskID: item.PromptID}
+		answerReq := serverapi.AskAnswerRequest{ClientRequestID: operationID.String(), SessionID: item.SessionID, AskID: item.PromptID}
 		if result.err != nil {
 			answerReq.ErrorMessage = result.err.Error()
 		} else {
@@ -327,13 +318,26 @@ func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, c
 			answerReq.SelectedOptionNumber = result.response.SelectedOptionNumber
 			answerReq.FreeformAnswer = result.response.FreeformAnswer
 		}
-		if err := control.AnswerAsk(promptCtx, answerReq); err != nil {
-			if retry != nil && shouldRetryPromptAnswerError(err) {
-				retry(item)
-			}
-		}
+		retryPromptAnswerOperation(promptCtx, item.PromptID, isPromptPending, func() error {
+			return control.AnswerAsk(promptCtx, answerReq)
+		})
 	}()
 	return askEvent{req: req, reply: reply, cancel: cancelPrompt}
+}
+
+func retryPromptAnswerOperation(ctx context.Context, promptID string, isPromptPending func(string) bool, submit func() error) {
+	for isPromptPending(promptID) {
+		err := submit()
+		if !shouldRetryPromptAnswerError(err) {
+			return
+		}
+		if !isPromptPending(promptID) {
+			return
+		}
+		if !waitPromptRetry(ctx) {
+			return
+		}
+	}
 }
 
 func shouldRetryPromptAnswerError(err error) bool {

@@ -159,7 +159,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		hasNext := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
+		_, hasNext := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
 		interruptCmd := tea.Cmd(nil)
 		if m.blocksRuntimeInput() {
 			_, interruptCmd = m.inputController().handleRuntimeCtrlC(nil)
@@ -171,7 +171,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(interruptCmd, m.interruptedStatusNoticeCmd())
 	case tea.KeyEsc:
-		hasNext := c.answer(clientui.PromptAnswer{}, errors.New("question canceled"))
+		_, hasNext := c.answer(clientui.PromptAnswer{}, errors.New("question canceled"))
 		if hasNext {
 			m.activity = uiActivityQuestion
 		} else {
@@ -212,12 +212,15 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					if !ok {
 						return m, nil
 					}
-					resp = clientui.PromptAnswer{Approval: &clientui.ApprovalPromptAnswer{Decision: decision, Commentary: commentary}}
+					resp = clientui.PromptAnswer{
+						PromptID: req.PromptID,
+						Approval: &clientui.ApprovalPromptAnswer{Decision: decision, Commentary: commentary},
+					}
 					if queueCmd := m.enqueueInjectedInputWithApprovalAnswer(commentary, &resp); queueCmd != nil {
 						m.ask.answerPending = true
 						return m, queueCmd
 					}
-					hasNext := c.answer(resp, nil)
+					_, hasNext := c.answer(resp, nil)
 					if hasNext {
 						m.activity = uiActivityQuestion
 					} else {
@@ -226,7 +229,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			}
-			hasNext := c.answer(resp, nil)
+			_, hasNext := c.answer(resp, nil)
 			if hasNext {
 				m.activity = uiActivityQuestion
 			} else {
@@ -245,7 +248,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.ask.freeform = true
 				return m, nil
 			}
-			hasNext := c.answer(clientui.PromptAnswer{Answer: commentary, FreeformAnswer: commentary}, nil)
+			_, hasNext := c.answer(clientui.PromptAnswer{Answer: commentary, FreeformAnswer: commentary}, nil)
 			if hasNext {
 				m.activity = uiActivityQuestion
 			} else {
@@ -266,7 +269,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if req.Approval && m.ask.cursor < len(req.ApprovalOptions) {
 			resp = clientui.PromptAnswer{Approval: &clientui.ApprovalPromptAnswer{Decision: req.ApprovalOptions[m.ask.cursor].Decision}}
 		}
-		hasNext := c.answer(resp, nil)
+		_, hasNext := c.answer(resp, nil)
 		if hasNext {
 			m.activity = uiActivityQuestion
 		} else {
@@ -414,20 +417,27 @@ func askQuestionPromptTextLines(question string) []askPromptLine {
 	return lines
 }
 
-func (c uiAskController) answer(resp clientui.PromptAnswer, err error) bool {
+func (c uiAskController) answer(resp clientui.PromptAnswer, err error) (bool, bool) {
 	m := c.model
 	if !m.ask.hasCurrent() {
-		return false
+		return false, false
+	}
+	currentPromptID := strings.TrimSpace(m.ask.current.req.PromptID)
+	answerPromptID := strings.TrimSpace(resp.PromptID)
+	if answerPromptID != "" && answerPromptID != currentPromptID {
+		return false, false
 	}
 	m.ask.answerPending = true
-	if resp.PromptID == "" {
-		resp.PromptID = m.ask.current.req.PromptID
+	if answerPromptID == "" {
+		resp.PromptID = currentPromptID
+	} else {
+		resp.PromptID = answerPromptID
 	}
 	m.ask.current.reply <- askReply{response: resp, err: err}
-	if strings.TrimSpace(m.ask.current.req.SessionID) == "" || strings.TrimSpace(m.ask.current.req.PromptID) == "" {
-		return c.resolveAnsweredPromptOptimistically()
+	if strings.TrimSpace(m.ask.current.req.SessionID) == "" || currentPromptID == "" {
+		return true, c.resolveAnsweredPromptOptimistically()
 	}
-	return false
+	return true, false
 }
 
 func (c uiAskController) resolveAnsweredPromptOptimistically() bool {
@@ -451,7 +461,10 @@ func (c uiAskController) resolveAnsweredPromptOptimistically() bool {
 }
 
 func (m *uiModel) answerQueuedApprovalCommentary(resp clientui.PromptAnswer) tea.Cmd {
-	hasNext := m.askController().answer(resp, nil)
+	accepted, hasNext := m.askController().answer(resp, nil)
+	if !accepted {
+		return nil
+	}
 	if hasNext {
 		m.activity = uiActivityQuestion
 	} else {

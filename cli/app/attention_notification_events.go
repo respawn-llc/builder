@@ -41,7 +41,7 @@ func startAttentionNotificationEvents(ctx context.Context, sub serverapi.Attenti
 
 func resubscribeAttentionNotifications(ctx context.Context, subscribe attentionNotificationSubscriber) (serverapi.AttentionNotificationSubscription, error) {
 	for {
-		if !waitPromptActivityRetry(ctx) {
+		if !waitPromptRetry(ctx) {
 			return nil, ctx.Err()
 		}
 		sub, err := subscribe(ctx)
