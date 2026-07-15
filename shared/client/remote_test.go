@@ -907,6 +907,7 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 			SessionID:          "session",
 			PendingOperationID: operationID,
 		},
+		serverapi.NewWorktreeImmediateTransitionError(serverapi.WorktreeImmediateTransitionApplyFailed, errors.New("retarget failed")),
 		&serverapi.WorktreeSetupRetainedError{
 			Worktree: serverapi.WorktreeTopologyEntry{
 				Variant: serverapi.WorktreeTopologyVariantRegistered,
@@ -942,6 +943,11 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 		var decoded *serverapi.WorktreeTransitionPendingError
 		if !errors.As(err, &decoded) || decoded.PendingOperationID != operationID || decoded.SessionID != "session" {
 			t.Fatalf("decoded pending transition = %+v (%v)", decoded, err)
+		}
+	case *serverapi.WorktreeImmediateTransitionError:
+		var decoded *serverapi.WorktreeImmediateTransitionError
+		if !errors.As(err, &decoded) || decoded.Kind != serverapi.WorktreeImmediateTransitionApplyFailed || decoded.Error() != source.Error() {
+			t.Fatalf("decoded immediate transition = %+v (%v)", decoded, err)
 		}
 	case *serverapi.WorktreeSetupRetainedError:
 		var decoded *serverapi.WorktreeSetupRetainedError

@@ -312,53 +312,6 @@ func TestRuntimewireViewImageReadsGeneratedFileWithNormalApproval(t *testing.T) 
 	}
 }
 
-func TestBuildToolRegistryMissingWorkspaceRootSuggestsRebind(t *testing.T) {
-	tests := []struct {
-		name string
-		tool toolspec.ID
-	}{
-		{name: "patch", tool: toolspec.ToolPatch},
-		{name: "view_image", tool: toolspec.ToolViewImage},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			missingWorkspace := filepath.Join(t.TempDir(), "workspace-removed")
-			newWorkspace := t.TempDir()
-			t.Chdir(newWorkspace)
-			sessionID := "session-1"
-
-			_, _, _, err := BuildToolRegistry(LocalToolRegistryOptions{
-				WorkspaceRoot:       missingWorkspace,
-				OwnerSessionID:      sessionID,
-				Enabled:             []toolspec.ID{tt.tool},
-				MinimumExecToBgTime: 15 * time.Second,
-				ShellOutputMaxChars: 16_000,
-				SupportsVision:      true,
-			})
-			if err == nil {
-				t.Fatal("expected build tool registry error for missing workspace root")
-			}
-			if !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("expected os.ErrNotExist, got %v", err)
-			}
-			var retarget sessionWorkspaceRetargetError
-			if !errors.As(err, &retarget) {
-				t.Fatalf("expected sessionWorkspaceRetargetError, got %v", err)
-			}
-			if retarget.sessionID != sessionID {
-				t.Fatalf("retarget sessionID = %q, want %q", retarget.sessionID, sessionID)
-			}
-			if retarget.workspaceRoot != missingWorkspace {
-				t.Fatalf("retarget workspaceRoot = %q, want %q", retarget.workspaceRoot, missingWorkspace)
-			}
-			if retarget.newRoot != newWorkspace {
-				t.Fatalf("retarget newRoot = %q, want %q", retarget.newRoot, newWorkspace)
-			}
-		})
-	}
-}
-
 func TestLocalToolRegistryBindingRebindUpdatesExecCommandRoot(t *testing.T) {
 	rootA := filepath.Join(t.TempDir(), "workspace-a")
 	rootB := filepath.Join(t.TempDir(), "workspace-b")

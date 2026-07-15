@@ -289,6 +289,8 @@ func TestWorktreeEnterAndLeaveReturnScheduledAcknowledgements(t *testing.T) {
 	remote := &worktreeCommandTestRemote{}
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
+	t.Setenv("KENT_RUN_ID", "018fdd67-89ab-4cde-8123-456789abc001")
+	t.Setenv("KENT_STEP_ID", "018fdd67-89ab-4cde-8123-456789abc002")
 	for _, args := range [][]string{
 		{"worktree", "enter", "--json", "feature/a"},
 		{"worktree", "leave", "--json"},
@@ -307,6 +309,11 @@ func TestWorktreeEnterAndLeaveReturnScheduledAcknowledgements(t *testing.T) {
 	}
 	if remote.enterRequest == nil || remote.enterRequest.SessionID != "shell-session" || remote.enterRequest.Selector != "feature/a" {
 		t.Fatalf("enter request = %+v", remote.enterRequest)
+	}
+	if remote.enterRequest.Origin == nil ||
+		remote.enterRequest.Origin.RunID != "018fdd67-89ab-4cde-8123-456789abc001" ||
+		remote.enterRequest.Origin.StepID != "018fdd67-89ab-4cde-8123-456789abc002" {
+		t.Fatalf("enter request origin = %+v", remote.enterRequest.Origin)
 	}
 	if remote.leaveRequest == nil || remote.leaveRequest.SessionID != "shell-session" {
 		t.Fatalf("leave request = %+v", remote.leaveRequest)

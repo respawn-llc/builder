@@ -5,6 +5,7 @@ import (
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/metadata"
+	"core/server/registry"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/shared/clientui"
@@ -2009,5 +2010,60 @@ func TestApplyRunPromptOverridesCLIModelOverrideRecomputesBudgetAfterFastRole(t 
 	}
 	if !updated.ActiveSettings.PriorityRequestMode {
 		t.Fatal("expected fast-role priority mode to stay enabled")
+	}
+}
+
+func missingWorktreeLaunchFixture(t *testing.T) (Planner, *metadata.Store, *session.Store, metadata.Binding) {
+	must := func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, persistenceRoot, workspaceRoot := context.Background(), t.TempDir(), t.TempDir()
+	metadataStore, err := metadata.Open(persistenceRoot)
+	must(err)
+	t.Cleanup(func() { _ = metadataStore.Close() })
+	binding, err := metadataStore.RegisterWorkspaceBinding(ctx, workspaceRoot)
+	must(err)
+	containerDir := filepath.Join(persistenceRoot, "projects", binding.ProjectID, "sessions")
+	store := createTestSessionInContainer(t, containerDir, "workspace", workspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
+	missingRoot := filepath.Join(t.TempDir(), "deleted")
+	err = metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{ID: "missing-worktree", WorkspaceID: binding.WorkspaceID, CanonicalRoot: missingRoot, Managed: true, GitMetadataJSON: `{}`})
+	must(err)
+	err = metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: store.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "missing-worktree"}, CwdRelpath: "pkg"})
+	must(err)
+	err = store.SetWorktreeReminderState(&session.WorktreeReminderState{Mode: session.WorktreeReminderModeEnter, WorktreeContext: session.WorktreeContext{WorktreePath: missingRoot, WorkspaceRoot: workspaceRoot, EffectiveCwd: filepath.Join(missingRoot, "pkg")}})
+	must(err)
+	sessionStores := registry.NewSessionStoreRegistry()
+	retargetWorkspace := func(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: req.SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, CwdRelpath: "."})
+		if err == nil {
+			registered, resolveErr := sessionStores.ResolveStore(ctx, req.SessionID)
+			err = errors.Join(resolveErr, registered.SetWorktreeReminderState(nil))
+		}
+		return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: binding.ProjectID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: req.WorkspaceRoot}}, err
+	}
+	return Planner{Config: config.App{WorkspaceRoot: workspaceRoot, PersistenceRoot: persistenceRoot, Settings: config.Settings{Model: "gpt-5"}}, ContainerDir: containerDir, StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(), RuntimeActive: func(string) bool { return false }, BlockSessionRuns: func([]string) func() { return func() {} }, SessionStores: sessionStores, RetargetWorkspace: retargetWorkspace}, metadataStore, store, binding
+}
+
+func TestPlannerRecoversDeletedManagedWorktreePersistently(t *testing.T) {
+	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
+	planner.SessionStores.RegisterStore(store)
+	planner.RuntimeActive = func(string) bool { return true }
+	intent := serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))
+	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent})
+	var recoveryErr *SessionTargetRecoveryError
+	if !errors.As(err, &recoveryErr) || recoveryErr.Reason != SessionTargetRecoveryActive || recoveryErr.Candidate == nil {
+		t.Fatalf("recovery error=%+v err=%v", recoveryErr, err)
+	}
+	planner.RuntimeActive = func(string) bool { return false }
+	plan, planErr := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent})
+	target, targetErr := metadataStore.ResolveSessionExecutionTarget(context.Background(), store.Meta().SessionID)
+	if planErr != nil || targetErr != nil || plan.Store != store || target.Worktree != nil || target.CwdRelpath != "." || target.WorkspaceID != binding.WorkspaceID || plan.Recovery == nil || plan.WorkspaceRoot != target.WorkspaceRoot || plan.Store.Meta().WorktreeReminder != nil {
+		t.Fatalf("plan=%+v target=%+v errors=%v/%v", plan.Recovery, target, planErr, targetErr)
+	}
+	reopened, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent})
+	if err != nil || reopened.Recovery != nil {
+		t.Fatalf("reopen recovery=%+v err=%v", reopened.Recovery, err)
 	}
 }

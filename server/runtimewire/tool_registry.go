@@ -17,9 +17,7 @@ import (
 	"core/shared/toolspec"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -171,7 +169,7 @@ func (b *LocalToolRegistryBinding) rebuild() error {
 		}
 		handler, err := BuildLocalRuntimeHandler(def, b.ctx)
 		if err != nil {
-			return wrapSessionWorkspaceRetargetHint(b.ctx.OwnerSessionID, b.ctx.WorkspaceRoot, err)
+			return err
 		}
 		handlers = append(handlers, tools.HandlerRegistration{ID: id, Handler: handler})
 	}
@@ -298,44 +296,4 @@ func generatedAssetsEditDenyMessage(configRoot string, userSkillsRoot string) st
 		skillsPath = config.PersistenceRoot + "/skills/"
 	}
 	return "Do NOT attempt to edit Kent's generated files; they are overwritten every session. You cannot edit generated skills. Consider instead copying them as " + skillsPath + " and exactly matching name/id/directory structure so that the new file automatically shadows the generated skill by Kent runtime."
-}
-
-func wrapSessionWorkspaceRetargetHint(sessionID string, workspaceRoot string, err error) error {
-	if strings.TrimSpace(sessionID) == "" || err == nil || !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	trimmedWorkspaceRoot := strings.TrimSpace(workspaceRoot)
-	if trimmedWorkspaceRoot == "" {
-		return err
-	}
-	newWorkspaceRoot := "."
-	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
-		newWorkspaceRoot = filepath.Clean(cwd)
-	}
-	return sessionWorkspaceRetargetError{
-		sessionID:     strings.TrimSpace(sessionID),
-		workspaceRoot: trimmedWorkspaceRoot,
-		newRoot:       newWorkspaceRoot,
-		cause:         err,
-	}
-}
-
-type sessionWorkspaceRetargetError struct {
-	sessionID     string
-	workspaceRoot string
-	newRoot       string
-	cause         error
-}
-
-func (e sessionWorkspaceRetargetError) Error() string {
-	return fmt.Sprintf(
-		"workspace root %q is missing; run `kent rebind %s %s`",
-		e.workspaceRoot,
-		strconv.Quote(e.sessionID),
-		strconv.Quote(e.newRoot),
-	)
-}
-
-func (e sessionWorkspaceRetargetError) Unwrap() error {
-	return e.cause
 }

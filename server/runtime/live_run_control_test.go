@@ -541,8 +541,9 @@ func TestCapturedActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	client.waitStarted(t)
 
 	queued := eng.QueueUserMessageWithClientRequestID("steer into drain", "req-queued")
-	if queued.ID == "" {
-		t.Fatal("busy queued message returned empty id")
+	handle, captureErr := eng.CaptureActiveRunResult(context.Background())
+	if queued.ID == "" || captureErr != nil {
+		t.Fatalf("queued=%+v capture error=%v", queued, captureErr)
 	}
 	handle, err := eng.CaptureActiveRunResult(context.Background())
 	if err != nil {

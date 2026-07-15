@@ -293,10 +293,11 @@ func TestRunWhenIdleWaitsForTerminalPublication(t *testing.T) {
 	}
 }
 
-func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.T) {
+func TestExclusiveStepAuthorityRejectsInterruptedStepBeforeFinalDrain(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
 	stepCtx, stepID, err := lifecycle.begin(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn})
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -305,25 +306,15 @@ func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.
 		t.Fatalf("begin returned ctx=%v stepID=%q, want active step", stepCtx, stepID)
 	}
 
-	called := false
-	active, err := lifecycle.WithActiveStep(func(string) error {
-		called = true
+	if _, err := lifecycle.InterruptCurrent(nil); err != nil {
+		t.Fatalf("InterruptCurrent: %v", err)
+	}
+	err = eng.ApplyForActiveStep(stepID, func() error {
+		t.Fatal("active-step callback ran after interruption")
 		return nil
 	})
-	if err != nil || !active || !called {
-		t.Fatalf("WithActiveStep before close active=%t called=%t err=%v, want active callback", active, called, err)
-	}
-
-	lifecycle.closeActiveStepQueue(stepID)
-	active, err = lifecycle.WithActiveStep(func(string) error {
-		t.Fatal("active-step callback ran after queue close")
-		return nil
-	})
-	if !errors.Is(err, ErrAgentBusy) {
-		t.Fatalf("WithActiveStep after close error = %v, want ErrAgentBusy", err)
-	}
-	if !active {
-		t.Fatal("WithActiveStep after close active=false, want true with busy error")
+	if !errors.Is(err, ErrActiveStepInactive) {
+		t.Fatalf("ApplyForActiveStep after interruption error = %v, want ErrActiveStepInactive", err)
 	}
 	lifecycle.end()
 }
