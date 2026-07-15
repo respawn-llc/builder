@@ -45,6 +45,50 @@ func TestSessionPageSeparatesCategoriesAndMapsLegacyToMain(t *testing.T) {
 	requireSessionPageIDs(t, subagentPage, "subagent-session")
 }
 
+func TestSessionPageReflectsPersistedCategoryPromotion(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	updatedAt := time.Now().UTC()
+	category := sessioncontract.SessionCategorySubagent
+	importSessionPageFixture(t, store, cfg, binding, "promoted-session", &category, updatedAt)
+
+	snapshot, err := store.ResolvePersistedSession(ctx, "promoted-session")
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession: %v", err)
+	}
+	promoted := sessioncontract.SessionCategoryMain
+	snapshot.Meta.Category = &promoted
+	snapshot.Meta.UpdatedAt = updatedAt.Add(time.Second)
+	if err := store.ImportSessionSnapshot(ctx, session.PersistedStoreSnapshot{
+		SessionDir: snapshot.SessionDir,
+		Meta:       *snapshot.Meta,
+	}); err != nil {
+		t.Fatalf("ImportSessionSnapshot promotion: %v", err)
+	}
+
+	mainPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategoryMain,
+		PageSize:  10,
+		Position:  serverapi.NewestSessionPagePosition(),
+	})
+	if err != nil {
+		t.Fatalf("ListSessionPage main: %v", err)
+	}
+	requireSessionPageIDs(t, mainPage, "promoted-session")
+
+	subagentPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategorySubagent,
+		PageSize:  10,
+		Position:  serverapi.NewestSessionPagePosition(),
+	})
+	if err != nil {
+		t.Fatalf("ListSessionPage subagent: %v", err)
+	}
+	requireSessionPageIDs(t, subagentPage)
+}
+
 func TestSessionPageNavigatesOlderAndNewerWithStableTieBreaks(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)

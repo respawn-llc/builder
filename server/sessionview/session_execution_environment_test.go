@@ -405,6 +405,35 @@ func TestSessionExecutionEnvironmentAuthorityMatrixIsReadOnly(t *testing.T) {
 		}
 	})
 
+	t.Run("git branch from execution subdirectory", func(t *testing.T) {
+		fixture := newSessionExecutionEnvironmentFixture(t)
+		markSessionExecutionEnvironmentGitRepository(t, fixture.workspaceRoot)
+		subdirectory := filepath.Join(fixture.workspaceRoot, "pkg")
+		if err := os.MkdirAll(subdirectory, 0o755); err != nil {
+			t.Fatalf("MkdirAll execution subdirectory: %v", err)
+		}
+		target := clientui.SessionExecutionTarget{
+			WorkspaceID:           "workspace-id",
+			WorkspaceRoot:         fixture.workspaceRoot,
+			WorkspaceAvailability: "available",
+			EffectiveWorkdir:      subdirectory,
+		}
+		service := NewService(
+			NewStaticSessionResolver(fixture.store),
+			nil,
+			staticExecutionTargetResolver{target: target},
+		).WithExecutionEnvironmentConfig(config.App{Settings: config.Settings{Model: "gpt-5.6-sol"}}).
+			WithExecutionEnvironmentGit(worktree.NewGitInspector(sessionExecutionEnvironmentGitRunner{
+				output: []byte("worktree " + fixture.workspaceRoot + "\nHEAD abc123\nbranch refs/heads/feature\n\n"),
+			}))
+
+		response := readEnvironmentAndAssertPersistenceUnchanged(t, fixture, service)
+		branch, ok := response.Environment.Branch.Value()
+		if !ok || branch.Name != "feature" {
+			t.Fatalf("subdirectory branch = %q/%v, want feature", branch, ok)
+		}
+	})
+
 	t.Run("non git workspace", func(t *testing.T) {
 		fixture := newSessionExecutionEnvironmentFixture(t)
 		service := NewService(NewStaticSessionResolver(fixture.store), nil, fixture.metadata).

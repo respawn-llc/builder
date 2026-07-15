@@ -3017,6 +3017,7 @@ ON CONFLICT(id) DO UPDATE SET
     first_prompt_preview = excluded.first_prompt_preview,
     input_draft = excluded.input_draft,
     parent_session_id = excluded.parent_session_id,
+    category = excluded.category,
     updated_at_unix_ms = MAX(sessions.updated_at_unix_ms, excluded.updated_at_unix_ms),
     last_sequence = excluded.last_sequence,
     model_request_count = excluded.model_request_count,

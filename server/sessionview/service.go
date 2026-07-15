@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -367,8 +368,16 @@ func (s *Service) resolveBranch(
 		}
 		return serverapi.FailedSessionExecutionBranch(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: err.Error()})
 	}
+	canonicalWorkdir, err := config.CanonicalWorkspaceRoot(target.EffectiveWorkdir)
+	if err != nil {
+		return serverapi.FailedSessionExecutionBranch(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: err.Error()})
+	}
 	for _, entry := range entries {
-		if entry.Root == target.EffectiveWorkdir {
+		relative, err := filepath.Rel(entry.Root, canonicalWorkdir)
+		if err != nil || !filepath.IsLocal(relative) {
+			continue
+		}
+		if relative == "." || filepath.IsLocal(relative) {
 			if entry.Detached {
 				return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableDetachedHead)
 			}
