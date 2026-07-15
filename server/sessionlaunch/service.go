@@ -191,6 +191,7 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		}
 		plan, err := planner.PlanSession(ctx, launch.SessionRequest{
 			Mode:                                launch.Mode(req.Mode),
+			Intent:                              req.Intent,
 			SelectedSessionID:                   selectedSessionID,
 			ForceNewSession:                     forceNewSession,
 			ParentSessionID:                     parentSessionID,
@@ -233,6 +234,7 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		ModelContractLocked: result.Plan.ModelContractLocked,
 		WorkspaceRoot:       result.Plan.WorkspaceRoot,
 		Source:              result.Plan.Source,
+		Recovery:            result.Plan.Recovery,
 	}, Warnings: result.Warnings}
 }
 

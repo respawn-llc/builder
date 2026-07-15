@@ -87,6 +87,9 @@ CREATE UNIQUE INDEX sessions_artifact_relpath_idx ON sessions(artifact_relpath);
 CREATE INDEX sessions_visible_category_recency_idx
 ON sessions(project_id, category, updated_at_unix_ms DESC, id DESC)
 WHERE launch_visible <> 0;
+CREATE INDEX sessions_worktree_updated_idx
+ON sessions(worktree_id, updated_at_unix_ms DESC)
+WHERE worktree_id IS NOT NULL;
 
 -- +goose StatementBegin
 CREATE TRIGGER workspaces_child_refs_delete_cleanup

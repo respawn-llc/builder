@@ -338,6 +338,41 @@ func TestMemoizingPromptServiceDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
+func TestMemoizingPromptServiceDedupesRemoteShapedReplayWithOverrides(t *testing.T) {
+	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+		return serverapi.RunPromptResponse{Result: "ok"}, nil
+	}}
+	service := &memoizingPromptService{
+		inner: inner,
+		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
+	}
+	role := "reviewer"
+	first := serverapi.RunPromptRequest{
+		ClientRequestID: "req-remote-shaped",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "remote-session")),
+		Prompt:          "hello",
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role, Model: " gpt-5 "},
+	}
+	wire, err := json.Marshal(first)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var replay serverapi.RunPromptRequest
+	if err := json.Unmarshal(wire, &replay); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+
+	if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
+		t.Fatalf("RunPrompt first: %v", err)
+	}
+	if _, err := service.RunPrompt(context.Background(), replay, nil); err != nil {
+		t.Fatalf("RunPrompt remote-shaped replay: %v", err)
+	}
+	if inner.CallCount() != 1 {
+		t.Fatalf("inner call count = %d, want 1", inner.CallCount())
+	}
+}
+
 func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.T) {
 	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 		sessionID, _ := req.Intent.SessionID()

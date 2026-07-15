@@ -609,7 +609,7 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	if err != nil {
 		return PreparedRunPromptOverrides{}, err
 	}
-	target, err := prepareNamedTarget(app, overrideConfig, overrides, *lookup.NormalizedSelector, lookup.Role, strings.TrimSpace(providerCaps.ProviderID), preparation.ModelLock, preparation.ToolLock)
+	target, err := prepareNamedTarget(app, overrideConfig, overrides, *lookup.NormalizedSelector, lookup.Role, strings.TrimSpace(providerCaps.ProviderID), preparation.ModelLock, preparation.ToolLock, applyBudget)
 	if err != nil {
 		return PreparedRunPromptOverrides{}, err
 	}
@@ -632,52 +632,20 @@ func preparePreparedBaseTarget(target PreparedBaseTarget, overrideConfig config.
 	source := cloneSourceReport(target.Source)
 	enabledTools := append([]toolspec.ID(nil), target.EnabledTools...)
 	var err error
+	resolved, source, enabledTools, err = applyPreparedConfigOverrides(resolved, source, enabledTools, overrideConfig, overrides, modelLock, toolLock, applyBudget)
+	if err != nil {
+		return PreparedBaseTarget{}, err
+	}
 	if overrides.HasConfigOverrides() {
-		source = mergeOverrideSources(source, overrideConfig.Source)
-		if strings.TrimSpace(overrides.Model) != "" && modelLock == nil {
-			originalModel := resolved.Model
-			explicitSources := map[string]string{}
-			for key, value := range source.Sources {
-				if strings.TrimSpace(value) != "" && strings.TrimSpace(value) != "default" {
-					explicitSources[key] = value
-				}
-			}
-			resolved.Model = overrideConfig.Settings.Model
-			applyBudget(&resolved, explicitSources, originalModel, true)
-		}
-		if strings.TrimSpace(overrides.ProviderOverride) != "" {
-			resolved.ProviderOverride = overrideConfig.Settings.ProviderOverride
-		}
-		if strings.TrimSpace(overrides.ThinkingLevel) != "" {
-			resolved.ThinkingLevel = overrideConfig.Settings.ThinkingLevel
-		}
-		if strings.TrimSpace(overrides.Theme) != "" {
-			resolved.Theme = overrideConfig.Settings.Theme
-		}
-		if overrides.ModelTimeoutSeconds > 0 {
-			resolved.Timeouts.ModelRequestSeconds = overrideConfig.Settings.Timeouts.ModelRequestSeconds
-		}
-		if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
-			resolved.OpenAIBaseURL = overrideConfig.Settings.OpenAIBaseURL
-		}
-		if strings.TrimSpace(overrides.Tools) != "" && toolLock == nil {
-			resolved.EnabledTools = cloneEnabledToolSet(overrideConfig.Settings.EnabledTools)
-		}
 		resolved, err = validateRunPromptOverrideSettings(resolved, source)
 		if err != nil {
 			return PreparedBaseTarget{}, err
-		}
-		if toolLock == nil && (strings.TrimSpace(overrides.Tools) != "" || strings.TrimSpace(overrides.Model) != "") {
-			enabledTools, err = ActiveToolIDsForPlan(resolved, source, nil)
-			if err != nil {
-				return PreparedBaseTarget{}, err
-			}
 		}
 	}
 	return PreparedBaseTarget{Settings: resolved, Source: source, EnabledTools: append([]toolspec.ID(nil), enabledTools...)}, nil
 }
 
-func prepareNamedTarget(app, overrideConfig config.App, overrides serverapi.RunPromptOverrides, selector string, role config.SubagentRole, providerID string, modelLock, toolLock *session.LockedContract) (PreparedSubagentTarget, error) {
+func prepareNamedTarget(app, overrideConfig config.App, overrides serverapi.RunPromptOverrides, selector string, role config.SubagentRole, providerID string, modelLock, toolLock *session.LockedContract, applyBudget modelContextBudgetApplier) (PreparedSubagentTarget, error) {
 	input := preparedSubagentIdentity{Selector: selector, Role: role, ProviderID: providerID}
 	baseSettings := EffectiveSettings(app.Settings, modelLock)
 	resolved, source, warning, err := resolvePreparedSubagentSettings(baseSettings, app.Source, input, modelLock == nil, false)
@@ -688,49 +656,13 @@ func prepareNamedTarget(app, overrideConfig config.App, overrides serverapi.RunP
 	if err != nil {
 		return PreparedSubagentTarget{}, err
 	}
-	if overrides.HasConfigOverrides() {
-		source = mergeOverrideSources(source, overrideConfig.Source)
-		if strings.TrimSpace(overrides.Model) != "" && modelLock == nil {
-			originalModel := resolved.Model
-			explicitSources := map[string]string{}
-			for key, value := range source.Sources {
-				if strings.TrimSpace(value) != "" && strings.TrimSpace(value) != "default" {
-					explicitSources[key] = value
-				}
-			}
-			resolved.Model = overrideConfig.Settings.Model
-			applyDerivedModelContextBudgetOverrides(&resolved, explicitSources, originalModel, true)
-		}
-		if strings.TrimSpace(overrides.ProviderOverride) != "" {
-			resolved.ProviderOverride = overrideConfig.Settings.ProviderOverride
-		}
-		if strings.TrimSpace(overrides.ThinkingLevel) != "" {
-			resolved.ThinkingLevel = overrideConfig.Settings.ThinkingLevel
-		}
-		if strings.TrimSpace(overrides.Theme) != "" {
-			resolved.Theme = overrideConfig.Settings.Theme
-		}
-		if overrides.ModelTimeoutSeconds > 0 {
-			resolved.Timeouts.ModelRequestSeconds = overrideConfig.Settings.Timeouts.ModelRequestSeconds
-		}
-		if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
-			resolved.OpenAIBaseURL = overrideConfig.Settings.OpenAIBaseURL
-		}
-		if strings.TrimSpace(overrides.Tools) != "" {
-			if toolLock == nil {
-				resolved.EnabledTools = cloneEnabledToolSet(overrideConfig.Settings.EnabledTools)
-			}
-		}
+	resolved, source, enabledTools, err = applyPreparedConfigOverrides(resolved, source, enabledTools, overrideConfig, overrides, modelLock, toolLock, applyBudget)
+	if err != nil {
+		return PreparedSubagentTarget{}, err
 	}
 	resolved, err = validateRunPromptOverrideSettings(resolved, source)
 	if err != nil {
 		return PreparedSubagentTarget{}, err
-	}
-	if toolLock == nil && (strings.TrimSpace(overrides.Tools) != "" || strings.TrimSpace(overrides.Model) != "") {
-		enabledTools, err = ActiveToolIDsForPlan(resolved, source, nil)
-		if err != nil {
-			return PreparedSubagentTarget{}, err
-		}
 	}
 	return PreparedSubagentTarget{
 		Selector:     selector,
@@ -739,6 +671,50 @@ func prepareNamedTarget(app, overrideConfig config.App, overrides serverapi.RunP
 		EnabledTools: append([]toolspec.ID(nil), enabledTools...),
 		Warning:      warning,
 	}, nil
+}
+
+func applyPreparedConfigOverrides(settings config.Settings, source config.SourceReport, enabledTools []toolspec.ID, overrideConfig config.App, overrides serverapi.RunPromptOverrides, modelLock, toolLock *session.LockedContract, applyBudget modelContextBudgetApplier) (config.Settings, config.SourceReport, []toolspec.ID, error) {
+	if !overrides.HasConfigOverrides() {
+		return settings, source, enabledTools, nil
+	}
+	source = mergeOverrideSources(source, overrideConfig.Source)
+	if strings.TrimSpace(overrides.Model) != "" && modelLock == nil {
+		originalModel := settings.Model
+		explicitSources := map[string]string{}
+		for key, value := range source.Sources {
+			if strings.TrimSpace(value) != "" && strings.TrimSpace(value) != "default" {
+				explicitSources[key] = value
+			}
+		}
+		settings.Model = overrideConfig.Settings.Model
+		applyBudget(&settings, explicitSources, originalModel, true)
+	}
+	if strings.TrimSpace(overrides.ProviderOverride) != "" {
+		settings.ProviderOverride = overrideConfig.Settings.ProviderOverride
+	}
+	if strings.TrimSpace(overrides.ThinkingLevel) != "" {
+		settings.ThinkingLevel = overrideConfig.Settings.ThinkingLevel
+	}
+	if strings.TrimSpace(overrides.Theme) != "" {
+		settings.Theme = overrideConfig.Settings.Theme
+	}
+	if overrides.ModelTimeoutSeconds > 0 {
+		settings.Timeouts.ModelRequestSeconds = overrideConfig.Settings.Timeouts.ModelRequestSeconds
+	}
+	if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
+		settings.OpenAIBaseURL = overrideConfig.Settings.OpenAIBaseURL
+	}
+	if strings.TrimSpace(overrides.Tools) != "" && toolLock == nil {
+		settings.EnabledTools = cloneEnabledToolSet(overrideConfig.Settings.EnabledTools)
+	}
+	if toolLock == nil && (strings.TrimSpace(overrides.Tools) != "" || strings.TrimSpace(overrides.Model) != "") {
+		var err error
+		enabledTools, err = ActiveToolIDsForPlan(settings, source, nil)
+		if err != nil {
+			return config.Settings{}, config.SourceReport{}, nil, err
+		}
+	}
+	return settings, source, enabledTools, nil
 }
 
 func ApplyPreparedRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides) (SessionPlan, []string, error) {

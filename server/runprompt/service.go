@@ -13,7 +13,7 @@ type runPromptMemoRequest struct {
 	Intent    serverapi.SessionLaunchIntent
 	Prompt    string
 	Timeout   string
-	Overrides serverapi.RunPromptOverrides
+	Overrides serverapi.RunPromptOverridesKey
 }
 
 type memoizingPromptService struct {
@@ -22,11 +22,15 @@ type memoizingPromptService struct {
 }
 
 func (s *memoizingPromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+	overrides, err := req.Overrides.CanonicalKey()
+	if err != nil {
+		return serverapi.RunPromptResponse{}, err
+	}
 	memoReq := runPromptMemoRequest{
 		Intent:    req.Intent,
 		Prompt:    strings.TrimSpace(req.Prompt),
 		Timeout:   req.Timeout.String(),
-		Overrides: req.Overrides,
+		Overrides: overrides,
 	}
 	return s.runs.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameRunPromptMemoRequest, func(ctx context.Context) (serverapi.RunPromptResponse, error) {
 		return s.inner.RunPrompt(ctx, req, progress)
