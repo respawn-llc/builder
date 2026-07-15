@@ -69,6 +69,34 @@ func TestRunPromptOverridesAgentRoleContract(t *testing.T) {
 	}
 }
 
+func TestRunPromptOverridesMarshalUsesSnakeCaseAndNullableSelector(t *testing.T) {
+	data, err := json.Marshal(RunPromptOverrides{
+		AgentRole:           runPromptStringPtr("worker"),
+		Model:               "gpt-5",
+		ProviderOverride:    "openai",
+		ThinkingLevel:       "medium",
+		Theme:               "dark",
+		ModelTimeoutSeconds: 30,
+		Tools:               "shell",
+		OpenAIBaseURL:       "https://example.test",
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal marshaled overrides: %v", err)
+	}
+	for key := range got {
+		if key == "AgentRole" || key == "Model" || key == "ProviderOverride" {
+			t.Fatalf("legacy override key %q in %s", key, data)
+		}
+	}
+	if got["agent_role"] != "worker" || got["model"] != "gpt-5" || got["provider_override"] != "openai" {
+		t.Fatalf("snake_case overrides = %v", got)
+	}
+}
+
 func TestRunPromptOverridesRolePresenceAndAuth(t *testing.T) {
 	tests := []struct {
 		name         string

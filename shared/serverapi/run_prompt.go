@@ -136,13 +136,13 @@ func (r RunPromptRequest) Validate() error {
 
 type RunPromptOverrides struct {
 	AgentRole           *string `json:"agent_role,omitempty"`
-	Model               string
-	ProviderOverride    string
-	ThinkingLevel       string
-	Theme               string
-	ModelTimeoutSeconds int
-	Tools               string
-	OpenAIBaseURL       string
+	Model               string  `json:"model"`
+	ProviderOverride    string  `json:"provider_override"`
+	ThinkingLevel       string  `json:"thinking_level"`
+	Theme               string  `json:"theme"`
+	ModelTimeoutSeconds int     `json:"model_timeout_seconds"`
+	Tools               string  `json:"tools"`
+	OpenAIBaseURL       string  `json:"openai_base_url"`
 }
 
 var ErrInvalidRunPromptAgentRole = errors.New("invalid agent role")

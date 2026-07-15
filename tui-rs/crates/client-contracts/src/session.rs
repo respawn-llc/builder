@@ -59,21 +59,21 @@ pub enum SessionLaunchMode {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RunPromptOverrides {
-    #[serde(rename = "AgentRole")]
-    pub agent_role: String,
-    #[serde(rename = "Model")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub agent_role: Option<String>,
+    #[serde(rename = "model")]
     pub model: String,
-    #[serde(rename = "ProviderOverride")]
+    #[serde(rename = "provider_override")]
     pub provider_override: String,
-    #[serde(rename = "ThinkingLevel")]
+    #[serde(rename = "thinking_level")]
     pub thinking_level: String,
-    #[serde(rename = "Theme")]
+    #[serde(rename = "theme")]
     pub theme: String,
-    #[serde(rename = "ModelTimeoutSeconds")]
+    #[serde(rename = "model_timeout_seconds")]
     pub model_timeout_seconds: i32,
-    #[serde(rename = "Tools")]
+    #[serde(rename = "tools")]
     pub tools: String,
-    #[serde(rename = "OpenAIBaseURL")]
+    #[serde(rename = "openai_base_url")]
     pub openai_base_url: String,
 }
 

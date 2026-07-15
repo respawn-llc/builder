@@ -660,14 +660,13 @@ fn session_plan_wrapper_sends_contract_dto_and_method_name() {
                 "session_id": "session-1"
             },
             "overrides": {
-                "AgentRole": "",
-                "Model": "",
-                "ProviderOverride": "",
-                "ThinkingLevel": "",
-                "Theme": "",
-                "ModelTimeoutSeconds": 0,
-                "Tools": "",
-                "OpenAIBaseURL": ""
+                "model": "",
+                "provider_override": "",
+                "thinking_level": "",
+                "theme": "",
+                "model_timeout_seconds": 0,
+                "tools": "",
+                "openai_base_url": ""
             }
         })
     );
@@ -697,7 +696,10 @@ fn session_plan_wrapper_serializes_nullable_lineage_and_selector_fields() {
             selected_session_id: Some("legacy-selector".to_owned()),
             caller_session_id: Some("caller-session".to_owned()),
             parent_session_id: Some("parent-session".to_owned()),
-            overrides: RunPromptOverrides::default(),
+            overrides: RunPromptOverrides {
+                agent_role: Some("worker".to_owned()),
+                ..RunPromptOverrides::default()
+            },
         })
         .unwrap();
     let connection = client.into_connection();
@@ -715,14 +717,14 @@ fn session_plan_wrapper_serializes_nullable_lineage_and_selector_fields() {
             "caller_session_id": "caller-session",
             "parent_session_id": "parent-session",
             "overrides": {
-                "AgentRole": "",
-                "Model": "",
-                "ProviderOverride": "",
-                "ThinkingLevel": "",
-                "Theme": "",
-                "ModelTimeoutSeconds": 0,
-                "Tools": "",
-                "OpenAIBaseURL": ""
+                "agent_role": "worker",
+                "model": "",
+                "provider_override": "",
+                "thinking_level": "",
+                "theme": "",
+                "model_timeout_seconds": 0,
+                "tools": "",
+                "openai_base_url": ""
             }
         })
     );

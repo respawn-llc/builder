@@ -178,9 +178,7 @@ func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 	}
 	if err := request.Intent.Validate(); err != nil ||
 		strings.TrimSpace(request.SelectedSessionID) != "" ||
-		request.ForceNewSession ||
-		request.CallerSessionID != nil ||
-		request.ParentSessionID != nil {
+		request.ForceNewSession {
 		return errors.New("legacy session launch fields are not accepted; use intent")
 	}
 	if err := request.Validate(); err != nil {
