@@ -318,6 +318,11 @@ func TestWorktreeEnterAndLeaveReturnScheduledAcknowledgements(t *testing.T) {
 	if remote.leaveRequest == nil || remote.leaveRequest.SessionID != "shell-session" {
 		t.Fatalf("leave request = %+v", remote.leaveRequest)
 	}
+	if remote.leaveRequest.Origin == nil ||
+		remote.leaveRequest.Origin.RunID != "018fdd67-89ab-4cde-8123-456789abc001" ||
+		remote.leaveRequest.Origin.StepID != "018fdd67-89ab-4cde-8123-456789abc002" {
+		t.Fatalf("leave request origin = %+v", remote.leaveRequest.Origin)
+	}
 }
 
 func TestWorktreeCreateDoesNotEnterAndReturnsCreatedSelector(t *testing.T) {
@@ -382,12 +387,19 @@ func TestAgentWorktreeDeleteRetainsBranchAndRejectsDeleteBranch(t *testing.T) {
 	}
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
+	t.Setenv("KENT_RUN_ID", "018fdd67-89ab-4cde-8123-456789abc001")
+	t.Setenv("KENT_STEP_ID", "018fdd67-89ab-4cde-8123-456789abc002")
 	var stdout, stderr bytes.Buffer
 	if exitCode := rootCommand([]string{"worktree", "delete", "--force", "feature/a"}, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
 		t.Fatalf("delete exit=%d stderr=%s", exitCode, stderr.String())
 	}
 	if remote.deleteRequest == nil || remote.deleteRequest.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeRetain || !remote.deleteRequest.ForceFolderRemoval {
 		t.Fatalf("delete request = %+v", remote.deleteRequest)
+	}
+	if remote.deleteRequest.Origin == nil ||
+		remote.deleteRequest.Origin.RunID != "018fdd67-89ab-4cde-8123-456789abc001" ||
+		remote.deleteRequest.Origin.StepID != "018fdd67-89ab-4cde-8123-456789abc002" {
+		t.Fatalf("delete request origin = %+v", remote.deleteRequest.Origin)
 	}
 	stdout.Reset()
 	stderr.Reset()

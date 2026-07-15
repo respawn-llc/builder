@@ -78,7 +78,7 @@ func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeave
 	}
 	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
 		return s.executeLeaveWorktree(runCtx, request.sessionID, authority, sync)
-	}, nil)
+	}, req.Origin)
 }
 
 func (s *Service) scheduleWorktreeTransition(
@@ -236,16 +236,22 @@ func (s *Service) executeLeaveWorktree(ctx context.Context, sessionID string, au
 	if err != nil {
 		return err
 	}
-	previous, err := s.currentTransitionWorktree(ctx, topology, workspaceCtx.target)
-	if err != nil {
+	apply := func() error {
+		previous, err := s.currentTransitionWorktree(ctx, topology, workspaceCtx.target)
+		if err != nil {
+			return err
+		}
+		main, err := mainTransitionWorktree(topology, workspaceCtx.workspaceRoot)
+		if err != nil {
+			return err
+		}
+		_, err = s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, main, authority, sync)
 		return err
 	}
-	main, err := mainTransitionWorktree(topology, workspaceCtx.workspaceRoot)
-	if err != nil {
-		return err
+	if authority != nil {
+		return authority(apply)
 	}
-	_, err = s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, main, authority, sync)
-	return err
+	return apply()
 }
 
 func (s *Service) enterTransitionWorktree(ctx context.Context, workspaceCtx sessionWorkspaceContext, entry serverapi.WorktreeTopologyEntry) (syncedWorktree, error) {

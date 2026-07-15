@@ -181,6 +181,7 @@ type RuntimeStepOrigin struct {
 type WorktreeLeaveRequest struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`
+	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
 }
 
 type WorktreeDeleteRequest struct {
@@ -189,6 +190,7 @@ type WorktreeDeleteRequest struct {
 	Selector            string                    `json:"selector"`
 	ForceFolderRemoval  bool                      `json:"force_folder_removal"`
 	BranchCleanupPolicy WorktreeBranchCleanupMode `json:"branch_cleanup_policy"`
+	Origin              *RuntimeStepOrigin        `json:"origin,omitempty"`
 }
 
 type WorktreeScheduledAcknowledgement struct {
@@ -429,7 +431,13 @@ func (request WorktreeLeaveRequest) Validate() error {
 	if err := request.OperationID.Validate(); err != nil {
 		return err
 	}
-	return validateRequiredSessionID(request.SessionID)
+	if err := validateRequiredSessionID(request.SessionID); err != nil {
+		return err
+	}
+	if request.Origin != nil {
+		return request.Origin.Validate()
+	}
+	return nil
 }
 
 func (request WorktreeDeleteRequest) Validate() error {
@@ -441,6 +449,11 @@ func (request WorktreeDeleteRequest) Validate() error {
 		Selector:  request.Selector,
 	}).Validate(); err != nil {
 		return err
+	}
+	if request.Origin != nil {
+		if err := request.Origin.Validate(); err != nil {
+			return err
+		}
 	}
 	return request.BranchCleanupPolicy.Validate()
 }

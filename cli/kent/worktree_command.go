@@ -279,10 +279,16 @@ func worktreeLeaveSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	origin, err := worktreeCommandRuntimeOrigin()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, func(ctx context.Context, remote worktreeCommandRemote) (serverapi.WorktreeScheduledAcknowledgement, error) {
 		return remote.LeaveWorktree(ctx, serverapi.WorktreeLeaveRequest{
 			OperationID: serverapi.NewWorktreeOperationID(),
 			SessionID:   sessionID,
+			Origin:      origin,
 		})
 	})
 }
@@ -305,6 +311,11 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	origin, err := worktreeCommandRuntimeOrigin()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	if _, inAgentShell := sessionenv.LookupSessionID(os.LookupEnv); inAgentShell && *deleteBranch {
 		fmt.Fprintln(stderr, "agent worktree deletion always retains branches; --delete-branch is not allowed inside Kent shell commands")
 		return 2
@@ -322,6 +333,7 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			Selector:            strings.TrimSpace(fs.Args()[0]),
 			ForceFolderRemoval:  *force,
 			BranchCleanupPolicy: policy,
+			Origin:              origin,
 		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
