@@ -1114,7 +1114,7 @@ func newRuntimeWireSession(t *testing.T, root string, name string) *session.Stor
 
 func newRuntimeWireSessionForWorkspace(t *testing.T, root string, name string, workspace string) *session.Store {
 	t.Helper()
-	store, err := session.Create(root, name, workspace)
+	store, err := session.Create(root, name, workspace, sessioncontract.SessionCategoryMain, runtimeWireTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create store %s: %v", name, err)
 	}

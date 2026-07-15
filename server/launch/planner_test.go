@@ -268,7 +268,8 @@ func TestPlannerReappliesPersistedSubagentSkillsPolicyOnResume(t *testing.T) {
 			workspace := t.TempDir()
 			loaded := loadLaunchConfig(t, workspace, tt.configLines...)
 			containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-			store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
+			persistence := sessiontest.NewPersistence()
+			store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace, persistence.Options()...)
 			if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 				t.Fatalf("SetContinuationContext: %v", err)
 			}
@@ -280,9 +281,13 @@ func TestPlannerReappliesPersistedSubagentSkillsPolicyOnResume(t *testing.T) {
 					Source:          loaded.Source,
 				},
 				ContainerDir: containerDir,
+				StoreOptions: persistence.Options(),
 			}
 
-			plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+			plan, err := planner.PlanSession(context.Background(), SessionRequest{
+				Mode:   ModeInteractive,
+				Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID)),
+			})
 			if err != nil {
 				t.Fatalf("PlanSession: %v", err)
 			}
