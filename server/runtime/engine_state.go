@@ -25,49 +25,6 @@ func (e *Engine) overlayLiveStreaming(snapshot *ChatSnapshot) {
 	snapshot.StreamingError = streamingErr
 }
 
-func (e *Engine) RecentTailTranscriptWindow(maxEntries int) TranscriptWindowSnapshot {
-	if e == nil {
-		return TranscriptWindowSnapshot{}
-	}
-	window := e.cachedRecentTailWindow(maxEntries)
-	total := e.CommittedTranscriptEntryCount()
-	window.TotalEntries = total
-	if offset := total - len(window.Snapshot.Entries); offset >= 0 {
-		window.Offset = offset
-	}
-	e.overlayLiveStreaming(&window.Snapshot)
-	return window
-}
-
-func (e *Engine) cachedRecentTailWindow(maxEntries int) TranscriptWindowSnapshot {
-	revision := e.TranscriptRevision()
-	if cached, ok := e.recentTailCache.get(revision, maxEntries); ok {
-		return cached
-	}
-	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{
-		TrackRecentTail:  true,
-		TailLimit:        maxEntries,
-		CacheWarningMode: e.cfg.CacheWarningMode,
-	})
-	for _, evt := range e.activeListEvents() {
-		_ = scan.ApplyPersistedEvent(evt)
-	}
-	window := scan.RecentTailSnapshot()
-	e.recentTailCache.store(revision, maxEntries, window)
-	return window
-}
-
-func (e *Engine) activeListEvents() []session.Event {
-	if e == nil || e.store == nil {
-		return nil
-	}
-	events, err := e.store.ReadEventsBackwardUntil(isCompactionSegmentBoundary)
-	if err != nil {
-		return nil
-	}
-	return events
-}
-
 type TranscriptSegmentPage struct {
 	Snapshot                          ChatSnapshot
 	OlderCursor                       int64

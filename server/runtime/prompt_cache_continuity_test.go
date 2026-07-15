@@ -379,9 +379,10 @@ type promptCacheProjection struct {
 // representation mismatch.
 func captureRuntimeProjection(t *testing.T, engine *Engine) promptCacheProjection {
 	t.Helper()
+	page := mustEngineNewestSegmentPage(t, engine)
 	return promptCacheProjection{
 		MainViewJSON:   mustMarshalCanonicalJSON(t, runtimeMainViewComparable(engine)),
-		TranscriptJSON: mustMarshalCanonicalJSON(t, engine.RecentTailTranscriptWindow(500)),
+		TranscriptJSON: mustMarshalCanonicalJSON(t, page.Snapshot),
 	}
 }
 
@@ -392,7 +393,7 @@ func capturePersistedProjectionFromStore(t *testing.T, store *session.Store) pro
 	scan := mustScanPersistedTranscript(t, store)
 	return promptCacheProjection{
 		MainViewJSON:   mustMarshalCanonicalJSON(t, persistedMainViewComparable(t, store, scan)),
-		TranscriptJSON: mustMarshalCanonicalJSON(t, scan.RecentTailSnapshot()),
+		TranscriptJSON: mustMarshalCanonicalJSON(t, scan.RecentTailSnapshot().Snapshot),
 	}
 }
 
