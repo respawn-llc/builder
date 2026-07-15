@@ -256,9 +256,7 @@ Workflow design affects prompt-cache continuity and token spend:
 - `new_session` starts clean and does not invalidate another session's cache. It gives the target agent the most free context, but the prompt and parameters must carry enough information because the agent may spend tokens re-orienting in the workspace.
 - `compact_and_continue_session` asks the previous agent for a handoff, then starts a new session from that summary. It frees context, but adds handoff cost and leaves the previous session cache behind.
 
-The editor shows draft validation and execution validation. Draft validation catches graph-shape problems such as duplicate keys, invalid prompt placeholders, bad parameter contracts, and incomplete node groups. Execution validation catches automation blockers such as missing prompts, missing roles, invalid start shape, unreachable nodes, and non-terminal nodes that cannot reach a terminal node.
-
-A workflow can remain linked to a project while execution validation fails. Drafts, Backlog tasks, and comments remain available, but task start and manual movement from Backlog into executable work are blocked until every agent role enables `ask_question`.
+The editor shows draft validation and execution validation. Draft validation catches graph-shape problems such as duplicate keys, invalid prompt placeholders, bad parameter contracts, and incomplete node groups. Execution validation catches automation blockers such as missing prompts, missing roles, invalid start shape, unreachable nodes, and non-terminal nodes that cannot reach a terminal node. A workflow can remain linked to a project while execution validation fails: drafts, Backlog tasks, and comments remain available, but task start and manual movement from Backlog into executable work are blocked until every agent role enables `ask_question`.
 
 ## 6. Manage Tasks
 
