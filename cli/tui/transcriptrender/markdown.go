@@ -2,6 +2,7 @@ package transcriptrender
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"charm.land/glamour/v2"
@@ -198,6 +199,7 @@ type markdownInlineStyle struct {
 	Faint     bool
 	Underline bool
 	Role      *StyleRole
+	Hyperlink *Hyperlink
 }
 
 type markdownLineBuilder struct {
@@ -227,7 +229,7 @@ func (b *markdownLineBuilder) append(text string, style markdownInlineStyle) {
 	if style.Underline {
 		attributes |= SpanAttributeUnderline
 	}
-	next := Span{Text: text, Style: SemanticStyle(role)}
+	next := Span{Text: text, Style: SemanticStyle(role), Hyperlink: style.Hyperlink}
 	next.Style.Attributes = attributes
 	last := len(b.spans) - 1
 	if last >= 0 && sameSpanStyle(b.spans[last], next) {
@@ -284,10 +286,12 @@ func renderMarkdownInlineChildren(builder *markdownLineBuilder, node ast.Node, s
 		case *ast.Link:
 			next := style
 			next.Underline = true
+			next.Hyperlink = markdownHyperlink(string(typed.Destination))
 			renderMarkdownInlineChildren(builder, typed, source, next, preserveSoftBreaks)
 		case *ast.AutoLink:
 			next := style
 			next.Underline = true
+			next.Hyperlink = markdownHyperlink(string(typed.URL(source)))
 			builder.append(string(typed.Label(source)), next)
 		default:
 			if child.HasChildren() {
@@ -459,7 +463,32 @@ func wrapStyledLine(spans []Span, width int) []Line {
 }
 
 func sameSpanStyle(left, right Span) bool {
-	return left.Style == right.Style
+	if left.Style != right.Style {
+		return false
+	}
+	if left.Hyperlink == nil || right.Hyperlink == nil {
+		return left.Hyperlink == nil && right.Hyperlink == nil
+	}
+	return left.Hyperlink.URL == right.Hyperlink.URL
+}
+
+func markdownHyperlink(raw string) *Hyperlink {
+	target := strings.TrimSpace(raw)
+	if target == "" {
+		return nil
+	}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	if parsed.Scheme == "" &&
+		parsed.Host == "" &&
+		parsed.Path == "" &&
+		parsed.RawQuery == "" &&
+		parsed.Fragment != "" {
+		return nil
+	}
+	return &Hyperlink{URL: target}
 }
 
 func firstSpanRole(spans []Span) StyleRole {

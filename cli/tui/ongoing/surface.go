@@ -531,8 +531,9 @@ func encodeTranscriptSpan(span transcriptrender.Span, themeName string) string {
 	}
 	resolved := transcriptrender.ResolveSpanStyle(span, themeName)
 	color := resolved.Foreground.TrueColor()
+	rendered := span.Text
 	if color == "" && !resolved.Faint && !resolved.Bold && !resolved.Italic && !resolved.Underline {
-		return span.Text
+		return transcriptrender.EncodeSpanHyperlink(span, rendered)
 	}
 	prefix := ansiTrueColorForeground(color)
 	if resolved.Faint {
@@ -547,7 +548,8 @@ func encodeTranscriptSpan(span transcriptrender.Span, themeName string) string {
 	if resolved.Underline {
 		prefix += "\x1b[4m"
 	}
-	return prefix + span.Text + "\x1b[0m"
+	rendered = prefix + span.Text + "\x1b[0m"
+	return transcriptrender.EncodeSpanHyperlink(span, rendered)
 }
 
 func ansiTrueColorForeground(hex string) string {

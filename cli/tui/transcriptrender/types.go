@@ -5,6 +5,8 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/theme"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 type Mode uint8
@@ -109,8 +111,13 @@ type Line struct {
 }
 
 type Span struct {
-	Text  string
-	Style SpanStyle
+	Text      string
+	Style     SpanStyle
+	Hyperlink *Hyperlink
+}
+
+type Hyperlink struct {
+	URL string
 }
 
 type LineBackground uint8
@@ -176,6 +183,13 @@ func SemanticSpan(text string, role StyleRole, attributes ...SpanAttribute) Span
 
 func ExplicitRGBSpan(text string, foreground RGBColor, attributes ...SpanAttribute) Span {
 	return Span{Text: text, Style: ExplicitRGBStyle(foreground, attributes...)}
+}
+
+func EncodeSpanHyperlink(span Span, rendered string) string {
+	if rendered == "" || span.Hyperlink == nil || span.Hyperlink.URL == "" {
+		return rendered
+	}
+	return xansi.SetHyperlink(span.Hyperlink.URL) + rendered + xansi.ResetHyperlink()
 }
 
 func combineSpanAttributes(attributes []SpanAttribute) SpanAttribute {

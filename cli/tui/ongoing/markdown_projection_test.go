@@ -8,8 +8,50 @@ import (
 
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
 )
+
+func TestTerminalMarkdownRendererEmitsOSC8Hyperlinks(t *testing.T) {
+	renderer := terminalMarkdownRenderer{themeName: "dark"}
+	renders := map[string]func(string, int) []string{
+		"volatile": renderer.Render,
+		"stable":   renderer.RenderStable,
+	}
+	for name, render := range renders {
+		t.Run(name, func(t *testing.T) {
+			for _, target := range []string{
+				"https://github.com/respawn-llc/kent/pull/574",
+				"/Users/example/project/main.go:42",
+			} {
+				encoded := strings.Join(render("[target]("+target+")", 80), "\n")
+				if !strings.Contains(encoded, xansi.SetHyperlink(target)) {
+					t.Fatalf("rendered markdown omitted OSC 8 target %q: %q", target, encoded)
+				}
+				if !strings.Contains(encoded, xansi.ResetHyperlink()) {
+					t.Fatalf("rendered markdown omitted OSC 8 hyperlink reset: %q", encoded)
+				}
+			}
+		})
+	}
+}
+
+func TestTerminalMarkdownRendererKeepsAdjacentHyperlinkTargetsDistinct(t *testing.T) {
+	const first = "https://example.com/first"
+	const second = "https://example.com/second"
+	encoded := strings.Join(
+		terminalMarkdownRenderer{themeName: "dark"}.Render(
+			"[first]("+first+")[second]("+second+")",
+			80,
+		),
+		"\n",
+	)
+	for _, target := range []string{first, second} {
+		if !strings.Contains(encoded, xansi.SetHyperlink(target)) {
+			t.Fatalf("rendered adjacent links omitted target %q: %q", target, encoded)
+		}
+	}
+}
 
 func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) {
 	var out bytes.Buffer

@@ -300,5 +300,5 @@ func renderDetailSpan(
 	if background.present {
 		style = style.Background(background.color.Lipgloss())
 	}
-	return style.Render(span.Text)
+	return transcriptrender.EncodeSpanHyperlink(span, style.Render(span.Text))
 }
