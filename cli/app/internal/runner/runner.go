@@ -37,6 +37,9 @@ func SessionLifecycleOptionsFor[SO any](req Request[SO]) (SessionLifecycleOption
 	var agentRole *string
 	if req.AgentRole != nil {
 		value := strings.TrimSpace(*req.AgentRole)
+		if value == "" {
+			return SessionLifecycleOptions{}, errors.New("agent role must not be blank")
+		}
 		agentRole = &value
 	}
 	options := SessionLifecycleOptions{

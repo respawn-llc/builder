@@ -651,6 +651,20 @@ func TestSetParentSessionIDRejectsBlankValueWithoutMutatingMetadata(t *testing.T
 	}
 }
 
+func TestSetParentSessionIDNilClearsParent(t *testing.T) {
+	store := newSessionTestStore(t)
+	parentSessionID := "parent-session"
+	if err := store.SetParentSessionID(&parentSessionID); err != nil {
+		t.Fatalf("SetParentSessionID: %v", err)
+	}
+	if err := store.SetParentSessionID(nil); err != nil {
+		t.Fatalf("SetParentSessionID(nil): %v", err)
+	}
+	if got := store.Meta().ParentSessionID; got != nil {
+		t.Fatalf("parent session id = %v, want nil", got)
+	}
+}
+
 func TestConversationFreshnessAdvancesOnlyForVisibleUserMessages(t *testing.T) {
 	store := newSessionTestStore(t)
 	if got := store.ConversationFreshness(); got != ConversationFreshnessFresh {

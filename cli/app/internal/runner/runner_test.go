@@ -143,3 +143,9 @@ func TestRequestDefaultsDoNotForceDefaultSubagentRole(t *testing.T) {
 		t.Fatalf("unexpected overrides: %+v", opts.Overrides)
 	}
 }
+
+func TestSessionLifecycleOptionsRejectsBlankAgentRole(t *testing.T) {
+	if _, err := SessionLifecycleOptionsFor(Request[NoStartupOptions]{AgentRole: runnerStringPtr(" \t ")}); err == nil {
+		t.Fatal("SessionLifecycleOptionsFor accepted a blank agent role")
+	}
+}

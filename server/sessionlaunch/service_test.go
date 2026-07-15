@@ -297,7 +297,7 @@ func TestSessionPlanMemoRequestUsesCanonicalNullableValues(t *testing.T) {
 }
 
 func TestPlanLaunchSessionRejectsUnknownParentBeforeRegisteringStore(t *testing.T) {
-	stores := registry.NewSessionStoreRegistry()
+	stores := &countingStoreRegistrar{}
 	service := NewService(launch.Planner{
 		Config: config.App{
 			WorkspaceRoot:   t.TempDir(),
@@ -318,8 +318,8 @@ func TestPlanLaunchSessionRejectsUnknownParentBeforeRegisteringStore(t *testing.
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialParentMissing {
 		t.Fatalf("error = %T %v, want parent-missing denial", err, err)
 	}
-	if store, resolveErr := stores.ResolveStore(context.Background(), "unknown-parent"); resolveErr != nil || store != nil {
-		t.Fatalf("unknown parent registry entry = %v/%v, want no store", store, resolveErr)
+	if stores.registrations != 0 {
+		t.Fatalf("store registrations = %d, want 0", stores.registrations)
 	}
 }
 

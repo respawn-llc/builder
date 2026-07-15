@@ -1499,6 +1499,19 @@ func TestApplyRunPromptOverridesRejectsInvalidAgentRole(t *testing.T) {
 	}
 }
 
+func TestApplyPreparedRunPromptOverridesDefaultWithoutBaseTargetReturnsError(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	role := config.DefaultSubagentRole
+	_, _, err := ApplyPreparedRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: &role}, PreparedRunPromptOverrides{
+		AgentRole: serverapi.RunPromptAgentRoleOverride{Present: true, Default: true},
+	})
+	if err == nil {
+		t.Fatal("ApplyPreparedRunPromptOverrides succeeded without a prepared base target")
+	}
+}
+
 func TestApplyRunPromptOverridesRecomputesEnabledToolsForModelOverride(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
@@ -2184,5 +2197,41 @@ func TestPlannerRecoversDeletedManagedWorktreePersistently(t *testing.T) {
 	reopened, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent})
 	if err != nil || reopened.Recovery != nil {
 		t.Fatalf("reopen recovery=%+v err=%v", reopened.Recovery, err)
+	}
+}
+
+func TestPlannerRecoversDeletedManagedWorktreeWhenSelectedSessionFieldIsUsed(t *testing.T) {
+	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{
+		Mode:              ModeInteractive,
+		SelectedSessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	target, err := metadataStore.ResolveSessionExecutionTarget(context.Background(), store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if plan.Recovery == nil || plan.Recovery.Kind != serverapi.SessionPlanRecoveryKindDeletedManagedWorktree {
+		t.Fatalf("recovery = %+v, want deleted managed worktree", plan.Recovery)
+	}
+	if target.Worktree != nil || target.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("recovered target = %+v, want workspace %q without worktree", target, binding.WorkspaceID)
+	}
+}
+
+func TestPlannerManagedWorktreeRecoveryRestoresReminderWhenRetargetFails(t *testing.T) {
+	planner, _, store, _ := missingWorktreeLaunchFixture(t)
+	planner.RetargetWorkspace = func(context.Context, serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("retarget failed")
+	}
+	intent := serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))
+
+	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent}); err == nil {
+		t.Fatal("PlanSession succeeded after retarget failure")
+	}
+	if store.Meta().WorktreeReminder == nil {
+		t.Fatal("worktree reminder was not restored after retarget failure")
 	}
 }

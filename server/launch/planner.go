@@ -242,7 +242,7 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		}
 	}
 	var recovery *serverapi.SessionPlanRecovery
-	if req.Mode == ModeInteractive && req.Intent.Kind() == serverapi.SessionLaunchIntentOpenExisting {
+	if req.Mode == ModeInteractive && (req.Intent.Kind() == serverapi.SessionLaunchIntentOpenExisting || strings.TrimSpace(req.SelectedSessionID) != "") {
 		recovery, store, err = p.recoverMissingManagedWorktreeTarget(ctx, store)
 		if err != nil {
 			return SessionPlan{}, err
@@ -395,19 +395,24 @@ func (p Planner) recoverMissingManagedWorktreeTarget(ctx context.Context, store 
 	} else {
 		store = registered
 	}
+	previousReminder := session.CloneWorktreeReminderState(store.Meta().WorktreeReminder)
+	if err := store.SetWorktreeReminderState(nil); err != nil {
+		if registered == nil {
+			p.SessionStores.UnregisterStore(store.Meta().SessionID)
+		}
+		return nil, store, fmt.Errorf("clear managed-worktree recovery reminder: %w", err)
+	}
 	result, err := p.RetargetWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{
 		ClientRequestID: uuid.NewString(),
 		SessionID:       store.Meta().SessionID,
 		WorkspaceRoot:   candidate.RootPath,
 	})
 	if err != nil {
+		rollbackErr := store.SetWorktreeReminderState(previousReminder)
 		if registered == nil {
 			p.SessionStores.UnregisterStore(store.Meta().SessionID)
 		}
-		return nil, store, err
-	}
-	if err := store.SetWorktreeReminderState(nil); err != nil {
-		return nil, store, err
+		return nil, store, errors.Join(err, rollbackErr)
 	}
 	return &serverapi.SessionPlanRecovery{
 		Kind:          serverapi.SessionPlanRecoveryKindDeletedManagedWorktree,
@@ -791,7 +796,7 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 		}
 		if roleOverride.Default {
 			if prepared.BaseTarget == nil {
-				panic("prepared base target is required for explicit default selector")
+				return SessionPlan{}, nil, errors.New("prepared base target is required for explicit default selector")
 			}
 			next.ActiveSettings = cloneSettings(prepared.BaseTarget.Settings)
 			next.Source = prepared.BaseTarget.Source

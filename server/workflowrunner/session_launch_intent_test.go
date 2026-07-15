@@ -92,6 +92,19 @@ func TestWorkflowRunContextPreservesNonDefaultAgentRoleOnCreateIntent(t *testing
 	}
 }
 
+func TestWorkflowRunContextOmitsBlankAgentRoleOverride(t *testing.T) {
+	req, err := sessionLaunchRequestForWorkflowRun(workflowstore.RunStartContext{
+		ContextMode: workflow.ContextModeNewSession,
+		Node:        workflowstore.NodeRecord{SubagentRole: " \t "},
+	})
+	if err != nil {
+		t.Fatalf("sessionLaunchRequestForWorkflowRun: %v", err)
+	}
+	if req.Overrides.AgentRole != nil {
+		t.Fatalf("agent role override = %v, want nil", req.Overrides.AgentRole)
+	}
+}
+
 func TestWorkflowRunContextRejectsEmptyIdentityInsteadOfInferringOpenOrCreate(t *testing.T) {
 	for _, input := range []workflowstore.RunStartContext{
 		{

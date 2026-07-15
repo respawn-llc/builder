@@ -851,7 +851,10 @@ func toolIDEnabled(enabled []toolspec.ID, want toolspec.ID) bool {
 
 func workflowRunPromptOverrides(role string) serverapi.RunPromptOverrides {
 	normalized := strings.TrimSpace(role)
-	if workflow.IsDefaultAgentRole(role) {
+	if normalized == "" {
+		return serverapi.RunPromptOverrides{}
+	}
+	if workflow.IsDefaultAgentRole(normalized) {
 		normalized = workflow.DefaultAgentRole
 	}
 	return serverapi.RunPromptOverrides{AgentRole: &normalized}
