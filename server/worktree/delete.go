@@ -157,7 +157,18 @@ func (s *Service) executeDeleteLocked(
 	}
 	leftoverRoot := missingLeftoverRoot(entry)
 	if target != nil {
-		if err := s.git.Remove(ctx, workspaceCtx.workspaceRoot, target.record.CanonicalRoot, req.ForceFolderRemoval); err != nil {
+		var err error
+		if req.ForceFolderRemoval && entry.Variant == serverapi.WorktreeTopologyVariantRegistered &&
+			entry.Registered != nil && entry.Registered.Git.PrunableReason != nil {
+			err = s.git.ForceRemovePrunableWorktree(ctx, workspaceCtx.workspaceRoot, target.record.CanonicalRoot)
+		} else {
+			err = s.git.Remove(ctx, workspaceCtx.workspaceRoot, target.record.CanonicalRoot, req.ForceFolderRemoval)
+		}
+		if err != nil {
+			var recoveryError *PrunableWorktreeRecoveryError
+			if errors.As(err, &recoveryError) && recoveryError.Destructive {
+				return serverapi.WorktreeDeleteCompletedResult{}, err
+			}
 			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(ctx))
 		}
 	}

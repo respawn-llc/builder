@@ -200,6 +200,35 @@ type GitInspector struct {
 	runner gitCommandRunner
 }
 
+type PrunableWorktreeRecoveryError struct {
+	Action       string
+	WorktreeRoot string
+	Destructive  bool
+	Cause        error
+}
+
+func (e *PrunableWorktreeRecoveryError) Error() string {
+	return fmt.Sprintf("prunable worktree recovery failed while %s for %q: %v", e.Action, e.WorktreeRoot, e.Cause)
+}
+
+func prunableWorktreeRecoveryError(action string, root string, cause error, destructive bool) error {
+	return &PrunableWorktreeRecoveryError{
+		Action:       action,
+		WorktreeRoot: root,
+		Destructive:  destructive,
+		Cause:        cause,
+	}
+}
+
+func (e *PrunableWorktreeRecoveryError) Unwrap() error { return e.Cause }
+
+func validatePrunableWorktreeRemovalRoot(root string) error {
+	if !filepath.IsAbs(root) || filepath.Clean(root) == filepath.VolumeName(root)+string(os.PathSeparator) {
+		return errors.New("prunable worktree root must be an absolute non-filesystem-root path")
+	}
+	return nil
+}
+
 func NewGitInspector(runner gitCommandRunner) *GitInspector {
 	if runner == nil {
 		runner = execGitCommandRunner{}
@@ -803,6 +832,88 @@ func (i *GitInspector) Remove(ctx context.Context, workspaceRoot string, worktre
 	args = append(args, canonicalWorktreeRoot)
 	_, err = i.runner.Output(ctx, canonicalWorkspaceRoot, args...)
 	return err
+}
+
+func (i *GitInspector) ForceRemovePrunableWorktree(ctx context.Context, workspaceRoot string, worktreeRoot string) error {
+	if i == nil {
+		return fmt.Errorf("git inspector is required")
+	}
+	trimmedWorktreeRoot := strings.TrimSpace(worktreeRoot)
+	if err := validatePrunableWorktreeRemovalRoot(trimmedWorktreeRoot); err != nil {
+		return err
+	}
+	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return prunableWorktreeRecoveryError("canonicalize_workspace", trimmedWorktreeRoot, err, false)
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(trimmedWorktreeRoot)
+	if err != nil {
+		return prunableWorktreeRecoveryError("canonicalize_worktree", trimmedWorktreeRoot, err, false)
+	}
+	if err := validatePrunableWorktreeRemovalRoot(canonicalWorktreeRoot); err != nil {
+		return prunableWorktreeRecoveryError("canonicalize_worktree", trimmedWorktreeRoot, err, false)
+	}
+	if _, err := os.Lstat(filepath.Join(canonicalWorktreeRoot, ".git")); err == nil {
+		return prunableWorktreeRecoveryError("inspect_git_marker", canonicalWorktreeRoot, errors.New(".git marker still exists"), false)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return prunableWorktreeRecoveryError("inspect_git_marker", canonicalWorktreeRoot, err, false)
+	}
+	registrationRoot, err := i.prunableWorktreeRegistrationRoot(ctx, canonicalWorkspaceRoot, canonicalWorktreeRoot)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(canonicalWorktreeRoot); err != nil {
+		return prunableWorktreeRecoveryError("remove_folder", canonicalWorktreeRoot, err, true)
+	}
+	if err := os.RemoveAll(registrationRoot); err != nil {
+		return prunableWorktreeRecoveryError("remove_registration", canonicalWorktreeRoot, err, true)
+	}
+	return nil
+}
+
+func (i *GitInspector) prunableWorktreeRegistrationRoot(ctx context.Context, workspaceRoot string, worktreeRoot string) (string, error) {
+	inspection, err := i.InspectTarget(ctx, workspaceRoot)
+	if err != nil {
+		return "", prunableWorktreeRecoveryError("locate_registration", worktreeRoot, err, false)
+	}
+	worktreesRoot := filepath.Join(inspection.Identity.CommonDir, "worktrees")
+	worktreesInfo, err := os.Lstat(worktreesRoot)
+	if err != nil {
+		return "", prunableWorktreeRecoveryError("locate_registration", worktreeRoot, err, false)
+	}
+	if !worktreesInfo.IsDir() || worktreesInfo.Mode()&os.ModeSymlink != 0 {
+		return "", prunableWorktreeRecoveryError("locate_registration", worktreeRoot, fmt.Errorf("Git worktree registration root %q must be a non-symlink directory", worktreesRoot), false)
+	}
+	entries, err := os.ReadDir(worktreesRoot)
+	if err != nil {
+		return "", prunableWorktreeRecoveryError("locate_registration", worktreeRoot, err, false)
+	}
+	matches := make([]string, 0, 1)
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		registrationRoot := filepath.Join(worktreesRoot, entry.Name())
+		gitdir, err := os.ReadFile(filepath.Join(registrationRoot, "gitdir"))
+		if err != nil {
+			return "", prunableWorktreeRecoveryError("locate_registration", worktreeRoot, err, false)
+		}
+		gitfilePath := strings.TrimSpace(string(gitdir))
+		if !filepath.IsAbs(gitfilePath) {
+			return "", prunableWorktreeRecoveryError("locate_registration", worktreeRoot, fmt.Errorf("registration %q has a non-absolute gitdir", registrationRoot), false)
+		}
+		registeredRoot, err := config.CanonicalWorkspaceRoot(filepath.Dir(gitfilePath))
+		if err != nil {
+			return "", prunableWorktreeRecoveryError("locate_registration", worktreeRoot, err, false)
+		}
+		if registeredRoot == worktreeRoot {
+			matches = append(matches, registrationRoot)
+		}
+	}
+	if len(matches) != 1 {
+		return "", prunableWorktreeRecoveryError("locate_registration", worktreeRoot, fmt.Errorf("found %d matching registrations", len(matches)), false)
+	}
+	return matches[0], nil
 }
 
 func countPorcelainStatusEntries(output []byte) int {

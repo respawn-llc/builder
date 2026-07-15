@@ -529,7 +529,7 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 	}
 }
 
-func TestWaitForActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
+func TestCapturedActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := newBlockingThenBlockedQueuedClient()
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
@@ -541,15 +541,16 @@ func TestWaitForActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	client.waitStarted(t)
 
 	queued := eng.QueueUserMessageWithClientRequestID("steer into drain", "req-queued")
-	if queued.ID == "" {
-		t.Fatal("busy queued message returned empty id")
+	handle, captureErr := eng.CaptureActiveRunResult(context.Background())
+	if queued.ID == "" || captureErr != nil {
+		t.Fatalf("queued=%+v capture error=%v", queued, captureErr)
 	}
 	waitDone := make(chan struct {
 		result LiveRunResult
 		err    error
 	}, 1)
 	go func() {
-		result, err := eng.WaitForActiveRunResult(context.Background())
+		result, err := handle.Wait()
 		waitDone <- struct {
 			result LiveRunResult
 			err    error
