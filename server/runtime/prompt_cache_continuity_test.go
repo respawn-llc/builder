@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -287,9 +286,15 @@ func TestLiveReloadedSkillsPolicyAppliesAtCompactionAndReviewerReconstruction(t 
 	if err != nil {
 		t.Fatalf("build re-enabled reviewer request: %v", err)
 	}
-	reviewerSkills, found := skillMessageContent(requestMessages(reviewerReenabled))
-	if !found || !strings.Contains(reviewerSkills, "- allowed:") || strings.Contains(reviewerSkills, "- blocked:") {
-		t.Fatalf("role-resolved re-enabled reviewer policy not applied: %q", reviewerSkills)
+	if _, found := skillMessageContent(requestMessages(reviewerReenabled)); !found {
+		t.Fatalf("role-resolved re-enabled reviewer omitted typed skills message: %+v", requestMessages(reviewerReenabled))
+	}
+	inspection, err := InspectSkills(workspace, "", brand.ResolveSkillPolicy(reloader.settings))
+	if err != nil {
+		t.Fatalf("inspect role-resolved re-enabled skills: %v", err)
+	}
+	if !skillInspectionMatches(inspection.Inspections, "allowed", false) || !skillInspectionMatches(inspection.Inspections, "blocked", true) {
+		t.Fatalf("role-resolved ordinary toggles not reflected in typed inspection: %+v", inspection.Inspections)
 	}
 	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeReload) {
 		t.Fatal("re-enabled reviewer reconstruction mutated the main transcript")

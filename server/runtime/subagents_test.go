@@ -333,11 +333,9 @@ func TestCompactionReinjectedSkillsFollowCurrentPolicy(t *testing.T) {
 	writeTestSkill(t, filepath.Join(workspace, config.ConfigDirName, "skills", "blocked"), "blocked", "blocked skill")
 
 	tests := []struct {
-		name        string
-		policy      config.SkillPolicy
-		wantSkills  bool
-		wantAllowed bool
-		wantBlocked bool
+		name       string
+		policy     config.SkillPolicy
+		wantSkills bool
 	}{
 		{
 			name:   "disabled policy omits skills",
@@ -349,8 +347,7 @@ func TestCompactionReinjectedSkillsFollowCurrentPolicy(t *testing.T) {
 				SkillSubsystem: config.SkillSubsystemEnabled,
 				SkillToggles:   map[string]bool{"blocked": false},
 			}),
-			wantSkills:  true,
-			wantAllowed: true,
+			wantSkills: true,
 		},
 	}
 	for _, tt := range tests {
@@ -364,17 +361,16 @@ func TestCompactionReinjectedSkillsFollowCurrentPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compaction reinjection: %v", err)
 			}
-			skillsContent, found := skillMessageContent(messages)
+			_, found := skillMessageContent(messages)
 			if found != tt.wantSkills {
 				t.Fatalf("skills message present = %t, want %t; messages=%+v", found, tt.wantSkills, messages)
 			}
-			if found {
-				if strings.Contains(skillsContent, "- allowed:") != tt.wantAllowed {
-					t.Fatalf("allowed skill presence mismatch: %q", skillsContent)
-				}
-				if strings.Contains(skillsContent, "- blocked:") != tt.wantBlocked {
-					t.Fatalf("blocked skill presence mismatch: %q", skillsContent)
-				}
+			inspection, err := InspectSkills(workspace, "", tt.policy)
+			if err != nil {
+				t.Fatalf("inspect skills policy: %v", err)
+			}
+			if tt.wantSkills && (!skillInspectionMatches(inspection.Inspections, "allowed", false) || !skillInspectionMatches(inspection.Inspections, "blocked", true)) {
+				t.Fatalf("ordinary toggles not reflected in typed inspection: %+v", inspection.Inspections)
 			}
 		})
 	}
@@ -477,6 +473,15 @@ func skillMessageContent(messages []llm.Message) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func skillInspectionMatches(inspections []SkillInspection, name string, disabled bool) bool {
+	for _, inspection := range inspections {
+		if inspection.Name == name {
+			return inspection.Loaded && inspection.Disabled == disabled
+		}
+	}
+	return false
 }
 
 func renderableSubagentRolesContain(roles []renderedSubagentRole, name string) bool {

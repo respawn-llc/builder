@@ -74,20 +74,20 @@ func TestDecodeScenarioRejectsInvalidIdentitiesPayloadsAndRouteCombinations(t *t
 	}
 }
 
-func TestResponsesStubRejectsForbiddenTypedInputProbe(t *testing.T) {
-	forbidden := uuid.New().String()
+func TestResponsesStubRejectsUnexpectedDeveloperMessageCount(t *testing.T) {
+	want := 0
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID:             uuid.New(),
-		Route:          blackbox.RouteResponses,
-		ForbiddenProbe: &forbidden,
-		Outcome:        blackbox.OutcomeJSON,
+		ID:                    uuid.New(),
+		Route:                 blackbox.RouteResponses,
+		DeveloperMessageCount: &want,
+		Outcome:               blackbox.OutcomeJSON,
 	}})
 	if err != nil {
 		t.Fatalf("StartResponsesStub: %v", err)
 	}
 	t.Cleanup(func() { stub.Close() })
 
-	response, err := http.Post(stub.URL()+"/responses", "application/json", strings.NewReader(`{"input":[{"role":"user","content":[{"type":"input_text","text":"`+forbidden+`"}]}]}`))
+	response, err := http.Post(stub.URL()+"/responses", "application/json", strings.NewReader(`{"input":[{"role":"developer","content":[{"type":"input_text","text":"context"}]}]}`))
 	if err != nil {
 		t.Fatalf("POST responses: %v", err)
 	}
@@ -98,24 +98,24 @@ func TestResponsesStubRejectsForbiddenTypedInputProbe(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
 	}
 	if err := stub.Verify(); err == nil {
-		t.Fatal("Verify accepted a forbidden typed input probe")
+		t.Fatal("Verify accepted an unexpected developer message count")
 	}
 }
 
-func TestResponsesStubRequiresProbeAnywhereInTypedRequestInput(t *testing.T) {
-	probe := uuid.New().String()
+func TestResponsesStubAcceptsExpectedDeveloperMessageCount(t *testing.T) {
+	want := 1
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID:         uuid.New(),
-		Route:      blackbox.RouteResponses,
-		InputProbe: &probe,
-		Outcome:    blackbox.OutcomeJSON,
+		ID:                    uuid.New(),
+		Route:                 blackbox.RouteResponses,
+		DeveloperMessageCount: &want,
+		Outcome:               blackbox.OutcomeJSON,
 	}})
 	if err != nil {
 		t.Fatalf("StartResponsesStub: %v", err)
 	}
 	t.Cleanup(func() { stub.Close() })
 
-	response, err := http.Post(stub.URL()+"/responses", "application/json", strings.NewReader(`{"input":[{"role":"developer","content":[{"type":"input_text","text":"skill `+probe+`"}]}]}`))
+	response, err := http.Post(stub.URL()+"/responses", "application/json", strings.NewReader(`{"input":[{"role":"developer","content":[{"type":"input_text","text":"context"}]}]}`))
 	if err != nil {
 		t.Fatalf("POST responses: %v", err)
 	}

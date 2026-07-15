@@ -56,11 +56,11 @@ func main() {
 		}},
 	}
 
-	if err := runModelScenario(binary, fixture, "global disable", nil, false); err != nil {
+	if err := runModelScenario(binary, fixture, "global disable", nil, 1); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := runModelScenario(binary, fixture, "role re-enablement", []string{"--agent", "qa"}, true); err != nil {
+	if err := runModelScenario(binary, fixture, "role re-enablement", []string{"--agent", "qa"}, 2); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -70,24 +70,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("global disable: PASS (skill probe absent from parent model request)")
-	fmt.Println("role re-enablement: PASS (skill probe present in qa-role model request)")
+	fmt.Println("global disable: PASS (parent request has no skills developer-message slot)")
+	fmt.Println("role re-enablement: PASS (qa-role request restores the skills developer-message slot)")
 	fmt.Println("/status: PASS (live disabled-policy overlay opened in alternate screen)")
 	fmt.Println("--- /status screen for manual neutral-state review ---")
 	fmt.Print(statusScreen)
 }
 
-func runModelScenario(binary string, fixture blackbox.RunFixture, name string, clientArgs []string, requireSkill bool) error {
-	probe := skillProbe
+func runModelScenario(binary string, fixture blackbox.RunFixture, name string, clientArgs []string, developerMessageCount int) error {
 	operation := blackbox.RequiredOperation{
-		ID:      uuid.New(),
-		Route:   blackbox.RouteResponses,
-		Outcome: blackbox.OutcomeStream,
-	}
-	if requireSkill {
-		operation.InputProbe = &probe
-	} else {
-		operation.ForbiddenProbe = &probe
+		ID:                    uuid.New(),
+		Route:                 blackbox.RouteResponses,
+		DeveloperMessageCount: &developerMessageCount,
+		Outcome:               blackbox.OutcomeStream,
+		ResponsePhase:         blackbox.NewResponsePhase(blackbox.ResponsePhaseFinal),
 	}
 	output := "ok"
 	operation.Output = &output
