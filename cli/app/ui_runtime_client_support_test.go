@@ -7,11 +7,13 @@ import (
 
 	"core/server/llm"
 	"core/server/runtime"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
 type countingSessionViewClient struct {
+	client.SessionViewClient
 	view            clientui.RuntimeMainView
 	page            clientui.TranscriptPage
 	count           atomic.Int32
@@ -49,7 +51,9 @@ func (c *countingSessionViewClient) GetSessionExecutionEnvironment(context.Conte
 	return serverapi.SessionExecutionEnvironmentResponse{}, nil
 }
 
-type blockingSessionViewClient struct{}
+type blockingSessionViewClient struct {
+	client.SessionViewClient
+}
 
 func (blockingSessionViewClient) GetSessionMainView(ctx context.Context, _ serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	<-ctx.Done()
@@ -77,6 +81,7 @@ type controlledTranscriptPageResult struct {
 }
 
 type controlledTranscriptPageClient struct {
+	client.SessionViewClient
 	started chan serverapi.SessionTranscriptPageRequest
 	results chan controlledTranscriptPageResult
 }
@@ -112,6 +117,7 @@ func (c *controlledTranscriptPageClient) GetSessionExecutionEnvironment(ctx cont
 }
 
 type flakySessionViewClient struct {
+	client.SessionViewClient
 	mu        sync.Mutex
 	responses []serverapi.SessionMainViewResponse
 	errs      []error

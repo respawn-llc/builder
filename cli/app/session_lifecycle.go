@@ -107,15 +107,17 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 	}
 	nextSessionOverrides := opts.Overrides
 	showStartupUpdateNotice := true
+	var pickerNotice *startupPickerNotice
 	for {
 		switch next.Kind() {
 		case serverapi.SessionLifecycleResultStop:
 			return nil
 		case serverapi.SessionLifecycleResultSelectSession:
-			picked, err := planner.selectSession(ctx)
+			picked, err := planner.selectSession(ctx, pickerNotice)
 			if err != nil {
 				return err
 			}
+			pickerNotice = nil
 			switch picked := picked.(type) {
 			case sessionPickerCancelResult:
 				next = serverapi.StopSessionLifecycleResult()
@@ -132,6 +134,11 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 				sessionID := picked.sessionID
 				selectedWorkspaceRoot, err := loadSelectedSessionWorkspaceRoot(ctx, server.SessionViewClient(), sessionID.String())
 				if err != nil {
+					pickerNotice = &startupPickerNotice{
+						Text:       "Could not inspect the selected session. Try again.",
+						Kind:       startupPickerNoticeError,
+						Diagnostic: err,
+					}
 					next = serverapi.SelectSessionLifecycleResult(serverapi.SessionAuthPreparationKeepCurrent)
 					continue
 				}

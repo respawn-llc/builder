@@ -285,6 +285,8 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.SessionMainViewRequest:
 		return p.SessionID, true
+	case serverapi.SessionExecutionWorkspaceRootRequest:
+		return p.SessionID.String(), true
 	case serverapi.SessionTranscriptPageRequest:
 		return p.SessionID, true
 	case serverapi.SessionLatestCommittedAssistantFinalAnswerRequest:

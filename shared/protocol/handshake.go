@@ -89,6 +89,7 @@ const (
 	MethodWorkflowTaskGet                               = "workflow.task.get"
 	MethodSessionPlan                                   = "session.plan"
 	MethodSessionGetMainView                            = "session.getMainView"
+	MethodSessionGetExecutionWorkspaceRoot              = "session.getExecutionWorkspaceRoot"
 	MethodSessionGetExecutionEnvironment                = "session.getExecutionEnvironment"
 	MethodSessionGetTranscriptPage                      = "session.getTranscriptPage"
 	MethodSessionGetLatestCommittedAssistantFinalAnswer = "session.getLatestCommittedAssistantFinalAnswer"

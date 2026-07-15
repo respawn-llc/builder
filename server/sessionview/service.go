@@ -309,6 +309,26 @@ func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req server
 	return serverapi.SessionExecutionEnvironmentResponse{Environment: environment}, nil
 }
 
+func (s *Service) GetSessionExecutionWorkspaceRoot(ctx context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionExecutionWorkspaceRootResponse{}, err
+	}
+	if s == nil || s.targets == nil {
+		return serverapi.SessionExecutionWorkspaceRootResponse{}, errors.New("session execution target resolver is required")
+	}
+	target, err := s.targets.ResolveSessionExecutionTarget(ctx, req.SessionID.String())
+	if err != nil {
+		return serverapi.SessionExecutionWorkspaceRootResponse{}, err
+	}
+	response := serverapi.SessionExecutionWorkspaceRootResponse{
+		WorkspaceRoot: strings.TrimSpace(target.WorkspaceRoot),
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.SessionExecutionWorkspaceRootResponse{}, err
+	}
+	return response, nil
+}
+
 func (s *Service) resolveExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
 	if s.targets == nil {
 		return clientui.SessionExecutionTarget{}, nil

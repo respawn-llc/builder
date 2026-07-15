@@ -55,8 +55,6 @@ func (m *sessionPickerModel) View() string {
 		}
 		out.WriteString(row)
 	}
-	out.WriteString("\n")
-	out.WriteString(m.styles.preview.Render("Tab/Shift+Tab or ←/→ to switch"))
 	out.WriteString("\n\n")
 
 	tab := m.tab(m.activeTab)
@@ -91,10 +89,6 @@ func (m *sessionPickerModel) View() string {
 			}
 			out.WriteString(m.styles.row.Render(pendingToolSpinnerFrame(m.spinnerFrame) + " Loading older sessions"))
 		}
-		if detail := m.renderSelectedDetail(tab); detail != "" {
-			out.WriteString("\n\n")
-			out.WriteString(detail)
-		}
 	}
 	return out.String()
 }
@@ -110,7 +104,7 @@ func (m *sessionPickerModel) visibleLineBudget() int {
 	if newSessionPickerStatusSurface(m.startupStatus).RenderStatus(m.width) != "" {
 		statusLines = 2
 	}
-	rows := m.height - lipgloss.Height(m.renderHeader()) - tabLines - 3 - statusLines - m.selectedDetailLineCount(m.tab(m.activeTab))
+	rows := m.height - lipgloss.Height(m.renderHeader()) - tabLines - 2 - statusLines
 	if rows < 1 {
 		return 1
 	}

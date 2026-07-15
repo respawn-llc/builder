@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -30,17 +29,8 @@ type blockingSessionPageLoader struct {
 	started chan context.Context
 }
 
-type blockingSessionDetailClient struct {
-	client.SessionViewClient
-	started chan context.Context
-}
-
 func newBlockingSessionPageLoader() *blockingSessionPageLoader {
 	return &blockingSessionPageLoader{started: make(chan context.Context, 1)}
-}
-
-func newBlockingSessionDetailClient() *blockingSessionDetailClient {
-	return &blockingSessionDetailClient{started: make(chan context.Context, 1)}
 }
 
 func (*blockingSessionPageLoader) ProjectID() string {
@@ -51,15 +41,6 @@ func (l *blockingSessionPageLoader) ListSessionPage(ctx context.Context, _ serve
 	l.started <- ctx
 	<-ctx.Done()
 	return serverapi.SessionPageResponse{}, ctx.Err()
-}
-
-func (c *blockingSessionDetailClient) GetSessionExecutionEnvironment(
-	ctx context.Context,
-	_ serverapi.SessionExecutionEnvironmentRequest,
-) (serverapi.SessionExecutionEnvironmentResponse, error) {
-	c.started <- ctx
-	<-ctx.Done()
-	return serverapi.SessionExecutionEnvironmentResponse{}, ctx.Err()
 }
 
 func (s *sessionPickerLifecycleTerminalSpy) EnterAltScreen() error {
@@ -400,142 +381,6 @@ func TestSessionPickerLifecycleCancelsInitialAndDirectionalPageRequestsOnEveryEx
 				}
 			})
 		}
-	}
-}
-
-func TestSessionPickerLifecycleCancelsSelectedDetailRequestsOnFailureCleanup(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		run  func(context.Context, tea.Cmd) (sessionPickerResult, error)
-	}{
-		{
-			name: "program failure",
-			run: func(_ context.Context, command tea.Cmd) (sessionPickerResult, error) {
-				go command()
-				return nil, errors.New("forced picker program failure")
-			},
-		},
-		{
-			name: "caller context teardown",
-			run: func(ctx context.Context, command tea.Cmd) (sessionPickerResult, error) {
-				go command()
-				<-ctx.Done()
-				return nil, ctx.Err()
-			},
-		},
-		{
-			name: "lifecycle result validation failure",
-			run: func(_ context.Context, command tea.Cmd) (sessionPickerResult, error) {
-				go command()
-				return nil, nil
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			detailClient := newBlockingSessionDetailClient()
-			callerContext, cancelCaller := context.WithCancel(context.Background())
-			defer cancelCaller()
-			lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
-				Loader:                     &recordingSessionPageLoader{},
-				ExecutionEnvironmentClient: detailClient,
-				Theme:                      "dark",
-				Header:                     sessionPickerHeaderInfo{},
-				Terminal:                   &sessionPickerLifecycleTerminalSpy{},
-			})
-			sessionID := mustPickerSessionID(t, "detail-cleanup-"+test.name)
-			lifecycle.options.RunProgram = func(ctx context.Context, picker *sessionPickerModel) (sessionPickerResult, error) {
-				command := picker.startSelectedDetailForTabWithID(
-					picker.tab(sessioncontract.SessionCategoryMain),
-					sessionID,
-				)
-				if command == nil {
-					t.Fatal("selected-detail command is nil")
-				}
-				if test.name == "caller context teardown" {
-					cancelCaller()
-				}
-				return test.run(ctx, command)
-			}
-
-			_, err := lifecycle.Run(callerContext)
-			if err == nil {
-				t.Fatal("Run error = nil, want lifecycle failure")
-			}
-			var requestContext context.Context
-			select {
-			case requestContext = <-detailClient.started:
-			case <-time.After(time.Second):
-				t.Fatal("selected-detail request did not start")
-			}
-			select {
-			case <-requestContext.Done():
-				if !errors.Is(requestContext.Err(), context.Canceled) {
-					t.Fatalf("selected-detail request context error = %v, want canceled", requestContext.Err())
-				}
-			case <-time.After(time.Second):
-				t.Fatal("lifecycle cleanup did not cancel selected-detail request")
-			}
-		})
-	}
-}
-
-func TestSessionPickerLifecycleRepeatedCleanupCancelsSelectedDetailOnce(t *testing.T) {
-	t.Parallel()
-
-	detailClient := newBlockingSessionDetailClient()
-	terminal := &sessionPickerLifecycleTerminalSpy{}
-	lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
-		Loader:                     &recordingSessionPageLoader{},
-		ExecutionEnvironmentClient: detailClient,
-		Theme:                      "dark",
-		Header:                     sessionPickerHeaderInfo{},
-		Terminal:                   terminal,
-	})
-	command := lifecycle.picker.startSelectedDetailForTabWithID(
-		lifecycle.picker.tab(sessioncontract.SessionCategoryMain),
-		mustPickerSessionID(t, "detail-repeated-cleanup"),
-	)
-	completed := make(chan tea.Msg, 1)
-	go func() {
-		completed <- command()
-	}()
-	var requestContext context.Context
-	select {
-	case requestContext = <-detailClient.started:
-	case <-time.After(time.Second):
-		t.Fatal("selected-detail request did not start")
-	}
-
-	if err := lifecycle.Cleanup(); err != nil {
-		t.Fatalf("first Cleanup: %v", err)
-	}
-	if err := lifecycle.Cleanup(); err != nil {
-		t.Fatalf("second Cleanup: %v", err)
-	}
-	select {
-	case <-requestContext.Done():
-		if !errors.Is(requestContext.Err(), context.Canceled) {
-			t.Fatalf("selected-detail request context error = %v, want canceled", requestContext.Err())
-		}
-	case <-time.After(time.Second):
-		t.Fatal("repeated lifecycle cleanup did not cancel selected-detail request")
-	}
-	select {
-	case message := <-completed:
-		loaded, ok := message.(sessionPickerSelectedDetailLoadedMsg)
-		if !ok || !errors.Is(loaded.Err, context.Canceled) {
-			t.Fatalf("selected-detail completion = %#v, want canceled load", message)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("canceled selected-detail command did not complete")
-	}
-	if terminal.events != nil {
-		t.Fatalf("inactive repeated cleanup touched terminal: %v", terminal.events)
 	}
 }
 

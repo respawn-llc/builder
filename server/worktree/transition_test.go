@@ -250,7 +250,37 @@ func TestInterruptedModelStepDoesNotRetargetAfterWorkspaceLockWait(t *testing.T)
 }
 
 func enterModelWorktree(env *serviceTestEnv, selector string) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	return env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{OperationID: serverapi.NewWorktreeOperationID(), SessionID: env.session.Meta().SessionID, Selector: selector, Origin: &serverapi.RuntimeStepOrigin{RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002"}})
+	return env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{OperationID: serverapi.NewWorktreeOperationID(), SessionID: env.session.Meta().SessionID, Selector: selector, Origin: testModelStepOrigin()})
+}
+
+func testModelStepOrigin() *serverapi.RuntimeStepOrigin {
+	return &serverapi.RuntimeStepOrigin{
+		RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID: "018fdd67-89ab-4cde-8123-456789abc002",
+	}
+}
+
+func TestModelStepLeaveRejectsInactiveOriginWithoutRetargeting(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/inactive-model-leave")
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	env.runtime.originActive = func() bool { return false }
+
+	ack, err := env.service.LeaveWorktree(env.ctx, serverapi.WorktreeLeaveRequest{
+		OperationID: serverapi.NewWorktreeOperationID(),
+		SessionID:   env.session.Meta().SessionID,
+		Origin:      testModelStepOrigin(),
+	})
+	var immediate *serverapi.WorktreeImmediateTransitionError
+	if !errors.As(err, &immediate) ||
+		immediate.Kind != serverapi.WorktreeImmediateTransitionOriginInactive ||
+		ack != (serverapi.WorktreeScheduledAcknowledgement{}) {
+		t.Fatalf("ack=%+v err=%v, want inactive-origin failure without acknowledgement", ack, err)
+	}
+	target := mustResolveServiceTestTarget(t, env)
+	if target.Worktree == nil || target.Worktree.ID != created.WorktreeID {
+		t.Fatalf("target after rejected leave = %+v, want worktree %q", target, created.WorktreeID)
+	}
 }
 
 func TestScheduledEnterRemainsBoundToInitiallyResolvedWorktree(t *testing.T) {
