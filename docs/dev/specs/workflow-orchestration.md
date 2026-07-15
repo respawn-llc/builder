@@ -6,7 +6,7 @@
 - Users define workflows made of nodes, transition groups, and edges.
 - Tasks move through graph nodes, Kanban statuses, agent workers, review loops, joins, and terminal states.
 - Backend/domain/persistence/runtime are primary. Frontend surfaces follow backend API/read-model needs.
-- Workflow API/read-model shapes are mutable before Kent 2.0.
+- Bundled clients and the server may make hard workflow RPC contract cutovers together. Incompatible cutovers bump the protocol version and do not retain old-client compatibility adapters.
 - CLI is an internal backend-testing and agent-control surface, not the primary user manual QA surface.
 - Real-provider workflow QA requires explicit User approval because it spends provider credits and can fail for provider/model reasons unrelated to orchestration correctness.
 
