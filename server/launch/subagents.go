@@ -8,7 +8,6 @@ import (
 	"core/server/auth"
 	"core/server/llm"
 	"core/shared/config"
-	"core/shared/toolspec"
 	"core/shared/valuecopy"
 )
 
@@ -185,16 +184,7 @@ func applySubagentRoleOverrides(settings *config.Settings, role config.SubagentR
 		}
 	}
 	applyDerivedModelContextBudgetOverrides(settings, role.Sources, originalModel, allowModelOverride)
-	for _, id := range toolspec.CatalogIDs() {
-		key := "tools." + toolspec.ConfigName(id)
-		if _, ok := role.Sources[key]; !ok {
-			continue
-		}
-		if settings.EnabledTools == nil {
-			settings.EnabledTools = map[toolspec.ID]bool{}
-		}
-		settings.EnabledTools[id] = role.Settings.EnabledTools[id]
-	}
+	settings.EnabledTools = config.EffectiveSubagentRoleTools(settings.EnabledTools, role)
 	for key, enabled := range role.Settings.SkillToggles {
 		if _, ok := role.Sources["skills."+key]; !ok {
 			continue

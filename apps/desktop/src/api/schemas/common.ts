@@ -31,6 +31,12 @@ export const nullableString = z
   .string()
   .nullish()
   .transform((value) => value ?? null);
+const nullableNonBlankString = z
+  .string()
+  .trim()
+  .min(1)
+  .nullish()
+  .transform((value) => value ?? null);
 const nullableNumber = z
   .number()
   .nullish()
@@ -120,6 +126,27 @@ export const projectBindingSchema: z.ZodType<ProjectBinding> = z
     workspaceStatus: value.workspace_status,
   }));
 
+const validationErrorDetailsSchema = z
+  .preprocess(
+    (value) => value ?? {},
+    z.object({
+    field_name: emptyString,
+    input_name: emptyString,
+    placeholder: emptyString,
+    provider_edge_id: emptyString,
+    role: nullableNonBlankString,
+    required_tool: nullableNonBlankString,
+    }),
+  )
+  .transform((value) => ({
+    fieldName: value.field_name,
+    inputName: value.input_name,
+    placeholder: value.placeholder,
+    providerEdgeID: value.provider_edge_id,
+    role: value.role,
+    requiredTool: value.required_tool,
+  }));
+
 export const validationErrorSchema: z.ZodType<WorkflowValidationError> = z
   .object({
     code: z.string(),
@@ -128,14 +155,7 @@ export const validationErrorSchema: z.ZodType<WorkflowValidationError> = z
     node_id: emptyString,
     transition_group_id: emptyString,
     edge_id: emptyString,
-    details: z
-      .object({
-        field_name: emptyString,
-        input_name: emptyString,
-        placeholder: emptyString,
-        provider_edge_id: emptyString,
-      })
-      .nullish(),
+    details: validationErrorDetailsSchema,
     related_ids: stringList,
     blocks_context: z.boolean().default(false),
   })
@@ -146,12 +166,7 @@ export const validationErrorSchema: z.ZodType<WorkflowValidationError> = z
     nodeID: value.node_id,
     transitionGroupID: value.transition_group_id,
     edgeID: value.edge_id,
-    details: {
-      fieldName: value.details?.field_name ?? "",
-      inputName: value.details?.input_name ?? "",
-      placeholder: value.details?.placeholder ?? "",
-      providerEdgeID: value.details?.provider_edge_id ?? "",
-    },
+    details: value.details,
     relatedIDs: value.related_ids,
     blocksContext: value.blocks_context,
   }));

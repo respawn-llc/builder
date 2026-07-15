@@ -398,7 +398,7 @@ function workflow(
           {
             blocksContext: true,
             code: "missing_target",
-            details: { fieldName: "", inputName: "", placeholder: "", providerEdgeID: "" },
+            details: { fieldName: "", inputName: "", placeholder: "", providerEdgeID: "", role: null, requiredTool: null },
             edgeID: "edge-1",
             message: "Missing target node.",
             nodeID: "node-x",

@@ -4,7 +4,9 @@ import (
 	"slices"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/workflow"
+	"core/shared/toolspec"
 )
 
 func TestValidateDefaultWorkflowPasses(t *testing.T) {
@@ -12,7 +14,7 @@ func TestValidateDefaultWorkflowPasses(t *testing.T) {
 
 	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
 		Context:      workflow.ValidationContextTaskCreation,
-		RoleResolver: workflow.StaticRoleResolver{"coder": true},
+		RoleResolver: testsetup.QuestionsEnabled("coder"),
 	})
 
 	if result.HasErrors() {
@@ -43,11 +45,106 @@ func TestValidateWorkflowAllowsDefaultAgentRole(t *testing.T) {
 
 	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
 		Context:      workflow.ValidationContextTaskCreation,
-		RoleResolver: workflow.StaticRoleResolver{"coder": true},
+		RoleResolver: testsetup.QuestionsEnabled("coder"),
 	})
 
 	if result.HasErrors() {
 		t.Fatalf("expected default role to be valid, got errors: %+v", result.Errors)
+	}
+}
+
+func TestAgentRoleRequirementReportsMissingRoleWithoutToolDiagnostic(t *testing.T) {
+	def := validWorkflow()
+	updateNodeAt(&def, 1, func(_ *workflow.NodeIdentity, _ *workflow.NodeKind, fields *workflow.NodeFields) {
+		fields.SubagentRole = "reviewer"
+	})
+
+	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+		Context:      workflow.ValidationContextExecution,
+		RoleResolver: testsetup.QuestionsEnabled("coder"),
+	})
+
+	var missing, disabled []workflow.ValidationError
+	for _, diagnostic := range result.Errors {
+		switch diagnostic.Code {
+		case workflow.CodeAgentRoleMissing:
+			missing = append(missing, diagnostic)
+		case workflow.CodeAgentRoleRequiredToolDisabled:
+			disabled = append(disabled, diagnostic)
+		}
+	}
+	if len(missing) != 1 || len(disabled) != 0 {
+		t.Fatalf("missing diagnostics = %+v, disabled diagnostics = %+v", missing, disabled)
+	}
+	if missing[0].AgentRole == nil || *missing[0].AgentRole != "reviewer" {
+		t.Fatalf("missing-role detail = %v, want reviewer", missing[0].AgentRole)
+	}
+	if missing[0].RequiredTool != nil {
+		t.Fatalf("missing role must not report a required tool: %v", missing[0].RequiredTool)
+	}
+}
+
+func TestAgentRoleRequirementReportsEveryUnsafeAgentIncludingUnreachableNodes(t *testing.T) {
+	def := validWorkflow()
+	def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_detached", "detached", "Detached", workflow.NodeFields{
+		SubagentRole:   "coder",
+		PromptTemplate: "Do detached work.",
+	}))
+	resolver := testsetup.QuestionsEnabled()
+	resolver["coder"] = map[toolspec.ID]bool{toolspec.ToolAskQuestion: false}
+
+	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+		Context:      workflow.ValidationContextExecution,
+		RoleResolver: resolver,
+	})
+
+	var nodeIDs []workflow.NodeID
+	for _, diagnostic := range result.Errors {
+		if diagnostic.Code == workflow.CodeAgentRoleRequiredToolDisabled {
+			nodeIDs = append(nodeIDs, diagnostic.NodeID)
+			if diagnostic.AgentRole == nil || *diagnostic.AgentRole != "coder" {
+				t.Fatalf("agent role = %v, want coder", diagnostic.AgentRole)
+			}
+			if diagnostic.RequiredTool == nil || *diagnostic.RequiredTool != toolspec.ToolAskQuestion {
+				t.Fatalf("required tool = %v, want ask_question", diagnostic.RequiredTool)
+			}
+		}
+	}
+	if !slices.Equal(nodeIDs, []workflow.NodeID{"node_agent", "node_detached"}) {
+		t.Fatalf("unsafe agent node ids = %v, want graph traversal order", nodeIDs)
+	}
+	assertHasCodes(t, result, workflow.CodeNodeUnreachableFromStart)
+}
+
+func TestAgentRoleRequirementBlocksOnlyInitialExecutionContexts(t *testing.T) {
+	def := validWorkflow()
+	resolver := testsetup.QuestionsEnabled()
+	resolver["coder"] = map[toolspec.ID]bool{toolspec.ToolAskQuestion: false}
+
+	for _, test := range []struct {
+		context workflow.ValidationContext
+		blocks  bool
+	}{
+		{context: workflow.ValidationContextDraft, blocks: false},
+		{context: workflow.ValidationContextTaskCreation, blocks: true},
+		{context: workflow.ValidationContextExecution, blocks: true},
+	} {
+		t.Run(string(test.context), func(t *testing.T) {
+			result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+				Context:      test.context,
+				RoleResolver: resolver,
+			})
+			var diagnostic *workflow.ValidationError
+			for index := range result.Errors {
+				if result.Errors[index].Code == workflow.CodeAgentRoleRequiredToolDisabled {
+					diagnostic = &result.Errors[index]
+					break
+				}
+			}
+			if diagnostic == nil || diagnostic.BlocksContext != test.blocks {
+				t.Fatalf("diagnostic = %+v, want blocks=%v", diagnostic, test.blocks)
+			}
+		})
 	}
 }
 
@@ -171,7 +268,7 @@ func TestStartNodeRules(t *testing.T) {
 
 			result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
 				Context:      workflow.ValidationContextTaskCreation,
-				RoleResolver: workflow.StaticRoleResolver{"coder": true},
+				RoleResolver: testsetup.QuestionsEnabled("coder"),
 			})
 
 			assertHasCodes(t, result, tt.code)
@@ -222,7 +319,7 @@ func TestNodeKindRules(t *testing.T) {
 
 			result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
 				Context:      workflow.ValidationContextTaskCreation,
-				RoleResolver: workflow.StaticRoleResolver{"coder": true},
+				RoleResolver: testsetup.QuestionsEnabled("coder"),
 			})
 
 			assertHasCodes(t, result, tt.code)
@@ -460,7 +557,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 		def := validWorkflow()
 		edgeByIDForValidationTest(t, &def, "edge_start").PromptTemplate = ""
 
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 
 		assertNoCode(t, result, workflow.CodeTransitionPromptRequired)
 	})
@@ -768,7 +865,7 @@ func TestNodeGroupV1ParallelGroupValidation(t *testing.T) {
 		addV1NodeGroup(&def)
 		def.Nodes = setNodeGroup(def.Nodes, "node_impl_b", "")
 
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 
 		assertHasCodes(t, result, workflow.CodeInvalidNodeGroup)
 		if !result.HasBlockingErrors() {
@@ -801,7 +898,7 @@ func TestNodeGroupV1ParallelGroupValidation(t *testing.T) {
 		addV1NodeGroup(&def)
 		transitionGroupByIDForValidationTest(t, &def, "group_split").SourceNodeID = "node_start"
 
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 
 		assertValidationMessage(
 			t,
@@ -820,7 +917,7 @@ func TestNodeGroupV1ParallelGroupValidation(t *testing.T) {
 		})
 		transitionGroupByIDForValidationTest(t, &def, "group_split").SourceNodeID = "node_start"
 
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 
 		assertValidationMessage(
 			t,
@@ -844,7 +941,7 @@ func TestNodeGroupV1ParallelGroupValidation(t *testing.T) {
 		})
 		edgeByIDForValidationTest(t, &def, "edge_split_b").TransitionGroupID = "group_start_impl_b"
 
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 
 		assertValidationMessage(
 			t,
@@ -867,7 +964,7 @@ func TestNodeGroupV1ParallelGroupValidation(t *testing.T) {
 		})
 		edgeByIDForValidationTest(t, &def, "edge_split_b").TransitionGroupID = "group_plan_impl_b"
 
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 
 		assertValidationMessage(
 			t,
@@ -897,7 +994,7 @@ func TestNodeGroupV1ParallelGroupValidation(t *testing.T) {
 			ContextMode:       workflow.ContextModeNewSession,
 		})
 
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 
 		assertValidationMessage(
 			t,
@@ -920,7 +1017,7 @@ func TestNodeGroupV1ParallelGroupValidation(t *testing.T) {
 			ContextMode:       workflow.ContextModeNewSession,
 		})
 
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 
 		assertValidationMessage(
 			t,
@@ -1216,7 +1313,7 @@ func TestContextSourceValidation(t *testing.T) {
 		edge.ContextMode = workflow.ContextModeContinueSession
 		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "code_review"}
 
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: workflow.StaticRoleResolver{"coder": true}})
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
 
 		assertHasCodes(t, result, workflow.CodeInvalidContextSource)
 		if result.HasBlockingErrors() {
@@ -1328,7 +1425,7 @@ func reviewAcceptanceWorkflow() workflow.Definition {
 func validateForTask(def workflow.Definition) workflow.ValidationResult {
 	return workflow.ValidateDefinition(def, workflow.ValidationOptions{
 		Context:      workflow.ValidationContextTaskCreation,
-		RoleResolver: workflow.StaticRoleResolver{"coder": true},
+		RoleResolver: testsetup.QuestionsEnabled("coder"),
 	})
 }
 

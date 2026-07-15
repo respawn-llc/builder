@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/server/workflowstore"
@@ -408,7 +409,7 @@ func newSchedulerTestStore(t *testing.T) (*workflowstore.Store, metadata.Binding
 		t.Fatalf("SetProjectKey: %v", err)
 	}
 	now := time.Unix(1_700_000_000, 0)
-	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true}), workflowstore.WithNow(func() time.Time {
+	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder")), workflowstore.WithNow(func() time.Time {
 		now = now.Add(time.Millisecond)
 		return now
 	}))

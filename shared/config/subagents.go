@@ -157,6 +157,19 @@ func LookupSubagentRole(settings Settings, rawSelector string) SubagentRoleLooku
 	}
 }
 
+func EffectiveSubagentRoleTools(base map[toolspec.ID]bool, role SubagentRole) map[toolspec.ID]bool {
+	effective := make(map[toolspec.ID]bool, len(base))
+	for id, enabled := range base {
+		effective[id] = enabled
+	}
+	for _, id := range toolspec.CatalogIDs() {
+		if _, explicit := role.Sources["tools."+toolspec.ConfigName(id)]; explicit {
+			effective[id] = role.Settings.EnabledTools[id]
+		}
+	}
+	return effective
+}
+
 func subagentRoleLookupSelector(selector string) *string {
 	return &selector
 }

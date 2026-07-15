@@ -1496,6 +1496,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 	role.Settings.Model = "gpt-5.6-sol-drifted"
 	role.Sources["model"] = "drifted-test"
 	fixture.cfg.Settings.Subagents["coder"] = role
+	fixture.cfg.Settings.EnabledTools[toolspec.ToolAskQuestion] = false
 	fixture.rebuildStarter(t)
 	secondScheduler := fixture.scheduler(t)
 
@@ -1509,6 +1510,9 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 	}
 	if reqs[0].Model == "" || reqs[1].Model != reqs[0].Model || reqs[1].Model == "gpt-5.6-sol-drifted" {
 		t.Fatalf("request models = %q then %q, want locked source session model reused after config drift", reqs[0].Model, reqs[1].Model)
+	}
+	if !requestHasTool(reqs[0], string(toolspec.ToolAskQuestion)) || !requestHasTool(reqs[1], string(toolspec.ToolAskQuestion)) {
+		t.Fatalf("request tools changed after ask_question config drift: first=%+v continued=%+v", reqs[0].Tools, reqs[1].Tools)
 	}
 }
 
@@ -2102,6 +2106,13 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	if _, err := fixture.metadata.ResolvePersistedSession(context.Background(), plan.Store.Meta().SessionID); err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
+	if err := plan.Store.MarkModelDispatchLocked(session.LockedContract{
+		Model:           fixture.cfg.Settings.Model,
+		EnabledTools:    []string{string(toolspec.ToolExecCommand)},
+		HasEnabledTools: true,
+	}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked legacy contract: %v", err)
+	}
 	if err := fixture.store.AttachRunSession(context.Background(), claimed.ID, claimed.Generation, plan.Store.Meta().SessionID); err != nil {
 		t.Fatalf("AttachRunSession: %v", err)
 	}
@@ -2116,6 +2127,8 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 		t.Fatalf("interrupted run session = %+v", runs)
 	}
 	originalSessionID := runs[0].SessionID
+	fixture.cfg.Settings.EnabledTools[toolspec.ToolAskQuestion] = false
+	fixture.rebuildStarter(t)
 	resumedRuns, err := fixture.store.ResumeTaskRuns(context.Background(), task.ID)
 	if err != nil {
 		t.Fatalf("ResumeTaskRuns: %v", err)
@@ -2138,6 +2151,9 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	requests := fixture.client.Requests()
 	if len(requests) != 1 || requests[0].ToolChoiceMode != llm.ToolChoiceModeRequired {
 		t.Fatalf("resumed model requests = %+v, want one required-tool request", requests)
+	}
+	if requestHasTool(requests[0], string(toolspec.ToolAskQuestion)) || !requestHasTool(requests[0], string(toolspec.ToolExecCommand)) {
+		t.Fatalf("resumed request did not preserve unsafe legacy locked tools: %+v", requests[0].Tools)
 	}
 	meta := fixture.sessionMeta(t, runs[0].SessionID)
 	if meta.Name != "RUN-1: Backlog -> Agent" || meta.FirstPromptPreview != startEdgePrompt {
@@ -2318,7 +2334,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if err := metadataStore.SetProjectKey(context.Background(), binding.ProjectID, "RUN"); err != nil {
 		t.Fatalf("SetProjectKey: %v", err)
 	}
-	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true, "reviewer": true, "planner": true}))
+	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder", "reviewer", "planner")))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}

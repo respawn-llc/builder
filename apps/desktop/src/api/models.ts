@@ -182,6 +182,8 @@ export type WorkflowValidationErrorDetails = Readonly<{
   inputName: string;
   placeholder: string;
   providerEdgeID: string;
+  role: string | null;
+  requiredTool: string | null;
 }>;
 
 export type WorkflowOutputField = Readonly<{

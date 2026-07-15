@@ -286,12 +286,16 @@ function BoardContent({
     event.preventDefault();
     const dragPayload = activeDrag === null ? null : activeDrag.payload;
     cancelActiveDrag();
-    if (dragPayload === null || actionsDisabled || !board.selectedWorkflow.validForTaskCreation) {
+    if (dragPayload === null || actionsDisabled) {
       reportRejectedDrop();
       return;
     }
     const dropAction = classifyDrop(column, dragPayload, firstActive?.id);
     if (dropAction.kind === "start") {
+      if (!board.selectedWorkflow.validForTaskCreation) {
+        reportRejectedDrop();
+        return;
+      }
       const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
       runCardAction(startExecutionTargetAction(dragPayload.taskID), pendingMove);
       return;
@@ -384,12 +388,14 @@ function BoardContent({
     if (activeDrag === null) {
       return "idle";
     }
-    if (actionsDisabled || !board.selectedWorkflow.validForTaskCreation) {
+    if (actionsDisabled) {
       return "blocked";
     }
-    const manualTargets = new Set(activeDrag.payload.manualMoveTargetNodeIDs);
-    const canStartHere = activeDrag.payload.canStart && column.id === firstActive?.id;
-    return canStartHere || manualTargets.has(column.id) ? "allowed" : "blocked";
+    const action = classifyDrop(column, activeDrag.payload, firstActive?.id);
+    if (action.kind === "start") {
+      return board.selectedWorkflow.validForTaskCreation ? "allowed" : "blocked";
+    }
+    return activeDrag.payload.manualMoveTargetNodeIDs.includes(column.id) ? "allowed" : "blocked";
   }
 
   function columnIsCollapsed(column: BoardColumn): boolean {

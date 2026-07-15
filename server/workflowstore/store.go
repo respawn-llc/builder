@@ -576,6 +576,13 @@ func (s *Store) AddNode(ctx context.Context, node NodeRecord) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if node.Kind == workflow.NodeKindStart {
+		for _, existing := range currentGraph.nodes {
+			if existing.Kind == workflow.NodeKindStart {
+				return 0, ErrWorkflowStartNodeExists
+			}
+		}
+	}
 	if err := enforceWorkflowGraphEditPolicy(ctx, q, node.WorkflowID, withWorkflowGraphNode(currentGraph, node)); err != nil {
 		return 0, err
 	}

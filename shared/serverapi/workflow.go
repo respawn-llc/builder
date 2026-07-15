@@ -648,10 +648,12 @@ type WorkflowValidationError struct {
 }
 
 type WorkflowValidationErrorDetails struct {
-	FieldName      string `json:"field_name,omitempty"`
-	InputName      string `json:"input_name,omitempty"`
-	Placeholder    string `json:"placeholder,omitempty"`
-	ProviderEdgeID string `json:"provider_edge_id,omitempty"`
+	FieldName      string  `json:"field_name,omitempty"`
+	InputName      string  `json:"input_name,omitempty"`
+	Placeholder    string  `json:"placeholder,omitempty"`
+	ProviderEdgeID string  `json:"provider_edge_id,omitempty"`
+	Role           *string `json:"role,omitempty"`
+	RequiredTool   *string `json:"required_tool,omitempty"`
 }
 
 type WorkflowTaskCreateRequest struct {

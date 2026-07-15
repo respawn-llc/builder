@@ -335,7 +335,10 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
 	}
-	workflowStore, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true}))
+	workflowStore, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(configRoleResolver{settings: config.Settings{
+		EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: true},
+		Subagents:    map[string]config.SubagentRole{"coder": {}},
+	}}))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}

@@ -67,8 +67,9 @@ var (
 
 	// ErrNodeHasTaskHistory and ErrEdgeHasTaskHistory guard physical deletion of
 	// graph elements that are still referenced by task history.
-	ErrNodeHasTaskHistory = errors.New("workflow node has task history references")
-	ErrEdgeHasTaskHistory = errors.New("workflow edge has task history references")
+	ErrNodeHasTaskHistory      = errors.New("workflow node has task history references")
+	ErrEdgeHasTaskHistory      = errors.New("workflow edge has task history references")
+	ErrWorkflowStartNodeExists = errors.New("workflow already has a start node; edit the existing start node instead")
 
 	// Manual-move guards. Each names a distinct unsupported/invalid manual-move
 	// condition.
@@ -114,19 +115,22 @@ func (e ContextSourceNoCompletedRunError) Error() string {
 // detect a validation failure generically with errors.Is.
 var ErrWorkflowValidationFailed = errors.New("workflow validation failed")
 
-// WorkflowValidationError reports that a workflow definition failed validation,
-// carrying the blocking validation codes so callers can assert on a specific
-// code with HasCode rather than parsing the rendered message.
+// WorkflowValidationError reports that a workflow definition failed validation
+// and retains the authoritative blocking diagnostics.
 type WorkflowValidationError struct {
-	Codes []workflow.ValidationErrorCode
+	Diagnostics []workflow.ValidationError
 }
 
 func (e WorkflowValidationError) Error() string {
-	codes := make([]string, 0, len(e.Codes))
-	for _, code := range e.Codes {
-		codes = append(codes, string(code))
+	diagnostics := make([]string, 0, len(e.Diagnostics))
+	for _, diagnostic := range e.Diagnostics {
+		rendered := strings.TrimSpace(diagnostic.Message)
+		if rendered == "" {
+			rendered = string(diagnostic.Code)
+		}
+		diagnostics = append(diagnostics, rendered)
 	}
-	return fmt.Sprintf("workflow validation failed: [%s]", strings.Join(codes, " "))
+	return fmt.Sprintf("workflow validation failed: [%s]", strings.Join(diagnostics, "; "))
 }
 
 // Is reports a match against ErrWorkflowValidationFailed so a generic
@@ -137,8 +141,8 @@ func (e WorkflowValidationError) Is(target error) bool {
 
 // HasCode reports whether the validation failure includes the given code.
 func (e WorkflowValidationError) HasCode(code workflow.ValidationErrorCode) bool {
-	for _, c := range e.Codes {
-		if c == code {
+	for _, diagnostic := range e.Diagnostics {
+		if diagnostic.Code == code {
 			return true
 		}
 	}

@@ -58,13 +58,20 @@ func ValidationErrors(workflowID string, errs []workflow.ValidationError) []serv
 }
 
 func validationErrorDetails(err workflow.ValidationError) *serverapi.WorkflowValidationErrorDetails {
+	var requiredTool *string
+	if err.RequiredTool != nil {
+		value := string(*err.RequiredTool)
+		requiredTool = &value
+	}
 	details := serverapi.WorkflowValidationErrorDetails{
 		FieldName:      err.FieldName,
 		InputName:      err.InputName,
 		Placeholder:    err.Placeholder,
 		ProviderEdgeID: string(err.ProviderEdgeID),
+		Role:           err.AgentRole,
+		RequiredTool:   requiredTool,
 	}
-	if details.FieldName == "" && details.InputName == "" && details.Placeholder == "" && details.ProviderEdgeID == "" {
+	if details.FieldName == "" && details.InputName == "" && details.Placeholder == "" && details.ProviderEdgeID == "" && details.Role == nil && details.RequiredTool == nil {
 		return nil
 	}
 	return &details

@@ -64,7 +64,7 @@ describe("layoutWorkflowGraph", () => {
       errors: [
         {
           code: "workflow.validation.invalid",
-          details: { fieldName: "", inputName: "", placeholder: "", providerEdgeID: "" },
+          details: { fieldName: "", inputName: "", placeholder: "", providerEdgeID: "", role: null, requiredTool: null },
           message: "Invalid",
           workflowID: "workflow-1",
           nodeID: "node-1",
@@ -89,7 +89,7 @@ describe("layoutWorkflowGraph", () => {
         {
           blocksContext: true,
           code: "workflow.validation.invalid_join_input_provider",
-          details: { fieldName: "", inputName: "summary", placeholder: "", providerEdgeID: "edge-join-b" },
+          details: { fieldName: "", inputName: "summary", placeholder: "", providerEdgeID: "edge-join-b", role: null, requiredTool: null },
           edgeID: "",
           message: "join input provider must reference an incoming edge into the join",
           nodeID: "join",

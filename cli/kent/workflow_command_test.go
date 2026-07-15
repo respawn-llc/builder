@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/workflow"
@@ -97,6 +98,21 @@ func TestWorkflowCommandsExposeJSONAndPersistGraphState(t *testing.T) {
 	}
 	if validation, code := workflowValidateJSONForTest(t, workflowID); code != 0 || !validation.Valid {
 		t.Fatalf("validation after wiring code=%d valid=%v, want valid", code, validation.Valid)
+	}
+}
+
+func TestWorkflowNodeAddRejectsSecondStart(t *testing.T) {
+	cfg, _, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+	workflowID := workflowCreateForTest(t, "Duplicate Start").ID
+
+	_, stderr, code := runWorkflowRootCommand(
+		"workflow", "node", "add", workflowID,
+		"--key", "second_start", "--kind", "start",
+	)
+	if code == 0 || strings.TrimSpace(stderr) == "" {
+		t.Fatalf("second Start exit=%d stderr_present=%t, want actionable command failure", code, strings.TrimSpace(stderr) != "")
 	}
 }
 
@@ -686,7 +702,7 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 	if err := metadataStore.SetProjectKey(context.Background(), binding.ProjectID, "WOR"); err != nil {
 		t.Fatalf("SetProjectKey: %v", err)
 	}
-	resolver := workflow.StaticRoleResolver{"workflow-test": true}
+	resolver := testsetup.QuestionsEnabled("workflow-test")
 	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(resolver))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
