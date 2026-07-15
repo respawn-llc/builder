@@ -709,6 +709,33 @@ func TestPlanLaunchSessionHeadlessSelectedSessionAuthorizesPersistedContinuation
 	}
 }
 
+func TestPlanLaunchSessionHeadlessSelectedSessionAllowsRemovedContinuationRole(t *testing.T) {
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("removed")}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	service := NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
+	}, &countingStoreRegistrar{})
+
+	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
+		ClientRequestID:   "req-removed-persisted-role",
+		Mode:              serverapi.SessionLaunchModeHeadless,
+		SelectedSessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.ActiveSettings.Model != cfg.Settings.Model {
+		t.Fatalf("model = %q, want base model %q", result.Plan.ActiveSettings.Model, cfg.Settings.Model)
+	}
+}
+
 func TestPlanLaunchSessionHeadlessSelectedSessionKeepsOmittedContinuationRoleDefault(t *testing.T) {
 	workspace := t.TempDir()
 	containerDir := t.TempDir()

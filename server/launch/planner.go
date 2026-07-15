@@ -618,7 +618,7 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	case config.SubagentRoleLookupMissing:
 		return PreparedRunPromptOverrides{}, fmt.Errorf("%w: unrecognized role %q", errInvalidAgentRole, roleOverride.Role)
 	}
-	providerSettings := cloneSettings(app.Settings)
+	providerSettings := EffectiveSettings(app.Settings, preparation.ModelLock)
 	providerSettings.ProviderOverride = overrideConfig.Settings.ProviderOverride
 	providerSettings.OpenAIBaseURL = overrideConfig.Settings.OpenAIBaseURL
 	providerSettings.Subagents = nil

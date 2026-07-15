@@ -1844,6 +1844,30 @@ func TestApplyRunPromptOverridesFastRoleUsesCLIProviderOverrideForHeuristic(t *t
 	}
 }
 
+func TestPrepareRunPromptOverridesLockedSessionFastRoleUsesLockedModelForProviderHeuristic(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace,
+		"model = \"claude-opus-4-6\"",
+	)
+	locked := &session.LockedContract{Model: "gpt-5.6-sol"}
+
+	prepared, err := PrepareRunPromptOverridesForLockedSession(loaded, serverapi.RunPromptOverrides{
+		AgentRole: launchTestStringPtr(config.BuiltInSubagentRoleFast),
+	}, auth.EmptyState(), locked)
+	if err != nil {
+		t.Fatalf("PrepareRunPromptOverridesForLockedSession: %v", err)
+	}
+	if prepared.NamedTarget == nil {
+		t.Fatal("expected named fast target")
+	}
+	if prepared.NamedTarget.Settings.Model != locked.Model {
+		t.Fatalf("model = %q, want locked model %q", prepared.NamedTarget.Settings.Model, locked.Model)
+	}
+	if !prepared.NamedTarget.Settings.PriorityRequestMode {
+		t.Fatal("expected fast heuristic priority mode")
+	}
+}
+
 func TestPlannerResumeFastRoleUsesProviderOverrideForHeuristic(t *testing.T) {
 	root := t.TempDir()
 	workspace := t.TempDir()

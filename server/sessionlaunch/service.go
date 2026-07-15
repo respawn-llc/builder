@@ -10,6 +10,7 @@ import (
 	"core/server/session"
 	"core/server/subagentpolicy"
 	servicecontract "core/shared/apicontract"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -153,16 +154,19 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 				return PlanResult{}, roleErr
 			}
 			if persistedRole != nil {
-				persistedOverride, overrideErr := (serverapi.RunPromptOverrides{AgentRole: persistedRole}).AgentRoleOverride()
-				if overrideErr != nil {
-					return PlanResult{}, overrideErr
-				}
-				persistedCaller := &subagentpolicy.Caller{AgentRole: persistedRole}
-				if caller != nil {
-					persistedCaller.Workflow = caller.Workflow
-				}
-				if err := subagentpolicy.Authorize(planner.Config.Settings, persistedCaller, subagentpolicy.TargetFromOverride(persistedOverride)); err != nil {
-					return PlanResult{}, err
+				lookup := config.LookupSubagentRole(planner.Config.Settings, *persistedRole)
+				if lookup.Status == config.SubagentRoleLookupPresent {
+					persistedOverride, overrideErr := (serverapi.RunPromptOverrides{AgentRole: persistedRole}).AgentRoleOverride()
+					if overrideErr != nil {
+						return PlanResult{}, overrideErr
+					}
+					persistedCaller := &subagentpolicy.Caller{AgentRole: persistedRole}
+					if caller != nil {
+						persistedCaller.Workflow = caller.Workflow
+					}
+					if err := subagentpolicy.Authorize(planner.Config.Settings, persistedCaller, subagentpolicy.TargetFromOverride(persistedOverride)); err != nil {
+						return PlanResult{}, err
+					}
 				}
 			}
 		}
