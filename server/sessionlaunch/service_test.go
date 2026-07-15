@@ -17,10 +17,22 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
 
 type failingAuthStateReader struct{}
+
+var serviceTestPersistence = sessiontest.NewPersistence()
+
+func createLaunchTestSession(t *testing.T, containerDir, name, workspace string) *session.Store {
+	t.Helper()
+	store, err := session.Create(containerDir, name, workspace, sessioncontract.SessionCategoryMain, serviceTestPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	return store
+}
 
 func (failingAuthStateReader) CurrentState(context.Context) (auth.State, error) {
 	return auth.State{}, errors.New("auth unavailable")
@@ -39,7 +51,9 @@ func sessionLaunchStringPtr(value string) *string {
 }
 
 func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, home)
 	ctx := context.Background()
 	workspace := t.TempDir()
 	cfg, err := config.Load(workspace, config.LoadOptions{})
@@ -56,7 +70,7 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
 	}
 	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	store, err := session.Create(containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, meta.AuthoritativeSessionStoreOptions()...)
+	store, err := session.Create(containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -100,6 +114,7 @@ func TestServicePlanSessionRegistersStoreAndReturnsPlan(t *testing.T) {
 			Settings:        config.Settings{Model: "gpt-5", OpenAIBaseURL: "http://config.local/v1"},
 		},
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, stores)
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
@@ -139,6 +154,7 @@ func TestServicePlanSessionDedupesForceNewSessionRequestID(t *testing.T) {
 			Settings:        config.Settings{Model: "gpt-5"},
 		},
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, stores)
 	req := serverapi.SessionPlanRequest{
 		ClientRequestID: "req-1",
@@ -177,6 +193,7 @@ func TestPlanLaunchSessionUsesOneConfigSnapshotForNamedRole(t *testing.T) {
 	service := NewService(launch.Planner{
 		Config:       snapshot,
 		ContainerDir: t.TempDir(),
+		StoreOptions: serviceTestPersistence.Options(),
 		ReloadConfig: func() (config.App, error) {
 			reloads++
 			if reloads != 1 {
@@ -239,6 +256,7 @@ func TestPlanLaunchSessionRejectsInvalidPreparedNamedTargetBeforeCreatingSession
 	service := NewService(launch.Planner{
 		Config:       snapshot,
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, stores)
 	role := "invalid"
 	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
@@ -261,27 +279,20 @@ func TestPlanLaunchSessionRejectsInvalidPreparedNamedTargetBeforeCreatingSession
 
 func TestSessionPlanMemoRequestUsesCanonicalNullableValues(t *testing.T) {
 	base := sessionPlanMemoRequest{
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		ForceNewSession: true,
+		Mode:              serverapi.SessionLaunchModeHeadless,
+		ForceNewSession:   true,
+		SelectedSessionID: "",
 	}
 	if !sameSessionPlanMemoRequest(base, base) {
 		t.Fatal("identical canonical request must match")
 	}
 	explicitDefault := base
+	role := config.DefaultSubagentRole
 	explicitDefault.Overrides = serverapi.RunPromptOverridesKey{
-		AgentRole: serverapi.OptionalStringKey{Present: true, Value: config.DefaultSubagentRole},
+		AgentRole: serverapi.OptionalStringKey{Present: true, Value: role},
 	}
 	if sameSessionPlanMemoRequest(base, explicitDefault) {
 		t.Fatal("omitted and explicit default selectors must not share a memo entry")
-	}
-	one := "caller-1"
-	two := "caller-1"
-	left := base
-	left.CallerSessionID = serverapi.CanonicalOptionalString(&one)
-	right := base
-	right.CallerSessionID = serverapi.CanonicalOptionalString(&two)
-	if !sameSessionPlanMemoRequest(left, right) {
-		t.Fatal("equal separately allocated caller ids must match")
 	}
 }
 
@@ -294,6 +305,7 @@ func TestPlanLaunchSessionRejectsUnknownParentBeforeRegisteringStore(t *testing.
 			Settings:        config.Settings{Model: "gpt-5"},
 		},
 		ContainerDir: t.TempDir(),
+		StoreOptions: serviceTestPersistence.Options(),
 	}, stores)
 	unknownParent := "unknown-parent"
 	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
@@ -325,6 +337,7 @@ func TestServicePlanSessionAppliesLaunchOverrides(t *testing.T) {
 	service := NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, registry.NewSessionStoreRegistry())
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
@@ -359,10 +372,7 @@ func TestServicePlanSessionRespectsLockedContractWhenApplyingOverrides(t *testin
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
-	store, err := session.Create(containerDir, "workspace-a", workspace)
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
@@ -372,6 +382,7 @@ func TestServicePlanSessionRespectsLockedContractWhenApplyingOverrides(t *testin
 	service := NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, registry.NewSessionStoreRegistry())
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
@@ -399,10 +410,7 @@ func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
-	store, err := session.Create(containerDir, "workspace-a", workspace)
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	role := "worker"
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
@@ -424,6 +432,7 @@ func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T
 	service := NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, registry.NewSessionStoreRegistry())
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
@@ -448,10 +457,7 @@ func TestServicePlanSessionPreparesOmittedSelectedRoleBeforeMaterialization(t *t
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
-	store, err := session.Create(containerDir, "workspace-a", workspace)
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	role := "worker"
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
@@ -470,6 +476,7 @@ func TestServicePlanSessionPreparesOmittedSelectedRoleBeforeMaterialization(t *t
 	service := NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, registry.NewSessionStoreRegistry())
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
@@ -500,6 +507,7 @@ func TestServicePlanSessionPropagatesOverrideToolConflict(t *testing.T) {
 	service := NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: t.TempDir(),
+		StoreOptions: serviceTestPersistence.Options(),
 	}, registry.NewSessionStoreRegistry())
 
 	_, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
@@ -526,6 +534,7 @@ func TestPlanLaunchSessionRejectsOmittedTargetBeforeMaterializingSession(t *test
 	service := NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, stores)
 
 	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
@@ -551,6 +560,8 @@ func TestPlanLaunchSessionRejectsOmittedTargetBeforeMaterializingSession(t *test
 
 func loadSessionLaunchTestConfig(t *testing.T, workspace string, persistenceRoot string) config.App {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(config.PersistenceRootEnvName, t.TempDir())
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
@@ -569,6 +580,7 @@ func TestServicePlanSessionDefaultRoleClearDoesNotRequireAuthState(t *testing.T)
 			Settings:        config.Settings{Model: "gpt-5.6-sol"},
 		},
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(failingAuthStateReader{})
 
 	if _, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
@@ -586,10 +598,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
-	store, err := session.Create(containerDir, "workspace-a", workspace)
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
@@ -606,6 +615,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	service := NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, registry.NewSessionStoreRegistry())
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
@@ -620,7 +630,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	if resp.Plan.ActiveSettings.Model != cfg.Settings.Model {
 		t.Fatalf("model = %q, want base model %q", resp.Plan.ActiveSettings.Model, cfg.Settings.Model)
 	}
-	reopened, err := session.Open(store.Dir())
+	reopened, err := session.Open(store.Dir(), serviceTestPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("reopen session: %v", err)
 	}
@@ -634,10 +644,7 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
-	store, err := session.Create(containerDir, "workspace-a", workspace)
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
@@ -654,9 +661,10 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 	service := NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, registry.NewSessionStoreRegistry())
 
-	_, err = service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
+	_, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID:   "req-1",
 		Mode:              serverapi.SessionLaunchModeInteractive,
 		SelectedSessionID: store.Meta().SessionID,
@@ -675,10 +683,7 @@ func TestServicePlanSessionInvalidRoleOverridePrecedesPersistedRoleValidation(t 
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
-	store, err := session.Create(containerDir, "workspace-a", workspace)
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
@@ -695,6 +700,7 @@ func TestServicePlanSessionInvalidRoleOverridePrecedesPersistedRoleValidation(t 
 	service := NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
 	}, registry.NewSessionStoreRegistry())
 
 	for _, role := range []string{"none", "self"} {

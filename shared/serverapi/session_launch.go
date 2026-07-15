@@ -176,6 +176,13 @@ func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 		ParentSessionID:   decoded.ParentSessionID,
 		Overrides:         decoded.Overrides,
 	}
+	if err := request.Intent.Validate(); err != nil ||
+		strings.TrimSpace(request.SelectedSessionID) != "" ||
+		request.ForceNewSession ||
+		request.CallerSessionID != nil ||
+		request.ParentSessionID != nil {
+		return errors.New("legacy session launch fields are not accepted; use intent")
+	}
 	if err := request.Validate(); err != nil {
 		return err
 	}
@@ -221,8 +228,9 @@ func (r SessionPlanRequest) Validate() error {
 	if mode != string(SessionLaunchModeInteractive) && mode != string(SessionLaunchModeHeadless) {
 		return errors.New("mode must be interactive or headless")
 	}
-	if err := r.Intent.Validate(); err != nil {
-		return fmt.Errorf("intent: %w", err)
+	intentErr := r.Intent.Validate()
+	if intentErr != nil && strings.TrimSpace(r.SelectedSessionID) == "" && !r.ForceNewSession && r.CallerSessionID == nil && r.ParentSessionID == nil {
+		return fmt.Errorf("intent: %w", intentErr)
 	}
 	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
 		return err

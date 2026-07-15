@@ -5,13 +5,15 @@ import (
 	"testing"
 )
 
+func runPromptStringPtr(value string) *string { return &value }
+
 func TestRunPromptOverridesAgentRoleJSONRoundTrip(t *testing.T) {
 	req := SessionPlanRequest{
 		ClientRequestID: "req-1",
 		Mode:            SessionLaunchModeHeadless,
 		Intent:          CreateNewSessionLaunchIntent(nil),
 		Overrides: RunPromptOverrides{
-			AgentRole: "default",
+			AgentRole: runPromptStringPtr("default"),
 		},
 	}
 	data, err := json.Marshal(req)
@@ -22,8 +24,8 @@ func TestRunPromptOverridesAgentRoleJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got.Overrides.AgentRole != "default" {
-		t.Fatalf("AgentRole = %q, want default after round trip: %s", got.Overrides.AgentRole, data)
+	if got.Overrides.AgentRole == nil || *got.Overrides.AgentRole != "default" {
+		t.Fatalf("AgentRole = %v, want default after round trip: %s", got.Overrides.AgentRole, data)
 	}
 	if !got.Overrides.HasAgentRoleOverride() {
 		t.Fatal("default role should count as a role override")
@@ -53,11 +55,11 @@ func TestRunPromptRequestParentIntentJSONRoundTrip(t *testing.T) {
 
 func TestRunPromptOverridesAgentRoleContract(t *testing.T) {
 	var got SessionPlanRequest
-	if err := json.Unmarshal([]byte(`{"client_request_id":"req-1","mode":"headless","intent":{"kind":"create_new"},"overrides":{"AgentRole":"worker"}}`), &got); err != nil {
+	if err := json.Unmarshal([]byte(`{"client_request_id":"req-1","mode":"headless","intent":{"kind":"create_new"},"overrides":{"agent_role":"worker"}}`), &got); err != nil {
 		t.Fatalf("Unmarshal request: %v", err)
 	}
-	if got.Overrides.AgentRole != "worker" {
-		t.Fatalf("AgentRole = %q, want worker", got.Overrides.AgentRole)
+	if got.Overrides.AgentRole == nil || *got.Overrides.AgentRole != "worker" {
+		t.Fatalf("AgentRole = %v, want worker", got.Overrides.AgentRole)
 	}
 	if !got.Overrides.HasAny() {
 		t.Fatal("AgentRole should count as an override")
@@ -78,10 +80,9 @@ func TestRunPromptOverridesRolePresenceAndAuth(t *testing.T) {
 		wantRoleName string
 	}{
 		{name: "empty", overrides: RunPromptOverrides{}, wantAny: false, wantRole: false},
-		{name: "empty role", overrides: RunPromptOverrides{AgentRole: " "}, wantAny: false, wantRole: false},
 		{name: "config only", overrides: RunPromptOverrides{Model: "gpt-5.6-sol"}, wantAny: true, wantRole: false},
-		{name: "default", overrides: RunPromptOverrides{AgentRole: "default"}, wantAny: true, wantRole: true, wantAuth: false, wantDefault: true},
-		{name: "named", overrides: RunPromptOverrides{AgentRole: " Worker "}, wantAny: true, wantRole: true, wantAuth: true, wantRoleName: "worker"},
+		{name: "default", overrides: RunPromptOverrides{AgentRole: runPromptStringPtr("default")}, wantAny: true, wantRole: true, wantAuth: false, wantDefault: true},
+		{name: "named", overrides: RunPromptOverrides{AgentRole: runPromptStringPtr(" Worker ")}, wantAny: true, wantRole: true, wantAuth: true, wantRoleName: "worker"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,7 +109,7 @@ func TestRunPromptOverridesRolePresenceAndAuth(t *testing.T) {
 func TestRunPromptOverridesRejectReservedNonDefaultRoles(t *testing.T) {
 	for _, role := range []string{"none", "self"} {
 		t.Run(role, func(t *testing.T) {
-			if err := (RunPromptOverrides{AgentRole: role}).ValidateAgentRoleOverride(); err == nil {
+			if err := (RunPromptOverrides{AgentRole: runPromptStringPtr(role)}).ValidateAgentRoleOverride(); err == nil {
 				t.Fatal("expected reserved non-default role to be invalid")
 			}
 		})

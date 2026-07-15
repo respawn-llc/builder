@@ -79,16 +79,33 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 	if err := req.Validate(); err != nil {
 		return PlanResult{}, err
 	}
+	selectedSessionID := strings.TrimSpace(req.SelectedSessionID)
+	forceNewSession := req.ForceNewSession
+	parentSessionID := req.ParentSessionID
+	if err := req.Intent.Validate(); err == nil {
+		switch req.Intent.Kind() {
+		case serverapi.SessionLaunchIntentOpenExisting:
+			sessionID, _ := req.Intent.SessionID()
+			selectedSessionID = sessionID.String()
+			forceNewSession = false
+		case serverapi.SessionLaunchIntentCreateNew:
+			forceNewSession = true
+			if parentID, ok := req.Intent.ParentID(); ok {
+				parent := parentID.String()
+				parentSessionID = &parent
+			}
+		}
+	}
 	overrides, err := req.Overrides.CanonicalKey()
 	if err != nil {
 		return PlanResult{}, err
 	}
 	memoReq := sessionPlanMemoRequest{
 		Mode:              req.Mode,
-		SelectedSessionID: strings.TrimSpace(req.SelectedSessionID),
-		ForceNewSession:   req.ForceNewSession,
+		SelectedSessionID: selectedSessionID,
+		ForceNewSession:   forceNewSession,
 		CallerSessionID:   serverapi.CanonicalOptionalString(req.CallerSessionID),
-		ParentSessionID:   serverapi.CanonicalOptionalString(req.ParentSessionID),
+		ParentSessionID:   serverapi.CanonicalOptionalString(parentSessionID),
 		Overrides:         overrides,
 	}
 	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, func(ctx context.Context) (PlanResult, error) {
@@ -116,12 +133,12 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 					Workflow:  callerContext.WorkflowSession,
 					AgentRole: callerContext.AgentRole,
 				}
-				if req.ParentSessionID != nil && strings.TrimSpace(*req.ParentSessionID) != strings.TrimSpace(*req.CallerSessionID) {
+				if parentSessionID != nil && strings.TrimSpace(*parentSessionID) != strings.TrimSpace(*req.CallerSessionID) {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialInvalidTarget}
 				}
 			}
-			if req.ParentSessionID != nil && req.CallerSessionID == nil {
-				if _, parentErr := launch.ResolveSessionCallerContext(planner.Config.PersistenceRoot, *req.ParentSessionID); parentErr != nil {
+			if parentSessionID != nil && req.CallerSessionID == nil {
+				if _, parentErr := launch.ResolveSessionCallerContext(planner.Config.PersistenceRoot, *parentSessionID); parentErr != nil {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialParentMissing}
 				}
 			}
@@ -139,15 +156,15 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 			}
 		}
 		preparation := launch.RunPromptPreparationContext{}
-		if strings.TrimSpace(req.SelectedSessionID) != "" {
-			selectedLocked, selectedErr := planner.SelectedSessionLockedContract(req.SelectedSessionID)
+		if selectedSessionID != "" {
+			selectedLocked, selectedErr := planner.SelectedSessionLockedContract(selectedSessionID)
 			if selectedErr != nil {
 				return PlanResult{}, selectedErr
 			}
 			preparation.ModelLock = selectedLocked
 			preparation.ToolLock = selectedLocked
 			if !roleOverride.Present {
-				target, targetErr := planner.SelectedSessionPromptFacingTarget(req.SelectedSessionID)
+				target, targetErr := planner.SelectedSessionPromptFacingTarget(selectedSessionID)
 				if targetErr != nil {
 					return PlanResult{}, targetErr
 				}
@@ -174,9 +191,9 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		}
 		plan, err := planner.PlanSession(ctx, launch.SessionRequest{
 			Mode:                                launch.Mode(req.Mode),
-			SelectedSessionID:                   req.SelectedSessionID,
-			ForceNewSession:                     req.ForceNewSession,
-			ParentSessionID:                     req.ParentSessionID,
+			SelectedSessionID:                   selectedSessionID,
+			ForceNewSession:                     forceNewSession,
+			ParentSessionID:                     parentSessionID,
 			SkipContinuationAgentRoleValidation: roleOverride.Default,
 			PreparedPromptFacingTarget:          preparedPromptFacingTarget,
 		})

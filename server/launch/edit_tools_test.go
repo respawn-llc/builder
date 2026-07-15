@@ -11,6 +11,8 @@ import (
 	"core/shared/toolspec"
 )
 
+func launchTestStringPtr(value string) *string { return &value }
+
 func TestActiveToolIDsDynamicDefaultChoosesPatchForGPTModels(t *testing.T) {
 	settings := validLaunchSettings("gpt-5.6-sol")
 	source := defaultToolSources()
@@ -124,6 +126,7 @@ func TestApplyRunPromptOverridesSubagentExplicitEditToolWins(t *testing.T) {
 
 func TestApplyRunPromptOverridesSubagentToolSourceSurvivesModelOverride(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv(config.PersistenceRootEnvName, t.TempDir())
 	store := createTestSession(t, t.TempDir())
 	settings := validLaunchSettings("gpt-5.6-sol")
 	settings.Subagents = map[string]config.SubagentRole{

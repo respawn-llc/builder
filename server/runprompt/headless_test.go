@@ -390,7 +390,9 @@ func TestMemoizingPromptServiceCanonicalizesNullableRequestValues(t *testing.T) 
 }
 
 func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, home)
 	ctx := context.Background()
 	root := t.TempDir()
 	workspace := t.TempDir()
@@ -404,7 +406,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
 	}
 	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
-	parent, err := session.Create(containerDir, filepath.Base(containerDir), workspace, meta.AuthoritativeSessionStoreOptions()...)
+	parent, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create parent: %v", err)
 	}
@@ -507,7 +509,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		t.Fatalf("caller/parent mismatch changed artifacts: before=%+v after=%+v", beforeMismatch, afterMismatch)
 	}
 
-	selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, meta.AuthoritativeSessionStoreOptions()...)
+	selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create selected: %v", err)
 	}
@@ -562,7 +564,9 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 }
 
 func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, home)
 	ctx := context.Background()
 	root := t.TempDir()
 	workspace := t.TempDir()
@@ -576,7 +580,7 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
 	}
 	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
-	parent, err := session.Create(containerDir, filepath.Base(containerDir), workspace, meta.AuthoritativeSessionStoreOptions()...)
+	parent, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create parent: %v", err)
 	}
@@ -587,11 +591,11 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 
 	var responseCount int
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleTestOpenAIInputTokenCount(w, r, 1) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
 		responseCount++
-		writeTestOpenAICompletedResponseStream(w, "workflow response", 1, 1)
+		modelstub.WriteCompletedResponseStream(w, "workflow response", 1, 1)
 	}))
 	defer provider.Close()
 	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
@@ -696,7 +700,7 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	}
 	for _, test := range selectedTests {
 		t.Run(test.name, func(t *testing.T) {
-			selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, meta.AuthoritativeSessionStoreOptions()...)
+			selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 			if err != nil {
 				t.Fatalf("session.Create selected: %v", err)
 			}
@@ -1150,7 +1154,9 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 }
 
 func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, home)
 
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
