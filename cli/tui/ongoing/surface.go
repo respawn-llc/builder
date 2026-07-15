@@ -103,6 +103,7 @@ type Surface struct {
 	groupRegister      *clientui.TranscriptRowKind
 	activeAssistant    activeAssistantState
 	terminalResize     TerminalResizePolicy
+	markdownLinks      transcriptrender.MarkdownLinkPresentation
 	lastSize           Size
 }
 
@@ -127,19 +128,34 @@ func NewSurface(writers ...io.Writer) *Surface {
 	if len(writers) > 0 && writers[0] != nil {
 		writer = writers[0]
 	}
-	return NewSurfaceWithTerminalResizePolicy(writer, TerminalResizeSemanticPrompt)
+	return NewSurfaceWithOptions(writer, SurfaceOptions{
+		TerminalResize: TerminalResizeSemanticPrompt,
+		MarkdownLinks:  transcriptrender.MarkdownLinkLabelOnly,
+	})
 }
 
-func NewSurfaceWithTerminalResizePolicy(writer io.Writer, policy TerminalResizePolicy) *Surface {
+type SurfaceOptions struct {
+	TerminalResize TerminalResizePolicy
+	MarkdownLinks  transcriptrender.MarkdownLinkPresentation
+}
+
+func NewSurfaceWithOptions(writer io.Writer, options SurfaceOptions) *Surface {
 	if writer == nil {
 		writer = io.Discard
 	}
-	switch policy {
+	switch options.TerminalResize {
 	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration:
 	default:
-		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", policy))
+		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", options.TerminalResize))
 	}
-	return &Surface{writer: writer, terminalResize: policy}
+	if !options.MarkdownLinks.Valid() {
+		panic(fmt.Sprintf("ongoing surface received invalid Markdown link presentation %d", options.MarkdownLinks))
+	}
+	return &Surface{
+		writer:         writer,
+		terminalResize: options.TerminalResize,
+		markdownLinks:  options.MarkdownLinks,
+	}
 }
 
 func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
@@ -170,7 +186,7 @@ func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame Frame
 	lines := s.hydrationImmutableLines(*message.Hydration, frame.Size.Width, frame.Theme)
 	activeStreamHydrated := s.hydrateActiveAssistantStream(message.Hydration.ActiveAssistantStream)
 	if activeStreamHydrated && !s.activeAssistantPromotionDeferred() {
-		projection := newMarkdownProjector(nil, frame.Theme).Project(markdownProjectionInput{
+		projection := newMarkdownProjector(nil, frame.Theme, s.markdownLinks).Project(markdownProjectionInput{
 			Source:           s.activeAssistant.source,
 			Width:            frameWidthOrDefault(frame),
 			PromotedBoundary: s.activeAssistant.promotedSourceBoundary,
@@ -228,7 +244,7 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, phase cl
 	if s.activeAssistantPromotionDeferred() {
 		return s.writeFrameTransaction(frame, nil)
 	}
-	projection := newMarkdownProjector(nil, frame.Theme).Project(markdownProjectionInput{
+	projection := newMarkdownProjector(nil, frame.Theme, s.markdownLinks).Project(markdownProjectionInput{
 		Source:           s.activeAssistant.source,
 		Width:            frameWidthOrDefault(frame),
 		PromotedBoundary: s.activeAssistant.promotedSourceBoundary,
@@ -296,7 +312,7 @@ func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame
 	unpromoted := s.activeAssistant.source[s.activeAssistant.promotedSourceBoundary:]
 	var rows []string
 	if unpromoted != "" {
-		rows = newMarkdownProjector(nil, frame.Theme).renderer.RenderStable(unpromoted, frameWidthOrDefault(frame))
+		rows = newMarkdownProjector(nil, frame.Theme, s.markdownLinks).renderer.RenderStable(unpromoted, frameWidthOrDefault(frame))
 	}
 	promotedRows := s.renderAssistantPromotedRows(rows, frame.Theme)
 	s.activeAssistant = activeAssistantState{}
@@ -423,7 +439,7 @@ func (s *Surface) renderHydratedCommittedRow(row clientui.TranscriptCommittedRow
 }
 
 func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow, width int, themeName string, mode transcriptrender.Mode) []string {
-	group, lines := committedRowLines(row, width, themeName, mode)
+	group, lines := committedRowLines(row, width, themeName, mode, s.markdownLinks)
 	return s.renderGroupedRows(group, lines, false)
 }
 
@@ -493,10 +509,22 @@ func (s *Surface) renderGroupedRows(group clientui.TranscriptRowKind, rows []str
 	return output
 }
 
-func committedRowLines(row clientui.TranscriptCommittedRow, width int, themeName string, mode transcriptrender.Mode) (clientui.TranscriptRowKind, []string) {
+func committedRowLines(
+	row clientui.TranscriptCommittedRow,
+	width int,
+	themeName string,
+	mode transcriptrender.Mode,
+	linkPresentation transcriptrender.MarkdownLinkPresentation,
+) (clientui.TranscriptRowKind, []string) {
 	switch row.Kind {
 	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice:
-		rendered := transcriptrender.RenderCommittedRow(row, width, themeName, mode)
+		rendered := transcriptrender.RenderCommittedRowWithLinkPresentation(
+			row,
+			width,
+			themeName,
+			mode,
+			linkPresentation,
+		)
 		return rendered.Group, encodeTranscriptLines(rendered.Lines, themeName)
 	default:
 		panic(fmt.Sprintf("ongoing render unknown committed row kind %q", row.Kind))
@@ -532,7 +560,7 @@ func encodeTranscriptSpan(span transcriptrender.Span, themeName string) string {
 	resolved := transcriptrender.ResolveSpanStyle(span, themeName)
 	color := resolved.Foreground.TrueColor()
 	rendered := span.Text
-	if color == "" && !resolved.Faint && !resolved.Bold && !resolved.Italic && !resolved.Underline {
+	if color == "" && !resolved.Faint && !resolved.Bold && !resolved.Italic && !resolved.Underline && !resolved.Strikethrough {
 		return transcriptrender.EncodeSpanHyperlink(span, rendered)
 	}
 	prefix := ansiTrueColorForeground(color)
@@ -547,6 +575,9 @@ func encodeTranscriptSpan(span transcriptrender.Span, themeName string) string {
 	}
 	if resolved.Underline {
 		prefix += "\x1b[4m"
+	}
+	if resolved.Strikethrough {
+		prefix += "\x1b[9m"
 	}
 	rendered = prefix + span.Text + "\x1b[0m"
 	return transcriptrender.EncodeSpanHyperlink(span, rendered)
@@ -645,7 +676,12 @@ func (s *Surface) liveBandLines(frame FrameInput) []string {
 }
 
 func (s *Surface) liveBandLayout(frame FrameInput) []liveBandLine {
-	lines := activeAssistantLines(s.activeAssistant, frameWidthOrDefault(frame), frame.Theme)
+	lines := activeAssistantLinesWithLinkPresentation(
+		s.activeAssistant,
+		frameWidthOrDefault(frame),
+		frame.Theme,
+		s.markdownLinks,
+	)
 	layout := make([]liveBandLine, 0, len(lines)+len(frame.Sections))
 	for _, line := range lines {
 		layout = append(layout, liveBandLine{text: line})
@@ -658,7 +694,7 @@ func (s *Surface) shrinkLiveBandLayoutToFrame(frame FrameInput, liveLayout []liv
 	if len(liveLayout) <= frame.Size.Height {
 		return liveLayout
 	}
-	lines := minimumLiveBandLayout(frame, s.activeAssistant)
+	lines := minimumLiveBandLayoutWithLinkPresentation(frame, s.activeAssistant, s.markdownLinks)
 	if len(lines) > frame.Size.Height {
 		return lines[len(lines)-frame.Size.Height:]
 	}
@@ -670,9 +706,26 @@ func minimumLiveBandLines(frame FrameInput, assistant activeAssistantState) []st
 }
 
 func minimumLiveBandLayout(frame FrameInput, assistant activeAssistantState) []liveBandLine {
+	return minimumLiveBandLayoutWithLinkPresentation(
+		frame,
+		assistant,
+		transcriptrender.MarkdownLinkLabelOnly,
+	)
+}
+
+func minimumLiveBandLayoutWithLinkPresentation(
+	frame FrameInput,
+	assistant activeAssistantState,
+	linkPresentation transcriptrender.MarkdownLinkPresentation,
+) []liveBandLine {
 	var lines []string
 	if assistant.source != "" {
-		assistantLines := activeAssistantLines(assistant, frameWidthOrDefault(frame), frame.Theme)
+		assistantLines := activeAssistantLinesWithLinkPresentation(
+			assistant,
+			frameWidthOrDefault(frame),
+			frame.Theme,
+			linkPresentation,
+		)
 		if len(assistantLines) > 0 {
 			lines = append(lines, assistantLines[len(assistantLines)-1])
 		}
@@ -714,11 +767,29 @@ func minimumLiveBandLayout(frame FrameInput, assistant activeAssistantState) []l
 	return layout
 }
 
-func activeAssistantLines(state activeAssistantState, width int, themeName string) []string {
+func activeAssistantLines(
+	state activeAssistantState,
+	width int,
+	themeName string,
+) []string {
+	return activeAssistantLinesWithLinkPresentation(
+		state,
+		width,
+		themeName,
+		transcriptrender.MarkdownLinkLabelOnly,
+	)
+}
+
+func activeAssistantLinesWithLinkPresentation(
+	state activeAssistantState,
+	width int,
+	themeName string,
+	linkPresentation transcriptrender.MarkdownLinkPresentation,
+) []string {
 	if state.source == "" {
 		return nil
 	}
-	projection := newMarkdownProjector(nil, themeName).Project(markdownProjectionInput{
+	projection := newMarkdownProjector(nil, themeName, linkPresentation).Project(markdownProjectionInput{
 		Source:           state.source,
 		Width:            width,
 		PromotedBoundary: state.promotedSourceBoundary,

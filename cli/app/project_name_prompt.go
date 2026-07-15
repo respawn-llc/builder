@@ -10,7 +10,6 @@ import (
 	tuiinput "core/cli/tui/input"
 	sharedtheme "core/shared/theme"
 
-	"charm.land/glamour/v2"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -19,7 +18,7 @@ type projectNamePromptModel struct {
 	width          int
 	height         int
 	theme          string
-	headerMD       *glamour.TermRenderer
+	headerMD       *startupMarkdownRenderer
 	input          tuiinput.Editor
 	terminalCursor *uiTerminalCursorState
 	error          string
@@ -33,7 +32,7 @@ func newProjectNamePromptModel(defaultName string, theme string) *projectNamePro
 		width:    defaultPickerWidth,
 		height:   defaultPickerHeight,
 		theme:    theme,
-		headerMD: newStartupMarkdownRendererWithWordWrap(theme, 0),
+		headerMD: newStartupMarkdownRendererWithWordWrap(theme),
 		input:    input,
 	}
 }
@@ -104,10 +103,8 @@ func (m *projectNamePromptModel) updateTerminalCursor() {
 
 func (m *projectNamePromptModel) renderHeader() string {
 	if m.headerMD != nil {
-		rendered, err := m.headerMD.Render(projectNamePromptHeaderMarkdown)
-		if err == nil {
-			return tui.ApplyThemeStyleIntents(trimRenderedHeaderInset(rendered), m.theme, tui.ThemeForeground)
-		}
+		rendered := m.headerMD.Render(projectNamePromptHeaderMarkdown, m.width)
+		return tui.ApplyThemeStyleIntents(trimRenderedHeaderInset(rendered), m.theme, tui.ThemeForeground)
 	}
 	return lipgloss.NewStyle().Foreground(uiPalette(m.theme).primary).Bold(true).Render(projectNamePromptHeaderFallback)
 }

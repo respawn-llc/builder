@@ -14,25 +14,38 @@ import (
 )
 
 func RenderToolRow(row clientui.TranscriptToolRow, width int, mode Mode) []Line {
+	return RenderToolRowWithLinkPresentation(row, width, mode, MarkdownLinkLabelOnly)
+}
+
+func RenderToolRowWithLinkPresentation(
+	row clientui.TranscriptToolRow,
+	width int,
+	mode Mode,
+	linkPresentation MarkdownLinkPresentation,
+) []Line {
+	if !linkPresentation.Valid() {
+		panic(fmt.Sprintf("render tool row with invalid Markdown link presentation %d", linkPresentation))
+	}
 	var syntax *syntaxProjector
 	if mode == ModeDetailExpanded {
 		configured := newSyntaxProjector("")
 		syntax = &configured
 	}
-	return renderToolRow(row, width, mode, syntax)
+	return renderToolRowWithLinkPresentation(row, width, mode, syntax, linkPresentation)
 }
 
-func renderToolRow(
+func renderToolRowWithLinkPresentation(
 	row clientui.TranscriptToolRow,
 	width int,
 	mode Mode,
 	syntax *syntaxProjector,
+	linkPresentation MarkdownLinkPresentation,
 ) []Line {
 	meta := normalizeToolMeta(row.ToolName, row.ToolPresentation)
 	meta.syntax = syntax
 	meta.IsError = row.IsError || shellExitFailed(meta)
 	role := toolRole(meta)
-	if lines, ok := renderAnsweredQuestion(row, meta, width, mode); ok {
+	if lines, ok := renderAnsweredQuestion(row, meta, width, mode, linkPresentation); ok {
 		return lines
 	}
 	display := toolDisplayText(row, meta, mode)
@@ -70,7 +83,13 @@ func renderToolRow(
 	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode, meta)
 }
 
-func renderAnsweredQuestion(row clientui.TranscriptToolRow, meta toolMeta, width int, mode Mode) ([]Line, bool) {
+func renderAnsweredQuestion(
+	row clientui.TranscriptToolRow,
+	meta toolMeta,
+	width int,
+	mode Mode,
+	linkPresentation MarkdownLinkPresentation,
+) ([]Line, bool) {
 	if meta.Presentation != transcript.ToolPresentationAskQuestion ||
 		meta.IsError ||
 		(mode != ModeOngoing && mode != ModeOngoingCollapsed) {
@@ -83,7 +102,12 @@ func renderAnsweredQuestion(row clientui.TranscriptToolRow, meta toolMeta, width
 
 	question := strings.TrimSpace(safeTranscriptText(firstNonEmpty(meta.Question, meta.Command, meta.CompactText, "ask question")))
 	bodyWidth := contentWidth(StyleRoleToolQuestion, width)
-	lines := RenderMarkdownLines(StyleRoleUser, question, bodyWidth)
+	lines := RenderMarkdownLinesWithLinkPresentation(
+		StyleRoleUser,
+		question,
+		bodyWidth,
+		linkPresentation,
+	)
 	lines = append(lines, textLines(StyleRoleToolQuestionAnswer, wrapLines(answer, bodyWidth), meta, mode)...)
 	return attachPrefixWithTree(StyleRoleToolQuestion, lines, width, mode, meta), true
 }

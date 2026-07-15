@@ -7,32 +7,90 @@ import (
 	"testing"
 
 	"core/cli/tui/transcriptrender"
+	tuitest "core/internal/testharness/pty"
 	"core/shared/clientui"
-	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
 )
 
-func TestTerminalMarkdownRendererEmitsOSC8Hyperlinks(t *testing.T) {
-	renderer := terminalMarkdownRenderer{themeName: "dark"}
-	renders := map[string]func(string, int) []string{
-		"volatile": renderer.Render,
-		"stable":   renderer.RenderStable,
-	}
-	for name, render := range renders {
-		t.Run(name, func(t *testing.T) {
-			for _, target := range []string{
-				"https://github.com/respawn-llc/kent/pull/574",
-				"/Users/example/project/main.go:42",
-			} {
-				encoded := strings.Join(render("[target]("+target+")", 80), "\n")
-				if !strings.Contains(encoded, xansi.SetHyperlink(target)) {
-					t.Fatalf("rendered markdown omitted OSC 8 target %q: %q", target, encoded)
-				}
-				if !strings.Contains(encoded, xansi.ResetHyperlink()) {
-					t.Fatalf("rendered markdown omitted OSC 8 hyperlink reset: %q", encoded)
-				}
+func TestTerminalMarkdownRendererAdaptsExplicitLinksToTerminalCapabilities(t *testing.T) {
+	for _, presentation := range []struct {
+		name                string
+		links               transcriptrender.MarkdownLinkPresentation
+		wantVisibleText     func(string) string
+		wantLinkedText      func(string) string
+		wantHyperlinkStarts int
+	}{
+		{
+			name:                "supported terminal",
+			links:               transcriptrender.MarkdownLinkLabelOnly,
+			wantVisibleText:     func(string) string { return "target" },
+			wantLinkedText:      func(string) string { return "target" },
+			wantHyperlinkStarts: 1,
+		},
+		{
+			name:                "fallback terminal",
+			links:               transcriptrender.MarkdownLinkLabelAndDestination,
+			wantVisibleText:     func(target string) string { return "target " + target },
+			wantLinkedText:      func(target string) string { return "target" + target },
+			wantHyperlinkStarts: 2,
+		},
+	} {
+		t.Run(presentation.name, func(t *testing.T) {
+			renderer := terminalMarkdownRenderer{
+				themeName:        "dark",
+				linkPresentation: presentation.links,
+			}
+			renders := map[string]func(string, int) []string{
+				"volatile": renderer.Render,
+				"stable":   renderer.RenderStable,
+			}
+			for name, render := range renders {
+				t.Run(name, func(t *testing.T) {
+					for _, target := range []string{
+						"https://github.com/respawn-llc/kent/pull/574",
+						"/Users/example/project/main.go:42",
+					} {
+						encoded := strings.Join(render("[target]("+target+")", 80), "\n")
+						trace := tuitest.TraceTerminalHyperlinks(t, encoded)
+						if got, want := trace.VisibleText(), presentation.wantVisibleText(target); got != want {
+							t.Fatalf("visible text = %q, want %q", got, want)
+						}
+						if got, want := trace.LinkedText(target), presentation.wantLinkedText(target); got != want {
+							t.Fatalf("linked text = %q, want %q", got, want)
+						}
+						if count := trace.OpenCount(target); count != presentation.wantHyperlinkStarts {
+							t.Fatalf("hyperlink starts = %d, want %d for %q: %q", count, presentation.wantHyperlinkStarts, target, encoded)
+						}
+					}
+				})
 			}
 		})
+	}
+}
+
+func TestTerminalMarkdownRendererDoesNotDuplicateAutolinkDestination(t *testing.T) {
+	const target = "https://example.com/autolink"
+	for _, presentation := range []transcriptrender.MarkdownLinkPresentation{
+		transcriptrender.MarkdownLinkLabelOnly,
+		transcriptrender.MarkdownLinkLabelAndDestination,
+	} {
+		encoded := strings.Join(
+			terminalMarkdownRenderer{
+				themeName:        "dark",
+				linkPresentation: presentation,
+			}.Render("<"+target+">", 80),
+			"\n",
+		)
+		trace := tuitest.TraceTerminalHyperlinks(t, encoded)
+		if got := trace.VisibleText(); got != target {
+			t.Fatalf("autolink visible text = %q, want %q", got, target)
+		}
+		if got := trace.LinkedText(target); got != target {
+			t.Fatalf("autolink linked text = %q, want %q", got, target)
+		}
+		if got := trace.OpenCount(target); got != 1 {
+			t.Fatalf("autolink OSC 8 start count = %d, want 1: %q", got, encoded)
+		}
 	}
 }
 
@@ -40,16 +98,21 @@ func TestTerminalMarkdownRendererKeepsAdjacentHyperlinkTargetsDistinct(t *testin
 	const first = "https://example.com/first"
 	const second = "https://example.com/second"
 	encoded := strings.Join(
-		terminalMarkdownRenderer{themeName: "dark"}.Render(
+		terminalMarkdownRenderer{
+			themeName:        "dark",
+			linkPresentation: transcriptrender.MarkdownLinkLabelOnly,
+		}.Render(
 			"[first]("+first+")[second]("+second+")",
 			80,
 		),
 		"\n",
 	)
-	for _, target := range []string{first, second} {
-		if !strings.Contains(encoded, xansi.SetHyperlink(target)) {
-			t.Fatalf("rendered adjacent links omitted target %q: %q", target, encoded)
-		}
+	trace := tuitest.TraceTerminalHyperlinks(t, encoded)
+	if got := trace.LinkedText(first); got != "first" {
+		t.Fatalf("first linked text = %q, want first", got)
+	}
+	if got := trace.LinkedText(second); got != "second" {
+		t.Fatalf("second linked text = %q, want second", got)
 	}
 }
 
@@ -149,7 +212,11 @@ func TestAssistantDeltaPromotesInlineAndBlockCodeThroughTranscriptRenderer(t *te
 }
 
 func TestMarkdownProjectionKeepsOpenBlocksMutableUntilBlankBoundary(t *testing.T) {
-	projector := newMarkdownProjector(&countingMarkdownRenderer{}, "")
+	projector := newMarkdownProjector(
+		&countingMarkdownRenderer{},
+		"",
+		transcriptrender.MarkdownLinkLabelOnly,
+	)
 
 	openTable := projector.Project(markdownProjectionInput{
 		Source:           "| a | b |\n| - | - |\n| 1 | 2 |",
@@ -190,7 +257,7 @@ func TestMarkdownProjectionKeepsOpenBlocksMutableUntilBlankBoundary(t *testing.T
 
 func TestMarkdownProjectionPromotesOnlyLongestSafeCandidateWithTwoRenders(t *testing.T) {
 	renderer := &countingMarkdownRenderer{}
-	projector := newMarkdownProjector(renderer, "")
+	projector := newMarkdownProjector(renderer, "", transcriptrender.MarkdownLinkLabelOnly)
 
 	result := projector.Project(markdownProjectionInput{
 		Source:           "one\n\ntwo\n\nthree",

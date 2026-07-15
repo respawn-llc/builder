@@ -107,7 +107,10 @@ func projectSyntaxSpans(
 	for token := iterator(); token != chroma.EOF; token = iterator() {
 		fragments := strings.Split(strings.ReplaceAll(token.Value, "\r\n", "\n"), "\n")
 		for index, fragment := range fragments {
-			appendStyledText(&lines[len(lines)-1], fragment, resolve(token.Type))
+			appendCoalescedSpan(&lines[len(lines)-1], Span{
+				Text:  fragment,
+				Style: resolve(token.Type),
+			})
 			if index < len(fragments)-1 {
 				lines = append(lines, nil)
 			}
@@ -125,16 +128,4 @@ func fallbackSyntaxSpans(lines []string, style SpanStyle) [][]Span {
 		out = append(out, []Span{{Text: line, Style: style}})
 	}
 	return out
-}
-
-func appendStyledText(spans *[]Span, text string, style SpanStyle) {
-	if text == "" {
-		return
-	}
-	last := len(*spans) - 1
-	if last >= 0 && (*spans)[last].Style == style {
-		(*spans)[last].Text += text
-		return
-	}
-	*spans = append(*spans, Span{Text: text, Style: style})
 }

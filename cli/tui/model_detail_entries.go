@@ -13,15 +13,25 @@ type detailEntry struct {
 }
 
 type detailProjection struct {
-	entries  []detailEntry
-	lines    []detailProjectedLine
-	ranges   []detailLineRange
-	compiler transcriptrender.DetailCompiler
+	entries          []detailEntry
+	lines            []detailProjectedLine
+	ranges           []detailLineRange
+	linkPresentation transcriptrender.MarkdownLinkPresentation
+	compiler         transcriptrender.DetailCompiler
 }
 
-func newDetailProjection(contentWidth int, themeName string) detailProjection {
+func newDetailProjection(
+	contentWidth int,
+	themeName string,
+	linkPresentation transcriptrender.MarkdownLinkPresentation,
+) detailProjection {
 	return detailProjection{
-		compiler: transcriptrender.NewDetailCompiler(contentWidth, themeName),
+		linkPresentation: linkPresentation,
+		compiler: transcriptrender.NewDetailCompilerWithLinkPresentation(
+			contentWidth,
+			themeName,
+			linkPresentation,
+		),
 	}
 }
 
@@ -100,7 +110,11 @@ func (p *detailProjection) replaceSnapshot(
 	}
 	compiler := p.compiler
 	if !compiler.Matches(contentWidth, themeName) {
-		compiler = transcriptrender.NewDetailCompiler(contentWidth, themeName)
+		compiler = transcriptrender.NewDetailCompilerWithLinkPresentation(
+			contentWidth,
+			themeName,
+			p.linkPresentation,
+		)
 	}
 	entries := make([]detailEntry, 0, len(rows))
 	for _, row := range rows {
@@ -124,7 +138,11 @@ func (p *detailProjection) recompile(
 	if p.compiler.Matches(contentWidth, themeName) {
 		return
 	}
-	compiler := transcriptrender.NewDetailCompiler(contentWidth, themeName)
+	compiler := transcriptrender.NewDetailCompilerWithLinkPresentation(
+		contentWidth,
+		themeName,
+		p.linkPresentation,
+	)
 	entries := make([]detailEntry, 0, len(p.entries))
 	for _, entry := range p.entries {
 		entries = append(entries, newDetailEntry(entry.row(), compiler.Compile(entry.row())))
@@ -178,5 +196,9 @@ func (p *detailProjection) clear(contentWidth int, themeName string) {
 	if p == nil {
 		return
 	}
-	*p = newDetailProjection(contentWidth, themeName)
+	*p = newDetailProjection(
+		contentWidth,
+		themeName,
+		p.linkPresentation,
+	)
 }

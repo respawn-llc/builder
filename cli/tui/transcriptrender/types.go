@@ -120,6 +120,22 @@ type Hyperlink struct {
 	URL string
 }
 
+type MarkdownLinkPresentation uint8
+
+const (
+	MarkdownLinkLabelOnly MarkdownLinkPresentation = iota
+	MarkdownLinkLabelAndDestination
+)
+
+func (p MarkdownLinkPresentation) Valid() bool {
+	switch p {
+	case MarkdownLinkLabelOnly, MarkdownLinkLabelAndDestination:
+		return true
+	default:
+		return false
+	}
+}
+
 type LineBackground uint8
 
 const (
@@ -142,6 +158,7 @@ const (
 	SpanAttributeBold
 	SpanAttributeItalic
 	SpanAttributeUnderline
+	SpanAttributeStrikethrough
 )
 
 type RGBColor struct {
@@ -237,11 +254,12 @@ func (f ResolvedForeground) TrueColor() string {
 }
 
 type ResolvedSpanStyle struct {
-	Foreground ResolvedForeground
-	Faint      bool
-	Bold       bool
-	Italic     bool
-	Underline  bool
+	Foreground    ResolvedForeground
+	Faint         bool
+	Bold          bool
+	Italic        bool
+	Underline     bool
+	Strikethrough bool
 }
 
 func ResolveSpanStyle(span Span, themeName string) ResolvedSpanStyle {
@@ -261,11 +279,12 @@ func ResolveSpanStyle(span Span, themeName string) ResolvedSpanStyle {
 		panic(fmt.Sprintf("resolve transcript span with invalid style kind %d", span.Style.Kind))
 	}
 	return ResolvedSpanStyle{
-		Foreground: foreground,
-		Faint:      span.Style.Has(SpanAttributeFaint),
-		Bold:       span.Style.Has(SpanAttributeBold),
-		Italic:     span.Style.Has(SpanAttributeItalic),
-		Underline:  span.Style.Has(SpanAttributeUnderline),
+		Foreground:    foreground,
+		Faint:         span.Style.Has(SpanAttributeFaint),
+		Bold:          span.Style.Has(SpanAttributeBold),
+		Italic:        span.Style.Has(SpanAttributeItalic),
+		Underline:     span.Style.Has(SpanAttributeUnderline),
+		Strikethrough: span.Style.Has(SpanAttributeStrikethrough),
 	}
 }
 
