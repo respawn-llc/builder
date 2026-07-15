@@ -111,13 +111,6 @@ func (s *transcriptRuntimeState) SeedLiveTools(starts []TranscriptLiveToolStart)
 	}
 }
 
-func (s *transcriptRuntimeState) LiveToolSnapshot() []TranscriptLiveToolStart {
-	if ledger := s.liveToolLedger(); ledger != nil {
-		return ledger.Snapshot()
-	}
-	return nil
-}
-
 func (s *transcriptRuntimeState) ToolCallSnapshot(callID string) (llm.ToolCall, bool) {
 	if ledger := s.liveToolLedger(); ledger != nil {
 		if start, ok := ledger.Lookup(callID); ok && start.Presentation != nil {

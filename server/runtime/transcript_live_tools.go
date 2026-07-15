@@ -73,22 +73,6 @@ func (l *transcriptLiveToolLedger) AbortAll() []TranscriptLiveToolStart {
 	return out
 }
 
-func (l *transcriptLiveToolLedger) Snapshot() []TranscriptLiveToolStart {
-	if l == nil {
-		return nil
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if len(l.inFlight) == 0 {
-		return nil
-	}
-	out := make([]TranscriptLiveToolStart, 0, len(l.inFlight))
-	for _, start := range l.inFlight {
-		out = append(out, cloneTranscriptLiveToolStart(start))
-	}
-	return out
-}
-
 func (l *transcriptLiveToolLedger) Lookup(callID string) (TranscriptLiveToolStart, bool) {
 	if l == nil {
 		return TranscriptLiveToolStart{}, false

@@ -32,7 +32,7 @@ func TranscriptHydrationFromSnapshot(runtimeSnapshot runtime.TranscriptHydration
 	return hydration
 }
 
-func TranscriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) []clientui.TranscriptToolStart {
+func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) []clientui.TranscriptToolStart {
 	if len(starts) == 0 {
 		return nil
 	}
@@ -231,7 +231,7 @@ func transcriptAssistantStream(text string, streamID *uuid.UUID, phase clientui.
 }
 
 func transcriptToolStartMessages(starts []runtime.TranscriptLiveToolStart) []clientui.TranscriptMessage {
-	projected := TranscriptToolStartsFromRuntime(starts)
+	projected := transcriptToolStartsFromRuntime(starts)
 	if len(projected) == 0 {
 		return nil
 	}

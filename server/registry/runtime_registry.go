@@ -803,7 +803,6 @@ func (r *RuntimeRegistry) SubscribeSessionTranscript(_ context.Context, req serv
 	err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
 		var subscribeErr error
 		hydration := runtimeview.TranscriptHydrationFromSnapshot(snapshot)
-		hydration.InFlightTools = runtimeview.TranscriptToolStartsFromRuntime(engine.TranscriptLiveToolSnapshot())
 		hydration.SessionStatus = runtimeview.TranscriptSessionStatusFromRuntime(engine)
 		hydration.SessionIdentity = runtimeview.TranscriptSessionIdentityFromRuntime(engine)
 		if target, ok := r.resolveSessionExecutionTarget(context.Background(), id); ok {

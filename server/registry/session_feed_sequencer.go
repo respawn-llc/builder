@@ -90,20 +90,7 @@ func (s sessionFeedSnapshot) applyToHydration(hydration *clientui.TranscriptHydr
 	hydration.ContextUsage = cloneRuntimeContextUsage(s.contextUsage)
 	hydration.GoalStatus = cloneGoalStatus(s.goalStatus)
 	if s.inFlightTools.len() > 0 {
-		merged := orderedFeedLedger[string, clientui.TranscriptToolStart]{}
-		for _, tool := range hydration.InFlightTools {
-			if tool.ToolCallID == "" {
-				continue
-			}
-			merged.upsert(tool.ToolCallID, tool)
-		}
-		for _, tool := range s.inFlightTools.values() {
-			if tool.ToolCallID == "" {
-				continue
-			}
-			merged.upsert(tool.ToolCallID, tool)
-		}
-		hydration.InFlightTools = merged.values()
+		hydration.InFlightTools = s.inFlightTools.values()
 	}
 	if s.backgrounds.len() > 0 {
 		hydration.BackgroundActivities = s.backgrounds.values()

@@ -116,7 +116,11 @@ func TestCommittedTranscriptChangedMarksOnlyDurableTranscriptMutations(t *testin
 
 func TestPersistedAssistantToolCallDoesNotCreateLiveToolState(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	var events []Event
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:   "gpt-5",
+		OnEvent: func(evt Event) { events = append(events, evt) },
+	})
 	if err := eng.steer("step", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role: llm.RoleAssistant,
 		ToolCalls: []llm.ToolCall{{
@@ -127,8 +131,10 @@ func TestPersistedAssistantToolCallDoesNotCreateLiveToolState(t *testing.T) {
 	}})); err != nil {
 		t.Fatalf("persist assistant tool call: %v", err)
 	}
-	if starts := eng.TranscriptLiveToolSnapshot(); len(starts) != 0 {
-		t.Fatalf("live tool starts = %+v, want explicit start events to be the only authority", starts)
+	for _, evt := range events {
+		if evt.Kind == EventToolCallStarted {
+			t.Fatalf("persisted assistant tool call emitted live tool start: %+v", evt)
+		}
 	}
 }
 

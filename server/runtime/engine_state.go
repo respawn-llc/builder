@@ -766,13 +766,6 @@ func (e *Engine) transcriptRuntimeState() *transcriptRuntimeState {
 	return e.transcriptState
 }
 
-func (e *Engine) TranscriptLiveToolSnapshot() []TranscriptLiveToolStart {
-	if e == nil {
-		return nil
-	}
-	return e.transcriptRuntimeState().LiveToolSnapshot()
-}
-
 func (e *Engine) lockedContractState() *lockedContractState {
 	e.mu.Lock()
 	defer e.mu.Unlock()
