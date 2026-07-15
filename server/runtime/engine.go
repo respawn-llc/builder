@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -274,20 +275,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	if !cfg.ModelCapabilities.SupportsReasoningEffort && !cfg.ModelCapabilities.SupportsVisionInputs {
 		cfg.ModelCapabilities = llm.LockedModelCapabilitiesForModel(cfg.Model)
 	}
-	if cfg.DisabledSkills != nil {
-		cloned := make(map[string]bool, len(cfg.DisabledSkills))
-		for name, disabled := range cfg.DisabledSkills {
-			if !disabled {
-				continue
-			}
-			normalized := config.NormalizeSkillName(name)
-			if normalized == "" {
-				continue
-			}
-			cloned[normalized] = true
-		}
-		cfg.DisabledSkills = cloned
-	}
+	cfg.DisabledSkills = maps.Clone(cfg.DisabledSkills)
 
 	eng := &Engine{
 		store:              store,

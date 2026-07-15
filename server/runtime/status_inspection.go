@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"core/server/skillcatalog"
-
-	"gopkg.in/yaml.v3"
 )
 
 type SkillInspection struct {
@@ -32,7 +30,6 @@ func InspectSkills(workspaceRoot, globalConfigDir string, disabledSkills map[str
 		WorkspaceRoot:  workspaceRoot,
 		ConfigRoot:     globalConfigDir,
 		DisabledSkills: disabledSkills,
-		ReadDir:        readSkillsDir,
 	})
 	if err != nil {
 		return nil, err
@@ -51,68 +48,6 @@ func InspectSkills(workspaceRoot, globalConfigDir string, disabledSkills map[str
 		})
 	}
 	return inspections, nil
-}
-
-func inspectSkillAtPath(fallbackName, skillPath string) SkillInspection {
-	resolvedPath := filepath.ToSlash(skillPath)
-	if canonical, err := filepath.EvalSymlinks(skillPath); err == nil {
-		resolvedPath = filepath.ToSlash(canonical)
-	}
-
-	contents, err := os.ReadFile(skillPath)
-	if err != nil {
-		reason := "could not read SKILL.md"
-		if os.IsNotExist(err) {
-			reason = "missing SKILL.md"
-		}
-		return SkillInspection{
-			Name:   sanitizeSkillSingleLine(fallbackName),
-			Path:   resolvedPath,
-			Loaded: false,
-			Reason: reason,
-		}
-	}
-
-	frontmatter, ok := extractSkillFrontmatter(string(contents))
-	if !ok {
-		return SkillInspection{
-			Name:   sanitizeSkillSingleLine(fallbackName),
-			Path:   resolvedPath,
-			Loaded: false,
-			Reason: "missing or invalid frontmatter",
-		}
-	}
-
-	var parsed skillFrontmatter
-	if err := yamlUnmarshal([]byte(frontmatter), &parsed); err != nil {
-		return SkillInspection{
-			Name:   sanitizeSkillSingleLine(fallbackName),
-			Path:   resolvedPath,
-			Loaded: false,
-			Reason: "invalid frontmatter YAML",
-		}
-	}
-
-	name := sanitizeSkillSingleLine(parsed.Name)
-	if name == "" {
-		name = sanitizeSkillSingleLine(fallbackName)
-	}
-	description := sanitizeSkillSingleLine(parsed.Description)
-	if name == "" || description == "" {
-		return SkillInspection{
-			Name:   name,
-			Path:   resolvedPath,
-			Loaded: false,
-			Reason: "missing name or description",
-		}
-	}
-
-	return SkillInspection{
-		Name:        name,
-		Description: description,
-		Path:        resolvedPath,
-		Loaded:      true,
-	}
 }
 
 func InstalledAgentsPaths(workspaceRoot, globalConfigDir string) ([]string, error) {
@@ -136,8 +71,4 @@ func InstalledAgentsPaths(workspaceRoot, globalConfigDir string) ([]string, erro
 	}
 	sort.Strings(installed)
 	return installed, nil
-}
-
-var yamlUnmarshal = func(data []byte, out any) error {
-	return yaml.Unmarshal(data, out)
 }

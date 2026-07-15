@@ -33,7 +33,6 @@ type Options struct {
 	ConfigRoot               string
 	DisabledSkills           map[string]bool
 	IncludeEmbeddedGenerated bool
-	ReadDir                  func(string) ([]os.DirEntry, error)
 }
 
 type Skill struct {
@@ -85,10 +84,6 @@ func Discover(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	readDir := opts.ReadDir
-	if readDir == nil {
-		readDir = os.ReadDir
-	}
 	disabled := normalizedDisabledSkills(opts.DisabledSkills)
 	candidates := make([]Skill, 0)
 	issues := make([]Issue, 0)
@@ -96,7 +91,7 @@ func Discover(opts Options) (Result, error) {
 	seenLoadedPaths := map[string]bool{}
 	userSkillNames := map[string]bool{}
 	for _, root := range roots {
-		rootInspections, rootSkills, rootIssues, err := discoverRoot(root, readDir, opts.IncludeEmbeddedGenerated)
+		rootInspections, rootSkills, rootIssues, err := discoverRoot(root, opts.IncludeEmbeddedGenerated)
 		if err != nil {
 			return Result{}, err
 		}
@@ -209,11 +204,11 @@ func Roots(workspaceRoot, configRoot string) ([]Root, error) {
 	return roots, nil
 }
 
-func discoverRoot(root Root, readDir func(string) ([]os.DirEntry, error), includeEmbeddedGenerated bool) ([]Inspection, []Skill, []Issue, error) {
+func discoverRoot(root Root, includeEmbeddedGenerated bool) ([]Inspection, []Skill, []Issue, error) {
 	if root.Kind == SourceKindGenerated && includeEmbeddedGenerated {
 		return discoverEmbeddedGenerated(root.Path)
 	}
-	entries, err := readDir(root.Path)
+	entries, err := os.ReadDir(root.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, nil, nil

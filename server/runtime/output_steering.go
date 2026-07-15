@@ -289,20 +289,6 @@ func steerClearStreamingStateIntent() steeringIntent {
 	}
 }
 
-func steerClearStreamingStateStoreIntent() steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true}}},
-	}
-}
-
-func steerStreamingResetEventsIntent() steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{resetEvents: true}}},
-	}
-}
-
 func steerCacheWarningIntent(warning transcript.CacheWarning, visibility transcript.EntryVisibility, emit bool) steeringIntent {
 	copyWarning := warning
 	return steeringIntent{

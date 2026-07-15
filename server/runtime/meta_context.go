@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/skillcatalog"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/config"
@@ -111,7 +113,7 @@ func newMetaContextBuilder(workspaceRoot, model, thinkingLevel string, disabledS
 		environmentCWD: trimmedRoot,
 		model:          strings.TrimSpace(model),
 		thinkingLevel:  strings.TrimSpace(thinkingLevel),
-		disabledSkills: normalizedDisabledSkills(disabledSkills),
+		disabledSkills: maps.Clone(disabledSkills),
 		now:            now,
 	}
 }
@@ -165,18 +167,22 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 	}
 
 	if opts.IncludeSkills {
-		skills, issues, err := discoverInjectedSkills(b.workspaceRoot, b.globalConfigDir, b.disabledSkills)
+		result, err := skillcatalog.Discover(skillcatalog.Options{
+			WorkspaceRoot:  b.workspaceRoot,
+			ConfigRoot:     b.globalConfigDir,
+			DisabledSkills: b.disabledSkills,
+		})
 		if err != nil {
 			return metaContextBuildResult{}, err
 		}
 		if opts.IncludeSkillWarnings {
-			collector.addWarnings(skillDiscoveryWarningTexts(issues))
+			collector.addWarnings(skillDiscoveryWarningTexts(result.Issues))
 		}
-		if len(skills) > 0 {
+		if len(result.Skills) > 0 {
 			collector.addMessages([]llm.Message{{
 				Role:        llm.RoleDeveloper,
 				MessageType: llm.MessageTypeSkills,
-				Content:     renderSkillsContext(skills),
+				Content:     renderSkillsContext(result.Skills),
 			}})
 		}
 	}
@@ -554,7 +560,7 @@ func worktreeBranchPromptValue(branch *string) string {
 	return *branch
 }
 
-func skillDiscoveryWarningTexts(issues []skillDiscoveryIssue) []string {
+func skillDiscoveryWarningTexts(issues []skillcatalog.Issue) []string {
 	if len(issues) == 0 {
 		return nil
 	}
