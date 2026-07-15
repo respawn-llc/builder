@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/server/session"
+	"core/shared/sessioncontract"
 )
 
 type blockingOrderedSessionObserver struct {
@@ -189,6 +190,7 @@ func TestConcurrentSessionPersistencePublishesSnapshotsInMutationOrder(t *testin
 		filepath.Join(cfg.PersistenceRoot, "projects", binding.ProjectID, "sessions"),
 		binding.WorkspaceName,
 		cfg.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
 		session.WithPersistenceObserver(observer),
 		session.WithPersistedSessionResolver(metadataStore),
 	)

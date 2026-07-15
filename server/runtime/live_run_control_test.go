@@ -545,6 +545,10 @@ func TestCapturedActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	if queued.ID == "" || captureErr != nil {
 		t.Fatalf("queued=%+v capture error=%v", queued, captureErr)
 	}
+	handle, err := eng.CaptureActiveRunResult(context.Background())
+	if err != nil {
+		t.Fatalf("CaptureActiveRunResult: %v", err)
+	}
 	waitDone := make(chan struct {
 		result LiveRunResult
 		err    error
@@ -570,7 +574,7 @@ func TestCapturedActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	}
 	waited := <-waitDone
 	if waited.err != nil {
-		t.Fatalf("WaitForActiveRunResult: %v", waited.err)
+		t.Fatalf("captured live run result: %v", waited.err)
 	}
 	if waited.result.AssistantMessage.Content != "queued work handled" {
 		t.Fatalf("wait result = %+v, want queued work handled", waited.result)

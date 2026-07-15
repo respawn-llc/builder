@@ -128,23 +128,25 @@ func TestPathReferenceEnterDoesNotSubmitWhileQueryIsPending(t *testing.T) {
 func TestPathReferencePickerSharedWithViewport(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.theme = "dark"
-	m.termWidth = 24
-	m.termHeight = 14
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(24, 14)
 	m.input = "@ab"
 	m.pathReference.tracked = uiPathReferenceQuery{Active: true, Start: 0, End: 3, RawQuery: "ab", NormalizedQuery: "ab"}
 	m.pathReference.matches = []uiPathReferenceCandidate{{Path: "cli/app/ui.go"}}
+	size := m.terminalGeometry.Size()
+	if size == nil {
+		t.Fatal("expected known terminal geometry")
+	}
 
 	style := uiThemeStyles(m.theme)
 	standard, ok := m.layout().composeStandardFrame(style)
 	if !ok {
 		t.Fatal("expected standard frame")
 	}
-	expectedPicker := m.layout().renderActivePicker(m.termWidth)
+	expectedPicker := m.layout().renderActivePicker(size.width)
 	if !reflect.DeepEqual(standard.pickerPane, expectedPicker) {
 		t.Fatalf("standard picker pane = %+v, want %+v", standard.pickerPane, expectedPicker)
 	}
-	wantChat := m.termHeight - len(standard.inputPane) - len(standard.queuePane) - len(expectedPicker) - len(standard.helpPane) - 1
+	wantChat := size.height - len(standard.inputPane) - len(standard.queuePane) - len(expectedPicker) - len(standard.helpPane) - 1
 	if wantChat < 1 {
 		wantChat = 1
 	}

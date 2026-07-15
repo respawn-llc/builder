@@ -78,8 +78,8 @@ func (*projectViewRemoteStub) GetProjectOverview(context.Context, serverapi.Proj
 	return serverapi.ProjectGetOverviewResponse{}, errors.New("unexpected GetProjectOverview call")
 }
 
-func (*projectViewRemoteStub) ListSessionsByProject(context.Context, serverapi.SessionListByProjectRequest) (serverapi.SessionListByProjectResponse, error) {
-	return serverapi.SessionListByProjectResponse{}, errors.New("unexpected ListSessionsByProject call")
+func (*projectViewRemoteStub) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+	return serverapi.SessionPageResponse{}, errors.New("unexpected ListSessionPage call")
 }
 
 func TestDialHeadlessPinsProjectViewRootBeforeDiscovery(t *testing.T) {

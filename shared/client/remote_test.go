@@ -14,6 +14,7 @@ import (
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"golang.org/x/net/websocket"
 )
 
@@ -103,7 +104,7 @@ func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	var updates []serverapi.RunPromptProgress
-	resp, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello"}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+	resp, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hello"}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 		updates = append(updates, progress)
 	}))
 	if err != nil {
@@ -677,8 +678,8 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectRebindWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"}}))
 			case protocol.MethodProjectGetOverview:
 				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectGetOverviewResponse{}))
-			case protocol.MethodSessionListByProject:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.SessionListByProjectResponse{}))
+			case protocol.MethodSessionPage:
+				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.SessionPageResponse{ProjectID: "project-1", Category: sessioncontract.SessionCategoryMain}))
 			case protocol.MethodProjectList:
 				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectListResponse{}))
 			default:
@@ -710,8 +711,13 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 	if _, err := remote.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: "project-1"}); err != nil {
 		t.Fatalf("GetProjectOverview: %v", err)
 	}
-	if _, err := remote.ListSessionsByProject(context.Background(), serverapi.SessionListByProjectRequest{ProjectID: "project-1"}); err != nil {
-		t.Fatalf("ListSessionsByProject: %v", err)
+	if _, err := remote.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
+		ProjectID: "project-1",
+		Category:  sessioncontract.SessionCategoryMain,
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
+	}); err != nil {
+		t.Fatalf("ListSessionPage: %v", err)
 	}
 	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
 		t.Fatalf("ListProjects: %v", err)

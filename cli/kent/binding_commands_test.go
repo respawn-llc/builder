@@ -12,6 +12,7 @@ import (
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"errors"
 	"fmt"
 	"net"
@@ -88,8 +89,8 @@ func (s bindingCommandTimeoutProjectViewStub) RebindWorkspace(ctx context.Contex
 	return s.rebindWorkspace(ctx, req)
 }
 
-func (bindingCommandTimeoutProjectViewStub) ListSessionsByProject(context.Context, serverapi.SessionListByProjectRequest) (serverapi.SessionListByProjectResponse, error) {
-	return serverapi.SessionListByProjectResponse{}, nil
+func (bindingCommandTimeoutProjectViewStub) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+	return serverapi.SessionPageResponse{}, nil
 }
 
 func (bindingCommandTimeoutProjectViewStub) GetProjectOverview(context.Context, serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
@@ -226,8 +227,7 @@ func newBindingCommandSession(t *testing.T, workspace string) (*metadata.Store, 
 	sess, err := session.Create(
 		filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
 		filepath.Base(cfg.WorkspaceRoot),
-		cfg.WorkspaceRoot,
-		store.AuthoritativeSessionStoreOptions()...,
+		cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)

@@ -16,6 +16,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
 
@@ -158,7 +159,7 @@ func TestNewStarterRejectsLegacyAndRuntimeClientFactoriesTogether(t *testing.T) 
 
 func newWorkflowFactorySession(t *testing.T) *session.Store {
 	t.Helper()
-	store, err := session.Create(t.TempDir(), "factory", t.TempDir(), workflowFactorySessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "factory", t.TempDir(), sessioncontract.SessionCategorySubagent, workflowFactorySessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}

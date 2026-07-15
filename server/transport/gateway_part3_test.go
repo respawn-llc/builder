@@ -10,6 +10,7 @@ import (
 	remoteclient "core/shared/client"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"encoding/json"
 	"errors"
 	"golang.org/x/net/websocket"
@@ -32,6 +33,7 @@ func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 		filepath.Join(appCore.Config().PersistenceRoot, "projects", binding.ProjectID, "sessions"),
 		filepath.Base(appCore.Config().WorkspaceRoot),
 		appCore.Config().WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
 		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
@@ -129,8 +131,7 @@ func createGatewayAuthoritativeSession(t *testing.T, appCore *core.Core) *sessio
 	store, err := session.Create(
 		filepath.Join(filepath.Join(appCore.Config().PersistenceRoot, "projects"), appCore.ProjectID(), "sessions"),
 		filepath.Base(appCore.Config().WorkspaceRoot),
-		appCore.Config().WorkspaceRoot,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
+		appCore.Config().WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)

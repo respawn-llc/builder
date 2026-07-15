@@ -316,7 +316,7 @@ func (m *uiModel) moveStatusScrollPage(deltaPages int) {
 }
 
 func (m *uiModel) statusRowsPerPage() int {
-	available := m.termHeight - 1
+	available := m.layout().effectiveHeight() - 1
 	if available < 1 {
 		return 1
 	}

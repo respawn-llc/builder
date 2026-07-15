@@ -132,7 +132,6 @@ var allowedSmallPackages = map[string]string{
 	"shared/llmerrors":                            "shared provider-error contract surfaced by CLI and server",
 	"shared/modelcontract":                        "shared model identifier contract needed by server/llm and shared clients",
 	"shared/rollbacktarget":                       "shared session rollback target contract used by CLI and server session lifecycle",
-	"shared/rpcwire":                              "cohesive shared RPC wire encoding owner",
 	"shared/sessioncontract":                      "shared session contract required below config/startup and server session packages",
 	"shared/sessionenv":                           "shared session environment contract used by CLI commands and shell env construction",
 	"shared/toolspec":                             "shared model-facing tool spec contract required below runtime, runtimewire, and clients",

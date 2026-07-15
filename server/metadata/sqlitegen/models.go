@@ -57,6 +57,7 @@ type Session struct {
 	LockedJson         string
 	UsageStateJson     string
 	MetadataJson       string
+	Category           sql.NullString
 }
 
 type SessionPromptHistoryEntry struct {

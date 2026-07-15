@@ -11,6 +11,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/session"
 	"core/shared/rollbacktarget"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -176,11 +177,22 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 		if s.authManager == nil {
 			return serverapi.SessionResolveTransitionResponse{}, errors.New("auth manager is required for logout")
 		}
-		return serverapi.SessionResolveTransitionResponse{
-			NextSessionID:  strings.TrimSpace(req.SessionID),
-			ShouldContinue: true,
-			RequiresReauth: true,
-		}, nil
+		currentID := strings.TrimSpace(req.SessionID)
+		if currentID == "" {
+			return serverapi.SelectSessionLifecycleResult(serverapi.SessionAuthPreparationReauthenticate), nil
+		}
+		sessionID, err := runtimeids.ParseSessionID(currentID)
+		if err != nil {
+			return serverapi.SessionResolveTransitionResponse{}, err
+		}
+		return serverapi.LaunchSessionLifecycleResult(
+			serverapi.OpenExistingSessionLaunchIntent(sessionID),
+			serverapi.NewSessionLaunchPreparation(
+				nil,
+				serverapi.RestoreStoredDraftSessionInitialInputPolicy(),
+				serverapi.SessionAuthPreparationReauthenticate,
+			),
+		), nil
 	}
 	var (
 		store *session.Store
@@ -210,18 +222,18 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 		if err != nil {
 			return serverapi.SessionResolveTransitionResponse{}, err
 		}
-		if err := s.preserveForkExecutionTarget(ctx, req.SessionID, resolved.NextSessionID); err != nil {
+		intent, ok := resolved.LaunchIntent()
+		if !ok {
+			return serverapi.SessionResolveTransitionResponse{}, errors.New("rollback transition did not resolve to a launch intent")
+		}
+		forkID, ok := intent.SessionID()
+		if !ok {
+			return serverapi.SessionResolveTransitionResponse{}, errors.New("rollback transition launch intent omitted fork session ID")
+		}
+		if err := s.preserveForkExecutionTarget(ctx, req.SessionID, forkID.String()); err != nil {
 			return serverapi.SessionResolveTransitionResponse{}, err
 		}
-		return serverapi.SessionResolveTransitionResponse{
-			NextSessionID:                resolved.NextSessionID,
-			InitialPrompt:                resolved.InitialPrompt,
-			InitialPromptHistoryRecorded: resolved.InitialPromptHistoryRecorded,
-			InitialInput:                 resolved.InitialInput,
-			ParentSessionID:              resolved.ParentSessionID,
-			ForceNewSession:              resolved.ForceNewSession,
-			ShouldContinue:               resolved.ShouldContinue,
-		}, nil
+		return resolved, nil
 	}
 	resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{
 		Store: store,
@@ -237,15 +249,7 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 	if err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
 	}
-	return serverapi.SessionResolveTransitionResponse{
-		NextSessionID:                resolved.NextSessionID,
-		InitialPrompt:                resolved.InitialPrompt,
-		InitialPromptHistoryRecorded: resolved.InitialPromptHistoryRecorded,
-		InitialInput:                 resolved.InitialInput,
-		ParentSessionID:              resolved.ParentSessionID,
-		ForceNewSession:              resolved.ForceNewSession,
-		ShouldContinue:               resolved.ShouldContinue,
-	}, nil
+	return resolved, nil
 }
 
 func (s *SessionLifecycleService) preserveForkExecutionTarget(ctx context.Context, parentSessionID string, childSessionID string) error {

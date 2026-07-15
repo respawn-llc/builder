@@ -31,7 +31,9 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 	"core/shared/transcriptdiag"
 
@@ -489,10 +491,14 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 		}
 	}()
 	var plan launch.SessionPlan
-	overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
+	launchRequest, err := sessionLaunchRequestForWorkflowRun(input)
+	if err != nil {
+		return launch.SessionPlan{}, nil, err
+	}
+	overrides := launchRequest.Overrides
 	skipPersistedRoleValidation := overrides.HasAny()
 	if strings.TrimSpace(input.Run.SessionID) != "" {
-		plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, SelectedSessionID: input.Run.SessionID, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
+		plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: launchRequest.Intent, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
 		if err != nil {
 			return launch.SessionPlan{}, nil, err
 		}
@@ -502,16 +508,10 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 	} else {
 		switch input.ContextMode {
 		case "", workflow.ContextModeNewSession:
-			plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, ForceNewSession: true, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
+			plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: launchRequest.Intent, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
 		case workflow.ContextModeContinueSession:
-			if strings.TrimSpace(input.SourceSessionID) == "" {
-				return launch.SessionPlan{}, nil, errors.New("continue_session requires a source session")
-			}
-			plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, SelectedSessionID: input.SourceSessionID, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
+			plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: launchRequest.Intent, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
 		case workflow.ContextModeCompactAndContinueSession:
-			if strings.TrimSpace(input.SourceSessionID) == "" {
-				return launch.SessionPlan{}, nil, errors.New("compact_and_continue_session requires a source session")
-			}
 			// In-place continuation reuses the source session; the runtime runs a real
 			// compaction before the node turn. A fan-out branch instead continues in an
 			// isolated full clone of the source so parallel branches never compact or
@@ -523,8 +523,13 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 					return launch.SessionPlan{}, nil, err
 				}
 				disposableCloneID = continuationSessionID
+				clonedID, parseErr := runtimeids.ParseSessionID(continuationSessionID)
+				if parseErr != nil {
+					return launch.SessionPlan{}, nil, parseErr
+				}
+				launchRequest.Intent = serverapi.OpenExistingSessionLaunchIntent(clonedID)
 			}
-			plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, SelectedSessionID: continuationSessionID, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
+			plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: launchRequest.Intent, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
 		default:
 			return launch.SessionPlan{}, nil, fmt.Errorf("unsupported workflow context mode %q", input.ContextMode)
 		}
@@ -541,7 +546,7 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 		}
 		plan, err = planner.PlanSession(ctx, launch.SessionRequest{
 			Mode:                                launch.ModeHeadless,
-			SelectedSessionID:                   plan.Store.Meta().SessionID,
+			Intent:                              mustOpenWorkflowSessionIntent(plan.Store.Meta().SessionID),
 			SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
 		})
 		if err != nil {
@@ -554,6 +559,55 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 	}
 	planSucceeded = true
 	return plan, warnings, nil
+}
+
+type workflowSessionLaunchRequest struct {
+	Intent    serverapi.SessionLaunchIntent
+	Overrides serverapi.RunPromptOverrides
+}
+
+func sessionLaunchRequestForWorkflowRun(input workflowstore.RunStartContext) (workflowSessionLaunchRequest, error) {
+	request := workflowSessionLaunchRequest{Overrides: workflowRunPromptOverrides(input.Node.SubagentRole)}
+	if resumedID := strings.TrimSpace(input.Run.SessionID); resumedID != "" {
+		intent, err := openWorkflowSessionIntent(resumedID)
+		request.Intent = intent
+		return request, err
+	}
+	switch input.ContextMode {
+	case "", workflow.ContextModeNewSession:
+		request.Intent = serverapi.CreateNewSessionLaunchIntent(nil)
+	case workflow.ContextModeContinueSession:
+		intent, err := openWorkflowSessionIntent(input.SourceSessionID)
+		if err != nil {
+			return workflowSessionLaunchRequest{}, fmt.Errorf("continue_session requires a valid source session: %w", err)
+		}
+		request.Intent = intent
+	case workflow.ContextModeCompactAndContinueSession:
+		intent, err := openWorkflowSessionIntent(input.SourceSessionID)
+		if err != nil {
+			return workflowSessionLaunchRequest{}, fmt.Errorf("compact_and_continue_session requires a valid source session: %w", err)
+		}
+		request.Intent = intent
+	default:
+		return workflowSessionLaunchRequest{}, fmt.Errorf("unsupported workflow context mode %q", input.ContextMode)
+	}
+	return request, nil
+}
+
+func openWorkflowSessionIntent(raw string) (serverapi.SessionLaunchIntent, error) {
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(raw))
+	if err != nil {
+		return serverapi.SessionLaunchIntent{}, err
+	}
+	return serverapi.OpenExistingSessionLaunchIntent(sessionID), nil
+}
+
+func mustOpenWorkflowSessionIntent(raw string) serverapi.SessionLaunchIntent {
+	intent, err := openWorkflowSessionIntent(raw)
+	if err != nil {
+		panic(fmt.Sprintf("workflow planned invalid session ID %q: %v", raw, err))
+	}
+	return intent
 }
 
 func compactAndContinueRequiresFreshContract(input workflowstore.RunStartContext, plan launch.SessionPlan) bool {
@@ -814,7 +868,7 @@ func (s *Starter) cloneSourceSessionForFanout(containerDir, sourceSessionID stri
 	if err != nil {
 		return "", fmt.Errorf("open source session: %w", err)
 	}
-	cloned, err := session.CloneSession(sourceStore, "")
+	cloned, err := session.CloneSession(sourceStore, "", sessioncontract.SessionCategorySubagent)
 	if err != nil {
 		return "", fmt.Errorf("clone source session: %w", err)
 	}

@@ -23,7 +23,6 @@ type sessionWorkspaceChangeAction int
 const (
 	sessionWorkspaceChangeProceed sessionWorkspaceChangeAction = iota
 	sessionWorkspaceChangePickAgain
-	sessionWorkspaceChangeReplanSelected
 )
 
 type workspaceChangePromptResult struct {
@@ -40,18 +39,15 @@ type workspaceChangePromptModel struct {
 	result       workspaceChangePromptResult
 }
 
-func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server sessionWorkspaceChangeServer, plan sessionLaunchPlan) (sessionWorkspaceChangeAction, error) {
+func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server sessionWorkspaceChangeServer, sessionID string, selectedWorkspaceRoot string) (sessionWorkspaceChangeAction, error) {
 	if server == nil {
 		return sessionWorkspaceChangeProceed, errors.New("embedded server is required")
 	}
-	if !plan.SelectedViaPicker || strings.TrimSpace(plan.SessionID) == "" {
-		return sessionWorkspaceChangeProceed, nil
-	}
-	if plan.SelectedSessionWorkspaceLookupFailed {
-		return sessionWorkspaceChangePickAgain, nil
+	if strings.TrimSpace(sessionID) == "" {
+		return sessionWorkspaceChangeProceed, errors.New("session id is required")
 	}
 	currentRoot := normalizeWorkspaceChangeDisplayRoot(server.Config().WorkspaceRoot)
-	selectedRoot := normalizeWorkspaceChangeDisplayRoot(plan.SelectedSessionWorkspaceRoot)
+	selectedRoot := normalizeWorkspaceChangeDisplayRoot(selectedWorkspaceRoot)
 	if comparableWorkspaceChangeRoot(currentRoot) == "" || comparableWorkspaceChangeRoot(selectedRoot) == "" || comparableWorkspaceChangeRoot(currentRoot) == comparableWorkspaceChangeRoot(selectedRoot) {
 		return sessionWorkspaceChangeProceed, nil
 	}
@@ -62,10 +58,10 @@ func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server session
 	if !result.Rebind {
 		return sessionWorkspaceChangePickAgain, nil
 	}
-	if err := retargetInteractiveSessionWorkspace(ctx, server, plan.SessionID); err != nil {
+	if err := retargetInteractiveSessionWorkspace(ctx, server, sessionID); err != nil {
 		return sessionWorkspaceChangeProceed, err
 	}
-	return sessionWorkspaceChangeReplanSelected, nil
+	return sessionWorkspaceChangeProceed, nil
 }
 
 func retargetInteractiveSessionWorkspace(ctx context.Context, server sessionWorkspaceChangeServer, sessionID string) error {

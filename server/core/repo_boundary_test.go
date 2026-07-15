@@ -217,6 +217,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"ReadModelVersion.Validate":                     {},
 		"RuntimeActivity.ActiveForControl":              {},
 		"RuntimeActivity.Validate":                      {},
+		"SessionSummary.Validate":                       {},
 		"RuntimeActivityActiveKind.Validate":            {},
 		"RuntimeCompactRequest.Validate":                {},
 		"RuntimeInputReconciliation.Ambiguous":          {},

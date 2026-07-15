@@ -139,9 +139,9 @@ type uiPresentationFeatureState struct {
 	pendingOngoingScratchReset  *ongoing.RehydrateReason
 	pendingOngoingWidthReset    bool
 	pendingOngoingResizeRepaint bool
-	termWidth                   int
-	termHeight                  int
-	windowSizeKnown             bool
+	terminalGeometry            terminalGeometry
+	ownershipReconciler         *ongoingOwnershipReconciler
+	pendingOwnershipCmd         tea.Cmd
 	helpVisible                 bool
 	startupCmds                 []tea.Cmd
 	uiMainThread                uiMainThreadState

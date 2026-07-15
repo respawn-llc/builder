@@ -17,8 +17,9 @@ func TestZeroValueUIModelUsesPromotedFeatureDefaultsSafely(t *testing.T) {
 	if result := m.reduceFeatureMessage(tea.WindowSizeMsg{Width: 80, Height: 24}); !result.handled {
 		t.Fatal("expected zero-value model to route window messages through feature reducers")
 	}
-	if m.termWidth != 80 || m.termHeight != 24 || !m.windowSizeKnown {
-		t.Fatalf("expected promoted window fields updated, got width=%d height=%d known=%t", m.termWidth, m.termHeight, m.windowSizeKnown)
+	size := m.terminalGeometry.Size()
+	if !m.terminalGeometry.IsKnown() || size == nil || size.width != 80 || size.height != 24 {
+		t.Fatalf("expected terminal geometry updated, got %+v", size)
 	}
 }
 

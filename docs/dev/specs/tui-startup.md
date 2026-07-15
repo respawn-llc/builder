@@ -8,12 +8,15 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 ## Surface Architecture
 
-- All startup surfaces are bounded surfaces composed through the shared Ratatui render layer: typed layout, styled spans, chrome, focus/selection affordances. No hand-assembled string frames, no raw terminal-control/SGR escape strings.
+- The future Rust TUI composes all startup surfaces through the shared Ratatui render layer: typed layout, styled spans, chrome, focus/selection affordances. No hand-assembled string frames, no raw terminal-control/SGR escape strings.
+- The shipping Go TUI keeps its existing startup rendering and lifecycle architecture. BUI-41 changes only the Go session picker and does not modify the Rust stub or migrate unrelated Go startup surfaces.
 - Startup surfaces run in terminal alt-screen (`?1049`) and exit alt-screen before the main UI begins ongoing replay, so all ongoing history lands in the normal buffer and remains in native scrollback. This is consistent with tui-transcript's "Main UI startup stays in the normal buffer", which governs the main chat surface, not startup selection.
+- Alt-screen startup surfaces enable alternate scroll (`?1007`) while active and disable it on every exit path; they never enable mouse capture. (owner: tui-terminal-environment :: Terminal Control Modes)
 - Text entry on startup surfaces uses the native/hardware terminal cursor positioned by the render adapter; never a drawn cursor glyph.
 - Startup surfaces do not enable terminal mouse capture.
 - Every asynchronous gate renders its surface immediately with a loading affordance; startup never leaves the terminal blank or frozen while waiting on the server.
-- Startup surfaces form an explicit navigation stack with owned UI lifecycles (Compose/Decompose-style component model): surfaces are pushed/popped, `Esc` pops except where a surface owns a different explicit key contract, and navigation state is owned by the pure model layer, never by render widgets.
+- The auth picker and session picker share one status-line treatment for operation errors and notices, including a session picker reopened by `/resume`; this requirement does not apply to other startup surfaces.
+- The future Rust TUI startup surfaces form an explicit navigation stack with owned UI lifecycles (Compose/Decompose-style component model): surfaces are pushed/popped, `Esc` pops except where a surface owns a different explicit key contract, and navigation state is owned by the pure model layer, never by render widgets.
 
 ## Startup Sequence
 
@@ -40,9 +43,20 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 ## Session Picker
 
 - Shows recent sessions, pick-or-new; scrollable with no cap; empty state goes directly to new-session setup. (owner: tui-transcript :: Startup And Session Selection)
-- The list is served as a recency-ordered window with infinite scroll; the client never holds or requests the full session set.
+- The picker has `Sessions` and `Subagents` tabs and opens on `Sessions`. Ordinary interactive sessions and interactive forks start in `Sessions`; sessions created for headless or workflow-agent execution start in `Subagents`. Every interactive open of a Subagent session, including opening by explicit session ID, permanently promotes it to `Sessions`. Picker selection alone does not promote: workspace lookup failure or declining a workspace change returns to the picker without changing the session artifact, recency, or category; an accepted retarget completes before open and promotion. Automated headless/workflow resumes and renames never change category. Legacy sessions without a recorded category appear in `Sessions`; category is never guessed from a session's name, parent, or current activity.
+- The tabs appear directly below the status header using the existing horizontal bracketed button-row treatment. The selected tab uses the primary bold treatment, the other tab is muted, a faint helper exposes the switching keys, and incremental lists do not show total counts.
+- When both full labels do not fit horizontally, the same buttons stack on adjacent lines rather than clipping or changing labels.
+- The picker opens immediately on `Sessions` and loads both tabs' first windows concurrently. A tab shows its own loading spinner until its first window arrives. If both first windows are empty, startup advances to new-session setup.
+- A tab data-load failure replaces that tab's list, including any stale rows, with an error notice because failed loading leaves no valid list to present. `Enter` retries the selected failed tab, and switching into a failed tab also retries. The shared startup status line separately surfaces the operation error: the active tab's outstanding failure wins, otherwise the newest outstanding tab failure is shown. Retry keeps the previous failure visible until that tab succeeds; recovery clears only that tab, reveals another outstanding failure when present, and clears the status after both recover.
+- Retry performs a fresh load from that tab's newest window and resets its old pagination position, selection, and scroll.
+- Each tab retains its selected row and scroll position while the picker remains open. Reopening the picker starts each tab at its newest session.
+- `Create a new session` appears only in `Sessions`; `n` starts a new ordinary session from either tab.
+- An empty `Subagents` tab remains selected and shows `No subagent sessions yet`; tab navigation and `n` remain available.
+- When both tabs are empty, startup skips the picker and goes directly to new-session setup.
+- Each tab is served as its own recency-ordered window with infinite scroll and keeps at most two bounded pages resident. Traversal loads older pages and reloads evicted newer pages when navigating back; neither client nor server holds or requests the full session set.
+- Initial load and fresh retry replace the affected tab body. Older/newer continuation keeps resident rows, selection, and viewport visible, shows a loading affordance at the requested edge, and blocks only crossing that pending edge.
 - Each row shows session title and relative age. Detail facts for the selected session (workspace path, git branch, auth method, model) load asynchronously with loading placeholders; selection is never blocked on them.
-- Keys: `Up`/`Down` and `j`/`k` move selection; `PgUp`/`PgDn` page; `Enter` opens; `n` starts a new session. `Esc` is a no-op, `q` has no binding, and `Ctrl+C` is the sole picker exit key.
+- Keys: `Up`/`Down` and `j`/`k` move selection; `PgUp`/`PgDn` page; `Tab`/`Shift+Tab`, `Left`/`Right`, and `h`/`l` switch tabs without opening a session; `Enter` opens; `n` starts a new session. `Esc` is a no-op, `q` has no binding, and `Ctrl+C` is the sole picker exit key.
 - Opening a session seeds the next main input from the session's persisted draft verbatim (byte-for-byte, including whitespace and newlines).
 
 ## Project Binding Flow

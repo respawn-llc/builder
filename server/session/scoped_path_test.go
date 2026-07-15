@@ -12,7 +12,7 @@ import (
 func TestResolveScopedSessionDirReturnsRealPathInsideContainer(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "workspace-a")
-	store, err := Create(containerDir, "workspace-a", "/tmp/workspace-a", sessionTestPersistence.options()...)
+	store, err := Create(containerDir, "workspace-a", "/tmp/workspace-a", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestResolveScopedSessionDirRejectsSymlinkOutsideContainer(t *testing.T) {
 	if err := os.MkdirAll(containerA, 0o755); err != nil {
 		t.Fatalf("mkdir container A: %v", err)
 	}
-	escaped, err := Create(containerB, "workspace-b", "/tmp/workspace-b", sessionTestPersistence.options()...)
+	escaped, err := Create(containerB, "workspace-b", "/tmp/workspace-b", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create escaped session: %v", err)
 	}
@@ -61,5 +61,20 @@ func TestResolveScopedSessionDirWrapsSessionNotFound(t *testing.T) {
 	}
 	if !errors.Is(err, sessioncontract.ErrSessionNotFound) {
 		t.Fatalf("error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestResolveScopedSessionDirUsesRuntimeSessionIDSyntax(t *testing.T) {
+	containerDir := t.TempDir()
+	legacyID := "legacy_session.2024"
+	legacyDir := filepath.Join(containerDir, legacyID)
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy session: %v", err)
+	}
+	if _, err := ResolveScopedSessionDir(containerDir, legacyID); err != nil {
+		t.Fatalf("resolve supported legacy session ID: %v", err)
+	}
+	if _, err := ResolveScopedSessionDir(containerDir, " "+legacyID); err == nil {
+		t.Fatal("padded session ID succeeded")
 	}
 }

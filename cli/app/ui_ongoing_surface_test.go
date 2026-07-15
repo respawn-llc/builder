@@ -15,6 +15,7 @@ import (
 func withUIOngoingTranscriptController(controller *ongoingTranscriptController) UIOption {
 	return func(m *uiModel) {
 		m.ongoingTranscript = controller
+		m.terminalGeometry = terminalGeometryKnown(80, 24)
 	}
 }
 
@@ -23,7 +24,7 @@ func TestNativeOngoingViewSuppressesBubbleTeaNormalBufferFrame(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIRendererOutputGateState(gate),
 		WithUIOngoingSurface(ongoing.NewSurface(&bytes.Buffer{})),
-	), 40, 8)
+	), 40, 10)
 
 	if got := m.View(); got != "" {
 		t.Fatalf("ongoing View() = %q, want empty renderer frame", got)
@@ -67,7 +68,7 @@ func TestNativeOngoingInitDefersRenderUntilWindowSizeKnown(t *testing.T) {
 		t.Fatalf("native ongoing init wrote before real window size: %q", out.String())
 	}
 
-	m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 
 	if out.Len() == 0 {
 		t.Fatal("native ongoing surface did not render after first window size")
@@ -104,7 +105,7 @@ func TestOngoingTranscriptEventReachesNativeSurface(t *testing.T) {
 	surface := ongoing.NewSurface(&out)
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(surface),
-	), 40, 8)
+	), 40, 10)
 	m.ongoingTranscript = newOngoingTranscriptController(surface, m.ongoingFrameInput)
 
 	_, cmd := m.Update(ongoingTranscriptEvent{
@@ -134,7 +135,7 @@ func TestNativeOngoingRepaintKeepsControllerLiveFrameSections(t *testing.T) {
 	spySurface := &ongoingSurfaceSpy{}
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(nativeSurface),
-	), 40, 8)
+	), 40, 10)
 	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
 	if _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
@@ -169,7 +170,7 @@ func TestNativeOngoingClipboardPasteRepaintsInput(t *testing.T) {
 	spySurface := &ongoingSurfaceSpy{}
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(nativeSurface),
-	), 40, 8)
+	), 40, 10)
 	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
 	m.mainInputDraftToken = 3
 
@@ -201,7 +202,7 @@ func TestNativeOngoingClipboardPasteErrorRepaintsStatus(t *testing.T) {
 	spySurface := &ongoingSurfaceSpy{}
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(nativeSurface),
-	), 40, 8)
+	), 40, 10)
 	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
 
 	next, _ := m.Update(clipboardPasteDoneMsg{
@@ -229,7 +230,7 @@ func TestNativeOngoingReconnectWarningRepaintsAndClearsStatus(t *testing.T) {
 	spySurface := &ongoingSurfaceSpy{}
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(nativeSurface),
-	), 40, 8)
+	), 40, 10)
 	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
 
 	next, _ := m.Update(runtimeReconnectWarningMsg{text: "connection interrupted"})
@@ -260,7 +261,7 @@ func TestNativeOngoingViewClearsLegacyAppCursorPlacement(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUITerminalCursorState(cursor),
 		WithUIOngoingSurface(ongoing.NewSurface(&bytes.Buffer{})),
-	), 40, 8)
+	), 40, 10)
 
 	_ = m.View()
 
@@ -281,7 +282,7 @@ func TestScratchRehydrationResultRequestsTranscriptReopen(t *testing.T) {
 		WithUIOngoingSurface(surface),
 		withUIOngoingTranscriptController(controller),
 		WithUIOngoingTranscriptReopen(func() { reopened = true }),
-	), 40, 8)
+	), 40, 10)
 
 	cmd := m.handleOngoingResult(ongoing.Result{
 		Action: ongoing.ResultRequestScratchRehydration,

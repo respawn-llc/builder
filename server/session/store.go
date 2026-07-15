@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/valuecopy"
 	"github.com/google/uuid"
@@ -61,8 +62,8 @@ type persistenceObservation struct {
 	version  uint64
 }
 
-func Create(workspaceContainerDir, workspaceContainerName, workspaceRoot string, options ...StoreOption) (*Store, error) {
-	s, err := NewLazy(workspaceContainerDir, workspaceContainerName, workspaceRoot, options...)
+func Create(workspaceContainerDir, workspaceContainerName, workspaceRoot string, category sessioncontract.SessionCategory, options ...StoreOption) (*Store, error) {
+	s, err := NewLazy(workspaceContainerDir, workspaceContainerName, workspaceRoot, category, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -82,13 +83,17 @@ func Create(workspaceContainerDir, workspaceContainerName, workspaceRoot string,
 	return s, nil
 }
 
-func NewLazy(workspaceContainerDir, workspaceContainerName, workspaceRoot string, options ...StoreOption) (*Store, error) {
+func NewLazy(workspaceContainerDir, workspaceContainerName, workspaceRoot string, category sessioncontract.SessionCategory, options ...StoreOption) (*Store, error) {
 	storeOpts := normalizeStoreOptions(options...)
-	return newLazyWithStoreOptions(workspaceContainerDir, workspaceContainerName, workspaceRoot, storeOpts)
+	return newLazyWithStoreOptions(workspaceContainerDir, workspaceContainerName, workspaceRoot, category, storeOpts)
 }
 
-func newLazyWithStoreOptions(workspaceContainerDir, workspaceContainerName, workspaceRoot string, storeOpts storeOptions) (*Store, error) {
-	sid := uuid.NewString()
+func newLazyWithStoreOptions(workspaceContainerDir, workspaceContainerName, workspaceRoot string, category sessioncontract.SessionCategory, storeOpts storeOptions) (*Store, error) {
+	validatedCategory, err := sessioncontract.ParseSessionCategory(string(category))
+	if err != nil {
+		return nil, err
+	}
+	sid := runtimeids.NewSessionID().String()
 	sessionDir := filepath.Join(workspaceContainerDir, sid)
 	now := storeTimestamp(storeOpts)
 	return &Store{
@@ -97,6 +102,7 @@ func newLazyWithStoreOptions(workspaceContainerDir, workspaceContainerName, work
 		options:    storeOpts,
 		meta: Meta{
 			SessionID:          sid,
+			Category:           sessionCategoryPointer(validatedCategory),
 			WorkspaceRoot:      workspaceRoot,
 			WorkspaceContainer: workspaceContainerName,
 			CreatedAt:          now,
@@ -141,6 +147,9 @@ func openPersistedSession(sessionDir string, resolvedMeta *Meta, storeOpts store
 	}
 	if err := normalizeMetaWorktreeReminder(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session worktree context: %w", err)
+	}
+	if err := validateMetaCategory(&s.meta); err != nil {
+		return nil, err
 	}
 	s.metadataVersion = 1
 	s.persistedMetaVersion = 1
@@ -629,6 +638,41 @@ func (s *Store) SetHeadlessActive(active bool) error {
 	s.meta.HeadlessActive = active
 	s.meta.UpdatedAt = time.Now().UTC()
 	return s.unlockAndObservePersistence(s.persistMetaLocked())
+}
+
+func (s *Store) PromoteSubagentToMain() (bool, error) {
+	s.mu.Lock()
+	if s.meta.Category == nil || *s.meta.Category == sessioncontract.SessionCategoryMain {
+		s.mu.Unlock()
+		return false, nil
+	}
+	if *s.meta.Category != sessioncontract.SessionCategorySubagent {
+		raw := string(*s.meta.Category)
+		sessionID := s.meta.SessionID
+		s.mu.Unlock()
+		return false, fmt.Errorf("session %q has invalid category %q", sessionID, raw)
+	}
+	mainCategory := sessioncontract.SessionCategoryMain
+	s.meta.Category = &mainCategory
+	s.meta.UpdatedAt = storeTimestamp(s.options)
+	return true, s.unlockAndObservePersistence(s.persistMetaLocked())
+}
+
+func sessionCategoryPointer(category sessioncontract.SessionCategory) *sessioncontract.SessionCategory {
+	return &category
+}
+
+func validateMetaCategory(meta *Meta) error {
+	if meta == nil || meta.Category == nil {
+		return nil
+	}
+	raw := string(*meta.Category)
+	category, err := sessioncontract.ParseSessionCategory(raw)
+	if err != nil {
+		return fmt.Errorf("session %q has invalid category %q: %w", meta.SessionID, raw, err)
+	}
+	meta.Category = sessionCategoryPointer(category)
+	return nil
 }
 
 func (s *Store) SetCompactionSoonReminderIssued(issued bool) error {

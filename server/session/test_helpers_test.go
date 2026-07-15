@@ -6,7 +6,10 @@ import (
 	"testing"
 
 	"core/internal/testharness/recordstore"
+	"core/shared/sessioncontract"
 )
+
+const testSessionCategory = sessioncontract.SessionCategoryMain
 
 type testSessionMetadata struct {
 	records map[string]PersistedSessionRecord
@@ -80,7 +83,7 @@ func newSessionTestStore(t *testing.T) *Store {
 
 func newSessionTestStoreAt(t *testing.T, root string) *Store {
 	t.Helper()
-	store, err := Create(root, "workspace-x", "/tmp/work", sessionTestPersistence.options()...)
+	store, err := Create(root, "workspace-x", "/tmp/work", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -97,7 +100,7 @@ func newSessionTestLazyStore(t *testing.T) *Store {
 
 func newSessionTestLazyStoreAt(t *testing.T, root string) *Store {
 	t.Helper()
-	store, err := NewLazy(root, "workspace-x", "/tmp/work", sessionTestPersistence.options()...)
+	store, err := NewLazy(root, "workspace-x", "/tmp/work", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("new lazy store: %v", err)
 	}

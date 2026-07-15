@@ -71,6 +71,7 @@ func (s *stubGitCommandRunner) Run(_ context.Context, dir string, args ...string
 
 func TestGitInspectorListParsesPorcelainTopology(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	markGitRepository(t, workspaceRoot)
 	linkedRoot := filepath.Join(t.TempDir(), "linked")
 	prunableRoot := filepath.Join(t.TempDir(), "missing-linked")
 	runner := &stubGitCommandRunner{output: []byte("worktree " + workspaceRoot + "\nHEAD aaa111\nbranch refs/heads/main\n\nworktree " + linkedRoot + "\nHEAD bbb222\nbranch refs/heads/feature/worktree\nlocked bootstrap running\n\nworktree " + prunableRoot + "\nHEAD ccc333\ndetached\nprunable gitdir file points to non-existent location\n")}
@@ -99,6 +100,54 @@ func TestGitInspectorListParsesPorcelainTopology(t *testing.T) {
 	prunableEntry := entries[2]
 	if !prunableEntry.Detached || prunableEntry.BranchName != "" || prunableEntry.PrunableReason == "" || prunableEntry.Root != canonicalTestPath(t, prunableRoot) {
 		t.Fatalf("unexpected prunable entry: %+v", prunableEntry)
+	}
+}
+
+func TestGitInspectorListClassifiesActualNonRepositoryWithoutRunningGit(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	runner := &stubGitCommandRunner{}
+	inspector := NewGitInspector(runner)
+
+	_, err := inspector.List(context.Background(), workspaceRoot)
+	var listErr *GitWorktreeListError
+	if !errors.As(err, &listErr) {
+		t.Fatalf("List error = %T, want typed worktree-list error", err)
+	}
+	if listErr.Kind != GitWorktreeListErrorNotRepository {
+		t.Fatalf("worktree-list error kind = %q, want not repository", listErr.Kind)
+	}
+	if runner.args != nil {
+		t.Fatalf("non-repository probe ran git command %v", runner.args)
+	}
+}
+
+func TestGitInspectorListClassifiesUnrelatedExit128AsInspectionFailure(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	markGitRepository(t, workspaceRoot)
+	rawDiagnostic := errors.New("fatal diagnostic whose wording is not a contract")
+	inspector := NewGitInspector(&stubGitCommandRunner{
+		output:   []byte("opaque stderr"),
+		err:      rawDiagnostic,
+		exitCode: 128,
+	})
+
+	_, err := inspector.List(context.Background(), workspaceRoot)
+	var listErr *GitWorktreeListError
+	if !errors.As(err, &listErr) {
+		t.Fatalf("List error = %T, want typed worktree-list error", err)
+	}
+	if listErr.Kind != GitWorktreeListErrorInspectionFailed {
+		t.Fatalf("worktree-list error kind = %q, want inspection failed", listErr.Kind)
+	}
+	if !errors.Is(err, rawDiagnostic) {
+		t.Fatal("typed worktree-list error discarded the diagnostic cause")
+	}
+}
+
+func markGitRepository(t *testing.T, workspaceRoot string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll .git: %v", err)
 	}
 }
 
@@ -220,6 +269,7 @@ func TestGitInspectorInspectsTargetIdentityAndExactRef(t *testing.T) {
 
 func TestGitInspectorFindCreatedWorktreeUsesCanonicalRoot(t *testing.T) {
 	workspaceRoot := t.TempDir()
+	markGitRepository(t, workspaceRoot)
 	createdRoot := filepath.Join(t.TempDir(), "created")
 	runner := &stubGitCommandRunner{output: []byte("worktree " + workspaceRoot + "\nHEAD aaa111\nbranch refs/heads/main\n\nworktree " + createdRoot + "\nHEAD bbb222\nbranch refs/heads/feature\n")}
 	created, found, err := NewGitInspector(runner).FindCreatedWorktree(context.Background(), workspaceRoot, createdRoot)

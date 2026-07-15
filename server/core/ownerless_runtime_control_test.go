@@ -13,6 +13,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -142,7 +143,7 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 	plan, err := launchClient.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "plan-1",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		ForceNewSession: true,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
@@ -150,6 +151,10 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 	sessionID := plan.Plan.SessionID
 	if sessionID == "" {
 		t.Fatal("PlanSession returned empty session id")
+	}
+	typedSessionID, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
 	}
 
 	runClient, err := appCore.RunPromptClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
@@ -160,9 +165,9 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 	runResult := make(chan serverapi.RunPromptResponse, 1)
 	go func() {
 		resp, runErr := runClient.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-			ClientRequestID:   uuid.NewString(),
-			SelectedSessionID: sessionID,
-			Prompt:            "drive the run",
+			ClientRequestID: uuid.NewString(),
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(typedSessionID),
+			Prompt:          "drive the run",
 		}, nil)
 		runResult <- resp
 		runDone <- runErr

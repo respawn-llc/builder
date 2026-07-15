@@ -12,6 +12,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
 
@@ -30,7 +31,7 @@ func createTestSessionInContainer(t *testing.T, containerDir, workspaceContainer
 	if len(options) == 0 {
 		options = sessiontest.NewPersistence().Options()
 	}
-	store, err := session.Create(containerDir, workspaceContainer, workspaceRoot, options...)
+	store, err := session.Create(containerDir, workspaceContainer, workspaceRoot, sessioncontract.SessionCategoryMain, options...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}

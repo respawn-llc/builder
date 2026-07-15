@@ -32,6 +32,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/sessionenv"
 	"core/shared/toolspec"
 )
@@ -180,7 +181,7 @@ func newTestHeadlessSessionRuntime(root string, authManager *auth.Manager, runti
 
 func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", persistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -203,7 +204,7 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 
 func TestHeadlessRuntimeWorkdirRejectsReminderWithoutEffectiveCWD(t *testing.T) {
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", persistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -221,13 +222,14 @@ func TestHeadlessRuntimeWorkdirRejectsReminderWithoutEffectiveCWD(t *testing.T) 
 
 func TestMemoizingPromptServiceDedupesSuccessfulRetry(t *testing.T) {
 	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-		return serverapi.RunPromptResponse{SessionID: req.SelectedSessionID, Result: "ok"}, nil
+		sessionID, _ := req.Intent.SessionID()
+		return serverapi.RunPromptResponse{SessionID: sessionID.String(), Result: "ok"}, nil
 	}}
 	service := &memoizingPromptService{
 		inner: inner,
 		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
 	}
-	req := serverapi.RunPromptRequest{ClientRequestID: "req-1", SelectedSessionID: "session-1", Prompt: "hello"}
+	req := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "session-1")), Prompt: "hello"}
 
 	first, err := service.RunPrompt(context.Background(), req, nil)
 	if err != nil {
@@ -247,13 +249,14 @@ func TestMemoizingPromptServiceDedupesSuccessfulRetry(t *testing.T) {
 
 func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.T) {
 	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-		return serverapi.RunPromptResponse{SessionID: req.SelectedSessionID, Result: "ok"}, nil
+		sessionID, _ := req.Intent.SessionID()
+		return serverapi.RunPromptResponse{SessionID: sessionID.String(), Result: "ok"}, nil
 	}}
 	service := &memoizingPromptService{
 		inner: inner,
 		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
 	}
-	first := serverapi.RunPromptRequest{ClientRequestID: "req-1", SelectedSessionID: "session-1", Prompt: "hello"}
+	first := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "session-1")), Prompt: "hello"}
 	if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
 		t.Fatalf("RunPrompt first: %v", err)
 	}
@@ -271,7 +274,7 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -320,9 +323,9 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 
 	var progresses []serverapi.RunPromptProgress
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID:   "continuation-direct-1",
-		SelectedSessionID: store.Meta().SessionID,
-		Prompt:            "hello",
+		ClientRequestID: "continuation-direct-1",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+		Prompt:          "hello",
 	}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 		progresses = append(progresses, progress)
 	}))
@@ -349,7 +352,7 @@ func TestLoopbackRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgrou
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", t.TempDir(), persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", t.TempDir(), sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -442,9 +445,9 @@ func TestLoopbackRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgrou
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID:   "active-shell-policy-1",
-		SelectedSessionID: store.Meta().SessionID,
-		Prompt:            "run the shell probe",
+		ClientRequestID: "active-shell-policy-1",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+		Prompt:          "run the shell probe",
 	}, nil)
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)
@@ -556,7 +559,7 @@ func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -577,9 +580,9 @@ func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	})
 
 	_, err = client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID:   "goal-reject-1",
-		SelectedSessionID: store.Meta().SessionID,
-		Prompt:            "continue",
+		ClientRequestID: "goal-reject-1",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+		Prompt:          "continue",
 	}, nil)
 	if !errors.Is(err, ErrHeadlessGoalSession) {
 		t.Fatalf("RunPrompt error = %v, want ErrHeadlessGoalSession", err)
@@ -590,7 +593,7 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -639,9 +642,9 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 	done := make(chan error, 1)
 	go func() {
 		_, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-			ClientRequestID:   "runtime-cleanup-1",
-			SelectedSessionID: store.Meta().SessionID,
-			Prompt:            "hello",
+			ClientRequestID: "runtime-cleanup-1",
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+			Prompt:          "hello",
 		}, nil)
 		done <- err
 	}()
@@ -681,7 +684,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -728,9 +731,9 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID:   "locked-direct-1",
-		SelectedSessionID: store.Meta().SessionID,
-		Prompt:            "hello",
+		ClientRequestID: "locked-direct-1",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
+		Prompt:          "hello",
 		Overrides: serverapi.RunPromptOverrides{
 			Model: "override-model",
 			Tools: "patch",

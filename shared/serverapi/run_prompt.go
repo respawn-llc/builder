@@ -14,12 +14,11 @@ import (
 )
 
 type RunPromptRequest struct {
-	ClientRequestID   string
-	SelectedSessionID string
-	ParentSessionID   string
-	Prompt            string
-	Timeout           time.Duration
-	Overrides         RunPromptOverrides
+	ClientRequestID string
+	Intent          SessionLaunchIntent
+	Prompt          string
+	Timeout         time.Duration
+	Overrides       RunPromptOverrides
 }
 
 func (r RunPromptRequest) Validate() error {
@@ -28,6 +27,9 @@ func (r RunPromptRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.Prompt) == "" {
 		return errors.New("prompt is required")
+	}
+	if err := r.Intent.Validate(); err != nil {
+		return fmt.Errorf("intent: %w", err)
 	}
 	return r.Overrides.ValidateAgentRoleOverride()
 }

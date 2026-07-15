@@ -23,6 +23,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -581,7 +582,7 @@ func newSessionRuntimeFixture(t *testing.T) sessionRuntimeFixture {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
 	}
 	projectSessionsDir := filepath.Join(filepath.Join(appCfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	store, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), appCfg.WorkspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
+	store, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), appCfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}

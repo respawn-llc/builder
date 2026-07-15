@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 	"encoding/json"
 	"strings"
@@ -326,7 +327,7 @@ func TestForkedSessionBeforeReminderDoesNotCopyReminderIssuedState(t *testing.T)
 		t.Fatalf("persist reminder-issued state: %v", err)
 	}
 
-	forkedStore, _, err := session.ForkAtUserMessage(store, userMessageSeqAt(t, store, 1), "Parent -> edit")
+	forkedStore, _, err := session.ForkAtUserMessage(store, userMessageSeqAt(t, store, 1), "Parent -> edit", sessioncontract.SessionCategoryMain)
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
@@ -368,7 +369,7 @@ func TestForkedSessionDoesNotCopyPersistedUsageState(t *testing.T) {
 		t.Fatal("expected parent session to persist usage state")
 	}
 
-	forkedStore, _, err := session.ForkAtUserMessage(store, userMessageSeqAt(t, store, 1), "Parent -> edit")
+	forkedStore, _, err := session.ForkAtUserMessage(store, userMessageSeqAt(t, store, 1), "Parent -> edit", sessioncontract.SessionCategoryMain)
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
@@ -399,7 +400,7 @@ func TestForkedSessionAfterReminderPreservesCompactionSoonReminderIssuedState(t 
 		t.Fatalf("append second user message: %v", err)
 	}
 
-	forkedStore, _, err := session.ForkAtUserMessage(store, userMessageSeqAt(t, store, 2), "Parent -> edit")
+	forkedStore, _, err := session.ForkAtUserMessage(store, userMessageSeqAt(t, store, 2), "Parent -> edit", sessioncontract.SessionCategoryMain)
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
@@ -456,7 +457,7 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 		t.Fatal("expected reopened compacted session metadata to remain cleared")
 	}
 
-	forkedStore, _, err := session.ForkAtUserMessage(reopenedStore, userMessageSeqAt(t, reopenedStore, 1), "Parent -> edit")
+	forkedStore, _, err := session.ForkAtUserMessage(reopenedStore, userMessageSeqAt(t, reopenedStore, 1), "Parent -> edit", sessioncontract.SessionCategoryMain)
 	if err != nil {
 		t.Fatalf("fork compacted session: %v", err)
 	}

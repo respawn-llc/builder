@@ -9,6 +9,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	brand "core/shared/config"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"os"
@@ -144,7 +145,7 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 
 	storeRoot := t.TempDir()
 	parent := mustCreateNamedTestSessionAt(t, storeRoot, "parent", workspace)
-	child, err := session.NewLazy(storeRoot, "child", workspace, runtimeTestSessionPersistence.Options()...)
+	child, err := session.NewLazy(storeRoot, "child", workspace, sessioncontract.SessionCategorySubagent, runtimeTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create child: %v", err)
 	}

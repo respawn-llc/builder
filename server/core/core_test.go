@@ -18,6 +18,7 @@ import (
 	brand "core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 func TestNewBuildsReusableServerCore(t *testing.T) {
@@ -302,7 +303,7 @@ func TestSessionLaunchClientForProjectWorkspaceReplaysForceNewSessionAcrossClien
 	req := serverapi.SessionPlanRequest{
 		ClientRequestID: "req-1",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		ForceNewSession: true,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
 	}
 	firstPlan, err := firstClient.PlanSession(context.Background(), req)
 	if err != nil {
@@ -361,7 +362,7 @@ func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testi
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{ClientRequestID: "req-1", Mode: serverapi.SessionLaunchModeInteractive, ForceNewSession: true})
+	plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{ClientRequestID: "req-1", Mode: serverapi.SessionLaunchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -426,7 +427,7 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	if err != nil {
 		t.Fatalf("RunPromptClientForProjectWorkspace second: %v", err)
 	}
-	req := serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello"}
+	req := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hello"}
 	firstRun, err := firstClient.RunPrompt(context.Background(), req, nil)
 	if err != nil {
 		t.Fatalf("RunPrompt first: %v", err)
@@ -441,15 +442,20 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	if firstRun.Result != "ok" || secondRun.Result != "ok" {
 		t.Fatalf("results = (%q, %q), want both ok", firstRun.Result, secondRun.Result)
 	}
-	overview, err := appCore.ProjectViewClient().GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID})
+	page, err := appCore.ProjectViewClient().ListSessionPage(context.Background(), serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategorySubagent,
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
+	})
 	if err != nil {
-		t.Fatalf("GetProjectOverview: %v", err)
+		t.Fatalf("ListSessionPage: %v", err)
 	}
-	if len(overview.Overview.Sessions) != 1 {
-		t.Fatalf("session count = %d, want 1", len(overview.Overview.Sessions))
+	if len(page.Sessions) != 1 {
+		t.Fatalf("session count = %d, want 1", len(page.Sessions))
 	}
-	if overview.Overview.Sessions[0].SessionID != firstRun.SessionID {
-		t.Fatalf("persisted session id = %q, want %q", overview.Overview.Sessions[0].SessionID, firstRun.SessionID)
+	if page.Sessions[0].SessionID.String() != firstRun.SessionID {
+		t.Fatalf("persisted session id = %q, want %q", page.Sessions[0].SessionID, firstRun.SessionID)
 	}
 }
 

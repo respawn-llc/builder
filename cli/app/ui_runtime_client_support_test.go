@@ -45,6 +45,10 @@ func (c *countingSessionViewClient) GetLatestCommittedAssistantFinalAnswer(_ con
 	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{Answer: c.finalAnswer}, nil
 }
 
+func (c *countingSessionViewClient) GetSessionExecutionEnvironment(context.Context, serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
+	return serverapi.SessionExecutionEnvironmentResponse{}, nil
+}
+
 type blockingSessionViewClient struct{}
 
 func (blockingSessionViewClient) GetSessionMainView(ctx context.Context, _ serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -60,6 +64,11 @@ func (blockingSessionViewClient) GetSessionTranscriptPage(ctx context.Context, _
 func (blockingSessionViewClient) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, _ serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
 	<-ctx.Done()
 	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, ctx.Err()
+}
+
+func (blockingSessionViewClient) GetSessionExecutionEnvironment(ctx context.Context, _ serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
+	<-ctx.Done()
+	return serverapi.SessionExecutionEnvironmentResponse{}, ctx.Err()
 }
 
 type controlledTranscriptPageResult struct {
@@ -97,6 +106,11 @@ func (c *controlledTranscriptPageClient) GetLatestCommittedAssistantFinalAnswer(
 	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, nil
 }
 
+func (c *controlledTranscriptPageClient) GetSessionExecutionEnvironment(ctx context.Context, _ serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
+	<-ctx.Done()
+	return serverapi.SessionExecutionEnvironmentResponse{}, ctx.Err()
+}
+
 type flakySessionViewClient struct {
 	mu        sync.Mutex
 	responses []serverapi.SessionMainViewResponse
@@ -127,6 +141,10 @@ func (c *flakySessionViewClient) GetSessionTranscriptPage(context.Context, serve
 
 func (c *flakySessionViewClient) GetLatestCommittedAssistantFinalAnswer(context.Context, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
 	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, nil
+}
+
+func (c *flakySessionViewClient) GetSessionExecutionEnvironment(context.Context, serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
+	return serverapi.SessionExecutionEnvironmentResponse{}, nil
 }
 
 type mutableRuntimeResolver struct {

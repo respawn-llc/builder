@@ -6,7 +6,6 @@ import (
 
 	"core/cli/app/internal/authui"
 	"core/cli/tui"
-	sharedtheme "core/shared/theme"
 
 	"charm.land/glamour/v2"
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,8 +44,6 @@ type startupPickerResult struct {
 
 type startupPickerStyles struct {
 	headerFallback lipgloss.Style
-	notice         lipgloss.Style
-	noticeError    lipgloss.Style
 	row            lipgloss.Style
 	rowSelected    lipgloss.Style
 	marker         lipgloss.Style
@@ -205,11 +202,12 @@ func (m *startupPickerModel) renderNotice() string {
 	if text == "" {
 		return ""
 	}
-	style := m.styles.notice
-	if m.notice.Kind == startupPickerNoticeError {
-		style = m.styles.noticeError
+	inset := m.headerInset()
+	rendered := renderStartupPickerNotice(m.notice, m.contentWidth()-lipgloss.Width(inset))
+	if rendered == "" {
+		return ""
 	}
-	return style.Render(m.headerInset() + truncateQueuedMessageLine(text, m.contentWidth()))
+	return inset + rendered
 }
 
 func (m *startupPickerModel) headerInset() string {
@@ -316,8 +314,6 @@ func newStartupPickerStyles(theme string) startupPickerStyles {
 	palette := uiPalette(theme)
 	return startupPickerStyles{
 		headerFallback: lipgloss.NewStyle().Foreground(palette.primary).Bold(true),
-		notice:         lipgloss.NewStyle().Foreground(palette.foreground),
-		noticeError:    lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Error.Adaptive()).Bold(true),
 		row:            lipgloss.NewStyle().Foreground(palette.foreground),
 		rowSelected:    lipgloss.NewStyle().Foreground(palette.primary).Bold(true),
 		marker:         lipgloss.NewStyle().Foreground(palette.muted),

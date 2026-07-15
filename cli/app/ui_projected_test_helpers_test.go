@@ -67,14 +67,12 @@ func newSizedProjectedRuntimeEventsUIModel(runtimeClient clientui.RuntimeClient,
 }
 
 func setTestUITerminalSize(m *uiModel, width, height int) *uiModel {
-	m.termWidth = width
-	m.termHeight = height
+	m.terminalGeometry = terminalGeometryKnown(width, height)
 	return m
 }
 
 func sizedTestUIModel(m *uiModel, width, height int) *uiModel {
 	m = setTestUITerminalSize(m, width, height)
-	m.windowSizeKnown = true
 	return m
 }
 

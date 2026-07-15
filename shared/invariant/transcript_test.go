@@ -130,7 +130,7 @@ func TestValidateTranscriptPage(t *testing.T) {
 	negativeCursor := int64(-1)
 	invalidPages := []clientui.TranscriptPage{
 		{SessionID: ""},
-		{SessionID: "not-a-session-uuid"},
+		{SessionID: "../not-a-session"},
 		{SessionID: uuid.NewString(), HasMoreAbove: true},
 		{SessionID: uuid.NewString(), OlderCursor: &olderCursor},
 		{SessionID: uuid.NewString(), OlderCursor: &zeroCursor, HasMoreAbove: true},

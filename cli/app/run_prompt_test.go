@@ -273,8 +273,8 @@ func (s *configuredProjectViewRemoteStub) GetProjectOverview(ctx context.Context
 	return serverapi.ProjectGetOverviewResponse{}, errors.New("unexpected GetProjectOverview call")
 }
 
-func (*configuredProjectViewRemoteStub) ListSessionsByProject(context.Context, serverapi.SessionListByProjectRequest) (serverapi.SessionListByProjectResponse, error) {
-	return serverapi.SessionListByProjectResponse{}, nil
+func (*configuredProjectViewRemoteStub) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+	return serverapi.SessionPageResponse{}, nil
 }
 
 func (s headlessProjectViewStubService) ListProjects(context.Context, serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
@@ -333,8 +333,8 @@ func (s headlessProjectViewStubService) GetProjectOverview(_ context.Context, re
 	return resp, nil
 }
 
-func (headlessProjectViewStubService) ListSessionsByProject(context.Context, serverapi.SessionListByProjectRequest) (serverapi.SessionListByProjectResponse, error) {
-	return serverapi.SessionListByProjectResponse{}, nil
+func (headlessProjectViewStubService) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+	return serverapi.SessionPageResponse{}, nil
 }
 
 func testPlanHeadlessWorkspaceBinding(ctx context.Context, projectViews client.ProjectViewClient, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
@@ -459,7 +459,7 @@ func waitForConfiguredRunPromptDaemon(t *testing.T, workspace string) {
 func TestEnsureSubagentSessionNameSetsDefault(t *testing.T) {
 	containerDir := t.TempDir()
 	persistence := sessiontest.NewPersistence()
-	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace", persistence.Options()...)
+	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace", sessioncontract.SessionCategoryMain, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("new lazy session: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestEnsureSubagentSessionNameSetsDefault(t *testing.T) {
 func TestEnsureSubagentSessionNamePreservesExistingName(t *testing.T) {
 	containerDir := t.TempDir()
 	persistence := sessiontest.NewPersistence()
-	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace", persistence.Options()...)
+	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace", sessioncontract.SessionCategoryMain, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("new lazy session: %v", err)
 	}

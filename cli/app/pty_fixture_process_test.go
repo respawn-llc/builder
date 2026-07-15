@@ -8,6 +8,7 @@ import (
 
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -120,19 +121,19 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	server = boundServer
 
 	planner := newSessionLaunchPlanner(server)
-	handoff, err := initialSessionHandoff(sessionID, false)
+	parsedSessionID, err := runtimeids.ParseSessionID(sessionID)
 	if err != nil {
 		return err
 	}
-	launchRequest, err := sessionLaunchRequestFromHandoff(handoff, serverapi.RunPromptOverrides{})
-	if err != nil {
-		return err
+	launchRequest := sessionLaunchRequest{
+		Mode:   launchModeInteractive,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(parsedSessionID),
 	}
 	plan, err := planner.PlanSession(ctx, launchRequest)
 	if err != nil {
 		return err
 	}
-	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, handoff, true)
+	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, "", false, "", false, true)
 	if err != nil {
 		return err
 	}

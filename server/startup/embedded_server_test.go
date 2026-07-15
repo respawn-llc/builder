@@ -26,7 +26,9 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 type testAuthHandler struct {
@@ -130,8 +132,7 @@ func createEmbeddedProjectSession(t *testing.T, server *EmbeddedServer, workspac
 	store, err := session.Create(
 		filepath.Join(filepath.Join(server.Config().PersistenceRoot, "projects"), server.ProjectID(), "sessions"),
 		filepath.Base(filepath.Clean(workspace)),
-		workspace,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
+		workspace, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("create project session: %v", err)
@@ -333,6 +334,7 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 
 	response, err := server.RunPromptClient().RunPrompt(context.Background(), serverapi.RunPromptRequest{
 		ClientRequestID: "embedded-run-1",
+		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
 		Prompt:          "hello from user",
 	}, nil)
 	if err != nil {
@@ -417,11 +419,15 @@ func TestRunPromptClientPublishesHeadlessSessionActivity(t *testing.T) {
 
 	responseCh := make(chan serverapi.RunPromptResponse, 1)
 	errCh := make(chan error, 1)
+	sessionID, parseErr := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if parseErr != nil {
+		t.Fatalf("ParseSessionID: %v", parseErr)
+	}
 	go func() {
 		resp, err := server.RunPromptClient().RunPrompt(ctx, serverapi.RunPromptRequest{
-			ClientRequestID:   "embedded-run-activity-1",
-			SelectedSessionID: store.Meta().SessionID,
-			Prompt:            "hello from user",
+			ClientRequestID: "embedded-run-activity-1",
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+			Prompt:          "hello from user",
 		}, nil)
 		if err != nil {
 			errCh <- err
@@ -561,14 +567,19 @@ func TestProjectViewClientListsCurrentProjectAndSessions(t *testing.T) {
 		t.Fatalf("unexpected project session count: %+v", projects.Projects[0])
 	}
 
-	sessions, err := server.ProjectViewClient().ListSessionsByProject(context.Background(), serverapi.SessionListByProjectRequest{ProjectID: server.ProjectID()})
+	sessions, err := server.ProjectViewClient().ListSessionPage(context.Background(), serverapi.SessionPageRequest{
+		ProjectID: server.ProjectID(),
+		Category:  sessioncontract.SessionCategoryMain,
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
+	})
 	if err != nil {
-		t.Fatalf("ListSessionsByProject: %v", err)
+		t.Fatalf("ListSessionPage: %v", err)
 	}
 	if len(sessions.Sessions) != 2 {
 		t.Fatalf("expected two sessions, got %+v", sessions)
 	}
-	if sessions.Sessions[0].SessionID != second.Meta().SessionID {
+	if sessions.Sessions[0].SessionID.String() != second.Meta().SessionID {
 		t.Fatalf("expected most recent session first, got %+v", sessions.Sessions)
 	}
 }

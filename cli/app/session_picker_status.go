@@ -10,10 +10,10 @@ import (
 )
 
 type sessionPickerStatusMsg struct {
-	cwd    string
-	branch string
-	auth   string
-	model  string
+	cwd    *string
+	branch *string
+	auth   *string
+	model  *string
 }
 
 func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
@@ -34,20 +34,28 @@ func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
 			authInfo = collector.CollectAuth(ctx, req, base).Auth
 		}
 
-		branch := ""
+		var branch *string
 		if gitResult.Git.Visible && strings.TrimSpace(gitResult.Git.Error) == "" {
-			branch = strings.TrimSpace(gitResult.Git.Branch)
-			if branch == "unknown" {
-				branch = ""
+			value := strings.TrimSpace(gitResult.Git.Branch)
+			if value != "" && value != "unknown" {
+				branch = &value
 			}
 		}
 		return sessionPickerStatusMsg{
-			cwd:    statusDisplayPath(base.Workdir, ""),
+			cwd:    optionalSessionPickerStatusText(statusDisplayPath(base.Workdir, "")),
 			branch: branch,
-			auth:   status.AuthDisplayLabel(authInfo),
-			model:  strings.TrimSpace(base.Model.Summary),
+			auth:   optionalSessionPickerStatusText(status.AuthDisplayLabel(authInfo)),
+			model:  optionalSessionPickerStatusText(base.Model.Summary),
 		}
 	}
+}
+
+func optionalSessionPickerStatusText(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func sessionPickerStatusRequestUseful(req uiStatusRequest, authManager status.AuthStateResolver) bool {

@@ -13,6 +13,7 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/workflowruntime"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
 
@@ -94,7 +95,7 @@ func mustCreateNamedTestSession(t *testing.T, workspaceContainerName string, wor
 
 func mustCreateNamedTestSessionAt(t *testing.T, root string, workspaceContainerName string, workspaceRoot string, options ...session.StoreOption) *session.Store {
 	t.Helper()
-	store, err := session.Create(root, workspaceContainerName, workspaceRoot, append(runtimeTestSessionPersistence.Options(), options...)...)
+	store, err := session.Create(root, workspaceContainerName, workspaceRoot, sessioncontract.SessionCategoryMain, append(runtimeTestSessionPersistence.Options(), options...)...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}

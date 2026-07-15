@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 
 	servicecontract "core/shared/apicontract"
 	"core/shared/serverapi"
@@ -72,6 +73,26 @@ func (c *loopbackProjectViewClient) GetProjectOverview(ctx context.Context, req 
 	return callLoopbackClient(c, "project view service is required", ctx, req, servicecontract.ProjectViewService.GetProjectOverview)
 }
 
-func (c *loopbackProjectViewClient) ListSessionsByProject(ctx context.Context, req serverapi.SessionListByProjectRequest) (serverapi.SessionListByProjectResponse, error) {
-	return callLoopbackClient(c, "project view service is required", ctx, req, servicecontract.ProjectViewService.ListSessionsByProject)
+func (c *loopbackProjectViewClient) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+	response, err := callLoopbackClient(c, "project view service is required", ctx, req, servicecontract.ProjectViewService.ListSessionPage)
+	if err != nil {
+		return serverapi.SessionPageResponse{}, err
+	}
+	if err := validateSessionPageResponseIdentity(req, response); err != nil {
+		return serverapi.SessionPageResponse{}, err
+	}
+	return response, nil
+}
+
+func validateSessionPageResponseIdentity(req serverapi.SessionPageRequest, response serverapi.SessionPageResponse) error {
+	if err := response.Validate(); err != nil {
+		return fmt.Errorf("session page response is invalid: %w", err)
+	}
+	if response.ProjectID != req.ProjectID {
+		return fmt.Errorf("session page response project %q does not match request project %q", response.ProjectID, req.ProjectID)
+	}
+	if response.Category != req.Category {
+		return fmt.Errorf("session page response category %q does not match request category %q", response.Category, req.Category)
+	}
+	return nil
 }

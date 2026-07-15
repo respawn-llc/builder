@@ -83,15 +83,20 @@ func (m *uiModel) activateSurfaceFrom(prev, surface uiSurface, suppressAltScreen
 	if surface == "" {
 		surface = surfaceForTranscriptMode(m.view.Mode())
 	}
-	m.updateOngoingOwnershipBeforeSurfaceTransition(prev, surface)
 	m.activeSurface = surface
 	m.syncRendererOutputGate()
 	if prev == surface || suppressAltScreen {
 		return nil
 	}
+	var ownershipCmd tea.Cmd
+	if !desiredOngoingOwnership(m.terminalGeometry, terminalDestinationForSurface(surface)) {
+		ownershipCmd = m.reconcileOngoingOwnership()
+	} else {
+		ownershipCmd = m.ongoingOwnershipAfterSurfaceTransitionCmd(prev, surface)
+	}
 	return sequenceCmds(
 		m.altScreenCmdForSurfaceTransition(prev, surface),
-		m.ongoingOwnershipAfterSurfaceTransitionCmd(prev, surface),
+		ownershipCmd,
 	)
 }
 
