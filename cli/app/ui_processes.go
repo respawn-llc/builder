@@ -164,7 +164,7 @@ func (m *uiModel) moveProcessSelectionPage(deltaPages int) {
 }
 
 func (m *uiModel) processListRowsPerPage() int {
-	available := m.termHeight - 1 - processListHeaderLines - processListFooterLines // status line + header + footer
+	available := m.layout().effectiveHeight() - 1 - processListHeaderLines - processListFooterLines // status line + header + footer
 	if available < processListEntryLines {
 		return 1
 	}

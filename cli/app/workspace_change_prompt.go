@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
-	"core/shared/serverapi"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"core/shared/clientui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -23,7 +25,6 @@ type sessionWorkspaceChangeAction int
 const (
 	sessionWorkspaceChangeProceed sessionWorkspaceChangeAction = iota
 	sessionWorkspaceChangePickAgain
-	sessionWorkspaceChangeReplanSelected
 )
 
 type workspaceChangePromptResult struct {
@@ -40,18 +41,19 @@ type workspaceChangePromptModel struct {
 	result       workspaceChangePromptResult
 }
 
-func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server sessionWorkspaceChangeServer, plan sessionLaunchPlan) (sessionWorkspaceChangeAction, error) {
+func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server sessionWorkspaceChangeServer, sessionID string, executionTarget clientui.SessionExecutionTarget) (sessionWorkspaceChangeAction, error) {
 	if server == nil {
 		return sessionWorkspaceChangeProceed, errors.New("embedded server is required")
 	}
-	if !plan.SelectedViaPicker || strings.TrimSpace(plan.SessionID) == "" {
+	if strings.TrimSpace(sessionID) == "" {
+		return sessionWorkspaceChangeProceed, errors.New("session id is required")
+	}
+	executionTarget = clientui.NormalizeSessionExecutionTarget(executionTarget)
+	if executionTarget.WorkspaceAvailability != clientui.ProjectAvailabilityAvailable {
 		return sessionWorkspaceChangeProceed, nil
 	}
-	if plan.SelectedSessionWorkspaceLookupFailed {
-		return sessionWorkspaceChangePickAgain, nil
-	}
 	currentRoot := normalizeWorkspaceChangeDisplayRoot(server.Config().WorkspaceRoot)
-	selectedRoot := normalizeWorkspaceChangeDisplayRoot(plan.SelectedSessionWorkspaceRoot)
+	selectedRoot := normalizeWorkspaceChangeDisplayRoot(executionTarget.WorkspaceRoot)
 	if comparableWorkspaceChangeRoot(currentRoot) == "" || comparableWorkspaceChangeRoot(selectedRoot) == "" || comparableWorkspaceChangeRoot(currentRoot) == comparableWorkspaceChangeRoot(selectedRoot) {
 		return sessionWorkspaceChangeProceed, nil
 	}
@@ -62,10 +64,10 @@ func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server session
 	if !result.Rebind {
 		return sessionWorkspaceChangePickAgain, nil
 	}
-	if err := retargetInteractiveSessionWorkspace(ctx, server, plan.SessionID); err != nil {
+	if err := retargetInteractiveSessionWorkspace(ctx, server, sessionID); err != nil {
 		return sessionWorkspaceChangeProceed, err
 	}
-	return sessionWorkspaceChangeReplanSelected, nil
+	return sessionWorkspaceChangeProceed, nil
 }
 
 func retargetInteractiveSessionWorkspace(ctx context.Context, server sessionWorkspaceChangeServer, sessionID string) error {

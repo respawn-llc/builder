@@ -287,6 +287,7 @@ func runHeadlessPromptViaEmbedded(t *testing.T, opts Options, clientRequestID, p
 	defer func() { _ = boot.Close() }()
 	resp, err := newHeadlessRunPromptClient(boot).RunPrompt(context.Background(), serverapi.RunPromptRequest{
 		ClientRequestID: clientRequestID,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
 		Prompt:          prompt,
 	}, nil)
 	if err != nil {
@@ -325,9 +326,9 @@ func TestHeadlessRunPromptClientResumesExistingSessionByID(t *testing.T) {
 
 	runClient := newHeadlessRunPromptClient(boot)
 	resumed, err := runClient.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID:   "req-resume-1",
-		SelectedSessionID: created.SessionID,
-		Prompt:            "second prompt",
+		ClientRequestID: "req-resume-1",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionID(t, created.SessionID)),
+		Prompt:          "second prompt",
 	}, nil)
 	if err != nil {
 		t.Fatalf("resumed client RunPrompt: %v", err)
@@ -384,9 +385,9 @@ func TestHeadlessRunPromptClientRestoresContinuationContextFromSelectedSession(t
 
 	runClient := newHeadlessRunPromptClient(boot)
 	resumed, err := runClient.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID:   "req-resume-2",
-		SelectedSessionID: created.SessionID,
-		Prompt:            "second prompt",
+		ClientRequestID: "req-resume-2",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionID(t, created.SessionID)),
+		Prompt:          "second prompt",
 	}, nil)
 	if err != nil {
 		t.Fatalf("resumed client RunPrompt: %v", err)

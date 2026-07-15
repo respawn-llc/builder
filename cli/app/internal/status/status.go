@@ -2,12 +2,10 @@ package status
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -396,12 +394,14 @@ func CollectGitStatus(ctx context.Context, workdir string, timeout time.Duration
 	if _, err := exec.LookPath("git"); err != nil {
 		return GitInfo{}
 	}
-	isRepo, probeErr := GitRepositoryProbe(trimmedWorkdir)
-	if probeErr != nil {
-		return GitInfo{Visible: true, Error: GitError(probeErr, "")}
-	}
-	if !isRepo {
+	switch inspection := config.InspectGitRepository(trimmedWorkdir).(type) {
+	case config.GitRepositoryPresent:
+	case config.GitNotRepository:
 		return GitInfo{}
+	case config.GitRepositoryInspectionFailed:
+		return GitInfo{Visible: true, Error: GitError(inspection.Cause, "")}
+	default:
+		panic(fmt.Sprintf("unknown Git repository inspection result %T", inspection))
 	}
 	gitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -447,38 +447,6 @@ func CollectGitStatus(ctx context.Context, workdir string, timeout time.Duration
 		gitInfo.Branch = "unknown"
 	}
 	return gitInfo
-}
-
-func GitRepositoryProbe(workdir string) (bool, error) {
-	info, err := os.Stat(workdir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("inspect git workdir: %w", err)
-	}
-	if !info.IsDir() {
-		return false, nil
-	}
-	current := filepath.Clean(workdir)
-	if resolved, err := filepath.EvalSymlinks(current); err == nil {
-		current = filepath.Clean(resolved)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("resolve git workdir: %w", err)
-	}
-	for {
-		gitMetadataPath := filepath.Join(current, ".git")
-		if _, err := os.Lstat(gitMetadataPath); err == nil {
-			return true, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return false, fmt.Errorf("inspect git metadata: %w", err)
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return false, nil
-		}
-		current = parent
-	}
 }
 
 func GitError(err error, output string) string {

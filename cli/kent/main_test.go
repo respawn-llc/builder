@@ -29,6 +29,7 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 
+	"core/shared/sessioncontract"
 	"github.com/google/uuid"
 )
 
@@ -216,7 +217,7 @@ func TestRootCommandContinueAgentRejectsLockedRoleChange(t *testing.T) {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
 	}
 	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	store, err := session.Create(containerDir, filepath.Base(filepath.Clean(cfg.WorkspaceRoot)), cfg.WorkspaceRoot, meta.AuthoritativeSessionStoreOptions()...)
+	store, err := session.Create(containerDir, filepath.Base(filepath.Clean(cfg.WorkspaceRoot)), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -238,11 +239,15 @@ func TestRootCommandContinueAgentRejectsLockedRoleChange(t *testing.T) {
 		if opts.SessionID != store.Meta().SessionID || opts.AgentRole != "worker" {
 			t.Fatalf("interactive options = %+v, want locked session and worker role", opts)
 		}
+		sessionID, parseErr := runtimeids.ParseSessionID(opts.SessionID)
+		if parseErr != nil {
+			t.Fatalf("ParseSessionID: %v", parseErr)
+		}
 		_, err := service.PlanSession(ctx, serverapi.SessionPlanRequest{
-			ClientRequestID:   "root-command-regression",
-			Mode:              serverapi.SessionLaunchModeInteractive,
-			SelectedSessionID: opts.SessionID,
-			Overrides:         serverapi.RunPromptOverrides{AgentRole: opts.AgentRole},
+			ClientRequestID: "root-command-regression",
+			Mode:            serverapi.SessionLaunchModeInteractive,
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+			Overrides:       serverapi.RunPromptOverrides{AgentRole: opts.AgentRole},
 		})
 		if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
 			t.Fatalf("PlanSession error = %v, want locked role change", err)

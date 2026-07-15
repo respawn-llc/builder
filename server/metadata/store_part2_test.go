@@ -7,6 +7,8 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"database/sql"
 	"errors"
 	"os"
@@ -120,6 +122,42 @@ func TestImportSessionSnapshotRejectsInvalidContinuationRole(t *testing.T) {
 	}
 }
 
+func TestImportSessionSnapshotRejectsInvalidSessionCategory(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sessionID := "session-invalid-category"
+	invalid := sessioncontract.SessionCategory("worker")
+	err := store.ImportSessionSnapshot(ctx, session.PersistedStoreSnapshot{
+		SessionDir: config.ProjectSessionDir(cfg, binding.ProjectID, sessionID),
+		Meta: session.Meta{
+			SessionID:          sessionID,
+			Category:           &invalid,
+			WorkspaceRoot:      binding.CanonicalRoot,
+			WorkspaceContainer: filepath.Base(binding.CanonicalRoot),
+			CreatedAt:          time.Now().UTC(),
+			UpdatedAt:          time.Now().UTC(),
+		},
+	})
+	if err == nil {
+		t.Fatal("ImportSessionSnapshot accepted invalid category")
+	}
+}
+
+func TestSessionCategoryResolverRejectsInvalidStoredCategory(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if _, err := store.db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("disable check constraints: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE sessions SET category = 'worker' WHERE id = ?`, sess.Meta().SessionID); err != nil {
+		t.Fatalf("seed invalid stored category: %v", err)
+	}
+	if _, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID); err == nil {
+		t.Fatal("ResolvePersistedSession accepted invalid stored category")
+	}
+}
+
 func TestSessionExecutionTargetClampsEscapingCwdRelpath(t *testing.T) {
 	target := sessionExecutionTargetFromRow(sqlitegen.GetSessionExecutionTargetByIDRow{
 		WorkspaceID:   "workspace-1",
@@ -230,7 +268,7 @@ func TestUpdateSessionExecutionTargetRejectsCrossWorkspaceWorktree(t *testing.T)
 		t.Fatalf("RegisterWorkspaceBinding workspaceB: %v", err)
 	}
 	projectSessionsDir := filepath.Join(filepath.Join(cfgA.PersistenceRoot, "projects"), bindingA.ProjectID, "sessions")
-	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfgA.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfgA.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -307,7 +345,7 @@ func TestResolvePersistedSessionUsesReboundWorkspaceRoot(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	projectSessionsDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfg.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -357,12 +395,17 @@ func TestHiddenDurableSessionStaysOutOfProjectListingsUntilVisible(t *testing.T)
 		t.Fatalf("hidden durable session must not affect project session count, got %+v", projects[0])
 	}
 
-	sessions, err := store.ListSessionsByProject(ctx, binding.ProjectID)
+	page, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategoryMain,
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
+	})
 	if err != nil {
-		t.Fatalf("ListSessionsByProject before visibility: %v", err)
+		t.Fatalf("ListSessionPage before visibility: %v", err)
 	}
-	if len(sessions) != 0 {
-		t.Fatalf("expected hidden durable session to stay out of listings, got %+v", sessions)
+	if len(page.Sessions) != 0 {
+		t.Fatalf("expected hidden durable session to stay out of listings, got %+v", page.Sessions)
 	}
 
 	if err := sess.SetName("incident triage"); err != nil {
@@ -377,15 +420,20 @@ func TestHiddenDurableSessionStaysOutOfProjectListingsUntilVisible(t *testing.T)
 		t.Fatalf("visible session must affect project session count, got %+v", projects[0])
 	}
 
-	sessions, err = store.ListSessionsByProject(ctx, binding.ProjectID)
+	page, err = store.ListSessionPage(ctx, serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategoryMain,
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
+	})
 	if err != nil {
-		t.Fatalf("ListSessionsByProject after visibility: %v", err)
+		t.Fatalf("ListSessionPage after visibility: %v", err)
 	}
-	if len(sessions) != 1 || sessions[0].SessionID != sess.Meta().SessionID {
-		t.Fatalf("expected newly visible session in listings, got %+v", sessions)
+	if len(page.Sessions) != 1 || page.Sessions[0].SessionID.String() != sess.Meta().SessionID {
+		t.Fatalf("expected newly visible session in listings, got %+v", page.Sessions)
 	}
-	if sessions[0].Name != "incident triage" {
-		t.Fatalf("session name = %q, want incident triage", sessions[0].Name)
+	if page.Sessions[0].Name != "incident triage" {
+		t.Fatalf("session name = %q, want incident triage", page.Sessions[0].Name)
 	}
 }
 
@@ -455,7 +503,7 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 			if !tc.wantVisible {
 				return
 			}
-			if listed[0].SessionID != sess.Meta().SessionID {
+			if listed[0].SessionID.String() != sess.Meta().SessionID {
 				t.Fatalf("listed session id = %q, want %q", listed[0].SessionID, sess.Meta().SessionID)
 			}
 		})
@@ -474,14 +522,19 @@ func assertProjectSessionListingCount(t *testing.T, ctx context.Context, store *
 	if projects[0].SessionCount != want {
 		t.Fatalf("project session count = %d, want %d", projects[0].SessionCount, want)
 	}
-	sessions, err := store.ListSessionsByProject(ctx, projectID)
+	page, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
+		ProjectID: projectID,
+		Category:  sessioncontract.SessionCategoryMain,
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
+	})
 	if err != nil {
-		t.Fatalf("ListSessionsByProject: %v", err)
+		t.Fatalf("ListSessionPage: %v", err)
 	}
-	if len(sessions) != want {
-		t.Fatalf("listed session count = %d, want %d, sessions=%+v", len(sessions), want, sessions)
+	if len(page.Sessions) != want {
+		t.Fatalf("listed session count = %d, want %d, sessions=%+v", len(page.Sessions), want, page.Sessions)
 	}
-	return sessions
+	return page.Sessions
 }
 
 func newMetadataTestStore(t *testing.T) (*Store, config.App, Binding) {
@@ -502,7 +555,7 @@ func newMetadataTestStoreForBoundWorkspace(t *testing.T, workspace string) (*Sto
 func createMetadataTestSession(t *testing.T, store *Store, cfg config.App, binding Binding) *session.Store {
 	t.Helper()
 	projectSessionsDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfg.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}

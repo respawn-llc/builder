@@ -38,11 +38,9 @@ type PlanResult struct {
 }
 
 type sessionPlanMemoRequest struct {
-	Mode              serverapi.SessionLaunchMode
-	SelectedSessionID string
-	ForceNewSession   bool
-	ParentSessionID   string
-	Overrides         serverapi.RunPromptOverrides
+	Mode      serverapi.SessionLaunchMode
+	Intent    serverapi.SessionLaunchIntent
+	Overrides serverapi.RunPromptOverrides
 }
 
 func NewService(planner launch.Planner, stores sessionStoreRegistrar) *Service {
@@ -78,11 +76,9 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		return PlanResult{}, err
 	}
 	memoReq := sessionPlanMemoRequest{
-		Mode:              req.Mode,
-		SelectedSessionID: strings.TrimSpace(req.SelectedSessionID),
-		ForceNewSession:   req.ForceNewSession,
-		ParentSessionID:   strings.TrimSpace(req.ParentSessionID),
-		Overrides:         req.Overrides,
+		Mode:      req.Mode,
+		Intent:    req.Intent,
+		Overrides: req.Overrides,
 	}
 	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, func(ctx context.Context) (PlanResult, error) {
 		roleOverride, err := req.Overrides.AgentRoleOverride()
@@ -91,9 +87,7 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		}
 		plan, err := s.planner.PlanSession(ctx, launch.SessionRequest{
 			Mode:                                launch.Mode(req.Mode),
-			SelectedSessionID:                   req.SelectedSessionID,
-			ForceNewSession:                     req.ForceNewSession,
-			ParentSessionID:                     req.ParentSessionID,
+			Intent:                              req.Intent,
 			SkipContinuationAgentRoleValidation: roleOverride.Default,
 		})
 		if err != nil {
@@ -145,9 +139,7 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 
 func sameSessionPlanMemoRequest(a sessionPlanMemoRequest, b sessionPlanMemoRequest) bool {
 	return a.Mode == b.Mode &&
-		a.SelectedSessionID == b.SelectedSessionID &&
-		a.ForceNewSession == b.ForceNewSession &&
-		a.ParentSessionID == b.ParentSessionID &&
+		a.Intent.Equal(b.Intent) &&
 		a.Overrides == b.Overrides
 }
 

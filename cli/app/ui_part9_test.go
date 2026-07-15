@@ -248,9 +248,7 @@ func (statusLineAzureClient) ProviderCapabilities(context.Context) (llm.Provider
 
 func TestHelpDismissesOnRegisteredKeyAndAppliesAction(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})
@@ -268,9 +266,7 @@ func TestHelpDismissesOnRegisteredKeyAndAppliesAction(t *testing.T) {
 
 func TestHelpDismissesOnAnyKeypress(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{Question: "Proceed?", Suggestions: []string{"Yes", "No"}}})
 	m.layout().syncViewport()
 
@@ -289,9 +285,7 @@ func TestHelpDismissesOnAnyKeypress(t *testing.T) {
 
 func TestQuestionMarkTogglesHelpWhenInputIsEmpty(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
@@ -304,9 +298,7 @@ func TestQuestionMarkTogglesHelpWhenInputIsEmpty(t *testing.T) {
 
 func TestQuestionMarkInsertsLiteralWhenInputIsNotEmpty(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.input = "draft"
 	m.inputCursor = len([]rune(m.input))
 	m.layout().syncViewport()
@@ -324,9 +316,7 @@ func TestQuestionMarkInsertsLiteralWhenInputIsNotEmpty(t *testing.T) {
 
 func TestAltQuestionMarkTogglesHelp(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}, Alt: true})
@@ -339,9 +329,7 @@ func TestAltQuestionMarkTogglesHelp(t *testing.T) {
 
 func TestF1TogglesHelp(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyF1})
@@ -441,9 +429,7 @@ func assertHelpEntryBindings(t *testing.T, sections []uiHelpSection, description
 
 func TestAltSlashTogglesHelp(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}, Alt: true})
@@ -456,9 +442,7 @@ func TestAltSlashTogglesHelp(t *testing.T) {
 
 func TestHelpToggleClearsRollbackEscArming(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -491,9 +475,7 @@ func TestHelpToggleClearsRollbackEscArming(t *testing.T) {
 
 func TestCmdSlashCSIUTogglesHelp(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(adaptCustomKeyMsg(testBubbleTeaUnknownCSISequence("\x1b[47;10u")))
@@ -506,9 +488,7 @@ func TestCmdSlashCSIUTogglesHelp(t *testing.T) {
 
 func TestHelpToggleKeyHidesVisibleHelp(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})
@@ -523,9 +503,7 @@ func TestHelpToggleKeyHidesVisibleHelp(t *testing.T) {
 
 func TestHelpToggleIgnoredInDetailMode(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.forwardToView(tui.ToggleModeMsg{})
 	m.layout().syncViewport()
 
@@ -539,9 +517,7 @@ func TestHelpToggleIgnoredInDetailMode(t *testing.T) {
 
 func TestTranscriptToggleClosesVisibleHelp(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})

@@ -42,10 +42,11 @@ func TestProductionKentBinaryPTYSmoke(t *testing.T) {
 		Dir:        environment.Workspace,
 		Env:        clientEnv,
 		Dimensions: pty.MustDimensions(24, 80),
-		ParseableInputs: []pty.ParseableInputEvent{
-			{Bytes: []byte{0x03, 0x03}},
-		},
-		Timeout: 10 * time.Second,
+		Inputs: []pty.InputEvent{{
+			After: 2 * time.Second,
+			Bytes: []byte{0x03},
+		}},
+		Timeout: 15 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run production kent smoke: %v raw=%q", err, string(capture.Raw))

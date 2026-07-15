@@ -1,6 +1,11 @@
 package clientui
 
-import "time"
+import (
+	"time"
+
+	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
+)
 
 type ProjectAvailability string
 
@@ -34,12 +39,12 @@ type ProjectWorkspaceSummary struct {
 type ProjectOverview struct {
 	Project    ProjectSummary
 	Workspaces []ProjectWorkspaceSummary
-	Sessions   []SessionSummary
 }
 
 type SessionSummary struct {
-	SessionID          string
-	Name               string
-	FirstPromptPreview string
-	UpdatedAt          time.Time
+	SessionID          runtimeids.SessionID            `json:"session_id"`
+	Category           sessioncontract.SessionCategory `json:"category"`
+	Name               string                          `json:"name,omitempty"`
+	FirstPromptPreview string                          `json:"first_prompt_preview,omitempty"`
+	UpdatedAt          time.Time                       `json:"updated_at"`
 }

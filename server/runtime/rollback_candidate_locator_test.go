@@ -8,6 +8,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/rollbacktarget"
+	"core/shared/sessioncontract"
 )
 
 func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestart(t *testing.T) {
@@ -112,7 +113,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 	forkedStore, _, err := session.ForkAtUserMessage(
 		reopened.store,
 		forkTargetPage.LatestRollbackCandidate.UserMessageSeq,
-		"rollback locator fork",
+		"rollback locator fork", sessioncontract.SessionCategoryMain,
 	)
 	if err != nil {
 		t.Fatalf("fork at newer rollback target: %v", err)

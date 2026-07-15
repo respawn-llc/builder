@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -25,15 +26,44 @@ func RunInteractive[S SessionServer, A any, SO any](ctx context.Context, req Req
 		return err
 	}
 	defer func() { _ = server.Close() }()
-	return deps.RunSessionLifecycle(ctx, server, authInteractor, strings.TrimSpace(req.SessionID), SessionLifecycleOptionsFor(req))
+	options, err := SessionLifecycleOptionsFor(req)
+	if err != nil {
+		return err
+	}
+	return deps.RunSessionLifecycle(ctx, server, authInteractor, options)
 }
 
-func SessionLifecycleOptionsFor[SO any](req Request[SO]) SessionLifecycleOptions {
+func SessionLifecycleOptionsFor[SO any](req Request[SO]) (SessionLifecycleOptions, error) {
 	agentRole := strings.TrimSpace(req.AgentRole)
-	return SessionLifecycleOptions{
-		ForceNewSession: agentRole != "" && agentRole != config.DefaultSubagentRole && strings.TrimSpace(req.SessionID) == "",
+	options := SessionLifecycleOptions{
 		Overrides: serverapi.RunPromptOverrides{
 			AgentRole: agentRole,
 		},
 	}
+	if req.SessionID != "" && req.WorkspaceContextSessionID != "" {
+		return SessionLifecycleOptions{}, errors.New("session ID and workspace context session ID cannot both be set")
+	}
+	if req.SessionID != "" {
+		sessionID, err := runtimeids.ParseSessionID(req.SessionID)
+		if err != nil {
+			return SessionLifecycleOptions{}, err
+		}
+		intent := serverapi.OpenExistingSessionLaunchIntent(sessionID)
+		options.Intent = &intent
+		return options, nil
+	}
+	if req.WorkspaceContextSessionID != "" {
+		parentID, err := runtimeids.ParseSessionID(req.WorkspaceContextSessionID)
+		if err != nil {
+			return SessionLifecycleOptions{}, err
+		}
+		intent := serverapi.CreateNewSessionLaunchIntent(&parentID)
+		options.Intent = &intent
+		return options, nil
+	}
+	if agentRole != "" && agentRole != config.DefaultSubagentRole {
+		intent := serverapi.CreateNewSessionLaunchIntent(nil)
+		options.Intent = &intent
+	}
+	return options, nil
 }

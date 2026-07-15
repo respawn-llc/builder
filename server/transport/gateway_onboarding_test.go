@@ -138,7 +138,7 @@ func TestGatewayProgressChecksDependencyAvailabilityBeforeAuthAndPreflight(t *te
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
 
-	errResp := callGatewayExpectError(t, conn, "run-prompt", protocol.MethodRunPrompt, serverapi.RunPromptRequest{})
+	errResp := callGatewayExpectError(t, conn, "run-prompt", protocol.MethodRunPrompt, serverapi.RunPromptRequest{ClientRequestID: "run-prompt", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "test"})
 	if errResp.Code != protocol.ErrCodeServerNotReady {
 		t.Fatalf("error code = %d, want server not ready", errResp.Code)
 	}

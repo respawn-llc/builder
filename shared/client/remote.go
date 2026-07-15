@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -283,8 +284,29 @@ func (c *Remote) GetProjectOverview(ctx context.Context, req serverapi.ProjectGe
 	return callUnscopedRPC[serverapi.ProjectGetOverviewRequest, serverapi.ProjectGetOverviewResponse](c, ctx, protocol.MethodProjectGetOverview, req)
 }
 
-func (c *Remote) ListSessionsByProject(ctx context.Context, req serverapi.SessionListByProjectRequest) (serverapi.SessionListByProjectResponse, error) {
-	return callUnscopedRPC[serverapi.SessionListByProjectRequest, serverapi.SessionListByProjectResponse](c, ctx, protocol.MethodSessionListByProject, req)
+func (c *Remote) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+	response, err := callUnscopedRPC[serverapi.SessionPageRequest, serverapi.SessionPageResponse](c, ctx, protocol.MethodSessionPage, req)
+	if err != nil {
+		return serverapi.SessionPageResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.SessionPageResponse{}, fmt.Errorf("session page response is invalid: %w", err)
+	}
+	if response.ProjectID != req.ProjectID {
+		return serverapi.SessionPageResponse{}, fmt.Errorf(
+			"session page response project %q does not match request project %q",
+			response.ProjectID,
+			req.ProjectID,
+		)
+	}
+	if response.Category != req.Category {
+		return serverapi.SessionPageResponse{}, fmt.Errorf(
+			"session page response category %q does not match request category %q",
+			response.Category,
+			req.Category,
+		)
+	}
+	return response, nil
 }
 
 func (c *Remote) CreateWorkflow(ctx context.Context, req serverapi.WorkflowCreateRequest) (serverapi.WorkflowCreateResponse, error) {
@@ -501,6 +523,11 @@ func (c *Remote) GetSessionTranscriptPage(ctx context.Context, req serverapi.Ses
 func (c *Remote) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
 	var resp serverapi.SessionLatestCommittedAssistantFinalAnswerResponse
 	return resp, c.call(ctx, protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, req, &resp)
+}
+
+func (c *Remote) GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
+	var resp serverapi.SessionExecutionEnvironmentResponse
+	return resp, c.call(ctx, protocol.MethodSessionGetExecutionEnvironment, req, &resp)
 }
 
 func (c *Remote) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {

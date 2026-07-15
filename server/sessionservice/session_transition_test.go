@@ -9,11 +9,12 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 func TestInitialInputPrefersPersistedDraft(t *testing.T) {
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/work", persistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/work", sessioncontract.SessionCategoryMain, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -34,7 +35,7 @@ func TestPersistInputDraftNoOpForNilStore(t *testing.T) {
 func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	root := t.TempDir()
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(root, "workspace-x", "/tmp/work", persistence.Options()...)
+	store, err := session.Create(root, "workspace-x", "/tmp/work", sessioncontract.SessionCategoryMain, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -66,16 +67,16 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve fork rollback: %v", err)
 	}
-	if !resolved.ShouldContinue {
-		t.Fatal("expected fork rollback to continue")
+	intent, preparation := requireSessionLifecycleLaunch(t, resolved)
+	forkID, ok := intent.SessionID()
+	if !ok || forkID.String() == store.Meta().SessionID {
+		t.Fatalf("expected new fork session id, got %q/%v", forkID.String(), ok)
 	}
-	if resolved.NextSessionID == "" || resolved.NextSessionID == store.Meta().SessionID {
-		t.Fatalf("expected new fork session id, got %q", resolved.NextSessionID)
+	prompt, ok := preparation.InitialPrompt()
+	if !ok || prompt.Text != "edited user message" {
+		t.Fatalf("initial prompt = %+v/%v", prompt, ok)
 	}
-	if resolved.InitialPrompt != "edited user message" {
-		t.Fatalf("initial prompt = %q", resolved.InitialPrompt)
-	}
-	child, err := persistence.Open(filepath.Join(root, resolved.NextSessionID))
+	child, err := persistence.Open(filepath.Join(root, forkID.String()))
 	if err != nil {
 		t.Fatalf("open forked session: %v", err)
 	}

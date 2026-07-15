@@ -29,6 +29,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 func registerGatewayWorkspace(t *testing.T, workspace string) {
@@ -659,7 +660,7 @@ func TestGatewayAuthBootstrapAPIKeyCompletionEnablesAuthRequiredMethods(t *testi
 	handshakeGateway(t, conn)
 
 	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-	if respErr := callGatewayExpectError(t, conn, "run-1", protocol.MethodRunPrompt, serverapi.RunPromptRequest{}); respErr.Code != protocol.ErrCodeAuthRequired {
+	if respErr := callGatewayExpectError(t, conn, "run-1", protocol.MethodRunPrompt, serverapi.RunPromptRequest{ClientRequestID: "run-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "test"}); respErr.Code != protocol.ErrCodeAuthRequired {
 		t.Fatalf("run.prompt error = %+v, want auth required", respErr)
 	}
 
@@ -874,7 +875,7 @@ func gatewaySessionPlanRequest(id string) serverapi.SessionPlanRequest {
 	return serverapi.SessionPlanRequest{
 		ClientRequestID: id,
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		ForceNewSession: true,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
 	}
 }
 
@@ -920,6 +921,7 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
 		"workspace-b",
 		resolvedB.Config.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
 		metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
@@ -1012,8 +1014,7 @@ func TestGatewayAllowsUnscopedSessionRetargetOutsideServerDefaultProject(t *test
 	foreignSession, err := session.Create(
 		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
 		"workspace-b",
-		resolvedB.Config.WorkspaceRoot,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
+		resolvedB.Config.WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create foreign: %v", err)
@@ -1082,11 +1083,17 @@ func TestGatewayAllowsOptionalSessionLifecycleRequestsWithoutSessionID(t *testin
 	if err != nil {
 		t.Fatalf("ResolveTransition: %v", err)
 	}
-	if !resolvedTransition.ShouldContinue || !resolvedTransition.ForceNewSession {
+	intent, ok := resolvedTransition.LaunchIntent()
+	if !ok || intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
 		t.Fatalf("unexpected transition response: %+v", resolvedTransition)
 	}
-	if resolvedTransition.InitialPrompt != "hello" {
-		t.Fatalf("initial prompt = %q, want hello", resolvedTransition.InitialPrompt)
+	preparation, ok := resolvedTransition.LaunchPreparation()
+	if !ok {
+		t.Fatal("transition response omitted launch preparation")
+	}
+	prompt, ok := preparation.InitialPrompt()
+	if !ok || prompt.Text != "hello" {
+		t.Fatalf("initial prompt = %+v/%v, want hello", prompt, ok)
 	}
 }
 

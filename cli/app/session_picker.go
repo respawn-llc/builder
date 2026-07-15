@@ -1,374 +1,624 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
-	"core/shared/clientui"
-	sharedtheme "core/shared/theme"
+	"core/shared/apicontract"
+	"core/shared/runtimeids"
+	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 
-	"charm.land/glamour/v2"
-	glamouransi "charm.land/glamour/v2/ansi"
-	glamourstyles "charm.land/glamour/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-)
-
-const (
-	sessionPickerCreateLabel = "Create a new session"
-	defaultPickerWidth       = 80
-	defaultPickerHeight      = 24
 )
 
 var runSessionPickerFlow = runSessionPicker
 
-type sessionPickerResult struct {
-	CreateNew bool
-	Session   *clientui.SessionSummary
-	Canceled  bool
+type sessionPageLoader interface {
+	ProjectID() string
+	ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error)
 }
 
-type sessionPickerStyles struct {
-	headerFallback lipgloss.Style
-	headerBox      lipgloss.Style
-	headerTitle    lipgloss.Style
-	headerText     lipgloss.Style
-	headerWarning  lipgloss.Style
-	headerSuccess  lipgloss.Style
-	row            lipgloss.Style
-	rowSelected    lipgloss.Style
-	marker         lipgloss.Style
-	markerSelected lipgloss.Style
-	preview        lipgloss.Style
-	timestamp      lipgloss.Style
+type sessionPickerResult interface {
+	isSessionPickerResult()
 }
+
+type sessionPickerCreateResult struct{}
+type sessionPickerCancelResult struct{}
+type sessionPickerOpenResult struct {
+	sessionID runtimeids.SessionID
+}
+
+func newSessionPickerCreateResult() sessionPickerResult {
+	return sessionPickerCreateResult{}
+}
+
+func newSessionPickerCancelResult() sessionPickerResult {
+	return sessionPickerCancelResult{}
+}
+
+func newSessionPickerOpenResult(sessionID runtimeids.SessionID) sessionPickerResult {
+	if sessionID.IsZero() {
+		panic("session picker open result requires a session ID")
+	}
+	return sessionPickerOpenResult{sessionID: sessionID}
+}
+
+func (sessionPickerCreateResult) isSessionPickerResult() {}
+func (sessionPickerCancelResult) isSessionPickerResult() {}
+func (sessionPickerOpenResult) isSessionPickerResult()   {}
 
 type sessionPickerModel struct {
-	sessions []clientui.SessionSummary
-	header   sessionPickerHeaderInfo
-	cursor   int
-	offset   int
-	width    int
-	height   int
-	theme    string
-	styles   sessionPickerStyles
-	result   sessionPickerResult
+	loader                     sessionPageLoader
+	requestContext             context.Context
+	executionEnvironmentClient apicontract.SessionViewService
+	header                     sessionPickerHeaderInfo
+	activeTab                  sessioncontract.SessionCategory
+	main                       sessionPickerTab
+	subagents                  sessionPickerTab
+	width                      int
+	height                     int
+	theme                      string
+	styles                     sessionPickerStyles
+	result                     sessionPickerResult
+
+	spinnerFrame               int
+	spinnerSequence            uint64
+	scheduledSpinnerGeneration *uint64
+	startupStatus              *startupPickerStatusModel
+	clock                      func() time.Time
 }
 
-func newSessionPickerModel(summaries []clientui.SessionSummary, theme string, header sessionPickerHeaderInfo) *sessionPickerModel {
-	items := append([]clientui.SessionSummary(nil), summaries...)
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].UpdatedAt.After(items[j].UpdatedAt)
-	})
-	m := &sessionPickerModel{
-		sessions: items,
-		header:   header,
-		width:    defaultPickerWidth,
-		height:   defaultPickerHeight,
-		theme:    theme,
-		styles:   newSessionPickerStyles(theme),
+type sessionPickerPageLoadedMsg struct {
+	category   sessioncontract.SessionCategory
+	generation uint64
+	position   serverapi.SessionPagePosition
+	response   serverapi.SessionPageResponse
+	err        error
+}
+
+type sessionPickerSpinnerTickMsg struct {
+	generation uint64
+}
+
+func newSessionPickerModelWithExecutionEnvironmentClient(
+	requestContext context.Context,
+	loader sessionPageLoader,
+	executionEnvironmentClient apicontract.SessionViewService,
+	theme string,
+	header sessionPickerHeaderInfo,
+) *sessionPickerModel {
+	if requestContext == nil {
+		panic("session picker requires a request context")
 	}
-	return m
+	if loader == nil {
+		panic("session picker requires a page loader")
+	}
+	return &sessionPickerModel{
+		loader:                     loader,
+		requestContext:             requestContext,
+		executionEnvironmentClient: executionEnvironmentClient,
+		header:                     header,
+		activeTab:                  sessioncontract.SessionCategoryMain,
+		main:                       newSessionPickerTab(sessioncontract.SessionCategoryMain),
+		subagents:                  newSessionPickerTab(sessioncontract.SessionCategorySubagent),
+		width:                      defaultPickerWidth,
+		height:                     defaultPickerHeight,
+		theme:                      theme,
+		styles:                     newSessionPickerStyles(theme),
+		startupStatus:              newStartupPickerStatusModel(),
+		clock:                      time.Now,
+	}
 }
 
 func (m *sessionPickerModel) Init() tea.Cmd {
-	return collectSessionPickerStatusCmd(m.header)
+	commands := []tea.Cmd{
+		m.startBodyRequest(sessioncontract.SessionCategoryMain, sessionPickerBodyRequestInitial),
+		m.startBodyRequest(sessioncontract.SessionCategorySubagent, sessionPickerBodyRequestInitial),
+		collectSessionPickerStatusCmd(m.header),
+	}
+	if tick := m.reconcileSpinnerTick(); tick != nil {
+		commands = append(commands, tick)
+	}
+	return tea.Batch(commands...)
+}
+
+func (m *sessionPickerModel) tab(category sessioncontract.SessionCategory) *sessionPickerTab {
+	switch category {
+	case sessioncontract.SessionCategoryMain:
+		return &m.main
+	case sessioncontract.SessionCategorySubagent:
+		return &m.subagents
+	default:
+		panic(fmt.Sprintf("unknown session picker category %q", category))
+	}
 }
 
 func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch key := msg.(type) {
+	switch message := msg.(type) {
+	case sessionPickerPageLoadedMsg:
+		cmd := m.applyPageLoaded(message)
+		return m, tea.Batch(cmd, m.reconcileSpinnerTick())
+	case sessionPickerSelectedDetailLoadedMsg:
+		return m, m.applySelectedDetailLoaded(message)
+	case sessionPickerSpinnerTickMsg:
+		if m.scheduledSpinnerGeneration == nil || message.generation != *m.scheduledSpinnerGeneration {
+			return m, nil
+		}
+		m.scheduledSpinnerGeneration = nil
+		m.spinnerFrame++
+		return m, m.reconcileSpinnerTick()
 	case sessionPickerStatusMsg:
-		if strings.TrimSpace(key.cwd) != "" {
-			m.header.CWD = strings.TrimSpace(key.cwd)
-		}
-		if strings.TrimSpace(key.branch) != "" {
-			m.header.Branch = strings.TrimSpace(key.branch)
-		}
-		if strings.TrimSpace(key.auth) != "" {
-			m.header.Auth = strings.TrimSpace(key.auth)
-		}
-		if strings.TrimSpace(key.model) != "" {
-			m.header.Model = strings.TrimSpace(key.model)
-		}
-		m.ensureCursorVisible()
+		m.header.CWD = sessionPickerStatusText(message.cwd)
+		m.header.Branch = sessionPickerStatusText(message.branch)
+		m.header.Auth = sessionPickerStatusText(message.auth)
+		m.header.Model = sessionPickerStatusText(message.model)
+		m.ensureSelectedVisible(m.tab(m.activeTab))
 		return m, nil
 	case tea.WindowSizeMsg:
-		if key.Width > 0 {
-			m.width = key.Width
+		if message.Width > 0 {
+			m.width = message.Width
 		}
-		if key.Height > 0 {
-			m.height = key.Height
+		if message.Height > 0 {
+			m.height = message.Height
 		}
-		m.ensureCursorVisible()
+		m.ensureSelectedVisible(m.tab(m.activeTab))
 		return m, nil
 	case tea.KeyMsg:
-		switch key.Type {
-		case tea.KeyUp:
-			m.moveCursor(-1)
-		case tea.KeyDown:
-			m.moveCursor(1)
-		case tea.KeyRunes:
-			filtered, _ := stripMouseSGRRunes(key.Runes)
-			if len(filtered) == 1 {
-				switch filtered[0] {
-				case 'k':
-					m.moveCursor(-1)
-				case 'j':
-					m.moveCursor(1)
-				case 'n':
-					m.result = sessionPickerResult{CreateNew: true}
-					return m, tea.Quit
-				}
-			}
-		case tea.KeyEnter:
-			if m.cursor == 0 {
-				m.result = sessionPickerResult{CreateNew: true}
-				return m, tea.Quit
-			}
-			picked := m.sessions[m.cursor-1]
-			m.result = sessionPickerResult{Session: &picked}
-			return m, tea.Quit
-		case tea.KeyCtrlC:
-			m.result = sessionPickerResult{Canceled: true}
-			return m, tea.Quit
-		}
+		return m, m.handleKey(message)
+	case tea.KeyType:
+		return m, m.handleKey(tea.KeyMsg{Type: message})
 	}
 	return m, nil
 }
 
-func (m *sessionPickerModel) View() string {
-	var out strings.Builder
-	out.WriteString(m.renderHeader())
-	out.WriteString("\n\n")
-	visible := m.visibleRowsFromOffset(m.offset)
-	for i, row := range visible {
-		if i > 0 {
-			out.WriteByte('\n')
+func sessionPickerStatusText(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func (m *sessionPickerModel) handleKey(key tea.KeyMsg) tea.Cmd {
+	switch key.Type {
+	case tea.KeyUp:
+		return m.moveSelection(-1)
+	case tea.KeyDown:
+		return m.moveSelection(1)
+	case tea.KeyPgUp:
+		return m.moveSelectionPage(-1)
+	case tea.KeyPgDown:
+		return m.moveSelectionPage(1)
+	case tea.KeyTab, tea.KeyShiftTab, tea.KeyLeft, tea.KeyRight:
+		return m.switchTab()
+	case tea.KeyRunes:
+		filtered, _ := stripMouseSGRRunes(key.Runes)
+		if len(filtered) != 1 {
+			return nil
 		}
-		out.WriteString(m.renderRow(row.index, row.showPreview))
-		if i+1 < len(visible) {
-			out.WriteByte('\n')
+		switch filtered[0] {
+		case 'k':
+			return m.moveSelection(-1)
+		case 'j':
+			return m.moveSelection(1)
+		case 'h', 'l':
+			return m.switchTab()
+		case 'n':
+			m.cancelSelectedDetailRequests()
+			m.result = newSessionPickerCreateResult()
+			return tea.Quit
 		}
+	case tea.KeyEnter:
+		tab := m.tab(m.activeTab)
+		if tab.bodyPhase == sessionPickerBodyFailed {
+			return m.startBodyRequest(m.activeTab, sessionPickerBodyRequestRetry)
+		}
+		switch selected := tab.selected.(type) {
+		case sessionPickerCreateSelection:
+			m.cancelSelectedDetailRequests()
+			m.result = newSessionPickerCreateResult()
+			return tea.Quit
+		case sessionPickerSessionSelection:
+			m.cancelSelectedDetailRequests()
+			m.result = newSessionPickerOpenResult(selected.sessionID)
+			return tea.Quit
+		}
+	case tea.KeyCtrlC:
+		m.cancelSelectedDetailRequests()
+		m.result = newSessionPickerCancelResult()
+		return tea.Quit
 	}
-	return out.String()
+	return nil
 }
 
-func (m *sessionPickerModel) moveCursor(delta int) {
-	totalItems := m.itemCount()
-	if totalItems == 0 {
-		return
+func (m *sessionPickerModel) switchTab() tea.Cmd {
+	if m.activeTab == sessioncontract.SessionCategoryMain {
+		m.activeTab = sessioncontract.SessionCategorySubagent
+	} else {
+		m.activeTab = sessioncontract.SessionCategoryMain
 	}
-	m.cursor += delta
-	if m.cursor < 0 {
-		m.cursor = 0
+	tab := m.tab(m.activeTab)
+	m.ensureSelectedVisible(tab)
+	if tab.bodyPhase == sessionPickerBodyFailed && tab.bodyRequest == nil {
+		return m.startBodyRequest(m.activeTab, sessionPickerBodyRequestRetry)
 	}
-	if m.cursor >= totalItems {
-		m.cursor = totalItems - 1
-	}
-	m.ensureCursorVisible()
+	return nil
 }
 
-func (m *sessionPickerModel) ensureCursorVisible() {
-	if m.cursor < m.offset {
-		m.offset = m.cursor
-	}
-	for m.offset < m.cursor && !m.rowVisibleFromOffset(m.offset, m.cursor) {
-		m.offset++
-	}
-	if m.offset < 0 {
-		m.offset = 0
-	}
-	for m.offset > 0 && m.rowVisibleFromOffset(m.offset-1, m.cursor) {
-		m.offset--
-	}
-	maxOffset := m.itemCount() - 1
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if m.offset > maxOffset {
-		m.offset = maxOffset
-	}
-}
-
-func (m *sessionPickerModel) visibleLineBudget() int {
-	rows := m.height - lipgloss.Height(m.renderHeader()) - 2
-	if rows < 1 {
-		return 1
-	}
-	return rows
-}
-
-type sessionPickerVisibleRow struct {
-	index       int
-	showPreview bool
-}
-
-func (m *sessionPickerModel) visibleRowsFromOffset(offset int) []sessionPickerVisibleRow {
-	budget := m.visibleLineBudget()
-	if budget <= 0 {
+func (m *sessionPickerModel) moveSelection(delta int) tea.Cmd {
+	tab := m.tab(m.activeTab)
+	if tab.bodyPhase != sessionPickerBodyReady && tab.bodyPhase != sessionPickerBodyEmpty {
 		return nil
 	}
-	visible := make([]sessionPickerVisibleRow, 0, m.itemCount())
-	for i := offset; i < m.itemCount(); i++ {
-		separator := 0
-		if len(visible) > 0 {
-			separator = 1
+	index := tab.selectedIndex()
+	if index == nil {
+		if tab.itemCount() > 0 {
+			return m.selectTabIndex(tab, 0)
 		}
-		available := budget - separator
-		if available < 1 {
-			break
+		return nil
+	}
+	next := *index + delta
+	if next >= 0 && next < tab.itemCount() {
+		return m.selectTabIndex(tab, next)
+	}
+	if tab.directional != nil {
+		return nil
+	}
+	if delta > 0 {
+		if len(tab.segments) == 0 {
+			return nil
 		}
-		showPreview := m.hasPreview(i) && available >= 2
-		rowLines := 1
-		if showPreview {
-			rowLines = 2
+		continuation := tab.segments[len(tab.segments)-1].older
+		if continuation == nil {
+			return nil
 		}
-		if rowLines > available {
-			if len(visible) == 0 {
-				return []sessionPickerVisibleRow{{index: i, showPreview: false}}
+		return m.startDirectionalRequest(tab, serverapi.OlderSessionPagePosition(*continuation), delta)
+	}
+	if !tab.containsNewestEdge() {
+		continuation := tab.segments[0].newer
+		if continuation != nil {
+			return m.startDirectionalRequest(tab, serverapi.NewerSessionPagePosition(*continuation), delta)
+		}
+	}
+	return nil
+}
+
+func (m *sessionPickerModel) moveSelectionPage(direction int) tea.Cmd {
+	if direction != -1 && direction != 1 {
+		panic("session picker page direction must be -1 or 1")
+	}
+	tab := m.tab(m.activeTab)
+	if tab.bodyPhase != sessionPickerBodyReady && tab.bodyPhase != sessionPickerBodyEmpty {
+		return nil
+	}
+	index := tab.selectedIndex()
+	if index == nil {
+		if tab.itemCount() == 0 {
+			return nil
+		}
+		if direction > 0 {
+			return m.selectTabIndex(tab, 0)
+		}
+		return m.selectTabIndex(tab, tab.itemCount()-1)
+	}
+	pageSize := len(m.visibleRowsFromOffset(tab, tab.offset))
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	next := *index + direction*pageSize
+	if next >= 0 && next < tab.itemCount() {
+		return m.selectTabIndex(tab, next)
+	}
+	if tab.directional != nil {
+		return nil
+	}
+	if direction > 0 {
+		if len(tab.segments) > 0 {
+			continuation := tab.segments[len(tab.segments)-1].older
+			if continuation != nil {
+				return m.startDirectionalRequest(tab, serverapi.OlderSessionPagePosition(*continuation), direction)
 			}
-			break
 		}
-		visible = append(visible, sessionPickerVisibleRow{index: i, showPreview: showPreview})
-		budget -= separator + rowLines
-		if budget == 0 {
-			break
+		if tab.itemCount() > 0 {
+			return m.selectTabIndex(tab, tab.itemCount()-1)
 		}
-	}
-	return visible
-}
-
-func (m *sessionPickerModel) rowVisibleFromOffset(offset, index int) bool {
-	for _, row := range m.visibleRowsFromOffset(offset) {
-		if row.index == index {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *sessionPickerModel) itemCount() int {
-	return len(m.sessions) + 1
-}
-
-func (m *sessionPickerModel) renderRow(index int, showPreview bool) string {
-	selected := index == m.cursor
-	title := sessionPickerCreateLabel
-	preview := ""
-	var timestamp string
-	if index > 0 {
-		item := m.sessions[index-1]
-		title = sessionPickerTitle(item)
-		preview = strings.TrimSpace(item.FirstPromptPreview)
-		timestamp = humanTime(item.UpdatedAt)
-	}
-
-	markerStyle := m.styles.marker
-	rowStyle := m.styles.row
-	marker := "◈"
-	if selected {
-		markerStyle = m.styles.markerSelected
-		rowStyle = m.styles.rowSelected
-	}
-	left := markerStyle.Render(marker) + " " + rowStyle.Render(title)
-	if timestamp == "" {
-		return left
-	}
-	right := m.styles.timestamp.Render(timestamp)
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-	titleLine := left + strings.Repeat(" ", gap) + right
-	if preview == "" || !showPreview {
-		return titleLine
-	}
-	previewWidth := m.width - 2
-	if previewWidth < 1 {
-		previewWidth = 1
-	}
-	previewLine := "  " + m.styles.preview.Render(truncateQueuedMessageLine(preview, previewWidth))
-	return titleLine + "\n" + previewLine
-}
-
-func sessionPickerTitle(item clientui.SessionSummary) string {
-	if title := strings.TrimSpace(item.Name); title != "" {
-		return title
-	}
-	return item.SessionID
-}
-
-func (m *sessionPickerModel) hasPreview(index int) bool {
-	if index <= 0 {
-		return false
-	}
-	return strings.TrimSpace(m.sessions[index-1].FirstPromptPreview) != ""
-}
-
-func newSessionPickerStyles(theme string) sessionPickerStyles {
-	palette := uiPalette(theme)
-	return sessionPickerStyles{
-		headerFallback: lipgloss.NewStyle().Foreground(palette.primary).Bold(true),
-		headerBox: lipgloss.NewStyle().
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(palette.muted),
-		headerTitle:    lipgloss.NewStyle().Foreground(palette.primary).Bold(true),
-		headerText:     lipgloss.NewStyle().Foreground(palette.foreground),
-		headerWarning:  lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Warning.Adaptive()).Bold(true),
-		headerSuccess:  lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Success.Adaptive()).Bold(true),
-		row:            lipgloss.NewStyle().Foreground(palette.foreground),
-		rowSelected:    lipgloss.NewStyle().Foreground(palette.primary).Bold(true),
-		marker:         lipgloss.NewStyle().Foreground(palette.muted),
-		markerSelected: lipgloss.NewStyle().Foreground(palette.primary).Bold(true),
-		preview:        lipgloss.NewStyle().Foreground(palette.muted).Faint(true),
-		timestamp:      lipgloss.NewStyle().Foreground(palette.muted).Faint(true),
-	}
-}
-
-func newStartupMarkdownRendererWithWordWrap(theme string, width int) *glamour.TermRenderer {
-	if width < 0 {
-		width = 0
-	}
-	style := startupMarkdownStyle(theme)
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithWordWrap(width),
-		glamour.WithStyles(style),
-	)
-	if err != nil {
 		return nil
 	}
-	return renderer
+	if !tab.containsNewestEdge() {
+		continuation := tab.segments[0].newer
+		if continuation != nil {
+			return m.startDirectionalRequest(tab, serverapi.NewerSessionPagePosition(*continuation), direction)
+		}
+	}
+	if tab.itemCount() > 0 {
+		return m.selectTabIndex(tab, 0)
+	}
+	return nil
 }
 
-func startupMarkdownStyle(theme string) glamouransi.StyleConfig {
-	style := glamourstyles.DarkStyleConfig
-	if strings.EqualFold(strings.TrimSpace(theme), "light") {
-		style = glamourstyles.LightStyleConfig
-	}
-	zero := uint(0)
-	style.Document.Margin = &zero
-	return style
+func (m *sessionPickerModel) selectTabIndex(tab *sessionPickerTab, index int) tea.Cmd {
+	tab.selectIndex(index)
+	m.ensureSelectedVisible(tab)
+	return m.startSelectedDetailForTab(tab)
 }
 
-func humanTime(ts time.Time) string {
-	if ts.IsZero() {
-		return "unknown"
+func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCategory, kind sessionPickerBodyRequestKind) tea.Cmd {
+	tab := m.tab(category)
+	if tab.bodyRequest != nil || tab.directional != nil {
+		return nil
 	}
-	return ts.Local().Format("2006-01-02 15:04")
+	if kind == sessionPickerBodyRequestRetry {
+		m.discardSelectedDetailForTab(tab)
+		m.clearPickerFailureForTab(tab, sessionPickerOperationDirectionalPage, tab.generation)
+		tab.resetForFreshLoad()
+	}
+	tab.generation++
+	request := &sessionPickerBodyRequest{
+		kind:       kind,
+		generation: tab.generation,
+		position:   serverapi.NewestSessionPagePosition(),
+	}
+	tab.bodyRequest = request
+	tab.bodyPhase = sessionPickerBodyInitialLoading
+	load := m.loadPageCmd(category, request.generation, request.position)
+	if kind == sessionPickerBodyRequestRetry {
+		return tea.Batch(load, m.reconcileSpinnerTick())
+	}
+	return load
 }
 
-func runSessionPicker(summaries []clientui.SessionSummary, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
-	model := newSessionPickerModel(summaries, theme, header)
-	program := tea.NewProgram(model, tea.WithAltScreen())
-	finalModel, err := program.Run()
-	if err != nil {
-		return sessionPickerResult{}, err
+func (m *sessionPickerModel) startDirectionalRequest(tab *sessionPickerTab, position serverapi.SessionPagePosition, move int) tea.Cmd {
+	if tab.bodyRequest != nil || tab.directional != nil {
+		return nil
 	}
-	picked, ok := finalModel.(*sessionPickerModel)
-	if !ok {
-		return sessionPickerResult{}, fmt.Errorf("unexpected picker model type %T", finalModel)
+	tab.generation++
+	tab.directional = &sessionPickerDirectionalRequest{
+		generation: tab.generation,
+		position:   position,
+		move:       move,
 	}
-	return picked.result, nil
+	return tea.Batch(
+		m.loadPageCmd(tab.category, tab.generation, position),
+		m.reconcileSpinnerTick(),
+	)
+}
+
+func (m *sessionPickerModel) loadPageCmd(category sessioncontract.SessionCategory, generation uint64, position serverapi.SessionPagePosition) tea.Cmd {
+	request := serverapi.SessionPageRequest{
+		ProjectID: m.loader.ProjectID(),
+		Category:  category,
+		PageSize:  serverapi.MaxSessionPageSize,
+		Position:  position,
+	}
+	return func() tea.Msg {
+		response, err := m.loader.ListSessionPage(m.requestContext, request)
+		return sessionPickerPageLoadedMsg{
+			category:   category,
+			generation: generation,
+			position:   position,
+			response:   response,
+			err:        err,
+		}
+	}
+}
+
+func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg) tea.Cmd {
+	tab := m.tab(message.category)
+	if tab.bodyRequest != nil &&
+		tab.bodyRequest.generation == message.generation &&
+		sessionPagePositionsEqual(tab.bodyRequest.position, message.position) {
+		requestKind := tab.bodyRequest.kind
+		tab.bodyRequest = nil
+		if message.err != nil {
+			tab.resetForFreshLoad()
+			tab.bodyPhase = sessionPickerBodyFailed
+			m.recordPickerFailureForTab(tab, sessionPickerOperationBodyPage, message.generation, sessionPickerFailurePageRequest, message.err)
+			return nil
+		}
+		if err := validateSessionPickerPage(message.response, m.loader.ProjectID(), tab.category); err != nil {
+			tab.resetForFreshLoad()
+			tab.bodyPhase = sessionPickerBodyFailed
+			m.recordPickerFailureForTab(tab, sessionPickerOperationBodyPage, message.generation, sessionPickerFailurePageContract, err)
+			return nil
+		}
+		tab.replaceSegments(message.response)
+		m.clearPickerFailureForTab(tab, sessionPickerOperationBodyPage, message.generation)
+		m.ensureSelectedVisible(tab)
+		if requestKind == sessionPickerBodyRequestInitial || requestKind == sessionPickerBodyRequestRetry {
+			return tea.Batch(
+				m.startSelectedDetailForTab(tab),
+				m.maybeCompleteAllEmpty(),
+			)
+		}
+		return m.startSelectedDetailForTab(tab)
+	}
+	if tab.directional == nil ||
+		tab.directional.generation != message.generation ||
+		!sessionPagePositionsEqual(tab.directional.position, message.position) {
+		return nil
+	}
+	directional := *tab.directional
+	tab.directional = nil
+	if message.err != nil {
+		m.discardSelectedDetailForTab(tab)
+		tab.resetForFreshLoad()
+		tab.bodyPhase = sessionPickerBodyFailed
+		m.recordPickerFailureForTab(tab, sessionPickerOperationDirectionalPage, message.generation, sessionPickerFailurePageRequest, message.err)
+		return nil
+	}
+	if err := validateSessionPickerPage(message.response, m.loader.ProjectID(), tab.category); err != nil {
+		m.discardSelectedDetailForTab(tab)
+		tab.resetForFreshLoad()
+		tab.bodyPhase = sessionPickerBodyFailed
+		m.recordPickerFailureForTab(tab, sessionPickerOperationDirectionalPage, message.generation, sessionPickerFailurePageContract, err)
+		return nil
+	}
+	segment := newSessionPickerPageSegment(message.response)
+	switch message.position.Kind() {
+	case serverapi.SessionPagePositionOlder:
+		tab.segments = append(tab.segments, segment)
+		if len(tab.segments) > 2 {
+			tab.segments = tab.segments[len(tab.segments)-2:]
+		}
+		tab.rebuildResidentIDs()
+		appended := tab.segments[len(tab.segments)-1]
+		if directional.move > 0 && len(appended.sessions) > 0 {
+			tab.selected = newSessionPickerSessionSelection(appended.sessions[0].SessionID)
+			m.cancelSelectedDetailForTab(tab)
+		}
+	case serverapi.SessionPagePositionNewer:
+		tab.segments = append([]sessionPickerPageSegment{segment}, tab.segments...)
+		if len(tab.segments) > 2 {
+			tab.segments = tab.segments[:2]
+		}
+		tab.rebuildResidentIDs()
+		prepended := tab.segments[0]
+		if directional.move < 0 && len(prepended.sessions) > 0 {
+			tab.selected = newSessionPickerSessionSelection(prepended.sessions[len(prepended.sessions)-1].SessionID)
+			m.cancelSelectedDetailForTab(tab)
+		}
+	}
+	tab.bodyPhase = sessionPickerBodyReady
+	m.clearPickerFailureForTab(tab, sessionPickerOperationDirectionalPage, message.generation)
+	m.ensureSelectedVisible(tab)
+	return m.startSelectedDetailForTab(tab)
+}
+
+func (m *sessionPickerModel) maybeCompleteAllEmpty() tea.Cmd {
+	if m.main.bodyPhase != sessionPickerBodyEmpty || m.subagents.bodyPhase != sessionPickerBodyEmpty {
+		return nil
+	}
+	m.result = newSessionPickerCreateResult()
+	return tea.Quit
+}
+
+func (m *sessionPickerModel) hasPendingPageRequest() bool {
+	return m.main.bodyRequest != nil || m.main.directional != nil ||
+		m.subagents.bodyRequest != nil || m.subagents.directional != nil
+}
+
+func (m *sessionPickerModel) reconcileSpinnerTick() tea.Cmd {
+	if !m.hasPendingPageRequest() || m.scheduledSpinnerGeneration != nil {
+		return nil
+	}
+	m.spinnerSequence++
+	generation := m.spinnerSequence
+	m.scheduledSpinnerGeneration = &generation
+	return tea.Tick(spinnerTickInterval, func(time.Time) tea.Msg {
+		return sessionPickerSpinnerTickMsg{generation: generation}
+	})
+}
+
+func runSessionPicker(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	var executionEnvironmentClient apicontract.SessionViewService
+	if provider, ok := loader.(interface {
+		SessionViewClient() apicontract.SessionViewService
+	}); ok {
+		executionEnvironmentClient = provider.SessionViewClient()
+	}
+	lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
+		Loader:                     loader,
+		ExecutionEnvironmentClient: executionEnvironmentClient,
+		Theme:                      theme,
+		Header:                     header,
+	})
+	defer lifecycle.Close()
+	terminal := sessionPickerTerminal{state: sessionPickerTerminalInactive}
+	if err := terminal.Enter(); err != nil {
+		return nil, err
+	}
+	finalModel, runErr := tea.NewProgram(lifecycle).Run()
+	closeErr := terminal.Close()
+	if runErr != nil && closeErr != nil {
+		return nil, errors.Join(runErr, closeErr)
+	}
+	if runErr != nil {
+		return nil, runErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if finalModel != lifecycle {
+		return nil, fmt.Errorf("unexpected picker lifecycle model type %T", finalModel)
+	}
+	result := lifecycle.Result()
+	if err := validateSessionPickerLifecycleResult(result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+type sessionPickerTerminalState uint8
+
+const (
+	sessionPickerTerminalInactive sessionPickerTerminalState = iota + 1
+	sessionPickerTerminalAltScreen
+	sessionPickerTerminalAlternateScroll
+	sessionPickerTerminalCleaned
+)
+
+type sessionPickerTerminalError struct {
+	Operation string
+	Err       error
+}
+
+func (e sessionPickerTerminalError) Error() string {
+	return fmt.Sprintf("session picker terminal %s failed: %v", e.Operation, e.Err)
+}
+
+func (e sessionPickerTerminalError) Unwrap() error {
+	return e.Err
+}
+
+type sessionPickerTerminal struct {
+	state sessionPickerTerminalState
+}
+
+func (t *sessionPickerTerminal) Enter() error {
+	if t == nil || t.state != sessionPickerTerminalInactive {
+		return errors.New("session picker terminal must be inactive before entry")
+	}
+	if err := writeTerminalSequence("\x1b[?1049h"); err != nil {
+		return sessionPickerTerminalError{Operation: "enter alt-screen", Err: err}
+	}
+	t.state = sessionPickerTerminalAltScreen
+	if err := writeTerminalSequence("\x1b[?1007h"); err != nil {
+		cleanupErr := t.Close()
+		if cleanupErr != nil {
+			return errors.Join(sessionPickerTerminalError{Operation: "enable alternate scroll", Err: err}, cleanupErr)
+		}
+		return sessionPickerTerminalError{Operation: "enable alternate scroll", Err: err}
+	}
+	t.state = sessionPickerTerminalAlternateScroll
+	return nil
+}
+
+func (t *sessionPickerTerminal) Close() error {
+	if t == nil || t.state == sessionPickerTerminalCleaned {
+		return nil
+	}
+	var cleanupErr error
+	switch t.state {
+	case sessionPickerTerminalAlternateScroll:
+		if err := writeTerminalSequence("\x1b[?1007l"); err != nil {
+			cleanupErr = sessionPickerTerminalError{Operation: "disable alternate scroll", Err: err}
+		}
+		fallthrough
+	case sessionPickerTerminalAltScreen:
+		if err := writeTerminalSequence("\x1b[?1049l"); err != nil {
+			exitErr := sessionPickerTerminalError{Operation: "exit alt-screen", Err: err}
+			if cleanupErr != nil {
+				cleanupErr = errors.Join(cleanupErr, exitErr)
+			} else {
+				cleanupErr = exitErr
+			}
+		}
+	case sessionPickerTerminalInactive:
+	default:
+		panic(fmt.Sprintf("unknown session picker terminal state %d", t.state))
+	}
+	t.state = sessionPickerTerminalCleaned
+	return cleanupErr
 }

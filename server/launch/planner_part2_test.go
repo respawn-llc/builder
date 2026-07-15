@@ -75,7 +75,7 @@ func TestPlannerInteractiveReopensSelectedSessionWithinActiveContainer(t *testin
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: selected.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestPlannerSelectedSessionUsesAuthoritativeMetadata(t *testing.T) {
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: selected.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestPlannerSelectedSessionIDUsesActiveContainerScope(t *testing.T) {
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: selected.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestPlannerSelectedSessionIDDoesNotFallbackOutsideActiveContainer(t *testin
 		ContainerDir: projectContainer,
 	}
 
-	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: otherProjectSession.Meta().SessionID})
+	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, otherProjectSession.Meta().SessionID))})
 	if err == nil || !errors.Is(err, session.ErrSessionNotFound) {
 		t.Fatalf("plan session err = %v, want ErrSessionNotFound", err)
 	}
@@ -179,7 +179,7 @@ func TestPlannerSelectedSessionIDRejectsSymlinkOutsideActiveContainer(t *testing
 		ContainerDir: containerA,
 	}
 
-	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: "escaped-link"}); err == nil {
+	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, "escaped-link"))}); err == nil {
 		t.Fatal("expected planner to reject symlinked selected session outside active container")
 	}
 }

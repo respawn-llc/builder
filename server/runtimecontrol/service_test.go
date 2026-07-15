@@ -24,6 +24,7 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
 
@@ -335,6 +336,7 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 		t.TempDir(),
 		"workspace-x",
 		"/tmp/workspace-x",
+		sessioncontract.SessionCategoryMain,
 		append(runtimeControlTestSessionPersistence.Options(), opts...)...,
 	)
 	if err != nil {
@@ -589,7 +591,7 @@ func runtimeControlPromptHistoryStoresLoad(t *testing.T, sessionID string) *runt
 }
 
 func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}

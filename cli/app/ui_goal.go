@@ -364,7 +364,7 @@ func (m *uiModel) moveGoalScroll(delta int) {
 }
 
 func (m *uiModel) moveGoalScrollPage(deltaPages int) {
-	height := m.termHeight
+	height := m.layout().effectiveHeight()
 	if height < 1 {
 		height = 1
 	}

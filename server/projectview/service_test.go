@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/metadata"
 	"core/server/session"
@@ -15,6 +16,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 func metadataColumnExists(t *testing.T, db *sql.DB, table string, column string) bool {
@@ -46,19 +48,44 @@ func metadataColumnExists(t *testing.T, db *sql.DB, table string, column string)
 func TestServiceListsSingleProjectAndSessions(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	first, err := session.Create(containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	baseTime := time.Now().UTC().Add(time.Hour)
+	firstOptions := append(store.AuthoritativeSessionStoreOptions(), session.WithClock(func() time.Time {
+		return baseTime
+	}))
+	first, err := session.Create(containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, firstOptions...)
 	if err != nil {
 		t.Fatalf("create first session: %v", err)
 	}
 	if err := first.SetName("first"); err != nil {
 		t.Fatalf("persist first session meta: %v", err)
 	}
-	second, err := session.Create(containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	firstMeta := first.Meta()
+	firstMeta.CreatedAt = baseTime
+	firstMeta.UpdatedAt = baseTime
+	if err := store.ImportSessionSnapshot(context.Background(), session.PersistedStoreSnapshot{
+		SessionDir: first.Dir(),
+		Meta:       firstMeta,
+	}); err != nil {
+		t.Fatalf("set deterministic first-session recency: %v", err)
+	}
+	secondOptions := append(store.AuthoritativeSessionStoreOptions(), session.WithClock(func() time.Time {
+		return baseTime.Add(time.Second)
+	}))
+	second, err := session.Create(containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, secondOptions...)
 	if err != nil {
 		t.Fatalf("create second session: %v", err)
 	}
 	if err := second.SetName("second"); err != nil {
 		t.Fatalf("persist second session meta: %v", err)
+	}
+	secondMeta := second.Meta()
+	secondMeta.CreatedAt = baseTime.Add(time.Second)
+	secondMeta.UpdatedAt = baseTime.Add(time.Second)
+	if err := store.ImportSessionSnapshot(context.Background(), session.PersistedStoreSnapshot{
+		SessionDir: second.Dir(),
+		Meta:       secondMeta,
+	}); err != nil {
+		t.Fatalf("set deterministic second-session recency: %v", err)
 	}
 
 	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
@@ -77,14 +104,19 @@ func TestServiceListsSingleProjectAndSessions(t *testing.T) {
 		t.Fatalf("expected available workspace availability, got %+v", projects.Projects[0])
 	}
 
-	sessions, err := svc.ListSessionsByProject(context.Background(), serverapi.SessionListByProjectRequest{ProjectID: binding.ProjectID})
+	sessions, err := svc.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategoryMain,
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
+	})
 	if err != nil {
-		t.Fatalf("ListSessionsByProject: %v", err)
+		t.Fatalf("ListSessionPage: %v", err)
 	}
 	if len(sessions.Sessions) != 2 {
 		t.Fatalf("expected two sessions, got %+v", sessions)
 	}
-	if sessions.Sessions[0].SessionID != second.Meta().SessionID {
+	if sessions.Sessions[0].SessionID.String() != second.Meta().SessionID {
 		t.Fatalf("expected most recent session first, got %+v", sessions.Sessions)
 	}
 
@@ -95,9 +127,6 @@ func TestServiceListsSingleProjectAndSessions(t *testing.T) {
 	if overview.Overview.Project.SessionCount != 2 {
 		t.Fatalf("unexpected overview session count: %+v", overview.Overview)
 	}
-	if len(overview.Overview.Sessions) != 2 {
-		t.Fatalf("unexpected overview sessions: %+v", overview.Overview)
-	}
 }
 
 func TestServiceRejectsUnknownProjectID(t *testing.T) {
@@ -106,15 +135,20 @@ func TestServiceRejectsUnknownProjectID(t *testing.T) {
 	if _, err := svc.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: "project-2"}); err == nil {
 		t.Fatal("expected GetProjectOverview to reject unknown project")
 	}
-	if _, err := svc.ListSessionsByProject(context.Background(), serverapi.SessionListByProjectRequest{ProjectID: "project-2"}); err == nil {
-		t.Fatal("expected ListSessionsByProject to reject unknown project")
+	if _, err := svc.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
+		ProjectID: "project-2",
+		Category:  sessioncontract.SessionCategoryMain,
+		PageSize:  20,
+		Position:  serverapi.NewestSessionPagePosition(),
+	}); err == nil {
+		t.Fatal("expected ListSessionPage to reject unknown project")
 	}
 }
 
 func TestServiceDeletesProjectMetadataAndSessionArtifacts(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	created, err := session.Create(sessionDir, filepath.Base(sessionDir), cfg.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	created, err := session.Create(sessionDir, filepath.Base(sessionDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -178,7 +212,7 @@ func TestServiceDeletesProjectWithBacklogTasks(t *testing.T) {
 func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	created, err := session.Create(sessionDir, filepath.Base(sessionDir), cfg.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	created, err := session.Create(sessionDir, filepath.Base(sessionDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -258,7 +292,7 @@ func TestServiceDeleteProjectBlocksSessionCreatedAfterPreflightList(t *testing.T
 func TestServiceDeleteProjectDoesNotDependOnSessionInFlightMetadata(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	created, err := session.Create(sessionDir, filepath.Base(sessionDir), cfg.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	created, err := session.Create(sessionDir, filepath.Base(sessionDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -975,7 +1009,7 @@ func newProjectViewMetadataService(t testing.TB, store *metadata.Store, projectI
 func createProjectViewSession(t testing.TB, store *metadata.Store, cfg config.App, projectID string, workspaceRoot string, name string) *session.Store {
 	t.Helper()
 	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), projectID, "sessions")
-	created, err := session.Create(sessionDir, filepath.Base(sessionDir), workspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	created, err := session.Create(sessionDir, filepath.Base(sessionDir), workspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}

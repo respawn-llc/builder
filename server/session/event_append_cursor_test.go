@@ -41,6 +41,7 @@ func TestAppendEventWithEndByteCursorRetainsPositionWhenObserverFailsAfterCommit
 		t.TempDir(),
 		"workspace",
 		t.TempDir(),
+		testSessionCategory,
 		WithPersistenceObserver(observer),
 	)
 	if err != nil {

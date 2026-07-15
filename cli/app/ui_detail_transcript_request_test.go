@@ -267,7 +267,7 @@ func TestDetailTranscriptInvalidSessionIDDoesNotCreatePendingRequest(t *testing.
 	sessionViews := newControlledTranscriptPageClient()
 	model := newProjectedClosedUIModel(
 		&runtimeControlFakeClient{},
-		WithUISessionID("not-a-valid-session-uuid"),
+		WithUISessionID("../not-a-valid-session-id"),
 		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
 	)
 	model.detailTranscript.replace(clientui.TranscriptPage{

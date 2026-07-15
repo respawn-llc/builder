@@ -9,7 +9,7 @@ func TestRunPromptOverridesAgentRoleJSONRoundTrip(t *testing.T) {
 	req := SessionPlanRequest{
 		ClientRequestID: "req-1",
 		Mode:            SessionLaunchModeHeadless,
-		ForceNewSession: true,
+		Intent:          CreateNewSessionLaunchIntent(nil),
 		Overrides: RunPromptOverrides{
 			AgentRole: "default",
 		},
@@ -30,12 +30,12 @@ func TestRunPromptOverridesAgentRoleJSONRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRunPromptRequestParentSessionIDJSONRoundTrip(t *testing.T) {
+func TestRunPromptRequestParentIntentJSONRoundTrip(t *testing.T) {
+	parentID := mustSessionLaunchIntentID(t, "parent-session")
 	req := RunPromptRequest{
-		ClientRequestID:   "req-1",
-		ParentSessionID:   "parent-session",
-		SelectedSessionID: "selected-session",
-		Prompt:            "hello",
+		ClientRequestID: "req-1",
+		Intent:          CreateNewSessionLaunchIntent(&parentID),
+		Prompt:          "hello",
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
@@ -45,14 +45,15 @@ func TestRunPromptRequestParentSessionIDJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got.ParentSessionID != "parent-session" {
-		t.Fatalf("ParentSessionID = %q, want parent-session", got.ParentSessionID)
+	gotParentID, present := got.Intent.ParentID()
+	if !present || gotParentID != parentID {
+		t.Fatalf("ParentID = %q/%v, want %q/true", gotParentID.String(), present, parentID.String())
 	}
 }
 
 func TestRunPromptOverridesAgentRoleContract(t *testing.T) {
 	var got SessionPlanRequest
-	if err := json.Unmarshal([]byte(`{"ClientRequestID":"req-1","Mode":"headless","ForceNewSession":true,"Overrides":{"AgentRole":"worker"}}`), &got); err != nil {
+	if err := json.Unmarshal([]byte(`{"client_request_id":"req-1","mode":"headless","intent":{"kind":"create_new"},"overrides":{"AgentRole":"worker"}}`), &got); err != nil {
 		t.Fatalf("Unmarshal request: %v", err)
 	}
 	if got.Overrides.AgentRole != "worker" {

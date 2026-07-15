@@ -112,7 +112,7 @@ func TestRemoteNoAuthAcknowledgementPropagatesToFreshConnectionStrategies(t *tes
 		t.Fatalf("SubscribeSessionActivity: %v", err)
 	}
 	_ = sub.Close()
-	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "run-1", Prompt: "hi"}, nil); err != nil {
+	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "run-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hi"}, nil); err != nil {
 		t.Fatalf("RunPrompt: %v", err)
 	}
 	if got := freshAckCount.Load(); got != 3 {

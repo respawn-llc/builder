@@ -183,6 +183,7 @@ func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterDeferredDetailTransacti
 		t.Fatalf("mark normal buffer unowned: %v", err)
 	}
 	model.activeSurface = uiSurfaceTranscriptDetail
+	_ = model.reconcileOngoingOwnership()
 	out.Reset()
 
 	scenario := newPTYCheckpointScenarioState(appfixture.ScriptFinalAssistantOrdinal(1))
@@ -249,7 +250,7 @@ func newPTYCheckpointOngoingModel(t *testing.T, writer *analyzer.Writer) *uiMode
 	surface := ongoing.NewSurface(writer)
 	model := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(surface),
-	), 40, 8)
+	), 40, 10)
 	model.ongoingTranscript = newOngoingTranscriptController(surface, model.ongoingFrameInput)
 	if _, err := model.ongoingTranscript.Accept(clientui.TranscriptMessage{
 		Sequence:  1,
