@@ -11,6 +11,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/runtimefeed"
 	"core/server/runtimeops"
 	"core/server/session"
 	servicecontract "core/shared/apicontract"
@@ -73,10 +74,10 @@ func (r defaultRuntimeControlActivityResolver) Snapshot(ctx context.Context, ses
 	if provider, ok := r.runtimes.(runtimeRegistrySnapshotProvider); ok {
 		registry = provider.RuntimeActivityRegistrySnapshot(sessionID)
 	}
-	return runtimeactivity.BuildSnapshot(sessionID, func(version clientui.ReadModelVersion) (runtimeactivity.SnapshotInput, error) {
+	return runtimeactivity.BuildSnapshot(sessionID, func() (runtimeactivity.SnapshotInput, error) {
 		return runtimeactivity.SnapshotInput{
 			Resolver:            runtimeactivity.ResolverSnapshot{Registry: registry, Active: runtimeactivity.ActiveStepFromProvider(engine)},
-			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+			InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
 		}, nil
 	})
 }

@@ -25,6 +25,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		script                    map[string]any
 		env                       []string
 		inputs                    []pty.InputEvent
+		frameInputs               []pty.FrameInputSequence
 		resizes                   []pty.DriverResizeEvent
 		frameResizes              []pty.FrameResizeEvent
 		expectedAppends           []string
@@ -280,12 +281,15 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					},
 				},
 			},
-			inputs: []pty.InputEvent{
-				{After: 1500 * time.Millisecond, Bytes: []byte("queued after tool start")},
-				{After: 1700 * time.Millisecond, Bytes: []byte("\t")},
-				{After: 2100 * time.Millisecond, Bytes: []byte("steering after tool start")},
-				{After: 2300 * time.Millisecond, Bytes: []byte("\r")},
-			},
+			frameInputs: []pty.FrameInputSequence{{
+				Phase: pty.PhaseToolStarted,
+				Inputs: []pty.FrameInput{
+					{Readiness: pty.ReadinessRendererFrame, Bytes: []byte("queued after tool start")},
+					{Readiness: pty.ReadinessInputApplied, Bytes: []byte("\t")},
+					{Readiness: pty.ReadinessInputApplied, Bytes: []byte("steering after tool start")},
+					{Readiness: pty.ReadinessInputApplied, Bytes: []byte("\r")},
+				},
+			}},
 			expectedAppends:    []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
 			expectedScreenRows: []string{"$ sleep 5; echo $((42424241+1))"},
 		},
@@ -333,7 +337,19 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			scenarioCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
-			capture, observationsPath := runPTYFixtureScenario(t, scenarioCtx, bin, tc.name, tc.script, tc.env, tc.inputs, tc.resizes, tc.frameResizes, tc.completionDrain)
+			capture, observationsPath := runPTYFixtureScenario(
+				t,
+				scenarioCtx,
+				bin,
+				tc.name,
+				tc.script,
+				tc.env,
+				tc.inputs,
+				tc.frameInputs,
+				tc.resizes,
+				tc.frameResizes,
+				tc.completionDrain,
+			)
 			if len(capture.Resizes) != len(tc.resizes)+len(tc.frameResizes) {
 				t.Fatalf(
 					"capture resize count = %d, want scheduled=%d frame-gated=%d",
@@ -428,7 +444,7 @@ func toolSeed(name string, callID string, input map[string]any, condensed string
 	}
 }
 
-func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, frameResizes []pty.FrameResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
+func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, frameInputs []pty.FrameInputSequence, resizes []pty.DriverResizeEvent, frameResizes []pty.FrameResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
 	t.Helper()
 	return runPTYFixtureScenarioWithInputPlan(
 		t,
@@ -437,7 +453,11 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 		name,
 		script,
 		env,
-		ptyFixtureInputPlan{scheduled: inputs, frameResizes: frameResizes},
+		ptyFixtureInputPlan{
+			scheduled:      inputs,
+			frameSequences: frameInputs,
+			frameResizes:   frameResizes,
+		},
 		resizes,
 		configuredCompletionDrain,
 	)

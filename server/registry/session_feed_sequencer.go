@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sync"
 
+	"core/server/runtimefeed"
 	"core/shared/clientui"
 )
 
@@ -15,18 +16,17 @@ type sessionFeedSequencer struct {
 }
 
 type sessionFeedSnapshot struct {
-	runState            *clientui.RunState
-	runtimeActivity     *clientui.RuntimeActivity
-	inputReconciliation *clientui.RuntimeInputReconciliationSnapshot
-	queuedMessages      queuedMessageStateLedger
-	pendingPrompts      orderedFeedLedger[string, clientui.TranscriptPendingSessionPrompt]
-	inFlightTools       orderedFeedLedger[string, clientui.TranscriptToolStart]
-	sessionStatus       *clientui.TranscriptSessionStatus
-	sessionIdentity     *clientui.TranscriptSessionIdentity
-	compactionStatus    *clientui.TranscriptCompactionStatus
-	contextUsage        *clientui.RuntimeContextUsage
-	goalStatus          *clientui.TranscriptGoalStatus
-	backgrounds         orderedFeedLedger[string, clientui.TranscriptBackgroundActivity]
+	runState         *clientui.RunState
+	runtimeReadModel *runtimefeed.RuntimeReadModelUpdate
+	queuedMessages   queuedMessageStateLedger
+	pendingPrompts   orderedFeedLedger[string, clientui.TranscriptPendingSessionPrompt]
+	inFlightTools    orderedFeedLedger[string, clientui.TranscriptToolStart]
+	sessionStatus    *clientui.TranscriptSessionStatus
+	sessionIdentity  *clientui.TranscriptSessionIdentity
+	compactionStatus *clientui.TranscriptCompactionStatus
+	contextUsage     *clientui.RuntimeContextUsage
+	goalStatus       *clientui.TranscriptGoalStatus
+	backgrounds      orderedFeedLedger[string, clientui.TranscriptBackgroundActivity]
 }
 
 func newSessionFeedSequencer(broker *transcriptSubscriptionBroker) *sessionFeedSequencer {
@@ -73,13 +73,34 @@ func (s *sessionFeedSequencer) Publish(messages []clientui.TranscriptMessage) {
 	}
 }
 
+func (s *sessionFeedSequencer) PublishRuntimeReadModel(update runtimefeed.RuntimeReadModelUpdate) {
+	if s == nil {
+		return
+	}
+	message := runtimefeed.TranscriptMessage{
+		Kind: runtimefeed.TranscriptMessageRuntimeReadModelUpdate,
+		Payload: runtimefeed.TranscriptPayload{
+			RuntimeReadModelUpdate: &update,
+		},
+	}
+	if err := message.ValidatePayload(); err != nil {
+		panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copied := cloneRuntimeReadModelUpdate(update)
+	s.snapshot.runtimeReadModel = &copied
+	s.broker.Publish(projectProtocol59TranscriptReadModel(copied).messages())
+}
+
 func (s sessionFeedSnapshot) applyToHydration(hydration *clientui.TranscriptHydration) {
 	if hydration == nil {
 		return
 	}
 	hydration.RunState = cloneRunState(s.runState)
-	hydration.RuntimeActivity = cloneRuntimeActivity(s.runtimeActivity)
-	hydration.InputReconciliation = cloneInputReconciliation(s.inputReconciliation)
+	if s.runtimeReadModel != nil {
+		projectProtocol59TranscriptReadModel(*s.runtimeReadModel).applyToHydration(hydration)
+	}
 	if s.sessionStatus != nil {
 		hydration.SessionStatus = *s.sessionStatus
 	}
@@ -108,6 +129,25 @@ func (s sessionFeedSnapshot) applyToHydration(hydration *clientui.TranscriptHydr
 	}
 }
 
+func cloneRuntimeReadModelUpdate(value runtimefeed.RuntimeReadModelUpdate) runtimefeed.RuntimeReadModelUpdate {
+	copied := value
+	if value.Activity.ActiveStep != nil {
+		activeStep := *value.Activity.ActiveStep
+		copied.Activity.ActiveStep = &activeStep
+	}
+	if value.InputReconciliation.Operations != nil {
+		copied.InputReconciliation.Operations = make([]runtimefeed.RuntimeInputReconciliation, len(value.InputReconciliation.Operations))
+		for index, operation := range value.InputReconciliation.Operations {
+			copied.InputReconciliation.Operations[index] = operation
+			if operation.Operation.QueueItemID != nil {
+				queueItemID := *operation.Operation.QueueItemID
+				copied.InputReconciliation.Operations[index].Operation.QueueItemID = &queueItemID
+			}
+		}
+	}
+	return copied
+}
+
 func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 	switch message.Kind {
 	case clientui.TranscriptMessageToolStart:
@@ -127,10 +167,6 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 		s.inFlightTools.delete(message.CommittedRow.Tool.ToolCallID)
 	case clientui.TranscriptMessageRunState:
 		s.runState = cloneRunState(message.RunState)
-	case clientui.TranscriptMessageRuntimeActivity:
-		s.runtimeActivity = cloneRuntimeActivity(message.RuntimeActivity)
-	case clientui.TranscriptMessageInputReconciliation:
-		s.inputReconciliation = cloneInputReconciliation(message.InputReconciliation)
 	case clientui.TranscriptMessageQueuedOrSteeredMessageState:
 		if message.QueuedOrSteeredMessageState == nil {
 			return
@@ -288,25 +324,6 @@ func cloneRunState(value *clientui.RunState) *clientui.RunState {
 		return nil
 	}
 	copied := *value
-	return &copied
-}
-
-func cloneRuntimeActivity(value *clientui.RuntimeActivity) *clientui.RuntimeActivity {
-	if value == nil {
-		return nil
-	}
-	copied := *value
-	return &copied
-}
-
-func cloneInputReconciliation(value *clientui.RuntimeInputReconciliationSnapshot) *clientui.RuntimeInputReconciliationSnapshot {
-	if value == nil {
-		return nil
-	}
-	copied := *value
-	if value.Operations != nil {
-		copied.Operations = append([]clientui.RuntimeInputReconciliation(nil), value.Operations...)
-	}
 	return &copied
 }
 

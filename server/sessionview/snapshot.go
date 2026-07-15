@@ -7,6 +7,7 @@ import (
 
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/runtimefeed"
 	"core/server/runtimeview"
 	"core/server/session"
 	"core/shared/clientui"
@@ -52,10 +53,10 @@ func (r defaultSessionRuntimeActivityResolver) Snapshot(ctx context.Context, ses
 		return runtimeactivity.ResponseSnapshot{}, err
 	}
 	registry := runtimeactivity.RegistrySnapshot{Registered: engine != nil, QueueAccepting: true}
-	return runtimeactivity.BuildSnapshot(sessionID, func(version clientui.ReadModelVersion) (runtimeactivity.SnapshotInput, error) {
+	return runtimeactivity.BuildSnapshot(sessionID, func() (runtimeactivity.SnapshotInput, error) {
 		return runtimeactivity.SnapshotInput{
 			Resolver:            runtimeactivity.ResolverSnapshot{Registry: registry, Active: runtimeactivity.ActiveStepFromProvider(engine)},
-			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+			InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
 		}, nil
 	})
 }

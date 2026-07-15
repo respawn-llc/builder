@@ -9,7 +9,6 @@ import (
 
 	"core/server/runtimefeed"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 )
 
 const DefaultCoordinatorCacheLimit = 128
@@ -24,10 +23,10 @@ type ResponseSnapshot struct {
 
 type SnapshotInput struct {
 	Resolver            ResolverSnapshot
-	InputReconciliation clientui.RuntimeInputReconciliationSnapshot
+	InputReconciliation runtimefeed.RuntimeInputReconciliationSnapshot
 }
 
-type SnapshotBuilder func(clientui.ReadModelVersion) (SnapshotInput, error)
+type SnapshotBuilder func() (SnapshotInput, error)
 
 type CoordinatorCache struct {
 	mu             sync.Mutex
@@ -65,10 +64,10 @@ func (c *CoordinatorCache) Next(sessionID string) clientui.ReadModelVersion {
 }
 
 func (c *CoordinatorCache) Snapshot(sessionID string, resolver ResolverSnapshot) (ResponseSnapshot, error) {
-	return c.WithSnapshot(sessionID, func(version clientui.ReadModelVersion) (SnapshotInput, error) {
+	return c.WithSnapshot(sessionID, func() (SnapshotInput, error) {
 		return SnapshotInput{
 			Resolver:            resolver,
-			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+			InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
 		}, nil
 	})
 }
@@ -222,7 +221,7 @@ func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (runtimefeed.
 	if err != nil {
 		panic(err)
 	}
-	input, err := build(version)
+	input, err := build()
 	if err != nil {
 		return runtimefeed.RuntimeReadModelUpdate{}, err
 	}
@@ -230,67 +229,15 @@ func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (runtimefeed.
 	if err != nil {
 		return runtimefeed.RuntimeReadModelUpdate{}, err
 	}
-	reconciliation, err := runtimeFeedInputReconciliation(input.InputReconciliation, version)
-	if err != nil {
-		return runtimefeed.RuntimeReadModelUpdate{}, err
-	}
 	update := runtimefeed.RuntimeReadModelUpdate{
 		Version:             version,
 		Activity:            activity,
-		InputReconciliation: reconciliation,
+		InputReconciliation: input.InputReconciliation,
 	}
 	if err := update.Validate(); err != nil {
 		return runtimefeed.RuntimeReadModelUpdate{}, fmt.Errorf("validate runtime feed read-model update: %w", err)
 	}
 	return update, nil
-}
-
-func runtimeFeedInputReconciliation(
-	reconciliation clientui.RuntimeInputReconciliationSnapshot,
-	version clientui.ReadModelVersion,
-) (runtimefeed.RuntimeInputReconciliationSnapshot, error) {
-	if reconciliation.Version != version {
-		return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("input reconciliation version %+v does not match response snapshot version %+v", reconciliation.Version, version)
-	}
-	projected := runtimefeed.RuntimeInputReconciliationSnapshot{
-		Operations: make([]runtimefeed.RuntimeInputReconciliation, 0, len(reconciliation.Operations)),
-	}
-	for index, record := range reconciliation.Operations {
-		if record.Version != version {
-			return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("input reconciliation record %d version %+v does not match response snapshot version %+v", index, record.Version, version)
-		}
-		operation, err := runtimeFeedOperationRef(record.OperationRef)
-		if err != nil {
-			return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("project input reconciliation operation %d: %w", index, err)
-		}
-		projected.Operations = append(projected.Operations, runtimefeed.RuntimeInputReconciliation{
-			Operation: operation,
-			State:     record.State,
-		})
-	}
-	return projected, nil
-}
-
-func runtimeFeedOperationRef(ref clientui.RuntimeOperationRef) (runtimefeed.RuntimeOperationRef, error) {
-	if err := ref.Validate(); err != nil {
-		return runtimefeed.RuntimeOperationRef{}, err
-	}
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(ref.ClientRequestID)
-	if err != nil {
-		return runtimefeed.RuntimeOperationRef{}, err
-	}
-	projected := runtimefeed.RuntimeOperationRef{
-		Kind:            ref.Kind,
-		ClientRequestID: clientRequestID,
-	}
-	if ref.QueueItemID != "" {
-		queueItemID, err := runtimeids.ParseQueueItemID(ref.QueueItemID)
-		if err != nil {
-			return runtimefeed.RuntimeOperationRef{}, err
-		}
-		projected.QueueItemID = &queueItemID
-	}
-	return projected, projected.Validate()
 }
 
 func (c *ReadModelCoordinator) IsCurrent(version clientui.ReadModelVersion) bool {

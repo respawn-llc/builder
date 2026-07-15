@@ -3,7 +3,9 @@ package runtimeactivity
 import (
 	"testing"
 
+	"core/server/runtimefeed"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 const (
@@ -172,18 +174,25 @@ func TestCoordinatorResponseSnapshotsUseOneVersionAndPermitResponseOnlyHoles(t *
 
 func TestCoordinatorBuildsCanonicalFeedSnapshotBeforeProtocol59Projection(t *testing.T) {
 	cache := NewCoordinatorCache(4)
-	update, err := cache.WithFeedSnapshot("session-feed", func(version clientui.ReadModelVersion) (SnapshotInput, error) {
+	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID("33333333-3333-4333-8333-333333333333")
+	if err != nil {
+		t.Fatalf("parse client request id: %v", err)
+	}
+	queueItemID, err := runtimeids.ParseQueueItemID("44444444-4444-4444-8444-444444444444")
+	if err != nil {
+		t.Fatalf("parse queue item id: %v", err)
+	}
+	update, err := cache.WithFeedSnapshot("session-feed", func() (SnapshotInput, error) {
 		return SnapshotInput{
 			Resolver: ResolverSnapshot{
 				Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
 			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{
-				Version: version,
-				Operations: []clientui.RuntimeInputReconciliation{{
-					Version: version,
-					OperationRef: clientui.RuntimeOperationRef{
-						Kind:            clientui.RuntimeOperationKindSubmit,
-						ClientRequestID: "33333333-3333-4333-8333-333333333333",
+			InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{
+				Operations: []runtimefeed.RuntimeInputReconciliation{{
+					Operation: runtimefeed.RuntimeOperationRef{
+						Kind:            clientui.RuntimeOperationKindQueuedMessage,
+						ClientRequestID: clientRequestID,
+						QueueItemID:     &queueItemID,
 					},
 					State: clientui.RuntimeInputReconciliationCommitted,
 				}},
@@ -205,6 +214,10 @@ func TestCoordinatorBuildsCanonicalFeedSnapshotBeforeProtocol59Projection(t *tes
 		projected.InputReconciliation.Version != update.Version ||
 		projected.InputReconciliation.Operations[0].Version != update.Version {
 		t.Fatalf("protocol-59 projection lost canonical version: update=%+v projected=%+v", update, projected)
+	}
+	projectedRef := projected.InputReconciliation.Operations[0].OperationRef
+	if projectedRef.ClientRequestID != "" || projectedRef.QueueItemID != queueItemID.String() {
+		t.Fatalf("protocol-59 queued operation ref = %+v, want queue-item-only compatibility shape", projectedRef)
 	}
 }
 

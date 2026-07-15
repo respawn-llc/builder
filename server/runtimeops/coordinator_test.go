@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"core/server/requestmemo"
+	"core/server/runtimefeed"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 func TestCoordinatorRecordsExactInputOperationOutcomes(t *testing.T) {
@@ -101,7 +103,7 @@ func TestCoordinatorExactRecordersMapRuntimeFactsToReconciliation(t *testing.T) 
 	}
 
 	coord.RecordUserMessageFlushed("session-1", refs[0])
-	coord.RecordQueuedMessageSubmitted("session-1", refs[1])
+	coord.RecordSubmitted("session-1", refs[1])
 	coord.RecordShellCompletion("session-1", refs[2], errRecorderTest)
 	coord.RecordCompactCompletion("session-1", refs[3], session.CommitReceipt{}, nil)
 	coord.RecordRuntimeAccessFailure("session-1", refs[4])
@@ -119,14 +121,271 @@ func TestCoordinatorExactRecordersMapRuntimeFactsToReconciliation(t *testing.T) 
 func TestCoordinatorRecordsQueuedMessageSubmittedByServerQueueItemID(t *testing.T) {
 	coord := NewCoordinator()
 	version := mustVersion(t, 1)
-	serverQueued := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "server-queue-1"}
+	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID("33333333-3333-4333-8333-333333333333")
+	if err != nil {
+		t.Fatalf("parse client request id: %v", err)
+	}
+	queueItemID, err := runtimeids.ParseQueueItemID("44444444-4444-4444-8444-444444444444")
+	if err != nil {
+		t.Fatalf("parse queue item id: %v", err)
+	}
+	serverQueued := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: queueItemID.String()}
 	clientOnly := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "client-req-1"}
 
-	coord.RecordQueuedMessageSubmitted("session-1", serverQueued)
+	if err := coord.RecordQueuedMessageStatus("session-1", runtimefeed.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: clientRequestID,
+		QueueItemID:     &queueItemID,
+	}, clientui.RuntimeInputReconciliationSubmitted); err != nil {
+		t.Fatalf("RecordQueuedMessageSubmitted: %v", err)
+	}
 
 	snapshot := coord.Snapshot("session-1", version, []clientui.RuntimeOperationRef{serverQueued, clientOnly})
 	assertState(t, snapshot, serverQueued, clientui.RuntimeInputReconciliationSubmitted)
 	assertState(t, snapshot, clientOnly, clientui.RuntimeInputReconciliationUnknown)
+
+	feedSnapshot, err := coord.FeedSnapshot("session-1", []clientui.RuntimeOperationRef{serverQueued})
+	if err != nil {
+		t.Fatalf("FeedSnapshot: %v", err)
+	}
+	if len(feedSnapshot.Operations) != 1 {
+		t.Fatalf("feed operations = %+v, want one queued operation", feedSnapshot.Operations)
+	}
+	operation := feedSnapshot.Operations[0]
+	if operation.Operation.ClientRequestID != clientRequestID ||
+		operation.Operation.QueueItemID == nil ||
+		*operation.Operation.QueueItemID != queueItemID ||
+		operation.State != clientui.RuntimeInputReconciliationSubmitted {
+		t.Fatalf("canonical queued reconciliation = %+v, want both identities and submitted state", operation)
+	}
+}
+
+func TestCoordinatorCommitMutationAllowsQueuedStatusPublication(t *testing.T) {
+	coord := NewCoordinator()
+	sessionID := "session-queued-status-publication"
+	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID("11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatalf("parse client request id: %v", err)
+	}
+	queueItemID, err := runtimeids.ParseQueueItemID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("parse queue item id: %v", err)
+	}
+	ref := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: clientRequestID.String(),
+	}
+	canonicalRef := runtimefeed.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: clientRequestID,
+		QueueItemID:     &queueItemID,
+	}
+	queueRef := clientui.RuntimeOperationRef{
+		Kind:        clientui.RuntimeOperationKindQueuedMessage,
+		QueueItemID: queueItemID.String(),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := Do(
+			coord,
+			context.Background(),
+			sessionID,
+			ref,
+			"queue request",
+			func(left, right string) bool { return left == right },
+			func(context.Context, Attempt) (struct{}, error) {
+				committed, commitErr := coord.TryCommitOperationMutation(sessionID, ref, func() error {
+					if recordErr := coord.RecordQueuedMessageStatus(
+						sessionID,
+						canonicalRef,
+						clientui.RuntimeInputReconciliationAccepted,
+					); recordErr != nil {
+						return recordErr
+					}
+					snapshot, snapshotErr := coord.FeedSnapshot(sessionID, []clientui.RuntimeOperationRef{queueRef})
+					if snapshotErr != nil {
+						return snapshotErr
+					}
+					if len(snapshot.Operations) != 1 ||
+						snapshot.Operations[0].State != clientui.RuntimeInputReconciliationAccepted {
+						return errors.New("accepted queued status was not visible during commit mutation")
+					}
+					return nil
+				})
+				if commitErr != nil {
+					return struct{}{}, commitErr
+				}
+				if !committed {
+					return struct{}{}, errors.New("queued operation mutation was not committed")
+				}
+				return struct{}{}, nil
+			},
+		)
+		done <- runErr
+	}()
+
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			t.Fatalf("queued operation: %v", runErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued status publication deadlocked inside commit mutation")
+	}
+}
+
+func TestCoordinatorCancellationWaitsForCommitMutation(t *testing.T) {
+	coord := NewCoordinator()
+	sessionID := "session-commit-cancellation"
+	ref := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: "33333333-3333-4333-8333-333333333333",
+	}
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	operationDone := make(chan error, 1)
+	go func() {
+		_, runErr := Do(
+			coord,
+			context.Background(),
+			sessionID,
+			ref,
+			"queue request",
+			func(left, right string) bool { return left == right },
+			func(context.Context, Attempt) (struct{}, error) {
+				committed, commitErr := coord.TryCommitOperationMutation(sessionID, ref, func() error {
+					close(mutationStarted)
+					<-releaseMutation
+					return nil
+				})
+				if commitErr != nil {
+					return struct{}{}, commitErr
+				}
+				if !committed {
+					return struct{}{}, errors.New("queued operation mutation was not committed")
+				}
+				return struct{}{}, nil
+			},
+		)
+		operationDone <- runErr
+	}()
+	<-mutationStarted
+
+	cancelDone := make(chan error, 1)
+	go func() {
+		_, cancelErr := coord.CancelOperationTarget(sessionID, ref)
+		cancelDone <- cancelErr
+	}()
+	select {
+	case cancelErr := <-cancelDone:
+		t.Fatalf("cancellation crossed active commit mutation: %v", cancelErr)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseMutation)
+	select {
+	case runErr := <-operationDone:
+		if runErr != nil {
+			t.Fatalf("queued operation: %v", runErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued operation did not finish after releasing commit mutation")
+	}
+	select {
+	case cancelErr := <-cancelDone:
+		if cancelErr != nil {
+			t.Fatalf("cancel committed operation: %v", cancelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not resume after commit mutation")
+	}
+	assertState(
+		t,
+		coord.Snapshot(sessionID, mustVersion(t, 1), []clientui.RuntimeOperationRef{ref}),
+		ref,
+		clientui.RuntimeInputReconciliationCommitted,
+	)
+}
+
+func TestCoordinatorCommitMutationPanicReleasesCancellationBarrier(t *testing.T) {
+	coord := NewCoordinator()
+	sessionID := "session-commit-panic"
+	ref := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: "44444444-4444-4444-8444-444444444444",
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("commit mutation panic was swallowed")
+			}
+		}()
+		_, _ = coord.TryCommitOperationMutation(sessionID, ref, func() error {
+			panic("commit mutation panic")
+		})
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		_, cancelErr := coord.CancelOperationTarget(sessionID, ref)
+		done <- cancelErr
+	}()
+	select {
+	case cancelErr := <-done:
+		if cancelErr != nil {
+			t.Fatalf("cancel after commit mutation panic: %v", cancelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("commit mutation panic left cancellation barrier locked")
+	}
+}
+
+func TestCoordinatorRetainsQueuedIdentityThroughEvictionWindowThenReleasesIt(t *testing.T) {
+	now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
+	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))
+	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID("55555555-5555-4555-8555-555555555555")
+	if err != nil {
+		t.Fatalf("parse client request id: %v", err)
+	}
+	queueItemID, err := runtimeids.ParseQueueItemID("66666666-6666-4666-8666-666666666666")
+	if err != nil {
+		t.Fatalf("parse queue item id: %v", err)
+	}
+	operation := runtimefeed.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: clientRequestID,
+		QueueItemID:     &queueItemID,
+	}
+	if err := coord.RecordQueuedMessageStatus("session-1", operation, clientui.RuntimeInputReconciliationSubmitted); err != nil {
+		t.Fatalf("record submitted queued message: %v", err)
+	}
+	queueRef := clientui.RuntimeOperationRef{
+		Kind:        clientui.RuntimeOperationKindQueuedMessage,
+		QueueItemID: queueItemID.String(),
+	}
+
+	now = now.Add(2 * time.Minute)
+	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindSubmit,
+		ClientRequestID: "77777777-7777-4777-8777-777777777777",
+	})
+	evicted, err := coord.FeedSnapshot("session-1", []clientui.RuntimeOperationRef{queueRef})
+	if err != nil {
+		t.Fatalf("FeedSnapshot during eviction window: %v", err)
+	}
+	if len(evicted.Operations) != 1 || evicted.Operations[0].State != clientui.RuntimeInputReconciliationEvicted {
+		t.Fatalf("evicted reconciliation = %+v, want evicted", evicted.Operations)
+	}
+
+	now = now.Add(2 * time.Minute)
+	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindSubmit,
+		ClientRequestID: "88888888-8888-4888-8888-888888888888",
+	})
+	if _, err := coord.FeedSnapshot("session-1", []clientui.RuntimeOperationRef{queueRef}); err == nil {
+		t.Fatal("FeedSnapshot retained queued identity after its eviction window")
+	}
 }
 
 func TestCoordinatorRecordsSubmitQueuedCompletionByCommitReceipt(t *testing.T) {
@@ -512,7 +771,7 @@ func TestCoordinatorSubmittedAttemptErrorIsNotRerun(t *testing.T) {
 	var calls atomic.Int32
 	run := func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
-		coord.RecordQueuedMessageSubmitted("session-1", ref)
+		coord.RecordSubmitted("session-1", ref)
 		return "submitted", errRecorderTest
 	}
 
@@ -565,7 +824,7 @@ func TestCoordinatorPrunesSubmittedAttemptErrorByCapacity(t *testing.T) {
 	var calls atomic.Int32
 	run := func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
-		coord.RecordQueuedMessageSubmitted("session-1", ref)
+		coord.RecordSubmitted("session-1", ref)
 		return "submitted", errRecorderTest
 	}
 

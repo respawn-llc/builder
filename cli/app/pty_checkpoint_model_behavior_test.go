@@ -175,6 +175,72 @@ func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterTerminalTransaction(t *
 	}
 }
 
+func TestPTYCheckpointModelEmitsToolStartedOnceAfterAcceptedToolStart(t *testing.T) {
+	var out bytes.Buffer
+	writer := analyzer.NewWriter(&out)
+	rejectedModel := newPTYCheckpointOngoingModel(t, writer)
+	out.Reset()
+
+	wrapped := newPTYCheckpointModel(
+		rejectedModel,
+		writer,
+		newPTYCheckpointScenarioState(appfixture.ScriptFinalAssistantOrdinal(1)),
+	)
+	wrapped.Update(ongoingTranscriptEvent{
+		Kind: ongoingTranscriptEventMessage,
+		Message: clientui.TranscriptMessage{
+			Sequence: 3,
+			Kind:     clientui.TranscriptMessageToolStart,
+			ToolStart: &clientui.TranscriptToolStart{
+				ToolCallID: "66666666-6666-4666-8666-666666666666",
+				ToolName:   "exec_command",
+			},
+		},
+	})
+	if events := analyzeCheckpointBytes(t, out.Bytes()).PhaseEvents; len(events) != 0 {
+		t.Fatalf("rejected tool start emitted checkpoint events: %#v", events)
+	}
+
+	model := newPTYCheckpointOngoingModel(t, writer)
+	out.Reset()
+	wrapped = newPTYCheckpointModel(
+		model,
+		writer,
+		newPTYCheckpointScenarioState(appfixture.ScriptFinalAssistantOrdinal(1)),
+	)
+	wrapped.Update(ongoingTranscriptEvent{
+		Kind: ongoingTranscriptEventMessage,
+		Message: clientui.TranscriptMessage{
+			Sequence: 2,
+			Kind:     clientui.TranscriptMessageToolStart,
+			ToolStart: &clientui.TranscriptToolStart{
+				ToolCallID: "77777777-7777-4777-8777-777777777777",
+				ToolName:   "exec_command",
+			},
+		},
+	})
+	wrapped.Update(ongoingTranscriptEvent{
+		Kind: ongoingTranscriptEventMessage,
+		Message: clientui.TranscriptMessage{
+			Sequence: 3,
+			Kind:     clientui.TranscriptMessageToolStart,
+			ToolStart: &clientui.TranscriptToolStart{
+				ToolCallID: "88888888-8888-4888-8888-888888888888",
+				ToolName:   "exec_command",
+			},
+		},
+	})
+
+	analysis := analyzeCheckpointBytes(t, out.Bytes())
+	if len(analysis.PhaseEvents) != 1 ||
+		analysis.PhaseEvents[0].Phase != analyzer.PhaseToolStarted {
+		t.Fatalf("checkpoint events = %#v, want one tool-started event", analysis.PhaseEvents)
+	}
+	if model.ongoingTranscript.lastSequence != 3 {
+		t.Fatalf("accepted transcript sequence = %d, want 3", model.ongoingTranscript.lastSequence)
+	}
+}
+
 func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterDeferredDetailTransaction(t *testing.T) {
 	var out bytes.Buffer
 	writer := analyzer.NewWriter(&out)

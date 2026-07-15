@@ -13,9 +13,11 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/runtimefeed"
 	"core/server/runtimeops"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -266,11 +268,7 @@ func TestRuntimeRegistryPublishesVersionedRuntimeActivityOnSessionStream(t *test
 	}
 	defer func() { _ = sub.Close() }()
 
-	registry.PublishRuntimeActivitySnapshot("session-1", runtimeactivity.ResponseSnapshot{
-		Version:             version,
-		Activity:            activity,
-		InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
-	})
+	registry.PublishRuntimeReadModelUpdate("session-1", idleRuntimeReadModelUpdate(version))
 
 	evt, err := sub.Next(context.Background())
 	if err != nil {
@@ -293,14 +291,38 @@ func TestRuntimeRegistryRecordsQueuedMessageStatusReconciliationByQueueItemID(t 
 	engine := &runtime.Engine{}
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "server-queue-1"}
+	clientRequestID := "33333333-3333-4333-8333-333333333333"
+	queueItemID := "44444444-4444-4444-8444-444444444444"
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: queueItemID}
+	operations.RecordAccepted("session-1", clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: clientRequestID,
+	})
 
 	registry.PublishRuntimeEvent("session-1", runtime.Event{
 		Kind: runtime.EventQueuedUserMessageStatus,
 		QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
 			SessionID:       "session-1",
-			QueueItemID:     "server-queue-1",
-			ClientRequestID: "client-queue-1",
+			QueueItemID:     queueItemID,
+			ClientRequestID: clientRequestID,
+			Status:          runtime.QueuedUserMessageAccepted,
+		},
+	})
+	accepted, err := registry.RuntimeReadModelSnapshot(context.Background(), "session-1", []clientui.RuntimeOperationRef{ref})
+	if err != nil {
+		t.Fatalf("accepted RuntimeReadModelSnapshot: %v", err)
+	}
+	if len(accepted.InputReconciliation.Operations) != 1 ||
+		accepted.InputReconciliation.Operations[0].State != clientui.RuntimeInputReconciliationAccepted {
+		t.Fatalf("accepted queue-item reconciliation = %+v, want accepted", accepted.InputReconciliation.Operations)
+	}
+
+	registry.PublishRuntimeEvent("session-1", runtime.Event{
+		Kind: runtime.EventQueuedUserMessageStatus,
+		QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
+			SessionID:       "session-1",
+			QueueItemID:     queueItemID,
+			ClientRequestID: clientRequestID,
 			Status:          runtime.QueuedUserMessageSubmitted,
 		},
 	})
@@ -308,6 +330,18 @@ func TestRuntimeRegistryRecordsQueuedMessageStatusReconciliationByQueueItemID(t 
 	snapshot := operations.Snapshot("session-1", clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}, []clientui.RuntimeOperationRef{ref})
 	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationSubmitted {
 		t.Fatalf("queued-message reconciliation = %+v, want submitted", snapshot.Operations)
+	}
+
+	readModel, err := registry.RuntimeReadModelSnapshot(context.Background(), "session-1", []clientui.RuntimeOperationRef{ref})
+	if err != nil {
+		t.Fatalf("RuntimeReadModelSnapshot: %v", err)
+	}
+	if len(readModel.InputReconciliation.Operations) != 1 {
+		t.Fatalf("read-model reconciliation = %+v, want one operation", readModel.InputReconciliation.Operations)
+	}
+	reconciliation := readModel.InputReconciliation.Operations[0]
+	if reconciliation.OperationRef != ref || reconciliation.State != clientui.RuntimeInputReconciliationSubmitted {
+		t.Fatalf("protocol-59 read-model reconciliation = %+v, want queue-item-only submitted operation", reconciliation)
 	}
 }
 
@@ -317,14 +351,9 @@ func TestRuntimeActivityEventsShareSessionActivityCursorWithoutUsingRawSequenceA
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
 	version := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 42}
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
 
 	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventConversationUpdated, StepID: "step-1"})
-	registry.PublishRuntimeActivitySnapshot("session-1", runtimeactivity.ResponseSnapshot{
-		Version:             version,
-		Activity:            activity,
-		InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
-	})
+	registry.PublishRuntimeReadModelUpdate("session-1", idleRuntimeReadModelUpdate(version))
 	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventRunStateChanged, StepID: "step-3"})
 
 	sub, err := registry.SubscribeSessionActivityFrom(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: "session-1", AfterSequence: 3})
@@ -579,21 +608,46 @@ func waitClosed(t *testing.T, ch <-chan struct{}) {
 }
 
 func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) {
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
+	activity := runtimefeed.RuntimeActivity{
+		State:          clientui.RuntimeActivityRegisteredIdle,
+		QueueAccepting: true,
+	}
 	if running {
-		activity = clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
-			ActiveKind:     clientui.RuntimeActivityActiveKindUserTurn,
-			RunID:          "run-1",
-			StepID:         "step-1",
+		runID, err := runtimeids.ParseRunID("11111111-1111-4111-8111-111111111111")
+		if err != nil {
+			panic(err)
+		}
+		stepID, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+		if err != nil {
+			panic(err)
+		}
+		activity = runtimefeed.RuntimeActivity{
+			State: clientui.RuntimeActivityRunning,
+			ActiveStep: &runtimefeed.RuntimeActiveStep{
+				RunID:      runID,
+				StepID:     stepID,
+				ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+			},
 			QueueAccepting: true,
-		})
+		}
 	}
 	version := runtimeactivity.NextReadModelVersion(sessionID)
-	registry.PublishRuntimeActivitySnapshot(sessionID, runtimeactivity.ResponseSnapshot{
+	registry.PublishRuntimeReadModelUpdate(sessionID, runtimefeed.RuntimeReadModelUpdate{
 		Version:             version,
 		Activity:            activity,
-		InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+		InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
 	})
+}
+
+func idleRuntimeReadModelUpdate(version clientui.ReadModelVersion) runtimefeed.RuntimeReadModelUpdate {
+	return runtimefeed.RuntimeReadModelUpdate{
+		Version: version,
+		Activity: runtimefeed.RuntimeActivity{
+			State:          clientui.RuntimeActivityRegisteredIdle,
+			QueueAccepting: true,
+		},
+		InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
+	}
 }
 
 func TestRuntimeRegistryDeliversReplayBeforePostSubscribeLiveEvents(t *testing.T) {
@@ -967,11 +1021,7 @@ func TestRuntimeRegistryPromptRingLowerBoundIgnoresRuntimeReadModelChurn(t *test
 	}
 	for i := 0; i < promptActivityBufferSize*2; i++ {
 		version := runtimeactivity.NextReadModelVersion("session-1")
-		registry.PublishRuntimeActivitySnapshot("session-1", runtimeactivity.ResponseSnapshot{
-			Version:             version,
-			Activity:            clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true}),
-			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
-		})
+		registry.PublishRuntimeReadModelUpdate("session-1", idleRuntimeReadModelUpdate(version))
 	}
 	for i := 0; i < promptActivityBufferSize; i++ {
 		registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%03d", i), Question: "pending"})

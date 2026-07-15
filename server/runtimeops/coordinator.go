@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"core/server/requestmemo"
+	"core/server/runtimefeed"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -73,16 +75,26 @@ type Coordinator struct {
 }
 
 type sessionLedger struct {
-	records       map[string]clientui.RuntimeInputReconciliation
-	terminal      map[string]time.Time
-	terminalOrder []string
-	evicted       map[string]clientui.RuntimeOperationRef
-	evictedAt     map[string]time.Time
-	evictedOrder  []string
-	operations    map[string]*operationEntry
-	tombstones    map[string]clientui.RuntimeOperationRef
-	tombstoneAt   map[string]time.Time
-	failedReqs    map[string]any
+	records                 map[string]clientui.RuntimeInputReconciliation
+	terminal                map[string]time.Time
+	terminalOrder           []string
+	evicted                 map[string]clientui.RuntimeOperationRef
+	evictedAt               map[string]time.Time
+	evictedOrder            []string
+	operations              map[string]*operationEntry
+	tombstones              map[string]clientui.RuntimeOperationRef
+	tombstoneAt             map[string]time.Time
+	failedReqs              map[string]any
+	queuedByClientRequestID map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity
+	queuedByQueueItemID     map[runtimeids.QueueItemID]*queuedOperationIdentity
+	queuedByOperationKey    map[string]*queuedOperationIdentity
+	commitBarriers          map[string]*operationCommitBarrier
+}
+
+type queuedOperationIdentity struct {
+	clientRequestID runtimeids.RuntimeClientRequestID
+	queueItemID     runtimeids.QueueItemID
+	operationKey    string
 }
 
 type operationEntry struct {
@@ -97,6 +109,10 @@ type operationEntry struct {
 	active      bool
 	completedAt time.Time
 	createdAt   time.Time
+}
+
+type operationCommitBarrier struct {
+	done chan struct{}
 }
 
 func NewCoordinator(options ...CoordinatorOption) *Coordinator {
@@ -279,50 +295,58 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 	if err := ref.Validate(); err != nil {
 		return CancellationResult{}, err
 	}
-	key := ref.Key()
 	version := c.nextVersion(sessionID)
-	var cancel context.CancelFunc
-	interruptActive := false
-	c.mu.Lock()
-	ledger := c.ledgerLocked(sessionID)
-	ledger.pruneLocked(c.limit, c.ttl, c.now())
-	if record, ok := ledger.records[key]; ok {
-		switch record.State {
-		case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
-			if entry := ledger.operations[key]; entry != nil && !entry.completed && entry.active && operationCancellationInterruptsActive(ref) {
-				cancel = entry.cancel
+	for {
+		var cancel context.CancelFunc
+		interruptActive := false
+		c.mu.Lock()
+		ledger := c.ledgerLocked(sessionID)
+		ledger.pruneLocked(c.limit, c.ttl, c.now())
+		key := ledger.operationKey(ref)
+		if barrier := ledger.commitBarriers[key]; barrier != nil {
+			done := barrier.done
+			c.mu.Unlock()
+			<-done
+			continue
+		}
+		if record, ok := ledger.records[key]; ok {
+			switch record.State {
+			case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
+				if entry := ledger.operations[key]; entry != nil && !entry.completed && entry.active && operationCancellationInterruptsActive(ref) {
+					cancel = entry.cancel
+					c.mu.Unlock()
+					return CancellationResult{InterruptActive: true, cancel: cancel}, nil
+				}
 				c.mu.Unlock()
+				return CancellationResult{}, nil
+			}
+		}
+		if entry := ledger.operations[key]; entry != nil {
+			if entry.successful {
+				c.mu.Unlock()
+				return CancellationResult{}, nil
+			}
+			if !entry.completed {
+				cancel = entry.cancel
+				interruptActive = entry.active && operationCancellationInterruptsActive(ref)
+			}
+		}
+		if _, exists := ledger.tombstones[key]; !exists && len(ledger.tombstones) >= c.limit {
+			c.mu.Unlock()
+			return CancellationResult{}, fmt.Errorf("runtime operation cancellation tombstone capacity exceeded for session %q", sessionKey(sessionID))
+		}
+		ledger.tombstones[key] = ref
+		ledger.tombstoneAt[key] = c.now()
+		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, version, false, c.now())
+		c.mu.Unlock()
+		if cancel != nil {
+			if interruptActive {
 				return CancellationResult{InterruptActive: true, cancel: cancel}, nil
 			}
-			c.mu.Unlock()
-			return CancellationResult{}, nil
+			cancel()
 		}
+		return CancellationResult{}, nil
 	}
-	if entry := ledger.operations[key]; entry != nil {
-		if entry.successful {
-			c.mu.Unlock()
-			return CancellationResult{}, nil
-		}
-		if !entry.completed {
-			cancel = entry.cancel
-			interruptActive = entry.active && operationCancellationInterruptsActive(ref)
-		}
-	}
-	if _, exists := ledger.tombstones[key]; !exists && len(ledger.tombstones) >= c.limit {
-		c.mu.Unlock()
-		return CancellationResult{}, fmt.Errorf("runtime operation cancellation tombstone capacity exceeded for session %q", sessionKey(sessionID))
-	}
-	ledger.tombstones[key] = ref
-	ledger.tombstoneAt[key] = c.now()
-	c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, version, false, c.now())
-	c.mu.Unlock()
-	if cancel != nil {
-		if interruptActive {
-			return CancellationResult{InterruptActive: true, cancel: cancel}, nil
-		}
-		cancel()
-	}
-	return CancellationResult{}, nil
 }
 
 func (c *Coordinator) RecordCommitted(sessionID string, ref clientui.RuntimeOperationRef) {
@@ -408,6 +432,7 @@ func (c *Coordinator) Snapshot(sessionID string, version clientui.ReadModelVersi
 		}
 		key := ref.Key()
 		if ledger != nil {
+			key = ledger.operationKey(ref)
 			if existing, ok := ledger.records[key]; ok {
 				record.State = existing.State
 			} else if _, ok := ledger.evicted[key]; ok {
@@ -417,6 +442,84 @@ func (c *Coordinator) Snapshot(sessionID string, version clientui.ReadModelVersi
 		operations = append(operations, record)
 	}
 	return clientui.RuntimeInputReconciliationSnapshot{Version: version, Operations: operations}
+}
+
+func (c *Coordinator) FeedSnapshot(sessionID string, refs []clientui.RuntimeOperationRef) (runtimefeed.RuntimeInputReconciliationSnapshot, error) {
+	if len(refs) == 0 {
+		return runtimefeed.RuntimeInputReconciliationSnapshot{}, nil
+	}
+	if c == nil {
+		return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("runtime operation coordinator is required for canonical reconciliation")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ledger := c.sessions[sessionKey(sessionID)]
+	operations := make([]runtimefeed.RuntimeInputReconciliation, 0, len(refs))
+	for index, ref := range refs {
+		operation, key, err := runtimeFeedOperationRef(ledger, ref)
+		if err != nil {
+			return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("project runtime operation %d: %w", index, err)
+		}
+		state := clientui.RuntimeInputReconciliationUnknown
+		if ledger != nil {
+			if existing, ok := ledger.records[key]; ok {
+				state = existing.State
+			} else if _, ok := ledger.evicted[key]; ok {
+				state = clientui.RuntimeInputReconciliationEvicted
+			}
+		}
+		operations = append(operations, runtimefeed.RuntimeInputReconciliation{
+			Operation: operation,
+			State:     state,
+		})
+	}
+	snapshot := runtimefeed.RuntimeInputReconciliationSnapshot{Operations: operations}
+	if err := snapshot.Validate(); err != nil {
+		return runtimefeed.RuntimeInputReconciliationSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func (c *Coordinator) RecordQueuedMessageStatus(sessionID string, ref runtimefeed.RuntimeOperationRef, state clientui.RuntimeInputReconciliationState) error {
+	if c == nil {
+		return nil
+	}
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
+		return fmt.Errorf("queued-message runtime fact requires queued kind and queue item id")
+	}
+	if err := state.Validate(); err != nil {
+		return err
+	}
+	switch state {
+	case clientui.RuntimeInputReconciliationAccepted,
+		clientui.RuntimeInputReconciliationSubmitted,
+		clientui.RuntimeInputReconciliationFailedWithRestore,
+		clientui.RuntimeInputReconciliationCanceledNotCommitted:
+	default:
+		return fmt.Errorf("queued-message runtime status cannot record reconciliation state %q", state)
+	}
+	version := c.nextVersion(sessionID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ledger := c.ledgerLocked(sessionID)
+	if err := ledger.bindQueuedOperation(ref); err != nil {
+		return err
+	}
+	protocol59Ref := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: ref.ClientRequestID.String(),
+	}
+	key := ledger.operationKey(protocol59Ref)
+	if state == clientui.RuntimeInputReconciliationSubmitted {
+		delete(ledger.tombstones, key)
+		delete(ledger.tombstoneAt, key)
+	}
+	c.recordLocked(ledger, protocol59Ref, state, version, !ledger.nonEvictableLocked(key), c.now())
+	ledger.pruneLocked(c.limit, c.ttl, c.now())
+	return nil
 }
 
 func (c *Coordinator) record(sessionID string, ref clientui.RuntimeOperationRef, state clientui.RuntimeInputReconciliationState) {
@@ -433,7 +536,7 @@ func (c *Coordinator) record(sessionID string, ref clientui.RuntimeOperationRef,
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ledger := c.ledgerLocked(sessionID)
-	key := ref.Key()
+	key := ledger.operationKey(ref)
 	c.recordLocked(ledger, ref, state, version, !ledger.nonEvictableLocked(key), c.now())
 	ledger.pruneLocked(c.limit, c.ttl, c.now())
 }
@@ -446,7 +549,7 @@ func (c *Coordinator) recordRuntimeAccepted(sessionID string, ref clientui.Runti
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ledger := c.ledgerLocked(sessionID)
-	key := ref.Key()
+	key := ledger.operationKey(ref)
 	delete(ledger.tombstones, key)
 	delete(ledger.tombstoneAt, key)
 	c.recordLocked(ledger, ref, state, version, !ledger.nonEvictableLocked(key), c.now())
@@ -454,7 +557,7 @@ func (c *Coordinator) recordRuntimeAccepted(sessionID string, ref clientui.Runti
 }
 
 func (c *Coordinator) recordLocked(ledger *sessionLedger, ref clientui.RuntimeOperationRef, state clientui.RuntimeInputReconciliationState, version clientui.ReadModelVersion, terminalEvictable bool, now time.Time) {
-	key := ref.Key()
+	key := ledger.operationKey(ref)
 	if _, tombstoned := ledger.tombstones[key]; tombstoned && state != clientui.RuntimeInputReconciliationCanceledNotCommitted {
 		return
 	}
@@ -477,14 +580,18 @@ func (c *Coordinator) ledgerLocked(sessionID string) *sessionLedger {
 		return ledger
 	}
 	ledger := &sessionLedger{
-		records:     make(map[string]clientui.RuntimeInputReconciliation),
-		terminal:    make(map[string]time.Time),
-		evicted:     make(map[string]clientui.RuntimeOperationRef),
-		evictedAt:   make(map[string]time.Time),
-		operations:  make(map[string]*operationEntry),
-		tombstones:  make(map[string]clientui.RuntimeOperationRef),
-		tombstoneAt: make(map[string]time.Time),
-		failedReqs:  make(map[string]any),
+		records:                 make(map[string]clientui.RuntimeInputReconciliation),
+		terminal:                make(map[string]time.Time),
+		evicted:                 make(map[string]clientui.RuntimeOperationRef),
+		evictedAt:               make(map[string]time.Time),
+		operations:              make(map[string]*operationEntry),
+		tombstones:              make(map[string]clientui.RuntimeOperationRef),
+		tombstoneAt:             make(map[string]time.Time),
+		failedReqs:              make(map[string]any),
+		queuedByClientRequestID: make(map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity),
+		queuedByQueueItemID:     make(map[runtimeids.QueueItemID]*queuedOperationIdentity),
+		queuedByOperationKey:    make(map[string]*queuedOperationIdentity),
+		commitBarriers:          make(map[string]*operationCommitBarrier),
 	}
 	c.sessions[key] = ledger
 	return ledger

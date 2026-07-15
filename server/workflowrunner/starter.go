@@ -19,7 +19,7 @@ import (
 	"core/server/metadata"
 	"core/server/runlog"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
+	"core/server/runtimefeed"
 	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/session"
@@ -75,7 +75,7 @@ type LockedTaskWorktreeRestoreRequest struct {
 type RuntimeEventRegistry interface {
 	PublishRuntimeEvent(sessionID string, evt runtime.Event)
 	PublishRuntimeEventForEngine(sessionID string, engine *runtime.Engine, evt runtime.Event)
-	PublishRuntimeActivitySnapshot(sessionID string, snapshot runtimeactivity.ResponseSnapshot)
+	PublishRuntimeReadModelUpdate(sessionID string, update runtimefeed.RuntimeReadModelUpdate)
 	AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error)
 }
 

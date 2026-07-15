@@ -12,9 +12,11 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/runtimecontrol"
+	"core/server/runtimefeed"
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/invariant"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -304,41 +306,61 @@ func TestSessionTranscriptSessionIdentityHydratesAndPublishesExecutionTarget(t *
 	}
 }
 
-func TestSessionTranscriptFeedSequencerHydratesRuntimeActivityAndPublishesLiveAfterHydration(t *testing.T) {
+func TestSessionTranscriptFeedSequencerStoresOneCanonicalReadModelAndProjectsProtocol59(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
 
 	version := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
-	registry.PublishRuntimeActivitySnapshot(engine.SessionID(), runtimeactivity.ResponseSnapshot{
-		Version:             version,
-		Activity:            activity,
-		InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
-	})
+	update := runtimefeed.RuntimeReadModelUpdate{
+		Version: version,
+		Activity: runtimefeed.RuntimeActivity{
+			State:          clientui.RuntimeActivityRegisteredIdle,
+			QueueAccepting: true,
+		},
+		InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
+	}
+	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), update)
 
 	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
 	defer func() { _ = sub.Close() }()
 	hydration := nextTranscriptMessage(t, sub)
-	if hydration.Sequence != 1 || hydration.Hydration == nil || hydration.Hydration.RuntimeActivity == nil || *hydration.Hydration.RuntimeActivity != activity {
-		t.Fatalf("hydration runtime activity = %+v, want %+v", hydration, activity)
+	wantActivity := runtimeactivity.Protocol59RuntimeActivity(update.Activity)
+	if hydration.Sequence != 1 || hydration.Hydration == nil || hydration.Hydration.RuntimeActivity == nil || *hydration.Hydration.RuntimeActivity != wantActivity {
+		t.Fatalf("hydration runtime activity = %+v, want %+v", hydration, wantActivity)
 	}
 	if hydration.Hydration.InputReconciliation == nil || hydration.Hydration.InputReconciliation.Version != version {
 		t.Fatalf("hydration reconciliation = %+v, want version %+v", hydration.Hydration.InputReconciliation, version)
 	}
 
 	nextVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 2}
-	nextActivity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{ActiveKind: clientui.RuntimeActivityActiveKindUserTurn, RunID: "run-1", StepID: "step-1"})
-	registry.PublishRuntimeActivitySnapshot(engine.SessionID(), runtimeactivity.ResponseSnapshot{
-		Version:             nextVersion,
-		Activity:            nextActivity,
-		InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(nextVersion),
-	})
+	runID, err := runtimeids.ParseRunID("11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatalf("parse run id: %v", err)
+	}
+	stepID, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("parse step id: %v", err)
+	}
+	nextUpdate := runtimefeed.RuntimeReadModelUpdate{
+		Version: nextVersion,
+		Activity: runtimefeed.RuntimeActivity{
+			State: clientui.RuntimeActivityRunning,
+			ActiveStep: &runtimefeed.RuntimeActiveStep{
+				RunID:      runID,
+				StepID:     stepID,
+				ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+			},
+		},
+		InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
+	}
+	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), nextUpdate)
 
 	liveActivity := nextTranscriptMessage(t, sub)
-	if liveActivity.Sequence != 2 || liveActivity.Kind != clientui.TranscriptMessageRuntimeActivity || liveActivity.RuntimeActivity == nil || *liveActivity.RuntimeActivity != nextActivity {
-		t.Fatalf("live runtime activity = %+v, want seq=2 %+v", liveActivity, nextActivity)
+	wantNextActivity := runtimeactivity.Protocol59RuntimeActivity(nextUpdate.Activity)
+	if liveActivity.Sequence != 2 || liveActivity.Kind != clientui.TranscriptMessageRuntimeActivity || liveActivity.RuntimeActivity == nil || *liveActivity.RuntimeActivity != wantNextActivity {
+		t.Fatalf("live runtime activity = %+v, want seq=2 %+v", liveActivity, wantNextActivity)
 	}
 	liveReconciliation := nextTranscriptMessage(t, sub)
 	if liveReconciliation.Sequence != 3 || liveReconciliation.Kind != clientui.TranscriptMessageInputReconciliation || liveReconciliation.InputReconciliation == nil || liveReconciliation.InputReconciliation.Version != nextVersion {

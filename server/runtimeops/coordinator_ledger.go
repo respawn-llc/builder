@@ -69,6 +69,9 @@ func (l *sessionLedger) nonEvictableLocked(key string) bool {
 	if entry := l.operations[key]; entry != nil && !entry.completed {
 		return true
 	}
+	if l.commitBarriers[key] != nil {
+		return true
+	}
 	return false
 }
 
@@ -120,6 +123,7 @@ func (l *sessionLedger) pruneEvictedLocked(limit int, ttl time.Duration, now tim
 		if !evictedAt.IsZero() && now.Sub(evictedAt) >= ttl {
 			delete(l.evictedAt, key)
 			delete(l.evicted, key)
+			l.removeQueuedOperationIdentity(key)
 			continue
 		}
 		retained = append(retained, key)
@@ -130,5 +134,6 @@ func (l *sessionLedger) pruneEvictedLocked(limit int, ttl time.Duration, now tim
 		l.evictedOrder = l.evictedOrder[1:]
 		delete(l.evictedAt, key)
 		delete(l.evicted, key)
+		l.removeQueuedOperationIdentity(key)
 	}
 }

@@ -23,8 +23,8 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/runtimecontrol"
+	"core/server/runtimefeed"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -2634,7 +2634,7 @@ func (r *workflowAskHandlerRuntime) PublishRuntimeEvent(string, runtime.Event) {
 func (r *workflowAskHandlerRuntime) PublishRuntimeEventForEngine(string, *runtime.Engine, runtime.Event) {
 }
 
-func (r *workflowAskHandlerRuntime) PublishRuntimeActivitySnapshot(string, runtimeactivity.ResponseSnapshot) {
+func (r *workflowAskHandlerRuntime) PublishRuntimeReadModelUpdate(string, runtimefeed.RuntimeReadModelUpdate) {
 }
 
 func (r *workflowAskHandlerRuntime) AwaitPromptResponse(_ context.Context, _ string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
