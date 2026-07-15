@@ -61,7 +61,8 @@ func TestSessionCategoryUnaffectedByUnrelatedMetadataMutations(t *testing.T) {
 		t.Fatalf("rename: %v", err)
 	}
 	assertSubagent("rename")
-	if err := store.SetParentSessionID("legacy-parent"); err != nil {
+	parentSessionID := "legacy-parent"
+	if err := store.SetParentSessionID(&parentSessionID); err != nil {
 		t.Fatalf("set parent: %v", err)
 	}
 	assertSubagent("parent assignment")
