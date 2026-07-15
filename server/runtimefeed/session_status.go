@@ -1,0 +1,63 @@
+package runtimefeed
+
+import (
+	"fmt"
+	"strings"
+
+	"core/shared/runtimeids"
+)
+
+type TranscriptSessionStatus struct {
+	ReviewerFrequency     string
+	ReviewerEnabled       bool
+	AutoCompactionEnabled bool
+	QuestionsEnabled      bool
+	FastModeAvailable     bool
+	FastModeEnabled       bool
+	ThinkingLevel         string
+	CompactionMode        string
+	ParentSessionID       *runtimeids.SessionID
+	Workflow              *TranscriptWorkflowSession
+}
+
+type TranscriptWorkflowSession struct {
+	Active     bool
+	RunID      string
+	TaskID     string
+	WorkflowID string
+}
+
+func (s TranscriptSessionStatus) Validate() error {
+	if strings.TrimSpace(s.ReviewerFrequency) == "" {
+		return fmt.Errorf("session status reviewer frequency is required")
+	}
+	if strings.TrimSpace(s.ThinkingLevel) == "" {
+		return fmt.Errorf("session status thinking level is required")
+	}
+	if strings.TrimSpace(s.CompactionMode) == "" {
+		return fmt.Errorf("session status compaction mode is required")
+	}
+	if s.FastModeEnabled && !s.FastModeAvailable {
+		return fmt.Errorf("session status cannot enable unavailable fast mode")
+	}
+	if s.ParentSessionID != nil && s.ParentSessionID.IsZero() {
+		return fmt.Errorf("session status parent session id is invalid")
+	}
+	if s.Workflow != nil {
+		return s.Workflow.Validate()
+	}
+	return nil
+}
+
+func (s TranscriptWorkflowSession) Validate() error {
+	if strings.TrimSpace(s.RunID) == "" {
+		return fmt.Errorf("workflow session run id is required")
+	}
+	if strings.TrimSpace(s.TaskID) == "" {
+		return fmt.Errorf("workflow session task id is required")
+	}
+	if strings.TrimSpace(s.WorkflowID) == "" {
+		return fmt.Errorf("workflow session workflow id is required")
+	}
+	return nil
+}
