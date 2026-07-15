@@ -5,18 +5,72 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"core/shared/sessioncontract"
 )
 
 func ptrMeta(meta Meta) *Meta {
 	return &meta
 }
 
+func TestOpenAcceptsLegacySessionWithoutCategory(t *testing.T) {
+	sessionDir := filepath.Join(t.TempDir(), "legacy-session")
+	now := time.Now().UTC()
+	meta := Meta{
+		SessionID:          "legacy-session",
+		WorkspaceRoot:      "/tmp/work",
+		WorkspaceContainer: "workspace",
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	writeSessionFixtureEvents(t, sessionDir, nil)
+
+	store, err := Open(sessionDir, WithPersistedSessionResolver(stubPersistedSessionResolver{
+		record: PersistedSessionRecord{SessionDir: sessionDir, Meta: &meta},
+	}))
+	if err != nil {
+		t.Fatalf("open legacy session: %v", err)
+	}
+	if got := store.Meta().Category; got != nil {
+		t.Fatalf("legacy category = %v, want absent", got)
+	}
+}
+
+func TestOpenRejectsMalformedPersistedSessionCategory(t *testing.T) {
+	sessionDir := filepath.Join(t.TempDir(), "malformed-category-session")
+	now := time.Now().UTC()
+	meta := Meta{
+		SessionID:          "malformed-category-session",
+		WorkspaceRoot:      "/tmp/work",
+		WorkspaceContainer: "workspace",
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		Category:           sessionCategoryTestPointer(sessioncontract.SessionCategory("worker")),
+	}
+	writeSessionFixtureEvents(t, sessionDir, nil)
+
+	_, err := Open(sessionDir, WithPersistedSessionResolver(stubPersistedSessionResolver{
+		record: PersistedSessionRecord{SessionDir: sessionDir, Meta: &meta},
+	}))
+	if err == nil {
+		t.Fatal("open malformed category session succeeded")
+	}
+	if !strings.Contains(err.Error(), "malformed-category-session") || !strings.Contains(err.Error(), "worker") {
+		t.Fatalf("error = %q, want session identity and raw category", err)
+	}
+}
+
+func sessionCategoryTestPointer(category sessioncontract.SessionCategory) *sessioncontract.SessionCategory {
+	return &category
+}
+
 func TestOpenByIDUsesPersistedSessionResolver(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "projects", "project-b", "sessions", "session-b")
-	target, err := Create(sessionDir, "sessions", "/tmp/work-b", sessionTestPersistence.options()...)
+	target, err := Create(sessionDir, "sessions", "/tmp/work-b", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -52,7 +106,7 @@ func TestOpenByIDRejectsWithoutPersistedSessionResolver(t *testing.T) {
 
 func TestSetWorkspaceRootPreservesWorkspaceContainer(t *testing.T) {
 	root := t.TempDir()
-	store, err := Create(root, "workspace-container", "/tmp/work-a", sessionTestPersistence.options()...)
+	store, err := Create(root, "workspace-container", "/tmp/work-a", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -84,7 +138,7 @@ func TestSetWorkspaceRootPreservesWorkspaceContainer(t *testing.T) {
 
 func TestRunArtifactRelocationUpdatesPathsAndWorkspaceAfterCallback(t *testing.T) {
 	container := t.TempDir()
-	store, err := Create(container, "source", "/workspace/source", sessionTestPersistence.options()...)
+	store, err := Create(container, "source", "/workspace/source", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -127,7 +181,7 @@ func TestRunArtifactRelocationUpdatesPathsAndWorkspaceAfterCallback(t *testing.T
 
 func TestRunArtifactRelocationRejectsZeroCommitTimeBeforeCallback(t *testing.T) {
 	container := t.TempDir()
-	store, err := Create(container, "source", "/workspace/source", sessionTestPersistence.options()...)
+	store, err := Create(container, "source", "/workspace/source", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -154,7 +208,7 @@ func TestRunArtifactRelocationRejectsZeroCommitTimeBeforeCallback(t *testing.T) 
 }
 
 func TestRunArtifactRelocationDoesNotMutateStoreWhenCallbackFails(t *testing.T) {
-	store, err := Create(t.TempDir(), "source", "/workspace/source", sessionTestPersistence.options()...)
+	store, err := Create(t.TempDir(), "source", "/workspace/source", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

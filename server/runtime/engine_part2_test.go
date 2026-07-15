@@ -6,6 +6,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 	"encoding/json"
 	"errors"
@@ -279,7 +280,7 @@ func TestChildSessionSnapshotsRoleSystemPromptOnFirstRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked parent: %v", err)
 	}
-	child, err := session.NewLazy(root, "child", workspace, runtimeTestSessionPersistence.Options()...)
+	child, err := session.NewLazy(root, "child", workspace, sessioncontract.SessionCategorySubagent, runtimeTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("new child: %v", err)
 	}

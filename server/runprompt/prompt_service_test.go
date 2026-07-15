@@ -60,17 +60,18 @@ func TestPromptServiceRunsPromptThroughPreparedRuntime(t *testing.T) {
 	progresses := make([]serverapi.RunPromptProgress, 0, 1)
 
 	result, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID:   "  req-123  ",
-		SelectedSessionID: "  abc-123  ",
-		Prompt:            "  hello world  ",
+		ClientRequestID: "  req-123  ",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "abc-123")),
+		Prompt:          "  hello world  ",
 	}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 		progresses = append(progresses, progress)
 	}))
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)
 	}
-	if launcher.lastRequest.SelectedSessionID != "abc-123" {
-		t.Fatalf("selected session id = %q, want abc-123", launcher.lastRequest.SelectedSessionID)
+	selectedID, present := launcher.lastRequest.Intent.SessionID()
+	if !present || selectedID.String() != "abc-123" {
+		t.Fatalf("selected session id = %q/%v, want abc-123/true", selectedID.String(), present)
 	}
 	if launcher.lastRequest.ClientRequestID != "req-123" {
 		t.Fatalf("client request id = %q, want req-123", launcher.lastRequest.ClientRequestID)
@@ -108,7 +109,7 @@ func TestPromptServiceReturnsPartialResultOnRunError(t *testing.T) {
 	}
 	service := NewPromptService(launcher)
 
-	result, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello"}, nil)
+	result, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hello"}, nil)
 	if !errors.Is(err, runErr) {
 		t.Fatalf("RunPrompt error = %v, want %v", err, runErr)
 	}
@@ -143,7 +144,7 @@ func TestPromptServiceAppliesTimeoutToSubmittedRun(t *testing.T) {
 	}
 	service := NewPromptService(launcher)
 
-	_, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello", Timeout: 5 * time.Second}, nil)
+	_, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hello", Timeout: 5 * time.Second}, nil)
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)
 	}

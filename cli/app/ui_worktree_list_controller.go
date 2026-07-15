@@ -31,7 +31,7 @@ func (m *uiModel) moveWorktreeSelection(delta int) {
 }
 
 func (m *uiModel) moveWorktreeSelectionPage(deltaPages int) {
-	rows := worktreeui.RowsPerPage(m.termHeight, worktreeOverlayHeaderLines, worktreeOverlayFooterLines, worktreeOverlayRowLines)
+	rows := worktreeui.RowsPerPage(m.layout().effectiveHeight(), worktreeOverlayHeaderLines, worktreeOverlayFooterLines, worktreeOverlayRowLines)
 	m.moveWorktreeSelection(rows * deltaPages)
 }
 

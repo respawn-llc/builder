@@ -59,7 +59,7 @@ func TestPlannerHeadlessCreatesNewSessionAndAppliesContinuationContext(t *testin
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeHeadless})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeHeadless, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestPlannerHeadlessUsesDefaultGPT55ModelAndOpenAIProviderInference(t *testi
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeHeadless})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeHeadless, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestPlannerInteractiveReopensSelectedSessionID(t *testing.T) {
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: second.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, second.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestPlannerReappliesPersistedSubagentRoleSettingsOnResume(t *testing.T) {
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestPlannerIgnoresMissingPersistedSubagentRoleOnResume(t *testing.T) {
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -856,9 +856,8 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
-		Mode:            ModeInteractive,
-		ForceNewSession: true,
-		ParentSessionID: parent.Meta().SessionID,
+		Mode:   ModeInteractive,
+		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
@@ -958,8 +957,8 @@ func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T)
 		StoreOptions: persistence.Options(),
 	}
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
-		Mode:            ModeHeadless,
-		ParentSessionID: parent.Meta().SessionID,
+		Mode:   ModeHeadless,
+		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
@@ -1012,9 +1011,8 @@ func TestPlannerNewChildSessionFallsBackWhenParentExecutionTargetIsNotMetadataBa
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
-		Mode:            ModeInteractive,
-		ForceNewSession: true,
-		ParentSessionID: parent.Meta().SessionID,
+		Mode:   ModeInteractive,
+		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
@@ -1052,9 +1050,8 @@ func TestPlannerNewChildSessionIgnoresParentOutsideActiveContainer(t *testing.T)
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
-		Mode:            ModeInteractive,
-		ForceNewSession: true,
-		ParentSessionID: parent.Meta().SessionID,
+		Mode:   ModeInteractive,
+		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
@@ -1126,9 +1123,8 @@ func TestPlannerNewChildSessionRollsBackDurableChildWhenExecutionTargetCopyFails
 	}
 
 	_, err = planner.PlanSession(context.Background(), SessionRequest{
-		Mode:            ModeInteractive,
-		ForceNewSession: true,
-		ParentSessionID: parent.Meta().SessionID,
+		Mode:   ModeInteractive,
+		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
 	})
 	if !errors.Is(err, session.ErrSessionNotFound) {
 		t.Fatalf("PlanSession error = %v, want session not found from metadata target update", err)
@@ -1168,8 +1164,8 @@ func TestPlannerNewSessionHonorsCanceledContextBeforeDurableCreation(t *testing.
 	cancel()
 
 	_, err := planner.PlanSession(ctx, SessionRequest{
-		Mode:            ModeInteractive,
-		ForceNewSession: true,
+		Mode:   ModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(nil),
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("PlanSession error = %v, want context canceled", err)
@@ -1194,9 +1190,8 @@ func TestPlannerNewChildSessionHonorsCanceledContextBeforeParentCopy(t *testing.
 	cancel()
 
 	_, err := planner.PlanSession(ctx, SessionRequest{
-		Mode:            ModeInteractive,
-		ForceNewSession: true,
-		ParentSessionID: parent.Meta().SessionID,
+		Mode:   ModeInteractive,
+		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("PlanSession error = %v, want context canceled", err)
@@ -1740,7 +1735,7 @@ func TestPlannerResumeFastRoleUsesProviderOverrideForHeuristic(t *testing.T) {
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -1781,7 +1776,7 @@ func TestPlannerResumeLockedDefaultModelTreatsSessionModelAsExplicitForRoleProvi
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -1820,7 +1815,7 @@ func TestPlannerResumeFastRoleUsesOpenAIBaseURLForHeuristic(t *testing.T) {
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -1862,7 +1857,7 @@ func TestPlannerResumePersistedRoleRejectsContextWindowBelowMinimum(t *testing.T
 		StoreOptions: persistence.Options(),
 	}
 
-	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID}); err == nil {
+	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))}); err == nil {
 		t.Fatal("expected persisted subagent role context window below minimum to fail")
 	} else if !config.IsModelContextWindowBelowMinimum(err) {
 		t.Fatalf("error = %v, want context window minimum failure", err)
@@ -1898,7 +1893,7 @@ func TestPlannerResumePersistedRoleRejectsReviewerContextWindowBelowMinimum(t *t
 		StoreOptions: persistence.Options(),
 	}
 
-	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID}); err == nil {
+	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))}); err == nil {
 		t.Fatal("expected persisted subagent role reviewer context window below minimum to fail")
 	} else if !config.IsModelContextWindowBelowMinimum(err) {
 		t.Fatalf("error = %v, want context window minimum failure", err)
@@ -1926,7 +1921,7 @@ func TestPlannerResumeRemovedPersistedRoleKeepsBaseSettings(t *testing.T) {
 		StoreOptions: persistence.Options(),
 	}
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"core/server/session"
 	"core/server/workflow"
 	"core/shared/config"
+	"core/shared/sessioncontract"
 )
 
 func removeWorkflowGraphSaveEdgesTouchingNode(def workflow.Definition, edges []EdgeRecord, nodeID workflow.NodeID) []EdgeRecord {
@@ -147,7 +148,7 @@ func newTestStoreWithConfig(t *testing.T) (*Store, metadata.Binding, config.App)
 func createTestSession(t *testing.T, ctx context.Context, store *Store, binding metadata.Binding, cfg config.App) string {
 	t.Helper()
 	sessionRoot := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	sessionStore, err := session.Create(sessionRoot, filepath.Base(cfg.WorkspaceRoot), cfg.WorkspaceRoot, store.metadata.AuthoritativeSessionStoreOptions()...)
+	sessionStore, err := session.Create(sessionRoot, filepath.Base(cfg.WorkspaceRoot), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.metadata.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}

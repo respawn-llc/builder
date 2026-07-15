@@ -624,8 +624,7 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 
 func TestDetailModeHidesInputBox(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 16
+	m.terminalGeometry = terminalGeometryKnown(80, 16)
 	m.input = "draft input should be hidden"
 	m.layout().syncViewport()
 
@@ -664,9 +663,7 @@ func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 	m := newProjectedStaticUIModel(
 		WithUIModelName("gpt-5"),
 	)
-	m.termWidth = 80
-	m.termHeight = 16
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(80, 16)
 	m.status.snapshot.Git = uiStatusGitInfo{Visible: true, Branch: "detail-mode-v2"}
 	m.layout().syncViewport()
 
@@ -701,9 +698,7 @@ func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
 		WithUIModelName("gpt-5"),
 	)
 	m.statusConfig.SessionViews = &countingSessionViewClient{page: page}
-	m.termWidth = 100
-	m.termHeight = 16
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(100, 16)
 	m.layout().syncViewport()
 
 	cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{
@@ -739,9 +734,7 @@ func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *test
 		"- Second item",
 	}, "\n")
 	m := newProjectedStaticUIModel()
-	m.termWidth = 72
-	m.termHeight = 12
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(72, 12)
 	m.layout().syncViewport()
 	testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{Question: question}, reply: make(chan askReply, 1)})
 	m.ask.input = "typed"
@@ -772,9 +765,7 @@ func TestAskQuestionPickerMarkdownQuestionWrapsWithoutSourceMarkers(t *testing.T
 		"- Second item",
 	}, "\n")
 	m := newProjectedStaticUIModel()
-	m.termWidth = 40
-	m.termHeight = 14
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(40, 14)
 	m.layout().syncViewport()
 	testSetActiveAsk(m, &askEvent{
 		req:   clientui.PendingPromptEvent{Question: question},
@@ -810,9 +801,7 @@ func TestAskQuestionPickerMarkdownQuestionWrapsWithoutSourceMarkers(t *testing.T
 func TestAskQuestionMarkdownLinksWrapIntoIndependentBoundedRows(t *testing.T) {
 	const target = "https://github.com/org/repo/pull/456"
 	m := newProjectedStaticUIModel()
-	m.termWidth = 24
-	m.termHeight = 12
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(24, 12)
 	m.layout().syncViewport()
 	testSetActiveAsk(m, &askEvent{
 		req:   clientui.PendingPromptEvent{Question: "[PR #456](https://github.com/org/repo/pull/456)"},
@@ -886,9 +875,7 @@ func TestAskQuestionOptionRowsDoNotInheritMarkdownHyperlinks(t *testing.T) {
 
 func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 56
-	m.termHeight = 9
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(56, 9)
 	m.layout().syncViewport()
 	testSetActiveAsk(m, &askEvent{
 		req: clientui.PendingPromptEvent{
@@ -940,9 +927,7 @@ func TestAskQuestionPickerRendersHeadingsRulesAndTables(t *testing.T) {
 		"| Table | Ready |",
 	}, "\n")
 	m := newProjectedStaticUIModel()
-	m.termWidth = 64
-	m.termHeight = 20
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(64, 20)
 	m.layout().syncViewport()
 	testSetActiveAsk(m, &askEvent{
 		req:   clientui.PendingPromptEvent{Question: question},

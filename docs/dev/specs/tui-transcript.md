@@ -201,8 +201,11 @@
 ## Startup And Session Selection
 
 - Startup shows recent sessions with pick-or-new flow.
-- Startup session list is scrollable with no cap.
-- If no sessions exist, startup goes directly to new-session setup.
+- The picker has `Sessions` and `Subagents` tabs and opens on `Sessions`. Ordinary interactive sessions and interactive forks start in `Sessions`; sessions created for headless or workflow-agent execution start in `Subagents`.
+- Every interactive open of a Subagent session permanently promotes it to `Sessions`. Picker selection alone does not promote: workspace lookup failure or declining a workspace change returns to the picker without changing the session artifact, recency, or category; an accepted retarget completes before open and promotion. Automated headless/workflow resumes and renames do not change category.
+- Legacy sessions without a recorded category appear in `Sessions`; category is never guessed from names, parent links, or current activity.
+- Each tab is a recency-ordered infinite-scroll window with at most two bounded pages resident. Traversal loads older pages and reloads evicted newer pages; continuation keeps resident rows visible and blocks only the pending boundary crossing. Neither client nor server materializes the full session set.
+- If both tabs are empty, startup goes directly to new-session setup.
 - When CLI startup cwd does not resolve to a registered project/workspace/worktree, startup enters project picker/registration instead of auto-registering.
 - That flow may create a project and attach current workspace as first workspace/main worktree, or attach current workspace to an existing project.
 - Outside that flow, CLI remains workspace-first.

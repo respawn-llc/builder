@@ -34,10 +34,10 @@ func Run(ctx context.Context, opts Options) error {
 		StartSessionServer: func(ctx context.Context, req runner.Request[embeddedattach.StartupOptions], interactor authInteractor, interactive bool) (interactiveSessionServer, error) {
 			return startSessionServer(ctx, optionsFromRunnerRequest(req), interactor, interactive)
 		},
-		RunSessionLifecycle: func(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string, opts runner.SessionLifecycleOptions) error {
-			return runSessionLifecycleWithOptions(ctx, server, interactor, initialSessionID, sessionLifecycleOptions{
-				ForceNewSession: opts.ForceNewSession,
-				Overrides:       opts.Overrides,
+		RunSessionLifecycle: func(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts runner.SessionLifecycleOptions) error {
+			return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{
+				Intent:    opts.Intent,
+				Overrides: opts.Overrides,
 			})
 		},
 	})

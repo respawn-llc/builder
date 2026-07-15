@@ -195,7 +195,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			}
 
 			originReleased := false
-			handoff, err := resolveAndReleaseSessionHandoff(
+			handoff, err := resolveAndReleaseSessionAction(
 				context.Background(),
 				server,
 				nil,
@@ -213,14 +213,14 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 				t.Fatal("child runtime was not released before parent launch")
 			}
 			parentSessionID := requireSessionOpenDestination(t, handoff)
-			if parentSessionID != parent.Meta().SessionID || handoff.InitialInput.TransitionInput != wantInput {
-				t.Fatalf("resolved handoff = %+v, want parent with exact transition input", handoff)
+			if parentSessionID != parent.Meta().SessionID {
+				t.Fatalf("resolved handoff = %+v, want parent", handoff)
 			}
 
 			planner := newSessionLaunchPlanner(server)
 			parentPlan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{
-				Mode:        launchModeInteractive,
-				Destination: sessionOpenDestinationForTest(t, parentSessionID),
+				Mode:   launchModeInteractive,
+				Intent: serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionIDForTest(t, parentSessionID)),
 			})
 			if err != nil {
 				t.Fatalf("plan parent session: %v", err)
@@ -230,7 +230,10 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 				server,
 				planner,
 				parentPlan,
-				*handoff,
+				"",
+				false,
+				wantInput,
+				true,
 				false,
 			)
 			if err != nil {

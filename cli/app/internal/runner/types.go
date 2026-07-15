@@ -31,12 +31,12 @@ type Request[SO any] struct {
 }
 
 type SessionLifecycleOptions struct {
-	ForceNewSession bool
-	Overrides       serverapi.RunPromptOverrides
+	Intent    *serverapi.SessionLaunchIntent
+	Overrides serverapi.RunPromptOverrides
 }
 
 type Dependencies[S SessionServer, A any, SO any] struct {
 	NewAuthInteractor   func() A
 	StartSessionServer  func(context.Context, Request[SO], A, bool) (S, error)
-	RunSessionLifecycle func(context.Context, S, A, string, SessionLifecycleOptions) error
+	RunSessionLifecycle func(context.Context, S, A, SessionLifecycleOptions) error
 }

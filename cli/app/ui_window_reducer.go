@@ -18,24 +18,27 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	m := r.model
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		previousWidth := m.termWidth
-		previousHeight := m.termHeight
-		previousKnown := m.windowSizeKnown
-		m.termWidth = msg.Width
-		m.termHeight = msg.Height
-		m.windowSizeKnown = true
+		wasNativeOngoing := m.nativeOngoingSurfaceActive()
+		previousSize := m.terminalGeometry.Size()
+		if msg.Width > 0 && msg.Height > 0 {
+			m.terminalGeometry = terminalGeometryKnown(msg.Width, msg.Height)
+		} else {
+			m.terminalGeometry = terminalGeometryUnknown()
+		}
 		m.layout().syncViewport()
-		if !m.nativeOngoingSurfaceActive() {
+		desiredOngoing := m.ongoingSurface != nil &&
+			desiredOngoingOwnership(m.terminalGeometry, terminalDestinationForSurface(m.surface()))
+		if !desiredOngoing || m.ongoingSurface == nil {
 			if m.ongoingSurface != nil {
 				result := m.ongoingSurface.ObserveResize(ongoing.Size{Width: msg.Width, Height: msg.Height})
 				if result.Action == ongoing.ResultScheduleWidthRehydration {
 					m.pendingOngoingWidthReset = true
 					m.pendingOngoingResizeRepaint = false
-				} else if !previousKnown || previousWidth != msg.Width || previousHeight != msg.Height {
+				} else if previousSize == nil || previousSize.width != msg.Width || previousSize.height != msg.Height {
 					m.pendingOngoingResizeRepaint = true
 				}
 			}
-			return handledUIFeatureUpdate(m, nil)
+			return handledUIFeatureUpdate(m, m.reconcileOngoingOwnership())
 		}
 		size := ongoing.Size{Width: msg.Width, Height: msg.Height}
 		var result ongoing.Result
@@ -49,8 +52,8 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			return handledUIFeatureUpdate(m, m.handleOngoingSurfaceError(err))
 		}
 		cmd := m.handleOngoingResult(result)
-		if !previousKnown {
-			cmd = tea.Batch(cmd, m.setOngoingNormalBufferOwned(true))
+		if previousSize == nil || !wasNativeOngoing {
+			cmd = tea.Batch(cmd, m.reconcileOngoingOwnership())
 		}
 		return handledUIFeatureUpdate(m, cmd)
 	}

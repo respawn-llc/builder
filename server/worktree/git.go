@@ -54,6 +54,32 @@ type GitTargetInspection struct {
 	Identity GitRepositoryIdentity
 }
 
+type GitWorktreeListErrorKind string
+
+const (
+	GitWorktreeListErrorNotRepository    GitWorktreeListErrorKind = "not_repository"
+	GitWorktreeListErrorInspectionFailed GitWorktreeListErrorKind = "inspection_failed"
+)
+
+type GitWorktreeListError struct {
+	Kind  GitWorktreeListErrorKind
+	Cause error
+}
+
+func (e *GitWorktreeListError) Error() string {
+	if e == nil {
+		return "git worktree listing failed"
+	}
+	return "git worktree listing failed: " + string(e.Kind)
+}
+
+func (e *GitWorktreeListError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 type CreateSpec struct {
 	BaseRef      string
 	CreateBranch bool
@@ -547,9 +573,32 @@ func (i *GitInspector) List(ctx context.Context, workspaceRoot string) ([]GitWor
 	if err != nil {
 		return nil, err
 	}
-	output, err := i.runner.Output(ctx, canonicalRoot, "worktree", "list", "--porcelain")
+	switch inspection := config.InspectGitRepository(canonicalRoot).(type) {
+	case config.GitRepositoryPresent:
+	case config.GitNotRepository:
+		return nil, &GitWorktreeListError{Kind: GitWorktreeListErrorNotRepository}
+	case config.GitRepositoryInspectionFailed:
+		return nil, &GitWorktreeListError{
+			Kind:  GitWorktreeListErrorInspectionFailed,
+			Cause: inspection.Cause,
+		}
+	default:
+		panic(fmt.Sprintf("unknown git repository inspection result %T", inspection))
+	}
+	args := []string{"worktree", "list", "--porcelain"}
+	output, exitCode, err := i.runner.Run(ctx, canonicalRoot, args...)
 	if err != nil {
-		return nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		cause := formatGitRunError(exitCode, err, output, args...)
+		if !errors.Is(cause, err) {
+			cause = errors.Join(cause, err)
+		}
+		return nil, &GitWorktreeListError{
+			Kind:  GitWorktreeListErrorInspectionFailed,
+			Cause: cause,
+		}
 	}
 	return parseGitWorktreeListPorcelain(string(output), canonicalRoot)
 }

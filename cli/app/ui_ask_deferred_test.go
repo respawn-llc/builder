@@ -13,9 +13,7 @@ import (
 func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 	reply := make(chan askReply, 1)
 	m := newProjectedStaticUIModel()
-	m.termWidth = 90
-	m.termHeight = 12
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(90, 12)
 	m.input = "hidden draft"
 	m.layout().syncViewport()
 
@@ -64,9 +62,7 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 	reply := make(chan askReply, 1)
 	m := newProjectedStaticUIModel()
-	m.termWidth = 100
-	m.termHeight = 14
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(100, 14)
 	m.input = "/ps"
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -109,9 +105,7 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 
 func TestDetailModeIgnoresHiddenMainInputKeys(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.termWidth = 90
-	m.termHeight = 12
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(90, 12)
 	m.input = "draft"
 	m.inputCursor = -1
 	m.layout().syncViewport()

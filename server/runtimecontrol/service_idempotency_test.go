@@ -13,6 +13,7 @@ import (
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/transcript"
 )
 
@@ -24,7 +25,7 @@ var runtimeControlOpenAICapabilities = llm.ProviderCapabilities{
 }
 
 func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestServiceInterruptRetryReturnsFreshActivitySnapshot(t *testing.T) {
 }
 
 func TestServiceSetFastModeEnabledDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -132,7 +133,7 @@ func TestServiceSetFastModeEnabledDedupesSuccessfulRetry(t *testing.T) {
 }
 
 func TestServiceSetReviewerEnabledDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestServiceSetReviewerEnabledDedupesSuccessfulRetry(t *testing.T) {
 }
 
 func TestServiceSetAutoCompactionEnabledDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestServiceCompactContextForPreSubmitDedupesSuccessfulRetry(t *testing.T) {
 }
 
 func TestServiceInterruptDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestServiceInterruptDedupesSuccessfulRetry(t *testing.T) {
 func newRuntimeControlCompactionFixture(t *testing.T) (*session.Store, *runtime.Engine, *runtimeControlFakeClient) {
 	t.Helper()
 	trimmed := 1
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -312,7 +313,7 @@ func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
 }
 
 func TestServiceAppendCommittedEntryDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -341,7 +342,7 @@ func TestServiceAppendCommittedEntryDedupesSuccessfulRetry(t *testing.T) {
 }
 
 func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -373,7 +374,7 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 }
 
 func TestServiceSubmitQueuedUserMessagesDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -409,7 +410,7 @@ func TestServiceSubmitQueuedUserMessagesDedupesSuccessfulRetry(t *testing.T) {
 }
 
 func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -446,7 +447,7 @@ func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 }
 
 func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}

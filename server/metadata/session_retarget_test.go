@@ -10,6 +10,7 @@ import (
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 type sessionRetargetFixture struct {
@@ -45,6 +46,7 @@ func newSessionRetargetFixture(t *testing.T) sessionRetargetFixture {
 		filepath.Join(cfg.PersistenceRoot, "projects", source.ProjectID, "sessions"),
 		source.WorkspaceName,
 		source.CanonicalRoot,
+		sessioncontract.SessionCategoryMain,
 		store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {

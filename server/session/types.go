@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"core/shared/sessioncontract"
 	"github.com/google/uuid"
 )
 
@@ -148,30 +149,31 @@ type GoalClearedEvent struct {
 }
 
 type Meta struct {
-	SessionID                       string                     `json:"session_id"`
-	Name                            string                     `json:"name,omitempty"`
-	FirstPromptPreview              string                     `json:"first_prompt_preview,omitempty"`
-	InputDraft                      string                     `json:"input_draft,omitempty"`
-	InputDraftRecoveryBuffers       []InputDraftRecoveryBuffer `json:"input_draft_recovery_buffers,omitempty"`
-	ParentSessionID                 string                     `json:"parent_session_id,omitempty"`
-	WorkspaceRoot                   string                     `json:"workspace_root"`
-	WorkspaceContainer              string                     `json:"workspace_container"`
-	Continuation                    *ContinuationContext       `json:"continuation,omitempty"`
-	CreatedAt                       time.Time                  `json:"created_at"`
-	UpdatedAt                       time.Time                  `json:"updated_at"`
-	LastSequence                    int64                      `json:"last_sequence"`
-	ConversationEstablished         bool                       `json:"conversation_established,omitempty"`
-	ModelRequestCount               int64                      `json:"model_request_count"`
-	PromptCacheLineageGeneration    int                        `json:"prompt_cache_lineage_generation,omitempty"`
-	HeadlessActive                  bool                       `json:"headless_active,omitempty"`
-	CompactionSoonReminderIssued    bool                       `json:"compaction_soon_reminder_issued,omitempty"`
-	GeneratedRecoveredWarningIssued bool                       `json:"generated_recovered_warning_issued,omitempty"`
-	PendingModelRecovery            *PendingModelRecovery      `json:"pending_model_recovery,omitempty"`
-	WorktreeReminder                *WorktreeReminderState     `json:"worktree_reminder,omitempty"`
-	UsageState                      *UsageState                `json:"usage_state,omitempty"`
-	Goal                            *GoalState                 `json:"goal,omitempty"`
-	WorkflowSession                 *WorkflowSessionState      `json:"workflow_session,omitempty"`
-	Locked                          *LockedContract            `json:"locked,omitempty"`
+	SessionID                       string                           `json:"session_id"`
+	Category                        *sessioncontract.SessionCategory `json:"category,omitempty"`
+	Name                            string                           `json:"name,omitempty"`
+	FirstPromptPreview              string                           `json:"first_prompt_preview,omitempty"`
+	InputDraft                      string                           `json:"input_draft,omitempty"`
+	InputDraftRecoveryBuffers       []InputDraftRecoveryBuffer       `json:"input_draft_recovery_buffers,omitempty"`
+	ParentSessionID                 string                           `json:"parent_session_id,omitempty"`
+	WorkspaceRoot                   string                           `json:"workspace_root"`
+	WorkspaceContainer              string                           `json:"workspace_container"`
+	Continuation                    *ContinuationContext             `json:"continuation,omitempty"`
+	CreatedAt                       time.Time                        `json:"created_at"`
+	UpdatedAt                       time.Time                        `json:"updated_at"`
+	LastSequence                    int64                            `json:"last_sequence"`
+	ConversationEstablished         bool                             `json:"conversation_established,omitempty"`
+	ModelRequestCount               int64                            `json:"model_request_count"`
+	PromptCacheLineageGeneration    int                              `json:"prompt_cache_lineage_generation,omitempty"`
+	HeadlessActive                  bool                             `json:"headless_active,omitempty"`
+	CompactionSoonReminderIssued    bool                             `json:"compaction_soon_reminder_issued,omitempty"`
+	GeneratedRecoveredWarningIssued bool                             `json:"generated_recovered_warning_issued,omitempty"`
+	PendingModelRecovery            *PendingModelRecovery            `json:"pending_model_recovery,omitempty"`
+	WorktreeReminder                *WorktreeReminderState           `json:"worktree_reminder,omitempty"`
+	UsageState                      *UsageState                      `json:"usage_state,omitempty"`
+	Goal                            *GoalState                       `json:"goal,omitempty"`
+	WorkflowSession                 *WorkflowSessionState            `json:"workflow_session,omitempty"`
+	Locked                          *LockedContract                  `json:"locked,omitempty"`
 }
 
 type PendingModelRecovery struct {

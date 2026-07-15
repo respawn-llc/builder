@@ -5,6 +5,7 @@ import (
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"database/sql"
 	"errors"
 	"os"
@@ -560,8 +561,7 @@ func TestCommitSessionWorkspaceRetargetAttachesTargetAndUpdatesSession(t *testin
 	sess, err := session.Create(
 		filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), bindingA.ProjectID, "sessions"),
 		filepath.Base(cfg.WorkspaceRoot),
-		cfg.WorkspaceRoot,
-		store.AuthoritativeSessionStoreOptions()...,
+		cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
@@ -734,8 +734,7 @@ func TestResolvePersistedSessionPreservesWorktreeReminderStateFromMetadata(t *te
 	sess, err := session.Create(
 		filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
 		filepath.Base(cfg.WorkspaceRoot),
-		cfg.WorkspaceRoot,
-		store.AuthoritativeSessionStoreOptions()...,
+		cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
@@ -772,8 +771,7 @@ func TestResolvePersistedSessionPreservesGoalStateFromMetadata(t *testing.T) {
 	sess, err := session.Create(
 		filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
 		filepath.Base(cfg.WorkspaceRoot),
-		cfg.WorkspaceRoot,
-		store.AuthoritativeSessionStoreOptions()...,
+		cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
@@ -938,7 +936,7 @@ func TestRebindWorkspaceRetargetsDescendantWorktrees(t *testing.T) {
 		t.Fatalf("insert worktree: %v", err)
 	}
 	projectSessionsDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfg.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
+	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -1251,5 +1249,33 @@ func TestImportSessionSnapshotRejectsSessionDirOutsidePersistenceRoot(t *testing
 	})
 	if !errors.Is(err, ErrPathEscapesPersistenceRoot) {
 		t.Fatalf("expected outside-persistence-root error, got %v", err)
+	}
+}
+
+func TestSessionCategorySnapshotImportRoundTripsThroughResolver(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sessionID := "session-category-round-trip"
+	category := sessioncontract.SessionCategorySubagent
+	err := store.ImportSessionSnapshot(ctx, session.PersistedStoreSnapshot{
+		SessionDir: config.ProjectSessionDir(cfg, binding.ProjectID, sessionID),
+		Meta: session.Meta{
+			SessionID:          sessionID,
+			Category:           &category,
+			WorkspaceRoot:      binding.CanonicalRoot,
+			WorkspaceContainer: filepath.Base(binding.CanonicalRoot),
+			CreatedAt:          time.Now().UTC(),
+			UpdatedAt:          time.Now().UTC(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ImportSessionSnapshot: %v", err)
+	}
+	record, err := store.ResolvePersistedSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession: %v", err)
+	}
+	if record.Meta.Category == nil || *record.Meta.Category != sessioncontract.SessionCategorySubagent {
+		t.Fatalf("resolved category = %v, want subagent", record.Meta.Category)
 	}
 }

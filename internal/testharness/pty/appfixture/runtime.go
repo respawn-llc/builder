@@ -19,6 +19,7 @@ import (
 	"core/server/session"
 	serverstartup "core/server/startup"
 	"core/server/tools"
+	"core/shared/sessioncontract"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 )
@@ -115,9 +116,6 @@ func (r *Runtime) RuntimeClientFactory() runtimewire.RuntimeClientFactory {
 }
 
 func (r *Runtime) SeedSession(ctx context.Context, persistenceRoot string, workspaceRoot string) (string, error) {
-	if len(r.ScriptFile.SeedTranscript) == 0 {
-		return "", nil
-	}
 	store, err := metadata.Open(persistenceRoot)
 	if err != nil {
 		return "", fmt.Errorf("open metadata store for seed session: %w", err)
@@ -130,8 +128,7 @@ func (r *Runtime) SeedSession(ctx context.Context, persistenceRoot string, works
 	sessionStore, err := session.Create(
 		filepath.Join(persistenceRoot, "projects", binding.ProjectID, "sessions"),
 		filepath.Base(workspaceRoot),
-		workspaceRoot,
-		store.AuthoritativeSessionStoreOptions()...,
+		workspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		return "", fmt.Errorf("create seed session: %w", err)
@@ -139,6 +136,11 @@ func (r *Runtime) SeedSession(ctx context.Context, persistenceRoot string, works
 	for idx, entry := range r.ScriptFile.SeedTranscript {
 		if err := appendSeedTranscriptEntry(sessionStore, workspaceRoot, idx, entry); err != nil {
 			return "", err
+		}
+	}
+	if len(r.ScriptFile.SeedTranscript) == 0 {
+		if err := sessionStore.EnsureDurable(); err != nil {
+			return "", fmt.Errorf("persist empty seed session: %w", err)
 		}
 	}
 	return sessionStore.Meta().SessionID, nil

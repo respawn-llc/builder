@@ -8,10 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"core/cli/app/internal/projectbinding"
 	"core/cli/app/internal/status"
 	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -27,34 +25,27 @@ const (
 )
 
 type sessionLaunchRequest struct {
-	Mode        launchMode
-	Destination sessionLaunchDestination
-	Overrides   serverapi.RunPromptOverrides
+	Mode      launchMode
+	Intent    serverapi.SessionLaunchIntent
+	Overrides serverapi.RunPromptOverrides
 }
 
 type sessionLaunchPlan struct {
-	Mode                                 launchMode
-	SessionID                            string
-	SelectedViaPicker                    bool
-	SelectedSessionWorkspaceRoot         string
-	SelectedSessionWorkspaceLookupFailed bool
-	ActiveSettings                       config.Settings
-	EnabledTools                         []toolspec.ID
-	ConfiguredModelName                  string
-	SessionName                          string
-	PromptHistory                        []string
-	ModelContractLocked                  bool
-	StatusConfig                         uiStatusConfig
-	WorkspaceRoot                        string
-	Source                               config.SourceReport
+	Mode                launchMode
+	SessionID           string
+	ActiveSettings      config.Settings
+	EnabledTools        []toolspec.ID
+	ConfiguredModelName string
+	SessionName         string
+	PromptHistory       []string
+	ModelContractLocked bool
+	StatusConfig        uiStatusConfig
+	WorkspaceRoot       string
+	Source              config.SourceReport
 }
 
 type resolvedSessionPlanRequest struct {
-	destination         sessionLaunchDestination
-	overrides           serverapi.RunPromptOverrides
-	selectedViaPicker   bool
-	sessionSummaries    []clientui.SessionSummary
-	hasSessionSummaries bool
+	request serverapi.SessionPlanRequest
 }
 
 type runtimeLaunchPlan struct {
@@ -81,7 +72,7 @@ func (p *runtimeLaunchPlan) DetachOnlyClose() error {
 	return p.Close()
 }
 
-type sessionPickerRunner func([]clientui.SessionSummary, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
+type sessionPickerRunner func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
 
 type sessionViewReader interface {
 	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
@@ -120,10 +111,28 @@ type launchPlanner struct {
 func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
 	return &launchPlanner{
 		server: server,
-		pickSession: func(summaries []clientui.SessionSummary, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
-			return runSessionPickerFlow(summaries, theme, header)
+		pickSession: func(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
+			return runSessionPickerFlow(loader, theme, header)
 		},
 	}
+}
+
+type projectScopedSessionPageLoader struct {
+	projectID   string
+	client      client.ProjectViewClient
+	sessionView client.SessionViewClient
+}
+
+func (l projectScopedSessionPageLoader) ProjectID() string {
+	return l.projectID
+}
+
+func (l projectScopedSessionPageLoader) ListSessionPage(ctx context.Context, request serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+	return l.client.ListSessionPage(ctx, request)
+}
+
+func (l projectScopedSessionPageLoader) SessionViewClient() client.SessionViewClient {
+	return l.sessionView
 }
 
 func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchRequest) (sessionLaunchPlan, error) {
@@ -134,11 +143,7 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
-	apiRequest, err := resolved.apiRequest(req.Mode)
-	if err != nil {
-		return sessionLaunchPlan{}, err
-	}
-	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, apiRequest)
+	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, resolved.request)
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
@@ -150,26 +155,15 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	}
 	cfg := p.server.Config()
 	authState := launchPlannerAuthState(p.server)
-	selectedSessionWorkspaceRoot := ""
-	selectedSessionWorkspaceLookupFailed := false
-	if resolved.selectedViaPicker {
-		selectedSessionWorkspaceRoot, err = loadSelectedSessionWorkspaceRoot(ctx, p.server.SessionViewClient(), resp.Plan.SessionID)
-		if err != nil {
-			selectedSessionWorkspaceLookupFailed = true
-		}
-	}
 	return sessionLaunchPlan{
-		Mode:                                 req.Mode,
-		SessionID:                            resp.Plan.SessionID,
-		SelectedViaPicker:                    resolved.selectedViaPicker,
-		SelectedSessionWorkspaceRoot:         selectedSessionWorkspaceRoot,
-		SelectedSessionWorkspaceLookupFailed: selectedSessionWorkspaceLookupFailed,
-		ActiveSettings:                       resp.Plan.ActiveSettings,
-		EnabledTools:                         enabledTools,
-		ConfiguredModelName:                  resp.Plan.ConfiguredModelName,
-		SessionName:                          resp.Plan.SessionName,
-		PromptHistory:                        append([]string(nil), resp.Plan.PromptHistory...),
-		ModelContractLocked:                  resp.Plan.ModelContractLocked,
+		Mode:                req.Mode,
+		SessionID:           resp.Plan.SessionID,
+		ActiveSettings:      resp.Plan.ActiveSettings,
+		EnabledTools:        enabledTools,
+		ConfiguredModelName: resp.Plan.ConfiguredModelName,
+		SessionName:         resp.Plan.SessionName,
+		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
+		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{
 			WorkspaceRoot:   resp.Plan.WorkspaceRoot,
 			PersistenceRoot: cfg.PersistenceRoot,
@@ -225,76 +219,38 @@ func (p *launchPlanner) PrepareRuntime(ctx context.Context, plan sessionLaunchPl
 func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunchRequest) (resolvedSessionPlanRequest, error) {
 	overrides := sessionPlanOverridesFromConfig(p.server.Config())
 	overrides = mergeSessionPlanOverrides(overrides, req.Overrides)
-	resolved := resolvedSessionPlanRequest{
-		destination: req.Destination,
-		overrides:   overrides,
-	}
-	switch req.Destination.(type) {
-	case sessionOpenDestination, sessionCreateDestination:
-		return resolved, nil
-	case sessionPickerDestination:
-	default:
-		return resolvedSessionPlanRequest{}, errors.New("session launch destination is required")
-	}
-	if req.Mode == launchModeHeadless {
-		resolved.destination = sessionCreateDestination{}
-		return resolved, nil
-	}
-	summaries, err := p.listSessionSummaries(ctx)
-	if err != nil {
+	if err := req.Intent.Validate(); err != nil {
 		return resolvedSessionPlanRequest{}, err
 	}
-	resolved.sessionSummaries = append([]clientui.SessionSummary(nil), summaries...)
-	resolved.hasSessionSummaries = true
-	if len(summaries) == 0 {
-		resolved.destination = sessionCreateDestination{}
-		return resolved, nil
-	}
-	if p.pickSession == nil {
-		return resolvedSessionPlanRequest{}, errors.New("session picker is required")
-	}
-	cfg := p.server.Config()
-	picked, err := p.pickSession(summaries, p.server.PresentationTheme(), p.sessionPickerHeaderInfo(cfg))
-	if err != nil {
-		return resolvedSessionPlanRequest{}, err
-	}
-	if picked.Canceled {
-		return resolvedSessionPlanRequest{}, projectbinding.ErrStartupCanceledByUser
-	}
-	if picked.CreateNew {
-		resolved.destination = sessionCreateDestination{}
-		return resolved, nil
-	}
-	if picked.Session == nil {
-		return resolvedSessionPlanRequest{}, errors.New("no session selected")
-	}
-	destination, err := newSessionOpenDestination(picked.Session.SessionID)
-	if err != nil {
-		return resolvedSessionPlanRequest{}, err
-	}
-	resolved.destination = destination
-	resolved.selectedViaPicker = true
-	return resolved, nil
+	return resolvedSessionPlanRequest{request: serverapi.SessionPlanRequest{
+		ClientRequestID: uuid.NewString(),
+		Mode:            serverapi.SessionLaunchMode(req.Mode),
+		Intent:          req.Intent,
+		Overrides:       overrides,
+	}}, nil
 }
 
-func (r resolvedSessionPlanRequest) apiRequest(mode launchMode) (serverapi.SessionPlanRequest, error) {
-	request := serverapi.SessionPlanRequest{
-		ClientRequestID: uuid.NewString(),
-		Mode:            serverapi.SessionLaunchMode(mode),
-		Overrides:       r.overrides,
+func (p *launchPlanner) selectSession(ctx context.Context) (sessionPickerResult, error) {
+	if p == nil || p.server == nil || p.server.ProjectViewClient() == nil {
+		return nil, errors.New("session picker project view client is required")
 	}
-	switch destination := r.destination.(type) {
-	case sessionOpenDestination:
-		request.SelectedSessionID = destination.SessionID()
-	case sessionCreateDestination:
-		request.ForceNewSession = true
-		if destination.Parent != nil {
-			request.ParentSessionID = destination.Parent.SessionID()
-		}
-	default:
-		return serverapi.SessionPlanRequest{}, errors.New("resolved session launch destination is required")
+	if p.pickSession == nil {
+		return nil, errors.New("session picker is required")
 	}
-	return request, nil
+	projectID := strings.TrimSpace(p.server.ProjectID())
+	if projectID == "" {
+		return nil, errors.New("session picker project ID is required")
+	}
+	loader := projectScopedSessionPageLoader{
+		projectID:   projectID,
+		client:      p.server.ProjectViewClient(),
+		sessionView: p.server.SessionViewClient(),
+	}
+	return p.pickSession(
+		loader,
+		p.server.PresentationTheme(),
+		p.sessionPickerHeaderInfo(p.server.Config()),
+	)
 }
 
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {
@@ -333,24 +289,6 @@ func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHea
 		OwnsServer:    p != nil && p.server != nil && p.server.OwnsServer(),
 		ServerAddress: net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)),
 	}
-}
-
-func (p *launchPlanner) listSessionSummaries(ctx context.Context) ([]clientui.SessionSummary, error) {
-	if p == nil || p.server == nil {
-		return nil, errors.New("launch planner bootstrap is required")
-	}
-	if p.server.ProjectViewClient() == nil {
-		return nil, errors.New("project view client is required")
-	}
-	projectID := strings.TrimSpace(p.server.ProjectID())
-	if projectID == "" {
-		return nil, errors.New("project id is required")
-	}
-	resp, err := p.server.ProjectViewClient().GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: projectID})
-	if err != nil {
-		return nil, err
-	}
-	return append([]clientui.SessionSummary(nil), resp.Overview.Sessions...), nil
 }
 
 func sessionPlanOverridesFromConfig(cfg config.App) serverapi.RunPromptOverrides {

@@ -300,7 +300,7 @@ func TestFilelessEventPersistenceDoesNotAppendToEventLog(t *testing.T) {
 
 func TestForkAtUserMessagePreservesPersistenceObserver(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
-	parent, err := Create(t.TempDir(), "workspace-x", "/tmp/work", WithPersistenceObserver(observer))
+	parent, err := Create(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestForkAtUserMessagePreservesPersistenceObserver(t *testing.T) {
 	}
 	observer.called = false
 
-	forked, _, err := ForkAtUserMessage(parent, userEvt.Seq, "Parent -> edit u1")
+	forked, _, err := ForkAtUserMessage(parent, userEvt.Seq, "Parent -> edit u1", testSessionCategory)
 	if err != nil {
 		t.Fatalf("fork at user message: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestPersistedSessionOpenRequiresResolver(t *testing.T) {
 
 func TestDurableSessionCreationRequiresPersistenceObserver(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Create(root, "workspace-x", "/tmp/work"); !errors.Is(err, errPersistenceObserverRequired) {
+	if _, err := Create(root, "workspace-x", "/tmp/work", testSessionCategory); !errors.Is(err, errPersistenceObserverRequired) {
 		t.Fatalf("Create error = %v, want persistence observer required", err)
 	}
 	entries, err := os.ReadDir(root)
@@ -383,7 +383,7 @@ func TestDurableSessionCreationRequiresPersistenceObserver(t *testing.T) {
 }
 
 func TestMetadataMutationRequiresPersistenceObserverWithoutChangingState(t *testing.T) {
-	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work")
+	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory)
 	if err != nil {
 		t.Fatalf("NewLazy: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestMetadataMutationRequiresPersistenceObserverWithoutChangingState(t *test
 }
 
 func TestEventAppendRequiresPersistenceObserverWithoutCreatingArtifact(t *testing.T) {
-	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work")
+	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory)
 	if err != nil {
 		t.Fatalf("NewLazy: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestEventAppendRequiresPersistenceObserverWithoutCreatingArtifact(t *testin
 
 func TestPersistedSessionDirectoryContainsOnlyAppendOnlyArtifacts(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
-	store, err := Create(t.TempDir(), "workspace-x", "/tmp/work", WithPersistenceObserver(observer))
+	store, err := Create(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestPersistedSessionDirectoryContainsOnlyAppendOnlyArtifacts(t *testing.T) 
 
 func TestMetadataPersistenceRetriesSameValueUntilObserverSucceeds(t *testing.T) {
 	observer := &flakyPersistenceObserver{failuresRemaining: 1}
-	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work", WithPersistenceObserver(observer))
+	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
 	if err != nil {
 		t.Fatalf("NewLazy: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestMetadataPersistenceRetriesSameValueUntilObserverSucceeds(t *testing.T) 
 
 func TestPersistenceObserverRunsOutsideStoreLock(t *testing.T) {
 	observer := &reentrantPersistenceObserver{ch: make(chan Meta, 1)}
-	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work", WithPersistenceObserver(observer))
+	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
 	if err != nil {
 		t.Fatalf("NewLazy: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestPersistenceObserverRunsOutsideStoreLock(t *testing.T) {
 
 func TestPersistenceSnapshotsAreImmutable(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
-	store, err := Create(t.TempDir(), "workspace-x", "/tmp/work", WithPersistenceObserver(observer))
+	store, err := Create(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -517,6 +517,7 @@ func TestFailedObservationRollsBackBeforeLaterMutation(t *testing.T) {
 		root,
 		"workspace-x",
 		"/tmp/work",
+		testSessionCategory,
 		WithPersistenceObserver(observer),
 		WithPersistedSessionResolver(sessionTestPersistence),
 	)

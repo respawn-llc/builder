@@ -18,6 +18,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 type retargetMetadataStub struct {
@@ -151,6 +152,7 @@ func newRealSessionRetargetFixture(t *testing.T) realSessionRetargetFixture {
 		sourceContainer,
 		sourceBinding.WorkspaceName,
 		sourceBinding.CanonicalRoot,
+		sessioncontract.SessionCategoryMain,
 		metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
@@ -163,6 +165,7 @@ func newRealSessionRetargetFixture(t *testing.T) realSessionRetargetFixture {
 		sourceContainer,
 		sourceBinding.WorkspaceName,
 		sourceBinding.CanonicalRoot,
+		sessioncontract.SessionCategoryMain,
 		metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
@@ -237,6 +240,7 @@ func newRetargetServiceFixture(t *testing.T) (*SessionWorkspaceRetargeter, *reta
 		sourceParent,
 		"source",
 		t.TempDir(),
+		sessioncontract.SessionCategoryMain,
 		persistence.Options()...,
 	)
 	if err != nil {
@@ -534,6 +538,7 @@ func TestSessionWorkspaceRetargeterStaleObserverCannotRestorePreviousTarget(t *t
 		sourceContainer,
 		fixture.sourceBinding.WorkspaceName,
 		fixture.sourceBinding.CanonicalRoot,
+		sessioncontract.SessionCategoryMain,
 		session.WithPersistenceObserver(observer),
 		session.WithPersistedSessionResolver(fixture.metadata),
 	)

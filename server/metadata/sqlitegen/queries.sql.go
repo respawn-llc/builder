@@ -1843,6 +1843,7 @@ SELECT
     s.first_prompt_preview,
     s.input_draft,
     s.parent_session_id,
+    s.category,
     s.created_at_unix_ms,
     s.updated_at_unix_ms,
     s.last_sequence,
@@ -1865,6 +1866,7 @@ type GetSessionRecordByIDRow struct {
 	FirstPromptPreview string
 	InputDraft         string
 	ParentSessionID    string
+	Category           sql.NullString
 	CreatedAtUnixMs    int64
 	UpdatedAtUnixMs    int64
 	LastSequence       int64
@@ -1886,6 +1888,7 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (G
 		&i.FirstPromptPreview,
 		&i.InputDraft,
 		&i.ParentSessionID,
+		&i.Category,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 		&i.LastSequence,
@@ -4266,6 +4269,219 @@ func (q *Queries) ListJoinExpectedBranches(ctx context.Context, batchID string) 
 	return items, nil
 }
 
+const listNewerSessionPage = `-- name: ListNewerSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = ?1
+  AND launch_visible <> 0
+  AND (
+      (?2 = 'main' AND (category = 'main' OR category IS NULL))
+      OR category = ?2
+  )
+  AND (
+      updated_at_unix_ms > ?3
+      OR (
+          updated_at_unix_ms = ?3
+          AND id > ?4
+      )
+  )
+ORDER BY updated_at_unix_ms ASC, id ASC
+LIMIT ?5
+`
+
+type ListNewerSessionPageParams struct {
+	ProjectID               string
+	Category                interface{}
+	BoundaryUpdatedAtUnixMs int64
+	BoundarySessionID       string
+	PageLimit               int64
+}
+
+type ListNewerSessionPageRow struct {
+	ID                 string
+	Name               string
+	FirstPromptPreview string
+	Category           string
+	UpdatedAtUnixMs    int64
+}
+
+func (q *Queries) ListNewerSessionPage(ctx context.Context, arg ListNewerSessionPageParams) ([]ListNewerSessionPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNewerSessionPage,
+		arg.ProjectID,
+		arg.Category,
+		arg.BoundaryUpdatedAtUnixMs,
+		arg.BoundarySessionID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNewerSessionPageRow
+	for rows.Next() {
+		var i ListNewerSessionPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.FirstPromptPreview,
+			&i.Category,
+			&i.UpdatedAtUnixMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNewestSessionPage = `-- name: ListNewestSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = ?1
+  AND launch_visible <> 0
+  AND (
+      (?2 = 'main' AND (category = 'main' OR category IS NULL))
+      OR category = ?2
+  )
+ORDER BY updated_at_unix_ms DESC, id DESC
+LIMIT ?3
+`
+
+type ListNewestSessionPageParams struct {
+	ProjectID string
+	Category  interface{}
+	PageLimit int64
+}
+
+type ListNewestSessionPageRow struct {
+	ID                 string
+	Name               string
+	FirstPromptPreview string
+	Category           string
+	UpdatedAtUnixMs    int64
+}
+
+func (q *Queries) ListNewestSessionPage(ctx context.Context, arg ListNewestSessionPageParams) ([]ListNewestSessionPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNewestSessionPage, arg.ProjectID, arg.Category, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNewestSessionPageRow
+	for rows.Next() {
+		var i ListNewestSessionPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.FirstPromptPreview,
+			&i.Category,
+			&i.UpdatedAtUnixMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOlderSessionPage = `-- name: ListOlderSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = ?1
+  AND launch_visible <> 0
+  AND (
+      (?2 = 'main' AND (category = 'main' OR category IS NULL))
+      OR category = ?2
+  )
+  AND (
+      updated_at_unix_ms < ?3
+      OR (
+          updated_at_unix_ms = ?3
+          AND id < ?4
+      )
+  )
+ORDER BY updated_at_unix_ms DESC, id DESC
+LIMIT ?5
+`
+
+type ListOlderSessionPageParams struct {
+	ProjectID               string
+	Category                interface{}
+	BoundaryUpdatedAtUnixMs int64
+	BoundarySessionID       string
+	PageLimit               int64
+}
+
+type ListOlderSessionPageRow struct {
+	ID                 string
+	Name               string
+	FirstPromptPreview string
+	Category           string
+	UpdatedAtUnixMs    int64
+}
+
+func (q *Queries) ListOlderSessionPage(ctx context.Context, arg ListOlderSessionPageParams) ([]ListOlderSessionPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listOlderSessionPage,
+		arg.ProjectID,
+		arg.Category,
+		arg.BoundaryUpdatedAtUnixMs,
+		arg.BoundarySessionID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOlderSessionPageRow
+	for rows.Next() {
+		var i ListOlderSessionPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.FirstPromptPreview,
+			&i.Category,
+			&i.UpdatedAtUnixMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingApprovalManualMoveSources = `-- name: ListPendingApprovalManualMoveSources :many
 SELECT tt.id, tt.source_placement_id, p.node_id
 FROM task_transitions tt
@@ -5189,53 +5405,6 @@ func (q *Queries) ListSessionWorkflowTaskIDs(ctx context.Context, sessionID sql.
 			return nil, err
 		}
 		items = append(items, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listSessionsByProject = `-- name: ListSessionsByProject :many
-SELECT
-    id,
-    name,
-    first_prompt_preview,
-    updated_at_unix_ms
-FROM sessions
-WHERE project_id = ?1
-  AND launch_visible <> 0
-ORDER BY updated_at_unix_ms DESC, rowid DESC
-`
-
-type ListSessionsByProjectRow struct {
-	ID                 string
-	Name               string
-	FirstPromptPreview string
-	UpdatedAtUnixMs    int64
-}
-
-func (q *Queries) ListSessionsByProject(ctx context.Context, projectID string) ([]ListSessionsByProjectRow, error) {
-	rows, err := q.db.QueryContext(ctx, listSessionsByProject, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListSessionsByProjectRow
-	for rows.Next() {
-		var i ListSessionsByProjectRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.FirstPromptPreview,
-			&i.UpdatedAtUnixMs,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -9924,6 +10093,7 @@ INSERT INTO sessions (
     first_prompt_preview,
     input_draft,
     parent_session_id,
+    category,
     created_at_unix_ms,
     updated_at_unix_ms,
     last_sequence,
@@ -9953,7 +10123,8 @@ INSERT INTO sessions (
     ?16,
     ?17,
     ?18,
-    ?19
+    ?19,
+    ?20
 )
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
@@ -9983,6 +10154,7 @@ type UpsertSessionParams struct {
 	FirstPromptPreview string
 	InputDraft         string
 	ParentSessionID    string
+	Category           sql.NullString
 	CreatedAtUnixMs    int64
 	UpdatedAtUnixMs    int64
 	LastSequence       int64
@@ -10006,6 +10178,7 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.FirstPromptPreview,
 		arg.InputDraft,
 		arg.ParentSessionID,
+		arg.Category,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 		arg.LastSequence,

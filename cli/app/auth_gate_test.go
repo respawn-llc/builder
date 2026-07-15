@@ -12,6 +12,7 @@ import (
 	"core/server/auth"
 	"core/server/authservice"
 	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 type stubAuthInteractor struct {
@@ -230,8 +231,8 @@ func TestResolveSessionActionLogoutUsesBootstrapAuthInteractor(t *testing.T) {
 	if got := requireSessionOpenDestination(t, resolved); got != store.Meta().SessionID {
 		t.Fatalf("expected session to continue in place, got %q", got)
 	}
-	if resolved.InitialPrompt != nil || resolved.InitialInput.TransitionInput != "" {
-		t.Fatalf("unexpected logout transition values prompt=%+v input=%q", resolved.InitialPrompt, resolved.InitialInput.TransitionInput)
+	if resolved.Kind() != serverapi.SessionLifecycleResultLaunch {
+		t.Fatalf("logout result kind = %q, want launch", resolved.Kind())
 	}
 
 	state, err := mgr.Load(ctx)
@@ -386,7 +387,7 @@ func TestResolveSessionActionLogoutRetryPreservesStoredAuthUntilSuccess(t *testi
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if resolved == nil {
+	if resolved.IsZero() {
 		t.Fatal("expected successful retry to continue session")
 	}
 	if pickCalls != 2 {
@@ -618,7 +619,7 @@ func TestResolveSessionActionLoginSkipClearsStoredAuthOnOptionalAuthSetup(t *tes
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if resolved == nil {
+	if resolved.IsZero() {
 		t.Fatal("expected login skip flow to continue")
 	}
 

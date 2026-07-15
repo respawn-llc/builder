@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"core/shared/sessioncontract"
 )
 
 func userMessagePayload(t *testing.T, content string) map[string]any {
@@ -70,7 +72,7 @@ func TestCloneSessionStreamsLargeHistoryAcrossChunks(t *testing.T) {
 		t.Fatalf("test requires more events (%d) than one chunk (%d)", len(parentEvents), forkReplayFlushEventCount)
 	}
 
-	child, err := CloneSession(parent, "clone")
+	child, err := CloneSession(parent, "clone", testSessionCategory)
 	if err != nil {
 		t.Fatalf("clone session: %v", err)
 	}
@@ -86,6 +88,38 @@ func TestCloneSessionStreamsLargeHistoryAcrossChunks(t *testing.T) {
 	}
 	if !child.Meta().HeadlessActive {
 		t.Fatal("expected cloned child to inherit headless-active state derived from replay")
+	}
+}
+
+func TestStreamedForkAndCloneRequireAndPersistCategory(t *testing.T) {
+	parent, err := Create(t.TempDir(), "workspace", "/tmp/work", sessioncontract.SessionCategoryMain, sessionTestPersistence.options()...)
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	target, _, err := parent.AppendEvent("step", "message", userMessagePayload(t, "fork target"))
+	if err != nil {
+		t.Fatalf("append fork target: %v", err)
+	}
+
+	forked, _, err := ForkAtUserMessage(
+		parent,
+		target.Seq,
+		"interactive fork",
+		sessioncontract.SessionCategoryMain,
+	)
+	if err != nil {
+		t.Fatalf("fork session: %v", err)
+	}
+	if got := forked.Meta().Category; got == nil || *got != sessioncontract.SessionCategoryMain {
+		t.Fatalf("fork category = %v, want main", got)
+	}
+
+	cloned, err := CloneSession(parent, "workflow clone", sessioncontract.SessionCategorySubagent)
+	if err != nil {
+		t.Fatalf("clone session: %v", err)
+	}
+	if got := cloned.Meta().Category; got == nil || *got != sessioncontract.SessionCategorySubagent {
+		t.Fatalf("clone category = %v, want subagent", got)
 	}
 }
 
@@ -116,7 +150,7 @@ func TestForkAtUserMessageStreamsPrefixAcrossChunks(t *testing.T) {
 		t.Fatalf("test requires fork prefix (%d) to span multiple chunks (%d)", len(expected), forkReplayFlushEventCount)
 	}
 
-	child, ordinal, err := ForkAtUserMessage(parent, forkSeq, "fork")
+	child, ordinal, err := ForkAtUserMessage(parent, forkSeq, "fork", testSessionCategory)
 	if err != nil {
 		t.Fatalf("fork at user message: %v", err)
 	}
@@ -138,7 +172,7 @@ func TestForkAtUserMessageOutOfRangeCleansUpChild(t *testing.T) {
 	parent := newSessionTestStoreAt(t, root)
 	appendForkTestEvents(t, parent, 2, 4)
 
-	if _, _, err := ForkAtUserMessage(parent, 999999, "fork"); err == nil {
+	if _, _, err := ForkAtUserMessage(parent, 999999, "fork", testSessionCategory); err == nil {
 		t.Fatal("expected out-of-range fork to fail")
 	}
 	assertOnlyForkParentSessionDir(t, root, parent)
@@ -158,7 +192,7 @@ func TestForkAtUserMessageRejectsMalformedHistoryReplacement(t *testing.T) {
 		t.Fatalf("append fork target: %v", err)
 	}
 
-	if _, _, err := ForkAtUserMessage(parent, target.Seq, "fork"); !errors.Is(err, errDecodeForkHistoryReplacement) {
+	if _, _, err := ForkAtUserMessage(parent, target.Seq, "fork", testSessionCategory); !errors.Is(err, errDecodeForkHistoryReplacement) {
 		t.Fatalf("fork error = %v, want %v", err, errDecodeForkHistoryReplacement)
 	}
 	assertOnlyForkParentSessionDir(t, root, parent)
@@ -186,7 +220,7 @@ func assertOnlyForkParentSessionDir(t *testing.T, root string, parent *Store) {
 
 func TestCloneSessionWithoutEventsPersistsEmptyChild(t *testing.T) {
 	parent := newSessionTestStore(t)
-	child, err := CloneSession(parent, "clone")
+	child, err := CloneSession(parent, "clone", testSessionCategory)
 	if err != nil {
 		t.Fatalf("clone empty session: %v", err)
 	}

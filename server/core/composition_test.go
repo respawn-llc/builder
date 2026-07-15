@@ -29,6 +29,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
 
@@ -355,7 +356,7 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 		t.Fatalf("ClaimRun: %v", err)
 	}
 	sessionsDir := filepath.Join(filepath.Join(resolved.Config.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	sessionStore, err := session.Create(sessionsDir, filepath.Base(sessionsDir), resolved.Config.WorkspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
+	sessionStore, err := session.Create(sessionsDir, filepath.Base(sessionsDir), resolved.Config.WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}

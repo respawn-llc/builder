@@ -68,8 +68,8 @@ func (c *testProjectViewClient) RebindWorkspace(context.Context, serverapi.Proje
 func (c *testProjectViewClient) GetProjectOverview(context.Context, serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
 	return c.overview, nil
 }
-func (c *testProjectViewClient) ListSessionsByProject(context.Context, serverapi.SessionListByProjectRequest) (serverapi.SessionListByProjectResponse, error) {
-	return serverapi.SessionListByProjectResponse{}, nil
+func (c *testProjectViewClient) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
+	return serverapi.SessionPageResponse{}, nil
 }
 
 func TestEnsureInteractiveBindsExistingPlan(t *testing.T) {

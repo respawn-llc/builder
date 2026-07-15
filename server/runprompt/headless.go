@@ -80,8 +80,9 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 	if l.boot.SessionLaunch == nil {
 		return nil, errors.New("headless session launch service is required")
 	}
-	if selected := strings.TrimSpace(req.SelectedSessionID); selected != "" && l.boot.SessionRuntime != nil {
-		active, err := l.boot.SessionRuntime.HasBlockingRuntimeActivity(ctx, selected)
+	selectedSessionID, openingExisting := req.Intent.SessionID()
+	if openingExisting && l.boot.SessionRuntime != nil {
+		active, err := l.boot.SessionRuntime.HasBlockingRuntimeActivity(ctx, selectedSessionID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -90,12 +91,10 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 		}
 	}
 	launchReq := serverapi.SessionPlanRequest{
-		ClientRequestID:   req.ClientRequestID,
-		Mode:              serverapi.SessionLaunchModeHeadless,
-		SelectedSessionID: req.SelectedSessionID,
-		ForceNewSession:   req.SelectedSessionID == "",
-		ParentSessionID:   req.ParentSessionID,
-		Overrides:         req.Overrides,
+		ClientRequestID: req.ClientRequestID,
+		Mode:            serverapi.SessionLaunchModeHeadless,
+		Intent:          req.Intent,
+		Overrides:       req.Overrides,
 	}
 	result, err := l.boot.SessionLaunch.PlanLaunchSession(ctx, launchReq)
 	if err != nil {
@@ -110,7 +109,7 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 		return nil, err
 	}
 	var sessionStarted *serverapi.RunPromptSessionStarted
-	if strings.TrimSpace(req.SelectedSessionID) == "" {
+	if req.Intent.Kind() == serverapi.SessionLaunchIntentCreateNew {
 		sessionID, err := uuid.Parse(runtimePlan.sessionID)
 		if err != nil || sessionID.Version() != 4 {
 			runtimePlan.CloseWithFailure(true)

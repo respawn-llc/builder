@@ -52,7 +52,7 @@ func TestRunInteractiveUsesInjectedStarterAndLifecycle(t *testing.T) {
 			}
 			return server, nil
 		},
-		RunSessionLifecycle: func(ctx context.Context, gotServer *fakeServer, gotAuth *struct{}, initialSessionID string, opts SessionLifecycleOptions) error {
+		RunSessionLifecycle: func(ctx context.Context, gotServer *fakeServer, gotAuth *struct{}, opts SessionLifecycleOptions) error {
 			lifecycleCalls++
 			if gotServer != server {
 				t.Fatal("lifecycle did not receive started server")
@@ -60,11 +60,8 @@ func TestRunInteractiveUsesInjectedStarterAndLifecycle(t *testing.T) {
 			if gotAuth != auth {
 				t.Fatal("lifecycle did not receive auth interactor")
 			}
-			if initialSessionID != "selected-session" {
-				t.Fatalf("initial session id = %q, want selected-session", initialSessionID)
-			}
-			if opts.ForceNewSession {
-				t.Fatal("selected session must not force new session")
+			if opts.Intent == nil || opts.Intent.Kind() != serverapi.SessionLaunchIntentOpenExisting {
+				t.Fatalf("initial intent = %+v, want open existing", opts.Intent)
 			}
 			if opts.Overrides.AgentRole != "reviewer" {
 				t.Fatalf("agent role override = %q, want reviewer", opts.Overrides.AgentRole)
@@ -90,9 +87,9 @@ func TestRunInteractiveComputesForceNewForNonDefaultAgentRole(t *testing.T) {
 		StartSessionServer: func(ctx context.Context, req Request[NoStartupOptions], auth struct{}, interactive bool) (*fakeServer, error) {
 			return server, nil
 		},
-		RunSessionLifecycle: func(ctx context.Context, server *fakeServer, auth struct{}, initialSessionID string, opts SessionLifecycleOptions) error {
-			if !opts.ForceNewSession {
-				t.Fatal("non-default role without selected session should force a new session")
+		RunSessionLifecycle: func(ctx context.Context, server *fakeServer, auth struct{}, opts SessionLifecycleOptions) error {
+			if opts.Intent == nil || opts.Intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
+				t.Fatalf("initial intent = %+v, want create new", opts.Intent)
 			}
 			if opts.Overrides.AgentRole != "reviewer" {
 				t.Fatalf("agent role override = %q, want reviewer", opts.Overrides.AgentRole)
@@ -120,7 +117,7 @@ func TestRunInteractiveClosesServerAfterLifecycleError(t *testing.T) {
 		StartSessionServer: func(ctx context.Context, req Request[NoStartupOptions], auth struct{}, interactive bool) (*fakeServer, error) {
 			return server, nil
 		},
-		RunSessionLifecycle: func(context.Context, *fakeServer, struct{}, string, SessionLifecycleOptions) error {
+		RunSessionLifecycle: func(context.Context, *fakeServer, struct{}, SessionLifecycleOptions) error {
 			return expected
 		},
 	})
@@ -133,8 +130,11 @@ func TestRunInteractiveClosesServerAfterLifecycleError(t *testing.T) {
 }
 
 func TestRequestDefaultsDoNotForceDefaultSubagentRole(t *testing.T) {
-	opts := SessionLifecycleOptionsFor(Request[NoStartupOptions]{AgentRole: config.DefaultSubagentRole})
-	if opts.ForceNewSession {
+	opts, err := SessionLifecycleOptionsFor(Request[NoStartupOptions]{AgentRole: config.DefaultSubagentRole})
+	if err != nil {
+		t.Fatalf("SessionLifecycleOptionsFor: %v", err)
+	}
+	if opts.Intent != nil {
 		t.Fatal("default subagent role must not force a new session")
 	}
 	if opts.Overrides != (serverapi.RunPromptOverrides{AgentRole: config.DefaultSubagentRole}) {

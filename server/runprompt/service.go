@@ -10,11 +10,10 @@ import (
 )
 
 type runPromptMemoRequest struct {
-	SelectedSessionID string
-	ParentSessionID   string
-	Prompt            string
-	Timeout           string
-	Overrides         serverapi.RunPromptOverrides
+	Intent    serverapi.SessionLaunchIntent
+	Prompt    string
+	Timeout   string
+	Overrides serverapi.RunPromptOverrides
 }
 
 type memoizingPromptService struct {
@@ -24,11 +23,10 @@ type memoizingPromptService struct {
 
 func (s *memoizingPromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 	memoReq := runPromptMemoRequest{
-		SelectedSessionID: strings.TrimSpace(req.SelectedSessionID),
-		ParentSessionID:   strings.TrimSpace(req.ParentSessionID),
-		Prompt:            strings.TrimSpace(req.Prompt),
-		Timeout:           req.Timeout.String(),
-		Overrides:         req.Overrides,
+		Intent:    req.Intent,
+		Prompt:    strings.TrimSpace(req.Prompt),
+		Timeout:   req.Timeout.String(),
+		Overrides: req.Overrides,
 	}
 	return s.runs.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameRunPromptMemoRequest, func(ctx context.Context) (serverapi.RunPromptResponse, error) {
 		return s.inner.RunPrompt(ctx, req, progress)
@@ -36,8 +34,7 @@ func (s *memoizingPromptService) RunPrompt(ctx context.Context, req serverapi.Ru
 }
 
 func sameRunPromptMemoRequest(a runPromptMemoRequest, b runPromptMemoRequest) bool {
-	return a.SelectedSessionID == b.SelectedSessionID &&
-		a.ParentSessionID == b.ParentSessionID &&
+	return a.Intent.Equal(b.Intent) &&
 		a.Prompt == b.Prompt &&
 		a.Timeout == b.Timeout &&
 		a.Overrides == b.Overrides

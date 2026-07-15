@@ -88,16 +88,7 @@ type SessionResolveTransitionRequest struct {
 	Transition      SessionTransition `json:"transition"`
 }
 
-type SessionResolveTransitionResponse struct {
-	NextSessionID                string `json:"next_session_id,omitempty"`
-	InitialPrompt                string `json:"initial_prompt,omitempty"`
-	InitialPromptHistoryRecorded bool   `json:"initial_prompt_history_recorded,omitempty"`
-	InitialInput                 string `json:"initial_input,omitempty"`
-	ParentSessionID              string `json:"parent_session_id,omitempty"`
-	ForceNewSession              bool   `json:"force_new_session,omitempty"`
-	ShouldContinue               bool   `json:"should_continue,omitempty"`
-	RequiresReauth               bool   `json:"requires_reauth,omitempty"`
-}
+type SessionResolveTransitionResponse = SessionLifecycleResult
 
 func (r SessionPersistInputDraftRequest) Validate() error {
 	if strings.TrimSpace(r.ClientRequestID) == "" {

@@ -2979,6 +2979,7 @@ INSERT INTO sessions (
     first_prompt_preview,
     input_draft,
     parent_session_id,
+    category,
     created_at_unix_ms,
     updated_at_unix_ms,
     last_sequence,
@@ -2999,6 +3000,7 @@ INSERT INTO sessions (
     sqlc.arg(first_prompt_preview),
     sqlc.arg(input_draft),
     sqlc.arg(parent_session_id),
+    sqlc.narg(category),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms),
     sqlc.arg(last_sequence),
@@ -3195,16 +3197,70 @@ ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, w.creat
 LIMIT sqlc.arg(limit_rows)
 OFFSET sqlc.arg(offset_rows);
 
--- name: ListSessionsByProject :many
+-- name: ListNewestSessionPage :many
 SELECT
     id,
     name,
     first_prompt_preview,
+    COALESCE(category, 'main') AS category,
     updated_at_unix_ms
 FROM sessions
 WHERE project_id = sqlc.arg(project_id)
   AND launch_visible <> 0
-ORDER BY updated_at_unix_ms DESC, rowid DESC;
+  AND (
+      (sqlc.arg(category) = 'main' AND (category = 'main' OR category IS NULL))
+      OR category = sqlc.arg(category)
+  )
+ORDER BY updated_at_unix_ms DESC, id DESC
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListOlderSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = sqlc.arg(project_id)
+  AND launch_visible <> 0
+  AND (
+      (sqlc.arg(category) = 'main' AND (category = 'main' OR category IS NULL))
+      OR category = sqlc.arg(category)
+  )
+  AND (
+      updated_at_unix_ms < sqlc.arg(boundary_updated_at_unix_ms)
+      OR (
+          updated_at_unix_ms = sqlc.arg(boundary_updated_at_unix_ms)
+          AND id < sqlc.arg(boundary_session_id)
+      )
+  )
+ORDER BY updated_at_unix_ms DESC, id DESC
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListNewerSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = sqlc.arg(project_id)
+  AND launch_visible <> 0
+  AND (
+      (sqlc.arg(category) = 'main' AND (category = 'main' OR category IS NULL))
+      OR category = sqlc.arg(category)
+  )
+  AND (
+      updated_at_unix_ms > sqlc.arg(boundary_updated_at_unix_ms)
+      OR (
+          updated_at_unix_ms = sqlc.arg(boundary_updated_at_unix_ms)
+          AND id > sqlc.arg(boundary_session_id)
+      )
+  )
+ORDER BY updated_at_unix_ms ASC, id ASC
+LIMIT sqlc.arg(page_limit);
 
 -- name: ListProjectSessionIDs :many
 SELECT id
@@ -3296,6 +3352,7 @@ SELECT
     s.first_prompt_preview,
     s.input_draft,
     s.parent_session_id,
+    s.category,
     s.created_at_unix_ms,
     s.updated_at_unix_ms,
     s.last_sequence,

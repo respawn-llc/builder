@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"core/shared/client"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -22,13 +23,16 @@ type RunPromptResult struct {
 }
 
 func runPrompt(ctx context.Context, client client.RunPromptClient, opts Options, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
+	intent, err := runPromptLaunchIntent(opts, initialSessionID)
+	if err != nil {
+		return RunPromptResult{}, err
+	}
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID:   uuid.NewString(),
-		SelectedSessionID: strings.TrimSpace(initialSessionID),
-		ParentSessionID:   runPromptParentSessionID(opts, initialSessionID),
-		Prompt:            prompt,
-		Timeout:           timeout,
-		Overrides:         runPromptOverridesFromOptions(opts),
+		ClientRequestID: uuid.NewString(),
+		Intent:          intent,
+		Prompt:          prompt,
+		Timeout:         timeout,
+		Overrides:       runPromptOverridesFromOptions(opts),
 	}, progress)
 	result := RunPromptResult{
 		SessionID:   response.SessionID,
@@ -43,11 +47,23 @@ func runPrompt(ctx context.Context, client client.RunPromptClient, opts Options,
 	return result, nil
 }
 
-func runPromptParentSessionID(opts Options, initialSessionID string) string {
-	if strings.TrimSpace(initialSessionID) != "" {
-		return ""
+func runPromptLaunchIntent(opts Options, initialSessionID string) (serverapi.SessionLaunchIntent, error) {
+	if selected := strings.TrimSpace(initialSessionID); selected != "" {
+		sessionID, err := runtimeids.ParseSessionID(selected)
+		if err != nil {
+			return serverapi.SessionLaunchIntent{}, err
+		}
+		return serverapi.OpenExistingSessionLaunchIntent(sessionID), nil
 	}
-	return strings.TrimSpace(opts.WorkspaceContextSessionID)
+	var parentID *runtimeids.SessionID
+	if rawParentID := strings.TrimSpace(opts.WorkspaceContextSessionID); rawParentID != "" {
+		parsedParentID, err := runtimeids.ParseSessionID(rawParentID)
+		if err != nil {
+			return serverapi.SessionLaunchIntent{}, err
+		}
+		parentID = &parsedParentID
+	}
+	return serverapi.CreateNewSessionLaunchIntent(parentID), nil
 }
 
 func runPromptOverridesFromOptions(opts Options) serverapi.RunPromptOverrides {

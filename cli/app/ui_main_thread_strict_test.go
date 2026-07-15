@@ -57,9 +57,7 @@ func TestTUIStrictIOViewDoesNotFetchProcessesForStatusOrOverlay(t *testing.T) {
 		WithUIProcessClient(processes),
 		WithUIDebug(true),
 	)
-	m.termWidth = 100
-	m.termHeight = 14
-	m.windowSizeKnown = true
+	m.terminalGeometry = terminalGeometryKnown(100, 14)
 	m.openProcessList()
 	m.activeSurface = uiSurfaceProcessList
 

@@ -3,17 +3,15 @@ package app
 import "core/cli/tui"
 
 func (l uiViewLayout) effectiveWidth() int {
-	m := l.model
-	if m.termWidth > 0 {
-		return m.termWidth
+	if size := l.model.terminalGeometry.Size(); size != nil {
+		return size.width
 	}
 	return 120
 }
 
 func (l uiViewLayout) effectiveHeight() int {
-	m := l.model
-	if m.termHeight > 0 {
-		return m.termHeight
+	if size := l.model.terminalGeometry.Size(); size != nil {
+		return size.height
 	}
 	return 32
 }

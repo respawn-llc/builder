@@ -1,13 +1,17 @@
 package metadata
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +21,9 @@ import (
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 
 	"github.com/google/uuid"
 	sqlitedriver "modernc.org/sqlite"
@@ -86,7 +92,18 @@ var (
 	ErrWorktreeIDRequired            = errors.New("worktree id is required")
 	ErrWorktreeWorkspaceIDRequired   = errors.New("workspace id is required")
 	ErrWorktreeCanonicalRootRequired = errors.New("worktree canonical root is required")
+	ErrInvalidPageToken              = errors.New("page_token is invalid")
 )
+
+const sessionPageTokenVersion = 1
+
+type sessionPageTokenPayload struct {
+	Version         int                             `json:"version"`
+	ProjectID       string                          `json:"project_id"`
+	Category        sessioncontract.SessionCategory `json:"category"`
+	UpdatedAtUnixMs int64                           `json:"updated_at_unix_ms"`
+	SessionID       runtimeids.SessionID            `json:"session_id"`
+}
 
 // WorktreeWorkspaceMismatchError reports that a worktree is not owned by the
 // expected workspace. It exposes the involved identifiers so callers can
@@ -1651,10 +1668,6 @@ func (s *Store) GetProjectOverview(ctx context.Context, projectID string) (clien
 		}
 		return clientui.ProjectOverview{}, fmt.Errorf("get project summary: %w", err)
 	}
-	sessions, err := s.ListSessionsByProject(ctx, projectID)
-	if err != nil {
-		return clientui.ProjectOverview{}, err
-	}
 	workspaces, err := s.ListProjectWorkspaces(ctx, projectID)
 	if err != nil {
 		return clientui.ProjectOverview{}, err
@@ -1662,7 +1675,6 @@ func (s *Store) GetProjectOverview(ctx context.Context, projectID string) (clien
 	return clientui.ProjectOverview{
 		Project:    projectSummaryFromRow(project.ID, project.ProjectKey, project.DisplayName, project.RootPath, project.SessionCount, project.LatestActivityUnixMs),
 		Workspaces: workspaces,
-		Sessions:   sessions,
 	}, nil
 }
 
@@ -1706,24 +1718,193 @@ func (s *Store) ListProjectWorkspacesPage(ctx context.Context, projectID string,
 	return out, nil
 }
 
-func (s *Store) ListSessionsByProject(ctx context.Context, projectID string) ([]clientui.SessionSummary, error) {
+func (s *Store) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
 	if s == nil || s.queries == nil {
-		return nil, errors.New("metadata store is required")
+		return serverapi.SessionPageResponse{}, errors.New("metadata store is required")
 	}
-	rows, err := s.queries.ListSessionsByProject(ctx, strings.TrimSpace(projectID))
-	if err != nil {
-		return nil, fmt.Errorf("list project sessions: %w", err)
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionPageResponse{}, err
 	}
-	out := make([]clientui.SessionSummary, 0, len(rows))
+	var rows []sessionPageRow
+	var hasMore bool
+	limit := int64(req.PageSize + 1)
+	switch req.Position.Kind() {
+	case serverapi.SessionPagePositionNewest:
+		queryRows, err := s.queries.ListNewestSessionPage(ctx, sqlitegen.ListNewestSessionPageParams{
+			ProjectID: strings.TrimSpace(req.ProjectID),
+			Category:  string(req.Category),
+			PageLimit: limit,
+		})
+		if err != nil {
+			return serverapi.SessionPageResponse{}, fmt.Errorf("list newest session page: %w", err)
+		}
+		for _, row := range queryRows {
+			rows = append(rows, sessionPageRow(row))
+		}
+	case serverapi.SessionPagePositionOlder, serverapi.SessionPagePositionNewer:
+		continuation, ok := req.Position.Continuation()
+		if !ok {
+			return serverapi.SessionPageResponse{}, ErrInvalidPageToken
+		}
+		token, err := decodeSessionPageToken(continuation, req.ProjectID, req.Category)
+		if err != nil {
+			return serverapi.SessionPageResponse{}, err
+		}
+		if req.Position.Kind() == serverapi.SessionPagePositionOlder {
+			queryRows, err := s.queries.ListOlderSessionPage(ctx, sqlitegen.ListOlderSessionPageParams{
+				ProjectID:               strings.TrimSpace(req.ProjectID),
+				Category:                string(req.Category),
+				BoundaryUpdatedAtUnixMs: token.UpdatedAtUnixMs,
+				BoundarySessionID:       token.SessionID.String(),
+				PageLimit:               limit,
+			})
+			if err != nil {
+				return serverapi.SessionPageResponse{}, fmt.Errorf("list older session page: %w", err)
+			}
+			for _, row := range queryRows {
+				rows = append(rows, sessionPageRow(row))
+			}
+		} else {
+			queryRows, err := s.queries.ListNewerSessionPage(ctx, sqlitegen.ListNewerSessionPageParams{
+				ProjectID:               strings.TrimSpace(req.ProjectID),
+				Category:                string(req.Category),
+				BoundaryUpdatedAtUnixMs: token.UpdatedAtUnixMs,
+				BoundarySessionID:       token.SessionID.String(),
+				PageLimit:               limit,
+			})
+			if err != nil {
+				return serverapi.SessionPageResponse{}, fmt.Errorf("list newer session page: %w", err)
+			}
+			for _, row := range queryRows {
+				rows = append(rows, sessionPageRow(row))
+			}
+		}
+	default:
+		return serverapi.SessionPageResponse{}, errors.New("session page position is invalid")
+	}
+	if len(rows) > req.PageSize {
+		hasMore = true
+		rows = rows[:req.PageSize]
+	}
+	if req.Position.Kind() == serverapi.SessionPagePositionNewer {
+		slices.Reverse(rows)
+	}
+	out := serverapi.SessionPageResponse{
+		ProjectID: strings.TrimSpace(req.ProjectID),
+		Category:  req.Category,
+		Sessions:  make([]clientui.SessionSummary, 0, len(rows)),
+	}
 	for _, row := range rows {
-		out = append(out, clientui.SessionSummary{
-			SessionID:          row.ID,
+		sessionID, err := runtimeids.ParseSessionID(row.ID)
+		if err != nil {
+			return serverapi.SessionPageResponse{}, fmt.Errorf("validate listed session id %q: %w", row.ID, err)
+		}
+		category, err := sessioncontract.ParseSessionCategory(row.Category)
+		if err != nil {
+			return serverapi.SessionPageResponse{}, fmt.Errorf("validate listed session category for %q: %w", row.ID, err)
+		}
+		out.Sessions = append(out.Sessions, clientui.SessionSummary{
+			SessionID:          sessionID,
+			Category:           category,
 			Name:               row.Name,
 			FirstPromptPreview: row.FirstPromptPreview,
 			UpdatedAt:          timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		})
 	}
+	if len(rows) > 0 {
+		setContinuation := func(target **serverapi.SessionPageContinuation, row sessionPageRow) error {
+			continuation, err := encodeSessionPageToken(req.ProjectID, req.Category, row)
+			if err != nil {
+				return err
+			}
+			*target = continuation
+			return nil
+		}
+		switch req.Position.Kind() {
+		case serverapi.SessionPagePositionNewest:
+			if hasMore {
+				if err := setContinuation(&out.Older, rows[len(rows)-1]); err != nil {
+					return serverapi.SessionPageResponse{}, err
+				}
+			}
+		case serverapi.SessionPagePositionOlder:
+			if err := setContinuation(&out.Newer, rows[0]); err != nil {
+				return serverapi.SessionPageResponse{}, err
+			}
+			if hasMore {
+				if err := setContinuation(&out.Older, rows[len(rows)-1]); err != nil {
+					return serverapi.SessionPageResponse{}, err
+				}
+			}
+		case serverapi.SessionPagePositionNewer:
+			if err := setContinuation(&out.Older, rows[len(rows)-1]); err != nil {
+				return serverapi.SessionPageResponse{}, err
+			}
+			if hasMore {
+				if err := setContinuation(&out.Newer, rows[0]); err != nil {
+					return serverapi.SessionPageResponse{}, err
+				}
+			}
+		}
+	}
+	if err := out.Validate(); err != nil {
+		return serverapi.SessionPageResponse{}, err
+	}
 	return out, nil
+}
+
+type sessionPageRow struct {
+	ID                 string
+	Name               string
+	FirstPromptPreview string
+	Category           string
+	UpdatedAtUnixMs    int64
+}
+
+func encodeSessionPageToken(projectID string, category sessioncontract.SessionCategory, row sessionPageRow) (*serverapi.SessionPageContinuation, error) {
+	sessionID, err := runtimeids.ParseSessionID(row.ID)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(sessionPageTokenPayload{
+		Version:         sessionPageTokenVersion,
+		ProjectID:       strings.TrimSpace(projectID),
+		Category:        category,
+		UpdatedAtUnixMs: row.UpdatedAtUnixMs,
+		SessionID:       sessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode session page token: %w", err)
+	}
+	continuation, err := serverapi.ParseSessionPageContinuation(base64.RawURLEncoding.EncodeToString(raw))
+	if err != nil {
+		return nil, err
+	}
+	return &continuation, nil
+}
+
+func decodeSessionPageToken(continuation serverapi.SessionPageContinuation, projectID string, category sessioncontract.SessionCategory) (sessionPageTokenPayload, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(continuation.String())
+	if err != nil {
+		return sessionPageTokenPayload{}, ErrInvalidPageToken
+	}
+	var payload sessionPageTokenPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return sessionPageTokenPayload{}, ErrInvalidPageToken
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return sessionPageTokenPayload{}, ErrInvalidPageToken
+	}
+	if payload.Version != sessionPageTokenVersion ||
+		payload.ProjectID != strings.TrimSpace(projectID) ||
+		payload.Category != category ||
+		payload.UpdatedAtUnixMs <= 0 ||
+		payload.SessionID.IsZero() {
+		return sessionPageTokenPayload{}, ErrInvalidPageToken
+	}
+	return payload, nil
 }
 
 func (s *Store) ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
@@ -1813,6 +1994,10 @@ func (s *Store) reconcileSessionEventLog(ctx context.Context, reconciliation ses
 func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
+	}
+	category, err := nullableSessionCategory(snapshot.Meta.SessionID, snapshot.Meta.Category)
+	if err != nil {
+		return err
 	}
 	if snapshot.Meta.Continuation != nil {
 		continuation, err := session.NormalizeContinuationContext(*snapshot.Meta.Continuation)
@@ -1906,6 +2091,7 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		FirstPromptPreview: snapshot.Meta.FirstPromptPreview,
 		InputDraft:         snapshot.Meta.InputDraft,
 		ParentSessionID:    snapshot.Meta.ParentSessionID,
+		Category:           category,
 		CreatedAtUnixMs:    snapshot.Meta.CreatedAt.UTC().UnixMilli(),
 		UpdatedAtUnixMs:    snapshot.Meta.UpdatedAt.UTC().UnixMilli(),
 		LastSequence:       snapshot.Meta.LastSequence,
@@ -2000,6 +2186,10 @@ func defaultJSONObject(value string) string {
 }
 
 func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Meta, error) {
+	category, err := sessionCategoryFromStored(row.ID, row.Category)
+	if err != nil {
+		return session.Meta{}, err
+	}
 	metadataPayload := struct {
 		WorkspaceRoot                   string                             `json:"workspace_root"`
 		WorkspaceContainer              string                             `json:"workspace_container"`
@@ -2051,6 +2241,7 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 	}
 	return session.Meta{
 		SessionID:                       row.ID,
+		Category:                        category,
 		Name:                            row.Name,
 		FirstPromptPreview:              row.FirstPromptPreview,
 		InputDraft:                      row.InputDraft,
@@ -2075,6 +2266,29 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		UsageState:                      usageState,
 		Locked:                          locked,
 	}, nil
+}
+
+func nullableSessionCategory(sessionID string, category *sessioncontract.SessionCategory) (sql.NullString, error) {
+	if category == nil {
+		return sql.NullString{}, nil
+	}
+	raw := string(*category)
+	validated, err := sessioncontract.ParseSessionCategory(raw)
+	if err != nil {
+		return sql.NullString{}, fmt.Errorf("session %q has invalid category %q: %w", sessionID, raw, err)
+	}
+	return sql.NullString{String: string(validated), Valid: true}, nil
+}
+
+func sessionCategoryFromStored(sessionID string, stored sql.NullString) (*sessioncontract.SessionCategory, error) {
+	if !stored.Valid {
+		return nil, nil
+	}
+	category, err := sessioncontract.ParseSessionCategory(stored.String)
+	if err != nil {
+		return nil, fmt.Errorf("session %q has invalid category %q: %w", sessionID, stored.String, err)
+	}
+	return &category, nil
 }
 
 func unmarshalStoredJSON(body string, target any) error {

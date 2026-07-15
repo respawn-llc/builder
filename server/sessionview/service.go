@@ -7,10 +7,14 @@ import (
 	"strings"
 	"sync"
 
+	"core/server/launch"
+	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeops"
 	"core/server/session"
+	"core/server/worktree"
 	servicecontract "core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -35,15 +39,41 @@ type UpdateStatusProvider interface {
 type Service struct {
 	sessions         SessionStoreResolver
 	snapshots        SessionSnapshotSource
+	targets          ExecutionTargetResolver
 	updates          UpdateStatusProvider
 	operations       *runtimeops.Coordinator
+	app              config.App
+	auth             client.AuthStatusClient
+	git              *worktree.GitInspector
 	cacheWarningMu   sync.RWMutex
 	cacheWarningMode config.CacheWarningMode
+}
+
+func (s *Service) WithExecutionEnvironmentConfig(app config.App) *Service {
+	if s != nil {
+		s.app = app
+	}
+	return s
+}
+
+func (s *Service) WithExecutionEnvironmentAuth(provider client.AuthStatusClient) *Service {
+	if s != nil {
+		s.auth = provider
+	}
+	return s
+}
+
+func (s *Service) WithExecutionEnvironmentGit(inspector *worktree.GitInspector) *Service {
+	if s != nil {
+		s.git = inspector
+	}
+	return s
 }
 
 func NewService(sessions SessionStoreResolver, runtimes RuntimeResolver, targets ExecutionTargetResolver) *Service {
 	svc := &Service{
 		sessions:         sessions,
+		targets:          targets,
 		cacheWarningMode: config.CacheWarningModeDefault,
 		operations:       runtimeops.NewCoordinator(),
 	}
@@ -234,6 +264,152 @@ func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, re
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errors.New("latest committed assistant final answer must not be blank")
 	}
 	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{Answer: answer}, nil
+}
+
+func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionExecutionEnvironmentResponse{}, err
+	}
+	if s == nil || s.sessions == nil {
+		return serverapi.SessionExecutionEnvironmentResponse{}, errSessionStoreResolverRequired
+	}
+	store, err := s.sessions.ResolveSessionStore(ctx, req.SessionID.String())
+	if err != nil {
+		return serverapi.SessionExecutionEnvironmentResponse{}, err
+	}
+	meta := store.Meta()
+	if strings.TrimSpace(meta.SessionID) != req.SessionID.String() {
+		return serverapi.SessionExecutionEnvironmentResponse{}, fmt.Errorf("session execution environment identity mismatch: requested %q, resolved %q", req.SessionID.String(), meta.SessionID)
+	}
+	environment := serverapi.SessionExecutionEnvironment{SessionID: req.SessionID}
+	target, targetErr := s.resolveExecutionTarget(ctx, req.SessionID.String())
+	if targetErr != nil {
+		environment.Workspace = serverapi.FailedSessionExecutionWorkspace(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: targetErr.Error()})
+	} else {
+		environment.Workspace = resolveSessionExecutionWorkspace(target)
+	}
+	environment.Branch = s.resolveBranch(ctx, target, environment.Workspace)
+	model, modelErr := launch.ResolveReadOnlySessionModel(s.app, meta)
+	if modelErr != nil {
+		var unavailable *launch.ReadOnlySessionModelUnavailableError
+		if errors.As(modelErr, &unavailable) {
+			environment.Model = serverapi.UnavailableSessionExecutionModel(unavailable.Reason)
+		} else {
+			environment.Model = serverapi.FailedSessionExecutionModel(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorInvalidConfiguration, Message: modelErr.Error()})
+		}
+	} else {
+		environment.Model = serverapi.AvailableSessionExecutionModel(serverapi.SessionExecutionModel{
+			Name:     model.Name,
+			Provider: model.Provider.ID(),
+			Locked:   model.Locked,
+		})
+	}
+	environment.Auth = s.resolveAuth(ctx, environment.Model)
+	return serverapi.SessionExecutionEnvironmentResponse{Environment: environment}, nil
+}
+
+func (s *Service) resolveExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
+	if s.targets == nil {
+		return clientui.SessionExecutionTarget{}, nil
+	}
+	return s.targets.ResolveSessionExecutionTarget(ctx, sessionID)
+}
+
+func resolveSessionExecutionWorkspace(target clientui.SessionExecutionTarget) serverapi.SessionExecutionWorkspaceField {
+	target = clientui.NormalizeSessionExecutionTarget(target)
+	if clientui.SessionExecutionTargetIsZero(target) {
+		return serverapi.UnavailableSessionExecutionWorkspace(
+			serverapi.SessionExecutionWorkspaceUnavailableNotConfigured,
+		)
+	}
+	availability := target.WorkspaceAvailability
+	targetKind := "workspace"
+	if target.Worktree != nil {
+		availability = target.Worktree.Availability
+		targetKind = "worktree"
+	}
+	switch strings.TrimSpace(availability) {
+	case "missing", "inaccessible":
+		return serverapi.FailedSessionExecutionWorkspace(serverapi.SessionExecutionFieldError{
+			Code: serverapi.SessionExecutionFieldErrorSourceFailure,
+			Message: fmt.Sprintf(
+				"session execution %s target is %s",
+				targetKind,
+				strings.TrimSpace(availability),
+			),
+		})
+	}
+	if strings.TrimSpace(target.EffectiveWorkdir) == "" {
+		return serverapi.FailedSessionExecutionWorkspace(serverapi.SessionExecutionFieldError{
+			Code:    serverapi.SessionExecutionFieldErrorSourceFailure,
+			Message: "session execution target has no effective workdir",
+		})
+	}
+	return serverapi.AvailableSessionExecutionWorkspace(target.EffectiveWorkdir)
+}
+
+func (s *Service) resolveBranch(
+	ctx context.Context,
+	target clientui.SessionExecutionTarget,
+	workspace serverapi.SessionExecutionWorkspaceField,
+) serverapi.SessionExecutionBranchField {
+	if workspace.Kind() != serverapi.SessionExecutionFieldAvailable {
+		return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableNotGitRepository)
+	}
+	if s.git == nil {
+		return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableNotGitRepository)
+	}
+	entries, err := s.git.List(ctx, target.EffectiveWorkdir)
+	if err != nil {
+		var listErr *worktree.GitWorktreeListError
+		if errors.As(err, &listErr) && listErr.Kind == worktree.GitWorktreeListErrorNotRepository {
+			return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableNotGitRepository)
+		}
+		return serverapi.FailedSessionExecutionBranch(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: err.Error()})
+	}
+	for _, entry := range entries {
+		if entry.Root == target.EffectiveWorkdir {
+			if entry.Detached {
+				return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableDetachedHead)
+			}
+			if strings.TrimSpace(entry.BranchName) == "" {
+				return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableNotGitRepository)
+			}
+			return serverapi.AvailableSessionExecutionBranch(entry.BranchName)
+		}
+	}
+	return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableNotGitRepository)
+}
+
+func (s *Service) resolveAuth(ctx context.Context, model serverapi.SessionExecutionModelField) serverapi.SessionExecutionAuthField {
+	if model.Kind() != serverapi.SessionExecutionFieldAvailable || s.auth == nil {
+		return serverapi.UnavailableSessionExecutionAuth(serverapi.SessionExecutionAuthUnavailableNotApplicable)
+	}
+	effectiveModel, ok := model.Value()
+	if !ok || !sessionExecutionProviderUsesKentManagedAuth(effectiveModel.Provider) {
+		return serverapi.UnavailableSessionExecutionAuth(serverapi.SessionExecutionAuthUnavailableNotApplicable)
+	}
+	var statusReq serverapi.AuthStatusRequest
+	status, err := s.auth.GetAuthStatus(ctx, statusReq)
+	if err != nil {
+		return serverapi.FailedSessionExecutionAuth(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: err.Error()})
+	}
+	if !status.Auth.Visible && status.Auth.Method == "" {
+		return serverapi.UnavailableSessionExecutionAuth(serverapi.SessionExecutionAuthUnavailableNotApplicable)
+	}
+	method := serverapi.SessionExecutionAuthMethod(string(status.Auth.Method))
+	if method == "" {
+		method = serverapi.SessionExecutionAuthMethodNone
+	}
+	return serverapi.AvailableSessionExecutionAuth(serverapi.SessionExecutionAuth{
+		Provider: effectiveModel.Provider,
+		Method:   method,
+	})
+}
+
+func sessionExecutionProviderUsesKentManagedAuth(provider string) bool {
+	capabilities, err := llm.InferProviderCapabilities(strings.TrimSpace(provider))
+	return err == nil && capabilities.IsOpenAIFirstParty
 }
 
 func (s *Service) resolveSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {

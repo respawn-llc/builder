@@ -44,15 +44,12 @@ func TestStartSessionServerUsesConfiguredDaemonForSessionLifecycleDraftPersisten
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "session lifecycle draft persistence")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "session lifecycle draft persistence")
 	defer runtimePlan.Close()
 	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "saved draft"}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
-	initialState, err := sessionLaunchInitialStateFromServer(context.Background(), server, plan.SessionID, sessionInitialInputDirective{
-		TransitionInput: "transition draft",
-		Precedence:      sessionInitialInputPreferStoredDraft,
-	})
+	initialState, err := sessionLaunchInitialStateFromServer(context.Background(), server, plan.SessionID, "transition draft", false)
 	if err != nil {
 		t.Fatalf("sessionLaunchInitialStateFromServer: %v", err)
 	}
@@ -71,7 +68,10 @@ func TestStartSessionServerUsesConfiguredDaemonForSessionLifecycleDraftPersisten
 	if err != nil {
 		t.Fatalf("ResolveTransition: %v", err)
 	}
-	if !resolved.ShouldContinue || resolved.NextSessionID != plan.SessionID || resolved.InitialInput != "transition draft" {
+	intent, preparation := requireAppLifecycleLaunch(t, resolved)
+	sessionID, ok := intent.SessionID()
+	override, hasOverride := preparation.InitialInputPolicy().OverrideText()
+	if !ok || sessionID.String() != plan.SessionID || !hasOverride || override != "transition draft" {
 		t.Fatalf("unexpected resolved transition: %+v", resolved)
 	}
 
@@ -104,7 +104,7 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 	}
 	promptViews := requirePromptViewServer(t, server)
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "test remote prompt snapshot reads")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote prompt snapshot reads")
 	defer runtimePlan.Close()
 
 	askDone := make(chan error, 1)
@@ -187,7 +187,7 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 	processes := requireProcessServer(t, server)
 
 	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -414,7 +414,7 @@ func waitForRemoteInlineOutput(t *testing.T, controls client.ProcessControlClien
 
 func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServer, wantReply string) {
 	t.Helper()
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Destination: sessionCreateDestination{}}, io.Discard, "workflow parity")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "workflow parity")
 	defer runtimePlan.Close()
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello parity")
@@ -428,10 +428,7 @@ func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServe
 	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "workflow draft"}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
-	initialState, err := sessionLaunchInitialStateFromServer(context.Background(), server, plan.SessionID, sessionInitialInputDirective{
-		TransitionInput: "transition draft",
-		Precedence:      sessionInitialInputPreferStoredDraft,
-	})
+	initialState, err := sessionLaunchInitialStateFromServer(context.Background(), server, plan.SessionID, "transition draft", false)
 	if err != nil {
 		t.Fatalf("sessionLaunchInitialStateFromServer: %v", err)
 	}

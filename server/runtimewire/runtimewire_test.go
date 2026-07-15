@@ -30,6 +30,7 @@ import (
 	"core/shared/invariant"
 	"core/shared/toolspec"
 
+	"core/shared/sessioncontract"
 	"github.com/google/uuid"
 )
 
@@ -65,7 +66,7 @@ func TestPromptFacingSnapshotReloaderUsesActiveWorkspaceRoot(t *testing.T) {
 			t.Fatalf("write system prompt: %v", err)
 		}
 	}
-	store, err := session.Create(t.TempDir(), "ws", originalWorkspace, runtimeWireTestSessionPersistence.Options()...)
+	store, err := session.Create(t.TempDir(), "ws", originalWorkspace, sessioncontract.SessionCategoryMain, runtimeWireTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -807,7 +808,7 @@ func TestBackgroundEventRouterRecoversInvalidTerminalEventInDiagnosticMode(t *te
 
 func TestNewRuntimeWiringRejectsEmptyModelAfterBypassingConfigDefaults(t *testing.T) {
 	root := t.TempDir()
-	store, err := session.Create(root, "ws", root, runtimeWireTestSessionPersistence.Options()...)
+	store, err := session.Create(root, "ws", root, sessioncontract.SessionCategoryMain, runtimeWireTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -1079,7 +1080,7 @@ func outsideNonTempDir(t *testing.T) string {
 
 func newRuntimeWireSession(t *testing.T, root string, name string) *session.Store {
 	t.Helper()
-	store, err := session.Create(root, name, root, runtimeWireTestSessionPersistence.Options()...)
+	store, err := session.Create(root, name, root, sessioncontract.SessionCategoryMain, runtimeWireTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create store %s: %v", name, err)
 	}

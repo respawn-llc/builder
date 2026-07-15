@@ -17,7 +17,9 @@ import (
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
 
@@ -52,9 +54,7 @@ type Planner struct {
 
 type SessionRequest struct {
 	Mode                                Mode
-	SelectedSessionID                   string
-	ForceNewSession                     bool
-	ParentSessionID                     string
+	Intent                              serverapi.SessionLaunchIntent
 	SkipContinuationAgentRoleValidation bool
 }
 
@@ -545,32 +545,56 @@ func (p Planner) openStore(ctx context.Context, req SessionRequest) (*session.St
 	if strings.TrimSpace(p.ContainerDir) == "" {
 		return nil, errors.New("launch planner container dir is required")
 	}
-	if strings.TrimSpace(req.SelectedSessionID) != "" {
-		return p.openScopedSession(req.SelectedSessionID)
+	if req.Intent.Kind() == "" {
+		return nil, errSessionSelectionRequired
 	}
-	if req.ForceNewSession || req.Mode == ModeHeadless {
-		return p.createSession(ctx, req.ParentSessionID, req.Mode)
+	if err := req.Intent.Validate(); err != nil {
+		return nil, fmt.Errorf("session launch intent: %w", err)
 	}
-	return nil, errSessionSelectionRequired
+	switch req.Intent.Kind() {
+	case serverapi.SessionLaunchIntentCreateNew:
+		parentID, hasParent := req.Intent.ParentID()
+		if !hasParent {
+			return p.createSession(ctx, nil, req.Mode)
+		}
+		return p.createSession(ctx, &parentID, req.Mode)
+	case serverapi.SessionLaunchIntentOpenExisting:
+		sessionID, _ := req.Intent.SessionID()
+		opened, err := p.openScopedSession(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if req.Mode == ModeInteractive {
+			if _, err := opened.PromoteSubagentToMain(); err != nil {
+				return nil, err
+			}
+		}
+		return opened, nil
+	default:
+		return nil, errSessionSelectionRequired
+	}
 }
 
-func (p Planner) openScopedSession(sessionID string) (*session.Store, error) {
-	realSessionDir, err := session.ResolveScopedSessionDir(p.ContainerDir, sessionID)
+func (p Planner) openScopedSession(sessionID runtimeids.SessionID) (*session.Store, error) {
+	realSessionDir, err := session.ResolveScopedSessionDir(p.ContainerDir, sessionID.String())
 	if err != nil {
 		return nil, err
 	}
 	return session.Open(realSessionDir, p.StoreOptions...)
 }
 
-func (p Planner) createSession(ctx context.Context, parentSessionID string, mode Mode) (*session.Store, error) {
+func (p Planner) createSession(ctx context.Context, parentSessionID *runtimeids.SessionID, mode Mode) (*session.Store, error) {
 	containerName := filepath.Base(p.ContainerDir)
-	created, err := session.NewLazy(p.ContainerDir, containerName, p.Config.WorkspaceRoot, p.StoreOptions...)
+	category := sessioncontract.SessionCategoryMain
+	if mode == ModeHeadless {
+		category = sessioncontract.SessionCategorySubagent
+	}
+	created, err := session.NewLazy(p.ContainerDir, containerName, p.Config.WorkspaceRoot, category, p.StoreOptions...)
 	if err != nil {
 		return nil, err
 	}
-	parentID := strings.TrimSpace(parentSessionID)
-	if parentID != "" {
-		if err := p.initializeChildSessionContext(ctx, created, parentID, mode); err != nil {
+	if parentSessionID != nil {
+		if err := p.initializeChildSessionContext(ctx, created, *parentSessionID, mode); err != nil {
 			return nil, err
 		}
 	} else {
@@ -584,13 +608,9 @@ func (p Planner) createSession(ctx context.Context, parentSessionID string, mode
 	return created, nil
 }
 
-func (p Planner) initializeChildSessionContext(ctx context.Context, child *session.Store, parentSessionID string, mode Mode) error {
+func (p Planner) initializeChildSessionContext(ctx context.Context, child *session.Store, parentID runtimeids.SessionID, mode Mode) error {
 	if child == nil {
 		return errors.New("child session store is required")
-	}
-	parentID := strings.TrimSpace(parentSessionID)
-	if parentID == "" {
-		return child.EnsureDurable()
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -616,9 +636,9 @@ func (p Planner) initializeChildSessionContext(ctx context.Context, child *sessi
 		}
 	}
 	if parent == nil {
-		return child.SetParentSessionID(parentID)
+		return child.SetParentSessionID(parentID.String())
 	}
-	target, hasTarget, err := p.resolveParentExecutionTarget(ctx, parentID)
+	target, hasTarget, err := p.resolveParentExecutionTarget(ctx, parentID.String())
 	if err != nil {
 		return err
 	}
@@ -634,7 +654,7 @@ func (p Planner) initializeChildSessionContext(ctx context.Context, child *sessi
 	return nil
 }
 
-func (p Planner) openParentSession(parentSessionID string) (*session.Store, error) {
+func (p Planner) openParentSession(parentSessionID runtimeids.SessionID) (*session.Store, error) {
 	parent, err := p.openScopedSession(parentSessionID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, session.ErrSessionNotFound) {

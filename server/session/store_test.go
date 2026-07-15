@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"core/shared/sessioncontract"
 )
 
 func TestNewLazyDoesNotPersistUntilFirstWrite(t *testing.T) {
@@ -19,6 +22,95 @@ func TestNewLazyDoesNotPersistUntilFirstWrite(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(store.Dir(), eventsFile)); err != nil {
 		t.Fatalf("expected events file after first write: %v", err)
+	}
+}
+
+func TestSessionCategoryRequiredForFreshAndLazyStores(t *testing.T) {
+	root := t.TempDir()
+	mainStore, err := Create(root, "workspace-main", "/tmp/main", sessioncontract.SessionCategoryMain, sessionTestPersistence.options()...)
+	if err != nil {
+		t.Fatalf("create main store: %v", err)
+	}
+	if got := mainStore.Meta().Category; got == nil || *got != sessioncontract.SessionCategoryMain {
+		t.Fatalf("main category = %v", got)
+	}
+
+	subagentStore, err := NewLazy(root, "workspace-subagent", "/tmp/subagent", sessioncontract.SessionCategorySubagent)
+	if err != nil {
+		t.Fatalf("create lazy subagent store: %v", err)
+	}
+	if got := subagentStore.Meta().Category; got == nil || *got != sessioncontract.SessionCategorySubagent {
+		t.Fatalf("subagent category = %v", got)
+	}
+}
+
+func TestSessionCategoryUnaffectedByUnrelatedMetadataMutations(t *testing.T) {
+	store, err := Create(t.TempDir(), "workspace", "/tmp/work", sessioncontract.SessionCategorySubagent, sessionTestPersistence.options()...)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	assertSubagent := func(operation string) {
+		t.Helper()
+		got := store.Meta().Category
+		if got == nil || *got != sessioncontract.SessionCategorySubagent {
+			t.Fatalf("category after %s = %v, want subagent", operation, got)
+		}
+	}
+
+	if err := store.SetName("renamed session"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	assertSubagent("rename")
+	if err := store.SetParentSessionID("legacy-parent"); err != nil {
+		t.Fatalf("set parent: %v", err)
+	}
+	assertSubagent("parent assignment")
+	if err := store.SetHeadlessActive(true); err != nil {
+		t.Fatalf("set headless active: %v", err)
+	}
+	assertSubagent("headless activation")
+}
+
+func TestSessionCategoryPromotionIsOneWayAndAdvancesRecencyOnce(t *testing.T) {
+	now := time.Date(2026, time.July, 14, 10, 0, 0, 0, time.UTC)
+	store, err := Create(
+		t.TempDir(),
+		"workspace",
+		"/tmp/work",
+		sessioncontract.SessionCategorySubagent,
+		append(sessionTestPersistence.options(), WithClock(func() time.Time { return now }))...,
+	)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	createdAt := store.Meta().UpdatedAt
+
+	now = now.Add(time.Hour)
+	changed, err := store.PromoteSubagentToMain()
+	if err != nil {
+		t.Fatalf("promote subagent: %v", err)
+	}
+	if !changed {
+		t.Fatal("first promotion reported no change")
+	}
+	promoted := store.Meta()
+	if promoted.Category == nil || *promoted.Category != sessioncontract.SessionCategoryMain {
+		t.Fatalf("promoted category = %v, want main", promoted.Category)
+	}
+	if !promoted.UpdatedAt.Equal(now) || !promoted.UpdatedAt.After(createdAt) {
+		t.Fatalf("promoted updated_at = %v, want %v after %v", promoted.UpdatedAt, now, createdAt)
+	}
+
+	now = now.Add(time.Hour)
+	changed, err = store.PromoteSubagentToMain()
+	if err != nil {
+		t.Fatalf("repeat promotion: %v", err)
+	}
+	if changed {
+		t.Fatal("repeat promotion reported a change")
+	}
+	if got := store.Meta().UpdatedAt; !got.Equal(promoted.UpdatedAt) {
+		t.Fatalf("repeat promotion advanced recency from %v to %v", promoted.UpdatedAt, got)
 	}
 }
 
@@ -419,7 +511,7 @@ func TestSetContinuationContextAndLockedPromptFacingContractStalePersistsTogethe
 
 func TestLockedContractMutationObserverCommitSemantics(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
-	store, err := Create(t.TempDir(), "ws", t.TempDir(), WithPersistenceObserver(observer))
+	store, err := Create(t.TempDir(), "ws", t.TempDir(), testSessionCategory, WithPersistenceObserver(observer))
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -491,7 +583,7 @@ func TestAppendEventPersistsFirstPromptPreview(t *testing.T) {
 func TestSetListingMetadataPersistsNameAndFirstPromptPreview(t *testing.T) {
 	root := t.TempDir()
 	observer := &recordingPersistenceObserver{}
-	store, err := Create(root, "workspace-x", "/tmp/work", WithPersistenceObserver(observer))
+	store, err := Create(root, "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -707,7 +799,7 @@ func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 		t.Fatalf("append a2: %v", err)
 	}
 
-	forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "Parent → edit u2")
+	forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "Parent → edit u2", testSessionCategory)
 	if err != nil {
 		t.Fatalf("fork at user message: %v", err)
 	}
@@ -761,7 +853,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 		t.Fatalf("append second user: %v", err)
 	}
 
-	beforeReminder, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 1), "before reminder")
+	beforeReminder, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 1), "before reminder", testSessionCategory)
 	if err != nil {
 		t.Fatalf("fork before reminder: %v", err)
 	}
@@ -769,7 +861,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 		t.Fatal("expected fork before reminder to clear reminder-issued state")
 	}
 
-	afterReminder, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after reminder")
+	afterReminder, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after reminder", testSessionCategory)
 	if err != nil {
 		t.Fatalf("fork after reminder: %v", err)
 	}
@@ -797,7 +889,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 			t.Fatalf("append second user: %v", err)
 		}
 
-		forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after legacy reviewer rollback")
+		forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after legacy reviewer rollback", testSessionCategory)
 		if err != nil {
 			t.Fatalf("fork: %v", err)
 		}
@@ -824,7 +916,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 			t.Fatalf("append second user: %v", err)
 		}
 
-		forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after compaction")
+		forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after compaction", testSessionCategory)
 		if err != nil {
 			t.Fatalf("fork: %v", err)
 		}
@@ -851,7 +943,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 			t.Fatalf("append second user: %v", err)
 		}
 
-		forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after legacy rollback")
+		forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after legacy rollback", testSessionCategory)
 		if err != nil {
 			t.Fatalf("fork: %v", err)
 		}
@@ -881,7 +973,7 @@ func TestForkAtUserMessageCopiesWorktreeReminderTarget(t *testing.T) {
 		t.Fatalf("append second user: %v", err)
 	}
 
-	forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "forked")
+	forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "forked", testSessionCategory)
 	if err != nil {
 		t.Fatalf("fork: %v", err)
 	}
@@ -966,7 +1058,7 @@ func TestSetWorktreeReminderStateRejectsEmptyPresentBranch(t *testing.T) {
 
 func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testing.T) {
 	root := t.TempDir()
-	parent, err := Create(root, "workspace-parent", "/tmp/work-parent", sessionTestPersistence.options()...)
+	parent, err := Create(root, "workspace-parent", "/tmp/work-parent", testSessionCategory, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
@@ -999,7 +1091,7 @@ func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testi
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
-	child, err := NewLazy(root, "workspace-child", "/tmp/work-child")
+	child, err := NewLazy(root, "workspace-child", "/tmp/work-child", testSessionCategory)
 	if err != nil {
 		t.Fatalf("new child: %v", err)
 	}

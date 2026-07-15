@@ -39,6 +39,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
 
@@ -1846,7 +1847,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	}
 	fixture.rebuildStarter(t)
 	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
-	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, fixture.metadata.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
@@ -1886,7 +1887,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))
 	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
-	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, fixture.metadata.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
@@ -1926,7 +1927,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))
 	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
-	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, fixture.metadata.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
@@ -1942,8 +1943,8 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 		StoreOptions: fixture.metadata.AuthoritativeSessionStoreOptions(),
 	}
 	plan, err := planner.PlanSession(context.Background(), launch.SessionRequest{
-		Mode:              launch.ModeHeadless,
-		SelectedSessionID: source.Meta().SessionID,
+		Mode:   launch.ModeHeadless,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustWorkflowSessionID(t, source.Meta().SessionID)),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 )
 
@@ -35,18 +36,11 @@ func candidateScopedSessionDir(containerDir string, sessionID string) (string, s
 	if trimmedContainerDir == "" {
 		return "", "", fmt.Errorf("workspace container dir is required")
 	}
-	if trimmedSessionID == "" {
-		return "", "", fmt.Errorf("session id is required")
+	parsedSessionID, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		return "", "", err
 	}
-	if filepath.IsAbs(trimmedSessionID) || trimmedSessionID == "." || trimmedSessionID == ".." {
-		return "", "", fmt.Errorf("session id %q is invalid", trimmedSessionID)
-	}
-	if strings.Contains(trimmedSessionID, "/") || strings.Contains(trimmedSessionID, "\\") {
-		return "", "", fmt.Errorf("session id %q is invalid", trimmedSessionID)
-	}
-	if cleaned := filepath.Clean(trimmedSessionID); cleaned != trimmedSessionID {
-		return "", "", fmt.Errorf("session id %q is invalid", trimmedSessionID)
-	}
+	trimmedSessionID = parsedSessionID.String()
 	absContainerDir, err := filepath.Abs(trimmedContainerDir)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve workspace container dir: %w", err)

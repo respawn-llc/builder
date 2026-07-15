@@ -224,14 +224,6 @@ type ProjectGetOverviewResponse struct {
 	Overview clientui.ProjectOverview
 }
 
-type SessionListByProjectRequest struct {
-	ProjectID string
-}
-
-type SessionListByProjectResponse struct {
-	Sessions []clientui.SessionSummary
-}
-
 func (r ProjectResolvePathRequest) Validate() error {
 	if strings.TrimSpace(r.Path) == "" {
 		return errors.New("path is required")
@@ -353,13 +345,6 @@ func (r ProjectRebindWorkspaceRequest) Validate() error {
 }
 
 func (r ProjectGetOverviewRequest) Validate() error {
-	if strings.TrimSpace(r.ProjectID) == "" {
-		return errors.New("project_id is required")
-	}
-	return nil
-}
-
-func (r SessionListByProjectRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}

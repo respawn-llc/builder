@@ -13,6 +13,7 @@ import (
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 	"encoding/json"
 	"net/http/httptest"
@@ -99,7 +100,7 @@ func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *te
 	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
 		ClientRequestID: "plan-after-explicit-workspace",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		ForceNewSession: true,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
 	}, &planResp)
 	if got, want := planResp.Plan.WorkspaceRoot, bindingB.CanonicalRoot; got != want {
 		t.Fatalf("planned workspace root = %q, want %q", got, want)
@@ -130,8 +131,7 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 	storeB, err := session.Create(
 		filepath.Join(filepath.Join(resolvedA.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
 		"workspace-b",
-		resolvedB.Config.WorkspaceRoot,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
+		resolvedB.Config.WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create workspace B: %v", err)
@@ -150,7 +150,7 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
 		ClientRequestID: "new-after-attach-session",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		ForceNewSession: true,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
 	}, &planResp)
 	wantWorkspaceRoot, err := config.CanonicalWorkspaceRoot(resolvedB.Config.WorkspaceRoot)
 	if err != nil {
@@ -186,8 +186,7 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	storeB, err := session.Create(
 		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
 		"workspace-b",
-		resolvedB.Config.WorkspaceRoot,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
+		resolvedB.Config.WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create foreign: %v", err)

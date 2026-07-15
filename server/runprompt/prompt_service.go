@@ -58,14 +58,15 @@ func (s *PromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRe
 		return serverapi.RunPromptResponse{}, ErrPromptServiceLauncherRequired
 	}
 	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
-	req.SelectedSessionID = strings.TrimSpace(req.SelectedSessionID)
-	req.ParentSessionID = strings.TrimSpace(req.ParentSessionID)
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.ClientRequestID == "" {
 		return serverapi.RunPromptResponse{}, ErrClientRequestIDRequired
 	}
 	if req.Prompt == "" {
 		return serverapi.RunPromptResponse{}, ErrPromptRequired
+	}
+	if err := req.Intent.Validate(); err != nil {
+		return serverapi.RunPromptResponse{}, err
 	}
 	if err := req.Overrides.ValidateAgentRoleOverride(); err != nil {
 		return serverapi.RunPromptResponse{}, err

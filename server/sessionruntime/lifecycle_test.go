@@ -16,6 +16,7 @@ import (
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 type lifecycleBuild struct {
@@ -679,7 +680,7 @@ func (o *armedWorktreeReminderFailObserver) ObservePersistedStore(context.Contex
 func TestSyncExecutionTargetRollsBackRebindWhenReminderPersistenceFails(t *testing.T) {
 	observer := &armedWorktreeReminderFailObserver{}
 	workspaceRoot := t.TempDir()
-	store, err := session.Create(t.TempDir(), "workspace", workspaceRoot, session.WithPersistenceObserver(observer))
+	store, err := session.Create(t.TempDir(), "workspace", workspaceRoot, sessioncontract.SessionCategoryMain, session.WithPersistenceObserver(observer))
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -746,7 +747,7 @@ func TestSyncExecutionTargetRollsBackRebindWhenReminderPersistenceFails(t *testi
 func TestSyncExecutionTargetFailsQueuedUserWorkWhenRollbackRebindFails(t *testing.T) {
 	observer := &armedWorktreeReminderFailObserver{}
 	workspaceRoot := t.TempDir()
-	store, err := session.Create(t.TempDir(), "workspace", workspaceRoot, session.WithPersistenceObserver(observer))
+	store, err := session.Create(t.TempDir(), "workspace", workspaceRoot, sessioncontract.SessionCategoryMain, session.WithPersistenceObserver(observer))
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}

@@ -29,7 +29,7 @@ func TestContinuationRolePersistence(t *testing.T) {
 				t.Fatalf("decode payload: %v", err)
 			}
 			persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{}}
-			store, err := Create(t.TempDir(), "workspace", t.TempDir(), persistence.options()...)
+			store, err := Create(t.TempDir(), "workspace", t.TempDir(), testSessionCategory, persistence.options()...)
 			if err != nil {
 				t.Fatalf("create session: %v", err)
 			}

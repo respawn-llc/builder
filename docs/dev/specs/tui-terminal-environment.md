@@ -12,8 +12,9 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 ## Size Degradation
 
-- Too-small guard: below the minimum size, the TUI renders nothing — a literally blank owned frame (alt-screen surface or ongoing mutable band; emitted scrollback is immutable and untouched). Rendering resumes normally once the terminal is at or above the minimum again. Minimum: 40 columns × 10 rows.
-- The guard is app-global: implemented once as a global override at the renderer/navigation-stack level, in front of every alt-screen navigation destination and the ongoing mutable band. Individual surfaces and page layouts never check terminal size, never implement their own too-small handling, and never know the guard exists — a per-surface size check is an architecture violation.
+- Future Rust TUI too-small guard: below the minimum size, the TUI renders nothing — a literally blank owned frame (alt-screen surface or ongoing mutable band; emitted scrollback is immutable and untouched). Rendering resumes normally once the terminal is at or above the minimum again. Minimum: 40 columns × 10 rows.
+- In the future Rust TUI, the guard is app-global: implemented once as a global override at the renderer/navigation-stack level, in front of every alt-screen navigation destination and the ongoing mutable band. Individual Rust surfaces and page layouts never check terminal size or implement their own too-small handling.
+- The shipping Go TUI applies the same 40×10 blank behavior to the BUI-41 session-picker lifecycle and the existing main-TUI ongoing ownership boundary. Other Go startup surfaces retain their existing size behavior.
 - At or above the minimum, every surface must remain crash-free and render sensibly. The floor for every page: vertical scrolling when content exceeds the height; infinite-scroll pagination for every unbounded list (never a full in-memory load); horizontal content wraps — never overflows or gets clipped off-screen. The status line follows its ratified priority ladder.
 
 ## Theme And Color
@@ -28,6 +29,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - Alt-screen surfaces enable alternate scroll while active and disable it on exit; the rollback picker is the exception (detail rendering without alternate scroll). (owner: terminology :: Alternate Scroll; tui-transcript :: Detail Mode)
 - No surface enables mouse capture, on any surface. (extends tui-startup :: Surface Architecture app-wide)
 
-## Known Drift (Go TUI, frozen)
+## Shipping Go TUI
 
-- Go has no too-small guard: below small sizes it renders broken frames.
+- Go startup surfaces use independent lifecycles; the shared navigation stack is a future Rust TUI requirement.
+- Outside the BUI-41 session picker and main-TUI ongoing ownership boundary, Go startup surfaces retain their existing size behavior.

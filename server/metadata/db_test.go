@@ -53,6 +53,151 @@ func TestOpenSuppressesGooseStatusLogging(t *testing.T) {
 	}
 }
 
+func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if !columnExists(t, store.db, "sessions", "category") {
+		t.Fatal("sessions.category is missing")
+	}
+	if !indexExists(t, store.db, "sessions_visible_category_recency_idx") {
+		t.Fatal("sessions_visible_category_recency_idx is missing")
+	}
+
+	var partial int
+	rows, err := store.db.Query(`PRAGMA index_list('sessions')`)
+	if err != nil {
+		t.Fatalf("list session indexes: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	found := false
+	for rows.Next() {
+		var sequence int
+		var name, origin string
+		var unique int
+		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			t.Fatalf("scan session index: %v", err)
+		}
+		if name == "sessions_visible_category_recency_idx" {
+			found = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate session indexes: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close session indexes: %v", err)
+	}
+	if !found || partial != 1 {
+		t.Fatalf("visible category recency index found=%v partial=%d, want true/1", found, partial)
+	}
+
+	indexRows, err := store.db.Query(`PRAGMA index_xinfo('sessions_visible_category_recency_idx')`)
+	if err != nil {
+		t.Fatalf("inspect session category index: %v", err)
+	}
+	defer func() { _ = indexRows.Close() }()
+	type indexedColumn struct {
+		name string
+		desc int
+	}
+	var columns []indexedColumn
+	for indexRows.Next() {
+		var sequence, columnID, desc, key int
+		var name sql.NullString
+		var collation string
+		if err := indexRows.Scan(&sequence, &columnID, &name, &desc, &collation, &key); err != nil {
+			t.Fatalf("scan session category index column: %v", err)
+		}
+		if key == 1 && name.Valid {
+			columns = append(columns, indexedColumn{name: name.String, desc: desc})
+		}
+	}
+	if err := indexRows.Err(); err != nil {
+		t.Fatalf("iterate session category index columns: %v", err)
+	}
+	wantColumns := []indexedColumn{
+		{name: "project_id"},
+		{name: "category"},
+		{name: "updated_at_unix_ms", desc: 1},
+		{name: "id", desc: 1},
+	}
+	if len(columns) != len(wantColumns) {
+		t.Fatalf("index columns = %+v, want %+v", columns, wantColumns)
+	}
+	for index := range wantColumns {
+		if columns[index] != wantColumns[index] {
+			t.Fatalf("index column %d = %+v, want %+v", index, columns[index], wantColumns[index])
+		}
+	}
+}
+
+func TestSessionCategoryStorageRejectsInvalidValues(t *testing.T) {
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if _, err := store.db.Exec(`UPDATE sessions SET category = 'worker' WHERE id = ?`, sess.Meta().SessionID); err == nil {
+		t.Fatal("sessions.category accepted an invalid value")
+	}
+}
+
+func TestSessionCategoryMigrationPreservesLegacyRowsAsNull(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 53)
+	if err != nil {
+		t.Fatalf("open version 53 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	workspaceRoot := t.TempDir()
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys for legacy seed: %v", err)
+	}
+	execSeed(t, db, "legacy workspace", `INSERT INTO workspaces (id, project_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('workspace-category-legacy', 'project-category-legacy', ?, '{}', ?, ?)`, workspaceRoot, now, now)
+	execSeed(t, db, "legacy project", `INSERT INTO projects (id, display_name, project_key, next_task_seq, primary_workspace_id, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('project-category-legacy', 'Legacy category', 'LEG', 1, 'workspace-category-legacy', ?, ?)`, now, now)
+	execSeed(t, db, "legacy session", `INSERT INTO sessions (
+    id, project_id, workspace_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'session-category-legacy',
+    'project-category-legacy',
+    'workspace-category-legacy',
+    'projects/project-category-legacy/sessions/session-category-legacy',
+    ?,
+    ?
+)`, now, now)
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys after legacy seed: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 53 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var category sql.NullString
+	if err := store.db.QueryRow(`SELECT category FROM sessions WHERE id = 'session-category-legacy'`).Scan(&category); err != nil {
+		t.Fatalf("scan migrated category: %v", err)
+	}
+	if category.Valid {
+		t.Fatalf("legacy category = %q, want SQL NULL", category.String)
+	}
+	record, err := store.ResolvePersistedSession(t.Context(), "session-category-legacy")
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession: %v", err)
+	}
+	if record.Meta.Category != nil {
+		t.Fatalf("legacy resolved category = %v, want absent", record.Meta.Category)
+	}
+}
+
 func TestOpenConfiguresSQLitePragmasThroughPathSafeDSN(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db with spaces", "main ? #.sqlite3")

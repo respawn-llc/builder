@@ -38,7 +38,9 @@ func WithUIOngoingTranscriptReopen(request func()) UIOption {
 }
 
 func (m *uiModel) nativeOngoingSurfaceActive() bool {
-	return m != nil && m.ongoingSurface != nil && m.surface() == uiSurfaceOngoingTranscript
+	return m != nil &&
+		m.ongoingSurface != nil &&
+		desiredOngoingOwnership(m.terminalGeometry, terminalDestinationForSurface(m.surface()))
 }
 
 func (m *uiModel) scheduleOngoingWidthRehydration() tea.Cmd {
@@ -91,29 +93,11 @@ func (m *uiModel) batchWithNativeOngoingRepaint(cmd tea.Cmd) tea.Cmd {
 	return tea.Batch(cmd, repaintCmd)
 }
 
-func (m *uiModel) updateOngoingOwnershipBeforeSurfaceTransition(prev, next uiSurface) {
-	if m == nil || m.ongoingTranscript == nil || prev == next {
-		return
-	}
-	if prev == uiSurfaceOngoingTranscript && next.wantsAltScreen() {
-		if result, err := m.ongoingTranscript.SetNormalBufferOwned(false); err != nil {
-			_ = m.handleOngoingSurfaceError(err)
-		} else {
-			_ = m.handleOngoingResult(result)
-		}
-	}
-}
-
 func (m *uiModel) ongoingOwnershipAfterSurfaceTransitionCmd(prev, next uiSurface) tea.Cmd {
 	if m == nil || m.ongoingTranscript == nil || prev == next {
 		return nil
 	}
-	if isOngoingNormalBufferRestoreTransition(prev, next) {
-		return func() tea.Msg {
-			return ongoingNormalBufferOwnedMsg{owned: true}
-		}
-	}
-	return nil
+	return m.queueOngoingOwnershipReconciliation()
 }
 
 func (m *uiModel) setOngoingNormalBufferOwned(owned bool) tea.Cmd {

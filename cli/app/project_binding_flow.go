@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"core/cli/app/internal/projectbinding"
 	"core/cli/tui"
@@ -217,7 +218,7 @@ func (m *projectBindingPickerModel) renderRow(index int, showPreview bool) strin
 	selected := index == m.cursor
 	row := projectbinding.RowText{Title: projectBindingCreateLabel}
 	if project, ok := m.projectForRow(index); ok {
-		row = projectbinding.ProjectRowText(project.DisplayName, project.ProjectID, project.RootPath, humanTime(project.UpdatedAt), projectBindingHomeDir())
+		row = projectbinding.ProjectRowText(project.DisplayName, project.ProjectID, project.RootPath, projectBindingTimestamp(project.UpdatedAt), projectBindingHomeDir())
 	}
 	markerStyle := m.styles.marker
 	rowStyle := m.styles.row
@@ -446,7 +447,7 @@ func (m *projectWorkspacePickerModel) renderHeader() string {
 func (m *projectWorkspacePickerModel) renderRow(index int, showPreview bool) string {
 	selected := index == m.cursor
 	workspace := m.workspaces[index]
-	row := projectbinding.WorkspaceRowText(workspace.DisplayName, workspace.RootPath, humanTime(workspace.UpdatedAt), projectBindingHomeDir())
+	row := projectbinding.WorkspaceRowText(workspace.DisplayName, workspace.RootPath, projectBindingTimestamp(workspace.UpdatedAt), projectBindingHomeDir())
 	markerStyle := m.styles.marker
 	rowStyle := m.styles.row
 	marker := "◈"
@@ -481,6 +482,13 @@ func (m *projectWorkspacePickerModel) renderRow(index int, showPreview bool) str
 	}
 	previewLine := "  " + m.styles.preview.Render(truncateQueuedMessageLine(row.Preview, previewWidth))
 	return titleLine + "\n" + previewLine
+}
+
+func projectBindingTimestamp(ts time.Time) string {
+	if ts.IsZero() {
+		return "unknown"
+	}
+	return ts.Local().Format("2006-01-02 15:04")
 }
 
 func (m *projectWorkspacePickerModel) hasPreview(index int) bool {

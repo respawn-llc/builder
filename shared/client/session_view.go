@@ -11,6 +11,7 @@ type SessionViewClient interface {
 	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
 	GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error)
 	GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
+	GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error)
 }
 
 type loopbackSessionViewClient struct {
@@ -31,4 +32,8 @@ func (c *loopbackSessionViewClient) GetSessionTranscriptPage(ctx context.Context
 
 func (c *loopbackSessionViewClient) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
 	return callLoopbackClient(c, "session view service is required", ctx, req, servicecontract.SessionViewService.GetLatestCommittedAssistantFinalAnswer)
+}
+
+func (c *loopbackSessionViewClient) GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
+	return callLoopbackClient(c, "session view service is required", ctx, req, servicecontract.SessionViewService.GetSessionExecutionEnvironment)
 }

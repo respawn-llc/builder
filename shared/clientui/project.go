@@ -1,6 +1,12 @@
 package clientui
 
-import "time"
+import (
+	"errors"
+	"time"
+
+	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
+)
 
 type ProjectAvailability string
 
@@ -34,12 +40,25 @@ type ProjectWorkspaceSummary struct {
 type ProjectOverview struct {
 	Project    ProjectSummary
 	Workspaces []ProjectWorkspaceSummary
-	Sessions   []SessionSummary
 }
 
 type SessionSummary struct {
-	SessionID          string
-	Name               string
-	FirstPromptPreview string
-	UpdatedAt          time.Time
+	SessionID          runtimeids.SessionID            `json:"session_id"`
+	Category           sessioncontract.SessionCategory `json:"category"`
+	Name               string                          `json:"name,omitempty"`
+	FirstPromptPreview string                          `json:"first_prompt_preview,omitempty"`
+	UpdatedAt          time.Time                       `json:"updated_at"`
+}
+
+func (s SessionSummary) Validate() error {
+	if s.SessionID.IsZero() {
+		return errors.New("session summary session_id is required")
+	}
+	if _, err := sessioncontract.ParseSessionCategory(string(s.Category)); err != nil {
+		return err
+	}
+	if s.UpdatedAt.IsZero() || s.UpdatedAt.Unix() <= 0 {
+		return errors.New("session summary updated_at must be after the Unix epoch")
+	}
+	return nil
 }

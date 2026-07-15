@@ -19,6 +19,7 @@ import (
 	"core/server/tools"
 	"core/shared/client"
 	"core/shared/config"
+	"core/shared/sessioncontract"
 )
 
 func registerAppWorkspace(t *testing.T, workspace string) {
@@ -249,8 +250,7 @@ func createAuthoritativeAppSession(t *testing.T, persistenceRoot string, workspa
 	store, err := session.Create(
 		filepath.Join(filepath.Join(config.App{PersistenceRoot: persistenceRoot}.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
 		filepath.Base(filepath.Clean(workspaceRoot)),
-		workspaceRoot,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
+		workspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		_ = metadataStore.Close()

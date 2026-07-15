@@ -15,7 +15,9 @@ import (
 	rpccontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 func TestRoutePolicyAuthPolicyHandlesBlankAndUnknownMethods(t *testing.T) {
@@ -79,6 +81,19 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, latestFinalRoute, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign latest final answer unexpectedly allowed")
+	}
+	typedSessionID, err := runtimeids.ParseSessionID(fixture.ownSessionID)
+	if err != nil {
+		t.Fatalf("parse execution-environment session ID: %v", err)
+	}
+	executionEnvironmentRoute := routeForTest(t, protocol.MethodSessionGetExecutionEnvironment)
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		executionEnvironmentRoute,
+		serverapi.SessionExecutionEnvironmentRequest{SessionID: typedSessionID},
+	); err != nil {
+		t.Fatalf("active project own execution environment: %v", err)
 	}
 	attachedRoute := routeForTest(t, protocol.MethodSessionRetargetWorkspace)
 	if err := executor.authorizeScope(ctx, &connectionState{}, attachedRoute, serverapi.SessionRetargetWorkspaceRequest{SessionID: fixture.foreignSessionID}); err != nil {
@@ -375,8 +390,7 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 	foreignStore, err := session.Create(
 		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
 		"workspace-b",
-		resolvedB.Config.WorkspaceRoot,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
+		resolvedB.Config.WorkspaceRoot, sessioncontract.SessionCategoryMain, metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create foreign: %v", err)

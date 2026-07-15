@@ -37,8 +37,9 @@ func TestWindowResizeDoesNotWriteOngoingSurfaceWhileDetailOwnsTerminal(t *testin
 	if !result.handled {
 		t.Fatal("window resize was not handled")
 	}
-	if m.termWidth != 100 || m.termHeight != 40 || !m.windowSizeKnown {
-		t.Fatalf("geometry = %dx%d known=%v, want stored resize", m.termWidth, m.termHeight, m.windowSizeKnown)
+	size := m.terminalGeometry.Size()
+	if !m.terminalGeometry.IsKnown() || size == nil || size.width != 100 || size.height != 40 {
+		t.Fatalf("geometry = %+v, want stored resize", size)
 	}
 	if len(surface.calls) != 0 {
 		t.Fatalf("ongoing surface calls while detail active = %v, want none", surface.calls)
@@ -171,7 +172,7 @@ func TestWindowResizeKeepsControllerLiveFrameSections(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(nativeSurface),
-	), 40, 8)
+	), 40, 10)
 	m.ongoingTranscript = newOngoingTranscriptController(surface, m.ongoingFrameInput)
 	if _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)

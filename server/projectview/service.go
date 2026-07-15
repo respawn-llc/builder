@@ -683,18 +683,14 @@ func (s *Service) GetProjectOverview(ctx context.Context, req serverapi.ProjectG
 	return serverapi.ProjectGetOverviewResponse{Overview: overview}, nil
 }
 
-func (s *Service) ListSessionsByProject(ctx context.Context, req serverapi.SessionListByProjectRequest) (serverapi.SessionListByProjectResponse, error) {
+func (s *Service) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
 	if err := req.Validate(); err != nil {
-		return serverapi.SessionListByProjectResponse{}, err
+		return serverapi.SessionPageResponse{}, err
 	}
 	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.SessionListByProjectResponse{}, err
+		return serverapi.SessionPageResponse{}, err
 	}
-	sessions, err := s.metadata.ListSessionsByProject(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.SessionListByProjectResponse{}, err
-	}
-	return serverapi.SessionListByProjectResponse{Sessions: sessions}, nil
+	return s.metadata.ListSessionPage(ctx, req)
 }
 
 func (s *Service) requireProjectID(projectID string) error {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/shared/rollbacktarget"
+	"core/shared/sessioncontract"
 	"core/shared/valuecopy"
 )
 
@@ -28,25 +29,25 @@ var (
 // conversation up to (but excluding) the visible user message persisted at
 // userMessageSeq. It returns the forked store and the 1-based ordinal of that
 // user message among the parent's visible user messages (for naming/display).
-func ForkAtUserMessage(parent *Store, userMessageSeq int64, forkName string) (*Store, int, error) {
+func ForkAtUserMessage(parent *Store, userMessageSeq int64, forkName string, category sessioncontract.SessionCategory) (*Store, int, error) {
 	if parent == nil {
 		return nil, 0, fmt.Errorf("parent store is required")
 	}
 	if userMessageSeq <= 0 {
 		return nil, 0, fmt.Errorf("user message seq must be >= 1")
 	}
-	return streamChildFromParent(parent, parent.Meta(), forkName, userMessageSeq)
+	return streamChildFromParent(parent, parent.Meta(), forkName, category, userMessageSeq)
 }
 
 // CloneSession creates a child session that replays the parent's entire
 // conversation history. Workflow compact-and-continue fan-out branches use this
 // so each parallel continuation compacts its own isolated copy of the source
 // conversation instead of mutating the shared source session.
-func CloneSession(parent *Store, forkName string) (*Store, error) {
+func CloneSession(parent *Store, forkName string, category sessioncontract.SessionCategory) (*Store, error) {
 	if parent == nil {
 		return nil, fmt.Errorf("parent store is required")
 	}
-	child, _, err := streamChildFromParent(parent, parent.Meta(), forkName, 0)
+	child, _, err := streamChildFromParent(parent, parent.Meta(), forkName, category, 0)
 	return child, err
 }
 
@@ -55,9 +56,9 @@ func CloneSession(parent *Store, forkName string) (*Store, error) {
 // visible user message persisted at that sequence (fork-at-message); targetSeq
 // == 0 clones everything. It returns the 1-based ordinal of the cut user
 // message among the parent's visible user messages (0 when cloning).
-func streamChildFromParent(parent *Store, parentMeta Meta, forkName string, targetSeq int64) (*Store, int, error) {
+func streamChildFromParent(parent *Store, parentMeta Meta, forkName string, category sessioncontract.SessionCategory, targetSeq int64) (*Store, int, error) {
 	containerDir := filepath.Dir(parent.Dir())
-	child, err := newLazyWithStoreOptions(containerDir, parentMeta.WorkspaceContainer, parentMeta.WorkspaceRoot, parent.options)
+	child, err := newLazyWithStoreOptions(containerDir, parentMeta.WorkspaceContainer, parentMeta.WorkspaceRoot, category, parent.options)
 	if err != nil {
 		return nil, 0, err
 	}

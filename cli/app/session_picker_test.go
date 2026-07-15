@@ -12,7 +12,9 @@ import (
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -38,17 +40,58 @@ func (fastOnlyAuthResolver) CurrentState(context.Context) (auth.State, error) {
 
 var _ client.AuthStatusClient = panicAuthStatusClient{}
 
+func newTestSessionPickerModel(t *testing.T, summaries []clientui.SessionSummary, header sessionPickerHeaderInfo) *sessionPickerModel {
+	t.Helper()
+	model := newUninitializedTestSessionPickerModel(t, summaries, header)
+	runSessionPickerCommands(t, model, model.Init())
+	return model
+}
+
+func newUninitializedTestSessionPickerModel(t *testing.T, summaries []clientui.SessionSummary, header sessionPickerHeaderInfo) *sessionPickerModel {
+	t.Helper()
+	if summaries == nil {
+		summaries = []clientui.SessionSummary{pickerTestSummary(t, "test-session", time.Now().UTC())}
+	}
+	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+		response := pickerPageResponse(t, request)
+		if request.Category == sessioncontract.SessionCategoryMain {
+			response.Sessions = append([]clientui.SessionSummary(nil), summaries...)
+		}
+		return sessionPageLoadResult{response: response}
+	}}
+	return newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", header)
+}
+
+func pickerTestSummary(t *testing.T, raw string, updatedAt time.Time) clientui.SessionSummary {
+	t.Helper()
+	id, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		t.Fatalf("ParseSessionID(%q): %v", raw, err)
+	}
+	return clientui.SessionSummary{
+		SessionID: id,
+		Category:  sessioncontract.SessionCategoryMain,
+		UpdatedAt: updatedAt,
+	}
+}
+
+func selectedPickerSessionID(t *testing.T, selection sessionPickerSelection) runtimeids.SessionID {
+	t.Helper()
+	selected, ok := selection.(sessionPickerSessionSelection)
+	if !ok {
+		t.Fatalf("picker selection = %T, want session selection", selection)
+	}
+	return selected.sessionID
+}
+
 func TestSessionPickerScrollsAndSelects(t *testing.T) {
 	now := time.Date(2026, time.February, 8, 12, 0, 0, 0, time.UTC)
 	summaries := make([]clientui.SessionSummary, 0, 20)
 	for i := 0; i < 20; i++ {
-		summaries = append(summaries, clientui.SessionSummary{
-			SessionID: fmt.Sprintf("s-%02d", i),
-			UpdatedAt: now.Add(-time.Duration(i) * time.Minute),
-		})
+		summaries = append(summaries, pickerTestSummary(t, fmt.Sprintf("s-%02d", i), now.Add(-time.Duration(i)*time.Minute)))
 	}
 
-	m := newSessionPickerModel(summaries, "dark", sessionPickerHeaderInfo{})
+	m := newTestSessionPickerModel(t, summaries, sessionPickerHeaderInfo{})
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
 	m = next.(*sessionPickerModel)
 	for i := 0; i < 16; i++ {
@@ -56,38 +99,37 @@ func TestSessionPickerScrollsAndSelects(t *testing.T) {
 		m = next.(*sessionPickerModel)
 	}
 
-	if m.cursor != 16 {
-		t.Fatalf("cursor=%d want 16", m.cursor)
+	tab := m.tab(sessioncontract.SessionCategoryMain)
+	if got := tab.selectedIndex(); got == nil || *got != 16 {
+		t.Fatalf("selected index=%v want 16", got)
 	}
-	if m.offset == 0 {
+	if tab.offset == 0 {
 		t.Fatalf("offset should advance for scroll")
 	}
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(*sessionPickerModel)
-	if m.result.Session == nil {
-		t.Fatal("expected selected session")
-	}
-	if m.result.Session.SessionID != summaries[15].SessionID {
-		t.Fatalf("selected=%s want %s", m.result.Session.SessionID, summaries[15].SessionID)
+	open, present := m.result.(sessionPickerOpenResult)
+	if !present || open.sessionID != summaries[15].SessionID {
+		t.Fatalf("selected=%+v want %s", m.result, summaries[15].SessionID.String())
 	}
 }
 
 func TestSessionPickerEnterDefaultsToCreateNew(t *testing.T) {
-	m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{})
+	m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(*sessionPickerModel)
-	if !m.result.CreateNew {
+	if _, ok := m.result.(sessionPickerCreateResult); !ok {
 		t.Fatal("expected default selection to create a new session")
 	}
 }
 
 func TestSessionPickerNewHotkeyAndExitKeys(t *testing.T) {
-	m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{})
+	m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m = next.(*sessionPickerModel)
-	if !m.result.CreateNew {
+	if _, ok := m.result.(sessionPickerCreateResult); !ok {
 		t.Fatal("expected create-new result")
 	}
 
@@ -95,40 +137,41 @@ func TestSessionPickerNewHotkeyAndExitKeys(t *testing.T) {
 		{Type: tea.KeyEsc},
 		{Type: tea.KeyRunes, Runes: []rune{'q'}},
 	} {
-		m = newSessionPickerModel([]clientui.SessionSummary{{SessionID: "s-1"}}, "dark", sessionPickerHeaderInfo{})
+		m = newTestSessionPickerModel(t, []clientui.SessionSummary{pickerTestSummary(t, "s-1", time.Now().UTC())}, sessionPickerHeaderInfo{})
 		next, cmd := m.Update(key)
 		m = next.(*sessionPickerModel)
 		if cmd != nil {
 			t.Fatalf("%v unexpectedly ended the session picker", key)
 		}
-		if m.cursor != 0 || m.result.CreateNew || m.result.Canceled || m.result.Session != nil {
-			t.Fatalf("%v changed picker state: cursor=%d result=%+v", key, m.cursor, m.result)
+		selected := m.tab(sessioncontract.SessionCategoryMain).selectedIndex()
+		if selected == nil || *selected != 0 || m.result != nil {
+			t.Fatalf("%v changed picker state: selected=%v result=%+v", key, selected, m.result)
 		}
 	}
 
-	m = newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{})
+	m = newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = next.(*sessionPickerModel)
 	if cmd == nil {
 		t.Fatal("expected Ctrl+C to exit the session picker")
 	}
-	if !m.result.Canceled {
+	if _, ok := m.result.(sessionPickerCancelResult); !ok {
 		t.Fatal("expected Ctrl+C cancellation result")
 	}
 }
 
 func TestSessionPickerIgnoresMouseSGRRunes(t *testing.T) {
-	m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{})
+	m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[<64;81;40M[<65;80;39M")})
 	m = next.(*sessionPickerModel)
-	if m.result.CreateNew || m.result.Canceled || m.result.Session != nil {
+	if m.result != nil {
 		t.Fatalf("expected mouse sgr runes ignored, got result=%+v", m.result)
 	}
 }
 
 func TestSessionPickerHeaderLoadsGitBranchAsync(t *testing.T) {
 	repoRoot := initStatusLineGitRepo(t, "picker-branch")
-	m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{
+	m := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version: "1.2.3",
 		StatusRequest: uiStatusRequest{
 			WorkspaceRoot: repoRoot,
@@ -137,7 +180,7 @@ func TestSessionPickerHeaderLoadsGitBranchAsync(t *testing.T) {
 			Settings:      config.Settings{Model: "gpt-5", ThinkingLevel: "high"},
 		},
 	})
-	cmd := m.Init()
+	cmd := collectSessionPickerStatusCmd(m.header)
 	if cmd == nil {
 		t.Fatal("expected async git branch command")
 	}
@@ -154,7 +197,7 @@ func TestSessionPickerHeaderLoadsGitBranchAsync(t *testing.T) {
 
 func TestSessionPickerHeaderInitialAsyncPaintUsesOnlyStaticShell(t *testing.T) {
 	repoRoot := initStatusLineGitRepo(t, "picker-branch")
-	m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{
+	m := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version:       "1.2.3",
 		OwnsServer:    true,
 		ServerAddress: "127.0.0.1:53082",
@@ -166,7 +209,7 @@ func TestSessionPickerHeaderInitialAsyncPaintUsesOnlyStaticShell(t *testing.T) {
 		},
 	})
 	m.width = 80
-	cmd := m.Init()
+	cmd := collectSessionPickerStatusCmd(m.header)
 	if cmd == nil {
 		t.Fatal("expected async status command")
 	}
@@ -183,7 +226,7 @@ func TestSessionPickerHeaderInitialAsyncPaintUsesOnlyStaticShell(t *testing.T) {
 }
 
 func TestSessionPickerHeaderLoadsFastAuthStateOnly(t *testing.T) {
-	m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{
+	m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version: "1.2.3",
 		StatusRequest: uiStatusRequest{
 			Settings:   config.Settings{Model: "gpt-5"},
@@ -194,7 +237,7 @@ func TestSessionPickerHeaderLoadsFastAuthStateOnly(t *testing.T) {
 			Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{Email: "user@example.com"}},
 		}},
 	})
-	cmd := m.Init()
+	cmd := collectSessionPickerStatusCmd(m.header)
 	if cmd == nil {
 		t.Fatal("expected async status command")
 	}
@@ -219,7 +262,7 @@ func TestSessionPickerHeaderLoadsFastAuthStateVariants(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{
+			m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 				Version: "1.2.3",
 				StatusRequest: uiStatusRequest{
 					Settings:   config.Settings{Model: "gpt-5"},
@@ -228,7 +271,7 @@ func TestSessionPickerHeaderLoadsFastAuthStateVariants(t *testing.T) {
 				},
 				AuthManager: fastOnlyAuthResolver{state: tt.state},
 			})
-			cmd := m.Init()
+			cmd := collectSessionPickerStatusCmd(m.header)
 			if cmd == nil {
 				t.Fatal("expected async status command")
 			}
@@ -243,7 +286,7 @@ func TestSessionPickerHeaderLoadsFastAuthStateVariants(t *testing.T) {
 }
 
 func TestSessionPickerHeaderReflowsMainInfoWhenNarrow(t *testing.T) {
-	m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{
+	m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version:       "1.2.3",
 		CWD:           "~/very/long/repository/path",
 		Branch:        "main",
@@ -271,7 +314,7 @@ func TestSessionPickerHeaderReflowsMainInfoWhenNarrow(t *testing.T) {
 }
 
 func TestSessionPickerHeaderRendersMissingRemoteAddressFallback(t *testing.T) {
-	m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{
+	m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version: "1.2.3",
 		CWD:     "~/repo",
 		Auth:    "No auth",
@@ -305,7 +348,7 @@ func TestSessionPickerAuthLabelExamples(t *testing.T) {
 }
 
 func TestSessionPickerHeaderTinyWidthKeepsRowsVisible(t *testing.T) {
-	m := newSessionPickerModel([]clientui.SessionSummary{{SessionID: "s-1", UpdatedAt: time.Now()}}, "dark", sessionPickerHeaderInfo{
+	m := newTestSessionPickerModel(t, []clientui.SessionSummary{pickerTestSummary(t, "s-1", time.Now().UTC())}, sessionPickerHeaderInfo{
 		Version:       "1.2.3",
 		CWD:           "~/very/long/path/to/repo",
 		Branch:        "feature/very-long-branch",

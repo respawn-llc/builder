@@ -436,7 +436,8 @@ func liveControlSubcommand(args []string) string {
 	if help || len(args) == 1 || len(positionals) == 0 {
 		return verb
 	}
-	if _, err := runtimeids.ParseSessionID(positionals[0]); err != nil {
+	sessionID, err := runtimeids.ParseSessionID(positionals[0])
+	if err != nil || !sessionID.IsCanonicalUUIDv4() {
 		return ""
 	}
 	switch verb {
