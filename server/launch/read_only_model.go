@@ -80,18 +80,19 @@ func ResolveReadOnlySessionModel(app config.App, meta session.Meta) (ReadOnlySes
 	}
 	active := app.Settings
 	if meta.Continuation != nil && meta.Continuation.AgentRole != nil {
-		role := strings.TrimSpace(*meta.Continuation.AgentRole)
-		if role == "" {
+		if strings.TrimSpace(*meta.Continuation.AgentRole) == "" {
 			return ReadOnlySessionModel{}, invalidReadOnlySessionModel(errors.New("continuation agent role is invalid"))
 		}
-		lookup := config.LookupSubagentRole(active, role)
-		switch lookup.Status {
-		case config.SubagentRoleLookupPresent:
-			active = lookup.Role.Settings
-		case config.SubagentRoleLookupInvalid:
-			return ReadOnlySessionModel{}, invalidReadOnlySessionModel(errors.New("continuation agent role is invalid"))
-		case config.SubagentRoleLookupMissing:
-			return ReadOnlySessionModel{}, invalidReadOnlySessionModel(errors.New("continuation agent role is not configured"))
+		var err error
+		active, _, err = applyPersistedSubagentRoleSettings(
+			active,
+			app.Source,
+			meta.Continuation.AgentRole,
+			true,
+			false,
+		)
+		if err != nil {
+			return ReadOnlySessionModel{}, invalidReadOnlySessionModel(err)
 		}
 	}
 	name := strings.TrimSpace(active.Model)
@@ -100,11 +101,24 @@ func ResolveReadOnlySessionModel(app config.App, meta session.Meta) (ReadOnlySes
 			Reason: serverapi.SessionExecutionModelUnavailableNotConfigured,
 		}
 	}
-	provider, err := resolveReadOnlySessionModelProvider(name, active.ProviderOverride)
+	provider, err := resolveReadOnlySessionModelProviderFromSettings(active)
 	if err != nil {
 		return ReadOnlySessionModel{}, err
 	}
 	return ReadOnlySessionModel{Name: name, Provider: provider}, nil
+}
+
+func resolveReadOnlySessionModelProviderFromSettings(settings config.Settings) (ReadOnlySessionModelProvider, error) {
+	if providerID := strings.TrimSpace(settings.ProviderCapabilities.ProviderID); providerID != "" {
+		return resolveReadOnlySessionModelProvider(settings.Model, providerID)
+	}
+	if providerOverride := strings.TrimSpace(settings.ProviderOverride); providerOverride != "" {
+		return resolveReadOnlySessionModelProvider(settings.Model, providerOverride)
+	}
+	if strings.TrimSpace(settings.OpenAIBaseURL) != "" {
+		return resolveReadOnlySessionModelProvider(settings.Model, persistedRoleProviderID(settings))
+	}
+	return resolveReadOnlySessionModelProvider(settings.Model, "")
 }
 
 func resolveReadOnlySessionModelProvider(model, configuredProvider string) (ReadOnlySessionModelProvider, error) {

@@ -55,9 +55,12 @@ func TestReadOnlyModelUsesLockedProviderContract(t *testing.T) {
 func TestReadOnlyModelUsesCurrentConfigAndContinuationRole(t *testing.T) {
 	app := config.App{
 		Settings: config.Settings{
-			Model: "configured-model",
+			Model: "gpt-configured-model",
 			Subagents: map[string]config.SubagentRole{
-				"worker": {Settings: config.Settings{Model: "gpt-worker-model"}},
+				"worker": {
+					Settings: config.Settings{Model: "gpt-worker-model"},
+					Sources:  map[string]string{"model": "workspace"},
+				},
 			},
 		},
 	}
@@ -74,6 +77,44 @@ func TestReadOnlyModelUsesCurrentConfigAndContinuationRole(t *testing.T) {
 	}
 	if resolved.Provider.ID() != "openai" {
 		t.Fatalf("resolved worker provider = %q, want inferred openai", resolved.Provider.ID())
+	}
+}
+
+func TestReadOnlyModelContinuationRoleInheritsBaseModel(t *testing.T) {
+	role := "worker"
+	resolved, err := ResolveReadOnlySessionModel(config.App{
+		Settings: config.Settings{
+			Model: "gpt-base-model",
+			Subagents: map[string]config.SubagentRole{
+				role: {
+					Settings: config.Settings{ThinkingLevel: "high"},
+					Sources:  map[string]string{"thinking_level": "workspace"},
+				},
+			},
+		},
+	}, session.Meta{
+		Continuation: &session.ContinuationContext{AgentRole: &role},
+	})
+	if err != nil {
+		t.Fatalf("ResolveReadOnlySessionModel: %v", err)
+	}
+	if resolved.Name != "gpt-base-model" || resolved.Provider.ID() != "openai" {
+		t.Fatalf("inherited role model = %+v provider=%q", resolved, resolved.Provider.ID())
+	}
+}
+
+func TestReadOnlyModelAppliesFastRoleHeuristics(t *testing.T) {
+	role := config.BuiltInSubagentRoleFast
+	resolved, err := ResolveReadOnlySessionModel(config.App{
+		Settings: config.Settings{Model: "gpt-base-model"},
+	}, session.Meta{
+		Continuation: &session.ContinuationContext{AgentRole: &role},
+	})
+	if err != nil {
+		t.Fatalf("ResolveReadOnlySessionModel: %v", err)
+	}
+	if resolved.Name != "gpt-5.6-terra" || resolved.Provider.ID() != "openai" {
+		t.Fatalf("fast role model = %+v provider=%q", resolved, resolved.Provider.ID())
 	}
 }
 
@@ -129,5 +170,37 @@ func TestReadOnlyModelPreservesExplicitProviderWithoutInference(t *testing.T) {
 	}
 	if resolved.Provider.ID() != "custom-provider" {
 		t.Fatalf("explicit provider = %q, want custom-provider", resolved.Provider.ID())
+	}
+}
+
+func TestReadOnlyModelUsesConfiguredProviderCapabilitiesID(t *testing.T) {
+	resolved, err := ResolveReadOnlySessionModel(config.App{
+		Settings: config.Settings{
+			Model: "provider-owned-model",
+			ProviderCapabilities: config.ProviderCapabilitiesOverride{
+				ProviderID: "openai-compatible",
+			},
+		},
+	}, session.Meta{})
+	if err != nil {
+		t.Fatalf("ResolveReadOnlySessionModel: %v", err)
+	}
+	if resolved.Provider.ID() != "openai-compatible" {
+		t.Fatalf("provider capabilities ID = %q, want openai-compatible", resolved.Provider.ID())
+	}
+}
+
+func TestReadOnlyModelUsesConfiguredOpenAICompatibleBaseURL(t *testing.T) {
+	resolved, err := ResolveReadOnlySessionModel(config.App{
+		Settings: config.Settings{
+			Model:         "provider-owned-model",
+			OpenAIBaseURL: "https://example.test/v1",
+		},
+	}, session.Meta{})
+	if err != nil {
+		t.Fatalf("ResolveReadOnlySessionModel: %v", err)
+	}
+	if resolved.Provider.ID() != "openai-compatible" {
+		t.Fatalf("base URL provider = %q, want openai-compatible", resolved.Provider.ID())
 	}
 }
