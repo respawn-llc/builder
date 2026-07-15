@@ -129,7 +129,7 @@ type PreparedSubagentTarget struct {
 	Settings     config.Settings
 	Source       config.SourceReport
 	EnabledTools []toolspec.ID
-	Warning      string
+	Warning      *string
 }
 
 type preparedSubagentIdentity struct {
@@ -835,8 +835,8 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 		}
 		next.EnabledTools = append([]toolspec.ID(nil), prepared.NamedTarget.EnabledTools...)
 		next.Source = prepared.NamedTarget.Source
-		if strings.TrimSpace(prepared.NamedTarget.Warning) != "" {
-			warnings = append(warnings, prepared.NamedTarget.Warning)
+		if prepared.NamedTarget.Warning != nil {
+			warnings = append(warnings, *prepared.NamedTarget.Warning)
 		}
 		if shouldPersistContinuation {
 			if err := persistContinuation(); err != nil {
@@ -900,7 +900,7 @@ func runPromptLoadOptions(overrides serverapi.RunPromptOverrides) config.LoadOpt
 	}
 }
 
-func resolvePreparedSubagentSettings(base config.Settings, baseSource config.SourceReport, target preparedSubagentIdentity, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, string, error) {
+func resolvePreparedSubagentSettings(base config.Settings, baseSource config.SourceReport, target preparedSubagentIdentity, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, *string, error) {
 	return resolveSubagentSettingsFromRole(base, baseSource, target.Selector, target.Role, target.ProviderID, allowModelOverride, validate)
 }
 

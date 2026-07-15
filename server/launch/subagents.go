@@ -14,20 +14,20 @@ import (
 
 const fastRoleSameAsMainWarning = "Warning: user configuration for fast agents is the same as for other agents. Consider asking the user to edit their config to pick a faster, smaller model at the end of your task. More info at " + config.DocsURL
 
-func resolveSubagentSettingsWithValidation(base config.Settings, providerBase config.Settings, baseSources map[string]string, roleName string, authState auth.State, allowModelOverride bool, validate bool) (config.Settings, string, error) {
+func resolveSubagentSettingsWithValidation(base config.Settings, providerBase config.Settings, baseSources map[string]string, roleName string, authState auth.State, allowModelOverride bool, validate bool) (config.Settings, *string, error) {
 	lookup := config.LookupSubagentRole(base, roleName)
 	switch lookup.Status {
 	case config.SubagentRoleLookupInvalid:
-		return config.Settings{}, "", fmt.Errorf("invalid subagent role %q", roleName)
+		return config.Settings{}, nil, fmt.Errorf("invalid subagent role %q", roleName)
 	case config.SubagentRoleLookupMissing:
-		return config.Settings{}, "", fmt.Errorf("Unrecognized role %q. It may have been removed by the user during the session. Available roles: [%s]", *lookup.NormalizedSelector, strings.Join(config.AvailableSubagentRoleNames(base, false), ", "))
+		return config.Settings{}, nil, fmt.Errorf("Unrecognized role %q. It may have been removed by the user during the session. Available roles: [%s]", *lookup.NormalizedSelector, strings.Join(config.AvailableSubagentRoleNames(base, false), ", "))
 	}
 	providerSettings := cloneSettings(providerBase)
 	providerSettings.Subagents = nil
 	applySubagentProviderOverrides(&providerSettings, lookup.Role)
 	providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
 	if err != nil {
-		return config.Settings{}, "", err
+		return config.Settings{}, nil, err
 	}
 	resolved, _, warning, err := resolveSubagentSettingsWithProviderID(
 		base,
@@ -38,18 +38,18 @@ func resolveSubagentSettingsWithValidation(base config.Settings, providerBase co
 		validate,
 	)
 	if err != nil {
-		return config.Settings{}, "", err
+		return config.Settings{}, nil, err
 	}
 	return resolved, warning, nil
 }
 
-func resolveSubagentSettingsWithProviderID(base config.Settings, baseSource config.SourceReport, roleName string, providerID string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, string, error) {
+func resolveSubagentSettingsWithProviderID(base config.Settings, baseSource config.SourceReport, roleName string, providerID string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, *string, error) {
 	lookup := config.LookupSubagentRole(base, roleName)
 	switch lookup.Status {
 	case config.SubagentRoleLookupInvalid:
-		return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("invalid subagent role %q", roleName)
+		return config.Settings{}, config.SourceReport{}, nil, fmt.Errorf("invalid subagent role %q", roleName)
 	case config.SubagentRoleLookupMissing:
-		return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("Unrecognized role %q. It may have been removed by the user during the session. Available roles: [%s]", *lookup.NormalizedSelector, strings.Join(config.AvailableSubagentRoleNames(base, false), ", "))
+		return config.Settings{}, config.SourceReport{}, nil, fmt.Errorf("Unrecognized role %q. It may have been removed by the user during the session. Available roles: [%s]", *lookup.NormalizedSelector, strings.Join(config.AvailableSubagentRoleNames(base, false), ", "))
 	}
 	return resolveSubagentSettingsFromRole(
 		base,
@@ -62,7 +62,7 @@ func resolveSubagentSettingsWithProviderID(base config.Settings, baseSource conf
 	)
 }
 
-func resolveSubagentSettingsFromRole(base config.Settings, baseSource config.SourceReport, selector string, role config.SubagentRole, providerID string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, string, error) {
+func resolveSubagentSettingsFromRole(base config.Settings, baseSource config.SourceReport, selector string, role config.SubagentRole, providerID string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, *string, error) {
 	resolved := cloneSettings(base)
 	_ = applyBuiltInRoleHeuristics(&resolved, selector, providerID, allowModelOverride)
 	applySubagentRoleOverrides(&resolved, role, allowModelOverride)
@@ -72,12 +72,13 @@ func resolveSubagentSettingsFromRole(base config.Settings, baseSource config.Sou
 	effectiveSource.Sources = effectiveSources
 	if validate {
 		if err := config.ValidateSettingsWithSources(resolved, effectiveSources); err != nil {
-			return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("invalid subagent role %q: %w", selector, err)
+			return config.Settings{}, config.SourceReport{}, nil, fmt.Errorf("invalid subagent role %q: %w", selector, err)
 		}
 	}
-	warning := ""
+	var warning *string
 	if selector == config.BuiltInSubagentRoleFast && sameResolvedSubagentSettings(base, resolved) {
-		warning = fastRoleSameAsMainWarning
+		warningValue := fastRoleSameAsMainWarning
+		warning = &warningValue
 	}
 	return resolved, effectiveSource, warning, nil
 }
