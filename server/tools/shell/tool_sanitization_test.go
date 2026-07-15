@@ -10,6 +10,21 @@ import (
 	"core/shared/config"
 )
 
+func mustPostprocessRunner(t *testing.T, settings postprocess.Settings) *postprocess.Runner {
+	t.Helper()
+	runner, err := postprocess.NewRunner(settings)
+	if err != nil {
+		t.Fatalf("new postprocess runner: %v", err)
+	}
+	return runner
+}
+
+func TestNewManagerRejectsNilPostprocessor(t *testing.T) {
+	if _, err := NewManager(WithPostprocessor(nil)); err == nil {
+		t.Fatal("expected nil shell postprocessor to fail manager construction")
+	}
+}
+
 func TestExecCommandSanitizesAnsiInDefaultProcessing(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
@@ -56,7 +71,7 @@ func TestExecCommandPostprocessingNonePreservesAnsi(t *testing.T) {
 	manager, err := NewManager(
 		WithMinimumExecToBgTime(250*time.Millisecond),
 		WithCloseTimeouts(20*time.Millisecond, 200*time.Millisecond),
-		WithPostprocessor(postprocess.NewRunner(postprocess.Settings{Mode: config.ShellPostprocessingModeNone})),
+		WithPostprocessor(mustPostprocessRunner(t, postprocess.Settings{Mode: config.ShellPostprocessingModeNone})),
 	)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)

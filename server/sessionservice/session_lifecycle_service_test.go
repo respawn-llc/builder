@@ -17,6 +17,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	sessionruntime "core/server/sessionruntime"
 	"core/shared/config"
 	"core/shared/rollbacktarget"
@@ -52,15 +53,31 @@ func userMessageSeqAt(t *testing.T, store *session.Store, n int) int64 {
 	return 0
 }
 
-func newTestSessionLifecycleService(containerDir string, authManager *auth.Manager) *SessionLifecycleService {
-	return NewSessionLifecycleService(containerDir, nil, authManager)
+func newTestSessionLifecycleService(containerDir string, authManager *auth.Manager, options ...[]session.StoreOption) *SessionLifecycleService {
+	if len(options) == 0 {
+		return NewSessionLifecycleService(containerDir, nil, authManager, sessionServiceTestPersistence.Options()...)
+	}
+	return NewSessionLifecycleService(containerDir, nil, authManager, options[0]...)
+}
+
+var sessionServiceTestPersistence = sessiontest.NewPersistence()
+
+type sessionLifecycleRetargeterStub struct {
+	result metadata.SessionWorkspaceRetargetResult
+	err    error
+	req    metadata.SessionWorkspaceRetargetRequest
+}
+
+func (s *sessionLifecycleRetargeterStub) RetargetWorkspace(_ context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error) {
+	s.req = req
+	return s.result, s.err
 }
 
 func createPersistedSession(t *testing.T) (string, string, *session.Store) {
 	t.Helper()
 	persistenceRoot := t.TempDir()
 	containerDir := filepath.Join(persistenceRoot, "projects", "project-x", "sessions")
-	store, err := session.Create(containerDir, "workspace-x", "/tmp/work")
+	store, err := session.Create(containerDir, "workspace-x", "/tmp/work", sessionServiceTestPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -94,26 +111,6 @@ func createAuthoritativeSessionLifecycleSession(t *testing.T, workspaceRoot stri
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return cfg, store, binding, sess
-}
-
-func TestMetadataBackedLoopbackClientOwnsMetadataStore(t *testing.T) {
-	cfg, _, _, sess := createAuthoritativeSessionLifecycleSession(t, t.TempDir())
-	lifecycleClient, err := NewMetadataBackedSessionLifecycleClient(cfg.PersistenceRoot, nil)
-	if err != nil {
-		t.Fatalf("NewMetadataBackedSessionLifecycleClient: %v", err)
-	}
-	if _, err := lifecycleClient.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: sess.Meta().SessionID}); err != nil {
-		t.Fatalf("GetInitialInput before Close: %v", err)
-	}
-	if err := lifecycleClient.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if err := lifecycleClient.Close(); err != nil {
-		t.Fatalf("Close duplicate: %v", err)
-	}
-	if _, err := lifecycleClient.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: sess.Meta().SessionID}); err == nil || !errors.Is(err, errLifecycleClientClosed) {
-		t.Fatalf("GetInitialInput after Close error = %v, want closed client", err)
-	}
 }
 
 func TestServiceGetInitialInputPrefersStoredDraft(t *testing.T) {
@@ -235,7 +232,7 @@ func TestServicePersistInputDraftWritesBySessionID(t *testing.T) {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
 
-	reopened, err := session.Open(store.Dir())
+	reopened, err := session.Open(store.Dir(), sessionServiceTestPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	}
@@ -294,48 +291,50 @@ func TestServiceGetInitialInputLegacyDraftHasNoRecoveryBuffers(t *testing.T) {
 	}
 }
 
-func TestServiceRetargetSessionWorkspaceUpdatesBindingAndSession(t *testing.T) {
-	oldWorkspace := t.TempDir()
-	newWorkspace := t.TempDir()
-	cfg, metadataStore, binding, sess := createAuthoritativeSessionLifecycleSession(t, oldWorkspace)
-
-	service := NewGlobalSessionLifecycleService(cfg.PersistenceRoot, nil, nil)
+func TestServiceRetargetSessionWorkspaceDelegatesAndMapsBinding(t *testing.T) {
+	projectID := "project-target"
+	retargeter := &sessionLifecycleRetargeterStub{result: metadata.SessionWorkspaceRetargetResult{
+		Binding: metadata.Binding{
+			ProjectID:       projectID,
+			ProjectKey:      "TAR",
+			ProjectName:     "Target",
+			WorkspaceID:     "workspace-target",
+			CanonicalRoot:   t.TempDir(),
+			WorkspaceName:   "target",
+			WorkspaceStatus: "available",
+		},
+		WorkspaceBindingCreated: true,
+	}}
+	service := NewGlobalSessionLifecycleService(t.TempDir(), nil, nil).WithWorkspaceRetargeter(retargeter)
 	resp, err := service.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
 		ClientRequestID: "req-1",
-		SessionID:       sess.Meta().SessionID,
-		WorkspaceRoot:   newWorkspace,
+		SessionID:       "session-1",
+		WorkspaceRoot:   retargeter.result.Binding.CanonicalRoot,
+		ProjectID:       &projectID,
 	})
 	if err != nil {
 		t.Fatalf("RetargetSessionWorkspace: %v", err)
 	}
-	if resp.Binding.ProjectID != binding.ProjectID {
-		t.Fatalf("binding project id = %q, want %q", resp.Binding.ProjectID, binding.ProjectID)
+	if retargeter.req.ProjectID == nil || *retargeter.req.ProjectID != projectID {
+		t.Fatalf("retarget request = %+v, want target project %q", retargeter.req, projectID)
 	}
-	target, err := metadataStore.ResolveSessionExecutionTarget(context.Background(), sess.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	if resp.Binding.ProjectID != projectID || resp.Binding.ProjectKey != "TAR" {
+		t.Fatalf("binding = %+v, want mapped retarget result", resp.Binding)
 	}
-	if target.WorkspaceRoot != resp.Binding.CanonicalRoot {
-		t.Fatalf("target workspace root = %q, want %q", target.WorkspaceRoot, resp.Binding.CanonicalRoot)
-	}
-	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, metadataStore.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("OpenByID: %v", err)
-	}
-	if reopened.Meta().WorkspaceRoot != resp.Binding.CanonicalRoot {
-		t.Fatalf("session workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, resp.Binding.CanonicalRoot)
+	if !resp.WorkspaceBindingCreated {
+		t.Fatal("WorkspaceBindingCreated = false, want true")
 	}
 }
 
-func TestServiceRetargetSessionWorkspaceRequiresPersistenceRoot(t *testing.T) {
+func TestServiceRetargetSessionWorkspaceRequiresRetargeter(t *testing.T) {
 	service := NewSessionLifecycleService(t.TempDir(), nil, nil)
 	_, err := service.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
 		ClientRequestID: "req-1",
 		SessionID:       "session-1",
 		WorkspaceRoot:   t.TempDir(),
 	})
-	if err == nil || !errors.Is(err, errPersistenceRootRequired) {
-		t.Fatalf("RetargetSessionWorkspace error = %v, want persistence root is required", err)
+	if !errors.Is(err, errSessionWorkspaceRetargeterRequired) {
+		t.Fatalf("RetargetSessionWorkspace error = %v, want missing retargeter", err)
 	}
 }
 
@@ -344,7 +343,7 @@ func TestServicePersistInputDraftPersistsAndDedupes(t *testing.T) {
 	if err := store.SetName("session name"); err != nil {
 		t.Fatalf("set session name: %v", err)
 	}
-	service := NewSessionLifecycleService(containerDir, nil, nil)
+	service := NewSessionLifecycleService(containerDir, nil, nil, sessionServiceTestPersistence.Options()...)
 	req := serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
 		SessionID:       store.Meta().SessionID,
@@ -357,7 +356,7 @@ func TestServicePersistInputDraftPersistsAndDedupes(t *testing.T) {
 	if _, err := service.PersistInputDraft(context.Background(), req); err != nil {
 		t.Fatalf("PersistInputDraft replay: %v", err)
 	}
-	reopened, err := session.Open(store.Dir())
+	reopened, err := session.Open(store.Dir(), sessionServiceTestPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	}
@@ -386,7 +385,7 @@ func TestServicePersistInputDraftRejectsClientRequestIDPayloadMismatch(t *testin
 	if _, err := service.PersistInputDraft(context.Background(), second); err == nil || !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("PersistInputDraft mismatch error = %v, want request id payload mismatch", err)
 	}
-	reopened, err := session.Open(store.Dir())
+	reopened, err := session.Open(store.Dir(), sessionServiceTestPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	}
@@ -471,7 +470,7 @@ func TestServiceResolveTransitionForkRollbackCreatesFork(t *testing.T) {
 	if resp.InitialPrompt != "edited prompt" {
 		t.Fatalf("initial prompt = %q, want %q", resp.InitialPrompt, "edited prompt")
 	}
-	if _, err := session.Open(filepath.Join(containerDir, resp.NextSessionID)); err != nil {
+	if _, err := session.Open(filepath.Join(containerDir, resp.NextSessionID), sessionServiceTestPersistence.Options()...); err != nil {
 		t.Fatalf("open forked session store: %v", err)
 	}
 }
@@ -504,7 +503,7 @@ func TestServiceResolveTransitionForkRollbackUsesTargetToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveTransition: %v", err)
 	}
-	if _, err := session.Open(filepath.Join(containerDir, resp.NextSessionID)); err != nil {
+	if _, err := session.Open(filepath.Join(containerDir, resp.NextSessionID), sessionServiceTestPersistence.Options()...); err != nil {
 		t.Fatalf("open forked session store: %v", err)
 	}
 	if resp.InitialPrompt != "edited prompt" {
@@ -634,6 +633,7 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	activateSettings := cfg.Settings
 	activateSettings.Model = "gpt-5.4"
 	activateSettings.OpenAIBaseURL = "http://127.0.0.1:1/v1"
+	activateSettings.Shell.PostprocessingMode = config.ShellPostprocessingModeBuiltin
 	if _, err := runtimeService.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-1",
 		SessionID:       resolved.NextSessionID,
@@ -702,7 +702,12 @@ func TestServiceGetInitialInputRejectsSessionOutsideContainer(t *testing.T) {
 	if err := os.MkdirAll(containerA, 0o755); err != nil {
 		t.Fatalf("mkdir container A: %v", err)
 	}
-	store, err := session.Create(containerB, "workspace-b", "/tmp/workspace-b")
+	store, err := session.Create(
+		containerB,
+		"workspace-b",
+		"/tmp/workspace-b",
+		sessionServiceTestPersistence.Options()...,
+	)
 	if err != nil {
 		t.Fatalf("create foreign session store: %v", err)
 	}
@@ -727,7 +732,12 @@ func TestServicePersistInputDraftRejectsSessionOutsideContainer(t *testing.T) {
 	if err := os.MkdirAll(containerA, 0o755); err != nil {
 		t.Fatalf("mkdir container A: %v", err)
 	}
-	store, err := session.Create(containerB, "workspace-b", "/tmp/workspace-b")
+	store, err := session.Create(
+		containerB,
+		"workspace-b",
+		"/tmp/workspace-b",
+		sessionServiceTestPersistence.Options()...,
+	)
 	if err != nil {
 		t.Fatalf("create foreign session store: %v", err)
 	}

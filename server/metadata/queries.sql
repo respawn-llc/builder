@@ -3011,26 +3011,33 @@ INSERT INTO sessions (
     sqlc.arg(metadata_json)
 )
 ON CONFLICT(id) DO UPDATE SET
-    project_id = excluded.project_id,
-    workspace_id = excluded.workspace_id,
-    worktree_id = excluded.worktree_id,
-    artifact_relpath = excluded.artifact_relpath,
     name = excluded.name,
     first_prompt_preview = excluded.first_prompt_preview,
     input_draft = excluded.input_draft,
     parent_session_id = excluded.parent_session_id,
-    updated_at_unix_ms = excluded.updated_at_unix_ms,
+    updated_at_unix_ms = MAX(sessions.updated_at_unix_ms, excluded.updated_at_unix_ms),
     last_sequence = excluded.last_sequence,
     model_request_count = excluded.model_request_count,
     launch_visible = CASE
         WHEN sessions.launch_visible <> 0 OR excluded.launch_visible <> 0 THEN 1
         ELSE 0
     END,
-    cwd_relpath = excluded.cwd_relpath,
     continuation_json = excluded.continuation_json,
     locked_json = excluded.locked_json,
     usage_state_json = excluded.usage_state_json,
     metadata_json = excluded.metadata_json;
+
+-- name: ReconcileSessionEventLog :execrows
+UPDATE sessions
+SET
+    last_sequence = sqlc.arg(last_sequence),
+    updated_at_unix_ms = MAX(updated_at_unix_ms, sqlc.arg(updated_at_unix_ms)),
+    metadata_json = json_set(
+        CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+        '$.conversation_established',
+        json(CASE WHEN sqlc.arg(conversation_established) <> 0 THEN 'true' ELSE 'false' END)
+    )
+WHERE id = sqlc.arg(session_id);
 
 -- name: GetProjectDisplayName :one
 SELECT display_name
@@ -3318,6 +3325,49 @@ LEFT JOIN workspaces w ON w.id = s.workspace_id
 LEFT JOIN worktrees wt ON wt.id = s.worktree_id
 WHERE s.id = sqlc.arg(session_id)
 LIMIT 1;
+
+-- name: GetSessionWorkspaceRetargetStateByID :one
+SELECT
+    s.id AS session_id,
+    s.project_id,
+    p.display_name AS project_display_name,
+    p.project_key,
+    s.artifact_relpath,
+    CAST(
+        json_type(s.metadata_json, '$.workflow_session') IS NOT NULL
+        AND json_type(s.metadata_json, '$.workflow_session') != 'null'
+        AS INTEGER
+    ) AS has_workflow_session
+FROM sessions s
+JOIN projects p ON p.id = s.project_id
+WHERE s.id = sqlc.arg(session_id)
+LIMIT 1;
+
+-- name: ListSessionWorkflowTaskIDs :many
+SELECT DISTINCT task.id
+FROM task_run_records run
+JOIN task_records task ON task.id = run.task_id
+WHERE run.session_id = sqlc.arg(session_id)
+ORDER BY task.id ASC;
+
+-- name: RetargetSessionWorkspaceProject :execrows
+UPDATE sessions
+SET
+    project_id = sqlc.arg(target_project_id),
+    workspace_id = sqlc.arg(target_workspace_id),
+    worktree_id = NULL,
+    cwd_relpath = '.',
+    artifact_relpath = sqlc.arg(target_artifact_relpath),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
+    metadata_json = json_set(
+        CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+        '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
+        '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
+        '$.worktree_reminder', json('null')
+    )
+WHERE id = sqlc.arg(session_id)
+  AND project_id = sqlc.arg(source_project_id)
+  AND artifact_relpath = sqlc.arg(source_artifact_relpath);
 
 -- name: UpdateSessionExecutionTargetByID :execrows
 UPDATE sessions

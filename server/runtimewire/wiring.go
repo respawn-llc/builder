@@ -2,6 +2,7 @@ package runtimewire
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	askquestion "core/server/tools"
 	triggerhandofftool "core/server/tools"
 	shelltool "core/server/tools/shell"
+	"core/server/tools/shell/postprocess"
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/toolspec"
@@ -63,6 +65,13 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 	if opts.Client != nil && opts.ClientFactory != nil {
 		return nil, ErrRuntimeClientFactoryConflict
 	}
+	shellPostprocessor, err := postprocess.NewRunner(postprocess.Settings{
+		Mode:     active.Shell.PostprocessingMode,
+		HookPath: active.Shell.PostprocessHook,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compile effective shell postprocessor: %w", err)
+	}
 	var eng *runtime.Engine
 	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:            workspaceRoot,
@@ -74,6 +83,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
 		Logger:                   logger,
 		Background:               background,
+		ShellPostprocessor:       shellPostprocessor,
 		GlobalConfigDir:          opts.GlobalConfigDir,
 		TriggerHandoffController: func() triggerhandofftool.TriggerHandoffController { return eng },
 		QuestionsEnabledGetter: func() bool {

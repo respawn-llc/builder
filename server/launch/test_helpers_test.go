@@ -1,7 +1,6 @@
 package launch
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"core/server/auth"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -27,6 +27,9 @@ func createTestSession(t *testing.T, workspace string) *session.Store {
 
 func createTestSessionInContainer(t *testing.T, containerDir, workspaceContainer, workspaceRoot string, options ...session.StoreOption) *session.Store {
 	t.Helper()
+	if len(options) == 0 {
+		options = sessiontest.NewPersistence().Options()
+	}
 	store, err := session.Create(containerDir, workspaceContainer, workspaceRoot, options...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -125,26 +128,13 @@ func createMetadataBackedSession(
 	return store
 }
 
-func writeDuplicateSessionMeta(t *testing.T, dir string, source session.Meta, workspaceRoot, name string) {
+func writeSessionEventArtifact(t *testing.T, dir string) {
 	t.Helper()
-	duplicateMeta := source
-	duplicateMeta.WorkspaceContainer = "sessions"
-	duplicateMeta.WorkspaceRoot = workspaceRoot
-	if name != "" {
-		duplicateMeta.Name = name
-	}
-	duplicateData, err := json.Marshal(duplicateMeta)
-	if err != nil {
-		t.Fatalf("marshal duplicate session meta: %v", err)
-	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir duplicate session dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "session.json"), duplicateData, 0o644); err != nil {
-		t.Fatalf("write duplicate session meta: %v", err)
+		t.Fatalf("mkdir session dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), nil, 0o644); err != nil {
-		t.Fatalf("write duplicate session events: %v", err)
+		t.Fatalf("write session events: %v", err)
 	}
 }
 

@@ -93,8 +93,8 @@ func TestLoadShellPostprocessingPrecedenceAndValidation(t *testing.T) {
 	if cfg.Settings.Shell.PostprocessingMode != ShellPostprocessingModeAll {
 		t.Fatalf("expected file shell.postprocessing_mode=all, got %q", cfg.Settings.Shell.PostprocessingMode)
 	}
-	if cfg.Settings.Shell.PostprocessHook != "/tmp/file-hook" {
-		t.Fatalf("expected file shell.postprocess_hook, got %q", cfg.Settings.Shell.PostprocessHook)
+	if cfg.Settings.Shell.PostprocessHook == nil || *cfg.Settings.Shell.PostprocessHook != "/tmp/file-hook" {
+		t.Fatalf("expected file shell.postprocess_hook, got %#v", cfg.Settings.Shell.PostprocessHook)
 	}
 	assertConfigSource(t, cfg, "shell.postprocessing_mode", "file")
 	assertConfigSource(t, cfg, "shell.postprocess_hook", "file")
@@ -105,8 +105,8 @@ func TestLoadShellPostprocessingPrecedenceAndValidation(t *testing.T) {
 	if cfg.Settings.Shell.PostprocessingMode != ShellPostprocessingModeUser {
 		t.Fatalf("expected env shell.postprocessing_mode=user, got %q", cfg.Settings.Shell.PostprocessingMode)
 	}
-	if cfg.Settings.Shell.PostprocessHook != "/tmp/env-hook" {
-		t.Fatalf("expected env shell.postprocess_hook, got %q", cfg.Settings.Shell.PostprocessHook)
+	if cfg.Settings.Shell.PostprocessHook == nil || *cfg.Settings.Shell.PostprocessHook != "/tmp/env-hook" {
+		t.Fatalf("expected env shell.postprocess_hook, got %#v", cfg.Settings.Shell.PostprocessHook)
 	}
 	assertConfigSource(t, cfg, "shell.postprocessing_mode", "env")
 	assertConfigSource(t, cfg, "shell.postprocess_hook", "env")

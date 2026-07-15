@@ -198,10 +198,7 @@ func createAppRuntimeSession(t *testing.T) *session.Store {
 
 func createAppRuntimeSessionAt(t *testing.T, root string, workspaceContainerName string, workspaceRoot string) *session.Store {
 	t.Helper()
-	store, err := session.Create(root, workspaceContainerName, workspaceRoot)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store, _ := createAuthoritativeTestSession(t, root, workspaceContainerName, workspaceRoot)
 	return store
 }
 

@@ -55,13 +55,16 @@
 - Non-zero exit is recoverable and does not auto-abort the turn.
 - Shell process-launch failures are not automatically retried.
 - Interrupt escalation is `SIGINT` then `SIGKILL` after 10 seconds.
-- Command post-processing is Kent-owned, applied after execution, configured under `[shell]`, and bypassed by per-call `raw=true` parameter on the `shell` tool.
-- `[shell].postprocessing_mode` uses `none | builtin | user | all`.
+- Command post-processing is Kent-owned, applied after execution, configured under `[shell]`, and bypassed by the per-process `raw=true` parameter on the `shell` tool.
+- `[shell].postprocessing_mode` accepts exactly `none | builtin | user | all`; omitted configuration resolves to the built-in default before policy compilation, while empty or unknown configured values are errors.
+- `[shell].postprocess_hook` is optional. Absence is represented as `null` in API contracts and by typed optionals in clients and server code; a present empty or whitespace-only value is invalid and must be removed to express absence.
+- Runtime-effective post-processing mode and hook settings compile into one immutable policy when a shell process starts. That captured policy remains authoritative for foreground completion, transition-to-background output, later `write_stdin` polling, automatic completion notices, and terminal processing during process exit or server shutdown, regardless of later runtime wiring or role/workspace changes.
+- `raw=true` bypasses the process's captured post-processing policy in every foreground, background, polling, completion, and shutdown output path.
 - The generic command output sanitizer runs before built-ins and hooks for every non-raw mode except `none`. Generic sanitizer is just another command post-processor, not special infrastructure.
 - Built-ins run before the optional user hook. A built-in halt stops later built-ins only.
 - User hooks receive JSON stdin and return JSON stdout, receiving both original sanitized output and Kent's current processed output.
 - Hook failures do not change the provider-facing command-output envelope.
-- Background shell processes are server-global. Process IDs are server-global within one server instance; owner session metadata is advisory for routing notices (to both humans and models) and history, NOT access control.
+- Background shell processes share one server-global manager, process registry, process-ID sequence, event router, and shutdown lifecycle even when their captured post-processing policies differ. Process IDs are server-global within one server instance; owner session metadata is advisory for routing notices (to both humans and models) and history, NOT access control.
 - TUI `/ps` may surface and operate on background processes from other sessions in the same app instance.
 
 ## Patch And Image Tools
@@ -133,7 +136,11 @@
 - Headless startup in an unregistered workspace fails fast; it must not auto-create hidden project/workspace state.
 - To recover from headless fail-fast workspace binding, `kent project [path]` inspects the project bound to a path, `kent attach [path]` binds a workspace to the project already bound to cwd, and `kent attach --project <project-id> [path]` binds with an explicit project override. All forms default `path` to cwd.
 - Server-admin project/binding commands use RPC to the configured running daemon. They must not require shutting down the server or taking local ownership of the persistence root.
-- Explicit relocation recovery is possible via CLI, which retargets one session to a different workspace root.
+- `kent rebind <session-id> <path>` retargets through the authoritative daemon and keeps the session in its source project. The CLI has no metadata-local fallback.
+- Default rebind selects the source-project binding when the target path is attached to both the source project and other projects. When the path is attached only to other projects, rebind fails without mutation and reports the source session/project plus complete commands for either an explicit cross-project move or attaching the path to the source project.
+- Cross-project movement requires `kent rebind --project <project-id> <session-id> <path>`. An explicit target project may auto-attach an unbound target workspace, and the successful response reports that attachment. If the path is attached only to other projects, explicit rebind rejects it rather than adding another binding.
+- Failed rebinds do not create workspace bindings or change session ownership. Workflow-owned sessions cannot move across projects. Parent/child session lineage is global and may cross project boundaries.
+- Rebind uses the existing session-maintenance boundary: it blocks new runs, waits for the current model step, pauses queued steering, and rejects a session-owned background process. Cross-project rebind then renames the session artifact and commits workspace/project ownership in one metadata transaction, renaming the artifact back if that transaction fails.
 - When a session selected from the interactive picker has a stored workspace root different from Kent's current workspace root, startup UI presents a prompt to rebind the workspace to the currently open destination.
 - Workspace relocation/rebinding is explicit user action; Kent does not infer auto-rebinds.
 - Interactive session creation **is lazy**. Sessions are created, persisted, initialized, started, and their data is loaded at the first usage point - user message or other trigger that leads to the agentic loop or model requests.

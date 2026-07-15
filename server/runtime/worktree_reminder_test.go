@@ -317,7 +317,7 @@ func TestManualCompactionReinjectsWorktreeReminderExactlyOnce(t *testing.T) {
 		t.Fatalf("close compacted engine: %v", err)
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen compacted session: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestLegacyCompactionWithoutWorktreeReminderSelfHealsOnceAcrossResume(t *tes
 	}
 	prompts.WorktreeModePrompt = "updated enter {{branch}}"
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen session: %v", err)
 	}

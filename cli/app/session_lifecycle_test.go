@@ -31,14 +31,17 @@ func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *test
 	containerDir := t.TempDir()
 	newWorkspace := t.TempDir()
 	t.Chdir(newWorkspace)
+	var sessionID string
+	persistence := sessiontest.NewPersistence()
 	server := &testEmbeddedServer{
 		cfg: config.App{
 			WorkspaceRoot:   missingWorkspace,
 			PersistenceRoot: t.TempDir(),
 			Settings:        config.Settings{Theme: "dark"},
 		},
-		containerDir: containerDir,
-		projectID:    "project-1",
+		containerDir:       containerDir,
+		sessionPersistence: persistence,
+		projectID:          "project-1",
 		projectViewClient: client.NewLoopbackProjectViewClient(projectBindingFlowStubProjectViewService{
 			resolveResp: serverapi.ProjectResolvePathResponse{
 				CanonicalRoot: missingWorkspace,
@@ -51,6 +54,7 @@ func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *test
 			},
 		}),
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
+			sessionID = plan.SessionID
 			_, _, _, err := buildToolRegistry(
 				plan.WorkspaceRoot,
 				plan.SessionID,
@@ -70,14 +74,10 @@ func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *test
 	if err == nil {
 		t.Fatal("expected startup error for missing workspace")
 	}
-	summaries, listErr := session.ListSessions(containerDir)
-	if listErr != nil {
-		t.Fatalf("ListSessions: %v", listErr)
+	if sessionID == "" {
+		t.Fatal("session id was not captured")
 	}
-	if len(summaries) != 1 {
-		t.Fatalf("session count = %d, want 1", len(summaries))
-	}
-	want := `workspace root ` + strconv.Quote(missingWorkspace) + ` is missing; run ` + "`kent rebind " + strconv.Quote(summaries[0].SessionID) + " " + strconv.Quote(newWorkspace) + "`"
+	want := `workspace root ` + strconv.Quote(missingWorkspace) + ` is missing; run ` + "`kent rebind " + strconv.Quote(sessionID) + " " + strconv.Quote(newWorkspace) + "`"
 	if got := err.Error(); got != want {
 		t.Fatalf("error = %q, want %q", got, want)
 	}
@@ -793,7 +793,8 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 			PersistenceRoot: root,
 			Settings:        config.Settings{Theme: "dark"},
 		},
-		containerDir: root,
+		containerDir:       root,
+		sessionPersistence: sessiontest.NewPersistence(),
 	}
 	planner := &launchPlanner{server: testServer}
 	launchRequest, err := sessionLaunchRequestFromHandoff(*resolved, serverapi.RunPromptOverrides{})

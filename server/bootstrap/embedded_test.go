@@ -44,6 +44,9 @@ func TestBuildRuntimeSupportUsesConfigSettings(t *testing.T) {
 		PriorityRequestMode: true,
 		ShellOutputMaxChars: 321,
 		BGShellsOutput:      config.BGShellsOutputVerbose,
+		Shell: config.ShellSettings{
+			PostprocessingMode: config.ShellPostprocessingModeBuiltin,
+		},
 	}})
 	if err != nil {
 		t.Fatalf("build runtime support: %v", err)

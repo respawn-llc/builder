@@ -24,8 +24,8 @@ type StoreOption func(*storeOptions)
 type storeOptions struct {
 	eventLog        eventLogOptions
 	observer        PersistenceObserver
+	reconciler      EventLogReconciliationObserver
 	resolver        PersistedSessionResolver
-	filelessMeta    bool
 	filelessEvents  bool
 	observerTimeout time.Duration
 	now             func() time.Time
@@ -45,6 +45,7 @@ func WithEventLogFSyncPolicy(policy EventLogFSyncPolicy) StoreOption {
 func WithPersistenceObserver(observer PersistenceObserver) StoreOption {
 	return func(options *storeOptions) {
 		options.observer = observer
+		options.reconciler, _ = observer.(EventLogReconciliationObserver)
 	}
 }
 
@@ -54,20 +55,13 @@ func WithPersistedSessionResolver(resolver PersistedSessionResolver) StoreOption
 	}
 }
 
-func WithFilelessMetadataPersistence() StoreOption {
-	return func(options *storeOptions) {
-		options.filelessMeta = true
-	}
-}
-
 // WithFilelessEventPersistence applies events and their metadata transitions to
-// the opened store's in-memory state without writing events.jsonl or
-// session.json. It is for read-only diagnostic execution that must exercise
-// normal event-driven state transitions.
+// the opened store's in-memory state without writing events.jsonl. It is for
+// read-only diagnostic execution that must exercise normal event-driven state
+// transitions.
 func WithFilelessEventPersistence() StoreOption {
 	return func(options *storeOptions) {
 		options.filelessEvents = true
-		options.filelessMeta = true
 	}
 }
 

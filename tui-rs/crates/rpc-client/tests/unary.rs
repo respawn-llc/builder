@@ -735,6 +735,7 @@ fn session_retarget_workspace_wrapper_uses_startup_binding_route() {
         "rpc-1",
         SessionRetargetWorkspaceResponse {
             binding: binding.clone(),
+            workspace_binding_created: true,
         },
     )]);
     let mut client = Client::new(connection);
@@ -744,18 +745,21 @@ fn session_retarget_workspace_wrapper_uses_startup_binding_route() {
             client_request_id: "request-1".to_owned(),
             session_id: "session-1".to_owned(),
             workspace_root: "/work/builder".to_owned(),
+            project_id: Some("project-1".to_owned()),
         })
         .unwrap();
     let connection = client.into_connection();
 
     assert_eq!(actual.binding, binding);
+    assert!(actual.workspace_binding_created);
     assert_sent_methods(&connection.sent, &[("rpc-1", "session.retargetWorkspace")]);
     assert_eq!(
         connection.sent[0].request().params.unwrap(),
         json!({
             "client_request_id": "request-1",
             "session_id": "session-1",
-            "workspace_root": "/work/builder"
+            "workspace_root": "/work/builder",
+            "project_id": "project-1"
         })
     );
 }
@@ -3127,7 +3131,7 @@ fn contract_settings_json() -> serde_json::Value {
         "Timeouts": {"ModelRequestSeconds": 0},
         "ShellOutputMaxChars": 0,
         "BGShellsOutput": "",
-        "Shell": {"PostprocessingMode": "", "PostprocessHook": ""},
+        "Shell": {"PostprocessingMode": "", "PostprocessHook": null},
         "CacheWarningMode": "",
         "Worktrees": {"BaseDir": "", "SetupScript": ""},
         "Workflow": {

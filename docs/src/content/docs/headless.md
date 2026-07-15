@@ -108,9 +108,10 @@ This is needed to enable functionality related to project management and allows 
 - `kent project` prints the project id for the bound workspace at `path` or `cwd`. Use to learn project IDs.
 - `kent attach <path>` attaches another workspace at [path] to the project already bound to `cwd`.
 - `kent attach --project <project-id> [path]` attaches using the ID.
-- `kent rebind <session-id> <new-path>` retargets one session to a different workspace root, for example when workspace has moved locally.
+- `kent rebind <session-id> <new-path>` retargets a session while keeping its source project and attaches an unbound target workspace to that project.
+- `kent rebind --project <project-id> <session-id> <new-path>` moves a non-workflow session to another project and attaches an unbound target workspace.
 
-The main agent will fix these issues on their own.
+If a default rebind targets a path attached only to another project, Kent prints executable commands for either moving the session or attaching the path to its source project.
 
 ## Output Modes
 

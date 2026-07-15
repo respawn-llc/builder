@@ -81,10 +81,7 @@ func (t serviceBlockingTool) Call(_ context.Context, c tools.Call) (tools.Result
 
 func TestServiceGetLatestCommittedAssistantFinalAnswer(t *testing.T) {
 	t.Run("present answer", func(t *testing.T) {
-		store, err := session.Create(t.TempDir(), "ws", t.TempDir())
-		if err != nil {
-			t.Fatalf("create store: %v", err)
-		}
+		store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 		if _, _, err := store.AppendEvent("step", "message", llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "durable answer"}); err != nil {
 			t.Fatalf("append final: %v", err)
 		}
@@ -98,10 +95,7 @@ func TestServiceGetLatestCommittedAssistantFinalAnswer(t *testing.T) {
 	})
 
 	t.Run("true absence", func(t *testing.T) {
-		store, err := session.Create(t.TempDir(), "ws", t.TempDir())
-		if err != nil {
-			t.Fatalf("create store: %v", err)
-		}
+		store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 		resp, err := NewService(NewStaticSessionResolver(store), nil, nil).GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: store.Meta().SessionID})
 		if err != nil {
 			t.Fatalf("get latest final answer: %v", err)
@@ -127,14 +121,11 @@ func TestServiceGetLatestCommittedAssistantFinalAnswer(t *testing.T) {
 	})
 
 	t.Run("persisted decode failure", func(t *testing.T) {
-		store, err := session.Create(t.TempDir(), "ws", t.TempDir())
-		if err != nil {
-			t.Fatalf("create store: %v", err)
-		}
+		store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 		if _, err := store.AppendReplayEvents([]session.ReplayEvent{{StepID: "step", Kind: "message", Payload: []byte(`"not a message"`)}}); err != nil {
 			t.Fatalf("append malformed event: %v", err)
 		}
-		_, err = NewService(NewStaticSessionResolver(store), nil, nil).GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: store.Meta().SessionID})
+		_, err := NewService(NewStaticSessionResolver(store), nil, nil).GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: store.Meta().SessionID})
 		if err == nil {
 			t.Fatal("expected persisted decode failure")
 		}
@@ -143,10 +134,7 @@ func TestServiceGetLatestCommittedAssistantFinalAnswer(t *testing.T) {
 
 func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	client := &serviceFakeLLM{responses: []llm.Response{
@@ -192,10 +180,7 @@ func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
 
 func TestServiceGetSessionMainViewIncludesUpdateStatus(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	svc := NewService(NewStaticSessionResolver(store), nil, nil).WithUpdateStatusProvider(staticUpdateStatusProvider{
 		status: clientui.UpdateStatus{Checked: true, Available: true, LatestVersion: "1.2.3"},
 	})
@@ -211,10 +196,7 @@ func TestServiceGetSessionMainViewIncludesUpdateStatus(t *testing.T) {
 
 func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if err := store.SetName("incident triage"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
@@ -251,10 +233,7 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 
 func TestServiceGetSessionMainViewFallsBackToDurableWorkflowSessionState(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
 		t.Fatalf("SetWorkflowSessionState: %v", err)
 	}
@@ -276,10 +255,7 @@ func TestServiceGetSessionMainViewFallsBackToDurableWorkflowSessionState(t *test
 
 func TestServiceGetSessionMainViewMergesDurableWorkflowSessionStateIntoLiveRuntime(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
 		t.Fatalf("SetWorkflowSessionState: %v", err)
 	}
@@ -302,10 +278,7 @@ func TestServiceGetSessionMainViewMergesDurableWorkflowSessionStateIntoLiveRunti
 
 func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	target := clientui.SessionExecutionTarget{
 		WorkspaceID:      "workspace-1",
 		WorkspaceRoot:    dir,
@@ -339,10 +312,7 @@ func TestServiceRequiresSessionStoreResolverForDormantReads(t *testing.T) {
 
 func TestServiceSessionTranscriptTailEntriesUsesLiveRuntimeWhenAttached(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if err := store.SetName("incident triage"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
@@ -375,10 +345,7 @@ func TestServiceSessionTranscriptTailEntriesUsesLiveRuntimeWhenAttached(t *testi
 
 func TestServiceSessionTranscriptTailEntriesUsesConfiguredCacheWarningModeForDormantTail(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if _, _, err := store.AppendEvent("step-1", "cache_warning", transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonNonPostfix}); err != nil {
 		t.Fatalf("append cache warning: %v", err)
 	}
@@ -410,10 +377,7 @@ func TestServiceSessionTranscriptTailEntriesUsesConfiguredCacheWarningModeForDor
 
 func TestServiceWithCacheWarningModeInvalidatesDormantCache(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if _, _, err := store.AppendEvent("step-1", "cache_warning", transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonNonPostfix}); err != nil {
 		t.Fatalf("append cache warning: %v", err)
 	}
@@ -442,10 +406,7 @@ func TestServiceWithCacheWarningModeInvalidatesDormantCache(t *testing.T) {
 
 func TestServiceSessionTranscriptTailEntriesReturnsDormantActiveSegment(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if err := store.SetName("incident triage"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
@@ -476,10 +437,7 @@ func TestServiceSessionTranscriptTailEntriesReturnsDormantActiveSegment(t *testi
 
 func TestServiceSessionTranscriptTailEntriesDormantCacheInvalidatesOnRevisionBoundary(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if err := appendDormantTranscriptMessages(store, 510); err != nil {
 		t.Fatalf("append transcript messages: %v", err)
 	}
@@ -516,10 +474,7 @@ func appendDormantTranscriptMessages(store *session.Store, count int) error {
 
 func TestServiceSessionTranscriptTailEntriesUsesDormantActiveSegment(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	total := 520
 	for i := 0; i < total; i++ {
 		entry := llm.Message{Role: llm.RoleUser, Content: "u" + strconv.Itoa(i)}
@@ -546,10 +501,7 @@ func TestServiceSessionTranscriptTailEntriesUsesDormantActiveSegment(t *testing.
 
 func TestServiceDormantReviewerRollbackIsIgnoredOnRead(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
@@ -596,10 +548,7 @@ func TestServiceDormantReviewerRollbackIsIgnoredOnRead(t *testing.T) {
 
 func TestServiceSessionTranscriptTailEntriesKeepsDormantCompactionSummaryAndCarryover(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "before compaction"}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
@@ -638,10 +587,7 @@ func TestServiceSessionTranscriptTailEntriesKeepsDormantCompactionSummaryAndCarr
 
 func TestServiceSessionTranscriptTailEntriesUsesNewestActiveSegment(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "before compaction"}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
@@ -682,12 +628,9 @@ func TestServiceSessionTranscriptTailEntriesUsesNewestActiveSegment(t *testing.T
 	}
 }
 
-func TestServiceGetSessionMainViewDoesNotMutatePersistedSessionFiles(t *testing.T) {
+func TestServiceGetSessionMainViewDoesNotMutatePersistedEvents(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
@@ -695,12 +638,7 @@ func TestServiceGetSessionMainViewDoesNotMutatePersistedSessionFiles(t *testing.
 		t.Fatalf("set pending recovery: %v", err)
 	}
 
-	sessionPath := filepath.Join(store.Dir(), "session.json")
 	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
-	beforeSession, err := os.ReadFile(sessionPath)
-	if err != nil {
-		t.Fatalf("read session file before: %v", err)
-	}
 	beforeEvents, err := os.ReadFile(eventsPath)
 	if err != nil {
 		t.Fatalf("read events file before: %v", err)
@@ -715,16 +653,9 @@ func TestServiceGetSessionMainViewDoesNotMutatePersistedSessionFiles(t *testing.
 		t.Fatalf("dormant activity = %+v, want unavailable", resp.MainView.Activity)
 	}
 
-	afterSession, err := os.ReadFile(sessionPath)
-	if err != nil {
-		t.Fatalf("read session file after: %v", err)
-	}
 	afterEvents, err := os.ReadFile(eventsPath)
 	if err != nil {
 		t.Fatalf("read events file after: %v", err)
-	}
-	if string(beforeSession) != string(afterSession) {
-		t.Fatalf("session file mutated during read\nbefore=%s\nafter=%s", string(beforeSession), string(afterSession))
 	}
 	if string(beforeEvents) != string(afterEvents) {
 		t.Fatalf("events file mutated during read\nbefore=%s\nafter=%s", string(beforeEvents), string(afterEvents))

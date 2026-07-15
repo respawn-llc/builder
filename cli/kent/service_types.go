@@ -200,6 +200,10 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
+func shellCommand(tokens ...string) string {
+	return commandString(tokens)
+}
+
 func applyHealthProbe(ctx context.Context, status serviceStatus, spec serviceSpec) serviceStatus {
 	healthStatus, pid := probeServiceHealth(ctx, spec)
 	if strings.TrimSpace(healthStatus) == "" {

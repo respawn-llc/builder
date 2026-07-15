@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	modelstub "core/internal/testharness/pty/blackbox"
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/llm"
@@ -22,11 +24,15 @@ import (
 	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
+	shelltool "core/server/tools/shell"
+	"core/server/tools/shell/postprocess"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessionenv"
 	"core/shared/toolspec"
 )
 
@@ -156,10 +162,15 @@ func (s *stubRunPromptService) CallCount() int {
 	return s.calls
 }
 
-func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManager *auth.Manager) *sessionlaunch.Service {
+func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManager *auth.Manager, persistences ...*sessiontest.Persistence) *sessionlaunch.Service {
+	persistence := sessiontest.NewPersistence()
+	if len(persistences) > 0 && persistences[0] != nil {
+		persistence = persistences[0]
+	}
 	return sessionlaunch.NewService(launch.Planner{
 		Config:       cfg,
 		ContainerDir: containerDir,
+		StoreOptions: persistence.Options(),
 	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(authManager)
 }
 
@@ -168,7 +179,8 @@ func newTestHeadlessSessionRuntime(root string, authManager *auth.Manager, runti
 }
 
 func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -190,7 +202,8 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 }
 
 func TestHeadlessRuntimeWorkdirRejectsReminderWithoutEffectiveCWD(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
@@ -257,7 +270,8 @@ func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.
 func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -293,11 +307,12 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 		Settings: config.Settings{
 			Model:         "gpt-5",
 			OpenAIBaseURL: "http://wrong.invalid",
+			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 	}
 	runtimes := registry.NewRuntimeRegistry()
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
 		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
@@ -330,10 +345,218 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 	}
 }
 
+func TestLoopbackRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgroundManager(t *testing.T) {
+	root := t.TempDir()
+	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", t.TempDir(), persistence.Options()...)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+
+	bootstrapHook := writeRunPromptHook(t, `printf '{"processed":true,"replaced_output":"BOOTSTRAP"}'`)
+	effectiveHook := writeRunPromptHook(t, fmt.Sprintf(
+		`printf '{"processed":true,"replaced_output":"EFFECTIVE:%%s"}' "$%s"`,
+		sessionenv.SessionIDEnv,
+	))
+	bootstrapRunner := mustRunPromptPostprocessor(t, config.ShellPostprocessingModeUser, &bootstrapHook)
+	background, err := shelltool.NewManager(shelltool.WithPostprocessor(bootstrapRunner))
+	if err != nil {
+		t.Fatalf("new supplied background manager: %v", err)
+	}
+	t.Cleanup(func() { _ = background.Close() })
+
+	toolOutput := make(chan string, 1)
+	var responseCount int
+	var responseMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+
+		responseMu.Lock()
+		responseCount++
+		currentResponse := responseCount
+		responseMu.Unlock()
+
+		switch currentResponse {
+		case 1:
+			args, marshalErr := json.Marshal(map[string]any{
+				"cmd":           "printf raw",
+				"shell":         "/bin/sh",
+				"login":         false,
+				"yield_time_ms": 1000,
+			})
+			if marshalErr != nil {
+				t.Fatalf("marshal exec_command arguments: %v", marshalErr)
+			}
+			writeRunPromptExecCommandResponse(w, args)
+		case 2:
+			defer r.Body.Close()
+			var payload map[string]any
+			if decodeErr := json.NewDecoder(r.Body).Decode(&payload); decodeErr != nil {
+				t.Fatalf("decode second provider request: %v", decodeErr)
+			}
+			output, ok := findRunPromptFunctionCallOutput(payload)
+			if !ok {
+				t.Fatalf("second provider request has no function_call_output: %#v", payload)
+			}
+			toolOutput <- output
+			modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
+		default:
+			t.Fatalf("unexpected provider response request %d", currentResponse)
+		}
+	}))
+	defer server.Close()
+
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}), nil, time.Now)
+	cfg := config.App{
+		WorkspaceRoot:   store.Meta().WorkspaceRoot,
+		PersistenceRoot: root,
+		Settings: config.Settings{
+			Model:               "gpt-5",
+			OpenAIBaseURL:       server.URL,
+			ShellOutputMaxChars: 16_000,
+			EnabledTools:        map[toolspec.ID]bool{toolspec.ToolExecCommand: true},
+			Shell: config.ShellSettings{
+				PostprocessingMode: config.ShellPostprocessingModeUser,
+				PostprocessHook:    &effectiveHook,
+			},
+		},
+	}
+	runtimes := registry.NewRuntimeRegistry()
+	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		AuthManager:     authManager,
+		Background:      background,
+		RuntimeRegistry: runtimes,
+		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
+	})
+
+	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+		ClientRequestID:   "active-shell-policy-1",
+		SelectedSessionID: store.Meta().SessionID,
+		Prompt:            "run the shell probe",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunPrompt: %v", err)
+	}
+	if response.Result != "done" {
+		t.Fatalf("result = %q, want done", response.Result)
+	}
+	select {
+	case output := <-toolOutput:
+		want := "EFFECTIVE:" + store.Meta().SessionID
+		if output != want {
+			t.Fatalf("exec_command output = %q, want %q", output, want)
+		}
+		if strings.Contains(output, "BOOTSTRAP") {
+			t.Fatalf("exec_command used bootstrap shell postprocessing: %q", output)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for exec_command output")
+	}
+}
+
+func writeRunPromptHook(t *testing.T, body string) string {
+	t.Helper()
+	script := "#!/bin/sh\n" + body + "\n"
+	return testsetup.WriteExecutable(t, "postprocess-hook.sh", script)
+}
+
+func mustRunPromptPostprocessor(t *testing.T, mode config.ShellPostprocessingMode, hookPath *string) *postprocess.Runner {
+	t.Helper()
+	runner, err := postprocess.NewRunner(postprocess.Settings{
+		Mode:     mode,
+		HookPath: hookPath,
+	})
+	if err != nil {
+		t.Fatalf("new run prompt postprocessor: %v", err)
+	}
+	return runner
+}
+
+func writeRunPromptExecCommandResponse(w http.ResponseWriter, args json.RawMessage) {
+	writeSSEJSON(w, map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":        "fc-runprompt-1",
+			"type":      "function_call",
+			"name":      string(toolspec.ToolExecCommand),
+			"call_id":   "call-runprompt-1",
+			"arguments": "",
+		},
+	})
+	writeSSEJSON(w, map[string]any{
+		"type":    "response.function_call_arguments.delta",
+		"item_id": "fc-runprompt-1",
+		"delta":   string(args),
+	})
+	writeSSEJSON(w, map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"usage": map[string]any{
+				"input_tokens":  1,
+				"output_tokens": 1,
+				"total_tokens":  2,
+			},
+			"output": []any{
+				map[string]any{
+					"type":      "function_call",
+					"id":        "fc-runprompt-1",
+					"name":      string(toolspec.ToolExecCommand),
+					"call_id":   "call-runprompt-1",
+					"arguments": string(args),
+				},
+			},
+		},
+	})
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func writeSSEJSON(w http.ResponseWriter, value any) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(fmt.Sprintf("marshal run prompt SSE event: %v", err))
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", encoded)
+}
+
+func findRunPromptFunctionCallOutput(payload map[string]any) (string, bool) {
+	items, ok := payload["input"].([]any)
+	if !ok {
+		return "", false
+	}
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok || item["type"] != "function_call_output" {
+			continue
+		}
+		output, ok := item["output"].(string)
+		if !ok {
+			return "", false
+		}
+		return output, true
+	}
+	return "", false
+}
+
 func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -350,7 +573,7 @@ func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 		Settings:        config.Settings{Model: "gpt-5"},
 	}
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, nil),
+		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, nil, persistence),
 	})
 
 	_, err = client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
@@ -366,7 +589,8 @@ func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -402,10 +626,11 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 		Settings: config.Settings{
 			Model:         "gpt-5",
 			OpenAIBaseURL: server.URL,
+			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 	}
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
 		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
@@ -455,7 +680,8 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -495,7 +721,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
 	runtimes := registry.NewRuntimeRegistry()
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
 		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),

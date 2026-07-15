@@ -2,46 +2,11 @@ package main
 
 import (
 	"context"
-	"core/shared/client"
-	"core/shared/config"
 	"core/shared/serverapi"
 	"errors"
-	"net"
 	"testing"
 	"time"
 )
-
-func TestRetargetSessionWorkspaceDoesNotFallbackForExplicitLoopbackPortOpenFailure(t *testing.T) {
-	resetBindingCommandRetargetHooks(t)
-	t.Setenv("KENT_SERVER_PORT", "65432")
-	newWorkspace, newCfg := newBindingCommandWorkspaceConfig(t)
-	if got := newCfg.Settings.ServerHost; got != "127.0.0.1" {
-		t.Fatalf("server host = %q, want default loopback", got)
-	}
-	if got := newCfg.Source.Sources["server_host"]; got != "default" {
-		t.Fatalf("server_host source = %q, want default", got)
-	}
-	if got := newCfg.Source.Sources["server_port"]; got != "env" {
-		t.Fatalf("server_port source = %q, want env", got)
-	}
-	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
-		return config.App{}, nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect refused")}
-	}
-	localCalls := 0
-	bindingCommandLocalSessionLifecycleClient = func(config.App) client.SessionLifecycleClient {
-		localCalls++
-		return bindingCommandTimeoutSessionLifecycleStub{}
-	}
-
-	_, err := retargetSessionWorkspace(context.Background(), "session-123", newWorkspace)
-	var opErr *net.OpError
-	if !errors.As(err, &opErr) {
-		t.Fatalf("retargetSessionWorkspace error = %v, want net.OpError", err)
-	}
-	if localCalls != 0 {
-		t.Fatalf("local calls = %d, want 0", localCalls)
-	}
-}
 
 func TestResolveWorkspaceBindingAppliesRPCTimeout(t *testing.T) {
 	originalTimeout := bindingCommandRPCTimeout
@@ -105,22 +70,28 @@ func TestBindingCommandProjectRPCWrappersApplyTimeout(t *testing.T) {
 	assertDeadlineExceeded("rebindWorkspaceWithTimeout", err)
 }
 
-func TestRetargetSessionWorkspaceWithTimeoutAppliesTimeout(t *testing.T) {
+func TestRetargetSessionWorkspaceWaitsBeyondGenericBindingTimeout(t *testing.T) {
 	originalTimeout := bindingCommandRPCTimeout
 	bindingCommandRPCTimeout = 20 * time.Millisecond
 	t.Cleanup(func() { bindingCommandRPCTimeout = originalTimeout })
 
 	stub := bindingCommandTimeoutSessionLifecycleStub{retargetSessionWorkspace: func(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-		<-ctx.Done()
-		return serverapi.SessionRetargetWorkspaceResponse{}, ctx.Err()
+		select {
+		case <-time.After(60 * time.Millisecond):
+			return serverapi.SessionRetargetWorkspaceResponse{}, nil
+		case <-ctx.Done():
+			return serverapi.SessionRetargetWorkspaceResponse{}, ctx.Err()
+		}
 	}}
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	start := time.Now()
-	_, err := retargetSessionWorkspaceWithTimeout(context.Background(), stub, "session-1", "/tmp/workspace")
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("retargetSessionWorkspaceWithTimeout error = %v, want deadline exceeded", err)
+	_, err := retargetSessionWorkspace(ctx, stub, "session-1", "/tmp/workspace", nil)
+	if err != nil {
+		t.Fatalf("retargetSessionWorkspace: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
-		t.Fatalf("retargetSessionWorkspaceWithTimeout took too long: %v", elapsed)
+	if elapsed := time.Since(start); elapsed < 60*time.Millisecond {
+		t.Fatalf("retargetSessionWorkspace returned before maintenance wait: %v", elapsed)
 	}
 }

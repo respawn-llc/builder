@@ -79,6 +79,9 @@ var (
 	// lands outside the persistence root. Callers match it via errors.Is.
 	ErrPathEscapesPersistenceRoot = errors.New("path escapes persistence root")
 
+	errSessionWorkspaceRootRequired      = errors.New("session workspace root is required")
+	errSessionWorkspaceContainerRequired = errors.New("session workspace container is required")
+
 	// Worktree record required-field validation sentinels.
 	ErrWorktreeIDRequired            = errors.New("worktree id is required")
 	ErrWorktreeWorkspaceIDRequired   = errors.New("workspace id is required")
@@ -212,7 +215,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) SessionStoreOptions() []session.StoreOption {
+func (s *Store) AuthoritativeSessionStoreOptions() []session.StoreOption {
 	if s == nil {
 		return nil
 	}
@@ -220,13 +223,6 @@ func (s *Store) SessionStoreOptions() []session.StoreOption {
 		session.WithPersistenceObserver(sessionObserver{store: s}),
 		session.WithPersistedSessionResolver(s),
 	}
-}
-
-func (s *Store) AuthoritativeSessionStoreOptions() []session.StoreOption {
-	if s == nil {
-		return nil
-	}
-	return append(s.SessionStoreOptions(), session.WithFilelessMetadataPersistence())
 }
 
 func (s *Store) EnsureWorkspaceBinding(ctx context.Context, workspaceRoot string) (Binding, error) {
@@ -661,30 +657,21 @@ func (s *Store) AttachWorkspaceToProject(ctx context.Context, projectID string, 
 	if err != nil {
 		return Binding{}, err
 	}
-	if binding, err := s.lookupProjectWorkspaceBinding(ctx, trimmedProjectID, canonicalRoot); err == nil {
-		return binding, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return Binding{}, err
-	}
-	projectName, err := s.queries.GetProjectDisplayName(ctx, trimmedProjectID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Binding{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
-		}
-		return Binding{}, fmt.Errorf("get project display name: %w", err)
+		return Binding{}, fmt.Errorf("begin workspace attach tx: %w", err)
 	}
-	workspaceCount, err := s.queries.CountProjectWorkspaces(ctx, trimmedProjectID)
-	if err != nil {
-		return Binding{}, fmt.Errorf("count project workspaces: %w", err)
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	if _, err := q.AcquireWorkspaceRegistrationLock(ctx); err != nil {
+		return Binding{}, fmt.Errorf("lock workspace attach: %w", err)
 	}
-	now := time.Now().UTC()
-	workspaceID := "workspace-" + uuid.NewString()
-	binding, err := s.insertWorkspaceBinding(ctx, canonicalRoot, projectName, "", filepath.Base(canonicalRoot), trimmedProjectID, workspaceID, now, workspaceCount == 0)
+	binding, _, err := attachWorkspaceToProjectWithQueries(ctx, q, trimmedProjectID, canonicalRoot, time.Now().UTC())
 	if err != nil {
 		return Binding{}, err
 	}
-	if strings.TrimSpace(binding.ProjectID) != trimmedProjectID {
-		return Binding{}, fmt.Errorf("workspace %q is already bound to project %q", binding.CanonicalRoot, binding.ProjectID)
+	if err := tx.Commit(); err != nil {
+		return Binding{}, fmt.Errorf("commit workspace attach tx: %w", err)
 	}
 	return binding, nil
 }
@@ -1079,79 +1066,7 @@ func (s *Store) lookupProjectWorkspaceBinding(ctx context.Context, projectID str
 	if s == nil || s.queries == nil {
 		return Binding{}, errors.New("metadata store is required")
 	}
-	row, err := s.queries.GetWorkspaceBindingByProjectAndCanonicalRoot(ctx, sqlitegen.GetWorkspaceBindingByProjectAndCanonicalRootParams{
-		ProjectID:         strings.TrimSpace(projectID),
-		CanonicalRootPath: strings.TrimSpace(canonicalRoot),
-	})
-	if err != nil {
-		return Binding{}, err
-	}
-	return Binding{
-		ProjectID:       row.ProjectID,
-		ProjectKey:      row.ProjectKey,
-		ProjectName:     row.ProjectDisplayName,
-		WorkspaceID:     row.WorkspaceID,
-		CanonicalRoot:   row.WorkspaceRoot,
-		WorkspaceName:   filepath.Base(row.WorkspaceRoot),
-		WorkspaceStatus: availabilityForPath(row.WorkspaceRoot),
-	}, nil
-}
-
-func (s *Store) RetargetSessionWorkspace(ctx context.Context, sessionID string, newWorkspaceRoot string) (Binding, error) {
-	if s == nil || s.queries == nil {
-		return Binding{}, errors.New("metadata store is required")
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return Binding{}, errors.New("session id is required")
-	}
-	newCanonicalRoot, err := canonicalFilesystemPath(newWorkspaceRoot)
-	if err != nil {
-		return Binding{}, err
-	}
-	if err := requireExistingDirectory(newCanonicalRoot); err != nil {
-		return Binding{}, err
-	}
-
-	targetRow, err := s.queries.GetSessionExecutionTargetByID(ctx, trimmedSessionID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Binding{}, session.ErrSessionNotFound
-		}
-		return Binding{}, fmt.Errorf("get session execution target: %w", err)
-	}
-	projectID := strings.TrimSpace(targetRow.ProjectID)
-	if projectID == "" {
-		return Binding{}, fmt.Errorf("session %q has no project", trimmedSessionID)
-	}
-
-	binding, err := s.AttachWorkspaceToProject(ctx, projectID, newCanonicalRoot)
-	if err != nil {
-		return Binding{}, err
-	}
-	record, err := s.ResolvePersistedSession(ctx, trimmedSessionID)
-	if err != nil {
-		return Binding{}, err
-	}
-	opened, err := session.Open(record.SessionDir, s.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		return Binding{}, err
-	}
-	if err := opened.SetWorkspaceRoot(binding.CanonicalRoot); err != nil {
-		return Binding{}, err
-	}
-	if err := opened.SetWorktreeReminderState(nil); err != nil {
-		return Binding{}, err
-	}
-	if err := s.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{
-		SessionID:  trimmedSessionID,
-		Workspace:  &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
-		Worktree:   nil,
-		CwdRelpath: ".",
-	}); err != nil {
-		return Binding{}, err
-	}
-	return binding, nil
+	return lookupProjectWorkspaceBindingWithQueries(ctx, s.queries, projectID, canonicalRoot)
 }
 
 func (s *Store) RegisterWorkspaceBinding(ctx context.Context, workspaceRoot string) (Binding, error) {
@@ -1219,26 +1134,18 @@ func (s *Store) registerWorkspaceBindingConverged(ctx context.Context, canonical
 	if err != nil {
 		return Binding{}, err
 	}
-	if _, err := q.InsertWorkspaceBinding(ctx, sqlitegen.InsertWorkspaceBindingParams{
-		ID:                workspaceID,
-		ProjectID:         projectID,
-		CanonicalRootPath: canonicalRoot,
-		GitMetadataJson:   "{}",
-		CreatedAtUnixMs:   now.UnixMilli(),
-		UpdatedAtUnixMs:   now.UnixMilli(),
-	}); err != nil {
-		return Binding{}, fmt.Errorf("insert workspace binding: %w", err)
-	}
-	updatedProject, err := q.SetProjectPrimaryWorkspace(ctx, sqlitegen.SetProjectPrimaryWorkspaceParams{
-		WorkspaceID:     workspaceID,
-		UpdatedAtUnixMs: now.UnixMilli(),
-		ProjectID:       projectID,
+	inserted, err := insertWorkspaceBindingWithQueries(ctx, q, workspaceBindingInsert{
+		ID:            workspaceID,
+		ProjectID:     projectID,
+		CanonicalRoot: canonicalRoot,
+		UpdatedAt:     now,
+		Primary:       true,
 	})
 	if err != nil {
-		return Binding{}, fmt.Errorf("set project primary workspace: %w", err)
+		return Binding{}, err
 	}
-	if updatedProject == 0 {
-		return Binding{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, projectID)
+	if !inserted {
+		return Binding{}, fmt.Errorf("workspace %q could not be registered", canonicalRoot)
 	}
 	if err := tx.Commit(); err != nil {
 		return Binding{}, fmt.Errorf("commit workspace registration tx: %w", err)
@@ -1583,6 +1490,46 @@ func projectKeyBase(value string) string {
 	return base
 }
 
+type workspaceBindingInsert struct {
+	ID            string
+	ProjectID     string
+	CanonicalRoot string
+	UpdatedAt     time.Time
+	Primary       bool
+}
+
+func insertWorkspaceBindingWithQueries(ctx context.Context, q *sqlitegen.Queries, insert workspaceBindingInsert) (bool, error) {
+	rows, err := q.InsertWorkspaceBinding(ctx, sqlitegen.InsertWorkspaceBindingParams{
+		ID:                insert.ID,
+		ProjectID:         insert.ProjectID,
+		CanonicalRootPath: insert.CanonicalRoot,
+		GitMetadataJson:   "{}",
+		CreatedAtUnixMs:   insert.UpdatedAt.UnixMilli(),
+		UpdatedAtUnixMs:   insert.UpdatedAt.UnixMilli(),
+	})
+	if err != nil {
+		return false, fmt.Errorf("insert workspace binding: %w", err)
+	}
+	if rows == 0 {
+		return false, nil
+	}
+	if !insert.Primary {
+		return true, nil
+	}
+	updatedProject, err := q.SetProjectPrimaryWorkspace(ctx, sqlitegen.SetProjectPrimaryWorkspaceParams{
+		WorkspaceID:     insert.ID,
+		UpdatedAtUnixMs: insert.UpdatedAt.UnixMilli(),
+		ProjectID:       insert.ProjectID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("set project primary workspace: %w", err)
+	}
+	if updatedProject == 0 {
+		return false, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, insert.ProjectID)
+	}
+	return true, nil
+}
+
 func (s *Store) insertWorkspaceBinding(ctx context.Context, canonicalRoot string, projectDisplayName string, projectKey string, workspaceDisplayName string, projectID string, workspaceID string, now time.Time, isPrimary bool) (Binding, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1606,13 +1553,12 @@ func (s *Store) insertWorkspaceBinding(ctx context.Context, canonicalRoot string
 	if insertWorkspaceBindingAfterProjectUpsertHook != nil {
 		insertWorkspaceBindingAfterProjectUpsertHook()
 	}
-	rows, err := q.InsertWorkspaceBinding(ctx, sqlitegen.InsertWorkspaceBindingParams{
-		ID:                workspaceID,
-		ProjectID:         projectID,
-		CanonicalRootPath: canonicalRoot,
-		GitMetadataJson:   "{}",
-		CreatedAtUnixMs:   now.UnixMilli(),
-		UpdatedAtUnixMs:   now.UnixMilli(),
+	inserted, err := insertWorkspaceBindingWithQueries(ctx, q, workspaceBindingInsert{
+		ID:            workspaceID,
+		ProjectID:     projectID,
+		CanonicalRoot: canonicalRoot,
+		UpdatedAt:     now,
+		Primary:       isPrimary,
 	})
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
@@ -1620,7 +1566,7 @@ func (s *Store) insertWorkspaceBinding(ctx context.Context, canonicalRoot string
 		}
 		return Binding{}, fmt.Errorf("insert workspace binding: %w", err)
 	}
-	if rows == 0 {
+	if !inserted {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			return Binding{}, fmt.Errorf("rollback workspace binding tx: %w", rollbackErr)
 		}
@@ -1628,19 +1574,6 @@ func (s *Store) insertWorkspaceBinding(ctx context.Context, canonicalRoot string
 			return binding, nil
 		}
 		return Binding{}, fmt.Errorf("insert workspace binding: canonical root %q conflict was not recoverable", canonicalRoot)
-	}
-	if isPrimary {
-		updatedProject, err := q.SetProjectPrimaryWorkspace(ctx, sqlitegen.SetProjectPrimaryWorkspaceParams{
-			WorkspaceID:     workspaceID,
-			UpdatedAtUnixMs: now.UnixMilli(),
-			ProjectID:       projectID,
-		})
-		if err != nil {
-			return Binding{}, fmt.Errorf("set project primary workspace: %w", err)
-		}
-		if updatedProject == 0 {
-			return Binding{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, projectID)
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Binding{}, fmt.Errorf("commit workspace binding tx: %w", err)
@@ -1844,6 +1777,39 @@ func (s *Store) ImportSessionSnapshot(ctx context.Context, snapshot session.Pers
 	return s.upsertSessionSnapshot(ctx, snapshot)
 }
 
+func (s *Store) reconcileSessionEventLog(ctx context.Context, reconciliation session.PersistedEventLogReconciliation) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	sessionID := strings.TrimSpace(reconciliation.SessionID)
+	if sessionID == "" {
+		return errors.New("session id is required")
+	}
+	if reconciliation.LastSequence < 0 {
+		return errors.New("session last sequence must be non-negative")
+	}
+	if reconciliation.UpdatedAt.IsZero() {
+		return errors.New("session reconciliation updated time is required")
+	}
+	conversationEstablished := int64(0)
+	if reconciliation.ConversationEstablished {
+		conversationEstablished = 1
+	}
+	rows, err := s.queries.ReconcileSessionEventLog(ctx, sqlitegen.ReconcileSessionEventLogParams{
+		LastSequence:            reconciliation.LastSequence,
+		UpdatedAtUnixMs:         reconciliation.UpdatedAt.UTC().UnixMilli(),
+		ConversationEstablished: conversationEstablished,
+		SessionID:               sessionID,
+	})
+	if err != nil {
+		return fmt.Errorf("reconcile session event log: %w", err)
+	}
+	if rows == 0 {
+		return session.ErrSessionNotFound
+	}
+	return nil
+}
+
 func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
@@ -1855,19 +1821,43 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		}
 		snapshot.Meta.Continuation = continuation
 	}
-	binding, err := s.EnsureWorkspaceBinding(ctx, snapshot.Meta.WorkspaceRoot)
-	if err != nil {
-		if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+	existingTarget, targetErr := s.queries.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(snapshot.Meta.SessionID))
+	if targetErr != nil && !errors.Is(targetErr, sql.ErrNoRows) {
+		return fmt.Errorf("get existing session execution target: %w", targetErr)
+	}
+	binding := Binding{}
+	workspaceRoot := snapshot.Meta.WorkspaceRoot
+	workspaceContainer := snapshot.Meta.WorkspaceContainer
+	persistedWorktreeReminder := snapshot.Meta.WorktreeReminder
+	worktreeID := sql.NullString{}
+	cwdRelpath := "."
+	if targetErr == nil {
+		binding.ProjectID = existingTarget.ProjectID
+		binding.WorkspaceID = existingTarget.WorkspaceID
+		authoritativeRoot := strings.TrimSpace(existingTarget.WorkspaceRoot)
+		if authoritativeRoot == "" {
+			return fmt.Errorf("session %q: %w", snapshot.Meta.SessionID, errSessionWorkspaceRootRequired)
+		}
+		sameRoot, err := canonicalWorkspaceRootsEqual(snapshot.Meta.WorkspaceRoot, authoritativeRoot)
+		if err != nil {
 			return err
 		}
-		existingTarget, targetErr := s.queries.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(snapshot.Meta.SessionID))
-		if targetErr != nil {
-			if errors.Is(targetErr, sql.ErrNoRows) {
-				return err
-			}
-			return fmt.Errorf("get existing session execution target: %w", targetErr)
+		if !sameRoot {
+			persistedWorktreeReminder = nil
 		}
-		binding = Binding{ProjectID: existingTarget.ProjectID}
+		workspaceRoot = authoritativeRoot
+		workspaceContainer = strings.TrimSpace(existingTarget.WorkspaceSnapshotName)
+		if workspaceContainer == "" {
+			return fmt.Errorf("session %q: %w", snapshot.Meta.SessionID, errSessionWorkspaceContainerRequired)
+		}
+		worktreeID = existingTarget.WorktreeID
+		cwdRelpath = normalizeSessionCwdRelpath(existingTarget.CwdRelpath)
+	} else {
+		var err error
+		binding, err = s.EnsureWorkspaceBinding(ctx, snapshot.Meta.WorkspaceRoot)
+		if err != nil {
+			return err
+		}
 	}
 	relpath, err := relativePathWithinRoot(s.persistenceRoot, snapshot.SessionDir)
 	if err != nil {
@@ -1885,26 +1875,16 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	if err != nil {
 		return err
 	}
-	persistedWorktreeReminder := snapshot.Meta.WorktreeReminder
-	worktreeID := sql.NullString{}
-	cwdRelpath := "."
-	if existingTarget, targetErr := s.queries.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(snapshot.Meta.SessionID)); targetErr == nil {
-		if strings.TrimSpace(binding.WorkspaceID) != "" && strings.TrimSpace(existingTarget.WorkspaceID) == binding.WorkspaceID {
-			worktreeID = existingTarget.WorktreeID
-			cwdRelpath = normalizeSessionCwdRelpath(existingTarget.CwdRelpath)
-		} else {
-			persistedWorktreeReminder = nil
-		}
-	} else if !errors.Is(targetErr, sql.ErrNoRows) {
-		return fmt.Errorf("get existing session execution target: %w", targetErr)
-	}
 	metadataJSON, err := marshalJSON(map[string]any{
-		"workspace_root":                     snapshot.Meta.WorkspaceRoot,
-		"workspace_container":                snapshot.Meta.WorkspaceContainer,
+		"workspace_root":                     workspaceRoot,
+		"workspace_container":                workspaceContainer,
+		"input_draft_recovery_buffers":       snapshot.Meta.InputDraftRecoveryBuffers,
+		"conversation_established":           snapshot.Meta.ConversationEstablished,
 		"prompt_cache_lineage_generation":    snapshot.Meta.PromptCacheLineageGeneration,
 		"headless_active":                    snapshot.Meta.HeadlessActive,
 		"compaction_soon_reminder_issued":    snapshot.Meta.CompactionSoonReminderIssued,
 		"generated_recovered_warning_issued": snapshot.Meta.GeneratedRecoveredWarningIssued,
+		"pending_model_recovery":             snapshot.Meta.PendingModelRecovery,
 		"worktree_reminder":                  persistedWorktreeReminder,
 		"goal":                               snapshot.Meta.Goal,
 		"workflow_session":                   snapshot.Meta.WorkflowSession,
@@ -1937,6 +1917,18 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		UsageStateJson:     usageStateJSON,
 		MetadataJson:       metadataJSON,
 	})
+}
+
+func canonicalWorkspaceRootsEqual(left string, right string) (bool, error) {
+	leftRoot, err := config.CanonicalWorkspaceRoot(left)
+	if err != nil {
+		return false, err
+	}
+	rightRoot, err := config.CanonicalWorkspaceRoot(right)
+	if err != nil {
+		return false, err
+	}
+	return leftRoot == rightRoot, nil
 }
 
 func availabilityForPath(path string) string {
@@ -2009,15 +2001,18 @@ func defaultJSONObject(value string) string {
 
 func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Meta, error) {
 	metadataPayload := struct {
-		WorkspaceRoot                   string                         `json:"workspace_root"`
-		WorkspaceContainer              string                         `json:"workspace_container"`
-		PromptCacheLineageGeneration    int                            `json:"prompt_cache_lineage_generation"`
-		HeadlessActive                  bool                           `json:"headless_active"`
-		CompactionSoonReminderIssued    bool                           `json:"compaction_soon_reminder_issued"`
-		GeneratedRecoveredWarningIssued bool                           `json:"generated_recovered_warning_issued"`
-		WorktreeReminder                *session.WorktreeReminderState `json:"worktree_reminder"`
-		Goal                            *session.GoalState             `json:"goal"`
-		WorkflowSession                 *session.WorkflowSessionState  `json:"workflow_session"`
+		WorkspaceRoot                   string                             `json:"workspace_root"`
+		WorkspaceContainer              string                             `json:"workspace_container"`
+		InputDraftRecoveryBuffers       []session.InputDraftRecoveryBuffer `json:"input_draft_recovery_buffers"`
+		ConversationEstablished         bool                               `json:"conversation_established"`
+		PromptCacheLineageGeneration    int                                `json:"prompt_cache_lineage_generation"`
+		HeadlessActive                  bool                               `json:"headless_active"`
+		CompactionSoonReminderIssued    bool                               `json:"compaction_soon_reminder_issued"`
+		GeneratedRecoveredWarningIssued bool                               `json:"generated_recovered_warning_issued"`
+		PendingModelRecovery            *session.PendingModelRecovery      `json:"pending_model_recovery"`
+		WorktreeReminder                *session.WorktreeReminderState     `json:"worktree_reminder"`
+		Goal                            *session.GoalState                 `json:"goal"`
+		WorkflowSession                 *session.WorkflowSessionState      `json:"workflow_session"`
 	}{}
 	if err := unmarshalStoredJSON(row.MetadataJson, &metadataPayload); err != nil {
 		return session.Meta{}, fmt.Errorf("decode session metadata json: %w", err)
@@ -2044,8 +2039,8 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 	if *usageState == (session.UsageState{}) {
 		usageState = nil
 	}
-	// The joined workspace row is authoritative. The JSON payload may still
-	// contain a historical snapshot captured before an explicit rebind.
+	// An attached workspace row is authoritative; detached sessions use the
+	// structured metadata payload owned by SQLite.
 	workspaceRoot := strings.TrimSpace(row.WorkspaceRoot)
 	if workspaceRoot == "" && strings.TrimSpace(metadataPayload.WorkspaceRoot) != "" {
 		workspaceRoot = strings.TrimSpace(metadataPayload.WorkspaceRoot)
@@ -2059,6 +2054,7 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		Name:                            row.Name,
 		FirstPromptPreview:              row.FirstPromptPreview,
 		InputDraft:                      row.InputDraft,
+		InputDraftRecoveryBuffers:       metadataPayload.InputDraftRecoveryBuffers,
 		ParentSessionID:                 row.ParentSessionID,
 		WorkspaceRoot:                   workspaceRoot,
 		WorkspaceContainer:              workspaceContainer,
@@ -2066,11 +2062,13 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		CreatedAt:                       timeFromStoredTimestamp(row.CreatedAtUnixMs),
 		UpdatedAt:                       timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		LastSequence:                    row.LastSequence,
+		ConversationEstablished:         metadataPayload.ConversationEstablished,
 		ModelRequestCount:               row.ModelRequestCount,
 		PromptCacheLineageGeneration:    metadataPayload.PromptCacheLineageGeneration,
 		HeadlessActive:                  metadataPayload.HeadlessActive,
 		CompactionSoonReminderIssued:    metadataPayload.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: metadataPayload.GeneratedRecoveredWarningIssued,
+		PendingModelRecovery:            metadataPayload.PendingModelRecovery,
 		WorktreeReminder:                metadataPayload.WorktreeReminder,
 		Goal:                            metadataPayload.Goal,
 		WorkflowSession:                 metadataPayload.WorkflowSession,
@@ -2236,11 +2234,11 @@ func relativePathWithinRoot(root string, target string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("compute session artifact relpath: %w", err)
 	}
-	cleaned := filepath.ToSlash(filepath.Clean(relpath))
-	if cleaned == "." || filepath.IsAbs(filepath.FromSlash(cleaned)) || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+	cleaned := filepath.Clean(relpath)
+	if cleaned == "." || !filepath.IsLocal(cleaned) {
 		return "", fmt.Errorf("session dir %q is outside persistence root %q: %w", target, root, ErrPathEscapesPersistenceRoot)
 	}
-	return cleaned, nil
+	return filepath.ToSlash(cleaned), nil
 }
 
 func canonicalFilesystemPath(path string) (string, error) {
@@ -2303,4 +2301,11 @@ func (o sessionObserver) ObservePersistedStore(ctx context.Context, snapshot ses
 		return nil
 	}
 	return o.store.upsertSessionSnapshot(ctx, snapshot)
+}
+
+func (o sessionObserver) ObserveEventLogReconciliation(ctx context.Context, reconciliation session.PersistedEventLogReconciliation) error {
+	if o.store == nil {
+		return nil
+	}
+	return o.store.reconcileSessionEventLog(ctx, reconciliation)
 }

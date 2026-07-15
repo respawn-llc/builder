@@ -1899,6 +1899,47 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (G
 	return i, err
 }
 
+const getSessionWorkspaceRetargetStateByID = `-- name: GetSessionWorkspaceRetargetStateByID :one
+SELECT
+    s.id AS session_id,
+    s.project_id,
+    p.display_name AS project_display_name,
+    p.project_key,
+    s.artifact_relpath,
+    CAST(
+        json_type(s.metadata_json, '$.workflow_session') IS NOT NULL
+        AND json_type(s.metadata_json, '$.workflow_session') != 'null'
+        AS INTEGER
+    ) AS has_workflow_session
+FROM sessions s
+JOIN projects p ON p.id = s.project_id
+WHERE s.id = ?1
+LIMIT 1
+`
+
+type GetSessionWorkspaceRetargetStateByIDRow struct {
+	SessionID          string
+	ProjectID          string
+	ProjectDisplayName string
+	ProjectKey         string
+	ArtifactRelpath    string
+	HasWorkflowSession int64
+}
+
+func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sessionID string) (GetSessionWorkspaceRetargetStateByIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionWorkspaceRetargetStateByID, sessionID)
+	var i GetSessionWorkspaceRetargetStateByIDRow
+	err := row.Scan(
+		&i.SessionID,
+		&i.ProjectID,
+		&i.ProjectDisplayName,
+		&i.ProjectKey,
+		&i.ArtifactRelpath,
+		&i.HasWorkflowSession,
+	)
+	return i, err
+}
+
 const getTask = `-- name: GetTask :one
 SELECT
     id,
@@ -5127,6 +5168,37 @@ func (q *Queries) ListSessionPromptHistoryText(ctx context.Context, sessionID st
 	return items, nil
 }
 
+const listSessionWorkflowTaskIDs = `-- name: ListSessionWorkflowTaskIDs :many
+SELECT DISTINCT task.id
+FROM task_run_records run
+JOIN task_records task ON task.id = run.task_id
+WHERE run.session_id = ?1
+ORDER BY task.id ASC
+`
+
+func (q *Queries) ListSessionWorkflowTaskIDs(ctx context.Context, sessionID sql.NullString) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionWorkflowTaskIDs, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionsByProject = `-- name: ListSessionsByProject :many
 SELECT
     id,
@@ -8294,6 +8366,39 @@ func (q *Queries) LockTaskExecutionTarget(ctx context.Context, arg LockTaskExecu
 	return result.RowsAffected()
 }
 
+const reconcileSessionEventLog = `-- name: ReconcileSessionEventLog :execrows
+UPDATE sessions
+SET
+    last_sequence = ?1,
+    updated_at_unix_ms = MAX(updated_at_unix_ms, ?2),
+    metadata_json = json_set(
+        CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+        '$.conversation_established',
+        json(CASE WHEN ?3 <> 0 THEN 'true' ELSE 'false' END)
+    )
+WHERE id = ?4
+`
+
+type ReconcileSessionEventLogParams struct {
+	LastSequence            int64
+	UpdatedAtUnixMs         interface{}
+	ConversationEstablished interface{}
+	SessionID               string
+}
+
+func (q *Queries) ReconcileSessionEventLog(ctx context.Context, arg ReconcileSessionEventLogParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reconcileSessionEventLog,
+		arg.LastSequence,
+		arg.UpdatedAtUnixMs,
+		arg.ConversationEstablished,
+		arg.SessionID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const recordInvalidCompletionProtocolViolation = `-- name: RecordInvalidCompletionProtocolViolation :one
 UPDATE task_runs
 SET
@@ -8925,6 +9030,56 @@ type ResumeTaskRunParams struct {
 
 func (q *Queries) ResumeTaskRun(ctx context.Context, arg ResumeTaskRunParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, resumeTaskRun, arg.UpdatedAtUnixMs, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const retargetSessionWorkspaceProject = `-- name: RetargetSessionWorkspaceProject :execrows
+UPDATE sessions
+SET
+    project_id = ?1,
+    workspace_id = ?2,
+    worktree_id = NULL,
+    cwd_relpath = '.',
+    artifact_relpath = ?3,
+    updated_at_unix_ms = ?4,
+    metadata_json = json_set(
+        CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+        '$.workspace_root', CAST(?5 AS TEXT),
+        '$.workspace_container', CAST(?6 AS TEXT),
+        '$.worktree_reminder', json('null')
+    )
+WHERE id = ?7
+  AND project_id = ?8
+  AND artifact_relpath = ?9
+`
+
+type RetargetSessionWorkspaceProjectParams struct {
+	TargetProjectID          string
+	TargetWorkspaceID        sql.NullString
+	TargetArtifactRelpath    string
+	UpdatedAtUnixMs          int64
+	TargetWorkspaceRoot      string
+	TargetWorkspaceContainer string
+	SessionID                string
+	SourceProjectID          string
+	SourceArtifactRelpath    string
+}
+
+func (q *Queries) RetargetSessionWorkspaceProject(ctx context.Context, arg RetargetSessionWorkspaceProjectParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, retargetSessionWorkspaceProject,
+		arg.TargetProjectID,
+		arg.TargetWorkspaceID,
+		arg.TargetArtifactRelpath,
+		arg.UpdatedAtUnixMs,
+		arg.TargetWorkspaceRoot,
+		arg.TargetWorkspaceContainer,
+		arg.SessionID,
+		arg.SourceProjectID,
+		arg.SourceArtifactRelpath,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -9801,22 +9956,17 @@ INSERT INTO sessions (
     ?19
 )
 ON CONFLICT(id) DO UPDATE SET
-    project_id = excluded.project_id,
-    workspace_id = excluded.workspace_id,
-    worktree_id = excluded.worktree_id,
-    artifact_relpath = excluded.artifact_relpath,
     name = excluded.name,
     first_prompt_preview = excluded.first_prompt_preview,
     input_draft = excluded.input_draft,
     parent_session_id = excluded.parent_session_id,
-    updated_at_unix_ms = excluded.updated_at_unix_ms,
+    updated_at_unix_ms = MAX(sessions.updated_at_unix_ms, excluded.updated_at_unix_ms),
     last_sequence = excluded.last_sequence,
     model_request_count = excluded.model_request_count,
     launch_visible = CASE
         WHEN sessions.launch_visible <> 0 OR excluded.launch_visible <> 0 THEN 1
         ELSE 0
     END,
-    cwd_relpath = excluded.cwd_relpath,
     continuation_json = excluded.continuation_json,
     locked_json = excluded.locked_json,
     usage_state_json = excluded.usage_state_json,

@@ -11,7 +11,6 @@ import (
 	"core/cli/tui"
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/session"
 	"core/server/sessionview"
 	"core/shared/client"
 	"core/shared/clientui"
@@ -960,7 +959,8 @@ func TestRollbackEditingSubmissionPreservesExactSelectedTarget(t *testing.T) {
 
 func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 	blockingClient := &rollbackInterruptBlockingClient{started: make(chan struct{})}
-	store, firstEngine := newAppRuntimeEngine(t, blockingClient, runtime.Config{})
+	store, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
+	firstEngine := newAppRuntimeEngineWithStore(t, store, blockingClient, runtime.Config{})
 	submitDone := make(chan error, 1)
 	go func() {
 		_, err := firstEngine.SubmitUserMessage(context.Background(), "interrupted prompt survives restart")
@@ -987,7 +987,7 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 		t.Fatalf("close interrupted runtime: %v", err)
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := persistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen interrupted session: %v", err)
 	}

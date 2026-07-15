@@ -327,11 +327,21 @@ func (fakeShellHandler) Call(context.Context, tools.Call) (tools.Result, error) 
 	return tools.Result{Output: json.RawMessage(`{"output":"ok","exit_code":0,"truncated":false}`)}, nil
 }
 
+var runtimeControlTestSessionPersistence = sessiontest.NewPersistence()
+
 func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tools.Registry, cfg runtime.Config, opts ...session.StoreOption) (*session.Store, *runtime.Engine) {
 	t.Helper()
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", opts...)
+	store, err := session.Create(
+		t.TempDir(),
+		"workspace-x",
+		"/tmp/workspace-x",
+		append(runtimeControlTestSessionPersistence.Options(), opts...)...,
+	)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist session store: %v", err)
 	}
 	if client == nil {
 		client = &runtimeControlFakeClient{}
@@ -579,7 +589,7 @@ func runtimeControlPromptHistoryStoresLoad(t *testing.T, sessionID string) *runt
 }
 
 func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -1336,7 +1346,7 @@ func TestServiceSetSessionNameDedupesSuccessfulRetry(t *testing.T) {
 	if got := store.Meta().Name; got != "after" {
 		t.Fatalf("session name = %q, want after", got)
 	}
-	if reopened, err := session.Open(store.Dir()); err != nil {
+	if reopened, err := runtimeControlTestSessionPersistence.Open(store.Dir()); err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	} else if got := reopened.Meta().Name; got != "after" {
 		t.Fatalf("reopened session name = %q, want after", got)

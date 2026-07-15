@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"core/cli/app/commands"
-	"core/server/session"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -23,10 +22,7 @@ func (s clientPromptRootsFailureServer) ClientPromptRoots() (commands.ClientProm
 }
 
 func TestResolveAndReleaseSessionHandoffTransitionFailureLeavesChildReopenableWithoutDestination(t *testing.T) {
-	child := createAppRuntimeSession(t)
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("persist child session: %v", err)
-	}
+	child, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
 	resolveErr := errors.New("transition resolution failed")
 	releaseCalls := 0
 	server := narrowSessionLifecycleServer{
@@ -58,7 +54,7 @@ func TestResolveAndReleaseSessionHandoffTransitionFailureLeavesChildReopenableWi
 		t.Fatalf("origin release calls = %d, want 1 after transition failure", releaseCalls)
 	}
 
-	reopened, err := session.Open(child.Dir())
+	reopened, err := persistence.Open(child.Dir())
 	if err != nil {
 		t.Fatalf("reopen child after transition failure: %v", err)
 	}
@@ -68,10 +64,7 @@ func TestResolveAndReleaseSessionHandoffTransitionFailureLeavesChildReopenableWi
 }
 
 func TestResolveAndReleaseSessionHandoffRejectsOpenSessionWithoutDestination(t *testing.T) {
-	child := createAppRuntimeSession(t)
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("persist child session: %v", err)
-	}
+	child, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
 	releaseCalls := 0
 	server := narrowSessionLifecycleServer{
 		lifecycle: &recordingSessionLifecycleClient{
@@ -102,7 +95,7 @@ func TestResolveAndReleaseSessionHandoffRejectsOpenSessionWithoutDestination(t *
 		t.Fatalf("origin cleanup calls = %d, want 1", releaseCalls)
 	}
 
-	reopened, err := session.Open(child.Dir())
+	reopened, err := persistence.Open(child.Dir())
 	if err != nil {
 		t.Fatalf("reopen child after invalid open-session response: %v", err)
 	}
@@ -112,10 +105,7 @@ func TestResolveAndReleaseSessionHandoffRejectsOpenSessionWithoutDestination(t *
 }
 
 func TestResolveAndReleaseSessionHandoffReturnsReleaseFailureBeforeDestinationCanPlan(t *testing.T) {
-	child := createAppRuntimeSession(t)
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("persist child session: %v", err)
-	}
+	child, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
 	releaseErr := errors.New("release failed")
 	events := make([]string, 0, 2)
 	server := narrowSessionLifecycleServer{
@@ -141,7 +131,7 @@ func TestResolveAndReleaseSessionHandoffReturnsReleaseFailureBeforeDestinationCa
 	if got := strings.Join(events, ","); got != "resolve,release" {
 		t.Fatalf("event order = %q, want resolve,release", got)
 	}
-	reopened, err := session.Open(child.Dir())
+	reopened, err := persistence.Open(child.Dir())
 	if err != nil {
 		t.Fatalf("reopen child after release failure: %v", err)
 	}
@@ -151,10 +141,7 @@ func TestResolveAndReleaseSessionHandoffReturnsReleaseFailureBeforeDestinationCa
 }
 
 func TestDestinationPlanningFailureLeavesChildReopenableWithoutPreparation(t *testing.T) {
-	child := createAppRuntimeSession(t)
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("persist child session: %v", err)
-	}
+	child, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
 	planErr := errors.New("destination planning failed")
 	prepareCalls := 0
 	server := &testEmbeddedServer{
@@ -207,7 +194,7 @@ func TestDestinationPlanningFailureLeavesChildReopenableWithoutPreparation(t *te
 		t.Fatalf("destination preparation calls = %d, want none after planning failure", prepareCalls)
 	}
 
-	reopened, err := session.Open(child.Dir())
+	reopened, err := persistence.Open(child.Dir())
 	if err != nil {
 		t.Fatalf("reopen child after destination planning failure: %v", err)
 	}
@@ -217,10 +204,7 @@ func TestDestinationPlanningFailureLeavesChildReopenableWithoutPreparation(t *te
 }
 
 func TestDestinationPreparationFailureLeavesChildReopenableWithoutComposition(t *testing.T) {
-	child := createAppRuntimeSession(t)
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("persist child session: %v", err)
-	}
+	child, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
 	prepareErr := errors.New("destination runtime preparation failed")
 	initialInputCalls := 0
 	server := &testEmbeddedServer{
@@ -269,7 +253,7 @@ func TestDestinationPreparationFailureLeavesChildReopenableWithoutComposition(t 
 		t.Fatalf("initial input calls = %d, want none before successful runtime preparation", initialInputCalls)
 	}
 
-	reopened, err := session.Open(child.Dir())
+	reopened, err := persistence.Open(child.Dir())
 	if err != nil {
 		t.Fatalf("reopen child after destination preparation failure: %v", err)
 	}
@@ -279,10 +263,7 @@ func TestDestinationPreparationFailureLeavesChildReopenableWithoutComposition(t 
 }
 
 func TestDestinationInitialInputFailureClosesRuntimeAndLeavesChildReopenableWithoutComposition(t *testing.T) {
-	child := createAppRuntimeSession(t)
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("persist child session: %v", err)
-	}
+	child, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
 	lookupErr := errors.New("destination initial input failed")
 	closeErr := errors.New("destination runtime cleanup failed")
 	closeCalls := 0
@@ -333,7 +314,7 @@ func TestDestinationInitialInputFailureClosesRuntimeAndLeavesChildReopenableWith
 		t.Fatalf("runtime cleanup calls = %d, want 1", closeCalls)
 	}
 
-	reopened, err := session.Open(child.Dir())
+	reopened, err := persistence.Open(child.Dir())
 	if err != nil {
 		t.Fatalf("reopen child after destination initial-input failure: %v", err)
 	}
@@ -343,10 +324,7 @@ func TestDestinationInitialInputFailureClosesRuntimeAndLeavesChildReopenableWith
 }
 
 func TestDestinationClientPromptRootsFailureJoinsRuntimeCleanupFailure(t *testing.T) {
-	child := createAppRuntimeSession(t)
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("persist child session: %v", err)
-	}
+	child, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
 	promptRootsErr := errors.New("client prompt roots unavailable")
 	closeErr := errors.New("destination runtime cleanup failed")
 	closeCalls := 0
@@ -390,7 +368,7 @@ func TestDestinationClientPromptRootsFailureJoinsRuntimeCleanupFailure(t *testin
 		t.Fatalf("runtime cleanup calls = %d, want 1", closeCalls)
 	}
 
-	reopened, err := session.Open(child.Dir())
+	reopened, err := persistence.Open(child.Dir())
 	if err != nil {
 		t.Fatalf("reopen child after client-prompt-root failure: %v", err)
 	}

@@ -5,21 +5,22 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
-	"sync"
 
 	"core/server/auth"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/session"
-	"core/shared/client"
 	"core/shared/rollbacktarget"
 	"core/shared/serverapi"
 )
+
+var errSessionWorkspaceRetargeterRequired = errors.New("session workspace retargeter is required")
 
 type SessionLifecycleService struct {
 	persistenceRoot string
 	containerDir    string
 	stores          sessionStoreResolver
+	retargeter      sessionWorkspaceRetargeter
 	authManager     *auth.Manager
 	storeOptions    []session.StoreOption
 	drafts          *requestmemo.Memo[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse]
@@ -41,6 +42,10 @@ type sessionStoreResolver interface {
 	ResolveStore(ctx context.Context, sessionID string) (*session.Store, error)
 }
 
+type sessionWorkspaceRetargeter interface {
+	RetargetWorkspace(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
+}
+
 func NewSessionLifecycleService(containerDir string, stores sessionStoreResolver, authManager *auth.Manager, storeOptions ...session.StoreOption) *SessionLifecycleService {
 	return &SessionLifecycleService{containerDir: strings.TrimSpace(containerDir), stores: stores, authManager: authManager, storeOptions: append([]session.StoreOption(nil), storeOptions...), drafts: requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](), transitions: requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]()}
 }
@@ -49,72 +54,19 @@ func NewGlobalSessionLifecycleService(persistenceRoot string, stores sessionStor
 	return &SessionLifecycleService{persistenceRoot: strings.TrimSpace(persistenceRoot), stores: stores, authManager: authManager, storeOptions: append([]session.StoreOption(nil), storeOptions...), drafts: requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](), transitions: requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]()}
 }
 
-type MetadataBackedSessionLifecycleClient struct {
-	mu     sync.RWMutex
-	client client.SessionLifecycleClient
-	store  *metadata.Store
-}
-
-func NewMetadataBackedSessionLifecycleClient(persistenceRoot string, authManager *auth.Manager) (*MetadataBackedSessionLifecycleClient, error) {
-	store, err := metadata.Open(persistenceRoot)
-	if err != nil {
-		return nil, err
-	}
-	service := NewGlobalSessionLifecycleService(persistenceRoot, nil, authManager, store.AuthoritativeSessionStoreOptions()...)
-	return &MetadataBackedSessionLifecycleClient{client: client.NewLoopbackSessionLifecycleClient(service), store: store}, nil
-}
-
-func (c *MetadataBackedSessionLifecycleClient) Close() error {
-	if c == nil {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	store := c.store
-	c.client = nil
-	c.store = nil
-	if store == nil {
-		return nil
-	}
-	return store.Close()
-}
-
-func (c *MetadataBackedSessionLifecycleClient) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
-	return callMetadataBackedLoopbackClient(c, ctx, req, client.SessionLifecycleClient.GetInitialInput)
-}
-
-func (c *MetadataBackedSessionLifecycleClient) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-	return callMetadataBackedLoopbackClient(c, ctx, req, client.SessionLifecycleClient.PersistInputDraft)
-}
-
-func (c *MetadataBackedSessionLifecycleClient) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	return callMetadataBackedLoopbackClient(c, ctx, req, client.SessionLifecycleClient.RetargetSessionWorkspace)
-}
-
-func (c *MetadataBackedSessionLifecycleClient) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-	return callMetadataBackedLoopbackClient(c, ctx, req, client.SessionLifecycleClient.ResolveTransition)
-}
-
-func callMetadataBackedLoopbackClient[Req any, Resp any](c *MetadataBackedSessionLifecycleClient, ctx context.Context, req Req, call func(client.SessionLifecycleClient, context.Context, Req) (Resp, error)) (Resp, error) {
-	if c == nil {
-		var zero Resp
-		return zero, errLifecycleClientClosed
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	client := c.client
-	if client == nil {
-		var zero Resp
-		return zero, errLifecycleClientClosed
-	}
-	return call(client, ctx, req)
-}
-
 func (s *SessionLifecycleService) WithPersistenceRoot(root string) *SessionLifecycleService {
 	if s == nil {
 		return nil
 	}
 	s.persistenceRoot = strings.TrimSpace(root)
+	return s
+}
+
+func (s *SessionLifecycleService) WithWorkspaceRetargeter(retargeter sessionWorkspaceRetargeter) *SessionLifecycleService {
+	if s == nil {
+		return nil
+	}
+	s.retargeter = retargeter
 	return s
 }
 
@@ -160,26 +112,27 @@ func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, 
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
-	if strings.TrimSpace(s.persistenceRoot) == "" {
-		return serverapi.SessionRetargetWorkspaceResponse{}, errPersistenceRootRequired
+	if s == nil || s.retargeter == nil {
+		return serverapi.SessionRetargetWorkspaceResponse{}, errSessionWorkspaceRetargeterRequired
 	}
-	metadataStore, err := metadata.Open(s.persistenceRoot)
+	result, err := s.retargeter.RetargetWorkspace(ctx, metadata.SessionWorkspaceRetargetRequest{
+		SessionID:     req.SessionID,
+		WorkspaceRoot: req.WorkspaceRoot,
+		ProjectID:     req.ProjectID,
+	})
 	if err != nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
-	defer func() { _ = metadataStore.Close() }()
-	binding, err := metadataStore.RetargetSessionWorkspace(ctx, req.SessionID, req.WorkspaceRoot)
-	if err != nil {
-		return serverapi.SessionRetargetWorkspaceResponse{}, err
-	}
+	binding := result.Binding
 	return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{
 		ProjectID:       binding.ProjectID,
+		ProjectKey:      binding.ProjectKey,
 		ProjectName:     binding.ProjectName,
 		WorkspaceID:     binding.WorkspaceID,
 		CanonicalRoot:   binding.CanonicalRoot,
 		WorkspaceName:   binding.WorkspaceName,
 		WorkspaceStatus: binding.WorkspaceStatus,
-	}}, nil
+	}, WorkspaceBindingCreated: result.WorkspaceBindingCreated}, nil
 }
 
 func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {

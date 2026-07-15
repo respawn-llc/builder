@@ -7,10 +7,10 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"errors"
+	"flag"
 	"fmt"
 	"github.com/google/uuid"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,10 +20,7 @@ import (
 var bindingCommandRPCTimeout = 5 * time.Second
 var bindingCommandRemoteOpener = openBindingCommandRemote
 var bindingCommandWorkspaceResolver = resolveWorkspaceBinding
-var bindingCommandSessionRetargeter = retargetSessionWorkspaceWithTimeout
-var bindingCommandLocalSessionLifecycleClient = func(cfg config.App) client.SessionLifecycleClient {
-	return NewLocalSessionLifecycleClient(cfg)
-}
+var bindingCommandSessionRetargeter = retargetSessionWorkspace
 
 func projectSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) > 0 {
@@ -122,6 +119,7 @@ func attachSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func rebindSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" rebind", stderr, rebindUsage)
+	projectID := fs.String("project", "", "target project ID; required to move a session across projects")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -130,12 +128,33 @@ func rebindSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "rebind requires <session-id> and <new-path>")
 		return 2
 	}
-	binding, err := retargetSessionWorkspace(context.Background(), remaining[0], remaining[1])
+	var targetProjectID *string
+	fs.Visit(func(parsedFlag *flag.Flag) {
+		if parsedFlag.Name != "project" {
+			return
+		}
+		trimmed := strings.TrimSpace(*projectID)
+		targetProjectID = &trimmed
+	})
+	if targetProjectID != nil && *targetProjectID == "" {
+		fmt.Fprintln(stderr, "project id must not be blank")
+		return 2
+	}
+	response, err := retargetSessionWorkspaceResponse(context.Background(), remaining[0], remaining[1], targetProjectID)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, formatSessionRetargetCommandError(remaining[1], err))
 		return 1
 	}
-	_, _ = fmt.Fprintln(stdout, binding.WorkspaceID)
+	_, _ = fmt.Fprintln(stdout, response.Binding.WorkspaceID)
+	if response.WorkspaceBindingCreated {
+		_, _ = fmt.Fprintf(
+			stderr,
+			"Attached workspace %q to project %q (%s).\n",
+			response.Binding.CanonicalRoot,
+			response.Binding.ProjectName,
+			response.Binding.ProjectID,
+		)
+	}
 	return 0
 }
 
@@ -205,10 +224,8 @@ func rebindWorkspaceWithTimeout(ctx context.Context, remote client.ProjectViewCl
 	return remote.RebindWorkspace(rpcCtx, serverapi.ProjectRebindWorkspaceRequest{OldWorkspaceRoot: oldWorkspaceRoot, NewWorkspaceRoot: newWorkspaceRoot})
 }
 
-func retargetSessionWorkspaceWithTimeout(ctx context.Context, remote client.SessionLifecycleClient, sessionID string, workspaceRoot string) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	rpcCtx, cancel := context.WithTimeout(ctx, bindingCommandRPCTimeout)
-	defer cancel()
-	return remote.RetargetSessionWorkspace(rpcCtx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: sessionID, WorkspaceRoot: workspaceRoot})
+func retargetSessionWorkspace(ctx context.Context, remote client.SessionLifecycleClient, sessionID string, workspaceRoot string, projectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	return remote.RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: sessionID, WorkspaceRoot: workspaceRoot, ProjectID: projectID})
 }
 
 func listProjects(ctx context.Context) ([]clientui.ProjectSummary, error) {
@@ -245,71 +262,17 @@ func createProject(ctx context.Context, displayName string, workspaceRoot string
 	return resp.Binding, nil
 }
 
-func retargetSessionWorkspace(ctx context.Context, sessionID string, newPath string) (serverapi.ProjectBinding, error) {
-	newCfg, err := loadBindingCommandConfig(newPath)
+func retargetSessionWorkspaceResponse(ctx context.Context, sessionID string, newPath string, projectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	newCfg, remote, err := bindingCommandRemoteOpener(ctx, newPath)
 	if err != nil {
-		return serverapi.ProjectBinding{}, err
-	}
-	_, remote, err := bindingCommandRemoteOpener(ctx, newPath)
-	if err != nil {
-		if shouldFallbackToLocalSessionRetargetOpenError(newCfg, err) {
-			localClient := bindingCommandLocalSessionLifecycleClient(newCfg)
-			defer func() { _ = localClient.Close() }()
-			resp, localErr := bindingCommandSessionRetargeter(ctx, localClient, sessionID, newCfg.WorkspaceRoot)
-			if localErr != nil {
-				return serverapi.ProjectBinding{}, localErr
-			}
-			return resp.Binding, nil
-		}
-		return serverapi.ProjectBinding{}, err
+		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
 	defer func() { _ = remote.Close() }()
-	resp, err := bindingCommandSessionRetargeter(ctx, remote, sessionID, newCfg.WorkspaceRoot)
+	resp, err := bindingCommandSessionRetargeter(ctx, remote, sessionID, newCfg.WorkspaceRoot, projectID)
 	if err != nil {
-		if shouldFallbackToLocalSessionRetargetRPCError(newCfg, err) {
-			localClient := bindingCommandLocalSessionLifecycleClient(newCfg)
-			defer func() { _ = localClient.Close() }()
-			resp, err = bindingCommandSessionRetargeter(ctx, localClient, sessionID, newCfg.WorkspaceRoot)
-		}
+		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
-	if err != nil {
-		return serverapi.ProjectBinding{}, err
-	}
-	return resp.Binding, nil
-}
-
-func shouldFallbackToLocalSessionRetargetOpenError(cfg config.App, err error) bool {
-	if !shouldFallbackToImplicitLoopbackSessionRetarget(cfg) {
-		return false
-	}
-	var opErr *net.OpError
-	return errors.As(err, &opErr) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
-}
-
-func shouldFallbackToLocalSessionRetargetRPCError(cfg config.App, err error) bool {
-	return errors.Is(err, serverapi.ErrMethodNotFound) && shouldFallbackToImplicitLoopbackSessionRetarget(cfg)
-}
-
-func shouldFallbackToImplicitLoopbackSessionRetarget(cfg config.App) bool {
-	return serverTargetIsLoopback(cfg) && !serverTargetConfiguredExplicitly(cfg)
-}
-
-func serverTargetConfiguredExplicitly(cfg config.App) bool {
-	return configSourceIsExplicit(cfg, "server_host") || configSourceIsExplicit(cfg, "server_port")
-}
-
-func configSourceIsExplicit(cfg config.App, key string) bool {
-	source := strings.TrimSpace(cfg.Source.Sources[key])
-	return source != "" && source != "default"
-}
-
-func serverTargetIsLoopback(cfg config.App) bool {
-	host := strings.TrimSpace(cfg.Settings.ServerHost)
-	if host == "" || strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
+	return resp, nil
 }
 
 func openBindingCommandRemote(ctx context.Context, path string) (config.App, *client.Remote, error) {

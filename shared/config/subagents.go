@@ -281,7 +281,7 @@ func subagentSourceDiffers(base Settings, role SubagentRole, key string) bool {
 	case "shell.postprocessing_mode":
 		return strings.TrimSpace(string(base.Shell.PostprocessingMode)) != strings.TrimSpace(string(role.Settings.Shell.PostprocessingMode))
 	case "shell.postprocess_hook":
-		return strings.TrimSpace(base.Shell.PostprocessHook) != strings.TrimSpace(role.Settings.Shell.PostprocessHook)
+		return !equalOptionalStrings(base.Shell.PostprocessHook, role.Settings.Shell.PostprocessHook)
 	case "reviewer.frequency":
 		return strings.TrimSpace(base.Reviewer.Frequency) != strings.TrimSpace(role.Settings.Reviewer.Frequency)
 	case "reviewer.model":
@@ -341,4 +341,11 @@ func subagentSourceDiffers(base Settings, role SubagentRole, key string) bool {
 		return base.SkillToggles[name] != role.Settings.SkillToggles[name]
 	}
 	return true
+}
+
+func equalOptionalStrings(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return strings.TrimSpace(*left) == strings.TrimSpace(*right)
 }

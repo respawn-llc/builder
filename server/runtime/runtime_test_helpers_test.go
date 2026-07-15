@@ -1,12 +1,15 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/workflowruntime"
@@ -64,6 +67,21 @@ func mustCreateTestSession(t *testing.T, workspaceRoot ...string) *session.Store
 	return mustCreateNamedTestSessionAt(t, root, "ws", workspace)
 }
 
+var runtimeTestSessionPersistence = sessiontest.NewPersistence()
+
+type armedTestPersistenceObserver struct {
+	delegate session.PersistenceObserver
+	armed    atomic.Bool
+	err      error
+}
+
+func (o *armedTestPersistenceObserver) ObservePersistedStore(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
+	if o.armed.Load() {
+		return o.err
+	}
+	return o.delegate.ObservePersistedStore(ctx, snapshot)
+}
+
 func mustCreateTestSessionAt(t *testing.T, root string, options ...session.StoreOption) *session.Store {
 	t.Helper()
 	return mustCreateNamedTestSessionAt(t, root, "ws", root, options...)
@@ -76,16 +94,19 @@ func mustCreateNamedTestSession(t *testing.T, workspaceContainerName string, wor
 
 func mustCreateNamedTestSessionAt(t *testing.T, root string, workspaceContainerName string, workspaceRoot string, options ...session.StoreOption) *session.Store {
 	t.Helper()
-	store, err := session.Create(root, workspaceContainerName, workspaceRoot, options...)
+	store, err := session.Create(root, workspaceContainerName, workspaceRoot, append(runtimeTestSessionPersistence.Options(), options...)...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist store: %v", err)
 	}
 	return store
 }
 
 func mustOpenTestSession(t *testing.T, dir string) *session.Store {
 	t.Helper()
-	store, err := session.Open(dir)
+	store, err := runtimeTestSessionPersistence.Open(dir)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

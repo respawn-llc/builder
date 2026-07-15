@@ -20,16 +20,16 @@ import (
 )
 
 type Manager struct {
-	mu                  sync.Mutex
-	nextID              int
-	entries             map[string]*processEntry
-	tempDir             string
-	onEvent             func(Event)
-	minimumExecToBgTime time.Duration
-	closeGracePeriod    time.Duration
-	closeWaitTimeout    time.Duration
-	postprocessor       *postprocess.Runner
-	closed              bool
+	mu                   sync.Mutex
+	nextID               int
+	entries              map[string]*processEntry
+	tempDir              string
+	onEvent              func(Event)
+	minimumExecToBgTime  time.Duration
+	closeGracePeriod     time.Duration
+	closeWaitTimeout     time.Duration
+	defaultPostprocessor *postprocess.Runner
+	closed               bool
 }
 
 type ManagerOption func(*Manager)
@@ -55,23 +55,27 @@ func WithCloseTimeouts(gracePeriod, waitTimeout time.Duration) ManagerOption {
 
 func WithPostprocessor(runner *postprocess.Runner) ManagerOption {
 	return func(m *Manager) {
-		m.postprocessor = runner
+		m.defaultPostprocessor = runner
 	}
 }
 
 func NewManager(opts ...ManagerOption) (*Manager, error) {
+	defaultPostprocessor, err := postprocess.NewRunner(postprocess.Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	if err != nil {
+		return nil, fmt.Errorf("compile default shell postprocessor: %w", err)
+	}
 	tempDir, err := os.MkdirTemp("", backgroundLogDirPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("create background shell temp dir: %w", err)
 	}
 	mgr := &Manager{
-		nextID:              initialProcessID,
-		entries:             make(map[string]*processEntry),
-		tempDir:             tempDir,
-		minimumExecToBgTime: defaultMinimumExecToBgTime,
-		closeGracePeriod:    closeGracePeriod,
-		closeWaitTimeout:    closeWaitTimeout,
-		postprocessor:       postprocess.NewRunner(postprocess.Settings{Mode: config.ShellPostprocessingModeBuiltin}),
+		nextID:               initialProcessID,
+		entries:              make(map[string]*processEntry),
+		tempDir:              tempDir,
+		minimumExecToBgTime:  defaultMinimumExecToBgTime,
+		closeGracePeriod:     closeGracePeriod,
+		closeWaitTimeout:     closeWaitTimeout,
+		defaultPostprocessor: defaultPostprocessor,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -80,6 +84,10 @@ func NewManager(opts ...ManagerOption) (*Manager, error) {
 	}
 	if mgr.minimumExecToBgTime <= 0 {
 		mgr.minimumExecToBgTime = defaultMinimumExecToBgTime
+	}
+	if mgr.defaultPostprocessor == nil {
+		_ = os.RemoveAll(tempDir)
+		return nil, errors.New("shell postprocessor is required")
 	}
 	return mgr, nil
 }
@@ -119,6 +127,13 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	if maxOutputChars <= 0 {
 		maxOutputChars = defaultOutputTokenCap * 4
 	}
+	runner := req.Postprocessor
+	if runner == nil {
+		runner = m.defaultPostprocessor
+	}
+	if runner == nil {
+		return ExecResult{}, errors.New("shell process postprocessor is required")
+	}
 
 	id, logPath, err := m.allocateProcessSlot()
 	if err != nil {
@@ -148,7 +163,8 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		command:        strings.TrimSpace(req.DisplayCommand),
 		workdir:        workdir,
 		raw:            req.Raw,
-		preserveOutput: m.preserveRawOutput(req.Raw),
+		postprocessor:  runner,
+		preserveOutput: runner.PreservesRawOutput(req.Raw),
 		startedAt:      time.Now().UTC(),
 		lastUpdatedAt:  time.Now().UTC(),
 		state:          "starting",
@@ -270,13 +286,6 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	result.ToolError = processed.UnrecoverableError
 	m.emitEvent(newBackgroundedEvent(snapshot))
 	return result, nil
-}
-
-func (m *Manager) preserveRawOutput(raw bool) bool {
-	if raw || m == nil || m.postprocessor == nil {
-		return true
-	}
-	return m.postprocessor.PreservesRawOutput(false)
 }
 
 func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult, error) {

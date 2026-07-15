@@ -14,7 +14,6 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/runtimeops"
-	"core/server/session"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -109,17 +108,14 @@ func newRegistryTestRuntime(t *testing.T, onEvent func(runtime.Event)) *runtime.
 
 func newRegistryRuntime(t *testing.T, client llm.Client, toolRegistry *askquestion.Registry, cfg runtime.Config, onEvent func(*runtime.Engine, runtime.Event)) *runtime.Engine {
 	t.Helper()
-	store, err := session.Create(t.TempDir(), "workspace", t.TempDir())
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	store := newRegistryTestSession(t, t.TempDir(), "workspace", t.TempDir())
 	var engine *runtime.Engine
 	cfg.OnEvent = func(evt runtime.Event) {
 		if onEvent != nil {
 			onEvent(engine, evt)
 		}
 	}
-	engine, err = runtime.New(store, client, toolRegistry, cfg)
+	engine, err := runtime.New(store, client, toolRegistry, cfg)
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
 	}

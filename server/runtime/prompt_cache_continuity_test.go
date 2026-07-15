@@ -19,9 +19,9 @@ import (
 )
 
 // This regression test guards prompt-cache continuity across restarts. It
-// seeds a realistic live runtime conversation, relies on production persistence
-// to write session.json/events.jsonl, replays the persisted event stream,
-// reopens the runtime from disk, and finally proves that the cache-relevant
+// seeds a realistic live runtime conversation, relies on production persistence,
+// replays the persisted event stream, reopens the runtime from disk, and proves
+// that the cache-relevant
 // request prefix is unchanged before vs after reload.
 func TestBuildRequest_ReopenPreservesPromptCachePrefix(t *testing.T) {
 	fixture := newPromptCacheContinuityFixture(t)
@@ -484,15 +484,13 @@ func conversationFreshnessLabel(f session.ConversationFreshness) string {
 
 func assertSessionPersistenceFilesPresent(t *testing.T, store *session.Store) {
 	t.Helper()
-	for _, name := range []string{"session.json", "events.jsonl"} {
-		path := filepath.Join(store.Dir(), name)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read persistence file %s: %v", path, err)
-		}
-		if len(data) == 0 {
-			t.Fatalf("expected persistence file %s to be non-empty", path)
-		}
+	path := filepath.Join(store.Dir(), "events.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read persistence file %s: %v", path, err)
+	}
+	if len(data) == 0 {
+		t.Fatalf("expected persistence file %s to be non-empty", path)
 	}
 }
 

@@ -1,6 +1,9 @@
 package session
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type PersistedStoreSnapshot struct {
 	SessionDir string
@@ -9,4 +12,15 @@ type PersistedStoreSnapshot struct {
 
 type PersistenceObserver interface {
 	ObservePersistedStore(ctx context.Context, snapshot PersistedStoreSnapshot) error
+}
+
+type PersistedEventLogReconciliation struct {
+	SessionID               string
+	LastSequence            int64
+	ConversationEstablished bool
+	UpdatedAt               time.Time
+}
+
+type EventLogReconciliationObserver interface {
+	ObserveEventLogReconciliation(ctx context.Context, reconciliation PersistedEventLogReconciliation) error
 }

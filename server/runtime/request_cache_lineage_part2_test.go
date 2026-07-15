@@ -38,7 +38,7 @@ func TestGenerateWithRetryClient_RestoreSkipsDigestVersionMismatch(t *testing.T)
 		t.Fatalf("append legacy response: %v", err)
 	}
 
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestGenerateWithRetryClient_DoesNotInventCompactionCauseWithoutPriorLineage
 		t.Fatalf("append history_replaced: %v", err)
 	}
 
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}

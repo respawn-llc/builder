@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"core/internal/testharness/testsetup"
 	"core/server/tools"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
@@ -98,11 +99,7 @@ func waitForEntryInteraction(t *testing.T, manager *Manager, id string, timeout 
 
 func writeExecutableScript(t *testing.T, contents string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "hook.sh")
-	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	return path
+	return testsetup.WriteExecutable(t, "hook.sh", contents)
 }
 
 func newBackgroundTestManager(t *testing.T) *Manager {
@@ -833,7 +830,7 @@ func TestExecCommandAppliesUserHookOutput(t *testing.T) {
 	manager, err := NewManager(
 		WithMinimumExecToBgTime(250*time.Millisecond),
 		WithCloseTimeouts(20*time.Millisecond, 200*time.Millisecond),
-		WithPostprocessor(postprocess.NewRunner(postprocess.Settings{Mode: config.ShellPostprocessingModeUser, HookPath: hookPath})),
+		WithPostprocessor(mustPostprocessRunner(t, postprocess.Settings{Mode: config.ShellPostprocessingModeUser, HookPath: &hookPath})),
 	)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
