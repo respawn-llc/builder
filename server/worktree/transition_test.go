@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -192,6 +193,64 @@ func TestEnterWorktreeSchedulesSingleFlightAdoptsExternalAndPublishesOutcome(t *
 	if record.Managed || record.CreatedBranch {
 		t.Fatalf("external adoption changed provenance: %+v", record)
 	}
+}
+
+func TestModelStepEnterIsAuthoritativeBeforeAcknowledgement(t *testing.T) {
+	env := newServiceTestEnv(t)
+	root := createExternalWorktree(t, env, "feature/model-step-enter")
+	env.runtime.activeSessions[env.session.Meta().SessionID] = true
+	env.runtime.blockRunsHook = func([]string) { t.Fatal("model-origin transition blocked its own run") }
+	ack, err := enterModelWorktree(env, "feature/model-step-enter")
+	canonicalRoot, canonicalErr := config.CanonicalWorkspaceRoot(root)
+	if err != nil || ack.Validate() != nil || canonicalErr != nil ||
+		len(env.runtime.rebindCalls) != 1 || env.runtime.rebindCalls[0].root != canonicalRoot {
+		t.Fatalf("ack=%+v err=%v rebinds=%+v", ack, err, env.runtime.rebindCalls)
+	}
+	env.runtime.rebindErr = errors.New("retarget failed")
+	ack, err = enterModelWorktree(env, "main")
+	var immediate *serverapi.WorktreeImmediateTransitionError
+	if !errors.As(err, &immediate) || immediate.Kind != serverapi.WorktreeImmediateTransitionApplyFailed ||
+		ack != (serverapi.WorktreeScheduledAcknowledgement{}) {
+		t.Fatalf("ack=%+v err=%v, want typed failure without acknowledgement", ack, err)
+	}
+}
+
+func TestInterruptedModelStepDoesNotRetargetAfterWorkspaceLockWait(t *testing.T) {
+	env := newServiceTestEnv(t)
+	createExternalWorktree(t, env, "feature/interrupted-model-enter")
+	gate, started := make(chan struct{}), make(chan struct{}, 1)
+	var active atomic.Bool
+	active.Store(true)
+	env.runtime.transitionGate, env.runtime.transitionStarted = gate, started
+	env.runtime.originActive = active.Load
+	var ack serverapi.WorktreeScheduledAcknowledgement
+	done := make(chan error, 1)
+	go func() {
+		var err error
+		ack, err = enterModelWorktree(env, "feature/interrupted-model-enter")
+		done <- err
+	}()
+	<-started
+	release, err := env.service.acquireWorkspaceMutationLock(env.ctx, env.binding.WorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(gate)
+	waitForWorkspaceMutationReferences(t, env.service, env.binding.WorkspaceID, 2)
+	active.Store(false)
+	release()
+	err = <-done
+	target := mustResolveServiceTestTarget(t, env)
+	topology, topologyErr := env.service.projectTopology(env.ctx, env.binding.WorkspaceID, env.workspaceRoot)
+	match, matchErr := resolveTopologySelector(topology, "feature/interrupted-model-enter")
+	var immediate *serverapi.WorktreeImmediateTransitionError
+	if !errors.As(err, &immediate) || immediate.Kind != serverapi.WorktreeImmediateTransitionOriginInactive || ack != (serverapi.WorktreeScheduledAcknowledgement{}) || target.Worktree != nil || topologyErr != nil || matchErr != nil || match.entry.Variant != serverapi.WorktreeTopologyVariantExternal {
+		t.Fatalf("ack=%+v err=%v target=%+v topology=%+v/%v/%v", ack, err, target, match.entry.Variant, topologyErr, matchErr)
+	}
+}
+
+func enterModelWorktree(env *serviceTestEnv, selector string) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	return env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{OperationID: serverapi.NewWorktreeOperationID(), SessionID: env.session.Meta().SessionID, Selector: selector, Origin: &serverapi.RuntimeStepOrigin{RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002"}})
 }
 
 func TestScheduledEnterRemainsBoundToInitiallyResolvedWorktree(t *testing.T) {

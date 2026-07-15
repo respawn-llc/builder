@@ -19,19 +19,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *testing.T) {
+func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 	missingWorkspace := filepath.Join(t.TempDir(), "workspace-removed")
 	containerDir := t.TempDir()
-	newWorkspace := t.TempDir()
-	t.Chdir(newWorkspace)
-	var sessionID string
 	persistence := sessiontest.NewPersistence()
 	server := &testEmbeddedServer{
 		cfg: config.App{
@@ -54,7 +50,6 @@ func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *test
 			},
 		}),
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
-			sessionID = plan.SessionID
 			_, _, _, err := buildToolRegistry(
 				plan.WorkspaceRoot,
 				plan.SessionID,
@@ -74,12 +69,8 @@ func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *test
 	if err == nil {
 		t.Fatal("expected startup error for missing workspace")
 	}
-	if sessionID == "" {
-		t.Fatal("session id was not captured")
-	}
-	want := `workspace root ` + strconv.Quote(missingWorkspace) + ` is missing; run ` + "`kent rebind " + strconv.Quote(sessionID) + " " + strconv.Quote(newWorkspace) + "`"
-	if got := err.Error(); got != want {
-		t.Fatalf("error = %q, want %q", got, want)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("startup error = %v, want os.ErrNotExist", err)
 	}
 }
 

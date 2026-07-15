@@ -19,6 +19,8 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 type Mode string
@@ -39,6 +41,19 @@ type MetadataExecutionTargetStore interface {
 	Close() error
 }
 
+type missingWorktreeRecoveryStore interface {
+	MetadataExecutionTargetStore
+	GetWorktreeRecordByID(context.Context, string) (metadata.WorktreeRecord, error)
+	LookupWorkspaceBindingByID(context.Context, string) (metadata.Binding, error)
+	ListProjectWorkspaces(context.Context, string) ([]clientui.ProjectWorkspaceSummary, error)
+}
+
+type sessionRecoveryStoreRegistry interface {
+	ResolveStore(context.Context, string) (*session.Store, error)
+	RegisterStore(*session.Store)
+	UnregisterStore(string)
+}
+
 // MetadataExecutionTargetStoreOpener opens metadata storage for launch planning.
 type MetadataExecutionTargetStoreOpener func(persistenceRoot string) (MetadataExecutionTargetStore, error)
 
@@ -48,6 +63,10 @@ type Planner struct {
 	StoreOptions        []session.StoreOption
 	ReloadConfig        func() (config.App, error)
 	MetadataStoreOpener MetadataExecutionTargetStoreOpener
+	RuntimeActive       func(sessionID string) bool
+	BlockSessionRuns    func(sessionIDs []string) func()
+	SessionStores       sessionRecoveryStoreRegistry
+	RetargetWorkspace   func(context.Context, serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error)
 }
 
 type SessionRequest struct {
@@ -71,6 +90,7 @@ type SessionPlan struct {
 	WorkspaceRoot                       string
 	Source                              config.SourceReport
 	BaseSource                          config.SourceReport
+	Recovery                            *serverapi.SessionPlanRecovery
 }
 
 type RunPromptOverrideOptions struct {
@@ -169,6 +189,13 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	if err != nil {
 		return SessionPlan{}, err
 	}
+	var recovery *serverapi.SessionPlanRecovery
+	if req.Mode == ModeInteractive && strings.TrimSpace(req.SelectedSessionID) != "" {
+		recovery, store, err = p.recoverMissingManagedWorktreeTarget(ctx, store)
+		if err != nil {
+			return SessionPlan{}, err
+		}
+	}
 	if req.Mode == ModeHeadless {
 		if err := EnsureSubagentSessionName(store); err != nil {
 			return SessionPlan{}, err
@@ -221,6 +248,10 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	if meta.Locked == nil {
 		configuredModelName = active.Model
 	}
+	workspaceRoot := p.Config.WorkspaceRoot
+	if recovery != nil {
+		workspaceRoot = recovery.WorkspaceRoot
+	}
 	return SessionPlan{
 		Store:                               store,
 		ActiveSettings:                      active,
@@ -230,10 +261,134 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		SessionName:                         meta.Name,
 		ModelContractLocked:                 meta.Locked != nil,
 		SkipContinuationAgentRoleValidation: req.SkipContinuationAgentRoleValidation,
-		WorkspaceRoot:                       p.Config.WorkspaceRoot,
+		WorkspaceRoot:                       workspaceRoot,
 		Source:                              source,
 		BaseSource:                          baseSource,
+		Recovery:                            recovery,
 	}, nil
+}
+
+type SessionTargetRecoveryErrorReason string
+
+const (
+	SessionTargetRecoveryActive           SessionTargetRecoveryErrorReason = "active"
+	SessionTargetRecoveryUnmanaged        SessionTargetRecoveryErrorReason = "unmanaged"
+	SessionTargetRecoveryNoCandidate      SessionTargetRecoveryErrorReason = "no_candidate"
+	SessionTargetRecoveryStateUnavailable SessionTargetRecoveryErrorReason = "runtime_state_unavailable"
+)
+
+type SessionTargetRecoveryError struct {
+	Reason    SessionTargetRecoveryErrorReason
+	Candidate *clientui.ProjectWorkspaceSummary
+	Cause     error
+}
+
+func (e *SessionTargetRecoveryError) Error() string {
+	if e.Candidate == nil {
+		return "session execution target recovery failed: " + string(e.Reason)
+	}
+	return fmt.Sprintf("session execution target recovery failed: %s; registered workspace candidate %q", e.Reason, e.Candidate.RootPath)
+}
+
+func (e *SessionTargetRecoveryError) Unwrap() error { return e.Cause }
+
+func (p Planner) recoverMissingManagedWorktreeTarget(ctx context.Context, store *session.Store) (recovery *serverapi.SessionPlanRecovery, authoritativeStore *session.Store, resultErr error) {
+	authoritativeStore = store
+	if store == nil {
+		return nil, nil, errors.New("session store is required")
+	}
+	metadataStore, err := p.openMetadataStore()
+	if err != nil {
+		return nil, authoritativeStore, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, metadataStore.Close()) }()
+	recoveryStore, ok := metadataStore.(missingWorktreeRecoveryStore)
+	if !ok {
+		return nil, authoritativeStore, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryStateUnavailable}
+	}
+	sessionID := strings.TrimSpace(store.Meta().SessionID)
+	target, err := recoveryStore.ResolveSessionExecutionTarget(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, session.ErrSessionNotFound) {
+			return nil, authoritativeStore, nil
+		}
+		return nil, authoritativeStore, err
+	}
+	missingWorktree := target.Worktree != nil && target.Worktree.Availability == string(clientui.ProjectAvailabilityMissing)
+	missingWorkspace := target.Worktree == nil && target.WorkspaceAvailability == string(clientui.ProjectAvailabilityMissing)
+	if !missingWorktree && !missingWorkspace {
+		return nil, authoritativeStore, nil
+	}
+	candidate, err := recoveryWorkspaceCandidate(ctx, recoveryStore, target.WorkspaceID)
+	if err != nil {
+		return nil, authoritativeStore, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryNoCandidate, Cause: err}
+	}
+	if !missingWorktree {
+		return nil, authoritativeStore, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryUnmanaged, Candidate: &candidate}
+	}
+	record, err := recoveryStore.GetWorktreeRecordByID(ctx, target.Worktree.ID)
+	if err != nil {
+		return nil, authoritativeStore, err
+	}
+	if !record.Managed {
+		return nil, authoritativeStore, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryUnmanaged, Candidate: &candidate}
+	}
+	if p.RuntimeActive == nil || p.BlockSessionRuns == nil || p.SessionStores == nil || p.RetargetWorkspace == nil {
+		return nil, authoritativeStore, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryStateUnavailable, Candidate: &candidate}
+	}
+	releaseRuns := p.BlockSessionRuns([]string{sessionID})
+	defer releaseRuns()
+	if p.RuntimeActive(sessionID) {
+		return nil, authoritativeStore, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryActive, Candidate: &candidate}
+	}
+	registered, resolveErr := p.SessionStores.ResolveStore(ctx, sessionID)
+	if resolveErr != nil {
+		return nil, authoritativeStore, errors.Join(resolveErr, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryStateUnavailable, Candidate: &candidate})
+	}
+	if registered == nil {
+		p.SessionStores.RegisterStore(authoritativeStore)
+	} else {
+		authoritativeStore = registered
+	}
+	retargetResult, err := p.RetargetWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: sessionID, WorkspaceRoot: candidate.RootPath})
+	if err != nil {
+		if registered == nil {
+			p.SessionStores.UnregisterStore(sessionID)
+		}
+		return nil, authoritativeStore, err
+	}
+	return &serverapi.SessionPlanRecovery{Kind: serverapi.SessionPlanRecoveryKindDeletedManagedWorktree, WorkspaceRoot: retargetResult.Binding.CanonicalRoot}, authoritativeStore, nil
+}
+
+func recoveryWorkspaceCandidate(ctx context.Context, store missingWorktreeRecoveryStore, workspaceID string) (clientui.ProjectWorkspaceSummary, error) {
+	binding, err := store.LookupWorkspaceBindingByID(ctx, workspaceID)
+	if err != nil {
+		return clientui.ProjectWorkspaceSummary{}, err
+	}
+	workspaces, err := store.ListProjectWorkspaces(ctx, binding.ProjectID)
+	if err != nil {
+		return clientui.ProjectWorkspaceSummary{}, err
+	}
+	var primary *clientui.ProjectWorkspaceSummary
+	for index := range workspaces {
+		workspace := &workspaces[index]
+		root := filepath.Clean(strings.TrimSpace(workspace.RootPath))
+		if workspace.Availability != clientui.ProjectAvailabilityAvailable || strings.TrimSpace(workspace.WorkspaceID) == "" ||
+			!filepath.IsAbs(root) || root == filepath.VolumeName(root)+string(os.PathSeparator) {
+			continue
+		}
+		workspace.RootPath = root
+		if workspace.WorkspaceID == workspaceID {
+			return *workspace, nil
+		}
+		if workspace.IsPrimary && primary == nil {
+			primary = workspace
+		}
+	}
+	if primary != nil {
+		return *primary, nil
+	}
+	return clientui.ProjectWorkspaceSummary{}, errors.New("owning project has no available registered workspace")
 }
 
 func applyPersistedSubagentRoleSettings(base config.Settings, source config.SourceReport, roleName *string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, error) {

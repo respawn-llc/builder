@@ -217,7 +217,7 @@ func worktreeHasStableIdentity(entry GitWorktree) bool {
 }
 
 func (s *Service) switchSessionTarget(ctx context.Context, workspaceCtx sessionWorkspaceContext, previous *syncedWorktree, next syncedWorktree) (clientui.SessionExecutionTarget, error) {
-	return s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, next, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+	return s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, next, nil, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 		return s.runtime.SyncExecutionTarget(syncCtx, workspaceCtx.sessionID, target, reminder)
 	})
 }
@@ -227,12 +227,13 @@ func (s *Service) switchSessionTargetWithSync(
 	workspaceCtx sessionWorkspaceContext,
 	previous *syncedWorktree,
 	next syncedWorktree,
+	authority transitionAuthority,
 	sync transitionTargetSync,
 ) (clientui.SessionExecutionTarget, error) {
 	if sync == nil {
 		return clientui.SessionExecutionTarget{}, errors.New("execution target synchronizer is required")
 	}
-	if s.active != nil {
+	if authority == nil && s.active != nil {
 		if sessionID := strings.TrimSpace(workspaceCtx.sessionID); sessionID != "" {
 			release := s.active.BlockSessionRuns([]string{sessionID})
 			defer release()

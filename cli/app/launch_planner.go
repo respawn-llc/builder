@@ -47,6 +47,7 @@ type sessionLaunchPlan struct {
 	StatusConfig                         uiStatusConfig
 	WorkspaceRoot                        string
 	Source                               config.SourceReport
+	Recovery                             *serverapi.SessionPlanRecovery
 }
 
 type resolvedSessionPlanRequest struct {
@@ -183,6 +184,7 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		},
 		WorkspaceRoot: resp.Plan.WorkspaceRoot,
 		Source:        resp.Plan.Source,
+		Recovery:      resp.Plan.Recovery,
 	}, nil
 }
 

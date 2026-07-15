@@ -32,7 +32,9 @@ type serviceTestRuntime struct {
 	rebindErr              error
 	rebindErrRoot          string
 	rebindHook             func(context.Context, string, string, string)
+	originActive           func() bool
 	transitionGate         <-chan struct{}
+	transitionStarted      chan<- struct{}
 	transitionOutcomes     []clientui.WorktreeTransitionOutcome
 	transitionOutcomeReady chan struct{}
 	steeredFailures        []clientui.WorktreeTransitionOutcome
@@ -107,8 +109,12 @@ func (r *serviceTestRuntime) HasBlockingRuntimeActivity(_ context.Context, sessi
 func (r *serviceTestRuntime) RunWorktreeTransition(
 	ctx context.Context,
 	sessionID string,
-	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+	origin *serverapi.RuntimeStepOrigin,
+	fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
 ) error {
+	if r.transitionStarted != nil {
+		r.transitionStarted <- struct{}{}
+	}
 	if r.transitionGate != nil {
 		select {
 		case <-ctx.Done():
@@ -116,9 +122,25 @@ func (r *serviceTestRuntime) RunWorktreeTransition(
 		case <-r.transitionGate:
 		}
 	}
-	return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+	var authority func(func() error) error
+	if origin != nil {
+		authority = func(apply func() error) error {
+			if r.originActive != nil && !r.originActive() {
+				return serverapi.NewWorktreeImmediateTransitionError(serverapi.WorktreeImmediateTransitionOriginInactive, errors.New("originating model step is no longer active"))
+			}
+			return apply()
+		}
+	}
+	err := fn(ctx, authority, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 		return r.SyncExecutionTarget(syncCtx, sessionID, target, reminder)
 	})
+	if err != nil && origin != nil {
+		var immediate *serverapi.WorktreeImmediateTransitionError
+		if !errors.As(err, &immediate) {
+			err = serverapi.NewWorktreeImmediateTransitionError(serverapi.WorktreeImmediateTransitionApplyFailed, err)
+		}
+	}
+	return err
 }
 
 func (r *serviceTestRuntime) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {

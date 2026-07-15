@@ -12,24 +12,45 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestDeleteWorktreeRequiresExplicitForceForDirtyTarget(t *testing.T) {
+func TestDeleteWorktreeRequiresForceThenCleansPrunableRegistration(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-precondition")
-	if err := os.WriteFile(filepath.Join(created.CanonicalRoot, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if err := os.Remove(filepath.Join(created.CanonicalRoot, ".git")); err != nil {
+		t.Fatal(err)
 	}
-	_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+	request := serverapi.WorktreeDeleteRequest{
 		OperationID:         serverapi.NewWorktreeOperationID(),
 		SessionID:           env.session.Meta().SessionID,
 		Selector:            created.WorktreeID,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
-	})
+	}
+	_, err := env.service.DeleteWorktree(env.ctx, request)
 	var precondition *serverapi.WorktreeDeletePreconditionError
-	if !errors.As(err, &precondition) || precondition.DirtyState.Kind != serverapi.WorktreeDirtyStateDirty {
-		t.Fatalf("delete error = %v, want dirty precondition", err)
+	if !errors.As(err, &precondition) || precondition.DirtyState.Kind != serverapi.WorktreeDirtyStateUnknown {
+		t.Fatalf("delete error = %v, want unknown-state precondition", err)
 	}
 	if _, err := os.Stat(created.CanonicalRoot); err != nil {
-		t.Fatalf("dirty worktree changed after rejected delete: %v", err)
+		t.Fatalf("prunable worktree changed after rejected delete: %v", err)
+	}
+	request.OperationID = serverapi.NewWorktreeOperationID()
+	request.ForceFolderRemoval = true
+	if _, err := env.service.DeleteWorktree(env.ctx, request); err != nil {
+		t.Fatalf("forced DeleteWorktree: %v", err)
+	}
+	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prunable worktree root still exists: %v", err)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("worktree record after forced prune cleanup = %v, want sql.ErrNoRows", err)
+	}
+	entries, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range entries {
+		if item.Root == created.CanonicalRoot {
+			t.Fatalf("Git registration still exists after forced cleanup: %+v", item)
+		}
 	}
 }
 

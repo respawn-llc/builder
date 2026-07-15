@@ -140,6 +140,7 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		ModelContractLocked: result.Plan.ModelContractLocked,
 		WorkspaceRoot:       result.Plan.WorkspaceRoot,
 		Source:              result.Plan.Source,
+		Recovery:            result.Plan.Recovery,
 	}, Warnings: result.Warnings}
 }
 
