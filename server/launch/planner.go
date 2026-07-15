@@ -18,6 +18,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
 
@@ -48,10 +49,15 @@ type Planner struct {
 	StoreOptions        []session.StoreOption
 	ReloadConfig        func() (config.App, error)
 	MetadataStoreOpener MetadataExecutionTargetStoreOpener
+	RuntimeActive       func(string) bool
+	BlockSessionRuns    func([]string) func()
+	SessionStores       any
+	RetargetWorkspace   func(context.Context, serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error)
 }
 
 type SessionRequest struct {
 	Mode                                Mode
+	Intent                              serverapi.SessionLaunchIntent
 	SelectedSessionID                   string
 	ForceNewSession                     bool
 	ParentSessionID                     *string
@@ -895,6 +901,17 @@ func (p Planner) openStore(ctx context.Context, req SessionRequest) (*session.St
 	if strings.TrimSpace(p.ContainerDir) == "" {
 		return nil, errors.New("launch planner container dir is required")
 	}
+	switch req.Intent.Kind() {
+	case serverapi.SessionLaunchIntentOpenExisting:
+		sessionID, _ := req.Intent.SessionID()
+		req.SelectedSessionID = sessionID.String()
+	case serverapi.SessionLaunchIntentCreateNew:
+		req.ForceNewSession = true
+		if parentID, ok := req.Intent.ParentID(); ok {
+			parent := parentID.String()
+			req.ParentSessionID = &parent
+		}
+	}
 	if strings.TrimSpace(req.SelectedSessionID) != "" {
 		return p.openScopedSession(req.SelectedSessionID)
 	}
@@ -942,7 +959,11 @@ func (p Planner) SelectedSessionPromptFacingTarget(sessionID string) (PreparedBa
 
 func (p Planner) createSession(ctx context.Context, parentSessionID *string, mode Mode) (*session.Store, error) {
 	containerName := filepath.Base(p.ContainerDir)
-	created, err := session.NewLazy(p.ContainerDir, containerName, p.Config.WorkspaceRoot, p.StoreOptions...)
+	category := sessioncontract.SessionCategoryMain
+	if mode == ModeHeadless {
+		category = sessioncontract.SessionCategorySubagent
+	}
+	created, err := session.NewLazy(p.ContainerDir, containerName, p.Config.WorkspaceRoot, category, p.StoreOptions...)
 	if err != nil {
 		return nil, err
 	}

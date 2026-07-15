@@ -20,6 +20,7 @@ CREATE TABLE sessions_new (
     first_prompt_preview TEXT NOT NULL DEFAULT '',
     input_draft TEXT NOT NULL DEFAULT '',
     parent_session_id TEXT CHECK (parent_session_id IS NULL OR length(trim(parent_session_id)) > 0),
+    category TEXT CHECK (category IS NULL OR category IN ('main', 'subagent')),
     created_at_unix_ms INTEGER NOT NULL,
     updated_at_unix_ms INTEGER NOT NULL,
     last_sequence INTEGER NOT NULL DEFAULT 0,
@@ -42,6 +43,7 @@ INSERT INTO sessions_new (
     first_prompt_preview,
     input_draft,
     parent_session_id,
+    category,
     created_at_unix_ms,
     updated_at_unix_ms,
     last_sequence,
@@ -63,6 +65,7 @@ SELECT
     first_prompt_preview,
     input_draft,
     NULLIF(trim(parent_session_id), ''),
+    category,
     created_at_unix_ms,
     updated_at_unix_ms,
     last_sequence,
@@ -81,6 +84,9 @@ ALTER TABLE sessions_new RENAME TO sessions;
 CREATE INDEX sessions_project_idx ON sessions(project_id, updated_at_unix_ms DESC);
 CREATE INDEX sessions_workspace_idx ON sessions(workspace_id, updated_at_unix_ms DESC);
 CREATE UNIQUE INDEX sessions_artifact_relpath_idx ON sessions(artifact_relpath);
+CREATE INDEX sessions_visible_category_recency_idx
+ON sessions(project_id, category, updated_at_unix_ms DESC, id DESC)
+WHERE launch_visible <> 0;
 
 -- +goose StatementBegin
 CREATE TRIGGER workspaces_child_refs_delete_cleanup

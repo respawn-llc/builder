@@ -14,19 +14,25 @@ import (
 )
 
 type RunPromptRequest struct {
-	ClientRequestID string
-	Intent          SessionLaunchIntent
-	SelectedSessionID string `json:"selected_session_id,omitempty"`
-	CallerSessionID *string `json:"caller_session_id,omitempty"`
-	ParentSessionID *string `json:"parent_session_id,omitempty"`
-	Prompt          string
-	Timeout         time.Duration
-	Overrides       RunPromptOverrides
+	ClientRequestID   string
+	Intent            SessionLaunchIntent
+	SelectedSessionID string  `json:"selected_session_id,omitempty"`
+	CallerSessionID   *string `json:"caller_session_id,omitempty"`
+	ParentSessionID   *string `json:"parent_session_id,omitempty"`
+	Prompt            string
+	Timeout           time.Duration
+	Overrides         RunPromptOverrides
 }
 
 type OptionalStringKey struct {
 	Present bool
-	Value string
+	Value   string
+}
+
+type RunPromptOverridesKey = RunPromptOverrides
+
+func (o RunPromptOverrides) CanonicalKey() (RunPromptOverridesKey, error) {
+	return o, o.ValidateAgentRoleOverride()
 }
 
 func CanonicalOptionalString(value *string) OptionalStringKey {
