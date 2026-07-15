@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"core/server/metadata"
@@ -24,15 +23,14 @@ type worktreeTransitionRequest struct {
 	selector    string
 	force       bool
 	cleanup     serverapi.WorktreeBranchCleanupMode
-	origin      *serverapi.RuntimeStepOrigin
 }
 
 type pendingWorktreeTransition struct {
-	request  worktreeTransitionRequest
-	complete func(error)
+	request worktreeTransitionRequest
 }
 
 type transitionTargetSync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
+type transitionAuthority func(func() error) error
 
 func (s *Service) replayPendingWorktreeTransition(request worktreeTransitionRequest) (serverapi.WorktreeScheduledAcknowledgement, bool) {
 	if s == nil {
@@ -41,7 +39,7 @@ func (s *Service) replayPendingWorktreeTransition(request worktreeTransitionRequ
 	s.transitionMu.Lock()
 	defer s.transitionMu.Unlock()
 	pending, ok := s.transitions[request.sessionID]
-	if !ok || !sameWorktreeTransitionRequest(pending.request, request) {
+	if !ok || pending.request != request {
 		return serverapi.WorktreeScheduledAcknowledgement{}, false
 	}
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: pending.request.operationID}, true
@@ -56,7 +54,6 @@ func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnter
 		sessionID:   strings.TrimSpace(req.SessionID),
 		kind:        clientui.WorktreeTransitionEnter,
 		selector:    strings.TrimSpace(req.Selector),
-		origin:      cloneWorktreeRuntimeStepOrigin(req.Origin),
 	}
 	if ack, ok := s.replayPendingWorktreeTransition(request); ok {
 		return ack, nil
@@ -65,9 +62,9 @@ func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnter
 	if err != nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, err
 	}
-	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, sync transitionTargetSync) error {
-		return s.executeEnterWorktree(runCtx, request.sessionID, target, sync)
-	})
+	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
+		return s.executeEnterWorktree(runCtx, request.sessionID, target, authority, sync)
+	}, req.Origin)
 }
 
 func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
@@ -78,17 +75,17 @@ func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeave
 		operationID: req.OperationID,
 		sessionID:   strings.TrimSpace(req.SessionID),
 		kind:        clientui.WorktreeTransitionLeave,
-		origin:      cloneWorktreeRuntimeStepOrigin(req.Origin),
 	}
-	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, sync transitionTargetSync) error {
-		return s.executeLeaveWorktree(runCtx, request.sessionID, sync)
-	})
+	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
+		return s.executeLeaveWorktree(runCtx, request.sessionID, authority, sync)
+	}, nil)
 }
 
 func (s *Service) scheduleWorktreeTransition(
-	_ context.Context,
+	ctx context.Context,
 	request worktreeTransitionRequest,
-	execute func(context.Context, transitionTargetSync) error,
+	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
+	origin *serverapi.RuntimeStepOrigin,
 ) (serverapi.WorktreeScheduledAcknowledgement, error) {
 	if s == nil || s.runtime == nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, errors.New("worktree transition runtime is required")
@@ -103,7 +100,7 @@ func (s *Service) scheduleWorktreeTransition(
 	}
 	if pending, ok := s.transitions[request.sessionID]; ok {
 		s.transitionMu.Unlock()
-		if sameWorktreeTransitionRequest(pending.request, request) {
+		if pending.request == request {
 			return serverapi.WorktreeScheduledAcknowledgement{OperationID: pending.request.operationID}, nil
 		}
 		return serverapi.WorktreeScheduledAcknowledgement{}, &serverapi.WorktreeTransitionPendingError{
@@ -115,55 +112,32 @@ func (s *Service) scheduleWorktreeTransition(
 	s.transitionWG.Add(1)
 	s.transitionMu.Unlock()
 
-	if request.origin != nil {
-		var once sync.Once
-		complete := func(err error) {
-			once.Do(func() {
-				s.finishWorktreeTransition(request, err)
-				s.transitionWG.Done()
-			})
-		}
-		s.transitionMu.Lock()
-		pending := s.transitions[request.sessionID]
-		pending.complete = complete
-		s.transitions[request.sessionID] = pending
-		s.transitionMu.Unlock()
-		if err := s.runtime.RunWorktreeTransitionAtStepBoundary(s.transitionCtx, request.sessionID, *request.origin, func(ctx context.Context, sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error {
-			return execute(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-				return sync(syncCtx, target, reminder)
-			})
-		}, func(err error) {
-			complete(err)
-		}); err != nil {
-			s.discardWorktreeTransition(request)
-			complete(err)
+	if origin != nil {
+		if err := s.runWorktreeTransition(ctx, request, execute, origin); err != nil {
 			return serverapi.WorktreeScheduledAcknowledgement{}, err
 		}
 	} else {
-		go func() {
-			_ = s.runWorktreeTransition(request, execute)
-		}()
+		go func() { _ = s.runWorktreeTransition(s.transitionCtx, request, execute, nil) }()
 	}
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: request.operationID}, nil
 }
 
 func (s *Service) runWorktreeTransition(
-	request worktreeTransitionRequest,
-	execute func(context.Context, transitionTargetSync) error,
+	ctx context.Context, request worktreeTransitionRequest,
+	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
+	origin *serverapi.RuntimeStepOrigin,
 ) error {
 	defer s.transitionWG.Done()
-	err := s.runtime.RunWorktreeTransition(s.transitionCtx, request.sessionID,
-		func(ctx context.Context, sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error {
-			return execute(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+	err := s.runtime.RunWorktreeTransition(
+		ctx,
+		request.sessionID,
+		origin,
+		func(ctx context.Context, authority func(func() error) error, sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error {
+			return execute(ctx, transitionAuthority(authority), func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 				return sync(syncCtx, target, reminder)
 			})
 		},
 	)
-	s.finishWorktreeTransition(request, err)
-	return err
-}
-
-func (s *Service) finishWorktreeTransition(request worktreeTransitionRequest, err error) {
 	if s.transitionCtx.Err() == nil {
 		outcome := clientui.WorktreeTransitionOutcome{
 			OperationID: request.operationID,
@@ -179,33 +153,12 @@ func (s *Service) finishWorktreeTransition(request worktreeTransitionRequest, er
 			_ = s.runtime.SteerWorktreeTransitionFailure(s.transitionCtx, request.sessionID, outcome)
 		}
 	}
-	s.discardWorktreeTransition(request)
-}
-
-func (s *Service) discardWorktreeTransition(request worktreeTransitionRequest) {
 	s.transitionMu.Lock()
-	if pending, ok := s.transitions[request.sessionID]; ok && sameWorktreeTransitionRequest(pending.request, request) {
+	if pending, ok := s.transitions[request.sessionID]; ok && pending.request == request {
 		delete(s.transitions, request.sessionID)
 	}
 	s.transitionMu.Unlock()
-}
-
-func sameWorktreeTransitionRequest(left worktreeTransitionRequest, right worktreeTransitionRequest) bool {
-	if left.operationID != right.operationID || left.sessionID != right.sessionID || left.kind != right.kind || left.selector != right.selector || left.force != right.force || left.cleanup != right.cleanup {
-		return false
-	}
-	if left.origin == nil || right.origin == nil {
-		return left.origin == nil && right.origin == nil
-	}
-	return *left.origin == *right.origin
-}
-
-func cloneWorktreeRuntimeStepOrigin(origin *serverapi.RuntimeStepOrigin) *serverapi.RuntimeStepOrigin {
-	if origin == nil {
-		return nil
-	}
-	copyOrigin := *origin
-	return &copyOrigin
+	return err
 }
 
 func (s *Service) resolveScheduledEnterTarget(
@@ -235,7 +188,7 @@ func (s *Service) resolveScheduledEnterTarget(
 	return scheduledWorktreeTargetFromEntry(match.entry)
 }
 
-func (s *Service) executeEnterWorktree(ctx context.Context, sessionID string, target scheduledWorktreeTarget, sync transitionTargetSync) error {
+func (s *Service) executeEnterWorktree(ctx context.Context, sessionID string, target scheduledWorktreeTarget, authority transitionAuthority, sync transitionTargetSync) error {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, sessionID)
 	if err != nil {
 		return err
@@ -252,19 +205,25 @@ func (s *Service) executeEnterWorktree(ctx context.Context, sessionID string, ta
 	if topologyIsCurrent(entry, workspaceCtx.target) {
 		return nil
 	}
-	previous, err := s.currentTransitionWorktree(ctx, topology, workspaceCtx.target)
-	if err != nil {
+	apply := func() error {
+		previous, err := s.currentTransitionWorktree(ctx, topology, workspaceCtx.target)
+		if err != nil {
+			return err
+		}
+		next, err := s.enterTransitionWorktree(ctx, workspaceCtx, entry)
+		if err != nil {
+			return err
+		}
+		_, err = s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, next, authority, sync)
 		return err
 	}
-	next, err := s.enterTransitionWorktree(ctx, workspaceCtx, entry)
-	if err != nil {
-		return err
+	if authority != nil {
+		return authority(apply)
 	}
-	_, err = s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, next, sync)
-	return err
+	return apply()
 }
 
-func (s *Service) executeLeaveWorktree(ctx context.Context, sessionID string, sync transitionTargetSync) error {
+func (s *Service) executeLeaveWorktree(ctx context.Context, sessionID string, authority transitionAuthority, sync transitionTargetSync) error {
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, sessionID)
 	if err != nil {
 		return err
@@ -285,7 +244,7 @@ func (s *Service) executeLeaveWorktree(ctx context.Context, sessionID string, sy
 	if err != nil {
 		return err
 	}
-	_, err = s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, main, sync)
+	_, err = s.switchSessionTargetWithSync(ctx, workspaceCtx, previous, main, authority, sync)
 	return err
 }
 

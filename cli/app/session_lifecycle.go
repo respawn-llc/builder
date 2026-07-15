@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -184,22 +185,17 @@ func prepareSessionUIRun(
 	handoff resolvedSessionHandoff,
 	startupUpdateNotice bool,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
-	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.WorkspaceRoot+" model="+plan.ActiveSettings.Model)
+	diagnosticWriter := os.Stderr
+	runtimePlan, err := planner.PrepareRuntime(ctx, plan, diagnosticWriter, "app.start session_id="+plan.SessionID+" workspace="+plan.WorkspaceRoot+" model="+plan.ActiveSettings.Model)
 	if err != nil {
 		return nil, uiLoopRequest{}, err
 	}
 	if plan.Recovery != nil && plan.Recovery.Kind == serverapi.SessionPlanRecoveryKindDeletedManagedWorktree {
-		emitter, ok := runtimePlan.Wiring.runtimeClient.(interface {
-			AppendCommittedEntry(role, text string) error
-		})
-		if !ok {
-			return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, errors.New("runtime recovery notice emitter is unavailable"))
-		}
-		if err := emitter.AppendCommittedEntry(
-			"warning",
-			"Managed worktree no longer exists; resumed in project root "+plan.Recovery.WorkspaceRoot+". Worktree-only uncommitted changes are unavailable.",
-		); err != nil {
-			return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
+		warning := "Managed worktree no longer exists; resumed in project root " + plan.Recovery.WorkspaceRoot + ". Worktree-only uncommitted changes are unavailable."
+		if err := runtimePlan.Wiring.runtimeClient.AppendCommittedEntry("warning", warning); err != nil {
+			if _, warningErr := fmt.Fprintf(diagnosticWriter, "%s\nWarning persistence failed: %v\n", warning, err); warningErr != nil {
+				return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, errors.Join(err, warningErr))
+			}
 		}
 	}
 	promptRoots, err := server.ClientPromptRoots()

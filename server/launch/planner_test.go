@@ -5,6 +5,7 @@ import (
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/metadata"
+	"core/server/registry"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/shared/clientui"
@@ -28,10 +29,6 @@ type failingUpdateMetadataExecutionTargetStore struct {
 
 func (s *failingUpdateMetadataExecutionTargetStore) ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
 	return s.base.ResolveSessionExecutionTarget(ctx, sessionID)
-}
-
-func (s *failingUpdateMetadataExecutionTargetStore) GetWorktreeRecordByID(ctx context.Context, worktreeID string) (metadata.WorktreeRecord, error) {
-	return s.base.GetWorktreeRecordByID(ctx, worktreeID)
 }
 
 func (s *failingUpdateMetadataExecutionTargetStore) UpdateSessionExecutionTarget(_ context.Context, update metadata.SessionExecutionTargetUpdate) error {
@@ -854,10 +851,9 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
 	planner := Planner{
-		Config:                        cfg,
-		ContainerDir:                  containerDir,
-		StoreOptions:                  metadataStore.AuthoritativeSessionStoreOptions(),
-		RecoverMissingManagedWorktree: true,
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
@@ -2022,146 +2018,56 @@ func TestApplyRunPromptOverridesCLIModelOverrideRecomputesBudgetAfterFastRole(t 
 	}
 }
 
-func TestPlannerRecoversDeletedManagedWorktreeForInactiveSession(t *testing.T) {
-	ctx := context.Background()
-	persistenceRoot := t.TempDir()
-	workspaceRoot := t.TempDir()
+func missingWorktreeLaunchFixture(t *testing.T) (Planner, *metadata.Store, *session.Store, metadata.Binding) {
+	t.Helper()
+	must := func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, persistenceRoot, workspaceRoot := context.Background(), t.TempDir(), t.TempDir()
 	metadataStore, err := metadata.Open(persistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	defer func() { _ = metadataStore.Close() }()
+	must(err)
+	t.Cleanup(func() { _ = metadataStore.Close() })
 	binding, err := metadataStore.RegisterWorkspaceBinding(ctx, workspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterWorkspaceBinding: %v", err)
-	}
+	must(err)
 	containerDir := filepath.Join(persistenceRoot, "projects", binding.ProjectID, "sessions")
-	store := createTestSessionInContainer(t, containerDir, filepath.Base(containerDir), workspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
+	store := createTestSessionInContainer(t, containerDir, "workspace", workspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
+	missingRoot := filepath.Join(t.TempDir(), "deleted")
+	err = metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{ID: "missing-worktree", WorkspaceID: binding.WorkspaceID, CanonicalRoot: missingRoot, Managed: true, GitMetadataJSON: `{}`})
+	must(err)
+	err = metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: store.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "missing-worktree"}, CwdRelpath: "pkg"})
+	must(err)
+	err = store.SetWorktreeReminderState(&session.WorktreeReminderState{Mode: session.WorktreeReminderModeEnter, WorktreeContext: session.WorktreeContext{WorktreePath: missingRoot, WorkspaceRoot: workspaceRoot, EffectiveCwd: filepath.Join(missingRoot, "pkg")}})
+	must(err)
+	sessionStores := registry.NewSessionStoreRegistry()
+	retargetWorkspace := func(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: req.SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, CwdRelpath: "."})
+		if err == nil {
+			registered, resolveErr := sessionStores.ResolveStore(ctx, req.SessionID)
+			err = errors.Join(resolveErr, registered.SetWorktreeReminderState(nil))
+		}
+		return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: binding.ProjectID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: req.WorkspaceRoot}}, err
 	}
-	missingWorktreeRoot := filepath.Join(t.TempDir(), "deleted-worktree")
-	if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
-		ID:              "deleted-managed-worktree",
-		WorkspaceID:     binding.WorkspaceID,
-		CanonicalRoot:   missingWorktreeRoot,
-		DisplayName:     "deleted-worktree",
-		Availability:    "missing",
-		Managed:         true,
-		GitMetadataJSON: `{}`,
-	}); err != nil {
-		t.Fatalf("UpsertWorktreeRecord: %v", err)
-	}
-	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
-		SessionID:  store.Meta().SessionID,
-		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
-		Worktree:   &metadata.SessionExecutionTargetUpdateWorktree{ID: "deleted-managed-worktree"},
-		CwdRelpath: "pkg",
-	}); err != nil {
-		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
-	}
-	if err := store.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode: session.WorktreeReminderModeEnter,
-		WorktreeContext: session.WorktreeContext{
-			WorktreePath:  missingWorktreeRoot,
-			WorkspaceRoot: workspaceRoot,
-			EffectiveCwd:  filepath.Join(missingWorktreeRoot, "pkg"),
-		},
-	}); err != nil {
-		t.Fatalf("SetWorktreeReminderState: %v", err)
-	}
-
-	planner := Planner{
-		Config: config.App{
-			WorkspaceRoot:   workspaceRoot,
-			PersistenceRoot: persistenceRoot,
-			Settings:        config.Settings{Model: "gpt-5"},
-		},
-		ContainerDir:                  containerDir,
-		StoreOptions:                  metadataStore.AuthoritativeSessionStoreOptions(),
-		RecoverMissingManagedWorktree: true,
-	}
-	plan, err := planner.PlanSession(ctx, SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
-	}
-	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
-	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
-	}
-	if target.Worktree != nil || target.EffectiveWorkdir != canonicalWorkspaceRoot || target.CwdRelpath != "." {
-		t.Fatalf("recovered target = %+v, want project root", target)
-	}
-	if plan.Store.Meta().WorktreeReminder != nil {
-		t.Fatalf("stale worktree reminder persisted after recovery: %+v", plan.Store.Meta().WorktreeReminder)
-	}
-	if plan.Recovery == nil ||
-		plan.Recovery.Kind != serverapi.SessionPlanRecoveryKindDeletedManagedWorktree ||
-		plan.Recovery.WorkspaceRoot != target.WorkspaceRoot {
-		t.Fatalf("recovery = %+v, want deleted managed-worktree recovery for %q", plan.Recovery, target.WorkspaceRoot)
-	}
+	return Planner{Config: config.App{WorkspaceRoot: workspaceRoot, PersistenceRoot: persistenceRoot, Settings: config.Settings{Model: "gpt-5"}}, ContainerDir: containerDir, StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(), RuntimeActive: func(string) bool { return false }, BlockSessionRuns: func([]string) func() { return func() {} }, SessionStores: sessionStores, RetargetWorkspace: retargetWorkspace}, metadataStore, store, binding
 }
 
-func TestPlannerRefusesDeletedManagedWorktreeRecoveryForActiveRuntime(t *testing.T) {
-	ctx := context.Background()
-	persistenceRoot := t.TempDir()
-	workspaceRoot := t.TempDir()
-	metadataStore, err := metadata.Open(persistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
+func TestPlannerRecoversDeletedManagedWorktreePersistently(t *testing.T) {
+	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
+	planner.RuntimeActive = func(string) bool { return true }
+	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	var recoveryErr *SessionTargetRecoveryError
+	if !errors.As(err, &recoveryErr) || recoveryErr.Reason != SessionTargetRecoveryActive || recoveryErr.Candidate == nil {
+		t.Fatalf("recovery error=%+v err=%v", recoveryErr, err)
 	}
-	defer func() { _ = metadataStore.Close() }()
-	binding, err := metadataStore.RegisterWorkspaceBinding(ctx, workspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	planner.RuntimeActive = func(string) bool { return false }
+	plan, planErr := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	target, targetErr := metadataStore.ResolveSessionExecutionTarget(context.Background(), store.Meta().SessionID)
+	if planErr != nil || targetErr != nil || target.Worktree != nil || target.CwdRelpath != "." || target.WorkspaceID != binding.WorkspaceID || plan.Recovery == nil || plan.WorkspaceRoot != target.WorkspaceRoot || plan.Store.Meta().WorktreeReminder != nil {
+		t.Fatalf("plan=%+v target=%+v errors=%v/%v", plan.Recovery, target, planErr, targetErr)
 	}
-	containerDir := filepath.Join(persistenceRoot, "projects", binding.ProjectID, "sessions")
-	store := createTestSessionInContainer(t, containerDir, filepath.Base(containerDir), workspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
-	if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
-		ID:              "active-deleted-worktree",
-		WorkspaceID:     binding.WorkspaceID,
-		CanonicalRoot:   filepath.Join(t.TempDir(), "deleted-worktree"),
-		DisplayName:     "deleted-worktree",
-		Availability:    "missing",
-		Managed:         true,
-		GitMetadataJSON: `{}`,
-	}); err != nil {
-		t.Fatalf("UpsertWorktreeRecord: %v", err)
-	}
-	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
-		SessionID:  store.Meta().SessionID,
-		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
-		Worktree:   &metadata.SessionExecutionTargetUpdateWorktree{ID: "active-deleted-worktree"},
-		CwdRelpath: ".",
-	}); err != nil {
-		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
-	}
-	planner := Planner{
-		Config:       config.App{WorkspaceRoot: workspaceRoot, PersistenceRoot: persistenceRoot, Settings: config.Settings{Model: "gpt-5"}},
-		ContainerDir: containerDir,
-		StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
-		RuntimeActive: func(sessionID string) bool {
-			return sessionID == store.Meta().SessionID
-		},
-		RecoverMissingManagedWorktree: true,
-	}
-	_, err = planner.PlanSession(ctx, SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
-	var recoveryErr *MissingManagedWorktreeRecoveryError
-	if !errors.As(err, &recoveryErr) || !recoveryErr.Active {
-		t.Fatalf("PlanSession error = %v, want active managed-worktree recovery refusal", err)
-	}
-	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
-	}
-	if target.Worktree == nil || target.Worktree.ID != "active-deleted-worktree" {
-		t.Fatalf("active target changed during refused recovery: %+v", target)
+	reopened, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
+	if err != nil || reopened.Recovery != nil {
+		t.Fatalf("reopen recovery=%+v err=%v", reopened.Recovery, err)
 	}
 }

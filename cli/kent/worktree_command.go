@@ -12,7 +12,6 @@ import (
 
 	"core/shared/client"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 
@@ -280,16 +279,10 @@ func worktreeLeaveSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	origin, err := worktreeCommandRuntimeOrigin()
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
 	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, func(ctx context.Context, remote worktreeCommandRemote) (serverapi.WorktreeScheduledAcknowledgement, error) {
 		return remote.LeaveWorktree(ctx, serverapi.WorktreeLeaveRequest{
 			OperationID: serverapi.NewWorktreeOperationID(),
 			SessionID:   sessionID,
-			Origin:      origin,
 		})
 	})
 }
@@ -312,11 +305,6 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	origin, err := worktreeCommandRuntimeOrigin()
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
 	if _, inAgentShell := sessionenv.LookupSessionID(os.LookupEnv); inAgentShell && *deleteBranch {
 		fmt.Fprintln(stderr, "agent worktree deletion always retains branches; --delete-branch is not allowed inside Kent shell commands")
 		return 2
@@ -333,7 +321,6 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			SessionID:           sessionID,
 			Selector:            strings.TrimSpace(fs.Args()[0]),
 			ForceFolderRemoval:  *force,
-			Origin:              origin,
 			BranchCleanupPolicy: policy,
 		})
 		if err != nil {
@@ -423,22 +410,13 @@ func resolveOptionalWorktreeCommandSession(sessionFlag string) *string {
 }
 
 func worktreeCommandRuntimeOrigin() (*serverapi.RuntimeStepOrigin, error) {
-	runID, stepID := sessionenv.LookupRunStepID(os.LookupEnv)
-	if runID == "" && stepID == "" {
+	runID, hasRunID := os.LookupEnv(sessionenv.RunIDEnv)
+	stepID, hasStepID := os.LookupEnv(sessionenv.StepIDEnv)
+	if !hasRunID && !hasStepID {
 		return nil, nil
 	}
-	if runID == "" || stepID == "" {
-		return nil, errors.New("Kent runtime origin requires both KENT_RUN_ID and KENT_STEP_ID")
-	}
-	parsedRunID, runErr := runtimeids.ParseRunID(runID)
-	parsedStepID, stepErr := runtimeids.ParseStepID(stepID)
-	if runErr != nil {
-		return nil, runErr
-	}
-	if stepErr != nil {
-		return nil, stepErr
-	}
-	return &serverapi.RuntimeStepOrigin{RunID: parsedRunID, StepID: parsedStepID}, nil
+	origin := &serverapi.RuntimeStepOrigin{RunID: strings.TrimSpace(runID), StepID: strings.TrimSpace(stepID)}
+	return origin, origin.Validate()
 }
 
 func openWorktreeCommandRemote(ctx context.Context, sessionID string) (worktreeCommandRemote, error) {

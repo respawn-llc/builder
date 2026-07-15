@@ -211,6 +211,23 @@ func (e *Engine) ActiveStepSnapshot() *RunSnapshot {
 	return e.ActiveRun()
 }
 
+var ErrActiveStepInactive = errors.New("originating model step is no longer active")
+
+type activeStepAuthority interface {
+	ApplyForActiveStep(string, func() error) error
+}
+
+func (e *Engine) ApplyForActiveStep(stepID string, apply func() error) error {
+	if e == nil {
+		return ErrActiveStepInactive
+	}
+	authority, ok := e.stepLifecycle.(activeStepAuthority)
+	if !ok {
+		return ErrActiveStepInactive
+	}
+	return authority.ApplyForActiveStep(stepID, apply)
+}
+
 func (e *Engine) LastCommittedAssistantFinalAnswer() string {
 	if e == nil {
 		return ""
