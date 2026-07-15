@@ -11,6 +11,7 @@ import (
 	"core/cli/app/internal/status"
 	"core/shared/client"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 
@@ -76,7 +77,7 @@ func (p *runtimeLaunchPlan) DetachOnlyClose() error {
 type sessionPickerRunner func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
 
 type sessionViewReader interface {
-	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
+	GetSessionExecutionWorkspaceRoot(ctx context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error)
 }
 
 type launchPlannerServer interface {
@@ -119,9 +120,8 @@ func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
 }
 
 type projectScopedSessionPageLoader struct {
-	projectID   string
-	client      client.ProjectViewClient
-	sessionView client.SessionViewClient
+	projectID string
+	client    client.ProjectViewClient
 }
 
 func (l projectScopedSessionPageLoader) ProjectID() string {
@@ -130,10 +130,6 @@ func (l projectScopedSessionPageLoader) ProjectID() string {
 
 func (l projectScopedSessionPageLoader) ListSessionPage(ctx context.Context, request serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
 	return l.client.ListSessionPage(ctx, request)
-}
-
-func (l projectScopedSessionPageLoader) SessionViewClient() client.SessionViewClient {
-	return l.sessionView
 }
 
 func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchRequest) (sessionLaunchPlan, error) {
@@ -197,11 +193,18 @@ func loadSelectedSessionWorkspaceRoot(ctx context.Context, sessionViews sessionV
 	if sessionViews == nil {
 		return "", errors.New("session view client is required")
 	}
-	resp, err := sessionViews.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: strings.TrimSpace(sessionID)})
+	typedSessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(resp.MainView.Session.ExecutionTarget.WorkspaceRoot), nil
+	resp, err := sessionViews.GetSessionExecutionWorkspaceRoot(ctx, serverapi.SessionExecutionWorkspaceRootRequest{SessionID: typedSessionID})
+	if err != nil {
+		return "", err
+	}
+	if err := resp.Validate(); err != nil {
+		return "", err
+	}
+	return resp.WorkspaceRoot, nil
 }
 
 func (p *launchPlanner) PrepareRuntime(ctx context.Context, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {
@@ -232,7 +235,7 @@ func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunc
 	}}, nil
 }
 
-func (p *launchPlanner) selectSession(ctx context.Context) (sessionPickerResult, error) {
+func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPickerNotice) (sessionPickerResult, error) {
 	if p == nil || p.server == nil || p.server.ProjectViewClient() == nil {
 		return nil, errors.New("session picker project view client is required")
 	}
@@ -244,15 +247,12 @@ func (p *launchPlanner) selectSession(ctx context.Context) (sessionPickerResult,
 		return nil, errors.New("session picker project ID is required")
 	}
 	loader := projectScopedSessionPageLoader{
-		projectID:   projectID,
-		client:      p.server.ProjectViewClient(),
-		sessionView: p.server.SessionViewClient(),
+		projectID: projectID,
+		client:    p.server.ProjectViewClient(),
 	}
-	return p.pickSession(
-		loader,
-		p.server.PresentationTheme(),
-		p.sessionPickerHeaderInfo(p.server.Config()),
-	)
+	header := p.sessionPickerHeaderInfo(p.server.Config())
+	header.Notice = notice
+	return p.pickSession(loader, p.server.PresentationTheme(), header)
 }
 
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {

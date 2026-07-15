@@ -68,6 +68,31 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, activeRoute, serverapi.SessionMainViewRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign session unexpectedly allowed")
 	}
+	executionWorkspaceRootSessionID, err := runtimeids.ParseSessionID(fixture.ownSessionID)
+	if err != nil {
+		t.Fatalf("parse execution-workspace-root session ID: %v", err)
+	}
+	executionWorkspaceRootRoute := routeForTest(t, protocol.MethodSessionGetExecutionWorkspaceRoot)
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		executionWorkspaceRootRoute,
+		serverapi.SessionExecutionWorkspaceRootRequest{SessionID: executionWorkspaceRootSessionID},
+	); err != nil {
+		t.Fatalf("active project own execution workspace root: %v", err)
+	}
+	foreignExecutionWorkspaceRootSessionID, err := runtimeids.ParseSessionID(fixture.foreignSessionID)
+	if err != nil {
+		t.Fatalf("parse foreign execution-workspace-root session ID: %v", err)
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		executionWorkspaceRootRoute,
+		serverapi.SessionExecutionWorkspaceRootRequest{SessionID: foreignExecutionWorkspaceRootSessionID},
+	); err == nil {
+		t.Fatal("active project foreign execution workspace root unexpectedly allowed")
+	}
 	transcriptPageRoute := routeForTest(t, protocol.MethodSessionGetTranscriptPage)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, transcriptPageRoute, serverapi.SessionTranscriptPageRequest{SessionID: fixture.ownSessionID}); err != nil {
 		t.Fatalf("active project own transcript page: %v", err)

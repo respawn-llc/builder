@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/client"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -23,8 +24,10 @@ func disableTransientStatusClearForTest(t *testing.T) {
 }
 
 type stubSessionViewClient struct {
-	getSessionMainView   func(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
-	getLatestFinalAnswer func(context.Context, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
+	client.SessionViewClient
+	getSessionMainView      func(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
+	getSessionWorkspaceRoot func(context.Context, serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error)
+	getLatestFinalAnswer    func(context.Context, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
 }
 
 func (s stubSessionViewClient) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -32,6 +35,13 @@ func (s stubSessionViewClient) GetSessionMainView(ctx context.Context, req serve
 		return serverapi.SessionMainViewResponse{}, errors.New("session view stub is required")
 	}
 	return s.getSessionMainView(ctx, req)
+}
+
+func (s stubSessionViewClient) GetSessionExecutionWorkspaceRoot(ctx context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
+	if s.getSessionWorkspaceRoot == nil {
+		return serverapi.SessionExecutionWorkspaceRootResponse{}, errors.New("session execution workspace root stub is required")
+	}
+	return s.getSessionWorkspaceRoot(ctx, req)
 }
 
 func (s stubSessionViewClient) GetSessionTranscriptPage(context.Context, serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {

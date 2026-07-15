@@ -59,7 +59,7 @@ func newUninitializedTestSessionPickerModel(t *testing.T, summaries []clientui.S
 		}
 		return sessionPageLoadResult{response: response}
 	}}
-	return newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", header)
+	return newSessionPickerModel(context.Background(), loader, "dark", header)
 }
 
 func pickerTestSummary(t *testing.T, raw string, updatedAt time.Time) clientui.SessionSummary {
@@ -247,6 +247,31 @@ func TestSessionPickerHeaderLoadsFastAuthStateOnly(t *testing.T) {
 	plain := stripANSIAndTrimRight(updated.renderHeader())
 	if !strings.Contains(plain, "OpenAI Subscription") {
 		t.Fatalf("expected fast auth display in header, got %q", plain)
+	}
+}
+
+func TestSessionPickerStatusOmitsAbsentModel(t *testing.T) {
+	header := sessionPickerHeaderInfo{
+		StatusRequest: uiStatusRequest{
+			AuthStatus: panicAuthStatusClient{},
+		},
+		AuthManager: fastOnlyAuthResolver{state: auth.State{
+			Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{Email: "user@example.com"}},
+		}},
+	}
+	cmd := collectSessionPickerStatusCmd(header)
+	if cmd == nil {
+		t.Fatal("expected async status command")
+	}
+	message, ok := cmd().(sessionPickerStatusMsg)
+	if !ok {
+		t.Fatalf("status message = %T", message)
+	}
+	if message.auth == nil {
+		t.Fatal("auth status is absent")
+	}
+	if message.model != nil {
+		t.Fatalf("absent model projected as %q", *message.model)
 	}
 }
 

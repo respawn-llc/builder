@@ -231,6 +231,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		})
 	},
 	protocol.MethodSessionGetMainView:                            gatewayClientCall[client.SessionViewClient, serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](GatewayDependencies.SessionViewClient, client.SessionViewClient.GetSessionMainView),
+	protocol.MethodSessionGetExecutionWorkspaceRoot:              gatewayClientCall[client.SessionViewClient, serverapi.SessionExecutionWorkspaceRootRequest, serverapi.SessionExecutionWorkspaceRootResponse](GatewayDependencies.SessionViewClient, client.SessionViewClient.GetSessionExecutionWorkspaceRoot),
 	protocol.MethodSessionGetTranscriptPage:                      gatewayClientCall[client.SessionViewClient, serverapi.SessionTranscriptPageRequest, serverapi.SessionTranscriptPageResponse](GatewayDependencies.SessionViewClient, client.SessionViewClient.GetSessionTranscriptPage),
 	protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer: gatewayClientCall[client.SessionViewClient, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest, serverapi.SessionLatestCommittedAssistantFinalAnswerResponse](GatewayDependencies.SessionViewClient, client.SessionViewClient.GetLatestCommittedAssistantFinalAnswer),
 	protocol.MethodSessionGetExecutionEnvironment:                gatewayClientCall[client.SessionViewClient, serverapi.SessionExecutionEnvironmentRequest, serverapi.SessionExecutionEnvironmentResponse](GatewayDependencies.SessionViewClient, client.SessionViewClient.GetSessionExecutionEnvironment),

@@ -12,3 +12,9 @@ type sessionExecutionEnvironmentClientBoundary interface {
 }
 
 var _ sessionExecutionEnvironmentClientBoundary = (client.SessionViewClient)(nil)
+
+type sessionExecutionWorkspaceRootClientBoundary interface {
+	GetSessionExecutionWorkspaceRoot(context.Context, serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error)
+}
+
+var _ sessionExecutionWorkspaceRootClientBoundary = (client.SessionViewClient)(nil)

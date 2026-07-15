@@ -11,22 +11,25 @@ import (
 )
 
 type startupPickerStatusFailure struct {
-	Tab            sessioncontract.SessionCategory
-	Operation      sessionPickerOperationKind
-	Generation     uint64
-	Kind           sessionPickerFailureKind
-	Diagnostic     error
-	ActiveEligible bool
+	Tab        sessioncontract.SessionCategory
+	Operation  sessionPickerOperationKind
+	Generation uint64
+	Kind       sessionPickerFailureKind
+	Diagnostic error
 }
+
+type sessionPickerOperationKind string
+
+const (
+	sessionPickerOperationBodyPage        sessionPickerOperationKind = "body_page"
+	sessionPickerOperationDirectionalPage sessionPickerOperationKind = "directional_page"
+)
 
 type sessionPickerFailureKind string
 
 const (
-	sessionPickerFailurePageRequest    sessionPickerFailureKind = "page_request"
-	sessionPickerFailurePageContract   sessionPickerFailureKind = "page_contract"
-	sessionPickerFailureDetailRequest  sessionPickerFailureKind = "detail_request"
-	sessionPickerFailureDetailContract sessionPickerFailureKind = "detail_contract"
-	sessionPickerFailureDetailField    sessionPickerFailureKind = "detail_field"
+	sessionPickerFailurePageRequest  sessionPickerFailureKind = "page_request"
+	sessionPickerFailurePageContract sessionPickerFailureKind = "page_contract"
 )
 
 type startupPickerStatusKey struct {
@@ -61,10 +64,7 @@ func (m *startupPickerStatusModel) Record(failure startupPickerStatusFailure) {
 	}
 	switch failure.Kind {
 	case sessionPickerFailurePageRequest,
-		sessionPickerFailurePageContract,
-		sessionPickerFailureDetailRequest,
-		sessionPickerFailureDetailContract,
-		sessionPickerFailureDetailField:
+		sessionPickerFailurePageContract:
 	default:
 		panic(fmt.Sprintf("unknown session picker failure kind %q", failure.Kind))
 	}
@@ -116,18 +116,12 @@ func projectStartupPickerStatus(model *startupPickerStatusModel) startupPickerSt
 		if model.activeTab != nil && key.tab != *model.activeTab {
 			continue
 		}
-		if model.activeTab != nil && !record.failure.ActiveEligible {
-			continue
-		}
 		if !found || record.sequence > newest.sequence {
 			newest, found = record, true
 		}
 	}
 	if !found {
 		for _, record := range model.failures {
-			if model.activeTab != nil && record.failure.Tab == *model.activeTab && !record.failure.ActiveEligible {
-				continue
-			}
 			if !found || record.sequence > newest.sequence {
 				newest, found = record, true
 			}
@@ -181,10 +175,29 @@ func sessionPickerFailureOperatorText(kind sessionPickerFailureKind) string {
 	switch kind {
 	case sessionPickerFailurePageRequest, sessionPickerFailurePageContract:
 		return "Sessions are unavailable. Try again."
-	case sessionPickerFailureDetailRequest, sessionPickerFailureDetailContract, sessionPickerFailureDetailField:
-		return "Session details are unavailable."
 	default:
 		panic(fmt.Sprintf("unknown session picker failure kind %q", kind))
+	}
+}
+
+func (m *sessionPickerModel) recordPickerFailureForTab(
+	tab *sessionPickerTab,
+	operation sessionPickerOperationKind,
+	generation uint64,
+	kind sessionPickerFailureKind,
+	diagnostic error,
+) {
+	if m.startupStatus == nil {
+		m.startupStatus = newStartupPickerStatusModel()
+	}
+	m.startupStatus.Record(startupPickerStatusFailure{
+		Tab: tab.category, Operation: operation, Generation: generation, Kind: kind, Diagnostic: diagnostic,
+	})
+}
+
+func (m *sessionPickerModel) clearPickerFailureForTab(tab *sessionPickerTab, kind sessionPickerOperationKind, generation uint64) {
+	if m.startupStatus != nil {
+		m.startupStatus.Clear(tab.category, kind, generation)
 	}
 }
 

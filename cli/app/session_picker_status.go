@@ -41,11 +41,15 @@ func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
 				branch = &value
 			}
 		}
+		var model *string
+		if sessionPickerStatusHasModel(req) {
+			model = optionalSessionPickerStatusText(base.Model.Summary)
+		}
 		return sessionPickerStatusMsg{
 			cwd:    optionalSessionPickerStatusText(statusDisplayPath(base.Workdir, "")),
 			branch: branch,
 			auth:   optionalSessionPickerStatusText(status.AuthDisplayLabel(authInfo)),
-			model:  optionalSessionPickerStatusText(base.Model.Summary),
+			model:  model,
 		}
 	}
 }
@@ -62,14 +66,17 @@ func sessionPickerStatusRequestUseful(req uiStatusRequest, authManager status.Au
 	if strings.TrimSpace(req.WorkspaceRoot) != "" {
 		return true
 	}
-	if strings.TrimSpace(req.ModelName) != "" || strings.TrimSpace(req.ConfiguredModelName) != "" {
-		return true
-	}
-	if strings.TrimSpace(req.Settings.Model) != "" {
+	if sessionPickerStatusHasModel(req) {
 		return true
 	}
 	if req.AuthStatus != nil {
 		return true
 	}
 	return status.NormalizeAuthStateResolver(authManager) != nil
+}
+
+func sessionPickerStatusHasModel(req uiStatusRequest) bool {
+	return strings.TrimSpace(req.ModelName) != "" ||
+		strings.TrimSpace(req.ConfiguredModelName) != "" ||
+		strings.TrimSpace(req.Settings.Model) != ""
 }

@@ -59,3 +59,19 @@ func TestLatestCommittedAssistantFinalAnswerRouteContract(t *testing.T) {
 		t.Fatal("latest committed assistant final answer route must validate its request")
 	}
 }
+
+func TestSessionExecutionWorkspaceRootRouteContract(t *testing.T) {
+	route, ok := RouteByMethod(protocol.MethodSessionGetExecutionWorkspaceRoot)
+	if !ok {
+		t.Fatal("session execution workspace root route missing")
+	}
+	if route.Kind != KindUnary || route.Auth != AuthPreServerAuth || route.Scope != ScopeSessionActiveProject || route.Connection != ConnectionControl || route.Dependency != DependencySessionView {
+		t.Fatalf("route = %+v", route)
+	}
+	if route.RequestType != reflect.TypeOf(serverapi.SessionExecutionWorkspaceRootRequest{}) || route.ResponseType != reflect.TypeOf(serverapi.SessionExecutionWorkspaceRootResponse{}) {
+		t.Fatalf("route request/response = %v / %v", route.RequestType, route.ResponseType)
+	}
+	if !route.ValidatesRequest {
+		t.Fatal("session execution workspace root route must validate its request")
+	}
+}

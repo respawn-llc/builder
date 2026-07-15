@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"core/shared/client"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -18,12 +16,11 @@ type sessionPickerTerminalIO interface {
 }
 
 type sessionPickerLifecycleOptions struct {
-	Loader                     sessionPageLoader
-	ExecutionEnvironmentClient client.SessionViewClient
-	Theme                      string
-	Header                     sessionPickerHeaderInfo
-	Terminal                   sessionPickerTerminalIO
-	RunProgram                 func(context.Context, *sessionPickerModel) (sessionPickerResult, error)
+	Loader     sessionPageLoader
+	Theme      string
+	Header     sessionPickerHeaderInfo
+	Terminal   sessionPickerTerminalIO
+	RunProgram func(context.Context, *sessionPickerModel) (sessionPickerResult, error)
 }
 
 type sessionPickerLifecycle struct {
@@ -86,10 +83,9 @@ func newSessionPickerLifecycle(options sessionPickerLifecycleOptions) *sessionPi
 	}
 	requestContext, cancel := context.WithCancel(context.Background())
 	return &sessionPickerLifecycle{
-		picker: newSessionPickerModelWithExecutionEnvironmentClient(
+		picker: newSessionPickerModel(
 			requestContext,
 			options.Loader,
-			options.ExecutionEnvironmentClient,
 			options.Theme,
 			options.Header,
 		),
@@ -196,7 +192,6 @@ func (l *sessionPickerLifecycle) Cleanup() error {
 	if l == nil || l.terminalState == sessionPickerTerminalCleaned {
 		return nil
 	}
-	l.picker.cancelSelectedDetailRequests()
 	l.cancel()
 	var cleanupErr error
 	switch l.terminalState {

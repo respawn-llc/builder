@@ -33,8 +33,9 @@ const (
 )
 
 type startupPickerNotice struct {
-	Text string
-	Kind startupPickerNoticeKind
+	Text       string
+	Kind       startupPickerNoticeKind
+	Diagnostic error
 }
 
 type startupPickerResult struct {

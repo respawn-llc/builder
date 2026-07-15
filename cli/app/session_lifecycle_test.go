@@ -278,11 +278,11 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 		},
 		projectID:         binding.ProjectID,
 		projectViewClient: projectViews,
-		sessionViewClient: stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-			if req.SessionID != store.Meta().SessionID {
-				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
+		sessionViewClient: stubSessionViewClient{getSessionWorkspaceRoot: func(_ context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
+			if req.SessionID.String() != store.Meta().SessionID {
+				return serverapi.SessionExecutionWorkspaceRootResponse{}, errors.New("unexpected session id")
 			}
-			return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{WorkspaceRoot: previousWorkspace}}}}, nil
+			return serverapi.SessionExecutionWorkspaceRootResponse{WorkspaceRoot: previousWorkspace}, nil
 		}},
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 			launchCalls++
@@ -375,11 +375,11 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 		},
 		projectID:         binding.ProjectID,
 		projectViewClient: projectViews,
-		sessionViewClient: stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-			if req.SessionID != store.Meta().SessionID {
-				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
+		sessionViewClient: stubSessionViewClient{getSessionWorkspaceRoot: func(_ context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
+			if req.SessionID.String() != store.Meta().SessionID {
+				return serverapi.SessionExecutionWorkspaceRootResponse{}, errors.New("unexpected session id")
 			}
-			return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{WorkspaceRoot: previousWorkspace}}}}, nil
+			return serverapi.SessionExecutionWorkspaceRootResponse{WorkspaceRoot: previousWorkspace}, nil
 		}},
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 			launchCalls++
@@ -440,14 +440,23 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 
 	launchCalls := 0
 	pickerCalls := 0
-	runSessionPickerFlow = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	runSessionPickerFlow = func(_ sessionPageLoader, _ string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
 		switch pickerCalls {
 		case 1:
+			if header.Notice != nil {
+				t.Fatalf("first picker notice = %+v, want none", header.Notice)
+			}
 			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, staleSessionID)), nil
 		case 2:
 			if launchCalls != 0 {
 				t.Fatalf("workspace lookup failure planned before picker retry: launchCalls=%d", launchCalls)
+			}
+			if header.Notice == nil ||
+				header.Notice.Kind != startupPickerNoticeError ||
+				header.Notice.Text == "" ||
+				!errors.Is(header.Notice.Diagnostic, session.ErrSessionNotFound) {
+				t.Fatalf("workspace lookup notice = %+v, want generic surfaced failure", header.Notice)
 			}
 			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, validStore.Meta().SessionID)), nil
 		}
@@ -470,14 +479,14 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 		},
 		projectID:         binding.ProjectID,
 		projectViewClient: projectViews,
-		sessionViewClient: stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-			switch req.SessionID {
+		sessionViewClient: stubSessionViewClient{getSessionWorkspaceRoot: func(_ context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
+			switch req.SessionID.String() {
 			case staleSessionID:
-				return serverapi.SessionMainViewResponse{}, session.ErrSessionNotFound
+				return serverapi.SessionExecutionWorkspaceRootResponse{}, session.ErrSessionNotFound
 			case validStore.Meta().SessionID:
-				return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{WorkspaceRoot: cfg.WorkspaceRoot}}}}, nil
+				return serverapi.SessionExecutionWorkspaceRootResponse{WorkspaceRoot: cfg.WorkspaceRoot}, nil
 			default:
-				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
+				return serverapi.SessionExecutionWorkspaceRootResponse{}, errors.New("unexpected session id")
 			}
 		}},
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {

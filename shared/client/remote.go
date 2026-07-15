@@ -499,6 +499,11 @@ func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMa
 	return resp, c.call(ctx, protocol.MethodSessionGetMainView, req, &resp)
 }
 
+func (c *Remote) GetSessionExecutionWorkspaceRoot(ctx context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
+	var resp serverapi.SessionExecutionWorkspaceRootResponse
+	return resp, c.call(ctx, protocol.MethodSessionGetExecutionWorkspaceRoot, req, &resp)
+}
+
 func (c *Remote) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
 	var resp serverapi.SessionTranscriptPageResponse
 	return resp, c.call(ctx, protocol.MethodSessionGetTranscriptPage, req, &resp)
