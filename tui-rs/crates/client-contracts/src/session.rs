@@ -18,17 +18,36 @@ pub struct SessionMainViewResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionPlanRequest {
     pub client_request_id: String,
     #[serde(default)]
     pub mode: SessionLaunchMode,
-    #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub selected_session_id: String,
-    #[serde(skip_serializing_if = "is_false", default)]
-    pub force_new_session: bool,
-    #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub parent_session_id: String,
+    pub intent: SessionLaunchIntent,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub selected_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub caller_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parent_session_id: Option<String>,
     pub overrides: RunPromptOverrides,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionLaunchIntent {
+    pub kind: SessionLaunchIntentKind,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionLaunchIntentKind {
+    CreateNew,
+    OpenExisting,
+    Unknown(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,6 +312,33 @@ impl SessionLaunchMode {
             "headless" => Self::Headless,
             _ => Self::Unknown(value),
         }
+    }
+}
+
+impl Serialize for SessionLaunchIntentKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(match self {
+            Self::CreateNew => "create_new",
+            Self::OpenExisting => "open_existing",
+            Self::Unknown(value) => value,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionLaunchIntentKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "create_new" => Self::CreateNew,
+            "open_existing" => Self::OpenExisting,
+            _ => Self::Unknown(value),
+        })
     }
 }
 

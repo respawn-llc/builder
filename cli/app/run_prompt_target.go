@@ -27,8 +27,9 @@ var configuredRemoteWorkspaceDiscoveryTimeout = 5 * time.Second
 type configuredProjectViewRemote = remoteattach.ProjectViewRemote
 
 type runPromptWorkspaceConfig struct {
-	Options Options
-	Config  config.App
+	Options       Options
+	Config        config.App
+	CallerContext startupconfig.CallerContext
 }
 
 func startRunPromptClient(ctx context.Context, opts Options) (client.RunPromptClient, func() error, error) {
@@ -36,7 +37,10 @@ func startRunPromptClient(ctx context.Context, opts Options) (client.RunPromptCl
 	if err != nil {
 		return nil, nil, err
 	}
-	opts = workspaceConfig.Options
+	return startRunPromptClientWithWorkspaceConfig(ctx, workspaceConfig)
+}
+
+func startRunPromptClientWithWorkspaceConfig(ctx context.Context, workspaceConfig runPromptWorkspaceConfig) (client.RunPromptClient, func() error, error) {
 	cfg := workspaceConfig.Config
 	// Omitting LaunchDaemon and StartEmbedded keeps kent run a pure client (see
 	// docs/dev/specs/core-runtime-tools.md): Resolve returns ErrNoServerAvailable
@@ -161,7 +165,11 @@ func resolveRunPromptWorkspaceConfig(opts Options) (runPromptWorkspaceConfig, er
 	if strings.TrimSpace(result.ResolvedWorkspaceRoot) != "" && result.ResolvedWorkspaceRoot != opts.WorkspaceRoot {
 		resolvedOpts.WorkspaceRoot = result.ResolvedWorkspaceRoot
 	}
-	return runPromptWorkspaceConfig{Options: resolvedOpts, Config: result.Config}, nil
+	return runPromptWorkspaceConfig{
+		Options:       resolvedOpts,
+		Config:        result.Config,
+		CallerContext: result.CallerContext,
+	}, nil
 }
 
 func startupConfigRequest(opts Options) startupconfig.Request {

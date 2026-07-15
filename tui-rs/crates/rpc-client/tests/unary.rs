@@ -39,7 +39,7 @@ use client_contracts::runtime_control::{
     RuntimeSubmitUserTurnRequest, RuntimeSubmitUserTurnResponse,
 };
 use client_contracts::session::{
-    RunPromptOverrides, SessionInitialInputRequest,
+    RunPromptOverrides, SessionInitialInputRequest, SessionLaunchIntent, SessionLaunchIntentKind,
     SessionInitialInputResponse, SessionLaunchMode, SessionMainViewRequest, SessionMainViewResponse,
     SessionPersistInputDraftRequest, SessionPersistInputDraftResponse, SessionPlanRequest,
     SessionResolveTransitionRequest, SessionResolveTransitionResponse,
@@ -634,9 +634,14 @@ fn session_plan_wrapper_sends_contract_dto_and_method_name() {
         .plan_session(SessionPlanRequest {
             client_request_id: "request-1".to_owned(),
             mode: SessionLaunchMode::Interactive,
-            selected_session_id: "session-1".to_owned(),
-            force_new_session: false,
-            parent_session_id: String::new(),
+            intent: SessionLaunchIntent {
+                kind: SessionLaunchIntentKind::OpenExisting,
+                parent_id: None,
+                session_id: Some("session-1".to_owned()),
+            },
+            selected_session_id: None,
+            caller_session_id: None,
+            parent_session_id: None,
             overrides: RunPromptOverrides::default(),
         })
         .unwrap();
@@ -650,7 +655,10 @@ fn session_plan_wrapper_sends_contract_dto_and_method_name() {
         json!({
             "client_request_id": "request-1",
             "mode": "interactive",
-            "selected_session_id": "session-1",
+            "intent": {
+                "kind": "open_existing",
+                "session_id": "session-1"
+            },
             "overrides": {
                 "AgentRole": "",
                 "Model": "",
@@ -663,6 +671,78 @@ fn session_plan_wrapper_sends_contract_dto_and_method_name() {
             }
         })
     );
+}
+
+#[test]
+fn session_plan_wrapper_serializes_nullable_lineage_and_selector_fields() {
+    let connection = ScriptedConnection::new(vec![success_response(
+        "rpc-1",
+        json!({"plan": {
+            "session_id": "session-1",
+            "active_settings": contract_settings_json(),
+            "source": contract_source_report_json()
+        }}),
+    )]);
+    let mut client = Client::new(connection);
+
+    client
+        .plan_session(SessionPlanRequest {
+            client_request_id: "request-1".to_owned(),
+            mode: SessionLaunchMode::Headless,
+            intent: SessionLaunchIntent {
+                kind: SessionLaunchIntentKind::CreateNew,
+                parent_id: Some("parent-session".to_owned()),
+                session_id: None,
+            },
+            selected_session_id: Some("legacy-selector".to_owned()),
+            caller_session_id: Some("caller-session".to_owned()),
+            parent_session_id: Some("parent-session".to_owned()),
+            overrides: RunPromptOverrides::default(),
+        })
+        .unwrap();
+    let connection = client.into_connection();
+
+    assert_eq!(
+        connection.sent[0].request().params.unwrap(),
+        json!({
+            "client_request_id": "request-1",
+            "mode": "headless",
+            "intent": {
+                "kind": "create_new",
+                "parent_id": "parent-session"
+            },
+            "selected_session_id": "legacy-selector",
+            "caller_session_id": "caller-session",
+            "parent_session_id": "parent-session",
+            "overrides": {
+                "AgentRole": "",
+                "Model": "",
+                "ProviderOverride": "",
+                "ThinkingLevel": "",
+                "Theme": "",
+                "ModelTimeoutSeconds": 0,
+                "Tools": "",
+                "OpenAIBaseURL": ""
+            }
+        })
+    );
+}
+
+#[test]
+fn session_plan_contract_rejects_unknown_wire_fields() {
+    let raw = json!({
+        "client_request_id": "request-1",
+        "mode": "interactive",
+        "intent": {
+            "kind": "create_new"
+        },
+        "overrides": {},
+        "force_new_session": true
+    });
+
+    if serde_json::from_value::<SessionPlanRequest>(raw).is_ok() {
+        panic!("session plan contract accepted an unknown legacy field");
+    }
 }
 
 #[test]
