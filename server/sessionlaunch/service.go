@@ -153,18 +153,14 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 			if roleErr != nil {
 				return PlanResult{}, roleErr
 			}
-			if persistedRole != nil {
+			if persistedRole != nil && caller != nil {
 				lookup := config.LookupSubagentRole(planner.Config.Settings, *persistedRole)
 				if lookup.Status == config.SubagentRoleLookupPresent {
 					persistedOverride, overrideErr := (serverapi.RunPromptOverrides{AgentRole: persistedRole}).AgentRoleOverride()
 					if overrideErr != nil {
 						return PlanResult{}, overrideErr
 					}
-					persistedCaller := &subagentpolicy.Caller{AgentRole: persistedRole}
-					if caller != nil {
-						persistedCaller.Workflow = caller.Workflow
-					}
-					if err := subagentpolicy.Authorize(planner.Config.Settings, persistedCaller, subagentpolicy.TargetFromOverride(persistedOverride)); err != nil {
+					if err := subagentpolicy.Authorize(planner.Config.Settings, caller, subagentpolicy.TargetFromOverride(persistedOverride)); err != nil {
 						return PlanResult{}, err
 					}
 				}

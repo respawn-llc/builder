@@ -678,7 +678,7 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 	}
 }
 
-func TestPlanLaunchSessionHeadlessSelectedSessionAuthorizesPersistedContinuationRole(t *testing.T) {
+func TestPlanLaunchSessionHeadlessSelectedSessionAllowsHumanContinuationOfNonCallableRole(t *testing.T) {
 	workspace := t.TempDir()
 	containerDir := t.TempDir()
 	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
@@ -698,14 +698,16 @@ func TestPlanLaunchSessionHeadlessSelectedSessionAuthorizesPersistedContinuation
 		StoreOptions: serviceTestPersistence.Options(),
 	}, &countingStoreRegistrar{})
 
-	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
+	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID:   "req-persisted-role",
 		Mode:              serverapi.SessionLaunchModeHeadless,
 		SelectedSessionID: store.Meta().SessionID,
 	})
-	var denied *serverapi.SubagentLaunchDeniedError
-	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
-		t.Fatalf("PlanLaunchSession error = %T %v, want persisted-role not-callable denial", err, err)
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.Store.Meta().SessionID != store.Meta().SessionID {
+		t.Fatalf("session id = %q, want selected %q", result.Plan.Store.Meta().SessionID, store.Meta().SessionID)
 	}
 }
 
