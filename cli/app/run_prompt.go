@@ -67,8 +67,13 @@ func runPromptLaunchIntent(opts Options, initialSessionID string) (serverapi.Ses
 }
 
 func runPromptOverridesFromOptions(opts Options) serverapi.RunPromptOverrides {
+	var agentRole *string
+	if opts.AgentRole != nil {
+		value := strings.TrimSpace(*opts.AgentRole)
+		agentRole = &value
+	}
 	return serverapi.RunPromptOverrides{
-		AgentRole:           strings.TrimSpace(opts.AgentRole),
+		AgentRole:           agentRole,
 		Model:               strings.TrimSpace(opts.Model),
 		ProviderOverride:    strings.TrimSpace(opts.ProviderOverride),
 		ThinkingLevel:       strings.TrimSpace(opts.ThinkingLevel),

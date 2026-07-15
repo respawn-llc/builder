@@ -46,7 +46,7 @@ type RuntimeStatus struct {
 	FastModeAvailable                 bool
 	FastModeEnabled                   bool
 	ConversationFreshness             ConversationFreshness
-	ParentSessionID                   string
+	ParentSessionID                   *string
 	LastCommittedAssistantFinalAnswer string
 	ThinkingLevel                     string
 	CompactionMode                    string

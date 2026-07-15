@@ -819,6 +819,49 @@ WHERE id = 'transition-lifecycle-null'
 	}
 }
 
+func TestOpenMigratesLegacyEmptyParentSessionIDToNull(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 52)
+	if err != nil {
+		t.Fatalf("open test database at version 52: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-parent-null', 'Project', ?, ?, '{}')`, now, now)
+	execSeed(t, db, "workspace", `
+INSERT INTO workspaces (
+    id, project_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('workspace-parent-null', 'project-parent-null', '/workspace-parent-null', '{}', ?, ?)`, now, now)
+	execSeed(t, db, "legacy session", `
+INSERT INTO sessions (
+    id, project_id, workspace_id, artifact_relpath, parent_session_id,
+    created_at_unix_ms, updated_at_unix_ms
+) VALUES ('session-parent-null', 'project-parent-null', 'workspace-parent-null', 'sessions/session-parent-null', '', ?, ?)`, now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 52 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	var parentSessionID sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT parent_session_id
+FROM sessions
+WHERE id = 'session-parent-null'
+`).Scan(&parentSessionID); err != nil {
+		t.Fatalf("query migrated parent session id: %v", err)
+	}
+	if parentSessionID.Valid {
+		t.Fatalf("migrated parent session id = %+v, want NULL absence", parentSessionID)
+	}
+}
+
 func TestOpenMigratesWorkflowScriptNodesWithRuntimeReferences(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")

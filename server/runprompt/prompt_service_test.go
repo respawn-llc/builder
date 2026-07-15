@@ -11,6 +11,10 @@ import (
 	"core/shared/serverapi"
 )
 
+func promptServiceStringPtr(value string) *string {
+	return &value
+}
+
 func TestPromptServiceRejectsEmptyPrompt(t *testing.T) {
 	service := NewPromptService(&stubHeadlessPromptLauncher{})
 
@@ -38,7 +42,7 @@ func TestPromptServiceRejectsInvalidAgentRoleBeforePreparingLauncher(t *testing.
 			_, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{
 				ClientRequestID: "req-1",
 				Prompt:          "hello",
-				Overrides:       serverapi.RunPromptOverrides{AgentRole: role},
+				Overrides:       serverapi.RunPromptOverrides{AgentRole: promptServiceStringPtr(role)},
 			}, nil)
 			if err == nil {
 				t.Fatal("expected invalid agent role error")

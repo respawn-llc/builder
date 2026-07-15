@@ -791,7 +791,8 @@ func (p Planner) initializeChildSessionContext(ctx context.Context, child *sessi
 		}
 	}
 	if parent == nil {
-		return child.SetParentSessionID(parentID.String())
+		parentIDString := parentID.String()
+		return child.SetParentSessionID(&parentIDString)
 	}
 	target, hasTarget, err := p.resolveParentExecutionTarget(ctx, parentID.String())
 	if err != nil {

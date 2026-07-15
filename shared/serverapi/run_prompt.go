@@ -16,9 +16,34 @@ import (
 type RunPromptRequest struct {
 	ClientRequestID string
 	Intent          SessionLaunchIntent
+	SelectedSessionID string `json:"selected_session_id,omitempty"`
+	CallerSessionID *string `json:"caller_session_id,omitempty"`
+	ParentSessionID *string `json:"parent_session_id,omitempty"`
 	Prompt          string
 	Timeout         time.Duration
 	Overrides       RunPromptOverrides
+}
+
+type OptionalStringKey struct {
+	Present bool
+	Value string
+}
+
+func CanonicalOptionalString(value *string) OptionalStringKey {
+	if value == nil {
+		return OptionalStringKey{}
+	}
+	return OptionalStringKey{Present: true, Value: strings.TrimSpace(*value)}
+}
+
+func ValidateOptionalIdentifier(field string, value *string) error {
+	if value == nil {
+		return nil
+	}
+	if strings.TrimSpace(*value) == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	return nil
 }
 
 func (r RunPromptRequest) Validate() error {
@@ -31,11 +56,17 @@ func (r RunPromptRequest) Validate() error {
 	if err := r.Intent.Validate(); err != nil {
 		return fmt.Errorf("intent: %w", err)
 	}
+	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
+		return err
+	}
+	if err := ValidateOptionalIdentifier("parent_session_id", r.ParentSessionID); err != nil {
+		return err
+	}
 	return r.Overrides.ValidateAgentRoleOverride()
 }
 
 type RunPromptOverrides struct {
-	AgentRole           string
+	AgentRole           *string `json:"agent_role,omitempty"`
 	Model               string
 	ProviderOverride    string
 	ThinkingLevel       string
@@ -54,9 +85,12 @@ type RunPromptAgentRoleOverride struct {
 }
 
 func (o RunPromptOverrides) AgentRoleOverride() (RunPromptAgentRoleOverride, error) {
-	raw := strings.TrimSpace(o.AgentRole)
-	if raw == "" {
+	if o.AgentRole == nil {
 		return RunPromptAgentRoleOverride{}, nil
+	}
+	raw := strings.TrimSpace(*o.AgentRole)
+	if raw == "" {
+		return RunPromptAgentRoleOverride{}, fmt.Errorf("%w %s", ErrInvalidRunPromptAgentRole, strconv.Quote(*o.AgentRole))
 	}
 	normalized := strings.ToLower(raw)
 	if normalized == config.DefaultSubagentRole {
@@ -78,11 +112,11 @@ func (o RunPromptOverrides) ValidateAgentRoleOverride() error {
 }
 
 func (o RunPromptOverrides) HasAgentRoleOverride() bool {
-	return strings.TrimSpace(o.AgentRole) != ""
+	return o.AgentRole != nil
 }
 
 func (o RunPromptOverrides) HasAny() bool {
-	return strings.TrimSpace(o.AgentRole) != "" ||
+	return o.AgentRole != nil ||
 		strings.TrimSpace(o.Model) != "" ||
 		strings.TrimSpace(o.ProviderOverride) != "" ||
 		strings.TrimSpace(o.ThinkingLevel) != "" ||

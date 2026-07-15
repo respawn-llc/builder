@@ -382,7 +382,8 @@ type statusRefreshRuntimeClient struct {
 
 func (c *statusRefreshRuntimeClient) Status() clientui.RuntimeStatus {
 	c.statusCalls++
-	return clientui.RuntimeStatus{ParentSessionID: "parent-session"}
+	parentSessionID := "parent-session"
+	return clientui.RuntimeStatus{ParentSessionID: &parentSessionID}
 }
 
 func TestStatusVisibleAuthSummarySuppressesGenericSubscriptionWhenPlanPresent(t *testing.T) {

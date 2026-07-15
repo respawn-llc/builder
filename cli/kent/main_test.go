@@ -33,6 +33,10 @@ import (
 	"github.com/google/uuid"
 )
 
+func mainTestStringPtr(value string) *string {
+	return &value
+}
+
 type stubServeServer struct {
 	serveErr error
 }
@@ -178,7 +182,7 @@ func TestRootCommandMapsAgentFlagToInteractiveApp(t *testing.T) {
 	if code := rootCommand(args, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if got.AgentRole != "reviewer" || got.SessionID != "session-123" {
+	if got.AgentRole == nil || *got.AgentRole != "reviewer" || got.SessionID != "session-123" {
 		t.Fatalf("unexpected interactive option mapping: %+v", got)
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
@@ -236,7 +240,7 @@ func TestRootCommandContinueAgentRejectsLockedRoleChange(t *testing.T) {
 		StoreOptions: meta.AuthoritativeSessionStoreOptions(),
 	}, registry.NewSessionStoreRegistry())
 	runInteractiveApp = func(ctx context.Context, opts app.Options) error {
-		if opts.SessionID != store.Meta().SessionID || opts.AgentRole != "worker" {
+		if opts.SessionID != store.Meta().SessionID || opts.AgentRole == nil || *opts.AgentRole != "worker" {
 			t.Fatalf("interactive options = %+v, want locked session and worker role", opts)
 		}
 		sessionID, parseErr := runtimeids.ParseSessionID(opts.SessionID)
@@ -634,8 +638,8 @@ func TestRunSubcommandMapsFastFlagToAgentRole(t *testing.T) {
 	if code := rootCommand([]string{"run", "--fast", "hello"}, strings.NewReader(""), io.Discard, io.Discard); code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if gotOpts.AgentRole != config.BuiltInSubagentRoleFast {
-		t.Fatalf("agent role = %q, want fast", gotOpts.AgentRole)
+	if gotOpts.AgentRole == nil || *gotOpts.AgentRole != config.BuiltInSubagentRoleFast {
+		t.Fatalf("agent role = %v, want fast", gotOpts.AgentRole)
 	}
 }
 
@@ -1115,6 +1119,30 @@ func TestRunSubcommandUsesKentSessionEnvAsWorkspaceContext(t *testing.T) {
 	}
 }
 
+func TestRunSubcommandKeepsKentSessionEnvAsCallerWhenSelectingSession(t *testing.T) {
+	original := runPromptApp
+	t.Cleanup(func() {
+		runPromptApp = original
+	})
+	var gotOpts app.Options
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
+		gotOpts = opts
+		return app.RunPromptResult{Result: "done"}, nil
+	}
+	t.Setenv(sessionenv.SessionIDEnv, "caller-from-env")
+
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "--session", "selected-session", "hello"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if gotOpts.SessionID != "selected-session" {
+		t.Fatalf("selected session = %q, want selected-session", gotOpts.SessionID)
+	}
+	if gotOpts.WorkspaceContextSessionID != "caller-from-env" {
+		t.Fatalf("caller session = %q, want caller-from-env", gotOpts.WorkspaceContextSessionID)
+	}
+}
+
 func TestRunSubcommandDefaultAgentWithFastUsesFastRole(t *testing.T) {
 	original := runPromptApp
 	t.Cleanup(func() {
@@ -1148,8 +1176,8 @@ func TestRunSubcommandDefaultAgentWithFastUsesFastRole(t *testing.T) {
 	if code := rootCommand([]string{"run", "--agent=default", "--fast", "hello"}, strings.NewReader(""), io.Discard, io.Discard); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if gotOpts.AgentRole != "" {
-		t.Fatalf("run prompt app should not be called, got agent role %q", gotOpts.AgentRole)
+	if gotOpts.AgentRole != nil {
+		t.Fatalf("run prompt app should not be called, got agent role %v", gotOpts.AgentRole)
 	}
 }
 
@@ -1189,8 +1217,8 @@ func TestRunSubcommandContinueDefaultAgentSendsDefaultRoleOverride(t *testing.T)
 	if gotOpts.SessionID != "session-123" {
 		t.Fatalf("session id = %q, want session-123", gotOpts.SessionID)
 	}
-	if gotOpts.AgentRole != config.DefaultSubagentRole {
-		t.Fatalf("agent role = %q, want default", gotOpts.AgentRole)
+	if gotOpts.AgentRole == nil || *gotOpts.AgentRole != config.DefaultSubagentRole {
+		t.Fatalf("agent role = %v, want default", gotOpts.AgentRole)
 	}
 }
 
@@ -1287,18 +1315,25 @@ func TestEffectiveRunAgentRoleRejectsConflictingFastFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("effectiveRunAgentRole: %v", err)
 	}
-	if role != config.BuiltInSubagentRoleFast {
-		t.Fatalf("role = %q, want fast", role)
+	if role == nil || *role != config.BuiltInSubagentRoleFast {
+		t.Fatalf("role = %v, want fast", role)
 	}
 }
 
 func TestEffectiveRunAgentRoleDefaultAndRemovedAliases(t *testing.T) {
+	omitted, err := effectiveRunAgentRole("", false)
+	if err != nil {
+		t.Fatalf("effectiveRunAgentRole omitted: %v", err)
+	}
+	if omitted != nil {
+		t.Fatalf("omitted role = %v, want nil", omitted)
+	}
 	role, err := effectiveRunAgentRole("default", false)
 	if err != nil {
 		t.Fatalf("effectiveRunAgentRole: %v", err)
 	}
-	if role != config.DefaultSubagentRole {
-		t.Fatalf("role = %q, want default", role)
+	if role == nil || *role != config.DefaultSubagentRole {
+		t.Fatalf("role = %v, want default", role)
 	}
 	for _, alias := range []string{"none", "self"} {
 		t.Run(alias, func(t *testing.T) {

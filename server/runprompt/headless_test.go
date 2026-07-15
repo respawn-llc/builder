@@ -19,6 +19,7 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/registry"
 	"core/server/requestmemo"
 	"core/server/runlog"
@@ -267,6 +268,285 @@ func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.
 	}
 	if inner.CallCount() != 1 {
 		t.Fatalf("inner call count = %d, want 1", inner.CallCount())
+	}
+}
+
+func TestMemoizingPromptServiceCanonicalizesNullableRequestValues(t *testing.T) {
+	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+		return serverapi.RunPromptResponse{Result: "ok"}, nil
+	}}
+	service := &memoizingPromptService{
+		inner: inner,
+		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
+	}
+	first := serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello"}
+	second := serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello", CallerSessionID: nil, ParentSessionID: nil}
+	if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
+		t.Fatalf("RunPrompt first: %v", err)
+	}
+	if _, err := service.RunPrompt(context.Background(), second, nil); err != nil {
+		t.Fatalf("RunPrompt equivalent replay: %v", err)
+	}
+	if inner.CallCount() != 1 {
+		t.Fatalf("inner call count = %d, want 1", inner.CallCount())
+	}
+
+	defaultSelector := "default"
+	mismatch := first
+	mismatch.Overrides.AgentRole = &defaultSelector
+	if _, err := service.RunPrompt(context.Background(), mismatch, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+		t.Fatalf("default-selector mismatch error = %v, want request-id reuse", err)
+	}
+}
+
+func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	workspace := t.TempDir()
+	meta, err := metadata.Open(root)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(ctx, workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
+	parent, err := session.Create(containerDir, filepath.Base(containerDir), workspace, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create parent: %v", err)
+	}
+	if err := parent.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1"}); err != nil {
+		t.Fatalf("SetWorkflowSessionState: %v", err)
+	}
+	if err := parent.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable parent: %v", err)
+	}
+
+	cfg := config.App{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: root,
+		Settings: config.Settings{
+			Model:    "gpt-5.6-sol",
+			Workflow: config.WorkflowSettings{Subagents: false},
+			Subagents: map[string]config.SubagentRole{
+				"hidden": {
+					Settings:         config.Settings{ThinkingLevel: "high"},
+					Sources:          map[string]string{"thinking_level": "file"},
+					AgentCallable:    true,
+					AgentCallableSet: true,
+				},
+			},
+		},
+	}
+	stores := registry.NewSessionStoreRegistry()
+	runtimes := registry.NewRuntimeRegistry()
+	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
+		SessionLaunch: sessionlaunch.NewService(launch.Planner{
+			Config:       cfg,
+			ContainerDir: containerDir,
+			StoreOptions: meta.AuthoritativeSessionStoreOptions(),
+		}, stores),
+		RuntimeRegistry: runtimes,
+	})
+	before, err := meta.ListProjectSessionIDs(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectSessionIDs before: %v", err)
+	}
+	role := "hidden"
+	parentID := parent.Meta().SessionID
+	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID: "workflow-denial-1",
+		CallerSessionID: &parentID,
+		ParentSessionID: &parentID,
+		Prompt:          "delegate this",
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
+	}, nil)
+	var denied *serverapi.SubagentLaunchDeniedError
+	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
+		t.Fatalf("RunPrompt error = %T %v, want workflow policy denial", err, err)
+	}
+	after, err := meta.ListProjectSessionIDs(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectSessionIDs after: %v", err)
+	}
+	if strings.Join(after, ",") != strings.Join(before, ",") {
+		t.Fatalf("session records changed on denied launch: before=%v after=%v", before, after)
+	}
+	entries, err := os.ReadDir(containerDir)
+	if err != nil {
+		t.Fatalf("ReadDir sessions: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != parent.Meta().SessionID {
+		t.Fatalf("session artifacts changed on denied launch: %+v", entries)
+	}
+	if runtimes.IsSessionRuntimeActive(parent.Meta().SessionID) {
+		t.Fatal("denied launch registered a runtime")
+	}
+
+	selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create selected: %v", err)
+	}
+	if err := selected.SetName("selected session"); err != nil {
+		t.Fatalf("SetName selected: %v", err)
+	}
+	selectedBefore := selected.Meta()
+	beforeSelectedDenial, err := meta.ListProjectSessionIDs(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectSessionIDs selected before: %v", err)
+	}
+	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID:   "workflow-selected-denial-1",
+		SelectedSessionID: selectedBefore.SessionID,
+		CallerSessionID:   &parentID,
+		Prompt:            "continue selected",
+		Overrides:         serverapi.RunPromptOverrides{AgentRole: &role},
+	}, nil)
+	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
+		t.Fatalf("selected RunPrompt error = %T %v, want workflow policy denial", err, err)
+	}
+	reopenedSelected, err := session.OpenByID(root, selectedBefore.SessionID, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("OpenByID selected: %v", err)
+	}
+	if got := reopenedSelected.Meta(); got.Name != selectedBefore.Name ||
+		got.ParentSessionID != selectedBefore.ParentSessionID ||
+		got.Continuation != nil ||
+		got.ModelRequestCount != selectedBefore.ModelRequestCount ||
+		got.LastSequence != selectedBefore.LastSequence {
+		t.Fatalf("selected session changed on denied launch: before=%+v after=%+v", selectedBefore, got)
+	}
+	afterSelectedDenial, err := meta.ListProjectSessionIDs(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectSessionIDs selected after: %v", err)
+	}
+	if strings.Join(afterSelectedDenial, ",") != strings.Join(beforeSelectedDenial, ",") {
+		t.Fatalf("session records changed on selected denial: before=%v after=%v", beforeSelectedDenial, afterSelectedDenial)
+	}
+}
+
+func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	root := t.TempDir()
+	workspace := t.TempDir()
+	meta, err := metadata.Open(root)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(ctx, workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
+	parent, err := session.Create(containerDir, filepath.Base(containerDir), workspace, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create parent: %v", err)
+	}
+	if err := parent.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1"}); err != nil {
+		t.Fatalf("SetWorkflowSessionState: %v", err)
+	}
+	parentID := parent.Meta().SessionID
+
+	var responseCount int
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleTestOpenAIInputTokenCount(w, r, 1) {
+			return
+		}
+		responseCount++
+		writeTestOpenAICompletedResponseStream(w, "workflow response", 1, 1)
+	}))
+	defer provider.Close()
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}), nil, time.Now)
+	cfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.PersistenceRoot = root
+	cfg.Settings.Model = "gpt-5.6-sol"
+	cfg.Settings.OpenAIBaseURL = provider.URL
+	cfg.Settings.Workflow = config.WorkflowSettings{Subagents: true}
+	workerSettings := cfg.Settings
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"worker": {
+			Settings:         workerSettings,
+			Sources:          map[string]string{"model": "file"},
+			AgentCallable:    true,
+			AgentCallableSet: true,
+		},
+	}
+	runtimes := registry.NewRuntimeRegistry()
+	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
+		SessionLaunch: sessionlaunch.NewService(launch.Planner{
+			Config:       cfg,
+			ContainerDir: containerDir,
+			StoreOptions: meta.AuthoritativeSessionStoreOptions(),
+		}, registry.NewSessionStoreRegistry()).WithAuthStateReader(authManager),
+		AuthManager:     authManager,
+		RuntimeRegistry: runtimes,
+		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
+		PromptHistory:   meta,
+	})
+
+	tests := []struct {
+		name      string
+		overrides serverapi.RunPromptOverrides
+		wantRole  string
+	}{
+		{name: "omitted base"},
+	}
+	worker := "worker"
+	tests = append(tests, struct {
+		name      string
+		overrides serverapi.RunPromptOverrides
+		wantRole  string
+	}{name: "custom", overrides: serverapi.RunPromptOverrides{AgentRole: &worker}, wantRole: worker})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
+				ClientRequestID: "workflow-allowed-" + strings.ReplaceAll(test.name, " ", "-"),
+				CallerSessionID: &parentID,
+				ParentSessionID: &parentID,
+				Prompt:          "delegate this",
+				Overrides:       test.overrides,
+			}, nil)
+			if err != nil {
+				t.Fatalf("RunPrompt: %v", err)
+			}
+			if response.Result != "workflow response" {
+				t.Fatalf("result = %q, want provider response", response.Result)
+			}
+			child, err := session.OpenByID(root, response.SessionID, meta.AuthoritativeSessionStoreOptions()...)
+			if err != nil {
+				t.Fatalf("OpenByID child: %v", err)
+			}
+			childMeta := child.Meta()
+			if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parentID {
+				t.Fatalf("parent id = %v, want %q", childMeta.ParentSessionID, parentID)
+			}
+			var gotRole *string
+			if childMeta.Continuation != nil {
+				gotRole = childMeta.Continuation.AgentRole
+			}
+			if test.wantRole == "" {
+				if gotRole != nil {
+					t.Fatalf("continuation role = %v, want base role", gotRole)
+				}
+			} else if gotRole == nil || *gotRole != test.wantRole {
+				t.Fatalf("continuation role = %v, want %q", gotRole, test.wantRole)
+			}
+			if runtimes.IsSessionRuntimeActive(response.SessionID) {
+				t.Fatalf("completed headless launch left runtime active for %q", response.SessionID)
+			}
+		})
+	}
+	if responseCount != 2 {
+		t.Fatalf("provider responses = %d, want 2", responseCount)
 	}
 }
 

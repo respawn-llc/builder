@@ -46,7 +46,7 @@ type Session struct {
 	Name               string
 	FirstPromptPreview string
 	InputDraft         string
-	ParentSessionID    string
+	ParentSessionID    sql.NullString
 	CreatedAtUnixMs    int64
 	UpdatedAtUnixMs    int64
 	LastSequence       int64

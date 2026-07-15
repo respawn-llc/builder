@@ -8,6 +8,7 @@ import (
 	"core/server/launch"
 	"core/server/requestmemo"
 	"core/server/session"
+	"core/server/subagentpolicy"
 	servicecontract "core/shared/apicontract"
 	"core/shared/serverapi"
 )
@@ -40,6 +41,9 @@ type PlanResult struct {
 type sessionPlanMemoRequest struct {
 	Mode      serverapi.SessionLaunchMode
 	Intent    serverapi.SessionLaunchIntent
+	CallerSessionID serverapi.OptionalStringKey
+	ParentSessionID serverapi.OptionalStringKey
+	SelectedSessionID string
 	Overrides serverapi.RunPromptOverrides
 }
 
@@ -78,11 +82,35 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 	memoReq := sessionPlanMemoRequest{
 		Mode:      req.Mode,
 		Intent:    req.Intent,
+		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
+		ParentSessionID: serverapi.CanonicalOptionalString(req.ParentSessionID),
+		SelectedSessionID: strings.TrimSpace(req.SelectedSessionID),
 		Overrides: req.Overrides,
 	}
 	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, func(ctx context.Context) (PlanResult, error) {
 		roleOverride, err := req.Overrides.AgentRoleOverride()
 		if err != nil {
+			return PlanResult{}, err
+		}
+		var caller *subagentpolicy.Caller
+		if req.Mode == serverapi.SessionLaunchModeHeadless {
+			if req.CallerSessionID != nil {
+				callerContext, callerErr := launch.ResolveSessionCallerContext(s.planner.Config.PersistenceRoot, *req.CallerSessionID)
+				if callerErr != nil {
+					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialCallerMissing}
+				}
+				caller = &subagentpolicy.Caller{Workflow: callerContext.WorkflowSession, AgentRole: callerContext.AgentRole}
+				if req.ParentSessionID != nil && strings.TrimSpace(*req.ParentSessionID) != strings.TrimSpace(*req.CallerSessionID) {
+					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialInvalidTarget}
+				}
+			}
+			if req.ParentSessionID != nil && req.CallerSessionID == nil {
+				if _, parentErr := launch.ResolveSessionCallerContext(s.planner.Config.PersistenceRoot, *req.ParentSessionID); parentErr != nil {
+					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialParentMissing}
+				}
+			}
+		}
+		if err := subagentpolicy.Authorize(s.planner.Config.Settings, caller, subagentpolicy.TargetFromOverride(roleOverride)); err != nil {
 			return PlanResult{}, err
 		}
 		plan, err := s.planner.PlanSession(ctx, launch.SessionRequest{

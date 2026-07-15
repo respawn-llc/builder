@@ -113,7 +113,7 @@ func TestApplyRunPromptOverridesSubagentExplicitEditToolWins(t *testing.T) {
 		Source:         defaultToolSources(),
 	}
 
-	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
+	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestApplyRunPromptOverridesSubagentToolSourceSurvivesModelOverride(t *testi
 		Source:         defaultToolSources(),
 	}
 
-	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: "worker", Model: "gpt-5.6-sol"}, auth.EmptyState())
+	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker"), Model: "gpt-5.6-sol"}, auth.EmptyState())
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides: %v", err)
 	}

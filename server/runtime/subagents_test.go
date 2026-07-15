@@ -175,6 +175,42 @@ func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *t
 	}
 }
 
+func TestSubagentsMetaMessageHidesCatalogForPersistedNonCallableCaller(t *testing.T) {
+	settings := config.Settings{
+		Model: "gpt-5.6-sol",
+		EnabledTools: map[toolspec.ID]bool{
+			toolspec.ToolExecCommand: true,
+		},
+		Subagents: map[string]config.SubagentRole{
+			"current": {
+				Settings:         config.Settings{Model: "gpt-5.4-mini"},
+				Sources:          map[string]string{"model": "file"},
+				AgentCallable:    false,
+				AgentCallableSet: true,
+			},
+			"worker": {
+				Settings:    config.Settings{ThinkingLevel: "high"},
+				Sources:     map[string]string{"thinking_level": "file"},
+				Description: "Callable helper.",
+			},
+		},
+	}
+	current := "current"
+	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
+		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand}).
+		withSubagentCallerRole(&current)
+	result, err := builder.Build(metaContextBuildOptions{
+		IncludeSubagents:          true,
+		SubagentInvocationContext: config.SubagentInvocationContextOrdinary,
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(result.Subagents) != 0 {
+		t.Fatalf("persisted non-callable caller must not receive an actionable catalog: %+v", result.Subagents)
+	}
+}
+
 func TestSubagentCatalogAppliesInvocationContextPolicy(t *testing.T) {
 	baseSettings := func(globalEnabled bool, roleDisabled bool) config.Settings {
 		return config.Settings{
@@ -258,9 +294,9 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 		workerVisible bool
 	}{
 		{name: "ordinary", settings: settings(false, false), workerVisible: true},
-		{name: "workflow default disabled", workflow: true, settings: settings(false, false)},
+		{name: "workflow default-only catalog", workflow: true, settings: settings(false, false), workerVisible: true},
 		{name: "workflow globally enabled", workflow: true, settings: settings(true, false), workerVisible: true},
-		{name: "workflow per role disabled", workflow: true, settings: settings(true, true)},
+		{name: "workflow default-only catalog with role disabled", workflow: true, settings: settings(true, true), workerVisible: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -289,6 +325,51 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 				t.Fatalf("compaction worker visibility = %t, want %t", got, tt.workerVisible)
 			}
 		})
+	}
+}
+
+func TestSubagentCatalogCarriesPersistedCallerPolicyIntoBaseAndCompaction(t *testing.T) {
+	store := mustCreateTestSession(t)
+	current := "current"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &current}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	settings := config.Settings{
+		Model: "gpt-5.5",
+		EnabledTools: map[toolspec.ID]bool{
+			toolspec.ToolExecCommand: true,
+		},
+		Subagents: map[string]config.SubagentRole{
+			"current": {
+				Settings:         config.Settings{Model: "gpt-5.4-mini"},
+				Sources:          map[string]string{"model": "file"},
+				AgentCallable:    false,
+				AgentCallableSet: true,
+			},
+			"worker": {
+				Settings:    config.Settings{ThinkingLevel: "high"},
+				Sources:     map[string]string{"thinking_level": "file"},
+				Description: "Callable helper.",
+			},
+		},
+	}
+	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+		Model:                   "gpt-5.5",
+		EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
+		SubagentCatalogSettings: settings,
+	})
+	if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
+		t.Fatalf("steer base meta context: %v", err)
+	}
+	if hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
+		t.Fatal("base catalog must not advertise targets denied to the persisted caller")
+	}
+	compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
+	if err != nil {
+		t.Fatalf("compaction reinjection: %v", err)
+	}
+	if hasSubagentMetaMessage(compacted) {
+		t.Fatal("compaction catalog must not advertise targets denied to the persisted caller")
 	}
 }
 

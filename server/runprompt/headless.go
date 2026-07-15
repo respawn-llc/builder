@@ -94,6 +94,9 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 		ClientRequestID: req.ClientRequestID,
 		Mode:            serverapi.SessionLaunchModeHeadless,
 		Intent:          req.Intent,
+		SelectedSessionID: req.SelectedSessionID,
+		CallerSessionID: req.CallerSessionID,
+		ParentSessionID: req.ParentSessionID,
 		Overrides:       req.Overrides,
 	}
 	result, err := l.boot.SessionLaunch.PlanLaunchSession(ctx, launchReq)

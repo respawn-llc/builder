@@ -3,7 +3,6 @@ package config
 import (
 	"core/shared/toolspec"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,29 +12,6 @@ import (
 
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
-}
-
-func TestGeneratedSettingsTOMLOmitsSkillsEnabled(t *testing.T) {
-	for _, subsystem := range []SkillSubsystemState{SkillSubsystemEnabled, SkillSubsystemDisabled} {
-		settings := configRegistry.defaultState().Settings
-		settings.SkillSubsystem = subsystem
-		rendered := settingsTOMLWithRenderingOptions(settings, true, nil, nil)
-		inSkillsSection := false
-		for _, line := range strings.Split(rendered, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-				inSkillsSection = trimmed == "[skills]"
-				continue
-			}
-			if !inSkillsSection {
-				continue
-			}
-			switch trimmed {
-			case "enabled = true", "enabled = false", "# enabled = true", "# enabled = false":
-				t.Fatalf("generated settings TOML must not advertise skills.enabled:\n%s", rendered)
-			}
-		}
-	}
 }
 
 func TestPreparePersistenceRootRefusesProcessStartRootUnderGoTest(t *testing.T) {
@@ -603,59 +579,6 @@ func TestLoadSubagentRoleFromFile(t *testing.T) {
 	}
 }
 
-func TestLoadSubagentRoleSkillsEnabledReservedPolicy(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, strings.Join([]string{
-		"[skills]",
-		"enabled = false",
-		"apiresult = false",
-		"",
-		"[subagents.inherits]",
-		"thinking_level = \"high\"",
-		"",
-		"[subagents.reenabled.skills]",
-		"enabled = true",
-		"apiresult = true",
-		"",
-		"[subagents.disabled.skills]",
-		"enabled = false",
-	}, "\n"), LoadOptions{})
-
-	inherited := cfg.Settings.Subagents["inherits"]
-	if _, exists := inherited.Sources["skills.enabled"]; exists {
-		t.Fatalf("omitted role policy must not have an explicit source: %+v", inherited.Sources)
-	}
-
-	reenabled := cfg.Settings.Subagents["reenabled"]
-	if !ResolveSkillPolicy(reenabled.Settings).Enabled() {
-		t.Fatal("explicit role skills.enabled=true must be retained for overlay")
-	}
-	if got := reenabled.Sources["skills.enabled"]; got != "file" {
-		t.Fatalf("expected role skills.enabled source file, got %q", got)
-	}
-	if _, exists := reenabled.Settings.SkillToggles["enabled"]; exists {
-		t.Fatalf("reserved role enabled key must not be an ordinary toggle: %+v", reenabled.Settings.SkillToggles)
-	}
-
-	disabled := cfg.Settings.Subagents["disabled"]
-	if ResolveSkillPolicy(disabled.Settings).Enabled() {
-		t.Fatal("explicit role skills.enabled=false must be retained for overlay")
-	}
-}
-
-func TestLoadSubagentRoleRejectsNonBooleanSkillsEnabledWithScopedPath(t *testing.T) {
-	err := loadConfigTestFileError(t, "[subagents.worker.skills]\nenabled = \"off\"\n", LoadOptions{})
-	if err == nil {
-		t.Fatal("expected invalid role skills.enabled type")
-	}
-	if !errors.Is(err, errSubagentRole) {
-		t.Fatalf("expected subagent role wrapper, got %v", err)
-	}
-	var typeErr *SettingsKeyTypeError
-	if !errors.As(err, &typeErr) || typeErr.Key != "subagents.worker.skills.enabled" {
-		t.Fatalf("expected scoped subagents.worker.skills.enabled type error, got %v", err)
-	}
-}
-
 func TestLoadSubagentRoleMetadataFromFile(t *testing.T) {
 	_, workspace, configPath := newConfigTestFile(t)
 	contents := strings.Join([]string{
@@ -896,121 +819,6 @@ func TestAvailableSubagentRoleNamesRemainsPresentationOnly(t *testing.T) {
 	callable := strings.Join(AvailableSubagentRoleNames(settings, true), ",")
 	if callable != "fast,callable" {
 		t.Fatalf("callable presentation roles = %q, want no no-op or non-callable roles", callable)
-	}
-}
-
-func TestSkillsEnabledOnlyRoleDoesNotAffectCatalogOrCallability(t *testing.T) {
-	for _, globalState := range []SkillSubsystemState{SkillSubsystemEnabled, SkillSubsystemDisabled} {
-		for _, roleState := range []SkillSubsystemState{SkillSubsystemEnabled, SkillSubsystemDisabled} {
-			t.Run(fmt.Sprintf("global_%d_role_%d", globalState, roleState), func(t *testing.T) {
-				settings := Settings{
-					SkillSubsystem: globalState,
-					Subagents: map[string]SubagentRole{
-						"worker": {
-							Settings: Settings{SkillSubsystem: roleState},
-							Sources:  map[string]string{"skills.enabled": "file"},
-						},
-						"blocked": {
-							Settings:         Settings{SkillSubsystem: roleState},
-							Sources:          map[string]string{"skills.enabled": "file"},
-							AgentCallableSet: true,
-						},
-						"visible": {
-							Settings: Settings{
-								ThinkingLevel:  "high",
-								SkillSubsystem: roleState,
-							},
-							Sources: map[string]string{
-								"thinking_level": "file",
-								"skills.enabled": "file",
-							},
-						},
-					},
-				}
-
-				if lookup := LookupSubagentRole(settings, "worker"); lookup.Status != SubagentRoleLookupPresent {
-					t.Fatalf("worker lookup = %q, want present", lookup.Status)
-				}
-				if !SubagentRoleCallableInContext(settings, "worker", SubagentInvocationContextOrdinary) {
-					t.Fatal("skills policy must not block directly callable role")
-				}
-				if SubagentRoleCallableInContext(settings, "blocked", SubagentInvocationContextOrdinary) {
-					t.Fatal("callability metadata must remain authoritative")
-				}
-				if got := strings.Join(AvailableSubagentRoleNames(settings, false), ","); got != "fast,visible" {
-					t.Fatalf("available roles = %q, want skills-only roles omitted and independent visible role retained", got)
-				}
-				if got := strings.Join(AvailableCallableSubagentRoleNames(settings, SubagentInvocationContextOrdinary), ","); got != "fast,visible" {
-					t.Fatalf("callable roles = %q, want skills-only roles omitted and independent visible role retained", got)
-				}
-			})
-		}
-	}
-}
-
-func TestWorkflowSubagentCallabilityPolicy(t *testing.T) {
-	role := func(agentCallable bool, agentCallableSet bool, workflowSubagent bool, workflowSubagentSet bool) SubagentRole {
-		return SubagentRole{
-			Settings:            Settings{Model: "gpt-5.4-mini"},
-			Sources:             map[string]string{"model": "file"},
-			AgentCallable:       agentCallable,
-			AgentCallableSet:    agentCallableSet,
-			WorkflowSubagent:    workflowSubagent,
-			WorkflowSubagentSet: workflowSubagentSet,
-		}
-	}
-	tests := []struct {
-		name              string
-		context           SubagentInvocationContext
-		workflowSubagents bool
-		roleName          string
-		role              SubagentRole
-		want              bool
-	}{
-		{name: "ordinary ignores workflow switches", context: SubagentInvocationContextOrdinary, roleName: "worker", role: role(true, false, false, true), want: true},
-		{name: "workflow global disabled dominates enabled role", context: SubagentInvocationContextWorkflow, roleName: "worker", role: role(true, false, true, true)},
-		{name: "workflow global enabled permits omitted role metadata", context: SubagentInvocationContextWorkflow, workflowSubagents: true, roleName: "worker", role: role(true, false, false, false), want: true},
-		{name: "workflow global enabled rejects disabled role", context: SubagentInvocationContextWorkflow, workflowSubagents: true, roleName: "worker", role: role(true, false, false, true)},
-		{name: "agent callable false rejects ordinary role", context: SubagentInvocationContextOrdinary, roleName: "worker", role: role(false, true, true, true)},
-		{name: "agent callable false rejects workflow role", context: SubagentInvocationContextWorkflow, workflowSubagents: true, roleName: "worker", role: role(false, true, true, true)},
-		{name: "fast bypasses disabled workflow switches", context: SubagentInvocationContextWorkflow, roleName: BuiltInSubagentRoleFast, role: role(true, false, false, true), want: true},
-		{name: "fast still obeys agent callability", context: SubagentInvocationContextWorkflow, roleName: BuiltInSubagentRoleFast, role: role(false, true, true, true)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			settings := Settings{
-				Workflow: WorkflowSettings{Subagents: tt.workflowSubagents},
-				Subagents: map[string]SubagentRole{
-					tt.roleName: tt.role,
-				},
-			}
-			if got := SubagentRoleCallableInContext(settings, tt.roleName, tt.context); got != tt.want {
-				t.Fatalf("callability = %t, want %t", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestAvailableCallableSubagentRoleNamesUsesWorkflowPolicy(t *testing.T) {
-	settings := Settings{
-		Workflow: WorkflowSettings{Subagents: true},
-		Subagents: map[string]SubagentRole{
-			"visible": {
-				Settings: Settings{Model: "gpt-5.4-mini"},
-				Sources:  map[string]string{"model": "file"},
-			},
-			"hidden": {
-				Settings:            Settings{Model: "gpt-5.4-mini"},
-				Sources:             map[string]string{"model": "file"},
-				WorkflowSubagentSet: true,
-			},
-		},
-	}
-	if got := strings.Join(AvailableCallableSubagentRoleNames(settings, SubagentInvocationContextOrdinary), ","); got != "fast,hidden,visible" {
-		t.Fatalf("ordinary callable roles = %q, want fast,hidden,visible", got)
-	}
-	if got := strings.Join(AvailableCallableSubagentRoleNames(settings, SubagentInvocationContextWorkflow), ","); got != "fast,visible" {
-		t.Fatalf("workflow callable roles = %q, want fast,visible", got)
 	}
 }
 

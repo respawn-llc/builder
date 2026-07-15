@@ -30,7 +30,7 @@ func TestResolvePersistedSessionRejectsEscapingArtifactRelpath(t *testing.T) {
 		Name:               "",
 		FirstPromptPreview: "",
 		InputDraft:         "",
-		ParentSessionID:    "",
+		ParentSessionID:    sql.NullString{},
 		CreatedAtUnixMs:    now,
 		UpdatedAtUnixMs:    now,
 		LastSequence:       0,
@@ -458,7 +458,8 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 			wantVisible: true,
 			mutate: func(t *testing.T, sess *session.Store) {
 				t.Helper()
-				if err := sess.SetParentSessionID("session-parent"); err != nil {
+				parentSessionID := "session-parent"
+				if err := sess.SetParentSessionID(&parentSessionID); err != nil {
 					t.Fatalf("SetParentSessionID: %v", err)
 				}
 			},

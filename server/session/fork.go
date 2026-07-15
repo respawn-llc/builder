@@ -67,7 +67,8 @@ func streamChildFromParent(parent *Store, parentMeta Meta, forkName string, cate
 	child.meta.Locked = cloneLockedContract(parentMeta.Locked)
 	child.meta.WorktreeReminder = CloneWorktreeReminderState(parentMeta.WorktreeReminder)
 	child.meta.UsageState = nil
-	child.meta.ParentSessionID = parentMeta.SessionID
+	parentSessionID := parentMeta.SessionID
+	child.meta.ParentSessionID = &parentSessionID
 	child.meta.Name = strings.TrimSpace(forkName)
 	child.meta.Continuation = cloneContinuationContext(parentMeta.Continuation)
 	child.mu.Unlock()
@@ -295,7 +296,8 @@ func InitializeChildFromParentWithOptions(child *Store, parent *Store, opts Chil
 	child.meta.WorkspaceContainer = parentMeta.WorkspaceContainer
 	child.meta.WorktreeReminder = CloneWorktreeReminderState(parentMeta.WorktreeReminder)
 	child.meta.UsageState = nil
-	child.meta.ParentSessionID = parentMeta.SessionID
+	parentSessionID := parentMeta.SessionID
+	child.meta.ParentSessionID = &parentSessionID
 	if opts.InheritContinuation {
 		child.meta.Continuation = cloneContinuationContext(parentMeta.Continuation)
 	} else {
