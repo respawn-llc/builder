@@ -76,39 +76,23 @@
   }
 }
 
-@keyframes kent-route-fade-scale {
+@keyframes kent-route-crossfade-in {
   from {
     opacity: 0;
-    transform: scale(0.985);
   }
 
   to {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
-@keyframes kent-route-fade-out {
+@keyframes kent-route-crossfade-out {
   from {
     opacity: 1;
-    transform: scale(1);
   }
 
   to {
     opacity: 0;
-    transform: scale(0.995);
-  }
-}
-
-@keyframes kent-surface-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -118,32 +102,20 @@
     scroll-behavior: smooth;
   }
 
-  ::view-transition-old(root) {
-    animation: kent-route-fade-out var(--kent-motion-fast) both;
-    transform-origin: center;
+  body > .page {
+    view-transition-name: kent-docs-page;
   }
 
-  ::view-transition-new(root) {
-    animation: kent-route-fade-scale var(--kent-motion-fast) both;
-    transform-origin: center;
+  ::view-transition-old(root),
+  ::view-transition-old(kent-docs-page) {
+    animation: kent-route-crossfade-out var(--kent-motion-fast) both;
+    mix-blend-mode: plus-lighter;
   }
 
-  header.header {
-    view-transition-name: kent-docs-header;
-  }
-
-  [data-has-sidebar] .sidebar-pane {
-    view-transition-name: kent-docs-sidebar;
-  }
-
-  h1#_top {
-    view-transition-name: kent-docs-title;
-  }
-
-  @media (min-width: 72rem) {
-    .right-sidebar {
-      view-transition-name: kent-docs-toc;
-    }
+  ::view-transition-new(root),
+  ::view-transition-new(kent-docs-page) {
+    animation: kent-route-crossfade-in var(--kent-motion-fast) both;
+    mix-blend-mode: plus-lighter;
   }
 }
 
@@ -353,6 +325,7 @@ mobile-starlight-toc a:hover,
 }
 
 .sidebar-pane a[aria-current='page'] {
+  color: var(--sl-color-text);
   background-color: var(--kent-surface-accent);
   box-shadow: inset 2px 0 0 var(--sl-color-accent);
 }
@@ -437,20 +410,6 @@ sl-doc-search {
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  h1#_top,
-  .sl-markdown-content,
-  [data-has-sidebar] .sidebar-pane {
-    animation: kent-surface-reveal var(--kent-motion-normal) both;
-  }
-
-  .sl-markdown-content {
-    animation-delay: var(--kent-motion-stagger-fast);
-  }
-
-  [data-has-sidebar] .sidebar-pane {
-    animation-delay: var(--kent-motion-stagger-normal);
-  }
-
   header.header a:hover,
   .site-title:hover,
   .sidebar-pane a:hover,
@@ -477,12 +436,6 @@ sl-doc-search {
     transform: translateY(0) scale(0.99);
   }
 
-  @media (min-width: 72rem) {
-    .right-sidebar-panel {
-      animation: kent-surface-reveal var(--kent-motion-normal) both;
-      animation-delay: calc(var(--kent-motion-stagger-normal) * 2);
-    }
-  }
 }
 
 body,
