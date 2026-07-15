@@ -363,20 +363,23 @@ func (p Planner) recoverMissingManagedWorktreeTarget(ctx context.Context, store 
 		}
 		return nil, store, err
 	}
-	missing := target.Worktree != nil && target.Worktree.Availability == string(clientui.ProjectAvailabilityMissing)
-	if !missing {
+	missingWorkspace := target.WorkspaceAvailability == string(clientui.ProjectAvailabilityMissing)
+	missingWorktree := target.Worktree != nil && target.Worktree.Availability == string(clientui.ProjectAvailabilityMissing)
+	if !missingWorkspace && !missingWorktree {
 		return nil, store, nil
 	}
 	candidate, err := recoveryWorkspaceCandidate(ctx, recoveryStore, target.WorkspaceID)
 	if err != nil {
 		return nil, store, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryNoCandidate, Cause: err}
 	}
-	record, err := recoveryStore.GetWorktreeRecordByID(ctx, target.Worktree.ID)
-	if err != nil {
-		return nil, store, err
-	}
-	if !record.Managed {
-		return nil, store, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryUnmanaged, Candidate: &candidate}
+	if missingWorktree {
+		record, recordErr := recoveryStore.GetWorktreeRecordByID(ctx, target.Worktree.ID)
+		if recordErr != nil {
+			return nil, store, recordErr
+		}
+		if !record.Managed {
+			return nil, store, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryUnmanaged, Candidate: &candidate}
+		}
 	}
 	if p.RuntimeActive == nil || p.BlockSessionRuns == nil || p.SessionStores == nil || p.RetargetWorkspace == nil {
 		return nil, store, &SessionTargetRecoveryError{Reason: SessionTargetRecoveryStateUnavailable, Candidate: &candidate}
@@ -429,12 +432,22 @@ func recoveryWorkspaceCandidate(ctx context.Context, store missingWorktreeRecove
 	if err != nil {
 		return clientui.ProjectWorkspaceSummary{}, err
 	}
+	var fallback *clientui.ProjectWorkspaceSummary
 	for _, workspace := range workspaces {
 		root := filepath.Clean(strings.TrimSpace(workspace.RootPath))
-		if workspace.WorkspaceID == workspaceID && workspace.Availability == clientui.ProjectAvailabilityAvailable && filepath.IsAbs(root) {
-			workspace.RootPath = root
+		if workspace.Availability != clientui.ProjectAvailabilityAvailable || !filepath.IsAbs(root) {
+			continue
+		}
+		workspace.RootPath = root
+		if workspace.WorkspaceID == workspaceID {
 			return workspace, nil
 		}
+		if fallback == nil {
+			fallback = &workspace
+		}
+	}
+	if fallback != nil {
+		return *fallback, nil
 	}
 	return clientui.ProjectWorkspaceSummary{}, errors.New("owning project has no available registered workspace")
 }
@@ -1050,6 +1063,20 @@ func (p Planner) SelectedSessionPromptFacingTarget(sessionID string) (PreparedBa
 		Source:       cloneSourceReport(plan.Source),
 		EnabledTools: append([]toolspec.ID(nil), plan.EnabledTools...),
 	}, nil
+}
+
+// SelectedSessionContinuationAgentRole reads the persisted continuation role
+// without applying it or mutating the selected session.
+func (p Planner) SelectedSessionContinuationAgentRole(sessionID string) (*string, error) {
+	store, err := p.openScopedSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	continuation := store.Meta().Continuation
+	if continuation == nil {
+		return nil, nil
+	}
+	return cloneContinuationRole(continuation.AgentRole), nil
 }
 
 func (p Planner) createSession(ctx context.Context, parentSessionID *string, mode Mode) (*session.Store, error) {

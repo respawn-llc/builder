@@ -678,6 +678,61 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 	}
 }
 
+func TestPlanLaunchSessionHeadlessSelectedSessionAuthorizesPersistedContinuationRole(t *testing.T) {
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"worker": {
+			AgentCallableSet: true,
+			AgentCallable:    false,
+		},
+	}
+	service := NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
+	}, &countingStoreRegistrar{})
+
+	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
+		ClientRequestID:   "req-persisted-role",
+		Mode:              serverapi.SessionLaunchModeHeadless,
+		SelectedSessionID: store.Meta().SessionID,
+	})
+	var denied *serverapi.SubagentLaunchDeniedError
+	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
+		t.Fatalf("PlanLaunchSession error = %T %v, want persisted-role not-callable denial", err, err)
+	}
+}
+
+func TestPlanLaunchSessionHeadlessSelectedSessionKeepsOmittedContinuationRoleDefault(t *testing.T) {
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	service := NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
+	}, &countingStoreRegistrar{})
+
+	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
+		ClientRequestID:   "req-omitted-persisted-role",
+		Mode:              serverapi.SessionLaunchModeHeadless,
+		SelectedSessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if continuation := result.Plan.Store.Meta().Continuation; continuation != nil && continuation.AgentRole != nil {
+		t.Fatalf("continuation = %+v, want omitted default role", continuation)
+	}
+}
+
 func TestServicePlanSessionInvalidRoleOverridePrecedesPersistedRoleValidation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()

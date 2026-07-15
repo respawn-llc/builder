@@ -147,6 +147,25 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		if err := subagentpolicy.Authorize(planner.Config.Settings, caller, target); err != nil {
 			return PlanResult{}, err
 		}
+		if req.Mode == serverapi.SessionLaunchModeHeadless && selectedSessionID != "" && !roleOverride.Present {
+			persistedRole, roleErr := planner.SelectedSessionContinuationAgentRole(selectedSessionID)
+			if roleErr != nil {
+				return PlanResult{}, roleErr
+			}
+			if persistedRole != nil {
+				persistedOverride, overrideErr := (serverapi.RunPromptOverrides{AgentRole: persistedRole}).AgentRoleOverride()
+				if overrideErr != nil {
+					return PlanResult{}, overrideErr
+				}
+				persistedCaller := &subagentpolicy.Caller{AgentRole: persistedRole}
+				if caller != nil {
+					persistedCaller.Workflow = caller.Workflow
+				}
+				if err := subagentpolicy.Authorize(planner.Config.Settings, persistedCaller, subagentpolicy.TargetFromOverride(persistedOverride)); err != nil {
+					return PlanResult{}, err
+				}
+			}
+		}
 		authState := auth.EmptyState()
 		if req.Overrides.NeedsAuthState() && s.authStates != nil {
 			var authErr error

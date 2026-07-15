@@ -2221,6 +2221,61 @@ func TestPlannerRecoversDeletedManagedWorktreeWhenSelectedSessionFieldIsUsed(t *
 	}
 }
 
+func TestPlannerRecoversMissingWorkspaceWithoutWorktreeTarget(t *testing.T) {
+	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
+	ctx := context.Background()
+	availableRoot := t.TempDir()
+	candidateBinding, err := metadataStore.AttachWorkspaceToProject(ctx, binding.ProjectID, availableRoot)
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
+		SessionID:  store.Meta().SessionID,
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		CwdRelpath: "pkg",
+	}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
+	}
+	if err := os.Remove(planner.Config.WorkspaceRoot); err != nil {
+		t.Fatalf("remove missing workspace root: %v", err)
+	}
+	planner.RetargetWorkspace = func(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
+			SessionID:  store.Meta().SessionID,
+			Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: candidateBinding.WorkspaceID},
+			CwdRelpath: ".",
+		}); err != nil {
+			return serverapi.SessionRetargetWorkspaceResponse{}, err
+		}
+		return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{
+			ProjectID:     candidateBinding.ProjectID,
+			WorkspaceID:   candidateBinding.WorkspaceID,
+			CanonicalRoot: candidateBinding.CanonicalRoot,
+		}}, nil
+	}
+
+	plan, err := planner.PlanSession(ctx, SessionRequest{
+		Mode:              ModeInteractive,
+		SelectedSessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if plan.Recovery == nil {
+		t.Fatal("recovery = nil, want missing workspace recovery")
+	}
+	if plan.WorkspaceRoot != candidateBinding.CanonicalRoot {
+		t.Fatalf("workspace root = %q, want %q", plan.WorkspaceRoot, candidateBinding.CanonicalRoot)
+	}
+	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.WorkspaceID != candidateBinding.WorkspaceID || target.Worktree != nil || target.EffectiveWorkdir != candidateBinding.CanonicalRoot {
+		t.Fatalf("recovered target = %+v, want candidate workspace without worktree", target)
+	}
+}
+
 func TestPlannerManagedWorktreeRecoveryRestoresReminderWhenRetargetFails(t *testing.T) {
 	planner, _, store, _ := missingWorktreeLaunchFixture(t)
 	planner.RetargetWorkspace = func(context.Context, serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
