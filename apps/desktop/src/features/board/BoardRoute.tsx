@@ -391,12 +391,11 @@ function BoardContent({
     if (actionsDisabled) {
       return "blocked";
     }
-    const manualTargets = new Set(activeDrag.payload.manualMoveTargetNodeIDs);
-    const canStartHere =
-      board.selectedWorkflow.validForTaskCreation &&
-      activeDrag.payload.canStart &&
-      column.id === firstActive?.id;
-    return canStartHere || manualTargets.has(column.id) ? "allowed" : "blocked";
+    const action = classifyDrop(column, activeDrag.payload, firstActive?.id);
+    if (action.kind === "start") {
+      return board.selectedWorkflow.validForTaskCreation ? "allowed" : "blocked";
+    }
+    return activeDrag.payload.manualMoveTargetNodeIDs.includes(column.id) ? "allowed" : "blocked";
   }
 
   function columnIsCollapsed(column: BoardColumn): boolean {
