@@ -665,6 +665,24 @@ func TestSetParentSessionIDNilClearsParent(t *testing.T) {
 	}
 }
 
+func TestMetaSnapshotDeepCopiesParentSessionID(t *testing.T) {
+	store := newSessionTestStore(t)
+	parentSessionID := "parent-session"
+	if err := store.SetParentSessionID(&parentSessionID); err != nil {
+		t.Fatalf("SetParentSessionID: %v", err)
+	}
+
+	snapshot := store.Meta()
+	if snapshot.ParentSessionID == nil {
+		t.Fatal("snapshot parent session id is nil")
+	}
+	*snapshot.ParentSessionID = "mutated-snapshot"
+
+	if got := store.Meta().ParentSessionID; got == nil || *got != parentSessionID {
+		t.Fatalf("store parent session id = %v, want %q after snapshot mutation", got, parentSessionID)
+	}
+}
+
 func TestConversationFreshnessAdvancesOnlyForVisibleUserMessages(t *testing.T) {
 	store := newSessionTestStore(t)
 	if got := store.ConversationFreshness(); got != ConversationFreshnessFresh {
