@@ -11,7 +11,7 @@ func Authorize(settings config.Settings, caller *Caller, target Target) error {
 		context = config.SubagentInvocationContextWorkflow
 	}
 	if caller != nil && caller.AgentRole != nil {
-		if err := authorizeNamed(settings, context, *caller.AgentRole); err != nil {
+		if err := authorizeCaller(settings, context, *caller.AgentRole); err != nil {
 			return err
 		}
 	}
@@ -29,6 +29,20 @@ func Authorize(settings config.Settings, caller *Caller, target Target) error {
 		return nil
 	}
 	return authorizeNamed(settings, context, target.Selector)
+}
+
+func authorizeCaller(settings config.Settings, context config.SubagentInvocationContext, selector string) error {
+	lookup := config.LookupSubagentRole(settings, selector)
+	if lookup.Status == config.SubagentRoleLookupInvalid {
+		return denial(serverapi.SubagentLaunchDenialInvalidTarget, nil, nil)
+	}
+	if lookup.Status == config.SubagentRoleLookupMissing {
+		return denial(serverapi.SubagentLaunchDenialTargetMissing, lookup.NormalizedSelector, available(settings, context))
+	}
+	if !config.SubagentRoleCallable(lookup.Role) {
+		return denial(serverapi.SubagentLaunchDenialNotCallable, lookup.NormalizedSelector, available(settings, context))
+	}
+	return nil
 }
 
 func authorizeNamed(settings config.Settings, context config.SubagentInvocationContext, selector string) error {
