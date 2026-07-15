@@ -142,7 +142,7 @@ func TestOngoingTranscriptControllerQueueOverflowRequestsScratchRehydrationOnRes
 	}
 
 	for seq := uint64(1); seq <= ongoingTranscriptQueueLimit+1; seq++ {
-		message := ongoingTranscriptMessage(seq, clientui.TranscriptMessageRunState)
+		message := ongoingTranscriptMessage(seq, clientui.TranscriptMessageCommittedRow)
 		if seq == 1 {
 			message = ongoingHydrationMessage(seq)
 		}
@@ -160,6 +160,40 @@ func TestOngoingTranscriptControllerQueueOverflowRequestsScratchRehydrationOnRes
 	}
 	if len(surface.calls) != 0 {
 		t.Fatalf("surface calls after overflow restore = %v, want no partial drain", surface.calls)
+	}
+}
+
+func TestOngoingTranscriptControllerQueuesOnlyTerminalWorkWhileUnowned(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	surface.calls = nil
+	if _, err := controller.SetNormalBufferOwned(false); err != nil {
+		t.Fatalf("mark unowned: %v", err)
+	}
+
+	for sequence := uint64(2); sequence <= ongoingTranscriptQueueLimit+2; sequence++ {
+		message := ongoingTranscriptMessage(sequence, clientui.TranscriptMessageQueuedOrSteeredMessageState)
+		message.QueuedOrSteeredMessageState.UserText = "latest queued prompt"
+		if _, err := controller.Accept(message); err != nil {
+			t.Fatalf("accept app-owned message %d: %v", sequence, err)
+		}
+	}
+	if len(surface.calls) != 0 {
+		t.Fatalf("surface calls while unowned = %v, want none", surface.calls)
+	}
+
+	result, err := controller.SetNormalBufferOwned(true)
+	if err != nil {
+		t.Fatalf("restore ownership: %v", err)
+	}
+	if result.Action != ongoing.ResultNoop {
+		t.Fatalf("restore action = %q, want no scratch rehydration", result.Action)
+	}
+	if got, want := surface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls = %v, want %v", got, want)
 	}
 }
 
