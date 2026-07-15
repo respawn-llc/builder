@@ -146,7 +146,7 @@ func TestReviewerSuggestions_ReopenKeepsPromptCachePrefixStable(t *testing.T) {
 		t.Fatalf("close original engine: %v", err)
 	}
 
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}

@@ -109,13 +109,10 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	}
 	defer func() { _ = md.Close() }()
 
-	// Fileless persistence permits the runtime's legacy contract backfills in
-	// memory without changing the session directory or SQLite metadata.
 	store, err := session.OpenByID(
 		persistenceRoot,
 		sessionID,
 		session.WithPersistedSessionResolver(md),
-		session.WithFilelessMetadataPersistence(),
 		session.WithFilelessEventPersistence(),
 	)
 	if err != nil {

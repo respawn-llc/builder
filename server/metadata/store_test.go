@@ -535,7 +535,23 @@ func TestRebindWorkspaceRejectsAmbiguousOldPath(t *testing.T) {
 	}
 }
 
-func TestRetargetSessionWorkspaceAttachesTargetAndUpdatesSession(t *testing.T) {
+func planAndCommitSessionWorkspaceRetarget(t *testing.T, ctx context.Context, store *Store, sessionID string, workspaceRoot string) Binding {
+	t.Helper()
+	plan, err := store.PlanSessionWorkspaceRetarget(ctx, SessionWorkspaceRetargetRequest{
+		SessionID:     sessionID,
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("PlanSessionWorkspaceRetarget: %v", err)
+	}
+	result, err := store.CommitSessionWorkspaceRetarget(ctx, plan, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CommitSessionWorkspaceRetarget: %v", err)
+	}
+	return result.Binding
+}
+
+func TestCommitSessionWorkspaceRetargetAttachesTargetAndUpdatesSession(t *testing.T) {
 	ctx := context.Background()
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
@@ -586,10 +602,7 @@ func TestRetargetSessionWorkspaceAttachesTargetAndUpdatesSession(t *testing.T) {
 		t.Fatalf("SetWorktreeReminderState before retarget: %v", err)
 	}
 
-	retargeted, err := store.RetargetSessionWorkspace(ctx, sess.Meta().SessionID, workspaceB)
-	if err != nil {
-		t.Fatalf("RetargetSessionWorkspace: %v", err)
-	}
+	retargeted := planAndCommitSessionWorkspaceRetarget(t, ctx, store, sess.Meta().SessionID, workspaceB)
 	canonicalWorkspaceB, err := config.CanonicalWorkspaceRoot(workspaceB)
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot workspaceB: %v", err)
@@ -644,7 +657,7 @@ func TestRetargetSessionWorkspaceAttachesTargetAndUpdatesSession(t *testing.T) {
 	}
 }
 
-func TestRetargetSessionWorkspaceClearsSameWorkspaceStaleWorktreeTarget(t *testing.T) {
+func TestCommitSessionWorkspaceRetargetClearsSameWorkspaceStaleWorktreeTarget(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
@@ -680,10 +693,7 @@ func TestRetargetSessionWorkspaceClearsSameWorkspaceStaleWorktreeTarget(t *testi
 		t.Fatalf("RemoveAll stale worktree root: %v", err)
 	}
 
-	retargeted, err := store.RetargetSessionWorkspace(ctx, sess.Meta().SessionID, cfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RetargetSessionWorkspace: %v", err)
-	}
+	retargeted := planAndCommitSessionWorkspaceRetarget(t, ctx, store, sess.Meta().SessionID, cfg.WorkspaceRoot)
 	if retargeted.WorkspaceID != binding.WorkspaceID {
 		t.Fatalf("retargeted workspace id = %q, want %q", retargeted.WorkspaceID, binding.WorkspaceID)
 	}
@@ -783,6 +793,118 @@ func TestResolvePersistedSessionPreservesGoalStateFromMetadata(t *testing.T) {
 	}
 	if *persisted != goal {
 		t.Fatalf("goal = %+v, want %+v", *persisted, goal)
+	}
+}
+
+func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.T) {
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	buffers := []session.InputDraftRecoveryBuffer{{
+		Kind:                     "queued_input",
+		ID:                       "buffer-1",
+		ServerID:                 "server-1",
+		ClientRequestID:          "request-1",
+		Text:                     "recover this draft",
+		OperationClientRequestID: "operation-request-1",
+		OperationQueueItemID:     "queue-item-1",
+		OperationKind:            "steer",
+	}}
+	if err := sess.SetInputDraftRecovery("draft", buffers); err != nil {
+		t.Fatalf("SetInputDraftRecovery: %v", err)
+	}
+	recovery := session.PendingModelRecovery{
+		RecoveryID:             "recovery-1",
+		StepID:                 "step-1",
+		Reason:                 "interrupted",
+		CreatedAt:              time.Now().UTC().Round(0),
+		OutstandingToolCallIDs: []string{"tool-call-1", "tool-call-2"},
+	}
+	if err := sess.SetPendingModelRecovery(recovery); err != nil {
+		t.Fatalf("SetPendingModelRecovery: %v", err)
+	}
+	if _, _, err := sess.AppendEvent(
+		"step-2",
+		"message",
+		map[string]string{"role": "user", "content": "establish conversation"},
+	); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+
+	record, err := store.ResolvePersistedSession(t.Context(), sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession: %v", err)
+	}
+	meta := record.Meta
+	if meta == nil {
+		t.Fatal("resolved metadata is nil")
+	}
+	if !meta.ConversationEstablished {
+		t.Fatal("conversation establishment did not round-trip through SQLite")
+	}
+	if len(meta.InputDraftRecoveryBuffers) != 1 || meta.InputDraftRecoveryBuffers[0] != buffers[0] {
+		t.Fatalf("recovery buffers = %+v, want %+v", meta.InputDraftRecoveryBuffers, buffers)
+	}
+	persistedRecovery := meta.PendingModelRecovery
+	if persistedRecovery == nil {
+		t.Fatal("pending model recovery did not round-trip through SQLite")
+	}
+	if persistedRecovery.RecoveryID != recovery.RecoveryID ||
+		persistedRecovery.StepID != recovery.StepID ||
+		persistedRecovery.Reason != recovery.Reason ||
+		!persistedRecovery.CreatedAt.Equal(recovery.CreatedAt) ||
+		len(persistedRecovery.OutstandingToolCallIDs) != len(recovery.OutstandingToolCallIDs) {
+		t.Fatalf("pending model recovery = %+v, want %+v", persistedRecovery, recovery)
+	}
+	for i, toolCallID := range recovery.OutstandingToolCallIDs {
+		if persistedRecovery.OutstandingToolCallIDs[i] != toolCallID {
+			t.Fatalf("outstanding tool call ids = %+v, want %+v", persistedRecovery.OutstandingToolCallIDs, recovery.OutstandingToolCallIDs)
+		}
+	}
+}
+
+func TestMissingEventLogRepairPersistsFreshConversationState(t *testing.T) {
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if _, _, err := sess.AppendEvent(
+		"step-1",
+		"message",
+		map[string]string{"role": "user", "content": "establish conversation"},
+	); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+	eventsPath := filepath.Join(sess.Dir(), "events.jsonl")
+	if err := os.Remove(eventsPath); err != nil {
+		t.Fatalf("remove events artifact: %v", err)
+	}
+
+	repaired, err := session.OpenByID(
+		cfg.PersistenceRoot,
+		sess.Meta().SessionID,
+		store.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.OpenByID repair: %v", err)
+	}
+	if repaired.Meta().LastSequence != 0 || repaired.Meta().ConversationEstablished {
+		t.Fatalf("repaired metadata = %+v, want fresh empty conversation", repaired.Meta())
+	}
+	if repaired.ConversationFreshness() != session.ConversationFreshnessFresh {
+		t.Fatalf("repaired freshness = %q, want fresh", repaired.ConversationFreshness())
+	}
+
+	reopened, err := session.OpenByID(
+		cfg.PersistenceRoot,
+		sess.Meta().SessionID,
+		store.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.OpenByID reopen: %v", err)
+	}
+	if reopened.Meta().LastSequence != 0 || reopened.Meta().ConversationEstablished {
+		t.Fatalf("reopened metadata = %+v, want fresh empty conversation", reopened.Meta())
+	}
+	if reopened.ConversationFreshness() != session.ConversationFreshnessFresh {
+		t.Fatalf("reopened freshness = %q, want fresh", reopened.ConversationFreshness())
 	}
 }
 

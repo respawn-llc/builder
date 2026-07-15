@@ -775,6 +775,76 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesSessionRetargetError(t *testing.T) {
+	source := &serverapi.SessionRetargetError{
+		Reason:        serverapi.SessionRetargetTargetProjectRequired,
+		SessionID:     "session-1",
+		SourceProject: serverapi.ProjectReference{ID: "project-source", Name: "Source"},
+		TargetRoot:    "/work/target",
+		CandidateProjects: []serverapi.ProjectReference{{
+			ID:   "project-target",
+			Name: "Target",
+		}},
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeSessionRetarget,
+		Message: source.Error(),
+		Data:    source.RPCErrorData(),
+	})
+	assertRemoteSessionRetargetError(t, err, source)
+}
+
+func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
+	source := &serverapi.SessionRetargetError{
+		Reason:        serverapi.SessionRetargetTargetProjectRequired,
+		SessionID:     "session-1",
+		SourceProject: serverapi.ProjectReference{ID: "project-source", Name: "Source"},
+		TargetRoot:    "/work/target",
+		CandidateProjects: []serverapi.ProjectReference{{
+			ID:   "project-target",
+			Name: "Target",
+		}},
+	}
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive session retarget request: %v", err)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData())); err != nil {
+			t.Fatalf("send session retarget error: %v", err)
+		}
+	})
+	defer server.Close()
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	_, err = remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
+		ClientRequestID: "request-1",
+		SessionID:       source.SessionID,
+		WorkspaceRoot:   source.TargetRoot,
+	})
+	assertRemoteSessionRetargetError(t, err, source)
+}
+
+func assertRemoteSessionRetargetError(t *testing.T, err error, source *serverapi.SessionRetargetError) {
+	t.Helper()
+	var decoded *serverapi.SessionRetargetError
+	if !errors.As(err, &decoded) {
+		t.Fatalf("decoded error = %T %v, want SessionRetargetError", err, err)
+	}
+	if decoded.Reason != source.Reason ||
+		decoded.SessionID != source.SessionID ||
+		decoded.SourceProject != source.SourceProject ||
+		decoded.TargetRoot != source.TargetRoot ||
+		len(decoded.CandidateProjects) != len(source.CandidateProjects) ||
+		decoded.CandidateProjects[0] != source.CandidateProjects[0] {
+		t.Fatalf("decoded session retarget error = %+v, want %+v", decoded, source)
+	}
+}
+
 func TestProtocolErrorDecodesWorktreeStructuredErrors(t *testing.T) {
 	operationID := serverapi.NewWorktreeOperationID()
 	for _, source := range remoteTestWorktreeStructuredErrors(operationID) {

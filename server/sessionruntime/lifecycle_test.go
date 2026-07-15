@@ -512,6 +512,67 @@ func TestSyncExecutionTargetRebindsActiveRuntime(t *testing.T) {
 	}
 }
 
+func TestRunSessionMaintenanceUsesRegisteredStoreAndRebindsRuntime(t *testing.T) {
+	fixture, reg := newRuntimeServiceFixture(t)
+	sessionID := fixture.store.Meta().SessionID
+	fixture.service.sessionStores.RegisterStore(fixture.store)
+	state, build := newLifecycleBuilder(t, fixture)
+	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
+		t.Fatalf("AcquireRuntime: %v", err)
+	}
+	targetWorkdir := t.TempDir()
+	err := fixture.service.RunSessionMaintenance(
+		context.Background(),
+		sessionID,
+		func(_ context.Context, store *session.Store, activeRuntime *ActiveRuntimeMaintenance) error {
+			if store != fixture.store {
+				t.Fatal("maintenance did not receive the registered runtime store")
+			}
+			if activeRuntime == nil {
+				t.Fatal("maintenance did not receive active runtime state")
+			}
+			if activeRuntime.PreviousWorkdir != fixture.store.Meta().WorkspaceRoot {
+				t.Fatalf("previous workdir = %q, want %q", activeRuntime.PreviousWorkdir, fixture.store.Meta().WorkspaceRoot)
+			}
+			return activeRuntime.Rebind(targetWorkdir)
+		},
+	)
+	if err != nil {
+		t.Fatalf("RunSessionMaintenance: %v", err)
+	}
+	if got, _ := state.rebindDir.Load().(string); got != targetWorkdir {
+		t.Fatalf("rebind workdir = %q, want %q", got, targetWorkdir)
+	}
+	engine, err := reg.ResolveRuntime(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("ResolveRuntime: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("runtime disappeared during maintenance")
+	}
+}
+
+func TestRunSessionMaintenanceRepresentsInactiveRuntimeExplicitly(t *testing.T) {
+	fixture, _ := newRuntimeServiceFixture(t)
+	fixture.service.sessionStores.RegisterStore(fixture.store)
+	err := fixture.service.RunSessionMaintenance(
+		context.Background(),
+		fixture.store.Meta().SessionID,
+		func(_ context.Context, store *session.Store, activeRuntime *ActiveRuntimeMaintenance) error {
+			if store != fixture.store {
+				t.Fatal("maintenance did not receive the registered store")
+			}
+			if activeRuntime != nil {
+				t.Fatalf("inactive maintenance runtime = %+v, want nil", activeRuntime)
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("RunSessionMaintenance: %v", err)
+	}
+}
+
 type lifecycleRequestCaptureClient struct {
 	mu      sync.Mutex
 	calls   []llm.Request
@@ -752,6 +813,7 @@ func TestSyncExecutionTargetFailsQueuedUserWorkWhenRollbackRebindFails(t *testin
 	if _, err := engine.SubmitUserMessage(context.Background(), "new work after failed switch"); !errors.Is(err, runtimepkg.ErrEngineClosed) {
 		t.Fatalf("SubmitUserMessage after failed rollback = %v, want ErrEngineClosed", err)
 	}
+	observer.armed.Store(false)
 	var rebuiltEngine *runtimepkg.Engine
 	rebuilt := false
 	rebuild := func(context.Context) (RuntimeBuildResult, error) {

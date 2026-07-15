@@ -7,11 +7,13 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/serverapi"
 )
 
 func TestInitialInputPrefersPersistedDraft(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/work")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/work", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -31,7 +33,8 @@ func TestPersistInputDraftNoOpForNilStore(t *testing.T) {
 
 func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	root := t.TempDir()
-	store, err := session.Create(root, "workspace-x", "/tmp/work")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(root, "workspace-x", "/tmp/work", persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
@@ -72,7 +75,7 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	if resolved.InitialPrompt != "edited user message" {
 		t.Fatalf("initial prompt = %q", resolved.InitialPrompt)
 	}
-	child, err := session.Open(filepath.Join(root, resolved.NextSessionID))
+	child, err := persistence.Open(filepath.Join(root, resolved.NextSessionID))
 	if err != nil {
 		t.Fatalf("open forked session: %v", err)
 	}

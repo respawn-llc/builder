@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/shared/rollbacktarget"
+	"core/shared/valuecopy"
 )
 
 var errForkReplayBoundary = errors.New("fork replay boundary reached")
@@ -230,6 +231,7 @@ func cloneLockedContract(in *LockedContract) *LockedContract {
 		toolPreambles := *in.ToolPreambles
 		copyLocked.ToolPreambles = &toolPreambles
 	}
+	copyLocked.ProviderContract.SupportsProviderVerbosity = valuecopy.Pointer(in.ProviderContract.SupportsProviderVerbosity)
 	copyLocked.SystemPrompt = strings.TrimSpace(in.SystemPrompt)
 	copyLocked.ReviewerPrompt = strings.TrimSpace(in.ReviewerPrompt)
 	return &copyLocked
@@ -280,6 +282,8 @@ func InitializeChildFromParentWithOptions(child *Store, parent *Store, opts Chil
 		return fmt.Errorf("parent store is required")
 	}
 	parentMeta := parent.Meta()
+	child.mutationMu.Lock()
+	defer child.mutationMu.Unlock()
 	child.mu.Lock()
 	if opts.InheritLockedContract {
 		child.meta.Locked = cloneLockedContract(parentMeta.Locked)

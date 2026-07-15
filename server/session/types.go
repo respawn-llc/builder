@@ -167,7 +167,6 @@ type Meta struct {
 	CompactionSoonReminderIssued    bool                       `json:"compaction_soon_reminder_issued,omitempty"`
 	GeneratedRecoveredWarningIssued bool                       `json:"generated_recovered_warning_issued,omitempty"`
 	PendingModelRecovery            *PendingModelRecovery      `json:"pending_model_recovery,omitempty"`
-	LegacyInFlightStepRecovery      bool                       `json:"-"`
 	WorktreeReminder                *WorktreeReminderState     `json:"worktree_reminder,omitempty"`
 	UsageState                      *UsageState                `json:"usage_state,omitempty"`
 	Goal                            *GoalState                 `json:"goal,omitempty"`
@@ -206,12 +205,4 @@ type Event struct {
 	Kind      string          `json:"kind"`
 	StepID    string          `json:"step_id,omitempty"`
 	Payload   json.RawMessage `json:"payload"`
-}
-
-type Summary struct {
-	SessionID          string    `json:"session_id"`
-	Name               string    `json:"name,omitempty"`
-	FirstPromptPreview string    `json:"first_prompt_preview,omitempty"`
-	UpdatedAt          time.Time `json:"updated_at"`
-	Path               string    `json:"path"`
 }

@@ -918,7 +918,7 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
 		"workspace-b",
 		resolvedB.Config.WorkspaceRoot,
-		metadataStore.SessionStoreOptions()...,
+		metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.Create foreign: %v", err)

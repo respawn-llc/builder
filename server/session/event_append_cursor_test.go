@@ -36,7 +36,7 @@ func TestAppendEventWithEndByteCursorReturnsReadableCommittedPosition(t *testing
 }
 
 func TestAppendEventWithEndByteCursorRetainsPositionWhenObserverFailsAfterCommit(t *testing.T) {
-	observer := &recordingPersistenceObserver{err: os.ErrPermission}
+	observer := &recordingPersistenceObserver{}
 	store, err := Create(
 		t.TempDir(),
 		"workspace",
@@ -46,6 +46,7 @@ func TestAppendEventWithEndByteCursorRetainsPositionWhenObserverFailsAfterCommit
 	if err != nil {
 		t.Fatalf("create observed store: %v", err)
 	}
+	observer.err = os.ErrPermission
 
 	appended, err := store.AppendEventWithEndByteCursor(
 		"step-1",

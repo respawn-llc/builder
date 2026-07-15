@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -238,11 +239,9 @@ func resetBindingCommandRetargetHooks(t *testing.T) {
 	t.Helper()
 	originalOpener := bindingCommandRemoteOpener
 	originalRetargeter := bindingCommandSessionRetargeter
-	originalLocalClient := bindingCommandLocalSessionLifecycleClient
 	t.Cleanup(func() {
 		bindingCommandRemoteOpener = originalOpener
 		bindingCommandSessionRetargeter = originalRetargeter
-		bindingCommandLocalSessionLifecycleClient = originalLocalClient
 	})
 	setBindingCommandTestHome(t)
 }
@@ -518,13 +517,10 @@ func TestAttachSubcommandRejectsUnknownExplicitProjectIDCleanly(t *testing.T) {
 func TestRebindSubcommandRetargetsSessionWorkspace(t *testing.T) {
 	oldWorkspace := t.TempDir()
 	newWorkspace := t.TempDir()
-	originalOpener := bindingCommandRemoteOpener
-	t.Cleanup(func() { bindingCommandRemoteOpener = originalOpener })
-	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
-		return config.App{}, nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect refused")}
-	}
-
 	store, binding, sess := newBindingCommandSession(t, oldWorkspace)
+	configureBindingCommandTestServerPort(t)
+	cleanup := startBindingCommandServer(t, oldWorkspace)
+	defer cleanup()
 	if err := sess.SetName("incident triage"); err != nil {
 		t.Fatalf("SetName: %v", err)
 	}
@@ -564,13 +560,10 @@ func TestRebindSubcommandRejectsInvalidInputs(t *testing.T) {
 	otherWorkspace := t.TempDir()
 	targetWorkspace := t.TempDir()
 	missingWorkspace := filepath.Join(t.TempDir(), "missing")
-	originalOpener := bindingCommandRemoteOpener
-	t.Cleanup(func() { bindingCommandRemoteOpener = originalOpener })
-	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
-		return config.App{}, nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect refused")}
-	}
-
 	store, _, sess := newBindingCommandSession(t, oldWorkspace)
+	configureBindingCommandTestServerPort(t)
+	cleanup := startBindingCommandServer(t, oldWorkspace)
+	defer cleanup()
 	if err := sess.SetName("incident triage"); err != nil {
 		t.Fatalf("SetName: %v", err)
 	}
@@ -599,7 +592,7 @@ func TestRebindSubcommandRejectsInvalidInputs(t *testing.T) {
 	}
 
 	assertRebindError([]string{"session-missing", targetWorkspace}, session.ErrSessionNotFound.Error())
-	assertRebindError([]string{sess.Meta().SessionID, missingWorkspace}, "does not exist")
+	assertRebindError([]string{sess.Meta().SessionID, missingWorkspace}, missingWorkspace)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -611,173 +604,210 @@ func TestRebindSubcommandRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
-func TestRetargetSessionWorkspaceFallsBackToLocalLifecycleClientForLoopbackMethodNotFound(t *testing.T) {
+func TestRebindSubcommandRejectsBlankProjectBeforeOpeningServer(t *testing.T) {
+	resetBindingCommandRetargetHooks(t)
+	opened := false
+	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
+		opened = true
+		return config.App{}, nil, errors.New("unexpected server open")
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := rebindSubcommand([]string{"--project", " ", "session-123", t.TempDir()}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if opened {
+		t.Fatal("blank project flag opened the server")
+	}
+	if stdout.Len() != 0 || stderr.Len() == 0 {
+		t.Fatalf("stdout = %q stderr = %q, want empty stdout and validation error", stdout.String(), stderr.String())
+	}
+}
+
+func TestRetargetSessionWorkspaceUsesDaemonAndPassesTargetProject(t *testing.T) {
 	resetBindingCommandRetargetHooks(t)
 	newWorkspace, newCfg := newBindingCommandWorkspaceConfig(t)
 	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
 		return newCfg, &client.Remote{}, nil
 	}
 	remoteCalls := 0
-	localCalls := 0
 	const sessionID = "session-123"
-	bindingCommandSessionRetargeter = func(ctx context.Context, lifecycle client.SessionLifecycleClient, gotSessionID string, workspaceRoot string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	const projectID = "project-target"
+	bindingCommandSessionRetargeter = func(ctx context.Context, lifecycle client.SessionLifecycleClient, gotSessionID string, workspaceRoot string, gotProjectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
 		if gotSessionID != sessionID {
 			t.Fatalf("session id = %q, want %q", gotSessionID, sessionID)
 		}
 		if workspaceRoot != newCfg.WorkspaceRoot {
 			t.Fatalf("workspace root = %q, want %q", workspaceRoot, newCfg.WorkspaceRoot)
 		}
-		switch lifecycle.(type) {
-		case *client.Remote:
-			remoteCalls++
-			return serverapi.SessionRetargetWorkspaceResponse{}, serverapi.ErrMethodNotFound
-		default:
-			localCalls++
-			return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{WorkspaceID: "workspace-local"}}, nil
+		if gotProjectID == nil || *gotProjectID != projectID {
+			t.Fatalf("project id = %v, want %q", gotProjectID, projectID)
 		}
-	}
-	bindingCommandLocalSessionLifecycleClient = func(cfg config.App) client.SessionLifecycleClient {
-		if cfg.WorkspaceRoot != newCfg.WorkspaceRoot {
-			t.Fatalf("local client cfg workspace = %q, want %q", cfg.WorkspaceRoot, newCfg.WorkspaceRoot)
-		}
-		return bindingCommandTimeoutSessionLifecycleStub{}
-	}
-
-	binding, err := retargetSessionWorkspace(context.Background(), sessionID, newWorkspace)
-	if err != nil {
-		t.Fatalf("retargetSessionWorkspace: %v", err)
-	}
-	if binding.WorkspaceID != "workspace-local" {
-		t.Fatalf("binding workspace id = %q, want %q", binding.WorkspaceID, "workspace-local")
-	}
-	if remoteCalls != 1 || localCalls != 1 {
-		t.Fatalf("remote calls = %d local calls = %d, want 1 each", remoteCalls, localCalls)
-	}
-}
-
-func TestRetargetSessionWorkspaceFallsBackToLocalLifecycleClientForLoopbackOpenFailure(t *testing.T) {
-	resetBindingCommandRetargetHooks(t)
-	newWorkspace, newCfg := newBindingCommandWorkspaceConfig(t)
-	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
-		return config.App{}, nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect refused")}
-	}
-	localCalls := 0
-	const sessionID = "session-123"
-	bindingCommandSessionRetargeter = func(ctx context.Context, lifecycle client.SessionLifecycleClient, gotSessionID string, workspaceRoot string) (serverapi.SessionRetargetWorkspaceResponse, error) {
-		if gotSessionID != sessionID {
-			t.Fatalf("session id = %q, want %q", gotSessionID, sessionID)
-		}
-		if workspaceRoot != newCfg.WorkspaceRoot {
-			t.Fatalf("workspace root = %q, want %q", workspaceRoot, newCfg.WorkspaceRoot)
-		}
-		localCalls++
-		return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{WorkspaceID: "workspace-local"}}, nil
-	}
-	bindingCommandLocalSessionLifecycleClient = func(cfg config.App) client.SessionLifecycleClient {
-		if cfg.WorkspaceRoot != newCfg.WorkspaceRoot {
-			t.Fatalf("local client cfg workspace = %q, want %q", cfg.WorkspaceRoot, newCfg.WorkspaceRoot)
-		}
-		return bindingCommandTimeoutSessionLifecycleStub{}
-	}
-
-	binding, err := retargetSessionWorkspace(context.Background(), sessionID, newWorkspace)
-	if err != nil {
-		t.Fatalf("retargetSessionWorkspace: %v", err)
-	}
-	if binding.WorkspaceID != "workspace-local" {
-		t.Fatalf("binding workspace id = %q, want %q", binding.WorkspaceID, "workspace-local")
-	}
-	if localCalls != 1 {
-		t.Fatalf("local calls = %d, want 1", localCalls)
-	}
-}
-
-func TestRetargetSessionWorkspaceDoesNotFallbackForNonLoopbackMethodNotFound(t *testing.T) {
-	resetBindingCommandRetargetHooks(t)
-	t.Setenv("KENT_SERVER_HOST", "192.0.2.10")
-	newWorkspace, newCfg := newBindingCommandWorkspaceConfig(t)
-	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
-		return newCfg, &client.Remote{}, nil
-	}
-	remoteCalls := 0
-	localCalls := 0
-	bindingCommandSessionRetargeter = func(context.Context, client.SessionLifecycleClient, string, string) (serverapi.SessionRetargetWorkspaceResponse, error) {
 		remoteCalls++
-		return serverapi.SessionRetargetWorkspaceResponse{}, serverapi.ErrMethodNotFound
-	}
-	bindingCommandLocalSessionLifecycleClient = func(config.App) client.SessionLifecycleClient {
-		localCalls++
-		return bindingCommandTimeoutSessionLifecycleStub{}
+		return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{WorkspaceID: "workspace-remote"}}, nil
 	}
 
-	_, err := retargetSessionWorkspace(context.Background(), "session-123", newWorkspace)
-	if !errors.Is(err, serverapi.ErrMethodNotFound) {
-		t.Fatalf("retargetSessionWorkspace error = %v, want ErrMethodNotFound", err)
+	targetProjectID := projectID
+	response, err := retargetSessionWorkspaceResponse(context.Background(), sessionID, newWorkspace, &targetProjectID)
+	if err != nil {
+		t.Fatalf("retargetSessionWorkspaceResponse: %v", err)
+	}
+	if response.Binding.WorkspaceID != "workspace-remote" {
+		t.Fatalf("binding workspace id = %q, want %q", response.Binding.WorkspaceID, "workspace-remote")
 	}
 	if remoteCalls != 1 {
 		t.Fatalf("remote calls = %d, want 1", remoteCalls)
 	}
-	if localCalls != 0 {
-		t.Fatalf("local calls = %d, want 0", localCalls)
+}
+
+func TestRebindSubcommandReportsAutoAttachedWorkspace(t *testing.T) {
+	resetBindingCommandRetargetHooks(t)
+	targetPath, targetCfg := newBindingCommandWorkspaceConfig(t)
+	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
+		return targetCfg, &client.Remote{}, nil
+	}
+	const (
+		sessionID = "session-123"
+		projectID = "project-target"
+	)
+	bindingCommandSessionRetargeter = func(_ context.Context, _ client.SessionLifecycleClient, gotSessionID string, workspaceRoot string, gotProjectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		if gotSessionID != sessionID || workspaceRoot != targetCfg.WorkspaceRoot || gotProjectID == nil || *gotProjectID != projectID {
+			t.Fatalf("retarget request = session:%q workspace:%q project:%v", gotSessionID, workspaceRoot, gotProjectID)
+		}
+		return serverapi.SessionRetargetWorkspaceResponse{
+			Binding: serverapi.ProjectBinding{
+				ProjectID:     projectID,
+				ProjectName:   "Target",
+				WorkspaceID:   "workspace-created",
+				CanonicalRoot: targetCfg.WorkspaceRoot,
+			},
+			WorkspaceBindingCreated: true,
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := rebindSubcommand([]string{"--project", projectID, sessionID, targetPath}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr.String())
+	}
+	if stdout.String() != "workspace-created\n" {
+		t.Fatalf("stdout = %q, want workspace id", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("auto-attached workspace did not produce an operator notice")
 	}
 }
 
-func TestRetargetSessionWorkspaceDoesNotFallbackForNonLoopbackOpenFailure(t *testing.T) {
+func TestRebindSubcommandFormatsCrossProjectChoicesAsExecutableCommands(t *testing.T) {
 	resetBindingCommandRetargetHooks(t)
-	t.Setenv("KENT_SERVER_HOST", "192.0.2.10")
+	targetPath := filepath.Join(t.TempDir(), "target workspace's copy")
+	if err := os.MkdirAll(targetPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll target path: %v", err)
+	}
+	targetCfg, err := config.Load(targetPath, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load target: %v", err)
+	}
+	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
+		return targetCfg, &client.Remote{}, nil
+	}
+	const (
+		sessionID       = "session-123"
+		sourceProjectID = "project-source"
+		targetProjectID = "project-target"
+	)
+	retargetErr := &serverapi.SessionRetargetError{
+		Reason:        serverapi.SessionRetargetTargetProjectRequired,
+		SessionID:     sessionID,
+		SourceProject: serverapi.ProjectReference{ID: sourceProjectID, Name: "Source"},
+		TargetRoot:    targetCfg.WorkspaceRoot,
+		CandidateProjects: []serverapi.ProjectReference{{
+			ID:   targetProjectID,
+			Name: "Target",
+		}},
+	}
+	bindingCommandSessionRetargeter = func(context.Context, client.SessionLifecycleClient, string, string, *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		return serverapi.SessionRetargetWorkspaceResponse{}, retargetErr
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := rebindSubcommand([]string{sessionID, targetPath}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("cross-project choices did not produce operator guidance")
+	}
+	guidance := buildSessionRetargetCommandGuidance(targetPath, retargetErr)
+	if len(guidance.Candidates) != 1 ||
+		!slices.Equal(guidance.Candidates[0].Tokens, []string{config.Command, "rebind", "--project", targetProjectID, sessionID, targetPath}) ||
+		!slices.Equal(guidance.AttachToSource, []string{config.Command, "attach", "--project", sourceProjectID, targetPath}) ||
+		!slices.Equal(guidance.RebindIntoSource, []string{config.Command, "rebind", sessionID, targetPath}) {
+		t.Fatalf("guidance commands = %+v", guidance)
+	}
+}
+
+func TestRebindSubcommandRejectsExplicitProjectForForeignBoundTarget(t *testing.T) {
+	resetBindingCommandRetargetHooks(t)
+	targetPath, targetCfg := newBindingCommandWorkspaceConfig(t)
+	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
+		return targetCfg, &client.Remote{}, nil
+	}
+	const (
+		sessionID          = "session-123"
+		requestedProjectID = "project-requested"
+		existingProjectID  = "project-existing"
+	)
+	retargetErr := &serverapi.SessionRetargetError{
+		Reason:        serverapi.SessionRetargetTargetProjectConflict,
+		SessionID:     sessionID,
+		SourceProject: serverapi.ProjectReference{ID: "project-source", Name: "Source"},
+		TargetRoot:    targetCfg.WorkspaceRoot,
+		CandidateProjects: []serverapi.ProjectReference{{
+			ID:   existingProjectID,
+			Name: "Existing",
+		}},
+	}
+	bindingCommandSessionRetargeter = func(_ context.Context, _ client.SessionLifecycleClient, gotSessionID string, workspaceRoot string, gotProjectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		if gotSessionID != sessionID || workspaceRoot != targetCfg.WorkspaceRoot || gotProjectID == nil || *gotProjectID != requestedProjectID {
+			t.Fatalf("retarget request = session:%q workspace:%q project:%v", gotSessionID, workspaceRoot, gotProjectID)
+		}
+		return serverapi.SessionRetargetWorkspaceResponse{}, retargetErr
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := rebindSubcommand([]string{"--project", requestedProjectID, sessionID, targetPath}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("foreign binding conflict did not produce operator guidance")
+	}
+	guidance := buildSessionRetargetCommandGuidance(targetPath, retargetErr)
+	if len(guidance.Candidates) != 1 ||
+		!slices.Equal(guidance.Candidates[0].Tokens, []string{config.Command, "rebind", "--project", existingProjectID, sessionID, targetPath}) ||
+		guidance.AttachToSource != nil ||
+		guidance.RebindIntoSource != nil {
+		t.Fatalf("guidance commands = %+v", guidance)
+	}
+}
+
+func TestRetargetSessionWorkspaceReturnsDaemonOpenFailure(t *testing.T) {
+	resetBindingCommandRetargetHooks(t)
 	newWorkspace := t.TempDir()
+	want := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect refused")}
 	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
-		return config.App{}, nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect refused")}
+		return config.App{}, nil, want
 	}
-	localCalls := 0
-	bindingCommandLocalSessionLifecycleClient = func(config.App) client.SessionLifecycleClient {
-		localCalls++
-		return bindingCommandTimeoutSessionLifecycleStub{}
-	}
-
-	_, err := retargetSessionWorkspace(context.Background(), "session-123", newWorkspace)
-	var opErr *net.OpError
-	if !errors.As(err, &opErr) {
-		t.Fatalf("retargetSessionWorkspace error = %v, want net.OpError", err)
-	}
-	if localCalls != 0 {
-		t.Fatalf("local calls = %d, want 0", localCalls)
-	}
-}
-
-func TestRetargetSessionWorkspaceDoesNotFallbackForExplicitLocalhostMethodNotFound(t *testing.T) {
-	resetBindingCommandRetargetHooks(t)
-	t.Setenv("KENT_SERVER_HOST", "localhost")
-	t.Setenv("KENT_SERVER_PORT", "65432")
-	newWorkspace, newCfg := newBindingCommandWorkspaceConfig(t)
-	if got := newCfg.Source.Sources["server_host"]; got != "env" {
-		t.Fatalf("server_host source = %q, want env", got)
-	}
-	if got := newCfg.Source.Sources["server_port"]; got != "env" {
-		t.Fatalf("server_port source = %q, want env", got)
-	}
-	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
-		return newCfg, &client.Remote{}, nil
-	}
-	remoteCalls := 0
-	localCalls := 0
-	bindingCommandSessionRetargeter = func(context.Context, client.SessionLifecycleClient, string, string) (serverapi.SessionRetargetWorkspaceResponse, error) {
-		remoteCalls++
-		return serverapi.SessionRetargetWorkspaceResponse{}, serverapi.ErrMethodNotFound
-	}
-	bindingCommandLocalSessionLifecycleClient = func(config.App) client.SessionLifecycleClient {
-		localCalls++
-		return bindingCommandTimeoutSessionLifecycleStub{}
-	}
-
-	_, err := retargetSessionWorkspace(context.Background(), "session-123", newWorkspace)
-	if !errors.Is(err, serverapi.ErrMethodNotFound) {
-		t.Fatalf("retargetSessionWorkspace error = %v, want ErrMethodNotFound", err)
-	}
-	if remoteCalls != 1 {
-		t.Fatalf("remote calls = %d, want 1", remoteCalls)
-	}
-	if localCalls != 0 {
-		t.Fatalf("local calls = %d, want 0", localCalls)
+	_, err := retargetSessionWorkspaceResponse(context.Background(), "session-123", newWorkspace, nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("retargetSessionWorkspaceResponse error = %v, want daemon open failure", err)
 	}
 }

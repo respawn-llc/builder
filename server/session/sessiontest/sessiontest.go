@@ -7,8 +7,73 @@
 package sessiontest
 
 import (
+	"context"
 	"core/server/session"
+
+	"core/internal/testharness/recordstore"
 )
+
+type Persistence struct {
+	records *recordstore.Store[session.PersistedSessionRecord]
+}
+
+func NewPersistence() *Persistence {
+	return &Persistence{records: recordstore.New(clonePersistedSessionRecord)}
+}
+
+func (p *Persistence) Options() []session.StoreOption {
+	return []session.StoreOption{
+		session.WithPersistenceObserver(p),
+		session.WithPersistedSessionResolver(p),
+	}
+}
+
+func (p *Persistence) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
+	p.records.Put(snapshot.Meta.SessionID, session.PersistedSessionRecord{
+		SessionDir: snapshot.SessionDir,
+		Meta:       cloneMeta(&snapshot.Meta),
+	})
+	return nil
+}
+
+func (p *Persistence) ObserveEventLogReconciliation(_ context.Context, reconciliation session.PersistedEventLogReconciliation) error {
+	record, ok := p.records.Get(reconciliation.SessionID)
+	if !ok {
+		return session.ErrSessionNotFound
+	}
+	meta := cloneMeta(record.Meta)
+	meta.LastSequence = reconciliation.LastSequence
+	meta.ConversationEstablished = reconciliation.ConversationEstablished
+	meta.UpdatedAt = reconciliation.UpdatedAt
+	record.Meta = meta
+	p.records.Put(reconciliation.SessionID, record)
+	return nil
+}
+
+func (p *Persistence) ResolvePersistedSession(_ context.Context, sessionID string) (session.PersistedSessionRecord, error) {
+	record, ok := p.records.Get(sessionID)
+	if !ok {
+		return session.PersistedSessionRecord{}, session.ErrSessionNotFound
+	}
+	return record, nil
+}
+
+func clonePersistedSessionRecord(record session.PersistedSessionRecord) session.PersistedSessionRecord {
+	record.Meta = cloneMeta(record.Meta)
+	return record
+}
+
+func cloneMeta(meta *session.Meta) *session.Meta {
+	if meta == nil {
+		return nil
+	}
+	cloned := *meta
+	return &cloned
+}
+
+func (p *Persistence) Open(dir string, options ...session.StoreOption) (*session.Store, error) {
+	return session.Open(dir, append(p.Options(), options...)...)
+}
 
 // CollectEvents streams the store's event log via the production streaming
 // reader and accumulates every event. Test-only.
@@ -50,8 +115,8 @@ type Snapshot struct {
 // SnapshotFromDir opens the persisted session at dir and projects its durable
 // state into a Snapshot using the production streaming readers. It surfaces the
 // same symlink/integrity rejections as session.Open. Test-only.
-func SnapshotFromDir(dir string) (Snapshot, error) {
-	store, err := session.Open(dir)
+func SnapshotFromDir(dir string, options ...session.StoreOption) (Snapshot, error) {
+	store, err := session.Open(dir, options...)
 	if err != nil {
 		return Snapshot{}, err
 	}

@@ -48,6 +48,7 @@ const (
 	ErrCodeWorktreeTransitionPending         = -32038
 	ErrCodeWorktreeSetupRetained             = -32039
 	ErrCodeWorktreeDeletePrecondition        = -32040
+	ErrCodeSessionRetarget                   = -32041
 )
 
 type Request struct {

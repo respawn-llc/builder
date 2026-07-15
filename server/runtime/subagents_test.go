@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"core/server/llm"
-	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/toolspec"
@@ -367,7 +366,7 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 		t.Fatalf("expected in-memory canonical transcript to keep subagent catalog, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
