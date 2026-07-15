@@ -1046,7 +1046,7 @@ func newRuntimeWireToolRegistry(t *testing.T, workspace string, enabled ...tools
 
 func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Logger, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
-	registry, broker, _, err := BuildToolRegistry(LocalToolRegistryOptions{
+	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:       workspace,
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
@@ -1057,12 +1057,12 @@ func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Log
 	if err != nil {
 		t.Fatalf("build tool registry: %v", err)
 	}
-	return registry, broker
+	return binding.Registry(), broker
 }
 
 func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, configRoot string, allowNonCwdEdits bool, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
-	registry, broker, _, err := BuildToolRegistry(LocalToolRegistryOptions{
+	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:       workspace,
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
@@ -1074,7 +1074,7 @@ func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, config
 	if err != nil {
 		t.Fatalf("build tool registry: %v", err)
 	}
-	return registry, broker
+	return binding.Registry(), broker
 }
 
 func newRuntimeWireBinding(t *testing.T, workspace string, enabled ...toolspec.ID) *LocalToolRegistryBinding {
