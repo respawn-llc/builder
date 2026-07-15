@@ -837,54 +837,31 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 	}
 	loaded := prepared.OverrideConfig
 	locked := plan.Store.Meta().Locked
-	mergedSource := mergeOverrideSources(next.Source, loaded.Source)
-	if strings.TrimSpace(overrides.Model) != "" && !next.ModelContractLocked {
-		originalModel := strings.TrimSpace(next.ActiveSettings.Model)
-		explicitSources := map[string]string{}
-		for key, source := range mergedSource.Sources {
-			if strings.TrimSpace(source) == "" || strings.TrimSpace(source) == "default" {
-				continue
-			}
-			explicitSources[key] = source
-		}
-		next.ActiveSettings.Model = loaded.Settings.Model
-		applyBudget(&next.ActiveSettings, explicitSources, originalModel, true)
-		next.ConfiguredModelName = loaded.Settings.Model
-	}
-	if strings.TrimSpace(overrides.ProviderOverride) != "" {
-		next.ActiveSettings.ProviderOverride = loaded.Settings.ProviderOverride
-	}
-	if strings.TrimSpace(overrides.ThinkingLevel) != "" {
-		next.ActiveSettings.ThinkingLevel = loaded.Settings.ThinkingLevel
-	}
-	if strings.TrimSpace(overrides.Theme) != "" {
-		next.ActiveSettings.Theme = loaded.Settings.Theme
-	}
-	if overrides.ModelTimeoutSeconds > 0 {
-		next.ActiveSettings.Timeouts.ModelRequestSeconds = loaded.Settings.Timeouts.ModelRequestSeconds
-	}
+	var err error
 	if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
 		shouldPersistContinuation = true
-		next.ActiveSettings.OpenAIBaseURL = loaded.Settings.OpenAIBaseURL
 	}
-	next.Source = mergedSource
+	next.ActiveSettings, next.Source, next.EnabledTools, err = applyPreparedConfigOverrides(
+		cloneSettings(next.ActiveSettings),
+		cloneSourceReport(next.Source),
+		append([]toolspec.ID(nil), next.EnabledTools...),
+		loaded,
+		overrides,
+		locked,
+		locked,
+		applyBudget,
+	)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	if strings.TrimSpace(overrides.Model) != "" && !next.ModelContractLocked {
+		next.ConfiguredModelName = loaded.Settings.Model
+	}
 	validated, err := validateRunPromptOverrideSettings(next.ActiveSettings, next.Source)
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
 	next.ActiveSettings = validated
-	if locked == nil {
-		if strings.TrimSpace(overrides.Tools) != "" {
-			next.ActiveSettings.EnabledTools = cloneEnabledToolSet(loaded.Settings.EnabledTools)
-		}
-		if strings.TrimSpace(overrides.Tools) != "" || strings.TrimSpace(overrides.Model) != "" {
-			enabledTools, err := ActiveToolIDsForPlan(next.ActiveSettings, mergedSource, locked)
-			if err != nil {
-				return SessionPlan{}, nil, err
-			}
-			next.EnabledTools = enabledTools
-		}
-	}
 	if shouldPersistContinuation {
 		if err := persistContinuation(); err != nil {
 			return SessionPlan{}, nil, err

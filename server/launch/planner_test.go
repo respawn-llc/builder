@@ -1336,6 +1336,38 @@ func TestApplyRunPromptOverridesOverridesHeadlessSettingsWithoutMutatingBasePlan
 	}
 }
 
+func TestApplyPreparedRunPromptOverridesWithoutRolePreservesConfiguredModelAndContinuation(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	overrides := serverapi.RunPromptOverrides{
+		Model:         "gpt-5-mini",
+		OpenAIBaseURL: "http://override.local/v1",
+	}
+
+	prepared, err := PrepareRunPromptOverrides(loaded, overrides, auth.EmptyState())
+	if err != nil {
+		t.Fatalf("PrepareRunPromptOverrides: %v", err)
+	}
+	prepared.BaseTarget = nil
+	updated, _, err := ApplyPreparedRunPromptOverrides(plan, overrides, prepared)
+	if err != nil {
+		t.Fatalf("ApplyPreparedRunPromptOverrides: %v", err)
+	}
+	if updated.ActiveSettings.Model != "gpt-5-mini" {
+		t.Fatalf("model = %q, want gpt-5-mini", updated.ActiveSettings.Model)
+	}
+	if updated.ConfiguredModelName != "gpt-5-mini" {
+		t.Fatalf("configured model = %q, want gpt-5-mini", updated.ConfiguredModelName)
+	}
+	if updated.ActiveSettings.OpenAIBaseURL != "http://override.local/v1" {
+		t.Fatalf("openai base url = %q, want override url", updated.ActiveSettings.OpenAIBaseURL)
+	}
+	if got := updated.Store.Meta().Continuation; got == nil || got.OpenAIBaseURL != "http://override.local/v1" {
+		t.Fatalf("continuation = %+v, want override url", got)
+	}
+}
+
 func TestSubagentRoleMetadataSurvivesCloneAndSourceReport(t *testing.T) {
 	settings := config.Settings{
 		Subagents: map[string]config.SubagentRole{
