@@ -6,12 +6,14 @@ import (
 
 	"core/server/workflow"
 	"core/shared/config"
+	"core/shared/toolspec"
 )
 
 func TestConfigRoleResolverUsesConfiguredRoleIdentity(t *testing.T) {
 	settings := config.Settings{
 		ThinkingLevel: "medium",
 		Workflow:      config.WorkflowSettings{Subagents: false},
+		EnabledTools:  map[toolspec.ID]bool{toolspec.ToolAskQuestion: true},
 		Subagents: map[string]config.SubagentRole{
 			"planner": {
 				Settings: config.Settings{ThinkingLevel: "medium"},
@@ -67,6 +69,7 @@ func TestWorkflowValidationUsesConfigRoleResolverIdentity(t *testing.T) {
 	settings := config.Settings{
 		ThinkingLevel: "medium",
 		Workflow:      config.WorkflowSettings{Subagents: false},
+		EnabledTools:  map[toolspec.ID]bool{toolspec.ToolAskQuestion: true},
 		Subagents: map[string]config.SubagentRole{
 			"planner": {
 				Settings: config.Settings{ThinkingLevel: "medium"},
@@ -114,6 +117,93 @@ func TestWorkflowValidationUsesConfigRoleResolverIdentity(t *testing.T) {
 			assertCoreWorkflowHasCode(t, result, workflow.CodeAgentRoleMissing)
 		})
 	}
+}
+
+func TestWorkflowValidationRejectsDefaultRoleWithoutAskQuestion(t *testing.T) {
+	def := coreWorkflowValidationDefinition(workflow.DefaultAgentRole)
+	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+		Context: workflow.ValidationContextExecution,
+		RoleResolver: configRoleResolver{settings: config.Settings{
+			EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: false},
+		}},
+	})
+
+	var diagnostics []workflow.ValidationError
+	for _, diagnostic := range result.Errors {
+		if diagnostic.Code == workflow.CodeAgentRoleRequiredToolDisabled {
+			diagnostics = append(diagnostics, diagnostic)
+		}
+	}
+	if len(diagnostics) != 1 {
+		t.Fatalf("required-tool diagnostics = %+v, want exactly one", diagnostics)
+	}
+	diagnostic := diagnostics[0]
+	if diagnostic.NodeID != workflow.NodeIDOf(def.Nodes[1]) {
+		t.Fatalf("node id = %q, want %q", diagnostic.NodeID, workflow.NodeIDOf(def.Nodes[1]))
+	}
+	if diagnostic.AgentRole == nil || *diagnostic.AgentRole != workflow.DefaultAgentRole {
+		t.Fatalf("agent role = %v, want %q", diagnostic.AgentRole, workflow.DefaultAgentRole)
+	}
+	if diagnostic.RequiredTool == nil || *diagnostic.RequiredTool != toolspec.ToolAskQuestion {
+		t.Fatalf("required tool = %v, want %q", diagnostic.RequiredTool, toolspec.ToolAskQuestion)
+	}
+	if !diagnostic.BlocksContext {
+		t.Fatal("execution-context diagnostic must block")
+	}
+}
+
+func TestWorkflowValidationRejectsConfiguredRoleDisablingAskQuestion(t *testing.T) {
+	settings := config.Settings{
+		EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: true},
+		Subagents: map[string]config.SubagentRole{
+			"planner": {
+				Settings: config.Settings{EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: false}},
+				Sources:  map[string]string{"tools.ask_question": "file"},
+			},
+		},
+	}
+	result := workflow.ValidateDefinition(coreWorkflowValidationDefinition("planner"), workflow.ValidationOptions{
+		Context:      workflow.ValidationContextExecution,
+		RoleResolver: configRoleResolver{settings: settings},
+	})
+
+	assertCoreWorkflowHasCode(t, result, workflow.CodeAgentRoleRequiredToolDisabled)
+}
+
+func TestWorkflowValidationAcceptsConfiguredRoleReenablingAskQuestion(t *testing.T) {
+	settings := config.Settings{
+		EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: false},
+		Subagents: map[string]config.SubagentRole{
+			"planner": {
+				Settings: config.Settings{EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}},
+				Sources:  map[string]string{"tools.ask_question": "file"},
+			},
+		},
+	}
+	result := workflow.ValidateDefinition(coreWorkflowValidationDefinition("planner"), workflow.ValidationOptions{
+		Context:      workflow.ValidationContextExecution,
+		RoleResolver: configRoleResolver{settings: settings},
+	})
+
+	assertCoreWorkflowHasNoCode(t, result, workflow.CodeAgentRoleRequiredToolDisabled)
+}
+
+func TestWorkflowValidationRejectsBuiltInRoleDisablingAskQuestion(t *testing.T) {
+	settings := config.Settings{
+		EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: true},
+		Subagents: map[string]config.SubagentRole{
+			config.BuiltInSubagentRoleFast: {
+				Settings: config.Settings{EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: false}},
+				Sources:  map[string]string{"tools.ask_question": "file"},
+			},
+		},
+	}
+	result := workflow.ValidateDefinition(coreWorkflowValidationDefinition(config.BuiltInSubagentRoleFast), workflow.ValidationOptions{
+		Context:      workflow.ValidationContextExecution,
+		RoleResolver: configRoleResolver{settings: settings},
+	})
+
+	assertCoreWorkflowHasCode(t, result, workflow.CodeAgentRoleRequiredToolDisabled)
 }
 
 func coreWorkflowValidationDefinition(role string) workflow.Definition {

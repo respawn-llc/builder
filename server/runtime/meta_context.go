@@ -349,7 +349,7 @@ func fallbackSubagentDescription(base config.Settings, role config.SubagentRole)
 	if role.Sources["priority_request_mode"] == "file" && role.Settings.PriorityRequestMode {
 		parts = append(parts, "fast mode on")
 	}
-	tools := effectiveRoleToolMap(base.EnabledTools, role)
+	tools := config.EffectiveSubagentRoleTools(base.EnabledTools, role)
 	if tools[toolspec.ToolPatch] || tools[toolspec.ToolEdit] {
 		parts = append(parts, "can edit")
 	}
@@ -364,20 +364,6 @@ func fallbackSubagentDescription(base config.Settings, role config.SubagentRole)
 		}
 	}
 	return strings.Join(filtered, ", ")
-}
-
-func effectiveRoleToolMap(base map[toolspec.ID]bool, role config.SubagentRole) map[toolspec.ID]bool {
-	out := make(map[toolspec.ID]bool, len(base))
-	for key, enabled := range base {
-		out[key] = enabled
-	}
-	for _, id := range toolspec.CatalogIDs() {
-		sourceKey := "tools." + toolspec.ConfigName(id)
-		if _, ok := role.Sources[sourceKey]; ok {
-			out[id] = role.Settings.EnabledTools[id]
-		}
-	}
-	return out
 }
 
 func toolEnabled(enabled []toolspec.ID, want toolspec.ID) bool {

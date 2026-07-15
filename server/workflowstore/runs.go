@@ -273,13 +273,22 @@ func (s *Store) ResumeTaskRuns(ctx context.Context, taskID workflow.TaskID) ([]R
 func (s *Store) validateRunnableRole(role string) error {
 	trimmed := strings.TrimSpace(role)
 	if trimmed == "" {
-		return WorkflowValidationError{Codes: []workflow.ValidationErrorCode{workflow.CodeAgentRoleRequired}}
+		return WorkflowValidationError{Diagnostics: []workflow.ValidationError{{
+			Code:          workflow.CodeAgentRoleRequired,
+			Message:       "agent node requires a subagent role",
+			BlocksContext: true,
+		}}}
 	}
 	if workflow.IsDefaultAgentRole(trimmed) {
 		return nil
 	}
 	if s.roleResolver != nil && !s.roleResolver.RoleExists(trimmed) {
-		return WorkflowValidationError{Codes: []workflow.ValidationErrorCode{workflow.CodeAgentRoleMissing}}
+		return WorkflowValidationError{Diagnostics: []workflow.ValidationError{{
+			Code:          workflow.CodeAgentRoleMissing,
+			Message:       "agent node references a missing subagent role",
+			AgentRole:     &trimmed,
+			BlocksContext: true,
+		}}}
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/toolspec"
 	"core/shared/workflowkey"
 )
 
@@ -549,10 +550,8 @@ func (s *validationState) validateKindConstraints() {
 				s.addHard(CodeInvalidStartNode, "start node must be non-executable and have no inputs", ref)
 			}
 		case NodeKindAgent:
-			if strings.TrimSpace(NodeSubagentRole(node)) == "" {
-				s.addSemantic(CodeAgentRoleRequired, "agent node requires a subagent role", ref)
-			} else if !IsDefaultAgentRole(NodeSubagentRole(node)) && (s.opts.RoleResolver == nil || !s.opts.RoleResolver.RoleExists(strings.TrimSpace(NodeSubagentRole(node)))) {
-				s.addSemantic(CodeAgentRoleMissing, "agent node references a missing subagent role", ref)
+			if issue, exists := validateAgentRoleRequirement(s.def.ID, node, toolspec.ToolAskQuestion, s.opts.RoleResolver); exists {
+				s.addSemantic(issue.Code, issue.Message, issue)
 			}
 		case NodeKindJoin:
 			if strings.TrimSpace(NodeSubagentRole(node)) != "" {
@@ -573,6 +572,32 @@ func (s *validationState) validateKindConstraints() {
 			}
 		}
 	}
+}
+
+func validateAgentRoleRequirement(workflowID WorkflowID, node Node, requiredTool toolspec.ID, resolver RoleResolver) (ValidationError, bool) {
+	ref := ValidationError{WorkflowID: workflowID, NodeID: NodeIDOf(node)}
+	role := strings.TrimSpace(NodeSubagentRole(node))
+	if role == "" {
+		return ValidationError{
+			Code:       CodeAgentRoleRequired,
+			Message:    "agent node requires a subagent role",
+			WorkflowID: ref.WorkflowID,
+			NodeID:     ref.NodeID,
+		}, true
+	}
+	ref.AgentRole = &role
+	if resolver == nil || !resolver.RoleExists(role) {
+		ref.Code = CodeAgentRoleMissing
+		ref.Message = fmt.Sprintf("Agent node %s references missing subagent role %s", nodeDisplayName(node), role)
+		return ref, true
+	}
+	if resolver.RoleToolEnabled(role, requiredTool) {
+		return ValidationError{}, false
+	}
+	ref.RequiredTool = &requiredTool
+	ref.Code = CodeAgentRoleRequiredToolDisabled
+	ref.Message = fmt.Sprintf("Agent node %s uses role %s without required tool %s; enable it in the role's effective configuration", nodeDisplayName(node), role, requiredTool)
+	return ref, true
 }
 
 func (s *validationState) validateRuntimeSupport() {

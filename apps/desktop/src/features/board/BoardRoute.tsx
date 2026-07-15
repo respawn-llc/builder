@@ -286,12 +286,16 @@ function BoardContent({
     event.preventDefault();
     const dragPayload = activeDrag === null ? null : activeDrag.payload;
     cancelActiveDrag();
-    if (dragPayload === null || actionsDisabled || !board.selectedWorkflow.validForTaskCreation) {
+    if (dragPayload === null || actionsDisabled) {
       reportRejectedDrop();
       return;
     }
     const dropAction = classifyDrop(column, dragPayload, firstActive?.id);
     if (dropAction.kind === "start") {
+      if (!board.selectedWorkflow.validForTaskCreation) {
+        reportRejectedDrop();
+        return;
+      }
       const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
       runCardAction(startExecutionTargetAction(dragPayload.taskID), pendingMove);
       return;
@@ -384,11 +388,14 @@ function BoardContent({
     if (activeDrag === null) {
       return "idle";
     }
-    if (actionsDisabled || !board.selectedWorkflow.validForTaskCreation) {
+    if (actionsDisabled) {
       return "blocked";
     }
     const manualTargets = new Set(activeDrag.payload.manualMoveTargetNodeIDs);
-    const canStartHere = activeDrag.payload.canStart && column.id === firstActive?.id;
+    const canStartHere =
+      board.selectedWorkflow.validForTaskCreation &&
+      activeDrag.payload.canStart &&
+      column.id === firstActive?.id;
     return canStartHere || manualTargets.has(column.id) ? "allowed" : "blocked";
   }
 

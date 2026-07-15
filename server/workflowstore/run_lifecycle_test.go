@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/workflow"
 )
 
@@ -590,7 +591,7 @@ func TestResumeTaskRunRejectsRoleDrift(t *testing.T) {
 	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRun: %v", err)
 	}
-	store.roleResolver = workflow.StaticRoleResolver{}
+	store.roleResolver = testsetup.QuestionsEnabled()
 
 	var roleErr WorkflowValidationError
 	if _, err := store.ResumeTaskRuns(ctx, task.ID); !errors.As(err, &roleErr) || !roleErr.HasCode(workflow.CodeAgentRoleMissing) {
@@ -618,7 +619,7 @@ func TestResumeTaskRunAllowsDefaultAgentRoleWithoutResolver(t *testing.T) {
 	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRun: %v", err)
 	}
-	store.roleResolver = workflow.StaticRoleResolver{}
+	store.roleResolver = testsetup.QuestionsEnabled()
 
 	resumedRuns, err := store.ResumeTaskRuns(ctx, task.ID)
 	if err != nil {

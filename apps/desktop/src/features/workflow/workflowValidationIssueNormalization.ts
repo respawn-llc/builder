@@ -11,7 +11,7 @@ export function normalizeWorkflowValidationErrors(
 }
 
 function workflowValidationErrorIdentity(error: WorkflowValidationError): string {
-  return [
+  return JSON.stringify([
     error.code,
     error.message,
     error.workflowID,
@@ -22,6 +22,8 @@ function workflowValidationErrorIdentity(error: WorkflowValidationError): string
     error.details.inputName,
     error.details.placeholder,
     error.details.providerEdgeID,
+    error.details.role,
+    error.details.requiredTool,
     [...error.relatedIDs].sort().join(","),
-  ].join("\u0000");
+  ]);
 }

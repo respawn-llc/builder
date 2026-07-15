@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/server/workflowstore"
@@ -39,7 +40,7 @@ func TestListTasksUsesCanonicalStatusProjection(t *testing.T) {
 		ProjectID:      &projectID,
 		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval},
-	}, workflow.StaticRoleResolver{"coder": true})
+	}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestListTasksUsesCanonicalStatusProjection(t *testing.T) {
 		resp, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
 			ProjectID:      &projectID,
 			AttentionKinds: []serverapi.WorkflowTaskAttentionKind{attentionKind},
-		}, workflow.StaticRoleResolver{"coder": true})
+		}, testsetup.QuestionsEnabled("coder"))
 		if err != nil {
 			t.Fatalf("ListTasks canceled %s attention: %v", attentionKind, err)
 		}
@@ -226,7 +227,7 @@ func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
 		ProjectID:   &projectID,
 		ColumnKeys:  []string{"backlog"},
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog},
-	}, workflow.StaticRoleResolver{"coder": true})
+	}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks backlog: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
 		ProjectID:   &projectID,
 		ColumnKeys:  []string{"agent"},
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning},
-	}, workflow.StaticRoleResolver{"coder": true})
+	}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks running: %v", err)
 	}
@@ -340,7 +341,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	list := func(request serverapi.WorkflowTaskListRequest) serverapi.WorkflowTaskListResponse {
 		t.Helper()
 		request.ProjectID = &projectID
-		response, err := view.ListTasks(ctx, request, workflow.StaticRoleResolver{"coder": true})
+		response, err := view.ListTasks(ctx, request, testsetup.QuestionsEnabled("coder"))
 		if err != nil {
 			t.Fatalf("ListTasks %+v: %v", request, err)
 		}
@@ -416,7 +417,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		{ColumnKeys: []string{"missing"}},
 	} {
 		request.ProjectID = &projectID
-		_, err := view.ListTasks(ctx, request, workflow.StaticRoleResolver{"coder": true})
+		_, err := view.ListTasks(ctx, request, testsetup.QuestionsEnabled("coder"))
 		var validationErr serverapi.WorkflowRequestValidationError
 		if !errors.As(err, &validationErr) {
 			t.Fatalf("ListTasks invalid request %+v error = %v, want validation error", request, err)
@@ -431,7 +432,7 @@ func TestListTasksPreservesFanoutStatusUnions(t *testing.T) {
 	response, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:   &projectID,
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
-	}, workflow.StaticRoleResolver{"coder": true})
+	}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks: %v", err)
 	}
@@ -509,7 +510,7 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 		items := make([]serverapi.WorkflowTaskListItem, 0, 5)
 		seen := map[string]bool{}
 		for {
-			response, err := view.ListTasks(ctx, request, workflow.StaticRoleResolver{"coder": true})
+			response, err := view.ListTasks(ctx, request, testsetup.QuestionsEnabled("coder"))
 			if err != nil {
 				t.Fatalf("ListTasks %+v: %v", request, err)
 			}
@@ -578,7 +579,7 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 		ProjectID: baseRequest.ProjectID,
 		PageSize:  baseRequest.PageSize,
 		Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
-	}, workflow.StaticRoleResolver{"coder": true})
+	}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks first page: %v", err)
 	}
@@ -599,7 +600,7 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(workflowTaskListPageTokenPayload{Version: token.Version, ProjectID: "project-conflict", WorkflowID: token.WorkflowID, WorkflowVersion: token.WorkflowVersion, ColumnStructureHash: token.ColumnStructureHash, StatusModelVersion: token.StatusModelVersion, Fingerprint: token.Fingerprint, Cursor: token.Cursor})},
 	}
 	for _, request := range invalidRequests {
-		_, err := view.ListTasks(ctx, request, workflow.StaticRoleResolver{"coder": true})
+		_, err := view.ListTasks(ctx, request, testsetup.QuestionsEnabled("coder"))
 		if !errors.Is(err, ErrInvalidPageToken) {
 			t.Fatalf("ListTasks invalid continuation %+v error = %v, want ErrInvalidPageToken", request, err)
 		}
@@ -709,7 +710,7 @@ func TestTaskListResolvesExactProjectWorkflowScope(t *testing.T) {
 			firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 			secondWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 			request, wantProjectID, wantWorkflowID, scopeErrWant := testCase.setup(t, ctx, store, workflowStore, binding, firstWorkflowID, secondWorkflowID)
-			response, err := view.ListTasks(ctx, request, workflow.StaticRoleResolver{"coder": true})
+			response, err := view.ListTasks(ctx, request, testsetup.QuestionsEnabled("coder"))
 			if scopeErrWant == nil {
 				if err != nil {
 					t.Fatalf("ListTasks: %v", err)
@@ -749,14 +750,14 @@ func TestTaskListInfersScopeFromContinuationToken(t *testing.T) {
 		}
 	}
 	projectID, workflowIDValue := binding.ProjectID, string(workflowID)
-	firstPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &projectID, WorkflowID: &workflowIDValue, PageSize: 1}, workflow.StaticRoleResolver{"coder": true})
+	firstPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &projectID, WorkflowID: &workflowIDValue, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks first page: %v", err)
 	}
 	if firstPage.NextPageToken == "" {
 		t.Fatal("expected continuation token")
 	}
-	nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{PageToken: firstPage.NextPageToken, PageSize: 1}, workflow.StaticRoleResolver{"coder": true})
+	nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{PageToken: firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks token-only continuation: %v", err)
 	}
@@ -764,7 +765,7 @@ func TestTaskListInfersScopeFromContinuationToken(t *testing.T) {
 		t.Fatalf("token-only continuation = %+v, want resolved second page", nextPage)
 	}
 	otherProjectID := "project-conflict"
-	_, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &otherProjectID, PageToken: firstPage.NextPageToken, PageSize: 1}, workflow.StaticRoleResolver{"coder": true})
+	_, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &otherProjectID, PageToken: firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
 	if !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("ListTasks conflicting token scope error = %v, want ErrInvalidPageToken", err)
 	}
