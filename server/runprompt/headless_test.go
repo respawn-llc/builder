@@ -382,12 +382,14 @@ func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.
 		inner: inner,
 		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
 	}
-	first := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "session-1")), Prompt: "hello"}
+	caller := "caller-1"
+	first := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "session-1")), CallerSessionID: &caller, Prompt: "hello"}
 	if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
 		t.Fatalf("RunPrompt first: %v", err)
 	}
 	second := first
-	second.Prompt = "different"
+	changedCaller := "caller-2"
+	second.CallerSessionID = &changedCaller
 	if _, err := service.RunPrompt(context.Background(), second, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("RunPrompt mismatch error = %v, want request id payload mismatch", err)
 	}

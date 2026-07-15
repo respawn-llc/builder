@@ -5,34 +5,6 @@ import (
 	"core/shared/serverapi"
 )
 
-type TargetKind uint8
-
-const (
-	TargetOmittedBase TargetKind = iota
-	TargetExplicitBase
-	TargetNamed
-)
-
-type Target struct {
-	Kind     TargetKind
-	Selector string
-}
-
-type Caller struct {
-	Workflow  bool
-	AgentRole *string
-}
-
-func TargetFromOverride(override serverapi.RunPromptAgentRoleOverride) Target {
-	if !override.Present {
-		return Target{Kind: TargetOmittedBase}
-	}
-	if override.Default {
-		return Target{Kind: TargetExplicitBase}
-	}
-	return Target{Kind: TargetNamed, Selector: override.Role}
-}
-
 func Authorize(settings config.Settings, caller *Caller, target Target) error {
 	context := config.SubagentInvocationContextOrdinary
 	if caller != nil && caller.Workflow {
@@ -80,23 +52,4 @@ func namedTargetAllowed(settings config.Settings, context config.SubagentInvocat
 	return context != config.SubagentInvocationContextWorkflow ||
 		*lookup.NormalizedSelector == config.BuiltInSubagentRoleFast ||
 		(settings.Workflow.Subagents && config.SubagentRoleWorkflowCallable(lookup.Role))
-}
-
-func available(settings config.Settings, context config.SubagentInvocationContext) []string {
-	names := config.AvailableSubagentRoleNames(settings, false)
-	out := make([]string, 0, len(names))
-	for _, name := range names {
-		if name == config.BuiltInSubagentRoleFast {
-			continue
-		}
-		lookup := config.LookupSubagentRole(settings, name)
-		if namedTargetAllowed(settings, context, lookup) {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-func denial(kind serverapi.SubagentLaunchDenialKind, target *string, availableRoles []string) error {
-	return &serverapi.SubagentLaunchDeniedError{Kind: kind, Target: target, AvailableRoles: availableRoles}
 }

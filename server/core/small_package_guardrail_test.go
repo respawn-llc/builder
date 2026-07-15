@@ -124,7 +124,6 @@ var allowedSmallPackages = map[string]string{
 	"server/serverstatus":                         "server status/update-status service owner after status consolidation",
 	"server/sessionlaunch":                        "session launch service seam kept separate from session runtime to avoid runprompt/runtime cycles",
 	"server/session/sessiontest":                  "test-only helper package exposing full event-history collectors kept out of the production session surface so production code cannot materialize whole histories",
-	"server/subagentpolicy":                       "single server-owned workflow subagent authorization policy shared by runtime catalog projection and session launch without making either package own the other's orchestration",
 	"server/workflowruntime":                      "runtime/workflow contract boundary imported by server runtime; merging into runner would invert dependencies",
 	"server/workflowscript":                       "shared workflow script path validation and resolution contract used by store, service, and runner without creating dependency cycles",
 	"server/workflowsvc":                          "workflow mutation service owner with service tests",
