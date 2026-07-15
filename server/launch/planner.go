@@ -909,7 +909,7 @@ func resolvePreparedSubagentSettings(base config.Settings, baseSource config.Sou
 	resolved := cloneSettings(base)
 	_ = applyBuiltInRoleHeuristics(&resolved, target.Selector, target.ProviderID, allowModelOverride)
 	applySubagentRoleOverrides(&resolved, target.Role, allowModelOverride)
-	effectiveSource := sourceReportWithPreparedSubagentRoleSources(baseSource, target.Role, allowModelOverride)
+	effectiveSource := sourceReportWithSubagentRoleSources(baseSource, target.Role, allowModelOverride)
 	effectiveSources := cloneStringMap(effectiveSource.Sources)
 	applyReviewerInheritance(&resolved, effectiveSources)
 	effectiveSource.Sources = effectiveSources
@@ -923,24 +923,6 @@ func resolvePreparedSubagentSettings(base config.Settings, baseSource config.Sou
 		warning = fastRoleSameAsMainWarning
 	}
 	return resolved, effectiveSource, warning, nil
-}
-
-func sourceReportWithPreparedSubagentRoleSources(base config.SourceReport, role config.SubagentRole, allowModelOverride bool) config.SourceReport {
-	if len(role.Sources) == 0 {
-		return base
-	}
-	next := base
-	next.Sources = cloneStringMap(base.Sources)
-	if !allowModelOverride && strings.TrimSpace(next.Sources["model"]) == "default" {
-		next.Sources["model"] = "session"
-	}
-	for key := range role.Sources {
-		if key == "model" && !allowModelOverride {
-			continue
-		}
-		next.Sources[key] = "subagent"
-	}
-	return next
 }
 
 func continuationRoleDisplay(role *string) string {
@@ -998,9 +980,8 @@ func cloneSourceReport(source config.SourceReport) config.SourceReport {
 	return next
 }
 
-func sourceReportWithSubagentRoleSources(base config.SourceReport, settings config.Settings, roleName string, allowModelOverride bool) config.SourceReport {
-	lookup := config.LookupSubagentRole(settings, roleName)
-	if lookup.Status != config.SubagentRoleLookupPresent || len(lookup.Role.Sources) == 0 {
+func sourceReportWithSubagentRoleSources(base config.SourceReport, role config.SubagentRole, allowModelOverride bool) config.SourceReport {
+	if len(role.Sources) == 0 {
 		return base
 	}
 	next := base
@@ -1008,7 +989,7 @@ func sourceReportWithSubagentRoleSources(base config.SourceReport, settings conf
 	if !allowModelOverride && strings.TrimSpace(next.Sources["model"]) == "default" {
 		next.Sources["model"] = "session"
 	}
-	for key := range lookup.Role.Sources {
+	for key := range role.Sources {
 		if key == "model" && !allowModelOverride {
 			continue
 		}

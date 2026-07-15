@@ -2645,6 +2645,7 @@ fn remote_main_view_uses_control_connection_and_decodes_questions_status() {
     let factory = remote.into_factory();
 
     assert!(actual.main_view.status.questions_enabled);
+    assert_eq!(actual.main_view.status.parent_session_id, None);
     assert_eq!(factory.opened, vec![ConnectionKind::Control]);
     assert_sent_methods(
         &main_view_log.borrow(),
@@ -3283,7 +3284,7 @@ fn zero_main_view_json() -> serde_json::Value {
                 "FastModeAvailable": false,
                 "FastModeEnabled": false,
                 "ConversationFreshness": 0,
-                "ParentSessionID": "",
+                "ParentSessionID": null,
                 "LastCommittedAssistantFinalAnswer": "",
                 "ThinkingLevel": "",
                 "CompactionMode": "",

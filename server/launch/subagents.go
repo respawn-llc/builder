@@ -54,7 +54,7 @@ func resolveSubagentSettingsWithProviderID(base config.Settings, baseSource conf
 	resolved := cloneSettings(base)
 	_ = applyBuiltInRoleHeuristics(&resolved, *lookup.NormalizedSelector, strings.TrimSpace(providerID), allowModelOverride)
 	applySubagentRoleOverrides(&resolved, lookup.Role, allowModelOverride)
-	effectiveSource := sourceReportWithSubagentRoleSources(baseSource, base, *lookup.NormalizedSelector, allowModelOverride)
+	effectiveSource := sourceReportWithSubagentRoleSources(baseSource, lookup.Role, allowModelOverride)
 	effectiveSources := cloneStringMap(effectiveSource.Sources)
 	applyReviewerInheritance(&resolved, effectiveSources)
 	effectiveSource.Sources = effectiveSources

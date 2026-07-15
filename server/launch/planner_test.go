@@ -1364,7 +1364,7 @@ func TestSubagentRoleMetadataSurvivesCloneAndSourceReport(t *testing.T) {
 		t.Fatalf("metadata did not survive clone: %+v", cloned.Subagents["worker"])
 	}
 
-	report := sourceReportWithSubagentRoleSources(config.SourceReport{Sources: map[string]string{"model": "file"}}, settings, "worker", true)
+	report := sourceReportWithSubagentRoleSources(config.SourceReport{Sources: map[string]string{"model": "file"}}, settings.Subagents["worker"], true)
 	if report.Sources["model"] != "subagent" {
 		t.Fatalf("source report model source = %q, want subagent", report.Sources["model"])
 	}

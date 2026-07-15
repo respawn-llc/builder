@@ -374,27 +374,54 @@ func TestMemoizingPromptServiceDedupesRemoteShapedReplayWithOverrides(t *testing
 }
 
 func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.T) {
-	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-		sessionID, _ := req.Intent.SessionID()
-		return serverapi.RunPromptResponse{SessionID: sessionID.String(), Result: "ok"}, nil
-	}}
-	service := &memoizingPromptService{
-		inner: inner,
-		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
+	tests := []struct {
+		name   string
+		mutate func(*serverapi.RunPromptRequest)
+	}{
+		{
+			name: "caller session provenance",
+			mutate: func(req *serverapi.RunPromptRequest) {
+				changedCaller := "caller-2"
+				req.CallerSessionID = &changedCaller
+			},
+		},
+		{
+			name: "legacy selected session",
+			mutate: func(req *serverapi.RunPromptRequest) {
+				req.SelectedSessionID = "selected-2"
+			},
+		},
 	}
-	caller := "caller-1"
-	first := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "session-1")), CallerSessionID: &caller, Prompt: "hello"}
-	if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
-		t.Fatalf("RunPrompt first: %v", err)
-	}
-	second := first
-	changedCaller := "caller-2"
-	second.CallerSessionID = &changedCaller
-	if _, err := service.RunPrompt(context.Background(), second, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("RunPrompt mismatch error = %v, want request id payload mismatch", err)
-	}
-	if inner.CallCount() != 1 {
-		t.Fatalf("inner call count = %d, want 1", inner.CallCount())
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+				sessionID, _ := req.Intent.SessionID()
+				return serverapi.RunPromptResponse{SessionID: sessionID.String(), Result: "ok"}, nil
+			}}
+			service := &memoizingPromptService{
+				inner: inner,
+				runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
+			}
+			caller := "caller-1"
+			first := serverapi.RunPromptRequest{
+				ClientRequestID:   "req-1",
+				Intent:            serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "session-1")),
+				SelectedSessionID: "selected-1",
+				CallerSessionID:   &caller,
+				Prompt:            "hello",
+			}
+			if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
+				t.Fatalf("RunPrompt first: %v", err)
+			}
+			second := first
+			test.mutate(&second)
+			if _, err := service.RunPrompt(context.Background(), second, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+				t.Fatalf("RunPrompt mismatch error = %v, want request id payload mismatch", err)
+			}
+			if inner.CallCount() != 1 {
+				t.Fatalf("inner call count = %d, want 1", inner.CallCount())
+			}
+		})
 	}
 }
 
