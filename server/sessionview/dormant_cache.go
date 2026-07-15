@@ -138,7 +138,7 @@ func buildDormantTranscriptCacheEntryWithMode(_ context.Context, store *session.
 func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clientui.ConversationFreshness) clientui.RuntimeMainView {
 	status := clientui.RuntimeStatus{
 		ConversationFreshness:             freshness,
-		ParentSessionID:                   cloneOptionalString(meta.ParentSessionID),
+		ParentSessionID:                   valuecopy.Pointer(meta.ParentSessionID),
 		LastCommittedAssistantFinalAnswer: e.lastCommittedAssistantAnswer,
 		Goal:                              runtimeview.GoalFromSessionState(meta.Goal, false),
 	}
@@ -158,14 +158,6 @@ func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clien
 			ConversationFreshness: freshness,
 		},
 	)
-}
-
-func cloneOptionalString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
 }
 
 func (e dormantTranscriptCacheEntry) newestSegmentPage(meta session.Meta, freshness clientui.ConversationFreshness) clientui.TranscriptPage {

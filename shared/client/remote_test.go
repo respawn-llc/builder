@@ -121,6 +121,51 @@ func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 	}
 }
 
+func TestRemoteRunPromptCarriesCallerLineageAndExplicitDefault(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var req protocol.Request
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Fatalf("receive run prompt: %v", err)
+		}
+		if req.Method != protocol.MethodRunPrompt {
+			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodRunPrompt)
+		}
+		var decoded serverapi.RunPromptRequest
+		if err := json.Unmarshal(req.Params, &decoded); err != nil {
+			t.Fatalf("decode run prompt params: %v", err)
+		}
+		if decoded.CallerSessionID == nil || *decoded.CallerSessionID != "caller-session" ||
+			decoded.ParentSessionID == nil || *decoded.ParentSessionID != "parent-session" ||
+			decoded.Overrides.AgentRole == nil || *decoded.Overrides.AgentRole != "default" {
+			t.Fatalf("decoded request = %+v, want present caller/parent/default selector", decoded)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RunPromptResponse{SessionID: "session-1", Result: "done"})); err != nil {
+			t.Fatalf("send response: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	caller := "caller-session"
+	parent := "parent-session"
+	role := "default"
+	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+		ClientRequestID:   "present",
+		CallerSessionID:   &caller,
+		ParentSessionID:   &parent,
+		Prompt:            "hello",
+		Overrides:         serverapi.RunPromptOverrides{AgentRole: &role},
+	}, nil); err != nil {
+		t.Fatalf("RunPrompt present provenance: %v", err)
+	}
+}
+
 func TestRemoteGetsLatestCommittedAssistantFinalAnswer(t *testing.T) {
 	answer := "durable answer"
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {

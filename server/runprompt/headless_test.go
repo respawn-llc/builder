@@ -500,6 +500,12 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	}{
 		{name: "omitted base"},
 	}
+	defaultRole := config.DefaultSubagentRole
+	tests = append(tests, struct {
+		name      string
+		overrides serverapi.RunPromptOverrides
+		wantRole  string
+	}{name: "explicit default", overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}})
 	worker := "worker"
 	tests = append(tests, struct {
 		name      string
@@ -545,8 +551,59 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 			}
 		})
 	}
-	if responseCount != 2 {
-		t.Fatalf("provider responses = %d, want 2", responseCount)
+	selectedTests := []struct {
+		name      string
+		overrides serverapi.RunPromptOverrides
+		wantRole  string
+	}{
+		{name: "selected omitted"},
+		{name: "selected default", overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}},
+		{name: "selected custom", overrides: serverapi.RunPromptOverrides{AgentRole: &worker}, wantRole: worker},
+	}
+	for _, test := range selectedTests {
+		t.Run(test.name, func(t *testing.T) {
+			selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, meta.AuthoritativeSessionStoreOptions()...)
+			if err != nil {
+				t.Fatalf("session.Create selected: %v", err)
+			}
+			if err := selected.EnsureDurable(); err != nil {
+				t.Fatalf("EnsureDurable selected: %v", err)
+			}
+			response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
+				ClientRequestID:   "workflow-allowed-" + strings.ReplaceAll(test.name, " ", "-"),
+				SelectedSessionID: selected.Meta().SessionID,
+				CallerSessionID:   &parentID,
+				Prompt:            "continue selected",
+				Overrides:         test.overrides,
+			}, nil)
+			if err != nil {
+				t.Fatalf("RunPrompt: %v", err)
+			}
+			if response.SessionID != selected.Meta().SessionID {
+				t.Fatalf("session id = %q, want selected %q", response.SessionID, selected.Meta().SessionID)
+			}
+			reopened, err := session.OpenByID(root, selected.Meta().SessionID, meta.AuthoritativeSessionStoreOptions()...)
+			if err != nil {
+				t.Fatalf("OpenByID selected: %v", err)
+			}
+			var gotRole *string
+			if reopened.Meta().Continuation != nil {
+				gotRole = reopened.Meta().Continuation.AgentRole
+			}
+			if test.wantRole == "" {
+				if gotRole != nil {
+					t.Fatalf("continuation role = %v, want base role", gotRole)
+				}
+			} else if gotRole == nil || *gotRole != test.wantRole {
+				t.Fatalf("continuation role = %v, want %q", gotRole, test.wantRole)
+			}
+			if runtimes.IsSessionRuntimeActive(selected.Meta().SessionID) {
+				t.Fatalf("completed selected launch left runtime active for %q", selected.Meta().SessionID)
+			}
+		})
+	}
+	if responseCount != 6 {
+		t.Fatalf("provider responses = %d, want 6", responseCount)
 	}
 }
 

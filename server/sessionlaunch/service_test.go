@@ -236,6 +236,55 @@ func TestServicePlanSessionRespectsLockedContractWhenApplyingOverrides(t *testin
 	}
 }
 
+func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	containerDir := t.TempDir()
+	store, err := session.Create(containerDir, "workspace-a", workspace)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	role := "worker"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	roleSettings := cfg.Settings
+	roleSettings.ThinkingLevel = "high"
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		role: {
+			Settings:         roleSettings,
+			Sources:          map[string]string{"thinking_level": "file"},
+			AgentCallable:    true,
+			AgentCallableSet: true,
+		},
+	}
+	service := NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+	}, registry.NewSessionStoreRegistry())
+
+	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
+		ClientRequestID:   "locked-named-tools",
+		Mode:              serverapi.SessionLaunchModeInteractive,
+		SelectedSessionID: store.Meta().SessionID,
+		Overrides: serverapi.RunPromptOverrides{
+			AgentRole: &role,
+			Tools:     "patch,edit",
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if strings.Join(resp.Plan.EnabledToolIDs, ",") != "exec_command" {
+		t.Fatalf("enabled tools = %+v, want the persisted locked tool set", resp.Plan.EnabledToolIDs)
+	}
+}
+
 func TestServicePlanSessionPropagatesOverrideToolConflict(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
