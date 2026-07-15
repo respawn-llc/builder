@@ -22,7 +22,7 @@ func TestTranscriptContractHydratesAtOneThenCarriesAtomicRuntimeReadModelUpdateA
 			},
 		},
 	}
-	if err := hydration.ValidatePayload(); err != nil {
+	if err := hydration.Validate(); err != nil {
 		t.Fatalf("validate hydration: %v", err)
 	}
 
@@ -33,8 +33,22 @@ func TestTranscriptContractHydratesAtOneThenCarriesAtomicRuntimeReadModelUpdateA
 			RuntimeReadModelUpdate: &update,
 		},
 	}
-	if err := live.ValidatePayload(); err != nil {
+	if err := live.Validate(); err != nil {
 		t.Fatalf("validate live runtime read-model update: %v", err)
+	}
+}
+
+func TestTranscriptPayloadValidationPrecedesPerSubscriptionSequenceAssignment(t *testing.T) {
+	update := runtimefeedTestRuntimeReadModelUpdate(t)
+	message := TranscriptMessage{
+		Kind:    TranscriptMessageRuntimeReadModelUpdate,
+		Payload: TranscriptPayload{RuntimeReadModelUpdate: &update},
+	}
+	if err := message.ValidatePayload(); err != nil {
+		t.Fatalf("validate unsequenced payload: %v", err)
+	}
+	if err := message.Validate(); err == nil {
+		t.Fatal("accepted final transcript message without subscription sequence")
 	}
 }
 
@@ -56,7 +70,7 @@ func TestTranscriptContractRejectsSequenceOutsideMessageLifecycle(t *testing.T) 
 		},
 	}
 	for _, message := range tests {
-		if err := message.ValidatePayload(); err == nil {
+		if err := message.Validate(); err == nil {
 			t.Fatalf("accepted message with invalid sequence lifecycle: %+v", message)
 		}
 	}

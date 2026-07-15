@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -541,6 +542,129 @@ func TestSessionTranscriptFeedPublishesUpdatedToolStartMetadataByCallID(t *testi
 	}
 	if got := hydration.Hydration.InFlightTools[0].ToolName; got != "exec" {
 		t.Fatalf("hydrated tool name = %q, want updated duplicate start metadata", got)
+	}
+}
+
+func TestSessionTranscriptFeedHydratesToolsInFirstStartOrder(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	const toolCount = 16
+	for index := 0; index < toolCount; index++ {
+		registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+			Kind:   runtime.EventToolCallStarted,
+			StepID: "22222222-2222-4222-8222-222222222222",
+			ToolCall: &llm.ToolCall{
+				ID:   fmt.Sprintf("call-%02d", index),
+				Name: "shell",
+			},
+		})
+	}
+	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+		Kind:   runtime.EventToolCallStarted,
+		StepID: "22222222-2222-4222-8222-222222222222",
+		ToolCall: &llm.ToolCall{
+			ID:   "call-00",
+			Name: "exec",
+		},
+	})
+
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+	hydration := nextTranscriptMessage(t, sub)
+	if hydration.Hydration == nil || len(hydration.Hydration.InFlightTools) != toolCount {
+		t.Fatalf("hydration = %+v, want %d in-flight tools", hydration, toolCount)
+	}
+	for index, tool := range hydration.Hydration.InFlightTools {
+		wantID := fmt.Sprintf("call-%02d", index)
+		if tool.ToolCallID != wantID {
+			t.Fatalf("hydrated tool %d id = %q, want first-start order id %q", index, tool.ToolCallID, wantID)
+		}
+	}
+	if got := hydration.Hydration.InFlightTools[0].ToolName; got != "exec" {
+		t.Fatalf("updated first tool name = %q, want exec", got)
+	}
+}
+
+func TestSessionTranscriptFeedHydratesBackgroundsInFirstSeenOrder(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	const backgroundCount = 16
+	activityIDs := make([]uuid.UUID, 0, backgroundCount)
+	for index := 0; index < backgroundCount; index++ {
+		activityID := uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012d", index+1))
+		activityIDs = append(activityIDs, activityID)
+		registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+			Kind: runtime.EventBackgroundUpdated,
+			Background: &runtime.BackgroundShellEvent{
+				Type:       runtime.BackgroundShellEventBackgrounded,
+				ID:         fmt.Sprintf("process-%02d", index),
+				ActivityID: activityID,
+				State:      "running",
+				Command:    "go test ./...",
+				Workdir:    "/repo",
+			},
+		})
+	}
+	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+		Kind: runtime.EventBackgroundUpdated,
+		Background: &runtime.BackgroundShellEvent{
+			Type:       runtime.BackgroundShellEventBackgrounded,
+			ID:         "process-00",
+			ActivityID: activityIDs[0],
+			State:      "running",
+			Command:    "go test ./...",
+			Workdir:    "/repo",
+			Preview:    "updated",
+		},
+	})
+
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+	hydration := nextTranscriptMessage(t, sub)
+	if hydration.Hydration == nil || len(hydration.Hydration.BackgroundActivities) != backgroundCount {
+		t.Fatalf("hydration = %+v, want %d backgrounds", hydration, backgroundCount)
+	}
+	for index, background := range hydration.Hydration.BackgroundActivities {
+		if background.ID != activityIDs[index].String() {
+			t.Fatalf("hydrated background %d id = %q, want first-seen order id %q", index, background.ID, activityIDs[index])
+		}
+	}
+	if got := hydration.Hydration.BackgroundActivities[0].Preview; got != "updated" {
+		t.Fatalf("updated first background preview = %q, want updated", got)
+	}
+}
+
+func TestSessionTranscriptFeedHydratesPromptsInCreationOrder(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	const promptCount = 16
+	for index := 0; index < promptCount; index++ {
+		registry.BeginPendingPrompt(engine.SessionID(), tools.AskQuestionRequest{
+			ID:       fmt.Sprintf("ask-%02d", index),
+			Question: "Choose",
+		})
+	}
+
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+	hydration := nextTranscriptMessage(t, sub)
+	if hydration.Hydration == nil || len(hydration.Hydration.PendingSessionPrompts) != promptCount {
+		t.Fatalf("hydration = %+v, want %d prompts", hydration, promptCount)
+	}
+	for index, prompt := range hydration.Hydration.PendingSessionPrompts {
+		wantID := fmt.Sprintf("ask-%02d", index)
+		if prompt.ID != wantID {
+			t.Fatalf("hydrated prompt %d id = %q, want creation order id %q", index, prompt.ID, wantID)
+		}
 	}
 }
 

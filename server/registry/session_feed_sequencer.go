@@ -19,29 +19,18 @@ type sessionFeedSnapshot struct {
 	runtimeActivity     *clientui.RuntimeActivity
 	inputReconciliation *clientui.RuntimeInputReconciliationSnapshot
 	queuedMessages      queuedMessageStateLedger
-	pendingPrompts      map[string]clientui.TranscriptPendingSessionPrompt
-	inFlightTools       map[string]clientui.TranscriptToolStart
+	pendingPrompts      orderedFeedLedger[string, clientui.TranscriptPendingSessionPrompt]
+	inFlightTools       orderedFeedLedger[string, clientui.TranscriptToolStart]
 	sessionStatus       *clientui.TranscriptSessionStatus
 	sessionIdentity     *clientui.TranscriptSessionIdentity
 	compactionStatus    *clientui.TranscriptCompactionStatus
 	contextUsage        *clientui.RuntimeContextUsage
 	goalStatus          *clientui.TranscriptGoalStatus
-	backgrounds         map[string]clientui.TranscriptBackgroundActivity
+	backgrounds         orderedFeedLedger[string, clientui.TranscriptBackgroundActivity]
 }
 
 func newSessionFeedSequencer(broker *transcriptSubscriptionBroker) *sessionFeedSequencer {
-	return &sessionFeedSequencer{
-		broker: broker,
-		snapshot: sessionFeedSnapshot{
-			queuedMessages: queuedMessageStateLedger{
-				byQueueItemID:     make(map[string]*queuedMessageStateNode),
-				byClientRequestID: make(map[string]*queuedMessageStateNode),
-			},
-			pendingPrompts: make(map[string]clientui.TranscriptPendingSessionPrompt),
-			inFlightTools:  make(map[string]clientui.TranscriptToolStart),
-			backgrounds:    make(map[string]clientui.TranscriptBackgroundActivity),
-		},
-	}
+	return &sessionFeedSequencer{broker: broker}
 }
 
 func (s *sessionFeedSequencer) HasSubscribers() bool {
@@ -100,37 +89,31 @@ func (s sessionFeedSnapshot) applyToHydration(hydration *clientui.TranscriptHydr
 	hydration.CompactionStatus = cloneCompactionStatus(s.compactionStatus)
 	hydration.ContextUsage = cloneRuntimeContextUsage(s.contextUsage)
 	hydration.GoalStatus = cloneGoalStatus(s.goalStatus)
-	if len(s.inFlightTools) > 0 {
-		merged := make(map[string]clientui.TranscriptToolStart, len(hydration.InFlightTools)+len(s.inFlightTools))
+	if s.inFlightTools.len() > 0 {
+		merged := orderedFeedLedger[string, clientui.TranscriptToolStart]{}
 		for _, tool := range hydration.InFlightTools {
 			if tool.ToolCallID == "" {
 				continue
 			}
-			merged[tool.ToolCallID] = tool
+			merged.upsert(tool.ToolCallID, tool)
 		}
-		for _, tool := range s.inFlightTools {
+		for _, tool := range s.inFlightTools.values() {
 			if tool.ToolCallID == "" {
 				continue
 			}
-			merged[tool.ToolCallID] = tool
+			merged.upsert(tool.ToolCallID, tool)
 		}
-		hydration.InFlightTools = make([]clientui.TranscriptToolStart, 0, len(merged))
-		for _, tool := range merged {
-			hydration.InFlightTools = append(hydration.InFlightTools, tool)
-		}
+		hydration.InFlightTools = merged.values()
 	}
-	if len(s.backgrounds) > 0 {
-		hydration.BackgroundActivities = make([]clientui.TranscriptBackgroundActivity, 0, len(s.backgrounds))
-		for _, background := range s.backgrounds {
-			hydration.BackgroundActivities = append(hydration.BackgroundActivities, background)
-		}
+	if s.backgrounds.len() > 0 {
+		hydration.BackgroundActivities = s.backgrounds.values()
 	}
 	if queuedMessages := s.queuedMessages.values(); len(queuedMessages) > 0 {
 		hydration.QueuedOrSteeredMessages = queuedMessages
 	}
-	if len(s.pendingPrompts) > 0 {
-		hydration.PendingSessionPrompts = make([]clientui.TranscriptPendingSessionPrompt, 0, len(s.pendingPrompts))
-		for _, prompt := range s.pendingPrompts {
+	if s.pendingPrompts.len() > 0 {
+		hydration.PendingSessionPrompts = make([]clientui.TranscriptPendingSessionPrompt, 0, s.pendingPrompts.len())
+		for _, prompt := range s.pendingPrompts.values() {
 			if prompt.State == clientui.TranscriptPromptPending {
 				hydration.PendingSessionPrompts = append(hydration.PendingSessionPrompts, prompt)
 			}
@@ -144,20 +127,17 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 		if message.ToolStart == nil || message.ToolStart.ToolCallID == "" {
 			return
 		}
-		if s.inFlightTools == nil {
-			s.inFlightTools = make(map[string]clientui.TranscriptToolStart)
-		}
-		s.inFlightTools[message.ToolStart.ToolCallID] = *message.ToolStart
+		s.inFlightTools.upsert(message.ToolStart.ToolCallID, *message.ToolStart)
 	case clientui.TranscriptMessageToolAbort:
 		if message.ToolAbort == nil || message.ToolAbort.ToolCallID == "" {
 			return
 		}
-		delete(s.inFlightTools, message.ToolAbort.ToolCallID)
+		s.inFlightTools.delete(message.ToolAbort.ToolCallID)
 	case clientui.TranscriptMessageCommittedRow:
 		if message.CommittedRow == nil || message.CommittedRow.Tool == nil || message.CommittedRow.Tool.ToolCallID == "" {
 			return
 		}
-		delete(s.inFlightTools, message.CommittedRow.Tool.ToolCallID)
+		s.inFlightTools.delete(message.CommittedRow.Tool.ToolCallID)
 	case clientui.TranscriptMessageRunState:
 		s.runState = cloneRunState(message.RunState)
 	case clientui.TranscriptMessageRuntimeActivity:
@@ -177,14 +157,11 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 		if message.PendingSessionPrompt == nil || message.PendingSessionPrompt.ID == "" {
 			return
 		}
-		if s.pendingPrompts == nil {
-			s.pendingPrompts = make(map[string]clientui.TranscriptPendingSessionPrompt)
-		}
 		if message.PendingSessionPrompt.State == clientui.TranscriptPromptResolved {
-			delete(s.pendingPrompts, message.PendingSessionPrompt.ID)
+			s.pendingPrompts.delete(message.PendingSessionPrompt.ID)
 			return
 		}
-		s.pendingPrompts[message.PendingSessionPrompt.ID] = *message.PendingSessionPrompt
+		s.pendingPrompts.upsert(message.PendingSessionPrompt.ID, *message.PendingSessionPrompt)
 	case clientui.TranscriptMessageSessionStatus:
 		if message.SessionStatus == nil {
 			return
@@ -207,14 +184,11 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 		if message.BackgroundActivity == nil || message.BackgroundActivity.ID == "" {
 			return
 		}
-		if s.backgrounds == nil {
-			s.backgrounds = make(map[string]clientui.TranscriptBackgroundActivity)
-		}
 		if message.BackgroundActivity.Removed {
-			delete(s.backgrounds, message.BackgroundActivity.ID)
+			s.backgrounds.delete(message.BackgroundActivity.ID)
 			return
 		}
-		s.backgrounds[message.BackgroundActivity.ID] = *message.BackgroundActivity
+		s.backgrounds.upsert(message.BackgroundActivity.ID, *message.BackgroundActivity)
 	}
 }
 
@@ -222,18 +196,10 @@ func transcriptQueueStateHydrates(status clientui.QueuedUserMessageStatus) bool 
 	return status == clientui.QueuedUserMessageAccepted
 }
 
-type queuedMessageStateNode struct {
-	state clientui.TranscriptQueuedOrSteeredMessageState
-	prev  *queuedMessageStateNode
-	next  *queuedMessageStateNode
-}
-
 type queuedMessageStateLedger struct {
-	head              *queuedMessageStateNode
-	tail              *queuedMessageStateNode
-	size              int
-	byQueueItemID     map[string]*queuedMessageStateNode
-	byClientRequestID map[string]*queuedMessageStateNode
+	entries           orderedFeedList[clientui.TranscriptQueuedOrSteeredMessageState]
+	byQueueItemID     map[string]*orderedFeedNode[clientui.TranscriptQueuedOrSteeredMessageState]
+	byClientRequestID map[string]*orderedFeedNode[clientui.TranscriptQueuedOrSteeredMessageState]
 }
 
 func (l *queuedMessageStateLedger) apply(state clientui.TranscriptQueuedOrSteeredMessageState) {
@@ -246,30 +212,19 @@ func (l *queuedMessageStateLedger) apply(state clientui.TranscriptQueuedOrSteere
 	}
 	if node != nil {
 		l.unindex(node)
-		node.state = state
+		node.value = state
 		l.index(node)
 		return
 	}
-	node = &queuedMessageStateNode{state: state, prev: l.tail}
-	if l.tail == nil {
-		l.head = node
-	} else {
-		l.tail.next = node
-	}
-	l.tail = node
-	l.size++
+	node = l.entries.append(state)
 	l.index(node)
 }
 
 func (l *queuedMessageStateLedger) values() []clientui.TranscriptQueuedOrSteeredMessageState {
-	values := make([]clientui.TranscriptQueuedOrSteeredMessageState, 0, l.size)
-	for node := l.head; node != nil; node = node.next {
-		values = append(values, node.state)
-	}
-	return values
+	return l.entries.values()
 }
 
-func (l *queuedMessageStateLedger) find(state clientui.TranscriptQueuedOrSteeredMessageState) *queuedMessageStateNode {
+func (l *queuedMessageStateLedger) find(state clientui.TranscriptQueuedOrSteeredMessageState) *orderedFeedNode[clientui.TranscriptQueuedOrSteeredMessageState] {
 	if state.QueueItemID != "" {
 		if node := l.byQueueItemID[state.QueueItemID]; node != nil {
 			return node
@@ -282,62 +237,50 @@ func (l *queuedMessageStateLedger) find(state clientui.TranscriptQueuedOrSteered
 	if node == nil {
 		return nil
 	}
-	if state.QueueItemID != "" && node.state.QueueItemID != "" && state.QueueItemID != node.state.QueueItemID {
+	if state.QueueItemID != "" && node.value.QueueItemID != "" && state.QueueItemID != node.value.QueueItemID {
 		panic(fmt.Sprintf(
 			"queued transcript state identity conflict: client_request_id=%q existing_queue_item_id=%q incoming_queue_item_id=%q",
 			state.ClientRequestID,
-			node.state.QueueItemID,
+			node.value.QueueItemID,
 			state.QueueItemID,
 		))
 	}
 	return node
 }
 
-func (l *queuedMessageStateLedger) index(node *queuedMessageStateNode) {
+func (l *queuedMessageStateLedger) index(node *orderedFeedNode[clientui.TranscriptQueuedOrSteeredMessageState]) {
 	if l.byQueueItemID == nil {
-		l.byQueueItemID = make(map[string]*queuedMessageStateNode)
+		l.byQueueItemID = make(map[string]*orderedFeedNode[clientui.TranscriptQueuedOrSteeredMessageState])
 	}
 	if l.byClientRequestID == nil {
-		l.byClientRequestID = make(map[string]*queuedMessageStateNode)
+		l.byClientRequestID = make(map[string]*orderedFeedNode[clientui.TranscriptQueuedOrSteeredMessageState])
 	}
-	if node.state.QueueItemID != "" {
-		if existing := l.byQueueItemID[node.state.QueueItemID]; existing != nil && existing != node {
-			panic(fmt.Sprintf("duplicate queued transcript queue_item_id=%q", node.state.QueueItemID))
+	if node.value.QueueItemID != "" {
+		if existing := l.byQueueItemID[node.value.QueueItemID]; existing != nil && existing != node {
+			panic(fmt.Sprintf("duplicate queued transcript queue_item_id=%q", node.value.QueueItemID))
 		}
-		l.byQueueItemID[node.state.QueueItemID] = node
+		l.byQueueItemID[node.value.QueueItemID] = node
 	}
-	if node.state.ClientRequestID != "" {
-		if existing := l.byClientRequestID[node.state.ClientRequestID]; existing != nil && existing != node {
-			panic(fmt.Sprintf("duplicate queued transcript client_request_id=%q", node.state.ClientRequestID))
+	if node.value.ClientRequestID != "" {
+		if existing := l.byClientRequestID[node.value.ClientRequestID]; existing != nil && existing != node {
+			panic(fmt.Sprintf("duplicate queued transcript client_request_id=%q", node.value.ClientRequestID))
 		}
-		l.byClientRequestID[node.state.ClientRequestID] = node
+		l.byClientRequestID[node.value.ClientRequestID] = node
 	}
 }
 
-func (l *queuedMessageStateLedger) unindex(node *queuedMessageStateNode) {
-	if node.state.QueueItemID != "" && l.byQueueItemID[node.state.QueueItemID] == node {
-		delete(l.byQueueItemID, node.state.QueueItemID)
+func (l *queuedMessageStateLedger) unindex(node *orderedFeedNode[clientui.TranscriptQueuedOrSteeredMessageState]) {
+	if node.value.QueueItemID != "" && l.byQueueItemID[node.value.QueueItemID] == node {
+		delete(l.byQueueItemID, node.value.QueueItemID)
 	}
-	if node.state.ClientRequestID != "" && l.byClientRequestID[node.state.ClientRequestID] == node {
-		delete(l.byClientRequestID, node.state.ClientRequestID)
+	if node.value.ClientRequestID != "" && l.byClientRequestID[node.value.ClientRequestID] == node {
+		delete(l.byClientRequestID, node.value.ClientRequestID)
 	}
 }
 
-func (l *queuedMessageStateLedger) remove(node *queuedMessageStateNode) {
+func (l *queuedMessageStateLedger) remove(node *orderedFeedNode[clientui.TranscriptQueuedOrSteeredMessageState]) {
 	l.unindex(node)
-	if node.prev == nil {
-		l.head = node.next
-	} else {
-		node.prev.next = node.next
-	}
-	if node.next == nil {
-		l.tail = node.prev
-	} else {
-		node.next.prev = node.prev
-	}
-	l.size--
-	node.prev = nil
-	node.next = nil
+	l.entries.remove(node)
 }
 
 func (s *sessionFeedSnapshot) shouldDrop(message clientui.TranscriptMessage) bool {
@@ -346,7 +289,7 @@ func (s *sessionFeedSnapshot) shouldDrop(message clientui.TranscriptMessage) boo
 		if message.ToolStart == nil || message.ToolStart.ToolCallID == "" {
 			return true
 		}
-		existing, ok := s.inFlightTools[message.ToolStart.ToolCallID]
+		existing, ok := s.inFlightTools.get(message.ToolStart.ToolCallID)
 		return ok && reflect.DeepEqual(existing, *message.ToolStart)
 	default:
 		return false

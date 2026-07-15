@@ -90,13 +90,6 @@ func (m TranscriptMessage) ValidatePayload() error {
 	if !matched {
 		return fmt.Errorf("transcript message kind %q does not match its payload", m.Kind)
 	}
-	if m.Kind == TranscriptMessageHydration {
-		if m.Sequence != 1 {
-			return fmt.Errorf("transcript hydration sequence = %d, want 1", m.Sequence)
-		}
-	} else if m.Sequence < 2 {
-		return fmt.Errorf("live transcript sequence = %d, want at least 2", m.Sequence)
-	}
 	switch m.Kind {
 	case TranscriptMessagePromptPending:
 		if m.Payload.PromptPending.State != TranscriptPromptStatePending {
@@ -108,6 +101,20 @@ func (m TranscriptMessage) ValidatePayload() error {
 		}
 	}
 	return validator.Validate()
+}
+
+func (m TranscriptMessage) Validate() error {
+	if err := m.ValidatePayload(); err != nil {
+		return err
+	}
+	if m.Kind == TranscriptMessageHydration {
+		if m.Sequence != 1 {
+			return fmt.Errorf("transcript hydration sequence = %d, want 1", m.Sequence)
+		}
+	} else if m.Sequence < 2 {
+		return fmt.Errorf("live transcript sequence = %d, want at least 2", m.Sequence)
+	}
+	return nil
 }
 
 func (p TranscriptPayload) validateCardinality(kind TranscriptMessageKind) error {
