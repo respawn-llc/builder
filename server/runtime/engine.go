@@ -352,42 +352,11 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	}
 	eng.seedTranscriptLiveToolsFromDanglingToolCalls()
 	eng.restorePersistedUsageState(meta.UsageState)
-	var recoveryCandidate *session.PendingModelRecovery
-	legacyRecoveryCandidate := false
 	if meta.PendingModelRecovery != nil {
 		recovery := cloneSessionPendingModelRecovery(meta.PendingModelRecovery)
-		recoveryCandidate = &recovery
-	} else if meta.LegacyInFlightStepRecovery {
-		legacyRecoveryCandidate = true
-		recoveryCandidate = &session.PendingModelRecovery{
-			RecoveryID: "legacy-in-flight",
-			Reason:     "legacy_in_flight_step",
-			CreatedAt:  time.Now().UTC(),
-		}
-	}
-	if recoveryCandidate != nil {
-		recovery := cloneSessionPendingModelRecovery(recoveryCandidate)
 		if strings.TrimSpace(recovery.StepID) == "" {
-			inferred, ok, err := eng.inferLegacyPendingModelRecovery(recovery)
-			if err != nil {
+			if err := store.DiscardPendingModelRecoveryCandidate(); err != nil {
 				return nil, err
-			}
-			if ok {
-				recovery = inferred
-				if err := store.SetPendingModelRecovery(recovery); err != nil {
-					return nil, err
-				}
-			}
-		}
-		if strings.TrimSpace(recovery.StepID) == "" {
-			if legacyRecoveryCandidate {
-				if err := store.DiscardLegacyPendingModelRecoveryCandidate(recovery); err != nil {
-					return nil, err
-				}
-			} else {
-				if err := store.DiscardPendingModelRecoveryCandidate(); err != nil {
-					return nil, err
-				}
 			}
 			return eng, nil
 		}

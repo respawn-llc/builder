@@ -122,11 +122,15 @@ pub struct SessionRetargetWorkspaceRequest {
     pub client_request_id: String,
     pub session_id: String,
     pub workspace_root: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SessionRetargetWorkspaceResponse {
     pub binding: ProjectBinding,
+    #[serde(default)]
+    pub workspace_binding_created: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

@@ -13,7 +13,10 @@ import (
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
+	"core/server/sessionruntime"
 	"core/server/sessionservice"
 	serverstartup "core/server/startup"
 	shelltool "core/server/tools/shell"
@@ -60,6 +63,7 @@ type testEmbeddedServer struct {
 	sessionRuntime       client.SessionRuntimeClient
 	sessionViewClient    client.SessionViewClient
 	sessionStores        *registry.SessionStoreRegistry
+	sessionPersistence   *sessiontest.Persistence
 	metadataOnce         sync.Once
 	metadataStore        *metadata.Store
 	metadataBindingData  metadata.Binding
@@ -179,6 +183,7 @@ func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID s
 		sessionRuntime:       s.sessionRuntime,
 		sessionViewClient:    s.sessionViewClient,
 		sessionStores:        s.sessionStores,
+		sessionPersistence:   s.sessionPersistence,
 		metadataStore:        s.metadataStore,
 		metadataBindingData:  s.metadataBindingData,
 		metadataBindingOK:    s.metadataBindingOK,
@@ -322,6 +327,34 @@ func (s *testEmbeddedServer) sessionStoreRegistry() *registry.SessionStoreRegist
 	return s.sessionStores
 }
 
+type testSessionProcessSource struct {
+	manager *shelltool.Manager
+}
+
+func (s testSessionProcessSource) List() []shelltool.Snapshot {
+	if s.manager == nil {
+		return nil
+	}
+	return s.manager.List()
+}
+
+func (s *testEmbeddedServer) sessionWorkspaceRetargeter(metadataStore *metadata.Store) *sessionservice.SessionWorkspaceRetargeter {
+	stores := s.sessionStoreRegistry()
+	runtimes := registry.NewRuntimeRegistry()
+	maintenance := sessionruntime.NewService(
+		s.cfg.PersistenceRoot,
+		metadataStore,
+		s.authManager,
+		s.fastModeState,
+		s.background,
+		nil,
+		runtimes,
+		stores,
+		metadataStore.AuthoritativeSessionStoreOptions()...,
+	)
+	return sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimes, maintenance, testSessionProcessSource{manager: s.background})
+}
+
 func (s *testEmbeddedServer) SessionLaunchClient() client.SessionLaunchClient {
 	if s.sessionLaunch != nil {
 		return s.sessionLaunch
@@ -334,7 +367,15 @@ func (s *testEmbeddedServer) SessionLaunchClient() client.SessionLaunchClient {
 		}, s.sessionStoreRegistry())
 		return client.NewLoopbackSessionLaunchClient(service)
 	}
-	service := sessionlaunch.NewService(launch.Planner{Config: s.cfg, ContainerDir: s.containerDir}, s.sessionStoreRegistry())
+	var storeOptions []session.StoreOption
+	if s.sessionPersistence != nil {
+		storeOptions = s.sessionPersistence.Options()
+	}
+	service := sessionlaunch.NewService(launch.Planner{
+		Config:       s.cfg,
+		ContainerDir: s.containerDir,
+		StoreOptions: storeOptions,
+	}, s.sessionStoreRegistry())
 	return client.NewLoopbackSessionLaunchClient(service)
 }
 
@@ -352,7 +393,8 @@ func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleCli
 			s.sessionStoreRegistry(),
 			s.authManager,
 			metadataStore.AuthoritativeSessionStoreOptions()...,
-		).WithPersistenceRoot(s.cfg.PersistenceRoot)
+		).WithPersistenceRoot(s.cfg.PersistenceRoot).
+			WithWorkspaceRetargeter(s.sessionWorkspaceRetargeter(metadataStore))
 		return client.NewLoopbackSessionLifecycleClient(service)
 	}
 	containerDir := strings.TrimSpace(s.containerDir)

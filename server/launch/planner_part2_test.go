@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/server/auth"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestApplyRunPromptOverridesCLIModelOverridePreservesExplicitThreshold(t *testing.T) {
@@ -61,14 +63,16 @@ func TestPlannerInteractiveReopensSelectedSessionWithinActiveContainer(t *testin
 	root := t.TempDir()
 	containerA := filepath.Join(root, "projects", "project-a", "sessions")
 	containerB := filepath.Join(root, "projects", "project-b", "sessions")
-	selected := createTestSessionInContainer(t, containerA, "sessions", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	selected := createTestSessionInContainer(t, containerA, "sessions", "/tmp/workspace-a", persistence.Options()...)
 	if err := selected.SetName("selected"); err != nil {
 		t.Fatalf("persist selected session meta: %v", err)
 	}
-	writeDuplicateSessionMeta(t, filepath.Join(containerB, selected.Meta().SessionID), selected.Meta(), "/tmp/workspace-b", "duplicate")
+	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Meta().SessionID))
 	planner := Planner{
 		Config:       config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
 		ContainerDir: containerA,
+		StoreOptions: persistence.Options(),
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: selected.Meta().SessionID})
@@ -81,18 +85,53 @@ func TestPlannerInteractiveReopensSelectedSessionWithinActiveContainer(t *testin
 	}
 }
 
+func TestPlannerSelectedSessionUsesAuthoritativeMetadata(t *testing.T) {
+	root := t.TempDir()
+	container := filepath.Join(root, "projects", "project-a", "sessions")
+	persistence := sessiontest.NewPersistence()
+	selected := createTestSessionInContainer(t, container, "sessions", "/tmp/workspace-old", persistence.Options()...)
+	if err := selected.SetName("selected"); err != nil {
+		t.Fatalf("persist selected session meta: %v", err)
+	}
+	authoritative := selected.Meta()
+	authoritative.WorkspaceRoot = "/tmp/workspace-new"
+	authoritative.WorkspaceContainer = "workspace-new"
+	authoritative.UpdatedAt = authoritative.UpdatedAt.Add(time.Second)
+	if err := persistence.ObservePersistedStore(context.Background(), session.PersistedStoreSnapshot{
+		SessionDir: selected.Dir(),
+		Meta:       authoritative,
+	}); err != nil {
+		t.Fatalf("record authoritative session metadata: %v", err)
+	}
+	planner := Planner{
+		Config:       config.App{WorkspaceRoot: authoritative.WorkspaceRoot, PersistenceRoot: root, Settings: config.Settings{}},
+		ContainerDir: container,
+		StoreOptions: persistence.Options(),
+	}
+
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: selected.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("plan session: %v", err)
+	}
+	if plan.Store.Meta().WorkspaceRoot != authoritative.WorkspaceRoot {
+		t.Fatalf("opened workspace root = %q, want authoritative %q", plan.Store.Meta().WorkspaceRoot, authoritative.WorkspaceRoot)
+	}
+}
+
 func TestPlannerSelectedSessionIDUsesActiveContainerScope(t *testing.T) {
 	root := t.TempDir()
 	containerA := filepath.Join(root, "projects", "project-a", "sessions")
 	containerB := filepath.Join(root, "projects", "project-b", "sessions")
-	selected := createTestSessionInContainer(t, containerA, "sessions", "/tmp/workspace-a")
+	persistence := sessiontest.NewPersistence()
+	selected := createTestSessionInContainer(t, containerA, "sessions", "/tmp/workspace-a", persistence.Options()...)
 	if err := selected.SetName("selected"); err != nil {
 		t.Fatalf("persist selected session meta: %v", err)
 	}
-	writeDuplicateSessionMeta(t, filepath.Join(containerB, selected.Meta().SessionID), selected.Meta(), "/tmp/workspace-b", "")
+	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Meta().SessionID))
 	planner := Planner{
 		Config:       config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
 		ContainerDir: containerA,
+		StoreOptions: persistence.Options(),
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: selected.Meta().SessionID})

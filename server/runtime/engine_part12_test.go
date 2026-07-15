@@ -285,7 +285,7 @@ func TestReopenedSessionRestoresCompactionSoonReminderIssuedState(t *testing.T) 
 		t.Fatalf("append reminder: %v", err)
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("re-open store: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 		t.Fatal("expected real compaction to clear reminder-issued state in session meta")
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("re-open store: %v", err)
 	}
@@ -494,7 +494,7 @@ func TestLegacyReviewerRollbackHistoryReplacementIsIgnoredAcrossReopen(t *testin
 		t.Fatal("expected ignored legacy reviewer rollback to leave persisted usage state intact")
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("re-open store: %v", err)
 	}

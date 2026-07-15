@@ -20,6 +20,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	askquestion "core/server/tools"
 	patchtool "core/server/tools/patch"
@@ -31,6 +32,8 @@ import (
 
 	"github.com/google/uuid"
 )
+
+var runtimeWireTestSessionPersistence = sessiontest.NewPersistence()
 
 func TestBuildToolRegistryAllowsHostedWebSearchWithoutLocalRuntimeBuilder(t *testing.T) {
 	workspace := t.TempDir()
@@ -62,7 +65,7 @@ func TestPromptFacingSnapshotReloaderUsesActiveWorkspaceRoot(t *testing.T) {
 			t.Fatalf("write system prompt: %v", err)
 		}
 	}
-	store, err := session.Create(t.TempDir(), "ws", originalWorkspace)
+	store, err := session.Create(t.TempDir(), "ws", originalWorkspace, runtimeWireTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -804,7 +807,7 @@ func TestBackgroundEventRouterRecoversInvalidTerminalEventInDiagnosticMode(t *te
 
 func TestNewRuntimeWiringRejectsEmptyModelAfterBypassingConfigDefaults(t *testing.T) {
 	root := t.TempDir()
-	store, err := session.Create(root, "ws", root)
+	store, err := session.Create(root, "ws", root, runtimeWireTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -1076,7 +1079,7 @@ func outsideNonTempDir(t *testing.T) string {
 
 func newRuntimeWireSession(t *testing.T, root string, name string) *session.Store {
 	t.Helper()
-	store, err := session.Create(root, name, root)
+	store, err := session.Create(root, name, root, runtimeWireTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create store %s: %v", name, err)
 	}

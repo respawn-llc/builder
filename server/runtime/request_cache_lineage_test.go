@@ -375,7 +375,7 @@ func TestBuildRequest_RotatesPromptCacheKeyFromPersistedCompactionOnReopen(t *te
 		t.Fatalf("append history_replaced: %v", err)
 	}
 
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	}); err != nil {
 		t.Fatalf("append history_replaced: %v", err)
 	}
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -634,7 +634,7 @@ func TestReviewerSuggestions_PromptCacheKeyStaysOnReviewerSessionAfterConversati
 		t.Fatalf("append history_replaced: %v", err)
 	}
 
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -726,7 +726,7 @@ func TestGenerateWithRetryClient_RestoreIgnoresRequestObservationWithoutResponse
 	}); err != nil {
 		t.Fatalf("append request event: %v", err)
 	}
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -767,7 +767,7 @@ func TestGenerateWithRetryClient_RestorePreservesRotatedCompactionKeyWithoutWarn
 		t.Fatalf("close engine: %v", err)
 	}
 
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}

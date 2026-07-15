@@ -45,10 +45,7 @@ func TestSessionSnapshotSourcesParityForTranscriptTailEntries(t *testing.T) {
 
 func TestSessionSnapshotSourcesParityForRollbackLocatorAcrossCandidateFreeCompactions(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	appended, err := store.AppendEventWithEndByteCursor(
 		"user-step",
 		"message",
@@ -156,10 +153,7 @@ type sessionSnapshotParityFixture struct {
 func newSessionSnapshotParityFixture(t *testing.T, cacheWarningMode config.CacheWarningMode) sessionSnapshotParityFixture {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	if err := store.SetName("parity session"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
@@ -203,10 +197,7 @@ func newSessionSnapshotParityFixture(t *testing.T, cacheWarningMode config.Cache
 func startBlockingRuntimeRun(t *testing.T) (*session.Store, *runtime.Engine, chan struct{}, chan error) {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
+	store := newSessionViewStore(t, dir, "ws", dir)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	client := &serviceFakeLLM{responses: []llm.Response{

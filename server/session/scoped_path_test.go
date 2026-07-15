@@ -12,7 +12,7 @@ import (
 func TestResolveScopedSessionDirReturnsRealPathInsideContainer(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "workspace-a")
-	store, err := Create(containerDir, "workspace-a", "/tmp/workspace-a")
+	store, err := Create(containerDir, "workspace-a", "/tmp/workspace-a", sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestResolveScopedSessionDirRejectsSymlinkOutsideContainer(t *testing.T) {
 	if err := os.MkdirAll(containerA, 0o755); err != nil {
 		t.Fatalf("mkdir container A: %v", err)
 	}
-	escaped, err := Create(containerB, "workspace-b", "/tmp/workspace-b")
+	escaped, err := Create(containerB, "workspace-b", "/tmp/workspace-b", sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("create escaped session: %v", err)
 	}

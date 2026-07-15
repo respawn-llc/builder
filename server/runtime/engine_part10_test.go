@@ -144,7 +144,7 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 
 	storeRoot := t.TempDir()
 	parent := mustCreateNamedTestSessionAt(t, storeRoot, "parent", workspace)
-	child, err := session.NewLazy(storeRoot, "child", workspace)
+	child, err := session.NewLazy(storeRoot, "child", workspace, runtimeTestSessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("create child: %v", err)
 	}

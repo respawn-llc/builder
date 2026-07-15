@@ -12,6 +12,7 @@ import (
 	"core/server/registry"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -157,12 +158,14 @@ func TestNewStarterRejectsLegacyAndRuntimeClientFactoriesTogether(t *testing.T) 
 
 func newWorkflowFactorySession(t *testing.T) *session.Store {
 	t.Helper()
-	store, err := session.Create(t.TempDir(), "factory", t.TempDir())
+	store, err := session.Create(t.TempDir(), "factory", t.TempDir(), workflowFactorySessionPersistence.Options()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
 	return store
 }
+
+var workflowFactorySessionPersistence = sessiontest.NewPersistence()
 
 func newLockedWorkflowProviderVerbosityPlan(t *testing.T, baseURL string) launch.SessionPlan {
 	t.Helper()

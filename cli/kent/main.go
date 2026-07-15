@@ -905,11 +905,7 @@ func buildRunSteerContinueCommand(sessionID, persistenceRoot, message string) st
 		tokens = append(tokens, "--persistence-root", root)
 	}
 	tokens = append(tokens, "--continue", sessionID, message)
-	quoted := make([]string, 0, len(tokens))
-	for _, token := range tokens {
-		quoted = append(quoted, shellQuote(token))
-	}
-	return strings.Join(quoted, " ")
+	return shellCommand(tokens...)
 }
 
 // continueCommandPersistenceRoot returns the absolute root to embed in a

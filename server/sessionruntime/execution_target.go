@@ -151,6 +151,80 @@ func (s *Service) runWorktreeTransition(
 	if fn == nil {
 		return nil
 	}
+	return s.runSessionMaintenance(ctx, sessionID, func(runCtx context.Context, _ *session.Store, guard registry.RuntimeGuard, _ *runtime.Engine) error {
+		trimmedSessionID := strings.TrimSpace(sessionID)
+		if guard == nil {
+			return fn(runCtx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+				if err := s.syncInactiveExecutionTarget(syncCtx, trimmedSessionID, target, reminder); err != nil {
+					return err
+				}
+				if s.runtimes != nil {
+					s.runtimes.PublishSessionIdentity(trimmedSessionID, &target)
+				}
+				return nil
+			})
+		}
+		return fn(runCtx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+			if err := s.syncGuardedExecutionTarget(syncCtx, trimmedSessionID, target, guard, reminder); err != nil {
+				return err
+			}
+			if s.runtimes != nil {
+				s.runtimes.PublishSessionIdentity(trimmedSessionID, &target)
+			}
+			return nil
+		})
+	})
+}
+
+func (s *Service) RunSessionMaintenance(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error,
+) error {
+	if fn == nil {
+		return nil
+	}
+	return s.runSessionMaintenance(ctx, sessionID, func(runCtx context.Context, store *session.Store, guard registry.RuntimeGuard, engine *runtime.Engine) error {
+		if guard == nil {
+			return fn(runCtx, store, nil)
+		}
+		activeRuntime := &ActiveRuntimeMaintenance{
+			PreviousWorkdir: strings.TrimSpace(engine.TranscriptWorkingDir()),
+			Rebind:          guard.Rebind,
+		}
+		if err := activeRuntime.Validate(); err != nil {
+			return err
+		}
+		return fn(runCtx, store, activeRuntime)
+	})
+}
+
+type ActiveRuntimeMaintenance struct {
+	PreviousWorkdir string
+	Rebind          func(string) error
+}
+
+func (m *ActiveRuntimeMaintenance) Validate() error {
+	if m == nil {
+		return errors.New("active runtime maintenance is required")
+	}
+	if strings.TrimSpace(m.PreviousWorkdir) == "" {
+		return errors.New("active runtime working directory is required")
+	}
+	if m.Rebind == nil {
+		return errors.New("active runtime rebind operation is required")
+	}
+	return nil
+}
+
+func (s *Service) runSessionMaintenance(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, *session.Store, registry.RuntimeGuard, *runtime.Engine) error,
+) error {
+	if fn == nil {
+		return nil
+	}
 	trimmedSessionID := strings.TrimSpace(sessionID)
 	if trimmedSessionID == "" {
 		return errors.New("session id is required")
@@ -164,15 +238,11 @@ func (s *Service) runWorktreeTransition(
 			return err
 		}
 		if guard == nil {
-			return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-				if err := s.syncInactiveExecutionTarget(syncCtx, trimmedSessionID, target, reminder); err != nil {
-					return err
-				}
-				if s.runtimes != nil {
-					s.runtimes.PublishSessionIdentity(trimmedSessionID, &target)
-				}
-				return nil
-			})
+			store, err := s.resolveStore(ctx, trimmedSessionID)
+			if err != nil {
+				return err
+			}
+			return fn(ctx, store, nil, nil)
 		}
 		defer guard.Release()
 		engine := guard.Engine()
@@ -180,15 +250,11 @@ func (s *Service) runWorktreeTransition(
 			return runtimeUnavailableErr(trimmedSessionID)
 		}
 		return engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, func() error {
-			return fn(ctx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-				if err := s.syncGuardedExecutionTarget(syncCtx, trimmedSessionID, target, guard, reminder); err != nil {
-					return err
-				}
-				if s.runtimes != nil {
-					s.runtimes.PublishSessionIdentity(trimmedSessionID, &target)
-				}
-				return nil
-			})
+			store, err := s.resolveStore(ctx, trimmedSessionID)
+			if err != nil {
+				return err
+			}
+			return fn(ctx, store, guard, engine)
 		})
 	}
 }

@@ -2,7 +2,6 @@ package sessionruntime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"reflect"
 	"sync"
@@ -16,9 +15,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/toolspec"
 )
 
 type lifecycleBuild struct {
@@ -515,243 +512,65 @@ func TestSyncExecutionTargetRebindsActiveRuntime(t *testing.T) {
 	}
 }
 
-func TestWorktreeTransitionBoundaryRejectsInactiveOrigin(t *testing.T) {
-	fixture, _ := newRuntimeServiceFixture(t)
+func TestRunSessionMaintenanceUsesRegisteredStoreAndRebindsRuntime(t *testing.T) {
+	fixture, reg := newRuntimeServiceFixture(t)
 	sessionID := fixture.store.Meta().SessionID
-	_, build := newLifecycleBuilder(t, fixture)
+	fixture.service.sessionStores.RegisterStore(fixture.store)
+	state, build := newLifecycleBuilder(t, fixture)
 	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
 		t.Fatalf("AcquireRuntime: %v", err)
 	}
-	runID, err := runtimeids.ParseRunID("018fdd67-89ab-4cde-8123-456789abc001")
-	if err != nil {
-		t.Fatalf("ParseRunID: %v", err)
-	}
-	stepID, err := runtimeids.ParseStepID("018fdd67-89ab-4cde-8123-456789abc002")
-	if err != nil {
-		t.Fatalf("ParseStepID: %v", err)
-	}
-	err = fixture.service.RunWorktreeTransitionAtStepBoundary(context.Background(), sessionID, serverapi.RuntimeStepOrigin{
-		RunID:  runID,
-		StepID: stepID,
-	}, func(
-		ctx context.Context,
-		syncTarget func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error,
-	) error {
-		return syncTarget(ctx, clientui.SessionExecutionTarget{EffectiveWorkdir: t.TempDir()}, nil)
-	}, nil)
-	if err == nil {
-		t.Fatal("RunWorktreeTransitionAtStepBoundary succeeded without the originating active model step")
-	}
-}
-
-func TestWorktreeTransitionAppliesAfterCommandResultBeforeSameTurnFollowup(t *testing.T) {
-	fixture, _ := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
 	targetWorkdir := t.TempDir()
-	client := &worktreeBoundaryClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "entering", Phase: llm.MessagePhaseCommentary},
-			ToolCalls: []llm.ToolCall{{ID: "call-enter", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"kent worktree enter feature"}`)}},
-			Usage:     llm.Usage{WindowTokens: 200000},
+	err := fixture.service.RunSessionMaintenance(
+		context.Background(),
+		sessionID,
+		func(_ context.Context, store *session.Store, activeRuntime *ActiveRuntimeMaintenance) error {
+			if store != fixture.store {
+				t.Fatal("maintenance did not receive the registered runtime store")
+			}
+			if activeRuntime == nil {
+				t.Fatal("maintenance did not receive active runtime state")
+			}
+			if activeRuntime.PreviousWorkdir != fixture.store.Meta().WorkspaceRoot {
+				t.Fatalf("previous workdir = %q, want %q", activeRuntime.PreviousWorkdir, fixture.store.Meta().WorkspaceRoot)
+			}
+			return activeRuntime.Rebind(targetWorkdir)
 		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "checking", Phase: llm.MessagePhaseCommentary},
-			ToolCalls: []llm.ToolCall{{ID: "call-probe", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"pwd"}`)}},
-			Usage:     llm.Usage{WindowTokens: 200000},
+	)
+	if err != nil {
+		t.Fatalf("RunSessionMaintenance: %v", err)
+	}
+	if got, _ := state.rebindDir.Load().(string); got != targetWorkdir {
+		t.Fatalf("rebind workdir = %q, want %q", got, targetWorkdir)
+	}
+	engine, err := reg.ResolveRuntime(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("ResolveRuntime: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("runtime disappeared during maintenance")
+	}
+}
+
+func TestRunSessionMaintenanceRepresentsInactiveRuntimeExplicitly(t *testing.T) {
+	fixture, _ := newRuntimeServiceFixture(t)
+	fixture.service.sessionStores.RegisterStore(fixture.store)
+	err := fixture.service.RunSessionMaintenance(
+		context.Background(),
+		fixture.store.Meta().SessionID,
+		func(_ context.Context, store *session.Store, activeRuntime *ActiveRuntimeMaintenance) error {
+			if store != fixture.store {
+				t.Fatal("maintenance did not receive the registered store")
+			}
+			if activeRuntime != nil {
+				t.Fatalf("inactive maintenance runtime = %+v, want nil", activeRuntime)
+			}
+			return nil
 		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	var engine *runtimepkg.Engine
-	var rebindDir atomic.Value
-	handler := worktreeBoundaryHandler{
-		service:       fixture.service,
-		sessionID:     sessionID,
-		workspaceRoot: fixture.config.WorkspaceRoot,
-		targetWorkdir: targetWorkdir,
-		engine:        func() *runtimepkg.Engine { return engine },
-		rebindDir:     &rebindDir,
+	)
+	if err != nil {
+		t.Fatalf("RunSessionMaintenance: %v", err)
 	}
-	build := func(context.Context) (RuntimeBuildResult, error) {
-		created, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(tools.HandlerRegistration{
-			ID:      toolspec.ToolExecCommand,
-			Handler: &handler,
-		}), runtimepkg.Config{Model: "gpt-5"})
-		if err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		engine = created
-		return RuntimeBuildResult{
-			Engine:      created,
-			LocalRebind: func(workdir string) error { rebindDir.Store(workdir); return nil },
-			Close:       func() { _ = created.Close() },
-		}, nil
-	}
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	if _, err := engine.SubmitUserMessage(context.Background(), "start"); err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if got, _ := rebindDir.Load().(string); got != targetWorkdir {
-		t.Fatalf("following local tool rebind root = %q, want %q", got, targetWorkdir)
-	}
-	if !handler.probeObservedTarget.Load() {
-		t.Fatal("following tool in the same assistant turn did not observe the retargeted root")
-	}
-	request := client.request(t, 1)
-	var sawCommandResult, sawSteer, sawWorktreeContext bool
-	for _, item := range request.Items {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call-enter" {
-			sawCommandResult = true
-		}
-		if item.Type != llm.ResponseItemTypeMessage {
-			continue
-		}
-		if item.Role == llm.RoleUser && item.Content == "steered after enter acknowledgement" {
-			sawSteer = true
-		}
-		if item.Role == llm.RoleDeveloper &&
-			item.MessageType == llm.MessageTypeWorktreeMode &&
-			item.WorktreeContext != nil &&
-			item.WorktreeContext.EffectiveCwd == targetWorkdir {
-			sawWorktreeContext = true
-		}
-	}
-	if !sawCommandResult || !sawSteer || !sawWorktreeContext {
-		t.Fatalf("same-turn follow-up request missing command result, steer, or target context: %+v", request.Items)
-	}
-}
-
-type worktreeBoundaryHandler struct {
-	service             *Service
-	sessionID           string
-	workspaceRoot       string
-	targetWorkdir       string
-	engine              func() *runtimepkg.Engine
-	rebindDir           *atomic.Value
-	calls               atomic.Int32
-	probeObservedTarget atomic.Bool
-}
-
-func (handler *worktreeBoundaryHandler) Call(ctx context.Context, call tools.Call) (tools.Result, error) {
-	switch handler.calls.Add(1) {
-	case 1:
-		runID, err := runtimeids.ParseRunID(call.RunID)
-		if err != nil {
-			return tools.Result{}, err
-		}
-		stepID, err := runtimeids.ParseStepID(call.StepID)
-		if err != nil {
-			return tools.Result{}, err
-		}
-		reminder := &session.WorktreeReminderState{
-			Mode: session.WorktreeReminderModeEnter,
-			WorktreeContext: session.WorktreeContext{
-				Branch:        session.OptionalWorktreeBranch("feature/boundary"),
-				WorktreePath:  handler.targetWorkdir,
-				WorkspaceRoot: handler.workspaceRoot,
-				EffectiveCwd:  handler.targetWorkdir,
-			},
-		}
-		err = handler.service.RunWorktreeTransitionAtStepBoundary(ctx, handler.sessionID, serverapi.RuntimeStepOrigin{RunID: runID, StepID: stepID}, func(syncCtx context.Context, syncTarget func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error {
-			return syncTarget(syncCtx, clientui.SessionExecutionTarget{
-				WorkspaceRoot:    handler.workspaceRoot,
-				EffectiveWorkdir: handler.targetWorkdir,
-			}, reminder)
-		}, nil)
-		if err != nil {
-			return tools.Result{}, err
-		}
-		handler.engine().QueueUserMessageForAutoDrain("steered after enter acknowledgement", "steered-after-enter")
-		return tools.Result{CallID: call.ID, Name: call.Name, Output: json.RawMessage(`"scheduled"`)}, nil
-	case 2:
-		if got, _ := handler.rebindDir.Load().(string); got == handler.targetWorkdir {
-			handler.probeObservedTarget.Store(true)
-		}
-		return tools.Result{CallID: call.ID, Name: call.Name, Output: json.RawMessage(`"probed"`)}, nil
-	default:
-		return tools.Result{}, errors.New("unexpected worktree boundary tool call")
-	}
-}
-
-type worktreeBoundaryClient struct {
-	mu        sync.Mutex
-	responses []llm.Response
-	requests  []llm.Request
-}
-
-func (client *worktreeBoundaryClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	client.requests = append(client.requests, request)
-	if len(client.responses) == 0 {
-		return llm.Response{}, errors.New("unexpected model request")
-	}
-	response := client.responses[0]
-	client.responses = client.responses[1:]
-	return response, nil
-}
-
-func (client *worktreeBoundaryClient) request(t *testing.T, index int) llm.Request {
-	t.Helper()
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if index >= len(client.requests) {
-		t.Fatalf("request %d is unavailable in %+v", index, client.requests)
-	}
-	return client.requests[index]
-}
-
-type worktreeTransitionSteerClient struct {
-	mu           sync.Mutex
-	calls        []llm.Request
-	firstStarted chan struct{}
-	releaseFirst chan struct{}
-	secondCall   chan struct{}
-	firstOnce    sync.Once
-	secondOnce   sync.Once
-}
-
-func newWorktreeTransitionSteerClient() *worktreeTransitionSteerClient {
-	return &worktreeTransitionSteerClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-		secondCall:   make(chan struct{}),
-	}
-}
-
-func (c *worktreeTransitionSteerClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
-	c.mu.Lock()
-	c.calls = append(c.calls, req)
-	callNumber := len(c.calls)
-	c.mu.Unlock()
-	if callNumber == 1 {
-		c.firstOnce.Do(func() { close(c.firstStarted) })
-		select {
-		case <-ctx.Done():
-			return llm.Response{}, ctx.Err()
-		case <-c.releaseFirst:
-		}
-	} else {
-		c.secondOnce.Do(func() { close(c.secondCall) })
-	}
-	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}, nil
-}
-
-func (c *worktreeTransitionSteerClient) request(t *testing.T, index int) llm.Request {
-	t.Helper()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if index >= len(c.calls) {
-		t.Fatalf("request %d is unavailable in %+v", index, c.calls)
-	}
-	return c.calls[index]
 }
 
 type lifecycleRequestCaptureClient struct {
@@ -994,6 +813,7 @@ func TestSyncExecutionTargetFailsQueuedUserWorkWhenRollbackRebindFails(t *testin
 	if _, err := engine.SubmitUserMessage(context.Background(), "new work after failed switch"); !errors.Is(err, runtimepkg.ErrEngineClosed) {
 		t.Fatalf("SubmitUserMessage after failed rollback = %v, want ErrEngineClosed", err)
 	}
+	observer.armed.Store(false)
 	var rebuiltEngine *runtimepkg.Engine
 	rebuilt := false
 	rebuild := func(context.Context) (RuntimeBuildResult, error) {

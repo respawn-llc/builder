@@ -21,36 +21,50 @@ type parsedEvents struct {
 	droppedTrailingEOF bool
 }
 
-func (s *Store) bootstrapEventLogStateLocked() error {
+type eventLogReconciliationObservation struct {
+	reconciliation PersistedEventLogReconciliation
+	version        uint64
+}
+
+func (s *Store) bootstrapEventLogStateLocked() (*eventLogReconciliationObservation, error) {
 	if !s.persisted {
-		return nil
+		return nil, nil
 	}
 	info, err := os.Stat(s.eventsFP)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			if s.options.filelessEvents {
+				return nil, fmt.Errorf("open events file for ephemeral session: %w", err)
+			}
+			if authorityErr := s.requireMetadataPersistenceLocked(); authorityErr != nil {
+				return nil, authorityErr
+			}
+			needsReconciliation := s.meta.LastSequence != 0 || s.meta.ConversationEstablished
+			if needsReconciliation && s.options.reconciler == nil {
+				return nil, errEventLogReconcilerRequired
+			}
 			if writeErr := os.WriteFile(s.eventsFP, nil, 0o644); writeErr != nil {
-				return fmt.Errorf("initialize missing events file: %w", writeErr)
+				return nil, fmt.Errorf("initialize missing events file: %w", writeErr)
 			}
 			s.eventsFileSizeBytes = 0
 			s.pendingFsyncWrites = 0
 			s.conversationFreshness = ConversationFreshnessFresh
-			if s.meta.LastSequence != 0 {
+			if needsReconciliation {
 				s.meta.LastSequence = 0
+				s.meta.ConversationEstablished = false
 				s.meta.UpdatedAt = time.Now().UTC()
-				if _, persistErr := s.persistMetaLocked(); persistErr != nil {
-					return persistErr
-				}
+				return s.persistEventLogReconciliationLocked()
 			}
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
 	s.eventsFileSizeBytes = info.Size()
 	s.pendingFsyncWrites = 0
 
 	window, err := readRecentEventsBackwardFile(s.eventsFP, 0, bootstrapTailRecoveryEvents, activeTailReverseChunkBytes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	established := s.meta.ConversationEstablished
@@ -84,11 +98,32 @@ func (s *Store) bootstrapEventLogStateLocked() error {
 	}
 	if metaChanged {
 		s.meta.UpdatedAt = time.Now().UTC()
-		if _, err := s.persistMetaLocked(); err != nil {
-			return err
-		}
+		return s.persistEventLogReconciliationLocked()
 	}
-	return nil
+	return nil, nil
+}
+
+func (s *Store) persistEventLogReconciliationLocked() (*eventLogReconciliationObservation, error) {
+	if s.options.filelessEvents {
+		s.metadataVersion++
+		return nil, nil
+	}
+	if err := s.requireMetadataPersistenceLocked(); err != nil {
+		return nil, err
+	}
+	if s.options.reconciler == nil {
+		return nil, errEventLogReconcilerRequired
+	}
+	s.metadataVersion++
+	return &eventLogReconciliationObservation{
+		reconciliation: PersistedEventLogReconciliation{
+			SessionID:               s.meta.SessionID,
+			LastSequence:            s.meta.LastSequence,
+			ConversationEstablished: s.meta.ConversationEstablished,
+			UpdatedAt:               s.meta.UpdatedAt,
+		},
+		version: s.metadataVersion,
+	}, nil
 }
 
 func (s *Store) appendEventsLogLocked(events []Event) (int64, error) {

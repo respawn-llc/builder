@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/toolspec"
@@ -282,7 +281,7 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnceOnCountFailure(t 
 		t.Fatalf("count calls=%d, want 2 repeated backend attempts", client.countCalls)
 	}
 
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}

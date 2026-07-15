@@ -837,7 +837,7 @@ func TestSystemPromptSnapshotUsesLocalFileAndSurvivesMidSessionFileChanges(t *te
 		t.Fatalf("close first engine: %v", err)
 	}
 
-	reopened, err := session.Open(store.Dir())
+	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -1001,7 +1001,7 @@ func TestPendingSystemPromptRefreshRunsAfterReopen(t *testing.T) {
 	if err := eng.Close(); err != nil {
 		t.Fatalf("close engine: %v", err)
 	}
-	reopenedStore, err := session.Open(store.Dir())
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
