@@ -662,10 +662,15 @@ type AssistantDelta struct {
 	Phase MessagePhase
 }
 
-type ReasoningSummaryDelta struct {
-	Key  string
-	Role string
+type ReasoningStatus struct {
 	Text string
+}
+
+type ReasoningSummaryDelta struct {
+	Key           string
+	Role          string
+	Text          string
+	CurrentStatus *ReasoningStatus
 }
 
 type StreamCallbacks struct {

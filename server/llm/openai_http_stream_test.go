@@ -537,7 +537,7 @@ func TestToolCallAccumulatorMergesCompletedCustomInputWithoutJSONInput(t *testin
 	}
 }
 
-func TestGenerateStream_PreservesBoldReasoningTextWithoutInferringStatus(t *testing.T) {
+func TestGenerateStream_CarriesReasoningStatusWithoutChangingSummaryText(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"**Preparing patch**\n\nPlain summary text"}`,
 		`{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"**Preparing patch**\n\nPlain summary text"}],"encrypted_content":"enc_1"}]}}`,
@@ -560,8 +560,104 @@ func TestGenerateStream_PreservesBoldReasoningTextWithoutInferringStatus(t *test
 	if reasoning[0].Text != "**Preparing patch**\n\nPlain summary text" {
 		t.Fatalf("summary = %q", reasoning[0].Text)
 	}
+	if reasoning[0].CurrentStatus == nil || reasoning[0].CurrentStatus.Text != "Preparing patch" {
+		t.Fatalf("unexpected current status: %+v", reasoning[0].CurrentStatus)
+	}
 	if len(resp.Reasoning) != 1 || resp.Reasoning[0].Text != "**Preparing patch**\n\nPlain summary text" {
 		t.Fatalf("unexpected final reasoning summary entries: %+v", resp.Reasoning)
+	}
+}
+
+func TestGenerateStream_ReasoningCallbacksCarryCurrentAccumulatedStatus(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"**Checking"}`,
+		`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":" tests**"}`,
+		`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"\nDetails"}`,
+		`{"type":"response.completed","response":{"output":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"**Checking tests**\nDetails"}],"encrypted_content":"enc_1"}]}}`,
+		`[DONE]`,
+	)
+
+	var reasoning []ReasoningSummaryDelta
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnReasoningSummaryDelta: func(delta ReasoningSummaryDelta) {
+			reasoning = append(reasoning, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+
+	if len(reasoning) != 3 {
+		t.Fatalf("expected 3 reasoning callbacks, got %+v", reasoning)
+	}
+	if reasoning[0].CurrentStatus != nil {
+		t.Fatalf("incomplete callback status = %+v, want absence", reasoning[0].CurrentStatus)
+	}
+	for index := 1; index < len(reasoning); index++ {
+		if reasoning[index].CurrentStatus == nil || reasoning[index].CurrentStatus.Text != "Checking tests" {
+			t.Fatalf("callback %d status = %+v, want Checking tests", index, reasoning[index].CurrentStatus)
+		}
+	}
+	if reasoning[2].Text != "**Checking tests**\nDetails" {
+		t.Fatalf("final callback text = %q", reasoning[2].Text)
+	}
+}
+
+func TestGenerateStream_ReasoningCallbackNilStatusMeansCurrentAbsence(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"**Checking tests**"}`,
+		`{"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":0,"summary_index":0,"text":"Plain summary"}`,
+		`{"type":"response.completed","response":{"output":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Plain summary"}],"encrypted_content":"enc_1"}]}}`,
+		`[DONE]`,
+	)
+
+	var reasoning []ReasoningSummaryDelta
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnReasoningSummaryDelta: func(delta ReasoningSummaryDelta) {
+			reasoning = append(reasoning, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+
+	if len(reasoning) != 2 {
+		t.Fatalf("expected 2 reasoning callbacks, got %+v", reasoning)
+	}
+	if reasoning[0].CurrentStatus == nil || reasoning[0].CurrentStatus.Text != "Checking tests" {
+		t.Fatalf("first callback status = %+v, want Checking tests", reasoning[0].CurrentStatus)
+	}
+	if reasoning[1].CurrentStatus != nil {
+		t.Fatalf("replacement callback status = %+v, want current absence", reasoning[1].CurrentStatus)
+	}
+}
+
+func TestGenerateStream_EmptyReasoningSnapshotClearsCurrentStatus(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"**Checking tests**"}`,
+		`{"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":0,"summary_index":0,"text":""}`,
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+
+	var reasoning []ReasoningSummaryDelta
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnReasoningSummaryDelta: func(delta ReasoningSummaryDelta) {
+			reasoning = append(reasoning, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+
+	if len(reasoning) != 2 {
+		t.Fatalf("expected 2 reasoning callbacks, got %+v", reasoning)
+	}
+	if reasoning[1].Text != "" {
+		t.Fatalf("empty snapshot callback text = %q", reasoning[1].Text)
+	}
+	if reasoning[1].CurrentStatus != nil {
+		t.Fatalf("empty snapshot callback status = %+v, want current absence", reasoning[1].CurrentStatus)
 	}
 }
 
