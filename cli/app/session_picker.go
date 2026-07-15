@@ -399,8 +399,9 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 			tab.segments = tab.segments[len(tab.segments)-2:]
 		}
 		tab.rebuildResidentIDs()
-		if directional.move > 0 && len(segment.sessions) > 0 {
-			tab.selected = newSessionPickerSessionSelection(segment.sessions[0].SessionID)
+		appended := tab.segments[len(tab.segments)-1]
+		if directional.move > 0 && len(appended.sessions) > 0 {
+			tab.selected = newSessionPickerSessionSelection(appended.sessions[0].SessionID)
 			m.cancelSelectedDetailForTab(tab)
 		}
 	case serverapi.SessionPagePositionNewer:
@@ -409,8 +410,9 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 			tab.segments = tab.segments[:2]
 		}
 		tab.rebuildResidentIDs()
-		if directional.move < 0 && len(segment.sessions) > 0 {
-			tab.selected = newSessionPickerSessionSelection(segment.sessions[len(segment.sessions)-1].SessionID)
+		prepended := tab.segments[0]
+		if directional.move < 0 && len(prepended.sessions) > 0 {
+			tab.selected = newSessionPickerSessionSelection(prepended.sessions[len(prepended.sessions)-1].SessionID)
 			m.cancelSelectedDetailForTab(tab)
 		}
 	}

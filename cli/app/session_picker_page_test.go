@@ -391,6 +391,43 @@ func TestSessionPickerKeepsTwoPageResidentBoundAcrossOlderAndNewerTraversal(t *t
 	}
 }
 
+func TestSessionPickerDirectionalOverlapSelectsFirstNewResidentRow(t *testing.T) {
+	older := mustPickerContinuation(t, "overlap-older")
+	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+		if request.Category == sessioncontract.SessionCategorySubagent {
+			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
+		}
+		switch request.Position.Kind() {
+		case serverapi.SessionPagePositionNewest:
+			response := pickerPageResponse(t, request, "session-3", "session-2")
+			response.Older = &older
+			return sessionPageLoadResult{response: response}
+		case serverapi.SessionPagePositionOlder:
+			return sessionPageLoadResult{response: pickerPageResponse(t, request, "session-2", "session-1")}
+		default:
+			t.Fatalf("unexpected page request: %+v", request)
+			return sessionPageLoadResult{}
+		}
+	}}
+	model := newSessionPickerModelWithExecutionEnvironmentClient(context.Background(), loader, nil, "dark", sessionPickerHeaderInfo{})
+	runSessionPickerCommands(t, model, model.Init())
+
+	for range 3 {
+		runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, tea.KeyMsg{Type: tea.KeyDown}))
+	}
+
+	selected, ok := model.main.selected.(sessionPickerSessionSelection)
+	if !ok || selected.sessionID.String() != "session-1" {
+		t.Fatalf("selection after overlapping older page = %+v, want session-1", model.main.selected)
+	}
+	if got := model.main.sessions(); len(got) != 3 ||
+		got[0].SessionID.String() != "session-3" ||
+		got[1].SessionID.String() != "session-2" ||
+		got[2].SessionID.String() != "session-1" {
+		t.Fatalf("resident sessions after overlap = %+v", got)
+	}
+}
+
 func pickerPageResponse(t *testing.T, request serverapi.SessionPageRequest, ids ...string) serverapi.SessionPageResponse {
 	t.Helper()
 	response := serverapi.SessionPageResponse{ProjectID: request.ProjectID, Category: request.Category}
