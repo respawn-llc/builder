@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"core/server/runtimefeed"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 const DefaultCoordinatorCacheLimit = 128
@@ -72,10 +74,21 @@ func (c *CoordinatorCache) Snapshot(sessionID string, resolver ResolverSnapshot)
 }
 
 func (c *CoordinatorCache) WithSnapshot(sessionID string, build SnapshotBuilder) (ResponseSnapshot, error) {
+	update, err := c.WithFeedSnapshot(sessionID, build)
+	if err != nil {
+		return ResponseSnapshot{}, err
+	}
 	if build == nil {
 		return ResponseSnapshot{}, nil
 	}
-	return c.coordinator(sessionID).Snapshot(build)
+	return Protocol59ResponseSnapshot(update), nil
+}
+
+func (c *CoordinatorCache) WithFeedSnapshot(sessionID string, build SnapshotBuilder) (runtimefeed.RuntimeReadModelUpdate, error) {
+	if build == nil {
+		return runtimefeed.RuntimeReadModelUpdate{}, nil
+	}
+	return c.coordinator(sessionID).feedSnapshot(build)
 }
 
 func (c *CoordinatorCache) IsCurrent(sessionID string, version clientui.ReadModelVersion) bool {
@@ -185,11 +198,22 @@ func (c *ReadModelCoordinator) Next() clientui.ReadModelVersion {
 }
 
 func (c *ReadModelCoordinator) Snapshot(build SnapshotBuilder) (ResponseSnapshot, error) {
-	if c == nil {
-		return defaultCoordinatorCache.WithSnapshot("unknown", build)
+	update, err := c.feedSnapshot(build)
+	if err != nil {
+		return ResponseSnapshot{}, err
 	}
 	if build == nil {
 		return ResponseSnapshot{}, nil
+	}
+	return Protocol59ResponseSnapshot(update), nil
+}
+
+func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (runtimefeed.RuntimeReadModelUpdate, error) {
+	if c == nil {
+		return defaultCoordinatorCache.WithFeedSnapshot("unknown", build)
+	}
+	if build == nil {
+		return runtimefeed.RuntimeReadModelUpdate{}, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -200,29 +224,73 @@ func (c *ReadModelCoordinator) Snapshot(build SnapshotBuilder) (ResponseSnapshot
 	}
 	input, err := build(version)
 	if err != nil {
-		return ResponseSnapshot{}, err
+		return runtimefeed.RuntimeReadModelUpdate{}, err
 	}
-	activity, err := ResolveRuntimeActivity(input.Resolver)
+	activity, err := resolveRuntimeFeedActivity(input.Resolver)
 	if err != nil {
-		return ResponseSnapshot{}, err
+		return runtimefeed.RuntimeReadModelUpdate{}, err
 	}
-	reconciliation := input.InputReconciliation
-	if reconciliation.Version.Validate() != nil {
-		reconciliation = clientui.NewEmptyRuntimeInputReconciliationSnapshot(version)
+	reconciliation, err := runtimeFeedInputReconciliation(input.InputReconciliation, version)
+	if err != nil {
+		return runtimefeed.RuntimeReadModelUpdate{}, err
 	}
-	if reconciliation.Version != version {
-		return ResponseSnapshot{}, fmt.Errorf("input reconciliation version %+v does not match response snapshot version %+v", reconciliation.Version, version)
-	}
-	for _, record := range reconciliation.Operations {
-		if record.Version != version {
-			return ResponseSnapshot{}, fmt.Errorf("input reconciliation record version %+v does not match response snapshot version %+v", record.Version, version)
-		}
-	}
-	return ResponseSnapshot{
+	update := runtimefeed.RuntimeReadModelUpdate{
 		Version:             version,
 		Activity:            activity,
 		InputReconciliation: reconciliation,
-	}, nil
+	}
+	if err := update.Validate(); err != nil {
+		return runtimefeed.RuntimeReadModelUpdate{}, fmt.Errorf("validate runtime feed read-model update: %w", err)
+	}
+	return update, nil
+}
+
+func runtimeFeedInputReconciliation(
+	reconciliation clientui.RuntimeInputReconciliationSnapshot,
+	version clientui.ReadModelVersion,
+) (runtimefeed.RuntimeInputReconciliationSnapshot, error) {
+	if reconciliation.Version != version {
+		return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("input reconciliation version %+v does not match response snapshot version %+v", reconciliation.Version, version)
+	}
+	projected := runtimefeed.RuntimeInputReconciliationSnapshot{
+		Operations: make([]runtimefeed.RuntimeInputReconciliation, 0, len(reconciliation.Operations)),
+	}
+	for index, record := range reconciliation.Operations {
+		if record.Version != version {
+			return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("input reconciliation record %d version %+v does not match response snapshot version %+v", index, record.Version, version)
+		}
+		operation, err := runtimeFeedOperationRef(record.OperationRef)
+		if err != nil {
+			return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("project input reconciliation operation %d: %w", index, err)
+		}
+		projected.Operations = append(projected.Operations, runtimefeed.RuntimeInputReconciliation{
+			Operation: operation,
+			State:     record.State,
+		})
+	}
+	return projected, nil
+}
+
+func runtimeFeedOperationRef(ref clientui.RuntimeOperationRef) (runtimefeed.RuntimeOperationRef, error) {
+	if err := ref.Validate(); err != nil {
+		return runtimefeed.RuntimeOperationRef{}, err
+	}
+	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(ref.ClientRequestID)
+	if err != nil {
+		return runtimefeed.RuntimeOperationRef{}, err
+	}
+	projected := runtimefeed.RuntimeOperationRef{
+		Kind:            ref.Kind,
+		ClientRequestID: clientRequestID,
+	}
+	if ref.QueueItemID != "" {
+		queueItemID, err := runtimeids.ParseQueueItemID(ref.QueueItemID)
+		if err != nil {
+			return runtimefeed.RuntimeOperationRef{}, err
+		}
+		projected.QueueItemID = &queueItemID
+	}
+	return projected, projected.Validate()
 }
 
 func (c *ReadModelCoordinator) IsCurrent(version clientui.ReadModelVersion) bool {
@@ -244,4 +312,8 @@ func BuildResponseSnapshot(sessionID string, resolver ResolverSnapshot) (Respons
 
 func BuildSnapshot(sessionID string, build SnapshotBuilder) (ResponseSnapshot, error) {
 	return defaultCoordinatorCache.WithSnapshot(sessionID, build)
+}
+
+func BuildFeedSnapshot(sessionID string, build SnapshotBuilder) (runtimefeed.RuntimeReadModelUpdate, error) {
+	return defaultCoordinatorCache.WithFeedSnapshot(sessionID, build)
 }

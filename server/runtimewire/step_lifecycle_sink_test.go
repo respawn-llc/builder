@@ -12,6 +12,11 @@ import (
 	"core/shared/invariant"
 )
 
+const (
+	stepLifecycleTestRunID  = "11111111-1111-4111-8111-111111111111"
+	stepLifecycleTestStepID = "22222222-2222-4222-8222-222222222222"
+)
+
 type recordingRuntimeActivityPublisher struct {
 	snapshots     []runtimeactivity.ResponseSnapshot
 	panicNext     bool
@@ -45,8 +50,8 @@ func TestStepLifecycleSinkPublishesVersionedRunningThenIdleActivity(t *testing.T
 	startedAt := time.Now().UTC()
 	if err := sink.StepBegan(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-1",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindGoalLoop,
 		StartedAt:  startedAt,
 	}); err != nil {
@@ -54,8 +59,8 @@ func TestStepLifecycleSinkPublishesVersionedRunningThenIdleActivity(t *testing.T
 	}
 	if err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-1",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindGoalLoop,
 		StartedAt:  startedAt,
 		FinishedAt: time.Now().UTC(),
@@ -83,8 +88,8 @@ func TestStepLifecycleSinkUsesPublisherRegistrySnapshotForTerminalActivity(t *te
 
 	if err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-draining",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindUserTurn,
 	}); err != nil {
 		t.Fatalf("StepEnded: %v", err)
@@ -113,8 +118,8 @@ func TestStepLifecycleSinkPublishesSafeRecoveryActivityOnTerminalPublicationInva
 
 	err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-recovery",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindGoalLoop,
 		FinishedAt: time.Now().UTC(),
 	})
@@ -160,8 +165,8 @@ func TestStepLifecycleSinkPanicsOnPublicationInvariantFailureInPanicMode(t *test
 	}()
 	err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-panic",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindGoalLoop,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {

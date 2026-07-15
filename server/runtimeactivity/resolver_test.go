@@ -6,6 +6,11 @@ import (
 	"core/shared/clientui"
 )
 
+const (
+	runtimeActivityTestRunID  = "11111111-1111-4111-8111-111111111111"
+	runtimeActivityTestStepID = "22222222-2222-4222-8222-222222222222"
+)
+
 func TestResolveRuntimeActivityUsesOnlyLiveResolverInputs(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -28,7 +33,7 @@ func TestResolveRuntimeActivityUsesOnlyLiveResolverInputs(t *testing.T) {
 			name: "running copies runtime-owned active kind",
 			snapshot: ResolverSnapshot{
 				Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
-				Active:   &ActiveStepSnapshot{RunID: "run-1", StepID: "step-1", ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop},
+				Active:   &ActiveStepSnapshot{RunID: runtimeActivityTestRunID, StepID: runtimeActivityTestStepID, ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop},
 			},
 			want:     clientui.RuntimeActivityRunning,
 			wantKind: clientui.RuntimeActivityActiveKindGoalLoop,
@@ -81,7 +86,7 @@ func TestResolveRuntimeActivityCopiesEveryRuntimeOwnedActiveKind(t *testing.T) {
 		t.Run(string(kind), func(t *testing.T) {
 			activity, err := ResolveRuntimeActivity(ResolverSnapshot{
 				Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
-				Active:   &ActiveStepSnapshot{RunID: "run-1", StepID: "step-1", ActiveKind: kind},
+				Active:   &ActiveStepSnapshot{RunID: runtimeActivityTestRunID, StepID: runtimeActivityTestStepID, ActiveKind: kind},
 			})
 			if err != nil {
 				t.Fatalf("ResolveRuntimeActivity: %v", err)
@@ -99,7 +104,7 @@ func TestResolveRuntimeActivityCopiesEveryRuntimeOwnedActiveKind(t *testing.T) {
 func TestResolveRuntimeActivityProjectsPromptWaitFromExplicitFact(t *testing.T) {
 	activity, err := ResolveRuntimeActivity(ResolverSnapshot{
 		Registry:   RegistrySnapshot{Registered: true},
-		Active:     &ActiveStepSnapshot{RunID: "run-1", StepID: "step-1", ActiveKind: clientui.RuntimeActivityActiveKindUserTurn},
+		Active:     &ActiveStepSnapshot{RunID: runtimeActivityTestRunID, StepID: runtimeActivityTestStepID, ActiveKind: clientui.RuntimeActivityActiveKindUserTurn},
 		PromptWait: true,
 	})
 	if err != nil {
@@ -162,6 +167,44 @@ func TestCoordinatorResponseSnapshotsUseOneVersionAndPermitResponseOnlyHoles(t *
 	}
 	if !hole.NewerThan(first.Version) || !second.Version.NewerThan(hole) {
 		t.Fatalf("versions did not preserve response-only hole ordering: first=%+v hole=%+v second=%+v", first.Version, hole, second.Version)
+	}
+}
+
+func TestCoordinatorBuildsCanonicalFeedSnapshotBeforeProtocol59Projection(t *testing.T) {
+	cache := NewCoordinatorCache(4)
+	update, err := cache.WithFeedSnapshot("session-feed", func(version clientui.ReadModelVersion) (SnapshotInput, error) {
+		return SnapshotInput{
+			Resolver: ResolverSnapshot{
+				Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
+			},
+			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{
+				Version: version,
+				Operations: []clientui.RuntimeInputReconciliation{{
+					Version: version,
+					OperationRef: clientui.RuntimeOperationRef{
+						Kind:            clientui.RuntimeOperationKindSubmit,
+						ClientRequestID: "33333333-3333-4333-8333-333333333333",
+					},
+					State: clientui.RuntimeInputReconciliationCommitted,
+				}},
+			},
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("build canonical feed snapshot: %v", err)
+	}
+	if err := update.Validate(); err != nil {
+		t.Fatalf("validate canonical feed snapshot: %v", err)
+	}
+	if got := update.InputReconciliation.Operations[0].Operation.ClientRequestID.String(); got != "33333333-3333-4333-8333-333333333333" {
+		t.Fatalf("canonical client request id = %q", got)
+	}
+
+	projected := Protocol59ResponseSnapshot(update)
+	if projected.Version != update.Version ||
+		projected.InputReconciliation.Version != update.Version ||
+		projected.InputReconciliation.Operations[0].Version != update.Version {
+		t.Fatalf("protocol-59 projection lost canonical version: update=%+v projected=%+v", update, projected)
 	}
 }
 
