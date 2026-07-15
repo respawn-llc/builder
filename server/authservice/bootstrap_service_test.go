@@ -14,10 +14,11 @@ import (
 func TestCompleteBootstrapConfiguresAPIKeyWhenAuthNotReady(t *testing.T) {
 	service, store := newTestAuthBootstrapService(auth.EmptyState())
 
-	resp, err := service.CompleteBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
+	resp, err := service.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
 		Mode:   serverapi.AuthBootstrapModeAPIKey,
 		APIKey: "server-key",
 	})
+
 	if err != nil {
 		t.Fatalf("CompleteBootstrap: %v", err)
 	}
@@ -45,10 +46,11 @@ func TestCompleteBootstrapReturnsSuccessWithoutOverwriteWhenAuthAlreadyReady(t *
 		},
 	})
 
-	resp, err := service.CompleteBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
+	resp, err := service.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
 		Mode:   serverapi.AuthBootstrapModeAPIKey,
 		APIKey: "server-key-2",
 	})
+
 	if err != nil {
 		t.Fatalf("CompleteBootstrap: %v", err)
 	}
@@ -76,7 +78,7 @@ func TestCompleteBootstrapNoneClearsAuthWhenAuthOptional(t *testing.T) {
 		},
 	}, config.Settings{OpenAIBaseURL: "http://127.0.0.1:8080/v1"})
 
-	resp, err := service.CompleteBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone})
+	resp, err := service.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone})
 	if err != nil {
 		t.Fatalf("CompleteBootstrap none: %v", err)
 	}
@@ -104,7 +106,7 @@ func TestCompleteBootstrapNoneSavesNoAuthPreferenceWhenAuthRequired(t *testing.T
 		},
 	})
 
-	resp, err := service.CompleteBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone})
+	resp, err := service.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone})
 	if err != nil {
 		t.Fatalf("CompleteBootstrap none: %v", err)
 	}
@@ -130,7 +132,7 @@ func TestGetBootstrapStatusReportsPersistedNoAuthSelection(t *testing.T) {
 		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
 	})
 
-	resp, err := service.GetBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	resp, err := service.GetAuthBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
 	if err != nil {
 		t.Fatalf("GetBootstrapStatus: %v", err)
 	}
@@ -145,7 +147,7 @@ func TestGetBootstrapStatusReportsPersistedNoAuthSelection(t *testing.T) {
 func TestGetBootstrapStatusDoesNotReportEmptyStateAsNoAuthSelection(t *testing.T) {
 	service, _ := newTestAuthBootstrapService(auth.EmptyState())
 
-	resp, err := service.GetBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	resp, err := service.GetAuthBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
 	if err != nil {
 		t.Fatalf("GetBootstrapStatus: %v", err)
 	}

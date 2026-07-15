@@ -2,22 +2,6 @@ package app
 
 import (
 	"context"
-	"core/cli/app/internal/daemonlaunch"
-	"core/cli/app/internal/remoteattach"
-	"core/server/auth"
-	"core/server/authservice"
-	"core/server/launch"
-	"core/server/runprompt"
-	"core/server/session"
-	"core/server/session/sessiontest"
-	serverstartup "core/server/startup"
-	askquestion "core/server/tools"
-	"core/shared/client"
-	"core/shared/clientui"
-	"core/shared/config"
-	"core/shared/protocol"
-	"core/shared/serverapi"
-	"core/shared/sessioncontract"
 	"errors"
 	"net/http"
 	"os"
@@ -28,6 +12,24 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"core/cli/app/internal/daemonlaunch"
+	"core/cli/app/internal/remoteattach"
+	"core/server/auth"
+	"core/server/authservice"
+	"core/server/launch"
+	"core/server/runprompt"
+	"core/server/session"
+	"core/server/session/sessiontest"
+	serverstartup "core/server/startup"
+	askquestion "core/server/tools"
+	"core/shared/apicontract"
+	"core/shared/client"
+	"core/shared/clientui"
+	"core/shared/config"
+	"core/shared/protocol"
+	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 type memoryAuthHandler struct {
@@ -337,7 +339,7 @@ func (headlessProjectViewStubService) ListSessionsByProject(context.Context, ser
 	return serverapi.SessionListByProjectResponse{}, nil
 }
 
-func testPlanHeadlessWorkspaceBinding(ctx context.Context, projectViews client.ProjectViewClient, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
+func testPlanHeadlessWorkspaceBinding(ctx context.Context, projectViews apicontract.ProjectViewService, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.ProjectBindingPlanResponse{}, err
 	}
@@ -371,7 +373,7 @@ func testPlanHeadlessWorkspaceBinding(ctx context.Context, projectViews client.P
 	return resp, nil
 }
 
-func testSelectSingleRemoteWorkspace(ctx context.Context, projectViews client.ProjectViewClient) (serverapi.ProjectWorkspacePlanSelected, bool, error) {
+func testSelectSingleRemoteWorkspace(ctx context.Context, projectViews apicontract.ProjectViewService) (serverapi.ProjectWorkspacePlanSelected, bool, error) {
 	projects, err := projectViews.ListProjects(ctx, serverapi.ProjectListRequest{})
 	if err != nil {
 		return serverapi.ProjectWorkspacePlanSelected{}, false, err
@@ -694,12 +696,12 @@ func TestStartRunPromptClientWithoutServerRequiresRunningServer(t *testing.T) {
 }
 
 func TestHeadlessProjectBindingPlanChoosesOnlyWorkspace(t *testing.T) {
-	client := client.NewLoopbackProjectViewClient(headlessProjectViewStubService{
+	client := headlessProjectViewStubService{
 		listProjectsResp: serverapi.ProjectListResponse{Projects: []clientui.ProjectSummary{{ProjectID: "project-1"}}},
 		overviews: map[string]serverapi.ProjectGetOverviewResponse{
 			"project-1": {Overview: clientui.ProjectOverview{Workspaces: []clientui.ProjectWorkspaceSummary{{WorkspaceID: "workspace-1"}}}},
 		},
-	})
+	}
 
 	plan, err := client.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: "/client/missing", Mode: serverapi.ProjectBindingPlanModeHeadless})
 	if err != nil {
@@ -714,7 +716,7 @@ func TestHeadlessProjectBindingPlanChoosesOnlyWorkspace(t *testing.T) {
 }
 
 func TestHeadlessProjectBindingPlanIgnoresUnavailableWorkspaces(t *testing.T) {
-	client := client.NewLoopbackProjectViewClient(headlessProjectViewStubService{
+	client := headlessProjectViewStubService{
 		listProjectsResp: serverapi.ProjectListResponse{Projects: []clientui.ProjectSummary{{ProjectID: "project-1"}}},
 		overviews: map[string]serverapi.ProjectGetOverviewResponse{
 			"project-1": {Overview: clientui.ProjectOverview{Workspaces: []clientui.ProjectWorkspaceSummary{
@@ -723,7 +725,7 @@ func TestHeadlessProjectBindingPlanIgnoresUnavailableWorkspaces(t *testing.T) {
 				{WorkspaceID: "workspace-inaccessible", Availability: clientui.ProjectAvailabilityInaccessible},
 			}}},
 		},
-	})
+	}
 
 	plan, err := client.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: "/client/missing", Mode: serverapi.ProjectBindingPlanModeHeadless})
 	if err != nil {

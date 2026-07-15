@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -58,7 +58,7 @@ func (e *promptEventEmitter) close() {
 	close(e.out)
 }
 
-func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivitySubscription, subscribe promptActivitySubscriber, control client.PromptControlClient, notificationFallback attentionNotificationHook) (<-chan askEvent, func()) {
+func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivitySubscription, subscribe promptActivitySubscriber, control apicontract.PromptControlService, notificationFallback attentionNotificationHook) (<-chan askEvent, func()) {
 	emitter := newPromptEventEmitter(16)
 	out := (<-chan askEvent)(emitter.out)
 	if sub == nil || subscribe == nil || control == nil {
@@ -283,7 +283,7 @@ func waitPromptActivityRetry(ctx context.Context) bool {
 	}
 }
 
-func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, control client.PromptControlClient, retry func(clientui.PendingPromptEvent)) askEvent {
+func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, control apicontract.PromptControlService, retry func(clientui.PendingPromptEvent)) askEvent {
 	req := item
 	req.Suggestions = append([]string(nil), item.Suggestions...)
 	req.ApprovalOptions = append([]clientui.ApprovalOption(nil), item.ApprovalOptions...)

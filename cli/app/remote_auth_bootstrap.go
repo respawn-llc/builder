@@ -8,7 +8,7 @@ import (
 
 	"core/cli/app/internal/authui"
 	serverauth "core/server/auth"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 
@@ -20,7 +20,7 @@ var (
 	ErrOAuthStateMismatch = errors.New("oauth state mismatch")
 )
 
-func ensureRemoteAuthReady(ctx context.Context, remote client.AuthBootstrapClient, settings config.Settings, interactor authInteractor, interactive bool) error {
+func ensureRemoteAuthReady(ctx context.Context, remote apicontract.AuthBootstrapService, settings config.Settings, interactor authInteractor, interactive bool) error {
 	if remote == nil {
 		return errors.New("auth bootstrap client is required")
 	}
@@ -62,7 +62,7 @@ func ensureRemoteAuthReady(ctx context.Context, remote client.AuthBootstrapClien
 	return nil
 }
 
-func (i *interactiveAuthInteractor) completeRemoteAuthBootstrap(ctx context.Context, remote client.AuthBootstrapClient, settings config.Settings, status serverapi.AuthGetBootstrapStatusResponse, force bool) error {
+func (i *interactiveAuthInteractor) completeRemoteAuthBootstrap(ctx context.Context, remote apicontract.AuthBootstrapService, settings config.Settings, status serverapi.AuthGetBootstrapStatusResponse, force bool) error {
 	if i == nil {
 		return errors.New("interactive auth interactor is required")
 	}
@@ -113,7 +113,7 @@ type remoteNoAuthAcknowledgementDisabler interface {
 	DisableNoAuthBootstrapAcknowledgement()
 }
 
-func enableRemoteNoAuth(ctx context.Context, remote client.AuthBootstrapClient) error {
+func enableRemoteNoAuth(ctx context.Context, remote apicontract.AuthBootstrapService) error {
 	if enabler, ok := remote.(remoteNoAuthAcknowledgementEnabler); ok {
 		return enabler.EnableNoAuthBootstrapAcknowledgement(ctx)
 	}
@@ -127,7 +127,7 @@ func enableRemoteNoAuth(ctx context.Context, remote client.AuthBootstrapClient) 
 	return serverapi.ErrServerAuthRequired
 }
 
-func disableRemoteNoAuth(remote client.AuthBootstrapClient) {
+func disableRemoteNoAuth(remote apicontract.AuthBootstrapService) {
 	if disabler, ok := remote.(remoteNoAuthAcknowledgementDisabler); ok {
 		disabler.DisableNoAuthBootstrapAcknowledgement()
 	}

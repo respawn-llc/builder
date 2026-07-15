@@ -2,6 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
 	"core/cli/app/commands"
 	"core/cli/app/internal/status"
 	"core/internal/testharness/runtimewirefixture"
@@ -20,18 +28,10 @@ import (
 	"core/server/sessionservice"
 	serverstartup "core/server/startup"
 	shelltool "core/server/tools/shell"
-	rpccontract "core/shared/apicontract"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
-	"errors"
-	"io"
-	"path/filepath"
-	"strings"
-	"sync"
-	"testing"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -44,24 +44,24 @@ type testEmbeddedServer struct {
 	fastModeState        *runtime.FastModeState
 	background           *shelltool.Manager
 	backgroundRouter     serverstartup.BackgroundRouter
-	runPromptClient      client.RunPromptClient
+	runPromptClient      apicontract.RunPromptService
 	projectID            string
 	boundWorkspaceID     string
-	askViewClient        client.AskViewClient
-	approvalViewClient   client.ApprovalViewClient
-	attentionClient      client.AttentionNotificationClient
-	promptControlClient  client.PromptControlClient
-	promptActivityClient client.PromptActivityClient
-	projectViewClient    client.ProjectViewClient
-	processControlClient client.ProcessControlClient
-	processOutputClient  client.ProcessOutputClient
-	processViewClient    client.ProcessViewClient
-	runtimeControlClient client.RuntimeControlClient
-	sessionLaunch        client.SessionLaunchClient
-	sessionActivity      client.SessionActivityClient
-	sessionLifecycle     client.SessionLifecycleClient
-	sessionRuntime       client.SessionRuntimeClient
-	sessionViewClient    client.SessionViewClient
+	askViewClient        apicontract.AskViewService
+	approvalViewClient   apicontract.ApprovalViewService
+	attentionClient      apicontract.AttentionNotificationService
+	promptControlClient  apicontract.PromptControlService
+	promptActivityClient apicontract.PromptActivityService
+	projectViewClient    apicontract.ProjectViewService
+	processControlClient apicontract.ProcessControlService
+	processOutputClient  apicontract.ProcessOutputService
+	processViewClient    apicontract.ProcessViewService
+	runtimeControlClient apicontract.RuntimeControlService
+	sessionLaunch        apicontract.SessionLaunchService
+	sessionActivity      apicontract.SessionActivityService
+	sessionLifecycle     apicontract.SessionLifecycleService
+	sessionRuntime       apicontract.SessionRuntimeService
+	sessionViewClient    apicontract.SessionViewService
 	sessionStores        *registry.SessionStoreRegistry
 	sessionPersistence   *sessiontest.Persistence
 	metadataOnce         sync.Once
@@ -229,14 +229,14 @@ func (s *testEmbeddedServer) metadataBinding() (*metadata.Store, metadata.Bindin
 	return s.metadataStore, s.metadataBindingData, true
 }
 
-func (s *testEmbeddedServer) ProjectViewClient() client.ProjectViewClient {
+func (s *testEmbeddedServer) ProjectViewClient() apicontract.ProjectViewService {
 	if s.projectViewClient != nil {
 		return s.projectViewClient
 	}
 	if metadataStore, binding, ok := s.metadataBinding(); ok {
 		service, err := projectview.NewMetadataService(metadataStore, binding.ProjectID)
 		if err == nil {
-			return client.NewLoopbackProjectViewClient(service)
+			return service
 		}
 	}
 	if strings.TrimSpace(s.cfg.PersistenceRoot) == "" {
@@ -252,20 +252,20 @@ func (s *testEmbeddedServer) ProjectViewClient() client.ProjectViewClient {
 		_ = store.Close()
 		return nil
 	}
-	return client.NewLoopbackProjectViewClient(service)
+	return service
 }
 
-func (s *testEmbeddedServer) AskViewClient() client.AskViewClient { return s.askViewClient }
+func (s *testEmbeddedServer) AskViewClient() apicontract.AskViewService { return s.askViewClient }
 
-func (s *testEmbeddedServer) ApprovalViewClient() client.ApprovalViewClient {
+func (s *testEmbeddedServer) ApprovalViewClient() apicontract.ApprovalViewService {
 	return s.approvalViewClient
 }
 
-func (s *testEmbeddedServer) PromptControlClient() client.PromptControlClient {
+func (s *testEmbeddedServer) PromptControlClient() apicontract.PromptControlService {
 	return s.promptControlClient
 }
 
-func (s *testEmbeddedServer) PromptActivityClient() client.PromptActivityClient {
+func (s *testEmbeddedServer) PromptActivityClient() apicontract.PromptActivityService {
 	return s.promptActivityClient
 }
 
@@ -286,7 +286,7 @@ func (s *testEmbeddedServer) AuthStatePath() string {
 	return config.GlobalAuthConfigPath(s.cfg)
 }
 
-func (s *testEmbeddedServer) AuthStatusClient() client.AuthStatusClient {
+func (s *testEmbeddedServer) AuthStatusClient() apicontract.AuthStatusService {
 	return nil
 }
 
@@ -298,26 +298,26 @@ func (s *testEmbeddedServer) BackgroundRouter() serverstartup.BackgroundRouter {
 	return s.backgroundRouter
 }
 
-func (s *testEmbeddedServer) RunPromptClient() client.RunPromptClient { return s.runPromptClient }
+func (s *testEmbeddedServer) RunPromptClient() apicontract.RunPromptService { return s.runPromptClient }
 
-func (s *testEmbeddedServer) ProcessControlClient() client.ProcessControlClient {
+func (s *testEmbeddedServer) ProcessControlClient() apicontract.ProcessControlService {
 	return s.processControlClient
 }
 
-func (s *testEmbeddedServer) ProcessOutputClient() client.ProcessOutputClient {
+func (s *testEmbeddedServer) ProcessOutputClient() apicontract.ProcessOutputService {
 	return s.processOutputClient
 }
 
-func (s *testEmbeddedServer) ProcessViewClient() client.ProcessViewClient {
+func (s *testEmbeddedServer) ProcessViewClient() apicontract.ProcessViewService {
 	return s.processViewClient
 }
 
-func (s *testEmbeddedServer) RuntimeControlClient() client.RuntimeControlClient {
+func (s *testEmbeddedServer) RuntimeControlClient() apicontract.RuntimeControlService {
 	if s.runtimeControlClient != nil {
 		return s.runtimeControlClient
 	}
 	registry := registry.NewRuntimeRegistry()
-	return client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry))
+	return runtimecontrol.NewService(registry)
 }
 
 func (s *testEmbeddedServer) sessionStoreRegistry() *registry.SessionStoreRegistry {
@@ -355,7 +355,7 @@ func (s *testEmbeddedServer) sessionWorkspaceRetargeter(metadataStore *metadata.
 	return sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimes, maintenance, testSessionProcessSource{manager: s.background})
 }
 
-func (s *testEmbeddedServer) SessionLaunchClient() client.SessionLaunchClient {
+func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchService {
 	if s.sessionLaunch != nil {
 		return s.sessionLaunch
 	}
@@ -365,7 +365,7 @@ func (s *testEmbeddedServer) SessionLaunchClient() client.SessionLaunchClient {
 			ContainerDir: filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
 			StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
 		}, s.sessionStoreRegistry())
-		return client.NewLoopbackSessionLaunchClient(service)
+		return service
 	}
 	var storeOptions []session.StoreOption
 	if s.sessionPersistence != nil {
@@ -376,14 +376,14 @@ func (s *testEmbeddedServer) SessionLaunchClient() client.SessionLaunchClient {
 		ContainerDir: s.containerDir,
 		StoreOptions: storeOptions,
 	}, s.sessionStoreRegistry())
-	return client.NewLoopbackSessionLaunchClient(service)
+	return service
 }
 
-func (s *testEmbeddedServer) SessionActivityClient() client.SessionActivityClient {
+func (s *testEmbeddedServer) SessionActivityClient() apicontract.SessionActivityService {
 	return s.sessionActivity
 }
 
-func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleClient {
+func (s *testEmbeddedServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if s.sessionLifecycle != nil {
 		return s.sessionLifecycle
 	}
@@ -395,7 +395,7 @@ func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleCli
 			metadataStore.AuthoritativeSessionStoreOptions()...,
 		).WithPersistenceRoot(s.cfg.PersistenceRoot).
 			WithWorkspaceRetargeter(s.sessionWorkspaceRetargeter(metadataStore))
-		return client.NewLoopbackSessionLifecycleClient(service)
+		return service
 	}
 	containerDir := strings.TrimSpace(s.containerDir)
 	if containerDir == "" {
@@ -406,18 +406,18 @@ func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleCli
 		containerDir = filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), projectID, "sessions")
 	}
 	service := sessionservice.NewSessionLifecycleService(containerDir, s.sessionStoreRegistry(), s.authManager).WithPersistenceRoot(s.cfg.PersistenceRoot)
-	return client.NewLoopbackSessionLifecycleClient(service)
+	return service
 }
 
-func (s *testEmbeddedServer) SessionRuntimeClient() client.SessionRuntimeClient {
+func (s *testEmbeddedServer) SessionRuntimeClient() apicontract.SessionRuntimeService {
 	return s.sessionRuntime
 }
 
-func (s *testEmbeddedServer) SessionViewClient() client.SessionViewClient {
+func (s *testEmbeddedServer) SessionViewClient() apicontract.SessionViewService {
 	return s.sessionViewClient
 }
 
-func (s *testEmbeddedServer) WorktreeClient() client.WorktreeClient {
+func (s *testEmbeddedServer) WorktreeClient() apicontract.WorktreeService {
 	return nil
 }
 
@@ -456,8 +456,8 @@ func (s *testEmbeddedServer) Reauthenticate(ctx context.Context, interactor auth
 	if s.reauthenticate != nil {
 		return s.reauthenticate(ctx, interactor)
 	}
-	service := authservice.NewBootstrapService(s.authManager, s.oauthOpts, s.cfg.Settings, rpccontract.AllowedPreAuthMethods())
-	remote := client.NewLoopbackAuthBootstrapClient(service)
+	service := authservice.NewBootstrapService(s.authManager, s.oauthOpts, s.cfg.Settings, apicontract.AllowedPreAuthMethods())
+	remote := service
 	status, err := remote.GetAuthBootstrapStatus(ctx, serverapi.AuthGetBootstrapStatusRequest{})
 	if err != nil {
 		return err
@@ -469,8 +469,8 @@ func (s *testEmbeddedServer) Reauthenticate(ctx context.Context, interactor auth
 }
 
 func (s *testEmbeddedServer) EnsureAuthReady(ctx context.Context, interactor authInteractor, interactiveAuth bool) error {
-	service := authservice.NewBootstrapService(s.authManager, s.oauthOpts, s.cfg.Settings, rpccontract.AllowedPreAuthMethods())
-	return ensureRemoteAuthReady(ctx, client.NewLoopbackAuthBootstrapClient(service), s.cfg.Settings, interactor, interactiveAuth)
+	service := authservice.NewBootstrapService(s.authManager, s.oauthOpts, s.cfg.Settings, apicontract.AllowedPreAuthMethods())
+	return ensureRemoteAuthReady(ctx, service, s.cfg.Settings, interactor, interactiveAuth)
 }
 
 func (s *stubEmbeddedProcessViewClient) ListProcesses(context.Context, serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
@@ -599,7 +599,7 @@ func TestEmbeddedAppServerPrepareRuntimeExposesPendingAsksAndApprovals(t *testin
 	}
 }
 
-func waitForPendingAskResources(t *testing.T, client client.AskViewClient, sessionID string, want int) []clientui.PendingAsk {
+func waitForPendingAskResources(t *testing.T, client apicontract.AskViewService, sessionID string, want int) []clientui.PendingAsk {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -620,7 +620,7 @@ func waitForPendingAskResources(t *testing.T, client client.AskViewClient, sessi
 	return nil
 }
 
-func waitForPendingApprovalResources(t *testing.T, client client.ApprovalViewClient, sessionID string, want int) []clientui.PendingApproval {
+func waitForPendingApprovalResources(t *testing.T, client apicontract.ApprovalViewService, sessionID string, want int) []clientui.PendingApproval {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

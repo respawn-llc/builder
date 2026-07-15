@@ -38,7 +38,6 @@ import (
 	"core/server/workflowview"
 	"core/server/worktree"
 	rpccontract "core/shared/apicontract"
-	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -149,7 +148,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithOperationCoordinator(runtimeOperations).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
 	gitInspector := worktree.NewGitInspector(nil)
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript, SetupTimeoutSeconds: cfg.Settings.Worktrees.SetupTimeoutSeconds})
-	projectViews := client.NewLoopbackProjectViewClient(projectService)
+	projectViews := projectService
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg)
@@ -223,7 +222,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		processOutputService:    processOutputService,
 		promptControlService:    promptControlService,
 		promptActivityService:   promptActivityService,
-		attentionService:        client.NewLoopbackAttentionNotificationClient(runtimeRegistry),
+		attentionService:        runtimeRegistry,
 		runtimeControlService:   runtimeControlService,
 		serverStatusService:     serverStatusService,
 		sessionRuntimeService:   sessionRuntimeService,

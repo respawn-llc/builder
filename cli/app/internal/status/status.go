@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"core/shared/apicontract"
 	"core/shared/auth"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 )
@@ -42,13 +42,13 @@ type Request struct {
 	WorkspaceRoot         string
 	PersistenceRoot       string
 	ExecutionTarget       clientui.SessionExecutionTarget
-	SessionViews          client.SessionViewClient
+	SessionViews          apicontract.SessionViewService
 	Settings              config.Settings
 	Source                config.SourceReport
 	AuthCacheIdentity     string
 	AuthCacheUnseedable   bool
 	CacheKeys             CacheKeys
-	AuthStatus            client.AuthStatusClient
+	AuthStatus            apicontract.AuthStatusService
 	AuthStatePath         string
 	SessionName           string
 	SessionID             string

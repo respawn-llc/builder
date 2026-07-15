@@ -5,16 +5,16 @@ import (
 	"errors"
 	"strings"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 )
 
 type BindingServer interface {
 	Config() config.App
-	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (client.SessionLaunchClient, error)
-	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (client.SessionLaunchClient, error)
-	RunPromptClientForProjectWorkspace(context.Context, string, string) (client.RunPromptClient, error)
-	RunPromptClientForProjectWorkspaceID(context.Context, string, string) (client.RunPromptClient, error)
+	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (apicontract.SessionLaunchService, error)
+	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (apicontract.SessionLaunchService, error)
+	RunPromptClientForProjectWorkspace(context.Context, string, string) (apicontract.RunPromptService, error)
+	RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error)
 }
 
 type WorkspaceBindingRequest struct {
@@ -25,8 +25,8 @@ type WorkspaceBindingRequest struct {
 
 type WorkspaceBinding struct {
 	ProjectID     string
-	SessionLaunch client.SessionLaunchClient
-	RunPrompt     client.RunPromptClient
+	SessionLaunch apicontract.SessionLaunchService
+	RunPrompt     apicontract.RunPromptService
 }
 
 func BindProjectWorkspace(ctx context.Context, req WorkspaceBindingRequest) (WorkspaceBinding, error) {

@@ -13,8 +13,7 @@ import (
 
 	"core/server/auth"
 	"core/server/metadata"
-	rpccontract "core/shared/apicontract"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
@@ -51,85 +50,85 @@ type GatewayDependencies interface {
 }
 
 type GatewayDependencyAvailability interface {
-	RouteDependencyAvailable(rpccontract.Dependency) error
+	RouteDependencyAvailable(apicontract.Dependency) error
 }
 
 type GatewayServerStatusDependencies interface {
-	ServerStatusClient() client.ServerStatusClient
+	ServerStatusClient() apicontract.ServerStatusService
 }
 
 type GatewayAuthDependencies interface {
 	AuthManager() *auth.Manager
-	AuthBootstrapClient() client.AuthBootstrapClient
-	AuthStatusClient() client.AuthStatusClient
+	AuthBootstrapClient() apicontract.AuthBootstrapService
+	AuthStatusClient() apicontract.AuthStatusService
 	ServerAuthRequired() bool
 }
 
 type GatewayCapabilityFactsDependencies interface {
-	CapabilityFactsClient() client.CapabilityFactsClient
+	CapabilityFactsClient() apicontract.CapabilityFactsService
 }
 
 type GatewayOnboardingDependencies interface {
-	OnboardingFinalizeClient() client.OnboardingFinalizeClient
+	OnboardingFinalizeClient() apicontract.OnboardingFinalizeService
 }
 
 type GatewayProjectDependencies interface {
 	MetadataStore() *metadata.Store
 	ProjectID() string
 	ProjectExists(context.Context, string) error
-	ProjectViewClient() client.ProjectViewClient
-	WorkflowClient() client.WorkflowClient
+	ProjectViewClient() apicontract.ProjectViewService
+	WorkflowClient() apicontract.WorkflowService
 }
 
 type GatewaySessionDependencies interface {
 	SessionBelongsToProject(context.Context, string, string) error
-	SessionViewClient() client.SessionViewClient
-	SessionLifecycleClient() client.SessionLifecycleClient
-	SessionRuntimeClient() client.SessionRuntimeClient
-	SessionActivityClient() client.SessionActivityClient
-	SessionTranscriptClient() client.SessionTranscriptClient
-	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (client.SessionLaunchClient, error)
-	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (client.SessionLaunchClient, error)
-	RunPromptClientForProjectWorkspace(context.Context, string, string) (client.RunPromptClient, error)
-	RunPromptClientForProjectWorkspaceID(context.Context, string, string) (client.RunPromptClient, error)
+	SessionViewClient() apicontract.SessionViewService
+	SessionLifecycleClient() apicontract.SessionLifecycleService
+	SessionRuntimeClient() apicontract.SessionRuntimeService
+	SessionActivityClient() apicontract.SessionActivityService
+	SessionTranscriptClient() apicontract.SessionTranscriptService
+	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (apicontract.SessionLaunchService, error)
+	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (apicontract.SessionLaunchService, error)
+	RunPromptClientForProjectWorkspace(context.Context, string, string) (apicontract.RunPromptService, error)
+	RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error)
 }
 
 type GatewayRuntimeDependencies interface {
-	RuntimeControlClient() client.RuntimeControlClient
-	RuntimeLiveControlClient() client.RuntimeLiveControlClient
+	RuntimeControlClient() apicontract.RuntimeControlService
+	RuntimeLiveControlClient() apicontract.RuntimeLiveControlService
 }
 
 type GatewayPromptDependencies interface {
-	AskViewClient() client.AskViewClient
-	ApprovalViewClient() client.ApprovalViewClient
-	PromptControlClient() client.PromptControlClient
-	PromptActivityClient() client.PromptActivityClient
-	AttentionNotificationClient() client.AttentionNotificationClient
+	AskViewClient() apicontract.AskViewService
+	ApprovalViewClient() apicontract.ApprovalViewService
+	PromptControlClient() apicontract.PromptControlService
+	PromptActivityClient() apicontract.PromptActivityService
+	AttentionNotificationClient() apicontract.AttentionNotificationService
 }
 
 type GatewayProcessDependencies interface {
-	ProcessViewClient() client.ProcessViewClient
-	ProcessControlClient() client.ProcessControlClient
-	ProcessOutputClient() client.ProcessOutputClient
+	ProcessViewClient() apicontract.ProcessViewService
+	ProcessControlClient() apicontract.ProcessControlService
+	ProcessOutputClient() apicontract.ProcessOutputService
 }
 
 type GatewayWorktreeDependencies interface {
-	WorktreeClient() client.WorktreeClient
+	WorktreeClient() apicontract.WorktreeService
 }
 
 var gatewaySubscriptionMethods = protocolSubscriptionMethodSet()
 
 type gatewayUnaryHandler func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response
 
-var gatewayUnaryHandlers = routeHandlersForKind(rpccontract.KindUnary, gatewayUnaryHandlerEntries)
+var gatewayUnaryHandlers = routeHandlersForKind(apicontract.KindUnary, gatewayUnaryHandlerEntries)
 
 var gatewayProgressHandlerEntries = map[string]gatewayProgressHandler{
 	protocol.MethodRunPrompt: (*Gateway).serveRunPrompt,
 }
 
-type gatewayProgressHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) bool
+type gatewayProgressHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request) bool
 
-var gatewayProgressHandlers = routeHandlersForKind(rpccontract.KindProgress, gatewayProgressHandlerEntries)
+var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
 
 func RuntimeLiveControlRoutesExecutable() bool {
 	for _, method := range []string{
@@ -145,7 +144,7 @@ func RuntimeLiveControlRoutesExecutable() bool {
 }
 
 func protocolSubscriptionMethodSet() map[string]struct{} {
-	methods := rpccontract.SubscriptionMethods()
+	methods := apicontract.SubscriptionMethods()
 	set := make(map[string]struct{}, len(methods))
 	for _, method := range methods {
 		set[strings.TrimSpace(method)] = struct{}{}
@@ -164,7 +163,7 @@ type connectionState struct {
 	ownedRuntimes         map[string]struct{}
 }
 
-type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request)
+type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request)
 
 var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodSessionSubscribeActivity:              (*Gateway).serveSessionActivitySubscription,
@@ -178,11 +177,11 @@ var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodWorktreeSetupSubscribe:                (*Gateway).serveWorktreeSetupSubscription,
 }
 
-var gatewaySubscriptionHandlers = routeHandlersForKind(rpccontract.KindSubscription, gatewaySubscriptionHandlerEntries)
+var gatewaySubscriptionHandlers = routeHandlersForKind(apicontract.KindSubscription, gatewaySubscriptionHandlerEntries)
 
-func routeHandlersForKind[T any](kind rpccontract.Kind, entries map[string]T) map[string]T {
+func routeHandlersForKind[T any](kind apicontract.Kind, entries map[string]T) map[string]T {
 	handlers := make(map[string]T)
-	for _, route := range rpccontract.Routes() {
+	for _, route := range apicontract.Routes() {
 		if route.Kind != kind {
 			continue
 		}
@@ -195,10 +194,10 @@ func routeHandlersForKind[T any](kind rpccontract.Kind, entries map[string]T) ma
 	return handlers
 }
 
-func gatewayProgressHandlerForMethod(method string) (gatewayProgressHandler, rpccontract.Route, bool) {
-	route, ok := rpccontract.RouteByMethod(strings.TrimSpace(method))
-	if !ok || route.Kind != rpccontract.KindProgress {
-		return nil, rpccontract.Route{}, false
+func gatewayProgressHandlerForMethod(method string) (gatewayProgressHandler, apicontract.Route, bool) {
+	route, ok := apicontract.RouteByMethod(strings.TrimSpace(method))
+	if !ok || route.Kind != apicontract.KindProgress {
+		return nil, apicontract.Route{}, false
 	}
 	handler, ok := gatewayProgressHandlers[route.Method]
 	return handler, route, ok
@@ -299,7 +298,7 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if req.Method != protocol.MethodHandshake && !state.handshakeDone {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
-	route, ok := rpccontract.RouteByMethod(req.Method)
+	route, ok := apicontract.RouteByMethod(req.Method)
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}

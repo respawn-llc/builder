@@ -10,7 +10,7 @@ import (
 
 	"core/prompts"
 	"core/server/workflow"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -413,7 +413,7 @@ func TestTaskCompleteAgentCrossSessionSelectorUsesServiceOwnershipError(t *testi
 }
 
 type taskCompleteCaptureRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	projectID string
 	response  serverapi.WorkflowTaskCompleteResponse
 	err       error
@@ -446,7 +446,7 @@ func (r *taskCompleteCaptureRemote) requireSingleRequest(t *testing.T) serverapi
 }
 
 type taskCompleteFatalRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	t *testing.T
 }
 

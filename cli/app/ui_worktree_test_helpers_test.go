@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"core/cli/app/internal/worktreeui"
-	sharedclient "core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -133,7 +132,7 @@ func (c *worktreeCommandTestClient) consumeReconnectFailure(kind string) bool {
 
 func newWorktreeTestRuntimeClient(sessionID string) *sessionRuntimeClient {
 	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}}}
-	return newUIRuntimeClientWithReads(sessionID, reads, sharedclient.NewLoopbackRuntimeControlClient(nil)).(*sessionRuntimeClient)
+	return newUIRuntimeClientWithReads(sessionID, reads, &reconnectRetryRuntimeControlClient{}).(*sessionRuntimeClient)
 }
 
 func newWorktreeTestModel(t *testing.T, client *worktreeCommandTestClient, opts ...UIOption) *uiModel {

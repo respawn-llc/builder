@@ -21,8 +21,7 @@ import (
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
-	servicecontract "core/shared/apicontract"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 	"core/shared/transcriptdiag"
 
@@ -60,16 +59,12 @@ type HeadlessBootstrap struct {
 	PersistenceRoot string
 }
 
-func NewLoopbackRunPromptClient(boot HeadlessBootstrap) client.RunPromptClient {
+func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
 	launcher := &headlessPromptLauncher{boot: boot}
-	var service servicecontract.RunPromptService = NewPromptService(launcher)
-	if service != nil {
-		service = &memoizingPromptService{
-			inner: service,
-			runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
-		}
+	return &memoizingPromptService{
+		inner: NewPromptService(launcher),
+		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
 	}
-	return client.NewLoopbackRunPromptClient(service)
 }
 
 type headlessPromptLauncher struct {

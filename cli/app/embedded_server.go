@@ -8,7 +8,7 @@ import (
 	"core/cli/app/commands"
 	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/status"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/theme"
@@ -34,7 +34,7 @@ type appServerCore interface {
 type embeddedAppServer struct {
 	inner              *embeddedattach.Server
 	boundProjectID     string
-	boundSessionLaunch client.SessionLaunchClient
+	boundSessionLaunch apicontract.SessionLaunchService
 }
 
 func newEmbeddedAppServer(inner *embeddedattach.Server) *embeddedAppServer {
@@ -96,14 +96,14 @@ func (s *embeddedAppServer) AuthStatePath() string {
 	return config.GlobalAuthConfigPath(s.Config())
 }
 
-func (s *embeddedAppServer) AuthStatusClient() client.AuthStatusClient {
+func (s *embeddedAppServer) AuthStatusClient() apicontract.AuthStatusService {
 	if s == nil || s.inner == nil {
 		return nil
 	}
 	return s.inner.AuthStatusClient()
 }
 
-func (s *embeddedAppServer) AuthBootstrapClient() client.AuthBootstrapClient {
+func (s *embeddedAppServer) AuthBootstrapClient() apicontract.AuthBootstrapService {
 	if s == nil || s.inner == nil {
 		return nil
 	}
@@ -127,7 +127,7 @@ func (s *embeddedAppServer) ProjectID() string {
 	return s.inner.ProjectID()
 }
 
-func (s *embeddedAppServer) ProjectViewClient() client.ProjectViewClient {
+func (s *embeddedAppServer) ProjectViewClient() apicontract.ProjectViewService {
 	if s == nil || s.inner == nil {
 		return nil
 	}
@@ -158,7 +158,7 @@ func (s *embeddedAppServer) RuntimeAttachmentClients() runtimeAttachmentClients 
 	}
 }
 
-func (s *embeddedAppServer) SessionLaunchClient() client.SessionLaunchClient {
+func (s *embeddedAppServer) SessionLaunchClient() apicontract.SessionLaunchService {
 	if s == nil {
 		return nil
 	}
@@ -171,21 +171,21 @@ func (s *embeddedAppServer) SessionLaunchClient() client.SessionLaunchClient {
 	return s.inner.SessionLaunchClient()
 }
 
-func (s *embeddedAppServer) SessionViewClient() client.SessionViewClient {
+func (s *embeddedAppServer) SessionViewClient() apicontract.SessionViewService {
 	if s == nil || s.inner == nil {
 		return nil
 	}
 	return s.inner.SessionViewClient()
 }
 
-func (s *embeddedAppServer) SessionLifecycleClient() client.SessionLifecycleClient {
+func (s *embeddedAppServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if s == nil || s.inner == nil {
 		return nil
 	}
 	return s.inner.SessionLifecycleClient()
 }
 
-func (s *embeddedAppServer) RunPromptClient() client.RunPromptClient {
+func (s *embeddedAppServer) RunPromptClient() apicontract.RunPromptService {
 	if s == nil || s.inner == nil {
 		return nil
 	}

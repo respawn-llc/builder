@@ -7,20 +7,20 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
 
 type runtimeAttachmentTestServer struct {
-	runtime                         client.SessionRuntimeClient
-	sessionEvents                   client.SessionActivityClient
-	attention                       client.AttentionNotificationClient
+	runtime                         apicontract.SessionRuntimeService
+	sessionEvents                   apicontract.SessionActivityService
+	attention                       apicontract.AttentionNotificationService
 	attentionNotificationsSupported *bool
-	promptEvents                    client.PromptActivityClient
-	sessionViews                    client.SessionViewClient
-	runtimeControl                  client.RuntimeControlClient
+	promptEvents                    apicontract.PromptActivityService
+	sessionViews                    apicontract.SessionViewService
+	runtimeControl                  apicontract.RuntimeControlService
 }
 
 func (s runtimeAttachmentTestServer) RuntimeAttachmentClients() runtimeAttachmentClients {

@@ -2,15 +2,16 @@ package status
 
 import (
 	"context"
-	"core/prompts"
-	"core/server/runtime"
-	"core/shared/auth"
-	"core/shared/client"
-	"core/shared/config"
-	"core/shared/serverapi"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"core/prompts"
+	"core/server/runtime"
+	"core/shared/apicontract"
+	"core/shared/auth"
+	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 const DefaultUsageBaseURL = "https://chatgpt.com/backend-api"
@@ -119,7 +120,7 @@ func JoinWarnings(existing string, warning string) string {
 	return strings.Join(parts, " | ")
 }
 
-func (c Collector) ParentSessionName(ctx context.Context, sessionViews client.SessionViewClient, parentSessionID string) (string, string) {
+func (c Collector) ParentSessionName(ctx context.Context, sessionViews apicontract.SessionViewService, parentSessionID string) (string, string) {
 	parentID := strings.TrimSpace(parentSessionID)
 	if sessionViews == nil || parentID == "" {
 		return "", ""

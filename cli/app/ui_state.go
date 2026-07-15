@@ -7,7 +7,7 @@ import (
 	"core/cli/app/internal/runtimestate"
 	"core/cli/tui"
 	"core/cli/tui/ongoing"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -34,7 +34,7 @@ type uiRuntimeFeatureState struct {
 
 	processClient         clientui.ProcessClient
 	processClientExplicit bool
-	worktreeClient        client.WorktreeClient
+	worktreeClient        apicontract.WorktreeService
 
 	runtimeEvents                  <-chan clientui.Event
 	pendingRuntimeEvents           []clientui.Event

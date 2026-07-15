@@ -10,7 +10,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
 	"core/server/core"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 )
 
@@ -52,7 +52,7 @@ type OnboardingHandler func(ctx context.Context, req OnboardingRequest) (config.
 type OnboardingRequest struct {
 	Config                config.App
 	AuthManager           *auth.Manager
-	CapabilityFactsClient client.CapabilityFactsClient
+	CapabilityFactsClient apicontract.CapabilityFactsService
 	ReloadConfig          func() (config.App, error)
 }
 
@@ -136,7 +136,7 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 		cfg, err = onboardingHandler(ctx, OnboardingRequest{
 			Config:                cfg,
 			AuthManager:           authSupport.AuthManager,
-			CapabilityFactsClient: client.NewLoopbackCapabilityFactsClient(factsService),
+			CapabilityFactsClient: factsService,
 			ReloadConfig: func() (config.App, error) {
 				refreshed, err := serverbootstrap.ResolveConfig(bootstrapReq)
 				if err != nil {

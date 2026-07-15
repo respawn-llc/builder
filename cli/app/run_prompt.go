@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -21,7 +21,7 @@ type RunPromptResult struct {
 	Warnings    []string
 }
 
-func runPrompt(ctx context.Context, client client.RunPromptClient, opts Options, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
+func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Options, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID:   uuid.NewString(),
 		SelectedSessionID: strings.TrimSpace(initialSessionID),

@@ -9,7 +9,7 @@ import (
 
 	"core/cli/app/internal/status"
 	"core/server/auth"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -36,7 +36,7 @@ func (fastOnlyAuthResolver) CurrentState(context.Context) (auth.State, error) {
 	panic("session picker must not resolve current auth state")
 }
 
-var _ client.AuthStatusClient = panicAuthStatusClient{}
+var _ apicontract.AuthStatusService = panicAuthStatusClient{}
 
 func TestSessionPickerScrollsAndSelects(t *testing.T) {
 	now := time.Date(2026, time.February, 8, 12, 0, 0, 0, time.UTC)

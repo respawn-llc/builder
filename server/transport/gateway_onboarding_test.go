@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"core/server/core"
-	rpccontract "core/shared/apicontract"
+	"core/shared/apicontract"
 	remoteclient "core/shared/client"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -15,19 +15,19 @@ import (
 
 type gatewayOnboardingOverride struct {
 	*core.Core
-	finalize remoteclient.OnboardingFinalizeClient
+	finalize apicontract.OnboardingFinalizeService
 }
 
-func (d *gatewayOnboardingOverride) OnboardingFinalizeClient() remoteclient.OnboardingFinalizeClient {
+func (d *gatewayOnboardingOverride) OnboardingFinalizeClient() apicontract.OnboardingFinalizeService {
 	return d.finalize
 }
 
 type gatewayOnboardingUnavailableOverride struct {
 	*core.Core
-	unavailable rpccontract.Dependency
+	unavailable apicontract.Dependency
 }
 
-func (d *gatewayOnboardingUnavailableOverride) RouteDependencyAvailable(dep rpccontract.Dependency) error {
+func (d *gatewayOnboardingUnavailableOverride) RouteDependencyAvailable(dep apicontract.Dependency) error {
 	if dep == d.unavailable {
 		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 	}
@@ -53,7 +53,7 @@ func TestGatewayOnboardingFinalizeIsUnauthenticatedAndDomainInvalidIsTyped(t *te
 	defer func() { _ = appCore.Close() }()
 	gateway, err := NewGateway(&gatewayOnboardingOverride{
 		Core:     appCore,
-		finalize: remoteclient.NewLoopbackOnboardingFinalizeClient(gatewayOnboardingService{}),
+		finalize: gatewayOnboardingService{},
 	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -80,7 +80,7 @@ func TestGatewayOnboardingFinalizeMalformedParamsRemainInvalidParams(t *testing.
 	defer func() { _ = appCore.Close() }()
 	gateway, err := NewGateway(&gatewayOnboardingOverride{
 		Core:     appCore,
-		finalize: remoteclient.NewLoopbackOnboardingFinalizeClient(gatewayOnboardingService{}),
+		finalize: gatewayOnboardingService{},
 	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -102,7 +102,7 @@ func TestGatewaySubscriptionChecksDependencyAvailabilityBeforeClientLookup(t *te
 	defer func() { _ = appCore.Close() }()
 	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
 		Core:        appCore,
-		unavailable: rpccontract.DependencyAttentionNotification,
+		unavailable: apicontract.DependencyAttentionNotification,
 	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -127,7 +127,7 @@ func TestGatewayProgressChecksDependencyAvailabilityBeforeAuthAndPreflight(t *te
 	defer func() { _ = appCore.Close() }()
 	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
 		Core:        appCore,
-		unavailable: rpccontract.DependencyRunPrompt,
+		unavailable: apicontract.DependencyRunPrompt,
 	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -152,7 +152,7 @@ func TestGatewayAttachChecksDependencyAvailabilitySeparatelyFromHandshake(t *tes
 	defer func() { _ = appCore.Close() }()
 	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
 		Core:        appCore,
-		unavailable: rpccontract.DependencyProtocolAttach,
+		unavailable: apicontract.DependencyProtocolAttach,
 	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -177,11 +177,11 @@ func TestRemoteOnboardingFinalizePreservesStructuredSentinels(t *testing.T) {
 	defer func() { _ = appCore.Close() }()
 	gateway, err := NewGateway(&gatewayOnboardingOverride{
 		Core: appCore,
-		finalize: remoteclient.NewLoopbackOnboardingFinalizeClient(gatewayOnboardingService{
+		finalize: gatewayOnboardingService{
 			handler: func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
 				return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: "/tmp/config.toml"}, nil)
 			},
-		}),
+		},
 	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)

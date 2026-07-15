@@ -5,17 +5,17 @@ import (
 	"errors"
 	"testing"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
 
 type testRunPromptClient struct {
-	client.RunPromptClient
+	apicontract.RunPromptService
 }
 
 type testAuthClient struct {
-	client.AuthBootstrapClient
+	apicontract.AuthBootstrapService
 }
 
 func TestEmbeddedTargetCarriesClientProjectAndClose(t *testing.T) {
@@ -52,7 +52,7 @@ func TestValidateEnsuresRemoteAuthAndProjectRegistration(t *testing.T) {
 			Auth:      auth,
 			ProjectID: func() string { return "project-1" },
 		},
-		EnsureAuthReady: func(_ context.Context, got client.AuthBootstrapClient) error {
+		EnsureAuthReady: func(_ context.Context, got apicontract.AuthBootstrapService) error {
 			calls++
 			if got != auth {
 				t.Fatalf("auth client = %T, want test auth client", got)
@@ -73,7 +73,7 @@ func TestValidateReturnsAuthErrorBeforeProjectRegistration(t *testing.T) {
 	err := ValidateRunPromptTarget(context.Background(), RunPromptValidateRequest{
 		Config: config.App{WorkspaceRoot: "/repo"},
 		Target: RunPromptTarget{Auth: &testAuthClient{}},
-		EnsureAuthReady: func(context.Context, client.AuthBootstrapClient) error {
+		EnsureAuthReady: func(context.Context, apicontract.AuthBootstrapService) error {
 			return authErr
 		},
 	})

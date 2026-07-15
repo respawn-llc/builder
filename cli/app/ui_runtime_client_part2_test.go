@@ -2,11 +2,6 @@ package app
 
 import (
 	"context"
-	"core/server/registry"
-	"core/server/runtimecontrol"
-	sharedclient "core/shared/client"
-	"core/shared/clientui"
-	"core/shared/serverapi"
 	"errors"
 	"reflect"
 	"strings"
@@ -14,12 +9,17 @@ import (
 	"testing"
 	"time"
 
+	"core/server/registry"
+	"core/server/runtimecontrol"
+	"core/shared/clientui"
+	"core/shared/serverapi"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testing.T) {
 	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}}}
-	controls := sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry.NewRuntimeRegistry()))
+	controls := runtimecontrol.NewService(registry.NewRuntimeRegistry())
 	runtimeClient := newTestSessionRuntimeClient(reads, controls)
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 	notified := make(chan error, 1)

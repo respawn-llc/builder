@@ -17,7 +17,7 @@ import (
 	"core/server/session"
 	serverstartup "core/server/startup"
 	"core/server/tools"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 )
 
@@ -66,7 +66,7 @@ func loadAppTestConfig(t *testing.T, workspace string, opts config.LoadOptions) 
 	return cfg
 }
 
-func newAppMetadataProjectViewClient(t *testing.T, cfg config.App) client.ProjectViewClient {
+func newAppMetadataProjectViewClient(t *testing.T, cfg config.App) apicontract.ProjectViewService {
 	t.Helper()
 	store, err := metadata.Open(cfg.PersistenceRoot)
 	if err != nil {
@@ -77,7 +77,7 @@ func newAppMetadataProjectViewClient(t *testing.T, cfg config.App) client.Projec
 	if err != nil {
 		t.Fatalf("NewMetadataService: %v", err)
 	}
-	return client.NewLoopbackProjectViewClient(service)
+	return service
 }
 
 // startStandingRunPromptServer starts an in-process standing serve server for

@@ -5,24 +5,24 @@ import (
 	"errors"
 	"testing"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 )
 
 type fakeSessionLaunchClient struct {
-	client.SessionLaunchClient
+	apicontract.SessionLaunchService
 }
 
 type fakeRunPromptClient struct {
-	client.RunPromptClient
+	apicontract.RunPromptService
 }
 
 type fakeServer struct {
 	cfg           config.App
-	rootLaunch    client.SessionLaunchClient
-	rootRunPrompt client.RunPromptClient
-	idLaunch      client.SessionLaunchClient
-	idRunPrompt   client.RunPromptClient
+	rootLaunch    apicontract.SessionLaunchService
+	rootRunPrompt apicontract.RunPromptService
+	idLaunch      apicontract.SessionLaunchService
+	idRunPrompt   apicontract.RunPromptService
 	rootErr       error
 	rootRunErr    error
 	idErr         error
@@ -32,22 +32,22 @@ type fakeServer struct {
 
 func (s *fakeServer) Config() config.App { return s.cfg }
 
-func (s *fakeServer) SessionLaunchClientForProjectWorkspace(_ context.Context, projectID string, workspaceRoot string) (client.SessionLaunchClient, error) {
+func (s *fakeServer) SessionLaunchClientForProjectWorkspace(_ context.Context, projectID string, workspaceRoot string) (apicontract.SessionLaunchService, error) {
 	s.calls = append(s.calls, "launch-root:"+projectID+":"+workspaceRoot)
 	return s.rootLaunch, s.rootErr
 }
 
-func (s *fakeServer) RunPromptClientForProjectWorkspace(_ context.Context, projectID string, workspaceRoot string) (client.RunPromptClient, error) {
+func (s *fakeServer) RunPromptClientForProjectWorkspace(_ context.Context, projectID string, workspaceRoot string) (apicontract.RunPromptService, error) {
 	s.calls = append(s.calls, "run-root:"+projectID+":"+workspaceRoot)
 	return s.rootRunPrompt, s.rootRunErr
 }
 
-func (s *fakeServer) SessionLaunchClientForProjectWorkspaceID(_ context.Context, projectID string, workspaceID string) (client.SessionLaunchClient, error) {
+func (s *fakeServer) SessionLaunchClientForProjectWorkspaceID(_ context.Context, projectID string, workspaceID string) (apicontract.SessionLaunchService, error) {
 	s.calls = append(s.calls, "launch-id:"+projectID+":"+workspaceID)
 	return s.idLaunch, s.idErr
 }
 
-func (s *fakeServer) RunPromptClientForProjectWorkspaceID(_ context.Context, projectID string, workspaceID string) (client.RunPromptClient, error) {
+func (s *fakeServer) RunPromptClientForProjectWorkspaceID(_ context.Context, projectID string, workspaceID string) (apicontract.RunPromptService, error) {
 	s.calls = append(s.calls, "run-id:"+projectID+":"+workspaceID)
 	return s.idRunPrompt, s.idRunErr
 }

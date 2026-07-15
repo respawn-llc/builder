@@ -5,20 +5,21 @@ import (
 	"strings"
 
 	"core/cli/app/internal/remoteattach"
+	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 )
 
 type RunPromptTarget struct {
-	Client    client.RunPromptClient
-	Auth      client.AuthBootstrapClient
+	Client    apicontract.RunPromptService
+	Auth      apicontract.AuthBootstrapService
 	ProjectID func() string
 }
 
 type RunPromptValidateRequest struct {
 	Target          RunPromptTarget
 	Config          config.App
-	EnsureAuthReady func(context.Context, client.AuthBootstrapClient) error
+	EnsureAuthReady func(context.Context, apicontract.AuthBootstrapService) error
 }
 
 func RunPromptRemoteWithClose(remote *client.Remote, _ config.App, closeFn func() error) Target[RunPromptTarget] {
@@ -32,7 +33,7 @@ func RunPromptRemoteWithClose(remote *client.Remote, _ config.App, closeFn func(
 	}
 }
 
-func RunPromptEmbedded(runPrompt client.RunPromptClient, projectID func() string, closeFn func() error) Target[RunPromptTarget] {
+func RunPromptEmbedded(runPrompt apicontract.RunPromptService, projectID func() string, closeFn func() error) Target[RunPromptTarget] {
 	return Target[RunPromptTarget]{
 		Value: RunPromptTarget{
 			Client:    runPrompt,

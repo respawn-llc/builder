@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -27,7 +27,7 @@ type RuntimeControl struct {
 }
 
 type Service struct {
-	Client             client.WorktreeClient
+	Client             apicontract.WorktreeService
 	SessionID          string
 	Runtime            RuntimeControl
 	ResolveContext     func() (context.Context, context.CancelFunc)

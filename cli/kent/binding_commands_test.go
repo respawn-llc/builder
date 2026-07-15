@@ -3,15 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"core/server/auth"
-	"core/server/authservice"
-	"core/server/metadata"
-	"core/server/session"
-	serverstartup "core/server/startup"
-	"core/shared/client"
-	"core/shared/config"
-	"core/shared/protocol"
-	"core/shared/serverapi"
 	"errors"
 	"fmt"
 	"net"
@@ -23,6 +14,17 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"core/server/auth"
+	"core/server/authservice"
+	"core/server/metadata"
+	"core/server/session"
+	serverstartup "core/server/startup"
+	"core/shared/apicontract"
+	"core/shared/client"
+	"core/shared/config"
+	"core/shared/protocol"
+	"core/shared/serverapi"
 )
 
 type bindingCommandTimeoutProjectViewStub struct {
@@ -380,7 +382,7 @@ func TestProjectIDForPathUsesTargetPathServerConfig(t *testing.T) {
 		calledPath = path
 		return config.App{}, &client.Remote{}, nil
 	}
-	bindingCommandWorkspaceResolver = func(ctx context.Context, projectViews client.ProjectViewClient, workspaceRoot string) (serverapi.ProjectBinding, error) {
+	bindingCommandWorkspaceResolver = func(ctx context.Context, projectViews apicontract.ProjectViewService, workspaceRoot string) (serverapi.ProjectBinding, error) {
 		if workspaceRoot != normalizedTarget {
 			t.Fatalf("workspace root = %q, want %q", workspaceRoot, normalizedTarget)
 		}
@@ -634,7 +636,7 @@ func TestRetargetSessionWorkspaceUsesDaemonAndPassesTargetProject(t *testing.T) 
 	remoteCalls := 0
 	const sessionID = "session-123"
 	const projectID = "project-target"
-	bindingCommandSessionRetargeter = func(ctx context.Context, lifecycle client.SessionLifecycleClient, gotSessionID string, workspaceRoot string, gotProjectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	bindingCommandSessionRetargeter = func(ctx context.Context, lifecycle apicontract.SessionLifecycleService, gotSessionID string, workspaceRoot string, gotProjectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
 		if gotSessionID != sessionID {
 			t.Fatalf("session id = %q, want %q", gotSessionID, sessionID)
 		}
@@ -671,7 +673,7 @@ func TestRebindSubcommandReportsAutoAttachedWorkspace(t *testing.T) {
 		sessionID = "session-123"
 		projectID = "project-target"
 	)
-	bindingCommandSessionRetargeter = func(_ context.Context, _ client.SessionLifecycleClient, gotSessionID string, workspaceRoot string, gotProjectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	bindingCommandSessionRetargeter = func(_ context.Context, _ apicontract.SessionLifecycleService, gotSessionID string, workspaceRoot string, gotProjectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
 		if gotSessionID != sessionID || workspaceRoot != targetCfg.WorkspaceRoot || gotProjectID == nil || *gotProjectID != projectID {
 			t.Fatalf("retarget request = session:%q workspace:%q project:%v", gotSessionID, workspaceRoot, gotProjectID)
 		}
@@ -727,7 +729,7 @@ func TestRebindSubcommandFormatsCrossProjectChoicesAsExecutableCommands(t *testi
 			Name: "Target",
 		}},
 	}
-	bindingCommandSessionRetargeter = func(context.Context, client.SessionLifecycleClient, string, string, *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	bindingCommandSessionRetargeter = func(context.Context, apicontract.SessionLifecycleService, string, string, *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
 		return serverapi.SessionRetargetWorkspaceResponse{}, retargetErr
 	}
 
@@ -772,7 +774,7 @@ func TestRebindSubcommandRejectsExplicitProjectForForeignBoundTarget(t *testing.
 			Name: "Existing",
 		}},
 	}
-	bindingCommandSessionRetargeter = func(_ context.Context, _ client.SessionLifecycleClient, gotSessionID string, workspaceRoot string, gotProjectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	bindingCommandSessionRetargeter = func(_ context.Context, _ apicontract.SessionLifecycleService, gotSessionID string, workspaceRoot string, gotProjectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
 		if gotSessionID != sessionID || workspaceRoot != targetCfg.WorkspaceRoot || gotProjectID == nil || *gotProjectID != requestedProjectID {
 			t.Fatalf("retarget request = session:%q workspace:%q project:%v", gotSessionID, workspaceRoot, gotProjectID)
 		}

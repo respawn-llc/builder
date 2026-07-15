@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -223,7 +223,7 @@ func TestTaskCommentsPluralAddAliasUsesCommentAdd(t *testing.T) {
 }
 
 type commentAddRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	taskID      string
 	addRequests []serverapi.WorkflowTaskCommentAddRequest
 }
@@ -244,7 +244,7 @@ func (r *commentAddRemote) AddWorkflowTaskComment(_ context.Context, req servera
 }
 
 type commentListRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	taskID       string
 	comments     []serverapi.WorkflowTaskComment
 	listRequests []serverapi.WorkflowTaskCommentListRequest
@@ -289,7 +289,7 @@ func (r *commentListRemote) ListWorkflowTaskComments(_ context.Context, req serv
 }
 
 type commentAuthorRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	task        serverapi.WorkflowTaskDetail
 	sessionName string
 }

@@ -7,7 +7,7 @@ import (
 
 	"core/server/llm"
 	serverstartup "core/server/startup"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -18,7 +18,7 @@ import (
 type backParentPrefillScenarioServer interface {
 	interactiveSessionServer
 	ProjectID() string
-	SessionViewClient() client.SessionViewClient
+	SessionViewClient() apicontract.SessionViewService
 }
 
 func TestBackParentPrefillTransportParity(t *testing.T) {

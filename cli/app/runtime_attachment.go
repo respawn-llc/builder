@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"core/cli/app/internal/runtimeattach"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/transcriptdiag"
@@ -22,21 +22,21 @@ type runtimeAttachmentSource interface {
 }
 
 type runtimeAttachmentClients struct {
-	ApprovalViews                   client.ApprovalViewClient
-	AskViews                        client.AskViewClient
-	Attention                       client.AttentionNotificationClient
+	ApprovalViews                   apicontract.ApprovalViewService
+	AskViews                        apicontract.AskViewService
+	Attention                       apicontract.AttentionNotificationService
 	AttentionNotificationsSupported bool
-	ProcessControls                 client.ProcessControlClient
-	ProcessOutput                   client.ProcessOutputClient
-	ProcessViews                    client.ProcessViewClient
-	PromptActivity                  client.PromptActivityClient
-	PromptControl                   client.PromptControlClient
-	RuntimeControls                 client.RuntimeControlClient
-	SessionActivity                 client.SessionActivityClient
-	SessionTranscript               client.SessionTranscriptClient
-	SessionRuntime                  client.SessionRuntimeClient
-	SessionViews                    client.SessionViewClient
-	Worktrees                       client.WorktreeClient
+	ProcessControls                 apicontract.ProcessControlService
+	ProcessOutput                   apicontract.ProcessOutputService
+	ProcessViews                    apicontract.ProcessViewService
+	PromptActivity                  apicontract.PromptActivityService
+	PromptControl                   apicontract.PromptControlService
+	RuntimeControls                 apicontract.RuntimeControlService
+	SessionActivity                 apicontract.SessionActivityService
+	SessionTranscript               apicontract.SessionTranscriptService
+	SessionRuntime                  apicontract.SessionRuntimeService
+	SessionViews                    apicontract.SessionViewService
+	Worktrees                       apicontract.WorktreeService
 }
 
 func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {

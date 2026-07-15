@@ -2,13 +2,6 @@ package app
 
 import (
 	"context"
-	serverstartup "core/server/startup"
-	askquestion "core/server/tools"
-	shelltool "core/server/tools/shell"
-	"core/shared/client"
-	"core/shared/clientui"
-	"core/shared/protocol"
-	"core/shared/serverapi"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -16,6 +9,14 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	serverstartup "core/server/startup"
+	askquestion "core/server/tools"
+	shelltool "core/server/tools/shell"
+	"core/shared/apicontract"
+	"core/shared/clientui"
+	"core/shared/protocol"
+	"core/shared/serverapi"
 
 	"github.com/google/uuid"
 	"golang.org/x/net/websocket"
@@ -360,7 +361,7 @@ func waitForSessionActivitySubscriptionEvent(t *testing.T, sub serverapi.Session
 	}
 }
 
-func waitForRemoteProcess(t *testing.T, views client.ProcessViewClient, sessionID string, processID string) clientui.BackgroundProcess {
+func waitForRemoteProcess(t *testing.T, views apicontract.ProcessViewService, sessionID string, processID string) clientui.BackgroundProcess {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -379,7 +380,7 @@ func waitForRemoteProcess(t *testing.T, views client.ProcessViewClient, sessionI
 	return clientui.BackgroundProcess{}
 }
 
-func waitForRemoteProcessExit(t *testing.T, views client.ProcessViewClient, processID string) {
+func waitForRemoteProcessExit(t *testing.T, views apicontract.ProcessViewService, processID string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -395,7 +396,7 @@ func waitForRemoteProcessExit(t *testing.T, views client.ProcessViewClient, proc
 	t.Fatalf("timed out waiting for process %s to exit", processID)
 }
 
-func waitForRemoteInlineOutput(t *testing.T, controls client.ProcessControlClient, processID string) serverapi.ProcessInlineOutputResponse {
+func waitForRemoteInlineOutput(t *testing.T, controls apicontract.ProcessControlService, processID string) serverapi.ProcessInlineOutputResponse {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -441,8 +442,8 @@ func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServe
 }
 
 type promptViewTestServer interface {
-	AskViewClient() client.AskViewClient
-	ApprovalViewClient() client.ApprovalViewClient
+	AskViewClient() apicontract.AskViewService
+	ApprovalViewClient() apicontract.ApprovalViewService
 }
 
 func requirePromptViewServer(t *testing.T, server any) promptViewTestServer {
@@ -462,18 +463,18 @@ type runtimePromptViewTestServer struct {
 	clients runtimeAttachmentClients
 }
 
-func (s runtimePromptViewTestServer) AskViewClient() client.AskViewClient {
+func (s runtimePromptViewTestServer) AskViewClient() apicontract.AskViewService {
 	return s.clients.AskViews
 }
 
-func (s runtimePromptViewTestServer) ApprovalViewClient() client.ApprovalViewClient {
+func (s runtimePromptViewTestServer) ApprovalViewClient() apicontract.ApprovalViewService {
 	return s.clients.ApprovalViews
 }
 
 type processTestServer interface {
-	ProcessControlClient() client.ProcessControlClient
-	ProcessOutputClient() client.ProcessOutputClient
-	ProcessViewClient() client.ProcessViewClient
+	ProcessControlClient() apicontract.ProcessControlService
+	ProcessOutputClient() apicontract.ProcessOutputService
+	ProcessViewClient() apicontract.ProcessViewService
 }
 
 func requireProcessServer(t *testing.T, server any) processTestServer {
@@ -493,15 +494,15 @@ type runtimeProcessTestServer struct {
 	clients runtimeAttachmentClients
 }
 
-func (s runtimeProcessTestServer) ProcessControlClient() client.ProcessControlClient {
+func (s runtimeProcessTestServer) ProcessControlClient() apicontract.ProcessControlService {
 	return s.clients.ProcessControls
 }
 
-func (s runtimeProcessTestServer) ProcessOutputClient() client.ProcessOutputClient {
+func (s runtimeProcessTestServer) ProcessOutputClient() apicontract.ProcessOutputService {
 	return s.clients.ProcessOutput
 }
 
-func (s runtimeProcessTestServer) ProcessViewClient() client.ProcessViewClient {
+func (s runtimeProcessTestServer) ProcessViewClient() apicontract.ProcessViewService {
 	return s.clients.ProcessViews
 }
 

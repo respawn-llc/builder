@@ -12,7 +12,6 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/sessionview"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 
@@ -998,7 +997,7 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 		}
 	})
 	resolver := sessionview.NewStaticRuntimeResolver(restartedEngine)
-	reads := client.NewLoopbackSessionViewClient(sessionview.NewService(nil, resolver, nil))
+	reads := sessionview.NewService(nil, resolver, nil)
 	model := newSizedProjectedClosedUIModel(
 		newUIRuntimeClientFromEngine(restartedEngine),
 		100,

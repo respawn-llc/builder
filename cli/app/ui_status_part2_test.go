@@ -2,16 +2,16 @@ package app
 
 import (
 	"context"
-	"core/cli/app/internal/status"
-	"core/server/auth"
-	"core/server/sessionview"
-	"core/shared/client"
-	"core/shared/clientui"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"core/cli/app/internal/status"
+	"core/server/auth"
+	"core/server/sessionview"
+	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -278,7 +278,7 @@ func TestStatusParentSessionNameResolvesFromSessionViews(t *testing.T) {
 	if err := parentStore.SetName("incident-root"); err != nil {
 		t.Fatalf("set parent name: %v", err)
 	}
-	sessionViews := client.NewLoopbackSessionViewClient(sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil))
+	sessionViews := sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil)
 	got, warning := status.Collector{ParentSessionReadTimeout: uiRuntimeReadTimeout}.ParentSessionName(context.Background(), sessionViews, parentStore.Meta().SessionID)
 	if warning != "" {
 		t.Fatalf("unexpected warning: %q", warning)
@@ -294,7 +294,7 @@ func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testi
 	if err := parentStore.SetName("incident-root"); err != nil {
 		t.Fatalf("set parent name: %v", err)
 	}
-	sessionViews := client.NewLoopbackSessionViewClient(sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil))
+	sessionViews := sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil)
 	collector := &stubProgressiveStatusCollector{base: uiStatusSnapshot{ParentSessionID: parentStore.Meta().SessionID}}
 	m := newProjectedStaticUIModel(
 		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),

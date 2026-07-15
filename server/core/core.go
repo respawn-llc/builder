@@ -18,7 +18,7 @@ import (
 	"core/server/sessionlaunch"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -94,11 +94,11 @@ func (s *Core) SessionBelongsToProject(ctx context.Context, sessionID string, pr
 	return nil
 }
 
-func (s *Core) SessionLaunchClientForProject(ctx context.Context, projectID string) (client.SessionLaunchClient, error) {
+func (s *Core) SessionLaunchClientForProject(ctx context.Context, projectID string) (apicontract.SessionLaunchService, error) {
 	return s.SessionLaunchClientForProjectWorkspace(ctx, projectID, s.safeBundles().Projects.cfg.WorkspaceRoot)
 }
 
-func (s *Core) SessionLaunchClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (client.SessionLaunchClient, error) {
+func (s *Core) SessionLaunchClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (apicontract.SessionLaunchService, error) {
 	projectCtx, err := s.resolveProjectContext(ctx, projectID, workspaceID, "")
 	if err != nil {
 		return nil, err
@@ -106,7 +106,7 @@ func (s *Core) SessionLaunchClientForProjectWorkspaceID(ctx context.Context, pro
 	return s.sessionLaunchClientForProjectContext(projectCtx), nil
 }
 
-func (s *Core) SessionLaunchClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (client.SessionLaunchClient, error) {
+func (s *Core) SessionLaunchClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (apicontract.SessionLaunchService, error) {
 	projectCtx, err := s.resolveProjectContext(ctx, projectID, "", workspaceRoot)
 	if err != nil {
 		return nil, err
@@ -114,11 +114,11 @@ func (s *Core) SessionLaunchClientForProjectWorkspace(ctx context.Context, proje
 	return s.sessionLaunchClientForProjectContext(projectCtx), nil
 }
 
-func (s *Core) RunPromptClientForProject(ctx context.Context, projectID string) (client.RunPromptClient, error) {
+func (s *Core) RunPromptClientForProject(ctx context.Context, projectID string) (apicontract.RunPromptService, error) {
 	return s.RunPromptClientForProjectWorkspace(ctx, projectID, s.safeBundles().Projects.cfg.WorkspaceRoot)
 }
 
-func (s *Core) RunPromptClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (client.RunPromptClient, error) {
+func (s *Core) RunPromptClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (apicontract.RunPromptService, error) {
 	projectCtx, err := s.resolveProjectContext(ctx, projectID, workspaceID, "")
 	if err != nil {
 		return nil, err
@@ -126,7 +126,7 @@ func (s *Core) RunPromptClientForProjectWorkspaceID(ctx context.Context, project
 	return s.runPromptClientForProjectContext(projectCtx), nil
 }
 
-func (s *Core) RunPromptClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (client.RunPromptClient, error) {
+func (s *Core) RunPromptClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (apicontract.RunPromptService, error) {
 	projectCtx, err := s.resolveProjectContext(ctx, projectID, "", workspaceRoot)
 	if err != nil {
 		return nil, err
@@ -241,7 +241,7 @@ func (s *Core) configForWorkspace(workspaceRoot string) (config.App, error) {
 	return projectCfg, nil
 }
 
-func (s *Core) sessionLaunchClientForProjectContext(projectCtx projectContext) client.SessionLaunchClient {
+func (s *Core) sessionLaunchClientForProjectContext(projectCtx projectContext) apicontract.SessionLaunchService {
 	if s == nil {
 		return nil
 	}
@@ -252,7 +252,7 @@ func (s *Core) sessionLaunchClientForProjectContext(projectCtx projectContext) c
 		return cached
 	}
 	service := s.sessionLaunchServiceForProjectContextLocked(projectCtx)
-	client := client.NewLoopbackSessionLaunchClient(service)
+	client := service
 	s.safeBundles().Sessions.sessionLaunchMap[scopeKey] = client
 	return client
 }
@@ -285,7 +285,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 	return service
 }
 
-func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) client.RunPromptClient {
+func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apicontract.RunPromptService {
 	if s == nil {
 		return nil
 	}
@@ -295,7 +295,7 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) clien
 	if cached := s.safeBundles().Sessions.runPromptMap[scopeKey]; cached != nil {
 		return cached
 	}
-	client := runprompt.NewLoopbackRunPromptClient(runprompt.HeadlessBootstrap{
+	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
 		SessionLaunch:   s.sessionLaunchServiceForProjectContext(projectCtx),
 		AuthManager:     s.safeBundles().Auth.support.AuthManager,
 		FastModeState:   s.safeBundles().Runtime.fastModeState,
@@ -388,7 +388,7 @@ func (s *Core) BackgroundRouter() *runtimewire.BackgroundEventRouter {
 	return s.safeBundles().Runtime.backgroundRouter
 }
 
-func (s *Core) SessionViewClient() client.SessionViewClient {
+func (s *Core) SessionViewClient() apicontract.SessionViewService {
 	if s == nil {
 		return nil
 	}
@@ -402,39 +402,39 @@ func (s *Core) ProjectID() string {
 	return s.safeBundles().Projects.projectID
 }
 
-func (s *Core) ProjectViewClient() client.ProjectViewClient {
+func (s *Core) ProjectViewClient() apicontract.ProjectViewService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Projects.projectViews
 }
 
-func (s *Core) AuthBootstrapClient() client.AuthBootstrapClient {
+func (s *Core) AuthBootstrapClient() apicontract.AuthBootstrapService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Auth.authBootstrap
 }
 
-func (s *Core) AuthStatusClient() client.AuthStatusClient {
+func (s *Core) AuthStatusClient() apicontract.AuthStatusService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Auth.authStatus
 }
 
-func (s *Core) CapabilityFactsClient() client.CapabilityFactsClient {
+func (s *Core) CapabilityFactsClient() apicontract.CapabilityFactsService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Capability.facts
 }
 
-func (s *Core) OnboardingFinalizeClient() client.OnboardingFinalizeClient {
+func (s *Core) OnboardingFinalizeClient() apicontract.OnboardingFinalizeService {
 	if s == nil {
 		return nil
 	}
-	return client.NewLoopbackOnboardingFinalizeClient(configuredCoreOnboardingFinalizeService{settingsPath: configuredCoreSettingsPath(s.Config())})
+	return configuredCoreOnboardingFinalizeService{settingsPath: configuredCoreSettingsPath(s.Config())}
 }
 
 type configuredCoreOnboardingFinalizeService struct {
@@ -459,126 +459,126 @@ func configuredCoreSettingsPath(cfg config.App) string {
 	return path
 }
 
-func (s *Core) AskViewClient() client.AskViewClient {
+func (s *Core) AskViewClient() apicontract.AskViewService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Prompts.askViews
 }
 
-func (s *Core) ApprovalViewClient() client.ApprovalViewClient {
+func (s *Core) ApprovalViewClient() apicontract.ApprovalViewService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Prompts.approvalViews
 }
 
-func (s *Core) ProcessViewClient() client.ProcessViewClient {
+func (s *Core) ProcessViewClient() apicontract.ProcessViewService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Processes.processViews
 }
 
-func (s *Core) RuntimeControlClient() client.RuntimeControlClient {
+func (s *Core) RuntimeControlClient() apicontract.RuntimeControlService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Runtime.runtimeControls
 }
 
-func (s *Core) RuntimeLiveControlClient() client.RuntimeLiveControlClient {
+func (s *Core) RuntimeLiveControlClient() apicontract.RuntimeLiveControlService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Runtime.runtimeLiveControls
 }
 
-func (s *Core) ServerStatusClient() client.ServerStatusClient {
+func (s *Core) ServerStatusClient() apicontract.ServerStatusService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Auth.serverStatus
 }
 
-func (s *Core) PromptControlClient() client.PromptControlClient {
+func (s *Core) PromptControlClient() apicontract.PromptControlService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Prompts.promptControl
 }
 
-func (s *Core) PromptActivityClient() client.PromptActivityClient {
+func (s *Core) PromptActivityClient() apicontract.PromptActivityService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Prompts.promptActivity
 }
 
-func (s *Core) AttentionNotificationClient() client.AttentionNotificationClient {
+func (s *Core) AttentionNotificationClient() apicontract.AttentionNotificationService {
 	if s == nil {
 		return unavailableAttentionNotificationClient{}
 	}
 	return s.safeBundles().Prompts.attentionNotifications
 }
 
-func (s *Core) ProcessControlClient() client.ProcessControlClient {
+func (s *Core) ProcessControlClient() apicontract.ProcessControlService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Processes.processControls
 }
 
-func (s *Core) ProcessOutputClient() client.ProcessOutputClient {
+func (s *Core) ProcessOutputClient() apicontract.ProcessOutputService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Processes.processOutput
 }
 
-func (s *Core) SessionActivityClient() client.SessionActivityClient {
+func (s *Core) SessionActivityClient() apicontract.SessionActivityService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Runtime.sessionActivity
 }
 
-func (s *Core) SessionTranscriptClient() client.SessionTranscriptClient {
+func (s *Core) SessionTranscriptClient() apicontract.SessionTranscriptService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Runtime.sessionTranscript
 }
 
-func (s *Core) SessionLaunchClient() client.SessionLaunchClient {
+func (s *Core) SessionLaunchClient() apicontract.SessionLaunchService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Sessions.sessionLaunch
 }
 
-func (s *Core) SessionRuntimeClient() client.SessionRuntimeClient {
+func (s *Core) SessionRuntimeClient() apicontract.SessionRuntimeService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Runtime.sessionRuntime
 }
 
-func (s *Core) SessionLifecycleClient() client.SessionLifecycleClient {
+func (s *Core) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Sessions.sessionLifecycle
 }
 
-func (s *Core) WorktreeClient() client.WorktreeClient {
+func (s *Core) WorktreeClient() apicontract.WorktreeService {
 	if s == nil {
 		return nil
 	}
 	return s.safeBundles().Worktrees.worktrees
 }
 
-func (s *Core) WorkflowClient() client.WorkflowClient {
+func (s *Core) WorkflowClient() apicontract.WorkflowService {
 	if s == nil {
 		return nil
 	}
@@ -627,7 +627,7 @@ func (s *Core) AwaitPromptResponse(ctx context.Context, sessionID string, req as
 	return s.safeBundles().Runtime.runtimeRegistry.AwaitPromptResponse(ctx, sessionID, req)
 }
 
-func (s *Core) RunPromptClient() client.RunPromptClient {
+func (s *Core) RunPromptClient() apicontract.RunPromptService {
 	if s == nil {
 		return nil
 	}

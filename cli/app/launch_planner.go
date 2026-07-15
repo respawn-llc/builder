@@ -10,7 +10,7 @@ import (
 
 	"core/cli/app/internal/projectbinding"
 	"core/cli/app/internal/status"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -92,10 +92,10 @@ type launchPlannerServer interface {
 	Config() config.App
 	PresentationTheme() string
 	ProjectID() string
-	AuthStatusClient() client.AuthStatusClient
-	ProjectViewClient() client.ProjectViewClient
-	SessionLaunchClient() client.SessionLaunchClient
-	SessionViewClient() client.SessionViewClient
+	AuthStatusClient() apicontract.AuthStatusService
+	ProjectViewClient() apicontract.ProjectViewService
+	SessionLaunchClient() apicontract.SessionLaunchService
+	SessionViewClient() apicontract.SessionViewService
 }
 
 type launchPlannerAuthStateProvider interface {

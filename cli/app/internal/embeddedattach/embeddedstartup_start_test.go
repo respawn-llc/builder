@@ -7,7 +7,6 @@ import (
 
 	"core/server/auth"
 	serverstartup "core/server/startup"
-	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -56,7 +55,7 @@ func TestBuildStartupRequestMapsOptions(t *testing.T) {
 func TestAdaptOnboardingHandlerMapsRequest(t *testing.T) {
 	expected := errors.New("mapped")
 	mgr := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	factsClient := client.NewLoopbackCapabilityFactsClient(embeddedAttachFactsService{})
+	factsClient := embeddedAttachFactsService{}
 	reload := func() (config.App, error) {
 		return config.App{WorkspaceRoot: "/reloaded"}, nil
 	}

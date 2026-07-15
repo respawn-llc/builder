@@ -10,7 +10,7 @@ import (
 	"core/server/runtimecontrol"
 	"core/server/runtimeview"
 	"core/server/sessionview"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 )
 
@@ -91,10 +91,10 @@ func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient
 		return nil
 	}
 	resolver := sessionview.NewStaticRuntimeResolver(engine)
-	reads := client.NewLoopbackSessionViewClient(sessionview.NewService(nil, resolver, nil))
+	reads := sessionview.NewService(nil, resolver, nil)
 	controlRegistry := registry.NewRuntimeRegistry()
 	registerUIRuntime(controlRegistry, engine.SessionID(), engine)
-	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(controlRegistry))
+	controls := runtimecontrol.NewService(controlRegistry)
 	runtimeClient := newUIRuntimeClientWithReads(engine.SessionID(), reads, controls).(*sessionRuntimeClient)
 	snapshot, err := controlRegistry.RuntimeReadModelSnapshot(context.Background(), engine.SessionID(), nil)
 	if err != nil {
@@ -116,10 +116,10 @@ func newUIRuntimeClient(engine *runtime.Engine) clientui.RuntimeClient {
 	return newUIRuntimeClientFromEngine(engine)
 }
 
-func newTestSessionRuntimeClient(reads client.SessionViewClient, controls client.RuntimeControlClient) *sessionRuntimeClient {
+func newTestSessionRuntimeClient(reads apicontract.SessionViewService, controls apicontract.RuntimeControlService) *sessionRuntimeClient {
 	return newUIRuntimeClientWithReads("session-1", reads, controls).(*sessionRuntimeClient)
 }
 
-func newTestSessionRuntimeClientWithControls(controls client.RuntimeControlClient) *sessionRuntimeClient {
+func newTestSessionRuntimeClientWithControls(controls apicontract.RuntimeControlService) *sessionRuntimeClient {
 	return newTestSessionRuntimeClient(&countingSessionViewClient{}, controls)
 }

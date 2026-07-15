@@ -5,7 +5,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/cli/tui"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -179,7 +179,7 @@ func WithUIProcessClient(client clientui.ProcessClient) UIOption {
 	}
 }
 
-func WithUIWorktreeClient(client client.WorktreeClient) UIOption {
+func WithUIWorktreeClient(client apicontract.WorktreeService) UIOption {
 	return func(m *uiModel) {
 		m.worktreeClient = client
 	}

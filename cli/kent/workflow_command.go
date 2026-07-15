@@ -2,10 +2,6 @@ package main
 
 import (
 	"context"
-	"core/shared/client"
-	"core/shared/config"
-	"core/shared/serverapi"
-	"core/shared/workflowkey"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"core/shared/apicontract"
+	"core/shared/config"
+	"core/shared/serverapi"
+	"core/shared/workflowkey"
 
 	"github.com/google/uuid"
 )
@@ -61,7 +62,7 @@ func writeWorkflowJSON(stdout io.Writer, stderr io.Writer, v any) int {
 }
 
 type workflowCommandRemote interface {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error)
 	Close() error
 }

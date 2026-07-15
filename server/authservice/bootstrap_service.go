@@ -35,7 +35,7 @@ func NewBootstrapService(manager *auth.Manager, oauthOptions auth.OpenAIOAuthOpt
 	}
 }
 
-func (s *BootstrapService) GetBootstrapStatus(ctx context.Context, _ serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
+func (s *BootstrapService) GetAuthBootstrapStatus(ctx context.Context, _ serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
 	ready, err := s.authReady(ctx)
 	if err != nil {
 		return serverapi.AuthGetBootstrapStatusResponse{}, err
@@ -80,7 +80,7 @@ func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, _ serverapi.Au
 	return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
 }
 
-func (s *BootstrapService) CompleteBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
+func (s *BootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.AuthCompleteBootstrapResponse{}, err
 	}

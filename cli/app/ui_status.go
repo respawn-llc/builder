@@ -7,7 +7,7 @@ import (
 
 	"core/cli/app/internal/status"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 
@@ -23,11 +23,11 @@ type uiStatusConfig struct {
 	WorkspaceRoot   string
 	PersistenceRoot string
 	ExecutionTarget clientui.SessionExecutionTarget
-	SessionViews    client.SessionViewClient
+	SessionViews    apicontract.SessionViewService
 	Settings        config.Settings
 	Source          config.SourceReport
 	AuthManager     status.AuthStateResolver
-	AuthStatus      client.AuthStatusClient
+	AuthStatus      apicontract.AuthStatusService
 	AuthStatePath   string
 	OwnsServer      bool
 }

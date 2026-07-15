@@ -11,6 +11,7 @@ import (
 	"core/cli/app/internal/remoteattach"
 	"core/cli/app/internal/serverattach"
 	"core/cli/app/internal/startupconfig"
+	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -34,7 +35,7 @@ type runPromptWorkspaceConfig struct {
 	CallerContext startupconfig.CallerContext
 }
 
-func startRunPromptClient(ctx context.Context, opts Options) (client.RunPromptClient, func() error, error) {
+func startRunPromptClient(ctx context.Context, opts Options) (apicontract.RunPromptService, func() error, error) {
 	workspaceConfig, err := resolveRunPromptWorkspaceConfig(opts)
 	if err != nil {
 		return nil, nil, err
@@ -58,7 +59,7 @@ func startRunPromptClient(ctx context.Context, opts Options) (client.RunPromptCl
 			if err := serverattach.ValidateRunPromptTarget(ctx, serverattach.RunPromptValidateRequest{
 				Target: resolution.Value,
 				Config: cfg,
-				EnsureAuthReady: func(ctx context.Context, auth client.AuthBootstrapClient) error {
+				EnsureAuthReady: func(ctx context.Context, auth apicontract.AuthBootstrapService) error {
 					return ensureRemoteAuthReady(ctx, auth, cfg.Settings, newHeadlessAuthInteractor(), false)
 				},
 			}); err != nil {
@@ -93,7 +94,7 @@ func startRunPromptClient(ctx context.Context, opts Options) (client.RunPromptCl
 	return target.Value.Client, target.Close, nil
 }
 
-func startRuntimeLiveControlClient(ctx context.Context, opts Options) (client.RuntimeLiveControlClient, func() error, error) {
+func startRuntimeLiveControlClient(ctx context.Context, opts Options) (apicontract.RuntimeLiveControlService, func() error, error) {
 	cfg, err := loadRemoteAttachConfig(opts)
 	if err != nil {
 		return nil, nil, err

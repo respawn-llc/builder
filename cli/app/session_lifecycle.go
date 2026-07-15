@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 
@@ -15,7 +15,7 @@ import (
 )
 
 type sessionLifecycleClientProvider interface {
-	SessionLifecycleClient() client.SessionLifecycleClient
+	SessionLifecycleClient() apicontract.SessionLifecycleService
 }
 
 type sessionConfigProvider interface {
@@ -48,7 +48,7 @@ type interactiveProjectBindingServer interface {
 	Config() config.App
 	PresentationTheme() string
 	ClientPromptRoots() (commands.ClientPromptRoots, error)
-	ProjectViewClient() client.ProjectViewClient
+	ProjectViewClient() apicontract.ProjectViewService
 	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error)
 }
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"core/server/metadata"
-	servicecontract "core/shared/apicontract"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 )
 
@@ -78,12 +78,12 @@ func (g *Gateway) resolveSessionAttachment(ctx context.Context, state *connectio
 	return binding, nil
 }
 
-func (g *Gateway) sessionLaunchClientForState(ctx context.Context, state *connectionState) (service servicecontract.SessionLaunchService, _ error) {
+func (g *Gateway) sessionLaunchClientForState(ctx context.Context, state *connectionState) (apicontract.SessionLaunchService, error) {
 	projectID, err := g.activeProjectID(ctx, state)
 	if err != nil {
 		return nil, err
 	}
-	var launchClient any
+	var launchClient apicontract.SessionLaunchService
 	if strings.TrimSpace(state.attachedWorkspaceID) == "" {
 		launchClient, err = g.deps.SessionLaunchClientForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
 	} else {
@@ -92,21 +92,15 @@ func (g *Gateway) sessionLaunchClientForState(ctx context.Context, state *connec
 	if err != nil {
 		return nil, err
 	}
-	loopback, ok := launchClient.(interface {
-		PlanSession(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error)
-	})
-	if !ok {
-		return nil, errors.New("session launch client does not implement service contract")
-	}
-	return loopback, nil
+	return launchClient, nil
 }
 
-func (g *Gateway) runPromptClientForState(ctx context.Context, state *connectionState) (servicecontract.RunPromptService, error) {
+func (g *Gateway) runPromptClientForState(ctx context.Context, state *connectionState) (apicontract.RunPromptService, error) {
 	projectID, err := g.activeProjectID(ctx, state)
 	if err != nil {
 		return nil, err
 	}
-	var runClient any
+	var runClient apicontract.RunPromptService
 	if strings.TrimSpace(state.attachedWorkspaceID) == "" {
 		runClient, err = g.deps.RunPromptClientForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
 	} else {
@@ -115,11 +109,5 @@ func (g *Gateway) runPromptClientForState(ctx context.Context, state *connection
 	if err != nil {
 		return nil, err
 	}
-	service, ok := runClient.(interface {
-		RunPrompt(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error)
-	})
-	if !ok {
-		return nil, errors.New("run prompt client does not implement service contract")
-	}
-	return service, nil
+	return runClient, nil
 }

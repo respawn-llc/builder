@@ -21,8 +21,7 @@ import (
 	"core/server/onboarding"
 	"core/server/serverstatus"
 	"core/server/transport"
-	rpccontract "core/shared/apicontract"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -111,7 +110,7 @@ func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapR
 	onboardingCfg, err := onboardingHandler(ctx, OnboardingRequest{
 		Config:                cfg,
 		AuthManager:           authSupport.AuthManager,
-		CapabilityFactsClient: client.NewLoopbackCapabilityFactsClient(factsService),
+		CapabilityFactsClient: factsService,
 		ReloadConfig:          reloadConfig,
 	})
 	if errors.Is(err, ErrOnboardingRequired) {
@@ -309,13 +308,13 @@ func newServerIdentity(cfg config.App) protocol.ServerIdentity {
 		ServerID:          fmt.Sprintf(config.Command+":%d", os.Getpid()),
 		PID:               os.Getpid(),
 		PersistenceRootID: config.PersistenceRootHash(cfg.PersistenceRoot),
-		Capabilities:      serverCapabilityFlags(rpccontract.Routes()),
+		Capabilities:      serverCapabilityFlags(apicontract.Routes()),
 	}
 }
 
-func serverCapabilityFlags(routes []rpccontract.Route) protocol.CapabilityFlags {
+func serverCapabilityFlags(routes []apicontract.Route) protocol.CapabilityFlags {
 	methods := make(map[string]struct{}, len(routes))
-	dependencies := make(map[rpccontract.Dependency]struct{}, len(routes))
+	dependencies := make(map[apicontract.Dependency]struct{}, len(routes))
 	for _, route := range routes {
 		methods[route.Method] = struct{}{}
 		dependencies[route.Dependency] = struct{}{}
@@ -324,11 +323,11 @@ func serverCapabilityFlags(routes []rpccontract.Route) protocol.CapabilityFlags 
 		_, ok := methods[method]
 		return ok
 	}
-	hasDependency := func(dependency rpccontract.Dependency) bool {
+	hasDependency := func(dependency apicontract.Dependency) bool {
 		_, ok := dependencies[dependency]
 		return ok
 	}
-	methodHasDependency := func(method string, dependency rpccontract.Dependency) bool {
+	methodHasDependency := func(method string, dependency apicontract.Dependency) bool {
 		for _, route := range routes {
 			if route.Method == method && route.Dependency == dependency {
 				return true
@@ -338,24 +337,24 @@ func serverCapabilityFlags(routes []rpccontract.Route) protocol.CapabilityFlags 
 	}
 	return protocol.CapabilityFlags{
 		JSONRPCWebSocket:       hasMethod(protocol.MethodHandshake),
-		AuthBootstrap:          hasDependency(rpccontract.DependencyAuthBootstrap),
-		ProjectAttach:          methodHasDependency(protocol.MethodAttachProject, rpccontract.DependencyProtocolAttach),
-		SessionAttach:          methodHasDependency(protocol.MethodAttachSession, rpccontract.DependencyProtocolAttach),
+		AuthBootstrap:          hasDependency(apicontract.DependencyAuthBootstrap),
+		ProjectAttach:          methodHasDependency(protocol.MethodAttachProject, apicontract.DependencyProtocolAttach),
+		SessionAttach:          methodHasDependency(protocol.MethodAttachSession, apicontract.DependencyProtocolAttach),
 		HealthEndpoint:         true,
 		ReadinessEndpoint:      true,
-		RunPrompt:              hasDependency(rpccontract.DependencyRunPrompt),
+		RunPrompt:              hasDependency(apicontract.DependencyRunPrompt),
 		SessionPlan:            hasMethod(protocol.MethodSessionPlan),
-		SessionLifecycle:       hasDependency(rpccontract.DependencySessionLifecycle),
-		SessionTranscript:      hasDependency(rpccontract.DependencySessionTranscript),
-		SessionRuntime:         hasDependency(rpccontract.DependencySessionRuntime),
-		RuntimeControl:         hasDependency(rpccontract.DependencyRuntimeControl),
-		RuntimeLiveControl:     hasDependency(rpccontract.DependencyRuntimeControl) && transport.RuntimeLiveControlRoutesExecutable(),
-		PromptControl:          hasDependency(rpccontract.DependencyPromptControl),
-		PromptActivity:         hasDependency(rpccontract.DependencyPromptActivity),
-		SessionActivity:        hasDependency(rpccontract.DependencySessionActivity),
-		ProcessOutput:          hasDependency(rpccontract.DependencyProcessOutput),
-		AttentionNotifications: hasDependency(rpccontract.DependencyAttentionNotification),
-		OnboardingFinalize:     hasDependency(rpccontract.DependencyOnboardingFinalize),
+		SessionLifecycle:       hasDependency(apicontract.DependencySessionLifecycle),
+		SessionTranscript:      hasDependency(apicontract.DependencySessionTranscript),
+		SessionRuntime:         hasDependency(apicontract.DependencySessionRuntime),
+		RuntimeControl:         hasDependency(apicontract.DependencyRuntimeControl),
+		RuntimeLiveControl:     hasDependency(apicontract.DependencyRuntimeControl) && transport.RuntimeLiveControlRoutesExecutable(),
+		PromptControl:          hasDependency(apicontract.DependencyPromptControl),
+		PromptActivity:         hasDependency(apicontract.DependencyPromptActivity),
+		SessionActivity:        hasDependency(apicontract.DependencySessionActivity),
+		ProcessOutput:          hasDependency(apicontract.DependencyProcessOutput),
+		AttentionNotifications: hasDependency(apicontract.DependencyAttentionNotification),
+		OnboardingFinalize:     hasDependency(apicontract.DependencyOnboardingFinalize),
 	}
 }
 
@@ -442,7 +441,7 @@ type startupGatewayDependencies struct {
 	bootstrap   serverbootstrap.Request
 	authSupport serverbootstrap.AuthSupport
 	rootLease   *core.RootLockLease
-	finalizer   client.OnboardingFinalizeClient
+	finalizer   apicontract.OnboardingFinalizeService
 	coreOptions core.Options
 	core        *core.Core
 	activation  error
@@ -514,9 +513,9 @@ func (d *startupGatewayDependencies) activeCore() *core.Core {
 	return d.core
 }
 
-func (d *startupGatewayDependencies) RouteDependencyAvailable(dep rpccontract.Dependency) error {
+func (d *startupGatewayDependencies) RouteDependencyAvailable(dep apicontract.Dependency) error {
 	switch dep {
-	case rpccontract.DependencyProtocol, rpccontract.DependencyServerStatus, rpccontract.DependencyAuthBootstrap, rpccontract.DependencyAuthStatus, rpccontract.DependencyCapabilityFacts, rpccontract.DependencyOnboardingFinalize:
+	case apicontract.DependencyProtocol, apicontract.DependencyServerStatus, apicontract.DependencyAuthBootstrap, apicontract.DependencyAuthStatus, apicontract.DependencyCapabilityFacts, apicontract.DependencyOnboardingFinalize:
 		return nil
 	default:
 		d.mu.RLock()
@@ -560,7 +559,7 @@ func (d *startupGatewayDependencies) snapshotConfig() config.App {
 }
 
 type startupServerStatusService struct {
-	base      client.ServerStatusClient
+	base      apicontract.ServerStatusService
 	readiness interface {
 		ServerReadinessState() startupReadinessState
 	}
@@ -605,7 +604,7 @@ func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req 
 }
 
 type startupFinalizeService struct {
-	service           client.OnboardingFinalizeClient
+	service           apicontract.OnboardingFinalizeService
 	activate          func(context.Context, serverapi.OnboardingFinalizeResponse) error
 	activationContext context.Context
 }
@@ -628,27 +627,27 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 }
 
 func (d *startupGatewayDependencies) AuthManager() *auth.Manager { return d.authSupport.AuthManager }
-func (d *startupGatewayDependencies) AuthBootstrapClient() client.AuthBootstrapClient {
+func (d *startupGatewayDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
 	cfg := d.snapshotConfig()
-	return client.NewLoopbackAuthBootstrapClient(authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods()))
+	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, cfg.Settings, apicontract.AllowedPreAuthMethods())
 }
-func (d *startupGatewayDependencies) AuthStatusClient() client.AuthStatusClient {
+func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusService {
 	cfg := d.snapshotConfig()
-	return client.NewLoopbackAuthStatusClient(authservice.NewStatusService(d.authSupport.AuthManager, cfg.Settings))
+	return authservice.NewStatusService(d.authSupport.AuthManager, cfg.Settings)
 }
-func (d *startupGatewayDependencies) CapabilityFactsClient() client.CapabilityFactsClient {
+func (d *startupGatewayDependencies) CapabilityFactsClient() apicontract.CapabilityFactsService {
 	cfg := d.snapshotConfig()
-	return client.NewLoopbackCapabilityFactsClient(capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: d.authSupport.AuthManager}))
+	return capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: d.authSupport.AuthManager})
 }
-func (d *startupGatewayDependencies) ServerStatusClient() client.ServerStatusClient {
+func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStatusService {
 	cfg := d.snapshotConfig()
-	return client.NewLoopbackServerStatusClient(startupServerStatusService{base: serverstatus.NewServerStatusService(d.authSupport.AuthManager, cfg), readiness: d})
+	return startupServerStatusService{base: serverstatus.NewServerStatusService(d.authSupport.AuthManager, cfg), readiness: d}
 }
 func (d *startupGatewayDependencies) ServerAuthRequired() bool {
 	cfg := d.snapshotConfig()
 	return authservice.StartupAuthRequired(cfg.Settings)
 }
-func (d *startupGatewayDependencies) OnboardingFinalizeClient() client.OnboardingFinalizeClient {
+func (d *startupGatewayDependencies) OnboardingFinalizeClient() apicontract.OnboardingFinalizeService {
 	return d.finalizer
 }
 
@@ -670,13 +669,13 @@ func (d *startupGatewayDependencies) ProjectExists(ctx context.Context, projectI
 	}
 	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }
-func (d *startupGatewayDependencies) ProjectViewClient() client.ProjectViewClient {
+func (d *startupGatewayDependencies) ProjectViewClient() apicontract.ProjectViewService {
 	if c := d.activeCore(); c != nil {
 		return c.ProjectViewClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) WorkflowClient() client.WorkflowClient {
+func (d *startupGatewayDependencies) WorkflowClient() apicontract.WorkflowService {
 	if c := d.activeCore(); c != nil {
 		return c.WorkflowClient()
 	}
@@ -688,121 +687,121 @@ func (d *startupGatewayDependencies) SessionBelongsToProject(ctx context.Context
 	}
 	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }
-func (d *startupGatewayDependencies) SessionViewClient() client.SessionViewClient {
+func (d *startupGatewayDependencies) SessionViewClient() apicontract.SessionViewService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionViewClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) SessionLifecycleClient() client.SessionLifecycleClient {
+func (d *startupGatewayDependencies) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLifecycleClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) SessionRuntimeClient() client.SessionRuntimeClient {
+func (d *startupGatewayDependencies) SessionRuntimeClient() apicontract.SessionRuntimeService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionRuntimeClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) SessionActivityClient() client.SessionActivityClient {
+func (d *startupGatewayDependencies) SessionActivityClient() apicontract.SessionActivityService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionActivityClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) SessionTranscriptClient() client.SessionTranscriptClient {
+func (d *startupGatewayDependencies) SessionTranscriptClient() apicontract.SessionTranscriptService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionTranscriptClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (client.SessionLaunchClient, error) {
+func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (apicontract.SessionLaunchService, error) {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLaunchClientForProjectWorkspace(ctx, projectID, workspaceRoot)
 	}
 	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }
-func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (client.SessionLaunchClient, error) {
+func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (apicontract.SessionLaunchService, error) {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLaunchClientForProjectWorkspaceID(ctx, projectID, workspaceID)
 	}
 	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }
-func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (client.RunPromptClient, error) {
+func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (apicontract.RunPromptService, error) {
 	if c := d.activeCore(); c != nil {
 		return c.RunPromptClientForProjectWorkspace(ctx, projectID, workspaceRoot)
 	}
 	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }
-func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (client.RunPromptClient, error) {
+func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (apicontract.RunPromptService, error) {
 	if c := d.activeCore(); c != nil {
 		return c.RunPromptClientForProjectWorkspaceID(ctx, projectID, workspaceID)
 	}
 	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }
-func (d *startupGatewayDependencies) RuntimeControlClient() client.RuntimeControlClient {
+func (d *startupGatewayDependencies) RuntimeControlClient() apicontract.RuntimeControlService {
 	if c := d.activeCore(); c != nil {
 		return c.RuntimeControlClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) RuntimeLiveControlClient() client.RuntimeLiveControlClient {
+func (d *startupGatewayDependencies) RuntimeLiveControlClient() apicontract.RuntimeLiveControlService {
 	if c := d.activeCore(); c != nil {
 		return c.RuntimeLiveControlClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) AskViewClient() client.AskViewClient {
+func (d *startupGatewayDependencies) AskViewClient() apicontract.AskViewService {
 	if c := d.activeCore(); c != nil {
 		return c.AskViewClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) ApprovalViewClient() client.ApprovalViewClient {
+func (d *startupGatewayDependencies) ApprovalViewClient() apicontract.ApprovalViewService {
 	if c := d.activeCore(); c != nil {
 		return c.ApprovalViewClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) PromptControlClient() client.PromptControlClient {
+func (d *startupGatewayDependencies) PromptControlClient() apicontract.PromptControlService {
 	if c := d.activeCore(); c != nil {
 		return c.PromptControlClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) PromptActivityClient() client.PromptActivityClient {
+func (d *startupGatewayDependencies) PromptActivityClient() apicontract.PromptActivityService {
 	if c := d.activeCore(); c != nil {
 		return c.PromptActivityClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) AttentionNotificationClient() client.AttentionNotificationClient {
+func (d *startupGatewayDependencies) AttentionNotificationClient() apicontract.AttentionNotificationService {
 	if c := d.activeCore(); c != nil {
 		return c.AttentionNotificationClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) ProcessViewClient() client.ProcessViewClient {
+func (d *startupGatewayDependencies) ProcessViewClient() apicontract.ProcessViewService {
 	if c := d.activeCore(); c != nil {
 		return c.ProcessViewClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) ProcessControlClient() client.ProcessControlClient {
+func (d *startupGatewayDependencies) ProcessControlClient() apicontract.ProcessControlService {
 	if c := d.activeCore(); c != nil {
 		return c.ProcessControlClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) ProcessOutputClient() client.ProcessOutputClient {
+func (d *startupGatewayDependencies) ProcessOutputClient() apicontract.ProcessOutputService {
 	if c := d.activeCore(); c != nil {
 		return c.ProcessOutputClient()
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) WorktreeClient() client.WorktreeClient {
+func (d *startupGatewayDependencies) WorktreeClient() apicontract.WorktreeService {
 	if c := d.activeCore(); c != nil {
 		return c.WorktreeClient()
 	}

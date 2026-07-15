@@ -1,7 +1,7 @@
 package app
 
 import (
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 )
 
@@ -13,16 +13,16 @@ type runtimeWiring struct {
 	requestTranscriptOpen func()
 	askEvents             <-chan askEvent
 	runtimeClient         clientui.RuntimeClient
-	promptControl         client.PromptControlClient
-	runtimeControls       client.RuntimeControlClient
-	worktrees             client.WorktreeClient
-	processControls       client.ProcessControlClient
-	processOutput         client.ProcessOutputClient
-	processViews          client.ProcessViewClient
-	approvalViews         client.ApprovalViewClient
-	askViews              client.AskViewClient
-	sessionActivity       client.SessionActivityClient
-	sessionTranscript     client.SessionTranscriptClient
-	sessionViews          client.SessionViewClient
+	promptControl         apicontract.PromptControlService
+	runtimeControls       apicontract.RuntimeControlService
+	worktrees             apicontract.WorktreeService
+	processControls       apicontract.ProcessControlService
+	processOutput         apicontract.ProcessOutputService
+	processViews          apicontract.ProcessViewService
+	approvalViews         apicontract.ApprovalViewService
+	askViews              apicontract.AskViewService
+	sessionActivity       apicontract.SessionActivityService
+	sessionTranscript     apicontract.SessionTranscriptService
+	sessionViews          apicontract.SessionViewService
 	promptHistory         []string
 }

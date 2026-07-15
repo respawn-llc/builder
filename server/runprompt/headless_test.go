@@ -267,7 +267,7 @@ func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.
 	}
 }
 
-func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testing.T) {
+func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
@@ -311,7 +311,7 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 		},
 	}
 	runtimes := registry.NewRuntimeRegistry()
-	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
@@ -345,7 +345,7 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 	}
 }
 
-func TestLoopbackRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgroundManager(t *testing.T) {
+func TestInProcessRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgroundManager(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
@@ -433,7 +433,7 @@ func TestLoopbackRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgrou
 		},
 	}
 	runtimes := registry.NewRuntimeRegistry()
-	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		Background:      background,
@@ -552,7 +552,7 @@ func findRunPromptFunctionCallOutput(payload map[string]any) (string, bool) {
 	return "", false
 }
 
-func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
+func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
@@ -572,7 +572,7 @@ func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 		PersistenceRoot: root,
 		Settings:        config.Settings{Model: "gpt-5"},
 	}
-	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, nil, persistence),
 	})
 
@@ -586,7 +586,7 @@ func TestLoopbackRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	}
 }
 
-func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) {
+func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) {
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
@@ -629,7 +629,7 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 	}
-	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
@@ -720,7 +720,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.OpenAIBaseURL = server.URL
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
 	runtimes := registry.NewRuntimeRegistry()
-	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,

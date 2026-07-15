@@ -2,6 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
 	"core/cli/app/internal/projectbinding"
 	"core/server/launch"
 	"core/server/metadata"
@@ -10,18 +18,11 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	shelltool "core/server/tools/shell"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-	"errors"
-	"io"
-	"os"
-	"path/filepath"
-	"strconv"
-	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -42,7 +43,7 @@ func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *test
 		containerDir:       containerDir,
 		sessionPersistence: persistence,
 		projectID:          "project-1",
-		projectViewClient: client.NewLoopbackProjectViewClient(projectBindingFlowStubProjectViewService{
+		projectViewClient: projectBindingFlowStubProjectViewService{
 			resolveResp: serverapi.ProjectResolvePathResponse{
 				CanonicalRoot: missingWorkspace,
 				Binding: &serverapi.ProjectBinding{
@@ -52,7 +53,7 @@ func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *test
 					WorkspaceStatus: string(clientui.ProjectAvailabilityAvailable),
 				},
 			},
-		}),
+		},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
 			sessionID = plan.SessionID
 			_, _, _, err := buildToolRegistry(
@@ -167,7 +168,7 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 		cfg:               cfg,
 		projectID:         binding.ProjectID,
 		projectViewClient: sessionLifecycleProjectViewClient(binding, cfg.WorkspaceRoot, nil),
-		sessionLaunch:     client.NewLoopbackSessionLaunchClient(service),
+		sessionLaunch:     service,
 	}
 
 	err = runSessionLifecycleWithOptions(ctx, server, nil, store.Meta().SessionID, sessionLifecycleOptions{
@@ -616,8 +617,8 @@ func (s stubSessionLaunchClient) PlanSession(ctx context.Context, req serverapi.
 	return s.planSession(ctx, req)
 }
 
-func sessionLifecycleProjectViewClient(binding metadata.Binding, workspaceRoot string, sessions []clientui.SessionSummary) client.ProjectViewClient {
-	return client.NewLoopbackProjectViewClient(projectBindingFlowStubProjectViewService{
+func sessionLifecycleProjectViewClient(binding metadata.Binding, workspaceRoot string, sessions []clientui.SessionSummary) apicontract.ProjectViewService {
+	return projectBindingFlowStubProjectViewService{
 		resolveResp: serverapi.ProjectResolvePathResponse{
 			CanonicalRoot: workspaceRoot,
 			Binding: &serverapi.ProjectBinding{
@@ -628,7 +629,7 @@ func sessionLifecycleProjectViewClient(binding metadata.Binding, workspaceRoot s
 			},
 		},
 		projectOverviewResp: serverapi.ProjectGetOverviewResponse{Overview: clientui.ProjectOverview{Sessions: sessions}},
-	})
+	}
 }
 
 func createAttachedAuthoritativeAppSession(t *testing.T, persistenceRoot string, projectID string, workspaceRoot string) *session.Store {
@@ -1233,12 +1234,12 @@ func TestForcedLocalExitPropagatesDetachReleaseFailure(t *testing.T) {
 }
 
 type narrowSessionLifecycleServer struct {
-	lifecycle      client.SessionLifecycleClient
+	lifecycle      apicontract.SessionLifecycleService
 	cfg            config.App
 	reauthenticate func(context.Context, authInteractor) error
 }
 
-func (s narrowSessionLifecycleServer) SessionLifecycleClient() client.SessionLifecycleClient {
+func (s narrowSessionLifecycleServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	return s.lifecycle
 }
 

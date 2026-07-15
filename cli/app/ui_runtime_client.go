@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -23,8 +23,8 @@ var errRuntimeTranscriptRefreshUnsupported = errors.New("runtime transcript refr
 var uiRuntimeReadTimeout = 300 * time.Millisecond
 
 type sessionRuntimeClient struct {
-	reads                    client.SessionViewClient
-	controls                 client.RuntimeControlClient
+	reads                    apicontract.SessionViewService
+	controls                 apicontract.RuntimeControlService
 	sessionID                string
 	reactivator              *runtimeReactivator
 	diagLogf                 func(string)
@@ -38,7 +38,7 @@ type sessionRuntimeClient struct {
 	readModelStale bool
 }
 
-func newUIRuntimeClientWithReads(sessionID string, reads client.SessionViewClient, controls client.RuntimeControlClient) clientui.RuntimeClient {
+func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService) clientui.RuntimeClient {
 	if reads == nil || controls == nil {
 		return nil
 	}
