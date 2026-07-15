@@ -38,9 +38,7 @@ type SessionPlan struct {
 
 type SessionPlanRecoveryKind string
 
-const (
-	SessionPlanRecoveryKindDeletedManagedWorktree SessionPlanRecoveryKind = "deleted_managed_worktree"
-)
+const SessionPlanRecoveryKindDeletedManagedWorktree SessionPlanRecoveryKind = "deleted_managed_worktree"
 
 type SessionPlanRecovery struct {
 	Kind          SessionPlanRecoveryKind `json:"kind"`

@@ -2019,7 +2019,6 @@ func TestApplyRunPromptOverridesCLIModelOverrideRecomputesBudgetAfterFastRole(t 
 }
 
 func missingWorktreeLaunchFixture(t *testing.T) (Planner, *metadata.Store, *session.Store, metadata.Binding) {
-	t.Helper()
 	must := func(err error) {
 		if err != nil {
 			t.Fatal(err)
@@ -2054,6 +2053,7 @@ func missingWorktreeLaunchFixture(t *testing.T) (Planner, *metadata.Store, *sess
 
 func TestPlannerRecoversDeletedManagedWorktreePersistently(t *testing.T) {
 	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
+	planner.SessionStores.RegisterStore(store)
 	planner.RuntimeActive = func(string) bool { return true }
 	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
 	var recoveryErr *SessionTargetRecoveryError
@@ -2063,7 +2063,7 @@ func TestPlannerRecoversDeletedManagedWorktreePersistently(t *testing.T) {
 	planner.RuntimeActive = func(string) bool { return false }
 	plan, planErr := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
 	target, targetErr := metadataStore.ResolveSessionExecutionTarget(context.Background(), store.Meta().SessionID)
-	if planErr != nil || targetErr != nil || target.Worktree != nil || target.CwdRelpath != "." || target.WorkspaceID != binding.WorkspaceID || plan.Recovery == nil || plan.WorkspaceRoot != target.WorkspaceRoot || plan.Store.Meta().WorktreeReminder != nil {
+	if planErr != nil || targetErr != nil || plan.Store != store || target.Worktree != nil || target.CwdRelpath != "." || target.WorkspaceID != binding.WorkspaceID || plan.Recovery == nil || plan.WorkspaceRoot != target.WorkspaceRoot || plan.Store.Meta().WorktreeReminder != nil {
 		t.Fatalf("plan=%+v target=%+v errors=%v/%v", plan.Recovery, target, planErr, targetErr)
 	}
 	reopened, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, SelectedSessionID: store.Meta().SessionID})
