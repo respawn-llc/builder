@@ -529,7 +529,7 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 	}
 }
 
-func TestWaitForActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
+func TestCapturedActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := newBlockingThenBlockedQueuedClient()
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
@@ -544,12 +544,16 @@ func TestWaitForActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	if queued.ID == "" {
 		t.Fatal("busy queued message returned empty id")
 	}
+	handle, err := eng.CaptureActiveRunResult(context.Background())
+	if err != nil {
+		t.Fatalf("CaptureActiveRunResult: %v", err)
+	}
 	waitDone := make(chan struct {
 		result LiveRunResult
 		err    error
 	}, 1)
 	go func() {
-		result, err := eng.WaitForActiveRunResult(context.Background())
+		result, err := handle.Wait()
 		waitDone <- struct {
 			result LiveRunResult
 			err    error
@@ -569,7 +573,7 @@ func TestWaitForActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	}
 	waited := <-waitDone
 	if waited.err != nil {
-		t.Fatalf("WaitForActiveRunResult: %v", waited.err)
+		t.Fatalf("captured live run result: %v", waited.err)
 	}
 	if waited.result.AssistantMessage.Content != "queued work handled" {
 		t.Fatalf("wait result = %+v, want queued work handled", waited.result)
