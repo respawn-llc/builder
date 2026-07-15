@@ -362,7 +362,7 @@ func TestForkedSessionDoesNotCopyPersistedUsageState(t *testing.T) {
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
-	if err := eng.recordLastUsage(llm.Usage{InputTokens: 900, WindowTokens: 410_000}); err != nil {
+	if _, err := eng.recordLastUsage(llm.Usage{InputTokens: 900, WindowTokens: 410_000}); err != nil {
 		t.Fatalf("record last usage: %v", err)
 	}
 	if store.Meta().UsageState == nil {
@@ -482,7 +482,7 @@ func TestLegacyReviewerRollbackHistoryReplacementIsIgnoredAcrossReopen(t *testin
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
-	if err := eng.recordLastUsage(llm.Usage{InputTokens: 900, WindowTokens: 410_000}); err != nil {
+	if _, err := eng.recordLastUsage(llm.Usage{InputTokens: 900, WindowTokens: 410_000}); err != nil {
 		t.Fatalf("record last usage: %v", err)
 	}
 	if store.Meta().UsageState == nil {

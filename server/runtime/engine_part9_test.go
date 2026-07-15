@@ -49,7 +49,7 @@ func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 			mu.Unlock()
 		},
 	})
-	if err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
 		{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary one"},
 		{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "summary two"},
 	})); err != nil {

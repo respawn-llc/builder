@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
 )
 
 const queuedUserSubmissionBusyRetryDelay = 25 * time.Millisecond
@@ -44,24 +45,24 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind
 // messages or background notices. This is used when a non-turn busy operation
 // (for example manual compaction) completes while queued steering is waiting.
 func (e *Engine) SubmitQueuedUserMessages(ctx context.Context) (assistant llm.Message, err error) {
-	assistant, err = e.SubmitQueuedUserMessagesWithActiveHook(ctx, nil)
+	assistant, _, err = e.SubmitQueuedUserMessagesWithActiveHook(ctx, nil)
 	e.surfaceRunError(err)
 	return assistant, err
 }
 
-func (e *Engine) SubmitQueuedUserMessagesWithActiveHook(ctx context.Context, onActive func()) (assistant llm.Message, err error) {
+func (e *Engine) SubmitQueuedUserMessagesWithActiveHook(ctx context.Context, onActive func()) (assistant llm.Message, receipt session.CommitReceipt, err error) {
 	return e.submitQueuedUserMessages(ctx, nil, onActive)
 }
 
-func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[string]struct{}, onActive func()) (assistant llm.Message, err error) {
+func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[string]struct{}, onActive func()) (assistant llm.Message, receipt session.CommitReceipt, err error) {
 	e.ensureOrchestrationCollaborators()
 	for {
 		if e.failQueuedUserWorkIfTerminal() {
-			return llm.Message{}, nil
+			return llm.Message{}, receipt, nil
 		}
 		if len(queueItemIDs) > 0 {
 			if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
-				return llm.Message{}, err
+				return llm.Message{}, receipt, err
 			}
 		}
 		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
@@ -74,24 +75,29 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 				return err
 			}
-			flushed, err := e.flushPendingUserInjections(stepID, queueItemIDs)
+			flushed, flushReceipt, err := e.flushPendingUserInjections(stepID, queueItemIDs)
+			if flushReceipt.Committed {
+				receipt = flushReceipt
+			}
 			if err != nil {
 				return err
 			}
 			if flushed == 0 {
 				return nil
 			}
-			msg, runErr := e.runStepLoopWithPendingUserInjectionIDs(stepCtx, stepID, queueItemIDs)
+			msg, runErr := e.runStepLoopWithPendingUserInjectionObserver(stepCtx, stepID, queueItemIDs, func(flushReceipt session.CommitReceipt) {
+				receipt = flushReceipt
+			})
 			assistant = msg
 			return runErr
 		})
-		if !errors.Is(err, ErrAgentBusy) {
-			return assistant, err
+		if receipt.Committed || !errors.Is(err, ErrAgentBusy) {
+			return assistant, receipt, err
 		}
 
 		select {
 		case <-ctx.Done():
-			return llm.Message{}, ctx.Err()
+			return llm.Message{}, receipt, ctx.Err()
 		case <-time.After(queuedUserSubmissionBusyRetryDelay):
 		}
 	}
@@ -245,7 +251,7 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 		return
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
-	if _, err := e.submitQueuedUserMessages(ctx, ids, nil); err != nil {
+	if _, _, err := e.submitQueuedUserMessages(ctx, ids, nil); err != nil {
 		e.surfaceRunError(err)
 		return
 	}
@@ -328,6 +334,9 @@ func (e *Engine) DrainQueuedUserMessagesBeforeClose(ctx context.Context) error {
 	if err != nil {
 		if e.failQueuedUserWorkIfTerminal() {
 			return nil
+		}
+		if !e.HasQueuedUserWork() {
+			return err
 		}
 		e.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
 		return err

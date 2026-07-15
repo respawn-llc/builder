@@ -8531,27 +8531,36 @@ UPDATE sessions
 SET
     last_sequence = ?1,
     updated_at_unix_ms = MAX(updated_at_unix_ms, ?2),
+    usage_state_json = CASE
+        WHEN ?3 <> 0 THEN 'null'
+        ELSE usage_state_json
+    END,
     metadata_json = json_set(
         CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
         '$.conversation_established',
-        json(CASE WHEN ?3 <> 0 THEN 'true' ELSE 'false' END)
+        json(CASE WHEN ?4 <> 0 THEN 'true' ELSE 'false' END)
     )
-WHERE id = ?4
+WHERE id = ?5
+  AND last_sequence = ?6
 `
 
 type ReconcileSessionEventLogParams struct {
 	LastSequence            int64
 	UpdatedAtUnixMs         interface{}
+	InvalidateUsageState    interface{}
 	ConversationEstablished interface{}
 	SessionID               string
+	ObservedLastSequence    int64
 }
 
 func (q *Queries) ReconcileSessionEventLog(ctx context.Context, arg ReconcileSessionEventLogParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, reconcileSessionEventLog,
 		arg.LastSequence,
 		arg.UpdatedAtUnixMs,
+		arg.InvalidateUsageState,
 		arg.ConversationEstablished,
 		arg.SessionID,
+		arg.ObservedLastSequence,
 	)
 	if err != nil {
 		return 0, err

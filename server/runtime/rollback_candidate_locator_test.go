@@ -36,7 +36,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 	}
 
 	for index := 0; index < 3; index++ {
-		if err := newCompactionPersistence(eng).replaceHistory(
+		if _, err := newCompactionPersistence(eng).replaceHistory(
 			"compact-step",
 			"local",
 			compactionModeManual,

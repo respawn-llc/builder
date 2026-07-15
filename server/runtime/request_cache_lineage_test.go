@@ -5,12 +5,14 @@ import (
 	"context"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/server/workflow"
 	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -146,6 +148,39 @@ func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 				t.Fatalf("cache warning event visibility = %q, want %q", events[0].CacheWarningVisibility, tt.want)
 			}
 		})
+	}
+}
+
+func TestPromptCacheResponseAppliesLineageByCommitReceipt(t *testing.T) {
+	observerErr := errors.New("cache response observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:            "gpt-5",
+		CacheWarningMode: config.CacheWarningModeOff,
+	})
+	prepared := preparedCacheRequestObservation{request: persistedCacheRequestObserved{
+		DigestVersion: requestCacheDigestVersion,
+		CacheKey:      "cache-key",
+		Scope:         transcript.CacheWarningScopeConversation,
+		ChunkCount:    1,
+		TerminalHash:  "terminal",
+	}}
+	gate.FailNext(observerErr)
+
+	err := eng.observePromptCacheResponse("step-1", prepared, llm.Usage{
+		HasCachedInputTokens: true,
+		CachedInputTokens:    7,
+	})
+	if !errors.Is(err, observerErr) {
+		t.Fatalf("cache response error = %v, want observer error", err)
+	}
+	tracker := eng.modelRequests().RequestCache()
+	tracker.mu.Lock()
+	lineage := tracker.lineage[prepared.request.CacheKey]
+	tracker.mu.Unlock()
+	if !lineage.hasResponse || !lineage.lastResponseHadReuse || lineage.lastCachedInputTokens != 7 {
+		t.Fatalf("committed cache response lineage = %+v", lineage)
 	}
 }
 
@@ -699,7 +734,7 @@ func TestGenerateWithRetryClient_CompactionRotatesConversationCacheKeyWithoutWar
 	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	if len(persistedCacheWarnings(t, store)) != 0 {
@@ -760,7 +795,7 @@ func TestGenerateWithRetryClient_RestorePreservesRotatedCompactionKeyWithoutWarn
 	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	if err := eng.Close(); err != nil {

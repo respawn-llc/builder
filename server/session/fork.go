@@ -174,7 +174,7 @@ func rebaseHistoryReplacementRollbackCandidate(
 	if err := json.Unmarshal(payload, &engine); err != nil {
 		return nil, fmt.Errorf("%w: %w", errDecodeForkHistoryReplacement, err)
 	}
-	if strings.TrimSpace(engine.Engine) == legacyReviewerRollbackEngine {
+	if IsLegacyReviewerRollbackHistoryReplacementEngine(engine.Engine) {
 		return append(json.RawMessage(nil), payload...), nil
 	}
 
@@ -338,18 +338,12 @@ func (d *replayDerivedState) apply(evt ReplayEvent) {
 		if err := json.Unmarshal(evt.Payload, &replacement); err != nil {
 			return
 		}
-		if strings.TrimSpace(replacement.Engine) == legacyReviewerRollbackEngine {
+		if IsLegacyReviewerRollbackHistoryReplacementEngine(replacement.Engine) {
 			return
 		}
 		d.reminderIssued = false
 	}
 }
-
-type historyReplacementEngine struct {
-	Engine string `json:"engine"`
-}
-
-const legacyReviewerRollbackEngine = "reviewer_rollback"
 
 func isCompactionSoonReminderMessage(msg reminderEventMessage) bool {
 	return strings.TrimSpace(msg.Role) == "developer" && strings.TrimSpace(msg.MessageType) == "compaction_soon_reminder" && strings.TrimSpace(msg.Content) != ""

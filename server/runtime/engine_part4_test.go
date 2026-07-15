@@ -500,7 +500,7 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: "environment info"},
 		{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "condensed summary"},
 	})
-	if err := newCompactionPersistence(eng).replaceHistory("step-1", "local", compactionModeManual, replacement); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-1", "local", compactionModeManual, replacement); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	trimmed := 2

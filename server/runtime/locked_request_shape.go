@@ -32,7 +32,7 @@ func (e *Engine) lockedRequestShape() (lockedRequestShape, error) {
 			HasEnabledTools: true,
 			WebSearchMode:   webSearchMode,
 		})
-		if commitErr := e.applyLockedContractMutationResult(result, err); commitErr != nil {
+		if commitErr := e.applyLockedContractMutationResult(result, err, e.lockedContractState().ApplyRequestShape); commitErr != nil {
 			return lockedRequestShape{}, commitErr
 		}
 		if result.Committed && result.Locked != nil {
@@ -53,7 +53,7 @@ func (e *Engine) lockedRequestShape() (lockedRequestShape, error) {
 		HasEnabledTools: true,
 		WebSearchMode:   webSearchMode,
 	})
-	if commitErr := e.applyLockedContractMutationResult(result, err); commitErr != nil {
+	if commitErr := e.applyLockedContractMutationResult(result, err, e.lockedContractState().ApplyRequestShape); commitErr != nil {
 		return lockedRequestShape{}, commitErr
 	}
 	if result.Committed && result.Locked != nil {

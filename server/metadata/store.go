@@ -1969,24 +1969,45 @@ func (s *Store) reconcileSessionEventLog(ctx context.Context, reconciliation ses
 	if reconciliation.LastSequence < 0 {
 		return errors.New("session last sequence must be non-negative")
 	}
+	if reconciliation.ObservedLastSequence < 0 {
+		return errors.New("observed session last sequence must be non-negative")
+	}
 	if reconciliation.UpdatedAt.IsZero() {
 		return errors.New("session reconciliation updated time is required")
+	}
+	invalidateUsageState, err := reconciliation.UsageState.InvalidatesUsageState()
+	if err != nil {
+		return fmt.Errorf("validate session usage-state reconciliation: %w", err)
 	}
 	conversationEstablished := int64(0)
 	if reconciliation.ConversationEstablished {
 		conversationEstablished = 1
 	}
+	invalidateUsageStateValue := int64(0)
+	if invalidateUsageState {
+		invalidateUsageStateValue = 1
+	}
 	rows, err := s.queries.ReconcileSessionEventLog(ctx, sqlitegen.ReconcileSessionEventLogParams{
 		LastSequence:            reconciliation.LastSequence,
+		ObservedLastSequence:    reconciliation.ObservedLastSequence,
 		UpdatedAtUnixMs:         reconciliation.UpdatedAt.UTC().UnixMilli(),
 		ConversationEstablished: conversationEstablished,
+		InvalidateUsageState:    invalidateUsageStateValue,
 		SessionID:               sessionID,
 	})
 	if err != nil {
 		return fmt.Errorf("reconcile session event log: %w", err)
 	}
 	if rows == 0 {
-		return session.ErrSessionNotFound
+		record, resolveErr := s.ResolvePersistedSession(ctx, sessionID)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		return session.EventLogReconciliationConflictError{
+			SessionID:            sessionID,
+			ObservedLastSequence: reconciliation.ObservedLastSequence,
+			CurrentLastSequence:  record.Meta.LastSequence,
+		}
 	}
 	return nil
 }

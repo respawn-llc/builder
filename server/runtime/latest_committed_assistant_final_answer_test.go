@@ -116,7 +116,7 @@ func TestLatestCommittedAssistantFinalAnswerCrossesLegacyReviewerRollback(t *tes
 		Content: "answer before rollback",
 	})
 	appendFinalAnswerTestEvent(t, store, "history_replaced", historyReplacementPayload{
-		Engine: legacyHistoryReplacementEngineReviewerRollback,
+		Engine: session.LegacyReviewerRollbackHistoryReplacementEngine,
 		Mode:   "manual",
 	})
 

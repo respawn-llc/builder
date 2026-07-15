@@ -1,4 +1,4 @@
-// Package filemode provides test-only filesystem permission assertions.
+// Package filemode provides test-only filesystem assertions and fault setup.
 package filemode
 
 import (

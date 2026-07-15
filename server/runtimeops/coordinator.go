@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/server/requestmemo"
+	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -344,9 +345,9 @@ func (c *Coordinator) RecordQueuedMessageSubmitted(sessionID string, ref clientu
 	c.recordRuntimeAccepted(sessionID, ref, clientui.RuntimeInputReconciliationSubmitted)
 }
 
-func (c *Coordinator) RecordQueuedMessageStatus(sessionID string, ref clientui.RuntimeOperationRef, submitted bool) {
-	if submitted {
-		c.RecordSubmitted(sessionID, ref)
+func (c *Coordinator) RecordSubmitQueuedCompletion(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error) {
+	if receipt.Committed || err == nil {
+		c.RecordQueuedMessageSubmitted(sessionID, ref)
 		return
 	}
 	c.RecordFailedWithRestore(sessionID, ref)
@@ -376,12 +377,12 @@ func (c *Coordinator) RecordShellCompletion(sessionID string, ref clientui.Runti
 	c.RecordCommitted(sessionID, ref)
 }
 
-func (c *Coordinator) RecordCompactCompletion(sessionID string, ref clientui.RuntimeOperationRef, err error) {
-	if err != nil {
-		c.RecordFailedWithRestore(sessionID, ref)
+func (c *Coordinator) RecordCompactCompletion(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error) {
+	if receipt.Committed || err == nil {
+		c.RecordCommitted(sessionID, ref)
 		return
 	}
-	c.RecordCommitted(sessionID, ref)
+	c.RecordFailedWithRestore(sessionID, ref)
 }
 
 func (c *Coordinator) RecordRuntimeAccessFailure(sessionID string, ref clientui.RuntimeOperationRef) {

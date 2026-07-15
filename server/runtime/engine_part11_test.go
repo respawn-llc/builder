@@ -666,7 +666,7 @@ func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 	checkpointEstimate := estimateItemsTokens(eng.transcriptRuntimeState().SnapshotItems())
-	if err := eng.recordLastUsage(llm.Usage{InputTokens: 900, OutputTokens: 120, WindowTokens: 410_000, CachedInputTokens: 45, HasCachedInputTokens: true}); err != nil {
+	if _, err := eng.recordLastUsage(llm.Usage{InputTokens: 900, OutputTokens: 120, WindowTokens: 410_000, CachedInputTokens: 45, HasCachedInputTokens: true}); err != nil {
 		t.Fatalf("record last usage: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("delta-", 40)}})); err != nil {
@@ -704,7 +704,7 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 		t.Fatalf("precondition: live final answer = %q, want %q", got, "the final answer")
 	}
 
-	if err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
 		{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary so far"},
 	})); err != nil {
 		t.Fatalf("replace history: %v", err)
@@ -726,7 +726,7 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	if err := eng.steerPersistedDiagnosticEntry("step-1", preciseTokenCountFailureDiagnostic, "error", "first fallback"); err != nil {
 		t.Fatalf("append first diagnostic: %v", err)
 	}
-	if err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, Content: "summary"}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	if err := eng.steerPersistedDiagnosticEntry("step-2", preciseTokenCountFailureDiagnostic, "error", "second fallback"); err != nil {
@@ -761,7 +761,7 @@ func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	if err := eng.steerPersistedDiagnosticEntry("step-1", preciseTokenCountFailureDiagnostic, "error", "first fallback"); err != nil {
 		t.Fatalf("append first diagnostic: %v", err)
 	}
-	if err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, Content: "summary"}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 

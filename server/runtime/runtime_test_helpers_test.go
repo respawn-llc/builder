@@ -1,12 +1,13 @@
 package runtime
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
+	"path/filepath"
 	"reflect"
-	"sync/atomic"
 	"testing"
 
+	"core/internal/testharness/filemode"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -70,17 +71,21 @@ func mustCreateTestSession(t *testing.T, workspaceRoot ...string) *session.Store
 
 var runtimeTestSessionPersistence = sessiontest.NewPersistence()
 
-type armedTestPersistenceObserver struct {
-	delegate session.PersistenceObserver
-	armed    atomic.Bool
-	err      error
+type testEventLogAppendBlocker = filemode.EventLogAppendBlocker
+
+func blockTestEventLogAppends(store *session.Store) (*testEventLogAppendBlocker, error) {
+	if store == nil {
+		return nil, errors.New("event-log append blocker requires a session store")
+	}
+	return filemode.BlockEventLogAppends(filepath.Join(store.Dir(), "events.jsonl"))
 }
 
-func (o *armedTestPersistenceObserver) ObservePersistedStore(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
-	if o.armed.Load() {
-		return o.err
+func mustBlockTestEventLogAppends(t *testing.T, store *session.Store) *testEventLogAppendBlocker {
+	t.Helper()
+	if store == nil {
+		t.Fatal("event-log append blocker requires a session store")
 	}
-	return o.delegate.ObservePersistedStore(ctx, snapshot)
+	return filemode.MustBlockEventLogAppends(t, filepath.Join(store.Dir(), "events.jsonl"))
 }
 
 func mustCreateTestSessionAt(t *testing.T, root string, options ...session.StoreOption) *session.Store {

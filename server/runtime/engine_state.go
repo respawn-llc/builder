@@ -236,10 +236,8 @@ func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText
 }
 
 func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
-	if entry.Role == "" || entry.Text == "" {
-		return nil
-	}
-	return e.steer("", steerLocalEntryIntent(entry))
+	_, err := e.appendCommittedEntryWithCommitReceipt(entry)
+	return err
 }
 
 func (e *Engine) SetStreamingError(text string) {
@@ -293,43 +291,6 @@ func (e *Engine) SetFastModeEnabled(enabled bool) (bool, error) {
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
 	changed := e.localFastModeEnabledChange(enabled)
-	e.applyFastModeEnabled(enabled)
-	return changed, nil
-}
-
-func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback func(changed bool) string) (bool, error) {
-	if feedback == nil {
-		return false, errors.New("committed feedback builder is required")
-	}
-	if enabled && !e.FastModeAvailable() {
-		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
-	}
-	if state := e.fastModeState(); state != nil {
-		changed, err := state.SetEnabledWithTransaction(enabled, func(changed bool) error {
-			text := strings.TrimSpace(feedback(changed))
-			if text == "" {
-				return errors.New("committed feedback text is required")
-			}
-			return e.AppendCommittedEntry("system", text)
-		})
-		if err != nil {
-			return false, err
-		}
-		if changed {
-			e.markCurrentRequestShapeDirty()
-		}
-		return changed, nil
-	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed := e.localFastModeEnabledChange(enabled)
-	text := strings.TrimSpace(feedback(changed))
-	if text == "" {
-		return false, errors.New("committed feedback text is required")
-	}
-	if err := e.AppendCommittedEntry("system", text); err != nil {
-		return false, err
-	}
 	e.applyFastModeEnabled(enabled)
 	return changed, nil
 }
@@ -397,30 +358,6 @@ func (e *Engine) SetQuestionsEnabled(enabled bool) (bool, bool) {
 	return changed, current
 }
 
-func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, changed bool) string) (bool, bool, error) {
-	if feedback == nil {
-		return false, e.QuestionsEnabled(), errors.New("committed feedback builder is required")
-	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed, current := e.questionsEnabledChange(enabled)
-	resultEnabled := current
-	if changed {
-		resultEnabled = enabled
-	}
-	text := strings.TrimSpace(feedback(resultEnabled, changed))
-	if text == "" {
-		return false, current, errors.New("committed feedback text is required")
-	}
-	if err := e.AppendCommittedEntry("system", text); err != nil {
-		return false, current, err
-	}
-	if changed {
-		e.applyQuestionsEnabled(enabled)
-	}
-	return changed, resultEnabled, nil
-}
-
 func (e *Engine) questionsEnabledChange(enabled bool) (bool, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -453,27 +390,6 @@ func (e *Engine) SetReviewerEnabled(enabled bool) (bool, string, error) {
 	defer e.controlMutationMu.Unlock()
 	changed, mode, err := e.reviewerEnabledChange(enabled)
 	if err != nil {
-		return false, mode, err
-	}
-	e.applyReviewerEnabled(enabled, mode)
-	return changed, mode, nil
-}
-
-func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, mode string, changed bool) string) (bool, string, error) {
-	if feedback == nil {
-		return false, e.ReviewerFrequency(), errors.New("committed feedback builder is required")
-	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed, mode, err := e.reviewerEnabledChange(enabled)
-	if err != nil {
-		return false, mode, err
-	}
-	text := strings.TrimSpace(feedback(mode != "off", mode, changed))
-	if text == "" {
-		return false, mode, errors.New("committed feedback text is required")
-	}
-	if err := e.AppendCommittedEntry("system", text); err != nil {
 		return false, mode, err
 	}
 	e.applyReviewerEnabled(enabled, mode)
@@ -763,14 +679,16 @@ func (e *Engine) setLastUsage(usage llm.Usage) {
 	e.applyUsageTrackingState(normalizedUsage, baselineEstimate, totalInputTokens, totalCachedInputTokens)
 }
 
-func (e *Engine) recordLastUsage(usage llm.Usage) error {
+func (e *Engine) recordLastUsage(usage llm.Usage) (session.CommitReceipt, error) {
 	baselineEstimate := 0
 	if e != nil {
 		baselineEstimate = e.transcriptRuntimeState().EstimatedProviderTokens()
 	}
 	normalizedUsage, totalInputTokens, totalCachedInputTokens := e.usageTrackingState().Next(usage)
+	receipt := session.CommitReceipt{Committed: true}
+	var persistenceErr error
 	if e != nil && e.store != nil {
-		if err := e.store.SetUsageState(&session.UsageState{
+		receipt, persistenceErr = e.store.SetUsageState(&session.UsageState{
 			InputTokens:             normalizedUsage.InputTokens,
 			OutputTokens:            normalizedUsage.OutputTokens,
 			WindowTokens:            normalizedUsage.WindowTokens,
@@ -779,12 +697,13 @@ func (e *Engine) recordLastUsage(usage llm.Usage) error {
 			EstimatedProviderTokens: baselineEstimate,
 			TotalInputTokens:        totalInputTokens,
 			TotalCachedInputTokens:  totalCachedInputTokens,
-		}); err != nil {
-			return err
+		})
+		if !receipt.Committed {
+			return receipt, persistenceErr
 		}
 	}
 	e.applyUsageTrackingState(normalizedUsage, baselineEstimate, totalInputTokens, totalCachedInputTokens)
-	return nil
+	return receipt, persistenceErr
 }
 
 func (e *Engine) restorePersistedUsageState(state *session.UsageState) {

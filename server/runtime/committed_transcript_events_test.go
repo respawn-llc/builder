@@ -57,7 +57,7 @@ func TestCommittedTranscriptChangedMarksOnlyDurableTranscriptMutations(t *testin
 	assertEventFlags(t, events[start:], []eventFlagExpectation{{kind: EventLocalEntryAdded, stepID: "persist-step", committedChanged: true}})
 
 	start = len(events)
-	if err := newCompactionPersistence(eng).replaceHistory("compact-step", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("compact-step", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
 		t.Fatalf("replace history for compaction: %v", err)
 	}
 	assertEventFlags(t, events[start:], []eventFlagExpectation{{kind: EventLocalEntryAdded, stepID: "compact-step", committedChanged: true}, {kind: EventConversationUpdated, stepID: "compact-step", committedChanged: false}})
@@ -76,7 +76,7 @@ func TestCommittedTranscriptChangedMarksOnlyDurableTranscriptMutations(t *testin
 
 	start = len(events)
 	eng.QueueUserMessage("queued input")
-	if _, err := eng.flushPendingUserInjections("flush-step", nil); err != nil {
+	if _, _, err := eng.flushPendingUserInjections("flush-step", nil); err != nil {
 		t.Fatalf("flush pending user injections: %v", err)
 	}
 	assertEventFlags(t, events[start:], []eventFlagExpectation{
@@ -133,7 +133,8 @@ func TestPersistedAssistantToolCallDoesNotCreateLiveToolState(t *testing.T) {
 }
 
 func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing.T) {
-	store := mustCreateTestSession(t)
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	var (
 		mu     sync.Mutex
 		events []Event
@@ -146,21 +147,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 			mu.Unlock()
 		},
 	})
-	firstEntered := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	secondEntered := make(chan struct{})
-	var firstOnce sync.Once
-	var secondOnce sync.Once
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		switch entry.Text {
-		case "first":
-			firstOnce.Do(func() { close(firstEntered) })
-			<-releaseFirst
-		case "second":
-			secondOnce.Do(func() { close(secondEntered) })
-		}
-		return nil
-	}
+	firstEntered, releaseFirst := gate.BlockNext()
 
 	firstDone := make(chan error, 1)
 	go func() {
@@ -177,12 +164,12 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 		secondDone <- eng.AppendCommittedEntry("system", "second")
 	}()
 	select {
-	case <-secondEntered:
-		t.Fatal("second append entered persistence before first append completed")
+	case err := <-secondDone:
+		t.Fatalf("second append completed before first append released: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
 
-	close(releaseFirst)
+	releaseFirst()
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first append: %v", err)
 	}
@@ -208,7 +195,8 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 }
 
 func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) {
-	store := mustCreateTestSession(t)
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	var (
 		mu     sync.Mutex
 		events []Event
@@ -223,27 +211,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 	})
 	eng.ensureOrchestrationCollaborators()
 
-	cachePersistEntered := make(chan struct{})
-	releaseCachePersist := make(chan struct{})
-	appendEntered := make(chan struct{})
-	var cacheOnce sync.Once
-	var appendOnce sync.Once
-	eng.beforePersistCacheObservation = func(events []session.EventInput) error {
-		for _, event := range events {
-			if event.Kind == sessionEventCacheWarning {
-				cacheOnce.Do(func() { close(cachePersistEntered) })
-				<-releaseCachePersist
-				return nil
-			}
-		}
-		return nil
-	}
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		if entry.Text == "feedback" {
-			appendOnce.Do(func() { close(appendEntered) })
-		}
-		return nil
-	}
+	cachePersistEntered, releaseCachePersist := gate.BlockNext()
 
 	cacheDone := make(chan error, 1)
 	go func() {
@@ -271,12 +239,12 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 		appendDone <- eng.AppendCommittedEntry("system", "feedback")
 	}()
 	select {
-	case <-appendEntered:
-		t.Fatal("committed feedback append entered persistence before cache warning observation completed")
+	case err := <-appendDone:
+		t.Fatalf("committed feedback append completed before cache warning observation released: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
 
-	close(releaseCachePersist)
+	releaseCachePersist()
 	if err := <-cacheDone; err != nil {
 		t.Fatalf("cache warning observation: %v", err)
 	}
@@ -386,9 +354,7 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 	store := mustCreateTestSession(t)
 	replacementEventEntered := make(chan struct{})
 	releaseReplacementEvent := make(chan struct{})
-	appendEntered := make(chan struct{})
 	var replacementOnce sync.Once
-	var appendOnce sync.Once
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
@@ -398,20 +364,15 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 			}
 		},
 	})
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		if entry.Text == "feedback" {
-			appendOnce.Do(func() { close(appendEntered) })
-		}
-		return nil
-	}
 
 	replaceDone := make(chan error, 1)
 	go func() {
-		replaceDone <- newCompactionPersistence(eng).replaceHistory("compact-step", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
+		_, err := newCompactionPersistence(eng).replaceHistory("compact-step", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
 			Role:        llm.RoleDeveloper,
 			MessageType: llm.MessageTypeCompactionSummary,
 			Content:     "summary",
 		}}))
+		replaceDone <- err
 	}()
 	select {
 	case <-replacementEventEntered:
@@ -424,8 +385,8 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 		appendDone <- eng.AppendCommittedEntry("system", "feedback")
 	}()
 	select {
-	case <-appendEntered:
-		t.Fatal("committed feedback append entered persistence before history replacement finished emitting")
+	case err := <-appendDone:
+		t.Fatalf("committed feedback append completed before history replacement finished emitting: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
 
@@ -811,7 +772,7 @@ func TestRestoredCompactedRuntimeNextCommittedEventFollowsHistoryReplacementSeed
 	}
 }
 
-func TestManualCompactionCarryoverPublishesCommittedEventBeforeLocalEntry(t *testing.T) {
+func TestHistoryReplacementPublishesManualCompactionCarryoverBeforeLocalEntry(t *testing.T) {
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -819,31 +780,49 @@ func TestManualCompactionCarryoverPublishesCommittedEventBeforeLocalEntry(t *tes
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
 
-	messages := []postCompactionMessage{{message: manualCompactionCarryoverMessage("keep the active requirement")}}
-	if err := newCompactionCarryoverCoordinator(eng).appendPostCompactionMessages("compact-step", messages); err != nil {
-		t.Fatalf("append manual carryover: %v", err)
+	carryover, ok := manualCompactionCarryoverMessage("keep the active requirement")
+	if !ok {
+		t.Fatal("expected non-empty manual compaction carryover")
+	}
+	receipt, err := newCompactionPersistence(eng).replaceHistory(
+		"compact-step",
+		"local",
+		compactionModeManual,
+		llm.ItemsFromMessages([]llm.Message{
+			{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
+			carryover,
+		}),
+	)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("replace history receipt=%+v error=%v", receipt, err)
 	}
 	if err := eng.steer("compact-step", steerLocalEntryIntent(storedLocalEntry{Role: "compaction_summary", Text: "summary"})); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
 
-	if len(events) != 2 {
-		t.Fatalf("event count = %d, want 2 events=%+v", len(events), events)
+	if len(events) != 4 {
+		t.Fatalf("event count = %d, want 4 events=%+v", len(events), events)
 	}
-	if events[0].Kind != EventConversationUpdated {
-		t.Fatalf("first event kind = %s, want %s; events=%+v", events[0].Kind, EventConversationUpdated, events)
-	}
-	if entries := TranscriptEntriesFromEvent(events[0]); len(entries) != 1 || entries[0].Role != string(transcript.EntryRoleManualCompactionCarryover) {
-		t.Fatalf("first event entries = %+v, want one manual compaction carryover", entries)
+	if entries := TranscriptEntriesFromEvent(events[0]); events[0].Kind != EventLocalEntryAdded || len(entries) != 1 || entries[0].Role != string(transcript.EntryRoleCompactionSummary) {
+		t.Fatalf("first replacement event = %+v, want compaction summary", events[0])
 	}
 	if !events[0].CommittedEntryStartSet || events[0].CommittedEntryStart != 0 || events[0].CommittedEntryCount != 1 {
 		t.Fatalf("first event range = start_set:%t start:%d count:%d, want start 0 count 1", events[0].CommittedEntryStartSet, events[0].CommittedEntryStart, events[0].CommittedEntryCount)
 	}
-	if events[1].Kind != EventLocalEntryAdded {
-		t.Fatalf("second event kind = %s, want %s; events=%+v", events[1].Kind, EventLocalEntryAdded, events)
+	if entries := TranscriptEntriesFromEvent(events[1]); events[1].Kind != EventLocalEntryAdded || len(entries) != 1 || entries[0].Role != string(transcript.EntryRoleManualCompactionCarryover) {
+		t.Fatalf("second replacement event = %+v, want manual compaction carryover", events[1])
 	}
 	if !events[1].CommittedEntryStartSet || events[1].CommittedEntryStart != 1 || events[1].CommittedEntryCount != 2 {
 		t.Fatalf("second event range = start_set:%t start:%d count:%d, want start 1 count 2", events[1].CommittedEntryStartSet, events[1].CommittedEntryStart, events[1].CommittedEntryCount)
+	}
+	if events[2].Kind != EventConversationUpdated || events[2].CommittedTranscriptChanged {
+		t.Fatalf("third event = %+v, want replacement conversation update", events[2])
+	}
+	if events[3].Kind != EventLocalEntryAdded {
+		t.Fatalf("fourth event kind = %s, want %s; events=%+v", events[3].Kind, EventLocalEntryAdded, events)
+	}
+	if !events[3].CommittedEntryStartSet || events[3].CommittedEntryStart != 2 || events[3].CommittedEntryCount != 3 {
+		t.Fatalf("fourth event range = start_set:%t start:%d count:%d, want start 2 count 3", events[3].CommittedEntryStartSet, events[3].CommittedEntryStart, events[3].CommittedEntryCount)
 	}
 	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, events)
 }

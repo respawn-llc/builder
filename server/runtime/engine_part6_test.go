@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -204,8 +205,6 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 }
 
 func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstructionAppendFailure(t *testing.T) {
-	reviewerInstructionErr := errors.New("injected reviewer instruction persistence failure")
-	localEntryErr := errors.New("injected reviewer status persistence failure")
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{{
@@ -218,8 +217,11 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 	}}}
 
 	var (
-		eventsMu sync.Mutex
-		events   []Event
+		eventsMu      sync.Mutex
+		events        []Event
+		blockReviewer bool
+		blocker       *testEventLogAppendBlocker
+		blockErr      error
 	)
 	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                 "gpt-5",
@@ -228,6 +230,10 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 			eventsMu.Lock()
 			defer eventsMu.Unlock()
 			events = append(events, evt)
+			if blockReviewer && evt.Kind == EventAssistantMessage {
+				blockReviewer = false
+				blocker, blockErr = blockTestEventLogAppends(store)
+			}
 		},
 		Reviewer: ReviewerConfig{
 			Frequency: "all",
@@ -235,25 +241,20 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 			Client:    reviewerClient,
 		},
 	})
-	eng.beforePersistMessage = func(msg llm.Message) error {
-		if msg.MessageType == llm.MessageTypeReviewerFeedback {
-			return reviewerInstructionErr
-		}
-		return nil
-	}
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		if transcript.IsReviewerEntryRole(entry.Role) {
-			return localEntryErr
-		}
-		return nil
-	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "do task"}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
+	blockReviewer = true
 
 	_, err := eng.runStepLoop(context.Background(), "step-1")
 	if err == nil {
 		t.Fatal("expected runStepLoop to fail when reviewer status persistence fails")
+	}
+	if blockErr != nil || blocker == nil {
+		t.Fatalf("block reviewer persistence: blocker=%v error=%v", blocker, blockErr)
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
 	}
 
 	eventsMu.Lock()
@@ -271,8 +272,8 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 	if assistantEventIdx < 0 {
 		t.Fatalf("expected assistant message event, got %+v", deferredEvents)
 	}
-	if !errors.Is(err, localEntryErr) {
-		t.Fatalf("expected injected reviewer status failure, got %v", err)
+	if err == nil {
+		t.Fatal("expected reviewer status event-log append failure")
 	}
 
 	snapshot := eng.ChatSnapshot()
@@ -288,7 +289,8 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 
 func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantEvent(t *testing.T) {
 	localEntryErr := errors.New("injected reviewer status persistence failure")
-	store := mustCreateTestSession(t)
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
@@ -306,8 +308,9 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	}}}
 
 	var (
-		eventsMu sync.Mutex
-		events   []Event
+		eventsMu        sync.Mutex
+		events          []Event
+		assistantEvents int
 	)
 	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
@@ -315,6 +318,12 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 			eventsMu.Lock()
 			defer eventsMu.Unlock()
 			events = append(events, evt)
+			if evt.Kind == EventAssistantMessage {
+				assistantEvents++
+				if assistantEvents == 2 {
+					gate.FailNext(localEntryErr)
+				}
+			}
 		},
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",
@@ -324,13 +333,6 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 			Client:        reviewerClient,
 		},
 	})
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		if entry.Role == "reviewer_status" {
-			return localEntryErr
-		}
-		return nil
-	}
-
 	_, err := eng.SubmitUserMessage(context.Background(), "do task")
 	if err == nil {
 		t.Fatal("expected submit to fail when reviewer status persistence fails")
@@ -346,6 +348,16 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	}
 	if !errors.Is(err, localEntryErr) {
 		t.Fatalf("expected injected reviewer status failure, got %v", err)
+	}
+	snapshot := eng.ChatSnapshot()
+	reviewerStatuses := 0
+	for _, entry := range snapshot.Entries {
+		if entry.Role == string(transcript.EntryRoleReviewerStatus) {
+			reviewerStatuses++
+		}
+	}
+	if reviewerStatuses != 1 {
+		t.Fatalf("committed reviewer status was not projected after observer failure: %+v", snapshot.Entries)
 	}
 }
 
@@ -399,12 +411,9 @@ func TestRestoreMessagesPreservesStoredLocalEntryNoticeID(t *testing.T) {
 }
 
 func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T) {
-	localEntryErr := errors.New("injected local entry persistence failure")
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		return localEntryErr
-	}
+	mustBlockTestEventLogAppends(t, store)
 
 	err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityOngoing,
@@ -412,8 +421,8 @@ func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T
 		Text:       "Supervisor ran, applied 1 suggestion.",
 	}))
 
-	if !errors.Is(err, localEntryErr) {
-		t.Fatalf("expected injected local entry failure, got %v", err)
+	if err == nil {
+		t.Fatal("expected local entry event-log append failure")
 	}
 	if snapshot := eng.ChatSnapshot(); len(snapshot.Entries) != 0 {
 		t.Fatalf("expected no in-memory local entries after append failure, got %+v", snapshot.Entries)

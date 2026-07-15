@@ -151,13 +151,13 @@ func (s *Service) runPreSubmitCompaction(ctx context.Context, sessionID string, 
 	}, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
 		runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
 		defer stopRunCtx()
-		compactErr := engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
+		receipt, compactErr := engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
 			s.operations.MarkOperationActive(sessionID, ref)
 		})
-		if s.operationAttemptCanceled(compactErr, attempt) {
+		if !receipt.Committed && s.operationAttemptCanceled(compactErr, attempt) {
 			s.operations.RecordCanceledNotCommitted(sessionID, ref)
 		} else {
-			s.operations.RecordCompactCompletion(sessionID, ref, compactErr)
+			s.operations.RecordCompactCompletion(sessionID, ref, receipt, compactErr)
 		}
 		return struct{}{}, compactErr
 	})

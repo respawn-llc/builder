@@ -56,7 +56,7 @@ func (e *Engine) ensureMainPromptFacingContractFresh(ctx context.Context, locked
 		ContextWindow:   next.ContextWindow,
 		ContextPercent:  next.ContextPercent,
 	})
-	if commitErr := e.applyLockedContractMutationResult(result, err); commitErr != nil {
+	if commitErr := e.applyLockedContractMutationResult(result, err, e.lockedContractState().ApplyMainPromptSnapshot); commitErr != nil {
 		return session.LockedContract{}, commitErr
 	}
 	if result.Committed && result.Locked != nil {
@@ -88,7 +88,7 @@ func (e *Engine) ensureReviewerPromptFresh(ctx context.Context) (string, bool, e
 		ReviewerPrompt:    prompt,
 		HasReviewerPrompt: true,
 	})
-	if commitErr := e.applyLockedContractMutationResult(result, err); commitErr != nil {
+	if commitErr := e.applyLockedContractMutationResult(result, err, e.lockedContractState().ApplyReviewerPromptSnapshot); commitErr != nil {
 		return "", false, commitErr
 	}
 	if err != nil {
@@ -130,9 +130,9 @@ func (e *Engine) lockedToolIDsFromConfigFallback() []toolspec.ID {
 	return append([]toolspec.ID(nil), e.cfg.EnabledTools...)
 }
 
-func (e *Engine) applyLockedContractMutationResult(result session.LockedContractMutationResult, err error) error {
+func (e *Engine) applyLockedContractMutationResult(result session.LockedContractMutationResult, err error, apply func(session.LockedContract)) error {
 	if result.Committed && result.Locked != nil {
-		e.lockedContractState().Set(*result.Locked)
+		apply(*result.Locked)
 		return nil
 	}
 	return err

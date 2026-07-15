@@ -213,10 +213,6 @@ type Engine struct {
 	stepFlow       stepExecutor
 	toolFlow       toolExecutor
 
-	beforePersistMessage          func(llm.Message) error
-	beforePersistLocalEntry       func(storedLocalEntry) error
-	beforePersistCacheObservation func([]session.EventInput) error
-
 	// baseMetaInjected guards the single per-conversation injection of base meta
 	// context (AGENTS.md, skills, subagents, environment). It is set when a
 	// resumed transcript already carries that context, and after the one-time
@@ -736,11 +732,15 @@ func (e *Engine) runStepLoop(ctx context.Context, stepID string) (llm.Message, e
 }
 
 func (e *Engine) runStepLoopWithPendingUserInjectionIDs(ctx context.Context, stepID string, queueItemIDs map[string]struct{}) (llm.Message, error) {
+	return e.runStepLoopWithPendingUserInjectionObserver(ctx, stepID, queueItemIDs, nil)
+}
+
+func (e *Engine) runStepLoopWithPendingUserInjectionObserver(ctx context.Context, stepID string, queueItemIDs map[string]struct{}, onQueuedUserFlushCommitted func(session.CommitReceipt)) (llm.Message, error) {
 	restore := e.pushActiveUserInjectionScope(queueItemIDs)
 	defer restore()
 	reviewerFrequency := e.ReviewerFrequency()
 	reviewerClient := e.reviewerRuntimeState().Client()
-	result, err := e.runStepLoopWithOptions(ctx, stepID, reviewerFrequency, reviewerClient, true)
+	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted)
 	if result.NoopFinalAnswer {
 		return llm.Message{}, err
 	}
@@ -754,11 +754,16 @@ func (e *Engine) runStepLoopWithPendingUserInjectionIDs(ctx context.Context, ste
 // resolution re-reads current runtime reviewer config so busy-time toggles (for
 // example from /supervisor) affect the currently running step at completion.
 func (e *Engine) runStepLoopWithOptions(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient llm.Client, refreshReviewerConfigOnResolve bool) (stepLoopResult, error) {
+	return e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, refreshReviewerConfigOnResolve, nil)
+}
+
+func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient llm.Client, refreshReviewerConfigOnResolve bool, onQueuedUserFlushCommitted func(session.CommitReceipt)) (stepLoopResult, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.stepFlow.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
 		ReviewerFrequency:              reviewerFrequency,
 		ReviewerClient:                 reviewerClient,
 		RefreshReviewerConfigOnResolve: refreshReviewerConfigOnResolve,
+		OnQueuedUserFlushCommitted:     onQueuedUserFlushCommitted,
 	})
 }
 

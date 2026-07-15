@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/toolspec"
 )
@@ -609,14 +610,12 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 }
 
 func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceFailures(t *testing.T) {
-	observer := &armedTestPersistenceObserver{
-		delegate: runtimeTestSessionPersistence,
-		err:      errors.New("finish persistence failed"),
-	}
-	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(observer))
+	finishErr := errors.New("finish persistence failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))
 	sink := &callbackStepLifecycleSink{onTransition: func(transition StepLifecycleTransition) error {
 		if transition == StepLifecycleTransitionEnded {
-			observer.armed.Store(true)
+			gate.FailNext(finishErr)
 		}
 		return nil
 	}}
@@ -817,7 +816,7 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 
 	steps := &stubExclusiveStepLifecycle{}
 	compactor := &defaultContextCompactor{engine: eng, steps: steps}
-	if err := compactor.CompactContext(context.Background(), ""); err != nil {
+	if _, err := compactor.CompactContextWithActiveHook(context.Background(), "", nil); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
 	if steps.calls() != 1 {

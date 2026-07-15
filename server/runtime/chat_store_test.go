@@ -824,7 +824,11 @@ func TestChatStoreSnapshotIncludesHeadlessModeVariantsAsDeveloperContext(t *test
 
 func TestChatStoreSnapshotIncludesHandoffFutureMessageAsDeveloperContext(t *testing.T) {
 	s := newChatStore()
-	s.appendMessage(handoffFutureAgentMessage("resume with tests"))
+	message, ok := handoffFutureAgentMessage("resume with tests")
+	if !ok {
+		t.Fatal("expected non-empty handoff future message")
+	}
+	s.appendMessage(message)
 
 	snap := s.snapshotWithMetadata().Snapshot
 	if len(snap.Entries) != 1 {

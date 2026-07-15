@@ -8,11 +8,10 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/shared/rollbacktarget"
 	"core/shared/valuecopy"
 )
-
-const legacyHistoryReplacementEngineReviewerRollback = "reviewer_rollback"
 
 // errDecodeHistoryReplacedEvent wraps failures to decode a persisted history_replaced event payload.
 var errDecodeHistoryReplacedEvent = errors.New("decode history_replaced event")
@@ -31,20 +30,14 @@ type historyReplacementEnvelope struct {
 
 func normalizeHistoryReplacementEngine(engine string) string {
 	engine = strings.TrimSpace(engine)
-	if engine == legacyHistoryReplacementEngineReviewerRollback {
+	if session.IsLegacyReviewerRollbackHistoryReplacementEngine(engine) {
 		return ""
 	}
 	return engine
 }
 
 func isPersistedHistoryReplacementBoundary(payload []byte) bool {
-	var envelope struct {
-		Engine string `json:"engine"`
-	}
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return false
-	}
-	return strings.TrimSpace(envelope.Engine) != legacyHistoryReplacementEngineReviewerRollback
+	return session.IsCompactionHistoryReplacementPayload(payload)
 }
 
 func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacementPayload, bool, error) {
@@ -53,7 +46,7 @@ func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacemen
 		return historyReplacementPayload{}, false, err
 	}
 	engine := strings.TrimSpace(envelope.Engine)
-	if engine == legacyHistoryReplacementEngineReviewerRollback {
+	if session.IsLegacyReviewerRollbackHistoryReplacementEngine(engine) {
 		return historyReplacementPayload{Engine: engine, Mode: strings.TrimSpace(envelope.Mode)}, true, nil
 	}
 	decoded := historyReplacementPayload{

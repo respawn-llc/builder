@@ -449,14 +449,17 @@ func TestOpenReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 
 	meta := store.Meta()
 	meta.LastSequence = 0
+	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{
+		meta.SessionID: {
+			SessionDir: store.Dir(),
+			Meta:       &meta,
+		},
+	}}
 
 	reopened, err := Open(
 		store.Dir(),
-		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
-			SessionDir: store.Dir(),
-			Meta:       &meta,
-		}}),
-		WithPersistenceObserver(sessionTestPersistence),
+		WithPersistedSessionResolver(persistence),
+		WithPersistenceObserver(persistence),
 	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)

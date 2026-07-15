@@ -122,10 +122,10 @@ type Service struct {
 	operations     *runtimeops.Coordinator
 	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
 	thinkingLevels *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	fastModes      *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetFastModeEnabledResponse]
-	reviewers      *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetReviewerEnabledResponse]
+	fastModes      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]]
+	reviewers      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]]
 	autoCompacts   *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
-	questions      *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetQuestionsEnabledResponse]
+	questions      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]]
 
 	localEntries   *requestmemo.Memo[localEntryMemoRequest, struct{}]
 	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
@@ -135,6 +135,11 @@ type Service struct {
 	goals          *requestmemo.Memo[goalSetMemoRequest, serverapi.RuntimeGoalShowResponse]
 	goalStatuses   *requestmemo.Memo[goalStatusMemoRequest, serverapi.RuntimeGoalShowResponse]
 	goalClears     *requestmemo.Memo[goalClearMemoRequest, serverapi.RuntimeGoalShowResponse]
+}
+
+type committedRuntimeMutationResult[Resp any] struct {
+	Response Resp
+	Err      error
 }
 
 type sessionStringMemoRequest struct {
@@ -228,10 +233,10 @@ func NewService(runtimes RuntimeResolver) *Service {
 		operations:     runtimeops.NewCoordinator(),
 		sessionNames:   requestmemo.New[sessionStringMemoRequest, struct{}](),
 		thinkingLevels: requestmemo.New[sessionStringMemoRequest, struct{}](),
-		fastModes:      requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetFastModeEnabledResponse](),
-		reviewers:      requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetReviewerEnabledResponse](),
+		fastModes:      requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]](),
+		reviewers:      requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]](),
 		autoCompacts:   requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse](),
-		questions:      requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetQuestionsEnabledResponse](),
+		questions:      requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]](),
 
 		localEntries:   requestmemo.New[localEntryMemoRequest, struct{}](),
 		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
@@ -432,19 +437,11 @@ func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeS
 		return serverapi.RuntimeSetFastModeEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return s.fastModes.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-		var resp serverapi.RuntimeSetFastModeEnabledResponse
-		err := s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			changed, err := engine.SetFastModeEnabledWithCommittedFeedback(req.Enabled, func(changed bool) string {
-				return serverapi.FastModeToggleStatusMessage(req.Enabled, changed)
-			})
-			resp = serverapi.RuntimeSetFastModeEnabledResponse{Changed: changed}
-			if err == nil {
-				s.publishSessionStatus(req.SessionID)
-			}
-			return err
+	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.fastModes, sameSessionBoolMemoRequest, func(engine *runtime.Engine) (serverapi.RuntimeSetFastModeEnabledResponse, session.CommitReceipt, error) {
+		changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(req.Enabled, func(changed bool) string {
+			return serverapi.FastModeToggleStatusMessage(req.Enabled, changed)
 		})
-		return resp, err
+		return serverapi.RuntimeSetFastModeEnabledResponse{Changed: changed}, receipt, err
 	})
 }
 
@@ -453,20 +450,11 @@ func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeS
 		return serverapi.RuntimeSetReviewerEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return s.reviewers.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-		var resp serverapi.RuntimeSetReviewerEnabledResponse
-		err := s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			changed, mode, err := engine.SetReviewerEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, mode string, changed bool) string {
-				return serverapi.ReviewerToggleStatusMessage(enabled, mode, changed)
-			})
-			if err != nil {
-				return err
-			}
-			resp = serverapi.RuntimeSetReviewerEnabledResponse{Changed: changed, Mode: mode}
-			s.publishSessionStatus(req.SessionID)
-			return nil
+	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.reviewers, sameSessionBoolMemoRequest, func(engine *runtime.Engine) (serverapi.RuntimeSetReviewerEnabledResponse, session.CommitReceipt, error) {
+		changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, mode string, changed bool) string {
+			return serverapi.ReviewerToggleStatusMessage(enabled, mode, changed)
 		})
-		return resp, err
+		return serverapi.RuntimeSetReviewerEnabledResponse{Changed: changed, Mode: mode}, receipt, err
 	})
 }
 
@@ -497,20 +485,43 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 		return serverapi.RuntimeSetQuestionsEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return s.questions.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-		var resp serverapi.RuntimeSetQuestionsEnabledResponse
-		err := s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			changed, enabled, err := engine.SetQuestionsEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, changed bool) string {
-				return serverapi.QuestionsToggleStatusMessage(enabled, changed)
-			})
-			resp = serverapi.RuntimeSetQuestionsEnabledResponse{Changed: changed, Enabled: enabled}
-			if err == nil {
-				s.publishSessionStatus(req.SessionID)
-			}
-			return err
+	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.questions, sameSessionBoolMemoRequest, func(engine *runtime.Engine) (serverapi.RuntimeSetQuestionsEnabledResponse, session.CommitReceipt, error) {
+		changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, changed bool) string {
+			return serverapi.QuestionsToggleStatusMessage(enabled, changed)
 		})
-		return resp, err
+		return serverapi.RuntimeSetQuestionsEnabledResponse{Changed: changed, Enabled: enabled}, receipt, err
 	})
+}
+
+func memoizedCommittedRuntimeMutation[Req any, Resp any](
+	service *Service,
+	ctx context.Context,
+	requestID string,
+	sessionID string,
+	req Req,
+	memo *requestmemo.Memo[Req, committedRuntimeMutationResult[Resp]],
+	same func(Req, Req) bool,
+	run func(*runtime.Engine) (Resp, session.CommitReceipt, error),
+) (Resp, error) {
+	var zero Resp
+	result, err := memo.Do(ctx, requestID, req, same, func(ctx context.Context) (committedRuntimeMutationResult[Resp], error) {
+		var result committedRuntimeMutationResult[Resp]
+		err := service.withRuntimeAccess(ctx, sessionID, func(engine *runtime.Engine) error {
+			response, receipt, mutationErr := run(engine)
+			result.Response = response
+			if !receipt.Committed {
+				return mutationErr
+			}
+			result.Err = mutationErr
+			service.publishSessionStatus(sessionID)
+			return nil
+		})
+		return result, err
+	})
+	if err != nil {
+		return zero, err
+	}
+	return result.Response, result.Err
 }
 
 func (s *Service) publishSessionStatus(sessionID string) {
@@ -623,15 +634,18 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		defer stopStartCancel()
 		runCtx, stopRunCtx := mergeOperationContexts(attempt.Context(), start.Context())
 		defer stopRunCtx()
+		var receipt session.CommitReceipt
 		err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
-			return engine.CompactContextWithActiveHook(runCtx, req.Args, func() {
+			compactReceipt, compactErr := engine.CompactContextWithActiveHook(runCtx, req.Args, func() {
 				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
 			})
+			receipt = compactReceipt
+			return compactErr
 		})
-		if s.operationAttemptCanceled(err, attempt) {
+		if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
 			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
 		} else {
-			s.operations.RecordCompactCompletion(memoReq.SessionID, req.OperationRef, err)
+			s.operations.RecordCompactCompletion(memoReq.SessionID, req.OperationRef, receipt, err)
 		}
 		return struct{}{}, err
 	})
@@ -654,15 +668,18 @@ func (s *Service) CompactContextForPreSubmit(ctx context.Context, req serverapi.
 		defer stopStartCancel()
 		runCtx, stopRunCtx := mergeOperationContexts(attempt.Context(), start.Context())
 		defer stopRunCtx()
+		var receipt session.CommitReceipt
 		err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
-			return engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
+			compactReceipt, compactErr := engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
 				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
 			})
+			receipt = compactReceipt
+			return compactErr
 		})
-		if s.operationAttemptCanceled(err, attempt) {
+		if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
 			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
 		} else {
-			s.operations.RecordCompactCompletion(memoReq.SessionID, req.OperationRef, err)
+			s.operations.RecordCompactCompletion(memoReq.SessionID, req.OperationRef, receipt, err)
 		}
 		return struct{}{}, err
 	})
@@ -697,17 +714,19 @@ func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.Ru
 		runCtx, stopRunCtx := mergeOperationContexts(attempt.Context(), start.Context())
 		defer stopRunCtx()
 		var resp serverapi.RuntimeSubmitQueuedUserMessagesResponse
+		var receipt session.CommitReceipt
 		err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
-			msg, err := engine.SubmitQueuedUserMessagesWithActiveHook(runCtx, func() {
+			msg, flushReceipt, err := engine.SubmitQueuedUserMessagesWithActiveHook(runCtx, func() {
 				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
 			})
+			receipt = flushReceipt
 			resp = serverapi.RuntimeSubmitQueuedUserMessagesResponse{Message: msg.Content}
 			return err
 		})
-		if s.operationAttemptCanceled(err, attempt) {
+		if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
 			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
 		} else {
-			s.operations.RecordQueuedMessageStatus(memoReq.SessionID, req.OperationRef, err == nil)
+			s.operations.RecordSubmitQueuedCompletion(memoReq.SessionID, req.OperationRef, receipt, err)
 		}
 		return resp, err
 	})

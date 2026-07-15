@@ -3,10 +3,11 @@ package session
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"reflect"
 	"sync"
 	"testing"
+
+	"core/internal/testharness/filemode"
 )
 
 func TestSetGoalPersistsMetadataAndEvent(t *testing.T) {
@@ -66,7 +67,7 @@ func TestSetGoalPersistsMetadataAndEvent(t *testing.T) {
 func TestGoalWithEventsRollsBackMetadataWhenEventAppendFails(t *testing.T) {
 	store := newSessionTestStore(t)
 
-	makeEventsPathDirectory(t, store)
+	blocker := filemode.MustBlockEventLogAppends(t, store.eventsFP)
 	_, err := store.SetGoalWithEvents("ship goal mode", GoalActorUser, []EventInput{{Kind: "message", Payload: "goal feedback"}})
 	if err == nil {
 		t.Fatal("expected SetGoalWithEvents to fail when event append fails")
@@ -74,7 +75,9 @@ func TestGoalWithEventsRollsBackMetadataWhenEventAppendFails(t *testing.T) {
 	if goal := store.Meta().Goal; goal != nil {
 		t.Fatalf("goal after failed atomic set = %+v, want nil", goal)
 	}
-	restoreEmptyEventsFile(t, store)
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log after failed goal set: %v", err)
+	}
 	events, err := collectEvents(store)
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
@@ -88,7 +91,7 @@ func TestGoalWithEventsRollsBackMetadataWhenEventAppendFails(t *testing.T) {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	previous := *store.Meta().Goal
-	makeEventsPathDirectory(t, store)
+	blocker = filemode.MustBlockEventLogAppends(t, store.eventsFP)
 	if _, err := store.SetGoalStatusWithEventBuilder(GoalStatusPaused, GoalActorUser, func(GoalState) ([]EventInput, error) {
 		return []EventInput{{Kind: "message", Payload: "goal feedback"}}, nil
 	}); err == nil {
@@ -98,34 +101,16 @@ func TestGoalWithEventsRollsBackMetadataWhenEventAppendFails(t *testing.T) {
 		t.Fatalf("goal after failed status update = %+v, want %+v", got, previous)
 	}
 
-	restoreEmptyEventsFile(t, store)
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log after failed goal status: %v", err)
+	}
 	previous = goal
-	makeEventsPathDirectory(t, store)
+	filemode.MustBlockEventLogAppends(t, store.eventsFP)
 	if _, err := store.ClearGoalWithEvents(GoalActorUser, []EventInput{{Kind: "message", Payload: "goal feedback"}}); err == nil {
 		t.Fatal("expected ClearGoalWithEvents to fail when event append fails")
 	}
 	if got := store.Meta().Goal; got == nil || !reflect.DeepEqual(*got, previous) {
 		t.Fatalf("goal after failed clear = %+v, want %+v", got, previous)
-	}
-}
-
-func makeEventsPathDirectory(t *testing.T, store *Store) {
-	t.Helper()
-	if err := os.Remove(store.eventsFP); err != nil {
-		t.Fatalf("remove events file: %v", err)
-	}
-	if err := os.Mkdir(store.eventsFP, 0o755); err != nil {
-		t.Fatalf("replace events file with directory: %v", err)
-	}
-}
-
-func restoreEmptyEventsFile(t *testing.T, store *Store) {
-	t.Helper()
-	if err := os.Remove(store.eventsFP); err != nil {
-		t.Fatalf("remove events directory: %v", err)
-	}
-	if err := os.WriteFile(store.eventsFP, nil, 0o644); err != nil {
-		t.Fatalf("restore events file: %v", err)
 	}
 }
 

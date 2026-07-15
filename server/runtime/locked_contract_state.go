@@ -38,6 +38,63 @@ func (s *lockedContractState) Set(locked session.LockedContract) {
 	s.mu.Unlock()
 }
 
+func (s *lockedContractState) MarkPromptFacingSnapshotsStale() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.locked != nil {
+		stale := s.locked.WithPromptFacingSnapshotsStale()
+		s.locked = &stale
+	}
+	s.mu.Unlock()
+}
+
+func (s *lockedContractState) ApplyMainPromptSnapshot(locked session.LockedContract) {
+	s.mutateFrom(locked, func(current *session.LockedContract) {
+		*current = current.WithMainPromptSnapshot(session.LockedMainPromptSnapshot{
+			SystemPrompt:    locked.SystemPrompt,
+			HasSystemPrompt: locked.HasSystemPrompt,
+			ToolPreambles:   locked.ToolPreambles,
+			ContextWindow:   locked.ContextWindow,
+			ContextPercent:  locked.ContextPercent,
+		})
+	})
+}
+
+func (s *lockedContractState) ApplyReviewerPromptSnapshot(locked session.LockedContract) {
+	s.mutateFrom(locked, func(current *session.LockedContract) {
+		*current = current.WithReviewerPromptSnapshot(session.LockedReviewerPromptSnapshot{
+			ReviewerPrompt:    locked.ReviewerPrompt,
+			HasReviewerPrompt: locked.HasReviewerPrompt,
+		})
+	})
+}
+
+func (s *lockedContractState) ApplyRequestShape(locked session.LockedContract) {
+	s.mutateFrom(locked, func(current *session.LockedContract) {
+		*current = current.WithRequestShape(session.LockedRequestShapeBackfill{
+			EnabledTools:    locked.EnabledTools,
+			HasEnabledTools: locked.HasEnabledTools,
+			WebSearchMode:   locked.WebSearchMode,
+		})
+	})
+}
+
+func (s *lockedContractState) mutateFrom(locked session.LockedContract, mutate func(*session.LockedContract)) {
+	if s == nil || mutate == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.locked == nil {
+		copyLocked := locked
+		s.locked = &copyLocked
+	} else {
+		mutate(s.locked)
+	}
+	s.mu.Unlock()
+}
+
 func (s *lockedContractState) Model() string {
 	locked, ok := s.Snapshot()
 	if !ok {

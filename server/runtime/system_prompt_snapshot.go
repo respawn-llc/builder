@@ -217,14 +217,6 @@ func (e *Engine) lockedReviewerPromptSnapshot() (string, bool) {
 	if e == nil {
 		return "", false
 	}
-	if meta := e.store.Meta(); meta.Locked != nil {
-		if meta.Locked.HasReviewerPrompt {
-			return strings.TrimSpace(meta.Locked.ReviewerPrompt), true
-		}
-		if prompt := strings.TrimSpace(meta.Locked.ReviewerPrompt); prompt != "" {
-			return prompt, true
-		}
-	}
 	return e.lockedContractState().ReviewerPromptSnapshot()
 }
 

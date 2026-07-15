@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/server/requestmemo"
+	"core/server/session"
 	"core/shared/clientui"
 )
 
@@ -100,9 +101,9 @@ func TestCoordinatorExactRecordersMapRuntimeFactsToReconciliation(t *testing.T) 
 	}
 
 	coord.RecordUserMessageFlushed("session-1", refs[0])
-	coord.RecordQueuedMessageStatus("session-1", refs[1], true)
+	coord.RecordQueuedMessageSubmitted("session-1", refs[1])
 	coord.RecordShellCompletion("session-1", refs[2], errRecorderTest)
-	coord.RecordCompactCompletion("session-1", refs[3], nil)
+	coord.RecordCompactCompletion("session-1", refs[3], session.CommitReceipt{}, nil)
 	coord.RecordRuntimeAccessFailure("session-1", refs[4])
 	coord.RecordInterruptCancellation("session-1", refs[5])
 
@@ -115,17 +116,63 @@ func TestCoordinatorExactRecordersMapRuntimeFactsToReconciliation(t *testing.T) 
 	assertState(t, snapshot, refs[5], clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
-func TestCoordinatorRecordsQueuedMessageStatusByServerQueueItemID(t *testing.T) {
+func TestCoordinatorRecordsQueuedMessageSubmittedByServerQueueItemID(t *testing.T) {
 	coord := NewCoordinator()
 	version := mustVersion(t, 1)
 	serverQueued := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "server-queue-1"}
 	clientOnly := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "client-req-1"}
 
-	coord.RecordQueuedMessageStatus("session-1", serverQueued, true)
+	coord.RecordQueuedMessageSubmitted("session-1", serverQueued)
 
 	snapshot := coord.Snapshot("session-1", version, []clientui.RuntimeOperationRef{serverQueued, clientOnly})
 	assertState(t, snapshot, serverQueued, clientui.RuntimeInputReconciliationSubmitted)
 	assertState(t, snapshot, clientOnly, clientui.RuntimeInputReconciliationUnknown)
+}
+
+func TestCoordinatorRecordsSubmitQueuedCompletionByCommitReceipt(t *testing.T) {
+	testCases := []struct {
+		name    string
+		receipt session.CommitReceipt
+		err     error
+		want    clientui.RuntimeInputReconciliationState
+		cancel  bool
+	}{
+		{
+			name:    "committed observer error",
+			receipt: session.CommitReceipt{Committed: true},
+			err:     errRecorderTest,
+			want:    clientui.RuntimeInputReconciliationSubmitted,
+		},
+		{
+			name: "successful empty submission",
+			want: clientui.RuntimeInputReconciliationSubmitted,
+		},
+		{
+			name: "uncommitted error",
+			err:  errRecorderTest,
+			want: clientui.RuntimeInputReconciliationFailedWithRestore,
+		},
+		{
+			name:    "committed completion overrides cancellation",
+			receipt: session.CommitReceipt{Committed: true},
+			err:     context.Canceled,
+			want:    clientui.RuntimeInputReconciliationSubmitted,
+			cancel:  true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			coord := NewCoordinator()
+			ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "submit-queued"}
+			if testCase.cancel {
+				coord.RecordCanceledNotCommitted("session-1", ref)
+			}
+			coord.RecordSubmitQueuedCompletion("session-1", ref, testCase.receipt, testCase.err)
+			snapshot := coord.Snapshot("session-1", mustVersion(t, 1), []clientui.RuntimeOperationRef{ref})
+			assertState(t, snapshot, ref, testCase.want)
+		})
+	}
 }
 
 var errRecorderTest = testRecorderError{}

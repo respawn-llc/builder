@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 )
 
@@ -31,10 +32,8 @@ type backgroundNoticeScheduler interface {
 }
 
 type contextCompactor interface {
-	CompactContext(ctx context.Context, args string) error
-	CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) error
-	CompactContextForPreSubmit(ctx context.Context) error
-	CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) error
+	CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error)
+	CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error)
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
 	ShouldCompactBeforeUserMessage(ctx context.Context, text string) (bool, error)
@@ -45,6 +44,7 @@ type stepLoopOptions struct {
 	ReviewerClient                 llm.Client
 	RefreshReviewerConfigOnResolve bool
 	PendingUserInjectionIDs        map[string]struct{}
+	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
 }
 
 type stepLoopResult struct {
@@ -69,7 +69,7 @@ type toolExecutor interface {
 
 type messageLifecycle interface {
 	RestoreMessages() error
-	FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, error)
+	FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error)
 	DrainPendingUserInjections() []QueuedUserMessage
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage

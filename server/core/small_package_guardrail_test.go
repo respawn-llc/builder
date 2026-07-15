@@ -111,7 +111,7 @@ var allowedSmallPackages = map[string]string{
 	"cli/app/internal/runtimestate":               "DTO-only reducer boundary; package-level tests enforce stdlib plus shared/clientui imports only",
 	"cli/app/internal/startupconfig":              "narrow CLI startup config-resolution seam after absorbing serve-command env construction",
 	"internal/testharness/pty/blackbox/cmd/tuiqa": "test-tooling command boundary retained outside production CLI so arbitrary compiled clients can run strict black-box scenarios",
-	"internal/testharness/filemode":               "test-only cross-package Unix permission assertion kept out of production tool APIs so edit and patch behavior tests share one implementation",
+	"internal/testharness/filemode":               "test-only cross-package filesystem assertions and fault setup kept out of production APIs so file-backed behavior tests share one implementation",
 	"internal/testharness/recordstore":            "test-only synchronized record storage shared across package-local and external session fixtures without introducing a production API or Go import cycle",
 	"internal/testharness/runtimewirefixture":     "shared runtimewire event fixture package used by app/runtimewire tests without duplicating router-facing event construction",
 	"server/bootstrap":                            "composition support boundary shared by core and startup; merging into startup creates a cycle",

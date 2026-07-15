@@ -4,12 +4,12 @@ import (
 	"context"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -590,23 +590,20 @@ func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 }
 
 func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
-	localEntryErr := errors.New("injected feedback persistence failure")
 	store := mustCreateTestSession(t)
 	eng := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
 		Model: "gpt-5.3-codex",
 	})
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		return localEntryErr
-	}
+	blocker := mustBlockTestEventLogAppends(t, store)
 
-	changed, err := eng.SetFastModeEnabledWithCommittedFeedback(true, func(changed bool) string {
+	changed, _, err := eng.SetFastModeEnabledWithCommittedFeedback(true, func(changed bool) string {
 		if changed {
 			return "Fast mode enabled"
 		}
 		return "Fast mode already enabled"
 	})
-	if !errors.Is(err, localEntryErr) {
-		t.Fatalf("enable fast mode error = %v, want %v", err, localEntryErr)
+	if err == nil {
+		t.Fatal("enable fast mode did not surface the event-log append failure")
 	}
 	if changed {
 		t.Fatal("did not expect changed=true when committed feedback append failed")
@@ -615,8 +612,10 @@ func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 		t.Fatal("fast mode mutated after committed feedback append failure")
 	}
 
-	eng.beforePersistLocalEntry = nil
-	changed, err = eng.SetFastModeEnabledWithCommittedFeedback(true, func(changed bool) string {
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
+	}
+	changed, _, err = eng.SetFastModeEnabledWithCommittedFeedback(true, func(changed bool) string {
 		if changed {
 			return "Fast mode enabled"
 		}
@@ -664,7 +663,8 @@ func TestFastModeSharedStateAppliesAcrossEngines(t *testing.T) {
 func TestSharedFastModeCommittedFeedbackSerializesAcrossEngines(t *testing.T) {
 	dir := t.TempDir()
 	state := NewFastModeState(false)
-	storeA := mustCreateNamedTestSessionAt(t, dir, "ws-a", dir)
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	storeA := mustCreateNamedTestSessionAt(t, dir, "ws-a", dir, session.WithPersistenceObserver(gate))
 	engA := mustNewExecTestEngine(t, storeA, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
 		Model:         "gpt-5.3-codex",
 		FastModeState: state,
@@ -674,13 +674,7 @@ func TestSharedFastModeCommittedFeedbackSerializesAcrossEngines(t *testing.T) {
 		Model:         "gpt-5.3-codex",
 		FastModeState: state,
 	})
-	blockAppend := make(chan struct{})
-	releaseAppend := make(chan struct{})
-	engA.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		close(blockAppend)
-		<-releaseAppend
-		return nil
-	}
+	blockAppend, releaseAppend := gate.BlockNext()
 	feedback := func(changed bool) string {
 		if changed {
 			return "Fast mode enabled"
@@ -694,17 +688,22 @@ func TestSharedFastModeCommittedFeedbackSerializesAcrossEngines(t *testing.T) {
 	}
 	firstDone := make(chan result, 1)
 	go func() {
-		changed, err := engA.SetFastModeEnabledWithCommittedFeedback(true, feedback)
+		changed, _, err := engA.SetFastModeEnabledWithCommittedFeedback(true, feedback)
 		firstDone <- result{changed: changed, err: err}
 	}()
 	<-blockAppend
 
 	secondDone := make(chan result, 1)
 	go func() {
-		changed, err := engB.SetFastModeEnabledWithCommittedFeedback(true, feedback)
+		changed, _, err := engB.SetFastModeEnabledWithCommittedFeedback(true, feedback)
 		secondDone <- result{changed: changed, err: err}
 	}()
-	close(releaseAppend)
+	select {
+	case result := <-secondDone:
+		t.Fatalf("second shared-state mutation completed before first feedback persisted: %+v", result)
+	case <-time.After(25 * time.Millisecond):
+	}
+	releaseAppend()
 
 	first := <-firstDone
 	second := <-secondDone
@@ -744,21 +743,18 @@ func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 }
 
 func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
-	localEntryErr := errors.New("injected feedback persistence failure")
 	store := mustCreateTestSession(t)
 	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		return localEntryErr
-	}
+	blocker := mustBlockTestEventLogAppends(t, store)
 
-	changed, enabled, err := eng.SetQuestionsEnabledWithCommittedFeedback(false, func(enabled bool, changed bool) string {
+	changed, enabled, _, err := eng.SetQuestionsEnabledWithCommittedFeedback(false, func(enabled bool, changed bool) string {
 		if !enabled && changed {
 			return "Questions disabled"
 		}
 		return "Questions already disabled"
 	})
-	if !errors.Is(err, localEntryErr) {
-		t.Fatalf("disable questions error = %v, want %v", err, localEntryErr)
+	if err == nil {
+		t.Fatal("disable questions did not surface the event-log append failure")
 	}
 	if changed {
 		t.Fatal("did not expect changed=true when committed feedback append failed")
@@ -770,8 +766,10 @@ func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testin
 		t.Fatal("questions setting mutated after committed feedback append failure")
 	}
 
-	eng.beforePersistLocalEntry = nil
-	changed, enabled, err = eng.SetQuestionsEnabledWithCommittedFeedback(false, func(enabled bool, changed bool) string {
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
+	}
+	changed, enabled, _, err = eng.SetQuestionsEnabledWithCommittedFeedback(false, func(enabled bool, changed bool) string {
 		if !enabled && changed {
 			return "Questions disabled"
 		}
@@ -879,7 +877,6 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 }
 
 func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
-	localEntryErr := errors.New("injected feedback persistence failure")
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 	cfg := Config{
@@ -892,18 +889,16 @@ func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 		},
 	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		return localEntryErr
-	}
+	blocker := mustBlockTestEventLogAppends(t, store)
 
-	changed, mode, err := eng.SetReviewerEnabledWithCommittedFeedback(true, func(enabled bool, mode string, changed bool) string {
+	changed, mode, _, err := eng.SetReviewerEnabledWithCommittedFeedback(true, func(enabled bool, mode string, changed bool) string {
 		if enabled && changed {
 			return "Supervisor invocation enabled"
 		}
 		return "Supervisor invocation already enabled"
 	})
-	if !errors.Is(err, localEntryErr) {
-		t.Fatalf("enable reviewer error = %v, want %v", err, localEntryErr)
+	if err == nil {
+		t.Fatal("enable reviewer did not surface the event-log append failure")
 	}
 	if changed {
 		t.Fatal("did not expect changed=true when committed feedback append failed")
@@ -915,8 +910,10 @@ func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 		t.Fatalf("reviewer frequency mutated after committed feedback append failure: %q", got)
 	}
 
-	eng.beforePersistLocalEntry = nil
-	changed, mode, err = eng.SetReviewerEnabledWithCommittedFeedback(true, func(enabled bool, mode string, changed bool) string {
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
+	}
+	changed, mode, _, err = eng.SetReviewerEnabledWithCommittedFeedback(true, func(enabled bool, mode string, changed bool) string {
 		if enabled && changed {
 			return "Supervisor invocation enabled"
 		}

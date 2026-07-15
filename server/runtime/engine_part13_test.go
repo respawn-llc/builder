@@ -5,6 +5,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	triggerhandofftool "core/server/tools"
 	"core/shared/toolspec"
@@ -706,7 +707,20 @@ func TestPendingTriggerHandoffRetriesFutureMessageAfterAppendFailureWithoutRecom
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
 		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
 	}}}
-	eng := mustNewHandoffTestEngine(t, store, client, Config{})
+	var (
+		blockFutureAppend bool
+		blocker           *testEventLogAppendBlocker
+		blockErr          error
+	)
+	eng := mustNewHandoffTestEngine(t, store, client, Config{
+		OnEvent: func(evt Event) {
+			if !blockFutureAppend || evt.Kind != EventConversationUpdated || evt.CommittedTranscriptChanged {
+				return
+			}
+			blockFutureAppend = false
+			blocker, blockErr = blockTestEventLogAppends(store)
+		},
+	})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
@@ -718,16 +732,12 @@ func TestPendingTriggerHandoffRetriesFutureMessageAfterAppendFailureWithoutRecom
 		t.Fatalf("trigger handoff: %v", err)
 	}
 
-	appendFailures := 0
-	eng.beforePersistMessage = func(msg llm.Message) error {
-		if msg.MessageType != llm.MessageTypeHandoffFutureMessage || appendFailures > 0 {
-			return nil
-		}
-		appendFailures++
-		return errors.New("synthetic future-message append failure")
-	}
+	blockFutureAppend = true
 	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err == nil {
 		t.Fatal("expected first pending handoff attempt to fail while appending future-agent message")
+	}
+	if blockErr != nil || blocker == nil {
+		t.Fatalf("block future-agent append: blocker=%v error=%v", blocker, blockErr)
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("expected exactly one compaction summary call after append failure, got %d", len(client.calls))
@@ -741,7 +751,9 @@ func TestPendingTriggerHandoffRetriesFutureMessageAfterAppendFailureWithoutRecom
 		t.Fatalf("pending future-agent message after append failure = %q, want %q", got, want)
 	}
 
-	eng.beforePersistMessage = nil
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
+	}
 	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err != nil {
 		t.Fatalf("retry pending future-agent message append: %v", err)
 	}
@@ -772,7 +784,20 @@ func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWith
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
 		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
 	}}}
-	eng := mustNewHandoffTestEngine(t, store, client, Config{})
+	var (
+		blockFutureAppend bool
+		blocker           *testEventLogAppendBlocker
+		blockErr          error
+	)
+	eng := mustNewHandoffTestEngine(t, store, client, Config{
+		OnEvent: func(evt Event) {
+			if !blockFutureAppend || evt.Kind != EventConversationUpdated || evt.CommittedTranscriptChanged {
+				return
+			}
+			blockFutureAppend = false
+			blocker, blockErr = blockTestEventLogAppends(store)
+		},
+	})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
@@ -796,20 +821,21 @@ func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWith
 	}
 	eng.handoffRuntimeState().QueueRequest("keep API details", "resume after restart")
 
-	eng.beforePersistMessage = func(msg llm.Message) error {
-		if msg.MessageType == llm.MessageTypeHandoffFutureMessage {
-			return errors.New("synthetic future-message append failure")
-		}
-		return nil
-	}
+	blockFutureAppend = true
 	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err == nil {
 		t.Fatal("expected handoff future-message append to fail")
+	}
+	if blockErr != nil || blocker == nil {
+		t.Fatalf("block future-agent append: blocker=%v error=%v", blocker, blockErr)
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("expected exactly one compaction summary call before reopen, got %d", len(client.calls))
 	}
 	if eng.handoffRuntimeState().RequestSnapshot() != nil {
 		t.Fatalf("expected successful compaction to consume queued handoff request before reopen, got %+v", eng.handoffRuntimeState().RequestSnapshot())
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
 	}
 
 	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
@@ -853,6 +879,39 @@ func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWith
 	}
 	if !foundFuture {
 		t.Fatalf("expected reopened request to include retried future-agent message, items=%+v", resumedClient.calls[0].Items)
+	}
+}
+
+func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.T) {
+	observerErr := errors.New("future-agent message observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	eng := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
+	eng.handoffRuntimeState().QueueFutureMessage("continue with verification")
+	gate.FailNext(observerErr)
+
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); !errors.Is(err, observerErr) {
+		t.Fatalf("apply pending handoff error = %v, want observer error", err)
+	}
+	if got := eng.handoffRuntimeState().FutureMessageSnapshot(); got != "" {
+		t.Fatalf("committed future-agent message retained retry ownership: %q", got)
+	}
+	messages := eng.transcriptRuntimeState().SnapshotMessages()
+	handoffMessages := 0
+	for _, message := range messages {
+		if message.MessageType == llm.MessageTypeHandoffFutureMessage {
+			handoffMessages++
+		}
+	}
+	if handoffMessages != 1 {
+		t.Fatalf("committed future-agent messages = %d, want 1", handoffMessages)
+	}
+
+	if applied, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err != nil || applied {
+		t.Fatalf("second pending handoff application = applied:%v error:%v, want no-op", applied, err)
+	}
+	if got := len(eng.transcriptRuntimeState().SnapshotMessages()); got != len(messages) {
+		t.Fatalf("future-agent message was appended again: before=%d after=%d", len(messages), got)
 	}
 }
 

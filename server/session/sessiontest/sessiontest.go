@@ -41,10 +41,24 @@ func (p *Persistence) ObserveEventLogReconciliation(_ context.Context, reconcili
 	if !ok {
 		return session.ErrSessionNotFound
 	}
+	invalidateUsageState, err := reconciliation.UsageState.InvalidatesUsageState()
+	if err != nil {
+		return err
+	}
 	meta := cloneMeta(record.Meta)
+	if meta.LastSequence != reconciliation.ObservedLastSequence {
+		return session.EventLogReconciliationConflictError{
+			SessionID:            reconciliation.SessionID,
+			ObservedLastSequence: reconciliation.ObservedLastSequence,
+			CurrentLastSequence:  meta.LastSequence,
+		}
+	}
 	meta.LastSequence = reconciliation.LastSequence
 	meta.ConversationEstablished = reconciliation.ConversationEstablished
 	meta.UpdatedAt = reconciliation.UpdatedAt
+	if invalidateUsageState {
+		meta.UsageState = nil
+	}
 	record.Meta = meta
 	p.records.Put(reconciliation.SessionID, record)
 	return nil

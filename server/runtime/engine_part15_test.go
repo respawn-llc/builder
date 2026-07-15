@@ -321,23 +321,17 @@ func TestCompactionLabelsSingleSummaryEntry(t *testing.T) {
 }
 
 func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails(t *testing.T) {
-	localEntryErr := errors.New("injected compaction error persistence failure")
 	store := mustCreateTestSession(t)
 	var events []Event
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		if entry.Role == "error" {
-			return localEntryErr
-		}
-		return nil
-	}
+	mustBlockTestEventLogAppends(t, store)
 
 	err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionFailed, compactionModeAuto, "remote", "openai", nil, 2, "quota exceeded")
-	if !errors.Is(err, localEntryErr) {
-		t.Fatalf("emitCompactionStatus error = %v, want %v", err, localEntryErr)
+	if err == nil {
+		t.Fatal("emitCompactionStatus did not surface the event-log append failure")
 	}
 	terminalEvents := 0
 	for _, evt := range events {
@@ -359,6 +353,10 @@ func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.
 	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "pre-compaction"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
+	oldUsage := &session.UsageState{InputTokens: 42, WindowTokens: 100}
+	if _, err := store.SetUsageState(oldUsage); err != nil {
+		t.Fatalf("persist seed usage state: %v", err)
+	}
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
 	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
@@ -369,7 +367,14 @@ func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.
 		_ = os.Chmod(eventsPath, 0o644)
 	}()
 
-	err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}))
+	carryover, ok := manualCompactionCarryoverMessage("pre-compaction")
+	if !ok {
+		t.Fatal("expected non-empty manual compaction carryover")
+	}
+	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
+		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
+		carryover,
+	}))
 	if err == nil {
 		t.Fatal("expected replaceHistory persistence failure")
 	}
@@ -379,6 +384,9 @@ func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.
 	if !eng.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("reminder state mutated despite persistence failure")
 	}
+	if usage := store.Meta().UsageState; usage == nil || usage.InputTokens != oldUsage.InputTokens {
+		t.Fatalf("uncommitted history replacement invalidated usage state: %+v", usage)
+	}
 }
 
 type failOnCompactionReminderResetObservation struct {
@@ -387,18 +395,6 @@ type failOnCompactionReminderResetObservation struct {
 
 func (o *failOnCompactionReminderResetObservation) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if !o.failed && snapshot.Meta.LastSequence >= 2 && !snapshot.Meta.CompactionSoonReminderIssued {
-		o.failed = true
-		return errors.New("persist observer failed")
-	}
-	return nil
-}
-
-type failOnUsageStateResetObservation struct {
-	failed bool
-}
-
-func (o *failOnUsageStateResetObservation) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
-	if !o.failed && snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil {
 		o.failed = true
 		return errors.New("persist observer failed")
 	}
@@ -418,7 +414,7 @@ func TestReplaceHistoryUpdatesRuntimeStateWhenMetadataPersistFailsAfterEventAppe
 	}
 	eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
-	err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}))
+	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}))
 	if err == nil {
 		t.Fatal("expected replaceHistory metadata persistence failure")
 	}
@@ -431,26 +427,119 @@ func TestReplaceHistoryUpdatesRuntimeStateWhenMetadataPersistFailsAfterEventAppe
 	}
 }
 
-func TestReplaceHistoryUpdatesRuntimeStateWhenUsageMetadataPersistFailsAfterEventAppend(t *testing.T) {
-	dir := t.TempDir()
-	observer := &failOnUsageStateResetObservation{}
-	store := mustCreateTestSessionAt(t, dir, session.WithPersistenceObserver(observer))
+func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReopen(t *testing.T) {
+	observerErr := errors.New("history replacement metadata observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "pre-compaction"}})); err != nil {
+		t.Fatalf("append seed message: %v", err)
+	}
+	oldUsage := llm.Usage{
+		InputTokens:          190_000,
+		WindowTokens:         200_000,
+		CachedInputTokens:    190_000,
+		HasCachedInputTokens: true,
+	}
+	if _, err := eng.recordLastUsage(oldUsage); err != nil {
+		t.Fatalf("persist seed usage state: %v", err)
+	}
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
+	}, observerErr)
+
+	_, receipt, err := store.AppendCompactionHistoryReplacement("step-compact", historyReplacementPayload{
+		Engine:           "local",
+		Mode:             string(compactionModeManual),
+		CompactionNumber: 1,
+		Items: llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: llm.MessageTypeCompactionSummary,
+			Content:     "summary",
+		}}),
+	})
+	if !receipt.Committed || !errors.Is(err, observerErr) {
+		t.Fatalf("append replacement receipt=%+v error=%v, want committed observer failure", receipt, err)
+	}
+
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
+	if err != nil {
+		t.Fatalf("reopen immediately after committed replacement: %v", err)
+	}
+	if usage := reopenedStore.Meta().UsageState; usage != nil {
+		t.Fatalf("immediate reopen restored pre-compaction usage: %+v", usage)
+	}
+	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
+	reopenedUsage := reopened.ContextUsage()
+	if reopenedUsage.UsedTokens <= 0 || reopenedUsage.UsedTokens >= oldUsage.InputTokens {
+		t.Fatalf("immediately reopened context usage = %+v, want compacted active-history estimate", reopenedUsage)
+	}
+	if reopenedUsage.HasCacheHitPercentage {
+		t.Fatalf("immediate reopen restored stale pre-compaction cache counters: %+v", reopenedUsage)
+	}
+}
+
+func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersistence(t *testing.T) {
+	replacementErr := errors.New("history replacement metadata observer failed")
+	finalUsageErr := errors.New("compacted usage metadata observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "pre-compaction"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
-	if err := store.SetUsageState(&session.UsageState{InputTokens: 42, WindowTokens: 100}); err != nil {
+	oldUsage := llm.Usage{
+		InputTokens:          190_000,
+		WindowTokens:         200_000,
+		CachedInputTokens:    190_000,
+		HasCachedInputTokens: true,
+	}
+	if _, err := eng.recordLastUsage(oldUsage); err != nil {
 		t.Fatalf("persist seed usage state: %v", err)
 	}
-	eng.setLastUsage(llm.Usage{InputTokens: 42, WindowTokens: 100})
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
+	}, replacementErr)
 
-	err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}))
-	if err == nil {
-		t.Fatal("expected replaceHistory usage metadata persistence failure")
+	receipt, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}))
+	if !receipt.Committed || !errors.Is(err, replacementErr) {
+		t.Fatalf("replaceHistory receipt=%+v error=%v, want committed observer failure", receipt, err)
 	}
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	if len(messages) != 1 || messages[0].Content != "summary" {
 		t.Fatalf("runtime transcript not updated after durable history replacement: %+v", messages)
+	}
+
+	compactedUsage := llm.Usage{InputTokens: 2_000, WindowTokens: oldUsage.WindowTokens}
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		usage := snapshot.Meta.UsageState
+		return usage != nil && usage.InputTokens == compactedUsage.InputTokens
+	}, finalUsageErr)
+	usageReceipt, usageErr := eng.recordLastUsage(compactedUsage)
+	if usageReceipt.Committed || !errors.Is(usageErr, finalUsageErr) {
+		t.Fatalf("record compacted usage receipt=%+v error=%v, want uncommitted observer failure", usageReceipt, usageErr)
+	}
+	if err := store.SetName("post-compaction metadata write"); err != nil {
+		t.Fatalf("persist unrelated metadata: %v", err)
+	}
+	if usage := store.Meta().UsageState; usage != nil {
+		t.Fatalf("later metadata write retained pre-compaction usage: %+v", usage)
+	}
+
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	if usage := reopenedStore.Meta().UsageState; usage != nil {
+		t.Fatalf("reopened metadata restored pre-compaction usage: %+v", usage)
+	}
+	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
+	reopenedUsage := reopened.ContextUsage()
+	if reopenedUsage.UsedTokens <= 0 || reopenedUsage.UsedTokens >= oldUsage.InputTokens {
+		t.Fatalf("reopened context usage = %+v, want compacted active-history estimate", reopenedUsage)
+	}
+	if reopenedUsage.HasCacheHitPercentage {
+		t.Fatalf("reopened cache usage restored stale pre-compaction counters: %+v", reopenedUsage)
 	}
 }
 
@@ -628,7 +717,7 @@ func TestRemoteCompactionReinjectsActiveWorkflowPrompt(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 
@@ -667,7 +756,7 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 
@@ -700,7 +789,7 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	_, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false)
+	_, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false)
 	if !errors.Is(err, countErr) {
 		t.Fatalf("compactNow error = %v, want %v", err, countErr)
 	}
@@ -719,7 +808,7 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 	}
 }
 
-func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAtomically(t *testing.T) {
+func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverAtomically(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
 		OutputItems: []llm.ResponseItem{
@@ -733,7 +822,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAtomically(t *testi
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", true); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 
@@ -756,22 +845,27 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAtomically(t *testi
 	if historyIndex < 0 {
 		t.Fatalf("expected history_replaced event, got %+v", events)
 	}
-	// Base meta is reinjected into the same replacement payload (atomic), with the
-	// compaction summary preceding the reinjected meta.
-	summaryIndex, environmentIndex := -1, -1
+	// Base meta and manual carryover are reinjected into the same replacement
+	// payload, with summary then canonical context then carryover.
+	summaryIndex, environmentIndex, carryoverIndex := -1, -1, -1
 	for idx, item := range replacement.Items {
 		switch item.MessageType {
 		case llm.MessageTypeCompactionSummary:
 			summaryIndex = idx
 		case llm.MessageTypeEnvironment:
 			environmentIndex = idx
+		case llm.MessageTypeManualCompactionCarryover:
+			carryoverIndex = idx
+			if !strings.Contains(item.Content, "seed") {
+				t.Fatalf("manual carryover lost the last visible user message: %+v", item)
+			}
 		}
 	}
-	if summaryIndex < 0 || environmentIndex < 0 {
-		t.Fatalf("replacement payload must embed summary and reinjected base meta: %+v", replacement.Items)
+	if summaryIndex < 0 || environmentIndex < 0 || carryoverIndex < 0 {
+		t.Fatalf("replacement payload must embed summary, reinjected base meta, and manual carryover: %+v", replacement.Items)
 	}
-	if summaryIndex >= environmentIndex {
-		t.Fatalf("compaction summary must precede reinjected meta in the replacement payload: %+v", replacement.Items)
+	if summaryIndex >= environmentIndex || environmentIndex >= carryoverIndex || carryoverIndex != len(replacement.Items)-1 {
+		t.Fatalf("replacement payload order must be summary, canonical context, then manual carryover: %+v", replacement.Items)
 	}
 	for _, evt := range events[historyIndex+1:] {
 		if evt.Kind != "message" {
@@ -781,8 +875,8 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAtomically(t *testi
 		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
 			t.Fatalf("decode message event: %v", err)
 		}
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeEnvironment {
-			t.Fatalf("base meta must be embedded in the replacement payload, not steered separately afterward: events=%+v", events)
+		if msg.Role == llm.RoleDeveloper && (msg.MessageType == llm.MessageTypeEnvironment || msg.MessageType == llm.MessageTypeManualCompactionCarryover) {
+			t.Fatalf("base meta and manual carryover must be embedded in the replacement payload, not steered separately afterward: events=%+v", events)
 		}
 	}
 }
@@ -809,7 +903,7 @@ func TestHistoryReplacementDurableAfterAppendObserverFailure(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
+	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
 	if err == nil {
 		t.Fatal("expected replacement observer failure")
 	}
@@ -843,7 +937,7 @@ func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
+	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
 	if err == nil {
 		t.Fatal("expected replacement observer failure")
 	}
@@ -873,6 +967,205 @@ func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn
 	}
 }
 
+type committedCompactionFixture struct {
+	store  *session.Store
+	engine *Engine
+	client *fakeCompactionClient
+	events []Event
+}
+
+func newCommittedCompactionFixture(t *testing.T, observer session.PersistenceObserver) *committedCompactionFixture {
+	t.Helper()
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(observer))
+	if err := store.MarkModelDispatchLocked(session.LockedContract{
+		Model:             "gpt-5",
+		SystemPrompt:      "stale system prompt",
+		HasSystemPrompt:   true,
+		ReviewerPrompt:    "stale reviewer prompt",
+		HasReviewerPrompt: true,
+	}); err != nil {
+		t.Fatalf("lock prompt snapshots: %v", err)
+	}
+	client := &fakeCompactionClient{
+		inputTokenCount: 2_000,
+		caps: llm.ProviderCapabilities{
+			ProviderID:                     "openai",
+			SupportsResponsesAPI:           true,
+			SupportsResponsesCompact:       true,
+			SupportsRequestInputTokenCount: true,
+			IsOpenAIFirstParty:             true,
+		},
+		compactionResponses: []llm.CompactionResponse{{
+			OutputItems: []llm.ResponseItem{
+				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
+				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+			},
+			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
+		}},
+	}
+	fixture := &committedCompactionFixture{store: store, client: client}
+	fixture.engine = mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model:   "gpt-5",
+		OnEvent: func(event Event) { fixture.events = append(fixture.events, event) },
+	})
+	if err := fixture.engine.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+		t.Fatalf("append seed message: %v", err)
+	}
+	fixture.engine.compactionRuntimeState().SetSoonReminderIssued(true)
+	if err := store.SetCompactionSoonReminderIssued(true); err != nil {
+		t.Fatalf("persist compaction reminder: %v", err)
+	}
+	return fixture
+}
+
+func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testing.T) {
+	observerErr := errors.New("history replacement observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	fixture := newCommittedCompactionFixture(t, gate)
+	gate.FailNext(observerErr)
+
+	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, "", false)
+	if !receipt.Committed || !errors.Is(err, observerErr) {
+		t.Fatalf("compactNow receipt=%+v error=%v, want committed observer failure", receipt, err)
+	}
+	completed := 0
+	failed := 0
+	for _, event := range fixture.events {
+		switch event.Kind {
+		case EventCompactionCompleted:
+			completed++
+		case EventCompactionFailed:
+			failed++
+		}
+	}
+	if completed != 1 || failed != 0 {
+		t.Fatalf("compaction terminal events: completed=%d failed=%d events=%+v", completed, failed, fixture.events)
+	}
+	if got := fixture.engine.compactionRuntimeState().Count(); got != 1 {
+		t.Fatalf("live compaction count = %d, want 1", got)
+	}
+	if fixture.engine.compactionRuntimeState().SoonReminderIssued() || fixture.store.Meta().CompactionSoonReminderIssued {
+		t.Fatal("committed compaction retained the soon reminder")
+	}
+	if locked := fixture.store.Meta().Locked; locked == nil || locked.HasSystemPrompt || locked.SystemPrompt != "" || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
+		t.Fatalf("prompt snapshots were not cleared after committed compaction: %+v", locked)
+	}
+	if usage := fixture.store.Meta().UsageState; usage == nil || usage.WindowTokens <= 0 {
+		t.Fatalf("usage state was not finalized after committed compaction: %+v", usage)
+	}
+	persisted, readErr := sessiontest.CollectEvents(fixture.store)
+	if readErr != nil {
+		t.Fatalf("read committed compaction events: %v", readErr)
+	}
+	replacements := 0
+	for _, event := range persisted {
+		if event.Kind == "history_replaced" {
+			replacements++
+		}
+	}
+	if replacements != 1 || len(fixture.client.compactionCalls) != 1 {
+		t.Fatalf("committed compaction retried: replacements=%d calls=%d", replacements, len(fixture.client.compactionCalls))
+	}
+}
+
+func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) {
+	observerErr := errors.New("compaction usage observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	fixture := newCommittedCompactionFixture(t, gate)
+	oldUsage := llm.Usage{
+		InputTokens:          190_000,
+		WindowTokens:         200_000,
+		CachedInputTokens:    190_000,
+		HasCachedInputTokens: true,
+	}
+	if _, err := fixture.engine.recordLastUsage(oldUsage); err != nil {
+		t.Fatalf("persist old usage: %v", err)
+	}
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		usage := snapshot.Meta.UsageState
+		return usage != nil && usage.WindowTokens == oldUsage.WindowTokens && usage.InputTokens != oldUsage.InputTokens
+	}, observerErr)
+
+	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, "", false)
+	if !receipt.Committed || !errors.Is(err, observerErr) {
+		t.Fatalf("compactNow receipt=%+v error=%v, want committed usage observer failure", receipt, err)
+	}
+	liveUsage := fixture.engine.ContextUsage()
+	if liveUsage.UsedTokens <= 0 || liveUsage.UsedTokens >= oldUsage.InputTokens {
+		t.Fatalf("live context usage = %+v, want compacted active-history usage", liveUsage)
+	}
+	if liveUsage.UsedTokens != fixture.client.inputTokenCount {
+		t.Fatalf("live context usage = %+v, want exact compacted input %d", liveUsage, fixture.client.inputTokenCount)
+	}
+	if usage := fixture.store.Meta().UsageState; usage != nil {
+		t.Fatalf("failed usage persistence leaked into Store metadata: %+v", usage)
+	}
+
+	reopenedStore, err := runtimeTestSessionPersistence.Open(fixture.store.Dir())
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
+	reopenedUsage := reopened.ContextUsage()
+	if reopenedUsage.UsedTokens <= 0 || reopenedUsage.UsedTokens >= oldUsage.InputTokens {
+		t.Fatalf("reopened context usage = %+v, want compacted active-history estimate", reopenedUsage)
+	}
+	if reopenedUsage.HasCacheHitPercentage {
+		t.Fatalf("reopened cache usage restored an uncommitted metadata mutation: %+v", reopenedUsage)
+	}
+}
+
+func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *testing.T) {
+	observerErr := errors.New("prompt snapshot stale observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	fixture := newCommittedCompactionFixture(t, gate)
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		locked := snapshot.Meta.Locked
+		return locked != nil &&
+			!locked.HasSystemPrompt && locked.SystemPrompt == "" &&
+			!locked.HasReviewerPrompt && locked.ReviewerPrompt == ""
+	}, observerErr)
+
+	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, "", false)
+	if !receipt.Committed || !errors.Is(err, observerErr) {
+		t.Fatalf("compactNow receipt=%+v error=%v, want committed stale-snapshot observer failure", receipt, err)
+	}
+	locked, ok := fixture.engine.lockedContractState().Snapshot()
+	if !ok || locked.HasSystemPrompt || locked.SystemPrompt != "" || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
+		t.Fatalf("live prompt snapshots after committed replacement = %+v, want stale", locked)
+	}
+	if stored := fixture.store.Meta().Locked; stored == nil || !stored.HasSystemPrompt || !stored.HasReviewerPrompt {
+		t.Fatalf("stale metadata observer did not exercise rollback: %+v", stored)
+	}
+	request, requestErr := fixture.engine.buildRequest(context.Background(), "step-next", false)
+	if requestErr != nil {
+		t.Fatalf("build request after committed replacement: %v", requestErr)
+	}
+	if request.SystemPrompt == "stale system prompt" {
+		t.Fatalf("next request reused pre-compaction system prompt: %+v", request)
+	}
+	reviewerPrompt, reviewerErr := fixture.engine.reviewerSystemPrompt(context.Background())
+	if reviewerErr != nil {
+		t.Fatalf("resolve reviewer prompt after committed replacement: %v", reviewerErr)
+	}
+	if reviewerPrompt == "stale reviewer prompt" {
+		t.Fatal("next reviewer request reused pre-compaction reviewer prompt")
+	}
+	completed := 0
+	failed := 0
+	for _, event := range fixture.events {
+		switch event.Kind {
+		case EventCompactionCompleted:
+			completed++
+		case EventCompactionFailed:
+			failed++
+		}
+	}
+	if completed != 1 || failed != 0 || len(fixture.client.compactionCalls) != 1 {
+		t.Fatalf("committed compaction terminalization: completed=%d failed=%d calls=%d events=%+v", completed, failed, len(fixture.client.compactionCalls), fixture.events)
+	}
+}
+
 func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
 	store := mustCreateTestSession(t)
 	resetErr := errors.New("workflow budget reset failed")
@@ -883,7 +1176,7 @@ func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
+	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
 	if !errors.Is(err, resetErr) {
 		t.Fatalf("replaceHistory error = %v, want %v", err, resetErr)
 	}
@@ -910,7 +1203,7 @@ func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
-	if _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 	client.responses = []llm.Response{commentaryResponse("complete",
@@ -1014,7 +1307,7 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 

@@ -102,7 +102,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err != nil {
 			return stepLoopResult{}, err
 		}
-		if err := e.recordLastUsage(resp.Usage); err != nil {
+		if _, err := e.recordLastUsage(resp.Usage); err != nil {
 			return stepLoopResult{}, err
 		}
 
@@ -196,7 +196,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if len(hostedToolExecutions) > 0 {
 					_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
 				}
-				if _, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
@@ -205,7 +205,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: commentaryWithoutToolCallsWarning}})); err != nil {
 					return stepLoopResult{}, err
 				}
-				if _, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
@@ -214,13 +214,13 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: finalWithoutContentWarning}})); err != nil {
 					return stepLoopResult{}, err
 				}
-				if _, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
 			}
 
-			flushed, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs)
+			flushed, err := s.flushPendingUserInjections(stepID, options)
 			if err != nil {
 				return stepLoopResult{}, err
 			}
@@ -340,10 +340,18 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{Message: assistantMsg, ExecutedToolCall: true}, nil
 		}
-		if _, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs); err != nil {
+		if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 			return stepLoopResult{}, err
 		}
 	}
+}
+
+func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
+	flushed, receipt, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs)
+	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
+		options.OnQueuedUserFlushCommitted(receipt)
+	}
+	return flushed, err
 }
 
 func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response) (preparedCompletedResponse, error) {
