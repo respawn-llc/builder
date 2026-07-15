@@ -901,23 +901,7 @@ func runPromptLoadOptions(overrides serverapi.RunPromptOverrides) config.LoadOpt
 }
 
 func resolvePreparedSubagentSettings(base config.Settings, baseSource config.SourceReport, target preparedSubagentIdentity, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, string, error) {
-	resolved := cloneSettings(base)
-	_ = applyBuiltInRoleHeuristics(&resolved, target.Selector, target.ProviderID, allowModelOverride)
-	applySubagentRoleOverrides(&resolved, target.Role, allowModelOverride)
-	effectiveSource := sourceReportWithSubagentRoleSources(baseSource, target.Role, allowModelOverride)
-	effectiveSources := cloneStringMap(effectiveSource.Sources)
-	applyReviewerInheritance(&resolved, effectiveSources)
-	effectiveSource.Sources = effectiveSources
-	if validate {
-		if err := config.ValidateSettingsWithSources(resolved, effectiveSources); err != nil {
-			return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("invalid subagent role %q: %w", target.Selector, err)
-		}
-	}
-	warning := ""
-	if target.Selector == config.BuiltInSubagentRoleFast && sameResolvedSubagentSettings(base, resolved) {
-		warning = fastRoleSameAsMainWarning
-	}
-	return resolved, effectiveSource, warning, nil
+	return resolveSubagentSettingsFromRole(base, baseSource, target.Selector, target.Role, target.ProviderID, allowModelOverride, validate)
 }
 
 func continuationRoleDisplay(role *string) string {

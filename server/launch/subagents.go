@@ -51,20 +51,32 @@ func resolveSubagentSettingsWithProviderID(base config.Settings, baseSource conf
 	case config.SubagentRoleLookupMissing:
 		return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("Unrecognized role %q. It may have been removed by the user during the session. Available roles: [%s]", *lookup.NormalizedSelector, strings.Join(config.AvailableSubagentRoleNames(base, false), ", "))
 	}
+	return resolveSubagentSettingsFromRole(
+		base,
+		baseSource,
+		*lookup.NormalizedSelector,
+		lookup.Role,
+		strings.TrimSpace(providerID),
+		allowModelOverride,
+		validate,
+	)
+}
+
+func resolveSubagentSettingsFromRole(base config.Settings, baseSource config.SourceReport, selector string, role config.SubagentRole, providerID string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, string, error) {
 	resolved := cloneSettings(base)
-	_ = applyBuiltInRoleHeuristics(&resolved, *lookup.NormalizedSelector, strings.TrimSpace(providerID), allowModelOverride)
-	applySubagentRoleOverrides(&resolved, lookup.Role, allowModelOverride)
-	effectiveSource := sourceReportWithSubagentRoleSources(baseSource, lookup.Role, allowModelOverride)
+	_ = applyBuiltInRoleHeuristics(&resolved, selector, providerID, allowModelOverride)
+	applySubagentRoleOverrides(&resolved, role, allowModelOverride)
+	effectiveSource := sourceReportWithSubagentRoleSources(baseSource, role, allowModelOverride)
 	effectiveSources := cloneStringMap(effectiveSource.Sources)
 	applyReviewerInheritance(&resolved, effectiveSources)
 	effectiveSource.Sources = effectiveSources
 	if validate {
 		if err := config.ValidateSettingsWithSources(resolved, effectiveSources); err != nil {
-			return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("invalid subagent role %q: %w", *lookup.NormalizedSelector, err)
+			return config.Settings{}, config.SourceReport{}, "", fmt.Errorf("invalid subagent role %q: %w", selector, err)
 		}
 	}
 	warning := ""
-	if *lookup.NormalizedSelector == config.BuiltInSubagentRoleFast && sameResolvedSubagentSettings(base, resolved) {
+	if selector == config.BuiltInSubagentRoleFast && sameResolvedSubagentSettings(base, resolved) {
 		warning = fastRoleSameAsMainWarning
 	}
 	return resolved, effectiveSource, warning, nil
