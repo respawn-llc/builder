@@ -23,6 +23,7 @@ import (
 
 type fakeWorkflowController struct {
 	completed                           atomic.Int64
+	completeErr                         error
 	violations                          atomic.Int64
 	protocolBudgetResets                atomic.Int64
 	protocolBudgetResetErr              error
@@ -37,10 +38,13 @@ type fakeWorkflowController struct {
 }
 
 func (c *fakeWorkflowController) CompleteWorkflowRun(_ context.Context, req workflowruntime.CompletionRequest) (workflowruntime.CompletionResult, error) {
-	c.completed.Add(1)
 	c.mu.Lock()
 	c.requests = append(c.requests, req)
 	c.mu.Unlock()
+	if c.completeErr != nil {
+		return workflowruntime.CompletionResult{}, c.completeErr
+	}
+	c.completed.Add(1)
 	return workflowruntime.CompletionResult{TransitionID: "transition-applied", State: "applied"}, nil
 }
 
@@ -910,6 +914,39 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 	terminal := eng.WorkflowTerminalState()
 	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceUnstructured || terminal.RunID != "run-1" {
 		t.Fatalf("terminal state = %+v, want unstructured completion", terminal)
+	}
+}
+
+func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTerminalState(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{completeErr: errors.New("workflow completion unavailable")}
+	client := &fakeClient{responses: []llm.Response{
+		structuredFinalResponse(`{"commentary":"first","summary":"done"}`),
+		structuredFinalResponse(`{"commentary":"retry","summary":"done"}`),
+	}}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	assertModelCallCount(t, client, 2)
+	if got := len(controller.completionRequests()); got != 2 {
+		t.Fatalf("completion attempts = %d, want 2", got)
+	}
+	if got := controller.completed.Load(); got != 0 {
+		t.Fatalf("successful completions = %d, want 0", got)
+	}
+	if got := controller.violations.Load(); got != 2 {
+		t.Fatalf("completion violations = %d, want 2", got)
+	}
+	if got := controller.maxHits.Load(); got != 1 {
+		t.Fatalf("invalid completion cap hits = %d, want 1", got)
+	}
+	if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+		t.Fatal("controller failure did not append workflow continuation feedback")
+	}
+	if terminal := eng.WorkflowTerminalState(); terminal.Completed {
+		t.Fatalf("terminal state = %+v, want incomplete after controller failures", terminal)
 	}
 }
 

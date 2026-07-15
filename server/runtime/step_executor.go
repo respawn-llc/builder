@@ -623,26 +623,24 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
 		return false, false, nil
 	}
-	outcome, err := s.workflowCompletionAdapter().Evaluate(ctx, content)
-	if err != nil {
-		return false, false, err
-	}
-	if outcome.Applicable {
-		if !outcome.Done {
-			terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, outcome.Continue)
-			return true, terminal, nudgeErr
-		}
-		if completeErr := outcome.Complete(ctx); completeErr != nil {
-			terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
-			return true, terminal, nudgeErr
-		}
-		return true, true, nil
-	}
 	mode, err := e.workflowCompletionMode(ctx)
 	if err != nil {
 		return false, false, err
 	}
 	content = strings.TrimSpace(content)
+	completion, applicable := evaluateWorkflowOutputCompletion(mode, e.cfg.WorkflowRun.Contract, content)
+	if applicable {
+		if completion.Invalid != nil {
+			terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completion.Invalid)
+			return true, terminal, nudgeErr
+		}
+		if completeErr := s.completeWorkflowRunFromParsed(ctx, completion.Parsed); completeErr != nil {
+			terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
+			return true, terminal, nudgeErr
+		}
+		e.setWorkflowTerminalState(completion.Source)
+		return true, true, nil
+	}
 	if mode == workflowruntime.CompletionModeShellCommand {
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, errors.New("normal final answers do not complete shell-command workflow nodes"))
 		return true, terminal, nudgeErr
