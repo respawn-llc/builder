@@ -26,8 +26,8 @@ func TestPlannerCreateNewIntentCreatesWithAndWithoutValidatedParent(t *testing.T
 		if plan.Store.Meta().Category == nil || *plan.Store.Meta().Category != sessioncontract.SessionCategoryMain {
 			t.Fatalf("created category = %v, want main", plan.Store.Meta().Category)
 		}
-		if plan.Store.Meta().ParentSessionID != "" {
-			t.Fatalf("parent session ID = %q, want absent", plan.Store.Meta().ParentSessionID)
+		if plan.Store.Meta().ParentSessionID != nil {
+			t.Fatalf("parent session ID = %v, want absent", plan.Store.Meta().ParentSessionID)
 		}
 		if plan.Store.Dir() == containerDir {
 			t.Fatal("expected a session directory below the container")
@@ -46,8 +46,8 @@ func TestPlannerCreateNewIntentCreatesWithAndWithoutValidatedParent(t *testing.T
 		if err != nil {
 			t.Fatalf("plan child session: %v", err)
 		}
-		if plan.Store.Meta().ParentSessionID != parent.Meta().SessionID {
-			t.Fatalf("parent session ID = %q, want %q", plan.Store.Meta().ParentSessionID, parent.Meta().SessionID)
+		if plan.Store.Meta().ParentSessionID == nil || *plan.Store.Meta().ParentSessionID != parent.Meta().SessionID {
+			t.Fatalf("parent session ID = %v, want %q", plan.Store.Meta().ParentSessionID, parent.Meta().SessionID)
 		}
 	})
 }

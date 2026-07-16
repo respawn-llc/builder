@@ -723,8 +723,19 @@ func (e *Engine) conversationPromptCacheKey(sessionID string) string {
 	return conversationPromptCacheKeyForLineage(sessionID, meta.PromptCacheLineageGeneration, e.compactionRuntimeState().Count())
 }
 
-func (e *Engine) ParentSessionID() string {
-	return strings.TrimSpace(e.store.Meta().ParentSessionID)
+func (e *Engine) ParentSessionID() *string {
+	if e == nil || e.store == nil {
+		return nil
+	}
+	parentSessionID := e.store.Meta().ParentSessionID
+	if parentSessionID == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*parentSessionID)
+	if value == "" {
+		panic("runtime engine received an empty parent session id")
+	}
+	return &value
 }
 
 func (e *Engine) SetTranscriptWorkingDir(workdir string) {

@@ -1,6 +1,7 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -14,11 +15,104 @@ import (
 )
 
 type RunPromptRequest struct {
-	ClientRequestID string
-	Intent          SessionLaunchIntent
-	Prompt          string
-	Timeout         time.Duration
-	Overrides       RunPromptOverrides
+	ClientRequestID   string `json:"client_request_id"`
+	Intent            SessionLaunchIntent
+	SelectedSessionID string             `json:"selected_session_id,omitempty"`
+	CallerSessionID   *string            `json:"caller_session_id,omitempty"`
+	ParentSessionID   *string            `json:"parent_session_id,omitempty"`
+	Prompt            string             `json:"prompt"`
+	Timeout           time.Duration      `json:"timeout"`
+	Overrides         RunPromptOverrides `json:"overrides,omitempty"`
+}
+
+func (r RunPromptRequest) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		ClientRequestID   string               `json:"client_request_id"`
+		Intent            *SessionLaunchIntent `json:"intent,omitempty"`
+		SelectedSessionID string               `json:"selected_session_id,omitempty"`
+		CallerSessionID   *string              `json:"caller_session_id,omitempty"`
+		ParentSessionID   *string              `json:"parent_session_id,omitempty"`
+		Prompt            string               `json:"prompt"`
+		Timeout           time.Duration        `json:"timeout"`
+		Overrides         RunPromptOverrides   `json:"overrides,omitempty"`
+	}
+	intent := r.Intent
+	var intentJSON *SessionLaunchIntent
+	if err := intent.Validate(); err != nil {
+		if strings.TrimSpace(r.SelectedSessionID) == "" && r.CallerSessionID == nil && r.ParentSessionID == nil {
+			intent = CreateNewSessionLaunchIntent(nil)
+			intentJSON = &intent
+		}
+	} else {
+		intentJSON = &intent
+	}
+	return json.Marshal(wire{
+		ClientRequestID:   r.ClientRequestID,
+		Intent:            intentJSON,
+		SelectedSessionID: r.SelectedSessionID,
+		CallerSessionID:   r.CallerSessionID,
+		ParentSessionID:   r.ParentSessionID,
+		Prompt:            r.Prompt,
+		Timeout:           r.Timeout,
+		Overrides:         r.Overrides,
+	})
+}
+
+type OptionalStringKey struct {
+	Present bool
+	Value   string
+}
+
+type RunPromptOverridesKey struct {
+	AgentRole           OptionalStringKey
+	Model               string
+	ProviderOverride    string
+	ThinkingLevel       string
+	Theme               string
+	ModelTimeoutSeconds int
+	Tools               string
+	OpenAIBaseURL       string
+}
+
+func (o RunPromptOverrides) CanonicalKey() (RunPromptOverridesKey, error) {
+	role, err := o.AgentRoleOverride()
+	if err != nil {
+		return RunPromptOverridesKey{}, err
+	}
+	key := RunPromptOverridesKey{
+		Model:               strings.TrimSpace(o.Model),
+		ProviderOverride:    strings.TrimSpace(o.ProviderOverride),
+		ThinkingLevel:       strings.TrimSpace(o.ThinkingLevel),
+		Theme:               strings.TrimSpace(o.Theme),
+		ModelTimeoutSeconds: o.ModelTimeoutSeconds,
+		Tools:               strings.TrimSpace(o.Tools),
+		OpenAIBaseURL:       strings.TrimSpace(o.OpenAIBaseURL),
+	}
+	if role.Present {
+		value := role.Role
+		if role.Default {
+			value = config.DefaultSubagentRole
+		}
+		key.AgentRole = OptionalStringKey{Present: true, Value: value}
+	}
+	return key, nil
+}
+
+func CanonicalOptionalString(value *string) OptionalStringKey {
+	if value == nil {
+		return OptionalStringKey{}
+	}
+	return OptionalStringKey{Present: true, Value: strings.TrimSpace(*value)}
+}
+
+func ValidateOptionalIdentifier(field string, value *string) error {
+	if value == nil {
+		return nil
+	}
+	if strings.TrimSpace(*value) == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	return nil
 }
 
 func (r RunPromptRequest) Validate() error {
@@ -28,21 +122,27 @@ func (r RunPromptRequest) Validate() error {
 	if strings.TrimSpace(r.Prompt) == "" {
 		return errors.New("prompt is required")
 	}
-	if err := r.Intent.Validate(); err != nil {
+	if err := r.Intent.Validate(); err != nil && strings.TrimSpace(r.SelectedSessionID) == "" && r.CallerSessionID == nil && r.ParentSessionID == nil {
 		return fmt.Errorf("intent: %w", err)
+	}
+	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
+		return err
+	}
+	if err := ValidateOptionalIdentifier("parent_session_id", r.ParentSessionID); err != nil {
+		return err
 	}
 	return r.Overrides.ValidateAgentRoleOverride()
 }
 
 type RunPromptOverrides struct {
-	AgentRole           string
-	Model               string
-	ProviderOverride    string
-	ThinkingLevel       string
-	Theme               string
-	ModelTimeoutSeconds int
-	Tools               string
-	OpenAIBaseURL       string
+	AgentRole           *string `json:"agent_role,omitempty"`
+	Model               string  `json:"model"`
+	ProviderOverride    string  `json:"provider_override"`
+	ThinkingLevel       string  `json:"thinking_level"`
+	Theme               string  `json:"theme"`
+	ModelTimeoutSeconds int     `json:"model_timeout_seconds"`
+	Tools               string  `json:"tools"`
+	OpenAIBaseURL       string  `json:"openai_base_url"`
 }
 
 var ErrInvalidRunPromptAgentRole = errors.New("invalid agent role")
@@ -54,9 +154,12 @@ type RunPromptAgentRoleOverride struct {
 }
 
 func (o RunPromptOverrides) AgentRoleOverride() (RunPromptAgentRoleOverride, error) {
-	raw := strings.TrimSpace(o.AgentRole)
-	if raw == "" {
+	if o.AgentRole == nil {
 		return RunPromptAgentRoleOverride{}, nil
+	}
+	raw := strings.TrimSpace(*o.AgentRole)
+	if raw == "" {
+		return RunPromptAgentRoleOverride{}, fmt.Errorf("%w %s", ErrInvalidRunPromptAgentRole, strconv.Quote(*o.AgentRole))
 	}
 	normalized := strings.ToLower(raw)
 	if normalized == config.DefaultSubagentRole {
@@ -78,11 +181,11 @@ func (o RunPromptOverrides) ValidateAgentRoleOverride() error {
 }
 
 func (o RunPromptOverrides) HasAgentRoleOverride() bool {
-	return strings.TrimSpace(o.AgentRole) != ""
+	return o.AgentRole != nil
 }
 
 func (o RunPromptOverrides) HasAny() bool {
-	return strings.TrimSpace(o.AgentRole) != "" ||
+	return o.AgentRole != nil ||
 		strings.TrimSpace(o.Model) != "" ||
 		strings.TrimSpace(o.ProviderOverride) != "" ||
 		strings.TrimSpace(o.ThinkingLevel) != "" ||

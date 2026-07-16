@@ -26,6 +26,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func sessionLifecycleStringPtr(value string) *string { return &value }
+
 func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 	missingWorkspace := filepath.Join(t.TempDir(), "workspace-removed")
 	containerDir := t.TempDir()
@@ -100,7 +102,7 @@ func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
 	createIntent := serverapi.CreateNewSessionLaunchIntent(nil)
 	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{
 		Intent:    &createIntent,
-		Overrides: serverapi.RunPromptOverrides{AgentRole: "worker"},
+		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
 	})
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
@@ -108,8 +110,8 @@ func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
 	if got.Mode != serverapi.SessionLaunchModeInteractive || got.Intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
 		t.Fatalf("launch request = %+v, want forced new interactive session", got)
 	}
-	if got.Overrides.AgentRole != "worker" {
-		t.Fatalf("agent override = %q, want worker", got.Overrides.AgentRole)
+	if got.Overrides.AgentRole == nil || *got.Overrides.AgentRole != "worker" {
+		t.Fatalf("agent override = %v, want worker", got.Overrides.AgentRole)
 	}
 }
 
@@ -168,7 +170,7 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 	openIntent := serverapi.OpenExistingSessionLaunchIntent(sessionID)
 	err = runSessionLifecycleWithOptions(ctx, server, nil, sessionLifecycleOptions{
 		Intent:    &openIntent,
-		Overrides: serverapi.RunPromptOverrides{AgentRole: "worker"},
+		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
 	})
 	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
 		t.Fatalf("runSessionLifecycle error = %v, want locked role change", err)
@@ -884,8 +886,8 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 	if store == nil {
 		t.Fatal("expected planned session store in registry")
 	}
-	if store.Meta().ParentSessionID != "parent-1" {
-		t.Fatalf("expected parent session id preserved across new session transition, got %q", store.Meta().ParentSessionID)
+	if store.Meta().ParentSessionID == nil || *store.Meta().ParentSessionID != "parent-1" {
+		t.Fatalf("expected parent session id preserved across new session transition, got %v", store.Meta().ParentSessionID)
 	}
 	entries := manager.List()
 	if len(entries) != 1 {
@@ -984,8 +986,8 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}
 	child := openAuthoritativeAppSession(t, cfg.PersistenceRoot, plan.SessionID)
 	childMeta := child.Meta()
-	if childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("child parent session id = %q, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
+		t.Fatalf("child parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.Continuation == nil || childMeta.Continuation.OpenAIBaseURL != "http://review-parent.local/v1" {
 		t.Fatalf("child continuation = %+v, want parent continuation", childMeta.Continuation)

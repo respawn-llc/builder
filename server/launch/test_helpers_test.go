@@ -82,6 +82,7 @@ func loadLaunchConfigWithHome(t *testing.T, workspace string, configLines ...str
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, config.ConfigDirName))
 	if len(configLines) > 0 {
 		writeHomeConfig(t, home, strings.Join(configLines, "\n"))
 	}

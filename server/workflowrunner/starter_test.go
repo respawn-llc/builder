@@ -43,6 +43,10 @@ import (
 	"core/shared/toolspec"
 )
 
+func workflowRunnerStringPtr(value string) *string {
+	return &value
+}
+
 const workflowRunnerTestWaitTimeout = 15 * time.Second
 
 func TestWorkflowRuntimeExecCommandUsesRoleShellSettingsWithSharedGlobalManager(t *testing.T) {
@@ -1953,7 +1957,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
-	_, _, err = launch.ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: "coder"}, auth.EmptyState())
+	_, _, err = launch.ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: workflowRunnerStringPtr("coder")}, auth.EmptyState())
 	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
 		t.Fatalf("ApplyRunPromptOverrides error = %v, want locked role change", err)
 	}

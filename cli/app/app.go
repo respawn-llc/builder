@@ -15,7 +15,7 @@ type Options struct {
 	WorkspaceRootExplicit     bool
 	SessionID                 string
 	WorkspaceContextSessionID string
-	AgentRole                 string
+	AgentRole                 *string
 	Model                     string
 	ProviderOverride          string
 	ThinkingLevel             string
@@ -44,7 +44,11 @@ func Run(ctx context.Context, opts Options) error {
 }
 
 func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
-	runClient, closeFn, err := startRunPromptClient(ctx, opts)
+	workspaceConfig, err := resolveRunPromptWorkspaceConfig(opts)
+	if err != nil {
+		return RunPromptResult{}, err
+	}
+	runClient, closeFn, err := startRunPromptClientWithWorkspaceConfig(ctx, workspaceConfig)
 	if err != nil {
 		return RunPromptResult{}, err
 	}
@@ -53,7 +57,7 @@ func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Du
 			_ = closeFn()
 		}
 	}()
-	return runPrompt(ctx, runClient, opts, strings.TrimSpace(opts.SessionID), prompt, timeout, progress)
+	return runPrompt(ctx, runClient, workspaceConfig.Options, workspaceConfig.CallerContext, strings.TrimSpace(opts.SessionID), prompt, timeout, progress)
 }
 
 func runnerRequestFromOptions(opts Options) runner.Request[embeddedattach.StartupOptions] {

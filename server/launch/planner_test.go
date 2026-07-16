@@ -438,7 +438,7 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 		t.Fatalf("base settings url = %q, want base", plan.BaseSettings.OpenAIBaseURL)
 	}
 
-	cleared, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: config.DefaultSubagentRole}, auth.EmptyState())
+	cleared, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.DefaultSubagentRole)}, auth.EmptyState())
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides clear: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 	if err := plan.Store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: "https://worker.example/v1", AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("reset continuation: %v", err)
 	}
-	switched, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: "research"}, auth.EmptyState())
+	switched, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("research")}, auth.EmptyState())
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides switch: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 		BaseSource:          baseSource,
 	}
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if updated.ActiveSettings.ThinkingLevel != "high" {
 		t.Fatalf("thinking level = %q, want new role", updated.ActiveSettings.ThinkingLevel)
 	}
@@ -549,7 +549,7 @@ func TestApplyRunPromptOverridesExplicitDefaultClearsPersistedRole(t *testing.T)
 		BaseSource:          config.SourceReport{Sources: map[string]string{"thinking_level": "file"}},
 	}
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: config.DefaultSubagentRole}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.DefaultSubagentRole)}, auth.EmptyState())
 	if updated.ActiveSettings.ThinkingLevel != "medium" {
 		t.Fatalf("thinking level = %q, want base config", updated.ActiveSettings.ThinkingLevel)
 	}
@@ -613,7 +613,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 		},
 		{
 			name:             "new role starts from base settings",
-			overrides:        serverapi.RunPromptOverrides{AgentRole: "worker"},
+			overrides:        serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")},
 			wantModel:        "gpt-5.4-mini",
 			wantThinking:     "high",
 			wantPatchSetting: true,
@@ -621,7 +621,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 		},
 		{
 			name:             "default clears resumed role",
-			overrides:        serverapi.RunPromptOverrides{AgentRole: config.DefaultSubagentRole},
+			overrides:        serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.DefaultSubagentRole)},
 			wantModel:        "gpt-5.6-sol",
 			wantThinking:     "medium",
 			wantPatchSetting: true,
@@ -729,7 +729,7 @@ func TestApplyRunPromptOverridesRejectsDifferentAgentRoleForLockedSession(t *tes
 				ModelContractLocked: true,
 			}
 
-			_, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: tt.override}, auth.EmptyState())
+			_, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(tt.override)}, auth.EmptyState())
 			if !errors.Is(err, ErrLockedAgentRoleChange) {
 				t.Fatalf("ApplyRunPromptOverrides error = %v, want locked role change", err)
 			}
@@ -763,7 +763,7 @@ func TestApplyRunPromptOverridesAllowsSameAgentRoleForLockedSession(t *testing.T
 		ModelContractLocked: true,
 	}
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if got := updated.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("worker")) {
 		t.Fatalf("continuation = %+v, want worker", got)
 	}
@@ -807,7 +807,7 @@ func TestApplyRunPromptOverridesOptionAllowsAgentRoleChangeForLockedSession(t *t
 		ModelContractLocked: true,
 	}
 
-	updated, _, err := ApplyRunPromptOverridesWithOptions(plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState(), RunPromptOverrideOptions{
+	updated, _, err := ApplyRunPromptOverridesWithOptions(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState(), RunPromptOverrideOptions{
 		AllowLockedAgentRoleChange: true,
 	})
 	if err != nil {
@@ -862,7 +862,7 @@ func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *t
 		ModelContractLocked: true,
 	}
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if updated.ActiveSettings.Model != "locked-model" {
 		t.Fatalf("model = %q, want locked-model", updated.ActiveSettings.Model)
 	}
@@ -951,8 +951,8 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 		t.Fatalf("PlanSession child: %v", err)
 	}
 	childMeta := plan.Store.Meta()
-	if childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("child parent session id = %q, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
+		t.Fatalf("child parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.Locked == nil || childMeta.Locked.Model != "locked-parent-model" {
 		t.Fatalf("child locked contract = %+v, want parent model lock", childMeta.Locked)
@@ -1052,7 +1052,7 @@ func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T)
 		t.Fatalf("PlanSession child: %v", err)
 	}
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: "code_review"}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("code_review")}, auth.EmptyState())
 	if childLocked := updated.Store.Meta().Locked; childLocked != nil {
 		t.Fatalf("child lock = %+v, want headless child to use its own role contract", childLocked)
 	}
@@ -1106,8 +1106,8 @@ func TestPlannerNewChildSessionFallsBackWhenParentExecutionTargetIsNotMetadataBa
 		t.Fatalf("PlanSession child: %v", err)
 	}
 	childMeta := plan.Store.Meta()
-	if childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("parent session id = %q, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
+		t.Fatalf("parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.WorktreeReminder == nil ||
 		childMeta.WorktreeReminder.Branch == nil ||
@@ -1145,8 +1145,8 @@ func TestPlannerNewChildSessionIgnoresParentOutsideActiveContainer(t *testing.T)
 		t.Fatalf("PlanSession child: %v", err)
 	}
 	childMeta := plan.Store.Meta()
-	if childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("parent session id = %q, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
+		t.Fatalf("parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.WorkspaceRoot != "/tmp/workspace-a" || childMeta.WorkspaceContainer != "sessions" {
 		t.Fatalf("child workspace context = root %q container %q, want active project session root", childMeta.WorkspaceRoot, childMeta.WorkspaceContainer)
@@ -1336,6 +1336,38 @@ func TestApplyRunPromptOverridesOverridesHeadlessSettingsWithoutMutatingBasePlan
 	}
 }
 
+func TestApplyPreparedRunPromptOverridesWithoutRolePreservesConfiguredModelAndContinuation(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	overrides := serverapi.RunPromptOverrides{
+		Model:         "gpt-5-mini",
+		OpenAIBaseURL: "http://override.local/v1",
+	}
+
+	prepared, err := PrepareRunPromptOverrides(loaded, overrides, auth.EmptyState())
+	if err != nil {
+		t.Fatalf("PrepareRunPromptOverrides: %v", err)
+	}
+	prepared.BaseTarget = nil
+	updated, _, err := ApplyPreparedRunPromptOverrides(plan, overrides, prepared)
+	if err != nil {
+		t.Fatalf("ApplyPreparedRunPromptOverrides: %v", err)
+	}
+	if updated.ActiveSettings.Model != "gpt-5-mini" {
+		t.Fatalf("model = %q, want gpt-5-mini", updated.ActiveSettings.Model)
+	}
+	if updated.ConfiguredModelName != "gpt-5-mini" {
+		t.Fatalf("configured model = %q, want gpt-5-mini", updated.ConfiguredModelName)
+	}
+	if updated.ActiveSettings.OpenAIBaseURL != "http://override.local/v1" {
+		t.Fatalf("openai base url = %q, want override url", updated.ActiveSettings.OpenAIBaseURL)
+	}
+	if got := updated.Store.Meta().Continuation; got == nil || got.OpenAIBaseURL != "http://override.local/v1" {
+		t.Fatalf("continuation = %+v, want override url", got)
+	}
+}
+
 func TestSubagentRoleMetadataSurvivesCloneAndSourceReport(t *testing.T) {
 	settings := config.Settings{
 		Subagents: map[string]config.SubagentRole{
@@ -1364,7 +1396,7 @@ func TestSubagentRoleMetadataSurvivesCloneAndSourceReport(t *testing.T) {
 		t.Fatalf("metadata did not survive clone: %+v", cloned.Subagents["worker"])
 	}
 
-	report := sourceReportWithSubagentRoleSources(config.SourceReport{Sources: map[string]string{"model": "file"}}, settings, "worker", true)
+	report := sourceReportWithSubagentRoleSources(config.SourceReport{Sources: map[string]string{"model": "file"}}, settings.Subagents["worker"], true)
 	if report.Sources["model"] != "subagent" {
 		t.Fatalf("source report model source = %q, want subagent", report.Sources["model"])
 	}
@@ -1456,7 +1488,7 @@ func TestApplyRunPromptOverridesRejectsInvalidAgentRole(t *testing.T) {
 	for _, role := range []string{"fast!", "none", "self"} {
 		t.Run(role, func(t *testing.T) {
 			plan := newSettingsPlan(t, workspace, config.Settings{Model: "gpt-5.4"})
-			_, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: role}, auth.EmptyState())
+			_, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(role)}, auth.EmptyState())
 			if err == nil {
 				t.Fatal("expected invalid agent role to fail")
 			}
@@ -1464,6 +1496,19 @@ func TestApplyRunPromptOverridesRejectsInvalidAgentRole(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestApplyPreparedRunPromptOverridesDefaultWithoutBaseTargetReturnsError(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	role := config.DefaultSubagentRole
+	_, _, err := ApplyPreparedRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: &role}, PreparedRunPromptOverrides{
+		AgentRole: serverapi.RunPromptAgentRoleOverride{Present: true, Default: true},
+	})
+	if err == nil {
+		t.Fatal("ApplyPreparedRunPromptOverrides succeeded without a prepared base target")
 	}
 }
 
@@ -1523,7 +1568,7 @@ func TestApplyRunPromptOverridesFastRoleWarnsWhenHeuristicDoesNothing(t *testing
 	)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
-	updated, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: config.BuiltInSubagentRoleFast}, auth.EmptyState())
+	updated, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.BuiltInSubagentRoleFast)}, auth.EmptyState())
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides: %v", err)
 	}
@@ -1570,7 +1615,7 @@ func TestApplyRunPromptOverridesFastRoleAppliesBuiltInHeuristics(t *testing.T) {
 	loaded := loadLaunchConfig(t, workspace)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: config.BuiltInSubagentRoleFast}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.BuiltInSubagentRoleFast)}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
 	if updated.ActiveSettings.Model != "gpt-5.6-terra" {
 		t.Fatalf("model = %q, want gpt-5.6-terra", updated.ActiveSettings.Model)
 	}
@@ -1616,7 +1661,7 @@ func TestApplyRunPromptOverridesLockedDefaultModelTreatsSessionModelAsExplicitFo
 		ModelContractLocked: true,
 	}
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if updated.ActiveSettings.Model != "locked-session-model" {
 		t.Fatalf("model = %q, want locked-session-model", updated.ActiveSettings.Model)
 	}
@@ -1643,7 +1688,7 @@ func TestApplyRunPromptOverridesFastRoleWarnsWhenExplicitRoleMatchesBase(t *test
 	)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
-	updated, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: config.BuiltInSubagentRoleFast}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
+	updated, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.BuiltInSubagentRoleFast)}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides: %v", err)
 	}
@@ -1666,7 +1711,7 @@ func TestApplyRunPromptOverridesSubagentProviderOverrideCanInheritBaseModel(t *t
 	)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if updated.ActiveSettings.Model != "my-team-alias" {
 		t.Fatalf("model = %q, want my-team-alias", updated.ActiveSettings.Model)
 	}
@@ -1691,7 +1736,7 @@ func TestApplyRunPromptOverridesSubagentReviewerSystemPromptFile(t *testing.T) {
 	)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if want := filepath.Join(home, config.ConfigDirName, "worker-reviewer.md"); updated.ActiveSettings.Reviewer.SystemPromptFile != want {
 		t.Fatalf("reviewer system prompt file = %q, want %q", updated.ActiveSettings.Reviewer.SystemPromptFile, want)
 	}
@@ -1710,7 +1755,7 @@ func TestApplyRunPromptOverridesRoleModelOverrideRecomputesContextBudget(t *test
 	)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: config.BuiltInSubagentRoleFast}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.BuiltInSubagentRoleFast)}, auth.EmptyState())
 	if updated.ActiveSettings.Model != "gpt-5.3-codex-spark" {
 		t.Fatalf("model = %q, want gpt-5.3-codex-spark", updated.ActiveSettings.Model)
 	}
@@ -1738,7 +1783,7 @@ func TestApplyRunPromptOverridesModelOverrideCanRepairRoleDerivedBudget(t *testi
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{
-		AgentRole: "worker",
+		AgentRole: launchTestStringPtr("worker"),
 		Model:     "gpt-5.3-codex",
 	}, auth.EmptyState())
 	if updated.ActiveSettings.Model != "gpt-5.3-codex" {
@@ -1766,7 +1811,7 @@ func TestApplyRunPromptOverridesRoleModelOverrideKeepsExplicitContextWindow(t *t
 	)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: config.BuiltInSubagentRoleFast}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.BuiltInSubagentRoleFast)}, auth.EmptyState())
 	if updated.ActiveSettings.ModelContextWindow != 100_000 {
 		t.Fatalf("context window = %d, want 100000", updated.ActiveSettings.ModelContextWindow)
 	}
@@ -1787,7 +1832,7 @@ func TestApplyRunPromptOverridesFastRoleUsesCLIProviderOverrideForHeuristic(t *t
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{
-		AgentRole:        config.BuiltInSubagentRoleFast,
+		AgentRole:        launchTestStringPtr(config.BuiltInSubagentRoleFast),
 		ProviderOverride: "openai",
 		OpenAIBaseURL:    "https://api.openai.com/v1",
 	}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
@@ -1796,6 +1841,30 @@ func TestApplyRunPromptOverridesFastRoleUsesCLIProviderOverrideForHeuristic(t *t
 	}
 	if !updated.ActiveSettings.PriorityRequestMode {
 		t.Fatal("expected priority request mode enabled")
+	}
+}
+
+func TestPrepareRunPromptOverridesLockedSessionFastRoleUsesLockedModelForProviderHeuristic(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace,
+		"model = \"claude-opus-4-6\"",
+	)
+	locked := &session.LockedContract{Model: "gpt-5.6-sol"}
+
+	prepared, err := PrepareRunPromptOverridesForLockedSession(loaded, serverapi.RunPromptOverrides{
+		AgentRole: launchTestStringPtr(config.BuiltInSubagentRoleFast),
+	}, auth.EmptyState(), locked)
+	if err != nil {
+		t.Fatalf("PrepareRunPromptOverridesForLockedSession: %v", err)
+	}
+	if prepared.NamedTarget == nil {
+		t.Fatal("expected named fast target")
+	}
+	if prepared.NamedTarget.Settings.Model != locked.Model {
+		t.Fatalf("model = %q, want locked model %q", prepared.NamedTarget.Settings.Model, locked.Model)
+	}
+	if !prepared.NamedTarget.Settings.PriorityRequestMode {
+		t.Fatal("expected fast heuristic priority mode")
 	}
 }
 
@@ -2034,7 +2103,7 @@ func TestApplyRunPromptOverridesFailedConfigOverrideDoesNotPersistContinuation(t
 	}
 
 	_, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{
-		AgentRole: "worker",
+		AgentRole: launchTestStringPtr("worker"),
 		Tools:     "not-a-tool",
 	}, auth.EmptyState())
 	if err == nil {
@@ -2061,7 +2130,7 @@ func TestApplyRunPromptOverridesRoleOnlyOverridePersistsContinuation(t *testing.
 		t.Fatalf("seed continuation: %v", err)
 	}
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
+	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if updated.ActiveSettings.OpenAIBaseURL != "https://worker.example/v1" {
 		t.Fatalf("openai base url = %q, want worker override", updated.ActiveSettings.OpenAIBaseURL)
 	}
@@ -2077,7 +2146,7 @@ func TestApplyRunPromptOverridesCLIModelOverrideRecomputesBudgetAfterFastRole(t 
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{
-		AgentRole: config.BuiltInSubagentRoleFast,
+		AgentRole: launchTestStringPtr(config.BuiltInSubagentRoleFast),
 		Model:     "gpt-5.3-codex-spark",
 	}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
 	if updated.ActiveSettings.Model != "gpt-5.3-codex-spark" {
@@ -2152,5 +2221,96 @@ func TestPlannerRecoversDeletedManagedWorktreePersistently(t *testing.T) {
 	reopened, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent})
 	if err != nil || reopened.Recovery != nil {
 		t.Fatalf("reopen recovery=%+v err=%v", reopened.Recovery, err)
+	}
+}
+
+func TestPlannerRecoversDeletedManagedWorktreeWhenSelectedSessionFieldIsUsed(t *testing.T) {
+	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{
+		Mode:              ModeInteractive,
+		SelectedSessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	target, err := metadataStore.ResolveSessionExecutionTarget(context.Background(), store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if plan.Recovery == nil || plan.Recovery.Kind != serverapi.SessionPlanRecoveryKindDeletedManagedWorktree {
+		t.Fatalf("recovery = %+v, want deleted managed worktree", plan.Recovery)
+	}
+	if target.Worktree != nil || target.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("recovered target = %+v, want workspace %q without worktree", target, binding.WorkspaceID)
+	}
+}
+
+func TestPlannerRecoversMissingWorkspaceWithoutWorktreeTarget(t *testing.T) {
+	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
+	ctx := context.Background()
+	availableRoot := t.TempDir()
+	candidateBinding, err := metadataStore.AttachWorkspaceToProject(ctx, binding.ProjectID, availableRoot)
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
+		SessionID:  store.Meta().SessionID,
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		CwdRelpath: "pkg",
+	}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
+	}
+	if err := os.Remove(planner.Config.WorkspaceRoot); err != nil {
+		t.Fatalf("remove missing workspace root: %v", err)
+	}
+	planner.RetargetWorkspace = func(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
+			SessionID:  store.Meta().SessionID,
+			Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: candidateBinding.WorkspaceID},
+			CwdRelpath: ".",
+		}); err != nil {
+			return serverapi.SessionRetargetWorkspaceResponse{}, err
+		}
+		return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{
+			ProjectID:     candidateBinding.ProjectID,
+			WorkspaceID:   candidateBinding.WorkspaceID,
+			CanonicalRoot: candidateBinding.CanonicalRoot,
+		}}, nil
+	}
+
+	plan, err := planner.PlanSession(ctx, SessionRequest{
+		Mode:              ModeInteractive,
+		SelectedSessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if plan.Recovery == nil {
+		t.Fatal("recovery = nil, want missing workspace recovery")
+	}
+	if plan.WorkspaceRoot != candidateBinding.CanonicalRoot {
+		t.Fatalf("workspace root = %q, want %q", plan.WorkspaceRoot, candidateBinding.CanonicalRoot)
+	}
+	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.WorkspaceID != candidateBinding.WorkspaceID || target.Worktree != nil || target.EffectiveWorkdir != candidateBinding.CanonicalRoot {
+		t.Fatalf("recovered target = %+v, want candidate workspace without worktree", target)
+	}
+}
+
+func TestPlannerManagedWorktreeRecoveryRestoresReminderWhenRetargetFails(t *testing.T) {
+	planner, _, store, _ := missingWorktreeLaunchFixture(t)
+	planner.RetargetWorkspace = func(context.Context, serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
+		return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("retarget failed")
+	}
+	intent := serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))
+
+	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent}); err == nil {
+		t.Fatal("PlanSession succeeded after retarget failure")
+	}
+	if store.Meta().WorktreeReminder == nil {
+		t.Fatal("worktree reminder was not restored after retarget failure")
 	}
 }

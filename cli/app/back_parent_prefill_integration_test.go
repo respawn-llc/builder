@@ -102,7 +102,8 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 		t.Run(tt.name, func(t *testing.T) {
 			parent := createAttachedAuthoritativeAppSession(t, server.Config().PersistenceRoot, server.ProjectID(), server.Config().WorkspaceRoot)
 			child := createAttachedAuthoritativeAppSession(t, server.Config().PersistenceRoot, server.ProjectID(), server.Config().WorkspaceRoot)
-			if err := child.SetParentSessionID(parent.Meta().SessionID); err != nil {
+			parentSessionID := parent.Meta().SessionID
+			if err := child.SetParentSessionID(&parentSessionID); err != nil {
 				t.Fatalf("link child to parent: %v", err)
 			}
 			if _, _, err := child.AppendEvent("child-step", "message", llm.Message{
@@ -212,8 +213,8 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			if !originReleased {
 				t.Fatal("child runtime was not released before parent launch")
 			}
-			parentSessionID := requireSessionOpenDestination(t, handoff)
-			if parentSessionID != parent.Meta().SessionID {
+			resolvedParentSessionID := requireSessionOpenDestination(t, handoff)
+			if resolvedParentSessionID != parent.Meta().SessionID {
 				t.Fatalf("resolved handoff = %+v, want parent", handoff)
 			}
 

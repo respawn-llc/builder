@@ -17,7 +17,7 @@ type Request[SO any] struct {
 	WorkspaceRootExplicit     bool
 	SessionID                 string
 	WorkspaceContextSessionID string
-	AgentRole                 string
+	AgentRole                 *string
 	Model                     string
 	ProviderOverride          string
 	ThinkingLevel             string

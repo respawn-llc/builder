@@ -141,24 +141,46 @@ func (i *SessionLaunchIntent) UnmarshalJSON(data []byte) error {
 }
 
 type SessionPlanRequest struct {
-	ClientRequestID string              `json:"client_request_id"`
-	Mode            SessionLaunchMode   `json:"mode"`
-	Intent          SessionLaunchIntent `json:"intent"`
-	Overrides       RunPromptOverrides  `json:"overrides,omitempty"`
+	ClientRequestID   string              `json:"client_request_id"`
+	Mode              SessionLaunchMode   `json:"mode"`
+	Intent            SessionLaunchIntent `json:"intent"`
+	SelectedSessionID string              `json:"selected_session_id,omitempty"`
+	ForceNewSession   bool                `json:"force_new_session,omitempty"`
+	CallerSessionID   *string             `json:"caller_session_id,omitempty"`
+	ParentSessionID   *string             `json:"parent_session_id,omitempty"`
+	Overrides         RunPromptOverrides  `json:"overrides,omitempty"`
 }
 
 func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 	type wire struct {
-		ClientRequestID string              `json:"client_request_id"`
-		Mode            SessionLaunchMode   `json:"mode"`
-		Intent          SessionLaunchIntent `json:"intent"`
-		Overrides       RunPromptOverrides  `json:"overrides"`
+		ClientRequestID   string              `json:"client_request_id"`
+		Mode              SessionLaunchMode   `json:"mode"`
+		Intent            SessionLaunchIntent `json:"intent"`
+		SelectedSessionID string              `json:"selected_session_id"`
+		ForceNewSession   bool                `json:"force_new_session"`
+		CallerSessionID   *string             `json:"caller_session_id"`
+		ParentSessionID   *string             `json:"parent_session_id"`
+		Overrides         RunPromptOverrides  `json:"overrides"`
 	}
 	var decoded wire
 	if err := decodeStrictJSON(data, &decoded); err != nil {
 		return err
 	}
-	request := SessionPlanRequest(decoded)
+	request := SessionPlanRequest{
+		ClientRequestID:   decoded.ClientRequestID,
+		Mode:              decoded.Mode,
+		Intent:            decoded.Intent,
+		SelectedSessionID: decoded.SelectedSessionID,
+		ForceNewSession:   decoded.ForceNewSession,
+		CallerSessionID:   decoded.CallerSessionID,
+		ParentSessionID:   decoded.ParentSessionID,
+		Overrides:         decoded.Overrides,
+	}
+	if err := request.Intent.Validate(); err != nil ||
+		strings.TrimSpace(request.SelectedSessionID) != "" ||
+		request.ForceNewSession {
+		return errors.New("legacy session launch fields are not accepted; use intent")
+	}
 	if err := request.Validate(); err != nil {
 		return err
 	}
@@ -204,8 +226,15 @@ func (r SessionPlanRequest) Validate() error {
 	if mode != string(SessionLaunchModeInteractive) && mode != string(SessionLaunchModeHeadless) {
 		return errors.New("mode must be interactive or headless")
 	}
-	if err := r.Intent.Validate(); err != nil {
-		return fmt.Errorf("intent: %w", err)
+	intentErr := r.Intent.Validate()
+	if intentErr != nil && strings.TrimSpace(r.SelectedSessionID) == "" && !r.ForceNewSession && r.CallerSessionID == nil && r.ParentSessionID == nil {
+		return fmt.Errorf("intent: %w", intentErr)
+	}
+	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
+		return err
+	}
+	if err := ValidateOptionalIdentifier("parent_session_id", r.ParentSessionID); err != nil {
+		return err
 	}
 	return r.Overrides.ValidateAgentRoleOverride()
 }

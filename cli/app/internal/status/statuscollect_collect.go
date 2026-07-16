@@ -74,7 +74,9 @@ func (c Collector) CollectBase(req Request) Snapshot {
 		if contextInfo.AvailableTokens < 0 {
 			contextInfo.AvailableTokens = 0
 		}
-		parentSessionID = strings.TrimSpace(status.ParentSessionID)
+		if status.ParentSessionID != nil {
+			parentSessionID = strings.TrimSpace(*status.ParentSessionID)
+		}
 		compactionCount = status.CompactionCount
 	}
 	return Snapshot{

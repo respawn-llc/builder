@@ -402,7 +402,13 @@ func (m *defaultMessageLifecycle) HasPendingUserInjections() bool {
 
 func newActiveMetaContextBuilder(meta session.Meta, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
 	roots := activeMetaContextRootsForMeta(meta)
-	return newMetaContextBuilder(roots.discoveryRoot, model, thinkingLevel, skillPolicy, now).withEnvironmentCWD(roots.environmentCWD).withGlobalConfigDir(globalConfigDir)
+	builder := newMetaContextBuilder(roots.discoveryRoot, model, thinkingLevel, skillPolicy, now).
+		withEnvironmentCWD(roots.environmentCWD).
+		withGlobalConfigDir(globalConfigDir)
+	if meta.Continuation != nil {
+		builder = builder.withSubagentCallerRole(meta.Continuation.AgentRole)
+	}
+	return builder
 }
 
 type activeMetaContextRoots struct {

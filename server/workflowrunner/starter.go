@@ -850,10 +850,14 @@ func toolIDEnabled(enabled []toolspec.ID, want toolspec.ID) bool {
 }
 
 func workflowRunPromptOverrides(role string) serverapi.RunPromptOverrides {
-	if workflow.IsDefaultAgentRole(role) {
-		return serverapi.RunPromptOverrides{AgentRole: workflow.DefaultAgentRole}
+	normalized := strings.TrimSpace(role)
+	if normalized == "" {
+		return serverapi.RunPromptOverrides{}
 	}
-	return serverapi.RunPromptOverrides{AgentRole: role}
+	if workflow.IsDefaultAgentRole(normalized) {
+		normalized = workflow.DefaultAgentRole
+	}
+	return serverapi.RunPromptOverrides{AgentRole: &normalized}
 }
 
 // cloneSourceSessionForFanout creates an isolated full clone of the source

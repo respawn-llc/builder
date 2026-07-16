@@ -285,10 +285,8 @@ func runSubcommand(args []string) int {
 		return 2
 	}
 	workspaceContextSessionID := ""
-	if sessionID == "" {
-		if envSessionID, ok := sessionenv.LookupSessionID(os.LookupEnv); ok {
-			workspaceContextSessionID = envSessionID
-		}
+	if envSessionID, ok := sessionenv.LookupSessionID(os.LookupEnv); ok {
+		workspaceContextSessionID = envSessionID
 	}
 	outputMode, err := parseRunOutputMode(*outputModeRaw)
 	if err != nil {
@@ -795,6 +793,28 @@ func parseRunProgressMode(raw string) (runProgressMode, error) {
 }
 
 func runErrorMessage(err error) string {
+	var denied *serverapi.SubagentLaunchDeniedError
+	if errors.As(err, &denied) {
+		target := ""
+		if denied.Target != nil {
+			target = strings.TrimSpace(*denied.Target)
+		}
+		switch denied.Kind {
+		case serverapi.SubagentLaunchDenialTargetMissing:
+			if len(denied.AvailableRoles) > 0 {
+				return fmt.Sprintf("subagent role %q is unavailable; available roles: %s", target, strings.Join(denied.AvailableRoles, ", "))
+			}
+			return fmt.Sprintf("subagent role %q is unavailable", target)
+		case serverapi.SubagentLaunchDenialNotCallable:
+			return "the requested subagent launch is not allowed for this Kent session"
+		case serverapi.SubagentLaunchDenialCallerMissing:
+			return "the caller session no longer exists"
+		case serverapi.SubagentLaunchDenialParentMissing:
+			return "the parent session no longer exists"
+		default:
+			return "the subagent launch request is invalid"
+		}
+	}
 	if message := llmerrors.UserFacingError(err); message != "" {
 		return message
 	}
@@ -810,6 +830,10 @@ func runErrorCode(err error) string {
 	}
 	if errors.Is(err, context.Canceled) {
 		return "interrupted"
+	}
+	var denied *serverapi.SubagentLaunchDeniedError
+	if errors.As(err, &denied) {
+		return "subagent_denied"
 	}
 	return "runtime"
 }
@@ -864,25 +888,28 @@ func emitWarnings(w io.Writer, warnings []string) {
 	_, _ = fmt.Fprintln(w)
 }
 
-func effectiveRunAgentRole(raw string, fast bool) (string, error) {
+func effectiveRunAgentRole(raw string, fast bool) (*string, error) {
 	trimmed := strings.TrimSpace(raw)
-	normalized := ""
+	var normalized *string
 	if trimmed != "" {
 		lower := strings.ToLower(trimmed)
+		value := ""
 		if lower == config.DefaultSubagentRole {
-			normalized = config.DefaultSubagentRole
+			value = config.DefaultSubagentRole
 		} else {
-			normalized = config.NormalizeSubagentSelector(trimmed)
-			if normalized == "" {
-				return "", fmt.Errorf("invalid --agent value %q", raw)
+			value = config.NormalizeSubagentSelector(trimmed)
+			if value == "" {
+				return nil, fmt.Errorf("invalid --agent value %q", raw)
 			}
 		}
+		normalized = &value
 	}
 	if fast {
-		if normalized != "" && normalized != config.BuiltInSubagentRoleFast {
-			return "", fmt.Errorf("--fast conflicts with --agent %q", raw)
+		if normalized != nil && *normalized != config.BuiltInSubagentRoleFast {
+			return nil, fmt.Errorf("--fast conflicts with --agent %q", raw)
 		}
-		return config.BuiltInSubagentRoleFast, nil
+		value := config.BuiltInSubagentRoleFast
+		return &value, nil
 	}
 	return normalized, nil
 }

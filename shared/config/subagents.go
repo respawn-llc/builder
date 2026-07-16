@@ -91,29 +91,6 @@ const (
 	SubagentInvocationContextWorkflow SubagentInvocationContext = "workflow"
 )
 
-// SubagentRoleCallableInContext applies the model-originated subagent policy.
-// It intentionally does not decide whether a role exists for workflow nodes;
-// use LookupSubagentRole for identity resolution.
-func SubagentRoleCallableInContext(settings Settings, rawSelector string, context SubagentInvocationContext) bool {
-	switch context {
-	case SubagentInvocationContextOrdinary, SubagentInvocationContextWorkflow:
-	default:
-		panic("unknown subagent invocation context: " + string(context))
-	}
-
-	lookup := LookupSubagentRole(settings, rawSelector)
-	if lookup.Status != SubagentRoleLookupPresent {
-		return false
-	}
-	if !SubagentRoleCallable(lookup.Role) {
-		return false
-	}
-	if context == SubagentInvocationContextOrdinary || *lookup.NormalizedSelector == BuiltInSubagentRoleFast {
-		return true
-	}
-	return settings.Workflow.Subagents && SubagentRoleWorkflowCallable(lookup.Role)
-}
-
 type SubagentRoleLookupStatus string
 
 const (
@@ -179,15 +156,11 @@ func subagentRoleLookupSelector(selector string) *string {
 // optionally filter non-callable roles. Use LookupSubagentRole for existence.
 func AvailableSubagentRoleNames(settings Settings, agentCallableOnly bool) []string {
 	return availableSubagentRoleNames(settings, func(name string, _ SubagentRole) bool {
-		return !agentCallableOnly || SubagentRoleCallableInContext(settings, name, SubagentInvocationContextOrdinary)
-	})
-}
-
-// AvailableCallableSubagentRoleNames returns presentation-ready roles that a
-// model may invoke from the supplied context.
-func AvailableCallableSubagentRoleNames(settings Settings, context SubagentInvocationContext) []string {
-	return availableSubagentRoleNames(settings, func(name string, _ SubagentRole) bool {
-		return SubagentRoleCallableInContext(settings, name, context)
+		if !agentCallableOnly {
+			return true
+		}
+		lookup := LookupSubagentRole(settings, name)
+		return lookup.Status == SubagentRoleLookupPresent && SubagentRoleCallable(lookup.Role)
 	})
 }
 

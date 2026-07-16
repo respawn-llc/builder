@@ -190,8 +190,8 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 	}
 	child := openAuthoritativeAppSession(t, cfg.PersistenceRoot, result.SessionID)
 	childMeta := child.Meta()
-	if childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("child parent session id = %q, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
+		t.Fatalf("child parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.WorktreeReminder == nil {
 		t.Fatal("expected child worktree reminder")
@@ -256,7 +256,7 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 	result, err := RunPrompt(context.Background(), Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
-		AgentRole:             config.BuiltInSubagentRoleFast,
+		AgentRole:             sessionLifecycleStringPtr(config.BuiltInSubagentRoleFast),
 	}, "hello from user", 0, nil)
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)

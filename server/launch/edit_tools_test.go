@@ -11,6 +11,8 @@ import (
 	"core/shared/toolspec"
 )
 
+func launchTestStringPtr(value string) *string { return &value }
+
 func TestActiveToolIDsDynamicDefaultChoosesPatchForGPTModels(t *testing.T) {
 	settings := validLaunchSettings("gpt-5.6-sol")
 	source := defaultToolSources()
@@ -113,7 +115,7 @@ func TestApplyRunPromptOverridesSubagentExplicitEditToolWins(t *testing.T) {
 		Source:         defaultToolSources(),
 	}
 
-	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
+	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides: %v", err)
 	}
@@ -124,6 +126,7 @@ func TestApplyRunPromptOverridesSubagentExplicitEditToolWins(t *testing.T) {
 
 func TestApplyRunPromptOverridesSubagentToolSourceSurvivesModelOverride(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv(config.PersistenceRootEnvName, t.TempDir())
 	store := createTestSession(t, t.TempDir())
 	settings := validLaunchSettings("gpt-5.6-sol")
 	settings.Subagents = map[string]config.SubagentRole{
@@ -149,7 +152,7 @@ func TestApplyRunPromptOverridesSubagentToolSourceSurvivesModelOverride(t *testi
 		Source:         defaultToolSources(),
 	}
 
-	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: "worker", Model: "gpt-5.6-sol"}, auth.EmptyState())
+	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker"), Model: "gpt-5.6-sol"}, auth.EmptyState())
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides: %v", err)
 	}

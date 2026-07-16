@@ -54,6 +54,8 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng.pauseQueuedUserAutoDrain()
+	t.Cleanup(eng.resumeQueuedUserAutoDrain)
 	startedAt := time.Now().UTC()
 	snapshot := &RunSnapshot{
 		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
