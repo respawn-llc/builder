@@ -129,9 +129,10 @@ func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus,
 	status.FastModeEnabled = update.FastModeEnabled
 	status.ThinkingLevel = update.ThinkingLevel
 	status.CompactionMode = update.CompactionMode
-	status.ParentSessionID = ""
+	status.ParentSessionID = nil
 	if update.ParentSessionID != nil {
-		status.ParentSessionID = update.ParentSessionID.String()
+		parentSessionID := update.ParentSessionID.String()
+		status.ParentSessionID = &parentSessionID
 	}
 	status.WorkflowActive = false
 	status.WorkflowSession = nil

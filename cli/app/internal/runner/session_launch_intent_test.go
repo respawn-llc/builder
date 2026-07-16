@@ -28,7 +28,7 @@ func TestSessionLifecycleOptionsUseExplicitTypedInitialIntent(t *testing.T) {
 		{
 			name: "create for non-default agent role",
 			request: Request[NoStartupOptions]{
-				AgentRole: "reviewer",
+				AgentRole: runnerStringPtr("reviewer"),
 			},
 			wantKind: serverapi.SessionLaunchIntentCreateNew,
 		},
@@ -83,7 +83,7 @@ func TestSessionLifecycleOptionsRejectInvalidIdentityWithoutEmptyStringInference
 func TestRunInteractivePassesTypedInitialIntentToLifecycle(t *testing.T) {
 	server := &fakeServer{}
 	err := RunInteractive(t.Context(), Request[NoStartupOptions]{
-		AgentRole: "reviewer",
+		AgentRole: runnerStringPtr("reviewer"),
 	}, Dependencies[*fakeServer, struct{}, NoStartupOptions]{
 		NewAuthInteractor: func() struct{} { return struct{}{} },
 		StartSessionServer: func(_ context.Context, _ Request[NoStartupOptions], _ struct{}, _ bool) (*fakeServer, error) {
@@ -93,8 +93,8 @@ func TestRunInteractivePassesTypedInitialIntentToLifecycle(t *testing.T) {
 			if (*opts.Intent).Kind() != serverapi.SessionLaunchIntentCreateNew {
 				t.Fatalf("intent kind = %q, want create_new", (*opts.Intent).Kind())
 			}
-			if opts.Overrides.AgentRole != "reviewer" {
-				t.Fatalf("agent role override = %q, want reviewer", opts.Overrides.AgentRole)
+			if opts.Overrides.AgentRole == nil || *opts.Overrides.AgentRole != "reviewer" {
+				t.Fatalf("agent role override = %v, want reviewer", opts.Overrides.AgentRole)
 			}
 			return nil
 		},

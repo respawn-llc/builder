@@ -161,7 +161,8 @@ func newSessionSnapshotParityFixture(t *testing.T, cacheWarningMode config.Cache
 	if err := store.SetName("parity session"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
-	if err := store.SetParentSessionID("parent-session"); err != nil {
+	parentSessionID := "parent-session"
+	if err := store.SetParentSessionID(&parentSessionID); err != nil {
 		t.Fatalf("set parent: %v", err)
 	}
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {

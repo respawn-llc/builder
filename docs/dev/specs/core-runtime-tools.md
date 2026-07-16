@@ -132,6 +132,8 @@
 - App-global daemon listen config is explicit through `server_host` and `server_port`. Kent binds exactly the configured address and fails startup if occupied.
 - Same-machine Unix-socket optimization is local-first and additive. Explicit `server_host` or `server_port` overrides stay authoritative.
 - JSON-RPC custom error codes in `shared/protocol` are wire contracts.
+- `RunPrompt` caller provenance is a protocol-generation contract. A generation that carries `CallerSessionID` rejects every peer from another protocol version during the handshake; operators upgrade and restart the client and server together before requests are accepted.
+- Session lineage absence is represented as null. Metadata and SQLite migration boundaries convert legacy empty `parent_session_id` values to null atomically; new API and persistence writes reject present empty or whitespace-only parent-session values.
 - Interactive startup is workspace-first. Unregistered cwd enters an explicit post-auth binding flow with create-new-project first and existing-project picker below.
 - Server-browsing mode can open existing server projects/workspaces only; it must not offer binding or project creation for the client path.
 - Headless startup in an unregistered workspace fails fast; it must not auto-create hidden project/workspace state.

@@ -83,8 +83,8 @@ func TestCloneSessionStreamsLargeHistoryAcrossChunks(t *testing.T) {
 	if !replayShapesEqual(parentEvents, childEvents) {
 		t.Fatalf("cloned child must replay the full parent history: parent=%d child=%d", len(parentEvents), len(childEvents))
 	}
-	if child.Meta().ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("child parent id = %q, want %q", child.Meta().ParentSessionID, parent.Meta().SessionID)
+	if child.Meta().ParentSessionID == nil || *child.Meta().ParentSessionID != parent.Meta().SessionID {
+		t.Fatalf("child parent id = %v, want %q", child.Meta().ParentSessionID, parent.Meta().SessionID)
 	}
 	if !child.Meta().HeadlessActive {
 		t.Fatal("expected cloned child to inherit headless-active state derived from replay")
@@ -234,7 +234,7 @@ func TestCloneSessionWithoutEventsPersistsEmptyChild(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(child.Dir(), eventsFile)); err != nil {
 		t.Fatalf("empty cloned child must be durable: %v", err)
 	}
-	if child.Meta().ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("child parent id = %q, want %q", child.Meta().ParentSessionID, parent.Meta().SessionID)
+	if child.Meta().ParentSessionID == nil || *child.Meta().ParentSessionID != parent.Meta().SessionID {
+		t.Fatalf("child parent id = %v, want %q", child.Meta().ParentSessionID, parent.Meta().SessionID)
 	}
 }

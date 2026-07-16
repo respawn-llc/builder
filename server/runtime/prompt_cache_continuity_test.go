@@ -549,7 +549,7 @@ type promptCacheComparableMainView struct {
 	ConversationFreshness          string                        `json:"conversation_freshness"`
 	Revision                       int64                         `json:"revision"`
 	CommittedEntryCount            int                           `json:"committed_entry_count"`
-	ParentSessionID                string                        `json:"parent_session_id,omitempty"`
+	ParentSessionID                *string                       `json:"parent_session_id,omitempty"`
 	LastCommittedAssistantResponse string                        `json:"last_committed_assistant_response,omitempty"`
 	ActiveRun                      *promptCacheComparableRunView `json:"active_run,omitempty"`
 }

@@ -210,7 +210,8 @@ func (m *uiModel) applyAuthSlashCommandRefreshed(msg authSlashCommandRefreshedMs
 }
 
 func (m *uiModel) hasParentSession() bool {
-	return strings.TrimSpace(m.cachedRuntimeStatus().ParentSessionID) != ""
+	parentSessionID := m.cachedRuntimeStatus().ParentSessionID
+	return parentSessionID != nil && strings.TrimSpace(*parentSessionID) != ""
 }
 
 func (m *uiModel) clampSlashCommandSelection() {

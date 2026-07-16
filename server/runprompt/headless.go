@@ -85,10 +85,13 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 		}
 	}
 	launchReq := serverapi.SessionPlanRequest{
-		ClientRequestID: req.ClientRequestID,
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          req.Intent,
-		Overrides:       req.Overrides,
+		ClientRequestID:   req.ClientRequestID,
+		Mode:              serverapi.SessionLaunchModeHeadless,
+		Intent:            req.Intent,
+		SelectedSessionID: req.SelectedSessionID,
+		CallerSessionID:   req.CallerSessionID,
+		ParentSessionID:   req.ParentSessionID,
+		Overrides:         req.Overrides,
 	}
 	result, err := l.boot.SessionLaunch.PlanLaunchSession(ctx, launchReq)
 	if err != nil {

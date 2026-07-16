@@ -200,7 +200,8 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if err := store.SetName("incident triage"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
-	if err := store.SetParentSessionID("parent-1"); err != nil {
+	parentSessionID := "parent-1"
+	if err := store.SetParentSessionID(&parentSessionID); err != nil {
 		t.Fatalf("set parent session id: %v", err)
 	}
 	if _, err := store.SetGoal("ship dormant goal", session.GoalActorUser); err != nil {
@@ -220,7 +221,7 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if resp.MainView.Session.SessionID != store.Meta().SessionID || resp.MainView.Session.SessionName != "incident triage" {
 		t.Fatalf("unexpected dormant session view: %+v", resp.MainView.Session)
 	}
-	if resp.MainView.Status.ParentSessionID != "parent-1" || resp.MainView.Status.LastCommittedAssistantFinalAnswer != "final answer" {
+	if resp.MainView.Status.ParentSessionID == nil || *resp.MainView.Status.ParentSessionID != "parent-1" || resp.MainView.Status.LastCommittedAssistantFinalAnswer != "final answer" {
 		t.Fatalf("unexpected dormant status: %+v", resp.MainView.Status)
 	}
 	if resp.MainView.Status.Goal == nil || resp.MainView.Status.Goal.Status != clientui.RuntimeGoalStatusActive || resp.MainView.Status.Goal.Objective != "ship dormant goal" {

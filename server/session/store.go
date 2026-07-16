@@ -596,9 +596,18 @@ func (s *Store) SetListingMetadata(name string, firstPromptPreview string) error
 	})
 }
 
-func (s *Store) SetParentSessionID(parentSessionID string) error {
+func (s *Store) SetParentSessionID(parentSessionID *string) error {
 	return s.mutateAndPersist(func() error {
-		s.meta.ParentSessionID = strings.TrimSpace(parentSessionID)
+		if parentSessionID == nil {
+			s.meta.ParentSessionID = nil
+			s.meta.UpdatedAt = time.Now().UTC()
+			return nil
+		}
+		normalized := strings.TrimSpace(*parentSessionID)
+		if normalized == "" {
+			return errors.New("parent session id is required")
+		}
+		s.meta.ParentSessionID = &normalized
 		s.meta.UpdatedAt = time.Now().UTC()
 		return nil
 	})

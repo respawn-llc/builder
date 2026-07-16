@@ -87,8 +87,21 @@ func TestWorkflowRunContextPreservesNonDefaultAgentRoleOnCreateIntent(t *testing
 	if req.Intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
 		t.Fatalf("intent kind = %q, want create_new", req.Intent.Kind())
 	}
-	if req.Overrides.AgentRole != "reviewer" {
-		t.Fatalf("agent role override = %q, want reviewer", req.Overrides.AgentRole)
+	if req.Overrides.AgentRole == nil || *req.Overrides.AgentRole != "reviewer" {
+		t.Fatalf("agent role override = %v, want reviewer", req.Overrides.AgentRole)
+	}
+}
+
+func TestWorkflowRunContextOmitsBlankAgentRoleOverride(t *testing.T) {
+	req, err := sessionLaunchRequestForWorkflowRun(workflowstore.RunStartContext{
+		ContextMode: workflow.ContextModeNewSession,
+		Node:        workflowstore.NodeRecord{SubagentRole: " \t "},
+	})
+	if err != nil {
+		t.Fatalf("sessionLaunchRequestForWorkflowRun: %v", err)
+	}
+	if req.Overrides.AgentRole != nil {
+		t.Fatalf("agent role override = %v, want nil", req.Overrides.AgentRole)
 	}
 }
 

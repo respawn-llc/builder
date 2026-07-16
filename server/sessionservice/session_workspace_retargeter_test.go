@@ -174,7 +174,8 @@ func newRealSessionRetargetFixture(t *testing.T) realSessionRetargetFixture {
 	if err := child.EnsureDurable(); err != nil {
 		t.Fatalf("child EnsureDurable: %v", err)
 	}
-	if err := child.SetParentSessionID(parent.Meta().SessionID); err != nil {
+	parentSessionID := parent.Meta().SessionID
+	if err := child.SetParentSessionID(&parentSessionID); err != nil {
 		t.Fatalf("SetParentSessionID: %v", err)
 	}
 	stores := registry.NewSessionStoreRegistry()
@@ -445,8 +446,8 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	if reopened.Meta().WorkspaceRoot != result.Binding.CanonicalRoot {
 		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, result.Binding.CanonicalRoot)
 	}
-	if reopened.Meta().ParentSessionID != fixture.parent.Meta().SessionID {
-		t.Fatalf("reopened parent session = %q, want %q", reopened.Meta().ParentSessionID, fixture.parent.Meta().SessionID)
+	if reopened.Meta().ParentSessionID == nil || *reopened.Meta().ParentSessionID != fixture.parent.Meta().SessionID {
+		t.Fatalf("reopened parent session = %v, want %q", reopened.Meta().ParentSessionID, fixture.parent.Meta().SessionID)
 	}
 	parentInSource, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.parent.Meta().SessionID, fixture.sourceBinding.ProjectID)
 	if err != nil {

@@ -506,6 +506,10 @@ func TestCLIPackagesDoNotImportServerOutsideCompositionBridges(t *testing.T) {
 			if !strings.HasPrefix(importPath, "core/server/") {
 				continue
 			}
+			if importPath == "core/server/subagentpolicy" {
+				violations = append(violations, relPath+": CLI must not own or execute server subagent launch authorization")
+				continue
+			}
 			allowedImports := allowedServerImportsByFile[relPath]
 			if _, allowed := allowedImports[importPath]; allowed {
 				if actualAllowedServerImportsByFile[relPath] == nil {

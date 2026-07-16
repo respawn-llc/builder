@@ -191,6 +191,67 @@ func callGatewayExpectError(t *testing.T, conn *websocket.Conn, id string, metho
 	return resp.Error
 }
 
+func callGatewayRaw(t *testing.T, conn *websocket.Conn, id string, method string, params json.RawMessage) protocol.Response {
+	t.Helper()
+	if err := websocket.JSON.Send(conn, protocol.Request{JSONRPC: protocol.JSONRPCVersion, ID: id, Method: method, Params: params}); err != nil {
+		t.Fatalf("send raw %s: %v", method, err)
+	}
+	var resp protocol.Response
+	if err := websocket.JSON.Receive(conn, &resp); err != nil {
+		t.Fatalf("receive raw %s: %v", method, err)
+	}
+	return resp
+}
+
+func TestGatewayRunPromptValidatesRawNullableProvenanceAndSelector(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+
+	valid := map[string]json.RawMessage{
+		"omitted": []byte(`{"client_request_id":"raw-omitted","selected_session_id":"missing-session","prompt":"hello"}`),
+		"null":    []byte(`{"client_request_id":"raw-null","selected_session_id":"missing-session","caller_session_id":null,"parent_session_id":null,"prompt":"hello","overrides":{"agent_role":null}}`),
+	}
+	var validCode int
+	for name, params := range valid {
+		t.Run(name, func(t *testing.T) {
+			resp := callGatewayRaw(t, conn, "raw-valid-"+name, protocol.MethodRunPrompt, params)
+			if resp.Error == nil {
+				t.Fatal("raw request unexpectedly succeeded")
+			}
+			if resp.Error.Code == protocol.ErrCodeInvalidParams {
+				t.Fatalf("raw %s request rejected as invalid params: %+v", name, resp.Error)
+			}
+			if validCode == 0 {
+				validCode = resp.Error.Code
+			} else if resp.Error.Code != validCode {
+				t.Fatalf("raw %s code = %d, want omitted/null equivalence code %d", name, resp.Error.Code, validCode)
+			}
+		})
+	}
+
+	for name, params := range map[string]json.RawMessage{
+		"empty caller":        []byte(`{"client_request_id":"raw-empty-caller","caller_session_id":"","prompt":"hello"}`),
+		"whitespace caller":   []byte(`{"client_request_id":"raw-space-caller","caller_session_id":" \t ","prompt":"hello"}`),
+		"empty parent":        []byte(`{"client_request_id":"raw-empty-parent","parent_session_id":"","prompt":"hello"}`),
+		"whitespace parent":   []byte(`{"client_request_id":"raw-space-parent","parent_session_id":" \t ","prompt":"hello"}`),
+		"empty selector":      []byte(`{"client_request_id":"raw-empty-selector","prompt":"hello","overrides":{"agent_role":""}}`),
+		"whitespace selector": []byte(`{"client_request_id":"raw-space-selector","prompt":"hello","overrides":{"agent_role":" \t "}}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp := callGatewayRaw(t, conn, "raw-invalid-"+name, protocol.MethodRunPrompt, params)
+			if resp.Error == nil || resp.Error.Code != protocol.ErrCodeInvalidParams {
+				t.Fatalf("raw %s response = %+v, want invalid params", name, resp)
+			}
+		})
+	}
+}
+
 func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 	projectID := "project-1"
 	missing := serverapi.WorkflowTaskListScopeDimensionWorkflow

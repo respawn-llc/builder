@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"core/cli/app/internal/startupconfig"
 	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -22,14 +23,17 @@ type RunPromptResult struct {
 	Warnings    []string
 }
 
-func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Options, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
+func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Options, caller startupconfig.CallerContext, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
 	intent, err := runPromptLaunchIntent(opts, initialSessionID)
 	if err != nil {
 		return RunPromptResult{}, err
 	}
+	callerSessionID, parentSessionID := runPromptProvenance(opts, caller)
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: uuid.NewString(),
 		Intent:          intent,
+		CallerSessionID: callerSessionID,
+		ParentSessionID: parentSessionID,
 		Prompt:          prompt,
 		Timeout:         timeout,
 		Overrides:       runPromptOverridesFromOptions(opts),
@@ -45,6 +49,17 @@ func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Op
 		return result, err
 	}
 	return result, nil
+}
+
+func runPromptProvenance(opts Options, caller startupconfig.CallerContext) (*string, *string) {
+	if caller.Kind != startupconfig.CallerKindKentSession {
+		return nil, nil
+	}
+	sessionID := strings.TrimSpace(opts.WorkspaceContextSessionID)
+	if sessionID == "" {
+		return nil, nil
+	}
+	return &sessionID, &sessionID
 }
 
 func runPromptLaunchIntent(opts Options, initialSessionID string) (serverapi.SessionLaunchIntent, error) {
@@ -67,8 +82,13 @@ func runPromptLaunchIntent(opts Options, initialSessionID string) (serverapi.Ses
 }
 
 func runPromptOverridesFromOptions(opts Options) serverapi.RunPromptOverrides {
+	var agentRole *string
+	if opts.AgentRole != nil {
+		value := strings.TrimSpace(*opts.AgentRole)
+		agentRole = &value
+	}
 	return serverapi.RunPromptOverrides{
-		AgentRole:           strings.TrimSpace(opts.AgentRole),
+		AgentRole:           agentRole,
 		Model:               strings.TrimSpace(opts.Model),
 		ProviderOverride:    strings.TrimSpace(opts.ProviderOverride),
 		ThinkingLevel:       strings.TrimSpace(opts.ThinkingLevel),

@@ -130,9 +130,8 @@ func TestSessionPlanRequestOwnsExactlyOneTypedLaunchIntent(t *testing.T) {
 
 	for _, raw := range []string{
 		`{"client_request_id":"request-1","mode":"interactive"}`,
-		`{"client_request_id":"request-1","mode":"interactive","selected_session_id":"target-session"}`,
-		`{"client_request_id":"request-1","mode":"interactive","force_new_session":true}`,
-		`{"client_request_id":"request-1","mode":"interactive","parent_session_id":"parent-session","intent":{"kind":"open_existing","session_id":"target-session"}}`,
+		`{"client_request_id":"request-1","mode":"interactive","selected_session_id":"target-session","intent":{"kind":"open_existing","session_id":"target-session"}}`,
+		`{"client_request_id":"request-1","mode":"interactive","force_new_session":true,"intent":{"kind":"create_new"}}`,
 	} {
 		var legacy SessionPlanRequest
 		if err := json.Unmarshal([]byte(raw), &legacy); err == nil {
@@ -140,6 +139,29 @@ func TestSessionPlanRequestOwnsExactlyOneTypedLaunchIntent(t *testing.T) {
 				t.Fatalf("legacy request shape succeeded: %s", raw)
 			}
 		}
+	}
+}
+
+func TestSessionPlanRequestAcceptsTypedIntentLineage(t *testing.T) {
+	var request SessionPlanRequest
+	if err := json.Unmarshal([]byte(`{
+		"client_request_id":"request-1",
+		"mode":"headless",
+		"intent":{"kind":"create_new","parent_id":"parent-session"},
+		"caller_session_id":"caller-session",
+		"parent_session_id":"parent-session",
+		"overrides":{"agent_role":"worker"}
+	}`), &request); err != nil {
+		t.Fatalf("typed request with lineage rejected: %v", err)
+	}
+	if request.CallerSessionID == nil || *request.CallerSessionID != "caller-session" {
+		t.Fatalf("caller session ID = %v, want caller-session", request.CallerSessionID)
+	}
+	if request.ParentSessionID == nil || *request.ParentSessionID != "parent-session" {
+		t.Fatalf("parent session ID = %v, want parent-session", request.ParentSessionID)
+	}
+	if request.Overrides.AgentRole == nil || *request.Overrides.AgentRole != "worker" {
+		t.Fatalf("agent role = %v, want worker", request.Overrides.AgentRole)
 	}
 }
 

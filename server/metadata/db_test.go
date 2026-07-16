@@ -102,9 +102,8 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 	}
 	defer func() { _ = indexRows.Close() }()
 	type indexedColumn struct {
-		name       string
-		desc       int
-		expression bool
+		name string
+		desc int
 	}
 	var columns []indexedColumn
 	for indexRows.Next() {
@@ -114,12 +113,8 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 		if err := indexRows.Scan(&sequence, &columnID, &name, &desc, &collation, &key); err != nil {
 			t.Fatalf("scan session category index column: %v", err)
 		}
-		if key == 1 {
-			columns = append(columns, indexedColumn{
-				name:       name.String,
-				desc:       desc,
-				expression: columnID == -2,
-			})
+		if key == 1 && name.Valid {
+			columns = append(columns, indexedColumn{name: name.String, desc: desc})
 		}
 	}
 	if err := indexRows.Err(); err != nil {
@@ -127,7 +122,7 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 	}
 	wantColumns := []indexedColumn{
 		{name: "project_id"},
-		{expression: true},
+		{name: "category"},
 		{name: "updated_at_unix_ms", desc: 1},
 		{name: "id", desc: 1},
 	}
@@ -821,6 +816,99 @@ SET applied_at_unix_ms = 0
 WHERE id = 'transition-lifecycle-null'
 `); err == nil {
 		t.Fatal("zero transition application timestamp should be rejected after lifecycle migration")
+	}
+}
+
+func TestOpenMigratesLegacyEmptyParentSessionIDToNull(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 52)
+	if err != nil {
+		t.Fatalf("open test database at version 52: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-parent-null', 'Project', ?, ?, '{}')`, now, now)
+	execSeed(t, db, "workspace", `
+INSERT INTO workspaces (
+    id, project_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('workspace-parent-null', 'project-parent-null', '/workspace-parent-null', '{}', ?, ?)`, now, now)
+	execSeed(t, db, "legacy session", `
+INSERT INTO sessions (
+    id, project_id, workspace_id, artifact_relpath, parent_session_id,
+    created_at_unix_ms, updated_at_unix_ms
+) VALUES ('session-parent-null', 'project-parent-null', 'workspace-parent-null', 'sessions/session-parent-null', '', ?, ?)`, now, now)
+	execSeed(t, db, "legacy prompt history", `
+INSERT INTO session_prompt_history_entries (session_id, source_id, text, created_at_unix_ms)
+VALUES ('session-parent-null', 'prompt-1', 'legacy prompt', ?)`, now)
+	execSeed(t, db, "workflow", `
+INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('workflow-parent-null', 'Workflow', 1, ?, ?)`, now, now)
+	execSeed(t, db, "workflow node", `
+INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, sort_order)
+VALUES ('node-parent-null', 'workflow-parent-null', 'agent', 'agent', 'Agent', 0)`)
+	execSeed(t, db, "project workflow link", `
+INSERT INTO project_workflow_links (id, project_id, workflow_id, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('link-parent-null', 'project-parent-null', 'workflow-parent-null', ?, ?)`, now, now)
+	execSeed(t, db, "task", `
+INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id,
+    title, body, created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES (
+    'task-parent-null', 'link-parent-null', 1,
+    1, 'PAR-1', 'Task', 'Task body', ?, ?, '{}'
+)`, now, now)
+	execSeed(t, db, "task node placement", `
+INSERT INTO task_node_placements (
+    id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('placement-parent-null', 'task-parent-null', 'node-parent-null', 'active', ?, ?)`, now, now)
+	execSeed(t, db, "task run", `
+INSERT INTO task_runs (
+    id, placement_id, session_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('run-parent-null', 'placement-parent-null', 'session-parent-null', 1, ?, ?)`, now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 52 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	var parentSessionID sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT parent_session_id
+FROM sessions
+WHERE id = 'session-parent-null'
+`).Scan(&parentSessionID); err != nil {
+		t.Fatalf("query migrated parent session id: %v", err)
+	}
+	if parentSessionID.Valid {
+		t.Fatalf("migrated parent session id = %+v, want NULL absence", parentSessionID)
+	}
+	var promptText string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT text
+FROM session_prompt_history_entries
+WHERE session_id = 'session-parent-null'
+`).Scan(&promptText); err != nil {
+		t.Fatalf("query migrated prompt history: %v", err)
+	}
+	if promptText != "legacy prompt" {
+		t.Fatalf("migrated prompt history = %q, want legacy prompt", promptText)
+	}
+	var taskRunSessionID sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT session_id
+FROM task_runs
+WHERE id = 'run-parent-null'
+`).Scan(&taskRunSessionID); err != nil {
+		t.Fatalf("query migrated task run: %v", err)
+	}
+	if !taskRunSessionID.Valid || taskRunSessionID.String != "session-parent-null" {
+		t.Fatalf("migrated task run session id = %+v, want session-parent-null", taskRunSessionID)
 	}
 }
 

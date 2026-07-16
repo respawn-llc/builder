@@ -2111,7 +2111,7 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		Name:               snapshot.Meta.Name,
 		FirstPromptPreview: snapshot.Meta.FirstPromptPreview,
 		InputDraft:         snapshot.Meta.InputDraft,
-		ParentSessionID:    snapshot.Meta.ParentSessionID,
+		ParentSessionID:    nullableParentSessionID(snapshot.Meta.ParentSessionID),
 		Category:           category,
 		CreatedAtUnixMs:    snapshot.Meta.CreatedAt.UTC().UnixMilli(),
 		UpdatedAtUnixMs:    snapshot.Meta.UpdatedAt.UTC().UnixMilli(),
@@ -2178,7 +2178,7 @@ func sessionLaunchVisible(meta session.Meta) bool {
 	if strings.TrimSpace(meta.InputDraft) != "" {
 		return true
 	}
-	if strings.TrimSpace(meta.ParentSessionID) != "" {
+	if meta.ParentSessionID != nil && strings.TrimSpace(*meta.ParentSessionID) != "" {
 		return true
 	}
 	return meta.ModelRequestCount > 0
@@ -2267,7 +2267,7 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		FirstPromptPreview:              row.FirstPromptPreview,
 		InputDraft:                      row.InputDraft,
 		InputDraftRecoveryBuffers:       metadataPayload.InputDraftRecoveryBuffers,
-		ParentSessionID:                 row.ParentSessionID,
+		ParentSessionID:                 optionalParentSessionID(row.ParentSessionID),
 		WorkspaceRoot:                   workspaceRoot,
 		WorkspaceContainer:              workspaceContainer,
 		Continuation:                    continuation,
@@ -2310,6 +2310,28 @@ func sessionCategoryFromStored(sessionID string, stored sql.NullString) (*sessio
 		return nil, fmt.Errorf("session %q has invalid category %q: %w", sessionID, stored.String, err)
 	}
 	return &category, nil
+}
+
+func nullableParentSessionID(parentSessionID *string) sql.NullString {
+	if parentSessionID == nil {
+		return sql.NullString{}
+	}
+	value := strings.TrimSpace(*parentSessionID)
+	if value == "" {
+		panic("metadata persistence received an empty parent session id")
+	}
+	return sql.NullString{String: value, Valid: true}
+}
+
+func optionalParentSessionID(parentSessionID sql.NullString) *string {
+	if !parentSessionID.Valid {
+		return nil
+	}
+	value := strings.TrimSpace(parentSessionID.String)
+	if value == "" {
+		panic("metadata persistence read an empty parent session id")
+	}
+	return &value
 }
 
 func unmarshalStoredJSON(body string, target any) error {

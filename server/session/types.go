@@ -189,7 +189,7 @@ type Meta struct {
 	FirstPromptPreview              string                           `json:"first_prompt_preview,omitempty"`
 	InputDraft                      string                           `json:"input_draft,omitempty"`
 	InputDraftRecoveryBuffers       []InputDraftRecoveryBuffer       `json:"input_draft_recovery_buffers,omitempty"`
-	ParentSessionID                 string                           `json:"parent_session_id,omitempty"`
+	ParentSessionID                 *string                          `json:"parent_session_id,omitempty"`
 	WorkspaceRoot                   string                           `json:"workspace_root"`
 	WorkspaceContainer              string                           `json:"workspace_container"`
 	Continuation                    *ContinuationContext             `json:"continuation,omitempty"`
@@ -203,6 +203,7 @@ type Meta struct {
 	CompactionSoonReminderIssued    bool                             `json:"compaction_soon_reminder_issued,omitempty"`
 	GeneratedRecoveredWarningIssued bool                             `json:"generated_recovered_warning_issued,omitempty"`
 	PendingModelRecovery            *PendingModelRecovery            `json:"pending_model_recovery,omitempty"`
+	LegacyInFlightStepRecovery      bool                             `json:"-"`
 	WorktreeReminder                *WorktreeReminderState           `json:"worktree_reminder,omitempty"`
 	UsageState                      *UsageState                      `json:"usage_state,omitempty"`
 	Goal                            *GoalState                       `json:"goal,omitempty"`

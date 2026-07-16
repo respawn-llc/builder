@@ -317,8 +317,9 @@ func sessionPlanOverridesFromConfig(cfg config.App) serverapi.RunPromptOverrides
 
 func mergeSessionPlanOverrides(base serverapi.RunPromptOverrides, override serverapi.RunPromptOverrides) serverapi.RunPromptOverrides {
 	merged := base
-	if value := strings.TrimSpace(override.AgentRole); value != "" {
-		merged.AgentRole = value
+	if override.AgentRole != nil {
+		value := strings.TrimSpace(*override.AgentRole)
+		merged.AgentRole = &value
 	}
 	if value := strings.TrimSpace(override.Model); value != "" {
 		merged.Model = value

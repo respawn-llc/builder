@@ -29,7 +29,7 @@ pub struct RuntimeStatus {
     #[serde(rename = "ConversationFreshness")]
     pub conversation_freshness: ConversationFreshness,
     #[serde(rename = "ParentSessionID")]
-    pub parent_session_id: String,
+    pub parent_session_id: Option<String>,
     #[serde(rename = "LastCommittedAssistantFinalAnswer")]
     pub last_committed_assistant_final_answer: String,
     #[serde(rename = "ThinkingLevel")]

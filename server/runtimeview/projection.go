@@ -94,8 +94,8 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.Transcr
 		ThinkingLevel:         engine.ThinkingLevel(),
 		CompactionMode:        engine.CompactionMode(),
 	}
-	if parentID := strings.TrimSpace(engine.ParentSessionID()); parentID != "" {
-		parsed, err := runtimeids.ParseSessionID(parentID)
+	if parentID := engine.ParentSessionID(); parentID != nil {
+		parsed, err := runtimeids.ParseSessionID(*parentID)
 		if err != nil {
 			panic(err)
 		}

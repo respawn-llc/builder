@@ -106,7 +106,10 @@ func (c uiInputController) handleResumeCommand() (tea.Model, tea.Cmd) {
 func (c uiInputController) handleBackCommand() (tea.Model, tea.Cmd) {
 	m := c.model
 	status := m.cachedRuntimeStatus()
-	parentSessionID := strings.TrimSpace(status.ParentSessionID)
+	parentSessionID := ""
+	if status.ParentSessionID != nil {
+		parentSessionID = strings.TrimSpace(*status.ParentSessionID)
+	}
 	if parentSessionID == "" {
 		return m, c.model.appendLocalEntryWithNoticeID("system", "No parent session available", "")
 	}

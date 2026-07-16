@@ -972,83 +972,17 @@ func TestSkillOnlyRoleAffectsCatalogWithoutChangingCallability(t *testing.T) {
 	if lookup := LookupSubagentRole(settings, "worker"); lookup.Status != SubagentRoleLookupPresent {
 		t.Fatalf("worker lookup = %q, want present", lookup.Status)
 	}
-	if !SubagentRoleCallableInContext(settings, "worker", SubagentInvocationContextOrdinary) {
+	if !SubagentRoleCallable(LookupSubagentRole(settings, "worker").Role) {
 		t.Fatal("skill policy must not block directly callable role")
 	}
-	if SubagentRoleCallableInContext(settings, "blocked", SubagentInvocationContextOrdinary) {
+	if SubagentRoleCallable(LookupSubagentRole(settings, "blocked").Role) {
 		t.Fatal("callability metadata must remain authoritative")
 	}
 	if got := strings.Join(AvailableSubagentRoleNames(settings, false), ","); got != "fast,blocked,visible,worker" {
 		t.Fatalf("available roles = %q, want all meaningful roles", got)
 	}
-	if got := strings.Join(AvailableCallableSubagentRoleNames(settings, SubagentInvocationContextOrdinary), ","); got != "fast,visible,worker" {
+	if got := strings.Join(AvailableSubagentRoleNames(settings, true), ","); got != "fast,visible,worker" {
 		t.Fatalf("callable roles = %q, want skill-only role and independent visible role", got)
-	}
-}
-
-func TestWorkflowSubagentCallabilityPolicy(t *testing.T) {
-	role := func(agentCallable bool, agentCallableSet bool, workflowSubagent bool, workflowSubagentSet bool) SubagentRole {
-		return SubagentRole{
-			Settings:            Settings{Model: "gpt-5.4-mini"},
-			Sources:             map[string]string{"model": "file"},
-			AgentCallable:       agentCallable,
-			AgentCallableSet:    agentCallableSet,
-			WorkflowSubagent:    workflowSubagent,
-			WorkflowSubagentSet: workflowSubagentSet,
-		}
-	}
-	tests := []struct {
-		name              string
-		context           SubagentInvocationContext
-		workflowSubagents bool
-		roleName          string
-		role              SubagentRole
-		want              bool
-	}{
-		{name: "ordinary ignores workflow switches", context: SubagentInvocationContextOrdinary, roleName: "worker", role: role(true, false, false, true), want: true},
-		{name: "workflow global disabled dominates enabled role", context: SubagentInvocationContextWorkflow, roleName: "worker", role: role(true, false, true, true)},
-		{name: "workflow global enabled permits omitted role metadata", context: SubagentInvocationContextWorkflow, workflowSubagents: true, roleName: "worker", role: role(true, false, false, false), want: true},
-		{name: "workflow global enabled rejects disabled role", context: SubagentInvocationContextWorkflow, workflowSubagents: true, roleName: "worker", role: role(true, false, false, true)},
-		{name: "agent callable false rejects ordinary role", context: SubagentInvocationContextOrdinary, roleName: "worker", role: role(false, true, true, true)},
-		{name: "agent callable false rejects workflow role", context: SubagentInvocationContextWorkflow, workflowSubagents: true, roleName: "worker", role: role(false, true, true, true)},
-		{name: "fast bypasses disabled workflow switches", context: SubagentInvocationContextWorkflow, roleName: BuiltInSubagentRoleFast, role: role(true, false, false, true), want: true},
-		{name: "fast still obeys agent callability", context: SubagentInvocationContextWorkflow, roleName: BuiltInSubagentRoleFast, role: role(false, true, true, true)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			settings := Settings{
-				Workflow: WorkflowSettings{Subagents: tt.workflowSubagents},
-				Subagents: map[string]SubagentRole{
-					tt.roleName: tt.role,
-				},
-			}
-			if got := SubagentRoleCallableInContext(settings, tt.roleName, tt.context); got != tt.want {
-				t.Fatalf("callability = %t, want %t", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestAvailableCallableSubagentRoleNamesUsesWorkflowPolicy(t *testing.T) {
-	settings := Settings{
-		Workflow: WorkflowSettings{Subagents: true},
-		Subagents: map[string]SubagentRole{
-			"visible": {
-				Settings: Settings{Model: "gpt-5.4-mini"},
-				Sources:  map[string]string{"model": "file"},
-			},
-			"hidden": {
-				Settings:            Settings{Model: "gpt-5.4-mini"},
-				Sources:             map[string]string{"model": "file"},
-				WorkflowSubagentSet: true,
-			},
-		},
-	}
-	if got := strings.Join(AvailableCallableSubagentRoleNames(settings, SubagentInvocationContextOrdinary), ","); got != "fast,hidden,visible" {
-		t.Fatalf("ordinary callable roles = %q, want fast,hidden,visible", got)
-	}
-	if got := strings.Join(AvailableCallableSubagentRoleNames(settings, SubagentInvocationContextWorkflow), ","); got != "fast,visible" {
-		t.Fatalf("workflow callable roles = %q, want fast,visible", got)
 	}
 }
 

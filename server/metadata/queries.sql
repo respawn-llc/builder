@@ -2999,7 +2999,7 @@ INSERT INTO sessions (
     sqlc.arg(name),
     sqlc.arg(first_prompt_preview),
     sqlc.arg(input_draft),
-    sqlc.arg(parent_session_id),
+    sqlc.narg(parent_session_id),
     sqlc.narg(category),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms),

@@ -34,7 +34,14 @@ func RunInteractive[S SessionServer, A any, SO any](ctx context.Context, req Req
 }
 
 func SessionLifecycleOptionsFor[SO any](req Request[SO]) (SessionLifecycleOptions, error) {
-	agentRole := strings.TrimSpace(req.AgentRole)
+	var agentRole *string
+	if req.AgentRole != nil {
+		value := strings.TrimSpace(*req.AgentRole)
+		if value == "" {
+			return SessionLifecycleOptions{}, errors.New("agent role must not be blank")
+		}
+		agentRole = &value
+	}
 	options := SessionLifecycleOptions{
 		Overrides: serverapi.RunPromptOverrides{
 			AgentRole: agentRole,
@@ -61,7 +68,7 @@ func SessionLifecycleOptionsFor[SO any](req Request[SO]) (SessionLifecycleOption
 		options.Intent = &intent
 		return options, nil
 	}
-	if agentRole != "" && agentRole != config.DefaultSubagentRole {
+	if agentRole != nil && *agentRole != config.DefaultSubagentRole {
 		intent := serverapi.CreateNewSessionLaunchIntent(nil)
 		options.Intent = &intent
 	}

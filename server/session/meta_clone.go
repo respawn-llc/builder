@@ -3,6 +3,10 @@ package session
 func cloneMeta(in Meta) Meta {
 	out := in
 	out.InputDraftRecoveryBuffers = append([]InputDraftRecoveryBuffer(nil), in.InputDraftRecoveryBuffers...)
+	if in.ParentSessionID != nil {
+		parentSessionID := *in.ParentSessionID
+		out.ParentSessionID = &parentSessionID
+	}
 	out.Continuation = cloneContinuationContext(in.Continuation)
 	if in.PendingModelRecovery != nil {
 		pending := *in.PendingModelRecovery

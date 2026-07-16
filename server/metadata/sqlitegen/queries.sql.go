@@ -1865,7 +1865,7 @@ type GetSessionRecordByIDRow struct {
 	Name               string
 	FirstPromptPreview string
 	InputDraft         string
-	ParentSessionID    string
+	ParentSessionID    sql.NullString
 	Category           sql.NullString
 	CreatedAtUnixMs    int64
 	UpdatedAtUnixMs    int64
@@ -10154,7 +10154,7 @@ type UpsertSessionParams struct {
 	Name               string
 	FirstPromptPreview string
 	InputDraft         string
-	ParentSessionID    string
+	ParentSessionID    sql.NullString
 	Category           sql.NullString
 	CreatedAtUnixMs    int64
 	UpdatedAtUnixMs    int64
