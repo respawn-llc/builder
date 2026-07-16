@@ -8,9 +8,10 @@ import (
 
 	"core/cli/tui/ongoing"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
+	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/google/uuid"
 )
 
 func withUIOngoingTranscriptController(controller *ongoingTranscriptController) UIOption {
@@ -136,20 +137,18 @@ func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing
 	), 77, 34)
 	m.input = strings.Repeat("x", 91)
 	m.inputCursor = -1
-	m.ongoingTranscript = newOngoingTranscriptController(surface, m.ongoingFrameInput)
+	m.ongoingTranscript = newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
 
-	if _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	next, _ := m.Update(askEventMsg{event: askEvent{
-		req: clientui.PendingPromptEvent{
-			Type:        clientui.PendingPromptEventPending,
-			PromptID:    "ask-1",
-			Question:    "Choose an option",
-			Suggestions: []string{"first", "second"},
-		},
-		reply: make(chan askReply, 1),
-	}})
+	next, _ := m.Update(askEventMsg{event: testQuestionAskEvent(
+		"ask-1",
+		"Choose an option",
+		make(chan askReply, 1),
+		"first",
+		"second",
+	)})
 	m = next.(*uiModel)
 
 	if got := m.surface(); got != uiSurfaceOngoingTranscript {
@@ -165,12 +164,16 @@ func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing
 		t.Fatalf("ask option picker cursor = %+v, want absent", got)
 	}
 
-	if _, err := m.ongoingTranscript.Accept(clientui.TranscriptMessage{
+	if _, _, err := m.ongoingTranscript.Accept(clientui.TranscriptMessage{
 		Sequence: 2,
 		Kind:     clientui.TranscriptMessageAssistantDelta,
-		AssistantDelta: &clientui.TranscriptAssistantDelta{
-			StreamID: uuid.New(),
-			Delta:    "working",
+		Payload: clientui.TranscriptPayload{
+			AssistantDelta: &clientui.TranscriptAssistantDelta{
+				StepID:   ongoingTestStepID(),
+				StreamID: runtimeids.NewAssistantStreamID(),
+				Delta:    "working",
+				Phase:    transcript.AssistantPhaseCommentary,
+			},
 		},
 	}); err != nil {
 		t.Fatalf("accept assistant delta: %v", err)

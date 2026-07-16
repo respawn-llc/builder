@@ -125,12 +125,12 @@ func TestUnknownToolExecutionProjectsFinalizedFailedInput(t *testing.T) {
 	var row *clientui.TranscriptCommittedRow
 	for _, message := range messages {
 		if message.Kind == clientui.TranscriptMessageCommittedRow &&
-			message.CommittedRow != nil &&
-			message.CommittedRow.Tool != nil {
+			message.Payload.CommittedRow != nil &&
+			message.Payload.CommittedRow.Tool != nil {
 			if row != nil {
 				t.Fatalf("client transcript messages = %+v, want exactly one committed tool row", messages)
 			}
-			row = message.CommittedRow
+			row = message.Payload.CommittedRow
 		}
 	}
 	if row == nil {
@@ -139,10 +139,10 @@ func TestUnknownToolExecutionProjectsFinalizedFailedInput(t *testing.T) {
 	if row.Kind != clientui.TranscriptRowTool || !row.Tool.IsError {
 		t.Fatalf("client transcript row = %+v, want failed tool row", row)
 	}
-	if row.Tool.ToolPresentation == nil ||
-		row.Tool.ToolPresentation.Command != string(input) ||
-		row.Tool.ToolPresentation.CompactText != string(input) {
-		t.Fatalf("projected tool presentation = %+v, want original input preserved", row.Tool.ToolPresentation)
+	if row.Tool.Presentation == nil ||
+		row.Tool.Presentation.Command != string(input) ||
+		row.Tool.Presentation.CompactText != string(input) {
+		t.Fatalf("projected tool presentation = %+v, want original input preserved", row.Tool.Presentation)
 	}
 }
 

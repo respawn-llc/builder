@@ -115,11 +115,11 @@ func TestOngoingTranscriptControllerPreservesWrappedDisplayCursorTargetWithPrepe
 	}
 
 	surface := &ongoingSurfaceSpy{}
-	controller := newOngoingTranscriptController(surface, m.ongoingFrameInput)
+	controller := newTestOngoingTranscriptController(surface, m.ongoingFrameInput)
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedMessageState)); err != nil {
+	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedMessageState)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
 
