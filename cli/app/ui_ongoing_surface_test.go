@@ -10,6 +10,7 @@ import (
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 func withUIOngoingTranscriptController(controller *ongoingTranscriptController) UIOption {
@@ -123,6 +124,60 @@ func TestOngoingTranscriptEventReachesNativeSurface(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "hydrated row") {
 		t.Fatalf("native surface output = %q, want hydrated row", got)
+	}
+}
+
+func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing.T) {
+	var out bytes.Buffer
+	surface := ongoing.NewSurface(&out)
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIOngoingSurface(surface),
+		WithUITerminalCursorState(newUITerminalCursorState()),
+	), 77, 34)
+	m.input = strings.Repeat("x", 91)
+	m.inputCursor = -1
+	m.ongoingTranscript = newOngoingTranscriptController(surface, m.ongoingFrameInput)
+
+	if _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	next, _ := m.Update(askEventMsg{event: askEvent{
+		req: clientui.PendingPromptEvent{
+			Type:        clientui.PendingPromptEventPending,
+			PromptID:    "ask-1",
+			Question:    "Choose an option",
+			Suggestions: []string{"first", "second"},
+		},
+		reply: make(chan askReply, 1),
+	}})
+	m = next.(*uiModel)
+
+	if got := m.surface(); got != uiSurfaceOngoingTranscript {
+		t.Fatalf("surface = %q, want ongoing transcript", got)
+	}
+	if !m.ongoingTranscript.normalOwned {
+		t.Fatal("ongoing transcript controller lost normal-buffer ownership")
+	}
+	if got := m.inputMode(); got != uiInputModeAsk {
+		t.Fatalf("input mode = %q, want ask", got)
+	}
+	if got := m.layout().inputPaneCursor(77); got.Visible {
+		t.Fatalf("ask option picker cursor = %+v, want absent", got)
+	}
+
+	if _, err := m.ongoingTranscript.Accept(clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageAssistantDelta,
+		AssistantDelta: &clientui.TranscriptAssistantDelta{
+			StreamID: uuid.New(),
+			Delta:    "working",
+		},
+	}); err != nil {
+		t.Fatalf("accept assistant delta: %v", err)
+	}
+
+	if got := m.ongoingFrameInput().Cursor; !reflect.DeepEqual(got, ongoing.Cursor{}) {
+		t.Fatalf("ask option picker frame cursor = %+v, want absent zero value", got)
 	}
 }
 

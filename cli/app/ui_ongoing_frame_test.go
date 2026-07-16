@@ -2,6 +2,7 @@ package app
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"core/cli/tui/ongoing"
@@ -99,6 +100,67 @@ func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *te
 	}
 	if got, want := frame.Cursor.Row, inputStart+1; got != want {
 		t.Fatalf("final frame cursor row = %d, want first framed input content row %d", got, want)
+	}
+}
+
+func TestOngoingTranscriptControllerPreservesWrappedDisplayCursorTargetWithPrependedSections(t *testing.T) {
+	const width = 24
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUITerminalCursorState(newUITerminalCursorState()),
+	), width, 12)
+	m.input = strings.Repeat("界", 20) + " tail"
+	m.inputCursor = -1
+	projected := m.layout().inputPaneCursor(width)
+	if !projected.Visible {
+		t.Fatal("shared editor cursor projection is absent")
+	}
+
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, m.ongoingFrameInput)
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	if _, err := controller.Accept(clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageQueuedOrSteeredMessageState,
+		QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{
+			QueueItemID: "11111111-1111-4111-8111-111111111111",
+			Status:      clientui.QueuedUserMessageAccepted,
+			UserText:    "queued prompt",
+		},
+	}); err != nil {
+		t.Fatalf("accept queued message: %v", err)
+	}
+
+	frame := surface.calls[len(surface.calls)-1].frame
+	_, queuedEnd, ok := ongoingFrameSectionTerminalRows(frame, ongoing.FrameSectionQueuedOrSteered)
+	if !ok {
+		t.Fatal("prepended queued section missing from final ongoing frame")
+	}
+	inputStart, inputEnd, ok := ongoingFrameSectionTerminalRows(frame, ongoing.FrameSectionInput)
+	if !ok {
+		t.Fatal("input section missing from final ongoing frame")
+	}
+	if queuedEnd >= inputStart {
+		t.Fatalf("queued section ends at row %d, want before input start %d", queuedEnd, inputStart)
+	}
+	if frame.Cursor.Target == nil || frame.Cursor.Target.SectionKind != ongoing.FrameSectionInput {
+		t.Fatalf("frame cursor target = %+v, want input section", frame.Cursor.Target)
+	}
+	if got, want := frame.Cursor.Target.Row, projected.Row; got != want {
+		t.Fatalf("frame cursor target row = %d, want shared editor row %d", got, want)
+	}
+	if got, want := frame.Cursor.Column, projected.Col+1; got != want {
+		t.Fatalf("frame cursor column = %d, want shared editor column %d", got, want)
+	}
+	if frame.Cursor.Column < 1 || frame.Cursor.Column > frame.Size.Width {
+		t.Fatalf("frame cursor column %d outside width %d", frame.Cursor.Column, frame.Size.Width)
+	}
+	if got, want := frame.Cursor.Row, inputStart+projected.Row-1; got != want {
+		t.Fatalf("frame cursor row = %d, want targeted input row %d", got, want)
+	}
+	if frame.Cursor.Row < inputStart || frame.Cursor.Row > inputEnd {
+		t.Fatalf("frame cursor row %d outside input rows %d..%d", frame.Cursor.Row, inputStart, inputEnd)
 	}
 }
 

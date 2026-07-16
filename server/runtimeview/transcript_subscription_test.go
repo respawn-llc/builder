@@ -1,9 +1,12 @@
 package runtimeview
 
 import (
+	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
+	"core/internal/testharness/scriptedllm"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
@@ -72,6 +75,71 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 	if got := hydration.CommittedRows[0].Visibility; got != clientui.EntryVisibilityHidden {
 		t.Fatalf("hydration visibility = %q, want hidden", got)
+	}
+}
+
+func TestUnknownToolExecutionProjectsFinalizedFailedInput(t *testing.T) {
+	input := json.RawMessage(`{}`)
+	call := llm.ToolCall{
+		ID:    "call-unknown",
+		Name:  "final_answer",
+		Input: input,
+	}
+	client := scriptedllm.NewClient(scriptedllm.Script{
+		Steps: []scriptedllm.Step{
+			scriptedllm.ToolBatch("", call),
+			{
+				ExpectedToolResults: []scriptedllm.ExpectedToolResult{{
+					CallID: call.ID,
+					Name:   call.Name,
+				}},
+				Response: scriptedllm.FinalAnswer("done").Response,
+			},
+		},
+	})
+	store := newRuntimeViewStore(t)
+	var completion runtime.Event
+	engine := newRuntimeViewEngine(t, store, client, runtime.Config{
+		Model: "gpt-5",
+		OnEvent: func(evt runtime.Event) {
+			if evt.Kind == runtime.EventToolCallCompleted && evt.ToolResult != nil {
+				completion = evt
+			}
+		},
+	})
+	if _, err := engine.SubmitUserMessage(context.Background(), "exercise unknown tool"); err != nil {
+		t.Fatalf("submit user message: %v", err)
+	}
+	if completion.ToolResult == nil || !completion.ToolResult.IsError || completion.ToolResult.Presentation == nil {
+		t.Fatalf("emitted completion = %+v, want finalized failed result", completion.ToolResult)
+	}
+	if completion.ToolResult.Presentation.Command != string(input) ||
+		completion.ToolResult.Presentation.CompactText != string(input) {
+		t.Fatalf("emitted presentation = %+v, want original input preserved", completion.ToolResult.Presentation)
+	}
+
+	messages := TranscriptMessagesFromRuntimeEvent(completion)
+	var row *clientui.TranscriptCommittedRow
+	for _, message := range messages {
+		if message.Kind == clientui.TranscriptMessageCommittedRow &&
+			message.CommittedRow != nil &&
+			message.CommittedRow.Tool != nil {
+			if row != nil {
+				t.Fatalf("client transcript messages = %+v, want exactly one committed tool row", messages)
+			}
+			row = message.CommittedRow
+		}
+	}
+	if row == nil {
+		t.Fatalf("client transcript messages = %+v, want one committed tool row", messages)
+	}
+	if row.Kind != clientui.TranscriptRowTool || !row.Tool.IsError {
+		t.Fatalf("client transcript row = %+v, want failed tool row", row)
+	}
+	if row.Tool.ToolPresentation == nil ||
+		row.Tool.ToolPresentation.Command != string(input) ||
+		row.Tool.ToolPresentation.CompactText != string(input) {
+		t.Fatalf("projected tool presentation = %+v, want original input preserved", row.Tool.ToolPresentation)
 	}
 }
 
