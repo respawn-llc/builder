@@ -110,6 +110,9 @@ func TestUnknownToolExecutionProjectsFinalizedFailedInput(t *testing.T) {
 	if _, err := engine.SubmitUserMessage(context.Background(), "exercise unknown tool"); err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
+	if remaining := client.RemainingSteps(); remaining != 0 {
+		t.Fatalf("scripted LLM steps remaining = %d, want continuation after tool result consumed", remaining)
+	}
 	if completion.ToolResult == nil || !completion.ToolResult.IsError || completion.ToolResult.Presentation == nil {
 		t.Fatalf("emitted completion = %+v, want finalized failed result", completion.ToolResult)
 	}
