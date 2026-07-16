@@ -4,8 +4,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type runtimeReadModelVersionDecision uint8
@@ -15,21 +13,6 @@ const (
 	runtimeReadModelVersionIgnore
 	runtimeReadModelVersionRefresh
 )
-
-func runtimeEventHasReadModelPayload(evt clientui.Event) bool {
-	return evt.RuntimeActivity != nil ||
-		evt.InputReconciliation != nil
-}
-
-func (m *uiModel) runtimeReadModelConflictDiagnosticCmd(evt clientui.Event) tea.Cmd {
-	if m == nil || evt.ReadModelVersion != m.runtimeReadModelVersion {
-		return nil
-	}
-	if evt.RuntimeActivity != nil && runtimeActivityConflictsWithProjection(*evt.RuntimeActivity, m) {
-		return m.sendTransientStatusWithNoticeID("conflicting runtime activity read-model update ignored", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-	}
-	return nil
-}
 
 func runtimeActivityConflictsWithProjection(activity clientui.RuntimeActivity, m *uiModel) bool {
 	if m == nil {
@@ -44,11 +27,14 @@ func runtimeActivityConflictsWithProjection(activity clientui.RuntimeActivity, m
 	if !activity.ActiveForControl() {
 		return false
 	}
-	if runtimeRunModeFromActivityKind(activity.ActiveKind) != m.runtimeLifecycle.Run.Mode {
+	if activity.ActiveStep == nil {
+		return strings.TrimSpace(m.currentRunID) != "" || strings.TrimSpace(m.currentStepID) != ""
+	}
+	if runtimeRunModeFromActivityKind(activity.ActiveStep.ActiveKind) != m.runtimeLifecycle.Run.Mode {
 		return true
 	}
-	return strings.TrimSpace(activity.RunID) != strings.TrimSpace(m.currentRunID) ||
-		strings.TrimSpace(activity.StepID) != strings.TrimSpace(m.currentStepID)
+	return activity.ActiveStep.RunID.String() != strings.TrimSpace(m.currentRunID) ||
+		activity.ActiveStep.StepID.String() != strings.TrimSpace(m.currentStepID)
 }
 
 func (m *uiModel) acceptRuntimeReadModelVersion(version clientui.ReadModelVersion, hydration bool) runtimeReadModelVersionDecision {

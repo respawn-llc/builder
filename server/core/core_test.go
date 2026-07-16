@@ -63,7 +63,7 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	if appCore.Background() == nil {
 		t.Fatal("expected background manager")
 	}
-	if appCore.ProjectViewClient() == nil || appCore.ProcessViewClient() == nil || appCore.ProcessOutputClient() == nil || appCore.SessionLaunchClient() == nil || appCore.SessionViewClient() == nil || appCore.SessionLifecycleClient() == nil || appCore.SessionActivityClient() == nil || appCore.SessionTranscriptClient() == nil || appCore.RunPromptClient() == nil {
+	if appCore.ProjectViewClient() == nil || appCore.ProcessViewClient() == nil || appCore.ProcessOutputClient() == nil || appCore.SessionLaunchClient() == nil || appCore.SessionViewClient() == nil || appCore.SessionLifecycleClient() == nil || appCore.SessionTranscriptClient() == nil || appCore.RunPromptClient() == nil {
 		t.Fatal("expected core clients to be wired")
 	}
 	if appCore.CapabilityFactsClient() == nil {

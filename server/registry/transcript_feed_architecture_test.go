@@ -34,16 +34,15 @@ func TestRuntimeRegistryDoesNotBypassSessionFeedSequencerForTranscriptBroker(t *
 	})
 }
 
-func TestProtocol59RuntimeReadModelTranscriptProjectionIsTheOnlyLegacySeam(t *testing.T) {
+func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {
 	repoRoot := findRegistryRepoRoot(t)
 	registryFiles, err := filepath.Glob(filepath.Join(repoRoot, "server", "registry", "*.go"))
 	if err != nil {
 		t.Fatalf("list registry files: %v", err)
 	}
-	allowedProjection := "protocol59_transcript_projection.go"
 	for _, path := range registryFiles {
 		base := filepath.Base(path)
-		if strings.HasSuffix(base, "_test.go") || base == allowedProjection {
+		if strings.HasSuffix(base, "_test.go") {
 			continue
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
@@ -61,7 +60,7 @@ func TestProtocol59RuntimeReadModelTranscriptProjectionIsTheOnlyLegacySeam(t *te
 			}
 			switch selector.Sel.Name {
 			case "TranscriptMessageRuntimeActivity", "TranscriptMessageInputReconciliation":
-				t.Fatalf("%s references legacy runtime read-model transcript kind %s; only %s may project canonical updates", base, selector.Sel.Name, allowedProjection)
+				t.Fatalf("%s references deleted legacy runtime read-model transcript kind %s", base, selector.Sel.Name)
 			}
 			return true
 		})

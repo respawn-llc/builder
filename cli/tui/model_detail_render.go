@@ -50,13 +50,6 @@ func (m Model) detailProjectedLines() []detailProjectedLine {
 	return m.detailProjection.lines
 }
 
-func detailRailForSelection(selected bool) detailRail {
-	if selected {
-		return detailRailSelected
-	}
-	return detailRailBlank
-}
-
 func (m Model) detailRenderedLines() []detailRenderedLine {
 	projected := m.detailProjectedLines()
 	out := make([]detailRenderedLine, 0, len(projected))

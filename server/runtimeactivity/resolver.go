@@ -1,11 +1,9 @@
 package runtimeactivity
 
 import (
-	"fmt"
-
-	"core/server/runtimefeed"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"fmt"
 )
 
 type RegistrySnapshot struct {
@@ -35,15 +33,11 @@ type ResolverSnapshot struct {
 }
 
 func ResolveRuntimeActivity(snapshot ResolverSnapshot) (clientui.RuntimeActivity, error) {
-	activity, err := resolveRuntimeFeedActivity(snapshot)
-	if err != nil {
-		return clientui.RuntimeActivity{}, err
-	}
-	return Protocol59RuntimeActivity(activity), nil
+	return resolveRuntimeFeedActivity(snapshot)
 }
 
-func resolveRuntimeFeedActivity(snapshot ResolverSnapshot) (runtimefeed.RuntimeActivity, error) {
-	var activity runtimefeed.RuntimeActivity
+func resolveRuntimeFeedActivity(snapshot ResolverSnapshot) (clientui.RuntimeActivity, error) {
+	var activity clientui.RuntimeActivity
 	if !snapshot.Registry.Registered {
 		activity.State = clientui.RuntimeActivityUnavailable
 	} else if snapshot.Registry.Closing {
@@ -57,13 +51,13 @@ func resolveRuntimeFeedActivity(snapshot ResolverSnapshot) (runtimefeed.RuntimeA
 		}
 		runID, err := runtimeids.ParseRunID(snapshot.Active.RunID)
 		if err != nil {
-			return runtimefeed.RuntimeActivity{}, fmt.Errorf("parse runtime active run id: %w", err)
+			return clientui.RuntimeActivity{}, fmt.Errorf("parse runtime active run id: %w", err)
 		}
 		stepID, err := runtimeids.ParseStepID(snapshot.Active.StepID)
 		if err != nil {
-			return runtimefeed.RuntimeActivity{}, fmt.Errorf("parse runtime active step id: %w", err)
+			return clientui.RuntimeActivity{}, fmt.Errorf("parse runtime active step id: %w", err)
 		}
-		activity.ActiveStep = &runtimefeed.RuntimeActiveStep{
+		activity.ActiveStep = &clientui.RuntimeActiveStep{
 			RunID:      runID,
 			StepID:     stepID,
 			ActiveKind: snapshot.Active.ActiveKind,
@@ -78,7 +72,7 @@ func resolveRuntimeFeedActivity(snapshot ResolverSnapshot) (runtimefeed.RuntimeA
 		activity.QueueAccepting = snapshot.Registry.QueueAccepting
 	}
 	if err := activity.Validate(); err != nil {
-		return runtimefeed.RuntimeActivity{}, err
+		return clientui.RuntimeActivity{}, err
 	}
 	return activity, nil
 }

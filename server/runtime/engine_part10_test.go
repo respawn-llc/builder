@@ -397,20 +397,6 @@ func TestBrokenSymlinkedSkillsAreSkippedAndWarnedInTranscript(t *testing.T) {
 	}
 }
 
-func TestEnvironmentContextMessageIncludesLabeledModelIdentifier(t *testing.T) {
-	workspace := t.TempDir()
-	msg, err := environmentContextMessage(workspace, "gpt-5.3-codex", time.Unix(0, 0).UTC())
-	if err != nil {
-		t.Fatalf("environmentContextMessage: %v", err)
-	}
-	if !strings.Contains(msg, "\nYour model: gpt-5.3-codex\n") {
-		t.Fatalf("expected environment message to include labeled model identifier, got %q", msg)
-	}
-	if strings.Contains(msg, "Your model: gpt-5.3-codex high") {
-		t.Fatalf("expected environment message to exclude thinking level from model identifier, got %q", msg)
-	}
-}
-
 func TestEnvironmentContextMessageUsesWorkspaceRootForCWD(t *testing.T) {
 	workspace := t.TempDir()
 	msg, err := environmentContextMessage(workspace, "gpt-5.3-codex", time.Unix(0, 0).UTC())
@@ -505,72 +491,59 @@ func TestSubmitInjectsEnvironmentLineWithLabeledModelIdentifier(t *testing.T) {
 	}
 }
 
-func TestManualCompactionReinjectsHeadlessEnterOnlyWhileHeadlessRemainsActive(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
-		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := store.SetHeadlessActive(true); err != nil {
-		t.Fatalf("mark headless active: %v", err)
+func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
+	tests := []struct {
+		name              string
+		active            bool
+		persistedMessages []llm.Message
+		wantHeadless      int
+	}{
+		{name: "active", active: true, wantHeadless: 1},
+		{
+			name: "exited",
+			persistedMessages: []llm.Message{
+				{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless mode instructions"},
+				{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessModeExit, Content: "interactive mode instructions"},
+			},
+		},
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "continue"}})); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			client := &fakeClient{responses: []llm.Response{{
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
+				Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
+			}}}
+			eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
+			if test.active {
+				if err := store.SetHeadlessActive(true); err != nil {
+					t.Fatalf("mark headless active: %v", err)
+				}
+			}
+			for _, message := range append(test.persistedMessages, llm.Message{Role: llm.RoleUser, Content: "continue"}) {
+				if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+					t.Fatalf("append message: %v", err)
+				}
+			}
+			if err := eng.CompactContext(context.Background(), ""); err != nil {
+				t.Fatalf("compact: %v", err)
+			}
 
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-
-	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	headlessCount := 0
-	exitCount := 0
-	for _, message := range messages {
-		switch message.MessageType {
-		case llm.MessageTypeHeadlessMode:
-			headlessCount++
-		case llm.MessageTypeHeadlessModeExit:
-			exitCount++
-		}
-	}
-	if headlessCount != 1 {
-		t.Fatalf("expected exactly one reinjected headless enter after compaction, got %d messages=%+v", headlessCount, messages)
-	}
-	if exitCount != 0 {
-		t.Fatalf("did not expect headless exit after compaction while still headless, got %d messages=%+v", exitCount, messages)
-	}
-}
-
-func TestManualCompactionDoesNotReinjectHeadlessEnterAfterExit(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
-		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless mode instructions"}})); err != nil {
-		t.Fatalf("append headless mode: %v", err)
-	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessModeExit, Content: "interactive mode instructions"}})); err != nil {
-		t.Fatalf("append headless exit: %v", err)
-	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "continue"}})); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-
-	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	for _, message := range messages {
-		if message.MessageType == llm.MessageTypeHeadlessMode {
-			t.Fatalf("did not expect headless enter reinjection after exit, got messages=%+v", messages)
-		}
-		if message.MessageType == llm.MessageTypeHeadlessModeExit {
-			t.Fatalf("did not expect historical headless exit in the new compaction list, got messages=%+v", messages)
-		}
+			headlessCount := 0
+			exitCount := 0
+			messages := eng.transcriptRuntimeState().SnapshotMessages()
+			for _, message := range messages {
+				switch message.MessageType {
+				case llm.MessageTypeHeadlessMode:
+					headlessCount++
+				case llm.MessageTypeHeadlessModeExit:
+					exitCount++
+				}
+			}
+			if headlessCount != test.wantHeadless || exitCount != 0 {
+				t.Fatalf("headless/exit counts = %d/%d, want %d/0; messages=%+v", headlessCount, exitCount, test.wantHeadless, messages)
+			}
+		})
 	}
 }
 

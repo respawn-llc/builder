@@ -7,7 +7,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/rollbacktarget"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 type rollbackCandidateLocatorTracker struct {
@@ -31,12 +31,12 @@ func (t *rollbackCandidateLocatorTracker) ObserveHistoryReplacement(payload hist
 	if t == nil {
 		return
 	}
-	t.carried = valuecopy.Pointer(payload.LatestRollbackCandidate)
+	t.carried = textutil.Pointer(payload.LatestRollbackCandidate)
 }
 
 func (t rollbackCandidateLocatorTracker) Resolve(activeWindowEndByte int64) (*rollbacktarget.CandidateLocator, error) {
 	if t.latestActiveUserSeq == nil {
-		return valuecopy.Pointer(t.carried), nil
+		return textutil.Pointer(t.carried), nil
 	}
 	// A segment window has at most one history-replacement boundary and it is
 	// first, so an observed active user is always newer than the carried locator.

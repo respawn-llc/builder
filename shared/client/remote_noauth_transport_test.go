@@ -70,12 +70,12 @@ func TestRemoteNoAuthAcknowledgementPropagatesToFreshConnectionStrategies(t *tes
 					reportHandlerError(handlerErrs, "send submit response: %w", err)
 				}
 				return
-			case protocol.MethodSessionSubscribeActivity:
+			case protocol.MethodSessionSubscribeTranscript:
 				if !attached {
 					reportHandlerError(handlerErrs, "subscribe before project attach")
 					return
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{Stream: protocol.MethodSessionActivityEvent}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{Stream: protocol.MethodSessionTranscriptEvent}))); err != nil {
 					reportHandlerError(handlerErrs, "send subscribe response: %w", err)
 				}
 				return
@@ -104,12 +104,12 @@ func TestRemoteNoAuthAcknowledgementPropagatesToFreshConnectionStrategies(t *tes
 	if err := remote.EnableNoAuthBootstrapAcknowledgement(context.Background()); err != nil {
 		t.Fatalf("EnableNoAuthBootstrapAcknowledgement: %v", err)
 	}
-	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: "submit-1", SessionID: "session-1", Text: "hi"}); err != nil {
+	if _, err := remote.SubmitUserTurn(context.Background(), runtimeSubmitUserTurnRequestForTest("session-1", "hi")); err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
-	sub, err := remote.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: "session-1"})
+	sub, err := remote.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{SessionID: "session-1"})
 	if err != nil {
-		t.Fatalf("SubscribeSessionActivity: %v", err)
+		t.Fatalf("SubscribeSessionTranscript: %v", err)
 	}
 	_ = sub.Close()
 	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "run-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hi"}, nil); err != nil {
@@ -176,7 +176,7 @@ func TestRemoteNoAuthAcknowledgementDisabledWhenServerReportsRealAuthReady(t *te
 	}
 	defer func() { _ = remote.Close() }()
 	remote.noAuthAck.Store(true)
-	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: "submit-1", SessionID: "session-1", Text: "hi"}); err != nil {
+	if _, err := remote.SubmitUserTurn(context.Background(), runtimeSubmitUserTurnRequestForTest("session-1", "hi")); err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
 	if got := ackCount.Load(); got != 1 {
@@ -260,7 +260,7 @@ func TestRemoteRealAuthCompletionDisablesNoAuthAcknowledgementPolicy(t *testing.
 	if remote.NoAuthBootstrapAcknowledgementEnabled() {
 		t.Fatal("expected real auth completion to disable no-auth acknowledgement policy")
 	}
-	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: "submit-1", SessionID: "session-1", Text: "hi"}); err != nil {
+	if _, err := remote.SubmitUserTurn(context.Background(), runtimeSubmitUserTurnRequestForTest("session-1", "hi")); err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
 	if got := ackCount.Load(); got != 1 {
@@ -317,7 +317,7 @@ func TestRemoteDoesNotAcknowledgeNoAuthWhenPolicyDisabled(t *testing.T) {
 		t.Fatalf("DialRemoteURLForProject: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: "submit-1", SessionID: "session-1", Text: "hi"}); err != nil {
+	if _, err := remote.SubmitUserTurn(context.Background(), runtimeSubmitUserTurnRequestForTest("session-1", "hi")); err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
 	requireNoHandlerError(t, handlerErrs)

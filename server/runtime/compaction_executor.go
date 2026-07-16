@@ -50,7 +50,7 @@ func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.R
 		engine:            "remote",
 		items:             replacement,
 		usage:             resp.Usage,
-		trimmedItemsCount: textutil.CloneInt(resp.TrimmedItemsCount),
+		trimmedItemsCount: textutil.Pointer(resp.TrimmedItemsCount),
 		overflowRepair:    repairStats,
 		provider:          providerID,
 	}, nil

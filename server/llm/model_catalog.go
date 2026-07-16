@@ -135,22 +135,6 @@ func SupportedThinkingLevelsModel(model string) []string {
 	return append([]string(nil), defaultSupportedThinkingLevels...)
 }
 
-func SupportedVerbosityLevelsModel(model string) []string {
-	if !SupportsVerbosityModel(model) {
-		return nil
-	}
-	contract, ok := LookupModelCapabilityContract(model)
-	if !ok {
-		return nil
-	}
-	return verbosityLevelsFromSupport(contract.SupportsVerbosity, contract.SupportedVerbosityLevels)
-}
-
-func SupportsLargeContextWindowModel(model string) bool {
-	contract, ok := LookupModelCapabilityContract(model)
-	return ok && contract.LargeContextWindowTokens > 0
-}
-
 func verbosityLevelsFromSupport(supported bool, levels []string) []string {
 	if !supported {
 		return nil

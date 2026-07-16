@@ -10,7 +10,7 @@ import (
 
 	"core/shared/rollbacktarget"
 	"core/shared/sessioncontract"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 var errForkReplayBoundary = errors.New("fork replay boundary reached")
@@ -232,7 +232,7 @@ func cloneLockedContract(in *LockedContract) *LockedContract {
 		toolPreambles := *in.ToolPreambles
 		copyLocked.ToolPreambles = &toolPreambles
 	}
-	copyLocked.ProviderContract.SupportsProviderVerbosity = valuecopy.Pointer(in.ProviderContract.SupportsProviderVerbosity)
+	copyLocked.ProviderContract.SupportsProviderVerbosity = textutil.Pointer(in.ProviderContract.SupportsProviderVerbosity)
 	copyLocked.SystemPrompt = strings.TrimSpace(in.SystemPrompt)
 	copyLocked.ReviewerPrompt = strings.TrimSpace(in.ReviewerPrompt)
 	return &copyLocked

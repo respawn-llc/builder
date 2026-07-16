@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"time"
 
@@ -291,7 +292,7 @@ func (e *Engine) queuedUserAutoDrainIDSnapshot() map[string]struct{} {
 func (e *Engine) pushActiveUserInjectionScope(ids map[string]struct{}) func() {
 	e.userInjectionScopeMu.Lock()
 	previous := e.activeUserInjectionScope
-	e.activeUserInjectionScope = cloneStringSet(ids)
+	e.activeUserInjectionScope = cloneMapIfNonEmpty(ids)
 	e.userInjectionScopeMu.Unlock()
 	return func() {
 		e.userInjectionScopeMu.Lock()
@@ -306,18 +307,14 @@ func (e *Engine) activeUserInjectionScopeSnapshot() map[string]struct{} {
 	}
 	e.userInjectionScopeMu.Lock()
 	defer e.userInjectionScopeMu.Unlock()
-	return cloneStringSet(e.activeUserInjectionScope)
+	return cloneMapIfNonEmpty(e.activeUserInjectionScope)
 }
 
-func cloneStringSet(in map[string]struct{}) map[string]struct{} {
+func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[string]struct{}, len(in))
-	for item := range in {
-		out[item] = struct{}{}
-	}
-	return out
+	return maps.Clone(in)
 }
 
 func (e *Engine) DrainQueuedUserMessagesBeforeClose(ctx context.Context) error {

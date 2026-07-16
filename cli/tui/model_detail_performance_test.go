@@ -238,16 +238,16 @@ func detailPerformancePrefixRow(index int) clientui.TranscriptCommittedRow {
 		))
 	case 2:
 		return detailTool(clientui.TranscriptToolRow{
-			ToolCallID: fmt.Sprintf("00000000-0000-4000-8000-%012d", index+1),
+			ToolCallID: clientui.ToolCallID(fmt.Sprintf("00000000-0000-4000-8000-%012d", index+1)),
 			ToolName:   "exec_command",
 			Text:       "go test ./cli/tui ./cli/tui/transcriptrender -count=1",
-			ToolPresentation: &clientui.ToolCallMeta{
+			Presentation: &transcript.ToolCallMeta{
 				ToolName:     "exec_command",
-				Presentation: clientui.ToolPresentationShell,
+				Presentation: transcript.ToolPresentationShell,
 				Command:      "go test ./cli/tui ./cli/tui/transcriptrender -count=1",
-				RenderHint: &clientui.ToolRenderHint{
-					Kind:         clientui.ToolRenderKindShell,
-					ShellDialect: clientui.ToolShellDialectPosix,
+				RenderHint: &transcript.ToolRenderHint{
+					Kind:         transcript.ToolRenderKindShell,
+					ShellDialect: transcript.ToolShellDialectPosix,
 				},
 			},
 		})
@@ -262,13 +262,13 @@ func detailPerformancePrefixRow(index int) clientui.TranscriptCommittedRow {
 			"/workspace",
 		)
 		return detailTool(clientui.TranscriptToolRow{
-			ToolCallID: fmt.Sprintf("10000000-0000-4000-8000-%012d", index+1),
+			ToolCallID: clientui.ToolCallID(fmt.Sprintf("10000000-0000-4000-8000-%012d", index+1)),
 			ToolName:   "patch",
 			Text:       rendered.DetailText(),
-			ToolPresentation: &clientui.ToolCallMeta{
+			Presentation: &transcript.ToolCallMeta{
 				ToolName:    "patch",
 				PatchRender: &rendered,
-				RenderHint:  &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff},
+				RenderHint:  &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
 			},
 		})
 	}
@@ -284,13 +284,13 @@ func detailPerformanceVisibleTail() []clientui.TranscriptCommittedRow {
 			ToolCallID: "20000000-0000-4000-8000-000000000001",
 			ToolName:   "exec_command",
 			Text:       "git status --short",
-			ToolPresentation: &clientui.ToolCallMeta{
+			Presentation: &transcript.ToolCallMeta{
 				ToolName:     "exec_command",
-				Presentation: clientui.ToolPresentationShell,
+				Presentation: transcript.ToolPresentationShell,
 				Command:      "git status --short",
-				RenderHint: &clientui.ToolRenderHint{
-					Kind:         clientui.ToolRenderKindShell,
-					ShellDialect: clientui.ToolShellDialectPosix,
+				RenderHint: &transcript.ToolRenderHint{
+					Kind:         transcript.ToolRenderKindShell,
+					ShellDialect: transcript.ToolShellDialectPosix,
 				},
 			},
 		}),
@@ -302,12 +302,12 @@ func detailPerformanceVisibleTail() []clientui.TranscriptCommittedRow {
 		detailNotice(clientui.TranscriptNoticeRow{
 			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:   clientui.TranscriptNoticeInfo,
-			Diagnostic: &clientui.TranscriptDiagnosticData{Detail: "tail diagnostic one"},
+			Diagnostic: &clientui.TranscriptDiagnostic{Detail: "tail diagnostic one"},
 		}),
 		detailNotice(clientui.TranscriptNoticeRow{
 			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:   clientui.TranscriptNoticeInfo,
-			Diagnostic: &clientui.TranscriptDiagnosticData{Detail: "tail diagnostic two"},
+			Diagnostic: &clientui.TranscriptDiagnostic{Detail: "tail diagnostic two"},
 		}),
 		{
 			Visibility: clientui.EntryVisibilityOngoing,

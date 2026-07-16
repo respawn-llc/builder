@@ -161,17 +161,3 @@ func withStatusWorkspaceRoot(root string) statusRequestOption {
 		req.WorkspaceRoot = root
 	}
 }
-
-func startupCmdMessage[T tea.Msg](cmds []tea.Cmd) (T, bool) {
-	var zero T
-	for _, cmd := range cmds {
-		if cmd == nil {
-			continue
-		}
-		msg, ok := cmd().(T)
-		if ok {
-			return msg, true
-		}
-	}
-	return zero, false
-}

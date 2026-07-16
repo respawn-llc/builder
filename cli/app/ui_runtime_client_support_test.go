@@ -5,8 +5,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"core/server/llm"
-	"core/server/runtime"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -49,30 +47,6 @@ func (c *countingSessionViewClient) GetLatestCommittedAssistantFinalAnswer(_ con
 
 func (c *countingSessionViewClient) GetSessionExecutionEnvironment(context.Context, serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
 	return serverapi.SessionExecutionEnvironmentResponse{}, nil
-}
-
-type blockingSessionViewClient struct {
-	apicontract.SessionViewService
-}
-
-func (blockingSessionViewClient) GetSessionMainView(ctx context.Context, _ serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-	<-ctx.Done()
-	return serverapi.SessionMainViewResponse{}, ctx.Err()
-}
-
-func (blockingSessionViewClient) GetSessionTranscriptPage(ctx context.Context, _ serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
-	<-ctx.Done()
-	return serverapi.SessionTranscriptPageResponse{}, ctx.Err()
-}
-
-func (blockingSessionViewClient) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, _ serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
-	<-ctx.Done()
-	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, ctx.Err()
-}
-
-func (blockingSessionViewClient) GetSessionExecutionEnvironment(ctx context.Context, _ serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
-	<-ctx.Done()
-	return serverapi.SessionExecutionEnvironmentResponse{}, ctx.Err()
 }
 
 type controlledTranscriptPageResult struct {
@@ -151,68 +125,4 @@ func (c *flakySessionViewClient) GetLatestCommittedAssistantFinalAnswer(context.
 
 func (c *flakySessionViewClient) GetSessionExecutionEnvironment(context.Context, serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
 	return serverapi.SessionExecutionEnvironmentResponse{}, nil
-}
-
-type mutableRuntimeResolver struct {
-	mu     sync.Mutex
-	engine *runtime.Engine
-}
-
-func (r *mutableRuntimeResolver) Set(engine *runtime.Engine) {
-	r.mu.Lock()
-	r.engine = engine
-	r.mu.Unlock()
-}
-
-func (r *mutableRuntimeResolver) ResolveRuntime(context.Context, string) (*runtime.Engine, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.engine, nil
-}
-
-func (r *mutableRuntimeResolver) WithGuardedRuntime(_ context.Context, _ string, fn func(*runtime.Engine) error) (bool, error) {
-	r.mu.Lock()
-	engine := r.engine
-	r.mu.Unlock()
-	if engine == nil {
-		return false, nil
-	}
-	return true, fn(engine)
-}
-
-func (r *mutableRuntimeResolver) BeginSessionRun(string) (func(), bool) {
-	return func() {}, true
-}
-
-func (r *mutableRuntimeResolver) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
-	return context.Background(), func() {}, true
-}
-
-func (r *mutableRuntimeResolver) SessionRunsBlocked(string) bool { return false }
-
-type runtimeClientFakeLLM struct {
-	mu        sync.Mutex
-	responses []llm.Response
-}
-
-func (f *runtimeClientFakeLLM) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.responses) == 0 {
-		return llm.Response{}, nil
-	}
-	resp := f.responses[0]
-	f.responses = f.responses[1:]
-	return resp, nil
-}
-
-func (f *runtimeClientFakeLLM) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
-	}, nil
 }

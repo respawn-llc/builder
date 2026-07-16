@@ -204,8 +204,6 @@ func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
 		!capabilities.RuntimeControl ||
 		!capabilities.RuntimeLiveControl ||
 		!capabilities.PromptControl ||
-		!capabilities.PromptActivity ||
-		!capabilities.SessionActivity ||
 		!capabilities.ProcessOutput ||
 		!capabilities.AttentionNotifications ||
 		!capabilities.OnboardingFinalize {

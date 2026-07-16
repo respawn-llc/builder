@@ -9,7 +9,7 @@ import (
 	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -419,13 +419,13 @@ func rollbackNavigationRequestAfterPage(
 	case tui.DetailTranscriptPageOlder:
 		if page.HasMoreAbove && page.OlderCursor != nil {
 			return clientui.TranscriptPageRequest{
-				Cursor: valuecopy.Pointer(page.OlderCursor),
+				Cursor: textutil.Pointer(page.OlderCursor),
 			}, true
 		}
 	case tui.DetailTranscriptPageNewer:
 		if page.HasMoreBelow && page.NewerCursor != nil {
 			return clientui.TranscriptPageRequest{
-				NewerCursor: valuecopy.Pointer(page.NewerCursor),
+				NewerCursor: textutil.Pointer(page.NewerCursor),
 			}, true
 		}
 	}

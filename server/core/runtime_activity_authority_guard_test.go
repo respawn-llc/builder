@@ -152,7 +152,6 @@ func TestRuntimeReadModelClockConsumersDoNotUseGlobalCoordinator(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	for _, relPath := range []string{
 		filepath.Join("server", "runtimeops", "coordinator.go"),
-		filepath.Join("server", "registry", "prompt_activity_broker.go"),
 	} {
 		content, err := os.ReadFile(filepath.Join(repoRoot, relPath))
 		if err != nil {

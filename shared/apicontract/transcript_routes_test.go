@@ -35,13 +35,6 @@ func TestTranscriptSubscriptionRequestHasNoCursor(t *testing.T) {
 	if typ.NumField() != 1 || typ.Field(0).Name != "SessionID" {
 		t.Fatalf("TranscriptSubscribeRequest fields = %v, want only SessionID", typ)
 	}
-	activity, ok := RouteByMethod(protocol.MethodSessionSubscribeActivity)
-	if !ok {
-		t.Fatal("legacy session activity route missing")
-	}
-	if activity.RequestType != reflect.TypeOf(serverapi.SessionActivitySubscribeRequest{}) {
-		t.Fatalf("session activity request type changed to %v", activity.RequestType)
-	}
 }
 
 func TestLatestCommittedAssistantFinalAnswerRouteContract(t *testing.T) {

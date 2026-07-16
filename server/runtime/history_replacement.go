@@ -10,7 +10,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/rollbacktarget"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 // errDecodeHistoryReplacedEvent wraps failures to decode a persisted history_replaced event payload.
@@ -54,10 +54,10 @@ func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacemen
 		Mode:                              strings.TrimSpace(envelope.Mode),
 		WorkflowRunID:                     strings.TrimSpace(envelope.WorkflowRunID),
 		CompactionNumber:                  envelope.CompactionNumber,
-		CommittedEntryStart:               valuecopy.Pointer(envelope.CommittedEntryStart),
+		CommittedEntryStart:               textutil.Pointer(envelope.CommittedEntryStart),
 		PendingHandoffFutureMessage:       strings.TrimSpace(envelope.PendingHandoffFutureMessage),
 		LastCommittedAssistantFinalAnswer: envelope.LastCommittedAssistantFinalAnswer,
-		LatestRollbackCandidate:           valuecopy.Pointer(envelope.LatestRollbackCandidate),
+		LatestRollbackCandidate:           textutil.Pointer(envelope.LatestRollbackCandidate),
 	}
 	if decoded.LatestRollbackCandidate != nil {
 		if err := decoded.LatestRollbackCandidate.Validate(); err != nil {

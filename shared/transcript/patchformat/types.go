@@ -57,6 +57,24 @@ type RenderedPatch struct {
 	DetailLines  []RenderedLine
 }
 
+func Clone(in *RenderedPatch) *RenderedPatch {
+	if in == nil {
+		return nil
+	}
+	out := &RenderedPatch{}
+	if len(in.Files) > 0 {
+		out.Files = make([]RenderedFile, 0, len(in.Files))
+		for _, file := range in.Files {
+			copyFile := file
+			copyFile.Diff = append([]string(nil), file.Diff...)
+			out.Files = append(out.Files, copyFile)
+		}
+	}
+	out.SummaryLines = append([]RenderedLine(nil), in.SummaryLines...)
+	out.DetailLines = append([]RenderedLine(nil), in.DetailLines...)
+	return out
+}
+
 func (r RenderedPatch) SummaryText() string {
 	return joinRenderedLines(r.SummaryLines)
 }

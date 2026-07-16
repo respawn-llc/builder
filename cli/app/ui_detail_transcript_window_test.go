@@ -8,6 +8,7 @@ import (
 	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -89,7 +90,8 @@ func TestDetailModeNewestRefreshPreservesCachedNavigationWhenSelectedRowSurvives
 	sessionViews := newControlledTranscriptPageClient()
 	selected := detailTestUserRow("selected full detail")
 	selected.Visibility = clientui.EntryVisibilityOngoing
-	selected.User.CondensedText = "selected"
+	selectedCondensed := "selected"
+	selected.User.CondensedText = &selectedCondensed
 	cached := clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
@@ -143,7 +145,8 @@ func TestDetailModeNewestRefreshPreservesCachedNavigationWhenSelectedRowSurvives
 func TestDetailModeNewestRefreshAnchorsAtEndWhenCachedWindowHasNewerContent(t *testing.T) {
 	selected := detailTestUserRow("selected full detail")
 	selected.Visibility = clientui.EntryVisibilityOngoing
-	selected.User.CondensedText = "selected"
+	selectedCondensed := "selected"
+	selected.User.CondensedText = &selectedCondensed
 	cached := clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		NewerCursor:  appInt64Ptr(75),
@@ -471,10 +474,10 @@ func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
 			detailTestToolRow(clientui.TranscriptToolRow{
 				ToolCallID: "3f14b1c8-5fee-4c0e-a72e-f38bb6c3c389",
 				ToolName:   "apply_patch",
-				ToolPresentation: &clientui.ToolCallMeta{
+				Presentation: &transcript.ToolCallMeta{
 					ToolName:       "apply_patch",
-					Presentation:   clientui.ToolPresentationDefault,
-					RenderBehavior: clientui.ToolCallRenderBehaviorDefault,
+					Presentation:   transcript.ToolPresentationDefault,
+					RenderBehavior: transcript.ToolCallRenderBehaviorDefault,
 					PatchRender:    sourcePatch,
 				},
 			}),
@@ -484,13 +487,13 @@ func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
 	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, page)
 	sourcePatch.Files[0].Diff[0] = "source changed"
 	firstRead := model.detailTranscript.page()
-	if got := firstRead.Entries[0].Tool.ToolPresentation.PatchRender.Files[0].Diff[0]; got != "old" {
+	if got := firstRead.Entries[0].Tool.Presentation.PatchRender.Files[0].Diff[0]; got != "old" {
 		t.Fatalf("stored patch diff = %q, want source-isolated old diff", got)
 	}
 
-	firstRead.Entries[0].Tool.ToolPresentation.PatchRender.Files[0].Diff[0] = "read changed"
+	firstRead.Entries[0].Tool.Presentation.PatchRender.Files[0].Diff[0] = "read changed"
 	secondRead := model.detailTranscript.page()
-	if got := secondRead.Entries[0].Tool.ToolPresentation.PatchRender.Files[0].Diff[0]; got != "old" {
+	if got := secondRead.Entries[0].Tool.Presentation.PatchRender.Files[0].Diff[0]; got != "old" {
 		t.Fatalf("page patch diff = %q, want page-isolated old diff", got)
 	}
 }

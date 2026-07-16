@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"core/shared/toolspec"
@@ -1079,7 +1080,7 @@ func (s *validationState) branchJoinDistances(start NodeID) (map[NodeID]int, boo
 				return nil, false
 			}
 		}
-		nextPath := cloneBoolMap(current.path)
+		nextPath := maps.Clone(current.path)
 		nextPath[current.nodeID] = true
 		for _, edge := range s.outgoingByNode[current.nodeID] {
 			stack = append(stack, frame{nodeID: edge.TargetNodeID, distance: current.distance + 1, path: nextPath})
@@ -1137,14 +1138,6 @@ func validContextMode(value ContextMode) bool {
 	default:
 		return false
 	}
-}
-
-func cloneBoolMap(in map[NodeID]bool) map[NodeID]bool {
-	out := make(map[NodeID]bool, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }
 
 func (c ValidationErrorCode) Error() string {

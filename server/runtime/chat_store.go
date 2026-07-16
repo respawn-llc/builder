@@ -16,21 +16,24 @@ import (
 )
 
 type ChatEntry struct {
-	Visibility         transcript.EntryVisibility
-	RollbackTargetID   *string
-	Role               string
-	Text               string
-	CondensedText      string
-	Phase              llm.MessagePhase
-	MessageType        llm.MessageType
-	SourcePath         string
-	WorktreeContext    *session.WorktreeContext
-	CompactLabel       string
-	ToolResultSummary  string
-	ToolCallID         string
-	NoticeID           string
-	BackgroundExitCode *int
-	ToolCall           *transcript.ToolCallMeta
+	StepID               string
+	Visibility           transcript.EntryVisibility
+	RollbackTargetID     *string
+	Role                 string
+	Text                 string
+	CondensedText        string
+	Phase                llm.MessagePhase
+	MessageType          llm.MessageType
+	SourcePath           string
+	WorktreeContext      *session.WorktreeContext
+	CompactLabel         string
+	ToolResultSummary    string
+	ToolCallID           string
+	NoticeID             string
+	BackgroundActivityID string
+	BackgroundProcessID  string
+	BackgroundExitCode   *int
+	ToolCall             *transcript.ToolCallMeta
 }
 
 type ChatSnapshot struct {
@@ -66,9 +69,10 @@ type storedToolCompletion struct {
 type chatStore struct {
 	mu sync.RWMutex
 
-	items   []llm.ResponseItem
-	compact *compactionCheckpoint
-	local   []localChatEntry
+	items          []llm.ResponseItem
+	messageStepIDs []string
+	compact        *compactionCheckpoint
+	local          []localChatEntry
 
 	toolCompletions                   map[string]tools.Result
 	toolCompletionProviderItems       map[string][]llm.ResponseItem
@@ -126,19 +130,20 @@ func newChatStoreWithCWD(cwd string) *chatStore {
 	}
 }
 
-func (s *chatStore) appendMessage(msg llm.Message) {
+func (s *chatStore) appendMessage(stepID string, msg llm.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	msg = normalizeMessageForTranscript(msg, s.cwd)
 	s.items = append(s.items, llm.ItemsFromMessages([]llm.Message{msg})...)
+	s.messageStepIDs = append(s.messageStepIDs, strings.TrimSpace(stepID))
 	s.applyMessageStatsLocked(msg)
 	s.providerTokenEstimateDirty = true
 }
-func (s *chatStore) replaceHistory(items []llm.ResponseItem) {
-	s.replaceHistoryAtCommittedEntryStart(items, nil)
+func (s *chatStore) replaceHistory(stepID string, items []llm.ResponseItem) {
+	s.replaceHistoryAtCommittedEntryStart(stepID, items, nil)
 }
 
-func (s *chatStore) replaceHistoryAtCommittedEntryStart(items []llm.ResponseItem, committedEntryStart *int) {
+func (s *chatStore) replaceHistoryAtCommittedEntryStart(stepID string, items []llm.ResponseItem, committedEntryStart *int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	activeSegmentEntryStart := s.transcriptEntryCount
@@ -153,7 +158,11 @@ func (s *chatStore) replaceHistoryAtCommittedEntryStart(items []llm.ResponseItem
 	// materializing replacement items as synthetic local entries at the compaction
 	// boundary while provider/model history switches to the compacted checkpoint.
 	projectedStart := len(s.local)
-	s.appendProjectedHistoryReplacementEntriesLocked(transcriptEntriesFromHistoryReplacement(preparedItems))
+	projectedEntries := transcriptEntriesFromHistoryReplacement(preparedItems)
+	for index := range projectedEntries {
+		projectedEntries[index].StepID = strings.TrimSpace(stepID)
+	}
+	s.appendProjectedHistoryReplacementEntriesLocked(projectedEntries)
 	s.local = append([]localChatEntry(nil), s.local[projectedStart:]...)
 	s.compact = &compactionCheckpoint{
 		CutoffItemCount:    0,
@@ -164,6 +173,7 @@ func (s *chatStore) replaceHistoryAtCommittedEntryStart(items []llm.ResponseItem
 	s.activeSegmentEntryStart = activeSegmentEntryStart
 	s.pruneAssistantStreamIDsBeforeLocked(activeSegmentEntryStart)
 	s.items = nil
+	s.messageStepIDs = nil
 	s.messageCount = 0
 	s.pruneToolCompletionsToWorkingSetLocked()
 	s.providerTokenEstimateDirty = true
@@ -342,15 +352,6 @@ func (s *chatStore) streamingSnapshot() (string, string, *AssistantStreamMetadat
 	defer s.mu.RUnlock()
 	streaming, metadata := s.streamingSnapshotLocked()
 	return streaming, s.streamingError, metadata
-}
-
-func (s *chatStore) transcriptStreamingSnapshot() (string, *uuid.UUID) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.streaming == nil {
-		return "", nil
-	}
-	return s.streaming.text, cloneTranscriptStreamID(s.streaming.transcriptStreamID)
 }
 
 func (s *chatStore) recordAssistantStreamFinalization(committedEntryStart int, streamID *uuid.UUID) {
@@ -703,53 +704,6 @@ func applyLastCommittedAssistantFinalAnswer(current string, msg llm.Message) str
 	return ""
 }
 
-func (s *chatStore) recentTailSnapshot(maxEntries int) TranscriptWindowSnapshot {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	items, localEntries := llm.CloneResponseItems(s.items), append([]localChatEntry(nil), s.local...)
-	materializedToolResults := collectMaterializedToolCalls(items)
-	scan := newInMemoryTranscriptScan(inMemoryTranscriptScanRequest{
-		TrackRecentTail: true,
-		TailLimit:       maxEntries,
-	}, s.toolCompletions, materializedToolResults)
-	localIndex := 0
-	processedMessages := 0
-	appendLocalEntries := func(messageCount int) {
-		for localIndex < len(localEntries) {
-			if localEntries[localIndex].AfterMessageCount > messageCount {
-				break
-			}
-			if localEntries[localIndex].MarksBoundary {
-				scan.MarkCompactionBoundary()
-			}
-			scan.appendEntry(localEntries[localIndex].Entry)
-			localIndex++
-		}
-	}
-	if s.compact != nil && s.compact.CutoffMessageCount == 0 {
-		scan.MarkCompactionBoundary()
-	}
-	appendLocalEntries(0)
-	walker := newResponseItemMessageWalker(func(msg llm.Message) {
-		scan.ApplyMessage(msg, 0)
-		processedMessages++
-		if s.compact != nil && processedMessages == s.compact.CutoffMessageCount {
-			scan.MarkCompactionBoundary()
-		}
-		appendLocalEntries(processedMessages)
-	})
-	for _, item := range items {
-		walker.Apply(item)
-	}
-	walker.Flush()
-	appendLocalEntries(processedMessages)
-	window := scan.RecentTailSnapshot()
-	window.Snapshot.Streaming, window.Snapshot.StreamingMetadata = s.streamingSnapshotLocked()
-	window.Snapshot.StreamingError = s.streamingError
-	return window
-}
-
 type transcriptDeliverySnapshot struct {
 	Rows              []TranscriptCommittedRowFact
 	Streaming         string
@@ -770,7 +724,7 @@ func newTranscriptDeliveryFactScan(completions map[string]tools.Result, material
 	return &transcriptDeliveryFactScan{toolCompletions: completions, materializedToolCalls: materializedToolCalls, streamIDsByEntry: streamIDsByEntry, currentEntryIndex: currentEntryIndex}
 }
 
-func (s *transcriptDeliveryFactScan) ApplyMessage(msg llm.Message) {
+func (s *transcriptDeliveryFactScan) ApplyMessage(stepID string, msg llm.Message) {
 	if s == nil {
 		return
 	}
@@ -778,7 +732,10 @@ func (s *transcriptDeliveryFactScan) ApplyMessage(msg llm.Message) {
 	if id, ok := s.streamIDsByEntry[s.currentEntryIndex]; ok {
 		streamID = &id
 	}
-	facts := transcriptCommittedRowFactsFromMessage(msg, streamID, s.toolCompletions, s.materializedToolCalls)
+	facts := transcriptCommittedRowFactsForStep(
+		stepID,
+		transcriptCommittedRowFactsFromMessage(msg, streamID, s.toolCompletions, s.materializedToolCalls),
+	)
 	s.rows = append(s.rows, facts...)
 	s.currentEntryIndex += transcriptCommittedEntryCountFromMessage(msg, s.toolCompletions, s.materializedToolCalls)
 }
@@ -815,48 +772,65 @@ func (s *transcriptDeliveryFactScan) Snapshot() []TranscriptCommittedRowFact {
 	return out
 }
 
+func (s *chatStore) walkProjectionLocked(
+	applyMessage func(stepID string, msg llm.Message),
+	applyLocalEntry func(localChatEntry),
+	markCompactionBoundary func(),
+) {
+	messageIndex := 0
+	localIndex := 0
+	appendLocalEntries := func(messageCount int) {
+		for localIndex < len(s.local) && s.local[localIndex].AfterMessageCount <= messageCount {
+			local := s.local[localIndex]
+			if local.MarksBoundary && markCompactionBoundary != nil {
+				markCompactionBoundary()
+			}
+			applyLocalEntry(local)
+			localIndex++
+		}
+	}
+	if s.compact != nil && s.compact.CutoffMessageCount == 0 && markCompactionBoundary != nil {
+		markCompactionBoundary()
+	}
+	appendLocalEntries(0)
+	walker := newResponseItemMessageWalker(func(msg llm.Message) {
+		if messageIndex >= len(s.messageStepIDs) {
+			panic(fmt.Sprintf("transcript message/step identity alignment exhausted: message_index=%d step_id_count=%d", messageIndex, len(s.messageStepIDs)))
+		}
+		applyMessage(strings.TrimSpace(s.messageStepIDs[messageIndex]), msg)
+		messageIndex++
+		if s.compact != nil && messageIndex == s.compact.CutoffMessageCount && markCompactionBoundary != nil {
+			markCompactionBoundary()
+		}
+		appendLocalEntries(messageIndex)
+	})
+	for _, item := range s.items {
+		walker.Apply(item)
+	}
+	walker.Flush()
+	if messageIndex != len(s.messageStepIDs) {
+		panic(fmt.Sprintf("transcript message/step identity alignment has unused identities: consumed=%d step_id_count=%d", messageIndex, len(s.messageStepIDs)))
+	}
+	appendLocalEntries(messageIndex)
+}
+
 func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	items, localEntries := llm.CloneResponseItems(s.items), append([]localChatEntry(nil), s.local...)
-	materializedToolResults := collectMaterializedToolCalls(items)
+	materializedToolResults := collectMaterializedToolCalls(s.items)
 	streamIDsByEntry := make(map[int]uuid.UUID, len(s.assistantStreamIDsByEntry))
 	for entryIndex, streamID := range s.assistantStreamIDsByEntry {
 		streamIDsByEntry[entryIndex] = streamID
 	}
 	scan := newTranscriptDeliveryFactScan(s.toolCompletions, materializedToolResults, streamIDsByEntry, s.activeSegmentEntryStart)
-	localIndex := 0
-	processedMessages := 0
-	appendLocalEntries := func(messageCount int) {
-		for localIndex < len(localEntries) {
-			if localEntries[localIndex].AfterMessageCount > messageCount {
-				break
-			}
-			if localEntries[localIndex].MarksBoundary {
-				scan.MarkCompactionBoundary()
-			}
-			scan.ApplyLocalEntry(localEntries[localIndex].Entry, localEntries[localIndex].Projected)
-			localIndex++
-		}
-	}
-	if s.compact != nil && s.compact.CutoffMessageCount == 0 {
-		scan.MarkCompactionBoundary()
-	}
-	appendLocalEntries(0)
-	walker := newResponseItemMessageWalker(func(msg llm.Message) {
-		scan.ApplyMessage(msg)
-		processedMessages++
-		if s.compact != nil && processedMessages == s.compact.CutoffMessageCount {
-			scan.MarkCompactionBoundary()
-		}
-		appendLocalEntries(processedMessages)
-	})
-	for _, item := range items {
-		walker.Apply(item)
-	}
-	walker.Flush()
-	appendLocalEntries(processedMessages)
+	s.walkProjectionLocked(
+		scan.ApplyMessage,
+		func(local localChatEntry) {
+			scan.ApplyLocalEntry(local.Entry, local.Projected)
+		},
+		scan.MarkCompactionBoundary,
+	)
 	streaming, metadata := s.streamingSnapshotLocked()
 	return transcriptDeliverySnapshot{
 		Rows:              scan.Snapshot(),
@@ -864,100 +838,5 @@ func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
 		StreamingMetadata: metadata,
 		StreamingStreamID: cloneTranscriptStreamID(s.streamingStreamIDLocked()),
 		StreamingPhase:    s.streamingPhaseLocked(),
-	}
-}
-
-func (s *chatStore) transcriptPageSnapshot(offset, limit int) transcriptPageSnapshot {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	items, localEntries := llm.CloneResponseItems(s.items), append([]localChatEntry(nil), s.local...)
-	materializedToolResults := collectMaterializedToolCalls(items)
-	scan := newInMemoryTranscriptScan(inMemoryTranscriptScanRequest{Offset: offset, Limit: limit}, s.toolCompletions, materializedToolResults)
-	localIndex := 0
-	processedMessages := 0
-	appendLocalEntries := func(messageCount int) {
-		for localIndex < len(localEntries) {
-			if localEntries[localIndex].AfterMessageCount > messageCount {
-				break
-			}
-			scan.appendEntry(localEntries[localIndex].Entry)
-			localIndex++
-		}
-	}
-	appendLocalEntries(0)
-	walker := newResponseItemMessageWalker(func(msg llm.Message) {
-		scan.ApplyMessage(msg, 0)
-		processedMessages++
-		appendLocalEntries(processedMessages)
-	})
-	for _, item := range items {
-		walker.Apply(item)
-	}
-	walker.Flush()
-	appendLocalEntries(processedMessages)
-	page := scan.PageSnapshot()
-	page.Snapshot.Streaming, page.Snapshot.StreamingMetadata = s.streamingSnapshotLocked()
-	page.Snapshot.StreamingError = s.streamingError
-	return page
-}
-
-type materializedChatSnapshot struct {
-	Snapshot             ChatSnapshot
-	CompactionEntryStart int
-}
-
-func (s *chatStore) snapshotWithMetadata() materializedChatSnapshot {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	items, localEntries := llm.CloneResponseItems(s.items), append([]localChatEntry(nil), s.local...)
-	materializedToolResults := collectMaterializedToolCalls(items)
-	scan := newInMemoryTranscriptScan(inMemoryTranscriptScanRequest{Offset: 0, Limit: 0}, s.toolCompletions, materializedToolResults)
-	localIndex := 0
-	appendLocalEntries := func(processedMessages int) {
-		for localIndex < len(localEntries) {
-			if localEntries[localIndex].AfterMessageCount > processedMessages {
-				break
-			}
-			scan.appendEntry(localEntries[localIndex].Entry)
-			localIndex++
-		}
-	}
-	appendLocalEntries(0)
-	processedMessages := 0
-	walker := newResponseItemMessageWalker(func(msg llm.Message) {
-		scan.ApplyMessage(msg, 0)
-		processedMessages++
-		appendLocalEntries(processedMessages)
-	})
-	for _, item := range items {
-		walker.Apply(item)
-	}
-	walker.Flush()
-	appendLocalEntries(processedMessages)
-	snapshot := scan.PageSnapshot().Snapshot
-	snapshot.Streaming, snapshot.StreamingMetadata = s.streamingSnapshotLocked()
-	snapshot.StreamingError = s.streamingError
-	return materializedChatSnapshot{
-		Snapshot:             snapshot,
-		CompactionEntryStart: -1,
-	}
-}
-
-func (s *chatStore) formatToolCall(call llm.ToolCall) ChatEntry {
-	meta := decodeToolCallMeta(call)
-	text := "tool call"
-	if meta != nil {
-		text = strings.TrimSpace(meta.Command)
-	}
-	if text == "" {
-		text = "tool call"
-	}
-	return ChatEntry{
-		Role:       "tool_call",
-		Text:       text,
-		ToolCallID: strings.TrimSpace(call.ID),
-		ToolCall:   meta,
 	}
 }

@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"core/server/auth"
-	"core/shared/clientui"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -42,10 +40,11 @@ func setupClipboardTestInput(t *testing.T, m *uiModel, target clipboardTestInput
 		m.replaceMainInput("beforeafter", len([]rune("before")))
 		return m
 	case clipboardTestInputAsk:
-		next, _ := m.Update(askEventMsg{event: askEvent{
-			req:   clientui.PendingPromptEvent{Question: "Provide details"},
-			reply: make(chan askReply, 1),
-		}})
+		next, _ := m.Update(askEventMsg{event: testQuestionAskEvent(
+			"clipboard-ask",
+			"Provide details",
+			make(chan askReply, 1),
+		)})
 		updated := next.(*uiModel)
 		if !updated.ask.freeform {
 			t.Fatal("expected freeform ask input")
@@ -222,7 +221,8 @@ func TestClipboardPasteDoneRejectsStaleTarget(t *testing.T) {
 	t.Run("replaced ask", func(t *testing.T) {
 		m := setupClipboardTestInput(t, newProjectedStaticUIModel(), clipboardTestInputAsk)
 		staleToken := m.ask.currentToken
-		testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{Question: "Replacement"}, reply: make(chan askReply, 1)})
+		replacement := testQuestionAskEvent("replacement-ask", "Replacement", make(chan askReply, 1))
+		testSetActiveAsk(m, &replacement)
 		m.ask.freeform = true
 		m.ask.input = "replacement"
 
@@ -282,7 +282,8 @@ func TestClipboardPasteDoneRemovesStaleTemporaryImage(t *testing.T) {
 			} else {
 				msg.Target = uiClipboardPasteTargetAsk
 				msg.AskToken = m.ask.currentToken
-				testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{Question: "Replacement"}, reply: make(chan askReply, 1)})
+				replacement := testQuestionAskEvent("replacement-ask", "Replacement", make(chan askReply, 1))
+				testSetActiveAsk(m, &replacement)
 				m.ask.freeform = true
 			}
 
@@ -519,13 +520,13 @@ func TestClipboardPasteBindingLeavesNonFreeformAskUnchanged(t *testing.T) {
 		calls++
 		return uiClipboardText{Text: "clipboard"}, nil
 	})))
-	next, _ := m.Update(askEventMsg{event: askEvent{
-		req: clientui.PendingPromptEvent{
-			Question:    "Choose one",
-			Suggestions: []string{"first", "second"},
-		},
-		reply: make(chan askReply, 1),
-	}})
+	next, _ := m.Update(askEventMsg{event: testQuestionAskEvent(
+		"clipboard-choice",
+		"Choose one",
+		make(chan askReply, 1),
+		"first",
+		"second",
+	)})
 	m = next.(*uiModel)
 	if m.ask.freeform {
 		t.Fatal("expected non-freeform ask")

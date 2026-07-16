@@ -23,21 +23,9 @@ type sessionConfigProvider interface {
 	Config() config.App
 }
 
-type sessionInitialInputServer interface {
-	sessionLifecycleClientProvider
-}
-
-type sessionDraftPersistenceServer interface {
-	sessionLifecycleClientProvider
-}
-
 type sessionTransitionServer interface {
 	sessionLifecycleClientProvider
 	Reauthenticate(ctx context.Context, interactor authInteractor, interactive bool) error
-}
-
-type sessionAuthReadinessServer interface {
-	EnsureAuthReady(ctx context.Context, interactor authInteractor, interactive bool) error
 }
 
 type sessionWorkspaceChangeServer interface {
@@ -45,23 +33,14 @@ type sessionWorkspaceChangeServer interface {
 	sessionConfigProvider
 }
 
-type interactiveProjectBindingServer interface {
-	Config() config.App
-	PresentationTheme() string
-	ClientPromptRoots() (commands.ClientPromptRoots, error)
-	ProjectViewClient() apicontract.ProjectViewService
-	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error)
-}
-
 type interactiveSessionServer interface {
 	appServerCore
-	interactiveProjectBindingServer
 	launchPlannerServer
 	sessionWorkspaceChangeServer
-	sessionInitialInputServer
-	sessionDraftPersistenceServer
 	sessionTransitionServer
-	sessionAuthReadinessServer
+	ClientPromptRoots() (commands.ClientPromptRoots, error)
+	EnsureAuthReady(ctx context.Context, interactor authInteractor, interactive bool) error
+	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error)
 }
 
 type sessionLifecycleOptions struct {
@@ -281,7 +260,6 @@ func prepareSessionUIRun(
 	return runtimePlan, uiLoopRequest{
 		wiring:                       runtimePlan.Wiring,
 		active:                       plan.ActiveSettings,
-		logger:                       runtimePlan.Logger,
 		commandRegistry:              commandRegistry,
 		initialPrompt:                initialPrompt,
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
@@ -336,7 +314,7 @@ type sessionLaunchInitialState struct {
 
 func sessionLaunchInitialStateFromServer(
 	ctx context.Context,
-	server sessionInitialInputServer,
+	server sessionLifecycleClientProvider,
 	sessionID string,
 	transitionInput string,
 	overrideStoredDraft bool,
@@ -355,7 +333,7 @@ func sessionLaunchInitialStateFromServer(
 	return sessionLaunchInitialState{Input: resp.Input, RecoveryBuffers: resp.RecoveryBuffers}, nil
 }
 
-func persistSessionDraftToServer(ctx context.Context, server sessionDraftPersistenceServer, sessionID string, model any) error {
+func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleClientProvider, sessionID string, model any) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil
 	}

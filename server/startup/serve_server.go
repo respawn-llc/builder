@@ -350,8 +350,6 @@ func serverCapabilityFlags(routes []apicontract.Route) protocol.CapabilityFlags 
 		RuntimeControl:         hasDependency(apicontract.DependencyRuntimeControl),
 		RuntimeLiveControl:     hasDependency(apicontract.DependencyRuntimeControl) && transport.RuntimeLiveControlRoutesExecutable(),
 		PromptControl:          hasDependency(apicontract.DependencyPromptControl),
-		PromptActivity:         hasDependency(apicontract.DependencyPromptActivity),
-		SessionActivity:        hasDependency(apicontract.DependencySessionActivity),
 		ProcessOutput:          hasDependency(apicontract.DependencyProcessOutput),
 		AttentionNotifications: hasDependency(apicontract.DependencyAttentionNotification),
 		OnboardingFinalize:     hasDependency(apicontract.DependencyOnboardingFinalize),
@@ -705,12 +703,6 @@ func (d *startupGatewayDependencies) SessionRuntimeClient() apicontract.SessionR
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) SessionActivityClient() apicontract.SessionActivityService {
-	if c := d.activeCore(); c != nil {
-		return c.SessionActivityClient()
-	}
-	return nil
-}
 func (d *startupGatewayDependencies) SessionTranscriptClient() apicontract.SessionTranscriptService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionTranscriptClient()
@@ -768,12 +760,6 @@ func (d *startupGatewayDependencies) ApprovalViewClient() apicontract.ApprovalVi
 func (d *startupGatewayDependencies) PromptControlClient() apicontract.PromptControlService {
 	if c := d.activeCore(); c != nil {
 		return c.PromptControlClient()
-	}
-	return nil
-}
-func (d *startupGatewayDependencies) PromptActivityClient() apicontract.PromptActivityService {
-	if c := d.activeCore(); c != nil {
-		return c.PromptActivityClient()
 	}
 	return nil
 }

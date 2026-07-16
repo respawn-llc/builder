@@ -508,13 +508,6 @@ func (s *Core) PromptControlClient() apicontract.PromptControlService {
 	return s.safeBundles().Prompts.promptControl
 }
 
-func (s *Core) PromptActivityClient() apicontract.PromptActivityService {
-	if s == nil {
-		return nil
-	}
-	return s.safeBundles().Prompts.promptActivity
-}
-
 func (s *Core) AttentionNotificationClient() apicontract.AttentionNotificationService {
 	if s == nil {
 		return unavailableAttentionNotificationClient{}
@@ -534,13 +527,6 @@ func (s *Core) ProcessOutputClient() apicontract.ProcessOutputService {
 		return nil
 	}
 	return s.safeBundles().Processes.processOutput
-}
-
-func (s *Core) SessionActivityClient() apicontract.SessionActivityService {
-	if s == nil {
-		return nil
-	}
-	return s.safeBundles().Runtime.sessionActivity
 }
 
 func (s *Core) SessionTranscriptClient() apicontract.SessionTranscriptService {

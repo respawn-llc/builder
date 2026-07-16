@@ -2,14 +2,15 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/google/uuid"
 )
 
 type runtimeInterruptReconciliationClient interface {
@@ -25,7 +26,7 @@ type runtimeMainViewReconciliationClient interface {
 }
 
 func newRuntimeOperationRef(kind clientui.RuntimeOperationKind) clientui.RuntimeOperationRef {
-	return clientui.RuntimeOperationRef{Kind: kind, ClientRequestID: uuid.NewString()}
+	return clientui.RuntimeOperationRef{Kind: kind, ClientRequestID: runtimeids.NewRuntimeClientRequestID()}
 }
 
 func (m *uiModel) runtimeClient() clientui.RuntimeClient {
@@ -139,17 +140,12 @@ func (m *uiModel) clearRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	return nil, nil
 }
 
-func (m *uiModel) appendRuntimeLocalEntryWithNoticeID(role, text, noticeID string) error {
-	if client := m.runtimeClient(); client != nil {
-		err := client.AppendCommittedEntryWithNoticeID(role, text, noticeID)
-		m.observeRuntimeRequestResult(err)
-		return err
-	}
-	return nil
-}
-
 func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
-	return m.submitRuntimeInput(ctx, clientui.RuntimeSubmitRequest{OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit), Text: text})
+	return m.submitRuntimeInput(ctx, clientui.RuntimeSubmitRequest{
+		OperationRef:                    newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
+		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
+		Text:                            text,
+	})
 }
 
 func (m *uiModel) submitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
@@ -241,11 +237,13 @@ func (m *uiModel) runtimeInterruptTargetRef(refs []clientui.RuntimeOperationRef)
 		return nil
 	}
 	if m.runtimeActivityBusy() {
-		if kind := runtimeOperationKindForActiveActivity(m.runtimeActivityProjection.ActiveKind); kind != "" {
-			for _, ref := range refs {
-				if ref.Kind == kind {
-					target := ref
-					return &target
+		if m.runtimeActivityProjection.ActiveStep != nil {
+			if kind := runtimeOperationKindForActiveActivity(m.runtimeActivityProjection.ActiveStep.ActiveKind); kind != "" {
+				for _, ref := range refs {
+					if ref.Kind == kind {
+						target := ref
+						return &target
+					}
 				}
 			}
 		}
@@ -288,13 +286,20 @@ func (m *uiModel) pendingRuntimeOperationRefs() []clientui.RuntimeOperationRef {
 		}
 	}
 	for _, item := range m.injectedQueue {
+		clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(strings.TrimSpace(item.ClientRequestID))
+		if err != nil {
+			panic(fmt.Sprintf("queued runtime input has invalid client request id %q: %v", item.ClientRequestID, err))
+		}
 		ref := clientui.RuntimeOperationRef{
-			Kind: clientui.RuntimeOperationKindQueuedMessage,
+			Kind:            clientui.RuntimeOperationKindQueuedMessage,
+			ClientRequestID: clientRequestID,
 		}
 		if serverID := strings.TrimSpace(item.ServerID); serverID != "" {
-			ref.QueueItemID = serverID
-		} else {
-			ref.ClientRequestID = item.ClientRequestID
+			queueItemID, err := runtimeids.ParseQueueItemID(serverID)
+			if err != nil {
+				panic(fmt.Sprintf("queued runtime input has invalid queue item id %q: %v", serverID, err))
+			}
+			ref.QueueItemID = &queueItemID
 		}
 		if err := ref.Validate(); err == nil && !runtimeOperationRefsContain(refs, ref) {
 			refs = append(refs, ref)
@@ -347,7 +352,7 @@ func (m *uiModel) queueRuntimeUserMessage(text string) (clientui.QueuedUserMessa
 	if client := m.runtimeClient(); client != nil {
 		return client.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage), Text: text})
 	}
-	return clientui.QueuedUserMessage{ID: uuid.NewString(), Text: text}, nil
+	return clientui.QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text}, nil
 }
 
 func (m *uiModel) discardQueuedRuntimeUserMessage(queueItemID string) bool {

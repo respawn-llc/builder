@@ -206,19 +206,6 @@ func SupportsRuntimeLiveControl(flags protocol.CapabilityFlags) bool {
 	return flags.RuntimeLiveControl && flags.RuntimeControl && flags.AuthBootstrap
 }
 
-func SupportsInteractiveSession(flags protocol.CapabilityFlags) bool {
-	return flags.AuthBootstrap &&
-		flags.ProjectAttach &&
-		flags.SessionPlan &&
-		flags.SessionLifecycle &&
-		flags.SessionRuntime &&
-		flags.RuntimeControl &&
-		flags.PromptControl &&
-		flags.PromptActivity &&
-		flags.SessionActivity &&
-		flags.ProcessOutput
-}
-
 func HeadlessWorkspaceRegistrationError(workspaceRoot string) error {
 	trimmedRoot := strings.TrimSpace(workspaceRoot)
 	if trimmedRoot == "" {

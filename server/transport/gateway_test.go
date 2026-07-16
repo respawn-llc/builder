@@ -789,8 +789,8 @@ func TestGatewayPersistedNoAuthDoesNotAuthorizeFreshConnectionsWithoutAck(t *tes
 	handshakeGateway(t, subscription)
 	callGateway(t, subscription, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
 	callGateway(t, subscription, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
-	if respErr := callGatewayExpectError(t, subscription, "subscribe-fresh-no-ack", protocol.MethodSessionSubscribeActivity, serverapi.SessionActivitySubscribeRequest{SessionID: store.Meta().SessionID}); respErr.Code != protocol.ErrCodeAuthRequired {
-		t.Fatalf("fresh session activity subscribe = %+v, want auth required", respErr)
+	if respErr := callGatewayExpectError(t, subscription, "subscribe-fresh-no-ack", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: store.Meta().SessionID}); respErr.Code != protocol.ErrCodeAuthRequired {
+		t.Fatalf("fresh session transcript subscribe = %+v, want auth required", respErr)
 	}
 }
 
@@ -806,24 +806,6 @@ func TestGatewayRejectsProjectWorkspaceMutationBeforeServerAuthReady(t *testing.
 
 	if respErr := callGatewayExpectError(t, conn, "attach-workspace", protocol.MethodProjectAttachWorkspace, serverapi.ProjectAttachWorkspaceRequest{ProjectID: appCore.ProjectID(), WorkspaceRoot: "/tmp/workspace"}); respErr.Code != protocol.ErrCodeAuthRequired {
 		t.Fatalf("project.attachWorkspace error = %+v, want auth required", respErr)
-	}
-}
-
-func TestGatewayRejectsSessionActivitySubscriptionBeforeServerAuthReady(t *testing.T) {
-	appCore, server, _ := newGatewayTestServerWithAuth(t, false)
-	defer func() { _ = appCore.Close() }()
-	store := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(store)
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
-	if respErr := callGatewayExpectError(t, conn, "subscribe", protocol.MethodSessionSubscribeActivity, serverapi.SessionActivitySubscribeRequest{SessionID: store.Meta().SessionID}); respErr.Code != protocol.ErrCodeAuthRequired {
-		t.Fatalf("session activity subscribe error = %+v, want auth required", respErr)
 	}
 }
 
@@ -872,7 +854,7 @@ func TestGatewaySessionTranscriptSubscriptionReturnsHydrationOnDedicatedRoute(t 
 	if err := json.Unmarshal(notification.Params, &params); err != nil {
 		t.Fatalf("decode transcript event: %v", err)
 	}
-	if params.Message.Sequence != 1 || params.Message.Kind != clientui.TranscriptMessageHydration || params.Message.Hydration == nil {
+	if params.Message.Sequence != 1 || params.Message.Kind != clientui.TranscriptMessageHydration || params.Message.Payload.Hydration == nil {
 		t.Fatalf("transcript message = %+v, want seq=1 hydration", params.Message)
 	}
 }
@@ -1135,7 +1117,7 @@ func TestGatewayProjectReattachClearsStaleSessionAttachment(t *testing.T) {
 	callGateway(t, conn, "attach-session-a", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: storeA.Meta().SessionID}, nil)
 	callGateway(t, conn, "attach-project-b", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingB.ProjectID}, nil)
 
-	if respErr := callGatewayExpectError(t, conn, "subscribe", protocol.MethodSessionSubscribeActivity, serverapi.SessionActivitySubscribeRequest{SessionID: storeA.Meta().SessionID}); respErr.Code != protocol.ErrCodeInvalidRequest {
+	if respErr := callGatewayExpectError(t, conn, "subscribe", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: storeA.Meta().SessionID}); respErr.Code != protocol.ErrCodeInvalidRequest {
 		t.Fatalf("expected session-attach-required error after project reattach, got %+v", respErr)
 	}
 }

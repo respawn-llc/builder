@@ -241,7 +241,7 @@ func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
 }
 
 func (e *Engine) SetStreamingError(text string) {
-	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).SetStreamingError(text)
+	e.transcriptRuntimeState().SetStreamingError(text)
 	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
@@ -257,7 +257,7 @@ func (e *Engine) ReportPromptHistoryPersistError(reason string) {
 }
 
 func (e *Engine) ClearStreamingError() {
-	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ClearStreamingError()
+	e.transcriptRuntimeState().ClearStreamingError()
 	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 

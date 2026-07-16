@@ -60,7 +60,7 @@ func TestOngoingFrameInputUsesOperatorLocalSectionsAndCursor(t *testing.T) {
 
 func TestOngoingFrameInputIgnoresRuntimeMainViewCopiesOfTranscriptOwnedFacts(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
-	m.runtimeActivityProjection = clientui.RuntimeActivity{RunID: "runtime-copy"}
+	m.runtimeActivityProjection = clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle}
 	m.runtimeContextUsage = clientui.RuntimeContextUsage{UsedTokens: 123, WindowTokens: 456}
 
 	frame := m.ongoingFrameInput()
@@ -80,20 +80,12 @@ func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *te
 	m.input = "hello"
 	m.inputCursor = 2
 	surface := &ongoingSurfaceSpy{}
-	controller := newOngoingTranscriptController(surface, m.ongoingFrameInput)
+	controller := newTestOngoingTranscriptController(surface, m.ongoingFrameInput)
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 
-	if _, err := controller.Accept(clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageQueuedOrSteeredMessageState,
-		QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{
-			QueueItemID: "11111111-1111-4111-8111-111111111111",
-			Status:      clientui.QueuedUserMessageAccepted,
-			UserText:    "queued prompt",
-		},
-	}); err != nil {
+	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedMessageState)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
 

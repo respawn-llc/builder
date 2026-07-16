@@ -273,7 +273,7 @@ func (p *processEntry) snapshotLocked() Snapshot {
 		Workdir:                 p.workdir,
 		StartedAt:               p.startedAt,
 		FinishedAt:              p.finishedAt,
-		ExitCode:                textutil.CloneInt(p.exitCode),
+		ExitCode:                textutil.Pointer(p.exitCode),
 		LogPath:                 p.logPath,
 		RecentOutput:            recentOutput,
 		OutputAvailable:         p.logPath != "",
@@ -467,12 +467,4 @@ func waitForEntryDone(entry *processEntry, timeout time.Duration) bool {
 	case <-timer.C:
 		return false
 	}
-}
-
-func countOutputLines(text string) int {
-	trimmed := strings.TrimRight(text, "\n")
-	if trimmed == "" {
-		return 0
-	}
-	return strings.Count(trimmed, "\n") + 1
 }

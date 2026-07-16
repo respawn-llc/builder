@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 type countRinger struct {
@@ -193,9 +195,9 @@ func TestUIAskEventDoesNotNotifyBellHookForActiveOrQueuedPrompts(t *testing.T) {
 	hooks := newUnfocusedBellHooks(ringer)
 	m := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
 
-	next, _ := m.Update(askEventMsg{event: askEvent{req: clientui.PendingPromptEvent{PromptID: "ask-1", Question: "First?"}}})
+	next, _ := m.Update(askEventMsg{event: askEvent{prompt: bellTestPrompt("ask-1", "First?")}})
 	m = next.(*uiModel)
-	next, _ = m.Update(askEventMsg{event: askEvent{req: clientui.PendingPromptEvent{PromptID: "ask-2", Question: "Second?"}}})
+	next, _ = m.Update(askEventMsg{event: askEvent{prompt: bellTestPrompt("ask-2", "Second?")}})
 	_ = next.(*uiModel)
 
 	if got := ringer.Count(); got != 0 {
@@ -279,19 +281,88 @@ func attentionNotificationIDPtr(kind clientui.AttentionNotificationKind, uuid st
 	return &id
 }
 
+func bellTestPrompt(id, question string) clientui.TranscriptPrompt {
+	prompt := *ongoingTranscriptMessage(2, clientui.TranscriptMessagePromptPending).Payload.PromptPending
+	prompt.PromptID = clientui.PromptID(id)
+	prompt.Question = question
+	return prompt
+}
+
+func bellTestStepID(index int) runtimeids.StepID {
+	values := []string{
+		"11111111-1111-4111-8111-111111111111",
+		"22222222-2222-4222-8222-222222222222",
+		"33333333-3333-4333-8333-333333333333",
+	}
+	if index < 1 || index > len(values) {
+		panic("bell test step index is out of range")
+	}
+	id, err := runtimeids.ParseStepID(values[index-1])
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func bellToolStartMessage(step int) clientui.TranscriptMessage {
+	return clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageToolStart,
+		Payload: clientui.TranscriptPayload{ToolStart: &clientui.TranscriptToolStart{
+			StepID:     bellTestStepID(step),
+			ToolCallID: "tool-call",
+			ToolName:   "exec_command",
+		}},
+	}
+}
+
+func bellAssistantFinalMessage(step int) clientui.TranscriptMessage {
+	return bellAssistantFinalMessageWithText(step, "turn complete")
+}
+
+func bellAssistantFinalMessageWithText(step int, text string) clientui.TranscriptMessage {
+	return clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageCommittedRow,
+		Payload: clientui.TranscriptPayload{CommittedRow: &clientui.TranscriptCommittedRow{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Integrity:  transcript.RowIntegrityValid,
+			Kind:       clientui.TranscriptRowAssistant,
+			Assistant: &clientui.TranscriptAssistantRow{
+				StepID: bellTestStepID(step),
+				Text:   text,
+				Phase:  transcript.AssistantPhaseFinal,
+			},
+		}},
+	}
+}
+
+func bellAssistantDeltaMessage(step int, delta string) clientui.TranscriptMessage {
+	return clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageAssistantDelta,
+		Payload: clientui.TranscriptPayload{AssistantDelta: &clientui.TranscriptAssistantDelta{
+			StepID:   bellTestStepID(step),
+			StreamID: runtimeids.NewAssistantStreamID(),
+			Delta:    delta,
+			Phase:    transcript.AssistantPhaseFinal,
+		}},
+	}
+}
+
 func TestBellHooksRingOnToolHeavyTurnEnd(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-1"})
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
 	if got := ringer.Count(); got != 0 {
 		t.Fatalf("ring count = %d after single tool call turn, want 0", got)
 	}
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-2"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-2"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-2"})
+	hooks.OnTranscriptMessage(bellToolStartMessage(2))
+	hooks.OnTranscriptMessage(bellToolStartMessage(2))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
 	if got := ringer.Count(); got != 0 {
 		t.Fatalf("ring count = %d before queue drain, want 0", got)
 	}
@@ -313,9 +384,9 @@ func TestBellHooksSuppressTurnCompletionWhileFocused(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newBellHooks(ringer, nil, func() bool { return true })
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-1"})
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
 	hooks.OnTurnQueueDrained()
 
 	if got := ringer.Count(); got != 0 {
@@ -328,9 +399,9 @@ func TestBellHooksRingOnToolHeavyTurnEndWithUnknownFocus(t *testing.T) {
 	focus := newTerminalFocusState()
 	hooks := newBellHooks(ringer, nil, focus.FocusedForAttention)
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-1"})
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
 	hooks.OnTurnQueueDrained()
 
 	if got := ringer.Count(); got != 1 {
@@ -342,9 +413,9 @@ func TestBellHooksFallbackToTurnCompleteForWhitespacePreview(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-1"})
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, "\x1b\a"))
 	hooks.OnTurnQueueDrained()
 
 	if got := ringer.Last(); got != "kent: turn complete" {
@@ -356,10 +427,10 @@ func TestBellHooksNoopAssistantDeltaClearsPendingTurnCompletion(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantDelta, StepID: "step-2", AssistantDelta: uiNoopFinalToken})
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(2, uiNoopFinalToken))
 	hooks.OnTurnQueueDrained()
 
 	if got := ringer.Count(); got != 0 {
@@ -371,13 +442,13 @@ func TestBellHooksNoopAssistantEventPreservesUnrelatedActiveTurn(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-2"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantDelta, StepID: "step-3", AssistantDelta: uiNoopFinalToken})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-2"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-2"})
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(2))
+	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(3, uiNoopFinalToken))
+	hooks.OnTranscriptMessage(bellToolStartMessage(2))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
 	hooks.OnTurnQueueDrained()
 
 	if got := ringer.Count(); got != 1 {
@@ -416,9 +487,9 @@ func TestBellHooksIgnoresMismatchedTurnEndStep(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-2"})
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
 	hooks.OnTurnQueueDrained()
 
 	if got := ringer.Count(); got != 0 {
@@ -430,12 +501,12 @@ func TestBellHooksRingOnceAfterQueuedTurnsDrain(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-2"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-2"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-2"})
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(2))
+	hooks.OnTranscriptMessage(bellToolStartMessage(2))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
 
 	if got := ringer.Count(); got != 0 {
 		t.Fatalf("ring count = %d before queue drain, want 0", got)
@@ -453,9 +524,9 @@ func TestBellHooksClearPendingTurnCompletionAfterAbort(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"})
-	hooks.OnProjectedRuntimeEvent(clientui.Event{Kind: clientui.EventAssistantMessage, StepID: "step-1"})
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
 	hooks.OnTurnQueueAborted()
 	hooks.OnTurnQueueDrained()
 

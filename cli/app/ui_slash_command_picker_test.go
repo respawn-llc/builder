@@ -550,7 +550,7 @@ func TestSlashCommandPickerAlwaysShowsCopyWithoutReadingCachedRuntimeStatus(t *t
 	client := &runtimeControlFakeClient{
 		status: clientui.RuntimeStatus{LastCommittedAssistantFinalAnswer: "done"},
 	}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m := newProjectedTestUIModel(client)
 	m.input = "/co"
 	m.refreshSlashCommandFilterFromInputWithAuth(true)
 

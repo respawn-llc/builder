@@ -36,7 +36,7 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 		Mode:              string(mode),
 		Engine:            strings.TrimSpace(engine),
 		Provider:          strings.TrimSpace(provider),
-		TrimmedItemsCount: textutil.CloneInt(trimmed),
+		TrimmedItemsCount: textutil.Pointer(trimmed),
 		Count:             count,
 		Error:             strings.TrimSpace(errText),
 	}

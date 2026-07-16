@@ -9,6 +9,7 @@ import (
 )
 
 type TranscriptLiveToolStart struct {
+	StepID       string
 	ToolCallID   string
 	ToolName     string
 	Presentation *transcript.ToolCallMeta
@@ -112,6 +113,7 @@ func (l *transcriptLiveToolLedger) Seed(starts []TranscriptLiveToolStart) {
 
 func normalizeTranscriptLiveToolStart(start TranscriptLiveToolStart) (TranscriptLiveToolStart, error) {
 	normalized := TranscriptLiveToolStart{
+		StepID:       strings.TrimSpace(start.StepID),
 		ToolCallID:   strings.TrimSpace(start.ToolCallID),
 		ToolName:     strings.TrimSpace(start.ToolName),
 		Presentation: cloneTranscriptToolCallMeta(start.Presentation),
@@ -122,8 +124,9 @@ func normalizeTranscriptLiveToolStart(start TranscriptLiveToolStart) (Transcript
 	return normalized, nil
 }
 
-func transcriptLiveToolStartFromCall(call llm.ToolCall) TranscriptLiveToolStart {
+func transcriptLiveToolStartFromCall(stepID string, call llm.ToolCall) TranscriptLiveToolStart {
 	return TranscriptLiveToolStart{
+		StepID:       strings.TrimSpace(stepID),
 		ToolCallID:   strings.TrimSpace(call.ID),
 		ToolName:     strings.TrimSpace(call.Name),
 		Presentation: decodeToolCallMeta(call),
@@ -132,6 +135,7 @@ func transcriptLiveToolStartFromCall(call llm.ToolCall) TranscriptLiveToolStart 
 
 func cloneTranscriptLiveToolStart(start TranscriptLiveToolStart) TranscriptLiveToolStart {
 	return TranscriptLiveToolStart{
+		StepID:       start.StepID,
 		ToolCallID:   start.ToolCallID,
 		ToolName:     start.ToolName,
 		Presentation: cloneTranscriptToolCallMeta(start.Presentation),

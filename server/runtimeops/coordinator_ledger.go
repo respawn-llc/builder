@@ -27,7 +27,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 				delete(l.operations, key)
 			}
 			delete(l.failedReqs, key)
-			l.recordEvictedLocked(key, record.OperationRef, now)
+			l.recordEvictedLocked(key, record.Operation, now)
 			continue
 		}
 		retained = append(retained, key)
@@ -43,7 +43,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 			delete(l.operations, key)
 		}
 		delete(l.failedReqs, key)
-		l.recordEvictedLocked(key, record.OperationRef, now)
+		l.recordEvictedLocked(key, record.Operation, now)
 	}
 	for key, createdAt := range l.tombstoneAt {
 		if !createdAt.IsZero() && now.Sub(createdAt) >= ttl {
@@ -54,7 +54,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 			if record, ok := l.records[key]; ok {
 				if _, terminal := l.terminal[key]; !terminal {
 					delete(l.records, key)
-					l.recordEvictedLocked(key, record.OperationRef, now)
+					l.recordEvictedLocked(key, record.Operation, now)
 				}
 			}
 		}

@@ -8,8 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -56,12 +57,11 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, "task complete --force requires exactly one explicit selector: --run, --session, or --task")
 		return 2
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	req, err := parsed.request(context.Background(), cfg, remote, agentSessionID, agentContext)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -79,11 +79,7 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		return 1
 	}
 	if parsed.JSONPayloadSet || parsed.JSONFileSet {
-		if err := json.NewEncoder(stdout).Encode(resp); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
+		return writeCommandJSON(stdout, stderr, resp)
 	}
 	writeTaskCompleteResult(stdout, resp)
 	return 0
@@ -104,7 +100,7 @@ func (a taskCompleteArgs) request(ctx context.Context, cfg config.App, remote wo
 		RunID:        strings.TrimSpace(a.RunID),
 		SessionID:    strings.TrimSpace(a.SessionID),
 		TransitionID: strings.TrimSpace(a.TransitionID),
-		OutputValues: cloneStringMap(a.OutputValues),
+		OutputValues: maps.Clone(a.OutputValues),
 		Commentary:   a.Commentary,
 	}
 	if len(req.OutputValues) == 0 {
@@ -453,12 +449,7 @@ func taskCompleteJSONParameterValue(raw json.RawMessage, field string) (string, 
 }
 
 func sortedRawJSONKeys(payload map[string]json.RawMessage) []string {
-	keys := make([]string, 0, len(payload))
-	for key := range payload {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(payload))
 }
 
 func taskCompleteErrorMessage(err error) string {

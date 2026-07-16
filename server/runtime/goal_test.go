@@ -1386,24 +1386,6 @@ func waitGoalLoopRunning(t *testing.T, engine *Engine, want bool) {
 	}
 }
 
-func waitGoalLoopSuspended(t *testing.T, engine *Engine, want bool) {
-	t.Helper()
-	deadline := time.After(2 * time.Second)
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		suspended := engine.GoalLoopSuspended()
-		if suspended == want {
-			return
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("goalLoopSuspended = %t, want %t", suspended, want)
-		case <-ticker.C:
-		}
-	}
-}
-
 func waitGoalLoopContinuationEnforced(t *testing.T, engine *Engine, want bool) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)

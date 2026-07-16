@@ -4,8 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 func TestFrameAnimationClockUsesElapsedFrameBoundaries(t *testing.T) {
@@ -59,45 +60,13 @@ func TestHandleSpinnerTickJumpsFromElapsedTimeAndKeepsBoundaryAlignedDelay(t *te
 	}
 }
 
-func TestRuntimeBusyEventStartsSpinnerTicking(t *testing.T) {
-	oldNow := uiAnimationNow
-	anchor := time.Unix(1_700_000_150, 0)
-	uiAnimationNow = func() time.Time { return anchor }
-	t.Cleanup(func() { uiAnimationNow = oldNow })
-
-	m := newProjectedStaticUIModel()
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
-		ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
-		RunID:      "run-1",
-		StepID:     "step-1",
-	})
-	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:             clientui.EventRuntimeActivityChanged,
-		ReadModelVersion: nextRuntimeReadModelVersionForTest(m),
-		RuntimeActivity:  &activity,
-	}})
-	updated := next.(*uiModel)
-	if !updated.isBusy() {
-		t.Fatal("expected runtime busy event to set busy")
-	}
-	if updated.spinnerTickToken == 0 {
-		t.Fatal("expected runtime busy event to start spinner ticking")
-	}
-	if updated.spinnerTickDue.IsZero() {
-		t.Fatal("expected runtime busy event to record next spinner tick deadline")
-	}
-	if cmd == nil {
-		t.Fatal("expected runtime busy event to schedule spinner tick")
-	}
-}
-
-func TestRuntimeEventRearmsExpiredSpinnerTick(t *testing.T) {
+func TestTranscriptRuntimeProgressStartsAndRearmsSpinner(t *testing.T) {
 	oldInterval := spinnerTickInterval
 	oldGrace := spinnerTickRearmGrace
 	oldNow := uiAnimationNow
 	spinnerTickInterval = 10 * time.Millisecond
 	spinnerTickRearmGrace = 30 * time.Millisecond
-	anchor := time.Unix(1_700_000_175, 0)
+	anchor := time.Unix(1_700_000_150, 0)
 	now := anchor
 	uiAnimationNow = func() time.Time { return now }
 	t.Cleanup(func() {
@@ -106,112 +75,99 @@ func TestRuntimeEventRearmsExpiredSpinnerTick(t *testing.T) {
 		uiAnimationNow = oldNow
 	})
 
-	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
-	m.spinnerGeneration = 1
-	m.spinnerTickToken = 1
-	m.spinnerClock.Start(anchor)
-	m.spinnerTickDue = anchor.Add(spinnerTickInterval)
-	now = anchor.Add(spinnerTickInterval + spinnerTickRearmGrace + time.Millisecond)
-
-	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:           clientui.EventAssistantDelta,
-		StepID:         "step-1",
-		AssistantDelta: "working",
-	}})
+	m := newAnimationTranscriptModel(t)
+	running := ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)
+	running.Payload.RuntimeReadModelUpdate.Activity = clientui.RuntimeActivity{
+		State: clientui.RuntimeActivityRunning,
+		ActiveStep: &clientui.RuntimeActiveStep{
+			RunID:      ongoingTestRunID(),
+			StepID:     ongoingTestStepID(),
+			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+		},
+	}
+	next, cmd := m.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: running})
 	updated := next.(*uiModel)
-	if updated.spinnerTickToken == 1 {
-		t.Fatal("expected expired spinner tick to be replaced with a fresh token")
+	if !updated.isBusy() || updated.spinnerTickToken == 0 || updated.spinnerTickDue.IsZero() || cmd == nil {
+		t.Fatalf(
+			"runtime progress did not start spinner: busy=%t token=%d due=%s cmd=%v",
+			updated.isBusy(),
+			updated.spinnerTickToken,
+			updated.spinnerTickDue,
+			cmd,
+		)
 	}
-	if updated.spinnerTickToken == 0 {
-		t.Fatal("expected spinner to remain active")
+
+	previousToken := updated.spinnerTickToken
+	updated.spinnerTickDue = anchor.Add(spinnerTickInterval)
+	now = updated.spinnerTickDue.Add(spinnerTickRearmGrace + time.Millisecond)
+	next, cmd = updated.Update(ongoingTranscriptEvent{
+		Kind:    ongoingTranscriptEventMessage,
+		Message: animationAssistantDeltaMessage(3),
+	})
+	updated = next.(*uiModel)
+	if updated.spinnerTickToken == 0 || updated.spinnerTickToken == previousToken {
+		t.Fatalf("runtime progress did not rearm spinner token: previous=%d current=%d", previousToken, updated.spinnerTickToken)
 	}
-	if !updated.spinnerTickDue.After(now) {
-		t.Fatalf("expected rearmed spinner due after current time, got due=%s now=%s", updated.spinnerTickDue, now)
-	}
-	if cmd == nil {
-		t.Fatal("expected runtime event to rearm expired spinner tick")
+	if !updated.spinnerTickDue.After(now) || cmd == nil {
+		t.Fatalf("runtime progress did not schedule a fresh spinner tick: due=%s now=%s cmd=%v", updated.spinnerTickDue, now, cmd)
 	}
 }
 
-func TestRuntimeEventRearmsActiveSpinnerTickBeforeGrace(t *testing.T) {
-	oldInterval := spinnerTickInterval
-	oldGrace := spinnerTickRearmGrace
+func TestTranscriptReviewerLifecycleStartsAndStopsSpinner(t *testing.T) {
 	oldNow := uiAnimationNow
-	spinnerTickInterval = 10 * time.Millisecond
-	spinnerTickRearmGrace = 30 * time.Second
-	anchor := time.Unix(1_700_000_185, 0)
-	now := anchor
-	uiAnimationNow = func() time.Time { return now }
-	t.Cleanup(func() {
-		spinnerTickInterval = oldInterval
-		spinnerTickRearmGrace = oldGrace
-		uiAnimationNow = oldNow
-	})
+	uiAnimationNow = func() time.Time { return time.Unix(1_700_000_200, 0) }
+	t.Cleanup(func() { uiAnimationNow = oldNow })
 
-	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
-	m.spinnerGeneration = 1
-	m.spinnerTickToken = 1
-	m.spinnerClock.Start(anchor)
-	m.spinnerTickDue = anchor.Add(spinnerTickInterval)
-	now = anchor.Add(25 * time.Millisecond)
-
-	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:           clientui.EventAssistantDelta,
-		StepID:         "step-1",
-		AssistantDelta: "working",
-	}})
-	updated := next.(*uiModel)
-	if updated.spinnerTickToken == 1 {
-		t.Fatal("expected runtime progress event to replace active spinner token")
+	m := newAnimationTranscriptModel(t)
+	startedMessage := clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageReviewerState,
+		Payload: clientui.TranscriptPayload{ReviewerState: &clientui.TranscriptReviewerState{
+			StepID: ongoingTestStepID(),
+			State:  clientui.ReviewerStateRunning,
+		}},
 	}
-	if got, want := updated.spinnerFrame, 2; got != want {
-		t.Fatalf("expected runtime progress event to advance spinner frame to %d, got %d", want, got)
-	}
-	if !updated.spinnerTickDue.After(now) {
-		t.Fatalf("expected rearmed spinner due after current time, got due=%s now=%s", updated.spinnerTickDue, now)
-	}
-	if cmd == nil {
-		t.Fatal("expected runtime progress event to schedule fresh spinner tick")
-	}
-}
-
-func TestReviewerOnlyRuntimeEventStartsAdvancesAndStopsSpinner(t *testing.T) {
-	oldInterval := spinnerTickInterval
-	oldNow := uiAnimationNow
-	spinnerTickInterval = 10 * time.Millisecond
-	anchor := time.Unix(1_700_000_200, 0)
-	uiAnimationNow = func() time.Time { return anchor }
-	t.Cleanup(func() {
-		spinnerTickInterval = oldInterval
-		uiAnimationNow = oldNow
-	})
-
-	m := newProjectedStaticUIModel()
-	next, _ := m.Update(projectedRuntimeEventMsg(runtime.Event{Kind: runtime.EventReviewerStarted}))
+	next, _ := m.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: startedMessage})
 	started := next.(*uiModel)
-	if !started.isReviewerRunning() {
-		t.Fatal("expected reviewer to start running")
-	}
-	if started.spinnerTickToken == 0 {
-		t.Fatal("expected reviewer-only runtime event to start spinner ticking")
+	if !started.isReviewerRunning() || started.spinnerTickToken == 0 {
+		t.Fatalf("reviewer start did not start spinner: running=%t token=%d", started.isReviewerRunning(), started.spinnerTickToken)
 	}
 
-	token := started.spinnerTickToken
-	tickAt := anchor.Add(25 * time.Millisecond)
-	next, _ = started.Update(spinnerTickMsg{token: token, at: tickAt})
-	advanced := next.(*uiModel)
-	if got, want := advanced.spinnerFrame, 2; got != want {
-		t.Fatalf("expected reviewer-only spinner to advance to frame %d, got %d", want, got)
+	completedMessage := startedMessage
+	completedMessage.Sequence = 3
+	completedMessage.Payload.ReviewerState = &clientui.TranscriptReviewerState{
+		StepID: ongoingTestStepID(),
+		State:  clientui.ReviewerStateCompleted,
 	}
-
-	next, _ = advanced.Update(projectedRuntimeEventMsg(runtime.Event{Kind: runtime.EventReviewerCompleted}))
+	next, _ = started.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: completedMessage})
 	completed := next.(*uiModel)
-	if completed.isReviewerRunning() {
-		t.Fatal("expected reviewer running state cleared on completion")
+	if completed.isReviewerRunning() || completed.spinnerTickToken != 0 {
+		t.Fatalf("reviewer completion did not stop spinner: running=%t token=%d", completed.isReviewerRunning(), completed.spinnerTickToken)
 	}
-	if completed.spinnerTickToken != 0 {
-		t.Fatalf("expected reviewer completion to stop spinner ticking, got token %d", completed.spinnerTickToken)
+}
+
+func newAnimationTranscriptModel(t *testing.T) *uiModel {
+	t.Helper()
+	surface := &ongoingSurfaceSpy{}
+	m := newProjectedStaticUIModel()
+	m.ongoingTranscript = newOngoingTranscriptController(surface, m.ongoingFrameInput, m.applyTranscriptMessageState)
+	next, _ := m.Update(ongoingTranscriptEvent{
+		Kind:    ongoingTranscriptEventMessage,
+		Message: ongoingHydrationMessage(1),
+	})
+	return next.(*uiModel)
+}
+
+func animationAssistantDeltaMessage(sequence uint64) clientui.TranscriptMessage {
+	streamID := runtimeids.NewAssistantStreamID()
+	return clientui.TranscriptMessage{
+		Sequence: sequence,
+		Kind:     clientui.TranscriptMessageAssistantDelta,
+		Payload: clientui.TranscriptPayload{AssistantDelta: &clientui.TranscriptAssistantDelta{
+			StepID:   ongoingTestStepID(),
+			StreamID: streamID,
+			Delta:    "working",
+			Phase:    transcript.AssistantPhaseCommentary,
+		}},
 	}
 }

@@ -274,28 +274,14 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	executor := newRoutePolicyExecutor(fixture.gateway)
 	ctx := context.Background()
 
-	attachedRoute := routeForTest(t, protocol.MethodSessionSubscribeActivity)
-	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, attachedRoute, serverapi.SessionActivitySubscribeRequest{SessionID: fixture.ownSessionID}); err != nil {
-		t.Fatalf("attached session subscription: %v", err)
-	}
-	err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, attachedRoute, serverapi.SessionActivitySubscribeRequest{SessionID: fixture.foreignSessionID})
-	var routeErr gatewayRouteError
-	if !errors.As(err, &routeErr) || routeErr.code != protocol.ErrCodeInvalidRequest {
-		t.Fatalf("attached session mismatch error = %v, want invalid request route error", err)
-	}
 	transcriptRoute := routeForTest(t, protocol.MethodSessionSubscribeTranscript)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.ownSessionID}); err != nil {
 		t.Fatalf("attached transcript subscription: %v", err)
 	}
-	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.foreignSessionID}); err == nil {
-		t.Fatal("attached transcript subscription mismatch unexpectedly allowed")
-	}
-	promptAttachedRoute := routeForTest(t, protocol.MethodPromptSubscribeActivity)
-	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, promptAttachedRoute, serverapi.PromptActivitySubscribeRequest{SessionID: fixture.ownSessionID}); err != nil {
-		t.Fatalf("attached prompt subscription: %v", err)
-	}
-	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, promptAttachedRoute, serverapi.PromptActivitySubscribeRequest{SessionID: fixture.foreignSessionID}); err == nil {
-		t.Fatal("attached prompt subscription mismatch unexpectedly allowed")
+	err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.foreignSessionID})
+	var routeErr gatewayRouteError
+	if !errors.As(err, &routeErr) || routeErr.code != protocol.ErrCodeInvalidRequest {
+		t.Fatalf("attached transcript mismatch error = %v, want invalid request route error", err)
 	}
 
 	projectWorkspaceRoute := routeForTest(t, protocol.MethodSessionPlan)

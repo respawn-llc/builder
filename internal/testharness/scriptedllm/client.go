@@ -47,10 +47,6 @@ func NewClient(script Script) *Client {
 	}
 }
 
-func NewLegacyClient(caps llm.ProviderCapabilities, steps ...Step) *Client {
-	return NewClient(Script{Capabilities: &caps, Steps: steps})
-}
-
 func (c *Client) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
 	step, finish, err := c.nextStep(req)
 	if err != nil {
@@ -78,7 +74,7 @@ func (c *Client) Compact(_ context.Context, req llm.CompactionRequest) (llm.Comp
 	}
 	response := c.compactions[0]
 	c.compactions = c.compactions[1:]
-	response.TrimmedItemsCount = textutil.CloneInt(response.TrimmedItemsCount)
+	response.TrimmedItemsCount = textutil.Pointer(response.TrimmedItemsCount)
 	return response, nil
 }
 

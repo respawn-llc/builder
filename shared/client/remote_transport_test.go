@@ -562,8 +562,8 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 				}
 				response := serverapi.RuntimeInterruptResponse{
 					Version:             version,
-					Activity:            clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{}),
-					InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+					Activity:            clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle},
+					InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 				}
 				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, response))); err != nil {
 					reportHandlerError(handlerErrs, "send interrupt response: %w", err)
@@ -585,7 +585,7 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 
 	submitDone := make(chan error, 1)
 	go func() {
-		_, submitErr := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: "submit-1", SessionID: "session-1", Text: "run"})
+		_, submitErr := remote.SubmitUserTurn(context.Background(), runtimeSubmitUserTurnRequestForTest("session-1", "run"))
 		submitDone <- submitErr
 	}()
 

@@ -759,8 +759,11 @@ func TestLoadSubagentRoleRejectsInvalidMetadata(t *testing.T) {
 }
 
 func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t *testing.T) {
+	baseHook := "/tmp/hook"
 	base := Settings{
+		Model:    "gpt-5.6-sol",
 		Timeouts: Timeouts{ModelRequestSeconds: 100},
+		Shell:    ShellSettings{PostprocessHook: &baseHook},
 		ProviderCapabilities: ProviderCapabilitiesOverride{
 			ProviderID:                "openai",
 			SupportsResponsesAPI:      true,
@@ -778,12 +781,18 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 			"timeouts.model_request_seconds":                    "file",
 			"provider_capabilities.supports_responses_api":      "file",
 			"provider_capabilities.supports_provider_verbosity": "file",
-			"reviewer.model": "file",
+			"model":                  "file",
+			"shell.postprocess_hook": "file",
+			"reviewer.model":         "file",
 			"reviewer.provider_capabilities.supports_responses_api": "file",
 		},
 	}
+	roleHook := " /tmp/hook "
+	same.Settings.Model = " gpt-5.6-sol "
+	same.Settings.Shell.PostprocessHook = &roleHook
+	same.Settings.Reviewer.Model = " gpt-5.6-sol "
 	if SubagentRoleHasMeaningfulDiff(base, same) {
-		t.Fatal("expected equal provider/reviewer/timeout values to be no-op")
+		t.Fatal("expected equal trimmed scalar, optional, provider, reviewer, and timeout values to be no-op")
 	}
 
 	changedTimeout := same
@@ -812,6 +821,42 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 	changedReviewer.Settings.Reviewer.Model = "gpt-5.4-mini"
 	if !SubagentRoleHasMeaningfulDiff(base, changedReviewer) {
 		t.Fatal("expected reviewer change to be meaningful")
+	}
+
+	for _, key := range []string{"theme", "worktrees.base_dir", "unknown.setting"} {
+		role := SubagentRole{Settings: base, Sources: map[string]string{key: "file"}}
+		if !SubagentRoleHasMeaningfulDiff(base, role) {
+			t.Fatalf("expected source %q to preserve role catalog visibility", key)
+		}
+	}
+}
+
+func TestOverlaySubagentRoleSettingsDoesNotApplyProcessSettings(t *testing.T) {
+	base := Settings{
+		Worktrees:    WorktreeSettings{BaseDir: "/base", SetupScript: "base.sh", SetupTimeoutSeconds: 10},
+		Workflow:     WorkflowSettings{CompletionMode: "structured_output", Concurrency: 2, MaxInvalidCompletionAttempts: 3, Subagents: true},
+		PreventSleep: "active",
+	}
+	role := SubagentRole{
+		Settings: Settings{
+			Worktrees:    WorktreeSettings{BaseDir: "/role", SetupScript: "role.sh", SetupTimeoutSeconds: 20},
+			Workflow:     WorkflowSettings{CompletionMode: "tool", Concurrency: 4, MaxInvalidCompletionAttempts: 5},
+			PreventSleep: "never",
+		},
+		Sources: map[string]string{
+			"worktrees.base_dir":                       "file",
+			"worktrees.setup_script":                   "file",
+			"worktrees.setup_timeout_seconds":          "file",
+			"workflow.completion_mode":                 "file",
+			"workflow.concurrency":                     "file",
+			"workflow.max_invalid_completion_attempts": "file",
+			"prevent_sleep":                            "file",
+		},
+	}
+
+	got := OverlaySubagentRoleSettings(base, role, true)
+	if got.Worktrees != base.Worktrees || got.Workflow != base.Workflow || got.PreventSleep != base.PreventSleep {
+		t.Fatalf("process settings changed: got worktrees=%+v workflow=%+v prevent_sleep=%q", got.Worktrees, got.Workflow, got.PreventSleep)
 	}
 }
 

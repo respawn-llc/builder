@@ -3,8 +3,10 @@ package onboardingimports
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -375,10 +377,7 @@ func choicesForItems(items []Item, kind ItemKind) []Choice {
 		sourceKind := SourceKindExternalProvider
 		refs[key] = ChoiceRef{Mode: ChoiceModeSymlinkSource, SourceKind: &sourceKind, ProviderID: item.Ref.ProviderID, SourceRoot: item.Ref.SourceRoot}
 	}
-	keys := make([]string, 0, len(grouped))
-	for key := range grouped {
-		keys = append(keys, key)
-	}
+	keys := slices.Collect(maps.Keys(grouped))
 	sort.Slice(keys, func(i, j int) bool {
 		left, right := refs[keys[i]], refs[keys[j]]
 		if providerRank(*left.ProviderID) != providerRank(*right.ProviderID) {
@@ -421,7 +420,10 @@ func skillEnablementProjections(choices []Choice, allItems []Item, generated []I
 	for _, choice := range choices {
 		imported := itemsForChoice(allItems, choice.Ref)
 		candidates := append([]Item(nil), imported...)
-		shadowing := cloneBoolMap(existing)
+		shadowing := maps.Clone(existing)
+		if shadowing == nil {
+			shadowing = map[string]bool{}
+		}
 		for _, item := range imported {
 			if item.Ref.Name != nil {
 				shadowing[normalizeName(*item.Ref.Name)] = true
@@ -584,14 +586,6 @@ func providerRank(provider ProviderID) int {
 		}
 	}
 	return len(Providers())
-}
-
-func cloneBoolMap(values map[string]bool) map[string]bool {
-	out := make(map[string]bool, len(values))
-	for key, value := range values {
-		out[key] = value
-	}
-	return out
 }
 
 func normalizeName(raw string) string {

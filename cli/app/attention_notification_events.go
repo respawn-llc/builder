@@ -10,7 +10,7 @@ import (
 
 type attentionNotificationSubscriber func(context.Context) (serverapi.AttentionNotificationSubscription, error)
 
-func startAttentionNotificationEvents(ctx context.Context, sub serverapi.AttentionNotificationSubscription, subscribe attentionNotificationSubscriber, hook attentionNotificationHook) func() {
+func startAttentionNotificationEvents(ctx context.Context, sub serverapi.AttentionNotificationSubscription, subscribe attentionNotificationSubscriber, hook *bellHooks) func() {
 	if sub == nil || subscribe == nil || hook == nil {
 		return func() {}
 	}
@@ -41,7 +41,7 @@ func startAttentionNotificationEvents(ctx context.Context, sub serverapi.Attenti
 
 func resubscribeAttentionNotifications(ctx context.Context, subscribe attentionNotificationSubscriber) (serverapi.AttentionNotificationSubscription, error) {
 	for {
-		if !waitPromptRetry(ctx) {
+		if !waitSubscriptionRetry(ctx) {
 			return nil, ctx.Err()
 		}
 		sub, err := subscribe(ctx)
@@ -54,7 +54,7 @@ func resubscribeAttentionNotifications(ctx context.Context, subscribe attentionN
 	}
 }
 
-func applyAttentionNotificationEvent(evt clientui.AttentionNotificationEvent, surfaced map[string]struct{}, hook attentionNotificationHook) {
+func applyAttentionNotificationEvent(evt clientui.AttentionNotificationEvent, surfaced map[string]struct{}, hook *bellHooks) {
 	if surfaced == nil || hook == nil {
 		return
 	}
@@ -97,4 +97,49 @@ func attentionNotificationMapKey(id clientui.AttentionNotificationID) string {
 		return ""
 	}
 	return string(id.Kind) + "\x00" + id.UUID
+}
+
+func notifyTranscriptPromptFallback(
+	hook *bellHooks,
+	prompt clientui.TranscriptPrompt,
+	source clientui.AttentionNotificationSource,
+) {
+	if hook == nil || prompt.State != clientui.TranscriptPromptStatePending {
+		return
+	}
+	kind := clientui.AttentionNotificationKindQuestion
+	if prompt.Kind == clientui.TranscriptPromptKindApproval {
+		kind = clientui.AttentionNotificationKindApproval
+	}
+	notification := clientui.AttentionNotification{
+		ID: clientui.AttentionNotificationID{
+			Kind: kind,
+			UUID: string(prompt.PromptID),
+		},
+		Kind:       kind,
+		OccurredAt: prompt.CreatedAt,
+		Revision:   1,
+		Target: clientui.AttentionNotificationTarget{
+			Kind:      clientui.AttentionNotificationTargetSessionPrompt,
+			SessionID: prompt.SessionID.String(),
+		},
+	}
+	if prompt.Kind == clientui.TranscriptPromptKindApproval {
+		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: prompt.Question}
+	} else {
+		promptID := string(prompt.PromptID)
+		notification.Question = &clientui.AttentionNotificationQuestionState{
+			PreparedAskIDs:          []string{promptID},
+			MaterializedAskIDs:      []string{promptID},
+			CurrentUnresolvedAskIDs: []string{promptID},
+			Preview:                 prompt.Question,
+			DisplayCount:            1,
+			MaterializedCount:       1,
+		}
+	}
+	hook.OnAttentionNotification(clientui.AttentionNotificationEvent{
+		Type:    clientui.AttentionNotificationEventPending,
+		Source:  source,
+		Pending: &notification,
+	})
 }

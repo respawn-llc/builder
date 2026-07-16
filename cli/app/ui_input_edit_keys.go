@@ -13,18 +13,6 @@ type uiSharedInputEditActions struct {
 	DeleteCurrentLine  func() bool
 }
 
-func isSharedInputEditKeyForGOOS(msg tea.KeyMsg, goos string) bool {
-	if isDeleteCurrentLineKeyForGOOS(msg, goos) {
-		return true
-	}
-	switch msg.Type {
-	case tea.KeyBackspace, tea.KeyCtrlH, tea.KeyDelete, tea.KeyCtrlW, tea.KeyCtrlK, tea.KeyCtrlU, tea.KeyCtrlY:
-		return true
-	default:
-		return false
-	}
-}
-
 func handleSharedInputEditKeyForGOOS(msg tea.KeyMsg, actions uiSharedInputEditActions, goos string) bool {
 	if isDeleteCurrentLineKeyForGOOS(msg, goos) {
 		runInputEditAction(actions.DeleteCurrentLine)

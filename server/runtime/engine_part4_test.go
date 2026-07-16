@@ -738,109 +738,6 @@ func TestSubmitUserMessageFinalAnswerWithoutContentForcesNextLoop(t *testing.T) 
 	}
 }
 
-func TestSubmitUserMessageFinalAnswerWithToolCallsExecutesToolCallsBeforeFinal(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: "final response",
-				Phase:   llm.MessagePhaseFinal,
-			},
-			ToolCalls: []llm.ToolCall{
-				{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-	}}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "final response" {
-		t.Fatalf("assistant content = %q, want final response", msg.Content)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected 1 model call, got %d", len(client.calls))
-	}
-
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-
-	toolCompleted := false
-	toolCallBeforeFinal := false
-	toolResultBeforeFinal := false
-	recoveryBeforeToolCall := false
-	recoverySeen := false
-	finalSeen := false
-	developerWarningFound := false
-	persistedFinalHasToolCalls := false
-	for _, evt := range events {
-		if evt.Kind == "model_recovery_pending" {
-			recoverySeen = true
-		}
-		if evt.Kind == "tool_completed" {
-			toolCompleted = true
-		}
-		if evt.Kind != "message" {
-			continue
-		}
-		var persisted llm.Message
-		if err := json.Unmarshal(evt.Payload, &persisted); err != nil {
-			t.Fatalf("decode message event: %v", err)
-		}
-		if persisted.Role == llm.RoleDeveloper && persisted.MessageType == llm.MessageTypeErrorFeedback {
-			developerWarningFound = true
-		}
-		if persisted.Role == llm.RoleAssistant && len(persisted.ToolCalls) == 1 && persisted.ToolCalls[0].ID == "call_shell_1" {
-			if finalSeen {
-				t.Fatalf("tool call persisted after final response")
-			}
-			recoveryBeforeToolCall = recoverySeen
-			toolCallBeforeFinal = true
-		}
-		if persisted.Role == llm.RoleTool && persisted.ToolCallID == "call_shell_1" {
-			if finalSeen {
-				t.Fatalf("tool result persisted after final response")
-			}
-			toolResultBeforeFinal = true
-		}
-		if persisted.Role == llm.RoleAssistant && strings.TrimSpace(persisted.Content) == "final response" && len(persisted.ToolCalls) > 0 {
-			persistedFinalHasToolCalls = true
-		}
-		if persisted.Role == llm.RoleAssistant && strings.TrimSpace(persisted.Content) == "final response" {
-			finalSeen = true
-		}
-	}
-	if !toolCompleted {
-		t.Fatalf("expected tool execution")
-	}
-	if !toolCallBeforeFinal {
-		t.Fatalf("expected tool call message before final response")
-	}
-	if !recoveryBeforeToolCall {
-		t.Fatalf("expected model recovery marker before final-answer tool call message, events=%+v", events)
-	}
-	if !toolResultBeforeFinal {
-		t.Fatalf("expected tool result message before final response")
-	}
-	if !finalSeen {
-		t.Fatalf("expected final response")
-	}
-	if developerWarningFound {
-		t.Fatalf("did not expect developer warning for final answer with tool calls")
-	}
-	if persistedFinalHasToolCalls {
-		t.Fatalf("expected persisted final assistant message to have no tool calls")
-	}
-}
-
 func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBeforeSingleFinal(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -902,7 +799,12 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 	}
 	order := make([]string, 0, 4)
 	finalCount := 0
+	recoverySeen := false
+	recoveryBeforeCalls := false
 	for _, evt := range events {
+		if evt.Kind == "model_recovery_pending" {
+			recoverySeen = true
+		}
 		if evt.Kind != "message" {
 			continue
 		}
@@ -917,6 +819,7 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 			if persisted.ToolCalls[0].ID != "call_shell_1" || persisted.ToolCalls[1].ID != "ws_1" {
 				t.Fatalf("unexpected mixed tool call order: %+v", persisted.ToolCalls)
 			}
+			recoveryBeforeCalls = recoverySeen
 			order = append(order, "calls")
 		}
 		if persisted.Role == llm.RoleTool && persisted.ToolCallID == "call_shell_1" {
@@ -939,6 +842,9 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 	}
 	if finalCount != 1 {
 		t.Fatalf("final answer count = %d, want 1", finalCount)
+	}
+	if !recoveryBeforeCalls {
+		t.Fatalf("model recovery marker did not precede final-answer tool calls: %+v", events)
 	}
 
 	emittedMu.Lock()

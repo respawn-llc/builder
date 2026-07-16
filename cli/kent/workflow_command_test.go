@@ -911,23 +911,6 @@ func workflowCommandStoredEdgeByID(t *testing.T, ctx context.Context, store *wor
 	return workflow.Edge{}
 }
 
-func workflowCommandEdgeRecord(edge workflow.Edge) workflowstore.EdgeRecord {
-	return workflowstore.EdgeRecord{
-		ID:                 edge.ID,
-		WorkflowID:         edge.WorkflowID,
-		TransitionGroupID:  edge.TransitionGroupID,
-		Key:                edge.Key,
-		TargetNodeID:       edge.TargetNodeID,
-		RequiresApproval:   edge.RequiresApproval,
-		ContextMode:        edge.ContextMode,
-		ContextSource:      edge.ContextSource,
-		InputBindings:      edge.InputBindings,
-		PromptTemplate:     edge.PromptTemplate,
-		Parameters:         edge.Parameters,
-		OutputRequirements: edge.OutputRequirements,
-	}
-}
-
 type pagedWorkflowListRemote struct {
 	apicontract.WorkflowService
 	definitions         map[string]serverapi.WorkflowDefinition

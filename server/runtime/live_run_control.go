@@ -413,7 +413,7 @@ func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus,
 	var stoppedQueueItems map[runtimeids.QueueItemID]struct{}
 	var done chan struct{}
 	if status == RunStatusFailed || status == RunStatusInterrupted {
-		stoppedQueueItems = cloneTypedQueueItemIDSet(group.taggedQueueItems)
+		stoppedQueueItems = cloneMapIfNonEmpty(group.taggedQueueItems)
 		for id := range group.publishingItems {
 			delete(stoppedQueueItems, id)
 			if c.stoppedPublishingQueueItems == nil {
@@ -619,7 +619,7 @@ func (c *liveRunCoordinator) interrupt() (bool, map[runtimeids.QueueItemID]struc
 		return false, nil, false
 	}
 	goalLoop := group.goalLoop
-	ids := cloneTypedQueueItemIDSet(group.taggedQueueItems)
+	ids := cloneMapIfNonEmpty(group.taggedQueueItems)
 	c.markStoppedQueueItemsLocked(ids)
 	for id := range group.publishingItems {
 		delete(ids, id)
@@ -837,17 +837,6 @@ func stringQueueItemIDSet(ids map[runtimeids.QueueItemID]struct{}) map[string]st
 	out := make(map[string]struct{}, len(ids))
 	for id := range ids {
 		out[id.String()] = struct{}{}
-	}
-	return out
-}
-
-func cloneTypedQueueItemIDSet(ids map[runtimeids.QueueItemID]struct{}) map[runtimeids.QueueItemID]struct{} {
-	if len(ids) == 0 {
-		return nil
-	}
-	out := make(map[runtimeids.QueueItemID]struct{}, len(ids))
-	for id := range ids {
-		out[id] = struct{}{}
 	}
 	return out
 }

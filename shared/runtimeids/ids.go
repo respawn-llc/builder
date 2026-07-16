@@ -1,6 +1,7 @@
 package runtimeids
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -58,4 +59,24 @@ func (id uuidv4Value) String() string {
 
 func (id uuidv4Value) IsZero() bool {
 	return id.value == uuid.Nil
+}
+
+func (id uuidv4Value) MarshalJSON() ([]byte, error) {
+	if id.IsZero() {
+		return nil, fmt.Errorf("runtime UUID is required")
+	}
+	return json.Marshal(id.String())
+}
+
+func (id *uuidv4Value) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	parsed, err := parseUUIDv4Value(raw, "runtime UUID")
+	if err != nil {
+		return err
+	}
+	*id = parsed
+	return nil
 }

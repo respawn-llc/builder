@@ -34,10 +34,6 @@ func LaunchCommand() string {
 	return formatLaunchCommand(effectiveExecutablePath())
 }
 
-func ContinueRunCommand(sessionID string) string {
-	return formatContinueRunCommand(effectiveExecutablePath(), sessionID)
-}
-
 // ContinueRunCommandWithRoot builds the continuation command and includes
 // `--persistence-root <root>` when persistenceRoot is non-empty, so a run that
 // selected a non-default root via the flag emits a command that targets the same

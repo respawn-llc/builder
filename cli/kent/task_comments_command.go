@@ -12,7 +12,7 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 const taskCommentListDefaultPageSize = 100
@@ -64,12 +64,11 @@ func taskCommentAddSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -190,12 +189,12 @@ func (s workflowTaskAgentRunScore) betterThan(other workflowTaskAgentRunScore) b
 		return s.Current
 	case s.Unfinished != other.Unfinished:
 		return s.Unfinished
-	case valuecopy.CompareOptional(s.StartedAt, other.StartedAt) != 0:
-		return valuecopy.CompareOptional(s.StartedAt, other.StartedAt) > 0
-	case valuecopy.CompareOptional(s.CompletedAt, other.CompletedAt) != 0:
-		return valuecopy.CompareOptional(s.CompletedAt, other.CompletedAt) > 0
-	case valuecopy.CompareOptional(s.InterruptedAt, other.InterruptedAt) != 0:
-		return valuecopy.CompareOptional(s.InterruptedAt, other.InterruptedAt) > 0
+	case textutil.CompareOptional(s.StartedAt, other.StartedAt) != 0:
+		return textutil.CompareOptional(s.StartedAt, other.StartedAt) > 0
+	case textutil.CompareOptional(s.CompletedAt, other.CompletedAt) != 0:
+		return textutil.CompareOptional(s.CompletedAt, other.CompletedAt) > 0
+	case textutil.CompareOptional(s.InterruptedAt, other.InterruptedAt) != 0:
+		return textutil.CompareOptional(s.InterruptedAt, other.InterruptedAt) > 0
 	case s.Generation != other.Generation:
 		return s.Generation > other.Generation
 	default:
@@ -240,12 +239,11 @@ func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, "task comment list requires --page-size to be positive")
 		return 2
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -285,12 +283,11 @@ func taskCommentReplaceSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		fmt.Fprintln(stderr, "task comment replace requires <comment-id>")
 		return 2
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 	defer cancel()
 	if err := remote.ReplaceWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentReplaceRequest{CommentID: positionals[0], Body: *body}); err != nil {
@@ -315,12 +312,11 @@ func taskCommentDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writ
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 	defer cancel()
 	if err := remote.DeleteWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentDeleteRequest{CommentID: positionals[0]}); err != nil {

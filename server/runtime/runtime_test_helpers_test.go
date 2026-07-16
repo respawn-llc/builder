@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"core/internal/testharness/filemode"
@@ -216,38 +215,5 @@ func assertModelCallCount(t *testing.T, client *fakeClient, want int) {
 	t.Helper()
 	if len(client.calls) != want {
 		t.Fatalf("model calls = %d, want %d", len(client.calls), want)
-	}
-}
-
-type expectedChatEntry struct {
-	Role string
-	Text string
-}
-
-type chatEntryCase struct {
-	name string
-	seed func(*chatStore)
-	want []expectedChatEntry
-}
-
-func runChatEntryCases(t *testing.T, cases []chatEntryCase) {
-	t.Helper()
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			store := newChatStore()
-			tc.seed(store)
-			assertChatEntries(t, store.snapshotWithMetadata().Snapshot.Entries, tc.want)
-		})
-	}
-}
-
-func assertChatEntries(t *testing.T, got []ChatEntry, want []expectedChatEntry) {
-	t.Helper()
-	normalized := make([]expectedChatEntry, 0, len(got))
-	for _, entry := range got {
-		normalized = append(normalized, expectedChatEntry{Role: entry.Role, Text: entry.Text})
-	}
-	if !reflect.DeepEqual(normalized, want) {
-		t.Fatalf("chat entries mismatch\n got: %+v\nwant: %+v", normalized, want)
 	}
 }

@@ -4,8 +4,6 @@ import (
 	"slices"
 	"testing"
 
-	"core/shared/clientui"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -104,7 +102,7 @@ func TestMainComposerPreservesOtherRuneInput(t *testing.T) {
 func TestAskFreeformAltRuneWordNavigation(t *testing.T) {
 	model := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Type answer"}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Type answer", reply)
 	updated := updateUIModel(t, model, askEventMsg{event: event})
 	updated.ask.input = "alpha beta gamma"
 	updated.ask.inputCursor = len([]rune(updated.ask.input))

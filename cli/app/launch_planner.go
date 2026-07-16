@@ -50,7 +50,6 @@ type resolvedSessionPlanRequest struct {
 }
 
 type runtimeLaunchPlan struct {
-	Logger      *runLogger
 	Wiring      *runtimeWiring
 	close       func() error
 	detachClose func() error

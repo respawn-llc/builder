@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"io"
 	"strings"
 )
 
@@ -43,28 +42,4 @@ func (m *uiModel) checkTUIBlockingOperation(kind, detail string) {
 	}
 	m.logf("tui.main_thread_violation err=%q", message)
 	panic(message)
-}
-
-func (m *uiModel) assertUITerminalMainThread(kind string) {
-	if m == nil || m.uiMainThread.depth > 0 {
-		return
-	}
-	kind = strings.TrimSpace(kind)
-	if kind == "" {
-		kind = "terminal write"
-	}
-	m.logf("tui.main_thread_violation err=%q", "TUI terminal write outside main thread: "+kind)
-}
-
-type uiMainThreadTerminalWriter struct {
-	model *uiModel
-	out   io.Writer
-	kind  string
-}
-
-func (w uiMainThreadTerminalWriter) Write(payload []byte) (int, error) {
-	if w.model != nil {
-		w.model.assertUITerminalMainThread(w.kind)
-	}
-	return w.out.Write(payload)
 }

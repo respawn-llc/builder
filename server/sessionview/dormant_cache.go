@@ -10,7 +10,7 @@ import (
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 const dormantTranscriptCacheMaxEntries = 16
@@ -150,7 +150,7 @@ func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clien
 		}
 	}
 	return runtimeview.RuntimeMainViewFromActivity(
-		clientui.MustRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{}),
+		clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable},
 		status,
 		clientui.RuntimeSessionView{
 			SessionID:             meta.SessionID,
@@ -169,7 +169,7 @@ func (e dormantTranscriptCacheEntry) transcriptPage(
 	freshness clientui.ConversationFreshness,
 	segment runtime.TranscriptSegmentPage,
 ) clientui.TranscriptPage {
-	segment.LatestRollbackCandidate = valuecopy.Pointer(e.newestSegment.LatestRollbackCandidate)
+	segment.LatestRollbackCandidate = textutil.Pointer(e.newestSegment.LatestRollbackCandidate)
 	return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, segment)
 }
 

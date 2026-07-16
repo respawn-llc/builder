@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"core/cli/tui"
-	"core/shared/clientui"
 )
 
 func TestInputModePrioritizesExclusiveUIFlows(t *testing.T) {
@@ -25,7 +24,7 @@ func TestInputModePrioritizesExclusiveUIFlows(t *testing.T) {
 		{name: "process list mode", model: uiModel{uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeProcessList}}}, want: uiInputModeProcessList},
 		{name: "rollback selection mode", model: uiModel{uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeRollbackSelection}}}, want: uiInputModeRollbackSelection},
 		{name: "rollback edit mode", model: uiModel{uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeRollbackEdit}}}, want: uiInputModeRollbackEdit},
-		{name: "ask mode", model: uiModel{uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeAsk}, ask: uiAskState{current: &askEvent{req: clientui.PendingPromptEvent{Question: "Proceed?"}}}}, uiRuntimeFeatureState: uiRuntimeFeatureState{view: detailView}}, want: uiInputModeAsk},
+		{name: "ask mode", model: uiModel{uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeAsk}, ask: uiAskState{current: testQuestionAskEventPtr("ask-1", "Proceed?")}}, uiRuntimeFeatureState: uiRuntimeFeatureState{view: detailView}}, want: uiInputModeAsk},
 		{name: "main", model: uiModel{}, want: uiInputModeMain},
 	}
 
@@ -50,12 +49,12 @@ func TestRestorePrimaryInputModeFollowsAskAndTranscriptMode(t *testing.T) {
 	}{
 		{
 			name:  "active ask in ongoing mode restores ask input",
-			model: &uiModel{uiConversationFeatureState: uiConversationFeatureState{ask: uiAskState{current: &askEvent{req: clientui.PendingPromptEvent{Question: "Proceed?"}}}}},
+			model: &uiModel{uiConversationFeatureState: uiConversationFeatureState{ask: uiAskState{current: testQuestionAskEventPtr("ask-1", "Proceed?")}}},
 			want:  uiInputModeAsk,
 		},
 		{
 			name:  "active ask in detail mode restores main input",
-			model: &uiModel{uiConversationFeatureState: uiConversationFeatureState{ask: uiAskState{current: &askEvent{req: clientui.PendingPromptEvent{Question: "Proceed?"}}}}, uiRuntimeFeatureState: uiRuntimeFeatureState{view: detailView}},
+			model: &uiModel{uiConversationFeatureState: uiConversationFeatureState{ask: uiAskState{current: testQuestionAskEventPtr("ask-1", "Proceed?")}}, uiRuntimeFeatureState: uiRuntimeFeatureState{view: detailView}},
 			want:  uiInputModeMain,
 		},
 		{

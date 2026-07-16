@@ -509,33 +509,36 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 		t.Fatalf("startSessionServer: %v", err)
 	}
 	defer func() { _ = server.Close() }()
-	promptViews := requirePromptViewServer(t, server)
-
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote prompt round trip")
 	defer runtimePlan.Close()
+	finishStep := beginAppTestModelPromptStep(t, srv, plan.SessionID)
 
 	askDone := make(chan struct {
 		resp askquestion.AskQuestionResponse
 		err  error
 	}, 1)
+	askFailure := make(chan error, 1)
 	go func() {
-		resp, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, askquestion.AskQuestionRequest{
-			ID:                     "ask-1",
-			Question:               "Pick one",
-			Suggestions:            []string{"one", "two"},
-			RecommendedOptionIndex: 2,
-		})
+		request := appTestModelPromptRequest("ask-1", "Pick one")
+		request.Suggestions = []string{"one", "two"}
+		request.RecommendedOptionIndex = 2
+		resp, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, request)
+		if err != nil {
+			askFailure <- err
+		}
 		askDone <- struct {
 			resp askquestion.AskQuestionResponse
 			err  error
 		}{resp: resp, err: err}
 	}()
-	waitForPendingAskResources(t, promptViews.AskViewClient(), plan.SessionID, 1)
-	askEvt := waitForRemoteAskEvent(t, runtimePlan.Wiring.askEvents)
-	if askEvt.req.PromptID != "ask-1" || askEvt.req.Question != "Pick one" {
-		t.Fatalf("unexpected ask event: %+v", askEvt.req)
+	askPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.transcriptEvents, "ask-1", askFailure)
+	if askPrompt.Kind != clientui.TranscriptPromptKindQuestion || askPrompt.Question != "Pick one" {
+		t.Fatalf("unexpected ask prompt: %+v", askPrompt)
 	}
-	askEvt.reply <- askReply{response: clientui.PromptAnswer{PromptID: askEvt.req.PromptID, SelectedOptionNumber: textutil.Int(2)}}
+	answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, askPrompt, clientui.PromptAnswer{
+		PromptID:             string(askPrompt.PromptID),
+		SelectedOptionNumber: textutil.Int(2),
+	})
 	select {
 	case result := <-askDone:
 		if result.err != nil {
@@ -547,30 +550,31 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for ask response")
 	}
-	waitForPendingAskResources(t, promptViews.AskViewClient(), plan.SessionID, 0)
-
 	approvalDone := make(chan struct {
 		resp askquestion.AskQuestionResponse
 		err  error
 	}, 1)
 	go func() {
-		resp, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, askquestion.AskQuestionRequest{
-			ID:              "approval-1",
-			Question:        "Approve it?",
-			Approval:        true,
-			ApprovalOptions: []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"}},
-		})
+		request := appTestModelPromptRequest("approval-1", "Approve it?")
+		request.Approval = true
+		request.ApprovalOptions = []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"}}
+		resp, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, request)
 		approvalDone <- struct {
 			resp askquestion.AskQuestionResponse
 			err  error
 		}{resp: resp, err: err}
 	}()
-	waitForPendingApprovalResources(t, promptViews.ApprovalViewClient(), plan.SessionID, 1)
-	approvalEvt := waitForRemoteAskEvent(t, runtimePlan.Wiring.askEvents)
-	if !approvalEvt.req.Approval || approvalEvt.req.PromptID != "approval-1" {
-		t.Fatalf("unexpected approval event: %+v", approvalEvt.req)
+	approvalPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.transcriptEvents, "approval-1")
+	if approvalPrompt.Kind != clientui.TranscriptPromptKindApproval {
+		t.Fatalf("unexpected approval prompt: %+v", approvalPrompt)
 	}
-	approvalEvt.reply <- askReply{response: clientui.PromptAnswer{PromptID: approvalEvt.req.PromptID, Approval: &clientui.ApprovalPromptAnswer{Decision: clientui.ApprovalDecisionAllowOnce, Commentary: "trusted"}}}
+	answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, approvalPrompt, clientui.PromptAnswer{
+		PromptID: string(approvalPrompt.PromptID),
+		Approval: &clientui.ApprovalPromptAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: "trusted",
+		},
+	})
 	select {
 	case result := <-approvalDone:
 		if result.err != nil {
@@ -582,6 +586,5 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for approval response")
 	}
-	waitForPendingApprovalResources(t, promptViews.ApprovalViewClient(), plan.SessionID, 0)
-
+	finishStep()
 }

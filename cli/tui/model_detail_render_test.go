@@ -10,6 +10,7 @@ import (
 	"core/internal/testharness/pty/analyzer"
 	"core/shared/clientui"
 	"core/shared/theme"
+	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -189,10 +190,10 @@ func TestSelectedStructuredPatchKeepsChromaStylesUnderDiffFill(t *testing.T) {
 		ToolCallID: "764a93e1-c17a-40d9-9021-4ce7b38dc984",
 		ToolName:   "patch",
 		Text:       renderedPatch.DetailText(),
-		ToolPresentation: &clientui.ToolCallMeta{
+		Presentation: &transcript.ToolCallMeta{
 			ToolName:    "patch",
 			PatchRender: &renderedPatch,
-			RenderHint:  &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff},
+			RenderHint:  &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
 		},
 	}))
 	var added transcriptrender.Line

@@ -236,22 +236,6 @@ func (e *Engine) QueueGoalClearForActiveStep(actor session.GoalActor) (session.G
 	return accepted, true, nil
 }
 
-func (e *Engine) effectiveGoalForActiveStep() *session.GoalState {
-	goal := e.Goal()
-	_, _ = e.stepLifecycle.WithActiveStep(func(stepID string) error {
-		stepID = strings.TrimSpace(stepID)
-		if stepID == "" {
-			return nil
-		}
-		e.activeStepGoalMutationsMu.Lock()
-		pending := append([]activeStepGoalMutation(nil), e.activeStepGoalMutations[stepID]...)
-		e.activeStepGoalMutationsMu.Unlock()
-		goal = foldGoalMutations(goal, pending)
-		return nil
-	})
-	return goal
-}
-
 func foldGoalMutations(goal *session.GoalState, mutations []activeStepGoalMutation) *session.GoalState {
 	for _, mutation := range mutations {
 		switch mutation.kind {

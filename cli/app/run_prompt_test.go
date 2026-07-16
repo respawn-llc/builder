@@ -558,8 +558,6 @@ func TestRunPromptWithIncompatibleServerReportsIncompatibleError(t *testing.T) {
 		SessionRuntime:   true,
 		RuntimeControl:   true,
 		PromptControl:    true,
-		PromptActivity:   true,
-		SessionActivity:  true,
 	})
 	defer cleanup()
 

@@ -35,24 +35,3 @@ func stripANSIAndTrimRight(view string) string {
 func stripANSIPreserve(view string) string {
 	return ansi.Strip(view)
 }
-
-func containsInOrder(text string, parts ...string) bool {
-	offset := 0
-	for _, part := range parts {
-		idx := strings.Index(text[offset:], part)
-		if idx < 0 {
-			return false
-		}
-		offset += idx + len(part)
-	}
-	return true
-}
-
-func lineContaining(text, substring string) string {
-	for _, line := range strings.Split(text, "\n") {
-		if strings.Contains(ansi.Strip(line), substring) {
-			return line
-		}
-	}
-	return ""
-}

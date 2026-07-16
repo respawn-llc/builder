@@ -1082,15 +1082,6 @@ func fakeClientCallCount(client *fakeClient) int {
 	return len(client.calls)
 }
 
-func fakeClientRequestAt(client *fakeClient, index int) llm.Request {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if index < 0 || index >= len(client.calls) {
-		return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic}
-	}
-	return client.calls[index]
-}
-
 func waitEngineLifecycleTasks(t *testing.T, eng *Engine) {
 	t.Helper()
 	done := make(chan struct{})

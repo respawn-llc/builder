@@ -6,7 +6,6 @@ import (
 
 	"core/server/runtime"
 	askquestion "core/server/tools"
-	"core/shared/clientui"
 )
 
 type runtimeGuard struct {
@@ -55,15 +54,8 @@ func (g *runtimeGuard) SubmitPromptResponse(resp askquestion.AskQuestionResponse
 		return fmt.Errorf("runtime guard is unavailable")
 	}
 	return g.entry.pendingPrompts.Submit(resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		g.entry.PublishPendingPrompt(g.sessionID, snapshot, eventType, g.entry.nextReadModelVersion(g.sessionID))
+		g.entry.PublishPendingPrompt(g.sessionID, snapshot, eventType)
 	})
-}
-
-func (e *runtimeEntry) nextReadModelVersion(sessionID string) clientui.ReadModelVersion {
-	if e == nil || e.readModelVersion == nil {
-		return clientui.ReadModelVersion{}
-	}
-	return e.readModelVersion(sessionID)
 }
 
 func (g *runtimeGuard) Release() {

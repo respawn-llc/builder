@@ -3,6 +3,7 @@ package sessionservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -55,40 +56,70 @@ func sessionRecoveryBuffersFromAPI(buffers []serverapi.SessionDraftRecoveryBuffe
 	}
 	out := make([]session.InputDraftRecoveryBuffer, 0, len(buffers))
 	for _, buffer := range buffers {
+		operationQueueItemID := ""
+		if buffer.OperationRef.QueueItemID != nil {
+			operationQueueItemID = buffer.OperationRef.QueueItemID.String()
+		}
 		out = append(out, session.InputDraftRecoveryBuffer{
 			Kind:                     string(buffer.Kind),
 			ID:                       strings.TrimSpace(buffer.ID),
 			ServerID:                 strings.TrimSpace(buffer.ServerID),
 			ClientRequestID:          strings.TrimSpace(buffer.ClientRequestID),
 			Text:                     buffer.Text,
-			OperationClientRequestID: strings.TrimSpace(buffer.OperationRef.ClientRequestID),
-			OperationQueueItemID:     strings.TrimSpace(buffer.OperationRef.QueueItemID),
+			OperationClientRequestID: buffer.OperationRef.ClientRequestID.String(),
+			OperationQueueItemID:     operationQueueItemID,
 			OperationKind:            string(buffer.OperationRef.Kind),
 		})
 	}
 	return out
 }
 
-func sessionRecoveryBuffersToAPI(buffers []session.InputDraftRecoveryBuffer) []serverapi.SessionDraftRecoveryBuffer {
+func sessionRecoveryBuffersToAPI(buffers []session.InputDraftRecoveryBuffer) ([]serverapi.SessionDraftRecoveryBuffer, error) {
 	if len(buffers) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]serverapi.SessionDraftRecoveryBuffer, 0, len(buffers))
-	for _, buffer := range buffers {
+	for index, buffer := range buffers {
+		operationRef, err := sessionRecoveryOperationRef(buffer)
+		if err != nil {
+			return nil, fmt.Errorf("restore session draft recovery operation %d: %w", index, err)
+		}
 		out = append(out, serverapi.SessionDraftRecoveryBuffer{
 			Kind:            serverapi.SessionDraftRecoveryBufferKind(strings.TrimSpace(buffer.Kind)),
 			ID:              strings.TrimSpace(buffer.ID),
 			ServerID:        strings.TrimSpace(buffer.ServerID),
 			ClientRequestID: strings.TrimSpace(buffer.ClientRequestID),
 			Text:            buffer.Text,
-			OperationRef: clientui.RuntimeOperationRef{
-				Kind:            clientui.RuntimeOperationKind(strings.TrimSpace(buffer.OperationKind)),
-				ClientRequestID: strings.TrimSpace(buffer.OperationClientRequestID),
-				QueueItemID:     strings.TrimSpace(buffer.OperationQueueItemID),
-			},
+			OperationRef:    operationRef,
 		})
 	}
-	return out
+	return out, nil
+}
+
+func sessionRecoveryOperationRef(buffer session.InputDraftRecoveryBuffer) (clientui.RuntimeOperationRef, error) {
+	kind := clientui.RuntimeOperationKind(strings.TrimSpace(buffer.OperationKind))
+	if kind == "" {
+		return clientui.RuntimeOperationRef{}, nil
+	}
+	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(strings.TrimSpace(buffer.OperationClientRequestID))
+	if err != nil {
+		return clientui.RuntimeOperationRef{}, err
+	}
+	ref := clientui.RuntimeOperationRef{
+		Kind:            kind,
+		ClientRequestID: clientRequestID,
+	}
+	if rawQueueItemID := strings.TrimSpace(buffer.OperationQueueItemID); rawQueueItemID != "" {
+		queueItemID, err := runtimeids.ParseQueueItemID(rawQueueItemID)
+		if err != nil {
+			return clientui.RuntimeOperationRef{}, err
+		}
+		ref.QueueItemID = &queueItemID
+	}
+	if err := ref.Validate(); err != nil {
+		return clientui.RuntimeOperationRef{}, err
+	}
+	return ref, nil
 }
 
 func resolveSessionTransition(_ context.Context, req sessionTransitionResolveRequest) (serverapi.SessionDirective, error) {

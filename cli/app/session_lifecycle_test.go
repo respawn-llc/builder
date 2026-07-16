@@ -822,7 +822,7 @@ func TestResolveSessionActionNewSessionUsesForceNewFlow(t *testing.T) {
 		t.Fatalf("resolve session action: %v", err)
 	}
 	parent := requireSessionCreateDestination(t, resolved)
-	if parent == nil || parent.SessionID() != "parent-1" {
+	if parent == nil || *parent != "parent-1" {
 		t.Fatalf("expected parent session id passthrough, got %+v", parent)
 	}
 	preparation, present := resolved.LaunchPreparation()
@@ -905,7 +905,7 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 		t.Fatalf("resolve session action: %v", err)
 	}
 	parent := requireSessionCreateDestination(t, resolved)
-	if parent == nil || parent.SessionID() != "parent-1" {
+	if parent == nil || *parent != "parent-1" {
 		t.Fatalf("expected new-session parent, got %+v", parent)
 	}
 	preparation, present := resolved.LaunchPreparation()
@@ -1224,13 +1224,13 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 			return serverapi.SessionPersistInputDraftResponse{}, nil
 		},
 	}
-	model := newUIModelDefaults(nil, nil, nil)
+	model := newUIModelDefaults(nil)
 	model.input = "visible draft"
 	model.activeSubmit = activeSubmitState{
 		text: "submitted before forced exit",
 		operationRef: clientui.RuntimeOperationRef{
 			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: "submit-1",
+			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 	}
 	model.pendingInjected = queuedUserMessagesForTest("pending injected")
@@ -1251,7 +1251,7 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 }
 
 func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *testing.T) {
-	model := NewProjectedUIModel(nil, nil, nil,
+	model := NewProjectedUIModel(nil,
 		WithUIInitialInput("visible draft"),
 		WithUIInitialRecoveryBuffers([]serverapi.SessionDraftRecoveryBuffer{
 			{Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit, Text: "submitted before forced exit"},

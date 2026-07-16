@@ -442,7 +442,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			evt.StepID = stepID
 		}
 		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
-			if err := e.transcriptRuntimeState().RecordLiveToolStart(*evt.ToolCall); err != nil {
+			if err := e.transcriptRuntimeState().RecordLiveToolStart(evt.StepID, *evt.ToolCall); err != nil {
 				return err
 			}
 		}
@@ -456,7 +456,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if appendErr != nil && !receipt.Committed {
 			return appendErr
 		}
-		newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
+		e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
 		if item.cacheWarning.emit {
 			e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true})
 		}
@@ -473,7 +473,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if observation.hasWarning {
 			warning := observation.warning
 			visibility := normalizeRuntimeEntryVisibility(observation.visibility)
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
+			e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
 			if observation.emit {
 				e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true})
 			}
@@ -490,7 +490,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			if delta.Text == "" {
 				return nil
 			}
-			metadata, streamID := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(stepID, e.TranscriptRevision(), e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
+			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(stepID, e.TranscriptRevision(), e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
 			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
 			return nil
 		}
@@ -540,7 +540,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	e.compactionRuntimeState().SetCount(replacement.payload.CompactionNumber)
 	e.resetCurrentPreciseInputTracking()
 	e.resetLocalDiagnostics()
-	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistoryAtCommittedEntryStart(preparedItems, &projectedStart)
+	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(stepID, preparedItems, &projectedStart)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	e.emitProjectedHistoryReplacementEntriesRaw(stepID, projectedStart, replacement.projectedEntries)
 	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})

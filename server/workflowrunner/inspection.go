@@ -32,26 +32,6 @@ func BuildWorkflowRuntimeConfig(input workflowstore.RunStartContext, completionM
 	}, nil
 }
 
-// BuildPersistedWorkflowRuntimeConfig reconstructs a workflow runtime contract
-// from the marker stored on a session. It only reads workflow metadata.
-func BuildPersistedWorkflowRuntimeConfig(ctx context.Context, store *workflowstore.Store, state session.WorkflowSessionState, sessionID string, maxInvalidCompletionAttempts int) (*workflowruntime.Config, error) {
-	input, err := loadPersistedWorkflowRunInput(ctx, store, state, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	mode, err := workflowruntime.ParseCompletionMode(optionalRunCompletionMode(input.Run.EffectiveCompletionMode))
-	if err != nil {
-		return nil, fmt.Errorf("parse workflow completion mode: %w", err)
-	}
-	return BuildWorkflowRuntimeConfig(
-		input,
-		mode,
-		maxInvalidCompletionAttempts,
-		workflowruntime.StoreController{Store: store},
-		store,
-	)
-}
-
 // PersistedWorkflowInspection is the workflow-owned runtime reconstruction for
 // a persisted session, including the run's authoritative execution root.
 type PersistedWorkflowInspection struct {

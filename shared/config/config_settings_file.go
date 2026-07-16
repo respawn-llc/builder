@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"core/shared/theme"
 	"errors"
 	"fmt"
 	"github.com/BurntSushi/toml"
@@ -167,37 +166,6 @@ func WriteDefaultSettingsFileAt(path string) (string, bool, error) {
 		return trimmed, false, nil
 	}
 	created, err := writeSettingsFileIfMissing(trimmed, settingsTOMLWithRenderingOptions(configRegistry.defaultState().Settings, true, nil, nil))
-	if err != nil {
-		return "", false, fmt.Errorf("write default settings file: %w", err)
-	}
-	return trimmed, created, nil
-}
-
-func WriteDefaultSettingsFileWithTheme(selectedTheme string) (path string, created bool, err error) {
-	path, err = resolveSettingsFilePathInRoot("")
-	if err != nil {
-		return "", false, err
-	}
-	return WriteDefaultSettingsFileWithThemeAt(path, selectedTheme)
-}
-
-// WriteDefaultSettingsFileWithThemeAt writes onboarding default settings at an
-// explicit settings path so interactive first-run onboarding seeds the resolved
-// config+data root (--persistence-root / KENT_PERSISTENCE_ROOT) rather than the
-// default ~/.kent.
-func WriteDefaultSettingsFileWithThemeAt(path string, selectedTheme string) (string, bool, error) {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return "", false, fmt.Errorf("settings path is required")
-	}
-	exists, err := settingsFileExists(trimmed)
-	if err != nil {
-		return "", false, err
-	}
-	if exists {
-		return trimmed, false, nil
-	}
-	created, err := writeSettingsFileIfMissing(trimmed, onboardingDefaultSettingsTOML(theme.Normalize(selectedTheme)))
 	if err != nil {
 		return "", false, fmt.Errorf("write default settings file: %w", err)
 	}

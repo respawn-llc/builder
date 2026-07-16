@@ -7,7 +7,6 @@ import (
 
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimefeed"
 	"core/server/runtimeview"
 	"core/server/session"
 	"core/shared/clientui"
@@ -56,7 +55,7 @@ func (r defaultSessionRuntimeActivityResolver) Snapshot(ctx context.Context, ses
 	return runtimeactivity.BuildSnapshot(sessionID, func() (runtimeactivity.SnapshotInput, error) {
 		return runtimeactivity.SnapshotInput{
 			Resolver:            runtimeactivity.ResolverSnapshot{Registry: registry, Active: runtimeactivity.ActiveStepFromProvider(engine)},
-			InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
+			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		}, nil
 	})
 }

@@ -2,11 +2,8 @@ package runtimeops
 
 import (
 	"fmt"
-	"strings"
 
-	"core/server/runtimefeed"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 )
 
 func (l *sessionLedger) operationKey(ref clientui.RuntimeOperationRef) string {
@@ -14,22 +11,17 @@ func (l *sessionLedger) operationKey(ref clientui.RuntimeOperationRef) string {
 	if l == nil || ref.Kind != clientui.RuntimeOperationKindQueuedMessage {
 		return key
 	}
-	queueItemID := strings.TrimSpace(ref.QueueItemID)
-	if queueItemID == "" {
+	if ref.QueueItemID == nil {
 		return key
 	}
-	typedQueueItemID, err := runtimeids.ParseQueueItemID(queueItemID)
-	if err != nil {
-		return key
-	}
-	identity := l.queuedByQueueItemID[typedQueueItemID]
+	identity := l.queuedByQueueItemID[*ref.QueueItemID]
 	if identity == nil {
 		return key
 	}
 	return identity.operationKey
 }
 
-func (l *sessionLedger) bindQueuedOperation(ref runtimefeed.RuntimeOperationRef) error {
+func (l *sessionLedger) bindQueuedOperation(ref clientui.RuntimeOperationRef) error {
 	if l == nil {
 		return fmt.Errorf("runtime operation ledger is required")
 	}
@@ -62,7 +54,7 @@ func (l *sessionLedger) bindQueuedOperation(ref runtimefeed.RuntimeOperationRef)
 			queueItemID:     queueItemID,
 			operationKey: (clientui.RuntimeOperationRef{
 				Kind:            clientui.RuntimeOperationKindQueuedMessage,
-				ClientRequestID: clientRequestID.String(),
+				ClientRequestID: clientRequestID,
 			}).Key(),
 		}
 	}
@@ -89,51 +81,35 @@ func (l *sessionLedger) removeQueuedOperationIdentity(operationKey string) {
 	}
 }
 
-func runtimeFeedOperationRef(ledger *sessionLedger, ref clientui.RuntimeOperationRef) (runtimefeed.RuntimeOperationRef, string, error) {
+func runtimeFeedOperationRef(ledger *sessionLedger, ref clientui.RuntimeOperationRef) (clientui.RuntimeOperationRef, string, error) {
 	if err := ref.Validate(); err != nil {
-		return runtimefeed.RuntimeOperationRef{}, "", err
+		return clientui.RuntimeOperationRef{}, "", err
 	}
-	var clientRequestID runtimeids.RuntimeClientRequestID
-	var queueItemID *runtimeids.QueueItemID
-	rawClientRequestID := strings.TrimSpace(ref.ClientRequestID)
-	rawQueueItemID := strings.TrimSpace(ref.QueueItemID)
-	if ref.Kind == clientui.RuntimeOperationKindQueuedMessage && rawQueueItemID != "" {
+	operation := ref
+	if ref.Kind == clientui.RuntimeOperationKindQueuedMessage && ref.QueueItemID != nil {
 		if ledger == nil {
-			return runtimefeed.RuntimeOperationRef{}, "", fmt.Errorf("queued-message queue item %q has no client request identity", rawQueueItemID)
+			return clientui.RuntimeOperationRef{}, "", fmt.Errorf("queued-message queue item %q has no client request identity", ref.QueueItemID.String())
 		}
-		typedQueueItemID, err := runtimeids.ParseQueueItemID(rawQueueItemID)
-		if err != nil {
-			return runtimefeed.RuntimeOperationRef{}, "", err
-		}
-		identity := ledger.queuedByQueueItemID[typedQueueItemID]
+		identity := ledger.queuedByQueueItemID[*ref.QueueItemID]
 		if identity == nil {
-			return runtimefeed.RuntimeOperationRef{}, "", fmt.Errorf("queued-message queue item %q has no client request identity", rawQueueItemID)
+			return clientui.RuntimeOperationRef{}, "", fmt.Errorf("queued-message queue item %q has no client request identity", ref.QueueItemID.String())
 		}
-		clientRequestID = identity.clientRequestID
-		queueItemID = &identity.queueItemID
-	} else {
-		typedClientRequestID, err := runtimeids.ParseRuntimeClientRequestID(rawClientRequestID)
-		if err != nil {
-			return runtimefeed.RuntimeOperationRef{}, "", err
-		}
-		clientRequestID = typedClientRequestID
+		operation.ClientRequestID = identity.clientRequestID
+		operation.QueueItemID = &identity.queueItemID
+	} else if ref.Kind == clientui.RuntimeOperationKindQueuedMessage && ledger != nil {
+		clientRequestID := ref.ClientRequestID
 		if ref.Kind == clientui.RuntimeOperationKindQueuedMessage && ledger != nil {
 			if identity := ledger.queuedByClientRequestID[clientRequestID]; identity != nil {
-				queueItemID = &identity.queueItemID
+				operation.QueueItemID = &identity.queueItemID
 			}
 		}
 	}
-	operation := runtimefeed.RuntimeOperationRef{
-		Kind:            ref.Kind,
-		ClientRequestID: clientRequestID,
-		QueueItemID:     queueItemID,
-	}
 	if err := operation.Validate(); err != nil {
-		return runtimefeed.RuntimeOperationRef{}, "", err
+		return clientui.RuntimeOperationRef{}, "", err
 	}
 	key := (clientui.RuntimeOperationRef{
 		Kind:            ref.Kind,
-		ClientRequestID: operation.ClientRequestID.String(),
+		ClientRequestID: operation.ClientRequestID,
 	}).Key()
 	return operation, key, nil
 }

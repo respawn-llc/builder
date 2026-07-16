@@ -3,7 +3,7 @@ package processview
 import (
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 func ProcessFromSnapshot(snapshot shelltool.Snapshot) clientui.BackgroundProcess {
@@ -17,7 +17,7 @@ func ProcessFromSnapshot(snapshot shelltool.Snapshot) clientui.BackgroundProcess
 		Workdir:                 snapshot.Workdir,
 		StartedAt:               snapshot.StartedAt,
 		FinishedAt:              snapshot.FinishedAt,
-		ExitCode:                valuecopy.Pointer(snapshot.ExitCode),
+		ExitCode:                textutil.Pointer(snapshot.ExitCode),
 		LogPath:                 snapshot.LogPath,
 		RecentOutput:            snapshot.RecentOutput,
 		OutputAvailable:         snapshot.OutputAvailable,

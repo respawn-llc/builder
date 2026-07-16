@@ -125,22 +125,3 @@ type Snapshot struct {
 	Events                []session.Event
 	ConversationFreshness session.ConversationFreshness
 }
-
-// SnapshotFromDir opens the persisted session at dir and projects its durable
-// state into a Snapshot using the production streaming readers. It surfaces the
-// same symlink/integrity rejections as session.Open. Test-only.
-func SnapshotFromDir(dir string, options ...session.StoreOption) (Snapshot, error) {
-	store, err := session.Open(dir, options...)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	events, err := CollectEvents(store)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	return Snapshot{
-		Meta:                  store.Meta(),
-		Events:                events,
-		ConversationFreshness: store.ConversationFreshness(),
-	}, nil
-}

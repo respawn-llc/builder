@@ -13,8 +13,6 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimefeed"
-	"core/server/runtimeops"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -22,6 +20,11 @@ import (
 )
 
 type registryRuntimeFakeClient struct{}
+
+const (
+	registryTestRunID  = "11111111-1111-4111-8111-111111111111"
+	registryTestStepID = "22222222-2222-4222-8222-222222222222"
+)
 
 func (registryRuntimeFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, nil
@@ -101,7 +104,7 @@ func closeRuntime(r *RuntimeRegistry, sessionID string, _ *runtime.Engine) {
 
 func newRegistryTestRuntime(t *testing.T, onEvent func(runtime.Event)) *runtime.Engine {
 	t.Helper()
-	return newRegistryRuntime(t, registryRuntimeFakeClient{}, askquestion.NewRegistry(), runtime.Config{Model: "gpt-5"}, func(_ *runtime.Engine, evt runtime.Event) {
+	return newRegistryRuntime(t, registryRuntimeFakeClient{}, askquestion.NewRegistry(), runtime.Config{Model: "gpt-5", ThinkingLevel: "medium"}, func(_ *runtime.Engine, evt runtime.Event) {
 		if onEvent != nil {
 			onEvent(evt)
 		}
@@ -125,263 +128,6 @@ func newRegistryRuntime(t *testing.T, client llm.Client, toolRegistry *askquesti
 	return engine
 }
 
-func TestRuntimeRegistryBroadcastsSessionActivityToMultipleSubscribers(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	first, err := registry.SubscribeSessionActivity(context.Background(), "session-1")
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity first: %v", err)
-	}
-	defer func() { _ = first.Close() }()
-	second, err := registry.SubscribeSessionActivity(context.Background(), "session-1")
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity second: %v", err)
-	}
-	defer func() { _ = second.Close() }()
-
-	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventConversationUpdated, StepID: "step-1"})
-
-	ctx := context.Background()
-	firstEvt, err := first.Next(ctx)
-	if err != nil {
-		t.Fatalf("first.Next: %v", err)
-	}
-	secondEvt, err := second.Next(ctx)
-	if err != nil {
-		t.Fatalf("second.Next: %v", err)
-	}
-	if firstEvt.Kind != clientui.EventConversationUpdated || secondEvt.Kind != clientui.EventConversationUpdated {
-		t.Fatalf("unexpected events: first=%+v second=%+v", firstEvt, secondEvt)
-	}
-	if firstEvt.StepID != "step-1" || secondEvt.StepID != "step-1" {
-		t.Fatalf("unexpected step ids: first=%+v second=%+v", firstEvt, secondEvt)
-	}
-}
-
-func TestRuntimeRegistryIsolatesSessionActivityBetweenSessions(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engineA := &runtime.Engine{}
-	engineB := &runtime.Engine{}
-	registerReady(t, registry, "session-a", engineA)
-	registerReady(t, registry, "session-b", engineB)
-	t.Cleanup(func() {
-		closeRuntime(registry, "session-a", engineA)
-		closeRuntime(registry, "session-b", engineB)
-	})
-
-	subA, err := registry.SubscribeSessionActivity(context.Background(), "session-a")
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity(session-a): %v", err)
-	}
-	defer func() { _ = subA.Close() }()
-	subB, err := registry.SubscribeSessionActivity(context.Background(), "session-b")
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity(session-b): %v", err)
-	}
-	defer func() { _ = subB.Close() }()
-
-	registry.PublishRuntimeEvent("session-a", runtime.Event{Kind: runtime.EventConversationUpdated, StepID: "step-a"})
-
-	evtA, err := subA.Next(context.Background())
-	if err != nil {
-		t.Fatalf("subA.Next: %v", err)
-	}
-	if evtA.Kind != clientui.EventConversationUpdated || evtA.StepID != "step-a" {
-		t.Fatalf("unexpected event for session-a: %+v", evtA)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if _, err := subB.Next(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected session-b subscriber to stay idle, got %v", err)
-	}
-}
-
-func TestRuntimeRegistryClosesLaggedSubscriberWithGapError(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	sub, err := registry.SubscribeSessionActivity(context.Background(), "session-1")
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	for i := 0; i <= sessionActivityBufferSize+1; i++ {
-		registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventConversationUpdated})
-	}
-
-	for i := 0; i < sessionActivityBufferSize; i++ {
-		evt, err := sub.Next(context.Background())
-		if err != nil {
-			t.Fatalf("unexpected early stream error after %d events: %v", i, err)
-		}
-		if evt.Kind != clientui.EventConversationUpdated {
-			t.Fatalf("unexpected event at %d: %+v", i, evt)
-		}
-	}
-	if _, err := sub.Next(context.Background()); !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("expected gap error, got %v", err)
-	}
-}
-
-func TestRuntimeRegistryReplaysSessionActivityFromCursor(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventConversationUpdated, StepID: "step-1"})
-	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventRunStateChanged, StepID: "step-2"})
-
-	sub, err := registry.SubscribeSessionActivityFrom(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: "session-1", AfterSequence: 3})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivityFrom: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	evt, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("Next replay: %v", err)
-	}
-	if evt.Sequence != 4 || evt.StepID != "step-2" {
-		t.Fatalf("replay event = %+v, want sequence 4 step-2", evt)
-	}
-}
-
-func TestRuntimeRegistryPublishesVersionedRuntimeActivityOnSessionStream(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	version := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
-
-	sub, err := registry.SubscribeSessionActivity(context.Background(), "session-1")
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	registry.PublishRuntimeReadModelUpdate("session-1", idleRuntimeReadModelUpdate(version))
-
-	evt, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
-	if evt.Kind != clientui.EventRuntimeActivityChanged || evt.Sequence == 0 {
-		t.Fatalf("event = %+v, want runtime activity event with raw stream sequence", evt)
-	}
-	if evt.ReadModelVersion != version || evt.RuntimeActivity == nil || *evt.RuntimeActivity != activity {
-		t.Fatalf("activity payload = %+v version=%+v, want %+v %+v", evt.RuntimeActivity, evt.ReadModelVersion, activity, version)
-	}
-	if evt.InputReconciliation == nil || evt.InputReconciliation.Version != version {
-		t.Fatalf("reconciliation = %+v, want version %+v", evt.InputReconciliation, version)
-	}
-}
-
-func TestRuntimeRegistryRecordsQueuedMessageStatusReconciliationByQueueItemID(t *testing.T) {
-	operations := runtimeops.NewCoordinator()
-	registry := NewRuntimeRegistry().WithOperationCoordinator(operations)
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	clientRequestID := "33333333-3333-4333-8333-333333333333"
-	queueItemID := "44444444-4444-4444-8444-444444444444"
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: queueItemID}
-	operations.RecordAccepted("session-1", clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: clientRequestID,
-	})
-
-	registry.PublishRuntimeEvent("session-1", runtime.Event{
-		Kind: runtime.EventQueuedUserMessageStatus,
-		QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
-			SessionID:       "session-1",
-			QueueItemID:     queueItemID,
-			ClientRequestID: clientRequestID,
-			Status:          runtime.QueuedUserMessageAccepted,
-		},
-	})
-	accepted, err := registry.RuntimeReadModelSnapshot(context.Background(), "session-1", []clientui.RuntimeOperationRef{ref})
-	if err != nil {
-		t.Fatalf("accepted RuntimeReadModelSnapshot: %v", err)
-	}
-	if len(accepted.InputReconciliation.Operations) != 1 ||
-		accepted.InputReconciliation.Operations[0].State != clientui.RuntimeInputReconciliationAccepted {
-		t.Fatalf("accepted queue-item reconciliation = %+v, want accepted", accepted.InputReconciliation.Operations)
-	}
-
-	registry.PublishRuntimeEvent("session-1", runtime.Event{
-		Kind: runtime.EventQueuedUserMessageStatus,
-		QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
-			SessionID:       "session-1",
-			QueueItemID:     queueItemID,
-			ClientRequestID: clientRequestID,
-			Status:          runtime.QueuedUserMessageSubmitted,
-		},
-	})
-
-	snapshot := operations.Snapshot("session-1", clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}, []clientui.RuntimeOperationRef{ref})
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationSubmitted {
-		t.Fatalf("queued-message reconciliation = %+v, want submitted", snapshot.Operations)
-	}
-
-	readModel, err := registry.RuntimeReadModelSnapshot(context.Background(), "session-1", []clientui.RuntimeOperationRef{ref})
-	if err != nil {
-		t.Fatalf("RuntimeReadModelSnapshot: %v", err)
-	}
-	if len(readModel.InputReconciliation.Operations) != 1 {
-		t.Fatalf("read-model reconciliation = %+v, want one operation", readModel.InputReconciliation.Operations)
-	}
-	reconciliation := readModel.InputReconciliation.Operations[0]
-	if reconciliation.OperationRef != ref || reconciliation.State != clientui.RuntimeInputReconciliationSubmitted {
-		t.Fatalf("protocol-59 read-model reconciliation = %+v, want queue-item-only submitted operation", reconciliation)
-	}
-}
-
-func TestRuntimeActivityEventsShareSessionActivityCursorWithoutUsingRawSequenceAsVersion(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	version := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 42}
-
-	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventConversationUpdated, StepID: "step-1"})
-	registry.PublishRuntimeReadModelUpdate("session-1", idleRuntimeReadModelUpdate(version))
-	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventRunStateChanged, StepID: "step-3"})
-
-	sub, err := registry.SubscribeSessionActivityFrom(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: "session-1", AfterSequence: 3})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivityFrom: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	activityEvent, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("activity Next: %v", err)
-	}
-	if activityEvent.Kind != clientui.EventRuntimeActivityChanged || activityEvent.Sequence != 4 {
-		t.Fatalf("activity event = %+v, want raw sequence 4 runtime activity", activityEvent)
-	}
-	if activityEvent.ReadModelVersion != version || activityEvent.ReadModelVersion.Sequence == activityEvent.Sequence {
-		t.Fatalf("activity event versions = raw %d read-model %+v, want independent read-model payload", activityEvent.Sequence, activityEvent.ReadModelVersion)
-	}
-
-	rawEvent, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("raw Next: %v", err)
-	}
-	if rawEvent.Kind != clientui.EventRunStateChanged || rawEvent.Sequence != 5 || rawEvent.ReadModelVersion.Validate() == nil {
-		t.Fatalf("raw event = %+v, want raw run event without read-model version", rawEvent)
-	}
-}
-
 func TestRuntimeRegistryReportsRunFinishedInterestReason(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := &runtime.Engine{}
@@ -395,9 +141,14 @@ func TestRuntimeRegistryReportsRunFinishedInterestReason(t *testing.T) {
 	})
 
 	registry.PublishRuntimeEvent("session-1", runtime.Event{
-		Kind:     runtime.EventRunStateChanged,
-		StepID:   "step-1",
-		RunState: &runtime.RunState{Lifecycle: runtime.FinishedRunLifecycle(runtime.RunModeTurn)},
+		Kind:   runtime.EventRunStateChanged,
+		StepID: registryTestStepID,
+		RunState: &runtime.RunState{
+			Lifecycle:  runtime.FinishedRunLifecycle(runtime.RunModeTurn),
+			RunID:      registryTestStepID,
+			ActiveKind: runtime.ActiveKindUserTurn,
+			Status:     runtime.RunStatusCompleted,
+		},
 	})
 
 	select {
@@ -608,22 +359,22 @@ func waitClosed(t *testing.T, ch <-chan struct{}) {
 }
 
 func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) {
-	activity := runtimefeed.RuntimeActivity{
+	activity := clientui.RuntimeActivity{
 		State:          clientui.RuntimeActivityRegisteredIdle,
 		QueueAccepting: true,
 	}
 	if running {
-		runID, err := runtimeids.ParseRunID("11111111-1111-4111-8111-111111111111")
+		runID, err := runtimeids.ParseRunID(registryTestRunID)
 		if err != nil {
 			panic(err)
 		}
-		stepID, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+		stepID, err := runtimeids.ParseStepID(registryTestStepID)
 		if err != nil {
 			panic(err)
 		}
-		activity = runtimefeed.RuntimeActivity{
+		activity = clientui.RuntimeActivity{
 			State: clientui.RuntimeActivityRunning,
-			ActiveStep: &runtimefeed.RuntimeActiveStep{
+			ActiveStep: &clientui.RuntimeActiveStep{
 				RunID:      runID,
 				StepID:     stepID,
 				ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
@@ -632,110 +383,21 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 		}
 	}
 	version := runtimeactivity.NextReadModelVersion(sessionID)
-	registry.PublishRuntimeReadModelUpdate(sessionID, runtimefeed.RuntimeReadModelUpdate{
+	registry.PublishRuntimeReadModelUpdate(sessionID, clientui.RuntimeReadModelUpdate{
 		Version:             version,
 		Activity:            activity,
-		InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
+		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 	})
 }
 
-func idleRuntimeReadModelUpdate(version clientui.ReadModelVersion) runtimefeed.RuntimeReadModelUpdate {
-	return runtimefeed.RuntimeReadModelUpdate{
+func idleRuntimeReadModelUpdate(version clientui.ReadModelVersion) clientui.RuntimeReadModelUpdate {
+	return clientui.RuntimeReadModelUpdate{
 		Version: version,
-		Activity: runtimefeed.RuntimeActivity{
+		Activity: clientui.RuntimeActivity{
 			State:          clientui.RuntimeActivityRegisteredIdle,
 			QueueAccepting: true,
 		},
-		InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
-	}
-}
-
-func TestRuntimeRegistryDeliversReplayBeforePostSubscribeLiveEvents(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventConversationUpdated, StepID: "step-1"})
-	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventRunStateChanged, StepID: "step-2"})
-
-	sub, err := registry.SubscribeSessionActivityFrom(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: "session-1", AfterSequence: 3})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivityFrom: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventAssistantDelta, StepID: "step-3"})
-
-	replay, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("Next replay: %v", err)
-	}
-	live, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("Next live: %v", err)
-	}
-	if replay.Sequence != 4 || replay.StepID != "step-2" {
-		t.Fatalf("replay event = %+v, want sequence 4 step-2", replay)
-	}
-	if live.Sequence != 5 || live.StepID != "step-3" {
-		t.Fatalf("live event = %+v, want sequence 5 step-3", live)
-	}
-}
-
-func TestRuntimeRegistryRejectsExpiredSessionActivityCursor(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	for i := 0; i <= sessionActivityBufferSize+1; i++ {
-		registry.PublishRuntimeEvent("session-1", runtime.Event{Kind: runtime.EventConversationUpdated})
-	}
-
-	if _, err := registry.SubscribeSessionActivityFrom(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: "session-1", AfterSequence: 1}); !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("expected stream gap for expired cursor, got %v", err)
-	}
-}
-
-func TestRuntimeRegistryRejectsInactiveSessionActivityStreamWithUnavailableError(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	if _, err := registry.SubscribeSessionActivity(context.Background(), "missing-session"); !errors.Is(err, serverapi.ErrStreamUnavailable) {
-		t.Fatalf("expected unavailable error, got %v", err)
-	}
-}
-
-func TestRuntimeRegistryNormalizesSessionActivitySubscriptionFailures(t *testing.T) {
-	sub, err := newSessionActivityBroker().Subscribe(0)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-	sub.closeWithError(errors.New("writer failed"))
-	if _, err := sub.Next(context.Background()); !errors.Is(err, serverapi.ErrStreamFailed) {
-		t.Fatalf("expected stream failed error, got %v", err)
-	}
-}
-
-func TestRuntimeRegistryPassesThroughSessionActivityEOF(t *testing.T) {
-	sub, err := newSessionActivityBroker().Subscribe(0)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-	sub.closeWithError(io.EOF)
-	if _, err := sub.Next(context.Background()); !errors.Is(err, io.EOF) {
-		t.Fatalf("expected EOF, got %v", err)
-	}
-}
-
-func TestRuntimeRegistryPassesThroughSessionActivityContextCanceled(t *testing.T) {
-	sub, err := newSessionActivityBroker().Subscribe(0)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := sub.Next(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled, got %v", err)
+		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 	}
 }
 
@@ -745,8 +407,8 @@ func TestRuntimeRegistryTracksPendingPromptsPerSession(t *testing.T) {
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
 
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "one?"})
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "approval-1", Question: "allow?", Approval: true})
+	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "one?"})
+	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "approval-1", StepID: registryTestStepID, Question: "allow?"})
 
 	items := registry.ListPendingPrompts("session-1")
 	if len(items) != 2 {
@@ -768,339 +430,6 @@ func TestRuntimeRegistryTracksPendingPromptsPerSession(t *testing.T) {
 	}
 }
 
-func TestRuntimeRegistrySubscribePromptActivityReplaysAllPendingPromptsBeyondBufferLimit(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	for i := 0; i < promptActivityBufferSize+5; i++ {
-		registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%03d", i), Question: "pending"})
-	}
-
-	sub, err := registry.SubscribePromptActivity(context.Background(), "session-1")
-	if err != nil {
-		t.Fatalf("SubscribePromptActivity: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	for i := 0; i < promptActivityBufferSize+5; i++ {
-		evt, err := sub.Next(context.Background())
-		if err != nil {
-			t.Fatalf("Next %d: %v", i, err)
-		}
-		wantID := fmt.Sprintf("ask-%03d", i)
-		if evt.Type != clientui.PendingPromptEventPending || evt.PromptID != wantID {
-			t.Fatalf("event %d = %+v, want pending %q", i, evt, wantID)
-		}
-	}
-	evt, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("snapshot complete: %v", err)
-	}
-	if evt.Type != clientui.PendingPromptEventSnapshot {
-		t.Fatalf("expected snapshot completion event, got %+v", evt)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if _, err := sub.Next(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected no extra replay events, got %v", err)
-	}
-}
-
-func TestRuntimeRegistrySubscribePromptActivityDeliversPromptStartedDuringInitialSubscribe(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	entry := registry.directory.Entry("session-1")
-	if entry == nil {
-		t.Fatal("registered runtime entry not found")
-	}
-
-	promptStarted := make(chan struct{})
-	promptDone := make(chan struct{})
-	sub, err := entry.SubscribePromptActivityInitial("session-1", registry.nextReadModelVersion("session-1"), func() {
-		go func() {
-			close(promptStarted)
-			registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-during-subscribe", Question: "Proceed?"})
-			close(promptDone)
-		}()
-		<-promptStarted
-		select {
-		case <-promptDone:
-			t.Fatal("prompt publish completed before initial subscription registered")
-		default:
-		}
-	})
-	if err != nil {
-		t.Fatalf("subscribePromptActivityInitial: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	select {
-	case <-promptDone:
-	case <-time.After(time.Second):
-		t.Fatal("prompt publish did not complete after initial subscription registered")
-	}
-
-	snapshot, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("snapshot Next: %v", err)
-	}
-	if snapshot.Type != clientui.PendingPromptEventSnapshot {
-		t.Fatalf("first event = %+v, want snapshot completion", snapshot)
-	}
-	if err := snapshot.ReadModelVersion.Validate(); err != nil {
-		t.Fatalf("snapshot read-model version is not stamped: %v", err)
-	}
-	pending, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("pending Next: %v", err)
-	}
-	if pending.Type != clientui.PendingPromptEventPending || pending.PromptID != "ask-during-subscribe" || pending.Question != "Proceed?" {
-		t.Fatalf("pending event = %+v, want ask-during-subscribe", pending)
-	}
-	if !pending.ReadModelVersion.NewerThan(snapshot.ReadModelVersion) {
-		t.Fatalf("pending version = %+v, want newer than snapshot %+v", pending.ReadModelVersion, snapshot.ReadModelVersion)
-	}
-}
-
-func TestRuntimeRegistryPromptInitialSnapshotVersionBecomesReplayCursor(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
-	initial, err := registry.SubscribePromptActivityFrom(context.Background(), serverapi.PromptActivitySubscribeRequest{SessionID: "session-1"})
-	if err != nil {
-		t.Fatalf("SubscribePromptActivity initial: %v", err)
-	}
-	defer func() { _ = initial.Close() }()
-	pending := nextPromptEventForTest(t, initial)
-	snapshot := nextPromptEventForTest(t, initial)
-	if pending.Type != clientui.PendingPromptEventPending || snapshot.Type != clientui.PendingPromptEventSnapshot {
-		t.Fatalf("initial events = %+v then %+v, want pending then snapshot", pending, snapshot)
-	}
-	if pending.ReadModelVersion != snapshot.ReadModelVersion {
-		t.Fatalf("snapshot events should share one read-model version, pending=%+v snapshot=%+v", pending.ReadModelVersion, snapshot.ReadModelVersion)
-	}
-	if err := snapshot.ReadModelVersion.Validate(); err != nil {
-		t.Fatalf("snapshot version: %v", err)
-	}
-
-	registry.CompletePendingPrompt("session-1", "ask-1")
-	replay, err := registry.SubscribePromptActivityFrom(context.Background(), serverapi.PromptActivitySubscribeRequest{
-		SessionID:             "session-1",
-		AfterReadModelVersion: snapshot.ReadModelVersion,
-	})
-	if err != nil {
-		t.Fatalf("SubscribePromptActivity replay: %v", err)
-	}
-	defer func() { _ = replay.Close() }()
-	resolved := nextPromptEventForTest(t, replay)
-	if resolved.Type != clientui.PendingPromptEventResolved || resolved.PromptID != "ask-1" {
-		t.Fatalf("replay event = %+v, want ask-1 resolved", resolved)
-	}
-	if !resolved.ReadModelVersion.NewerThan(snapshot.ReadModelVersion) {
-		t.Fatalf("resolved version = %+v, want newer than snapshot cursor %+v", resolved.ReadModelVersion, snapshot.ReadModelVersion)
-	}
-}
-
-func TestRuntimeRegistryPromptEventSharesRuntimeReadModelGeneration(t *testing.T) {
-	registry := NewRuntimeRegistry().WithOperationCoordinator(runtimeops.NewCoordinator())
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	runtimeSnapshot, err := registry.RuntimeReadModelSnapshot(context.Background(), "session-1", nil)
-	if err != nil {
-		t.Fatalf("RuntimeReadModelSnapshot: %v", err)
-	}
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
-	initial, err := registry.SubscribePromptActivityFrom(context.Background(), serverapi.PromptActivitySubscribeRequest{SessionID: "session-1"})
-	if err != nil {
-		t.Fatalf("SubscribePromptActivity initial: %v", err)
-	}
-	defer func() { _ = initial.Close() }()
-	pending := nextPromptEventForTest(t, initial)
-	if pending.ReadModelVersion.Epoch != runtimeSnapshot.Version.Epoch || pending.ReadModelVersion.Generation != runtimeSnapshot.Version.Generation {
-		t.Fatalf("prompt version %+v does not share runtime read-model generation %+v", pending.ReadModelVersion, runtimeSnapshot.Version)
-	}
-	if pending.ReadModelVersion.Sequence <= runtimeSnapshot.Version.Sequence {
-		t.Fatalf("prompt sequence = %+v, want after runtime snapshot %+v", pending.ReadModelVersion, runtimeSnapshot.Version)
-	}
-}
-
-func TestRuntimeRegistryPromptReplayRejectsForeignReadModelGenerationBeforeRingOverflow(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
-	foreignVersion, err := clientui.NewReadModelVersion("foreign-epoch", 1, 1)
-	if err != nil {
-		t.Fatalf("foreign version: %v", err)
-	}
-
-	_, err = registry.SubscribePromptActivityFrom(context.Background(), serverapi.PromptActivitySubscribeRequest{
-		SessionID:             "session-1",
-		AfterReadModelVersion: foreignVersion,
-	})
-	if !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("SubscribePromptActivity foreign generation error = %v, want stream gap", err)
-	}
-}
-
-func TestRuntimeRegistryPromptResolutionDuringInitialSnapshotIsDeliveredAfterSnapshot(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
-
-	entry := registry.directory.Entry("session-1")
-	if entry == nil {
-		t.Fatal("registered runtime entry not found")
-	}
-	resolveStarted := make(chan struct{})
-	resolveDone := make(chan struct{})
-	sub, err := entry.SubscribePromptActivityInitial("session-1", registry.nextReadModelVersion("session-1"), func() {
-		go func() {
-			close(resolveStarted)
-			registry.CompletePendingPrompt("session-1", "ask-1")
-			close(resolveDone)
-		}()
-		<-resolveStarted
-		select {
-		case <-resolveDone:
-			t.Fatal("prompt resolution completed before initial subscription registered")
-		default:
-		}
-	})
-	if err != nil {
-		t.Fatalf("SubscribePromptActivityInitial: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-	select {
-	case <-resolveDone:
-	case <-time.After(time.Second):
-		t.Fatal("prompt resolution did not complete after initial subscription registered")
-	}
-
-	pending := nextPromptEventForTest(t, sub)
-	snapshot := nextPromptEventForTest(t, sub)
-	resolved := nextPromptEventForTest(t, sub)
-	if pending.Type != clientui.PendingPromptEventPending || snapshot.Type != clientui.PendingPromptEventSnapshot || resolved.Type != clientui.PendingPromptEventResolved {
-		t.Fatalf("events = %+v, %+v, %+v; want pending snapshot resolved", pending, snapshot, resolved)
-	}
-	if pending.ReadModelVersion != snapshot.ReadModelVersion {
-		t.Fatalf("initial prompt snapshot version mismatch: pending=%+v snapshot=%+v", pending.ReadModelVersion, snapshot.ReadModelVersion)
-	}
-	if !resolved.ReadModelVersion.NewerThan(snapshot.ReadModelVersion) {
-		t.Fatalf("resolved version = %+v, want newer than snapshot %+v", resolved.ReadModelVersion, snapshot.ReadModelVersion)
-	}
-}
-
-func TestRuntimeRegistryPromptRingLowerBoundIgnoresRuntimeReadModelChurn(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	initial, err := registry.SubscribePromptActivityFrom(context.Background(), serverapi.PromptActivitySubscribeRequest{SessionID: "session-1"})
-	if err != nil {
-		t.Fatalf("SubscribePromptActivity initial: %v", err)
-	}
-	snapshot := nextPromptEventForTest(t, initial)
-	_ = initial.Close()
-	if snapshot.Type != clientui.PendingPromptEventSnapshot {
-		t.Fatalf("initial event = %+v, want snapshot", snapshot)
-	}
-	for i := 0; i < promptActivityBufferSize*2; i++ {
-		version := runtimeactivity.NextReadModelVersion("session-1")
-		registry.PublishRuntimeReadModelUpdate("session-1", idleRuntimeReadModelUpdate(version))
-	}
-	for i := 0; i < promptActivityBufferSize; i++ {
-		registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%03d", i), Question: "pending"})
-	}
-	replay, err := registry.SubscribePromptActivityFrom(context.Background(), serverapi.PromptActivitySubscribeRequest{
-		SessionID:             "session-1",
-		AfterReadModelVersion: snapshot.ReadModelVersion,
-	})
-	if err != nil {
-		t.Fatalf("SubscribePromptActivity after unrelated runtime churn: %v", err)
-	}
-	defer func() { _ = replay.Close() }()
-	for i := 0; i < promptActivityBufferSize; i++ {
-		evt := nextPromptEventForTest(t, replay)
-		if evt.Type != clientui.PendingPromptEventPending || evt.PromptID != fmt.Sprintf("ask-%03d", i) {
-			t.Fatalf("replay %d = %+v", i, evt)
-		}
-	}
-
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-overflow", Question: "overflow"})
-	if _, err := registry.SubscribePromptActivityFrom(context.Background(), serverapi.PromptActivitySubscribeRequest{
-		SessionID:             "session-1",
-		AfterReadModelVersion: snapshot.ReadModelVersion,
-	}); !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("SubscribePromptActivity after prompt ring overflow = %v, want stream gap", err)
-	}
-}
-
-func TestPromptActivitySubscriptionCloseStopsInitialReplay(t *testing.T) {
-	sub, err := newPromptActivityBroker().Subscribe([]clientui.PendingPromptEvent{
-		{Type: clientui.PendingPromptEventPending, SessionID: "session-1", PromptID: "ask-1"},
-		{Type: clientui.PendingPromptEventSnapshot, SessionID: "session-1"},
-	}, clientui.ReadModelVersion{})
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	if err := sub.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if evt, err := sub.Next(context.Background()); !evt.IsZero() || !errors.Is(err, io.EOF) {
-		t.Fatalf("Next after close = evt=%+v err=%v, want EOF without initial replay", evt, err)
-	}
-}
-
-func TestPromptActivityInitialSubscribeUsesSnapshotVersionAsReplayCursor(t *testing.T) {
-	broker := newPromptActivityBroker()
-	snapshotVersion, err := clientui.NewReadModelVersion("epoch-1", 1, 1)
-	if err != nil {
-		t.Fatalf("snapshot version: %v", err)
-	}
-	resolvedVersion, err := clientui.NewReadModelVersion("epoch-1", 1, 2)
-	if err != nil {
-		t.Fatalf("resolved version: %v", err)
-	}
-	broker.Publish(clientui.PendingPromptEvent{
-		Type:             clientui.PendingPromptEventResolved,
-		SessionID:        "session-1",
-		PromptID:         "ask-1",
-		ReadModelVersion: resolvedVersion,
-	})
-	sub, err := broker.Subscribe([]clientui.PendingPromptEvent{{
-		Type:             clientui.PendingPromptEventSnapshot,
-		SessionID:        "session-1",
-		ReadModelVersion: snapshotVersion,
-	}}, snapshotVersion)
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-	snapshot := nextPromptEventForTest(t, sub)
-	resolved := nextPromptEventForTest(t, sub)
-	if snapshot.Type != clientui.PendingPromptEventSnapshot || snapshot.ReadModelVersion != snapshotVersion {
-		t.Fatalf("snapshot event = %+v, want version %+v", snapshot, snapshotVersion)
-	}
-	if resolved.Type != clientui.PendingPromptEventResolved || resolved.PromptID != "ask-1" || resolved.ReadModelVersion != resolvedVersion {
-		t.Fatalf("resolved event = %+v, want ask-1 version %+v", resolved, resolvedVersion)
-	}
-}
-
 func TestRuntimeRegistrySubmitPromptResponseRemovesPendingPromptBeforeWaiterReturns(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := &runtime.Engine{}
@@ -1109,7 +438,7 @@ func TestRuntimeRegistrySubmitPromptResponseRemovesPendingPromptBeforeWaiterRetu
 
 	responseDone := make(chan error, 1)
 	go func() {
-		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
+		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
 		responseDone <- err
 	}()
 
@@ -1157,6 +486,7 @@ func TestRuntimeRegistrySubmitPromptResponseRejectsInvalidApprovalBeforeResolvin
 	go func() {
 		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{
 			ID:       "approval-1",
+			StepID:   registryTestStepID,
 			Question: "Approve?",
 			Approval: true,
 			ApprovalOptions: []askquestion.AskQuestionApprovalOption{
@@ -1238,12 +568,11 @@ func TestRuntimeGuardRetirePublishesQueuedFailureBeforeEntryRemoval(t *testing.T
 		registry.PublishRuntimeEventForEngine(sessionID, engine, evt)
 	})
 	registerReady(t, registry, sessionID, engine)
-	sub, err := registry.SubscribeSessionActivity(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity: %v", err)
-	}
+	sub := subscribeTranscriptForTest(t, registry, sessionID)
 	defer func() { _ = sub.Close() }()
-	engine.QueueUserMessageWithClientRequestID("restore this", "client-queue-1")
+	_ = nextTranscriptMessage(t, sub)
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
+	engine.QueueUserMessageWithClientRequestID("restore this", clientRequestID.String())
 	guard, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("BeginRuntimeGuard: %v", err)
@@ -1255,22 +584,22 @@ func TestRuntimeGuardRetirePublishesQueuedFailureBeforeEntryRemoval(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	for {
-		evt, err := sub.Next(ctx)
+		message, err := sub.Next(ctx)
 		if err != nil {
 			t.Fatalf("Next queued failure: %v", err)
 		}
-		status := evt.QueuedUserMessageStatus
+		status := message.Payload.QueuedMessageState
 		if status == nil || status.Status != clientui.QueuedUserMessageFailed {
 			continue
 		}
-		if status.ClientRequestID != "client-queue-1" {
-			t.Fatalf("client request id = %q, want client-queue-1", status.ClientRequestID)
+		if status.ClientRequestID != clientRequestID {
+			t.Fatalf("client request id = %q, want %q", status.ClientRequestID.String(), clientRequestID.String())
 		}
-		if status.FailureReason != clientui.QueuedUserMessageFailureRuntimeUnavailable {
-			t.Fatalf("failure reason = %q, want runtime_unavailable", status.FailureReason)
+		if status.FailureReason == nil || *status.FailureReason != clientui.QueuedUserMessageFailureRuntimeUnavailable {
+			t.Fatalf("failure reason = %v, want runtime_unavailable", status.FailureReason)
 		}
-		if status.RestoreText != "restore this" {
-			t.Fatalf("restore text = %q, want restore this", status.RestoreText)
+		if status.Text == nil || *status.Text != "restore this" {
+			t.Fatalf("restore text = %v, want restore this", status.Text)
 		}
 		return
 	}
@@ -1473,7 +802,7 @@ func TestRuntimeRegistrySubmitPromptResponseAllowedForClosingDrainPrompt(t *test
 	go func() {
 		_, err := claim.Close(context.Background(), func(ctx context.Context) error {
 			close(drainStarted)
-			resp, err := registry.AwaitPromptResponse(ctx, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
+			resp, err := registry.AwaitPromptResponse(ctx, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
 			if err != nil {
 				return err
 			}
@@ -1521,18 +850,9 @@ func TestRuntimeRegistryAwaitPromptResponseContextCanceledRemovesPendingPrompt(t
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
 
-	sub, err := registry.SubscribePromptActivity(context.Background(), "session-1")
-	if err != nil {
-		t.Fatalf("SubscribePromptActivity: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-	if _, err := sub.Next(context.Background()); err != nil {
-		t.Fatalf("initial snapshot Next: %v", err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = registry.AwaitPromptResponse(ctx, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
+	_, err := registry.AwaitPromptResponse(ctx, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("AwaitPromptResponse error=%v, want context.Canceled", err)
 	}
@@ -1541,20 +861,6 @@ func TestRuntimeRegistryAwaitPromptResponseContextCanceledRemovesPendingPrompt(t
 	}
 	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "late"}, nil); !errors.Is(err, serverapi.ErrPromptNotFound) {
 		t.Fatalf("late SubmitPromptResponse error=%v, want ErrPromptNotFound", err)
-	}
-	pending, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("pending Next: %v", err)
-	}
-	if pending.Type != clientui.PendingPromptEventPending || pending.PromptID != "ask-1" {
-		t.Fatalf("pending event=%+v, want ask-1 pending", pending)
-	}
-	resolved, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("resolved Next: %v", err)
-	}
-	if resolved.Type != clientui.PendingPromptEventResolved || resolved.PromptID != "ask-1" {
-		t.Fatalf("resolved event=%+v, want ask-1 resolved", resolved)
 	}
 }
 
@@ -1692,15 +998,4 @@ func TestRuntimeRegistryExclusiveStartRejectsNormalStartsUntilReleased(t *testin
 		t.Fatal("normal start should succeed after exclusive reservation release")
 	}
 	releaseNormal()
-}
-
-func nextPromptEventForTest(t *testing.T, sub serverapi.PromptActivitySubscription) clientui.PendingPromptEvent {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	evt, err := sub.Next(ctx)
-	if err != nil {
-		t.Fatalf("prompt Next: %v", err)
-	}
-	return evt
 }

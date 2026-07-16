@@ -1,15 +1,13 @@
 package runtime
 
 import (
-	"encoding/json"
 	"strings"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
-	"core/shared/toolspec"
+	"core/shared/textutil"
 	"core/shared/transcript"
-	"core/shared/valuecopy"
 
 	"github.com/google/uuid"
 )
@@ -24,6 +22,7 @@ const (
 )
 
 type TranscriptCommittedRowFact struct {
+	StepID     string
 	Visibility transcript.EntryVisibility
 	Integrity  transcript.RowIntegrity
 	Kind       TranscriptCommittedRowFactKind
@@ -57,19 +56,21 @@ type TranscriptToolRowFact struct {
 }
 
 type TranscriptNoticeRowFact struct {
-	Reason             string
-	Severity           string
-	LegacyText         *string
-	NoticeID           *string
-	MessageType        llm.MessageType
-	SourcePath         string
-	WorktreeContext    *session.WorktreeContext
-	CondensedText      string
-	CompactLabel       string
-	BackgroundExitCode *int
-	DiagnosticCode     string
-	DiagnosticDetail   string
-	CacheWarning       *TranscriptCacheWarningFact
+	Reason               string
+	Severity             string
+	LegacyText           *string
+	NoticeID             *string
+	MessageType          llm.MessageType
+	SourcePath           string
+	WorktreeContext      *session.WorktreeContext
+	CondensedText        string
+	CompactLabel         string
+	BackgroundActivityID string
+	BackgroundProcessID  string
+	BackgroundExitCode   *int
+	DiagnosticCode       string
+	DiagnosticDetail     string
+	CacheWarning         *TranscriptCacheWarningFact
 }
 
 type TranscriptCacheWarningFact struct {
@@ -80,48 +81,66 @@ type TranscriptCacheWarningFact struct {
 }
 
 func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFact {
+	var facts []TranscriptCommittedRowFact
 	switch evt.Kind {
 	case EventConversationUpdated, EventAssistantMessage:
-		return transcriptCommittedRowFactsFromMessage(evt.Message, evt.AssistantTranscriptStreamID, nil, nil)
+		facts = transcriptCommittedRowFactsFromMessage(evt.Message, evt.AssistantTranscriptStreamID, nil, nil)
 	case EventUserMessageFlushed:
 		if strings.TrimSpace(evt.UserMessage) == "" {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{{Kind: TranscriptCommittedRowFactUser, User: &TranscriptUserRowFact{Text: evt.UserMessage}, Visibility: transcript.EntryVisibilityOngoing}}
+		facts = []TranscriptCommittedRowFact{{Kind: TranscriptCommittedRowFactUser, User: &TranscriptUserRowFact{Text: evt.UserMessage}, Visibility: transcript.EntryVisibilityOngoing}}
 	case EventToolCallCompleted:
 		if evt.ToolResult == nil {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{transcriptToolRowFactFromResult(*evt.ToolResult)}
+		facts = []TranscriptCommittedRowFact{transcriptToolRowFactFromResult(*evt.ToolResult)}
 	case EventCacheWarning:
 		if evt.CacheWarning == nil {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{transcriptCacheWarningFact(*evt.CacheWarning, evt.CacheWarningVisibility)}
+		facts = []TranscriptCommittedRowFact{transcriptCacheWarningFact(*evt.CacheWarning, evt.CacheWarningVisibility)}
 	case EventLocalEntryAdded:
 		if evt.LocalEntry == nil {
 			return nil
 		}
 		if evt.LocalEntryProjected {
 			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
-				return []TranscriptCommittedRowFact{fact}
+				facts = []TranscriptCommittedRowFact{fact}
+				break
 			}
 			return nil
 		}
 		if fact, ok := transcriptNoticeRowFactFromChatEntry(*evt.LocalEntry); ok {
-			return []TranscriptCommittedRowFact{fact}
+			facts = []TranscriptCommittedRowFact{fact}
+			break
 		}
 		return nil
 	case EventInFlightClearFailed:
 		if strings.TrimSpace(evt.Error) == "" {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{runtimeDiagnosticNoticeFact("in_flight_clear_failed", transcript.NoticeSeverityError, evt.Error)}
+		facts = []TranscriptCommittedRowFact{runtimeDiagnosticNoticeFact("in_flight_clear_failed", transcript.NoticeSeverityError, evt.Error)}
 	case EventBackgroundUpdated:
 		return nil
 	default:
 		return nil
 	}
+	return transcriptCommittedRowFactsForStep(evt.StepID, facts)
+}
+
+func transcriptCommittedRowFactsForStep(stepID string, facts []TranscriptCommittedRowFact) []TranscriptCommittedRowFact {
+	stepID = strings.TrimSpace(stepID)
+	for index := range facts {
+		existing := strings.TrimSpace(facts[index].StepID)
+		if existing != "" && stepID != "" && existing != stepID {
+			panic("transcript committed row step identity conflicts with its runtime event")
+		}
+		if stepID != "" {
+			facts[index].StepID = stepID
+		}
+	}
+	return facts
 }
 
 func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []TranscriptCommittedRowFact {
@@ -145,7 +164,7 @@ func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
 		if evt.ToolCall == nil {
 			return nil
 		}
-		start := transcriptLiveToolStartFromCall(*evt.ToolCall)
+		start := transcriptLiveToolStartFromCall(evt.StepID, *evt.ToolCall)
 		if strings.TrimSpace(start.ToolCallID) == "" {
 			return nil
 		}
@@ -175,16 +194,13 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 			}})
 		}
 		for _, call := range msg.ToolCalls {
-			if synthesized, ok := synthesizedTranscriptToolResultFact(call, completions, materializedToolCalls); ok {
-				out = append(out, synthesized)
+			if result, ok := synthesizedToolResultForCall(call, completions, materializedToolCalls); ok {
+				out = append(out, transcriptToolRowFactFromResult(result))
 			}
 		}
 		return out
 	case llm.RoleTool:
-		if msg.MessageType == llm.MessageTypeCustomToolCallOutput {
-			return []TranscriptCommittedRowFact{customToolCallOutputRowFact(msg, completions)}
-		}
-		return []TranscriptCommittedRowFact{toolMessageRowFact(msg, completions)}
+		return []TranscriptCommittedRowFact{transcriptToolRowFactFromResult(resolvedToolResultForMessage(msg, completions))}
 	case llm.RoleDeveloper:
 		if msg.MessageType == llm.MessageTypeReviewerFeedback {
 			return nil
@@ -201,46 +217,8 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 	}
 }
 
-func customToolCallOutputRowFact(msg llm.Message, completions map[string]tools.Result) TranscriptCommittedRowFact {
-	return toolMessageRowFact(msg, completions)
-}
-
-func toolMessageRowFact(msg llm.Message, completions map[string]tools.Result) TranscriptCommittedRowFact {
-	callID := strings.TrimSpace(msg.ToolCallID)
-	result := tools.Result{
-		CallID: callID,
-		Name:   toolspecIDFromString(msg.Name),
-		Output: json.RawMessage(msg.Content),
-	}
-	if completion, ok := completions[callID]; ok {
-		if result.Name == "" {
-			result.Name = completion.Name
-		}
-		if strings.TrimSpace(msg.Content) == "" && len(completion.Output) > 0 {
-			result.Output = completion.Output
-		}
-		result.IsError = completion.IsError
-		result.Summary = completion.Summary
-		result.CondensedText = completion.CondensedText
-		result.Presentation = completion.Presentation
-	}
-	if result.Name == "" {
-		result.Name = "tool"
-	}
-	return transcriptToolRowFactFromResult(result)
-}
-
 func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) int {
-	count := len(VisibleChatEntriesFromMessage(msg))
-	if msg.Role != llm.RoleAssistant {
-		return count
-	}
-	for _, call := range msg.ToolCalls {
-		if _, ok := synthesizedTranscriptToolResultFact(call, completions, materializedToolCalls); ok {
-			count++
-		}
-	}
-	return count
+	return len(visibleChatEntriesFromMessage(msg, completions, materializedToolCalls))
 }
 
 func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
@@ -260,11 +238,12 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 			panic("transcript user entry has a present but empty rollback target id")
 		}
 		return TranscriptCommittedRowFact{
-			Kind: TranscriptCommittedRowFactUser,
+			StepID: entry.StepID,
+			Kind:   TranscriptCommittedRowFactUser,
 			User: &TranscriptUserRowFact{
 				Text:             text,
 				CondensedText:    entry.CondensedText,
-				RollbackTargetID: valuecopy.Pointer(entry.RollbackTargetID),
+				RollbackTargetID: textutil.Pointer(entry.RollbackTargetID),
 			},
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
 			Integrity:  integrity,
@@ -276,7 +255,8 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 			text = firstNonBlankTranscriptValue(entry.CondensedText, entry.CompactLabel)
 		}
 		return TranscriptCommittedRowFact{
-			Kind: TranscriptCommittedRowFactAssistant,
+			StepID: entry.StepID,
+			Kind:   TranscriptCommittedRowFactAssistant,
 			Assistant: &TranscriptAssistantRowFact{
 				Text:          text,
 				CondensedText: entry.CondensedText,
@@ -297,6 +277,7 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 			toolName = strings.TrimSpace(entry.ToolCall.ToolName)
 		}
 		return TranscriptCommittedRowFact{
+			StepID:     entry.StepID,
 			Kind:       TranscriptCommittedRowFactTool,
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoingCollapsed), integrity),
 			Integrity:  integrity,
@@ -322,6 +303,7 @@ func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedR
 	}
 	integrity := transcriptNoticeEntryIntegrity(entry)
 	fact := localEntryNoticeFact(entry)
+	fact.StepID = entry.StepID
 	fact.Visibility = transcriptVisibilityForIntegrity(
 		resolveTranscriptVisibility(visibility, defaultTranscriptNoticeVisibility(entry)),
 		integrity,
@@ -474,21 +456,6 @@ func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {
 	return runtimeNoticeFactFromLocalEntry(entry)
 }
 
-func synthesizedTranscriptToolResultFact(call llm.ToolCall, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) (TranscriptCommittedRowFact, bool) {
-	callID := strings.TrimSpace(call.ID)
-	if callID == "" {
-		return TranscriptCommittedRowFact{}, false
-	}
-	if _, ok := materializedToolCalls[callID]; ok {
-		return TranscriptCommittedRowFact{}, false
-	}
-	completion, ok := completions[callID]
-	if !ok {
-		return TranscriptCommittedRowFact{}, false
-	}
-	return transcriptToolRowFactFromResult(completion), true
-}
-
 func transcriptToolRowFactFromResult(result tools.Result) TranscriptCommittedRowFact {
 	if strings.TrimSpace(result.CallID) == "" {
 		entry := toolResultChatEntry(result)
@@ -545,16 +512,18 @@ func runtimeNoticeFactFromMessage(msg llm.Message, severity string) TranscriptCo
 		code = "runtime_notice"
 	}
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: messageTypeTranscriptVisibility(msg.MessageType), Notice: &TranscriptNoticeRowFact{
-		Reason:             transcript.NoticeReasonRuntimeDiagnostic,
-		Severity:           normalizeTranscriptNoticeSeverity(severity),
-		MessageType:        msg.MessageType,
-		SourcePath:         strings.TrimSpace(msg.SourcePath),
-		WorktreeContext:    session.CloneWorktreeContext(msg.WorktreeContext),
-		CondensedText:      strings.TrimSpace(msg.CompactContent),
-		CompactLabel:       compactLabelForMessage(msg),
-		BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode),
-		DiagnosticCode:     code,
-		DiagnosticDetail:   msg.Content,
+		Reason:               transcript.NoticeReasonRuntimeDiagnostic,
+		Severity:             normalizeTranscriptNoticeSeverity(severity),
+		MessageType:          msg.MessageType,
+		SourcePath:           strings.TrimSpace(msg.SourcePath),
+		WorktreeContext:      session.CloneWorktreeContext(msg.WorktreeContext),
+		CondensedText:        strings.TrimSpace(msg.CompactContent),
+		CompactLabel:         compactLabelForMessage(msg),
+		BackgroundActivityID: strings.TrimSpace(msg.BackgroundActivityID),
+		BackgroundProcessID:  strings.TrimSpace(msg.Name),
+		BackgroundExitCode:   textutil.Pointer(msg.BackgroundExitCode),
+		DiagnosticCode:       code,
+		DiagnosticDetail:     msg.Content,
 	}}
 }
 
@@ -571,17 +540,19 @@ func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact
 		messageType = llm.MessageTypeReviewerFeedback
 	}
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalizeRuntimeEntryVisibility(entry.Visibility), Notice: &TranscriptNoticeRowFact{
-		Reason:             transcript.NoticeReasonRuntimeDiagnostic,
-		Severity:           transcript.LegacyNoticeSeverityForRole(entry.Role),
-		NoticeID:           noticeIDPtr,
-		MessageType:        messageType,
-		SourcePath:         strings.TrimSpace(entry.SourcePath),
-		WorktreeContext:    session.CloneWorktreeContext(entry.WorktreeContext),
-		CondensedText:      strings.TrimSpace(entry.CondensedText),
-		CompactLabel:       strings.TrimSpace(entry.CompactLabel),
-		BackgroundExitCode: valuecopy.Pointer(entry.BackgroundExitCode),
-		DiagnosticCode:     role,
-		DiagnosticDetail:   detail,
+		Reason:               transcript.NoticeReasonRuntimeDiagnostic,
+		Severity:             transcript.LegacyNoticeSeverityForRole(entry.Role),
+		NoticeID:             noticeIDPtr,
+		MessageType:          messageType,
+		SourcePath:           strings.TrimSpace(entry.SourcePath),
+		WorktreeContext:      session.CloneWorktreeContext(entry.WorktreeContext),
+		CondensedText:        strings.TrimSpace(entry.CondensedText),
+		CompactLabel:         strings.TrimSpace(entry.CompactLabel),
+		BackgroundActivityID: strings.TrimSpace(entry.BackgroundActivityID),
+		BackgroundProcessID:  strings.TrimSpace(entry.BackgroundProcessID),
+		BackgroundExitCode:   textutil.Pointer(entry.BackgroundExitCode),
+		DiagnosticCode:       role,
+		DiagnosticDetail:     detail,
 	}}
 }
 
@@ -617,8 +588,4 @@ func normalizeTranscriptNoticeSeverity(severity string) string {
 		return transcript.NoticeSeverityInfo
 	}
 	return severity
-}
-
-func toolspecIDFromString(value string) toolspec.ID {
-	return toolspec.ID(strings.TrimSpace(value))
 }

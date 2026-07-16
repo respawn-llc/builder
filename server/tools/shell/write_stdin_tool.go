@@ -75,7 +75,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 		BackgroundSessionID: in.SessionID,
 		BackgroundRunning:   result.Running,
 		Backgrounded:        result.Backgrounded,
-		BackgroundExitCode:  textutil.CloneInt(result.ExitCode),
+		BackgroundExitCode:  textutil.Pointer(result.ExitCode),
 	})
 	if marshalErr != nil {
 		return tools.Result{}, marshalErr

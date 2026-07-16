@@ -31,7 +31,7 @@ func TestRuntimeRegistryKeepsGenericPromptAttentionOffDesktopRootStream(t *testi
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
+		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
 		done <- err
 	}()
 	pending := nextRegistryAttentionEvent(t, sessionSub)
@@ -126,6 +126,7 @@ func TestRuntimeRegistryPublishesTaskApprovalPromptAsDurablyClearedQuestionAtten
 	}
 	req := askquestion.AskQuestionRequest{
 		ID:              "approval-1",
+		StepID:          registryTestStepID,
 		Question:        "Approve protected path?",
 		Approval:        true,
 		AttentionTarget: &target,
@@ -218,7 +219,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotUsesPendingPromptStore(t *testin
 	engine := &runtime.Engine{}
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
+	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
 
 	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
 	if err != nil {
@@ -241,7 +242,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotOverflowReturnsStreamGap(t *test
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
 	for i := 0; i < 65; i++ {
-		registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%d", i), Question: "Proceed?"})
+		registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%d", i), StepID: registryTestStepID, Question: "Proceed?"})
 	}
 
 	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
@@ -323,6 +324,7 @@ func attentionNotificationEventIDMatches(event clientui.AttentionNotificationEve
 func taskBatchAskRequest(id string) askquestion.AskQuestionRequest {
 	return askquestion.AskQuestionRequest{
 		ID:       id,
+		StepID:   registryTestStepID,
 		Question: "Proceed?",
 		QuestionBatch: &askquestion.AskQuestionBatchMetadata{
 			Origin:              askquestion.AskQuestionOriginModelTool,

@@ -110,7 +110,6 @@ func WithUIStatusConfig(statusConfig uiStatusConfig) UIOption {
 		if statusConfig.Settings.Debug {
 			m.debugMode = true
 		}
-		m.updateTranscriptDiagnosticsMode()
 		if m.statusCollector == nil {
 			m.statusCollector = defaultUIStatusCollector{authManager: statusConfig.AuthManager}
 		}

@@ -3,12 +3,10 @@ package runtimeops
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
 	"core/server/requestmemo"
-	"core/server/runtimefeed"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -35,8 +33,6 @@ func (r CancellationResult) CancelOperationAttempt() {
 
 type CoordinatorOption func(*Coordinator)
 
-type VersionAllocator func(sessionID string) clientui.ReadModelVersion
-
 func WithLimit(limit int) CoordinatorOption {
 	return func(c *Coordinator) {
 		if limit > 0 {
@@ -62,16 +58,11 @@ func WithNow(now func() time.Time) CoordinatorOption {
 }
 
 type Coordinator struct {
-	mu             sync.Mutex
-	limit          int
-	ttl            time.Duration
-	now            func() time.Time
-	versionMu      sync.Mutex
-	epoch          string
-	nextGeneration uint64
-	sequences      map[string]uint64
-	version        VersionAllocator
-	sessions       map[string]*sessionLedger
+	mu       sync.Mutex
+	limit    int
+	ttl      time.Duration
+	now      func() time.Time
+	sessions map[string]*sessionLedger
 }
 
 type sessionLedger struct {
@@ -117,13 +108,10 @@ type operationCommitBarrier struct {
 
 func NewCoordinator(options ...CoordinatorOption) *Coordinator {
 	coord := &Coordinator{
-		limit:          defaultCoordinatorLimit,
-		ttl:            defaultCoordinatorTTL,
-		now:            time.Now,
-		epoch:          "runtimeops-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 36),
-		nextGeneration: 1,
-		sequences:      make(map[string]uint64),
-		sessions:       make(map[string]*sessionLedger),
+		limit:    defaultCoordinatorLimit,
+		ttl:      defaultCoordinatorTTL,
+		now:      time.Now,
+		sessions: make(map[string]*sessionLedger),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -131,46 +119,6 @@ func NewCoordinator(options ...CoordinatorOption) *Coordinator {
 		}
 	}
 	return coord
-}
-
-func WithVersionAllocator(allocator VersionAllocator) CoordinatorOption {
-	return func(c *Coordinator) {
-		c.SetVersionAllocator(allocator)
-	}
-}
-
-func (c *Coordinator) SetVersionAllocator(allocator VersionAllocator) {
-	if c == nil || allocator == nil {
-		return
-	}
-	c.versionMu.Lock()
-	c.version = allocator
-	c.versionMu.Unlock()
-}
-
-func (c *Coordinator) nextVersion(sessionID string) clientui.ReadModelVersion {
-	if c == nil {
-		version, err := clientui.NewReadModelVersion("runtimeops-unknown", 1, 1)
-		if err != nil {
-			panic(err)
-		}
-		return version
-	}
-	c.versionMu.Lock()
-	allocator := c.version
-	c.versionMu.Unlock()
-	if allocator != nil {
-		return allocator(sessionID)
-	}
-	c.versionMu.Lock()
-	defer c.versionMu.Unlock()
-	key := sessionKey(sessionID)
-	c.sequences[key]++
-	version, err := clientui.NewReadModelVersion(c.epoch, c.nextGeneration, c.sequences[key])
-	if err != nil {
-		panic(err)
-	}
-	return version
 }
 
 type Attempt struct {
@@ -208,12 +156,11 @@ func Do[Req any, Resp any](
 	}
 	key := ref.Key()
 	for {
-		recordVersion := coord.nextVersion(sessionID)
 		coord.mu.Lock()
 		ledger := coord.ledgerLocked(sessionID)
 		ledger.pruneLocked(coord.limit, coord.ttl, coord.now())
 		if _, canceled := ledger.tombstones[key]; canceled {
-			coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, recordVersion, false, coord.now())
+			coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, false, coord.now())
 			coord.mu.Unlock()
 			return zero, ErrOperationCanceled
 		}
@@ -250,7 +197,7 @@ func Do[Req any, Resp any](
 			createdAt: coord.now(),
 		}
 		ledger.operations[key] = entry
-		coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationAccepted, recordVersion, false, coord.now())
+		coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationAccepted, false, coord.now())
 		coord.mu.Unlock()
 
 		resp, err := run(ctx, Attempt{ctx: attemptCtx})
@@ -295,7 +242,6 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 	if err := ref.Validate(); err != nil {
 		return CancellationResult{}, err
 	}
-	version := c.nextVersion(sessionID)
 	for {
 		var cancel context.CancelFunc
 		interruptActive := false
@@ -337,7 +283,7 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 		}
 		ledger.tombstones[key] = ref
 		ledger.tombstoneAt[key] = c.now()
-		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, version, false, c.now())
+		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, false, c.now())
 		c.mu.Unlock()
 		if cancel != nil {
 			if interruptActive {
@@ -413,52 +359,21 @@ func (c *Coordinator) RecordRuntimeAccessFailure(sessionID string, ref clientui.
 	c.RecordFailedWithRestore(sessionID, ref)
 }
 
-func (c *Coordinator) Snapshot(sessionID string, version clientui.ReadModelVersion, refs []clientui.RuntimeOperationRef) clientui.RuntimeInputReconciliationSnapshot {
-	if c == nil || len(refs) == 0 {
-		return clientui.NewEmptyRuntimeInputReconciliationSnapshot(version)
+func (c *Coordinator) FeedSnapshot(sessionID string, refs []clientui.RuntimeOperationRef) (clientui.RuntimeInputReconciliationSnapshot, error) {
+	if len(refs) == 0 {
+		return clientui.RuntimeInputReconciliationSnapshot{}, nil
+	}
+	if c == nil {
+		return clientui.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("runtime operation coordinator is required for canonical reconciliation")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ledger := c.sessions[sessionKey(sessionID)]
 	operations := make([]clientui.RuntimeInputReconciliation, 0, len(refs))
-	for _, ref := range refs {
-		if err := ref.Validate(); err != nil {
-			continue
-		}
-		record := clientui.RuntimeInputReconciliation{
-			Version:      version,
-			OperationRef: ref,
-			State:        clientui.RuntimeInputReconciliationUnknown,
-		}
-		key := ref.Key()
-		if ledger != nil {
-			key = ledger.operationKey(ref)
-			if existing, ok := ledger.records[key]; ok {
-				record.State = existing.State
-			} else if _, ok := ledger.evicted[key]; ok {
-				record.State = clientui.RuntimeInputReconciliationEvicted
-			}
-		}
-		operations = append(operations, record)
-	}
-	return clientui.RuntimeInputReconciliationSnapshot{Version: version, Operations: operations}
-}
-
-func (c *Coordinator) FeedSnapshot(sessionID string, refs []clientui.RuntimeOperationRef) (runtimefeed.RuntimeInputReconciliationSnapshot, error) {
-	if len(refs) == 0 {
-		return runtimefeed.RuntimeInputReconciliationSnapshot{}, nil
-	}
-	if c == nil {
-		return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("runtime operation coordinator is required for canonical reconciliation")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	ledger := c.sessions[sessionKey(sessionID)]
-	operations := make([]runtimefeed.RuntimeInputReconciliation, 0, len(refs))
 	for index, ref := range refs {
 		operation, key, err := runtimeFeedOperationRef(ledger, ref)
 		if err != nil {
-			return runtimefeed.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("project runtime operation %d: %w", index, err)
+			return clientui.RuntimeInputReconciliationSnapshot{}, fmt.Errorf("project runtime operation %d: %w", index, err)
 		}
 		state := clientui.RuntimeInputReconciliationUnknown
 		if ledger != nil {
@@ -468,19 +383,19 @@ func (c *Coordinator) FeedSnapshot(sessionID string, refs []clientui.RuntimeOper
 				state = clientui.RuntimeInputReconciliationEvicted
 			}
 		}
-		operations = append(operations, runtimefeed.RuntimeInputReconciliation{
+		operations = append(operations, clientui.RuntimeInputReconciliation{
 			Operation: operation,
 			State:     state,
 		})
 	}
-	snapshot := runtimefeed.RuntimeInputReconciliationSnapshot{Operations: operations}
+	snapshot := clientui.RuntimeInputReconciliationSnapshot{Operations: operations}
 	if err := snapshot.Validate(); err != nil {
-		return runtimefeed.RuntimeInputReconciliationSnapshot{}, err
+		return clientui.RuntimeInputReconciliationSnapshot{}, err
 	}
 	return snapshot, nil
 }
 
-func (c *Coordinator) RecordQueuedMessageStatus(sessionID string, ref runtimefeed.RuntimeOperationRef, state clientui.RuntimeInputReconciliationState) error {
+func (c *Coordinator) RecordQueuedMessageStatus(sessionID string, ref clientui.RuntimeOperationRef, state clientui.RuntimeInputReconciliationState) error {
 	if c == nil {
 		return nil
 	}
@@ -501,23 +416,18 @@ func (c *Coordinator) RecordQueuedMessageStatus(sessionID string, ref runtimefee
 	default:
 		return fmt.Errorf("queued-message runtime status cannot record reconciliation state %q", state)
 	}
-	version := c.nextVersion(sessionID)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ledger := c.ledgerLocked(sessionID)
 	if err := ledger.bindQueuedOperation(ref); err != nil {
 		return err
 	}
-	protocol59Ref := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: ref.ClientRequestID.String(),
-	}
-	key := ledger.operationKey(protocol59Ref)
+	key := ledger.operationKey(ref)
 	if state == clientui.RuntimeInputReconciliationSubmitted {
 		delete(ledger.tombstones, key)
 		delete(ledger.tombstoneAt, key)
 	}
-	c.recordLocked(ledger, protocol59Ref, state, version, !ledger.nonEvictableLocked(key), c.now())
+	c.recordLocked(ledger, ref, state, !ledger.nonEvictableLocked(key), c.now())
 	ledger.pruneLocked(c.limit, c.ttl, c.now())
 	return nil
 }
@@ -532,12 +442,11 @@ func (c *Coordinator) record(sessionID string, ref clientui.RuntimeOperationRef,
 	if err := state.Validate(); err != nil {
 		return
 	}
-	version := c.nextVersion(sessionID)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ledger := c.ledgerLocked(sessionID)
 	key := ledger.operationKey(ref)
-	c.recordLocked(ledger, ref, state, version, !ledger.nonEvictableLocked(key), c.now())
+	c.recordLocked(ledger, ref, state, !ledger.nonEvictableLocked(key), c.now())
 	ledger.pruneLocked(c.limit, c.ttl, c.now())
 }
 
@@ -545,26 +454,24 @@ func (c *Coordinator) recordRuntimeAccepted(sessionID string, ref clientui.Runti
 	if c == nil || ref.Validate() != nil || state.Validate() != nil {
 		return
 	}
-	version := c.nextVersion(sessionID)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ledger := c.ledgerLocked(sessionID)
 	key := ledger.operationKey(ref)
 	delete(ledger.tombstones, key)
 	delete(ledger.tombstoneAt, key)
-	c.recordLocked(ledger, ref, state, version, !ledger.nonEvictableLocked(key), c.now())
+	c.recordLocked(ledger, ref, state, !ledger.nonEvictableLocked(key), c.now())
 	ledger.pruneLocked(c.limit, c.ttl, c.now())
 }
 
-func (c *Coordinator) recordLocked(ledger *sessionLedger, ref clientui.RuntimeOperationRef, state clientui.RuntimeInputReconciliationState, version clientui.ReadModelVersion, terminalEvictable bool, now time.Time) {
+func (c *Coordinator) recordLocked(ledger *sessionLedger, ref clientui.RuntimeOperationRef, state clientui.RuntimeInputReconciliationState, terminalEvictable bool, now time.Time) {
 	key := ledger.operationKey(ref)
 	if _, tombstoned := ledger.tombstones[key]; tombstoned && state != clientui.RuntimeInputReconciliationCanceledNotCommitted {
 		return
 	}
 	ledger.records[key] = clientui.RuntimeInputReconciliation{
-		Version:      version,
-		OperationRef: ref,
-		State:        state,
+		Operation: ref,
+		State:     state,
 	}
 	if terminalEvictable && state != clientui.RuntimeInputReconciliationAccepted {
 		if _, exists := ledger.terminal[key]; !exists {

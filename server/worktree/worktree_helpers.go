@@ -24,27 +24,6 @@ func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTa
 	return nil
 }
 
-func (s *Service) shouldAttemptBranchCleanup(target syncedWorktree, explicitDeleteBranch bool) bool {
-	if strings.TrimSpace(target.git.BranchName) == "" {
-		return false
-	}
-	if explicitDeleteBranch {
-		return true
-	}
-	return target.record.Managed && target.record.CreatedBranch
-}
-
-func (s *Service) branchCleanupSkippedMessage(target syncedWorktree, explicitDeleteBranch bool) string {
-	branchName := strings.TrimSpace(target.git.BranchName)
-	if branchName == "" {
-		return ""
-	}
-	if explicitDeleteBranch || (target.record.Managed && target.record.CreatedBranch) {
-		return ""
-	}
-	return fmt.Sprintf("Kept branch %s: Kent cannot prove this worktree created it", branchName)
-}
-
 func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktree) (string, bool, error) {
 	if !record.CreatedBranch {
 		return "", false, nil

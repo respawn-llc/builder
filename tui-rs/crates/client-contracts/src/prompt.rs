@@ -30,14 +30,6 @@ pub struct ApprovalAnswerRequest {
     pub commentary: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct PromptActivitySubscribeRequest {
-    #[serde(rename = "SessionID", default)]
-    pub session_id: String,
-    #[serde(rename = "AfterSequence")]
-    pub after_sequence: u64,
-}
-
 fn is_zero_i32(value: &i32) -> bool {
     *value == 0
 }

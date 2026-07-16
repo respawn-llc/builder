@@ -70,7 +70,7 @@ func TestTUIStrictIOViewDoesNotFetchProcessesForStatusOrOverlay(t *testing.T) {
 
 func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUIDebug(true))
+	m := newProjectedTestUIModel(client, WithUIDebug(true))
 	m.startupCmds = nil
 	m.setRuntimeActivityBusyForTest(true)
 	m.input = "queued steering"
@@ -97,7 +97,7 @@ func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 
 func TestTUIStrictIOCompactDoneChecksQueuedRuntimeWorkAsCommand(t *testing.T) {
 	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUIDebug(true))
+	m := newProjectedTestUIModel(client, WithUIDebug(true))
 	m.startupCmds = nil
 	m.setRuntimeActivityBusyForTest(true)
 	m.setCompacting(true)

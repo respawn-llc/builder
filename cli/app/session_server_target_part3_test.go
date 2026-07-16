@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http/httptest"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -21,62 +20,6 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/net/websocket"
 )
-
-func TestStartSessionServerUsesConfiguredDaemonForSessionLifecycleDraftPersistence(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "session lifecycle draft persistence")
-	defer runtimePlan.Close()
-	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "saved draft"}); err != nil {
-		t.Fatalf("PersistInputDraft: %v", err)
-	}
-	initialState, err := sessionLaunchInitialStateFromServer(context.Background(), server, plan.SessionID, "transition draft", false)
-	if err != nil {
-		t.Fatalf("sessionLaunchInitialStateFromServer: %v", err)
-	}
-	if initialState.Input != "saved draft" {
-		t.Fatalf("sessionLaunchInitialStateFromServer input = %q, want saved draft", initialState.Input)
-	}
-	resolved, err := server.SessionLifecycleClient().ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       plan.SessionID,
-		Transition: serverapi.SessionTransition{
-			Action:          "open_session",
-			TargetSessionID: plan.SessionID,
-			InitialInput:    "transition draft",
-		},
-	})
-	if err != nil {
-		t.Fatalf("ResolveTransition: %v", err)
-	}
-	intent, preparation := requireAppLifecycleLaunch(t, resolved)
-	sessionID, ok := intent.SessionID()
-	override, hasOverride := preparation.DraftDisposition().OverrideText()
-	if !ok || sessionID.String() != plan.SessionID || !hasOverride || override != "transition draft" {
-		t.Fatalf("unexpected resolved transition: %+v", resolved)
-	}
-
-}
 
 func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
@@ -103,40 +46,39 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 	if _, ok := server.(*remoteAppServer); !ok {
 		t.Fatalf("expected remote app server, got %T", server)
 	}
-	promptViews := requirePromptViewServer(t, server)
-
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote prompt snapshot reads")
 	defer runtimePlan.Close()
+	finishStep := beginAppTestModelPromptStep(t, srv, plan.SessionID)
 
 	askDone := make(chan error, 1)
 	go func() {
-		_, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, askquestion.AskQuestionRequest{ID: "ask-remote-1", Question: "Ask?"})
+		_, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, appTestModelPromptRequest("ask-remote-1", "Ask?"))
 		askDone <- err
 	}()
 	approvalDone := make(chan error, 1)
 	go func() {
-		_, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, askquestion.AskQuestionRequest{
-			ID:              "approval-remote-1",
-			Question:        "Approve?",
-			Approval:        true,
-			ApprovalOptions: []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}},
-		})
+		request := appTestModelPromptRequest("approval-remote-1", "Approve?")
+		request.Approval = true
+		request.ApprovalOptions = []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}}
+		_, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, request)
 		approvalDone <- err
 	}()
 
-	waitForPendingAskResources(t, promptViews.AskViewClient(), plan.SessionID, 1)
-	waitForPendingApprovalResources(t, promptViews.ApprovalViewClient(), plan.SessionID, 1)
-
-	first := waitForRemoteAskEvent(t, runtimePlan.Wiring.askEvents)
-	second := waitForRemoteAskEvent(t, runtimePlan.Wiring.askEvents)
-	for _, evt := range []askEvent{first, second} {
-		switch evt.req.PromptID {
+	prompts := waitForRemoteTranscriptPrompts(t, runtimePlan.Wiring.transcriptEvents, 2, "")
+	for _, prompt := range prompts {
+		switch prompt.PromptID {
 		case "ask-remote-1":
-			evt.reply <- askReply{response: clientui.PromptAnswer{PromptID: evt.req.PromptID, Answer: "done"}}
+			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{
+				PromptID: string(prompt.PromptID),
+				Answer:   "done",
+			})
 		case "approval-remote-1":
-			evt.reply <- askReply{response: clientui.PromptAnswer{PromptID: evt.req.PromptID, Approval: &clientui.ApprovalPromptAnswer{Decision: clientui.ApprovalDecisionAllowOnce}}}
+			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{
+				PromptID: string(prompt.PromptID),
+				Approval: &clientui.ApprovalPromptAnswer{Decision: clientui.ApprovalDecisionAllowOnce},
+			})
 		default:
-			t.Fatalf("unexpected prompt event id %q", evt.req.PromptID)
+			t.Fatalf("unexpected prompt event id %q", prompt.PromptID)
 		}
 	}
 
@@ -156,9 +98,7 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for remote approval response")
 	}
-
-	waitForPendingAskResources(t, promptViews.AskViewClient(), plan.SessionID, 0)
-	waitForPendingApprovalResources(t, promptViews.ApprovalViewClient(), plan.SessionID, 0)
+	finishStep()
 
 }
 
@@ -311,54 +251,67 @@ func waitForConfiguredRemoteIdentity(t *testing.T, workspace string) protocol.Se
 	return protocol.ServerIdentity{}
 }
 
-func waitForPIDExit(t *testing.T, pid int) {
+func waitForRemoteTranscriptPrompt(t *testing.T, events <-chan ongoingTranscriptEvent, promptID clientui.PromptID, earlyFailures ...<-chan error) clientui.TranscriptPrompt {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		err := syscall.Kill(pid, 0)
-		if err != nil {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("pid %d still running", pid)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	return waitForRemoteTranscriptPrompts(t, events, 1, promptID, earlyFailures...)[0]
 }
 
-func waitForRemoteAskEvent(t *testing.T, events <-chan askEvent) askEvent {
+func waitForRemoteTranscriptPrompts(t *testing.T, events <-chan ongoingTranscriptEvent, count int, promptID clientui.PromptID, earlyFailures ...<-chan error) []clientui.TranscriptPrompt {
 	t.Helper()
+	if count < 1 {
+		t.Fatal("remote transcript prompt count must be positive")
+	}
+	var earlyFailure <-chan error
+	if len(earlyFailures) > 0 {
+		earlyFailure = earlyFailures[0]
+	}
+	var seen []clientui.TranscriptMessage
+	prompts := make([]clientui.TranscriptPrompt, 0, count)
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
 		case evt, ok := <-events:
 			if !ok {
-				t.Fatal("ask event channel closed")
+				t.Fatal("transcript event channel closed")
 			}
-			if evt.isResolution() {
+			if evt.Kind == ongoingTranscriptEventLoss {
+				t.Fatalf("transcript subscription lost while waiting for prompt: %v", evt.Err)
+			}
+			if evt.Kind != ongoingTranscriptEventMessage {
 				continue
 			}
-			return evt
+			seen = append(seen, evt.Message)
+			var candidates []clientui.TranscriptPrompt
+			switch evt.Message.Kind {
+			case clientui.TranscriptMessageHydration:
+				candidates = evt.Message.Payload.Hydration.PendingPrompts
+			case clientui.TranscriptMessagePromptPending:
+				candidates = []clientui.TranscriptPrompt{*evt.Message.Payload.PromptPending}
+			}
+			for _, prompt := range candidates {
+				if promptID == "" || prompt.PromptID == promptID {
+					prompts = append(prompts, prompt)
+					if len(prompts) == count {
+						return prompts
+					}
+				}
+			}
+		case err := <-earlyFailure:
+			t.Fatalf("prompt %q failed before publication: %v", promptID, err)
+			return nil
 		case <-deadline:
-			t.Fatal("timed out waiting for ask event")
-			return askEvent{}
+			t.Fatalf("timed out waiting for %d transcript prompt(s) %q after messages %+v", count, promptID, seen)
+			return nil
 		}
 	}
 }
 
-func waitForSessionActivitySubscriptionEvent(t *testing.T, sub serverapi.SessionActivitySubscription, description string, predicate func(clientui.Event) bool) clientui.Event {
+func answerRemoteTranscriptPrompt(t *testing.T, answerer *transcriptPromptAnswerer, prompt clientui.TranscriptPrompt, answer clientui.PromptAnswer) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for {
-		evt, err := sub.Next(ctx)
-		if err != nil {
-			t.Fatalf("session activity subscription failed while waiting for %s: %v", description, err)
-		}
-		if predicate == nil || predicate(evt) {
-			return evt
-		}
+	if answerer == nil {
+		t.Fatal("transcript prompt answerer is required")
 	}
+	answerer.event(prompt).reply <- askReply{response: answer}
 }
 
 func waitForRemoteProcess(t *testing.T, views apicontract.ProcessViewService, sessionID string, processID string) clientui.BackgroundProcess {
@@ -436,36 +389,6 @@ func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServe
 	if initialState.Input != "workflow draft" {
 		t.Fatalf("sessionLaunchInitialStateFromServer input = %q, want workflow draft", initialState.Input)
 	}
-}
-
-type promptViewTestServer interface {
-	AskViewClient() apicontract.AskViewService
-	ApprovalViewClient() apicontract.ApprovalViewService
-}
-
-func requirePromptViewServer(t *testing.T, server any) promptViewTestServer {
-	t.Helper()
-	promptViews, ok := server.(promptViewTestServer)
-	if !ok {
-		runtimeSource, runtimeOK := server.(runtimeAttachmentSource)
-		if !runtimeOK {
-			t.Fatalf("server %T does not expose prompt view clients", server)
-		}
-		return runtimePromptViewTestServer{clients: runtimeSource.RuntimeAttachmentClients()}
-	}
-	return promptViews
-}
-
-type runtimePromptViewTestServer struct {
-	clients runtimeAttachmentClients
-}
-
-func (s runtimePromptViewTestServer) AskViewClient() apicontract.AskViewService {
-	return s.clients.AskViews
-}
-
-func (s runtimePromptViewTestServer) ApprovalViewClient() apicontract.ApprovalViewService {
-	return s.clients.ApprovalViews
 }
 
 type processTestServer interface {

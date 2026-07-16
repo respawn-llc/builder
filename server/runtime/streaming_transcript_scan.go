@@ -38,9 +38,11 @@ type streamingTranscriptScan struct {
 }
 
 type turnBuffer struct {
-	assistant    *llm.Message
-	callIDs      []string
-	materialized []llm.Message
+	assistant         *llm.Message
+	assistantStepID   string
+	callIDs           []string
+	materialized      []llm.Message
+	materializedSteps []string
 }
 
 func newStreamingTranscriptScan(req inMemoryTranscriptScanRequest, cacheWarningMode config.CacheWarningMode) *streamingTranscriptScan {
@@ -65,7 +67,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
 			return fmt.Errorf("decode message event: %w", err)
 		}
 		for _, reconstructed := range reconstructPersistedMessages(msg) {
-			s.applyReconstructedMessage(reconstructed, evt.Seq)
+			s.applyReconstructedMessage(reconstructed, evt.Seq, evt.StepID)
 		}
 	case "tool_completed":
 		var completion storedToolCompletion
@@ -91,7 +93,9 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
 		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
 			return fmt.Errorf("decode local_entry event: %w", err)
 		}
-		s.scan.appendEntry(*localEntryChatEntry(entry))
+		projected := *localEntryChatEntry(entry)
+		projected.StepID = strings.TrimSpace(evt.StepID)
+		s.scan.appendEntry(projected)
 	case sessionEventCacheWarning:
 		s.closeTurn()
 		var warning transcript.CacheWarning
@@ -99,6 +103,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
 			return fmt.Errorf("decode %s event: %w", sessionEventCacheWarning, err)
 		}
 		s.scan.appendEntry(ChatEntry{
+			StepID:     strings.TrimSpace(evt.StepID),
 			Visibility: cacheWarningEntryVisibility(s.cacheWarningMode),
 			Role:       cacheWarningTranscriptRole,
 			Text:       transcript.CacheWarningText(warning),
@@ -114,6 +119,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
 		}
 		s.scan.MarkCompactionBoundary()
 		for _, entry := range transcriptEntriesFromHistoryReplacement(llm.PrepareOpenAIInputItems(payload.Items)) {
+			entry.StepID = strings.TrimSpace(evt.StepID)
 			s.scan.appendEntry(entry)
 		}
 		if answer := strings.TrimSpace(payload.LastCommittedAssistantFinalAnswer); answer != "" {
@@ -123,11 +129,12 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
 	return nil
 }
 
-func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, seq int64) {
+func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, seq int64, stepID string) {
 	if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
 		s.closeTurn()
 		buffered := msg
 		s.turn.assistant = &buffered
+		s.turn.assistantStepID = strings.TrimSpace(stepID)
 		s.turn.callIDs = s.turn.callIDs[:0]
 		for _, call := range msg.ToolCalls {
 			if callID := strings.TrimSpace(call.ID); callID != "" {
@@ -138,10 +145,11 @@ func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, seq
 	}
 	if msg.Role == llm.RoleTool && s.turn.assistant != nil && s.turnOwnsCall(strings.TrimSpace(msg.ToolCallID)) {
 		s.turn.materialized = append(s.turn.materialized, msg)
+		s.turn.materializedSteps = append(s.turn.materializedSteps, strings.TrimSpace(stepID))
 		return
 	}
 	s.closeTurn()
-	s.applyMessage(msg, seq)
+	s.applyMessage(msg, seq, stepID)
 }
 
 func (s *streamingTranscriptScan) turnOwnsCall(callID string) bool {
@@ -156,8 +164,8 @@ func (s *streamingTranscriptScan) turnOwnsCall(callID string) bool {
 	return false
 }
 
-func (s *streamingTranscriptScan) applyMessage(msg llm.Message, seq int64) {
-	s.scan.ApplyMessage(msg, seq)
+func (s *streamingTranscriptScan) applyMessage(msg llm.Message, seq int64, stepID string) {
+	s.scan.ApplyMessage(msg, seq, stepID)
 	s.lastCommittedAssistantFinalAnswer = applyLastCommittedAssistantFinalAnswer(s.lastCommittedAssistantFinalAnswer, msg)
 }
 
@@ -166,7 +174,9 @@ func (s *streamingTranscriptScan) closeTurn() {
 		return
 	}
 	assistant := *s.turn.assistant
+	assistantStepID := s.turn.assistantStepID
 	materialized := s.turn.materialized
+	materializedSteps := s.turn.materializedSteps
 	callIDs := s.turn.callIDs
 
 	for _, rm := range materialized {
@@ -174,16 +184,26 @@ func (s *streamingTranscriptScan) closeTurn() {
 			s.materialized[callID] = struct{}{}
 		}
 	}
-	s.applyMessage(assistant, 0)
-	for _, rm := range materialized {
-		s.applyMessage(rm, 0)
+	s.applyMessage(assistant, 0, assistantStepID)
+	for index, rm := range materialized {
+		if index >= len(materializedSteps) {
+			panic(fmt.Sprintf("persisted transcript tool-message step identity missing: materialized_index=%d materialized_count=%d step_id_count=%d", index, len(materialized), len(materializedSteps)))
+		}
+		s.applyMessage(rm, 0, materializedSteps[index])
+	}
+	if len(materializedSteps) != len(materialized) {
+		panic(fmt.Sprintf("persisted transcript tool-message step identity count mismatch: materialized_count=%d step_id_count=%d", len(materialized), len(materializedSteps)))
 	}
 
 	for _, callID := range callIDs {
 		delete(s.completions, callID)
 		delete(s.materialized, callID)
 	}
-	s.turn = turnBuffer{callIDs: callIDs[:0]}
+	s.turn = turnBuffer{
+		callIDs:           callIDs[:0],
+		materialized:      materialized[:0],
+		materializedSteps: materializedSteps[:0],
+	}
 }
 
 func (s *streamingTranscriptScan) PageSnapshot() transcriptPageSnapshot {

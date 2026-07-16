@@ -8,7 +8,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/rollbacktarget"
-	"core/shared/toolspec"
+	"core/shared/textutil"
 )
 
 type transcriptPageSnapshot struct {
@@ -58,11 +58,16 @@ func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions ma
 	}
 }
 
-func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64) {
+func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID string) {
 	if s == nil {
 		return
 	}
-	for _, entry := range s.visibleEntriesFromMessage(msg, seq) {
+	for _, entry := range visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls) {
+		if strings.TrimSpace(entry.Role) == "user" && seq > 0 {
+			targetID := rollbacktarget.EncodeUserMessageSeq(seq)
+			entry.RollbackTargetID = &targetID
+		}
+		entry.StepID = strings.TrimSpace(stepID)
 		s.appendEntry(entry)
 	}
 }
@@ -111,81 +116,6 @@ func (s *inMemoryTranscriptScan) MarkCompactionBoundary() {
 		}
 	}
 	s.tailStart = s.compactionEntryStart
-}
-
-func (s *inMemoryTranscriptScan) visibleEntriesFromMessage(msg llm.Message, seq int64) []ChatEntry {
-	entries := make([]ChatEntry, 0, 1+len(msg.ToolCalls))
-	switch msg.Role {
-	case llm.RoleUser:
-		if entry, ok := visibleUserTranscriptEntry(msg); ok {
-			if strings.TrimSpace(entry.Role) == "user" && seq > 0 {
-				targetID := rollbacktarget.EncodeUserMessageSeq(seq)
-				entry.RollbackTargetID = &targetID
-			}
-			entries = append(entries, entry)
-		}
-	case llm.RoleAssistant:
-		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
-			entries = append(entries, ChatEntry{
-				Visibility: assistantTranscriptVisibility(msg.Phase),
-				Role:       "assistant",
-				Text:       msg.Content,
-				Phase:      msg.Phase,
-			})
-		}
-		for _, call := range msg.ToolCalls {
-			entries = append(entries, formatPersistedToolCall(call))
-			if synthesized, ok := s.synthesizedToolResult(call); ok {
-				entries = append(entries, synthesized)
-			}
-		}
-	case llm.RoleTool:
-		callID := strings.TrimSpace(msg.ToolCallID)
-		result := tools.Result{
-			CallID: callID,
-			Name:   toolspec.ID(strings.TrimSpace(msg.Name)),
-			Output: json.RawMessage(msg.Content),
-		}
-		if completion, ok := s.toolCompletions[callID]; ok {
-			if result.Name == "" {
-				result.Name = completion.Name
-			}
-			if strings.TrimSpace(msg.Content) == "" && len(completion.Output) > 0 {
-				result.Output = completion.Output
-			}
-			result.IsError = completion.IsError
-			result.Summary = completion.Summary
-			result.CondensedText = completion.CondensedText
-			result.Presentation = completion.Presentation
-		}
-		if result.Name == "" {
-			result.Name = toolspec.ID("tool")
-		}
-		entries = append(entries, toolResultChatEntry(result))
-	case llm.RoleDeveloper:
-		if entry, ok := visibleDeveloperChatEntry(msg); ok {
-			entries = append(entries, entry)
-		}
-	}
-	return entries
-}
-
-func (s *inMemoryTranscriptScan) synthesizedToolResult(call llm.ToolCall) (ChatEntry, bool) {
-	if s == nil {
-		return ChatEntry{}, false
-	}
-	callID := strings.TrimSpace(call.ID)
-	if callID == "" {
-		return ChatEntry{}, false
-	}
-	if _, ok := s.materializedToolCalls[callID]; ok {
-		return ChatEntry{}, false
-	}
-	completion, ok := s.toolCompletions[callID]
-	if !ok {
-		return ChatEntry{}, false
-	}
-	return toolResultChatEntry(completion), true
 }
 
 func (s *inMemoryTranscriptScan) appendEntry(entry ChatEntry) {
@@ -240,14 +170,16 @@ func (w *responseItemMessageWalker) Apply(item llm.ResponseItem) {
 			role = llm.RoleUser
 		}
 		msg := llm.Message{
-			Role:            role,
-			MessageType:     item.MessageType,
-			SourcePath:      item.SourcePath,
-			WorktreeContext: session.CloneWorktreeContext(item.WorktreeContext),
-			Phase:           item.Phase,
-			Content:         item.Content,
-			CompactContent:  item.CompactContent,
-			Name:            item.Name,
+			Role:                 role,
+			MessageType:          item.MessageType,
+			SourcePath:           item.SourcePath,
+			WorktreeContext:      session.CloneWorktreeContext(item.WorktreeContext),
+			Phase:                item.Phase,
+			Content:              item.Content,
+			CompactContent:       item.CompactContent,
+			BackgroundActivityID: item.BackgroundActivityID,
+			BackgroundExitCode:   textutil.Pointer(item.BackgroundExitCode),
+			Name:                 item.Name,
 		}
 		if role == llm.RoleAssistant {
 			w.flushAssistant()

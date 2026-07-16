@@ -891,9 +891,7 @@ func TestSessionReplacementDiscardsRollbackStateWithoutRestoringOldTranscript(t 
 				model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 			}
 
-			cmd := model.runtimeAdapter().applyProjectedSessionMetadata(clientui.RuntimeSessionView{
-				SessionID: detailTestReplacementSessionID,
-			})
+			cmd := applyDetailTestSessionReplacement(t, model, detailTestReplacementSessionID)
 
 			if model.rollback.isActive() || model.rollback.isAwaitingActivation() ||
 				model.rollback.restoreDetailTranscript != nil {

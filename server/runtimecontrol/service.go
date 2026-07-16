@@ -11,15 +11,14 @@ import (
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimefeed"
 	"core/server/runtimeops"
 	"core/server/session"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/transcript"
-	"core/shared/valuecopy"
 )
 
 type RuntimeResolver interface {
@@ -77,7 +76,7 @@ func (r defaultRuntimeControlActivityResolver) Snapshot(ctx context.Context, ses
 	return runtimeactivity.BuildSnapshot(sessionID, func() (runtimeactivity.SnapshotInput, error) {
 		return runtimeactivity.SnapshotInput{
 			Resolver:            runtimeactivity.ResolverSnapshot{Registry: registry, Active: runtimeactivity.ActiveStepFromProvider(engine)},
-			InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
+			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		}, nil
 	})
 }
@@ -743,7 +742,7 @@ func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptR
 	sessionID := strings.TrimSpace(req.SessionID)
 	reqData := runtimeInterruptMemoRequest{
 		SessionID:            sessionID,
-		TargetOperationRef:   valuecopy.Pointer(req.TargetOperationRef),
+		TargetOperationRef:   textutil.Pointer(req.TargetOperationRef),
 		PendingOperationRefs: append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...),
 	}
 	return s.interrupt(ctx, reqData)
@@ -779,10 +778,21 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 	if req.TargetOperationRef != nil {
 		cancelResult.CancelOperationAttempt()
 	}
-	if engine != nil && req.TargetOperationRef != nil && req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage && strings.TrimSpace(req.TargetOperationRef.QueueItemID) != "" {
-		engine.DiscardQueuedUserMessage(req.TargetOperationRef.QueueItemID)
+	if engine != nil &&
+		req.TargetOperationRef != nil &&
+		req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage &&
+		req.TargetOperationRef.QueueItemID != nil {
+		if engine.DiscardQueuedUserMessage(req.TargetOperationRef.QueueItemID.String()) {
+			if err := s.operations.RecordQueuedMessageStatus(
+				sessionID,
+				*req.TargetOperationRef,
+				clientui.RuntimeInputReconciliationCanceledNotCommitted,
+			); err != nil {
+				return serverapi.RuntimeInterruptResponse{}, err
+			}
+		}
 	}
-	return s.runtimeInterruptResponse(sessionID, engine, pendingRefs), nil
+	return s.runtimeInterruptResponse(sessionID, engine, pendingRefs)
 }
 
 func (s *Service) runtimeActivityActiveForControl(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) bool {
@@ -793,28 +803,36 @@ func (s *Service) runtimeActivityActiveForControl(ctx context.Context, sessionID
 	return err == nil && snapshot.Activity.ActiveForControl()
 }
 
-func (s *Service) runtimeInterruptResponse(sessionID string, engine *runtime.Engine, refs []clientui.RuntimeOperationRef) serverapi.RuntimeInterruptResponse {
+func (s *Service) runtimeInterruptResponse(sessionID string, engine *runtime.Engine, refs []clientui.RuntimeOperationRef) (serverapi.RuntimeInterruptResponse, error) {
 	snapshot, err := s.activity.Snapshot(context.Background(), sessionID, refs)
 	if err != nil {
 		version := runtimeactivity.NextReadModelVersion(sessionID)
+		reconciliation, reconciliationErr := s.operations.FeedSnapshot(sessionID, refs)
+		if reconciliationErr != nil {
+			return serverapi.RuntimeInterruptResponse{}, reconciliationErr
+		}
 		return serverapi.RuntimeInterruptResponse{
 			Version:             version,
-			Activity:            clientui.MustRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{DiagnosticRecovery: true}),
-			InputReconciliation: s.operations.Snapshot(sessionID, version, refs),
-		}
+			Activity:            clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true},
+			InputReconciliation: reconciliation,
+		}, nil
+	}
+	reconciliation, err := s.interruptInputReconciliation(sessionID, snapshot, refs)
+	if err != nil {
+		return serverapi.RuntimeInterruptResponse{}, err
 	}
 	return serverapi.RuntimeInterruptResponse{
 		Version:             snapshot.Version,
 		Activity:            snapshot.Activity,
-		InputReconciliation: s.interruptInputReconciliation(sessionID, snapshot, refs),
-	}
+		InputReconciliation: reconciliation,
+	}, nil
 }
 
-func (s *Service) interruptInputReconciliation(sessionID string, snapshot runtimeactivity.ResponseSnapshot, refs []clientui.RuntimeOperationRef) clientui.RuntimeInputReconciliationSnapshot {
+func (s *Service) interruptInputReconciliation(sessionID string, snapshot runtimeactivity.ResponseSnapshot, refs []clientui.RuntimeOperationRef) (clientui.RuntimeInputReconciliationSnapshot, error) {
 	if len(refs) == 0 || len(snapshot.InputReconciliation.Operations) > 0 {
-		return snapshot.InputReconciliation
+		return snapshot.InputReconciliation, nil
 	}
-	return s.operations.Snapshot(sessionID, snapshot.Version, refs)
+	return s.operations.FeedSnapshot(sessionID, refs)
 }
 
 func (s *Service) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
@@ -840,6 +858,19 @@ func (s *Service) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQue
 					text = record.Text
 				}
 				item := engine.QueueUserMessageWithClientRequestID(text, strings.TrimSpace(req.ClientRequestID))
+				queueItemID, err := runtimeids.ParseQueueItemID(item.ID)
+				if err != nil {
+					return fmt.Errorf("parse queued runtime item identity: %w", err)
+				}
+				canonicalRef := memoReq.OperationRef
+				canonicalRef.QueueItemID = &queueItemID
+				if err := s.operations.RecordQueuedMessageStatus(
+					memoReq.SessionID,
+					canonicalRef,
+					clientui.RuntimeInputReconciliationAccepted,
+				); err != nil {
+					return err
+				}
 				resp = serverapi.RuntimeQueueUserMessageResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
 				return nil
 			})

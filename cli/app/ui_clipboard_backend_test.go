@@ -27,18 +27,6 @@ type stubClipboardCommandRunner struct {
 	runInputFn   func(input []byte, name string, args ...string) error
 }
 
-type stubExitCodeError struct {
-	code int
-}
-
-func (e stubExitCodeError) Error() string {
-	return "exit status"
-}
-
-func (e stubExitCodeError) ExitCode() int {
-	return e.code
-}
-
 func (r *stubClipboardCommandRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
 	key := clipboardCommandKey(name, args...)
 	r.commands = append(r.commands, key)

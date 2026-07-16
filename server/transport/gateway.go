@@ -85,7 +85,6 @@ type GatewaySessionDependencies interface {
 	SessionViewClient() apicontract.SessionViewService
 	SessionLifecycleClient() apicontract.SessionLifecycleService
 	SessionRuntimeClient() apicontract.SessionRuntimeService
-	SessionActivityClient() apicontract.SessionActivityService
 	SessionTranscriptClient() apicontract.SessionTranscriptService
 	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (apicontract.SessionLaunchService, error)
 	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (apicontract.SessionLaunchService, error)
@@ -102,7 +101,6 @@ type GatewayPromptDependencies interface {
 	AskViewClient() apicontract.AskViewService
 	ApprovalViewClient() apicontract.ApprovalViewService
 	PromptControlClient() apicontract.PromptControlService
-	PromptActivityClient() apicontract.PromptActivityService
 	AttentionNotificationClient() apicontract.AttentionNotificationService
 }
 
@@ -166,10 +164,8 @@ type connectionState struct {
 type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request)
 
 var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
-	protocol.MethodSessionSubscribeActivity:              (*Gateway).serveSessionActivitySubscription,
 	protocol.MethodSessionSubscribeTranscript:            (*Gateway).serveSessionTranscriptSubscription,
 	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
-	protocol.MethodPromptSubscribeActivity:               (*Gateway).servePromptActivitySubscription,
 	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
 	protocol.MethodAttentionSessionNotificationSubscribe: (*Gateway).serveSessionAttentionNotificationSubscription,
 	protocol.MethodWorkflowSubscribe:                     (*Gateway).serveWorkflowSubscription,

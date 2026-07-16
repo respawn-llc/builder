@@ -2,7 +2,7 @@ package transcript
 
 import "testing"
 
-func TestClassifyAssistantPhaseMakesLegacyAbsenceExplicit(t *testing.T) {
+func TestClassifyAssistantPhaseCanonicalizesPersistedAbsenceAsFinal(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
@@ -10,7 +10,7 @@ func TestClassifyAssistantPhaseMakesLegacyAbsenceExplicit(t *testing.T) {
 	}{
 		{name: "commentary", raw: "commentary", want: AssistantPhaseCommentary},
 		{name: "final", raw: "final_answer", want: AssistantPhaseFinal},
-		{name: "legacy absence", raw: "", want: AssistantPhaseLegacyFinal},
+		{name: "persisted absence", raw: "", want: AssistantPhaseFinal},
 	}
 
 	for _, tc := range tests {

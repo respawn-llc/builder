@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -85,7 +84,7 @@ func worktreeStatusSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		if *jsonOut {
-			return encodeWorktreeJSON(stdout, stderr, status)
+			return writeCommandJSON(stdout, stderr, status)
 		}
 		fmt.Fprintln(stdout, status.Worktree.RecordedRoot)
 		for _, problem := range status.Problems {
@@ -116,7 +115,7 @@ func worktreeListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 				return 1
 			}
 			if *jsonOut {
-				return encodeWorktreeJSON(stdout, stderr, response)
+				return writeCommandJSON(stdout, stderr, response)
 			}
 			writeWorktreeList(stdout, response.Worktrees, true)
 			return 0
@@ -139,7 +138,7 @@ func worktreeListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		return 1
 	}
 	if *jsonOut {
-		return encodeWorktreeJSON(stdout, stderr, response)
+		return writeCommandJSON(stdout, stderr, response)
 	}
 	writeWorktreeList(stdout, response.Worktrees, false)
 	return 0
@@ -220,7 +219,7 @@ func worktreeCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		if *jsonOut {
-			return encodeWorktreeJSON(stdout, stderr, response)
+			return writeCommandJSON(stdout, stderr, response)
 		}
 		if response.Worktree.Topology.Variant != serverapi.WorktreeTopologyVariantRegistered || response.Worktree.Topology.Registered == nil {
 			fmt.Fprintln(stderr, "create returned a non-registered worktree")
@@ -322,7 +321,7 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		if *jsonOut {
-			return encodeWorktreeJSON(stdout, stderr, result)
+			return writeCommandJSON(stdout, stderr, result)
 		}
 		if result.Kind == serverapi.WorktreeDeleteResultKindScheduled {
 			fmt.Fprintf(stdout, "Scheduled deletion: %s\n", result.Scheduled.OperationID.String())
@@ -361,7 +360,7 @@ func runScheduledWorktreeCommand(
 			return 1
 		}
 		if jsonOut {
-			return encodeWorktreeJSON(stdout, stderr, ack)
+			return writeCommandJSON(stdout, stderr, ack)
 		}
 		fmt.Fprintf(stdout, "Scheduled: %s\n", ack.OperationID.String())
 		return 0
@@ -376,14 +375,6 @@ func withWorktreeCommandRemote(stderr io.Writer, sessionID string, fn func(workt
 	}
 	defer func() { _ = remote.Close() }()
 	return fn(remote)
-}
-
-func encodeWorktreeJSON(stdout io.Writer, stderr io.Writer, value any) int {
-	if err := json.NewEncoder(stdout).Encode(value); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	return 0
 }
 
 func resolveWorktreeCommandSession(sessionFlag string) (string, error) {

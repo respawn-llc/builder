@@ -217,7 +217,3 @@ func (m *uiModel) injectedQueueItemNeedsLocalPane(item injectedRuntimeQueueItem)
 		return false
 	}
 }
-
-func (e queuedPaneEntry) displayText() string {
-	return e.Text
-}

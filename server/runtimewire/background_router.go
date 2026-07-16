@@ -9,7 +9,7 @@ import (
 	"core/server/runtime"
 	shelltool "core/server/tools/shell"
 	"core/shared/invariant"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -124,6 +124,8 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 		Type:              eventType,
 		ID:                evt.Snapshot.ID,
 		ActivityID:        evt.Snapshot.ActivityID,
+		OwnerRunID:        evt.Snapshot.OwnerRunID,
+		OwnerStepID:       evt.Snapshot.OwnerStepID,
 		State:             evt.Snapshot.State,
 		Command:           evt.Snapshot.Command,
 		Workdir:           evt.Snapshot.Workdir,
@@ -132,7 +134,7 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 		CompactText:       summary.CondensedText,
 		Preview:           preview,
 		PreviewRemoved:    previewRemoved,
-		ExitCode:          valuecopy.Pointer(evt.Snapshot.ExitCode),
+		ExitCode:          textutil.Pointer(evt.Snapshot.ExitCode),
 		UserRequestedKill: evt.Snapshot.KillRequested,
 		NoticeSuppressed:  evt.NoticeSuppressed,
 	}, shouldNotify)

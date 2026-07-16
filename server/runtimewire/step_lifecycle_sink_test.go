@@ -8,7 +8,6 @@ import (
 
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimefeed"
 	"core/shared/clientui"
 	"core/shared/invariant"
 )
@@ -19,13 +18,13 @@ const (
 )
 
 type recordingRuntimeReadModelPublisher struct {
-	snapshots     []runtimefeed.RuntimeReadModelUpdate
+	snapshots     []clientui.RuntimeReadModelUpdate
 	panicNext     bool
 	panicMessage  string
 	panicConsumed bool
 }
 
-func (p *recordingRuntimeReadModelPublisher) PublishRuntimeReadModelUpdate(_ string, snapshot runtimefeed.RuntimeReadModelUpdate) {
+func (p *recordingRuntimeReadModelPublisher) PublishRuntimeReadModelUpdate(_ string, snapshot clientui.RuntimeReadModelUpdate) {
 	if p.panicNext && !p.panicConsumed {
 		p.panicConsumed = true
 		panic(p.panicMessage)

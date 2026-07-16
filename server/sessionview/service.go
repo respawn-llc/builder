@@ -213,7 +213,11 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 		return serverapi.SessionMainViewResponse{}, err
 	}
 	if len(view.InputReconciliation.Operations) == 0 && len(req.PendingOperationRefs) > 0 {
-		view.InputReconciliation = s.operations.Snapshot(strings.TrimSpace(req.SessionID), view.Version, req.PendingOperationRefs)
+		reconciliation, err := s.operations.FeedSnapshot(strings.TrimSpace(req.SessionID), req.PendingOperationRefs)
+		if err != nil {
+			return serverapi.SessionMainViewResponse{}, err
+		}
+		view.InputReconciliation = reconciliation
 	}
 	return serverapi.SessionMainViewResponse{MainView: view}, nil
 }

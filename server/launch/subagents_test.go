@@ -61,7 +61,7 @@ func TestApplyReviewerInheritanceRecomputesDefaultBaseURLWhenReviewerProviderExp
 	}
 }
 
-func TestApplySubagentRoleOverridesAppliesProviderVerbosityCapability(t *testing.T) {
+func TestOverlaySubagentRoleSettingsAppliesProviderVerbosityCapability(t *testing.T) {
 	settings := config.Settings{
 		ProviderCapabilities: config.ProviderCapabilitiesOverride{
 			ProviderID:                "main-provider",
@@ -80,14 +80,14 @@ func TestApplySubagentRoleOverridesAppliesProviderVerbosityCapability(t *testing
 		},
 	}
 
-	applySubagentRoleOverrides(&settings, role, true)
+	settings = config.OverlaySubagentRoleSettings(settings, role, true)
 
 	if settings.ProviderCapabilities.SupportsProviderVerbosity {
 		t.Fatalf("expected subagent verbosity capability override to apply, got %+v", settings.ProviderCapabilities)
 	}
 }
 
-func TestApplySubagentRoleOverridesResolvesPerSkillToggles(t *testing.T) {
+func TestOverlaySubagentRoleSettingsResolvesPerSkillToggles(t *testing.T) {
 	tests := []struct {
 		name          string
 		base          config.Settings
@@ -136,7 +136,7 @@ func TestApplySubagentRoleOverridesResolvesPerSkillToggles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			settings := cloneSettings(tt.base)
-			applySubagentRoleOverrides(&settings, tt.role, true)
+			settings = config.OverlaySubagentRoleSettings(settings, tt.role, true)
 			policy := config.ResolveSkillPolicy(settings)
 			if got := policy.SkillEnabled("apiresult"); got != tt.wantAPIResult {
 				t.Fatalf("apiresult enabled = %t, want %t", got, tt.wantAPIResult)

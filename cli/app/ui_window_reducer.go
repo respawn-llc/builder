@@ -6,16 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type uiWindowFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) windowReducer() uiWindowFeatureReducer {
-	return uiWindowFeatureReducer{model: m}
-}
-
-func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceWindowMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		wasNativeOngoing := m.nativeOngoingSurfaceActive()

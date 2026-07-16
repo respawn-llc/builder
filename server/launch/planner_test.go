@@ -411,7 +411,7 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 		},
 	}
 	source := loaded.Source
-	source.Sources = cloneStringMap(loaded.Source.Sources)
+	source.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	source.Sources["openai_base_url"] = "file"
 	source.Sources["thinking_level"] = "file"
 	planner := Planner{
@@ -473,7 +473,7 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	baseSettings := loaded.Settings
-	baseSettings.EnabledTools = cloneEnabledToolSet(baseSettings.EnabledTools)
+	baseSettings.EnabledTools = cloneMapOrEmpty(baseSettings.EnabledTools)
 	baseSettings.EnabledTools[toolspec.ToolExecCommand] = true
 	baseSettings.EnabledTools[toolspec.ToolPatch] = true
 	workerSettings := cloneSettings(baseSettings)
@@ -488,13 +488,13 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 	resumedSettings.ThinkingLevel = "xhigh"
 	resumedSettings.EnabledTools[toolspec.ToolPatch] = false
 	baseSource := loaded.Source
-	baseSource.Sources = cloneStringMap(loaded.Source.Sources)
+	baseSource.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	baseSource.Sources["thinking_level"] = "file"
 	baseSource.Sources["tools.shell"] = "file"
 	baseSource.Sources["tools.patch"] = "file"
 	baseSource.Sources["tools.edit"] = "file"
 	resumedSource := baseSource
-	resumedSource.Sources = cloneStringMap(baseSource.Sources)
+	resumedSource.Sources = cloneMapOrEmpty(baseSource.Sources)
 	resumedSource.Sources["thinking_level"] = "subagent"
 	resumedSource.Sources["tools.patch"] = "subagent"
 	plan := SessionPlan{
@@ -598,7 +598,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)
 	baseSettings := loaded.Settings
-	baseSettings.EnabledTools = cloneEnabledToolSet(baseSettings.EnabledTools)
+	baseSettings.EnabledTools = cloneMapOrEmpty(baseSettings.EnabledTools)
 	baseSettings.Model = "gpt-5.6-sol"
 	baseSettings.ThinkingLevel = "medium"
 	baseSettings.EnabledTools[toolspec.ToolExecCommand] = true
@@ -613,7 +613,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 		},
 	}
 	baseSource := loaded.Source
-	baseSource.Sources = cloneStringMap(loaded.Source.Sources)
+	baseSource.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	baseSource.Sources["model"] = "file"
 	baseSource.Sources["thinking_level"] = "file"
 	baseSource.Sources["tools.shell"] = "file"
@@ -623,7 +623,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 	resumedSettings.ThinkingLevel = "xhigh"
 	resumedSettings.EnabledTools[toolspec.ToolPatch] = false
 	resumedSource := baseSource
-	resumedSource.Sources = cloneStringMap(baseSource.Sources)
+	resumedSource.Sources = cloneMapOrEmpty(baseSource.Sources)
 	resumedSource.Sources["thinking_level"] = "subagent"
 	resumedSource.Sources["tools.patch"] = "subagent"
 
@@ -873,7 +873,7 @@ func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *t
 		},
 	}
 	baseSource := loaded.Source
-	baseSource.Sources = cloneStringMap(loaded.Source.Sources)
+	baseSource.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	baseSource.Sources["model"] = "file"
 	baseSource.Sources["thinking_level"] = "file"
 	store := createTestSession(t, workspace)
@@ -1508,7 +1508,7 @@ func TestApplyRunPromptOverridesRecomputesEnabledToolsForModelOverride(t *testin
 	settings.Model = "gpt-5.4"
 	settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
 	source := loaded.Source
-	source.Sources = cloneStringMap(loaded.Source.Sources)
+	source.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	source.Sources["tools.patch"] = "file"
 	source.Sources["tools.edit"] = "file"
 	plan := newSettingsPlanWithSource(t, workspace, settings, source)
@@ -1530,7 +1530,7 @@ func TestApplyRunPromptOverridesKeepsExplicitToolSourcesWhenOnlyModelOverrides(t
 	settings.Model = "gpt-5.4"
 	settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
 	source := loaded.Source
-	source.Sources = cloneStringMap(loaded.Source.Sources)
+	source.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	source.Sources["tools.shell"] = "cli"
 	source.Sources["tools.patch"] = "file"
 	source.Sources["tools.edit"] = "file"
@@ -1568,7 +1568,7 @@ func TestApplyRunPromptOverridesFastRoleWarnsWhenHeuristicDoesNothing(t *testing
 	}
 }
 
-func TestApplySubagentRoleOverridesAppendsRoleSystemPromptFile(t *testing.T) {
+func TestOverlaySubagentRoleSettingsAppendsRoleSystemPromptFile(t *testing.T) {
 	mainPrompt := filepath.Join(t.TempDir(), "main-system.md")
 	rolePrompt := filepath.Join(t.TempDir(), "worker-system.md")
 	settings := config.Settings{
@@ -1581,7 +1581,7 @@ func TestApplySubagentRoleOverridesAppendsRoleSystemPromptFile(t *testing.T) {
 		},
 		Sources: map[string]string{"system_prompt_file": "file"},
 	}
-	applySubagentRoleOverrides(&settings, role, true)
+	settings = config.OverlaySubagentRoleSettings(settings, role, true)
 
 	if settings.SystemPromptFile != "worker-system.md" {
 		t.Fatalf("system_prompt_file = %q, want worker-system.md", settings.SystemPromptFile)

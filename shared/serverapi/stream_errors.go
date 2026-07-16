@@ -11,9 +11,7 @@ var ErrStreamGap = errors.New("stream cursor is outside the retained range and c
 var ErrStreamUnavailable = errors.New("stream is unavailable")
 var ErrStreamFailed = errors.New("stream failed")
 
-var ErrSessionActivityGap = ErrStreamGap
 var ErrProcessOutputGap = ErrStreamGap
-var ErrSessionActivityUnavailable = ErrStreamUnavailable
 var ErrProcessOutputUnavailable = ErrStreamUnavailable
 
 type TranscriptCloseReason string

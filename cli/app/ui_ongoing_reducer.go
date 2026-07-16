@@ -2,20 +2,12 @@ package app
 
 import (
 	"core/cli/tui/ongoing"
+	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type uiOngoingFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) ongoingReducer() uiOngoingFeatureReducer {
-	return uiOngoingFeatureReducer{model: m}
-}
-
-func (r uiOngoingFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceOngoingMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case ongoingTranscriptEvent:
 		cmd := m.handleOngoingTranscriptEvent(msg)
@@ -45,7 +37,19 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	)
 	switch event.Kind {
 	case ongoingTranscriptEventMessage:
-		result, err = m.ongoingTranscript.Accept(event.Message)
+		var stateCmd tea.Cmd
+		result, stateCmd, err = m.ongoingTranscript.Accept(event.Message)
+		if err == nil {
+			stateCmd = sequenceCmds(stateCmd, m.inputController().resumeQueuedInputsAfterIdleRuntime())
+		}
+		if event.Message.Kind == clientui.TranscriptMessageHydration {
+			stateCmd = sequenceCmds(stateCmd, m.flushQueuedInputsAfterHydration())
+		}
+		m.layout().syncViewport()
+		if err != nil {
+			return m.handleOngoingSurfaceError(err)
+		}
+		return tea.Batch(stateCmd, m.handleOngoingResult(result), m.reconcileSpinnerTicking(true))
 	case ongoingTranscriptEventLoss:
 		result = m.ongoingTranscript.HandleSubscriptionLoss()
 	default:

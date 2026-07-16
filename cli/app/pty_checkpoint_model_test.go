@@ -191,7 +191,7 @@ type ptyOngoingAssistantFinalCandidate struct {
 }
 
 func ongoingAssistantFinalCandidate(model tea.Model, msg tea.Msg) ptyOngoingAssistantFinalCandidate {
-	event, ok := msg.(ongoingTranscriptEvent)
+	event, ok := ptyCheckpointTranscriptEvent(msg)
 	if !ok ||
 		!isCommittedAssistantFinal(event.Message) {
 		return ptyOngoingAssistantFinalCandidate{}
@@ -260,11 +260,23 @@ func ongoingToolStartCandidate(
 	model tea.Model,
 	msg tea.Msg,
 ) ptyOngoingTranscriptAcceptanceCandidate {
-	event, ok := msg.(ongoingTranscriptEvent)
+	event, ok := ptyCheckpointTranscriptEvent(msg)
 	if !ok || event.Message.Kind != clientui.TranscriptMessageToolStart {
 		return ptyOngoingTranscriptAcceptanceCandidate{}
 	}
 	return ongoingTranscriptAcceptanceCandidate(model, event)
+}
+
+func ptyCheckpointTranscriptEvent(msg tea.Msg) (ongoingTranscriptEvent, bool) {
+	dispatched, ok := msg.(uiDispatchedEventMsg)
+	if !ok {
+		return ongoingTranscriptEvent{}, false
+	}
+	return dispatched.event, true
+}
+
+func dispatchPTYCheckpointTranscriptEvent(event ongoingTranscriptEvent) uiDispatchedEventMsg {
+	return uiDispatchedEventMsg{event: event}
 }
 
 type ptyOngoingTargetFinalDrainCandidate struct {
@@ -321,13 +333,13 @@ func (candidate ptyOngoingTargetFinalDrainCandidate) terminalAppliedBy(model tea
 
 func isCommittedAssistantFinal(message clientui.TranscriptMessage) bool {
 	if message.Kind != clientui.TranscriptMessageCommittedRow ||
-		message.CommittedRow == nil ||
-		message.CommittedRow.Kind != clientui.TranscriptRowAssistant ||
-		message.CommittedRow.Assistant == nil {
+		message.Payload.CommittedRow == nil ||
+		message.Payload.CommittedRow.Kind != clientui.TranscriptRowAssistant ||
+		message.Payload.CommittedRow.Assistant == nil {
 		return false
 	}
-	switch message.CommittedRow.Assistant.Phase {
-	case transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal:
+	switch message.Payload.CommittedRow.Assistant.Phase {
+	case transcript.AssistantPhaseFinal:
 		return true
 	default:
 		return false

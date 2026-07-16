@@ -141,7 +141,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	projectService.WithRuntimeActivitySources(runtimeRegistry, sessionRuntimeService)
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
 	promptControlService := promptcontrol.NewPromptControlService(runtimeRegistry)
-	promptActivityService := promptcontrol.NewPromptActivityService(runtimeRegistry)
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
@@ -163,7 +162,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter)
-	sessionActivityService := sessionservice.NewSessionActivityService(runtimeRegistry)
 	var workflowRuntimeStarter *workflowrunner.Starter
 	var workflowScheduler *workflowrunner.SchedulerService
 	cleanupNewFailure := func() {
@@ -227,14 +225,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		processService:          processService,
 		processOutputService:    processOutputService,
 		promptControlService:    promptControlService,
-		promptActivityService:   promptActivityService,
 		attentionService:        runtimeRegistry,
 		runtimeControlService:   runtimeControlService,
 		serverStatusService:     serverStatusService,
 		sessionRuntimeService:   sessionRuntimeService,
 		sessionViewService:      sessionViewService,
 		sessionLifecycleService: sessionLifecycleService,
-		sessionActivityService:  sessionActivityService,
 		updateStatusService:     updateStatusService,
 		workflowService:         workflowService,
 		workflowScheduler:       workflowScheduler,

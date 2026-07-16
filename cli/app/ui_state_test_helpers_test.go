@@ -1,5 +1,11 @@
 package app
 
+import (
+	"testing"
+
+	"core/shared/clientui"
+)
+
 func testActiveAsk(m *uiModel) *askEvent {
 	if m == nil {
 		return nil
@@ -41,13 +47,6 @@ func testAskInput(m *uiModel) string {
 	return m.ask.input
 }
 
-func testSetAskInput(m *uiModel, input string) {
-	if m == nil {
-		return
-	}
-	m.ask.input = input
-}
-
 func testAskInputCursor(m *uiModel) int {
 	if m == nil {
 		return 0
@@ -55,30 +54,28 @@ func testAskInputCursor(m *uiModel) int {
 	return m.ask.inputCursor
 }
 
-func testSetAskInputCursor(m *uiModel, cursor int) {
-	if m == nil {
-		return
+func resolveAnsweredTestAskThroughTranscript(t *testing.T, m *uiModel) {
+	t.Helper()
+	active := testActiveAsk(m)
+	if active == nil {
+		t.Fatal("answered ask was resolved before the canonical transcript resolution")
 	}
-	m.ask.inputCursor = cursor
-}
-
-func testAskQueue(m *uiModel) []askEvent {
-	if m == nil {
-		return nil
+	if !m.ask.answerPending {
+		t.Fatal("answered ask is not awaiting the canonical transcript resolution")
 	}
-	return m.ask.queue
-}
-
-func testProcessListOpen(m *uiModel) bool {
-	if m == nil {
-		return false
+	resolved := cloneTranscriptPromptForAsk(active.prompt)
+	resolved.State = clientui.TranscriptPromptStateResolved
+	message := clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessagePromptResolved,
+		Payload: clientui.TranscriptPayload{
+			PromptResolved: &resolved,
+		},
 	}
-	return m.processList.open
-}
-
-func testProcessListSurfaceActive(m *uiModel) bool {
-	if m == nil {
-		return false
+	if err := message.Validate(); err != nil {
+		t.Fatalf("validate prompt resolution transcript message: %v", err)
 	}
-	return m.surface() == uiSurfaceProcessList
+	if cmd := m.applyTranscriptMessageState(message); cmd != nil {
+		t.Fatal("prompt resolution transcript message unexpectedly returned a command")
+	}
 }

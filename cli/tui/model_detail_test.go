@@ -193,6 +193,9 @@ func TestDetailUnrecoverableMalformedEntriesStayVisibleAsDetailOnlyDiagnostics(t
 }
 
 func TestDetailRecoverableMalformedEntriesStayOngoingAndExpandable(t *testing.T) {
+	legacyUser := "legacy user"
+	legacyAssistant := "legacy assistant"
+	legacyNotice := "legacy notice"
 	cases := []struct {
 		name string
 		row  clientui.TranscriptCommittedRow
@@ -203,7 +206,7 @@ func TestDetailRecoverableMalformedEntriesStayOngoingAndExpandable(t *testing.T)
 				Visibility: clientui.EntryVisibilityOngoing,
 				Integrity:  transcript.RowIntegrityRecoverableMalformed,
 				Kind:       clientui.TranscriptRowUser,
-				User:       &clientui.TranscriptUserRow{CondensedText: "legacy user"},
+				User:       &clientui.TranscriptUserRow{CondensedText: &legacyUser},
 			},
 		},
 		{
@@ -212,7 +215,7 @@ func TestDetailRecoverableMalformedEntriesStayOngoingAndExpandable(t *testing.T)
 				Visibility: clientui.EntryVisibilityOngoing,
 				Integrity:  transcript.RowIntegrityRecoverableMalformed,
 				Kind:       clientui.TranscriptRowAssistant,
-				Assistant:  &clientui.TranscriptAssistantRow{CondensedText: "legacy assistant"},
+				Assistant:  &clientui.TranscriptAssistantRow{CondensedText: &legacyAssistant},
 			},
 		},
 		{
@@ -231,8 +234,8 @@ func TestDetailRecoverableMalformedEntriesStayOngoingAndExpandable(t *testing.T)
 				Integrity:  transcript.RowIntegrityRecoverableMalformed,
 				Kind:       clientui.TranscriptRowNotice,
 				Notice: &clientui.TranscriptNoticeRow{
-					Reason: clientui.TranscriptNoticeLegacyUntypedNotice,
-					Data:   clientui.TranscriptNoticeData{CompactLabel: "legacy notice"},
+					Reason:       clientui.TranscriptNoticeLegacyUntypedNotice,
+					CompactLabel: &legacyNotice,
 				},
 			},
 		},
@@ -256,10 +259,13 @@ func TestDetailRecoverableMalformedEntriesStayOngoingAndExpandable(t *testing.T)
 
 func TestDetailModeCachedRowsPreserveVisibility(t *testing.T) {
 	model := NewModel()
+	compactNotice := "compact notice"
 	cached := detailNotice(clientui.TranscriptNoticeRow{
-		Severity: clientui.TranscriptNoticeInfo,
-		Data:     clientui.TranscriptNoticeData{CompactLabel: "compact notice"},
-		Diagnostic: &clientui.TranscriptDiagnosticData{
+		Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
+		Severity:     clientui.TranscriptNoticeInfo,
+		CompactLabel: &compactNotice,
+		Diagnostic: &clientui.TranscriptDiagnostic{
+			Code:   "detail_cache_test",
 			Detail: "diagnostic detail",
 		},
 	})
@@ -378,13 +384,12 @@ func TestDetailNonExpandableSelectionHasNoActionOrEnterMutation(t *testing.T) {
 
 func TestDetailNoticeKeepsCompactTextSeparateFromExpandedBody(t *testing.T) {
 	fullBody := "  full persisted notice body  "
+	condensedText := "compact notice"
 	entry, ok := detailTestEntryFromCommittedRow(detailNotice(clientui.TranscriptNoticeRow{
-		Reason:   clientui.TranscriptNoticeLegacyUntypedNotice,
-		Severity: clientui.TranscriptNoticeInfo,
-		Data: clientui.TranscriptNoticeData{
-			LegacyText:    &fullBody,
-			CondensedText: "compact notice",
-		},
+		Reason:        clientui.TranscriptNoticeLegacyUntypedNotice,
+		Severity:      clientui.TranscriptNoticeInfo,
+		LegacyText:    &fullBody,
+		CondensedText: &condensedText,
 	}))
 	if !ok {
 		t.Fatal("notice row was dropped")
@@ -393,11 +398,11 @@ func TestDetailNoticeKeepsCompactTextSeparateFromExpandedBody(t *testing.T) {
 	if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil {
 		t.Fatalf("row = %#v, want notice row", row)
 	}
-	if row.Notice.Data.LegacyText == nil || *row.Notice.Data.LegacyText != fullBody {
-		t.Fatalf("notice legacy text = %#v, want full body", row.Notice.Data.LegacyText)
+	if row.Notice.LegacyText == nil || *row.Notice.LegacyText != fullBody {
+		t.Fatalf("notice legacy text = %#v, want full body", row.Notice.LegacyText)
 	}
-	if row.Notice.Data.CondensedText != "compact notice" {
-		t.Fatalf("notice condensed text = %q, want compact metadata", row.Notice.Data.CondensedText)
+	if row.Notice.CondensedText == nil || *row.Notice.CondensedText != condensedText {
+		t.Fatalf("notice condensed text = %v, want compact metadata", row.Notice.CondensedText)
 	}
 	expanded := transcriptrender.RenderCommittedRow(row, 80, "", transcriptrender.ModeDetailExpanded)
 	if len(expanded.Lines) != 1 || expanded.Lines[0].LeadingSymbol == nil || len(expanded.Lines[0].Spans) < 2 {
@@ -421,11 +426,22 @@ func TestDetailNoticePreservesServerProjectedSeverityAndReason(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			entry, ok := detailTestEntryFromCommittedRow(detailNotice(clientui.TranscriptNoticeRow{
-				Reason:   tt.wantReason,
-				Severity: tt.wantSeverity,
-				Data:     clientui.TranscriptNoticeData{CompactLabel: "notice"},
-			}))
+			compactLabel := "notice"
+			notice := clientui.TranscriptNoticeRow{
+				Reason:       tt.wantReason,
+				Severity:     tt.wantSeverity,
+				CompactLabel: &compactLabel,
+			}
+			if tt.wantReason == clientui.TranscriptNoticeCacheWarning {
+				notice.CacheWarning = &clientui.TranscriptCacheWarning{
+					Scope:      "detail",
+					Reason:     "test",
+					Visibility: transcript.EntryVisibilityOngoing,
+				}
+			} else {
+				notice.LegacyText = &compactLabel
+			}
+			entry, ok := detailTestEntryFromCommittedRow(detailNotice(notice))
 			if !ok {
 				t.Fatal("notice row was dropped")
 			}
@@ -442,13 +458,14 @@ func TestDetailNoticePreservesServerProjectedSeverityAndReason(t *testing.T) {
 
 func TestWorkflowModeNoticeRendersCollapsedOngoingAndExpandedDetail(t *testing.T) {
 	fullBody := "full workflow instructions\nwith second line"
+	condensedText := "workflow compact"
+	messageType := clientui.TranscriptMessageWorkflowMode
 	row := detailNotice(clientui.TranscriptNoticeRow{
-		Severity: clientui.TranscriptNoticeInfo,
-		Data: clientui.TranscriptNoticeData{
-			LegacyText:    &fullBody,
-			CondensedText: "workflow compact",
-			MessageType:   clientui.MessageTypeWorkflowMode,
-		},
+		Reason:        clientui.TranscriptNoticeLegacyUntypedNotice,
+		Severity:      clientui.TranscriptNoticeInfo,
+		LegacyText:    &fullBody,
+		CondensedText: &condensedText,
+		MessageType:   &messageType,
 	})
 	row.Visibility = clientui.EntryVisibilityOngoingCollapsed
 	entry, ok := detailTestEntryFromCommittedRow(row)
@@ -490,9 +507,9 @@ func TestDetailToolRowPreservesToolCallData(t *testing.T) {
 	entry, ok := detailTestEntryFromCommittedRow(detailTool(clientui.TranscriptToolRow{
 		ToolCallID: callID,
 		ToolName:   "exec_command",
-		ToolPresentation: &clientui.ToolCallMeta{
+		Presentation: &transcript.ToolCallMeta{
 			ToolName:     "exec_command",
-			Presentation: clientui.ToolPresentationShell,
+			Presentation: transcript.ToolPresentationShell,
 			CompactText:  "run tests",
 			Command:      "./scripts/test.sh ./cli/tui",
 		},
@@ -507,21 +524,25 @@ func TestDetailToolRowPreservesToolCallData(t *testing.T) {
 	if row.Tool.ToolCallID != callID || row.Tool.ToolName != "exec_command" {
 		t.Fatalf("tool row identity = %#v, want persisted tool call identity", row.Tool)
 	}
-	if row.Tool.ToolPresentation == nil || row.Tool.ToolPresentation.CompactText != "run tests" {
-		t.Fatalf("tool presentation = %#v, want compact call metadata", row.Tool.ToolPresentation)
+	if row.Tool.Presentation == nil || row.Tool.Presentation.CompactText != "run tests" {
+		t.Fatalf("tool presentation = %#v, want compact call metadata", row.Tool.Presentation)
 	}
 }
 
 func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 	for _, role := range []transcript.EntryRole{transcript.EntryRoleReviewerStatus, transcript.EntryRoleReviewerError} {
 		t.Run(string(role), func(t *testing.T) {
+			messageType := clientui.TranscriptMessageReviewerFeedback
+			compactLabel := "review result"
 			entry, ok := detailTestEntryFromCommittedRow(detailNotice(clientui.TranscriptNoticeRow{
-				Severity: clientui.TranscriptNoticeInfo,
-				Data: clientui.TranscriptNoticeData{
-					MessageType:  clientui.MessageTypeReviewerFeedback,
-					CompactLabel: "review result",
+				Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
+				Severity:     clientui.TranscriptNoticeInfo,
+				MessageType:  &messageType,
+				CompactLabel: &compactLabel,
+				Diagnostic: &clientui.TranscriptDiagnostic{
+					Code:   clientui.TranscriptDiagnosticCode(role),
+					Detail: "review result",
 				},
-				Diagnostic: &clientui.TranscriptDiagnosticData{Code: string(role)},
 			}))
 			if !ok {
 				t.Fatal("reviewer row was dropped")
@@ -530,7 +551,7 @@ func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 			if row.Notice == nil || row.Notice.Diagnostic == nil {
 				t.Fatalf("reviewer row = %+v", row)
 			}
-			if row.Notice.Diagnostic.Code != string(role) {
+			if row.Notice.Diagnostic.Code != clientui.TranscriptDiagnosticCode(role) {
 				t.Fatalf("reviewer diagnostic code = %q, want %q", row.Notice.Diagnostic.Code, role)
 			}
 		})

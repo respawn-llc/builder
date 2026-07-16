@@ -22,8 +22,6 @@ func TestStatusLineGitStartupRefreshCachesBranch(t *testing.T) {
 	close(search.events)
 	m := newProjectedTestUIModel(
 		nil,
-		closedProjectedRuntimeEvents(),
-		closedAskEvents(),
 		WithUIPathReferenceSearch(search),
 		WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: repoRoot}),
 	)
@@ -52,8 +50,6 @@ func TestStatusLineGitStartupUsesRuntimeWorktreeRootBranch(t *testing.T) {
 	close(search.events)
 	m := newProjectedTestUIModel(
 		runtimeClient,
-		closedProjectedRuntimeEvents(),
-		closedAskEvents(),
 		WithUIPathReferenceSearch(search),
 		WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: workspaceRoot}),
 	)

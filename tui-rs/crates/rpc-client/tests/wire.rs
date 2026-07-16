@@ -28,7 +28,7 @@ fn json_rpc_request_omits_empty_id_and_missing_params() {
     let request = Request {
         jsonrpc: JSONRPC_VERSION.to_owned(),
         id: String::new(),
-        method: "session.activity".to_owned(),
+        method: "sample.event".to_owned(),
         params: None,
     };
 
@@ -38,7 +38,7 @@ fn json_rpc_request_omits_empty_id_and_missing_params() {
         value,
         json!({
             "jsonrpc": "2.0",
-            "method": "session.activity"
+            "method": "sample.event"
         })
     );
 }

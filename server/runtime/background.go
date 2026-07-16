@@ -10,8 +10,8 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/valuecopy"
 )
 
 type defaultBackgroundNoticeScheduler struct {
@@ -42,12 +42,13 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 		return
 	}
 	b.QueueDeveloperNotice(llm.Message{
-		Role:               llm.RoleDeveloper,
-		MessageType:        llm.MessageTypeBackgroundNotice,
-		Name:               strings.TrimSpace(evt.ID),
-		Content:            formatBackgroundShellNotice(evt),
-		CompactContent:     formatBackgroundShellCompact(evt),
-		BackgroundExitCode: valuecopy.Pointer(evt.ExitCode),
+		Role:                 llm.RoleDeveloper,
+		MessageType:          llm.MessageTypeBackgroundNotice,
+		Name:                 strings.TrimSpace(evt.ID),
+		BackgroundActivityID: evt.ActivityID.String(),
+		Content:              formatBackgroundShellNotice(evt),
+		CompactContent:       formatBackgroundShellCompact(evt),
+		BackgroundExitCode:   textutil.Pointer(evt.ExitCode),
 	})
 }
 

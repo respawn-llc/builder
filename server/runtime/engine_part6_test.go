@@ -103,14 +103,24 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	if len(snapshotAtCompletion.Entries) < 2 {
 		t.Fatalf("expected follow-up assistant and reviewer status in completion snapshot, got %+v", snapshotAtCompletion.Entries)
 	}
-	assistantEntry := snapshotAtCompletion.Entries[len(snapshotAtCompletion.Entries)-2]
+	assistantIndex := len(snapshotAtCompletion.Entries) - 2
+	suggestionsIndex := -1
+	for index, entry := range snapshotAtCompletion.Entries[:assistantIndex] {
+		if entry.Role == "reviewer_suggestions" {
+			suggestionsIndex = index
+		}
+	}
+	if suggestionsIndex < 0 {
+		t.Fatalf("expected reviewer suggestions before follow-up assistant, got %+v", snapshotAtCompletion.Entries)
+	}
+	assistantEntry := snapshotAtCompletion.Entries[assistantIndex]
 	if assistantEntry.Role != "assistant" || assistantEntry.Text != "updated final after review" {
 		t.Fatalf("expected completion snapshot penultimate entry to be follow-up assistant, got %+v", assistantEntry)
 	}
 	if !assistant.CommittedEntryStartSet {
 		t.Fatalf("expected follow-up assistant event committed start metadata, got %+v", *assistant)
 	}
-	if got, want := assistant.CommittedEntryStart, len(snapshotAtCompletion.Entries)-2; got != want {
+	if got, want := assistant.CommittedEntryStart, assistantIndex; got != want {
 		t.Fatalf("follow-up assistant committed start = %d, want %d; snapshot=%+v", got, want, snapshotAtCompletion.Entries)
 	}
 	statusEntry := snapshotAtCompletion.Entries[len(snapshotAtCompletion.Entries)-1]

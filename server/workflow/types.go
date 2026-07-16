@@ -270,33 +270,6 @@ func IsExecutableNode(node Node) bool {
 	}
 }
 
-func IsSessionNode(node Node) bool {
-	if node == nil {
-		return false
-	}
-	return node.Kind() == NodeKindAgent
-}
-
-func IsBoardVisibleNode(node Node) bool {
-	return IsExecutableNode(node)
-}
-
-func CanSourceParameters(node Node) bool {
-	if node == nil {
-		return false
-	}
-	switch node.Kind() {
-	case NodeKindAgent, NodeKindScript:
-		return true
-	default:
-		return false
-	}
-}
-
-func CanOwnCompletionContract(node Node) bool {
-	return CanSourceParameters(node)
-}
-
 func NodeSubagentRole(node Node) string {
 	if agent, ok := node.(AgentNode); ok {
 		return agent.SubagentRole

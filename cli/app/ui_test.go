@@ -209,7 +209,7 @@ func TestParseUserShellCommand(t *testing.T) {
 func TestAskQuestionTabFreeformFlow(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Pick one", Suggestions: []string{"a", "b"}}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -244,15 +244,16 @@ func TestAskQuestionTabFreeformFlow(t *testing.T) {
 	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 1 {
 		t.Fatalf("expected selected option 1 preserved when switching to freeform, got %+v", resp.response)
 	}
+	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask should be resolved")
+		t.Fatal("ask remained active after transcript resolution")
 	}
 }
 
 func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Pick one", Suggestions: []string{"a", "b"}}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -299,15 +300,16 @@ func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 	if resp.response.FreeformAnswer != "custom" {
 		t.Fatalf("expected pending freeform draft submitted with picker answer, got %+v", resp.response)
 	}
+	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask should be resolved")
+		t.Fatal("ask remained active after transcript resolution")
 	}
 }
 
 func TestAskQuestionTabRoundTripRestoresPendingFreeformDraftAndCursor(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Pick one", Suggestions: []string{"a", "b"}}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -350,15 +352,16 @@ func TestAskQuestionTabRoundTripRestoresPendingFreeformDraftAndCursor(t *testing
 	if resp.response.FreeformAnswer != "custoXm" {
 		t.Fatalf("expected restored draft to remain editable, got %+v", resp.response)
 	}
+	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask should be resolved")
+		t.Fatal("ask remained active after transcript resolution")
 	}
 }
 
 func TestAskQuestionPickerSubmitReturnsSelectedOptionNumber(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Pick one", Suggestions: []string{"a", "b"}}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -374,15 +377,16 @@ func TestAskQuestionPickerSubmitReturnsSelectedOptionNumber(t *testing.T) {
 	if resp.response.Answer != "" || resp.response.FreeformAnswer != "" {
 		t.Fatalf("expected structured picker response without raw answer text, got %+v", resp.response)
 	}
+	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask should be resolved")
+		t.Fatal("ask remained active after transcript resolution")
 	}
 }
 
 func TestAskQuestionFreeformSelectionEnterDropsIntoFreeformWhenEmpty(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Pick one", Suggestions: []string{"a", "b"}}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -415,7 +419,7 @@ func TestAskQuestionFreeformSelectionEnterDropsIntoFreeformWhenEmpty(t *testing.
 func TestAskQuestionFreeformSelectionEmptySubmitRequiresCommentary(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Pick one", Suggestions: []string{"a", "b"}}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -450,7 +454,7 @@ func TestAskQuestionFreeformSelectionEmptySubmitRequiresCommentary(t *testing.T)
 func TestAskQuestionFreeformSelectionSubmitsFreeformOnly(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Pick one", Suggestions: []string{"a", "b"}}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -472,15 +476,16 @@ func TestAskQuestionFreeformSelectionSubmitsFreeformOnly(t *testing.T) {
 	if resp.response.Answer != "custom" || resp.response.FreeformAnswer != "custom" {
 		t.Fatalf("unexpected freeform selection response: %+v", resp.response)
 	}
+	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask should be resolved")
+		t.Fatal("ask remained active after transcript resolution")
 	}
 }
 
 func TestAskFreeformUsesMainEditingStack(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Type answer"}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Type answer", reply)
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -511,15 +516,16 @@ func TestAskFreeformUsesMainEditingStack(t *testing.T) {
 	if resp.response.Answer != ">hello _worl" {
 		t.Fatalf("unexpected inline edit result: %q", resp.response.Answer)
 	}
+	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask should be resolved")
+		t.Fatal("ask remained active after transcript resolution")
 	}
 }
 
 func TestAskFreeformCtrlUEditingMatchesMainInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Type answer"}, reply: reply}
+	event := testQuestionAskEvent("ask-1", "Type answer", reply)
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -551,7 +557,14 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	m := newProjectedEngineUIModel(eng)
 	m.setRuntimeActivityBusyForTest(true)
 	reply := make(chan askReply, 1)
-	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionAllowSession, Label: "Allow for this session"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
+	event := testApprovalAskEvent(
+		"approval-1",
+		"Approve?",
+		reply,
+		clientui.ApprovalDecisionAllowOnce,
+		clientui.ApprovalDecisionAllowSession,
+		clientui.ApprovalDecisionDeny,
+	)
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -619,8 +632,9 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "blocked by policy" {
 		t.Fatalf("expected deny commentary injected into regular user-said flow, got %+v", updated.pendingInjected)
 	}
+	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("expected ask to resolve after commentary submit")
+		t.Fatal("approval ask remained active after transcript resolution")
 	}
 }
 
@@ -738,7 +752,8 @@ func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *test
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(72, 12)
 	m.layout().syncViewport()
-	testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{Question: question}, reply: make(chan askReply, 1)})
+	event := testQuestionAskEvent("ask-1", question, make(chan askReply, 1))
+	testSetActiveAsk(m, &event)
 	m.ask.input = "typed"
 	m.ask.inputCursor = len([]rune(m.ask.input))
 
@@ -769,10 +784,8 @@ func TestAskQuestionPickerMarkdownQuestionWrapsWithoutSourceMarkers(t *testing.T
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(40, 14)
 	m.layout().syncViewport()
-	testSetActiveAsk(m, &askEvent{
-		req:   clientui.PendingPromptEvent{Question: question},
-		reply: make(chan askReply, 1),
-	})
+	event := testQuestionAskEvent("ask-1", question, make(chan askReply, 1))
+	testSetActiveAsk(m, &event)
 
 	wrapped, _ := m.layout().wrappedAskPromptLines(32)
 	var questionLines []string
@@ -824,10 +837,12 @@ func TestAskQuestionMarkdownLinksWrapIntoIndependentBoundedRows(t *testing.T) {
 			)
 			m.terminalGeometry = terminalGeometryKnown(24, 12)
 			m.layout().syncViewport()
-			testSetActiveAsk(m, &askEvent{
-				req:   clientui.PendingPromptEvent{Question: "[PR #456](https://github.com/org/repo/pull/456)"},
-				reply: make(chan askReply, 1),
-			})
+			event := testQuestionAskEvent(
+				"ask-1",
+				"[PR #456](https://github.com/org/repo/pull/456)",
+				make(chan askReply, 1),
+			)
+			testSetActiveAsk(m, &event)
 			m.ask.input = "answer"
 			m.ask.inputCursor = len([]rune(m.ask.input))
 
@@ -859,10 +874,8 @@ func TestAskQuestionMarkdownLinksWrapIntoIndependentBoundedRows(t *testing.T) {
 
 func TestAskQuestionPlainPRReferenceDoesNotCreateHyperlink(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	testSetActiveAsk(m, &askEvent{
-		req:   clientui.PendingPromptEvent{Question: "PR #456"},
-		reply: make(chan askReply, 1),
-	})
+	event := testQuestionAskEvent("ask-1", "PR #456", make(chan askReply, 1))
+	testSetActiveAsk(m, &event)
 
 	wrapped, _ := m.layout().wrappedAskPromptLines(12)
 	for _, line := range wrapped {
@@ -877,13 +890,13 @@ func TestAskQuestionPlainPRReferenceDoesNotCreateHyperlink(t *testing.T) {
 
 func TestAskQuestionOptionRowsDoNotInheritMarkdownHyperlinks(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	testSetActiveAsk(m, &askEvent{
-		req: clientui.PendingPromptEvent{
-			Question:    "[PR #456](https://github.com/org/repo/pull/456)",
-			Suggestions: []string{"Approve"},
-		},
-		reply: make(chan askReply, 1),
-	})
+	event := testQuestionAskEvent(
+		"ask-1",
+		"[PR #456](https://github.com/org/repo/pull/456)",
+		make(chan askReply, 1),
+		"Approve",
+	)
+	testSetActiveAsk(m, &event)
 
 	wrapped, _ := m.layout().wrappedAskPromptLines(12)
 	for _, line := range wrapped {
@@ -900,16 +913,14 @@ func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(56, 9)
 	m.layout().syncViewport()
-	testSetActiveAsk(m, &askEvent{
-		req: clientui.PendingPromptEvent{
-			Question: strings.Repeat("Long **Markdown question** content. ", 8),
-			Suggestions: []string{
-				"First",
-				"Second",
-			},
-		},
-		reply: make(chan askReply, 1),
-	})
+	event := testQuestionAskEvent(
+		"ask-1",
+		strings.Repeat("Long **Markdown question** content. ", 8),
+		make(chan askReply, 1),
+		"First",
+		"Second",
+	)
+	testSetActiveAsk(m, &event)
 
 	visible, _ := m.layout().visibleAskPromptLinesWithCursor(48)
 	questionLines := 0
@@ -952,10 +963,8 @@ func TestAskQuestionPickerRendersHeadingsRulesAndTables(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(64, 20)
 	m.layout().syncViewport()
-	testSetActiveAsk(m, &askEvent{
-		req:   clientui.PendingPromptEvent{Question: question},
-		reply: make(chan askReply, 1),
-	})
+	event := testQuestionAskEvent("ask-1", question, make(chan askReply, 1))
+	testSetActiveAsk(m, &event)
 
 	wrapped, _ := m.layout().wrappedAskPromptLines(56)
 	var questionLines []string

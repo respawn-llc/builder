@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"core/server/registry"
 	"core/server/runlog"
 	"core/server/runtime"
-	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/session"
 	askquestion "core/server/tools"
@@ -175,32 +173,6 @@ func (s *Service) RunOnAcquiredRuntime(ctx context.Context, sessionID string, en
 		return ErrAcquiredRuntimeOvertaken
 	}
 	return nil
-}
-
-func (s *Service) runOnAcquiredRuntimeWithClosedSignal(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context) error) error {
-	if s.runtimes == nil {
-		return ErrAcquiredRuntimeOvertaken
-	}
-	closed, ok := s.runtimes.AcquiredRuntimeClosed(strings.TrimSpace(sessionID), engine)
-	if !ok {
-		return ErrAcquiredRuntimeOvertaken
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
-		select {
-		case <-closed:
-			cancel()
-		case <-runCtx.Done():
-		}
-	}()
-	err := fn(runCtx)
-	select {
-	case <-closed:
-		return errors.Join(ErrAcquiredRuntimeOvertaken, err)
-	default:
-		return err
-	}
 }
 
 type RuntimeBuilder func(ctx context.Context) (RuntimeBuildResult, error)
@@ -411,7 +383,7 @@ func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivate
 		}
 		logger.Logf("app.interactive.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, target.WorkspaceRoot, target.EffectiveWorkdir, req.ActiveSettings.Model)
 		logger.Logf("config.settings path=%s created=%t", req.Source.SettingsPath, req.Source.CreatedDefaultConfig)
-		for _, line := range configSourceLines(req.Source.Sources) {
+		for _, line := range runlog.FormatConfigSourceLines(req.Source.Sources) {
 			logger.Logf("config.source %s", line)
 		}
 		enabledTools, err := parseToolIDs(req.EnabledToolIDs)
@@ -439,9 +411,7 @@ func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivate
 			OnEvent: func(evt runtime.Event) {
 				logger.Logf("%s", runlog.FormatRuntimeEvent(evt))
 				if transcriptdiag.Enabled(req.ActiveSettings.Debug, os.Getenv) {
-					projected := runtimeview.EventFromRuntime(evt)
-					logger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
-					logger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
+					logger.Logf("%s", runlog.FormatTranscriptRuntimeEventDiagnostic(sessionID, evt))
 				}
 				publishRuntimeEvent(evt)
 			},
@@ -478,11 +448,11 @@ func activationResponse() serverapi.SessionRuntimeActivateResponse {
 
 func (s *Service) runtimeBlockingActivity(ctx context.Context, sessionID string) (clientui.RuntimeActivity, error) {
 	if s == nil || s.runtimes == nil {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
+		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
 	}
 	id := strings.TrimSpace(sessionID)
 	if id == "" {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
+		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
 	}
 	engine, err := s.runtimes.ResolveRuntime(ctx, id)
 	if err != nil {
@@ -501,7 +471,7 @@ func (s *Service) engineHasBlockingRuntimeActivity(sessionID string, engine *run
 
 func (s *Service) resolveBlockingRuntimeActivity(sessionID string, engine *runtime.Engine) (clientui.RuntimeActivity, error) {
 	if s == nil || s.runtimes == nil {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
+		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
 	}
 	snapshot, err := s.runtimes.RuntimeReadModelSnapshot(context.Background(), strings.TrimSpace(sessionID), nil)
 	if err != nil {
@@ -654,19 +624,6 @@ func parseToolIDs(raw []string) ([]toolspec.ID, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
-}
-
-func configSourceLines(src map[string]string) []string {
-	keys := make([]string, 0, len(src))
-	for key := range src {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	lines := make([]string, 0, len(keys))
-	for _, key := range keys {
-		lines = append(lines, fmt.Sprintf("%s=%s", key, strings.TrimSpace(src[key])))
-	}
-	return lines
 }
 
 func runtimeOwnerIDRequiredError() error {

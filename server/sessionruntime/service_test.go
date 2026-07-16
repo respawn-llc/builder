@@ -469,6 +469,7 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 		OwnerID:         "interactive-owner",
 		ActiveSettings: config.Settings{
 			Model:                  "gpt-5",
+			ThinkingLevel:          "medium",
 			ModelContextWindow:     200000,
 			MinimumExecToBgSeconds: 1,
 			ShellOutputMaxChars:    16_000,

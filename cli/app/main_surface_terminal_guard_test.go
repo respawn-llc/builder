@@ -246,7 +246,7 @@ func isInteractiveTUIPath(relPath string) bool {
 		return false
 	}
 	switch relPath {
-	case "cli/app/run_prompt.go", "cli/app/runlog.go":
+	case "cli/app/run_prompt.go":
 		return false
 	default:
 		return true

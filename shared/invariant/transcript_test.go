@@ -5,29 +5,35 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
 
 func TestValidateTranscriptCommittedRow(t *testing.T) {
-	streamID := uuid.New()
+	stepID, err := runtimeids.ParseStepID(uuid.NewString())
+	if err != nil {
+		t.Fatalf("parse step id: %v", err)
+	}
+	streamID := runtimeids.NewAssistantStreamID()
 	rollbackTargetID := rollbacktarget.EncodeUserMessageSeq(12)
 	validRows := []clientui.TranscriptCommittedRow{
 		{
 			Visibility: clientui.EntryVisibilityOngoing,
 			Kind:       clientui.TranscriptRowUser,
-			User:       &clientui.TranscriptUserRow{Text: "user", RollbackTargetID: &rollbackTargetID},
+			User:       &clientui.TranscriptUserRow{StepID: stepID, Text: "user", RollbackTargetID: &rollbackTargetID},
 		},
 		{
 			Visibility: clientui.EntryVisibilityOngoingCollapsed,
 			Kind:       clientui.TranscriptRowAssistant,
-			Assistant:  &clientui.TranscriptAssistantRow{Text: "assistant", StreamID: &streamID},
+			Assistant:  &clientui.TranscriptAssistantRow{StepID: stepID, Text: "assistant", StreamID: &streamID},
 		},
 		{
 			Visibility: clientui.EntryVisibilityDetail,
 			Kind:       clientui.TranscriptRowTool,
 			Tool: &clientui.TranscriptToolRow{
+				StepID:     stepID,
 				ToolCallID: "tool-call",
 				ToolName:   "shell",
 			},
@@ -44,7 +50,7 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 		}
 	}
 
-	zeroStreamID := uuid.Nil
+	zeroStreamID := runtimeids.AssistantStreamID{}
 	invalidRollbackTargetID := "not-a-rollback-target"
 	invalidRows := []clientui.TranscriptCommittedRow{
 		{Visibility: clientui.EntryVisibilityDetail, Integrity: transcript.RowIntegrity(255), Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{}},

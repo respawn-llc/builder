@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -51,16 +50,6 @@ type workflowEdgeOutput struct {
 	Version           int64  `json:"version"`
 }
 
-// writeWorkflowJSON encodes v as a single JSON line to stdout, reporting any
-// encode failure to stderr. It returns the process exit code to use.
-func writeWorkflowJSON(stdout io.Writer, stderr io.Writer, v any) int {
-	if err := json.NewEncoder(stdout).Encode(v); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	return 0
-}
-
 type workflowCommandRemote interface {
 	apicontract.WorkflowService
 	ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error)
@@ -70,6 +59,15 @@ type workflowCommandRemote interface {
 var workflowCommandRemoteOpener func(context.Context, string) (config.App, workflowCommandRemote, error) = func(ctx context.Context, path string) (config.App, workflowCommandRemote, error) {
 	cfg, remote, err := bindingCommandRemoteOpener(ctx, path)
 	return cfg, remote, err
+}
+
+func openWorkflowCommandSession(stderr io.Writer, path string) (config.App, workflowCommandRemote, func(), bool) {
+	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return config.App{}, nil, nil, false
+	}
+	return cfg, remote, func() { _ = remote.Close() }, true
 }
 
 func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -139,12 +137,11 @@ func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		}
 		targetPolicy = &parsed
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	def, err := resolveWorkflowDefinition(context.Background(), remote, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -181,7 +178,7 @@ func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, resp.Definition.Workflow)
+		return writeCommandJSON(stdout, stderr, resp.Definition.Workflow)
 	}
 	fmt.Fprintf(stdout, "Updated workflow %q (%s) to version %d.\n", resp.Definition.Workflow.Name, resp.Definition.Workflow.ID, resp.Definition.Workflow.Version)
 	return 0
@@ -200,13 +197,11 @@ func workflowCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, "workflow create requires <name>")
 		return 2
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	_ = cfg
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 	defer cancel()
 	resp, err := remote.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: name, Description: *description})
@@ -215,7 +210,7 @@ func workflowCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, resp.Workflow)
+		return writeCommandJSON(stdout, stderr, resp.Workflow)
 	}
 	fmt.Fprintf(stdout, "Created workflow %q (%s).\n", resp.Workflow.Name, resp.Workflow.ID)
 	return 0
@@ -233,19 +228,18 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, "workflow list does not accept positional arguments")
 		return 2
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	workflows, nextPageToken, err := listWorkflowPage(context.Background(), remote, serverapi.WorkflowListRequest{PageSize: *pageSize, PageToken: *pageToken})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, workflowListOutput{Workflows: workflows, NextPageToken: nextPageToken})
+		return writeCommandJSON(stdout, stderr, workflowListOutput{Workflows: workflows, NextPageToken: nextPageToken})
 	}
 	for _, workflow := range workflows {
 		fmt.Fprintf(stdout, "%s: %s (v%d)\n", workflow.ID, workflow.Name, workflow.Version)
@@ -298,12 +292,11 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		*displayName = workflowDisplayNameFromKey(*key)
 	}
 	nodeID := "node-" + uuid.NewString()
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	workflowID, err := resolveWorkflowID(context.Background(), remote, workflowRef[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -318,7 +311,7 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, workflowNodeOutput{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, ScriptPath: req.ScriptPath, Version: resp.Version})
+		return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, ScriptPath: req.ScriptPath, Version: resp.Version})
 	}
 	fmt.Fprintf(stdout, "Added %s node `%s` (%s).\n", *kind, *key, nodeID)
 	return 0
@@ -338,12 +331,11 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	if !ok {
 		return exitCode
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	def, err := resolveWorkflowDefinition(context.Background(), remote, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -397,7 +389,7 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, workflowNodeOutput{WorkflowID: def.Workflow.ID, NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, ScriptPath: updated.ScriptPath, Version: resp.Version})
+		return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: def.Workflow.ID, NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, ScriptPath: updated.ScriptPath, Version: resp.Version})
 	}
 	fmt.Fprintf(stdout, "Updated node `%s`.\n", updated.Key)
 	return 0
@@ -466,12 +458,11 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	def, err := resolveWorkflowDefinition(context.Background(), remote, workflowRef[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -541,7 +532,7 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: def.Workflow.ID, EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TransitionID: *transitionID, Version: resp.Version})
+		return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: def.Workflow.ID, EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TransitionID: *transitionID, Version: resp.Version})
 	}
 	fmt.Fprintf(stdout, "Added edge `%s` (%s) on transition `%s`: `%s` → `%s` (%s).\n", *edgeKey, edgeID, *transitionID, *fromKey, *toKey, workflowEdgeContextDetail(*contextMode, *requiresApproval, parsedContextSource))
 	return 0
@@ -566,12 +557,11 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	if !ok {
 		return exitCode
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	def, err := resolveWorkflowDefinition(context.Background(), remote, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -672,7 +662,7 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: def.Workflow.ID, EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TransitionID: updatedGroup.TransitionID, Version: resp.Version})
+		return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: def.Workflow.ID, EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TransitionID: updatedGroup.TransitionID, Version: resp.Version})
 	}
 	fmt.Fprintf(stdout, "Updated edge `%s`: `%s` → `%s` (%s).\n", updatedEdge.Key, updatedGroup.TransitionID, workflowNodeKeyOrID(workflowNodeKeyByID(def), updatedEdge.TargetNodeID), workflowEdgeContextDetail(updatedEdge.ContextMode, updatedEdge.RequiresApproval, updatedEdge.ContextSource))
 	return 0
@@ -686,12 +676,11 @@ func workflowLinkSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 	if !ok {
 		return exitCode
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -718,7 +707,7 @@ func workflowLinkSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, resp.Link)
+		return writeCommandJSON(stdout, stderr, resp.Link)
 	}
 	suffix := ""
 	if resp.Link.Default {
@@ -735,12 +724,11 @@ func workflowUnlinkSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if !ok {
 		return exitCode
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	link, err := resolveWorkflowProjectLink(context.Background(), cfg, remote, positionals[0], positionals[1])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -755,14 +743,14 @@ func workflowUnlinkSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	}
 	if !resp.Unlinked {
 		if *jsonOut {
-			writeWorkflowJSON(stdout, stderr, resp)
+			writeCommandJSON(stdout, stderr, resp)
 			return 1
 		}
 		writeWorkflowUnlinkBlockers(stderr, resp.Blockers)
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, resp)
+		return writeCommandJSON(stdout, stderr, resp)
 	}
 	fmt.Fprintf(stdout, "Unlinked workflow %s from project %s.\n", positionals[1], positionals[0])
 	return 0
@@ -775,12 +763,11 @@ func workflowDefaultSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	if !ok {
 		return exitCode
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -799,7 +786,7 @@ func workflowDefaultSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, resp.Link)
+		return writeCommandJSON(stdout, stderr, resp.Link)
 	}
 	fmt.Fprintf(stdout, "Set workflow %s as the default for project %s.\n", positionals[1], positionals[0])
 	return 0
@@ -813,12 +800,11 @@ func workflowValidateSubcommand(args []string, stdout io.Writer, stderr io.Write
 	if !ok {
 		return exitCode
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	workflowID, err := resolveWorkflowID(context.Background(), remote, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -832,7 +818,7 @@ func workflowValidateSubcommand(args []string, stdout io.Writer, stderr io.Write
 		return 1
 	}
 	if *jsonOut {
-		exit := writeWorkflowJSON(stdout, stderr, resp)
+		exit := writeCommandJSON(stdout, stderr, resp)
 		if exit == 0 && !resp.Valid {
 			return 1
 		}
@@ -887,19 +873,18 @@ func workflowInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	if !ok {
 		return exitCode
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	def, err := resolveWorkflowDefinition(context.Background(), remote, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	if *jsonOut {
-		return writeWorkflowJSON(stdout, stderr, def)
+		return writeCommandJSON(stdout, stderr, def)
 	}
 	writeWorkflowDefinition(stdout, def)
 	return 0
@@ -1336,21 +1321,6 @@ func workflowDisplayNameFromKey(key string) string {
 		return strings.TrimSpace(key)
 	}
 	return display
-}
-
-func workflowTaskSummaryFromCard(projectID string, card serverapi.WorkflowBoardTaskCard) serverapi.WorkflowTaskSummary {
-	return serverapi.WorkflowTaskSummary{
-		ID:                card.TaskID,
-		ProjectID:         projectID,
-		WorkflowID:        card.WorkflowID,
-		ShortID:           card.ShortID,
-		Title:             card.Title,
-		BodyPreview:       card.Preview.Markdown,
-		SourceWorkspaceID: card.SourceWorkspace.WorkspaceID,
-		UpdatedAtUnixMs:   card.UpdatedAtUnixMs,
-		Done:              card.Status.Kind == "done",
-		ActiveNodeIDs:     append([]string(nil), card.ActiveNodeIDs...),
-	}
 }
 
 func pathExists(path string) bool {

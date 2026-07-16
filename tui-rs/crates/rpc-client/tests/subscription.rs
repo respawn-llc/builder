@@ -1,16 +1,11 @@
 use std::collections::VecDeque;
 
-use client_contracts::clientui::{
-    EventKind, PendingPromptEventType, RunLifecyclePhase, RunMode, RunStatus,
-};
-use client_contracts::prompt::PromptActivitySubscribeRequest;
 use client_contracts::protocol::{
     AttachResponse, CapabilityFlags, HandshakeResponse, ServerIdentity,
 };
-use client_contracts::session::SessionActivitySubscribeRequest;
 use rpc_client::api::{RemoteClient, RemoteContext};
 use rpc_client::error::{ProtocolError, RpcError};
-use rpc_client::stream::{NextCancellation, StreamItem, SubscriptionRoute, TypedStreamItem};
+use rpc_client::stream::{NextCancellation, StreamItem, SubscriptionRoute};
 use rpc_client::transport::{ConnectionFactory, ConnectionKind, FrameConnection, TransportError};
 use rpc_client::wire::{ErrorCode, Frame, JSONRPC_VERSION, Request, Response};
 use serde_json::json;
@@ -29,18 +24,15 @@ fn subscription_ack_event_and_complete_are_ordered_and_terminal() {
                 session_id: "session-1".to_owned(),
             },
         ),
-        success_response("subscribe-session-activity", json!({"stream":"stream-1"})),
-        notification(
-            "session.activity",
-            json!({"event":{"kind":"assistant_delta"}}),
-        ),
-        notification("session.activity.complete", json!({})),
+        success_response("subscribe-sample", json!({"stream":"stream-1"})),
+        notification("sample.event", json!({"value": 1})),
+        notification("sample.complete", json!({})),
     ]);
     let route = SubscriptionRoute {
-        request_id: "subscribe-session-activity",
-        method: "session.subscribeActivity",
-        event_method: "session.activity",
-        complete_method: "session.activity.complete",
+        request_id: "subscribe-sample",
+        method: "sample.subscribe",
+        event_method: "sample.event",
+        complete_method: "sample.complete",
     };
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![connection]),
@@ -53,7 +45,7 @@ fn subscription_ack_event_and_complete_are_ordered_and_terminal() {
 
     assert_eq!(
         subscription.next_item().unwrap(),
-        StreamItem::Event(json!({"event":{"kind":"assistant_delta"}}))
+        StreamItem::Event(json!({"value": 1}))
     );
     assert_eq!(subscription.next_item().unwrap(), StreamItem::Complete);
     assert_eq!(subscription.next_item().unwrap(), StreamItem::Complete);
@@ -63,162 +55,15 @@ fn subscription_ack_event_and_complete_are_ordered_and_terminal() {
         &[
             ("handshake", "protocol.handshake"),
             ("attach-session", "session.attach"),
-            ("subscribe-session-activity", "session.subscribeActivity"),
+            ("subscribe-sample", "sample.subscribe"),
         ],
-    );
-}
-
-#[test]
-fn session_activity_wrapper_decodes_typed_events_and_uses_route_metadata() {
-    let event_params = json!({
-        "event": {
-            "Sequence": 7,
-            "Kind": "run_state_changed",
-            "StepID": "step-1",
-            "RecoveryCause": "",
-            "CommittedTranscriptChanged": false,
-            "Error": "",
-            "AssistantDelta": "",
-            "UserMessage": "",
-            "CacheWarningVisibility": "",
-            "RunState": {
-                "Lifecycle": {"Phase": "running", "Mode": "turn"},
-                "RunID": "run-1",
-                "Status": "running",
-                "StartedAt": "2026-05-31T12:00:00Z",
-                "FinishedAt": "0001-01-01T00:00:00Z"
-            }
-        }
-    });
-    let connection = ScriptedConnection::new(vec![
-        success_response("handshake", handshake_response()),
-        success_response(
-            "attach-session",
-            AttachResponse {
-                kind: "session".to_owned(),
-                project_id: String::new(),
-                workspace_id: String::new(),
-                workspace_root: String::new(),
-                session_id: "session-1".to_owned(),
-            },
-        ),
-        success_response(
-            "subscribe-session-activity",
-            json!({"stream":"session-activity"}),
-        ),
-        notification("session.activity", event_params),
-        notification("session.activity.complete", json!({})),
-    ]);
-    let mut remote = RemoteClient::new(
-        ScriptedFactory::new(vec![connection]),
-        RemoteContext::unscoped(),
-    );
-
-    let mut subscription = remote
-        .subscribe_session_activity(SessionActivitySubscribeRequest {
-            session_id: "session-1".to_owned(),
-            after_sequence: 0,
-        })
-        .unwrap();
-
-    let event = match subscription.next_item().unwrap() {
-        TypedStreamItem::Event(params) => params.event,
-        TypedStreamItem::Complete => panic!("expected event"),
-    };
-    assert_eq!(event.kind, EventKind::RunStateChanged);
-    let run_state = event.run_state.unwrap();
-    assert_eq!(run_state.status, RunStatus::Running);
-    assert_eq!(run_state.lifecycle.phase, RunLifecyclePhase::Running);
-    assert_eq!(run_state.lifecycle.mode, RunMode::Turn);
-    assert_eq!(subscription.next_item().unwrap(), TypedStreamItem::Complete);
-    let connection = subscription.into_connection();
-    assert_sent_methods(
-        &connection.sent,
-        &[
-            ("handshake", "protocol.handshake"),
-            ("attach-session", "session.attach"),
-            ("subscribe-session-activity", "session.subscribeActivity"),
-        ],
-    );
-    assert_eq!(
-        connection.sent[2].request().params.unwrap(),
-        json!({"SessionID":"session-1","AfterSequence":0})
-    );
-}
-
-#[test]
-fn prompt_activity_wrapper_decodes_typed_events_and_uses_route_metadata() {
-    let event_params = json!({
-        "event": {
-            "Sequence": 5,
-            "Type": "pending",
-            "PromptID": "prompt-1",
-            "SessionID": "session-1",
-            "Question": "Continue?",
-            "Suggestions": ["Yes", "No"],
-            "RecommendedOptionIndex": 1,
-            "Approval": false,
-            "CreatedAt": "2026-05-31T12:01:00Z"
-        }
-    });
-    let connection = ScriptedConnection::new(vec![
-        success_response("handshake", handshake_response()),
-        success_response(
-            "attach-session",
-            AttachResponse {
-                kind: "session".to_owned(),
-                project_id: String::new(),
-                workspace_id: String::new(),
-                workspace_root: String::new(),
-                session_id: "session-1".to_owned(),
-            },
-        ),
-        success_response(
-            "subscribe-prompt-activity",
-            json!({"stream":"prompt-activity"}),
-        ),
-        notification("prompt.activity", event_params),
-        notification("prompt.activity.complete", json!({})),
-    ]);
-    let mut remote = RemoteClient::new(
-        ScriptedFactory::new(vec![connection]),
-        RemoteContext::unscoped(),
-    );
-
-    let mut subscription = remote
-        .subscribe_prompt_activity(PromptActivitySubscribeRequest {
-            session_id: "session-1".to_owned(),
-            after_sequence: 0,
-        })
-        .unwrap();
-
-    let event = match subscription.next_item().unwrap() {
-        TypedStreamItem::Event(params) => params.event,
-        TypedStreamItem::Complete => panic!("expected event"),
-    };
-    assert_eq!(event.event_type, PendingPromptEventType::Pending);
-    assert_eq!(event.prompt_id, "prompt-1");
-    assert_eq!(event.suggestions, ["Yes", "No"]);
-    assert_eq!(subscription.next_item().unwrap(), TypedStreamItem::Complete);
-    let connection = subscription.into_connection();
-    assert_sent_methods(
-        &connection.sent,
-        &[
-            ("handshake", "protocol.handshake"),
-            ("attach-session", "session.attach"),
-            ("subscribe-prompt-activity", "prompt.subscribeActivity"),
-        ],
-    );
-    assert_eq!(
-        connection.sent[2].request().params.unwrap(),
-        json!({"SessionID":"session-1","AfterSequence":0})
     );
 }
 
 #[test]
 fn subscription_maps_error_unexpected_invalid_complete_cancel_and_close() {
     let mut gap = RawSubscriptionFixture::new(vec![notification(
-        "session.activity.complete",
+        "sample.complete",
         json!({"code": -32010, "message": "gap"}),
     )]);
     assert_eq!(
@@ -237,7 +82,7 @@ fn subscription_maps_error_unexpected_invalid_complete_cancel_and_close() {
     );
 
     let mut invalid_complete = RawSubscriptionFixture::new(vec![notification(
-        "session.activity.complete",
+        "sample.complete",
         json!("invalid"),
     )]);
     assert_eq!(
@@ -245,10 +90,8 @@ fn subscription_maps_error_unexpected_invalid_complete_cancel_and_close() {
         RpcError::StreamFailed
     );
 
-    let mut cancel = RawSubscriptionFixture::new(vec![notification(
-        "session.activity",
-        json!({"event":{"kind":"assistant_delta"}}),
-    )]);
+    let mut cancel =
+        RawSubscriptionFixture::new(vec![notification("sample.event", json!({"value": 1}))]);
     assert_eq!(
         cancel
             .subscription
@@ -258,7 +101,7 @@ fn subscription_maps_error_unexpected_invalid_complete_cancel_and_close() {
     );
     assert_eq!(
         cancel.subscription.next_item().unwrap(),
-        StreamItem::Event(json!({"event":{"kind":"assistant_delta"}}))
+        StreamItem::Event(json!({"value": 1}))
     );
 
     let mut close = RawSubscriptionFixture::new(Vec::new());
@@ -281,10 +124,10 @@ impl RawSubscriptionFixture {
             subscription: rpc_client::stream::RawSubscription::new(
                 ScriptedConnection::new(incoming),
                 SubscriptionRoute {
-                    request_id: "subscribe-session-activity",
-                    method: "session.subscribeActivity",
-                    event_method: "session.activity",
-                    complete_method: "session.activity.complete",
+                    request_id: "subscribe-sample",
+                    method: "sample.subscribe",
+                    event_method: "sample.event",
+                    complete_method: "sample.complete",
                 },
                 "stream-1".to_owned(),
             ),
@@ -396,8 +239,6 @@ fn capabilities() -> CapabilityFlags {
         session_runtime: true,
         runtime_control: true,
         prompt_control: true,
-        prompt_activity: true,
-        session_activity: true,
         process_output: true,
     }
 }

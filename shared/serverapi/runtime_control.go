@@ -310,14 +310,10 @@ func validateRuntimeOperationRef(ref clientui.RuntimeOperationRef, kind clientui
 	if ref.Kind != kind {
 		return errors.New("operation_ref kind does not match request")
 	}
-	if strings.TrimSpace(ref.ClientRequestID) != strings.TrimSpace(clientRequestID) {
+	if ref.ClientRequestID.String() != strings.TrimSpace(clientRequestID) {
 		return errors.New("operation_ref client_request_id must match request client_request_id")
 	}
 	return nil
-}
-
-func isZeroServerAPIRuntimeOperationRef(ref clientui.RuntimeOperationRef) bool {
-	return ref.Kind == "" && strings.TrimSpace(ref.ClientRequestID) == "" && strings.TrimSpace(ref.QueueItemID) == ""
 }
 
 func validateRuntimeGoalActionRequest(clientRequestID string, sessionID string, actor string) error {
@@ -369,10 +365,7 @@ func (r RuntimeSubmitUserTurnRequest) Validate() error {
 	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindSubmit, r.ClientRequestID); err != nil {
 		return err
 	}
-	if isZeroServerAPIRuntimeOperationRef(r.PreSubmitCompactionOperationRef) {
-		return nil
-	}
-	return validateRuntimeOperationRef(r.PreSubmitCompactionOperationRef, clientui.RuntimeOperationKindPreSubmitCompact, r.PreSubmitCompactionOperationRef.ClientRequestID)
+	return validateRuntimeOperationRef(r.PreSubmitCompactionOperationRef, clientui.RuntimeOperationKindPreSubmitCompact, r.PreSubmitCompactionOperationRef.ClientRequestID.String())
 }
 func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
@@ -424,7 +417,7 @@ func (r RuntimeQueueUserMessageRequest) Validate() error {
 	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindQueuedMessage, r.ClientRequestID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(r.OperationRef.QueueItemID) != "" {
+	if r.OperationRef.QueueItemID != nil {
 		return errors.New("queued-message create operation_ref must not carry queue item id")
 	}
 	if strings.TrimSpace(r.Text) == "" {

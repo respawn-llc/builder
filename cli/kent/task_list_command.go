@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -90,12 +89,11 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 2
 		}
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	request := serverapi.WorkflowTaskListRequest{
 		WorkflowID:     selectedWorkflowID,
 		ColumnKeys:     columnKeys,
@@ -121,11 +119,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, jsonOut bool) int {
 	items := taskListItemsFromResponse(resp.Tasks)
 	if jsonOut {
-		if err := json.NewEncoder(stdout).Encode(taskListOutput{ProjectID: resp.ProjectID, WorkflowID: resp.WorkflowID, NextPageToken: resp.NextPageToken, Tasks: items}); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
+		return writeCommandJSON(stdout, stderr, taskListOutput{ProjectID: resp.ProjectID, WorkflowID: resp.WorkflowID, NextPageToken: resp.NextPageToken, Tasks: items})
 	}
 	for _, item := range items {
 		statusText, err := taskStatusText(item.Status)

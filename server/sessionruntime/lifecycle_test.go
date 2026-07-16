@@ -261,31 +261,6 @@ func TestReleaseCloseIfIdlePolicyKeepsActiveRunWithoutLegacyOnlyIfIdle(t *testin
 	}
 }
 
-func TestReleaseOnlyIfIdleKeepsSubscriberRuntime(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	state, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	sub, err := reg.SubscribeSessionActivity(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "owner-a", true, true))
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if resp.Released {
-		t.Fatalf("runtime with subscribers must not be released: %+v", resp)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) || state.closeCount.Load() != 0 {
-		t.Fatal("subscriber runtime must stay registered and open")
-	}
-}
-
 func TestReleaseOnlyIfIdleClosesIdleRuntime(t *testing.T) {
 	fixture, reg := newRuntimeServiceFixture(t)
 	sessionID := fixture.store.Meta().SessionID
@@ -504,12 +479,36 @@ func TestSyncExecutionTargetRebindsActiveRuntime(t *testing.T) {
 	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
 		t.Fatalf("AcquireRuntime: %v", err)
 	}
-	target := clientui.SessionExecutionTarget{EffectiveWorkdir: fixture.config.WorkspaceRoot}
+	target := lifecycleWorkspaceExecutionTarget(fixture.config.WorkspaceRoot)
 	if err := fixture.service.SyncExecutionTarget(context.Background(), sessionID, target, nil); err != nil {
 		t.Fatalf("SyncExecutionTarget: %v", err)
 	}
 	if got, _ := state.rebindDir.Load().(string); got != fixture.config.WorkspaceRoot {
 		t.Fatalf("rebind workdir = %q, want %q", got, fixture.config.WorkspaceRoot)
+	}
+}
+
+func lifecycleWorkspaceExecutionTarget(workspaceRoot string) clientui.SessionExecutionTarget {
+	return clientui.SessionExecutionTarget{
+		WorkspaceRoot:         workspaceRoot,
+		WorkspaceAvailability: clientui.ProjectAvailabilityUnlinked,
+		CwdRelpath:            ".",
+		EffectiveWorkdir:      workspaceRoot,
+	}
+}
+
+func lifecycleWorktreeExecutionTarget(workspaceRoot, worktreeRoot string) clientui.SessionExecutionTarget {
+	return clientui.SessionExecutionTarget{
+		WorkspaceID:           "workspace-1",
+		WorkspaceRoot:         workspaceRoot,
+		WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		Worktree: &clientui.SessionExecutionWorktreeTarget{
+			ID:           "worktree-1",
+			Root:         worktreeRoot,
+			Availability: string(clientui.ProjectAvailabilityAvailable),
+		},
+		CwdRelpath:       ".",
+		EffectiveWorkdir: worktreeRoot,
 	}
 }
 
@@ -638,10 +637,10 @@ func TestSyncExecutionTargetPersistsReminderBeforeQueuedUserAutoDrain(t *testing
 	if engine == nil {
 		t.Fatal("expected active engine")
 	}
-	err := fixture.service.SyncExecutionTarget(context.Background(), sessionID, clientui.SessionExecutionTarget{
-		WorkspaceRoot:    fixture.config.WorkspaceRoot,
-		EffectiveWorkdir: targetWorkdir,
-	}, &session.WorktreeReminderState{
+	err := fixture.service.SyncExecutionTarget(context.Background(), sessionID, lifecycleWorktreeExecutionTarget(
+		fixture.config.WorkspaceRoot,
+		targetWorkdir,
+	), &session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeEnter,
 		WorktreeContext: session.WorktreeContext{
 			Branch:        session.OptionalWorktreeBranch("feature/queued-switch"),
@@ -717,10 +716,10 @@ func TestSyncExecutionTargetRollsBackRebindWhenReminderPersistenceFails(t *testi
 		t.Fatal("expected active engine")
 	}
 	observer.armed.Store(true)
-	err = service.SyncExecutionTarget(context.Background(), sessionID, clientui.SessionExecutionTarget{
-		WorkspaceRoot:    workspaceRoot,
-		EffectiveWorkdir: targetWorkdir,
-	}, &session.WorktreeReminderState{
+	err = service.SyncExecutionTarget(context.Background(), sessionID, lifecycleWorktreeExecutionTarget(
+		workspaceRoot,
+		targetWorkdir,
+	), &session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeEnter,
 		WorktreeContext: session.WorktreeContext{
 			Branch:        session.OptionalWorktreeBranch("feature/persist-fails"),
@@ -785,10 +784,10 @@ func TestSyncExecutionTargetFailsQueuedUserWorkWhenRollbackRebindFails(t *testin
 		t.Fatal("expected active engine")
 	}
 	observer.armed.Store(true)
-	err = service.SyncExecutionTarget(context.Background(), sessionID, clientui.SessionExecutionTarget{
-		WorkspaceRoot:    workspaceRoot,
-		EffectiveWorkdir: targetWorkdir,
-	}, &session.WorktreeReminderState{
+	err = service.SyncExecutionTarget(context.Background(), sessionID, lifecycleWorktreeExecutionTarget(
+		workspaceRoot,
+		targetWorkdir,
+	), &session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeEnter,
 		WorktreeContext: session.WorktreeContext{
 			Branch:        session.OptionalWorktreeBranch("feature/rollback-rebind-fails"),
@@ -847,8 +846,9 @@ func TestIdleUnloadTimerReleasesOrphanedRuntime(t *testing.T) {
 	var engine *runtimepkg.Engine
 	build := func(ctx context.Context) (RuntimeBuildResult, error) {
 		e, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(), runtimepkg.Config{
-			Model:   "gpt-5",
-			OnEvent: func(evt runtimepkg.Event) { reg.PublishRuntimeEvent(sessionID, evt) },
+			Model:         "gpt-5",
+			ThinkingLevel: "medium",
+			OnEvent:       func(evt runtimepkg.Event) { reg.PublishRuntimeEvent(sessionID, evt) },
 		})
 		if err != nil {
 			return RuntimeBuildResult{}, err

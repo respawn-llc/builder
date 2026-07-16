@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"core/server/runtime"
-	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -19,29 +18,26 @@ type runtimeDirectory struct {
 }
 
 type runtimeEntry struct {
-	mu               sync.Mutex
-	cond             *sync.Cond
-	generation       uint64
-	built            bool
-	buildErr         error
-	ready            chan struct{}
-	closed           chan struct{}
-	closedOnce       sync.Once
-	ownerRefs        int
-	ownerIDs         map[string]struct{}
-	closing          bool
-	closeDraining    bool
-	inFlight         int
-	engine           *runtime.Engine
-	rebind           func(string) error
-	teardown         func()
-	sessionActivity  *sessionActivityBroker
-	transcript       *transcriptSubscriptionBroker
-	sessionFeed      *sessionFeedSequencer
-	promptActivity   *promptActivityBroker
-	pendingPrompts   *pendingPromptStore
-	readModelUnpin   func()
-	readModelVersion func(string) clientui.ReadModelVersion
+	mu             sync.Mutex
+	cond           *sync.Cond
+	generation     uint64
+	built          bool
+	buildErr       error
+	ready          chan struct{}
+	closed         chan struct{}
+	closedOnce     sync.Once
+	ownerRefs      int
+	ownerIDs       map[string]struct{}
+	closing        bool
+	closeDraining  bool
+	inFlight       int
+	engine         *runtime.Engine
+	rebind         func(string) error
+	teardown       func()
+	transcript     *transcriptSubscriptionBroker
+	sessionFeed    *sessionFeedSequencer
+	pendingPrompts *pendingPromptStore
+	readModelUnpin func()
 }
 
 func newRuntimeDirectory() *runtimeDirectory {
@@ -50,14 +46,12 @@ func newRuntimeDirectory() *runtimeDirectory {
 
 func newBuildingRuntimeEntry(generation uint64) *runtimeEntry {
 	entry := &runtimeEntry{
-		generation:      generation,
-		ready:           make(chan struct{}),
-		closed:          make(chan struct{}),
-		ownerIDs:        make(map[string]struct{}),
-		sessionActivity: newSessionActivityBroker(),
-		transcript:      newTranscriptSubscriptionBroker(),
-		promptActivity:  newPromptActivityBroker(),
-		pendingPrompts:  newPendingPromptStore(),
+		generation:     generation,
+		ready:          make(chan struct{}),
+		closed:         make(chan struct{}),
+		ownerIDs:       make(map[string]struct{}),
+		transcript:     newTranscriptSubscriptionBroker(),
+		pendingPrompts: newPendingPromptStore(),
 	}
 	entry.sessionFeed = newSessionFeedSequencer(entry.transcript)
 	entry.cond = sync.NewCond(&entry.mu)
@@ -532,7 +526,5 @@ func closeRuntimeEntry(entry *runtimeEntry, err error) {
 	entry.markClosing()
 	entry.waitForGuards()
 	entry.pendingPrompts.Close(err)
-	entry.promptActivity.Close(err)
-	entry.sessionActivity.Close(err)
 	entry.transcript.Close(err)
 }

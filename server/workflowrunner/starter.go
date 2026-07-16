@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,8 +20,6 @@ import (
 	"core/server/metadata"
 	"core/server/runlog"
 	"core/server/runtime"
-	"core/server/runtimefeed"
-	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
@@ -30,6 +29,7 @@ import (
 	"core/server/workflowattention"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -75,7 +75,7 @@ type LockedTaskWorktreeRestoreRequest struct {
 type RuntimeEventRegistry interface {
 	PublishRuntimeEvent(sessionID string, evt runtime.Event)
 	PublishRuntimeEventForEngine(sessionID string, engine *runtime.Engine, evt runtime.Event)
-	PublishRuntimeReadModelUpdate(sessionID string, update runtimefeed.RuntimeReadModelUpdate)
+	PublishRuntimeReadModelUpdate(sessionID string, update clientui.RuntimeReadModelUpdate)
 	AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error)
 }
 
@@ -830,14 +830,7 @@ func workflowProviderCapabilitiesOverride(plan launch.SessionPlan) *llm.Provider
 }
 
 func cloneStringMap(values map[string]string) map[string]string {
-	if values == nil {
-		return nil
-	}
-	cloned := make(map[string]string, len(values))
-	for key, value := range values {
-		cloned[key] = value
-	}
-	return cloned
+	return maps.Clone(values)
 }
 
 func toolIDEnabled(enabled []toolspec.ID, want toolspec.ID) bool {
@@ -965,9 +958,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 			OnEvent: func(evt runtime.Event) {
 				logger.Logf("%s", runlog.FormatRuntimeEvent(evt))
 				if transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv) {
-					projected := runtimeview.EventFromRuntime(evt)
-					logger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
-					logger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
+					logger.Logf("%s", runlog.FormatTranscriptRuntimeEventDiagnostic(sessionID, evt))
 				}
 				publishRuntimeEvent(evt)
 			},

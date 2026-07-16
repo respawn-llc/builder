@@ -6,8 +6,8 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 	"core/shared/transcript"
-	"core/shared/valuecopy"
 )
 
 func visibleUserTranscriptEntry(msg llm.Message) (ChatEntry, bool) {
@@ -66,7 +66,17 @@ func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 	case llm.MessageTypeCompactionSoonReminder:
 		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleWarning), Text: msg.Content, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
 	case llm.MessageTypeBackgroundNotice:
-		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleSystem), Text: msg.Content, CondensedText: msg.CompactContent, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg), BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode)}, true
+		return ChatEntry{
+			Visibility:           messageTypeTranscriptVisibility(msg.MessageType),
+			Role:                 string(transcript.EntryRoleSystem),
+			Text:                 msg.Content,
+			CondensedText:        msg.CompactContent,
+			MessageType:          msg.MessageType,
+			CompactLabel:         compactLabelForMessage(msg),
+			BackgroundActivityID: strings.TrimSpace(msg.BackgroundActivityID),
+			BackgroundProcessID:  strings.TrimSpace(msg.Name),
+			BackgroundExitCode:   textutil.Pointer(msg.BackgroundExitCode),
+		}, true
 	case llm.MessageTypeHandoffFutureMessage:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
 	case llm.MessageTypeManualCompactionCarryover:
@@ -149,15 +159,17 @@ func messageTypeTranscriptVisibility(messageType llm.MessageType) transcript.Ent
 
 func developerContextEntry(msg llm.Message, visibility transcript.EntryVisibility) ChatEntry {
 	return ChatEntry{
-		Visibility:         visibility,
-		Role:               string(transcript.EntryRoleDeveloperContext),
-		Text:               msg.Content,
-		CondensedText:      strings.TrimSpace(msg.CompactContent),
-		MessageType:        msg.MessageType,
-		SourcePath:         strings.TrimSpace(msg.SourcePath),
-		WorktreeContext:    session.CloneWorktreeContext(msg.WorktreeContext),
-		CompactLabel:       compactLabelForMessage(msg),
-		BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode),
+		Visibility:           visibility,
+		Role:                 string(transcript.EntryRoleDeveloperContext),
+		Text:                 msg.Content,
+		CondensedText:        strings.TrimSpace(msg.CompactContent),
+		MessageType:          msg.MessageType,
+		SourcePath:           strings.TrimSpace(msg.SourcePath),
+		WorktreeContext:      session.CloneWorktreeContext(msg.WorktreeContext),
+		CompactLabel:         compactLabelForMessage(msg),
+		BackgroundActivityID: strings.TrimSpace(msg.BackgroundActivityID),
+		BackgroundProcessID:  strings.TrimSpace(msg.Name),
+		BackgroundExitCode:   textutil.Pointer(msg.BackgroundExitCode),
 	}
 }
 

@@ -63,7 +63,7 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 		AskID:                req.AskID,
 		ErrorMessage:         req.ErrorMessage,
 		Answer:               req.Answer,
-		SelectedOptionNumber: textutil.CloneInt(req.SelectedOptionNumber),
+		SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
 		FreeformAnswer:       req.FreeformAnswer,
 	}
 	_, err := s.asks.Do(ctx, req.ClientRequestID, memoReq, sameAskAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
@@ -74,7 +74,7 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 			return prompts.SubmitPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
 				RequestID:            req.AskID,
 				Answer:               req.Answer,
-				SelectedOptionNumber: textutil.CloneInt(req.SelectedOptionNumber),
+				SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
 				FreeformAnswer:       req.FreeformAnswer,
 			}, nil)
 		})

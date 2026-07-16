@@ -47,13 +47,13 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if err := rollbackLocator.ObserveMessage(evt.Seq, msg); err != nil {
 				return err
 			}
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendMessage(msg)
+			e.transcriptRuntimeState().AppendMessage(evt.StepID, msg)
 			recoveredHandoff.ApplyMessage(msg)
 			if isCompactionSoonReminderMessage(msg) {
 				reminderIssued = true
 			}
 		case "tool_completed":
-			if err := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).RestoreToolCompletionPayload(evt.Payload); err != nil {
+			if err := e.transcriptRuntimeState().RestoreToolCompletionPayload(evt.Payload); err != nil {
 				return err
 			}
 			if err := recoveredHandoff.ApplyToolCompletion(evt.Payload); err != nil {
@@ -65,9 +65,11 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("decode local_entry event: %w", err)
 			}
 			e.diagnosticDedupeStore().RestoreLocal(entry.DiagnosticKey)
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendLocalEntryRecord(*localEntryChatEntry(entry))
+			restored := *localEntryChatEntry(entry)
+			restored.StepID = strings.TrimSpace(evt.StepID)
+			e.transcriptRuntimeState().AppendLocalEntryRecord(restored)
 		case sessionEventCacheWarning:
-			if err := applyPersistedCacheWarningToTranscript(newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()), evt.Payload, e.cfg.CacheWarningMode); err != nil {
+			if err := applyPersistedCacheWarningToTranscript(e.transcriptRuntimeState(), evt.Payload, e.cfg.CacheWarningMode); err != nil {
 				return err
 			}
 		case sessionEventCacheRequestObserved:
@@ -87,7 +89,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				continue
 			}
 			e.resetLocalDiagnostics()
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistoryAtCommittedEntryStart(payload.Items, payload.CommittedEntryStart)
+			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(evt.StepID, payload.Items, payload.CommittedEntryStart)
 			e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(payload.LastCommittedAssistantFinalAnswer)
 			if payload.CompactionNumber > 0 {
 				e.compactionRuntimeState().SetCount(payload.CompactionNumber)

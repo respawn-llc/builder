@@ -198,7 +198,8 @@ func (c *sessionRuntimeClient) SubmitRuntimeInput(ctx context.Context, req clien
 	if err := req.Validate(); err != nil {
 		return clientui.UserTurnSubmission{}, err
 	}
-	resp, err := runtimeRequestCallWithID(ctx, c, true, req.OperationRef.ClientRequestID, func(ctx context.Context, id string) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+	requestID := req.OperationRef.ClientRequestID.String()
+	resp, err := runtimeRequestCallWithID(ctx, c, true, requestID, func(ctx context.Context, id string) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{
 			ClientRequestID:                 id,
 			SessionID:                       c.sessionID,
@@ -207,7 +208,7 @@ func (c *sessionRuntimeClient) SubmitRuntimeInput(ctx context.Context, req clien
 			PreSubmitCompactionOperationRef: req.PreSubmitCompactionOperationRef,
 		})
 	})
-	return userTurnSubmissionFromResponse(resp, req.Text, req.OperationRef.ClientRequestID), err
+	return userTurnSubmissionFromResponse(resp, req.Text, requestID), err
 }
 
 func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string, requestID string) clientui.UserTurnSubmission {
@@ -222,7 +223,7 @@ func (c *sessionRuntimeClient) RunUserShell(ctx context.Context, req clientui.Ru
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return runtimeRequestCallNoResultWithID(ctx, c, req.OperationRef.ClientRequestID, func(ctx context.Context, requestID string) error {
+	return runtimeRequestCallNoResultWithID(ctx, c, req.OperationRef.ClientRequestID.String(), func(ctx context.Context, requestID string) error {
 		return c.controls.SubmitUserShellCommand(ctx, serverapi.RuntimeSubmitUserShellCommandRequest{ClientRequestID: requestID, SessionID: c.sessionID, Command: req.Command, OperationRef: req.OperationRef})
 	})
 }
@@ -231,7 +232,7 @@ func (c *sessionRuntimeClient) CompactRuntime(ctx context.Context, req clientui.
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return runtimeRequestCallNoResultWithID(ctx, c, req.OperationRef.ClientRequestID, func(ctx context.Context, requestID string) error {
+	return runtimeRequestCallNoResultWithID(ctx, c, req.OperationRef.ClientRequestID.String(), func(ctx context.Context, requestID string) error {
 		return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{ClientRequestID: requestID, SessionID: c.sessionID, Args: req.Args, OperationRef: req.OperationRef})
 	})
 }
@@ -250,7 +251,7 @@ func (c *sessionRuntimeClient) SubmitRuntimeQueued(ctx context.Context, req clie
 	if err := req.Validate(); err != nil {
 		return "", err
 	}
-	resp, err := runtimeRequestCallWithID(ctx, c, true, req.OperationRef.ClientRequestID, func(ctx context.Context, requestID string) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
+	resp, err := runtimeRequestCallWithID(ctx, c, true, req.OperationRef.ClientRequestID.String(), func(ctx context.Context, requestID string) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
 		return c.controls.SubmitQueuedUserMessages(ctx, serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: requestID, SessionID: c.sessionID, OperationRef: req.OperationRef})
 	})
 	return resp.Message, err
@@ -290,7 +291,7 @@ func (c *sessionRuntimeClient) QueueRuntimeUserMessage(req clientui.RuntimeQueue
 	if err := req.Validate(); err != nil {
 		return clientui.QueuedUserMessage{}, err
 	}
-	requestID := strings.TrimSpace(req.OperationRef.ClientRequestID)
+	requestID := req.OperationRef.ClientRequestID.String()
 	resp, err := runtimeControlCall(c, true, func(ctx context.Context, _ string) (serverapi.RuntimeQueueUserMessageResponse, error) {
 		return c.controls.QueueUserMessage(ctx, serverapi.RuntimeQueueUserMessageRequest{ClientRequestID: requestID, SessionID: c.sessionID, OperationRef: req.OperationRef, Text: req.Text})
 	})

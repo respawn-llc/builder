@@ -6,12 +6,16 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
-	"core/shared/valuecopy"
 )
 
 func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
+	return visibleChatEntriesFromMessage(msg, nil, nil)
+}
+
+func visibleChatEntriesFromMessage(msg llm.Message, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []ChatEntry {
 	entries := make([]ChatEntry, 0, 1+len(msg.ToolCalls))
 	switch msg.Role {
 	case llm.RoleUser:
@@ -29,13 +33,12 @@ func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
 		}
 		for _, call := range msg.ToolCalls {
 			entries = append(entries, formatPersistedToolCall(call))
+			if result, ok := synthesizedToolResultForCall(call, completions, materializedToolCalls); ok {
+				entries = append(entries, toolResultChatEntry(result))
+			}
 		}
 	case llm.RoleTool:
-		if msg.MessageType == llm.MessageTypeCustomToolCallOutput {
-			entries = append(entries, customToolCallOutputChatEntry(msg))
-		} else {
-			entries = append(entries, toolMessageChatEntry(msg))
-		}
+		entries = append(entries, toolResultChatEntry(resolvedToolResultForMessage(msg, completions)))
 	case llm.RoleDeveloper:
 		if entry, ok := visibleDeveloperChatEntry(msg); ok {
 			entries = append(entries, entry)
@@ -44,11 +47,23 @@ func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
 	return entries
 }
 
+func synthesizedToolResultForCall(call llm.ToolCall, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) (tools.Result, bool) {
+	callID := strings.TrimSpace(call.ID)
+	if callID == "" {
+		return tools.Result{}, false
+	}
+	if _, ok := materializedToolCalls[callID]; ok {
+		return tools.Result{}, false
+	}
+	completion, ok := completions[callID]
+	return completion, ok
+}
+
 func assistantTranscriptVisibility(phase llm.MessagePhase) transcript.EntryVisibility {
 	switch transcript.ClassifyAssistantPhase(string(phase)) {
 	case transcript.AssistantPhaseCommentary:
 		return transcript.EntryVisibilityDetail
-	case transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal:
+	case transcript.AssistantPhaseFinal:
 		return transcript.EntryVisibilityOngoing
 	default:
 		panic(fmt.Sprintf("unsupported assistant transcript phase %q", phase))
@@ -56,27 +71,28 @@ func assistantTranscriptVisibility(phase llm.MessagePhase) transcript.EntryVisib
 }
 
 func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
+	var entries []ChatEntry
 	switch evt.Kind {
 	case EventConversationUpdated:
-		return VisibleChatEntriesFromMessage(evt.Message)
+		entries = VisibleChatEntriesFromMessage(evt.Message)
 	case EventUserMessageFlushed:
 		text := strings.TrimSpace(evt.UserMessage)
 		if text == "" {
 			return nil
 		}
-		return []ChatEntry{{Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: evt.UserMessage}}
+		entries = []ChatEntry{{Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: evt.UserMessage}}
 	case EventAssistantMessage:
-		return VisibleChatEntriesFromMessage(evt.Message)
+		entries = VisibleChatEntriesFromMessage(evt.Message)
 	case EventToolCallStarted:
 		if evt.ToolCall == nil {
 			return nil
 		}
-		return []ChatEntry{formatPersistedToolCall(*evt.ToolCall)}
+		entries = []ChatEntry{formatPersistedToolCall(*evt.ToolCall)}
 	case EventToolCallCompleted:
 		if evt.ToolResult == nil {
 			return nil
 		}
-		return []ChatEntry{toolResultChatEntry(*evt.ToolResult)}
+		entries = []ChatEntry{toolResultChatEntry(*evt.ToolResult)}
 	case EventReviewerCompleted:
 		// Reviewer completion remains a runtime-status event only.
 		// Persisted reviewer terminal rows must arrive through local_entry_added
@@ -90,18 +106,18 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		if strings.TrimSpace(evt.Error) == "" {
 			return nil
 		}
-		return []ChatEntry{{Role: "error", Text: fmt.Sprintf("Run cleanup warning: %s", evt.Error)}}
+		entries = []ChatEntry{{Role: "error", Text: fmt.Sprintf("Run cleanup warning: %s", evt.Error)}}
 	case EventCacheWarning:
 		if evt.CacheWarning == nil {
 			return nil
 		}
-		return []ChatEntry{{Role: cacheWarningTranscriptRole, Text: transcript.CacheWarningText(*evt.CacheWarning), Visibility: evt.CacheWarningVisibility}}
+		entries = []ChatEntry{{Role: cacheWarningTranscriptRole, Text: transcript.CacheWarningText(*evt.CacheWarning), Visibility: evt.CacheWarningVisibility}}
 	case EventLocalEntryAdded:
 		if evt.LocalEntry == nil {
 			return nil
 		}
 		entry := *evt.LocalEntry
-		return []ChatEntry{entry}
+		entries = []ChatEntry{entry}
 	case EventBackgroundUpdated:
 		if evt.Background == nil {
 			return nil
@@ -110,35 +126,62 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 			return nil
 		}
 		compact := formatBackgroundShellCompact(*evt.Background)
-		return []ChatEntry{{
-			Role:               string(transcript.EntryRoleSystem),
-			Visibility:         transcript.EntryVisibilityOngoingCollapsed,
-			Text:               formatBackgroundShellNotice(*evt.Background),
-			CondensedText:      compact,
-			MessageType:        llm.MessageTypeBackgroundNotice,
-			CompactLabel:       compact,
-			BackgroundExitCode: valuecopy.Pointer(evt.Background.ExitCode),
+		entries = []ChatEntry{{
+			Role:                 string(transcript.EntryRoleSystem),
+			Visibility:           transcript.EntryVisibilityOngoingCollapsed,
+			Text:                 formatBackgroundShellNotice(*evt.Background),
+			CondensedText:        compact,
+			MessageType:          llm.MessageTypeBackgroundNotice,
+			CompactLabel:         compact,
+			BackgroundActivityID: evt.Background.ActivityID.String(),
+			BackgroundProcessID:  strings.TrimSpace(evt.Background.ID),
+			BackgroundExitCode:   textutil.Pointer(evt.Background.ExitCode),
 		}}
 	default:
 		return nil
 	}
+	stepID := strings.TrimSpace(evt.StepID)
+	for index := range entries {
+		existing := strings.TrimSpace(entries[index].StepID)
+		if existing != "" && stepID != "" && existing != stepID {
+			panic(fmt.Sprintf(
+				"transcript entry step identity conflicts with runtime event: entry_index=%d entry_step_id=%q event_step_id=%q event_kind=%q",
+				index,
+				existing,
+				stepID,
+				evt.Kind,
+			))
+		}
+		if stepID != "" {
+			entries[index].StepID = stepID
+		}
+	}
+	return entries
 }
 
-func customToolCallOutputChatEntry(msg llm.Message) ChatEntry {
-	return toolMessageChatEntry(msg)
-}
-
-func toolMessageChatEntry(msg llm.Message) ChatEntry {
+func resolvedToolResultForMessage(msg llm.Message, completions map[string]tools.Result) tools.Result {
 	callID := strings.TrimSpace(msg.ToolCallID)
 	result := tools.Result{
 		CallID: callID,
 		Name:   toolspec.ID(strings.TrimSpace(msg.Name)),
 		Output: []byte(msg.Content),
 	}
+	if completion, ok := completions[callID]; ok {
+		if result.Name == "" {
+			result.Name = completion.Name
+		}
+		if strings.TrimSpace(msg.Content) == "" && len(completion.Output) > 0 {
+			result.Output = completion.Output
+		}
+		result.IsError = completion.IsError
+		result.Summary = completion.Summary
+		result.CondensedText = completion.CondensedText
+		result.Presentation = completion.Presentation
+	}
 	if result.Name == "" {
 		result.Name = toolspec.ID("tool")
 	}
-	return toolResultChatEntry(result)
+	return result
 }
 
 func toolResultChatEntry(result tools.Result) ChatEntry {

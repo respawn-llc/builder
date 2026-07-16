@@ -11,12 +11,10 @@ use client_contracts::project::{
     ProjectBindingPlanResponse, ProjectCreateRequest, ProjectCreateResponse,
     ProjectGetOverviewRequest, ProjectGetOverviewResponse,
 };
-use client_contracts::prompt::{
-    ApprovalAnswerRequest, AskAnswerRequest, PromptActivitySubscribeRequest,
-};
+use client_contracts::prompt::{ApprovalAnswerRequest, AskAnswerRequest};
 use client_contracts::protocol::{
     AttachProjectRequest, AttachResponse, AttachSessionRequest, HandshakeRequest,
-    HandshakeResponse, PromptActivityEventParams, SessionActivityEventParams, SubscribeResponse,
+    HandshakeResponse, SubscribeResponse,
 };
 use client_contracts::runtime_control::{
     RuntimeAppendCommittedEntryRequest, RuntimeCompactContextRequest,
@@ -35,13 +33,13 @@ use client_contracts::runtime_control::{
     RuntimeSubmitUserTurnResponse,
 };
 use client_contracts::session::{
-    SessionActivitySubscribeRequest, SessionInitialInputRequest, SessionInitialInputResponse,
-    SessionMainViewRequest, SessionMainViewResponse, SessionPersistInputDraftRequest,
-    SessionPersistInputDraftResponse, SessionPlanRequest, SessionPlanResponse,
-    SessionResolveTransitionRequest, SessionResolveTransitionResponse,
-    SessionRetargetWorkspaceRequest, SessionRetargetWorkspaceResponse,
-    SessionRuntimeActivateRequest, SessionRuntimeActivateResponse, SessionRuntimeReleaseRequest,
-    SessionRuntimeReleaseResponse, SessionTranscriptPageRequest, SessionTranscriptPageResponse,
+    SessionInitialInputRequest, SessionInitialInputResponse, SessionMainViewRequest,
+    SessionMainViewResponse, SessionPersistInputDraftRequest, SessionPersistInputDraftResponse,
+    SessionPlanRequest, SessionPlanResponse, SessionResolveTransitionRequest,
+    SessionResolveTransitionResponse, SessionRetargetWorkspaceRequest,
+    SessionRetargetWorkspaceResponse, SessionRuntimeActivateRequest,
+    SessionRuntimeActivateResponse, SessionRuntimeReleaseRequest, SessionRuntimeReleaseResponse,
+    SessionTranscriptPageRequest, SessionTranscriptPageResponse,
 };
 use client_contracts::worktree::{
     WorktreeCreateRequest, WorktreeCreateResponse, WorktreeCreateTargetResolveRequest,
@@ -56,7 +54,7 @@ use std::time::Duration;
 
 use crate::error::RpcError;
 use crate::json_rpc::JsonRpcConnection;
-use crate::stream::{RawSubscription, SubscriptionRoute, TypedSubscription};
+use crate::stream::{RawSubscription, SubscriptionRoute};
 use crate::transport::{ConnectionFactory, ConnectionKind, FrameConnection};
 
 const METHOD_HANDSHAKE: &str = "protocol.handshake";
@@ -81,10 +79,8 @@ const METHOD_SESSION_RESOLVE_TRANSITION: &str = "session.resolveTransition";
 const METHOD_SESSION_RETARGET_WORKSPACE: &str = "session.retargetWorkspace";
 const METHOD_SESSION_RUNTIME_ACTIVATE: &str = "session.runtime.activate";
 const METHOD_SESSION_RUNTIME_RELEASE: &str = "session.runtime.release";
-const METHOD_PROMPT_SUBSCRIBE_ACTIVITY: &str = "prompt.subscribeActivity";
 const METHOD_ASK_ANSWER: &str = "ask.answer";
 const METHOD_APPROVAL_ANSWER: &str = "approval.answer";
-const METHOD_SESSION_SUBSCRIBE_ACTIVITY: &str = "session.subscribeActivity";
 const METHOD_RUNTIME_SUBMIT_USER_TURN: &str = "runtime.submitUserTurn";
 const METHOD_RUNTIME_SUBMIT_USER_SHELL_COMMAND: &str = "runtime.submitUserShellCommand";
 const METHOD_RUNTIME_COMPACT_CONTEXT: &str = "runtime.compactContext";
@@ -114,8 +110,6 @@ const METHOD_WORKTREE_CREATE_TARGET_RESOLVE: &str = "worktree.create_target.reso
 const REQUEST_ID_HANDSHAKE: &str = "handshake";
 const REQUEST_ID_PROJECT_ATTACH: &str = "attach-project";
 const REQUEST_ID_SESSION_ATTACH: &str = "attach-session";
-const REQUEST_ID_SUBSCRIBE_PROMPT_ACTIVITY: &str = "subscribe-prompt-activity";
-const REQUEST_ID_SUBSCRIBE_SESSION_ACTIVITY: &str = "subscribe-session-activity";
 const REQUEST_ID_RUNTIME_SUBMIT_USER_TURN: &str = "runtime-submit-user-turn";
 const REQUEST_ID_RUNTIME_SUBMIT_USER_SHELL_COMMAND: &str = "runtime-submit-user-shell-command";
 const REQUEST_ID_RUNTIME_COMPACT_CONTEXT: &str = "runtime-compact-context";
@@ -478,42 +472,6 @@ impl<F: ConnectionFactory> RemoteClient<F> {
             self.open_session_subscription(session_id, route.request_id, route.method, request)?;
         Ok(RawSubscription::new(connection, route, stream_id)
             .with_item_read_timeout(self.subscription_item_read_timeout))
-    }
-
-    pub fn subscribe_session_activity(
-        &mut self,
-        request: SessionActivitySubscribeRequest,
-    ) -> Result<TypedSubscription<F::Connection, SessionActivityEventParams>, RpcError> {
-        let session_id = request.session_id.clone();
-        let raw = self.subscribe_raw(
-            &session_id,
-            SubscriptionRoute {
-                request_id: REQUEST_ID_SUBSCRIBE_SESSION_ACTIVITY,
-                method: METHOD_SESSION_SUBSCRIBE_ACTIVITY,
-                event_method: "session.activity",
-                complete_method: "session.activity.complete",
-            },
-            request,
-        )?;
-        Ok(TypedSubscription::new(raw))
-    }
-
-    pub fn subscribe_prompt_activity(
-        &mut self,
-        request: PromptActivitySubscribeRequest,
-    ) -> Result<TypedSubscription<F::Connection, PromptActivityEventParams>, RpcError> {
-        let session_id = request.session_id.clone();
-        let raw = self.subscribe_raw(
-            &session_id,
-            SubscriptionRoute {
-                request_id: REQUEST_ID_SUBSCRIBE_PROMPT_ACTIVITY,
-                method: METHOD_PROMPT_SUBSCRIBE_ACTIVITY,
-                event_method: "prompt.activity",
-                complete_method: "prompt.activity.complete",
-            },
-            request,
-        )?;
-        Ok(TypedSubscription::new(raw))
     }
 
     pub fn get_session_main_view(

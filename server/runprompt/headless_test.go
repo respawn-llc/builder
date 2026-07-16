@@ -309,6 +309,7 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 		PersistenceRoot: root,
 		Settings: config.Settings{
 			Model:         "gpt-5",
+			ThinkingLevel: "medium",
 			OpenAIBaseURL: "http://wrong.invalid",
 			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
@@ -426,6 +427,7 @@ func TestInProcessRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgro
 		PersistenceRoot: root,
 		Settings: config.Settings{
 			Model:               "gpt-5",
+			ThinkingLevel:       "medium",
 			OpenAIBaseURL:       server.URL,
 			ShellOutputMaxChars: 16_000,
 			EnabledTools:        map[toolspec.ID]bool{toolspec.ToolExecCommand: true},
@@ -628,6 +630,7 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 		PersistenceRoot: root,
 		Settings: config.Settings{
 			Model:         "gpt-5",
+			ThinkingLevel: "medium",
 			OpenAIBaseURL: server.URL,
 			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},

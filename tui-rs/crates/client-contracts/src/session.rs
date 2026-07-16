@@ -213,14 +213,6 @@ pub struct SessionPersistInputDraftRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SessionPersistInputDraftResponse {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct SessionActivitySubscribeRequest {
-    #[serde(rename = "SessionID", default)]
-    pub session_id: String,
-    #[serde(rename = "AfterSequence")]
-    pub after_sequence: u64,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SessionTranscriptPageRequest {
     #[serde(rename = "session_id", default)]

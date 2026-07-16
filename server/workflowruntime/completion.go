@@ -2,10 +2,13 @@ package workflowruntime
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -437,7 +440,7 @@ func DecodeCompletion(raw json.RawMessage, contract CompletionContract) (ParsedC
 	seen := map[string]bool{}
 	invalidFields := map[string]bool{}
 	nullParameters := map[string]bool{}
-	for _, key := range sortedRawMessageKeys(payload) {
+	for _, key := range sortedMapKeys(payload) {
 		value := payload[key]
 		field := strings.TrimSpace(key)
 		if field == "" {
@@ -495,12 +498,12 @@ func DecodeCompletion(raw json.RawMessage, contract CompletionContract) (ParsedC
 		parsed.TransitionID = strings.TrimSpace(selected.ID)
 		selectedParameters := normalizedParameters(selected.Parameters)
 		selectedParameterSet := parameterSet(selectedParameters)
-		for _, key := range sortedBoolKeys(nullParameters) {
+		for _, key := range sortedMapKeys(nullParameters) {
 			if selectedParameterSet[key] {
 				parsed.OutputValues[key] = "null"
 			}
 		}
-		for _, key := range sortedStringKeys(parsed.OutputValues) {
+		for _, key := range sortedMapKeys(parsed.OutputValues) {
 			if !selectedParameterSet[key] {
 				issues = append(issues, ValidationIssue{Code: "unexpected_parameter", Field: key, Message: "parameter is not declared by the selected transition"})
 			}
@@ -566,13 +569,8 @@ func decodeParameterValue(value json.RawMessage, field string) (string, bool, Va
 	return compacted.String(), true, ValidationIssue{}
 }
 
-func sortedRawMessageKeys(values map[string]json.RawMessage) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
+func sortedMapKeys[M ~map[K]V, K cmp.Ordered, V any](values M) []K {
+	return slices.Sorted(maps.Keys(values))
 }
 
 func ToolErrorPayload(err error) json.RawMessage {
@@ -737,22 +735,4 @@ func sortedTransitionIDs(transitions []CompletionTransition) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func sortedStringKeys(values map[string]string) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedBoolKeys(values map[string]bool) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }

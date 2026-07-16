@@ -121,15 +121,6 @@ func newSessionTestLazyStoreAt(t *testing.T, root string) *Store {
 	return store
 }
 
-func reopenSessionTestStore(t *testing.T, store *Store) *Store {
-	t.Helper()
-	reopened, err := Open(store.Dir(), sessionTestPersistence.options()...)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	return reopened
-}
-
 func openSessionTestStore(store *Store) (*Store, error) {
 	return Open(store.Dir(), sessionTestPersistence.options()...)
 }

@@ -100,18 +100,6 @@ func (m *uiModel) activateSurfaceFrom(prev, surface uiSurface, suppressAltScreen
 	)
 }
 
-type uiPresentationFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) presentationReducer() uiPresentationFeatureReducer {
-	return uiPresentationFeatureReducer{model: m}
-}
-
-func (r uiPresentationFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	return uiFeatureUpdateResult{}
-}
-
 func (m *uiModel) altScreenCmdForSurfaceTransition(prev, next uiSurface) tea.Cmd {
 	prevWantsAlt := prev.wantsAltScreen()
 	nextWantsAlt := next.wantsAltScreen()

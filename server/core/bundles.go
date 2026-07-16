@@ -79,7 +79,6 @@ type PromptBundle struct {
 	askViews               apicontract.AskViewService
 	approvalViews          apicontract.ApprovalViewService
 	promptControl          apicontract.PromptControlService
-	promptActivity         apicontract.PromptActivityService
 	attentionNotifications apicontract.AttentionNotificationService
 }
 
@@ -91,7 +90,6 @@ type RuntimeBundle struct {
 	runtimeControls     apicontract.RuntimeControlService
 	runtimeLiveControls apicontract.RuntimeLiveControlService
 	sessionRuntime      apicontract.SessionRuntimeService
-	sessionActivity     apicontract.SessionActivityService
 	sessionTranscript   apicontract.SessionTranscriptService
 
 	sessionRuntimeService *sessionruntime.Service
@@ -199,14 +197,12 @@ type bundleCompositionInput struct {
 	processService          *processview.ProcessViewService
 	processOutputService    *processview.ProcessOutputService
 	promptControlService    *promptcontrol.PromptControlService
-	promptActivityService   *promptcontrol.PromptActivityService
 	attentionService        apicontract.AttentionNotificationService
 	runtimeControlService   *runtimecontrol.Service
 	serverStatusService     *serverstatus.ServerStatusService
 	sessionRuntimeService   *sessionruntime.Service
 	sessionViewService      *sessionview.Service
 	sessionLifecycleService *sessionservice.SessionLifecycleService
-	sessionActivityService  *sessionservice.SessionActivityService
 	updateStatusService     *serverstatus.UpdateStatusService
 	workflowService         *workflowsvc.Service
 	workflowScheduler       *workflowrunner.SchedulerService
@@ -251,8 +247,8 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore, in.sessionStoreRegistry),
 		Processes:   newProcessBundle(in.processService, in.processOutputService),
 		Projects:    newProjectBundle(in.cfg, in.containerDir, in.projectViews),
-		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.promptActivityService, in.attentionService),
-		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService, in.sessionActivityService),
+		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.attentionService),
+		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
 		Updates:     &UpdateBundle{updateStatus: in.updateStatusService},
 		Workflows:   newWorkflowBundle(in.workflowService, in.workflowScheduler),
@@ -298,7 +294,7 @@ func newProjectBundle(cfg config.App, containerDir string, projectViews apicontr
 	}
 }
 
-func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *promptcontrol.ApprovalViewService, promptControlService *promptcontrol.PromptControlService, promptActivityService *promptcontrol.PromptActivityService, attentionService apicontract.AttentionNotificationService) *PromptBundle {
+func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *promptcontrol.ApprovalViewService, promptControlService *promptcontrol.PromptControlService, attentionService apicontract.AttentionNotificationService) *PromptBundle {
 	if attentionService == nil {
 		attentionService = unavailableAttentionNotificationClient{}
 	}
@@ -306,12 +302,11 @@ func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *
 		askViews:               askService,
 		approvalViews:          approvalService,
 		promptControl:          promptControlService,
-		promptActivity:         promptActivityService,
 		attentionNotifications: attentionService,
 	}
 }
 
-func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegistry *registry.RuntimeRegistry, runtimeControlService *runtimecontrol.Service, sessionRuntimeService *sessionruntime.Service, sessionActivityService *sessionservice.SessionActivityService) *RuntimeBundle {
+func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegistry *registry.RuntimeRegistry, runtimeControlService *runtimecontrol.Service, sessionRuntimeService *sessionruntime.Service) *RuntimeBundle {
 	return &RuntimeBundle{
 		fastModeState:       runtimeSupport.FastModeState,
 		background:          runtimeSupport.Background,
@@ -320,7 +315,6 @@ func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegi
 		runtimeControls:     runtimeControlService,
 		runtimeLiveControls: runtimeControlService,
 		sessionRuntime:      sessionRuntimeService,
-		sessionActivity:     sessionActivityService,
 		sessionTranscript:   runtimeRegistry,
 
 		sessionRuntimeService: sessionRuntimeService,

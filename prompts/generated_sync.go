@@ -233,15 +233,10 @@ func RecoveredWarningFor(configRoot string) (string, error) {
 	return recoveredWarning(paths.generatedRoot, paths.recoveryRoot), nil
 }
 
-func RecoveredRootNonEmpty() (bool, error) {
-	return RecoveredRootNonEmptyFor("")
-}
-
 // RecoveredRootNonEmptyFor reports whether the recovered directory under the
 // supplied persistence config root holds any salvaged content. An empty
-// configRoot falls back to the default (<home>/.kent), matching
-// RecoveredRootNonEmpty, so the recovery warning follows the selected root the
-// same way generated sync does.
+// configRoot falls back to the default (<home>/.kent), so the recovery warning
+// follows the selected root the same way generated sync does.
 func RecoveredRootNonEmptyFor(configRoot string) (bool, error) {
 	paths, err := resolvePathsForRoot("", configRoot)
 	if err != nil {
@@ -257,10 +252,6 @@ type generatedPaths struct {
 	// (<root>/skills) where users place customized global skills.
 	homeSkillsRoot string
 	recoveryRoot   string
-}
-
-func resolvePaths(homeDir string) (generatedPaths, error) {
-	return resolvePathsForRoot(homeDir, "")
 }
 
 // resolvePathsForRoot resolves the generated/recovery layout. When configRoot

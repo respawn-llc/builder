@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/runtimestate"
 	"core/cli/tui"
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
@@ -58,7 +57,7 @@ type uiInputFeatureState struct {
 	promptHistoryDraft       string
 	promptHistoryDraftCursor int
 	activity                 uiActivity
-	runtimeLifecycle         runtimestate.RuntimeRunState
+	runtimeLifecycle         uiRuntimeLifecycle
 	reviewerEnabled          bool
 	reviewerMode             string
 	autoCompactionEnabled    bool
@@ -148,6 +147,8 @@ type uiPresentationFeatureState struct {
 type uiConversationFeatureState struct {
 	interaction                        uiInteractionState
 	ask                                uiAskState
+	promptAnswers                      *transcriptPromptAnswerer
+	promptAttention                    *bellHooks
 	startupSubmit                      string
 	startupSubmitPromptHistoryRecorded bool
 }
@@ -168,7 +169,7 @@ type uiSessionTransitionFeatureState struct {
 type uiStatusFeatureState struct {
 	processList                 uiProcessListState
 	reasoningStatusHeader       string
-	turnQueueHook               turnQueueHook
+	turnQueueHook               *bellHooks
 	statusConfig                uiStatusConfig
 	statusCollector             uiStatusCollector
 	statusRepository            uiStatusRepository
@@ -192,7 +193,6 @@ type uiStatusFeatureState struct {
 	startupUpdateShown       bool
 	debugKeys                bool
 	debugMode                bool
-	transcriptDiagnostics    bool
 }
 
 type uiTranscriptFeatureState struct {

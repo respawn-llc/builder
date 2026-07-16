@@ -16,7 +16,6 @@ import (
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeops"
-	"core/server/runtimeview"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
@@ -448,9 +447,6 @@ func TestServiceInterruptReturnsUnavailableActivityWithoutEngine(t *testing.T) {
 	if resp.Activity.State != clientui.RuntimeActivityUnavailable {
 		t.Fatalf("activity = %+v, want unavailable", resp.Activity)
 	}
-	if resp.InputReconciliation.Version != resp.Version {
-		t.Fatalf("reconciliation version = %+v, want %+v", resp.InputReconciliation.Version, resp.Version)
-	}
 }
 
 func TestServiceLiveSteerRequiresActiveRun(t *testing.T) {
@@ -610,8 +606,8 @@ func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
 	if resp.Activity.State != clientui.RuntimeActivityRegisteredIdle {
 		t.Fatalf("activity = %+v, want idle", resp.Activity)
 	}
-	if resp.Version.Epoch == "" || resp.InputReconciliation.Version != resp.Version {
-		t.Fatalf("invalid versioned response: %+v", resp)
+	if err := resp.Version.Validate(); err != nil {
+		t.Fatalf("invalid response version: %v", err)
 	}
 }
 
@@ -986,103 +982,6 @@ func TestServiceSetGoalPropagatesGoalLoopStartError(t *testing.T) {
 	}
 }
 
-func TestServiceActiveGoalUpdatesEmitExactlyOneGoalStatusEventBeforeGoalLoopEvents(t *testing.T) {
-	tests := []struct {
-		name    string
-		prepare func(*testing.T, *runtime.Engine, func())
-		call    func(context.Context, *Service, string) error
-	}{
-		{
-			name: "set",
-			call: func(ctx context.Context, service *Service, sessionID string) error {
-				_, err := service.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{
-					ClientRequestID: "goal-status-set",
-					SessionID:       sessionID,
-					Objective:       "ship goal mode",
-					Actor:           "user",
-				})
-				return err
-			},
-		},
-		{
-			name: "resume",
-			prepare: func(t *testing.T, engine *runtime.Engine, resetEvents func()) {
-				t.Helper()
-				if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-					t.Fatalf("SetGoal: %v", err)
-				}
-				if _, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
-					t.Fatalf("pause goal: %v", err)
-				}
-				resetEvents()
-			},
-			call: func(ctx context.Context, service *Service, sessionID string) error {
-				_, err := service.ResumeGoal(ctx, serverapi.RuntimeGoalStatusRequest{
-					ClientRequestID: "goal-status-resume",
-					SessionID:       sessionID,
-					Actor:           "user",
-				})
-				return err
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var eventsMu sync.Mutex
-			events := make([]runtime.Event, 0, 8)
-			resetEvents := func() {
-				eventsMu.Lock()
-				defer eventsMu.Unlock()
-				events = nil
-			}
-			store, engine := newRuntimeControlTestEngine(t, &blockingRuntimeControlClient{}, nil, runtime.Config{
-				EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-				OnEvent: func(evt runtime.Event) {
-					eventsMu.Lock()
-					defer eventsMu.Unlock()
-					events = append(events, evt)
-				},
-			})
-			if tt.prepare != nil {
-				tt.prepare(t, engine, resetEvents)
-			}
-			service := NewService(stubRuntimeResolver{engine: engine})
-
-			if err := tt.call(context.Background(), service, store.Meta().SessionID); err != nil {
-				t.Fatalf("active goal update: %v", err)
-			}
-
-			eventsMu.Lock()
-			gotEvents := append([]runtime.Event(nil), events...)
-			eventsMu.Unlock()
-			statusIndexes := make([]int, 0, 1)
-			for idx, evt := range gotEvents {
-				if evt.Kind == runtime.EventGoalStatusUpdated {
-					statusIndexes = append(statusIndexes, idx)
-				}
-			}
-			if len(statusIndexes) != 1 {
-				t.Fatalf("goal status event count = %d, want 1 events=%+v", len(statusIndexes), gotEvents)
-			}
-			statusIndex := statusIndexes[0]
-			if statusIndex == 0 || gotEvents[statusIndex-1].Kind != runtime.EventConversationUpdated || !gotEvents[statusIndex-1].CommittedTranscriptChanged {
-				t.Fatalf("goal status event not immediately after committed feedback: events=%+v", gotEvents)
-			}
-			for idx, evt := range gotEvents[:statusIndex] {
-				if evt.Kind == runtime.EventRunStateChanged || evt.Kind == runtime.EventAssistantMessage || evt.Kind == runtime.EventToolCallStarted || evt.Kind == runtime.EventToolCallCompleted {
-					t.Fatalf("event[%d]=%+v preceded goal feedback/status", idx, evt)
-				}
-			}
-			finalGoal := runtimeview.StatusFromRuntime(engine).Goal
-			status := gotEvents[statusIndex].GoalStatus
-			if finalGoal == nil || status == nil || status.Cleared || status.State.ID != finalGoal.ID || status.State.Objective != finalGoal.Objective || string(status.State.Status) != string(finalGoal.Status) {
-				t.Fatalf("goal status payload = %+v, final goal = %+v", status, finalGoal)
-			}
-		})
-	}
-}
-
 func TestServiceResumeGoalPreflightFailureDoesNotMutateOrEmit(t *testing.T) {
 	var events []runtime.Event
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
@@ -1304,29 +1203,6 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 	client.releaseSecond()
 }
 
-func TestServiceCompleteGoalFeedbackIncludesCookDuration(t *testing.T) {
-	now := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}}, session.WithClock(func() time.Time {
-		return now
-	}))
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	now = now.Add(5*time.Hour + 32*time.Minute + 9*time.Second)
-
-	if _, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{ClientRequestID: "complete-duration", SessionID: store.Meta().SessionID, Actor: "agent"}); err != nil {
-		t.Fatalf("CompleteGoal: %v", err)
-	}
-
-	messages := runtimeControlGoalDeveloperMessages(t, store)
-	if len(messages) != 2 {
-		t.Fatalf("goal developer messages len = %d, want set+complete", len(messages))
-	}
-	if got, want := messages[1].CompactContent, "Goal complete. Cooked for 5h32m9s"; got != want {
-		t.Fatalf("complete compact content = %q, want %q", got, want)
-	}
-}
-
 func TestServiceSetSessionNameDedupesSuccessfulRetry(t *testing.T) {
 	store, engine := newRuntimeControlTestEngine(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	if err := store.SetName("before"); err != nil {
@@ -1442,12 +1318,15 @@ func TestServiceTargetCancelReleasesStartMarkerBeforeRuntimeAccessReturns(t *tes
 	resolver := &cancelableStartRuntimeResolver{started: make(chan struct{}), released: make(chan struct{})}
 	operations := runtimeops.NewCoordinator()
 	service := NewService(resolver).WithOperationCoordinator(operations)
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "cancel-start-marker"}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	req := serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: ref.ClientRequestID,
+		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       "session-start-marker",
 		Text:            "hello",
 		OperationRef:    ref,
+		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+			clientui.RuntimeOperationKindPreSubmitCompact,
+		),
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -1482,12 +1361,15 @@ func TestServiceSubmitUserTurnOperationTombstonePreventsPreFlushSubmittedReconci
 	resolver := &cancelableStartRuntimeResolver{started: make(chan struct{}), released: make(chan struct{})}
 	operations := runtimeops.NewCoordinator()
 	service := NewService(resolver).WithOperationCoordinator(operations)
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "cancel-before-flush"}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	req := serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: ref.ClientRequestID,
+		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       "session-cancel-before-flush",
 		Text:            "restore me",
 		OperationRef:    ref,
+		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+			clientui.RuntimeOperationKindPreSubmitCompact,
+		),
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -1516,12 +1398,15 @@ func TestServiceSubmitUserTurnOperationTombstonePreventsPreFlushSubmittedReconci
 func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-flush-boundary"}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	req := serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: ref.ClientRequestID,
+		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
 		Text:            "flush before model completes",
 		OperationRef:    ref,
+		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+			clientui.RuntimeOperationKindPreSubmitCompact,
+		),
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -1560,14 +1445,17 @@ func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t
 func TestServiceInterruptQueuedServerMessageDoesNotInterruptUnrelatedActiveRun(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	activeRef := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "active-submit"}
+	activeRef := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	done := make(chan error, 1)
 	go func() {
 		_, err := service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
-			ClientRequestID: activeRef.ClientRequestID,
+			ClientRequestID: activeRef.ClientRequestID.String(),
 			SessionID:       store.Meta().SessionID,
 			Text:            "keep running",
 			OperationRef:    activeRef,
+			PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+				clientui.RuntimeOperationKindPreSubmitCompact,
+			),
 		})
 		done <- err
 	}()
@@ -1576,11 +1464,14 @@ func TestServiceInterruptQueuedServerMessageDoesNotInterruptUnrelatedActiveRun(t
 	case <-time.After(time.Second):
 		t.Fatal("active submit did not reach model request")
 	}
-	queued, err := service.QueueUserMessage(context.Background(), runtimeControlQueueUserMessageRequest(store, "queued-discard-only", "discard queued only"))
+	queueRequest := runtimeControlQueueUserMessageRequest(store, "queued-discard-only", "discard queued only")
+	queued, err := service.QueueUserMessage(context.Background(), queueRequest)
 	if err != nil {
 		t.Fatalf("QueueUserMessage: %v", err)
 	}
-	target := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: queued.QueueItemID}
+	queueItemID := mustRuntimeControlQueueItemID(t, queued.QueueItemID)
+	target := queueRequest.OperationRef
+	target.QueueItemID = &queueItemID
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID:    "interrupt-queued-discard-only",
 		SessionID:          store.Meta().SessionID,
@@ -1609,9 +1500,9 @@ func TestServiceInterruptCancelsInFlightQueuedMessageCreateByClientRef(t *testin
 	resolver := &cancelableStartRuntimeResolver{started: make(chan struct{}), released: make(chan struct{})}
 	operations := runtimeops.NewCoordinator()
 	service := NewService(resolver).WithOperationCoordinator(operations)
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "queue-create-cancel"}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	req := serverapi.RuntimeQueueUserMessageRequest{
-		ClientRequestID: ref.ClientRequestID,
+		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       "session-queue-create",
 		OperationRef:    ref,
 		Text:            "queued before server id",
@@ -1649,9 +1540,9 @@ func TestServiceCanceledQueuedMessageCreateRejectsDuplicateRetries(t *testing.T)
 	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
 	operations := runtimeops.NewCoordinator()
 	service.WithOperationCoordinator(operations)
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "queue-create-canceled-retry"}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	req := serverapi.RuntimeQueueUserMessageRequest{
-		ClientRequestID: ref.ClientRequestID,
+		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
 		OperationRef:    ref,
 		Text:            "must not enqueue after cancel",
@@ -1673,7 +1564,7 @@ func TestServiceCanceledQueuedMessageCreateRejectsDuplicateRetries(t *testing.T)
 func TestServiceInterruptWithTargetRecordsCancellationTombstoneWithoutRuntime(t *testing.T) {
 	operations := runtimeops.NewCoordinator()
 	service := NewService(stubRuntimeResolver{}).WithOperationCoordinator(operations)
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-target"}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID:    "interrupt-target",
 		SessionID:          "session-target",
@@ -1686,7 +1577,7 @@ func TestServiceInterruptWithTargetRecordsCancellationTombstoneWithoutRuntime(t 
 		t.Fatalf("activity = %+v, want unavailable", resp.Activity)
 	}
 	assertRuntimeControlReconciliation(t, operations, "session-target", ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-	if len(resp.InputReconciliation.Operations) != 1 || resp.InputReconciliation.Operations[0].OperationRef != ref || resp.InputReconciliation.Operations[0].State != clientui.RuntimeInputReconciliationCanceledNotCommitted {
+	if len(resp.InputReconciliation.Operations) != 1 || resp.InputReconciliation.Operations[0].Operation != ref || resp.InputReconciliation.Operations[0].State != clientui.RuntimeInputReconciliationCanceledNotCommitted {
 		t.Fatalf("response reconciliation = %+v, want canceled target", resp.InputReconciliation)
 	}
 }
@@ -1706,7 +1597,7 @@ func TestServiceTargetedPreActiveInterruptDoesNotInterruptUnrelatedActiveRun(t *
 	}
 	operations := runtimeops.NewCoordinator()
 	service := NewService(stubRuntimeResolver{engine: engine}).WithOperationCoordinator(operations)
-	target := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "pre-active-target"}
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID:    "interrupt-pre-active-target",
 		SessionID:          store.Meta().SessionID,
@@ -1745,7 +1636,7 @@ func TestServiceTargetedTerminalOperationDoesNotInterruptUnrelatedActiveRun(t *t
 		t.Fatal("active run did not start")
 	}
 	operations := runtimeops.NewCoordinator()
-	target := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "terminal-target"}
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	operations.RecordCommitted(store.Meta().SessionID, target)
 	service := NewService(stubRuntimeResolver{engine: engine}).WithOperationCoordinator(operations)
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
@@ -1798,13 +1689,9 @@ func TestServiceInterruptDoesNotExposeLongLivedStartReservationAsActivity(t *tes
 
 func assertRuntimeControlReconciliation(t *testing.T, operations *runtimeops.Coordinator, sessionID string, ref clientui.RuntimeOperationRef, want clientui.RuntimeInputReconciliationState) {
 	t.Helper()
-	version, err := clientui.NewReadModelVersion("test", 1, 1)
-	if err != nil {
-		t.Fatalf("NewReadModelVersion: %v", err)
-	}
-	snapshot := operations.Snapshot(sessionID, version, []clientui.RuntimeOperationRef{ref})
+	snapshot := runtimeControlFeedSnapshot(t, operations, sessionID, []clientui.RuntimeOperationRef{ref})
 	for _, record := range snapshot.Operations {
-		if record.OperationRef == ref {
+		if record.Operation.Key() == ref.Key() {
 			if record.State != want {
 				t.Fatalf("reconciliation state = %q, want %q", record.State, want)
 			}
@@ -1882,7 +1769,7 @@ func TestServiceQueueUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	if firstQueue.QueueItemID == "" || secondQueue.QueueItemID != firstQueue.QueueItemID {
 		t.Fatalf("queue ids = (%q, %q), want stable non-empty id", firstQueue.QueueItemID, secondQueue.QueueItemID)
 	}
-	queueCreateSnapshot := service.operations.Snapshot(store.Meta().SessionID, clientui.ReadModelVersion{Epoch: "test", Generation: 1, Sequence: 1}, []clientui.RuntimeOperationRef{req.OperationRef})
+	queueCreateSnapshot := runtimeControlFeedSnapshot(t, service.operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{req.OperationRef})
 	if len(queueCreateSnapshot.Operations) != 1 || queueCreateSnapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
 		t.Fatalf("queue create reconciliation = %+v, want committed for UI-owned operation ref", queueCreateSnapshot.Operations)
 	}
@@ -1946,11 +1833,14 @@ func TestServiceDiscardQueuedUserMessageIsRuntimeOnly(t *testing.T) {
 func TestServiceInterruptTargetQueuedServerMessageDiscardsRuntimeWork(t *testing.T) {
 	ctx := context.Background()
 	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
-	queued, err := service.QueueUserMessage(ctx, runtimeControlQueueUserMessageRequest(sessionStore, "req-interrupt-discard", "discard on interrupt"))
+	queueRequest := runtimeControlQueueUserMessageRequest(sessionStore, "req-interrupt-discard", "discard on interrupt")
+	queued, err := service.QueueUserMessage(ctx, queueRequest)
 	if err != nil {
 		t.Fatalf("QueueUserMessage: %v", err)
 	}
-	target := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: queued.QueueItemID}
+	queueItemID := mustRuntimeControlQueueItemID(t, queued.QueueItemID)
+	target := queueRequest.OperationRef
+	target.QueueItemID = &queueItemID
 
 	if _, err := service.Interrupt(ctx, serverapi.RuntimeInterruptRequest{
 		ClientRequestID:      "interrupt-queued-server",
@@ -2074,29 +1964,35 @@ func countUserMessagesWithContent(t *testing.T, store *session.Store, content st
 	return count
 }
 
-func runtimeControlUserTurnRequest(store *session.Store, requestID string, text string) serverapi.RuntimeSubmitUserTurnRequest {
+func runtimeControlUserTurnRequest(store *session.Store, _ string, text string) serverapi.RuntimeSubmitUserTurnRequest {
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	return serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: requestID,
+		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
 		Text:            text,
-		OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: requestID},
+		OperationRef:    ref,
+		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+			clientui.RuntimeOperationKindPreSubmitCompact,
+		),
 	}
 }
 
-func runtimeControlShellCommandRequest(store *session.Store, requestID string, command string) serverapi.RuntimeSubmitUserShellCommandRequest {
+func runtimeControlShellCommandRequest(store *session.Store, _ string, command string) serverapi.RuntimeSubmitUserShellCommandRequest {
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindUserShell)
 	return serverapi.RuntimeSubmitUserShellCommandRequest{
-		ClientRequestID: requestID,
+		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
 		Command:         command,
-		OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: requestID},
+		OperationRef:    ref,
 	}
 }
 
-func runtimeControlQueueUserMessageRequest(store *session.Store, requestID string, text string) serverapi.RuntimeQueueUserMessageRequest {
+func runtimeControlQueueUserMessageRequest(store *session.Store, _ string, text string) serverapi.RuntimeQueueUserMessageRequest {
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	return serverapi.RuntimeQueueUserMessageRequest{
-		ClientRequestID: requestID,
+		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
-		OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: requestID},
+		OperationRef:    ref,
 		Text:            text,
 	}
 }

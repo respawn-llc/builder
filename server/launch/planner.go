@@ -248,7 +248,7 @@ func applyPersistedSubagentRoleSettings(base config.Settings, source config.Sour
 		return base, source, nil
 	}
 	providerSettings := cloneSettings(base)
-	applySubagentProviderOverrides(&providerSettings, lookup.Role)
+	providerSettings = config.OverlaySubagentRoleProviderSettings(providerSettings, lookup.Role)
 	resolved, effectiveSource, _, err := resolveSubagentSettingsWithProviderID(base, source, *lookup.NormalizedSelector, persistedRoleProviderID(providerSettings), allowModelOverride, validate)
 	if err != nil {
 		return config.Settings{}, config.SourceReport{}, err
@@ -452,7 +452,7 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 	next.ActiveSettings = validated
 	if locked == nil {
 		if strings.TrimSpace(overrides.Tools) != "" {
-			next.ActiveSettings.EnabledTools = cloneEnabledToolSet(loaded.Settings.EnabledTools)
+			next.ActiveSettings.EnabledTools = cloneMapOrEmpty(loaded.Settings.EnabledTools)
 		}
 		if strings.TrimSpace(overrides.Tools) != "" || strings.TrimSpace(overrides.Model) != "" {
 			enabledTools, err := ActiveToolIDsForPlan(next.ActiveSettings, mergedSource, locked)
@@ -494,7 +494,7 @@ func sameContinuationRole(left, right *string) bool {
 
 func validateRunPromptOverrideSettings(settings config.Settings, source config.SourceReport) (config.Settings, error) {
 	validated := cloneSettings(settings)
-	sources := cloneStringMap(source.Sources)
+	sources := cloneMapOrEmpty(source.Sources)
 	applyReviewerInheritance(&validated, sources)
 	if err := config.ValidateSettingsWithSources(validated, sources); err != nil {
 		return config.Settings{}, err
@@ -525,7 +525,7 @@ func sourceReportWithSubagentRoleSources(base config.SourceReport, settings conf
 		return base
 	}
 	next := base
-	next.Sources = cloneStringMap(base.Sources)
+	next.Sources = cloneMapOrEmpty(base.Sources)
 	if !allowModelOverride && strings.TrimSpace(next.Sources["model"]) == "default" {
 		next.Sources["model"] = "session"
 	}
@@ -763,7 +763,7 @@ func ActiveToolIDsForPlan(settings config.Settings, source config.SourceReport, 
 		}
 		return DedupeSortToolIDs(ids), nil
 	}
-	enabled := cloneEnabledToolSet(settings.EnabledTools)
+	enabled := cloneMapOrEmpty(settings.EnabledTools)
 	if bothEditToolSourcesDefault(source) {
 		if settings.ProviderCapabilities.IsOpenAIFirstParty || strings.HasPrefix(strings.ToLower(strings.TrimSpace(settings.Model)), "gpt-") {
 			enabled[toolspec.ToolPatch] = true
@@ -791,17 +791,6 @@ func enabledToolIDs(enabled map[toolspec.ID]bool) []toolspec.ID {
 		}
 	}
 	return ids
-}
-
-func cloneEnabledToolSet(in map[toolspec.ID]bool) map[toolspec.ID]bool {
-	if len(in) == 0 {
-		return map[toolspec.ID]bool{}
-	}
-	out := make(map[toolspec.ID]bool, len(in))
-	for id, enabled := range in {
-		out[id] = enabled
-	}
-	return out
 }
 
 func DedupeSortToolIDs(ids []toolspec.ID) []toolspec.ID {

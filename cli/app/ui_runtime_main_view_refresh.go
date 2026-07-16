@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 
+	"core/cli/tui"
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -127,7 +128,31 @@ func (m *uiModel) handleRuntimeMainViewRefreshed(msg runtimeMainViewRefreshedMsg
 	m.observeRuntimeRequestResult(nil)
 	applyCmd := m.applyRuntimeMainViewState(msg.view)
 	noticeCmd := runtimeMainViewStartupUpdateNoticeCmd(req, msg.view)
-	return sequenceCmds(applyCmd, m.runtimeAdapter().applyProjectedSessionMetadata(msg.view.Session), noticeCmd, m.drainPendingRuntimeMainViewRefresh().cmd)
+	return sequenceCmds(applyCmd, m.applyRuntimeSessionMetadata(msg.view.Session), noticeCmd, m.drainPendingRuntimeMainViewRefresh().cmd)
+}
+
+func (m *uiModel) applyRuntimeSessionMetadata(session clientui.RuntimeSessionView) tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	previousSessionID := strings.TrimSpace(m.sessionID)
+	nextSessionID := strings.TrimSpace(session.SessionID)
+	if nextSessionID != "" {
+		m.sessionID = nextSessionID
+	}
+	if strings.TrimSpace(session.SessionName) != "" {
+		m.sessionName = strings.TrimSpace(session.SessionName)
+	}
+	m.conversationFreshness = session.ConversationFreshness
+	if previousSessionID == "" || nextSessionID == "" || previousSessionID == nextSessionID {
+		return nil
+	}
+	rollbackCmd := m.discardRollbackStateForSessionReplacement()
+	cancelCmd := m.cancelPendingDetailTranscriptRequest()
+	m.detailTranscript.reset()
+	resetCmd := m.forwardToView(tui.ResetDetailTranscriptMsg{})
+	loadCmd := m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
+	return sequenceCmds(rollbackCmd, cancelCmd, resetCmd, loadCmd)
 }
 
 func runtimeMainViewStartupUpdateNoticeCmd(req runtimeMainViewRefreshRequest, view clientui.RuntimeMainView) tea.Cmd {

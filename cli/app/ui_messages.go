@@ -168,14 +168,6 @@ type startupUpdateNoticeMsg struct {
 	version string
 }
 
-type runtimeEventMsg struct {
-	event clientui.Event
-}
-
-type runtimeEventBatchMsg struct {
-	events []clientui.Event
-}
-
 type uiModelProbeMessage interface {
 	probeUIModel(*uiModel)
 }
@@ -214,10 +206,6 @@ type terminalSequenceWriteErrMsg struct {
 	err error
 }
 
-type runLoggerDiagnosticMsg struct {
-	diagnostic runLoggerDiagnostic
-}
-
 type clipboardPasteDoneMsg struct {
 	Target         uiClipboardPasteTarget
 	MainDraftToken uint64
@@ -236,21 +224,21 @@ type clipboardTextCopyDoneMsg struct {
 }
 
 type askEvent struct {
-	req              clientui.PendingPromptEvent
+	prompt           clientui.TranscriptPrompt
 	reply            chan askReply
 	cancel           func()
-	resolvedPromptID string
+	resolvedPromptID clientui.PromptID
 }
 
 func (e askEvent) promptID() string {
-	if strings.TrimSpace(e.resolvedPromptID) != "" {
-		return strings.TrimSpace(e.resolvedPromptID)
+	if strings.TrimSpace(string(e.resolvedPromptID)) != "" {
+		return strings.TrimSpace(string(e.resolvedPromptID))
 	}
-	return strings.TrimSpace(e.req.PromptID)
+	return strings.TrimSpace(string(e.prompt.PromptID))
 }
 
 func (e askEvent) isResolution() bool {
-	return strings.TrimSpace(e.resolvedPromptID) != ""
+	return strings.TrimSpace(string(e.resolvedPromptID)) != ""
 }
 
 func (e askEvent) cancelPending() {

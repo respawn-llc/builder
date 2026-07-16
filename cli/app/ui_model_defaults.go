@@ -12,9 +12,9 @@ import (
 	"core/shared/theme"
 )
 
-func newUIModelDefaults(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, askEvents <-chan askEvent) *uiModel {
+func newUIModelDefaults(runtimeClient clientui.RuntimeClient) *uiModel {
 	return &uiModel{
-		eventDispatcher:                 newUIEventDispatcher(runtimeEvents, nil, askEvents),
+		eventDispatcher:                 newUIEventDispatcher(nil),
 		uiRuntimeFeatureState:           newUIRuntimeFeatureState(runtimeClient),
 		uiInputFeatureState:             newUIInputFeatureState(),
 		uiPresentationFeatureState:      newUIPresentationFeatureState(),
@@ -71,12 +71,11 @@ func newUISessionTransitionFeatureState() uiSessionTransitionFeatureState {
 func newUIStatusFeatureState() uiStatusFeatureState {
 	debug := envFlagEnabled("KENT_DEBUG")
 	return uiStatusFeatureState{
-		statusRepository:      status.NewMemoryRepository(),
-		clipboardPaster:       newSystemClipboardPaster(),
-		clipboardTextCopier:   newSystemClipboardTextCopier(),
-		debugKeys:             envFlagEnabled("KENT_DEBUG_KEYS"),
-		debugMode:             debug,
-		transcriptDiagnostics: envFlagEnabled("KENT_TRANSCRIPT_DIAGNOSTICS"),
+		statusRepository:    status.NewMemoryRepository(),
+		clipboardPaster:     newSystemClipboardPaster(),
+		clipboardTextCopier: newSystemClipboardTextCopier(),
+		debugKeys:           envFlagEnabled("KENT_DEBUG_KEYS"),
+		debugMode:           debug,
 	}
 }
 

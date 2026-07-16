@@ -1,14 +1,12 @@
 package runtimeactivity
 
 import (
+	"core/shared/clientui"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"core/server/runtimefeed"
-	"core/shared/clientui"
 )
 
 const DefaultCoordinatorCacheLimit = 128
@@ -23,7 +21,7 @@ type ResponseSnapshot struct {
 
 type SnapshotInput struct {
 	Resolver            ResolverSnapshot
-	InputReconciliation runtimefeed.RuntimeInputReconciliationSnapshot
+	InputReconciliation clientui.RuntimeInputReconciliationSnapshot
 }
 
 type SnapshotBuilder func() (SnapshotInput, error)
@@ -67,7 +65,7 @@ func (c *CoordinatorCache) Snapshot(sessionID string, resolver ResolverSnapshot)
 	return c.WithSnapshot(sessionID, func() (SnapshotInput, error) {
 		return SnapshotInput{
 			Resolver:            resolver,
-			InputReconciliation: runtimefeed.RuntimeInputReconciliationSnapshot{},
+			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		}, nil
 	})
 }
@@ -80,12 +78,12 @@ func (c *CoordinatorCache) WithSnapshot(sessionID string, build SnapshotBuilder)
 	if build == nil {
 		return ResponseSnapshot{}, nil
 	}
-	return Protocol59ResponseSnapshot(update), nil
+	return responseSnapshot(update), nil
 }
 
-func (c *CoordinatorCache) WithFeedSnapshot(sessionID string, build SnapshotBuilder) (runtimefeed.RuntimeReadModelUpdate, error) {
+func (c *CoordinatorCache) WithFeedSnapshot(sessionID string, build SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
 	if build == nil {
-		return runtimefeed.RuntimeReadModelUpdate{}, nil
+		return clientui.RuntimeReadModelUpdate{}, nil
 	}
 	return c.coordinator(sessionID).feedSnapshot(build)
 }
@@ -204,15 +202,15 @@ func (c *ReadModelCoordinator) Snapshot(build SnapshotBuilder) (ResponseSnapshot
 	if build == nil {
 		return ResponseSnapshot{}, nil
 	}
-	return Protocol59ResponseSnapshot(update), nil
+	return responseSnapshot(update), nil
 }
 
-func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (runtimefeed.RuntimeReadModelUpdate, error) {
+func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
 	if c == nil {
 		return defaultCoordinatorCache.WithFeedSnapshot("unknown", build)
 	}
 	if build == nil {
-		return runtimefeed.RuntimeReadModelUpdate{}, nil
+		return clientui.RuntimeReadModelUpdate{}, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -223,19 +221,19 @@ func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (runtimefeed.
 	}
 	input, err := build()
 	if err != nil {
-		return runtimefeed.RuntimeReadModelUpdate{}, err
+		return clientui.RuntimeReadModelUpdate{}, err
 	}
 	activity, err := resolveRuntimeFeedActivity(input.Resolver)
 	if err != nil {
-		return runtimefeed.RuntimeReadModelUpdate{}, err
+		return clientui.RuntimeReadModelUpdate{}, err
 	}
-	update := runtimefeed.RuntimeReadModelUpdate{
+	update := clientui.RuntimeReadModelUpdate{
 		Version:             version,
 		Activity:            activity,
 		InputReconciliation: input.InputReconciliation,
 	}
 	if err := update.Validate(); err != nil {
-		return runtimefeed.RuntimeReadModelUpdate{}, fmt.Errorf("validate runtime feed read-model update: %w", err)
+		return clientui.RuntimeReadModelUpdate{}, fmt.Errorf("validate runtime feed read-model update: %w", err)
 	}
 	return update, nil
 }
@@ -253,14 +251,21 @@ func NextReadModelVersion(sessionID string) clientui.ReadModelVersion {
 	return defaultCoordinatorCache.Next(sessionID)
 }
 
-func BuildResponseSnapshot(sessionID string, resolver ResolverSnapshot) (ResponseSnapshot, error) {
-	return defaultCoordinatorCache.Snapshot(sessionID, resolver)
-}
-
 func BuildSnapshot(sessionID string, build SnapshotBuilder) (ResponseSnapshot, error) {
 	return defaultCoordinatorCache.WithSnapshot(sessionID, build)
 }
 
-func BuildFeedSnapshot(sessionID string, build SnapshotBuilder) (runtimefeed.RuntimeReadModelUpdate, error) {
+func BuildFeedSnapshot(sessionID string, build SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
 	return defaultCoordinatorCache.WithFeedSnapshot(sessionID, build)
+}
+
+func responseSnapshot(update clientui.RuntimeReadModelUpdate) ResponseSnapshot {
+	if err := update.Validate(); err != nil {
+		panic(fmt.Sprintf("project invalid runtime read-model update: %+v: %v", update, err))
+	}
+	return ResponseSnapshot{
+		Version:             update.Version,
+		Activity:            update.Activity,
+		InputReconciliation: update.InputReconciliation,
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/transcript"
@@ -75,22 +76,28 @@ func (r *sequenceRuntimeActivityResolver) Snapshot(context.Context, string, []cl
 func TestServiceInterruptRetryReturnsFreshActivitySnapshot(t *testing.T) {
 	runningVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}
 	idleVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 2}
+	runID := mustRuntimeControlRunID(t)
+	stepID := mustRuntimeControlStepID(t)
 	resolver := &sequenceRuntimeActivityResolver{snapshots: []runtimeactivity.ResponseSnapshot{
 		{
 			Version: runningVersion,
-			Activity: clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
-				ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
-				RunID:      "run-1",
-				StepID:     "step-1",
-			}),
-			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(runningVersion),
+			Activity: clientui.RuntimeActivity{
+				State: clientui.RuntimeActivityRunning,
+				ActiveStep: &clientui.RuntimeActiveStep{
+					ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
+					RunID:      runID,
+					StepID:     stepID,
+				},
+			},
+			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		},
 		{
 			Version: idleVersion,
-			Activity: clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{
+			Activity: clientui.RuntimeActivity{
+				State:          clientui.RuntimeActivityRegisteredIdle,
 				QueueAccepting: true,
-			}),
-			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(idleVersion),
+			},
+			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		},
 	}}
 	service := NewService(stubRuntimeResolver{}).WithRuntimeActivityResolver(resolver)
@@ -322,7 +329,8 @@ func TestServiceSetAutoCompactionEnabledDedupesSuccessfulRetry(t *testing.T) {
 func TestServiceCompactContextDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, client := newRuntimeControlCompactionFixture(t)
 	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeCompactContextRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Args: "compact now", OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: "req-1"}}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
+	req := serverapi.RuntimeCompactContextRequest{ClientRequestID: ref.ClientRequestID.String(), SessionID: store.Meta().SessionID, Args: "compact now", OperationRef: ref}
 
 	if err := service.CompactContext(context.Background(), req); err != nil {
 		t.Fatalf("CompactContext first: %v", err)
@@ -349,7 +357,7 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 			kind: clientui.RuntimeOperationKindCompact,
 			run: func(service *Service, sessionID string, ref clientui.RuntimeOperationRef) error {
 				return service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
-					ClientRequestID: ref.ClientRequestID,
+					ClientRequestID: ref.ClientRequestID.String(),
 					SessionID:       sessionID,
 					Args:            "compact now",
 					OperationRef:    ref,
@@ -361,7 +369,7 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 			kind: clientui.RuntimeOperationKindPreSubmitCompact,
 			run: func(service *Service, sessionID string, ref clientui.RuntimeOperationRef) error {
 				return service.CompactContextForPreSubmit(context.Background(), serverapi.RuntimeCompactContextForPreSubmitRequest{
-					ClientRequestID: ref.ClientRequestID,
+					ClientRequestID: ref.ClientRequestID.String(),
 					SessionID:       sessionID,
 					OperationRef:    ref,
 				})
@@ -375,7 +383,7 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 			store, engine, client := newRuntimeControlCompactionFixture(t, session.WithPersistenceObserver(gate))
 			operations := runtimeops.NewCoordinator()
 			service := NewService(stubRuntimeResolver{engine: engine}).WithOperationCoordinator(operations)
-			ref := clientui.RuntimeOperationRef{Kind: testCase.kind, ClientRequestID: "req-committed-error"}
+			ref := runtimeControlOperationRef(testCase.kind)
 			gate.FailNext(observerErr)
 
 			if err := testCase.run(service, store.Meta().SessionID, ref); !errors.Is(err, observerErr) {
@@ -390,11 +398,7 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 			if got := countEventsByKind(t, store, "history_replaced"); got != 1 {
 				t.Fatalf("history_replaced event count = %d, want 1", got)
 			}
-			version, err := clientui.NewReadModelVersion("test", 1, 1)
-			if err != nil {
-				t.Fatalf("NewReadModelVersion: %v", err)
-			}
-			snapshot := operations.Snapshot(store.Meta().SessionID, version, []clientui.RuntimeOperationRef{ref})
+			snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
 			if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
 				t.Fatalf("compaction reconciliation = %+v, want committed", snapshot)
 			}
@@ -405,7 +409,8 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 func TestServiceCompactContextForPreSubmitDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, client := newRuntimeControlCompactionFixture(t)
 	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeCompactContextForPreSubmitRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: "req-1"}}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindPreSubmitCompact)
+	req := serverapi.RuntimeCompactContextForPreSubmitRequest{ClientRequestID: ref.ClientRequestID.String(), SessionID: store.Meta().SessionID, OperationRef: ref}
 
 	if err := service.CompactContextForPreSubmit(context.Background(), req); err != nil {
 		t.Fatalf("CompactContextForPreSubmit first: %v", err)
@@ -589,7 +594,8 @@ func TestServiceSubmitQueuedUserMessagesDedupesSuccessfulRetry(t *testing.T) {
 	}
 	engine.QueueUserMessage("hello")
 	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "req-1"}}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmitQueued)
+	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: ref.ClientRequestID.String(), SessionID: store.Meta().SessionID, OperationRef: ref}
 
 	first, err := service.SubmitQueuedUserMessages(context.Background(), req)
 	if err != nil {
@@ -639,9 +645,9 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 	engine.QueueUserMessage("hello")
 	operations := runtimeops.NewCoordinator()
 	service := NewService(stubRuntimeResolver{engine: engine}).WithOperationCoordinator(operations)
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "req-committed-error"}
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmitQueued)
 	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{
-		ClientRequestID: ref.ClientRequestID,
+		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
 		OperationRef:    ref,
 	}
@@ -670,11 +676,7 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 	if got := engine.CommittedTranscriptEntryCount(); got != entriesBeforeSubmit+1 {
 		t.Fatalf("projected transcript entries = %d, want %d", got, entriesBeforeSubmit+1)
 	}
-	version, err := clientui.NewReadModelVersion("test", 1, 1)
-	if err != nil {
-		t.Fatalf("NewReadModelVersion: %v", err)
-	}
-	snapshot := operations.Snapshot(store.Meta().SessionID, version, []clientui.RuntimeOperationRef{ref})
+	snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
 	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationSubmitted {
 		t.Fatalf("queued submission reconciliation = %+v, want submitted", snapshot)
 	}
@@ -739,4 +741,47 @@ func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
 	if got := countPromptHistoryEvents(t, store, "/resume"); got != 1 {
 		t.Fatalf("prompt history count = %d, want 1", got)
 	}
+}
+
+func runtimeControlOperationRef(kind clientui.RuntimeOperationKind) clientui.RuntimeOperationRef {
+	return clientui.RuntimeOperationRef{
+		Kind:            kind,
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+	}
+}
+
+func runtimeControlFeedSnapshot(t *testing.T, operations *runtimeops.Coordinator, sessionID string, refs []clientui.RuntimeOperationRef) clientui.RuntimeInputReconciliationSnapshot {
+	t.Helper()
+	snapshot, err := operations.FeedSnapshot(sessionID, refs)
+	if err != nil {
+		t.Fatalf("FeedSnapshot: %v", err)
+	}
+	return snapshot
+}
+
+func mustRuntimeControlRunID(t *testing.T) runtimeids.RunID {
+	t.Helper()
+	id, err := runtimeids.ParseRunID("11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatalf("ParseRunID: %v", err)
+	}
+	return id
+}
+
+func mustRuntimeControlStepID(t *testing.T) runtimeids.StepID {
+	t.Helper()
+	id, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("ParseStepID: %v", err)
+	}
+	return id
+}
+
+func mustRuntimeControlQueueItemID(t *testing.T, raw string) runtimeids.QueueItemID {
+	t.Helper()
+	id, err := runtimeids.ParseQueueItemID(raw)
+	if err != nil {
+		t.Fatalf("ParseQueueItemID: %v", err)
+	}
+	return id
 }

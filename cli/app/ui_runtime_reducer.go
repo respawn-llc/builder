@@ -9,23 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type uiRuntimeFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) runtimeReducer() uiRuntimeFeatureReducer {
-	return uiRuntimeFeatureReducer{model: m}
-}
-
-func (r uiRuntimeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceRuntimeMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
-	case runtimeEventMsg:
-		next, cmd := m.handleRuntimeEventBatch([]clientui.Event{msg.event})
-		return handledUIFeatureUpdate(next, cmd)
-	case runtimeEventBatchMsg:
-		next, cmd := m.handleRuntimeEventBatch(msg.events)
-		return handledUIFeatureUpdate(next, cmd)
 	case runtimeConnectionStateChangedMsg:
 		m.observeRuntimeRequestResult(msg.err)
 		m.layout().syncViewport()

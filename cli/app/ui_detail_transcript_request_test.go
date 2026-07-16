@@ -2,11 +2,13 @@ package app
 
 import (
 	"errors"
+	"io"
 	"testing"
 	"time"
 
 	"core/cli/tui"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
 
@@ -395,7 +397,7 @@ func TestDetailTranscriptVisibleSessionReplacementCancelsOldRequestAndHydratesNe
 	oldDone := runDetailTranscriptCommand(oldCmd)
 	waitForDetailTranscriptRequest(t, sessionViews)
 
-	newCmd := model.runtimeAdapter().applyProjectedSessionMetadata(clientui.RuntimeSessionView{SessionID: detailTestReplacementSessionID})
+	newCmd := applyDetailTestSessionReplacement(t, model, detailTestReplacementSessionID)
 	if model.detailTranscript.loaded {
 		t.Fatal("visible session replacement retained old app detail membership")
 	}
@@ -442,7 +444,7 @@ func TestDetailTranscriptHiddenSessionReplacementResetsAndHydratesNewTarget(t *t
 		},
 	}})
 
-	cmd := model.runtimeAdapter().applyProjectedSessionMetadata(clientui.RuntimeSessionView{SessionID: detailTestReplacementSessionID})
+	cmd := applyDetailTestSessionReplacement(t, model, detailTestReplacementSessionID)
 	if model.detailTranscript.loaded {
 		t.Fatal("hidden session replacement retained old app detail membership")
 	}
@@ -463,6 +465,21 @@ func TestDetailTranscriptHiddenSessionReplacementResetsAndHydratesNewTarget(t *t
 		Transcript: clientui.TranscriptPage{SessionID: detailTestReplacementSessionID},
 	}}
 	_ = waitForDetailTranscriptCompletion(t, done)
+}
+
+func applyDetailTestSessionReplacement(t *testing.T, model *uiModel, rawSessionID string) tea.Cmd {
+	t.Helper()
+	sessionID, err := runtimeids.ParseSessionID(rawSessionID)
+	if err != nil {
+		t.Fatalf("parse replacement session ID: %v", err)
+	}
+	return model.applyTranscriptMessageState(clientui.TranscriptMessage{
+		Kind: clientui.TranscriptMessageSessionIdentity,
+		Payload: clientui.TranscriptPayload{SessionIdentity: &clientui.TranscriptSessionIdentity{
+			SessionID:             sessionID,
+			ConversationFreshness: clientui.ConversationFreshnessEstablished,
+		}},
+	})
 }
 
 func newDetailTranscriptRequestTestModel(sessionViews *controlledTranscriptPageClient) *uiModel {
@@ -505,9 +522,38 @@ func startDetailTranscriptRequestFromInput(t *testing.T, model *uiModel, input t
 func runDetailTranscriptCommand(cmd tea.Cmd) <-chan tea.Msg {
 	done := make(chan tea.Msg, 1)
 	go func() {
-		done <- cmd()
+		program := tea.NewProgram(
+			detailTranscriptCommandHarness{command: cmd, done: done},
+			tea.WithInput(nil),
+			tea.WithOutput(io.Discard),
+			tea.WithoutRenderer(),
+		)
+		if _, err := program.Run(); err != nil {
+			done <- detailTranscriptLoadMsg{err: err}
+		}
 	}()
 	return done
+}
+
+type detailTranscriptCommandHarness struct {
+	command tea.Cmd
+	done    chan<- tea.Msg
+}
+
+func (h detailTranscriptCommandHarness) Init() tea.Cmd {
+	return h.command
+}
+
+func (h detailTranscriptCommandHarness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(detailTranscriptLoadMsg); !ok {
+		return h, nil
+	}
+	h.done <- msg
+	return h, tea.Quit
+}
+
+func (detailTranscriptCommandHarness) View() string {
+	return ""
 }
 
 func waitForDetailTranscriptRequest(t *testing.T, client *controlledTranscriptPageClient) serverapi.SessionTranscriptPageRequest {

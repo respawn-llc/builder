@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"core/server/requestmemo"
-	"core/server/runtimefeed"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -16,13 +15,12 @@ import (
 
 func TestCoordinatorRecordsExactInputOperationOutcomes(t *testing.T) {
 	coord := NewCoordinator()
-	version := mustVersion(t, 1)
 	refs := []clientui.RuntimeOperationRef{
-		{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-1"},
-		{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "queue-1"},
-		{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: "shell-1"},
-		{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: "compact-1"},
-		{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: "pre-compact-1"},
+		testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindUserShell),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindCompact),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
 	}
 
 	coord.RecordCommitted("session-1", refs[0])
@@ -30,38 +28,17 @@ func TestCoordinatorRecordsExactInputOperationOutcomes(t *testing.T) {
 	coord.RecordFailedWithRestore("session-1", refs[2])
 	coord.RecordCanceledNotCommitted("session-1", refs[3])
 
-	snapshot := coord.Snapshot("session-1", version, refs)
+	snapshot := mustFeedSnapshot(t, coord, "session-1", refs)
 	assertState(t, snapshot, refs[0], clientui.RuntimeInputReconciliationCommitted)
 	assertState(t, snapshot, refs[1], clientui.RuntimeInputReconciliationSubmitted)
 	assertState(t, snapshot, refs[2], clientui.RuntimeInputReconciliationFailedWithRestore)
 	assertState(t, snapshot, refs[3], clientui.RuntimeInputReconciliationCanceledNotCommitted)
 	assertState(t, snapshot, refs[4], clientui.RuntimeInputReconciliationUnknown)
-	if snapshot.Version != version {
-		t.Fatalf("snapshot version = %+v, want %+v", snapshot.Version, version)
-	}
-}
-
-func TestCoordinatorTransitionsUseReadModelVersions(t *testing.T) {
-	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-versioned"}
-
-	coord.RecordAccepted("session-versioned", ref)
-	accepted := coord.Snapshot("session-versioned", mustVersion(t, 50), []clientui.RuntimeOperationRef{ref})
-	assertState(t, accepted, ref, clientui.RuntimeInputReconciliationAccepted)
-	acceptedVersion := accepted.Operations[0].Version
-
-	coord.RecordCommitted("session-versioned", ref)
-	committed := coord.Snapshot("session-versioned", mustVersion(t, 51), []clientui.RuntimeOperationRef{ref})
-	assertState(t, committed, ref, clientui.RuntimeInputReconciliationCommitted)
-	committedVersion := committed.Operations[0].Version
-	if !committedVersion.NewerThan(acceptedVersion) {
-		t.Fatalf("committed version = %+v, want newer than accepted %+v", committedVersion, acceptedVersion)
-	}
 }
 
 func TestCoordinatorCancelTerminalOperationDoesNotInterruptActiveRuntime(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "terminal-cancel"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	for _, record := range []func(string, clientui.RuntimeOperationRef){
 		coord.RecordCommitted,
 		coord.RecordSubmitted,
@@ -79,27 +56,25 @@ func TestCoordinatorCancelTerminalOperationDoesNotInterruptActiveRuntime(t *test
 
 func TestCoordinatorIgnoresTextAndKeysOnlyByOperationRef(t *testing.T) {
 	coord := NewCoordinator()
-	version := mustVersion(t, 1)
-	submit := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "same"}
-	shell := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: "same"}
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
+	submit := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: clientRequestID}
+	shell := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: clientRequestID}
 
 	coord.RecordCommitted("session-1", submit)
 
-	snapshot := coord.Snapshot("session-1", version, []clientui.RuntimeOperationRef{submit, shell})
-	assertState(t, snapshot, submit, clientui.RuntimeInputReconciliationCommitted)
-	assertState(t, snapshot, shell, clientui.RuntimeInputReconciliationUnknown)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{submit}), submit, clientui.RuntimeInputReconciliationCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{shell}), shell, clientui.RuntimeInputReconciliationUnknown)
 }
 
 func TestCoordinatorExactRecordersMapRuntimeFactsToReconciliation(t *testing.T) {
 	coord := NewCoordinator()
-	version := mustVersion(t, 1)
 	refs := []clientui.RuntimeOperationRef{
-		{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "flush-1"},
-		{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "queued-status-1"},
-		{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: "shell-failed-1"},
-		{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: "compact-ok-1"},
-		{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: "access-failed-1"},
-		{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "interrupt-1"},
+		testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindUserShell),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindCompact),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued),
 	}
 
 	coord.RecordUserMessageFlushed("session-1", refs[0])
@@ -109,7 +84,7 @@ func TestCoordinatorExactRecordersMapRuntimeFactsToReconciliation(t *testing.T) 
 	coord.RecordRuntimeAccessFailure("session-1", refs[4])
 	coord.RecordInterruptCancellation("session-1", refs[5])
 
-	snapshot := coord.Snapshot("session-1", version, refs)
+	snapshot := mustFeedSnapshot(t, coord, "session-1", refs)
 	assertState(t, snapshot, refs[0], clientui.RuntimeInputReconciliationCommitted)
 	assertState(t, snapshot, refs[1], clientui.RuntimeInputReconciliationSubmitted)
 	assertState(t, snapshot, refs[2], clientui.RuntimeInputReconciliationFailedWithRestore)
@@ -120,19 +95,12 @@ func TestCoordinatorExactRecordersMapRuntimeFactsToReconciliation(t *testing.T) 
 
 func TestCoordinatorRecordsQueuedMessageSubmittedByServerQueueItemID(t *testing.T) {
 	coord := NewCoordinator()
-	version := mustVersion(t, 1)
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID("33333333-3333-4333-8333-333333333333")
-	if err != nil {
-		t.Fatalf("parse client request id: %v", err)
-	}
-	queueItemID, err := runtimeids.ParseQueueItemID("44444444-4444-4444-8444-444444444444")
-	if err != nil {
-		t.Fatalf("parse queue item id: %v", err)
-	}
-	serverQueued := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: queueItemID.String()}
-	clientOnly := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "client-req-1"}
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
+	queueItemID := runtimeids.NewQueueItemID()
+	serverQueued := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: clientRequestID, QueueItemID: &queueItemID}
+	clientOnly := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
 
-	if err := coord.RecordQueuedMessageStatus("session-1", runtimefeed.RuntimeOperationRef{
+	if err := coord.RecordQueuedMessageStatus("session-1", clientui.RuntimeOperationRef{
 		Kind:            clientui.RuntimeOperationKindQueuedMessage,
 		ClientRequestID: clientRequestID,
 		QueueItemID:     &queueItemID,
@@ -140,7 +108,7 @@ func TestCoordinatorRecordsQueuedMessageSubmittedByServerQueueItemID(t *testing.
 		t.Fatalf("RecordQueuedMessageSubmitted: %v", err)
 	}
 
-	snapshot := coord.Snapshot("session-1", version, []clientui.RuntimeOperationRef{serverQueued, clientOnly})
+	snapshot := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{serverQueued, clientOnly})
 	assertState(t, snapshot, serverQueued, clientui.RuntimeInputReconciliationSubmitted)
 	assertState(t, snapshot, clientOnly, clientui.RuntimeInputReconciliationUnknown)
 
@@ -163,28 +131,17 @@ func TestCoordinatorRecordsQueuedMessageSubmittedByServerQueueItemID(t *testing.
 func TestCoordinatorCommitMutationAllowsQueuedStatusPublication(t *testing.T) {
 	coord := NewCoordinator()
 	sessionID := "session-queued-status-publication"
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID("11111111-1111-4111-8111-111111111111")
-	if err != nil {
-		t.Fatalf("parse client request id: %v", err)
-	}
-	queueItemID, err := runtimeids.ParseQueueItemID("22222222-2222-4222-8222-222222222222")
-	if err != nil {
-		t.Fatalf("parse queue item id: %v", err)
-	}
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
+	queueItemID := runtimeids.NewQueueItemID()
 	ref := clientui.RuntimeOperationRef{
 		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: clientRequestID.String(),
+		ClientRequestID: clientRequestID,
 	}
-	canonicalRef := runtimefeed.RuntimeOperationRef{
+	canonicalRef := clientui.RuntimeOperationRef{
 		Kind:            clientui.RuntimeOperationKindQueuedMessage,
 		ClientRequestID: clientRequestID,
 		QueueItemID:     &queueItemID,
 	}
-	queueRef := clientui.RuntimeOperationRef{
-		Kind:        clientui.RuntimeOperationKindQueuedMessage,
-		QueueItemID: queueItemID.String(),
-	}
-
 	done := make(chan error, 1)
 	go func() {
 		_, runErr := Do(
@@ -203,7 +160,7 @@ func TestCoordinatorCommitMutationAllowsQueuedStatusPublication(t *testing.T) {
 					); recordErr != nil {
 						return recordErr
 					}
-					snapshot, snapshotErr := coord.FeedSnapshot(sessionID, []clientui.RuntimeOperationRef{queueRef})
+					snapshot, snapshotErr := coord.FeedSnapshot(sessionID, []clientui.RuntimeOperationRef{canonicalRef})
 					if snapshotErr != nil {
 						return snapshotErr
 					}
@@ -238,10 +195,7 @@ func TestCoordinatorCommitMutationAllowsQueuedStatusPublication(t *testing.T) {
 func TestCoordinatorCancellationWaitsForCommitMutation(t *testing.T) {
 	coord := NewCoordinator()
 	sessionID := "session-commit-cancellation"
-	ref := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: "33333333-3333-4333-8333-333333333333",
-	}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	mutationStarted := make(chan struct{})
 	releaseMutation := make(chan struct{})
 	operationDone := make(chan error, 1)
@@ -302,7 +256,7 @@ func TestCoordinatorCancellationWaitsForCommitMutation(t *testing.T) {
 	}
 	assertState(
 		t,
-		coord.Snapshot(sessionID, mustVersion(t, 1), []clientui.RuntimeOperationRef{ref}),
+		mustFeedSnapshot(t, coord, sessionID, []clientui.RuntimeOperationRef{ref}),
 		ref,
 		clientui.RuntimeInputReconciliationCommitted,
 	)
@@ -311,10 +265,7 @@ func TestCoordinatorCancellationWaitsForCommitMutation(t *testing.T) {
 func TestCoordinatorCommitMutationPanicReleasesCancellationBarrier(t *testing.T) {
 	coord := NewCoordinator()
 	sessionID := "session-commit-panic"
-	ref := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: "44444444-4444-4444-8444-444444444444",
-	}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	func() {
 		defer func() {
 			if recover() == nil {
@@ -344,15 +295,9 @@ func TestCoordinatorCommitMutationPanicReleasesCancellationBarrier(t *testing.T)
 func TestCoordinatorRetainsQueuedIdentityThroughEvictionWindowThenReleasesIt(t *testing.T) {
 	now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
 	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID("55555555-5555-4555-8555-555555555555")
-	if err != nil {
-		t.Fatalf("parse client request id: %v", err)
-	}
-	queueItemID, err := runtimeids.ParseQueueItemID("66666666-6666-4666-8666-666666666666")
-	if err != nil {
-		t.Fatalf("parse queue item id: %v", err)
-	}
-	operation := runtimefeed.RuntimeOperationRef{
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
+	queueItemID := runtimeids.NewQueueItemID()
+	operation := clientui.RuntimeOperationRef{
 		Kind:            clientui.RuntimeOperationKindQueuedMessage,
 		ClientRequestID: clientRequestID,
 		QueueItemID:     &queueItemID,
@@ -360,16 +305,10 @@ func TestCoordinatorRetainsQueuedIdentityThroughEvictionWindowThenReleasesIt(t *
 	if err := coord.RecordQueuedMessageStatus("session-1", operation, clientui.RuntimeInputReconciliationSubmitted); err != nil {
 		t.Fatalf("record submitted queued message: %v", err)
 	}
-	queueRef := clientui.RuntimeOperationRef{
-		Kind:        clientui.RuntimeOperationKindQueuedMessage,
-		QueueItemID: queueItemID.String(),
-	}
+	queueRef := operation
 
 	now = now.Add(2 * time.Minute)
-	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindSubmit,
-		ClientRequestID: "77777777-7777-4777-8777-777777777777",
-	})
+	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
 	evicted, err := coord.FeedSnapshot("session-1", []clientui.RuntimeOperationRef{queueRef})
 	if err != nil {
 		t.Fatalf("FeedSnapshot during eviction window: %v", err)
@@ -379,10 +318,7 @@ func TestCoordinatorRetainsQueuedIdentityThroughEvictionWindowThenReleasesIt(t *
 	}
 
 	now = now.Add(2 * time.Minute)
-	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindSubmit,
-		ClientRequestID: "88888888-8888-4888-8888-888888888888",
-	})
+	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
 	if _, err := coord.FeedSnapshot("session-1", []clientui.RuntimeOperationRef{queueRef}); err == nil {
 		t.Fatal("FeedSnapshot retained queued identity after its eviction window")
 	}
@@ -423,12 +359,12 @@ func TestCoordinatorRecordsSubmitQueuedCompletionByCommitReceipt(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			coord := NewCoordinator()
-			ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "submit-queued"}
+			ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
 			if testCase.cancel {
 				coord.RecordCanceledNotCommitted("session-1", ref)
 			}
 			coord.RecordSubmitQueuedCompletion("session-1", ref, testCase.receipt, testCase.err)
-			snapshot := coord.Snapshot("session-1", mustVersion(t, 1), []clientui.RuntimeOperationRef{ref})
+			snapshot := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref})
 			assertState(t, snapshot, ref, testCase.want)
 		})
 	}
@@ -442,21 +378,20 @@ func (testRecorderError) Error() string { return "recorder failure" }
 
 func TestCoordinatorEvictsOldRecordsConservatively(t *testing.T) {
 	coord := NewCoordinator(WithLimit(1))
-	evicted := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "old"}
-	current := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "new"}
-	version := mustVersion(t, 1)
+	evicted := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
+	current := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 
 	coord.RecordCommitted("session-1", evicted)
 	coord.RecordCommitted("session-1", current)
 
-	snapshot := coord.Snapshot("session-1", version, []clientui.RuntimeOperationRef{evicted, current})
+	snapshot := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{evicted, current})
 	assertState(t, snapshot, evicted, clientui.RuntimeInputReconciliationEvicted)
 	assertState(t, snapshot, current, clientui.RuntimeInputReconciliationCommitted)
 }
 
 func TestCoordinatorMemoDedupesInFlightAndSuccessfulRetry(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-memo"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int32
@@ -517,30 +452,26 @@ func TestCoordinatorMemoDedupesInFlightAndSuccessfulRetry(t *testing.T) {
 
 func TestCoordinatorMemoRejectsReusedOperationRefWithDifferentParamsBeforeLedgerMutation(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: "shell-mismatch"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindUserShell)
 	_, err := Do(coord, context.Background(), "session-1", ref, "pwd", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (struct{}, error) {
 		return struct{}{}, nil
 	})
 	if err != nil {
 		t.Fatalf("first operation: %v", err)
 	}
-	version := mustVersion(t, 1)
-	before := coord.Snapshot("session-1", version, []clientui.RuntimeOperationRef{ref}).Operations[0].Version
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationAccepted)
 	_, err = Do(coord, context.Background(), "session-1", ref, "ls", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (struct{}, error) {
 		return struct{}{}, nil
 	})
 	if !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("mismatch error = %v, want request id reused", err)
 	}
-	after := coord.Snapshot("session-1", version, []clientui.RuntimeOperationRef{ref}).Operations[0].Version
-	if after != before {
-		t.Fatalf("mismatch mutated ledger version: before=%+v after=%+v", before, after)
-	}
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationAccepted)
 }
 
 func TestCoordinatorFailedAttemptRejectsRetryWithDifferentParams(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "failed-mismatch"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	_, err := Do(coord, context.Background(), "session-1", ref, "original", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (struct{}, error) {
 		coord.RecordFailedWithRestore("session-1", ref)
 		return struct{}{}, errRecorderTest
@@ -548,8 +479,7 @@ func TestCoordinatorFailedAttemptRejectsRetryWithDifferentParams(t *testing.T) {
 	if !errors.Is(err, errRecorderTest) {
 		t.Fatalf("first error = %v, want recorder failure", err)
 	}
-	version := mustVersion(t, 20)
-	before := coord.Snapshot("session-1", version, []clientui.RuntimeOperationRef{ref}).Operations[0].Version
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationFailedWithRestore)
 	_, err = Do(coord, context.Background(), "session-1", ref, "different", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (struct{}, error) {
 		t.Fatal("mismatched failed retry must not run")
 		return struct{}{}, nil
@@ -557,16 +487,13 @@ func TestCoordinatorFailedAttemptRejectsRetryWithDifferentParams(t *testing.T) {
 	if !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("mismatched failed retry error = %v, want request id reused", err)
 	}
-	after := coord.Snapshot("session-1", version, []clientui.RuntimeOperationRef{ref}).Operations[0].Version
-	if after != before {
-		t.Fatalf("mismatched failed retry mutated ledger version: before=%+v after=%+v", before, after)
-	}
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationFailedWithRestore)
 }
 
 func TestCoordinatorPrunesSuccessfulMemoResponsesWithTerminalRecord(t *testing.T) {
 	now := time.Date(2026, 6, 30, 13, 0, 0, 0, time.UTC)
 	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "ttl-success"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	var calls atomic.Int32
 	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
@@ -577,7 +504,7 @@ func TestCoordinatorPrunesSuccessfulMemoResponsesWithTerminalRecord(t *testing.T
 		t.Fatalf("first operation = (%q, %v)", resp, err)
 	}
 	now = now.Add(2 * time.Minute)
-	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "trigger-prune"})
+	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
 	resp, err = Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
 		return "second", nil
@@ -593,12 +520,12 @@ func TestCoordinatorPrunesSuccessfulMemoResponsesWithTerminalRecord(t *testing.T
 func TestCoordinatorTombstoneExpiresAndAllowsLateOperationAfterTTL(t *testing.T) {
 	now := time.Date(2026, 6, 30, 14, 0, 0, 0, time.UTC)
 	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "tombstone-ttl"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	if err := coord.CancelOperation("session-1", ref); err != nil {
 		t.Fatalf("CancelOperation: %v", err)
 	}
 	now = now.Add(2 * time.Minute)
-	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "trigger-prune"})
+	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
 	ran := false
 	_, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (struct{}, error) {
 		ran = true
@@ -614,7 +541,7 @@ func TestCoordinatorTombstoneExpiresAndAllowsLateOperationAfterTTL(t *testing.T)
 
 func TestCoordinatorTombstoneRemainsTerminalUntilTTL(t *testing.T) {
 	coord := NewCoordinator(WithLimit(1))
-	canceled := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "consumed-tombstone"}
+	canceled := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	if err := coord.CancelOperation("session-1", canceled); err != nil {
 		t.Fatalf("CancelOperation: %v", err)
 	}
@@ -627,26 +554,26 @@ func TestCoordinatorTombstoneRemainsTerminalUntilTTL(t *testing.T) {
 			t.Fatalf("late operation attempt %d error = %v, want canceled", i+1, err)
 		}
 	}
-	for _, id := range []string{"new-a", "new-b"} {
-		coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: id})
+	for range 2 {
+		coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 8), []clientui.RuntimeOperationRef{canceled}), canceled, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{canceled}), canceled, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
 func TestCoordinatorTombstonePreventsLateSuccessfulRecorderOverwrite(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "late-success-after-cancel"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	if err := coord.CancelOperation("session-1", ref); err != nil {
 		t.Fatalf("CancelOperation: %v", err)
 	}
 	coord.RecordCommitted("session-1", ref)
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 9), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
 func TestCoordinatorTombstonedSuccessfulAttemptDoesNotReplayAfterTTL(t *testing.T) {
 	now := time.Date(2026, 6, 30, 15, 30, 0, 0, time.UTC)
 	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "late-success-memo"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	calls := atomic.Int32{}
 	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
@@ -659,7 +586,7 @@ func TestCoordinatorTombstonedSuccessfulAttemptDoesNotReplayAfterTTL(t *testing.
 		t.Fatalf("tombstoned success = (%q, %v), want canceled zero response", resp, err)
 	}
 	now = now.Add(2 * time.Minute)
-	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "trigger-prune"})
+	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
 	resp, err = Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
 		return "fresh", nil
@@ -674,7 +601,7 @@ func TestCoordinatorTombstonedSuccessfulAttemptDoesNotReplayAfterTTL(t *testing.
 
 func TestCoordinatorQueuedMessageCommitBarrierPreventsLateCancelTombstone(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "queued-commit-barrier"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	created := false
 	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		committed, err := coord.TryCommitOperationMutation("session-1", ref, func() error {
@@ -702,12 +629,12 @@ func TestCoordinatorQueuedMessageCommitBarrierPreventsLateCancelTombstone(t *tes
 	if !created {
 		t.Fatal("queued create mutation did not run")
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 10), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
 func TestCoordinatorQueuedMessageCommitMutationPreventsPreCommitCreate(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "queued-pre-commit-cancel"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	created := false
 	if err := coord.CancelOperation("session-1", ref); err != nil {
 		t.Fatalf("CancelOperation: %v", err)
@@ -722,12 +649,12 @@ func TestCoordinatorQueuedMessageCommitMutationPreventsPreCommitCreate(t *testin
 	if committed || created {
 		t.Fatalf("committed=%t created=%t, want canceled before queued mutation", committed, created)
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 11), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
 func TestCoordinatorCommittedRuntimeAcceptanceWinsLateCancel(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-late-cancel"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		if err := coord.CancelOperation("session-1", ref); err != nil {
 			t.Fatalf("CancelOperation: %v", err)
@@ -738,12 +665,12 @@ func TestCoordinatorCommittedRuntimeAcceptanceWinsLateCancel(t *testing.T) {
 	if err != nil || resp != "accepted" {
 		t.Fatalf("accepted operation = (%q, %v), want success despite late cancel", resp, err)
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 12), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
 func TestCoordinatorCommittedAttemptErrorIsNotRerun(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-committed-error"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	var calls atomic.Int32
 	run := func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
@@ -762,12 +689,12 @@ func TestCoordinatorCommittedAttemptErrorIsNotRerun(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("committed error calls = %d, want 1", got)
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 13), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
 func TestCoordinatorSubmittedAttemptErrorIsNotRerun(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "queue-submitted-error"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	var calls atomic.Int32
 	run := func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
@@ -786,13 +713,13 @@ func TestCoordinatorSubmittedAttemptErrorIsNotRerun(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("submitted error calls = %d, want 1", got)
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 14), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationSubmitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationSubmitted)
 }
 
 func TestCoordinatorPrunesCommittedAttemptErrorAfterTTL(t *testing.T) {
 	now := time.Date(2026, 6, 30, 16, 0, 0, 0, time.UTC)
 	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-committed-error-ttl"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	var calls atomic.Int32
 	run := func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
@@ -805,7 +732,7 @@ func TestCoordinatorPrunesCommittedAttemptErrorAfterTTL(t *testing.T) {
 		t.Fatalf("first committed error = (%q, %v), want accepted recorder error", resp, err)
 	}
 	now = now.Add(2 * time.Minute)
-	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "trigger-ttl-prune"})
+	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
 	resp, err = Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
 		return "fresh", nil
@@ -820,7 +747,7 @@ func TestCoordinatorPrunesCommittedAttemptErrorAfterTTL(t *testing.T) {
 
 func TestCoordinatorPrunesSubmittedAttemptErrorByCapacity(t *testing.T) {
 	coord := NewCoordinator(WithLimit(1), WithTTL(time.Hour))
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "queue-submitted-error-capacity"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
 	var calls atomic.Int32
 	run := func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
@@ -832,7 +759,7 @@ func TestCoordinatorPrunesSubmittedAttemptErrorByCapacity(t *testing.T) {
 	if !errors.Is(err, errRecorderTest) || resp != "submitted" {
 		t.Fatalf("first submitted error = (%q, %v), want submitted recorder error", resp, err)
 	}
-	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "trigger-capacity-prune"})
+	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
 	resp, err = Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
 		return "fresh", nil
@@ -848,28 +775,28 @@ func TestCoordinatorPrunesSubmittedAttemptErrorByCapacity(t *testing.T) {
 func TestCoordinatorPrunesExpiredTombstonesBeforeCapacityCheck(t *testing.T) {
 	now := time.Date(2026, 6, 30, 15, 0, 0, 0, time.UTC)
 	coord := NewCoordinator(WithLimit(1), WithTTL(time.Minute), WithNow(func() time.Time { return now }))
-	old := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "old-tombstone"}
+	old := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	if err := coord.CancelOperation("session-1", old); err != nil {
 		t.Fatalf("old CancelOperation: %v", err)
 	}
 	now = now.Add(2 * time.Minute)
-	newRef := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "new-tombstone"}
+	newRef := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	if err := coord.CancelOperation("session-1", newRef); err != nil {
 		t.Fatalf("new CancelOperation after old TTL: %v", err)
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 9), []clientui.RuntimeOperationRef{old, newRef}), old, clientui.RuntimeInputReconciliationEvicted)
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 10), []clientui.RuntimeOperationRef{newRef}), newRef, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{old, newRef}), old, clientui.RuntimeInputReconciliationEvicted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{newRef}), newRef, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
 func TestCoordinatorBoundsEvictedMarkers(t *testing.T) {
 	coord := NewCoordinator(WithLimit(1), WithTTL(time.Hour))
-	evictedA := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "evicted-a"}
-	evictedB := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "evicted-b"}
-	current := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "current"}
+	evictedA := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
+	evictedB := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
+	current := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	coord.RecordCommitted("session-1", evictedA)
 	coord.RecordCommitted("session-1", evictedB)
 	coord.RecordCommitted("session-1", current)
-	snapshot := coord.Snapshot("session-1", mustVersion(t, 11), []clientui.RuntimeOperationRef{evictedA, evictedB, current})
+	snapshot := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{evictedA, evictedB, current})
 	assertState(t, snapshot, evictedA, clientui.RuntimeInputReconciliationUnknown)
 	assertState(t, snapshot, evictedB, clientui.RuntimeInputReconciliationEvicted)
 	assertState(t, snapshot, current, clientui.RuntimeInputReconciliationCommitted)
@@ -877,7 +804,7 @@ func TestCoordinatorBoundsEvictedMarkers(t *testing.T) {
 
 func TestCoordinatorFailedAttemptCanRetryWithSameOperationRecord(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: "compact-retry"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindCompact)
 	var calls atomic.Int32
 	_, err := Do(coord, context.Background(), "session-1", ref, "args", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
@@ -887,7 +814,7 @@ func TestCoordinatorFailedAttemptCanRetryWithSameOperationRecord(t *testing.T) {
 	if !errors.Is(err, errRecorderTest) {
 		t.Fatalf("first error = %v, want recorder failure", err)
 	}
-	failed := coord.Snapshot("session-1", mustVersion(t, 3), []clientui.RuntimeOperationRef{ref})
+	failed := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref})
 	assertState(t, failed, ref, clientui.RuntimeInputReconciliationFailedWithRestore)
 
 	resp, err := Do(coord, context.Background(), "session-1", ref, "args", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
@@ -901,12 +828,12 @@ func TestCoordinatorFailedAttemptCanRetryWithSameOperationRecord(t *testing.T) {
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("calls = %d, want failed attempt plus retry", got)
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 4), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
 func TestCoordinatorCancelBeforeRegisterCreatesNonEvictableTombstone(t *testing.T) {
 	coord := NewCoordinator(WithLimit(1))
-	canceled := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "queued-cancel"}
+	canceled := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
 	if err := coord.CancelOperation("session-1", canceled); err != nil {
 		t.Fatalf("CancelOperation: %v", err)
 	}
@@ -917,17 +844,17 @@ func TestCoordinatorCancelBeforeRegisterCreatesNonEvictableTombstone(t *testing.
 	if !errors.Is(err, ErrOperationCanceled) {
 		t.Fatalf("late original error = %v, want operation canceled", err)
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 5), []clientui.RuntimeOperationRef{canceled}), canceled, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-	for i := 0; i < 3; i++ {
-		ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "terminal-" + string(rune('a'+i))}
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{canceled}), canceled, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+	for range 3 {
+		ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 		coord.RecordCommitted("session-1", ref)
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 6), []clientui.RuntimeOperationRef{canceled}), canceled, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{canceled}), canceled, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
 func TestCoordinatorCancelInFlightCancelsAttemptContext(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-cancel"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -950,12 +877,12 @@ func TestCoordinatorCancelInFlightCancelsAttemptContext(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for in-flight operation cancellation")
 	}
-	assertState(t, coord.Snapshot("session-1", mustVersion(t, 6), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
 func TestCoordinatorCancelActiveSubmitQueuedRequestsRuntimeInterrupt(t *testing.T) {
 	coord := NewCoordinator()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "submit-queued-active-cancel"}
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -989,15 +916,15 @@ func TestCoordinatorCancelActiveSubmitQueuedRequestsRuntimeInterrupt(t *testing.
 func TestCoordinatorTerminalTTLMarksEvictedButKeepsUnexpiredTombstones(t *testing.T) {
 	now := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
 	coord := NewCoordinator(WithLimit(1), WithTTL(time.Hour), WithNow(func() time.Time { return now }))
-	terminal := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "terminal"}
-	tombstone := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "tombstone"}
+	terminal := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
+	tombstone := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	coord.RecordCommitted("session-1", terminal)
 	if err := coord.CancelOperation("session-1", tombstone); err != nil {
 		t.Fatalf("CancelOperation: %v", err)
 	}
 	now = now.Add(2 * time.Minute)
-	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "new"})
-	snapshot := coord.Snapshot("session-1", mustVersion(t, 7), []clientui.RuntimeOperationRef{terminal, tombstone})
+	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
+	snapshot := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{terminal, tombstone})
 	assertState(t, snapshot, terminal, clientui.RuntimeInputReconciliationEvicted)
 	assertState(t, snapshot, tombstone, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
@@ -1005,7 +932,7 @@ func TestCoordinatorTerminalTTLMarksEvictedButKeepsUnexpiredTombstones(t *testin
 func assertState(t *testing.T, snapshot clientui.RuntimeInputReconciliationSnapshot, ref clientui.RuntimeOperationRef, want clientui.RuntimeInputReconciliationState) {
 	t.Helper()
 	for _, record := range snapshot.Operations {
-		if record.OperationRef == ref {
+		if record.Operation.Key() == ref.Key() {
 			if record.State != want {
 				t.Fatalf("state for %+v = %q, want %q", ref, record.State, want)
 			}
@@ -1015,11 +942,18 @@ func assertState(t *testing.T, snapshot clientui.RuntimeInputReconciliationSnaps
 	t.Fatalf("missing record for %+v in %+v", ref, snapshot.Operations)
 }
 
-func mustVersion(t *testing.T, sequence uint64) clientui.ReadModelVersion {
+func mustFeedSnapshot(t *testing.T, coord *Coordinator, sessionID string, refs []clientui.RuntimeOperationRef) clientui.RuntimeInputReconciliationSnapshot {
 	t.Helper()
-	version, err := clientui.NewReadModelVersion("epoch-1", 1, sequence)
+	snapshot, err := coord.FeedSnapshot(sessionID, refs)
 	if err != nil {
-		t.Fatalf("NewReadModelVersion: %v", err)
+		t.Fatalf("FeedSnapshot: %v", err)
 	}
-	return version
+	return snapshot
+}
+
+func testRuntimeOperationRef(kind clientui.RuntimeOperationKind) clientui.RuntimeOperationRef {
+	return clientui.RuntimeOperationRef{
+		Kind:            kind,
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+	}
 }

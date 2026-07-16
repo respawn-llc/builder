@@ -129,7 +129,7 @@ func TestWorktreeCreateSetupEventUpdatesPendingOperationState(t *testing.T) {
 		Phase:               serverapi.WorktreeSetupPhaseStarted,
 	}
 
-	updated := model.worktreeReducer().Update(worktreeSetupEventMsg{token: 7, event: event}).model
+	updated := model.reduceWorktreeMessage(worktreeSetupEventMsg{token: 7, event: event}).model
 
 	if updated.worktrees.create.setupEvent == nil {
 		t.Fatal("setup event was not reduced into create state")

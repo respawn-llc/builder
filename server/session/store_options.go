@@ -36,12 +36,6 @@ type eventLogOptions struct {
 	fsyncIntervalWrites int
 }
 
-func WithEventLogFSyncPolicy(policy EventLogFSyncPolicy) StoreOption {
-	return func(options *storeOptions) {
-		options.eventLog.fsyncPolicy = policy
-	}
-}
-
 func WithPersistenceObserver(observer PersistenceObserver) StoreOption {
 	return func(options *storeOptions) {
 		options.observer = observer

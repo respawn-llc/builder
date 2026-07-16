@@ -4,7 +4,6 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/theme"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,16 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
-
-func writeOnboardingTestSkill(t *testing.T, dir string, name string, description string) {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir skill dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: "+description+"\n---\n"), 0o644); err != nil {
-		t.Fatalf("write skill: %v", err)
-	}
-}
 
 func skillSymlinkChoiceFact(provider string, root string, count int) serverapi.ImportChoiceFact {
 	sourceKind := "external_provider"

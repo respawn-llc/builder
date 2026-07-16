@@ -197,7 +197,7 @@ fn session_subscription_setup_attaches_session_before_subscribe() {
                 session_id: "session-1".to_owned(),
             },
         ),
-        success_response("subscribe-session-activity", json!({"stream":"session-1"})),
+        success_response("subscribe-sample", json!({"stream":"session-1"})),
     ]);
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![connection]),
@@ -207,8 +207,8 @@ fn session_subscription_setup_attaches_session_before_subscribe() {
     let (connection, stream_id) = remote
         .open_session_subscription(
             "session-1",
-            "subscribe-session-activity",
-            "session.subscribeActivity",
+            "subscribe-sample",
+            "sample.subscribe",
             json!({"session_id":"session-1"}),
         )
         .unwrap();
@@ -222,7 +222,7 @@ fn session_subscription_setup_attaches_session_before_subscribe() {
             ("handshake", "protocol.handshake"),
             ("attach-project", "project.attach"),
             ("attach-session", "session.attach"),
-            ("subscribe-session-activity", "session.subscribeActivity"),
+            ("subscribe-sample", "sample.subscribe"),
         ],
     );
     assert_eq!(
@@ -2782,7 +2782,7 @@ fn setup_and_dedicated_failures_close_new_connections() {
                 session_id: "session-1".to_owned(),
             },
         ),
-        error_response("subscribe-session-activity"),
+        error_response("subscribe-sample"),
     ]);
     let subscribe_closed = subscribe.close_count.clone();
     let mut remote = RemoteClient::new(
@@ -2985,8 +2985,6 @@ fn capabilities() -> CapabilityFlags {
         session_runtime: true,
         runtime_control: true,
         prompt_control: true,
-        prompt_activity: true,
-        session_activity: true,
         process_output: true,
     }
 }
@@ -3057,10 +3055,10 @@ fn error_response(id: &str) -> Frame {
 
 fn subscription_route() -> rpc_client::stream::SubscriptionRoute {
     rpc_client::stream::SubscriptionRoute {
-        request_id: "subscribe-session-activity",
-        method: "session.subscribeActivity",
-        event_method: "session.activity",
-        complete_method: "session.activity.complete",
+        request_id: "subscribe-sample",
+        method: "sample.subscribe",
+        event_method: "sample.event",
+        complete_method: "sample.complete",
     }
 }
 
@@ -3180,8 +3178,10 @@ fn contract_transcript_rows_json() -> serde_json::Value {
             "Integrity": 0,
             "Kind": "user",
             "User": {
+                "StepID": "11111111-1111-4111-8111-111111111111",
                 "Text": "ship the fix",
-                "CondensedText": ""
+                "CondensedText": null,
+                "RollbackTargetID": null
             },
             "Assistant": null,
             "Tool": null,

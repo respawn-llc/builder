@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/google/uuid"
 )
 
 func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithBlankGroupSeparators(t *testing.T) {
@@ -18,13 +18,13 @@ func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithBlankGroupSepa
 
 	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageHydration,
-		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
+		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
 			userRow("first user"),
 			userRow("second user"),
 			assistantRow("assistant answer"),
 			toolRow("tool result"),
 			noticeRow("notice"),
-		}},
+		}}},
 	}, testFrame())
 	if err != nil {
 		t.Fatalf("apply hydration: %v", err)
@@ -80,11 +80,11 @@ func TestBackgroundShellCompletionStaysFlushWithToolActivity(t *testing.T) {
 
 	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageHydration,
-		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
+		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
 			toolRow("backgrounded command"),
 			backgroundNoticeRow("background complete"),
 			noticeRow("ordinary notice"),
-		}},
+		}}},
 	}, testFrame())
 	if err != nil {
 		t.Fatalf("apply hydration: %v", err)
@@ -138,7 +138,7 @@ func TestCommittedAssistantFinalFallbackUsesFrameTheme(t *testing.T) {
 		t.Fatalf("apply ordinary committed assistant row: %v", err)
 	}
 
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	fallbackRow := assistantRow("themed answer")
 	fallbackRow.Assistant.StreamID = &streamID
 	var actual bytes.Buffer
@@ -176,12 +176,12 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 
 	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageHydration,
-		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
+		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
 			userRow("user\x1b[2J\nnext\tline\rafter"),
 			assistantRow("assistant\x1b]0;spoof\a **answer**"),
 			toolRow("tool\x1b[3;1H result"),
 			noticeRow("notice\x07 value"),
-		}},
+		}}},
 	}, testFrame())
 	if err != nil {
 		t.Fatalf("apply malicious hydration: %v", err)
@@ -206,12 +206,12 @@ func TestCommittedRowsFilterNonOngoingVisibility(t *testing.T) {
 
 	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageHydration,
-		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
+		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
 			visibleRow(userRow("ongoing"), clientui.EntryVisibilityOngoing),
 			visibleRow(userRow("collapsed ongoing"), clientui.EntryVisibilityOngoingCollapsed),
 			visibleRow(userRow("detail only"), clientui.EntryVisibilityDetail),
 			visibleRow(userRow("hidden"), clientui.EntryVisibilityHidden),
-		}},
+		}}},
 	}, testFrame())
 	if err != nil {
 		t.Fatalf("apply visibility hydration: %v", err)
@@ -256,9 +256,11 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 			row := clientui.TranscriptCommittedRow{
 				Kind:       clientui.TranscriptRowAssistant,
 				Visibility: tt.visibility,
+				Integrity:  transcript.RowIntegrityValid,
 				Assistant: &clientui.TranscriptAssistantRow{
-					Text:  multiLine,
-					Phase: transcript.AssistantPhaseCommentary,
+					StepID: assistantFinalizationStepID(),
+					Text:   multiLine,
+					Phase:  transcript.AssistantPhaseCommentary,
 				},
 			}
 			if _, err := surface.ApplyTerminalMessage(committedMessage(row), FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
@@ -290,17 +292,21 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 func TestAnsweredQuestionRendersFullQuestionAndSelectedAnswer(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
+	condensedText := "Recursive scan\nUser also said:\ninclude tests"
 	row := clientui.TranscriptCommittedRow{
 		Kind:       clientui.TranscriptRowTool,
 		Visibility: clientui.EntryVisibilityOngoingCollapsed,
+		Integrity:  transcript.RowIntegrityValid,
 		Tool: &clientui.TranscriptToolRow{
+			StepID:        assistantFinalizationStepID(),
+			ToolCallID:    "5c8ff40e-35fd-48db-9b42-bc42fb7a741d",
 			ToolName:      "ask_question",
 			Text:          "User chose option #2. They also said: include tests",
-			CondensedText: "Recursive scan\nUser also said:\ninclude tests",
-			ToolPresentation: &clientui.ToolCallMeta{
+			CondensedText: &condensedText,
+			Presentation: &transcript.ToolCallMeta{
 				ToolName:       "ask_question",
-				Presentation:   clientui.ToolPresentationAskQuestion,
-				RenderBehavior: clientui.ToolCallRenderBehaviorAskQuestion,
+				Presentation:   transcript.ToolPresentationAskQuestion,
+				RenderBehavior: transcript.ToolCallRenderBehaviorAskQuestion,
 				Command:        "Choose scope?\nKeep generated files in scope?",
 				CompactText:    "Choose scope?\nKeep generated files in scope?",
 				Question:       "Choose scope?\nKeep generated files in scope?",
@@ -326,23 +332,28 @@ func TestAnsweredQuestionRendersFullQuestionAndSelectedAnswer(t *testing.T) {
 }
 
 func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
-	for _, phase := range []transcript.AssistantPhase{transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal} {
+	for _, phase := range []transcript.AssistantPhase{transcript.AssistantPhaseFinal} {
 		t.Run(string(phase), func(t *testing.T) {
 			var out bytes.Buffer
 			surface := NewSurface(&out)
+			condensedText := "compact answer"
 			row := clientui.TranscriptCommittedRow{
 				Kind:       clientui.TranscriptRowAssistant,
 				Visibility: clientui.EntryVisibilityOngoing,
+				Integrity:  transcript.RowIntegrityValid,
 				Assistant: &clientui.TranscriptAssistantRow{
+					StepID:        assistantFinalizationStepID(),
 					Text:          "first line\nsecond line\nthird line",
-					CondensedText: "compact answer",
+					CondensedText: &condensedText,
 					Phase:         phase,
 				},
 			}
 
 			if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-				Kind:      clientui.TranscriptMessageHydration,
-				Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{row}},
+				Kind: clientui.TranscriptMessageHydration,
+				Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{
+					CommittedRows: []clientui.TranscriptCommittedRow{row},
+				}},
 			}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
 				t.Fatalf("apply hydration: %v", err)
 			}
@@ -357,18 +368,23 @@ func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
 func TestHydrationRendersFullUserPrompt(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
+	condensedText := "/review"
 	row := clientui.TranscriptCommittedRow{
 		Kind:       clientui.TranscriptRowUser,
 		Visibility: clientui.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
 		User: &clientui.TranscriptUserRow{
+			StepID:        assistantFinalizationStepID(),
 			Text:          "/review\nInspect every changed file.\nReport architectural regressions.",
-			CondensedText: "/review",
+			CondensedText: &condensedText,
 		},
 	}
 
 	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind:      clientui.TranscriptMessageHydration,
-		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{row}},
+		Kind: clientui.TranscriptMessageHydration,
+		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{
+			CommittedRows: []clientui.TranscriptCommittedRow{row},
+		}},
 	}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
 		t.Fatalf("apply hydration: %v", err)
 	}
@@ -380,13 +396,21 @@ func TestHydrationRendersFullUserPrompt(t *testing.T) {
 
 func committedMessage(row clientui.TranscriptCommittedRow) clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
-		Kind:         clientui.TranscriptMessageCommittedRow,
-		CommittedRow: &row,
+		Kind:    clientui.TranscriptMessageCommittedRow,
+		Payload: clientui.TranscriptPayload{CommittedRow: &row},
 	}
 }
 
 func userRow(text string) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: text}}
+	return clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowUser,
+		User: &clientui.TranscriptUserRow{
+			StepID: assistantFinalizationStepID(),
+			Text:   text,
+		},
+	}
 }
 
 func visibleRow(row clientui.TranscriptCommittedRow, visibility clientui.EntryVisibility) clientui.TranscriptCommittedRow {
@@ -395,35 +419,58 @@ func visibleRow(row clientui.TranscriptCommittedRow, visibility clientui.EntryVi
 }
 
 func assistantRow(text string) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{
-		Text:  text,
-		Phase: transcript.AssistantPhaseFinal,
-	}}
+	return clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowAssistant,
+		Assistant: &clientui.TranscriptAssistantRow{
+			StepID: assistantFinalizationStepID(),
+			Text:   text,
+			Phase:  transcript.AssistantPhaseFinal,
+		},
+	}
 }
 
 func toolRow(text string) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibilityOngoingCollapsed, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{Text: text}}
+	return clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityOngoingCollapsed,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowTool,
+		Tool: &clientui.TranscriptToolRow{
+			StepID:     assistantFinalizationStepID(),
+			ToolCallID: "71219421-994c-4eea-8280-fdc345770f22",
+			ToolName:   "tool",
+			Text:       text,
+		},
+	}
 }
 
 func noticeRow(text string) clientui.TranscriptCommittedRow {
 	legacyText := text
 	return clientui.TranscriptCommittedRow{
 		Visibility: clientui.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowNotice,
-		Notice:     &clientui.TranscriptNoticeRow{Data: clientui.TranscriptNoticeData{LegacyText: &legacyText}},
+		Notice: &clientui.TranscriptNoticeRow{
+			Reason:     clientui.TranscriptNoticeLegacyUntypedNotice,
+			Severity:   clientui.TranscriptNoticeInfo,
+			LegacyText: &legacyText,
+		},
 	}
 }
 
 func backgroundNoticeRow(text string) clientui.TranscriptCommittedRow {
+	messageType := clientui.TranscriptMessageBackgroundNotice
+	compactLabel := text
 	return clientui.TranscriptCommittedRow{
 		Visibility: clientui.EntryVisibilityOngoingCollapsed,
+		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowNotice,
 		Notice: &clientui.TranscriptNoticeRow{
-			Severity: clientui.TranscriptNoticeInfo,
-			Data: clientui.TranscriptNoticeData{
-				MessageType:  clientui.MessageTypeBackgroundNotice,
-				CompactLabel: text,
-			},
+			Reason:       clientui.TranscriptNoticeLegacyUntypedNotice,
+			Severity:     clientui.TranscriptNoticeInfo,
+			MessageType:  &messageType,
+			CompactLabel: &compactLabel,
 		},
 	}
 }

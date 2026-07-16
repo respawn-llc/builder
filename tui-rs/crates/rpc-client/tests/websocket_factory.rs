@@ -114,8 +114,6 @@ where
                             "session_runtime": true,
                             "runtime_control": true,
                             "prompt_control": true,
-                            "prompt_activity": true,
-                            "session_activity": true,
                             "process_output": true
                         }
                     }

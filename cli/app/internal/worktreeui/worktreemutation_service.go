@@ -93,16 +93,6 @@ func (s Service) Enter(selector string) (serverapi.WorktreeScheduledAcknowledgem
 	})
 }
 
-func (s Service) Leave() (serverapi.WorktreeScheduledAcknowledgement, error) {
-	operationID := s.operationID()
-	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeScheduledAcknowledgement, error) {
-		return s.Client.LeaveWorktree(ctx, serverapi.WorktreeLeaveRequest{
-			OperationID: operationID,
-			SessionID:   s.SessionID,
-		})
-	})
-}
-
 func (s Service) Delete(
 	selector string,
 	forceFolderRemoval bool,

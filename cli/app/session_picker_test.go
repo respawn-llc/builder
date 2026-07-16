@@ -75,15 +75,6 @@ func pickerTestSummary(t *testing.T, raw string, updatedAt time.Time) clientui.S
 	}
 }
 
-func selectedPickerSessionID(t *testing.T, selection sessionPickerSelection) runtimeids.SessionID {
-	t.Helper()
-	selected, ok := selection.(sessionPickerSessionSelection)
-	if !ok {
-		t.Fatalf("picker selection = %T, want session selection", selection)
-	}
-	return selected.sessionID
-}
-
 func TestSessionPickerScrollsAndSelects(t *testing.T) {
 	now := time.Date(2026, time.February, 8, 12, 0, 0, 0, time.UTC)
 	summaries := make([]clientui.SessionSummary, 0, 20)

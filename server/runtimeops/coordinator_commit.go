@@ -19,7 +19,6 @@ func (c *Coordinator) TryCommitOperation(sessionID string, ref clientui.RuntimeO
 	if err := ref.Validate(); err != nil {
 		return false
 	}
-	version := c.nextVersion(sessionID)
 	for {
 		c.mu.Lock()
 		ledger := c.ledgerLocked(sessionID)
@@ -32,11 +31,11 @@ func (c *Coordinator) TryCommitOperation(sessionID string, ref clientui.RuntimeO
 			continue
 		}
 		if _, canceled := ledger.tombstones[key]; canceled {
-			c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, version, false, c.now())
+			c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, false, c.now())
 			c.mu.Unlock()
 			return false
 		}
-		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCommitted, version, !ledger.nonEvictableLocked(key), c.now())
+		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCommitted, !ledger.nonEvictableLocked(key), c.now())
 		c.mu.Unlock()
 		return true
 	}
@@ -52,7 +51,6 @@ func (c *Coordinator) TryCommitOperationMutation(sessionID string, ref clientui.
 	if err := ref.Validate(); err != nil {
 		return false, err
 	}
-	version := c.nextVersion(sessionID)
 	var (
 		ledger  *sessionLedger
 		key     string
@@ -70,7 +68,7 @@ func (c *Coordinator) TryCommitOperationMutation(sessionID string, ref clientui.
 			continue
 		}
 		if _, canceled := ledger.tombstones[key]; canceled {
-			c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, version, false, c.now())
+			c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, false, c.now())
 			c.mu.Unlock()
 			return false, nil
 		}
@@ -93,7 +91,7 @@ func (c *Coordinator) TryCommitOperationMutation(sessionID string, ref clientui.
 	}
 	delete(ledger.commitBarriers, key)
 	if mutationErr == nil {
-		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCommitted, version, !ledger.nonEvictableLocked(key), c.now())
+		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCommitted, !ledger.nonEvictableLocked(key), c.now())
 	}
 	close(barrier.done)
 	c.mu.Unlock()

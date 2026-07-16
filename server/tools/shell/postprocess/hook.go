@@ -64,7 +64,7 @@ func (p userHookProcessor) Process(ctx context.Context, envelope Envelope) (Deci
 		Workdir:         req.Workdir,
 		OriginalOutput:  envelope.OriginalOutput,
 		CurrentOutput:   envelope.CurrentOutput,
-		ExitCode:        textutil.CloneInt(req.ExitCode),
+		ExitCode:        textutil.Pointer(req.ExitCode),
 		Backgrounded:    req.Backgrounded,
 		MaxDisplayChars: req.MaxDisplayChars,
 	})

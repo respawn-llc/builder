@@ -49,7 +49,7 @@ func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (sessio
 	_, receipt, err := e.store.AppendEvent(stepID, "tool_completed", payload)
 	if receipt.Committed {
 		e.markCurrentRequestShapeDirtyForSignificantMutation()
-		newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).RecordStoredToolCompletion(payload)
+		e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
 		if hasBackgroundSession {
 			e.ensureOrchestrationCollaborators()
 			e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
@@ -135,7 +135,7 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 	}
 	_, receipt, err := e.store.AppendEvent(stepID, "local_entry", entry)
 	if receipt.Committed {
-		newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendLocalEntryRecord(*localEntryChatEntry(entry))
+		e.transcriptRuntimeState().AppendLocalEntryRecord(*localEntryChatEntry(entry))
 		e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: localEntryChatEntry(entry), CommittedTranscriptChanged: true})
 	}
 	return receipt, err
@@ -190,7 +190,7 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	} else {
 		e.markCurrentRequestShapeDirty()
 	}
-	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendMessage(msg)
+	e.transcriptRuntimeState().AppendMessage(stepID, msg)
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
 	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
@@ -255,13 +255,14 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 	} else {
 		e.markCurrentRequestShapeDirty()
 	}
-	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendMessage(msg)
+	e.transcriptRuntimeState().AppendMessage(stepID, msg)
 	e.emitRaw(Event{
 		Kind:                         EventUserMessageFlushed,
 		StepID:                       stepID,
 		UserMessage:                  msg.Content,
 		UserMessageBatch:             append([]string(nil), batch...),
 		UserMessageBatchQueueItemIDs: normalizedIDs,
+		UserMessageBatchQueuedItems:  queuedUserMessageIdentities(normalizedItems),
 		CommittedTranscriptChanged:   true,
 	})
 	for _, item := range normalizedItems {
@@ -303,6 +304,20 @@ func queuedUserMessageStatusItemIDs(items []QueuedUserMessage) []string {
 		}
 	}
 	return ids
+}
+
+func queuedUserMessageIdentities(items []QueuedUserMessage) []QueuedUserMessageIdentity {
+	if len(items) == 0 {
+		return nil
+	}
+	identities := make([]QueuedUserMessageIdentity, 0, len(items))
+	for _, item := range items {
+		identities = append(identities, QueuedUserMessageIdentity{
+			QueueItemID:     strings.TrimSpace(item.ID),
+			ClientRequestID: strings.TrimSpace(item.ClientRequestID),
+		})
+	}
+	return identities
 }
 
 func queuedUserMessageIDSet(items []QueuedUserMessage) map[string]struct{} {
@@ -353,7 +368,7 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 }
 
 func (e *Engine) clearStreamingAssistantStateRaw() (*AssistantStreamMetadata, *uuid.UUID) {
-	return newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ClearStreamingAssistantState()
+	return e.transcriptRuntimeState().ClearStreamingAssistantState()
 }
 
 func (e *Engine) emitStreamingAssistantResetEventsRaw(stepID string, metadata *AssistantStreamMetadata, streamID *uuid.UUID, abortReason *AssistantStreamAbortReason) {
@@ -414,7 +429,7 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 	if instruction.kind == completedResponseResolutionInstructionFinalize {
 		committed := instruction.committedAssistant
 		if clearedStreamID != nil {
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).RecordAssistantStreamFinalization(committed.coordinate.start, clearedStreamID)
+			e.transcriptRuntimeState().RecordAssistantStreamFinalization(committed.coordinate.start, clearedStreamID)
 		}
 		if err := e.emitCommittedAssistantMessageEventRaw(stepID, steeringCommittedAssistantMessage{
 			message:    committed.message,

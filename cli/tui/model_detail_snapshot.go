@@ -3,7 +3,7 @@ package tui
 import (
 	"maps"
 
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 type DetailPresentationSnapshot struct {
@@ -17,7 +17,7 @@ func (m Model) DetailPresentationSnapshot() DetailPresentationSnapshot {
 	return DetailPresentationSnapshot{
 		loaded:   m.detailPageLoaded,
 		expanded: maps.Clone(m.expanded),
-		selected: valuecopy.Pointer(m.selected),
+		selected: textutil.Pointer(m.selected),
 		scroll:   m.detailScroll,
 	}
 }

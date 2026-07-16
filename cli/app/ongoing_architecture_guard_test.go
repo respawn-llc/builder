@@ -101,9 +101,9 @@ func badPageRead(client interface{ GetSessionTranscriptPage() }) {
 	t.Run("independent UI event wait", func(t *testing.T) {
 		source := `package app
 
-import "core/shared/clientui"
+type ongoingTranscriptEvent struct{}
 
-func renamedRuntimeWait(events <-chan clientui.Event) {
+func renamedRuntimeWait(events <-chan ongoingTranscriptEvent) {
 	<-events
 }
 `
@@ -196,8 +196,7 @@ func isIndependentUIEventReceive(pkg *packages.Package, expression *ast.UnaryExp
 		return false
 	}
 	switch typeName(types.Unalias(channel.Elem())) {
-	case "core/shared/clientui.Event",
-		"core/cli/app.askEvent",
+	case "core/cli/app.askEvent",
 		"core/cli/app.ongoingTranscriptEvent":
 		return true
 	default:
@@ -292,7 +291,6 @@ func parseOngoingArchitectureFixture(t *testing.T, relPath, source string) ([]*p
 	writeTestFile(t, filepath.Join(dir, "shared/clientui/transcript_contract.go"), `package clientui
 
 type TranscriptCommittedRow struct{}
-type Event struct{}
 `)
 	pkgs, err := packages.Load(&packages.Config{
 		Dir:   dir,

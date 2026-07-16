@@ -1,6 +1,7 @@
 package runtimeids
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -75,5 +76,55 @@ func TestSessionIDTracksCanonicalUUIDv4WithoutRejectingLegacyIDs(t *testing.T) {
 	}
 	if legacy.IsCanonicalUUIDv4() {
 		t.Fatal("legacy session ID was marked canonical UUIDv4")
+	}
+}
+
+func TestRuntimeUUIDIDsRoundTripAsJSONString(t *testing.T) {
+	runID, err := ParseRunID("11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatalf("ParseRunID: %v", err)
+	}
+	stepID, err := ParseStepID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("ParseStepID: %v", err)
+	}
+	streamID, err := ParseAssistantStreamID("33333333-3333-4333-8333-333333333333")
+	if err != nil {
+		t.Fatalf("ParseAssistantStreamID: %v", err)
+	}
+	activityID, err := ParseBackgroundActivityID("44444444-4444-4444-8444-444444444444")
+	if err != nil {
+		t.Fatalf("ParseBackgroundActivityID: %v", err)
+	}
+
+	assertRuntimeUUIDJSONRoundTrip(t, NewRuntimeClientRequestID(), new(RuntimeClientRequestID))
+	assertRuntimeUUIDJSONRoundTrip(t, NewQueueItemID(), new(QueueItemID))
+	assertRuntimeUUIDJSONRoundTrip(t, NewLiveRunGroupID(), new(LiveRunGroupID))
+	assertRuntimeUUIDJSONRoundTrip(t, runID, new(RunID))
+	assertRuntimeUUIDJSONRoundTrip(t, stepID, new(StepID))
+	assertRuntimeUUIDJSONRoundTrip(t, streamID, new(AssistantStreamID))
+	assertRuntimeUUIDJSONRoundTrip(t, activityID, new(BackgroundActivityID))
+}
+
+func TestZeroRuntimeUUIDIDCannotMarshal(t *testing.T) {
+	if _, err := json.Marshal(RuntimeClientRequestID{}); err == nil {
+		t.Fatal("zero RuntimeClientRequestID marshaled successfully")
+	}
+}
+
+func assertRuntimeUUIDJSONRoundTrip[T interface{ String() string }](t *testing.T, id T, decoded *T) {
+	t.Helper()
+	encoded, err := json.Marshal(id)
+	if err != nil {
+		t.Fatalf("marshal %T: %v", id, err)
+	}
+	if got, want := string(encoded), `"`+id.String()+`"`; got != want {
+		t.Fatalf("marshal %T = %s, want %s", id, got, want)
+	}
+	if err := json.Unmarshal(encoded, decoded); err != nil {
+		t.Fatalf("unmarshal %T: %v", id, err)
+	}
+	if got := (*decoded).String(); got != id.String() {
+		t.Fatalf("round-trip %T = %q, want %q", id, got, id.String())
 	}
 }

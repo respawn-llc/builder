@@ -3,24 +3,10 @@ package session
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 )
 
 var errSessionFileSymlink = errors.New("session file symlink")
-
-func readRegularSessionFile(path string, label string) ([]byte, error) {
-	fp, err := openRegularSessionFile(path, label)
-	if err != nil {
-		return nil, err
-	}
-	defer fp.Close()
-	data, err := io.ReadAll(fp)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
-}
 
 func openRegularSessionFile(path string, label string) (*os.File, error) {
 	fp, err := openSessionFileReadOnly(path)

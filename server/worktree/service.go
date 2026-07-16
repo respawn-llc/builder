@@ -1366,17 +1366,6 @@ func (s *Service) resolveSessionWorkspaceContext(ctx context.Context, sessionID 
 	}, nil
 }
 
-func (s *Service) ensureDeletionUnblocked(ctx context.Context, currentSessionID string, worktreeID string, worktreeRoot string) (func(), error) {
-	taskBlockers, err := s.metadata.Queries().CountNonTerminalTasksByManagedWorktree(ctx, sql.NullString{String: strings.TrimSpace(worktreeID), Valid: true})
-	if err != nil {
-		return func() {}, err
-	}
-	if taskBlockers > 0 {
-		return func() {}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree is still managed by %d non-terminal workflow task(s)", taskBlockers))
-	}
-	return s.ensureDeletionSessionAndProcessUnblocked(ctx, currentSessionID, worktreeID, worktreeRoot)
-}
-
 func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, currentSessionID string, worktreeID string, worktreeRoot string) (func(), error) {
 	blockers, err := s.metadata.ListSessionsTargetingWorktree(ctx, worktreeID)
 	if err != nil {

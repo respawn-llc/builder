@@ -645,29 +645,29 @@ func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowI
 		}
 	}
 	for _, group := range prepared.nodeGroups {
-		if err := upsertWorkflowNodeGroup(ctx, q, group); err != nil {
+		if err := upsertWorkflowNodeGroup(ctx, q, group, "save workflow node group"); err != nil {
 			return err
 		}
 	}
 	for index, node := range prepared.nodes {
-		if err := upsertWorkflowNode(ctx, q, node, int64(index*100)); err != nil {
+		if err := upsertWorkflowNode(ctx, q, node, int64(index*100), "save workflow node"); err != nil {
 			return err
 		}
 	}
 	for index, group := range prepared.transitionGroups {
-		if err := upsertWorkflowTransitionGroup(ctx, q, group, int64(index*100)); err != nil {
+		if err := upsertWorkflowTransitionGroup(ctx, q, group, int64(index*100), "save workflow transition group"); err != nil {
 			return err
 		}
 	}
 	for index, edge := range prepared.edges {
-		if err := upsertWorkflowEdge(ctx, q, edge, int64(index*100)); err != nil {
+		if err := upsertWorkflowEdge(ctx, q, edge, int64(index*100), "save workflow edge"); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func upsertWorkflowNodeGroup(ctx context.Context, q *sqlitegen.Queries, group NodeGroupRecord) error {
+func upsertWorkflowNodeGroup(ctx context.Context, q *sqlitegen.Queries, group NodeGroupRecord, op string) error {
 	updated, err := q.UpsertWorkflowNodeGroup(ctx, sqlitegen.UpsertWorkflowNodeGroupParams{
 		ID:          group.ID,
 		WorkflowID:  string(group.WorkflowID),
@@ -675,10 +675,10 @@ func upsertWorkflowNodeGroup(ctx context.Context, q *sqlitegen.Queries, group No
 		DisplayName: strings.TrimSpace(group.DisplayName),
 		SortOrder:   group.SortOrder,
 	})
-	return expectAffectedRowCount(updated, err, "save workflow node group")
+	return expectAffectedRowCount(updated, err, op)
 }
 
-func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeRecord, sortOrder int64) error {
+func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeRecord, sortOrder int64, op string) error {
 	if err := validateNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 		return err
 	}
@@ -710,10 +710,10 @@ func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeReco
 		GroupID:                nullableString(node.GroupID),
 		SortOrder:              sortOrder,
 	})
-	return expectAffectedRowCount(updated, err, "save workflow node")
+	return expectAffectedRowCount(updated, err, op)
 }
 
-func upsertWorkflowTransitionGroup(ctx context.Context, q *sqlitegen.Queries, group TransitionGroupRecord, sortOrder int64) error {
+func upsertWorkflowTransitionGroup(ctx context.Context, q *sqlitegen.Queries, group TransitionGroupRecord, sortOrder int64, op string) error {
 	updated, err := q.UpsertWorkflowTransitionGroup(ctx, sqlitegen.UpsertWorkflowTransitionGroupParams{
 		ID:           string(group.ID),
 		SourceNodeID: string(group.SourceNodeID),
@@ -723,10 +723,10 @@ func upsertWorkflowTransitionGroup(ctx context.Context, q *sqlitegen.Queries, gr
 		SortOrder:    sortOrder,
 		WorkflowID:   string(group.WorkflowID),
 	})
-	return expectAffectedRowCount(updated, err, "save workflow transition group")
+	return expectAffectedRowCount(updated, err, op)
 }
 
-func upsertWorkflowEdge(ctx context.Context, q *sqlitegen.Queries, edge EdgeRecord, sortOrder int64) error {
+func upsertWorkflowEdge(ctx context.Context, q *sqlitegen.Queries, edge EdgeRecord, sortOrder int64, op string) error {
 	contextSource := workflow.CanonicalContextSource(edge.ContextSource)
 	parameters, err := marshalJSONArray(edge.Parameters)
 	if err != nil {
@@ -760,7 +760,7 @@ func upsertWorkflowEdge(ctx context.Context, q *sqlitegen.Queries, edge EdgeReco
 		SortOrder:              sortOrder,
 		WorkflowID:             string(edge.WorkflowID),
 	})
-	return expectAffectedRowCount(updated, err, "save workflow edge")
+	return expectAffectedRowCount(updated, err, op)
 }
 
 func expectAffectedRowCount(count int64, err error, op string) error {

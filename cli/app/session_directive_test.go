@@ -49,7 +49,7 @@ func requireSessionOpenDestination(t *testing.T, result serverapi.SessionDirecti
 	return sessionID.String()
 }
 
-func requireSessionCreateDestination(t *testing.T, result serverapi.SessionDirective) *sessionParentReference {
+func requireSessionCreateDestination(t *testing.T, result serverapi.SessionDirective) *string {
 	t.Helper()
 	result = requireSessionLifecycleResult(t, result)
 	if result.Kind() != serverapi.SessionDirectiveLaunch {
@@ -63,7 +63,8 @@ func requireSessionCreateDestination(t *testing.T, result serverapi.SessionDirec
 	if !present {
 		return nil
 	}
-	return optionalSessionParentReference(parentID.String())
+	value := parentID.String()
+	return &value
 }
 
 func sessionLaunchRequestFromLifecycleResult(t *testing.T, result serverapi.SessionDirective, overrides serverapi.RunPromptOverrides) sessionLaunchRequest {
@@ -368,30 +369,4 @@ func requireAppLifecycleLaunch(t *testing.T, result serverapi.SessionDirective) 
 		t.Fatal("launch result omitted preparation")
 	}
 	return intent, preparation
-}
-
-func assertAppLifecycleSelect(t *testing.T, result serverapi.SessionDirective, wantAuth serverapi.SessionAuthPreparation) {
-	t.Helper()
-	if result.Kind() != serverapi.SessionDirectiveSelectSession {
-		t.Fatalf("result kind = %q, want select session", result.Kind())
-	}
-	authPreparation, ok := result.AuthPreparation()
-	if !ok || authPreparation != wantAuth {
-		t.Fatalf("auth preparation = %q/%v, want %q", authPreparation, ok, wantAuth)
-	}
-}
-
-func testCreateSessionLaunchRequest(mode launchMode) sessionLaunchRequest {
-	return sessionLaunchRequest{
-		Mode:   mode,
-		Intent: serverapi.CreateNewSessionLaunchIntent(nil),
-	}
-}
-
-func testOpenSessionLaunchRequest(t *testing.T, mode launchMode, rawSessionID string) sessionLaunchRequest {
-	t.Helper()
-	return sessionLaunchRequest{
-		Mode:   mode,
-		Intent: serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionID(t, rawSessionID)),
-	}
 }

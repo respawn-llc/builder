@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -609,129 +608,65 @@ func TestSubmitUserMessageCommentaryWithoutToolCallsForcesNextLoop(t *testing.T)
 	}
 }
 
-func TestSubmitUserMessage_ExposesViewImageToolForVisionModels(t *testing.T) {
-	store := mustCreateTestSession(t)
+func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
+	tests := []struct {
+		name             string
+		model            string
+		windowTokens     int
+		capabilities     session.LockedModelCapabilities
+		wantTool         bool
+		checkLocked      bool
+		wantLockedVision bool
+	}{
+		{name: "vision model", model: "gpt-5.3-codex", windowTokens: 200000, wantTool: true},
+		{name: "text-only model", model: "gpt-3.5-turbo", windowTokens: 200000},
+		{name: "codex spark", model: "gpt-5.3-codex-spark", windowTokens: 128000, checkLocked: true},
+		{
+			name:             "unlisted model with vision override",
+			model:            "gpt-4.1-2026-01-15",
+			windowTokens:     200000,
+			capabilities:     session.LockedModelCapabilities{SupportsVisionInputs: true},
+			wantTool:         true,
+			checkLocked:      true,
+			wantLockedVision: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			client := &fakeClient{responses: []llm.Response{{
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+				Usage:     llm.Usage{WindowTokens: test.windowTokens},
+			}}}
+			eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage}}), Config{
+				Model:             test.model,
+				ModelCapabilities: test.capabilities,
+				EnabledTools:      []toolspec.ID{toolspec.ToolViewImage},
+			})
 
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage}}), Config{
-		Model:        "gpt-5.3-codex",
-		EnabledTools: []toolspec.ID{toolspec.ToolViewImage},
-	})
-
-	if _, err := eng.SubmitUserMessage(context.Background(), "analyze image"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected 1 model call, got %d", len(client.calls))
-	}
-	found := false
-	for _, tool := range client.calls[0].Tools {
-		if strings.TrimSpace(tool.Name) == string(toolspec.ToolViewImage) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected view_image tool in request tools: %+v", client.calls[0].Tools)
-	}
-}
-
-func TestSubmitUserMessage_HidesViewImageToolForTextOnlyModels(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage}}), Config{
-		Model:        "gpt-3.5-turbo",
-		EnabledTools: []toolspec.ID{toolspec.ToolViewImage},
-	})
-
-	if _, err := eng.SubmitUserMessage(context.Background(), "analyze image"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected 1 model call, got %d", len(client.calls))
-	}
-	for _, tool := range client.calls[0].Tools {
-		if strings.TrimSpace(tool.Name) == string(toolspec.ToolViewImage) {
-			t.Fatalf("did not expect view_image tool in request for text-only model: %+v", client.calls[0].Tools)
-		}
-	}
-}
-
-func TestSubmitUserMessage_HidesViewImageToolForCodexSpark(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
-		Usage:     llm.Usage{WindowTokens: 128000},
-	}}}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage}}), Config{
-		Model:        "gpt-5.3-codex-spark",
-		EnabledTools: []toolspec.ID{toolspec.ToolViewImage},
-	})
-
-	if _, err := eng.SubmitUserMessage(context.Background(), "analyze image"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected 1 model call, got %d", len(client.calls))
-	}
-	for _, tool := range client.calls[0].Tools {
-		if strings.TrimSpace(tool.Name) == string(toolspec.ToolViewImage) {
-			t.Fatalf("did not expect view_image tool in request for codex spark: %+v", client.calls[0].Tools)
-		}
-	}
-	locked := store.Meta().Locked
-	if locked == nil {
-		t.Fatal("expected locked contract")
-	}
-	if locked.ModelCapabilities.SupportsVisionInputs {
-		t.Fatalf("expected codex spark locked capabilities to remain text-only, got %+v", locked.ModelCapabilities)
-	}
-}
-
-func TestSubmitUserMessage_ExposesViewImageToolForUnlistedVisionModelWithOverride(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage}}), Config{
-		Model:             "gpt-4.1-2026-01-15",
-		ModelCapabilities: session.LockedModelCapabilities{SupportsVisionInputs: true},
-		EnabledTools:      []toolspec.ID{toolspec.ToolViewImage},
-	})
-
-	if _, err := eng.SubmitUserMessage(context.Background(), "analyze image"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected 1 model call, got %d", len(client.calls))
-	}
-	found := false
-	for _, tool := range client.calls[0].Tools {
-		if strings.TrimSpace(tool.Name) == string(toolspec.ToolViewImage) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected view_image tool in request tools for override-enabled alias: %+v", client.calls[0].Tools)
-	}
-	locked := store.Meta().Locked
-	if locked == nil || !locked.ModelCapabilities.SupportsVisionInputs {
-		t.Fatalf("expected locked model capability override to persist, got %+v", locked)
+			if _, err := eng.SubmitUserMessage(context.Background(), "analyze image"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			if len(client.calls) != 1 {
+				t.Fatalf("model calls = %d, want 1", len(client.calls))
+			}
+			found := false
+			for _, tool := range client.calls[0].Tools {
+				if strings.TrimSpace(tool.Name) == string(toolspec.ToolViewImage) {
+					found = true
+					break
+				}
+			}
+			if found != test.wantTool {
+				t.Fatalf("view_image present = %t, want %t; tools=%+v", found, test.wantTool, client.calls[0].Tools)
+			}
+			if test.checkLocked {
+				locked := store.Meta().Locked
+				if locked == nil || locked.ModelCapabilities.SupportsVisionInputs != test.wantLockedVision {
+					t.Fatalf("locked capabilities = %+v, want vision=%t", locked, test.wantLockedVision)
+				}
+			}
+		})
 	}
 }
 
@@ -995,51 +930,5 @@ func TestSubmitUserMessageCompatibleResponsesMissingPhaseRemainsTerminal(t *test
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("model calls = %d, want 1", len(client.calls))
-	}
-}
-
-func TestSubmitUserMessageMissingPhaseLegacyClientEmitsAssistantEventOnce(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{
-			Role:    llm.RoleAssistant,
-			Content: "done",
-		},
-		Usage: llm.Usage{WindowTokens: 200000},
-	}}}
-	client.caps = llm.ProviderCapabilities{ProviderID: "anthropic", SupportsResponsesAPI: false, IsOpenAIFirstParty: false}
-
-	var (
-		mu     sync.Mutex
-		events []Event
-	)
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		OnEvent: func(evt Event) {
-			mu.Lock()
-			defer mu.Unlock()
-			events = append(events, evt)
-		},
-	})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	assistantEvents := 0
-	for _, evt := range events {
-		if evt.Kind == EventAssistantMessage && evt.Message.Content == "done" {
-			assistantEvents++
-		}
-	}
-	if assistantEvents != 1 {
-		t.Fatalf("expected one assistant_message event for missing-phase terminal reply, got %d events=%+v", assistantEvents, events)
 	}
 }

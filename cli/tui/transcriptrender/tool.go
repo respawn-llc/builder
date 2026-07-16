@@ -13,27 +13,6 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 )
 
-func RenderToolRow(row clientui.TranscriptToolRow, width int, mode Mode) []Line {
-	return RenderToolRowWithLinkPresentation(row, width, mode, MarkdownLinkLabelOnly)
-}
-
-func RenderToolRowWithLinkPresentation(
-	row clientui.TranscriptToolRow,
-	width int,
-	mode Mode,
-	linkPresentation MarkdownLinkPresentation,
-) []Line {
-	if !linkPresentation.Valid() {
-		panic(fmt.Sprintf("render tool row with invalid Markdown link presentation %d", linkPresentation))
-	}
-	var syntax *syntaxProjector
-	if mode == ModeDetailExpanded {
-		configured := newSyntaxProjector("")
-		syntax = &configured
-	}
-	return renderToolRowWithLinkPresentation(row, width, mode, syntax, linkPresentation)
-}
-
 func renderToolRowWithLinkPresentation(
 	row clientui.TranscriptToolRow,
 	width int,
@@ -41,7 +20,7 @@ func renderToolRowWithLinkPresentation(
 	syntax *syntaxProjector,
 	linkPresentation MarkdownLinkPresentation,
 ) []Line {
-	meta := normalizeToolMeta(row.ToolName, row.ToolPresentation)
+	meta := normalizeToolMeta(row.ToolName, row.Presentation)
 	meta.syntax = syntax
 	meta.IsError = row.IsError || shellExitFailed(meta)
 	role := toolRole(meta)
@@ -54,7 +33,7 @@ func renderToolRowWithLinkPresentation(
 	}
 	if isPatchTool(meta) {
 		input := display.Text
-		result := row.ResultSummary
+		result := optionalString(row.ResultSummary)
 		if mode == ModeDetailExpanded {
 			input = detailedToolText(meta, row.Text)
 			result = detailedToolResultText(row)
@@ -95,7 +74,7 @@ func renderAnsweredQuestion(
 		(mode != ModeOngoing && mode != ModeOngoingCollapsed) {
 		return nil, false
 	}
-	answer := strings.TrimSpace(safeTranscriptText(row.CondensedText))
+	answer := strings.TrimSpace(safeTranscriptText(optionalString(row.CondensedText)))
 	if answer == "" {
 		return nil, false
 	}
@@ -113,7 +92,7 @@ func renderAnsweredQuestion(
 }
 
 func RenderPendingTool(tool clientui.TranscriptToolStart, width int, themeName string, spinner string) Line {
-	meta := normalizeToolMeta(tool.ToolName, tool.ToolPresentation)
+	meta := normalizeToolMeta(tool.ToolName, tool.Presentation)
 	syntax := newSyntaxProjector(themeName)
 	meta.syntax = &syntax
 	role := toolRole(meta)
@@ -147,37 +126,18 @@ type toolMeta struct {
 	syntax          *syntaxProjector
 }
 
-func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
+func normalizeToolMeta(toolName string, in *transcript.ToolCallMeta) toolMeta {
 	adapted := transcript.ToolCallMeta{ToolName: strings.TrimSpace(toolName)}
 	if in != nil {
-		adapted = transcript.ToolCallMeta{
-			ToolName:               firstNonEmpty(in.ToolName, toolName),
-			Presentation:           transcript.ToolPresentationKind(in.Presentation),
-			RenderBehavior:         transcript.ToolCallRenderBehavior(in.RenderBehavior),
-			IsShell:                in.IsShell,
-			UserInitiated:          in.UserInitiated,
-			Command:                in.Command,
-			CompactText:            in.CompactText,
-			InlineMeta:             in.InlineMeta,
-			TimeoutLabel:           in.TimeoutLabel,
-			PatchSummary:           in.PatchSummary,
-			PatchDetail:            in.PatchDetail,
-			PatchRender:            in.PatchRender,
-			Question:               in.Question,
-			Suggestions:            append([]string(nil), in.Suggestions...),
-			RecommendedOptionIndex: in.RecommendedOptionIndex,
-			OmitSuccessfulResult:   in.OmitSuccessfulResult,
-			RawOutputRequested:     in.RawOutputRequested,
-			OutputTruncated:        in.OutputTruncated,
-			MovedToBackground:      in.MovedToBackground,
-			ShellExitCode:          in.ShellExitCode,
-		}
+		adapted = *in
+		adapted.ToolName = firstNonEmpty(in.ToolName, toolName)
+		adapted.Suggestions = append([]string(nil), in.Suggestions...)
 		if in.RenderHint != nil {
 			adapted.RenderHint = &transcript.ToolRenderHint{
-				Kind:         transcript.ToolRenderKind(in.RenderHint.Kind),
+				Kind:         in.RenderHint.Kind,
 				Path:         in.RenderHint.Path,
 				ResultOnly:   in.RenderHint.ResultOnly,
-				ShellDialect: transcript.ToolShellDialect(in.RenderHint.ShellDialect),
+				ShellDialect: in.RenderHint.ShellDialect,
 			}
 		}
 	}
@@ -215,8 +175,8 @@ type toolDisplay struct {
 
 func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) toolDisplay {
 	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
-		text := compactToolText(meta, firstNonEmpty(row.CondensedText, row.Text))
-		resultSummary := row.ResultSummary
+		text := compactToolText(meta, firstNonEmpty(optionalString(row.CondensedText), row.Text))
+		resultSummary := optionalString(row.ResultSummary)
 		if meta.IsError && (mode == ModeOngoing || mode == ModeOngoingCollapsed) {
 			resultSummary = ""
 		}
@@ -301,7 +261,7 @@ func detailedToolText(meta toolMeta, fallback string) string {
 
 func detailedToolResultText(row clientui.TranscriptToolRow) string {
 	output := strings.TrimSpace(safeTranscriptText(row.Text))
-	summary := strings.TrimSpace(safeTranscriptText(row.ResultSummary))
+	summary := strings.TrimSpace(safeTranscriptText(optionalString(row.ResultSummary)))
 	if output == summary {
 		return output
 	}

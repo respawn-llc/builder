@@ -14,7 +14,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 	"github.com/google/uuid"
 )
 
@@ -1201,7 +1201,7 @@ func markLockedPromptFacingContractStale(locked *LockedContract) {
 func (s *Store) RefreshLockedMainPromptSnapshot(snapshot LockedMainPromptSnapshot) (LockedContractMutationResult, error) {
 	return s.mutateLockedContractWithCommitStatus(func(locked *LockedContract) {
 		snapshot.SystemPrompt = strings.TrimSpace(snapshot.SystemPrompt)
-		snapshot.ToolPreambles = valuecopy.Pointer(snapshot.ToolPreambles)
+		snapshot.ToolPreambles = textutil.Pointer(snapshot.ToolPreambles)
 		*locked = locked.WithMainPromptSnapshot(snapshot)
 	})
 }
@@ -1270,7 +1270,7 @@ func (s *Store) AppendEventWithEndByteCursor(stepID, kind string, payload any) (
 	result := EventAppendResult{
 		Event:         outcome.event,
 		CommitReceipt: CommitReceipt{Committed: outcome.committed},
-		EndByteCursor: valuecopy.Pointer(outcome.endByteCursor),
+		EndByteCursor: textutil.Pointer(outcome.endByteCursor),
 	}
 	if err != nil {
 		return result, err

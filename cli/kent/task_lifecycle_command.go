@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -41,12 +40,11 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -81,11 +79,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		return 1
 	}
 	if *jsonOut {
-		if err := json.NewEncoder(stdout).Encode(taskShowOutputFromDetail(task)); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
+		return writeCommandJSON(stdout, stderr, taskShowOutputFromDetail(task))
 	}
 	if err := writeTaskDetail(stdout, task); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -123,12 +117,11 @@ func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--body cannot be combined with --body-file")
 		return 2
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -163,11 +156,7 @@ func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	if *jsonOut {
-		if err := json.NewEncoder(stdout).Encode(resp); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
+		return writeCommandJSON(stdout, stderr, resp)
 	}
 	fmt.Fprintf(stdout, "Edited task %s.\n", taskSummaryDisplayID(resp.Task))
 	return 0
@@ -209,12 +198,11 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -235,9 +223,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	}
 	if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
 		if *jsonOut {
-			if err := json.NewEncoder(stdout).Encode(resp); err != nil {
-				fmt.Fprintln(stderr, err)
-			}
+			_ = writeCommandJSON(stdout, stderr, resp)
 		} else {
 			writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
 		}
@@ -249,11 +235,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		return 1
 	}
 	if *jsonOut {
-		if err := json.NewEncoder(stdout).Encode(resp); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
+		return writeCommandJSON(stdout, stderr, resp)
 	}
 	detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.RunID, taskStartSessionPollTimeout, taskStartSessionPollInterval)
 	if err != nil {
@@ -326,12 +308,11 @@ func taskCancelSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -367,12 +348,11 @@ func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -409,12 +389,11 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -456,12 +435,11 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskApproveResponse, error) {
 		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0], ExecutionTarget: executionTarget})
 	})
@@ -520,12 +498,11 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)

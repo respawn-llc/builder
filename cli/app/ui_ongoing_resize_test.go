@@ -29,11 +29,11 @@ func TestOngoingWidthRehydrationDebounceTokenRestarts(t *testing.T) {
 
 func TestWindowResizeDoesNotWriteOngoingSurfaceWhileDetailOwnsTerminal(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
-	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	controller := newNoopOngoingTranscriptController(surface, ongoingTestFrameProvider)
 	m := newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
 	m.activeSurface = uiSurfaceTranscriptDetail
 
-	result := m.windowReducer().Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	result := m.reduceWindowMessage(tea.WindowSizeMsg{Width: 100, Height: 40})
 
 	if !result.handled {
 		t.Fatal("window resize was not handled")
@@ -59,9 +59,9 @@ func TestWindowResizeWhileDetailOwnsTerminalRepaintsOnReturn(t *testing.T) {
 			m := sizedTestUIModel(newProjectedStaticUIModel(
 				WithUIOngoingSurface(nativeSurface),
 			), 80, 24)
-			controller := newOngoingTranscriptController(surface, m.ongoingFrameInput)
+			controller := newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
 			m.ongoingTranscript = controller
-			if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+			if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 				t.Fatalf("accept hydration: %v", err)
 			}
 
@@ -71,7 +71,7 @@ func TestWindowResizeWhileDetailOwnsTerminalRepaintsOnReturn(t *testing.T) {
 			surface.calls = nil
 			raw.Reset()
 
-			result := m.windowReducer().Update(tea.WindowSizeMsg{Width: target.Width, Height: target.Height})
+			result := m.reduceWindowMessage(tea.WindowSizeMsg{Width: target.Width, Height: target.Height})
 			if !result.handled {
 				t.Fatal("window resize was not handled")
 			}
@@ -123,8 +123,8 @@ func TestAppleTerminalWidthResizeWhileDetailOwnsTerminalRehydratesOnReturn(t *te
 	}
 	raw.Reset()
 	surface := &ongoingSurfaceSpy{}
-	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
-	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+	controller := newNoopOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	reopenCount := 0
@@ -137,7 +137,7 @@ func TestAppleTerminalWidthResizeWhileDetailOwnsTerminalRehydratesOnReturn(t *te
 	if cmd := m.activateSurface(uiSurfaceTranscriptDetail); cmd == nil {
 		t.Fatal("expected detail activation command")
 	}
-	result := m.windowReducer().Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	result := m.reduceWindowMessage(tea.WindowSizeMsg{Width: 100, Height: 24})
 	if !result.handled {
 		t.Fatal("window resize was not handled")
 	}
@@ -177,24 +177,16 @@ func TestWindowResizeKeepsControllerLiveFrameSections(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(nativeSurface),
 	), 40, 10)
-	m.ongoingTranscript = newOngoingTranscriptController(surface, m.ongoingFrameInput)
-	if _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
+	m.ongoingTranscript = newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
+	if _, _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, err := m.ongoingTranscript.Accept(clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessagePendingSessionPrompt,
-		PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{
-			ID:    "ask-1",
-			State: clientui.TranscriptPromptPending,
-			Data:  clientui.TranscriptPendingSessionPromptData{Question: "Approve command?"},
-		},
-	}); err != nil {
+	if _, _, err := m.ongoingTranscript.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePromptPending)); err != nil {
 		t.Fatalf("accept pending prompt: %v", err)
 	}
 	surface.calls = nil
 
-	result := m.windowReducer().Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+	result := m.reduceWindowMessage(tea.WindowSizeMsg{Width: 40, Height: 10})
 
 	if !result.handled {
 		t.Fatal("window resize was not handled")
@@ -208,12 +200,7 @@ func TestWindowResizeKeepsControllerLiveFrameSections(t *testing.T) {
 }
 
 func committedMessageForOngoingResizeTest() clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageCommittedRow,
-		CommittedRow: &clientui.TranscriptCommittedRow{
-			Visibility: clientui.EntryVisibilityOngoing,
-			Kind:       clientui.TranscriptRowUser,
-			User:       &clientui.TranscriptUserRow{Text: "committed"},
-		},
-	}
+	message := ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow)
+	message.Payload.CommittedRow.User.Text = "committed"
+	return message
 }

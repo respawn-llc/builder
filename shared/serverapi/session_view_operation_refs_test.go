@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 func TestSessionMainViewRequestCarriesPendingOperationRefs(t *testing.T) {
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-1"}
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: runtimeids.NewRuntimeClientRequestID()}
 	req := SessionMainViewRequest{SessionID: "session-1", PendingOperationRefs: []clientui.RuntimeOperationRef{ref}}
 
 	if err := req.Validate(); err != nil {

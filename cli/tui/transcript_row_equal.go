@@ -22,7 +22,7 @@ func transcriptUserRowEqual(left, right *clientui.TranscriptUserRow) bool {
 		return left == right
 	}
 	return left.Text == right.Text &&
-		left.CondensedText == right.CondensedText &&
+		pointersEqual(left.CondensedText, right.CondensedText) &&
 		pointersEqual(left.RollbackTargetID, right.RollbackTargetID)
 }
 
@@ -31,7 +31,7 @@ func transcriptAssistantRowEqual(left, right *clientui.TranscriptAssistantRow) b
 		return left == right
 	}
 	return left.Text == right.Text &&
-		left.CondensedText == right.CondensedText &&
+		pointersEqual(left.CondensedText, right.CondensedText) &&
 		left.Phase == right.Phase &&
 		pointersEqual(left.StreamID, right.StreamID)
 }
@@ -44,11 +44,11 @@ func transcriptToolRowEqual(left, right *clientui.TranscriptToolRow) bool {
 		left.ToolName == right.ToolName &&
 		left.Text == right.Text &&
 		left.IsError == right.IsError &&
-		left.ResultSummary == right.ResultSummary &&
-		left.CondensedText == right.CondensedText &&
+		pointersEqual(left.ResultSummary, right.ResultSummary) &&
+		pointersEqual(left.CondensedText, right.CondensedText) &&
 		transcript.ToolCallMetaEqual(
-			transcriptToolCallMeta(left.ToolPresentation),
-			transcriptToolCallMeta(right.ToolPresentation),
+			left.Presentation,
+			right.Presentation,
 		)
 }
 
@@ -58,17 +58,17 @@ func transcriptNoticeRowEqual(left, right *clientui.TranscriptNoticeRow) bool {
 	}
 	return left.Reason == right.Reason &&
 		left.Severity == right.Severity &&
-		pointersEqual(left.Data.LegacyText, right.Data.LegacyText) &&
-		pointersEqual(left.Data.NoticeID, right.Data.NoticeID) &&
-		pointersEqual(left.Data.CacheWarning, right.Data.CacheWarning) &&
-		pointersEqual(left.Data.RuntimeDiagnostic, right.Data.RuntimeDiagnostic) &&
-		left.Data.MessageType == right.Data.MessageType &&
-		left.Data.SourcePath == right.Data.SourcePath &&
-		transcriptWorktreeContextEqual(left.Data.WorktreeContext, right.Data.WorktreeContext) &&
-		left.Data.CondensedText == right.Data.CondensedText &&
-		left.Data.CompactLabel == right.Data.CompactLabel &&
-		pointersEqual(left.Data.BackgroundExitCode, right.Data.BackgroundExitCode) &&
-		pointersEqual(left.Diagnostic, right.Diagnostic)
+		pointersEqual(left.StepID, right.StepID) &&
+		pointersEqual(left.MessageType, right.MessageType) &&
+		pointersEqual(left.LegacyText, right.LegacyText) &&
+		pointersEqual(left.NoticeID, right.NoticeID) &&
+		pointersEqual(left.SourcePath, right.SourcePath) &&
+		transcriptWorktreeContextEqual(left.Worktree, right.Worktree) &&
+		pointersEqual(left.CacheWarning, right.CacheWarning) &&
+		pointersEqual(left.Diagnostic, right.Diagnostic) &&
+		pointersEqual(left.Background, right.Background) &&
+		pointersEqual(left.CondensedText, right.CondensedText) &&
+		pointersEqual(left.CompactLabel, right.CompactLabel)
 }
 
 func transcriptWorktreeContextEqual(left, right *clientui.TranscriptWorktreeContext) bool {
@@ -86,41 +86,4 @@ func pointersEqual[T comparable](left, right *T) bool {
 		return left == right
 	}
 	return *left == *right
-}
-
-func transcriptToolCallMeta(meta *clientui.ToolCallMeta) *transcript.ToolCallMeta {
-	if meta == nil {
-		return nil
-	}
-	out := transcript.ToolCallMeta{
-		ToolName:               meta.ToolName,
-		Presentation:           transcript.ToolPresentationKind(meta.Presentation),
-		RenderBehavior:         transcript.ToolCallRenderBehavior(meta.RenderBehavior),
-		IsShell:                meta.IsShell,
-		UserInitiated:          meta.UserInitiated,
-		Command:                meta.Command,
-		CompactText:            meta.CompactText,
-		InlineMeta:             meta.InlineMeta,
-		TimeoutLabel:           meta.TimeoutLabel,
-		PatchSummary:           meta.PatchSummary,
-		PatchDetail:            meta.PatchDetail,
-		PatchRender:            meta.PatchRender,
-		Question:               meta.Question,
-		Suggestions:            append([]string(nil), meta.Suggestions...),
-		RecommendedOptionIndex: meta.RecommendedOptionIndex,
-		OmitSuccessfulResult:   meta.OmitSuccessfulResult,
-		RawOutputRequested:     meta.RawOutputRequested,
-		OutputTruncated:        meta.OutputTruncated,
-		MovedToBackground:      meta.MovedToBackground,
-		ShellExitCode:          meta.ShellExitCode,
-	}
-	if meta.RenderHint != nil {
-		out.RenderHint = &transcript.ToolRenderHint{
-			Kind:         transcript.ToolRenderKind(meta.RenderHint.Kind),
-			Path:         meta.RenderHint.Path,
-			ResultOnly:   meta.RenderHint.ResultOnly,
-			ShellDialect: transcript.ToolShellDialect(meta.RenderHint.ShellDialect),
-		}
-	}
-	return &out
 }

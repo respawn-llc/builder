@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::clientui::{Event, PendingPromptEvent};
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct HandshakeRequest {
     #[serde(default)]
@@ -38,8 +36,6 @@ pub struct CapabilityFlags {
     pub session_runtime: bool,
     pub runtime_control: bool,
     pub prompt_control: bool,
-    pub prompt_activity: bool,
-    pub session_activity: bool,
     pub process_output: bool,
 }
 
@@ -75,16 +71,6 @@ pub struct AttachResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SubscribeResponse {
     pub stream: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct SessionActivityEventParams {
-    pub event: Event,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct PromptActivityEventParams {
-    pub event: PendingPromptEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

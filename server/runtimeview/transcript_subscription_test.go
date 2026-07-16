@@ -14,30 +14,37 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	transcriptProjectionRunID  = "10000000-0000-4000-8000-000000000011"
+	transcriptProjectionStepID = "10000000-0000-4000-8000-000000000012"
+)
+
 func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testing.T) {
 	streamID := uuid.MustParse("f84c7d21-4c94-4a54-87fd-b41f5bd01d38")
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
 		ActiveAssistantText:     "hello",
+		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: transcriptProjectionStepID},
 		ActiveAssistantStreamID: &streamID,
-		ActiveAssistantPhase:    "final_answer",
+		ActiveAssistantPhase:    llm.MessagePhaseFinal,
 	})
-	if hydration.ActiveAssistantStream == nil {
+	if hydration.ActiveAssistant == nil {
 		t.Fatal("expected active assistant stream in hydration")
 	}
-	if got := hydration.ActiveAssistantStream.StreamID; got != streamID {
-		t.Fatalf("active assistant stream id = %q, want %q", got, streamID)
+	if got := hydration.ActiveAssistant.StreamID.String(); got != streamID.String() {
+		t.Fatalf("active assistant stream id = %q, want %q", got, streamID.String())
 	}
-	if hydration.ActiveAssistantStream.Text != "hello" {
-		t.Fatalf("active assistant stream text = %q, want hello", hydration.ActiveAssistantStream.Text)
+	if hydration.ActiveAssistant.Text != "hello" {
+		t.Fatalf("active assistant stream text = %q, want hello", hydration.ActiveAssistant.Text)
 	}
-	if hydration.ActiveAssistantStream.Phase != "final_answer" {
-		t.Fatalf("active assistant stream phase = %q, want final_answer", hydration.ActiveAssistantStream.Phase)
+	if hydration.ActiveAssistant.Phase != transcript.AssistantPhaseFinal {
+		t.Fatalf("active assistant stream phase = %q, want final", hydration.ActiveAssistant.Phase)
 	}
 }
 
 func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:                runtime.EventLocalEntryAdded,
+		StepID:              transcriptProjectionStepID,
 		LocalEntryProjected: true,
 		LocalEntry: &runtime.ChatEntry{
 			Visibility: transcript.EntryVisibilityDetail,
@@ -45,15 +52,16 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 			Text:       "detail-only row",
 		},
 	})
-	if len(messages) != 1 || messages[0].CommittedRow == nil {
+	if len(messages) != 1 || messages[0].Payload.CommittedRow == nil {
 		t.Fatalf("messages = %+v, want one committed row", messages)
 	}
-	if got := messages[0].CommittedRow.Visibility; got != clientui.EntryVisibilityDetail {
+	if got := messages[0].Payload.CommittedRow.Visibility; got != transcript.EntryVisibilityDetail {
 		t.Fatalf("committed row visibility = %q, want detail", got)
 	}
 
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
+			StepID:     transcriptProjectionStepID,
 			Visibility: transcript.EntryVisibilityHidden,
 			Kind:       runtime.TranscriptCommittedRowFactUser,
 			User:       &runtime.TranscriptUserRowFact{Text: "hidden row"},
@@ -81,6 +89,7 @@ func TestTranscriptPagePreservesRollbackTargetIdentity(t *testing.T) {
 			LatestRollbackCandidate: locator,
 			Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
 				Role:             "user",
+				StepID:           transcriptProjectionStepID,
 				Text:             "persisted user prompt",
 				RollbackTargetID: &targetID,
 			}}},
@@ -98,10 +107,11 @@ func TestTranscriptPagePreservesRollbackTargetIdentity(t *testing.T) {
 	}
 }
 
-func TestTranscriptProjectionClassifiesBlankLegacyAssistantPhase(t *testing.T) {
+func TestTranscriptProjectionCanonicalizesBlankPersistedAssistantPhase(t *testing.T) {
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
-			Kind: runtime.TranscriptCommittedRowFactAssistant,
+			StepID: transcriptProjectionStepID,
+			Kind:   runtime.TranscriptCommittedRowFactAssistant,
 			Assistant: &runtime.TranscriptAssistantRowFact{
 				Text: "legacy final answer",
 			},
@@ -110,21 +120,24 @@ func TestTranscriptProjectionClassifiesBlankLegacyAssistantPhase(t *testing.T) {
 	if len(hydration.CommittedRows) != 1 || hydration.CommittedRows[0].Assistant == nil {
 		t.Fatalf("hydration rows = %+v, want one assistant row", hydration.CommittedRows)
 	}
-	if got := hydration.CommittedRows[0].Assistant.Phase; got != transcript.AssistantPhaseLegacyFinal {
-		t.Fatalf("legacy assistant phase = %q, want explicit legacy final classification", got)
+	if got := hydration.CommittedRows[0].Assistant.Phase; got != transcript.AssistantPhaseFinal {
+		t.Fatalf("persisted assistant phase = %q, want canonical final phase", got)
 	}
 }
 
 func TestTranscriptPageProjectsReviewerAndBackgroundMetadata(t *testing.T) {
 	exitCode := 9
+	activityID := uuid.New()
 	page := TranscriptPageFromSegment("58e121b5-30f7-4d0f-a1fa-fb3e6695e39c", "name", clientui.ConversationFreshnessEstablished, runtime.TranscriptSegmentPage{
 		Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{
 			{Role: "reviewer_status", Text: "review complete"},
 			{
-				Role:               "system",
-				Text:               "background failed",
-				MessageType:        llm.MessageTypeBackgroundNotice,
-				BackgroundExitCode: &exitCode,
+				Role:                 "system",
+				Text:                 "background failed",
+				MessageType:          llm.MessageTypeBackgroundNotice,
+				BackgroundActivityID: activityID.String(),
+				BackgroundProcessID:  "process-1",
+				BackgroundExitCode:   &exitCode,
 			},
 		}},
 	})
@@ -135,25 +148,27 @@ func TestTranscriptPageProjectsReviewerAndBackgroundMetadata(t *testing.T) {
 	if page.Entries[0].Kind != clientui.TranscriptRowNotice || page.Entries[0].Notice == nil {
 		t.Fatalf("reviewer row = %+v, want notice", page.Entries[0])
 	}
-	if got := page.Entries[0].Notice.Data.MessageType; got != clientui.MessageTypeReviewerFeedback {
-		t.Fatalf("reviewer message type = %q, want reviewer feedback", got)
+	if got := page.Entries[0].Notice.MessageType; got == nil || *got != clientui.TranscriptMessageReviewerFeedback {
+		t.Fatalf("reviewer message type = %v, want reviewer feedback", got)
 	}
 	if page.Entries[1].Kind != clientui.TranscriptRowNotice || page.Entries[1].Notice == nil {
 		t.Fatalf("background row = %+v, want notice", page.Entries[1])
 	}
-	if got := page.Entries[1].Notice.Data.BackgroundExitCode; got == nil || *got != exitCode {
-		t.Fatalf("background exit code = %+v, want %d", got, exitCode)
+	if background := page.Entries[1].Notice.Background; background == nil || background.ExitCode == nil || *background.ExitCode != exitCode {
+		t.Fatalf("background notice = %+v, want exit code %d", background, exitCode)
 	}
 }
 
-func TestTranscriptHydrationOmitsAssistantStreamWithoutRuntimeIdentity(t *testing.T) {
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+func TestTranscriptHydrationRejectsAssistantStreamWithoutRuntimeIdentity(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected partial assistant stream identity panic")
+		}
+	}()
+	_ = TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
 		ActiveAssistantText:     "hello",
-		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: "step-1"},
+		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: transcriptProjectionStepID},
 	})
-	if hydration.ActiveAssistantStream != nil {
-		t.Fatalf("active assistant stream = %+v, want nil without stream id", hydration.ActiveAssistantStream)
-	}
 }
 
 func TestTranscriptMessagesIgnoreEmptyAssistantDelta(t *testing.T) {
@@ -178,54 +193,76 @@ func TestTranscriptMessagesIgnoreNoopAssistantResetWithoutStream(t *testing.T) {
 	}
 }
 
+func TestTranscriptMessagesIgnoreFinalizedAssistantReset(t *testing.T) {
+	streamID := uuid.New()
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                        runtime.EventAssistantDeltaReset,
+		StepID:                      transcriptProjectionStepID,
+		AssistantTranscriptStreamID: &streamID,
+	})
+	if len(messages) != 0 {
+		t.Fatalf("finalized assistant reset messages = %+v, want committed assistant row to remain the sole terminal", messages)
+	}
+}
+
 func TestTranscriptBackgroundActivityUsesRuntimeActivityID(t *testing.T) {
 	activityID := uuid.New()
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
-		Kind: runtime.EventBackgroundUpdated,
+		Kind:   runtime.EventBackgroundUpdated,
+		StepID: transcriptProjectionStepID,
 		Background: &runtime.BackgroundShellEvent{
-			ID:         uuid.NewString(),
-			ActivityID: activityID,
-			State:      "running",
-			Preview:    "tests",
+			Type:        runtime.BackgroundShellEventBackgrounded,
+			ID:          uuid.NewString(),
+			ActivityID:  activityID,
+			OwnerRunID:  transcriptProjectionRunID,
+			OwnerStepID: transcriptProjectionStepID,
+			State:       "running",
+			Command:     "go test ./...",
+			Workdir:     "/tmp/workspace",
+			Preview:     "tests",
 		},
 	})
-	if len(messages) != 1 || messages[0].BackgroundActivity == nil {
+	if len(messages) != 1 || messages[0].Payload.BackgroundActivity == nil {
 		t.Fatalf("messages = %+v, want one background activity", messages)
 	}
-	if got := messages[0].BackgroundActivity.ID; got != activityID.String() {
+	if got := messages[0].Payload.BackgroundActivity.ActivityID.String(); got != activityID.String() {
 		t.Fatalf("background transcript id = %q, want activity id %q", got, activityID)
 	}
 }
 
-func TestTranscriptBackgroundActivityRemovalFollowsLifecycleNotPreviewTruncation(t *testing.T) {
+func TestTranscriptBackgroundActivityLifecycleIgnoresPreviewTruncation(t *testing.T) {
 	tests := []struct {
 		name           string
 		eventType      runtime.BackgroundShellEventType
 		previewRemoved int
-		wantRemoved    bool
+		wantLifecycle  clientui.BackgroundLifecycle
 	}{
-		{name: "running truncated preview remains live", eventType: runtime.BackgroundShellEventBackgrounded, previewRemoved: 2},
-		{name: "completed activity leaves live band", eventType: runtime.BackgroundShellEventCompleted, wantRemoved: true},
-		{name: "killed activity leaves live band", eventType: runtime.BackgroundShellEventKilled, wantRemoved: true},
+		{name: "running truncated preview remains live", eventType: runtime.BackgroundShellEventBackgrounded, previewRemoved: 2, wantLifecycle: clientui.BackgroundLifecycleBackgrounded},
+		{name: "completed activity is terminal", eventType: runtime.BackgroundShellEventCompleted, wantLifecycle: clientui.BackgroundLifecycleCompleted},
+		{name: "killed activity is terminal", eventType: runtime.BackgroundShellEventKilled, wantLifecycle: clientui.BackgroundLifecycleKilled},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
-				Kind: runtime.EventBackgroundUpdated,
+				Kind:   runtime.EventBackgroundUpdated,
+				StepID: transcriptProjectionStepID,
 				Background: &runtime.BackgroundShellEvent{
 					Type:           tt.eventType,
 					ID:             uuid.NewString(),
 					ActivityID:     uuid.New(),
+					OwnerRunID:     transcriptProjectionRunID,
+					OwnerStepID:    transcriptProjectionStepID,
 					State:          string(tt.eventType),
 					Command:        "sleep 2",
+					Workdir:        "/tmp/workspace",
 					PreviewRemoved: tt.previewRemoved,
 				},
 			})
-			if len(messages) != 1 || messages[0].BackgroundActivity == nil {
+			if len(messages) != 1 || messages[0].Payload.BackgroundActivity == nil {
 				t.Fatalf("messages = %+v, want one background activity", messages)
 			}
-			if got := messages[0].BackgroundActivity.Removed; got != tt.wantRemoved {
-				t.Fatalf("background activity removed = %t, want %t", got, tt.wantRemoved)
+			if got := messages[0].Payload.BackgroundActivity.Lifecycle; got != tt.wantLifecycle {
+				t.Fatalf("background activity lifecycle = %q, want %q", got, tt.wantLifecycle)
 			}
 		})
 	}
@@ -233,23 +270,27 @@ func TestTranscriptBackgroundActivityRemovalFollowsLifecycleNotPreviewTruncation
 
 func TestTranscriptBackgroundNoticeCarriesTypedExitCode(t *testing.T) {
 	exitCode := 3
+	activityID := uuid.New()
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
-		Kind: runtime.EventConversationUpdated,
+		Kind:   runtime.EventConversationUpdated,
+		StepID: transcriptProjectionStepID,
 		Message: llm.Message{
-			Role:               llm.RoleDeveloper,
-			MessageType:        llm.MessageTypeBackgroundNotice,
-			Content:            "background failed",
-			CompactContent:     "background failed",
-			BackgroundExitCode: &exitCode,
+			Role:                 llm.RoleDeveloper,
+			Name:                 "process-1",
+			MessageType:          llm.MessageTypeBackgroundNotice,
+			Content:              "background failed",
+			CompactContent:       "background failed",
+			BackgroundActivityID: activityID.String(),
+			BackgroundExitCode:   &exitCode,
 		},
 	})
 
-	if len(messages) != 1 || messages[0].CommittedRow == nil || messages[0].CommittedRow.Notice == nil {
+	if len(messages) != 1 || messages[0].Payload.CommittedRow == nil || messages[0].Payload.CommittedRow.Notice == nil {
 		t.Fatalf("messages = %+v, want one background notice", messages)
 	}
-	got := messages[0].CommittedRow.Notice.Data.BackgroundExitCode
-	if got == nil || *got != exitCode {
-		t.Fatalf("background exit code = %+v, want %d", got, exitCode)
+	background := messages[0].Payload.CommittedRow.Notice.Background
+	if background == nil || background.ExitCode == nil || *background.ExitCode != exitCode {
+		t.Fatalf("background notice = %+v, want exit code %d", background, exitCode)
 	}
 }
 
@@ -274,11 +315,11 @@ func TestTranscriptWorktreeNoticeCarriesTypedContextWithoutServerPresentation(t 
 		},
 	})
 
-	if len(messages) != 1 || messages[0].CommittedRow == nil || messages[0].CommittedRow.Notice == nil {
+	if len(messages) != 1 || messages[0].Payload.CommittedRow == nil || messages[0].Payload.CommittedRow.Notice == nil {
 		t.Fatalf("messages = %+v, want one worktree notice", messages)
 	}
-	data := messages[0].CommittedRow.Notice.Data
-	if data.WorktreeContext == nil {
+	notice := messages[0].Payload.CommittedRow.Notice
+	if notice.Worktree == nil {
 		t.Fatal("worktree transcript context is missing")
 	}
 	wantContext := &clientui.TranscriptWorktreeContext{
@@ -287,11 +328,11 @@ func TestTranscriptWorktreeNoticeCarriesTypedContextWithoutServerPresentation(t 
 		WorkspaceRoot: target.WorkspaceRoot,
 		EffectiveCwd:  target.EffectiveCwd,
 	}
-	if !reflect.DeepEqual(data.WorktreeContext, wantContext) {
-		t.Fatalf("worktree transcript context = %+v, want %+v", data.WorktreeContext, wantContext)
+	if !reflect.DeepEqual(notice.Worktree, wantContext) {
+		t.Fatalf("worktree transcript context = %+v, want %+v", notice.Worktree, wantContext)
 	}
-	if data.CondensedText != "" || data.CompactLabel != "" {
-		t.Fatalf("server-authored worktree presentation leaked into client contract: %+v", data)
+	if notice.CondensedText != nil || notice.CompactLabel != nil {
+		t.Fatalf("server-authored worktree presentation leaked into client contract: %+v", notice)
 	}
 }
 
@@ -311,12 +352,12 @@ func TestTranscriptWorktreeNoticeKeepsMissingBranchNullable(t *testing.T) {
 		},
 	})
 	if len(messages) != 1 ||
-		messages[0].CommittedRow == nil ||
-		messages[0].CommittedRow.Notice == nil ||
-		messages[0].CommittedRow.Notice.Data.WorktreeContext == nil {
+		messages[0].Payload.CommittedRow == nil ||
+		messages[0].Payload.CommittedRow.Notice == nil ||
+		messages[0].Payload.CommittedRow.Notice.Worktree == nil {
 		t.Fatalf("messages = %+v, want one typed worktree notice", messages)
 	}
-	if branch := messages[0].CommittedRow.Notice.Data.WorktreeContext.Branch; branch != nil {
+	if branch := messages[0].Payload.CommittedRow.Notice.Worktree.Branch; branch != nil {
 		t.Fatalf("projected detached worktree branch = %v, want null", branch)
 	}
 }
@@ -329,11 +370,17 @@ func TestTranscriptBackgroundActivityRejectsMissingRuntimeActivityID(t *testing.
 	}()
 
 	_ = TranscriptMessagesFromRuntimeEvent(runtime.Event{
-		Kind: runtime.EventBackgroundUpdated,
+		Kind:   runtime.EventBackgroundUpdated,
+		StepID: transcriptProjectionStepID,
 		Background: &runtime.BackgroundShellEvent{
-			ID:      uuid.NewString(),
-			State:   "running",
-			Preview: "tests",
+			Type:        runtime.BackgroundShellEventBackgrounded,
+			ID:          uuid.NewString(),
+			OwnerRunID:  transcriptProjectionRunID,
+			OwnerStepID: transcriptProjectionStepID,
+			State:       "running",
+			Command:     "go test ./...",
+			Workdir:     "/tmp/workspace",
+			Preview:     "tests",
 		},
 	})
 }
@@ -342,10 +389,12 @@ func TestAssistantTranscriptMessagesDoNotReemitLiveToolStarts(t *testing.T) {
 	for _, kind := range []runtime.EventKind{runtime.EventAssistantMessage, runtime.EventConversationUpdated} {
 		t.Run(string(kind), func(t *testing.T) {
 			messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
-				Kind: kind,
+				Kind:   kind,
+				StepID: transcriptProjectionStepID,
 				Message: llm.Message{
 					Role:    llm.RoleAssistant,
 					Content: "checking the repo",
+					Phase:   llm.MessagePhaseCommentary,
 					ToolCalls: []llm.ToolCall{{
 						ID:   "call-1",
 						Name: "shell",
@@ -355,7 +404,7 @@ func TestAssistantTranscriptMessagesDoNotReemitLiveToolStarts(t *testing.T) {
 			if len(messages) != 1 {
 				t.Fatalf("messages = %+v, want only assistant committed row", messages)
 			}
-			if messages[0].Kind != clientui.TranscriptMessageCommittedRow || messages[0].CommittedRow == nil || messages[0].CommittedRow.Assistant == nil {
+			if messages[0].Kind != clientui.TranscriptMessageCommittedRow || messages[0].Payload.CommittedRow == nil || messages[0].Payload.CommittedRow.Assistant == nil {
 				t.Fatalf("message = %+v, want assistant committed row", messages[0])
 			}
 		})
