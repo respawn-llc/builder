@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/cli/tui/transcriptrender"
+	"core/internal/testharness/clientuitest"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/transcript"
@@ -264,7 +265,7 @@ func TestDetailModeCachedRowsPreserveVisibility(t *testing.T) {
 		Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 		Severity:     clientui.TranscriptNoticeInfo,
 		CompactLabel: &compactNotice,
-		Diagnostic: legacyTranscriptDiagnosticForTest(
+		Diagnostic: clientuitest.LegacyTranscriptDiagnostic(
 			"detail_cache_test",
 			"diagnostic detail",
 		),
@@ -539,7 +540,7 @@ func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 				Severity:     clientui.TranscriptNoticeInfo,
 				MessageType:  &messageType,
 				CompactLabel: &compactLabel,
-				Diagnostic: legacyTranscriptDiagnosticForTest(
+				Diagnostic: clientuitest.LegacyTranscriptDiagnostic(
 					clientui.TranscriptDiagnosticCode(role),
 					"review result",
 				),
@@ -557,8 +558,4 @@ func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 			}
 		})
 	}
-}
-
-func legacyTranscriptDiagnosticForTest(code clientui.TranscriptDiagnosticCode, detail string) *clientui.TranscriptDiagnostic {
-	return &clientui.TranscriptDiagnostic{Code: &code, Detail: &detail}
 }

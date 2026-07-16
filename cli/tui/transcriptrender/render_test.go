@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unicode"
 
+	"core/internal/testharness/clientuitest"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
@@ -430,7 +431,7 @@ func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) 
 			Severity:     clientui.TranscriptNoticeInfo,
 			MessageType:  &messageType,
 			CompactLabel: &compactLabel,
-			Diagnostic:   legacyTranscriptDiagnosticForTest("background_completion", compactLabel),
+			Diagnostic:   clientuitest.LegacyTranscriptDiagnostic("background_completion", compactLabel),
 			Background: &clientui.TranscriptBackgroundNoticeIdentity{
 				ActivityID: runtimeids.NewBackgroundActivityID(),
 				ProcessID:  "background-process",
@@ -479,7 +480,7 @@ func TestWorktreeNoticeRendersTypedClientContext(t *testing.T) {
 				WorkspaceRoot: "/tmp/workspace",
 				EffectiveCwd:  effectiveCWD,
 			},
-			Diagnostic: legacyTranscriptDiagnosticForTest(
+			Diagnostic: clientuitest.LegacyTranscriptDiagnostic(
 				"worktree_transition",
 				"model-only instructions",
 			),
@@ -1600,7 +1601,7 @@ func TestBackgroundExitStatusDoesNotOverridePrimaryNoticeSymbol(t *testing.T) {
 				Severity:     clientui.TranscriptNoticeInfo,
 				MessageType:  &messageType,
 				CompactLabel: &compactLabel,
-				Diagnostic:   legacyTranscriptDiagnosticForTest("background_completion", compactLabel),
+				Diagnostic:   clientuitest.LegacyTranscriptDiagnostic("background_completion", compactLabel),
 				Background: &clientui.TranscriptBackgroundNoticeIdentity{
 					ActivityID: runtimeids.NewBackgroundActivityID(),
 					ProcessID:  "background-process",
@@ -1821,7 +1822,7 @@ func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing
 			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:     clientui.TranscriptNoticeInfo,
 			CompactLabel: &compactLabel,
-			Diagnostic:   legacyTranscriptDiagnosticForTest("agents_context", "raw diagnostic body"),
+			Diagnostic:   clientuitest.LegacyTranscriptDiagnostic("agents_context", "raw diagnostic body"),
 		},
 	}, 80, "", ModeDetailCollapsed)
 
@@ -1836,7 +1837,7 @@ func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing
 			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:     clientui.TranscriptNoticeInfo,
 			CompactLabel: &compactLabel,
-			Diagnostic:   legacyTranscriptDiagnosticForTest("agents_context", "raw diagnostic body"),
+			Diagnostic:   clientuitest.LegacyTranscriptDiagnostic("agents_context", "raw diagnostic body"),
 		},
 	}, 80, "", ModeDetailExpanded)
 	if got, want := expanded.Lines[0].Plain(), "ℹ raw diagnostic body"; got != want {
@@ -1915,7 +1916,7 @@ func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
 			Severity:     clientui.TranscriptNoticeInfo,
 			MessageType:  &messageType,
 			CompactLabel: &compactLabel,
-			Diagnostic: legacyTranscriptDiagnosticForTest(
+			Diagnostic: clientuitest.LegacyTranscriptDiagnostic(
 				clientui.TranscriptDiagnosticCode(transcript.EntryRoleReviewerSuggestions),
 				compactLabel,
 			),
@@ -1931,10 +1932,6 @@ func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
 			t.Fatalf("mode %v reviewer line = %q, want reviewer glyph", mode, got)
 		}
 	}
-}
-
-func legacyTranscriptDiagnosticForTest(code clientui.TranscriptDiagnosticCode, detail string) *clientui.TranscriptDiagnostic {
-	return &clientui.TranscriptDiagnostic{Code: &code, Detail: &detail}
 }
 
 func toolRow(name string, presentation transcript.ToolPresentationKind, text string, isError bool) clientui.TranscriptCommittedRow {

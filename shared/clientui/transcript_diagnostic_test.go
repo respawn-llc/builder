@@ -9,7 +9,9 @@ import (
 )
 
 func TestTranscriptDiagnosticJSONUsesNullableInactiveVariantFields(t *testing.T) {
-	legacy := legacyTranscriptDiagnosticForTest("legacy_code", "legacy detail")
+	legacyCode := TranscriptDiagnosticCode("legacy_code")
+	legacyDetail := "legacy detail"
+	legacy := &TranscriptDiagnostic{Code: &legacyCode, Detail: &legacyDetail}
 	legacyJSON, err := json.Marshal(legacy)
 	if err != nil {
 		t.Fatalf("marshal legacy diagnostic: %v", err)
@@ -25,7 +27,9 @@ func TestTranscriptDiagnosticJSONUsesNullableInactiveVariantFields(t *testing.T)
 			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
 		},
 	)
-	developerJSON, err := json.Marshal(developerTranscriptDiagnosticForTest(developer))
+	developerJSON, err := json.Marshal(&TranscriptDiagnostic{
+		Developer: transcript.CloneDeveloperDiagnostic(&developer),
+	})
 	if err != nil {
 		t.Fatalf("marshal developer diagnostic: %v", err)
 	}
@@ -62,11 +66,13 @@ func TestTranscriptDiagnosticJSONRejectsMissingPartialBlankAndMixedVariants(t *t
 		}
 	}
 
-	blank := legacyTranscriptDiagnosticForTest(" ", "detail")
+	blankCode := TranscriptDiagnosticCode(" ")
+	blankDetail := "detail"
+	blank := &TranscriptDiagnostic{Code: &blankCode, Detail: &blankDetail}
 	if err := blank.Validate(); err == nil {
 		t.Fatal("validated blank legacy diagnostic")
 	}
-	mixed := developerTranscriptDiagnosticForTest(developer)
+	mixed := &TranscriptDiagnostic{Developer: transcript.CloneDeveloperDiagnostic(&developer)}
 	code := TranscriptDiagnosticCode("legacy")
 	detail := "detail"
 	mixed.Code = &code
@@ -74,12 +80,4 @@ func TestTranscriptDiagnosticJSONRejectsMissingPartialBlankAndMixedVariants(t *t
 	if err := mixed.Validate(); err == nil {
 		t.Fatal("validated mixed legacy and developer diagnostic")
 	}
-}
-
-func legacyTranscriptDiagnosticForTest(code TranscriptDiagnosticCode, detail string) *TranscriptDiagnostic {
-	return &TranscriptDiagnostic{Code: &code, Detail: &detail}
-}
-
-func developerTranscriptDiagnosticForTest(diagnostic transcript.DeveloperDiagnostic) *TranscriptDiagnostic {
-	return &TranscriptDiagnostic{Developer: transcript.CloneDeveloperDiagnostic(&diagnostic)}
 }

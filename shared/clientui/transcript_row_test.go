@@ -89,6 +89,9 @@ func TestTranscriptNoticeRowCarriesTypedCacheWarningFacts(t *testing.T) {
 
 func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 	legacyText := "legacy notice"
+	runtimeCode := TranscriptDiagnosticCode("runtime")
+	contradictory := "contradictory"
+	failed := "failed"
 	tests := []TranscriptNoticeRow{
 		{
 			Reason:   TranscriptNoticeCacheWarning,
@@ -110,10 +113,7 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 				Reason:     "cache_miss",
 				Visibility: transcript.EntryVisibilityOngoing,
 			},
-			Diagnostic: legacyTranscriptDiagnosticForTest(
-				TranscriptDiagnosticCode("runtime"),
-				"contradictory",
-			),
+			Diagnostic: &TranscriptDiagnostic{Code: &runtimeCode, Detail: &contradictory},
 		},
 		{
 			Reason:   TranscriptNoticeRuntimeDiagnostic,
@@ -123,19 +123,13 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 				Reason:     "cache_miss",
 				Visibility: transcript.EntryVisibilityOngoing,
 			},
-			Diagnostic: legacyTranscriptDiagnosticForTest(
-				TranscriptDiagnosticCode("runtime"),
-				"failed",
-			),
+			Diagnostic: &TranscriptDiagnostic{Code: &runtimeCode, Detail: &failed},
 		},
 		{
 			Reason:     TranscriptNoticeLegacyUntypedNotice,
 			Severity:   TranscriptNoticeInfo,
 			LegacyText: &legacyText,
-			Diagnostic: legacyTranscriptDiagnosticForTest(
-				TranscriptDiagnosticCode("runtime"),
-				"contradictory",
-			),
+			Diagnostic: &TranscriptDiagnostic{Code: &runtimeCode, Detail: &contradictory},
 		},
 	}
 	for _, notice := range tests {
@@ -156,7 +150,7 @@ func TestTranscriptNoticeRowCarriesTypedDeveloperDiagnosticWithoutLegacyFields(t
 	notice := TranscriptNoticeRow{
 		Reason:     TranscriptNoticeRuntimeDiagnostic,
 		Severity:   TranscriptNoticeError,
-		Diagnostic: developerTranscriptDiagnosticForTest(diagnostic),
+		Diagnostic: &TranscriptDiagnostic{Developer: transcript.CloneDeveloperDiagnostic(&diagnostic)},
 	}
 	if err := notice.Validate(); err != nil {
 		t.Fatalf("validate typed developer diagnostic notice: %v", err)
