@@ -85,7 +85,6 @@ func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *te
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-
 	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedMessageState)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
@@ -120,15 +119,7 @@ func TestOngoingTranscriptControllerPreservesWrappedDisplayCursorTargetWithPrepe
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, err := controller.Accept(clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageQueuedOrSteeredMessageState,
-		QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{
-			QueueItemID: "11111111-1111-4111-8111-111111111111",
-			Status:      clientui.QueuedUserMessageAccepted,
-			UserText:    "queued prompt",
-		},
-	}); err != nil {
+	if _, _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedMessageState)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
 
