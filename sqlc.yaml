@@ -3,6 +3,7 @@ sql:
   - engine: "sqlite"
     schema:
       - "server/metadata/migrations/*.up.sql"
+      - "server/metadata/sqlc/*.sql"
     queries:
       - "server/metadata/queries.sql"
     gen:
