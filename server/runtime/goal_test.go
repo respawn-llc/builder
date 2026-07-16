@@ -15,6 +15,7 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/clientui"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -528,6 +529,15 @@ func TestGoalTurnAppendsNudgePromptAndRunsModel(t *testing.T) {
 	if len(messages) < 2 {
 		t.Fatalf("goal developer messages len = %d, want at least 2", len(messages))
 	}
+	if got := messages[1].Content; got != prompts.RenderGoalNudgePrompt("ship goal mode", "active") {
+		t.Fatalf("nudge prompt = %q", got)
+	}
+	if clientui.GoalNudgeCompactLabel == "" {
+		t.Fatal("goal nudge compact label must not be empty")
+	}
+	if got := messages[1].CompactContent; got != clientui.GoalNudgeCompactLabel {
+		t.Fatalf("nudge compact content = %q, want shared label %q", got, clientui.GoalNudgeCompactLabel)
+	}
 }
 
 func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
@@ -578,6 +588,32 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 	}
 }
 
+func TestGoalDeveloperMessageVisibleInOngoingWithDetailPrompt(t *testing.T) {
+	msg := llm.Message{
+		Role:           llm.RoleDeveloper,
+		MessageType:    llm.MessageTypeGoal,
+		Content:        prompts.RenderGoalNudgePrompt("ship goal mode", "active"),
+		CompactContent: clientui.GoalNudgeCompactLabel,
+	}
+
+	entries := VisibleChatEntriesFromMessage(msg)
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Role != string(transcript.EntryRoleGoalFeedback) {
+		t.Fatalf("goal role = %q, want %q", entry.Role, transcript.EntryRoleGoalFeedback)
+	}
+	if entry.Visibility != transcript.EntryVisibilityOngoing {
+		t.Fatalf("goal visibility = %q, want ongoing", entry.Visibility)
+	}
+	if entry.Text != msg.Content {
+		t.Fatalf("goal detail text = %q, want full prompt", entry.Text)
+	}
+	if entry.CondensedText != msg.CompactContent {
+		t.Fatalf("goal condensed text = %q, want compact", entry.CondensedText)
+	}
+}
 func TestSurfaceRunErrorPersistsOperatorFeedback(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})

@@ -61,11 +61,12 @@ func TestRequestEntryPointsUseUnifiedMetaContextPreparation(t *testing.T) {
 
 func TestRuntimeMetaContextRenderersStayInsideBuilder(t *testing.T) {
 	bannedCalls := map[string]bool{
-		"headlessModeMetaMessage":     true,
-		"headlessModeExitMetaMessage": true,
-		"workflowModeMetaMessage":     true,
-		"worktreeModeMetaMessage":     true,
-		"worktreeModeExitMetaMessage": true,
+		"headlessModeMetaMessage":           true,
+		"headlessModeExitMetaMessage":       true,
+		"activeGoalContinuationMetaMessage": true,
+		"workflowModeMetaMessage":           true,
+		"worktreeModeMetaMessage":           true,
+		"worktreeModeExitMetaMessage":       true,
 	}
 	assertNoBannedRuntimeCalls(t, map[string]bool{"meta_context.go": true}, bannedCalls)
 }

@@ -3,8 +3,14 @@ package prompts
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
+	"text/template/parse"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	markdowntext "github.com/yuin/goldmark/text"
 )
 
 func TestRenderSystemPromptTemplateUsesTypedFields(t *testing.T) {
@@ -339,20 +345,162 @@ func workflowInstructionsTestArgs(taskNumberOfComments int64) WorkflowNodeContex
 	}
 }
 
-func TestRenderGoalNudgePrompt(t *testing.T) {
-	rendered := RenderGoalNudgePrompt("ship /goal mode", "active")
-	// The objective and the launch command must both be substituted in.
-	for _, want := range []string{
-		"ship /goal mode",
-		LaunchCommand(),
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("expected goal nudge to substitute %q, got %q", want, rendered)
+func TestGoalPromptTemplatesUseTypedCompositionFields(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		wantFields []string
+	}{
+		{
+			name:       "active goal continuation",
+			source:     ActiveGoalContinuationPrompt,
+			wantFields: []string{"GoalText", "SharedGuidance"},
+		},
+		{
+			name:       "ordinary goal nudge",
+			source:     GoalNudgePrompt,
+			wantFields: []string{"Objective", "SharedGuidance"},
+		},
+		{
+			name:       "shared guidance",
+			source:     GoalContinuationGuidancePrompt,
+			wantFields: []string{"LaunchCommand"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trees, err := parse.Parse(tt.name, tt.source, "", "", nil)
+			if err != nil {
+				t.Fatalf("parse template: %v", err)
+			}
+			got := templateRootFieldIdentities(t, trees[tt.name].Root)
+			if !reflect.DeepEqual(got, tt.wantFields) {
+				t.Fatalf("root fields = %#v, want %#v", got, tt.wantFields)
+			}
+		})
+	}
+}
+
+func TestGoalPromptTypedDataContractsBindEveryField(t *testing.T) {
+	guidanceData := goalContinuationGuidanceTemplateData{LaunchCommand: LaunchCommand()}
+	if err := validateTemplatePlaceholders("goal continuation guidance", GoalContinuationGuidancePrompt, guidanceData); err != nil {
+		t.Fatalf("validate shared guidance: %v", err)
+	}
+	guidance, err := renderNamedTemplate("goal continuation guidance", GoalContinuationGuidancePrompt, guidanceData)
+	if err != nil {
+		t.Fatalf("render shared guidance: %v", err)
+	}
+	if err := validateTemplatePlaceholders("goal nudge", GoalNudgePrompt, goalNudgeTemplateData{
+		Objective:      "ship /goal mode",
+		SharedGuidance: guidance,
+	}); err != nil {
+		t.Fatalf("validate goal nudge: %v", err)
+	}
+	if _, err := renderNamedTemplate("goal nudge", GoalNudgePrompt, goalNudgeTemplateData{
+		Objective:      "ship /goal mode",
+		SharedGuidance: guidance,
+	}); err != nil {
+		t.Fatalf("render goal nudge: %v", err)
+	}
+	continuationData := activeGoalContinuationTemplateData{
+		GoalText:       "ship /goal mode",
+		SharedGuidance: guidance,
+	}
+	if err := validateTemplatePlaceholders("active goal continuation", ActiveGoalContinuationPrompt, continuationData); err != nil {
+		t.Fatalf("validate active goal continuation: %v", err)
+	}
+	if _, err := renderNamedTemplate("active goal continuation", ActiveGoalContinuationPrompt, continuationData); err != nil {
+		t.Fatalf("render active goal continuation: %v", err)
+	}
+}
+
+func TestRenderActiveGoalContinuationPromptPreservesOneExactGoalBlock(t *testing.T) {
+	goal := "  ship /goal mode  "
+	rendered := RenderActiveGoalContinuationPrompt(goal)
+	source := []byte(rendered)
+	document := goldmark.New().Parser().Parse(markdowntext.NewReader(source))
+
+	var goalBlocks [][]string
+	if err := ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		block, ok := node.(*ast.HTMLBlock)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		lines := markdownSegmentValues(source, block.Lines())
+		if len(lines) > 0 && lines[0] == "<goal>\n" {
+			goalBlocks = append(goalBlocks, lines)
+		}
+		return ast.WalkContinue, nil
+	}); err != nil {
+		t.Fatalf("walk rendered markdown: %v", err)
+	}
+	want := [][]string{{"<goal>\n", goal + "\n", "</goal>\n"}}
+	if !reflect.DeepEqual(goalBlocks, want) {
+		t.Fatalf("goal blocks = %#v, want %#v", goalBlocks, want)
+	}
+}
+
+func templateRootFieldIdentities(t *testing.T, node parse.Node) []string {
+	t.Helper()
+	var fields []string
+	var walkNode func(parse.Node)
+	var walkPipe func(*parse.PipeNode)
+	walkPipe = func(pipe *parse.PipeNode) {
+		for _, command := range pipe.Cmds {
+			for _, argument := range command.Args {
+				if field, ok := argument.(*parse.FieldNode); ok {
+					fields = append(fields, field.Ident...)
+				}
+			}
 		}
 	}
-	if strings.Contains(rendered, "{{") {
-		t.Fatalf("expected goal nudge placeholders rendered, got %q", rendered)
+	walkNode = func(current parse.Node) {
+		switch typed := current.(type) {
+		case *parse.ListNode:
+			for _, child := range typed.Nodes {
+				walkNode(child)
+			}
+		case *parse.ActionNode:
+			walkPipe(typed.Pipe)
+		case *parse.IfNode:
+			walkPipe(typed.Pipe)
+			walkNode(typed.List)
+			if typed.ElseList != nil {
+				walkNode(typed.ElseList)
+			}
+		case *parse.RangeNode:
+			walkPipe(typed.Pipe)
+			walkNode(typed.List)
+			if typed.ElseList != nil {
+				walkNode(typed.ElseList)
+			}
+		case *parse.WithNode:
+			walkPipe(typed.Pipe)
+			walkNode(typed.List)
+			if typed.ElseList != nil {
+				walkNode(typed.ElseList)
+			}
+		case *parse.TemplateNode:
+			if typed.Pipe != nil {
+				walkPipe(typed.Pipe)
+			}
+		}
 	}
+	walkNode(node)
+	return fields
+}
+
+func markdownSegmentValues(source []byte, segments *markdowntext.Segments) []string {
+	values := make([]string, 0, segments.Len())
+	for index := range segments.Len() {
+		segment := segments.At(index)
+		values = append(values, string(segment.Value(source)))
+	}
+	return values
 }
 
 func TestRenderWorkflowNudgePrompt(t *testing.T) {

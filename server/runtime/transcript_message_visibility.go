@@ -49,6 +49,7 @@ func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 		llm.MessageTypeEnvironment,
 		llm.MessageTypeHeadlessMode,
 		llm.MessageTypeHeadlessModeExit,
+		llm.MessageTypeActiveGoalContinuation,
 		llm.MessageTypeWorkflowMode:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
 	case llm.MessageTypeWorktreeMode, llm.MessageTypeWorktreeModeExit:
@@ -109,7 +110,8 @@ func isUnknownDeveloperMessageType(messageType llm.MessageType) bool {
 		llm.MessageTypeWorkflowMode,
 		llm.MessageTypeWorktreeMode,
 		llm.MessageTypeWorktreeModeExit,
-		llm.MessageTypeGoal:
+		llm.MessageTypeGoal,
+		llm.MessageTypeActiveGoalContinuation:
 		return false
 	default:
 		return true
@@ -140,6 +142,8 @@ func messageTypeTranscriptVisibility(messageType llm.MessageType) transcript.Ent
 		llm.MessageTypeManualCompactionCarryover,
 		llm.MessageTypeHeadlessMode,
 		llm.MessageTypeHeadlessModeExit:
+		return transcript.EntryVisibilityDetail
+	case llm.MessageTypeActiveGoalContinuation:
 		return transcript.EntryVisibilityDetail
 	case llm.MessageTypeBackgroundNotice:
 		return transcript.EntryVisibilityOngoingCollapsed

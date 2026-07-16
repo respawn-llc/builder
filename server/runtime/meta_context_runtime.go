@@ -244,6 +244,8 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 			return nil, err
 		}
 		opts.WorkflowTaskCommentCount = commentCount
+	} else if goal, ok := e.goalContinuation().activeGoal(); ok {
+		opts.ActiveGoal = &goal
 	}
 	metaResult, err := builder.Build(opts)
 	if err != nil {

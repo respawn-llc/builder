@@ -113,6 +113,7 @@
 - `worktree_mode`: `O`
 - `worktree_mode_exit`: `O`
 - `goal`: `O`
+- `active_goal_continuation`: `D`
 - Thinking-level feedback from `/thinking` is not rendered as a transcript row in ongoing or detail. The TUI surfaces thinking level through the status-line model label/reasoning segment instead of neutral transcript notices.
 - Locked non-message roles:
 - user turns: `O`
@@ -143,6 +144,7 @@
 - Compaction summaries and manual compaction carryover use secondary text.
 - Handoff future-agent context rows use the faint foreground system-notice style.
 - Goal-related rows use primary text.
+- Active-goal continuation initialization uses a developer-context row with compact label `Goal nudge`. The ordinary active-goal continuation nudge reuses the same compact label; goal set, pause, resume, completion, and clear feedback keep their existing compact presentation.
 - Workflow-related rows use primary text and `OC` visibility.
 - Worktree-enter rows use the faint foreground system-notice style.
 - Worktree-exit rows use full-strength foreground text.

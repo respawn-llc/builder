@@ -86,6 +86,18 @@ func TestTranscriptNoticeRowCarriesTypedCacheWarningFacts(t *testing.T) {
 	}
 }
 
+func TestTranscriptNoticeRowAcceptsActiveGoalContinuationMessageType(t *testing.T) {
+	messageType := TranscriptMessageActiveGoalContinuation
+	notice := TranscriptNoticeRow{
+		Reason:      TranscriptNoticeLegacyUntypedNotice,
+		Severity:    TranscriptNoticeInfo,
+		MessageType: &messageType,
+	}
+	if err := notice.Validate(); err != nil {
+		t.Fatalf("validate active-goal continuation notice: %v", err)
+	}
+}
+
 func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 	legacyText := "legacy notice"
 	tests := []TranscriptNoticeRow{

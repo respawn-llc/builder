@@ -255,6 +255,9 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	}
 
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	if _, err := eng.SetGoal("survive automatic compaction", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
@@ -266,6 +269,7 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	if eng.shouldAutoCompactWithContext(context.Background()) {
 		t.Fatalf("expected auto compact threshold to be cleared after replacement, usage=%+v", eng.usageTrackingState().Last())
 	}
+	assertSingleActiveGoalContinuation(t, eng.transcriptRuntimeState().SnapshotItems(), "survive automatic compaction")
 }
 
 func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails(t *testing.T) {
@@ -596,6 +600,68 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 	}
 }
 
+func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) {
+	tests := []struct {
+		name     string
+		workflow bool
+		mutate   func(*Engine) error
+	}{
+		{name: "absent"},
+		{name: "paused", mutate: func(engine *Engine) error {
+			if _, err := engine.SetGoal("paused goal", session.GoalActorUser); err != nil {
+				return err
+			}
+			_, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
+			return err
+		}},
+		{name: "complete", mutate: func(engine *Engine) error {
+			if _, err := engine.SetGoal("complete goal", session.GoalActorUser); err != nil {
+				return err
+			}
+			_, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorUser)
+			return err
+		}},
+		{name: "cleared", mutate: func(engine *Engine) error {
+			if _, err := engine.SetGoal("cleared goal", session.GoalActorUser); err != nil {
+				return err
+			}
+			_, err := engine.ClearGoal(session.GoalActorUser)
+			return err
+		}},
+		{name: "active workflow", workflow: true, mutate: func(engine *Engine) error {
+			_, err := engine.SetGoal("workflow-owned goal", session.GoalActorUser)
+			return err
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			client := activeGoalCompactionTestClient()
+			var engine *Engine
+			if test.workflow {
+				engine = mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool), Config{Model: "gpt-5"})
+			} else {
+				engine = mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
+			}
+			if test.mutate != nil {
+				if err := test.mutate(engine); err != nil {
+					t.Fatalf("prepare goal state: %v", err)
+				}
+			}
+			if err := engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+				t.Fatalf("append seed: %v", err)
+			}
+			if _, _, err := engine.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
+				t.Fatalf("compactNow: %v", err)
+			}
+			if got := activeGoalContinuationMessages(engine.transcriptRuntimeState().SnapshotItems()); len(got) != 0 {
+				t.Fatalf("active-goal continuation messages = %+v, want none", got)
+			}
+		})
+	}
+}
+
 func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverAtomically(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
@@ -606,6 +672,16 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 		Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	if _, err := eng.SetGoal("preserve atomic goal context", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	mustSetWorktreeReminderState(t, store, testWorktreeReminderState(
+		session.WorktreeReminderModeEnter,
+		"feature/goal",
+		t.TempDir(),
+		t.TempDir(),
+		t.TempDir(),
+	))
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
@@ -635,13 +711,22 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 	}
 	// Base meta and manual carryover are reinjected into the same replacement
 	// payload, with summary then canonical context then carryover.
-	summaryIndex, environmentIndex, carryoverIndex := -1, -1, -1
+	summaryIndex, environmentIndex, goalIndex, worktreeIndex, carryoverIndex := -1, -1, -1, -1, -1
+	goalCount := 0
 	for idx, item := range replacement.Items {
 		switch item.MessageType {
 		case llm.MessageTypeCompactionSummary:
 			summaryIndex = idx
 		case llm.MessageTypeEnvironment:
 			environmentIndex = idx
+		case llm.MessageTypeActiveGoalContinuation:
+			goalIndex = idx
+			goalCount++
+			if item.Content != prompts.RenderActiveGoalContinuationPrompt("preserve atomic goal context") {
+				t.Fatalf("active-goal continuation content = %q", item.Content)
+			}
+		case llm.MessageTypeWorktreeMode:
+			worktreeIndex = idx
 		case llm.MessageTypeManualCompactionCarryover:
 			carryoverIndex = idx
 			if !strings.Contains(item.Content, "seed") {
@@ -649,11 +734,11 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 			}
 		}
 	}
-	if summaryIndex < 0 || environmentIndex < 0 || carryoverIndex < 0 {
-		t.Fatalf("replacement payload must embed summary, reinjected base meta, and manual carryover: %+v", replacement.Items)
+	if summaryIndex < 0 || environmentIndex < 0 || goalIndex < 0 || worktreeIndex < 0 || carryoverIndex < 0 || goalCount != 1 {
+		t.Fatalf("replacement payload must embed summary, base meta, one active-goal continuation, worktree context, and manual carryover: %+v", replacement.Items)
 	}
-	if summaryIndex >= environmentIndex || environmentIndex >= carryoverIndex || carryoverIndex != len(replacement.Items)-1 {
-		t.Fatalf("replacement payload order must be summary, canonical context, then manual carryover: %+v", replacement.Items)
+	if !(summaryIndex < environmentIndex && environmentIndex < goalIndex && goalIndex < worktreeIndex && worktreeIndex < carryoverIndex) || carryoverIndex != len(replacement.Items)-1 {
+		t.Fatalf("replacement payload order must be summary, base, active goal, worktree, then manual carryover: %+v", replacement.Items)
 	}
 	for _, evt := range events[historyIndex+1:] {
 		if evt.Kind != "message" {
@@ -663,8 +748,8 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
 			t.Fatalf("decode message event: %v", err)
 		}
-		if msg.Role == llm.RoleDeveloper && (msg.MessageType == llm.MessageTypeEnvironment || msg.MessageType == llm.MessageTypeManualCompactionCarryover) {
-			t.Fatalf("base meta and manual carryover must be embedded in the replacement payload, not steered separately afterward: events=%+v", events)
+		if msg.Role == llm.RoleDeveloper && (msg.MessageType == llm.MessageTypeEnvironment || msg.MessageType == llm.MessageTypeActiveGoalContinuation || msg.MessageType == llm.MessageTypeManualCompactionCarryover) {
+			t.Fatalf("base meta, active-goal continuation, and manual carryover must be embedded in the replacement payload, not steered separately afterward: events=%+v", events)
 		}
 	}
 }
@@ -777,6 +862,12 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 	observerErr := errors.New("history replacement observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	fixture := newCommittedCompactionFixture(t, gate)
+	if _, err := fixture.engine.SetGoal("survive observer failure", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if goal := fixture.engine.Goal(); goal == nil || goal.Status != session.GoalStatusActive {
+		t.Fatalf("active goal precondition = %+v", goal)
+	}
 	gate.FailNext(observerErr)
 
 	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, "", false)
@@ -820,6 +911,39 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 	}
 	if replacements != 1 || len(fixture.client.compactionCalls) != 1 {
 		t.Fatalf("committed compaction retried: replacements=%d calls=%d", replacements, len(fixture.client.compactionCalls))
+	}
+	assertSingleActiveGoalContinuation(t, fixture.engine.transcriptRuntimeState().SnapshotItems(), "survive observer failure")
+}
+
+func activeGoalCompactionTestClient() *fakeCompactionClient {
+	return &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
+		OutputItems: []llm.ResponseItem{
+			{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
+			{Type: llm.ResponseItemTypeCompaction, ID: "cmp_goal", EncryptedContent: "enc_goal"},
+		},
+		Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
+	}}}
+}
+
+func activeGoalContinuationMessages(items []llm.ResponseItem) []llm.Message {
+	messages := llm.MessagesFromItems(items)
+	out := make([]llm.Message, 0, 1)
+	for _, message := range messages {
+		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeActiveGoalContinuation {
+			out = append(out, message)
+		}
+	}
+	return out
+}
+
+func assertSingleActiveGoalContinuation(t *testing.T, items []llm.ResponseItem, objective string) {
+	t.Helper()
+	messages := activeGoalContinuationMessages(items)
+	if len(messages) != 1 {
+		t.Fatalf("active-goal continuation count = %d, want 1; messages=%+v", len(messages), messages)
+	}
+	if messages[0].Content != prompts.RenderActiveGoalContinuationPrompt(objective) {
+		t.Fatalf("active-goal continuation content = %q", messages[0].Content)
 	}
 }
 

@@ -31,4 +31,7 @@ const (
 	MessageTypeWorktreeMode              MessageType = "worktree_mode"
 	MessageTypeWorktreeModeExit          MessageType = "worktree_mode_exit"
 	MessageTypeGoal                      MessageType = "goal"
+	MessageTypeActiveGoalContinuation    MessageType = "active_goal_continuation"
 )
+
+const GoalNudgeCompactLabel = "Goal nudge"
