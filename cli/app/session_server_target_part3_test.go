@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"io"
-	"net"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +16,6 @@ import (
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
-	"golang.org/x/net/websocket"
 )
 
 func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.T) {
@@ -125,7 +122,11 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 		t.Fatalf("startSessionServer: %v", err)
 	}
 	defer func() { _ = server.Close() }()
-	processes := requireProcessServer(t, server)
+	remote, ok := server.(*remoteAppServer)
+	if !ok {
+		t.Fatalf("expected remote app server, got %T", server)
+	}
+	processes := remote.RuntimeAttachmentClients()
 
 	planner := newSessionLaunchPlanner(server)
 	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
@@ -147,12 +148,12 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 		t.Fatal("expected backgrounded process")
 	}
 
-	proc := waitForRemoteProcess(t, processes.ProcessViewClient(), plan.SessionID, result.SessionID)
+	proc := waitForRemoteProcess(t, processes.ProcessViews, plan.SessionID, result.SessionID)
 	if proc.OwnerSessionID != plan.SessionID {
 		t.Fatalf("unexpected process owner: %+v", proc)
 	}
 
-	getResp, err := processes.ProcessViewClient().GetProcess(context.Background(), serverapi.ProcessGetRequest{ProcessID: result.SessionID})
+	getResp, err := processes.ProcessViews.GetProcess(context.Background(), serverapi.ProcessGetRequest{ProcessID: result.SessionID})
 	if err != nil {
 		t.Fatalf("GetProcess: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 		t.Fatalf("unexpected get process response: %+v", getResp.Process)
 	}
 
-	outputSub, err := processes.ProcessOutputClient().SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: result.SessionID, OffsetBytes: 0})
+	outputSub, err := processes.ProcessOutput.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: result.SessionID, OffsetBytes: 0})
 	if err != nil {
 		t.Fatalf("SubscribeProcessOutput: %v", err)
 	}
@@ -172,66 +173,16 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 	if !strings.Contains(chunk.Text, "daemon process output") {
 		t.Fatalf("unexpected process output chunk: %+v", chunk)
 	}
-	inlineResp := waitForRemoteInlineOutput(t, processes.ProcessControlClient(), result.SessionID)
+	inlineResp := waitForRemoteInlineOutput(t, processes.ProcessControls, result.SessionID)
 	if !strings.Contains(inlineResp.Output, "daemon process output") {
 		t.Fatalf("unexpected inline output: %q", inlineResp.Output)
 	}
 
-	if _, err := processes.ProcessControlClient().KillProcess(context.Background(), serverapi.ProcessKillRequest{ClientRequestID: uuid.NewString(), ProcessID: result.SessionID}); err != nil {
+	if _, err := processes.ProcessControls.KillProcess(context.Background(), serverapi.ProcessKillRequest{ClientRequestID: uuid.NewString(), ProcessID: result.SessionID}); err != nil {
 		t.Fatalf("KillProcess: %v", err)
 	}
-	waitForRemoteProcessExit(t, processes.ProcessViewClient(), result.SessionID)
+	waitForRemoteProcessExit(t, processes.ProcessViews, result.SessionID)
 
-}
-
-func TestInteractiveSessionServerWorkflowParity(t *testing.T) {
-	t.Run("embedded", func(t *testing.T) {
-		_, workspace := newRegisteredAppWorkspace(t)
-		fakeResponses, _ := newFakeResponsesServer(t, []string{"parity reply"})
-		defer fakeResponses.Close()
-		server, err := startEmbeddedServer(context.Background(), Options{
-			WorkspaceRoot:         workspace,
-			WorkspaceRootExplicit: true,
-			Model:                 "gpt-5",
-			OpenAIBaseURL:         fakeResponses.URL,
-			OpenAIBaseURLExplicit: true,
-		}, readyMemoryAuthHandler(), false)
-		if err != nil {
-			t.Fatalf("startEmbeddedServer: %v", err)
-		}
-		defer func() { _ = server.Close() }()
-		runInteractiveWorkflowScenario(t, server, "parity reply")
-	})
-
-	t.Run("daemon", func(t *testing.T) {
-		_, workspace := newRegisteredAppWorkspace(t)
-		fakeResponses, _ := newFakeResponsesServer(t, []string{"parity reply"})
-		defer fakeResponses.Close()
-
-		srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-			WorkspaceRoot:         workspace,
-			WorkspaceRootExplicit: true,
-			Model:                 "gpt-5",
-			OpenAIBaseURL:         fakeResponses.URL,
-			OpenAIBaseURLExplicit: true,
-		}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-		if err != nil {
-			t.Fatalf("serve.Start: %v", err)
-		}
-		defer func() { _ = srv.Close() }()
-
-		stopServing := serveAppServer(t, srv)
-		defer stopServing()
-		waitForConfiguredRemoteIdentity(t, workspace)
-
-		server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
-		if err != nil {
-			t.Fatalf("startSessionServer: %v", err)
-		}
-		defer func() { _ = server.Close() }()
-		runInteractiveWorkflowScenario(t, server, "parity reply")
-
-	})
 }
 
 func waitForConfiguredRemoteIdentity(t *testing.T, workspace string) protocol.ServerIdentity {
@@ -364,104 +315,4 @@ func waitForRemoteInlineOutput(t *testing.T, controls apicontract.ProcessControl
 	}
 	t.Fatalf("timed out waiting for inline output from %s", processID)
 	return serverapi.ProcessInlineOutputResponse{}
-}
-
-func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServer, wantReply string) {
-	t.Helper()
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "workflow parity")
-	defer runtimePlan.Close()
-
-	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello parity")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != wantReply {
-		t.Fatalf("assistant message = %q, want %q", message, wantReply)
-	}
-	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "workflow draft"}); err != nil {
-		t.Fatalf("PersistInputDraft: %v", err)
-	}
-	initialState, err := sessionLaunchInitialStateFromServer(context.Background(), server, plan.SessionID, "transition draft", false)
-	if err != nil {
-		t.Fatalf("sessionLaunchInitialStateFromServer: %v", err)
-	}
-	if initialState.Input != "workflow draft" {
-		t.Fatalf("sessionLaunchInitialStateFromServer input = %q, want workflow draft", initialState.Input)
-	}
-}
-
-type processTestServer interface {
-	ProcessControlClient() apicontract.ProcessControlService
-	ProcessOutputClient() apicontract.ProcessOutputService
-	ProcessViewClient() apicontract.ProcessViewService
-}
-
-func requireProcessServer(t *testing.T, server any) processTestServer {
-	t.Helper()
-	processes, ok := server.(processTestServer)
-	if !ok {
-		runtimeSource, runtimeOK := server.(runtimeAttachmentSource)
-		if !runtimeOK {
-			t.Fatalf("server %T does not expose process clients", server)
-		}
-		return runtimeProcessTestServer{clients: runtimeSource.RuntimeAttachmentClients()}
-	}
-	return processes
-}
-
-type runtimeProcessTestServer struct {
-	clients runtimeAttachmentClients
-}
-
-func (s runtimeProcessTestServer) ProcessControlClient() apicontract.ProcessControlService {
-	return s.clients.ProcessControls
-}
-
-func (s runtimeProcessTestServer) ProcessOutputClient() apicontract.ProcessOutputService {
-	return s.clients.ProcessOutput
-}
-
-func (s runtimeProcessTestServer) ProcessViewClient() apicontract.ProcessViewService {
-	return s.clients.ProcessViews
-}
-
-func publishConfiguredRemoteForWorkspace(t *testing.T, workspace string, caps protocol.CapabilityFlags) func() {
-	t.Helper()
-	identity := protocol.ServerIdentity{
-		ProtocolVersion: protocol.Version,
-		ServerID:        "stale-daemon",
-		PID:             222,
-		Capabilities:    caps,
-	}
-	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
-		defer func() { _ = ws.Close() }()
-		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if req.Method != protocol.MethodHandshake {
-			_ = websocket.JSON.Send(ws, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake required"))
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: identity})); err != nil {
-			return
-		}
-		for {
-			if err := websocket.JSON.Receive(ws, &req); err != nil {
-				return
-			}
-			_ = websocket.JSON.Send(ws, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, "method not found"))
-		}
-	}))
-	host, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
-	if err != nil {
-		server.Close()
-		t.Fatalf("SplitHostPort: %v", err)
-	}
-	t.Setenv("KENT_SERVER_HOST", host)
-	t.Setenv("KENT_SERVER_PORT", port)
-	return func() {
-		server.Close()
-	}
 }

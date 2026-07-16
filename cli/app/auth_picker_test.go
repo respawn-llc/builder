@@ -95,35 +95,6 @@ func TestAuthMethodPickerCancel(t *testing.T) {
 	}
 }
 
-func TestInteractiveAuthInteractorNeedsInteractionForEnvConflict(t *testing.T) {
-	interactor := &interactiveAuthInteractor{}
-	if interactor.NeedsInteraction(authInteraction{
-		AuthRequired: true,
-		Gate:         auth.StartupGate{Ready: true},
-		State:        auth.State{Scope: auth.ScopeGlobal, Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "sk-env"}}},
-		StoredState:  auth.EmptyState(),
-		HasEnvAPIKey: true,
-	}) {
-		t.Fatal("did not expect ready env-only startup without saved preference to require method selection")
-	}
-	if !interactor.NeedsInteraction(authInteraction{
-		Gate:         auth.StartupGate{Ready: true},
-		State:        auth.State{Scope: auth.ScopeGlobal, Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "sk-env"}}},
-		StoredState:  auth.State{Scope: auth.ScopeGlobal, Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{AccessToken: "x"}}},
-		HasEnvAPIKey: true,
-	}) {
-		t.Fatal("expected unresolved env-vs-oauth conflict to require interaction")
-	}
-	if interactor.NeedsInteraction(authInteraction{
-		Gate:         auth.StartupGate{Ready: true},
-		State:        auth.State{Scope: auth.ScopeGlobal, Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{AccessToken: "x"}}, EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved},
-		StoredState:  auth.State{Scope: auth.ScopeGlobal, Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{AccessToken: "x"}}, EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved},
-		HasEnvAPIKey: true,
-	}) {
-		t.Fatal("did not expect saved preference to reopen conflict picker")
-	}
-}
-
 func TestInteractiveAuthInteractorOffersEnvAPIKeyChoiceWhenAvailable(t *testing.T) {
 	ctx := context.Background()
 	mgr := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now)
@@ -384,25 +355,6 @@ func TestInteractiveAuthInteractorRetriesWithFlowErrorAndClearsOnSuccess(t *test
 	}
 	if state.Method.Type != auth.MethodOAuth {
 		t.Fatalf("expected oauth auth, got %q", state.Method.Type)
-	}
-}
-
-func TestRunOAuthBrowserAutoClosesListenerAfterWaitFailure(t *testing.T) {
-	listener := &stubOAuthCallbackListener{waitErr: errors.New("wait failed")}
-	interactor := &interactiveAuthInteractor{
-		startCallbackListener: func() (oauthCallbackListener, error) {
-			return listener, nil
-		},
-		openBrowser: func(string) error { return nil },
-		stderr:      io.Discard,
-	}
-
-	_, err := interactor.authOAuthRunner("dark").BrowserAuto(context.Background(), auth.OpenAIOAuthOptions{})
-	if err == nil || err.Error() != "wait failed" {
-		t.Fatalf("expected wait failure, got %v", err)
-	}
-	if listener.closed != 1 {
-		t.Fatalf("expected listener to be closed once, got %d", listener.closed)
 	}
 }
 

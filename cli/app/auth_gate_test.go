@@ -473,51 +473,16 @@ func TestBootstrapAppSkipAuthDoesNotPersistAuthState(t *testing.T) {
 	}
 }
 
-func TestInteractiveAuthSkipClearsStoredAuthState(t *testing.T) {
-	mgr := auth.NewManager(auth.NewMemoryStore(auth.State{
+func TestInteractiveAuthSkipClearsSavedAndEnvAuthEvenWhenRequired(t *testing.T) {
+	ctx := context.Background()
+	store := authservice.WrapStoreWithEnvAPIKeyOverride(auth.NewMemoryStore(auth.State{
 		Scope: auth.ScopeGlobal,
 		Method: auth.Method{
 			Type:   auth.MethodAPIKey,
 			APIKey: &auth.APIKeyMethod{Key: "sk-before"},
 		},
 		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
-	}), nil, time.Now)
-	storedState, err := mgr.StoredState(context.Background())
-	if err != nil {
-		t.Fatalf("load stored state: %v", err)
-	}
-
-	interactor := &interactiveAuthInteractor{
-		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
-			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
-		},
-	}
-	outcome, err := interactor.Interact(context.Background(), authInteraction{
-		Manager:     mgr,
-		StoredState: storedState,
-	})
-	if err != nil {
-		t.Fatalf("interactive skip: %v", err)
-	}
-	if !outcome.ProceedWithoutAuth {
-		t.Fatal("expected skip to proceed without auth")
-	}
-
-	state, err := mgr.StoredState(context.Background())
-	if err != nil {
-		t.Fatalf("load cleared state: %v", err)
-	}
-	if state.Method.Type != auth.MethodNone {
-		t.Fatalf("expected stored auth method to be cleared, got %+v", state.Method)
-	}
-	if state.EnvAPIKeyPreference != auth.EnvAPIKeyPreferencePreferSaved {
-		t.Fatalf("expected no-auth preference to be saved, got %q", state.EnvAPIKeyPreference)
-	}
-}
-
-func TestInteractiveAuthSkipDisablesEnvAPIKeyFallback(t *testing.T) {
-	ctx := context.Background()
-	store := authservice.WrapStoreWithEnvAPIKeyOverride(auth.NewMemoryStore(auth.EmptyState()), func(key string) string {
+	}), func(key string) string {
 		if key == "OPENAI_API_KEY" {
 			return "sk-env"
 		}
@@ -538,6 +503,7 @@ func TestInteractiveAuthSkipDisablesEnvAPIKeyFallback(t *testing.T) {
 		Manager:      mgr,
 		StoredState:  storedState,
 		HasEnvAPIKey: true,
+		AuthRequired: true,
 	})
 	if err != nil {
 		t.Fatalf("interactive skip: %v", err)
@@ -551,35 +517,14 @@ func TestInteractiveAuthSkipDisablesEnvAPIKeyFallback(t *testing.T) {
 		t.Fatalf("load auth state: %v", err)
 	}
 	if state.Method.Type != auth.MethodNone {
-		t.Fatalf("expected env auth override to stay disabled after skip, got %+v", state.Method)
-	}
-	if state.EnvAPIKeyPreference != auth.EnvAPIKeyPreferencePreferSaved {
-		t.Fatalf("expected skip to persist saved-auth preference, got %q", state.EnvAPIKeyPreference)
+		t.Fatalf("expected saved and env auth to stay disabled after skip, got %+v", state.Method)
 	}
 	stored, err := mgr.StoredState(ctx)
 	if err != nil {
 		t.Fatalf("load stored auth state: %v", err)
 	}
-	if stored.EnvAPIKeyPreference != auth.EnvAPIKeyPreferencePreferSaved {
-		t.Fatalf("expected stored preference to disable env fallback, got %q", stored.EnvAPIKeyPreference)
-	}
-}
-
-func TestInteractiveAuthSkipAllowsRequiredAuthOptOut(t *testing.T) {
-	interactor := &interactiveAuthInteractor{
-		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
-			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
-		},
-	}
-	outcome, err := interactor.Interact(context.Background(), authInteraction{
-		Manager:      auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now),
-		AuthRequired: true,
-	})
-	if err != nil {
-		t.Fatalf("interactive skip: %v", err)
-	}
-	if !outcome.ProceedWithoutAuth {
-		t.Fatal("expected no-auth selection to proceed without auth")
+	if stored.Method.Type != auth.MethodNone || stored.EnvAPIKeyPreference != auth.EnvAPIKeyPreferencePreferSaved {
+		t.Fatalf("stored skip state = %+v, want no auth with saved-auth preference", stored)
 	}
 }
 

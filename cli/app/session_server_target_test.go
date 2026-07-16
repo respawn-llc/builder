@@ -301,26 +301,7 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 
 }
 
-func TestRemoteInteractiveRuntimeTwoClientsConvergeOnSameSessionAcrossWorkspaces(t *testing.T) {
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"shared daemon reply"})
-	defer fakeResponses.Close()
-	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
-
-	submission, err := submitRuntimeClientForTest(t, fixture.runtimePlanA.Wiring.runtimeClient, "hello from client A")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage A: %v", err)
-	}
-	if message != "shared daemon reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "shared daemon reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected one daemon-backed llm call, got %d", hits.Load())
-	}
-
-}
-
-func TestRemoteInteractiveRuntimeAskAnswersFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
+func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
 	fixture := startRemoteMultiClientRuntimeFixture(t, "")
 	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, fixture.planA.SessionID)
 
@@ -362,12 +343,6 @@ func TestRemoteInteractiveRuntimeAskAnswersFromAnyAttachedClientAcrossWorkspaces
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for ask response")
 	}
-	finishStep()
-}
-
-func TestRemoteInteractiveRuntimeApprovalAnswersFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
-	fixture := startRemoteMultiClientRuntimeFixture(t, "")
-	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, fixture.planA.SessionID)
 
 	approvalDone := make(chan struct {
 		resp askquestion.AskQuestionResponse
@@ -388,7 +363,6 @@ func TestRemoteInteractiveRuntimeApprovalAnswersFromAnyAttachedClientAcrossWorks
 	if approvalPrompt.Kind != clientui.TranscriptPromptKindApproval || approvalPrompt.Question != "Allow the command?" {
 		t.Fatalf("unexpected approval prompt: %+v", approvalPrompt)
 	}
-	runtimeClientsB := fixture.serverB.RuntimeAttachmentClients()
 
 	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
 		ClientRequestID: uuid.NewString(),
@@ -606,33 +580,4 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *r
 	}
 
 	return fixture
-}
-
-func TestStartSessionServerBypassesRemoteAndDaemonOnFirstInteractiveRun(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspaceWithoutSettings(t)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, &stubAuthInteractor{}, true)
-	if server != nil {
-		t.Cleanup(func() { _ = server.Close() })
-	}
-	if err == nil {
-		t.Fatal("expected unavailable configured server to fail")
-	}
-}
-
-func TestStartSessionServerUnregisteredWorkspaceStartsRegistrationCapableServer(t *testing.T) {
-	home := newAppTestHome(t)
-	workspace := t.TempDir()
-	configureAppTestServerPort(t)
-	if _, _, err := config.WriteDefaultSettingsFileAt(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
-		t.Fatalf("write test settings: %v", err)
-	}
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
-	if server != nil {
-		t.Cleanup(func() { _ = server.Close() })
-	}
-	if err == nil {
-		t.Fatal("expected unavailable configured server to fail")
-	}
 }

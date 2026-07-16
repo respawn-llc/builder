@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -13,6 +14,7 @@ import (
 )
 
 type projectViewRemoteStub struct {
+	apicontract.ProjectViewService
 	identity     protocol.ServerIdentity
 	plan         func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error)
 	requireRoot  func(string) error
@@ -44,42 +46,6 @@ func (s *projectViewRemoteStub) PlanWorkspaceBinding(ctx context.Context, req se
 		return s.plan(ctx, req)
 	}
 	return serverapi.ProjectBindingPlanResponse{}, errors.New("unexpected PlanWorkspaceBinding call")
-}
-
-func (*projectViewRemoteStub) ListProjects(context.Context, serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
-	return serverapi.ProjectListResponse{}, errors.New("unexpected ListProjects call")
-}
-
-func (*projectViewRemoteStub) ListProjectHome(context.Context, serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	return serverapi.ProjectHomeListResponse{}, errors.New("unexpected ListProjectHome call")
-}
-
-func (*projectViewRemoteStub) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	return serverapi.ProjectResolvePathResponse{}, errors.New("unexpected ResolveProjectPath call")
-}
-
-func (*projectViewRemoteStub) CreateProject(context.Context, serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	return serverapi.ProjectCreateResponse{}, errors.New("unexpected CreateProject call")
-}
-
-func (*projectViewRemoteStub) AttachWorkspaceToProject(context.Context, serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	return serverapi.ProjectAttachWorkspaceResponse{}, errors.New("unexpected AttachWorkspaceToProject call")
-}
-
-func (*projectViewRemoteStub) ListProjectWorkspaces(context.Context, serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	return serverapi.ProjectWorkspaceListResponse{}, errors.New("unexpected ListProjectWorkspaces call")
-}
-
-func (*projectViewRemoteStub) RebindWorkspace(context.Context, serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	return serverapi.ProjectRebindWorkspaceResponse{}, errors.New("unexpected RebindWorkspace call")
-}
-
-func (*projectViewRemoteStub) GetProjectOverview(context.Context, serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	return serverapi.ProjectGetOverviewResponse{}, errors.New("unexpected GetProjectOverview call")
-}
-
-func (*projectViewRemoteStub) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	return serverapi.SessionPageResponse{}, errors.New("unexpected ListSessionPage call")
 }
 
 func TestDialHeadlessPinsProjectViewRootBeforeDiscovery(t *testing.T) {
