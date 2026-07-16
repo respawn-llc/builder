@@ -42,7 +42,6 @@ type uiRuntimeFeatureState struct {
 	runtimeReconnectWarning    <-chan runtimeReconnectWarningMsg
 	runtimeContextUsage        clientui.RuntimeContextUsage
 	runtimeContextUsageSession string
-	runtimeReadModelVersion    clientui.ReadModelVersion
 	runtimeActivityProjection  clientui.RuntimeActivity
 	logger                     uiLogger
 }

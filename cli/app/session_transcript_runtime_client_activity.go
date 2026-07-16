@@ -2,103 +2,87 @@ package app
 
 import "core/shared/clientui"
 
-type runtimeActivitySnapshotPatch struct {
-	Version             clientui.ReadModelVersion
-	Activity            clientui.RuntimeActivity
-	InputReconciliation clientui.RuntimeInputReconciliationSnapshot
-}
-
-func (c *sessionRuntimeClient) patchVersionedRuntimeActivity(snapshot runtimeActivitySnapshotPatch) {
+func (c *sessionRuntimeClient) mergeRuntimeTuple(
+	candidate runtimeTupleCandidate,
+	ingress runtimeTupleIngress,
+) runtimeTupleMergeResult {
 	if c == nil {
-		return
+		return runtimeTupleMergeResult{}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	switch decideRuntimeActivitySnapshotCache(c.mainView.Version, snapshot.Version) {
-	case runtimeActivitySnapshotCacheApply:
-		view := &c.mainView
-		view.Version = snapshot.Version
-		view.Activity = snapshot.Activity
-		view.InputReconciliation = snapshot.InputReconciliation
-		if view.Session.SessionID == "" {
-			view.Session.SessionID = c.sessionID
+	decision := decideRuntimeTuple(c.mainView.Version, candidate.Version, ingress)
+	if decision == runtimeTupleApply {
+		applyRuntimeTuple(&c.mainView, candidate)
+		if c.mainView.Session.SessionID == "" {
+			c.mainView.Session.SessionID = c.sessionID
 		}
 		c.hasMainView = true
-	case runtimeActivitySnapshotCacheRefresh:
-		c.readModelStale = true
 	}
+	return runtimeTupleMergeResult{decision: decision, view: c.mainView, project: decision == runtimeTupleApply}
 }
 
-type runtimeActivitySnapshotCacheDecision uint8
-
-const (
-	runtimeActivitySnapshotCacheIgnore runtimeActivitySnapshotCacheDecision = iota
-	runtimeActivitySnapshotCacheApply
-	runtimeActivitySnapshotCacheRefresh
-)
-
-func decideRuntimeActivitySnapshotCache(current clientui.ReadModelVersion, incoming clientui.ReadModelVersion) runtimeActivitySnapshotCacheDecision {
-	if incoming.Validate() != nil {
-		return runtimeActivitySnapshotCacheIgnore
-	}
-	if current.Validate() != nil {
-		return runtimeActivitySnapshotCacheApply
-	}
-	if incoming.Epoch != current.Epoch {
-		return runtimeActivitySnapshotCacheRefresh
-	}
-	if incoming.Generation != current.Generation {
-		if incoming.Generation > current.Generation {
-			return runtimeActivitySnapshotCacheRefresh
-		}
-		return runtimeActivitySnapshotCacheIgnore
-	}
-	if incoming.Sequence <= current.Sequence {
-		return runtimeActivitySnapshotCacheIgnore
-	}
-	return runtimeActivitySnapshotCacheApply
-}
-
-func (c *sessionRuntimeClient) observeTranscriptMessageState(message clientui.TranscriptMessage) {
+func (c *sessionRuntimeClient) admitTranscriptMessageState(message clientui.TranscriptMessage) (runtimeTupleMergeResult, error) {
 	if c == nil {
-		return
+		return runtimeTupleMergeResult{}, nil
 	}
-	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		switch message.Kind {
-		case clientui.TranscriptMessageHydration:
-			if message.Payload.Hydration != nil {
-				applyTranscriptHydrationToMainView(view, *message.Payload.Hydration)
-			}
-		case clientui.TranscriptMessageRuntimeReadModelUpdate:
-			if message.Payload.RuntimeReadModelUpdate != nil {
-				applyTranscriptRuntimeReadModelToMainView(view, *message.Payload.RuntimeReadModelUpdate)
-			}
-		case clientui.TranscriptMessageSessionStatus:
-			if message.Payload.SessionStatus != nil {
-				applyTranscriptSessionStatusToRuntimeStatus(&view.Status, *message.Payload.SessionStatus)
-			}
-		case clientui.TranscriptMessageSessionIdentity:
-			if message.Payload.SessionIdentity != nil {
-				applyTranscriptSessionIdentityToRuntimeView(&view.Session, *message.Payload.SessionIdentity)
-			}
-		case clientui.TranscriptMessageContextUsage:
-			if message.Payload.ContextUsage != nil {
-				view.Status.ContextUsage = runtimeContextUsageFromTranscript(*message.Payload.ContextUsage)
-			}
-		case clientui.TranscriptMessageGoalStatus:
-			if message.Payload.GoalStatus != nil {
-				view.Status.Goal = runtimeGoalFromTranscript(*message.Payload.GoalStatus)
-			}
-		case clientui.TranscriptMessageCompactionStatus:
-			if message.Payload.CompactionStatus != nil {
-				view.Status.CompactionCount = message.Payload.CompactionStatus.Count
-			}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	result := runtimeTupleMergeResult{decision: runtimeTupleIgnore, view: c.mainView}
+	switch message.Kind {
+	case clientui.TranscriptMessageHydration:
+		hydration := message.Payload.Hydration
+		candidate := runtimeTupleFromReadModelUpdate(hydration.RuntimeReadModelUpdate)
+		decision := decideRuntimeTuple(c.mainView.Version, candidate.Version, runtimeTupleIngressHydration)
+		if decision == runtimeTupleIgnore && !runtimeTupleMatchesView(candidate, c.mainView) {
+			return runtimeTupleMergeResult{}, hydrationRuntimeTupleError(c.mainView, candidate)
 		}
-	})
+		if decision == runtimeTupleApply {
+			applyRuntimeTuple(&c.mainView, candidate)
+		}
+		applyTranscriptHydrationMetadataToMainView(&c.mainView, *hydration)
+		c.ensureMainViewIdentity()
+		result = runtimeTupleMergeResult{decision: decision, view: c.mainView, project: true}
+	case clientui.TranscriptMessageRuntimeReadModelUpdate:
+		candidate := runtimeTupleFromReadModelUpdate(*message.Payload.RuntimeReadModelUpdate)
+		decision := decideRuntimeTuple(c.mainView.Version, candidate.Version, runtimeTupleIngressIncremental)
+		if decision == runtimeTupleApply {
+			applyRuntimeTuple(&c.mainView, candidate)
+			c.ensureMainViewIdentity()
+		}
+		result = runtimeTupleMergeResult{decision: decision, view: c.mainView, project: decision == runtimeTupleApply}
+	default:
+		applyTranscriptMetadataToMainView(&c.mainView, message)
+		c.ensureMainViewIdentity()
+		result.view = c.mainView
+	}
+	return result, nil
 }
 
-func applyTranscriptHydrationToMainView(view *clientui.RuntimeMainView, hydration clientui.TranscriptHydration) {
-	applyTranscriptRuntimeReadModelToMainView(view, hydration.RuntimeReadModelUpdate)
+func (c *sessionRuntimeClient) ensureMainViewIdentity() {
+	if c.mainView.Session.SessionID == "" {
+		c.mainView.Session.SessionID = c.sessionID
+	}
+	c.hasMainView = true
+}
+
+func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message clientui.TranscriptMessage) {
+	switch message.Kind {
+	case clientui.TranscriptMessageSessionStatus:
+		applyTranscriptSessionStatusToRuntimeStatus(&view.Status, *message.Payload.SessionStatus)
+	case clientui.TranscriptMessageSessionIdentity:
+		applyTranscriptSessionIdentityToRuntimeView(&view.Session, *message.Payload.SessionIdentity)
+	case clientui.TranscriptMessageContextUsage:
+		view.Status.ContextUsage = runtimeContextUsageFromTranscript(*message.Payload.ContextUsage)
+	case clientui.TranscriptMessageGoalStatus:
+		view.Status.Goal = runtimeGoalFromTranscript(*message.Payload.GoalStatus)
+	case clientui.TranscriptMessageCompactionStatus:
+		view.Status.CompactionCount = message.Payload.CompactionStatus.Count
+	}
+}
+
+func applyTranscriptHydrationMetadataToMainView(view *clientui.RuntimeMainView, hydration clientui.TranscriptHydration) {
 	applyTranscriptSessionStatusToRuntimeStatus(&view.Status, hydration.SessionStatus)
 	applyTranscriptSessionIdentityToRuntimeView(&view.Session, hydration.SessionIdentity)
 	view.Status.ContextUsage = clientui.RuntimeContextUsage{}
@@ -112,12 +96,6 @@ func applyTranscriptHydrationToMainView(view *clientui.RuntimeMainView, hydratio
 	if hydration.ActiveCompaction != nil {
 		view.Status.CompactionCount = hydration.ActiveCompaction.Count
 	}
-}
-
-func applyTranscriptRuntimeReadModelToMainView(view *clientui.RuntimeMainView, update clientui.RuntimeReadModelUpdate) {
-	view.Version = update.Version
-	view.Activity = update.Activity
-	view.InputReconciliation = update.InputReconciliation
 }
 
 func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus, update clientui.TranscriptSessionStatus) {

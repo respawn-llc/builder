@@ -262,29 +262,34 @@ func (c *sessionRuntimeClient) Interrupt() error {
 }
 
 func (c *sessionRuntimeClient) InterruptWithPendingRefs(refs []clientui.RuntimeOperationRef) error {
-	return c.interruptWithTarget(nil, refs)
+	_, err := c.interruptRuntimeCandidate(nil, refs)
+	return err
 }
 
 func (c *sessionRuntimeClient) InterruptWithTarget(target clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) error {
 	if err := target.Validate(); err != nil {
 		return err
 	}
-	return c.interruptWithTarget(&target, refs)
+	_, err := c.interruptRuntimeCandidate(&target, refs)
+	return err
 }
 
-func (c *sessionRuntimeClient) interruptWithTarget(target *clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) error {
+func (c *sessionRuntimeClient) interruptRuntimeCandidate(
+	target *clientui.RuntimeOperationRef,
+	refs []clientui.RuntimeOperationRef,
+) (runtimeTupleCandidate, error) {
 	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeInterruptResponse, error) {
 		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{ClientRequestID: requestID, SessionID: c.sessionID, TargetOperationRef: target, PendingOperationRefs: refs})
 	})
 	if err != nil {
-		return err
+		return runtimeTupleCandidate{}, err
 	}
-	c.patchVersionedRuntimeActivity(runtimeActivitySnapshotPatch{
+	candidate := runtimeTupleCandidate{
 		Version:             resp.Version,
 		Activity:            resp.Activity,
 		InputReconciliation: resp.InputReconciliation,
-	})
-	return nil
+	}
+	return candidate, nil
 }
 
 func (c *sessionRuntimeClient) QueueRuntimeUserMessage(req clientui.RuntimeQueueUserMessageRequest) (clientui.QueuedUserMessage, error) {

@@ -150,7 +150,13 @@ func newAnimationTranscriptModel(t *testing.T) *uiModel {
 	t.Helper()
 	surface := &ongoingSurfaceSpy{}
 	m := newProjectedStaticUIModel()
-	m.ongoingTranscript = newOngoingTranscriptController(surface, m.ongoingFrameInput, m.applyTranscriptMessageState)
+	runtimeClient := &sessionRuntimeClient{sessionID: ongoingTestSessionID().String()}
+	m.ongoingTranscript = newOngoingTranscriptController(
+		surface,
+		m.ongoingFrameInput,
+		runtimeClient.admitTranscriptMessageState,
+		m.applyAdmittedTranscriptMessageState,
+	)
 	next, _ := m.Update(ongoingTranscriptEvent{
 		Kind:    ongoingTranscriptEventMessage,
 		Message: ongoingHydrationMessage(1),

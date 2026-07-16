@@ -21,6 +21,10 @@ type runtimeTargetInterruptClient interface {
 	InterruptWithTarget(clientui.RuntimeOperationRef, []clientui.RuntimeOperationRef) error
 }
 
+type runtimeInterruptCandidateClient interface {
+	interruptRuntimeCandidate(*clientui.RuntimeOperationRef, []clientui.RuntimeOperationRef) (runtimeTupleCandidate, error)
+}
+
 type runtimeMainViewReconciliationClient interface {
 	RefreshMainViewWithPendingRefs([]clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error)
 }
@@ -209,7 +213,12 @@ func (m *uiModel) submitQueuedRuntimeUserMessages(ctx context.Context) (string, 
 
 func (m *uiModel) interruptRuntime() error {
 	m.checkTUIBlockingOperation("runtime control mutation", "interrupt")
-	err := executeRuntimeInterrupt(runtimeInterruptRequestFromModel(m))
+	candidate, err := executeRuntimeInterrupt(runtimeInterruptRequestFromModel(m))
+	if err == nil && candidate != nil {
+		if client, ok := m.runtimeClient().(*sessionRuntimeClient); ok {
+			client.mergeRuntimeTuple(*candidate, runtimeTupleIngressIncremental)
+		}
+	}
 	m.observeRuntimeRequestResult(err)
 	return err
 }
@@ -259,17 +268,24 @@ func (m *uiModel) runtimeInterruptTargetRef(refs []clientui.RuntimeOperationRef)
 	return &target
 }
 
-func executeRuntimeInterrupt(req runtimeInterruptRequest) error {
+func executeRuntimeInterrupt(req runtimeInterruptRequest) (*runtimeTupleCandidate, error) {
 	if req.client == nil {
-		return nil
+		return nil, nil
+	}
+	if candidateClient, ok := req.client.(runtimeInterruptCandidateClient); ok {
+		candidate, err := candidateClient.interruptRuntimeCandidate(req.target, req.pendingRefs)
+		if err != nil {
+			return nil, err
+		}
+		return &candidate, nil
 	}
 	if requestClient, ok := req.client.(runtimeInterruptReconciliationClient); ok {
 		if targetClient, ok := req.client.(runtimeTargetInterruptClient); ok && req.target != nil {
-			return targetClient.InterruptWithTarget(*req.target, req.pendingRefs)
+			return nil, targetClient.InterruptWithTarget(*req.target, req.pendingRefs)
 		}
-		return requestClient.InterruptWithPendingRefs(req.pendingRefs)
+		return nil, requestClient.InterruptWithPendingRefs(req.pendingRefs)
 	}
-	return req.client.Interrupt()
+	return nil, req.client.Interrupt()
 }
 
 func (m *uiModel) pendingRuntimeOperationRefs() []clientui.RuntimeOperationRef {
@@ -510,7 +526,7 @@ func (m *uiModel) runtimeControlCommand(operation runtimeControlOperation, text 
 		case runtimeControlSetQuestions:
 			msg.changed, msg.err = client.SetQuestionsEnabled(enabled)
 		case runtimeControlInterrupt:
-			msg.err = executeRuntimeInterrupt(interruptReq)
+			msg.runtimeTuple, msg.err = executeRuntimeInterrupt(interruptReq)
 		}
 		return msg
 	}
@@ -583,7 +599,13 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 		status := serverapi.QuestionsToggleStatusMessage(msg.enabled, msg.changed)
 		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
 	case runtimeControlInterrupt:
-		if client, ok := m.runtimeClient().(interface{ consumeRuntimeReadModelStale() bool }); ok && client.consumeRuntimeReadModelStale() {
+		var merge runtimeTupleMergeResult
+		if msg.runtimeTuple != nil {
+			if client, ok := m.runtimeClient().(*sessionRuntimeClient); ok {
+				merge = client.mergeRuntimeTuple(*msg.runtimeTuple, runtimeTupleIngressIncremental)
+			}
+		}
+		if merge.decision == runtimeTupleRefresh {
 			decision := m.startRuntimeMainViewRefreshRequest(runtimeReadModelResetMainViewRefreshRequest())
 			return tea.Batch(followUpCmd, decision.cmd)
 		}

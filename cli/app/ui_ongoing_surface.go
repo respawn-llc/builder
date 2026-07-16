@@ -71,6 +71,20 @@ func (m *uiModel) handleOngoingSurfaceError(err error) tea.Cmd {
 	return tea.Quit
 }
 
+func (m *uiModel) handleOngoingDeveloperError(err ongoing.DeveloperError) tea.Cmd {
+	if m != nil && m.debugMode {
+		panic(err)
+	}
+	if m != nil {
+		m.exitAction = UIActionExit
+		m.forcedLocalExit = true
+		m.transientStatus = err.Error()
+		m.transientStatusKind = uiStatusNoticeError
+		m.logf("ongoing.developer_error err=%q", err.Error())
+	}
+	return tea.Quit
+}
+
 func (m *uiModel) renderNativeOngoingSurface() tea.Cmd {
 	if m == nil || m.ongoingSurface == nil || !m.nativeOngoingSurfaceActive() {
 		return nil

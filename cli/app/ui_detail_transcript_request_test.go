@@ -473,13 +473,13 @@ func applyDetailTestSessionReplacement(t *testing.T, model *uiModel, rawSessionI
 	if err != nil {
 		t.Fatalf("parse replacement session ID: %v", err)
 	}
-	return model.applyTranscriptMessageState(clientui.TranscriptMessage{
+	return model.applyAdmittedTranscriptMessageState(clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageSessionIdentity,
 		Payload: clientui.TranscriptPayload{SessionIdentity: &clientui.TranscriptSessionIdentity{
 			SessionID:             sessionID,
 			ConversationFreshness: clientui.ConversationFreshnessEstablished,
 		}},
-	})
+	}, runtimeTupleMergeResult{})
 }
 
 func newDetailTranscriptRequestTestModel(sessionViews *controlledTranscriptPageClient) *uiModel {

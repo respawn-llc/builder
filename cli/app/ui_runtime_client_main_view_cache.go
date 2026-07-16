@@ -20,36 +20,26 @@ func (c *sessionRuntimeClient) CachedMainView() (clientui.RuntimeMainView, bool)
 }
 
 func (c *sessionRuntimeClient) storeMainView(view clientui.RuntimeMainView) clientui.RuntimeMainView {
+	return c.mergeMainViewCandidate(view, runtimeTupleIngressAuthoritativeSnapshot).view
+}
+
+func (c *sessionRuntimeClient) mergeMainViewCandidate(
+	view clientui.RuntimeMainView,
+	ingress runtimeTupleIngress,
+) runtimeTupleMergeResult {
 	if view.Session.SessionID == "" {
 		view.Session.SessionID = c.sessionID
 	}
 	c.mu.Lock()
-	if !shouldStoreRuntimeMainView(c.mainView.Version, view.Version) {
-		current := c.mainView
-		c.mu.Unlock()
-		return current
+	defer c.mu.Unlock()
+	decision := decideRuntimeTuple(c.mainView.Version, view.Version, ingress)
+	c.mainView.Status = view.Status
+	c.mainView.Session = view.Session
+	if decision == runtimeTupleApply {
+		applyRuntimeTuple(&c.mainView, runtimeTupleFromMainView(view))
 	}
-	c.mainView = view
 	c.hasMainView = true
-	c.readModelStale = false
-	c.mu.Unlock()
-	return view
-}
-
-func shouldStoreRuntimeMainView(current clientui.ReadModelVersion, incoming clientui.ReadModelVersion) bool {
-	if incoming.Validate() != nil {
-		return current.Validate() != nil
-	}
-	if current.Validate() != nil {
-		return true
-	}
-	if incoming.Epoch != current.Epoch {
-		return true
-	}
-	if incoming.Generation != current.Generation {
-		return incoming.Generation > current.Generation
-	}
-	return incoming.Sequence > current.Sequence
+	return runtimeTupleMergeResult{decision: decision, view: c.mainView, project: decision == runtimeTupleApply}
 }
 
 func (c *sessionRuntimeClient) patchMainView(apply func(view *clientui.RuntimeMainView)) {
@@ -60,15 +50,4 @@ func (c *sessionRuntimeClient) patchMainView(apply func(view *clientui.RuntimeMa
 	}
 	c.hasMainView = true
 	c.mu.Unlock()
-}
-
-func (c *sessionRuntimeClient) consumeRuntimeReadModelStale() bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	stale := c.readModelStale
-	c.readModelStale = false
-	return stale
 }

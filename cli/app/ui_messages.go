@@ -91,6 +91,7 @@ type runtimeControlDoneMsg struct {
 	changed        bool
 	mode           string
 	compactionMode string
+	runtimeTuple   *runtimeTupleCandidate
 	err            error
 }
 

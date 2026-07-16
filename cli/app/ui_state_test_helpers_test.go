@@ -75,7 +75,7 @@ func resolveAnsweredTestAskThroughTranscript(t *testing.T, m *uiModel) {
 	if err := message.Validate(); err != nil {
 		t.Fatalf("validate prompt resolution transcript message: %v", err)
 	}
-	if cmd := m.applyTranscriptMessageState(message); cmd != nil {
+	if cmd := m.applyAdmittedTranscriptMessageState(message, runtimeTupleMergeResult{}); cmd != nil {
 		t.Fatal("prompt resolution transcript message unexpectedly returned a command")
 	}
 }
