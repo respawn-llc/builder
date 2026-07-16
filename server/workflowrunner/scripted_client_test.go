@@ -26,10 +26,6 @@ func ScriptedToolBatch(content string, calls ...llm.ToolCall) ScriptedRuntimeSte
 	return scriptedllm.ToolBatch(content, calls...)
 }
 
-func ScriptedAskQuestion(callID string, input []byte) ScriptedRuntimeStep {
-	return scriptedllm.AskQuestion(callID, input)
-}
-
 func ScriptedRuntimeError(err error) ScriptedRuntimeStep {
 	return scriptedllm.RuntimeError(err)
 }

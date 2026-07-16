@@ -1,10 +1,6 @@
 package scriptedllm
 
-import (
-	"encoding/json"
-
-	"core/server/llm"
-)
+import "core/server/llm"
 
 func FinalAnswer(content string) Step {
 	return Step{Response: llm.Response{
@@ -19,10 +15,6 @@ func ToolBatch(content string, calls ...llm.ToolCall) Step {
 		ToolCalls: append([]llm.ToolCall(nil), calls...),
 		Usage:     llm.Usage{WindowTokens: defaultContextWindowTokens},
 	}}
-}
-
-func AskQuestion(callID string, input []byte) Step {
-	return ToolBatch("question", llm.ToolCall{ID: callID, Name: "ask_question", Input: json.RawMessage(input)})
 }
 
 func RuntimeError(err error) Step {
