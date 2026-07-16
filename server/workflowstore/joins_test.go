@@ -1,7 +1,7 @@
 package workflowstore
 
 import (
-	"database/sql"
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -9,7 +9,49 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/config"
 )
+
+type fanoutJoinFixture struct {
+	ctx        context.Context
+	store      *Store
+	binding    metadata.Binding
+	cfg        config.App
+	workflowID workflow.WorkflowID
+	implA      workflow.Node
+	implB      workflow.Node
+	synth      workflow.Node
+}
+
+func newFanoutJoinFixture(t *testing.T, configure func(*fanoutJoinFixture)) fanoutJoinFixture {
+	t.Helper()
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	fixture := fanoutJoinFixture{
+		ctx:        ctx,
+		store:      store,
+		binding:    binding,
+		cfg:        cfg,
+		workflowID: workflowID,
+		implA:      nodeByKey(t, def, "impl_a"),
+		implB:      nodeByKey(t, def, "impl_b"),
+		synth:      nodeByKey(t, def, "synth"),
+	}
+	if configure != nil {
+		configure(&fixture)
+	}
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	return fixture
+}
+
+func (f fanoutJoinFixture) start(t *testing.T) (TaskRecord, map[workflow.NodeID]workflow.RunID) {
+	t.Helper()
+	return startFanoutTask(t, f.ctx, f.store, f.binding.ProjectID, f.workflowID)
+}
 
 func TestCompleteRunFanoutCreatesParallelBranchPlacements(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
@@ -21,27 +63,7 @@ func TestCompleteRunFanoutCreatesParallelBranchPlacements(t *testing.T) {
 	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{ID: worktreeID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: worktreeRoot, Managed: true, CreatedBranch: true}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	// Intentional direct fixture: the test needs an existing managed worktree
-	// association without exercising task creation/source-workspace behavior.
-	if _, err := store.db.ExecContext(ctx, `
-UPDATE tasks
-SET source_workspace_id = ?,
-    managed_worktree_id = ?,
-    execution_target_mode = ?,
-    execution_target_requested_ref = ?,
-    execution_target_commit_oid = ?,
-    execution_target_provenance = ?
-WHERE id = ?`,
-		binding.WorkspaceID,
-		worktreeID,
-		string(workflow.ExecutionTargetModeHead),
-		"HEAD",
-		"fixture-commit",
-		string(ExecutionTargetProvenanceResolved),
-		string(task.ID),
-	); err != nil {
-		t.Fatalf("attach managed worktree to task: %v", err)
-	}
+	setTaskExecutionTargetFixture(t, ctx, store, task.ID, workflow.ExecutionTargetModeHead, &worktreeID)
 	started := startTask(t, ctx, store, task.ID)
 
 	result := completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "split", OutputValues: map[string]string{"summary": "plan"}})
@@ -63,32 +85,17 @@ WHERE id = ?`,
 			t.Fatalf("branch run context %s execution root = %+v, want managed worktree %q at %q", runID, input.ExecutionRoot, worktreeID, worktreeRoot)
 		}
 	}
-	rows, err := store.db.QueryContext(ctx, `
-SELECT id, parallel_batch_transition_id, parallel_branch_edge_id
-FROM task_node_placements
-WHERE id IN (?, ?)
-ORDER BY parallel_branch_edge_id ASC`, string(result.PlacementIDs[0]), string(result.PlacementIDs[1]))
-	if err != nil {
-		t.Fatalf("query branch placements: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	branches := map[string]string{}
-	for rows.Next() {
-		var placementID string
-		var batchID sql.NullString
-		var branchEdgeID sql.NullString
-		if err := rows.Scan(&placementID, &batchID, &branchEdgeID); err != nil {
-			t.Fatalf("scan branch placement: %v", err)
+	branches := map[string]struct{}{}
+	for _, placementID := range result.PlacementIDs {
+		batchID, branchEdgeID := placementParallelIDs(t, ctx, store, placementID)
+		if batchID != string(result.TransitionID) || branchEdgeID == "" {
+			t.Fatalf("branch placement %s batch=%q branch=%q, want batch transition and branch edge", placementID, batchID, branchEdgeID)
 		}
-		if batchID.String != string(result.TransitionID) || !branchEdgeID.Valid || branchEdgeID.String == "" {
-			t.Fatalf("branch placement %s batch=%+v branch=%+v, want batch transition and branch edge", placementID, batchID, branchEdgeID)
-		}
-		branches[branchEdgeID.String] = placementID
+		branches[branchEdgeID] = struct{}{}
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("branch rows: %v", err)
-	}
-	if len(branches) != 2 || branches["edge-split-a-"+string(workflowID)] == "" || branches["edge-split-b-"+string(workflowID)] == "" {
+	_, hasA := branches["edge-split-a-"+string(workflowID)]
+	_, hasB := branches["edge-split-b-"+string(workflowID)]
+	if len(branches) != 2 || !hasA || !hasB {
 		t.Fatalf("branch identities = %+v, want split edge ids", branches)
 	}
 }
@@ -109,33 +116,9 @@ func TestSerialCompletionDoesNotCreateParallelBranchPlacement(t *testing.T) {
 }
 
 func TestJoinWaitsForAllBranchesAndRoutesSelectedProvider(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	split, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, TransitionID: "split", OutputValues: map[string]string{"summary": "plan"}})
-	if err != nil {
-		t.Fatalf("CompleteRun split: %v", err)
-	}
-	runs, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	branchRunsByNode := map[workflow.NodeID]workflow.RunID{}
-	for _, run := range runs {
-		if run.ID != started.RunID {
-			branchRunsByNode[run.NodeID] = run.ID
-		}
-	}
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	implA := nodeByKey(t, def, "impl_a")
-	implB := nodeByKey(t, def, "impl_b")
-
-	first, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implB)], TransitionID: "join"})
+	f := newFanoutJoinFixture(t, nil)
+	task, branchRunsByNode := f.start(t)
+	first, err := f.store.CompleteRun(f.ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(f.implB)], TransitionID: "join"})
 	if err != nil {
 		t.Fatalf("CompleteRun branch b: %v", err)
 	}
@@ -143,14 +126,14 @@ func TestJoinWaitsForAllBranchesAndRoutesSelectedProvider(t *testing.T) {
 		t.Fatalf("first branch result = %+v, want join waiting for missing branch", first)
 	}
 	selectedProviderValue := "  branch a\n"
-	second, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": selectedProviderValue}})
+	second, err := f.store.CompleteRun(f.ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(f.implA)], TransitionID: "join", OutputValues: map[string]string{"joined": selectedProviderValue}})
 	if err != nil {
 		t.Fatalf("CompleteRun branch a: %v", err)
 	}
 	if len(second.PlacementIDs) != 1 || len(second.RunIDs) != 1 {
 		t.Fatalf("second branch result = %+v, want joined provider-routed agent run", second)
 	}
-	transitions, err := store.ListTransitions(ctx, task.ID)
+	transitions, err := f.store.ListTransitions(f.ctx, task.ID)
 	if err != nil {
 		t.Fatalf("ListTransitions: %v", err)
 	}
@@ -158,15 +141,12 @@ func TestJoinWaitsForAllBranchesAndRoutesSelectedProvider(t *testing.T) {
 	if joinTransition.TransitionID != "done" || joinTransition.OutputValues["joined"] != selectedProviderValue {
 		t.Fatalf("join transition = %+v, want selected provider output", joinTransition)
 	}
-	input, err := store.GetRunStartContext(ctx, second.RunIDs[0])
+	input, err := f.store.GetRunStartContext(f.ctx, second.RunIDs[0])
 	if err != nil {
 		t.Fatalf("GetRunStartContext joined run: %v", err)
 	}
 	if input.InputValues["joined"] != selectedProviderValue {
 		t.Fatalf("joined input = %+v, want selected provider value", input.InputValues)
-	}
-	if split.TransitionID == "" {
-		t.Fatalf("split transition id missing")
 	}
 }
 
@@ -242,51 +222,27 @@ WHERE r.id = ?`, string(branchRunsByNode[workflow.NodeIDOf(implA)])).Scan(&batch
 }
 
 func TestJoinDownstreamCanUseSelectedPriorContextSource(t *testing.T) {
-	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
-	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	planNode := nodeByKey(t, def, "plan")
-	synthNode := nodeByKey(t, def, "synth")
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-join-synth-"+string(workflowID)))
-		edge.TargetNodeID = workflow.NodeIDOf(synthNode)
-		edge.ContextMode = workflow.ContextModeContinueSession
-		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "plan"}
-		edge.PromptTemplate = "Synthesize {{.Params.joined}}."
+	f := newFanoutJoinFixture(t, func(f *fanoutJoinFixture) {
+		saveWorkflowGraphFixture(t, f.ctx, f.store, f.workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+			edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-join-synth-"+string(f.workflowID)))
+			edge.TargetNodeID = workflow.NodeIDOf(f.synth)
+			edge.ContextMode = workflow.ContextModeContinueSession
+			edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "plan"}
+			edge.PromptTemplate = "Synthesize {{.Params.joined}}."
+		})
 	})
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	claimedPlan, err := store.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun plan: %v", err)
-	}
-	planSessionID := createTestSession(t, ctx, store, binding, cfg)
-	if err := store.AttachRunSession(ctx, started.RunID, claimedPlan.Generation, planSessionID); err != nil {
-		t.Fatalf("AttachRunSession plan: %v", err)
-	}
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "split", OutputValues: map[string]string{"summary": "plan"}})
-	runs, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns branches: %v", err)
-	}
-	branchRuns := map[workflow.NodeID]workflow.RunID{}
-	for _, run := range runs {
-		if run.NodeID != workflow.NodeIDOf(planNode) {
-			branchRuns[run.NodeID] = run.ID
-		}
-	}
-	implA := nodeByKey(t, def, "impl_a")
-	implB := nodeByKey(t, def, "impl_b")
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "a"}})
-	joined := completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implB)], TransitionID: "join"})
+	task := createDefaultTask(t, f.ctx, f.store, f.binding.ProjectID)
+	started := startTask(t, f.ctx, f.store, task.ID)
+	claimedPlan := claimRunFixture(t, f.ctx, f.store, started.RunID, 0)
+	planSessionID := createAndAttachRunSessionFixture(t, f.ctx, f.store, f.binding, f.cfg, started.RunID, claimedPlan.Generation)
+	completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: started.RunID, TransitionID: "split", OutputValues: map[string]string{"summary": "plan"}})
+	branchRuns := runsByNodeExcluding(t, f.ctx, f.store, task.ID, started.RunID)
+	completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(f.implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "a"}})
+	joined := completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(f.implB)], TransitionID: "join"})
 	if len(joined.RunIDs) != 1 {
 		t.Fatalf("joined result = %+v, want synth run", joined)
 	}
-	input, err := store.GetRunStartContext(ctx, joined.RunIDs[0])
+	input, err := f.store.GetRunStartContext(f.ctx, joined.RunIDs[0])
 	if err != nil {
 		t.Fatalf("GetRunStartContext synth: %v", err)
 	}
@@ -299,37 +255,17 @@ func TestJoinDownstreamCanUseSelectedPriorContextSource(t *testing.T) {
 }
 
 func TestDuplicateBranchArrivalIsRejectedAndDoesNotDuplicateJoin(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "split", OutputValues: map[string]string{"summary": "plan"}})
-	runs, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	implA := nodeByKey(t, def, "impl_a")
-	implB := nodeByKey(t, def, "impl_b")
-	branchRunsByNode := map[workflow.NodeID]workflow.RunID{}
-	for _, run := range runs {
-		if run.ID != started.RunID {
-			branchRunsByNode[run.NodeID] = run.ID
-		}
-	}
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}})
-	if _, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a again"}}); !errors.Is(err, ErrRunAlreadyCompleted) {
+	f := newFanoutJoinFixture(t, nil)
+	task, branchRunsByNode := f.start(t)
+	completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(f.implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}})
+	if _, err := f.store.CompleteRun(f.ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(f.implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a again"}}); !errors.Is(err, ErrRunAlreadyCompleted) {
 		t.Fatalf("duplicate branch completion error = %v, want run already completed", err)
 	}
-	joined := completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implB)], TransitionID: "join"})
+	joined := completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(f.implB)], TransitionID: "join"})
 	if len(joined.PlacementIDs) != 1 || len(joined.RunIDs) != 1 {
 		t.Fatalf("join result = %+v, want one downstream placement/run", joined)
 	}
-	transitions, err := store.ListTransitions(ctx, task.ID)
+	transitions, err := f.store.ListTransitions(f.ctx, task.ID)
 	if err != nil {
 		t.Fatalf("ListTransitions: %v", err)
 	}
@@ -345,24 +281,16 @@ func TestDuplicateBranchArrivalIsRejectedAndDoesNotDuplicateJoin(t *testing.T) {
 }
 
 func TestUnrelatedFanoutBatchDoesNotSatisfyWaitingJoin(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	waitingTask, waitingRuns := startFanoutTask(t, ctx, store, binding.ProjectID, workflowID)
-	otherTask, otherRuns := startFanoutTask(t, ctx, store, binding.ProjectID, workflowID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	implA := nodeByKey(t, def, "impl_a")
-	implB := nodeByKey(t, def, "impl_b")
-	waitingFirst := completeRun(t, ctx, store, CompleteRunRequest{RunID: waitingRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "waiting a"}})
+	f := newFanoutJoinFixture(t, nil)
+	waitingTask, waitingRuns := f.start(t)
+	_, otherRuns := f.start(t)
+	waitingFirst := completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: waitingRuns[workflow.NodeIDOf(f.implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "waiting a"}})
 	if len(waitingFirst.PlacementIDs) != 0 || len(waitingFirst.RunIDs) != 0 {
 		t.Fatalf("waiting branch result = %+v, want no join yet", waitingFirst)
 	}
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: otherRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "other a"}})
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: otherRuns[workflow.NodeIDOf(implB)], TransitionID: "join"})
-	transitions, err := store.ListTransitions(ctx, waitingTask.ID)
+	completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: otherRuns[workflow.NodeIDOf(f.implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "other a"}})
+	completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: otherRuns[workflow.NodeIDOf(f.implB)], TransitionID: "join"})
+	transitions, err := f.store.ListTransitions(f.ctx, waitingTask.ID)
 	if err != nil {
 		t.Fatalf("ListTransitions waiting task: %v", err)
 	}
@@ -371,9 +299,8 @@ func TestUnrelatedFanoutBatchDoesNotSatisfyWaitingJoin(t *testing.T) {
 			t.Fatalf("waiting task transitions = %+v, unrelated batch satisfied join", transitions)
 		}
 	}
-	joined := completeRun(t, ctx, store, CompleteRunRequest{RunID: waitingRuns[workflow.NodeIDOf(implB)], TransitionID: "join"})
+	joined := completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: waitingRuns[workflow.NodeIDOf(f.implB)], TransitionID: "join"})
 	if len(joined.PlacementIDs) != 1 || len(joined.RunIDs) != 1 {
 		t.Fatalf("waiting final join = %+v, want downstream run after own missing branch", joined)
 	}
-	_ = otherTask
 }

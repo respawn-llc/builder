@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -8,26 +9,39 @@ import (
 	"core/server/workflow"
 )
 
-func TestStartTaskAllowsCrossRoleContinueSessionContextMode(t *testing.T) {
+func startCompletionValidationWorkflow(t *testing.T, create func(*testing.T, context.Context, *Store) workflow.WorkflowID) (context.Context, *Store, TaskRecord, StartTaskResult) {
+	t.Helper()
 	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "reviewer")
+	workflowID := create(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	return ctx, store, task, startTask(t, ctx, store, task.ID)
+}
 
-	task, err := store.CreateTask(ctx, CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask invalid workflow backlog: %v", err)
-	}
-	if _, err := store.StartTask(ctx, task.ID); err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
+func createCompletionValidationWorkflow(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+	t.Helper()
+	return createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+}
+
+func createAmbiguousCompletionValidationWorkflow(t *testing.T, ctx context.Context, store *Store, parameters []workflow.Parameter) workflow.WorkflowID {
+	t.Helper()
+	workflowID := createValidWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		groupID := workflow.TransitionGroupID("group-blocked-" + string(workflowID))
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: groupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(nodeByKey(t, def, "agent")), TransitionID: "blocked", DisplayName: "Blocked"})
+		req.Edges = append(req.Edges, EdgeRecord{ID: workflow.EdgeID("edge-blocked-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: groupID, Key: "blocked", TargetNodeID: workflow.NodeIDOf(nodeByKind(t, def, workflow.NodeKindTerminal)), ContextMode: workflow.ContextModeNewSession, Parameters: parameters})
+	})
+	return workflowID
+}
+
+func TestStartTaskAllowsCrossRoleContinueSessionContextMode(t *testing.T) {
+	startCompletionValidationWorkflow(t, func(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+		return createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "reviewer")
+	})
 }
 
 func TestCompleteRunValidatesOutputRequirements(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
+	ctx, store, task, started := startCompletionValidationWorkflow(t, createCompletionValidationWorkflow)
 	if _, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, TransitionID: "next", OutputValues: map[string]string{"prior_summary": "  "}}); !completionHasCode(err, CompletionCodeRequiredOutputMissing) {
 		t.Fatalf("expected missing required output error, got %v", err)
 	}
@@ -48,62 +62,30 @@ func TestCompleteRunValidatesOutputRequirements(t *testing.T) {
 }
 
 func TestCompleteRunInfersSingleTransitionID(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
+	ctx, store, _, started := startCompletionValidationWorkflow(t, createValidWorkflow)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID})
 }
 
 func TestCompleteRunRejectsMissingTransitionIDWhenAmbiguous(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
-	blockedGroup := workflow.TransitionGroupID("group-blocked-" + string(workflowID))
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
-		agent := nodeByKey(t, def, "agent")
-		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: blockedGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "blocked", DisplayName: "Blocked"})
-		req.Edges = append(req.Edges, EdgeRecord{ID: workflow.EdgeID("edge-blocked-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: blockedGroup, Key: "blocked", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession})
+	ctx, store, _, started := startCompletionValidationWorkflow(t, func(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+		return createAmbiguousCompletionValidationWorkflow(t, ctx, store, nil)
 	})
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
 	if _, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID}); !completionHasCode(err, CompletionCodeTransitionIDRequired) {
 		t.Fatalf("expected missing transition id error, got %v", err)
 	}
 }
 
 func TestCompleteRunRejectsUnknownOutputField(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
+	ctx, store, _, started := startCompletionValidationWorkflow(t, createValidWorkflow)
 	if _, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, TransitionID: "done", OutputValues: map[string]string{"extra": "nope"}}); !completionHasCode(err, CompletionCodeUnknownOutputField) {
 		t.Fatalf("expected unknown output error, got %v", err)
 	}
 }
 
 func TestCompleteRunRejectsParameterDeclaredOnlyByAnotherTransition(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
-	blockedGroup := workflow.TransitionGroupID("group-blocked-" + string(workflowID))
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
-		agent := nodeByKey(t, def, "agent")
-		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: blockedGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "blocked", DisplayName: "Blocked"})
-		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-blocked-" + string(workflowID)),
-			WorkflowID:        workflowID,
-			TransitionGroupID: blockedGroup,
-			Key:               "blocked",
-			TargetNodeID:      workflow.NodeIDOf(done),
-			ContextMode:       workflow.ContextModeNewSession,
-			Parameters:        []workflow.Parameter{{Key: "blocked_reason", Description: "Why the task is blocked."}},
-		})
+	ctx, store, _, started := startCompletionValidationWorkflow(t, func(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+		return createAmbiguousCompletionValidationWorkflow(t, ctx, store, []workflow.Parameter{{Key: "blocked_reason", Description: "Why the task is blocked."}})
 	})
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
 
 	if _, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, TransitionID: "done", OutputValues: map[string]string{"blocked_reason": "blocked"}}); !completionHasCode(err, CompletionCodeUnknownOutputField) {
 		t.Fatalf("expected selected-transition unknown output error, got %v", err)
@@ -111,11 +93,7 @@ func TestCompleteRunRejectsParameterDeclaredOnlyByAnotherTransition(t *testing.T
 }
 
 func TestCompleteRunReturnsStructuredValidationIssues(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
+	ctx, store, _, started := startCompletionValidationWorkflow(t, createCompletionValidationWorkflow)
 	_, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, TransitionID: "next", OutputValues: map[string]string{"extra": "nope"}})
 	var validation CompletionValidationError
 	if !errors.As(err, &validation) {
@@ -127,11 +105,7 @@ func TestCompleteRunReturnsStructuredValidationIssues(t *testing.T) {
 }
 
 func TestCompleteRunRejectsOversizedCompletionFields(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
+	ctx, store, _, started := startCompletionValidationWorkflow(t, createCompletionValidationWorkflow)
 	_, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, TransitionID: "next", OutputValues: map[string]string{"prior_summary": strings.Repeat("a", workflow.MaxOutputValueBytes+1)}})
 	if !completionHasCode(err, CompletionCodeOutputTooLarge) {
 		t.Fatalf("expected oversized output error, got %v", err)

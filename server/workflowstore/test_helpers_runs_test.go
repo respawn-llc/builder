@@ -6,28 +6,120 @@ import (
 	"strings"
 	"testing"
 
+	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/config"
 )
 
-func addPreviousTargetReworkEdge(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, acceptanceNodeID workflow.NodeID, implementationNodeID workflow.NodeID, requiresApproval bool) {
+func claimRunFixture(t *testing.T, ctx context.Context, store *Store, runID workflow.RunID, generation int64) RunnableRunRecord {
+	t.Helper()
+	claimed, err := store.ClaimRun(ctx, runID, generation)
+	if err != nil {
+		t.Fatalf("ClaimRun %s: %v", runID, err)
+	}
+	return claimed
+}
+
+func createAndAttachRunSessionFixture(t *testing.T, ctx context.Context, store *Store, binding metadata.Binding, cfg config.App, runID workflow.RunID, generation int64) string {
+	t.Helper()
+	sessionID := createTestSession(t, ctx, store, binding, cfg)
+	if err := store.AttachRunSession(ctx, runID, generation, sessionID); err != nil {
+		t.Fatalf("AttachRunSession %s: %v", runID, err)
+	}
+	return sessionID
+}
+
+func addTargetHistoryReworkEdge(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, sourceNodeID workflow.NodeID, targetNodeID workflow.NodeID, contextSource workflow.ContextSourceKind, requiresApproval bool) {
 	t.Helper()
 	reworkGroup := workflow.TransitionGroupID("group-previous-target-rework-" + string(workflowID))
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: acceptanceNodeID, TransitionID: "rework", DisplayName: "Rework"})
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: sourceNodeID, TransitionID: "rework", DisplayName: "Rework"})
 		req.Edges = append(req.Edges, EdgeRecord{
 			ID:                workflow.EdgeID("edge-previous-target-rework-" + string(workflowID)),
 			WorkflowID:        workflowID,
 			TransitionGroupID: reworkGroup,
 			Key:               "rework",
-			TargetNodeID:      implementationNodeID,
+			TargetNodeID:      targetNodeID,
 			ContextMode:       workflow.ContextModeContinueSession,
-			ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget},
+			ContextSource:     workflow.ContextSource{Kind: contextSource},
 			RequiresApproval:  requiresApproval,
 			PromptTemplate:    "Implement {{.Params.summary}}.",
 			Parameters:        []workflow.Parameter{{Key: "summary", Description: "Rework summary."}},
 		})
 	})
+}
+
+func sourceExecutionTargetCandidate(sourceWorkspaceID, sourceWorkspaceRoot string) *ExecutionTargetCandidate {
+	return &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Root:     ExecutionRoot{SourceWorkspaceID: sourceWorkspaceID, SourceWorkspaceRoot: sourceWorkspaceRoot},
+	}
+}
+
+func managedHeadExecutionTargetCandidate(sourceWorkspaceID, sourceWorkspaceRoot, worktreeID, worktreeRoot string) *ExecutionTargetCandidate {
+	requestedRef := "HEAD"
+	commitOID := "0123456789abcdef"
+	return &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   sourceWorkspaceID,
+			SourceWorkspaceRoot: sourceWorkspaceRoot,
+			Managed:             &ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot},
+		},
+	}
+}
+
+func executionTargetFactsForTask(t *testing.T, ctx context.Context, store *Store, taskID workflow.TaskID) (sqlitegen.TaskRecord, *ExecutionTargetSnapshot) {
+	t.Helper()
+	row, err := store.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	snapshot, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
+	}
+	return row, snapshot
+}
+
+func setTaskExecutionTargetFixture(t *testing.T, ctx context.Context, store *Store, taskID workflow.TaskID, mode workflow.ExecutionTargetMode, managedWorktreeID *string) {
+	t.Helper()
+	var requestedRef, commitOID, worktreeID any
+	switch mode {
+	case workflow.ExecutionTargetModeNone:
+	case workflow.ExecutionTargetModeHead:
+		requestedRef = "HEAD"
+		commitOID = "0123456789abcdef"
+	default:
+		t.Fatalf("unsupported execution target fixture mode %q", mode)
+	}
+	if managedWorktreeID != nil {
+		worktreeID = *managedWorktreeID
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE tasks
+SET
+    managed_worktree_id = ?,
+    execution_target_mode = ?,
+    execution_target_requested_ref = ?,
+    execution_target_resolved_ref = NULL,
+    execution_target_commit_oid = ?,
+    execution_target_provenance = ?
+WHERE id = ?`,
+		worktreeID,
+		string(mode),
+		requestedRef,
+		commitOID,
+		string(ExecutionTargetProvenanceResolved),
+		string(taskID)); err != nil {
+		t.Fatalf("set execution target fixture: %v", err)
+	}
 }
 
 func addOutputFieldToNode(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, node workflow.Node, field workflow.OutputField) {
@@ -130,20 +222,26 @@ func startFanoutTask(t *testing.T, ctx context.Context, store *Store, projectID 
 	}
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "split", OutputValues: map[string]string{"summary": "plan"}})
-	runs, err := store.ListRuns(ctx, task.ID)
+	branchRunsByNode := runsByNodeExcluding(t, ctx, store, task.ID, started.RunID)
+	if len(branchRunsByNode) != 2 {
+		t.Fatalf("branch runs = %+v, want two branch runs", branchRunsByNode)
+	}
+	return task, branchRunsByNode
+}
+
+func runsByNodeExcluding(t *testing.T, ctx context.Context, store *Store, taskID workflow.TaskID, excludedRunID workflow.RunID) map[workflow.NodeID]workflow.RunID {
+	t.Helper()
+	runs, err := store.ListRuns(ctx, taskID)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
 	branchRunsByNode := map[workflow.NodeID]workflow.RunID{}
 	for _, run := range runs {
-		if run.ID != started.RunID {
+		if run.ID != excludedRunID {
 			branchRunsByNode[run.NodeID] = run.ID
 		}
 	}
-	if len(branchRunsByNode) != 2 {
-		t.Fatalf("branch runs = %+v, want two branch runs", branchRunsByNode)
-	}
-	return task, branchRunsByNode
+	return branchRunsByNode
 }
 
 func placementParallelIDs(t *testing.T, ctx context.Context, store *Store, placementID workflow.PlacementID) (string, string) {

@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -51,42 +52,7 @@ func TestManualMoveToTerminalArchivesWithoutOutputValues(t *testing.T) {
 	}
 }
 
-func TestManualMoveRejectsStartedRun(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	if _, err := store.ClaimRun(ctx, started.RunID, 0); err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(done)})
-	if !errors.Is(err, ErrManualMoveDuringActiveRun) {
-		t.Fatalf("ManualMoveTask started run error = %v, want active-run rejection", err)
-	}
-
-	runs, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(runs) != 1 || runs[0].CompletedAt != nil || runs[0].InterruptedAt != nil {
-		t.Fatalf("runs after rejected manual move = %+v, want original active run", runs)
-	}
-	placements, err := store.ListPlacements(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPlacements: %v", err)
-	}
-	if len(placements) != 2 || placements[1].State != "active" {
-		t.Fatalf("placements after rejected manual move = %+v, want original active placement", placements)
-	}
-}
-
-func TestManualRestartRejectsActiveRunWithoutMutatingTask(t *testing.T) {
+func TestManualMoveRejectsActiveRunWithoutMutationAndRestartsAfterInterrupt(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -340,137 +306,100 @@ func TestManualMoveContinueSessionRequiresSourceSession(t *testing.T) {
 	}
 }
 
-func TestManualMoveRejectsSelectedContextSourceV1(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	runs, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns after plan: %v", err)
+func TestManualMoveRejectsUnsupportedContextSourcesV1(t *testing.T) {
+	type completion struct {
+		nodeKey      string
+		transitionID string
+		outputValues map[string]string
 	}
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
+	type reworkEdge struct {
+		sourceNodeKey string
+		targetNodeKey string
+		contextSource workflow.ContextSourceKind
 	}
-	implementationNode := nodeByKey(t, def, "implementation")
-	openPRNode := nodeByKey(t, def, "open_pr")
-	var implementationRun RunRecord
-	for _, run := range runs {
-		if run.NodeID == workflow.NodeIDOf(implementationNode) {
-			implementationRun = run
-		}
+	completions := []completion{
+		{nodeKey: "plan", transitionID: "implement", outputValues: map[string]string{"summary": "plan done"}},
+		{nodeKey: "implementation", transitionID: "accept", outputValues: map[string]string{"summary": "implemented"}},
+		{nodeKey: "acceptance", transitionID: "open_pr", outputValues: map[string]string{"acceptance_decision": "approved"}},
+		{nodeKey: "open_pr", transitionID: "rework", outputValues: map[string]string{"summary": "needs changes"}},
 	}
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(openPRNode), OutputValues: map[string]string{"acceptance_decision": "approved"}})
-	if !errors.Is(err, ErrManualMoveSelectedContextSource) {
-		t.Fatalf("ManualMoveTask selected context source error = %v, want unsupported selected context source", err)
+	cases := []struct {
+		name          string
+		rework        *reworkEdge
+		completedRuns int
+		targetNodeKey string
+		moveOutputKey string
+		wantErr       error
+	}{
+		{
+			name:          "selected node forward",
+			completedRuns: 2,
+			targetNodeKey: "open_pr",
+			moveOutputKey: "acceptance_decision",
+			wantErr:       ErrManualMoveSelectedContextSource,
+		},
+		{
+			name:          "selected node historical backward",
+			completedRuns: 3,
+			targetNodeKey: "acceptance",
+			moveOutputKey: "summary",
+			wantErr:       ErrManualMoveSelectedContextSource,
+		},
+		{
+			name:          "previous target forward",
+			rework:        &reworkEdge{sourceNodeKey: "acceptance", targetNodeKey: "implementation", contextSource: workflow.ContextSourcePreviousTarget},
+			completedRuns: 2,
+			targetNodeKey: "implementation",
+			moveOutputKey: "summary",
+			wantErr:       ErrManualMovePreviousTargetContext,
+		},
+		{
+			name:          "previous target or new forward",
+			rework:        &reworkEdge{sourceNodeKey: "acceptance", targetNodeKey: "implementation", contextSource: workflow.ContextSourcePreviousTargetOrNew},
+			completedRuns: 2,
+			targetNodeKey: "implementation",
+			moveOutputKey: "summary",
+			wantErr:       ErrManualMovePreviousTargetContext,
+		},
+		{
+			name:          "previous target historical backward",
+			rework:        &reworkEdge{sourceNodeKey: "open_pr", targetNodeKey: "implementation", contextSource: workflow.ContextSourcePreviousTarget},
+			completedRuns: 4,
+			targetNodeKey: "open_pr",
+			moveOutputKey: "summary",
+			wantErr:       ErrManualMovePreviousTargetContext,
+		},
 	}
-}
 
-func TestBackwardManualMoveRejectsHistoricalSelectedContextSourceV1(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	implementationNode := nodeByKey(t, def, "implementation")
-	acceptanceNode := nodeByKey(t, def, "acceptance")
-	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
-	acceptanceRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: acceptanceRun.ID, TransitionID: "open_pr", OutputValues: map[string]string{"acceptance_decision": "approved"}})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, store, binding := newTestStoreContext(t)
+			workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
+			def, _, err := store.GetDefinition(ctx, workflowID)
+			if err != nil {
+				t.Fatalf("GetDefinition: %v", err)
+			}
+			if tc.rework != nil {
+				sourceNode := nodeByKey(t, def, tc.rework.sourceNodeKey)
+				targetNode := nodeByKey(t, def, tc.rework.targetNodeKey)
+				addOutputFieldToNode(t, ctx, store, workflowID, sourceNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
+				addTargetHistoryReworkEdge(t, ctx, store, workflowID, workflow.NodeIDOf(sourceNode), workflow.NodeIDOf(targetNode), tc.rework.contextSource, false)
+			}
+			linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+			task := createDefaultTask(t, ctx, store, binding.ProjectID)
+			startTask(t, ctx, store, task.ID)
+			for _, completed := range completions[:tc.completedRuns] {
+				node := nodeByKey(t, def, completed.nodeKey)
+				run := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(node))
+				completeRun(t, ctx, store, CompleteRunRequest{RunID: run.ID, TransitionID: completed.transitionID, OutputValues: completed.outputValues})
+			}
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(acceptanceNode), OutputValues: map[string]string{"summary": "needs recheck"}})
-	if !errors.Is(err, ErrManualMoveSelectedContextSource) {
-		t.Fatalf("backward ManualMoveTask selected context source error = %v, want unsupported selected context source", err)
-	}
-}
-
-func TestManualMoveRejectsPreviousTargetContextSourceV1(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	implementationNode := nodeByKey(t, def, "implementation")
-	acceptanceNode := nodeByKey(t, def, "acceptance")
-	addOutputFieldToNode(t, ctx, store, workflowID, acceptanceNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
-	addPreviousTargetReworkEdge(t, ctx, store, workflowID, workflow.NodeIDOf(acceptanceNode), workflow.NodeIDOf(implementationNode), false)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
-
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(implementationNode), OutputValues: map[string]string{"summary": "needs changes"}})
-	if !errors.Is(err, ErrManualMovePreviousTargetContext) {
-		t.Fatalf("ManualMoveTask previous target context source error = %v, want unsupported previous target context source", err)
-	}
-}
-
-func TestManualMoveRejectsPreviousTargetOrNewContextSourceV1(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	implementationNode := nodeByKey(t, def, "implementation")
-	acceptanceNode := nodeByKey(t, def, "acceptance")
-	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-manual-rework-" + string(workflowID))
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"})
-		req.Edges = append(req.Edges, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-manual-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "Rework."})
-	})
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
-
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(implementationNode)})
-	if !errors.Is(err, ErrManualMovePreviousTargetContext) {
-		t.Fatalf("ManualMoveTask previous target or new context source error = %v, want unsupported previous target context source", err)
-	}
-}
-
-func TestBackwardManualMoveRejectsHistoricalPreviousTargetContextSourceV1(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	implementationNode := nodeByKey(t, def, "implementation")
-	acceptanceNode := nodeByKey(t, def, "acceptance")
-	openPRNode := nodeByKey(t, def, "open_pr")
-	addOutputFieldToNode(t, ctx, store, workflowID, openPRNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
-	addPreviousTargetReworkEdge(t, ctx, store, workflowID, workflow.NodeIDOf(openPRNode), workflow.NodeIDOf(implementationNode), false)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
-	acceptanceRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: acceptanceRun.ID, TransitionID: "open_pr", OutputValues: map[string]string{"acceptance_decision": "approved"}})
-	openPRRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(openPRNode))
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: openPRRun.ID, TransitionID: "rework", OutputValues: map[string]string{"summary": "needs changes"}})
-
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(openPRNode), OutputValues: map[string]string{"summary": "needs recheck"}})
-	if !errors.Is(err, ErrManualMovePreviousTargetContext) {
-		t.Fatalf("backward ManualMoveTask previous target context source error = %v, want unsupported previous target context source", err)
+			targetNode := nodeByKey(t, def, tc.targetNodeKey)
+			_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(targetNode), OutputValues: map[string]string{tc.moveOutputKey: "manual"}})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("ManualMoveTask context source error = %v, want %v", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -497,9 +426,21 @@ func TestManualMovePendingApprovalRequiresSourceRun(t *testing.T) {
 	}
 }
 
-func TestManualMoveAutoApprovedExecutableTargetLocksNoneAndCreatesRunAtomically(t *testing.T) {
+type manualMoveExecutableFixture struct {
+	ctx          context.Context
+	store        *Store
+	taskID       workflow.TaskID
+	targetNodeID workflow.NodeID
+	candidate    *ExecutionTargetCandidate
+}
+
+func newManualMoveExecutableFixture(t *testing.T, requiresApproval bool) manualMoveExecutableFixture {
+	t.Helper()
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	if requiresApproval {
+		requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
+	}
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	startTask(t, ctx, store, task.ID)
@@ -507,126 +448,94 @@ func TestManualMoveAutoApprovedExecutableTargetLocksNoneAndCreatesRunAtomically(
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	impl := nodeByKey(t, def, "implement")
-
-	candidate := &ExecutionTargetCandidate{
-		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
-		Root: ExecutionRoot{
-			SourceWorkspaceID:   binding.WorkspaceID,
-			SourceWorkspaceRoot: binding.CanonicalRoot,
-		},
+	return manualMoveExecutableFixture{
+		ctx:          ctx,
+		store:        store,
+		taskID:       task.ID,
+		targetNodeID: workflow.NodeIDOf(nodeByKey(t, def, "implement")),
+		candidate:    sourceExecutionTargetCandidate(binding.WorkspaceID, binding.CanonicalRoot),
 	}
-	preparation, err := store.PrepareManualMove(ctx, ManualMoveRequest{
-		TaskID:       task.ID,
-		TargetNodeID: workflow.NodeIDOf(impl),
+}
+
+func (f manualMoveExecutableFixture) request() ManualMoveRequest {
+	return ManualMoveRequest{
+		TaskID:       f.taskID,
+		TargetNodeID: f.targetNodeID,
 		OutputValues: map[string]string{"prior_summary": "done"},
 		AutoApprove:  true,
-	})
+	}
+}
+
+func (f manualMoveExecutableFixture) snapshot(t *testing.T) *ExecutionTargetSnapshot {
+	t.Helper()
+	_, snapshot := executionTargetFactsForTask(t, f.ctx, f.store, f.taskID)
+	return snapshot
+}
+
+func TestManualMoveAutoApprovedExecutableTargetLocksNoneAndCreatesRunAtomically(t *testing.T) {
+	fixture := newManualMoveExecutableFixture(t, false)
+	preparation, err := fixture.store.PrepareManualMove(fixture.ctx, fixture.request())
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
 	if !preparation.RequiresExecutionTarget() {
 		t.Fatal("auto-approved executable move does not require an execution target")
 	}
-	moved, err := store.ApplyManualMove(ctx, preparation, candidate)
+	moved, err := fixture.store.ApplyManualMove(fixture.ctx, preparation, fixture.candidate)
 	if err != nil {
 		t.Fatalf("ApplyManualMove: %v", err)
 	}
 	if moved.State != "applied" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 1 {
 		t.Fatalf("manual auto-approved executable move = %+v, want applied placement and run", moved)
 	}
-	transitions, err := store.ListTransitions(ctx, task.ID)
+	transitions, err := fixture.store.ListTransitions(fixture.ctx, fixture.taskID)
 	if err != nil {
 		t.Fatalf("ListTransitions: %v", err)
 	}
 	if len(transitions) != 2 || transitions[1].State != "applied" {
 		t.Fatalf("transitions = %+v, want no intermediate pending transition", transitions)
 	}
-	row, err := store.queries.GetTask(ctx, string(task.ID))
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	snapshot, err := executionTargetSnapshotFromTask(row)
-	if err != nil {
-		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
-	}
+	snapshot := fixture.snapshot(t)
 	if snapshot == nil || snapshot.Mode != workflow.ExecutionTargetModeNone {
 		t.Fatalf("snapshot = %+v, want locked none", snapshot)
 	}
 }
 
 func TestManualMoveApprovalRequiredExecutableTargetDefersTargetLock(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
-	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	startTask(t, ctx, store, task.ID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	impl := nodeByKey(t, def, "implement")
-
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{
-		TaskID:       task.ID,
-		TargetNodeID: workflow.NodeIDOf(impl),
-		OutputValues: map[string]string{"prior_summary": "done"},
-		AutoApprove:  true,
-	})
+	fixture := newManualMoveExecutableFixture(t, true)
+	moved, err := fixture.store.ManualMoveTask(fixture.ctx, fixture.request())
 	if err != nil {
 		t.Fatalf("ManualMoveTask approval-required executable: %v", err)
 	}
 	if moved.State != "pending_approval" || len(moved.PlacementIDs) != 0 || len(moved.RunIDs) != 0 || !moved.RequiresApproval {
 		t.Fatalf("manual approval-required executable move = %+v, want pending approval without automation", moved)
 	}
-	row, err := store.queries.GetTask(ctx, string(task.ID))
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	snapshot, err := executionTargetSnapshotFromTask(row)
-	if err != nil {
-		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
-	}
+	snapshot := fixture.snapshot(t)
 	if snapshot != nil {
 		t.Fatalf("snapshot = %+v, want target to remain unlocked until approval", snapshot)
 	}
 }
 
 func TestManualMoveAutoApprovedExecutableTargetFailureLeavesSourceUntouched(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	startTask(t, ctx, store, task.ID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	impl := nodeByKey(t, def, "implement")
-	placementsBefore, err := store.ListPlacements(ctx, task.ID)
+	fixture := newManualMoveExecutableFixture(t, false)
+	placementsBefore, err := fixture.store.ListPlacements(fixture.ctx, fixture.taskID)
 	if err != nil {
 		t.Fatalf("ListPlacements before move: %v", err)
 	}
-	transitionsBefore, err := store.ListTransitions(ctx, task.ID)
+	transitionsBefore, err := fixture.store.ListTransitions(fixture.ctx, fixture.taskID)
 	if err != nil {
 		t.Fatalf("ListTransitions before move: %v", err)
 	}
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{
-		TaskID:       task.ID,
-		TargetNodeID: workflow.NodeIDOf(impl),
-		OutputValues: map[string]string{"prior_summary": "done"},
-		AutoApprove:  true,
-	})
+	_, err = fixture.store.ManualMoveTask(fixture.ctx, fixture.request())
 	if !errors.Is(err, ErrExecutionTargetRequired) {
 		t.Fatalf("ManualMoveTask missing execution target error = %v, want ErrExecutionTargetRequired", err)
 	}
-	placementsAfter, err := store.ListPlacements(ctx, task.ID)
+	placementsAfter, err := fixture.store.ListPlacements(fixture.ctx, fixture.taskID)
 	if err != nil {
 		t.Fatalf("ListPlacements after move: %v", err)
 	}
-	transitionsAfter, err := store.ListTransitions(ctx, task.ID)
+	transitionsAfter, err := fixture.store.ListTransitions(fixture.ctx, fixture.taskID)
 	if err != nil {
 		t.Fatalf("ListTransitions after move: %v", err)
 	}
@@ -636,56 +545,16 @@ func TestManualMoveAutoApprovedExecutableTargetFailureLeavesSourceUntouched(t *t
 }
 
 func TestManualMoveAutoApprovedExecutableRejectsCandidateForLockedManagedTarget(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	startTask(t, ctx, store, task.ID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	impl := nodeByKey(t, def, "implement")
-	if _, err := store.db.ExecContext(ctx, `
-UPDATE tasks
-SET
-    execution_target_mode = ?,
-    execution_target_requested_ref = ?,
-    execution_target_commit_oid = ?,
-    execution_target_provenance = ?
-WHERE id = ?`,
-		string(workflow.ExecutionTargetModeHead),
-		"HEAD",
-		"0123456789abcdef",
-		string(ExecutionTargetProvenanceResolved),
-		string(task.ID)); err != nil {
-		t.Fatalf("lock managed target fixture: %v", err)
-	}
+	fixture := newManualMoveExecutableFixture(t, false)
+	setTaskExecutionTargetFixture(t, fixture.ctx, fixture.store, fixture.taskID, workflow.ExecutionTargetModeHead, nil)
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{
-		TaskID:       task.ID,
-		TargetNodeID: workflow.NodeIDOf(impl),
-		OutputValues: map[string]string{"prior_summary": "done"},
-		AutoApprove:  true,
-		ExecutionTarget: &ExecutionTargetCandidate{
-			Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
-			Root: ExecutionRoot{
-				SourceWorkspaceID:   binding.WorkspaceID,
-				SourceWorkspaceRoot: binding.CanonicalRoot,
-			},
-		},
-	})
+	req := fixture.request()
+	req.ExecutionTarget = fixture.candidate
+	_, err := fixture.store.ManualMoveTask(fixture.ctx, req)
 	if !errors.Is(err, ErrExecutionTargetAlreadyLocked) {
 		t.Fatalf("ManualMoveTask error = %v, want ErrExecutionTargetAlreadyLocked", err)
 	}
-	row, err := store.queries.GetTask(ctx, string(task.ID))
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	snapshot, err := executionTargetSnapshotFromTask(row)
-	if err != nil {
-		t.Fatalf("executionTargetSnapshotFromTask: %v", err)
-	}
+	snapshot := fixture.snapshot(t)
 	if snapshot == nil || snapshot.Mode != workflow.ExecutionTargetModeHead {
 		t.Fatalf("snapshot = %+v, want original head target", snapshot)
 	}
