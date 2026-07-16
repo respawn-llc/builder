@@ -17,6 +17,7 @@ import (
 )
 
 type uiModel struct {
+	eventDispatcher *uiEventDispatcher
 	uiRuntimeFeatureState
 	uiInputFeatureState
 	uiPresentationFeatureState
@@ -37,18 +38,14 @@ type uiRuntimeFeatureState struct {
 	processClientExplicit bool
 	worktreeClient        apicontract.WorktreeService
 
-	runtimeEvents                  <-chan clientui.Event
-	pendingRuntimeEvents           []clientui.Event
-	waitRuntimeEventAfterHydration bool
-	askEvents                      <-chan askEvent
-	pathReferenceEvents            <-chan uiPathReferenceSearchEvent
-	runtimeConnectionEvents        <-chan runtimeConnectionStateChangedMsg
-	runtimeReconnectWarning        <-chan runtimeReconnectWarningMsg
-	runtimeContextUsage            clientui.RuntimeContextUsage
-	runtimeContextUsageSession     string
-	runtimeReadModelVersion        clientui.ReadModelVersion
-	runtimeActivityProjection      clientui.RuntimeActivity
-	logger                         uiLogger
+	pathReferenceEvents        <-chan uiPathReferenceSearchEvent
+	runtimeConnectionEvents    <-chan runtimeConnectionStateChangedMsg
+	runtimeReconnectWarning    <-chan runtimeReconnectWarningMsg
+	runtimeContextUsage        clientui.RuntimeContextUsage
+	runtimeContextUsageSession string
+	runtimeReadModelVersion    clientui.ReadModelVersion
+	runtimeActivityProjection  clientui.RuntimeActivity
+	logger                     uiLogger
 }
 
 type uiInputFeatureState struct {
@@ -135,7 +132,6 @@ type uiPresentationFeatureState struct {
 	rendererOutputGate          *uiRendererOutputGateState
 	ongoingSurface              *ongoing.Surface
 	ongoingTranscript           *ongoingTranscriptController
-	ongoingEvents               <-chan ongoingTranscriptEvent
 	requestOngoingOpen          func()
 	ongoingWidthToken           uint64
 	pendingOngoingScratchReset  *ongoing.RehydrateReason

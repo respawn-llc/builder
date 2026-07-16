@@ -14,42 +14,30 @@ type uiRuntimeAdapter struct {
 	model *uiModel
 }
 
-type runtimeEventApplyResult struct {
-	cmd             tea.Cmd
-	awaitsHydration bool
-	fatal           bool
-}
-
-func (a uiRuntimeAdapter) applyProjectedRuntimeEventsBatch(events []clientui.Event) runtimeEventApplyResult {
+func (a uiRuntimeAdapter) applyProjectedRuntimeEventsBatch(events []clientui.Event) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(events))
-	fatal := false
 	for _, evt := range events {
-		result := a.applyProjectedRuntimeEvent(evt)
-		cmds = append(cmds, result.cmd)
-		if result.fatal {
-			fatal = true
-			break
-		}
+		cmds = append(cmds, a.applyProjectedRuntimeEvent(evt))
 	}
-	return runtimeEventApplyResult{cmd: batchCmds(cmds...), fatal: fatal}
+	return batchCmds(cmds...)
 }
 
-func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtimeEventApplyResult {
+func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) tea.Cmd {
 	m := a.model
 	if m == nil {
-		return runtimeEventApplyResult{}
+		return nil
 	}
 	if runtimeEventHasReadModelPayload(evt) && evt.ReadModelVersion.Validate() != nil {
 		decision := m.startRuntimeMainViewRefreshRequest(runtimeReadModelResetMainViewRefreshRequest())
-		return runtimeEventApplyResult{cmd: tea.Batch(decision.cmd, m.sendTransientStatusWithNoticeID("invalid runtime read-model update ignored; refreshing session view", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))}
+		return tea.Batch(decision.cmd, m.sendTransientStatusWithNoticeID("invalid runtime read-model update ignored; refreshing session view", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}
 	if runtimeEventHasReadModelPayload(evt) {
 		switch m.acceptRuntimeReadModelVersion(evt.ReadModelVersion, false) {
 		case runtimeReadModelVersionIgnore:
-			return runtimeEventApplyResult{cmd: m.runtimeReadModelConflictDiagnosticCmd(evt)}
+			return m.runtimeReadModelConflictDiagnosticCmd(evt)
 		case runtimeReadModelVersionRefresh:
 			decision := m.startRuntimeMainViewRefreshRequest(runtimeReadModelResetMainViewRefreshRequest())
-			return runtimeEventApplyResult{cmd: decision.cmd}
+			return decision.cmd
 		}
 	}
 	if m.turnQueueHook != nil {
@@ -75,7 +63,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 		a.reconcileInterruptFromRuntimeActivity(evt),
 		a.reconcileWorktreeTransitionOutcome(evt),
 	}
-	return runtimeEventApplyResult{cmd: batchCmds(cmds...)}
+	return batchCmds(cmds...)
 }
 
 func (a uiRuntimeAdapter) applyProjectedSessionMetadata(session clientui.RuntimeSessionView) tea.Cmd {

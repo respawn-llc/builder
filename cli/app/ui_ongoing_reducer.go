@@ -19,7 +19,7 @@ func (r uiOngoingFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case ongoingTranscriptEvent:
 		cmd := m.handleOngoingTranscriptEvent(msg)
-		return handledUIFeatureUpdate(m, tea.Batch(cmd, waitOngoingTranscriptEvent(m.ongoingEvents)))
+		return handledUIFeatureUpdate(m, cmd)
 	case ongoingNormalBufferOwnedMsg:
 		_ = msg
 		return handledUIFeatureUpdate(m, m.reconcileOngoingOwnership())

@@ -28,7 +28,7 @@ func TestOngoingClientArchitectureGuards(t *testing.T) {
 	for _, violation := range violations {
 		formatted = append(formatted, violation.String())
 	}
-	t.Fatalf("ongoing native scrollback architecture violations:\n%s", strings.Join(formatted, "\n"))
+	t.Fatalf("client architecture violations:\n%s", strings.Join(formatted, "\n"))
 }
 
 func TestOngoingClientArchitectureGuardsRejectNegativeFixture(t *testing.T) {
@@ -97,6 +97,20 @@ func badPageRead(client interface{ GetSessionTranscriptPage() }) {
 		violations := collectOngoingArchitectureViolations(pkgs, root)
 		assertOngoingArchitectureViolation(t, violations, ongoingArchitectureViolationPageRead)
 	})
+
+	t.Run("independent UI event wait", func(t *testing.T) {
+		source := `package app
+
+import "core/shared/clientui"
+
+func renamedRuntimeWait(events <-chan clientui.Event) {
+	<-events
+}
+`
+		pkgs, root := parseOngoingArchitectureFixture(t, "cli/app/ui_bad_wait.go", source)
+		violations := collectOngoingArchitectureViolations(pkgs, root)
+		assertOngoingArchitectureViolation(t, violations, ongoingArchitectureViolationIndependentEventWait)
+	})
 }
 
 func assertOngoingArchitectureViolation(t *testing.T, violations []ongoingArchitectureViolation, reason ongoingArchitectureViolationReason) {
@@ -163,10 +177,32 @@ func ongoingArchitectureViolationsInFile(pkg *packages.Package, file *ast.File, 
 			if isForbiddenOngoingTranscriptReadSelector(typed.Name) && isOngoingDeliveryOrSurfacePath(relPath) {
 				violations = append(violations, newOngoingArchitectureViolation(pkg, typed.Pos(), relPath, ongoingArchitectureViolationPageRead))
 			}
+		case *ast.UnaryExpr:
+			if isIndependentUIEventReceive(pkg, typed, relPath) {
+				violations = append(violations, newOngoingArchitectureViolation(pkg, typed.Pos(), relPath, ongoingArchitectureViolationIndependentEventWait))
+			}
 		}
 		return true
 	})
 	return violations
+}
+
+func isIndependentUIEventReceive(pkg *packages.Package, expression *ast.UnaryExpr, relPath string) bool {
+	if expression.Op != token.ARROW || !isAppPath(relPath) || relPath == "cli/app/ui_event_dispatcher.go" {
+		return false
+	}
+	channel, ok := types.Unalias(pkg.TypesInfo.TypeOf(expression.X)).Underlying().(*types.Chan)
+	if !ok {
+		return false
+	}
+	switch typeName(types.Unalias(channel.Elem())) {
+	case "core/shared/clientui.Event",
+		"core/cli/app.askEvent",
+		"core/cli/app.ongoingTranscriptEvent":
+		return true
+	default:
+		return false
+	}
 }
 
 func committedRowStateViolations(pkg *packages.Package, spec *ast.TypeSpec, relPath string) []ongoingArchitectureViolation {
@@ -256,6 +292,7 @@ func parseOngoingArchitectureFixture(t *testing.T, relPath, source string) ([]*p
 	writeTestFile(t, filepath.Join(dir, "shared/clientui/transcript_contract.go"), `package clientui
 
 type TranscriptCommittedRow struct{}
+type Event struct{}
 `)
 	pkgs, err := packages.Load(&packages.Config{
 		Dir:   dir,
@@ -288,6 +325,7 @@ const (
 	ongoingArchitectureViolationPageRead              ongoingArchitectureViolationReason = "page_read"
 	ongoingArchitectureViolationUncountedAppPath      ongoingArchitectureViolationReason = "uncounted_app_path"
 	ongoingArchitectureViolationRawWriter             ongoingArchitectureViolationReason = "raw_writer"
+	ongoingArchitectureViolationIndependentEventWait  ongoingArchitectureViolationReason = "independent_ui_event_wait"
 )
 
 type ongoingArchitectureViolation struct {
@@ -311,6 +349,8 @@ func (r ongoingArchitectureViolationReason) Message() string {
 		return "app transcript-message handling for ongoing must live in counted session_transcript/ui_ongoing files"
 	case ongoingArchitectureViolationRawWriter:
 		return "cli/app must call ongoing Surface methods, not raw ongoing writer helpers"
+	case ongoingArchitectureViolationIndependentEventWait:
+		return "runtime, transcript, and prompt source channels may only be received by the unified UI event dispatcher"
 	default:
 		return string(r)
 	}

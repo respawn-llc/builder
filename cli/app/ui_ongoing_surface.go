@@ -27,7 +27,7 @@ func WithUIOngoingSurface(surface *ongoing.Surface) UIOption {
 
 func WithUIOngoingTranscriptEvents(events <-chan ongoingTranscriptEvent) UIOption {
 	return func(m *uiModel) {
-		m.ongoingEvents = events
+		m.eventDispatcher.transcriptEvents = events
 	}
 }
 
@@ -132,19 +132,6 @@ func (m *uiModel) setOngoingNormalBufferOwned(owned bool) tea.Cmd {
 		return tea.Batch(resultCmd, widthRehydrationCmd, m.handleOngoingResult(repaintResult))
 	}
 	return tea.Batch(resultCmd, widthRehydrationCmd)
-}
-
-func waitOngoingTranscriptEvent(events <-chan ongoingTranscriptEvent) tea.Cmd {
-	if events == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		event, ok := <-events
-		if !ok {
-			return nil
-		}
-		return event
-	}
 }
 
 func (m *uiModel) handleOngoingResult(result ongoing.Result) tea.Cmd {

@@ -174,7 +174,6 @@ type runtimeEventMsg struct {
 
 type runtimeEventBatchMsg struct {
 	events []clientui.Event
-	carry  *clientui.Event
 }
 
 type uiModelProbeMessage interface {

@@ -41,7 +41,7 @@ func (r uiAskFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	case askEventMsg:
 		m.askController().acceptEvent(msg.event)
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, waitAskEvent(m.askEvents))
+		return handledUIFeatureUpdate(m, nil)
 	}
 	return uiFeatureUpdateResult{}
 }
