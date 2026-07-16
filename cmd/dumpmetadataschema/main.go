@@ -23,18 +23,27 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("dumpmetadataschema", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	var usageWriteErr error
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: dumpmetadataschema")
+		_, usageWriteErr = fmt.Fprintln(stderr, "usage: dumpmetadataschema")
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			if usageWriteErr != nil {
+				return 1
+			}
 			return 0
 		}
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "dumpmetadataschema does not accept arguments")
+		if _, err := fmt.Fprintln(stderr, "dumpmetadataschema does not accept arguments"); err != nil {
+			return 1
+		}
 		fs.Usage()
+		if usageWriteErr != nil {
+			return 1
+		}
 		return 2
 	}
 

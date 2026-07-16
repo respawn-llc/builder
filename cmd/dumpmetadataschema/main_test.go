@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -170,6 +171,19 @@ func TestRunHelpSucceedsWithoutCreatingTemporaryDatabase(t *testing.T) {
 	}
 	if len(tempArtifacts) != 0 {
 		t.Fatalf("help created temporary artifacts: %v", tempArtifacts)
+	}
+}
+
+func TestRunReportsHelpOutputFailure(t *testing.T) {
+	var stdout bytes.Buffer
+	stderr := writerFunc(func(_ []byte) (int, error) {
+		return 0, io.ErrClosedPipe
+	})
+	if exitCode := run([]string{"--help"}, &stdout, stderr); exitCode == 0 {
+		t.Fatal("run succeeded after help output failed")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("help stdout is not schema-only: %q", stdout.String())
 	}
 }
 
