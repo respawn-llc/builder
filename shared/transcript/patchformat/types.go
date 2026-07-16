@@ -1,6 +1,10 @@
 package patchformat
 
-import "strings"
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+)
 
 type Document struct {
 	Hunks []any
@@ -19,6 +23,20 @@ type WholeFileDeletionOperationID struct {
 	HunkOrdinal int
 }
 
+func (id *WholeFileDeletionOperationID) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		HunkOrdinal *int `json:"HunkOrdinal"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.HunkOrdinal == nil {
+		return errors.New("whole-file deletion operation hunk ordinal is required")
+	}
+	id.HunkOrdinal = *wire.HunkOrdinal
+	return nil
+}
+
 type WholeFileDeletionFact struct {
 	ID      WholeFileDeletionOperationID
 	Removed int
@@ -27,6 +45,22 @@ type WholeFileDeletionFact struct {
 type WholeFileDeletionOperation struct {
 	ID         WholeFileDeletionOperationID
 	CountKnown bool
+}
+
+func (operation *WholeFileDeletionOperation) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ID         *WholeFileDeletionOperationID `json:"ID"`
+		CountKnown bool                          `json:"CountKnown"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.ID == nil {
+		return errors.New("whole-file deletion operation id is required")
+	}
+	operation.ID = *wire.ID
+	operation.CountKnown = wire.CountKnown
+	return nil
 }
 
 type WholeFileDeletionFactMismatchKind string

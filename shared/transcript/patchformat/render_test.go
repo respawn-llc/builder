@@ -1,6 +1,7 @@
 package patchformat
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -175,6 +176,20 @@ func TestApplyWholeFileDeletionFactsExposesPositiveAndKnownZeroCounts(t *testing
 		}
 		if !ShowsRemovedCount(file) {
 			t.Fatalf("file %d did not expose its known removal-count fact", index)
+		}
+	}
+}
+
+func TestWholeFileDeletionOperationJSONRejectsAbsentIdentity(t *testing.T) {
+	for _, payload := range []string{
+		`{"CountKnown":true}`,
+		`{"ID":null,"CountKnown":true}`,
+		`{"ID":{},"CountKnown":true}`,
+		`{"ID":{"HunkOrdinal":null},"CountKnown":true}`,
+	} {
+		var operation WholeFileDeletionOperation
+		if err := json.Unmarshal([]byte(payload), &operation); err == nil {
+			t.Fatalf("decoded whole-file deletion operation without identity: %s", payload)
 		}
 	}
 }
