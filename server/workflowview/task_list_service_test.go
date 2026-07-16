@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"core/internal/testharness/testsetup"
@@ -200,54 +201,6 @@ func TestListTasksUsesBoardCanceledTerminalNode(t *testing.T) {
 	}
 }
 
-func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	backlog, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Backlog", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask backlog: %v", err)
-	}
-	running, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Running", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask running: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, running.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	if _, err := workflowStore.ClaimRun(ctx, started.RunID, 0); err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-
-	projectID := binding.ProjectID
-	backlogResp, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:   &projectID,
-		ColumnKeys:  []string{"backlog"},
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog},
-	}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("ListTasks backlog: %v", err)
-	}
-	if len(backlogResp.Tasks) != 1 || backlogResp.Tasks[0].TaskID != string(backlog.ID) {
-		t.Fatalf("backlog tasks = %+v", backlogResp.Tasks)
-	}
-
-	runningResp, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:   &projectID,
-		ColumnKeys:  []string{"agent"},
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning},
-	}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("ListTasks running: %v", err)
-	}
-	if len(runningResp.Tasks) != 1 || runningResp.Tasks[0].TaskID != string(running.ID) {
-		t.Fatalf("running tasks = %+v", runningResp.Tasks)
-	}
-}
-
 func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
@@ -407,7 +360,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		}
 	}
 	approvalResponse := list(serverapi.WorkflowTaskListRequest{StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval}})
-	if approvalResponse.Tasks[0].RunCount != 1 || containsString(approvalResponse.Tasks[0].Status.RunIDs, string(approvalStarted.RunID)) || containsString(workflowTaskAttentionStrings(approvalResponse.Tasks[0].Status.AttentionTypes), string(serverapi.WorkflowTaskAttentionKindInterrupted)) {
+	if approvalResponse.Tasks[0].RunCount != 1 || containsString(approvalResponse.Tasks[0].Status.RunIDs, string(approvalStarted.RunID)) || slices.Contains(approvalResponse.Tasks[0].Status.AttentionTypes, serverapi.WorkflowTaskAttentionKindInterrupted) {
 		t.Fatalf("approval list item must preserve history count but exclude stale current facts: %+v", approvalResponse.Tasks[0])
 	}
 
@@ -530,56 +483,57 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 			request.PageToken = response.NextPageToken
 		}
 	}
-	statusAsc := listAllPages(serverapi.WorkflowTaskListRequest{
-		ProjectID: baseRequest.ProjectID,
-		PageSize:  baseRequest.PageSize,
-		Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
-	})
-	if got, want := taskStatusKinds(statusAsc), []serverapi.WorkflowTaskStatusKind{
-		serverapi.WorkflowTaskStatusKindDone,
-		serverapi.WorkflowTaskStatusKindRunning,
-		serverapi.WorkflowTaskStatusKindQueued,
-		serverapi.WorkflowTaskStatusKindBacklog,
-		serverapi.WorkflowTaskStatusKindActive,
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("status sort = %v, want %v", got, want)
+	sortedRequest := func(field serverapi.WorkflowTaskListSortField, direction serverapi.WorkflowTaskListSortDirection) serverapi.WorkflowTaskListRequest {
+		return serverapi.WorkflowTaskListRequest{
+			ProjectID: baseRequest.ProjectID,
+			PageSize:  baseRequest.PageSize,
+			Sort:      []serverapi.WorkflowTaskListSort{{Field: field, Direction: direction}},
+		}
 	}
-	statusDesc := listAllPages(serverapi.WorkflowTaskListRequest{
-		ProjectID: baseRequest.ProjectID,
-		PageSize:  baseRequest.PageSize,
-		Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionDesc}},
-	})
-	if got, want := taskStatusKinds(statusDesc), []serverapi.WorkflowTaskStatusKind{
-		serverapi.WorkflowTaskStatusKindActive,
-		serverapi.WorkflowTaskStatusKindBacklog,
-		serverapi.WorkflowTaskStatusKindQueued,
-		serverapi.WorkflowTaskStatusKindRunning,
-		serverapi.WorkflowTaskStatusKindDone,
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("descending status sort = %v, want %v", got, want)
+	for _, tt := range []struct {
+		name      string
+		direction serverapi.WorkflowTaskListSortDirection
+		want      []serverapi.WorkflowTaskStatusKind
+	}{
+		{name: "ascending", direction: serverapi.WorkflowTaskListSortDirectionAsc, want: []serverapi.WorkflowTaskStatusKind{
+			serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindRunning,
+			serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog,
+			serverapi.WorkflowTaskStatusKindActive,
+		}},
+		{name: "descending", direction: serverapi.WorkflowTaskListSortDirectionDesc, want: []serverapi.WorkflowTaskStatusKind{
+			serverapi.WorkflowTaskStatusKindActive, serverapi.WorkflowTaskStatusKindBacklog,
+			serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindRunning,
+			serverapi.WorkflowTaskStatusKindDone,
+		}},
+	} {
+		t.Run("status "+tt.name, func(t *testing.T) {
+			got := taskStatusKinds(listAllPages(sortedRequest(serverapi.WorkflowTaskListSortFieldStatus, tt.direction)))
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("status sort = %v, want %v", got, tt.want)
+			}
+		})
 	}
-	columnAsc := listAllPages(serverapi.WorkflowTaskListRequest{
-		ProjectID: baseRequest.ProjectID,
-		PageSize:  baseRequest.PageSize,
-		Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
-	})
-	if columnAsc[0].TaskID != string(backlog.ID) || columnAsc[len(columnAsc)-1].TaskID != string(done.ID) {
-		t.Fatalf("column sort = %+v, want backlog before done", columnAsc)
-	}
-	columnDesc := listAllPages(serverapi.WorkflowTaskListRequest{
-		ProjectID: baseRequest.ProjectID,
-		PageSize:  baseRequest.PageSize,
-		Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionDesc}},
-	})
-	if columnDesc[0].TaskID != string(done.ID) || columnDesc[len(columnDesc)-1].TaskID != string(backlog.ID) {
-		t.Fatalf("descending column sort = %+v, want done before backlog", columnDesc)
+	for _, tt := range []struct {
+		name          string
+		direction     serverapi.WorkflowTaskListSortDirection
+		first, lastID string
+	}{
+		{name: "ascending", direction: serverapi.WorkflowTaskListSortDirectionAsc, first: string(backlog.ID), lastID: string(done.ID)},
+		{name: "descending", direction: serverapi.WorkflowTaskListSortDirectionDesc, first: string(done.ID), lastID: string(backlog.ID)},
+	} {
+		t.Run("column "+tt.name, func(t *testing.T) {
+			items := listAllPages(sortedRequest(serverapi.WorkflowTaskListSortFieldColumn, tt.direction))
+			if items[0].TaskID != tt.first || items[len(items)-1].TaskID != tt.lastID {
+				t.Fatalf("column sort = %+v, want %s before %s", items, tt.first, tt.lastID)
+			}
+		})
 	}
 
-	firstPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID: baseRequest.ProjectID,
-		PageSize:  baseRequest.PageSize,
-		Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
-	}, testsetup.QuestionsEnabled("coder"))
+	firstPage, err := view.ListTasks(
+		ctx,
+		sortedRequest(serverapi.WorkflowTaskListSortFieldStatus, serverapi.WorkflowTaskListSortDirectionAsc),
+		testsetup.QuestionsEnabled("coder"),
+	)
 	if err != nil {
 		t.Fatalf("ListTasks first page: %v", err)
 	}
@@ -788,12 +742,4 @@ func taskStatusKinds(items []serverapi.WorkflowTaskListItem) []serverapi.Workflo
 		kinds = append(kinds, item.Status.Kind)
 	}
 	return kinds
-}
-
-func workflowTaskAttentionStrings(values []serverapi.WorkflowTaskAttentionKind) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		out = append(out, string(value))
-	}
-	return out
 }

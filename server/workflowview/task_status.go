@@ -15,14 +15,6 @@ type workflowTaskStatusFact struct {
 	Done   bool
 }
 
-func (s *Service) taskStatus(ctx context.Context, taskID string) (serverapi.WorkflowTaskStatus, error) {
-	fact, err := s.taskStatusFact(ctx, taskID)
-	if err != nil {
-		return serverapi.WorkflowTaskStatus{}, err
-	}
-	return fact.Status, nil
-}
-
 func (s *Service) taskStatusFact(ctx context.Context, taskID string) (workflowTaskStatusFact, error) {
 	row, err := s.queries.GetWorkflowTaskStatusRecord(ctx, taskID)
 	if err != nil {

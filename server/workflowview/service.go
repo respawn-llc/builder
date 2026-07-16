@@ -1895,18 +1895,6 @@ func (s *Service) validationAttentionItems(ctx context.Context, projectID string
 	return items, nil
 }
 
-func parseOffsetPageToken(token string) (int, error) {
-	trimmed := strings.TrimSpace(token)
-	if trimmed == "" {
-		return 0, nil
-	}
-	offset, err := strconv.Atoi(trimmed)
-	if err != nil || offset < 0 {
-		return 0, errors.New("page_token is invalid")
-	}
-	return offset, nil
-}
-
 type boardProjectWorkspaceFacts struct {
 	primary   serverapi.ProjectWorkspaceSummary
 	byID      map[string]serverapi.ProjectWorkspaceSummary
