@@ -241,11 +241,11 @@ func transcriptCommittedEntryCountWithToolCompletionDiagnostics(
 	materializedToolCalls map[string]struct{},
 	diagnostics map[string]*transcript.DeveloperDiagnostic,
 ) int {
-	entries := visibleChatEntriesFromMessage(msg, completions, materializedToolCalls)
-	count := len(entries)
-	for _, entry := range entries {
-		if (entry.Role == "tool_result_ok" || entry.Role == "tool_result_error") &&
-			diagnostics[strings.TrimSpace(entry.ToolCallID)] != nil {
+	projections := visibleChatEntryProjectionsFromMessage(msg, completions, materializedToolCalls)
+	count := len(projections)
+	for _, projection := range projections {
+		if projection.ToolCompletion != nil &&
+			diagnostics[strings.TrimSpace(projection.ToolCompletion.CallID)] != nil {
 			count++
 		}
 	}

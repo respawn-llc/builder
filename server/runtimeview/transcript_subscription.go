@@ -167,10 +167,10 @@ func transcriptCompactionStatus(evt runtime.Event) clientui.TranscriptCompaction
 		status.State = clientui.CompactionCompleted
 	case runtime.EventCompactionFailed:
 		status.State = clientui.CompactionFailed
-		status.Diagnostic = &clientui.TranscriptDiagnostic{
-			Code:   clientui.TranscriptDiagnosticCode("compaction_failed"),
-			Detail: strings.TrimSpace(evt.Compaction.Error),
-		}
+		status.Diagnostic = clientui.NewLegacyTranscriptDiagnostic(
+			clientui.TranscriptDiagnosticCode("compaction_failed"),
+			strings.TrimSpace(evt.Compaction.Error),
+		)
 	default:
 		panic(fmt.Sprintf("runtime event %q carries compaction facts outside the compaction lifecycle", evt.Kind))
 	}
@@ -304,10 +304,10 @@ func transcriptToolAbortMessages(evt runtime.Event) []clientui.TranscriptMessage
 		Reason:     reason,
 	}
 	if reason == clientui.ToolAbortFailed {
-		abort.Diagnostic = &clientui.TranscriptDiagnostic{
-			Code:   clientui.TranscriptDiagnosticCode("tool_failed"),
-			Detail: strings.TrimSpace(evt.Error),
-		}
+		abort.Diagnostic = clientui.NewLegacyTranscriptDiagnostic(
+			clientui.TranscriptDiagnosticCode("tool_failed"),
+			strings.TrimSpace(evt.Error),
+		)
 	}
 	return []clientui.TranscriptMessage{transcriptMessage(
 		clientui.TranscriptMessageToolAbort,
@@ -535,18 +535,16 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 				fact.Reason,
 			))
 		}
-		notice.Diagnostic = &clientui.TranscriptDiagnostic{
-			Code:   clientui.TranscriptDiagnosticCode(strings.TrimSpace(*fact.DiagnosticCode)),
-			Detail: *fact.DiagnosticDetail,
-		}
+		notice.Diagnostic = clientui.NewLegacyTranscriptDiagnostic(
+			clientui.TranscriptDiagnosticCode(strings.TrimSpace(*fact.DiagnosticCode)),
+			*fact.DiagnosticDetail,
+		)
 	}
 	if hasDeveloperDiagnostic {
 		if err := fact.DeveloperDiagnostic.Validate(); err != nil {
 			panic(fmt.Sprintf("runtime transcript notice has invalid developer diagnostic: %v", err))
 		}
-		notice.Diagnostic = &clientui.TranscriptDiagnostic{
-			Developer: transcript.CloneDeveloperDiagnostic(fact.DeveloperDiagnostic),
-		}
+		notice.Diagnostic = clientui.NewDeveloperTranscriptDiagnostic(*fact.DeveloperDiagnostic)
 	}
 	activityID := strings.TrimSpace(fact.BackgroundActivityID)
 	processID := strings.TrimSpace(fact.BackgroundProcessID)

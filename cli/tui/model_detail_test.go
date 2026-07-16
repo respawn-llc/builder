@@ -264,10 +264,10 @@ func TestDetailModeCachedRowsPreserveVisibility(t *testing.T) {
 		Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 		Severity:     clientui.TranscriptNoticeInfo,
 		CompactLabel: &compactNotice,
-		Diagnostic: &clientui.TranscriptDiagnostic{
-			Code:   "detail_cache_test",
-			Detail: "diagnostic detail",
-		},
+		Diagnostic: clientui.NewLegacyTranscriptDiagnostic(
+			"detail_cache_test",
+			"diagnostic detail",
+		),
 	})
 	cached.Visibility = clientui.EntryVisibilityOngoingCollapsed
 	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
@@ -539,10 +539,10 @@ func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 				Severity:     clientui.TranscriptNoticeInfo,
 				MessageType:  &messageType,
 				CompactLabel: &compactLabel,
-				Diagnostic: &clientui.TranscriptDiagnostic{
-					Code:   clientui.TranscriptDiagnosticCode(role),
-					Detail: "review result",
-				},
+				Diagnostic: clientui.NewLegacyTranscriptDiagnostic(
+					clientui.TranscriptDiagnosticCode(role),
+					"review result",
+				),
 			}))
 			if !ok {
 				t.Fatal("reviewer row was dropped")
@@ -551,8 +551,9 @@ func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 			if row.Notice == nil || row.Notice.Diagnostic == nil {
 				t.Fatalf("reviewer row = %+v", row)
 			}
-			if row.Notice.Diagnostic.Code != clientui.TranscriptDiagnosticCode(role) {
-				t.Fatalf("reviewer diagnostic code = %q, want %q", row.Notice.Diagnostic.Code, role)
+			code, _, legacy := row.Notice.Diagnostic.Legacy()
+			if !legacy || code != clientui.TranscriptDiagnosticCode(role) {
+				t.Fatalf("reviewer diagnostic code = %q legacy=%t, want %q", code, legacy, role)
 			}
 		})
 	}

@@ -194,31 +194,31 @@ func (c *ongoingTranscriptController) drainQueued() (ongoing.Result, error) {
 			return ongoing.Result{}, err
 		}
 	}
-	diagnostic := developerDiagnosticFromTranscriptMessages(queued)
+	diagnostics := developerDiagnosticsFromTranscriptMessages(queued)
 	if needsRender {
 		result, err := c.surface.Render(c.frameInput())
 		if err != nil {
 			return ongoing.Result{}, err
 		}
-		c.consumeDeveloperDiagnostic(diagnostic)
+		c.consumeDeveloperDiagnostics(diagnostics)
 		return result, nil
 	}
-	c.consumeDeveloperDiagnostic(diagnostic)
+	c.consumeDeveloperDiagnostics(diagnostics)
 	return ongoing.Result{}, nil
 }
 
 func (c *ongoingTranscriptController) applyNow(message clientui.TranscriptMessage, stateChanged bool) (ongoing.Result, error) {
-	diagnostic := developerDiagnosticFromTranscriptMessage(message)
+	diagnostics := developerDiagnosticsFromTranscriptMessage(message)
 	if isAppOwnedOngoingMessage(message.Kind) {
 		if stateChanged {
 			result, err := c.surface.Render(c.frameInput())
 			if err != nil {
 				return ongoing.Result{}, err
 			}
-			c.consumeDeveloperDiagnostic(diagnostic)
+			c.consumeDeveloperDiagnostics(diagnostics)
 			return result, nil
 		}
-		c.consumeDeveloperDiagnostic(diagnostic)
+		c.consumeDeveloperDiagnostics(diagnostics)
 		return ongoing.Result{}, nil
 	}
 	if message.Kind == clientui.TranscriptMessageHydration {
@@ -232,14 +232,14 @@ func (c *ongoingTranscriptController) applyNow(message clientui.TranscriptMessag
 				return ongoing.Result{}, err
 			}
 		}
-		c.consumeDeveloperDiagnostic(diagnostic)
+		c.consumeDeveloperDiagnostics(diagnostics)
 		return result, nil
 	}
 	result, err := c.surface.ApplyTerminalMessage(message, c.frameInput())
 	if err != nil {
 		return ongoing.Result{}, err
 	}
-	c.consumeDeveloperDiagnostic(diagnostic)
+	c.consumeDeveloperDiagnostics(diagnostics)
 	return result, nil
 }
 
@@ -249,18 +249,26 @@ type ongoingTranscriptDeveloperDiagnosticError struct {
 }
 
 func (e ongoingTranscriptDeveloperDiagnosticError) Error() string {
+	kind, present := e.Diagnostic.Kind()
+	if !present {
+		return fmt.Sprintf(
+			"ongoing transcript developer diagnostic: invalid variant detail=%q\n%s",
+			transcript.DeveloperDiagnosticText(e.Diagnostic),
+			e.Stack,
+		)
+	}
 	context := e.Diagnostic.DeletionFactMismatch
 	if context == nil {
 		return fmt.Sprintf(
 			"ongoing transcript developer diagnostic: kind=%s detail=%q\n%s",
-			e.Diagnostic.Kind(),
+			kind,
 			transcript.DeveloperDiagnosticText(e.Diagnostic),
 			e.Stack,
 		)
 	}
 	return fmt.Sprintf(
 		"ongoing transcript developer diagnostic: kind=%s call_id=%q hunk_ordinal=%d mismatch=%s detail=%q\n%s",
-		e.Diagnostic.Kind(),
+		kind,
 		context.CallID,
 		context.OperationID.HunkOrdinal,
 		context.MismatchKind,
@@ -269,44 +277,50 @@ func (e ongoingTranscriptDeveloperDiagnosticError) Error() string {
 	)
 }
 
-func (c *ongoingTranscriptController) consumeDeveloperDiagnostic(diagnostic *transcript.DeveloperDiagnostic) {
-	if diagnostic == nil {
-		return
-	}
-	err := ongoingTranscriptDeveloperDiagnosticError{
-		Diagnostic: *transcript.CloneDeveloperDiagnostic(diagnostic),
-		Stack:      string(debug.Stack()),
-	}
-	if c.logf != nil {
-		c.logf("%s", err.Error())
-	}
-	if c.debug {
-		panic(err)
-	}
-}
-
-func developerDiagnosticFromTranscriptMessages(messages []clientui.TranscriptMessage) *transcript.DeveloperDiagnostic {
-	for _, message := range messages {
-		if diagnostic := developerDiagnosticFromTranscriptMessage(message); diagnostic != nil {
-			return diagnostic
+func (c *ongoingTranscriptController) consumeDeveloperDiagnostics(diagnostics []transcript.DeveloperDiagnostic) {
+	var panicError *ongoingTranscriptDeveloperDiagnosticError
+	for index := range diagnostics {
+		err := ongoingTranscriptDeveloperDiagnosticError{
+			Diagnostic: *transcript.CloneDeveloperDiagnostic(&diagnostics[index]),
+			Stack:      string(debug.Stack()),
+		}
+		if c.logf != nil {
+			c.logf("%s", err.Error())
+		}
+		if panicError == nil {
+			panicError = &err
 		}
 	}
-	return nil
+	if c.debug && panicError != nil {
+		panic(*panicError)
+	}
 }
 
-func developerDiagnosticFromTranscriptMessage(message clientui.TranscriptMessage) *transcript.DeveloperDiagnostic {
+func developerDiagnosticsFromTranscriptMessages(messages []clientui.TranscriptMessage) []transcript.DeveloperDiagnostic {
+	var diagnostics []transcript.DeveloperDiagnostic
+	for _, message := range messages {
+		diagnostics = append(diagnostics, developerDiagnosticsFromTranscriptMessage(message)...)
+	}
+	return diagnostics
+}
+
+func developerDiagnosticsFromTranscriptMessage(message clientui.TranscriptMessage) []transcript.DeveloperDiagnostic {
 	if message.Kind == clientui.TranscriptMessageCommittedRow {
-		return developerDiagnosticFromCommittedRow(message.Payload.CommittedRow)
+		if diagnostic := developerDiagnosticFromCommittedRow(message.Payload.CommittedRow); diagnostic != nil {
+			return []transcript.DeveloperDiagnostic{*diagnostic}
+		}
+		return nil
 	}
 	if message.Kind != clientui.TranscriptMessageHydration || message.Payload.Hydration == nil {
 		return nil
 	}
+	var diagnostics []transcript.DeveloperDiagnostic
 	for index := range message.Payload.Hydration.CommittedRows {
 		if diagnostic := developerDiagnosticFromCommittedRow(&message.Payload.Hydration.CommittedRows[index]); diagnostic != nil {
-			return diagnostic
+			diagnostics = append(diagnostics, *diagnostic)
 		}
 	}
-	return nil
+	return diagnostics
 }
 
 func developerDiagnosticFromCommittedRow(row *clientui.TranscriptCommittedRow) *transcript.DeveloperDiagnostic {
@@ -314,9 +328,11 @@ func developerDiagnosticFromCommittedRow(row *clientui.TranscriptCommittedRow) *
 		return nil
 	}
 	diagnostic := row.Notice.Diagnostic.Developer
-	if diagnostic == nil ||
-		diagnostic.Kind() != transcript.DeveloperDiagnosticDeletionFactMismatch ||
-		diagnostic.Validate() != nil {
+	if diagnostic == nil || diagnostic.Validate() != nil {
+		return nil
+	}
+	kind, present := diagnostic.Kind()
+	if !present || kind != transcript.DeveloperDiagnosticDeletionFactMismatch {
 		return nil
 	}
 	return transcript.CloneDeveloperDiagnostic(diagnostic)

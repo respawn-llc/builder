@@ -110,10 +110,10 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 				Reason:     "cache_miss",
 				Visibility: transcript.EntryVisibilityOngoing,
 			},
-			Diagnostic: &TranscriptDiagnostic{
-				Code:   TranscriptDiagnosticCode("runtime"),
-				Detail: "contradictory",
-			},
+			Diagnostic: NewLegacyTranscriptDiagnostic(
+				TranscriptDiagnosticCode("runtime"),
+				"contradictory",
+			),
 		},
 		{
 			Reason:   TranscriptNoticeRuntimeDiagnostic,
@@ -123,19 +123,19 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 				Reason:     "cache_miss",
 				Visibility: transcript.EntryVisibilityOngoing,
 			},
-			Diagnostic: &TranscriptDiagnostic{
-				Code:   TranscriptDiagnosticCode("runtime"),
-				Detail: "failed",
-			},
+			Diagnostic: NewLegacyTranscriptDiagnostic(
+				TranscriptDiagnosticCode("runtime"),
+				"failed",
+			),
 		},
 		{
 			Reason:     TranscriptNoticeLegacyUntypedNotice,
 			Severity:   TranscriptNoticeInfo,
 			LegacyText: &legacyText,
-			Diagnostic: &TranscriptDiagnostic{
-				Code:   TranscriptDiagnosticCode("runtime"),
-				Detail: "contradictory",
-			},
+			Diagnostic: NewLegacyTranscriptDiagnostic(
+				TranscriptDiagnosticCode("runtime"),
+				"contradictory",
+			),
 		},
 	}
 	for _, notice := range tests {
@@ -154,18 +154,18 @@ func TestTranscriptNoticeRowCarriesTypedDeveloperDiagnosticWithoutLegacyFields(t
 		},
 	)
 	notice := TranscriptNoticeRow{
-		Reason:   TranscriptNoticeRuntimeDiagnostic,
-		Severity: TranscriptNoticeError,
-		Diagnostic: &TranscriptDiagnostic{
-			Developer: &diagnostic,
-		},
+		Reason:     TranscriptNoticeRuntimeDiagnostic,
+		Severity:   TranscriptNoticeError,
+		Diagnostic: NewDeveloperTranscriptDiagnostic(diagnostic),
 	}
 	if err := notice.Validate(); err != nil {
 		t.Fatalf("validate typed developer diagnostic notice: %v", err)
 	}
 
-	notice.Diagnostic.Code = "legacy"
-	notice.Diagnostic.Detail = "must not coexist"
+	legacyCode := TranscriptDiagnosticCode("legacy")
+	legacyDetail := "must not coexist"
+	notice.Diagnostic.Code = &legacyCode
+	notice.Diagnostic.Detail = &legacyDetail
 	if err := notice.Validate(); err == nil {
 		t.Fatal("accepted developer diagnostic with legacy code and detail")
 	}

@@ -70,16 +70,17 @@ func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID
 	if s == nil {
 		return
 	}
-	for _, entry := range visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls) {
+	for _, projection := range visibleChatEntryProjectionsFromMessage(msg, s.toolCompletions, s.materializedToolCalls) {
+		entry := projection.Entry
 		if strings.TrimSpace(entry.Role) == "user" && seq > 0 {
 			targetID := rollbacktarget.EncodeUserMessageSeq(seq)
 			entry.RollbackTargetID = &targetID
 		}
 		entry.StepID = strings.TrimSpace(stepID)
 		s.appendEntry(entry)
-		if (entry.Role == "tool_result_ok" || entry.Role == "tool_result_error") &&
-			s.toolCompletionDiagnostics[strings.TrimSpace(entry.ToolCallID)] != nil {
-			diagnostic := toolCompletionDiagnosticChatEntry(*s.toolCompletionDiagnostics[strings.TrimSpace(entry.ToolCallID)])
+		if projection.ToolCompletion != nil &&
+			s.toolCompletionDiagnostics[strings.TrimSpace(projection.ToolCompletion.CallID)] != nil {
+			diagnostic := toolCompletionDiagnosticChatEntry(*s.toolCompletionDiagnostics[strings.TrimSpace(projection.ToolCompletion.CallID)])
 			diagnostic.StepID = strings.TrimSpace(stepID)
 			s.appendEntry(diagnostic)
 		}

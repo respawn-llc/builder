@@ -253,6 +253,136 @@ func TestOngoingTranscriptControllerDebugPanicsForQueuedDeveloperDiagnosticAfter
 	_, _ = controller.SetNormalBufferOwned(true)
 }
 
+func TestOngoingTranscriptControllerConsumesEveryHydratedAndQueuedDeveloperDiagnostic(t *testing.T) {
+	t.Run("hydration", func(t *testing.T) {
+		surface := &ongoingSurfaceSpy{}
+		loggedAfterApply := 0
+		controller := newOngoingTranscriptController(
+			surface,
+			ongoingTestFrameProvider,
+			func(clientui.TranscriptMessage) tea.Cmd { return nil },
+			withOngoingTranscriptDeveloperDiagnostics(false, func(string, ...any) {
+				if got := surface.callKinds(); reflect.DeepEqual(got, []string{"apply"}) {
+					loggedAfterApply++
+				}
+			}),
+		)
+		hydration := ongoingHydrationMessage(1)
+		hydration.Payload.Hydration.CommittedRows = []clientui.TranscriptCommittedRow{
+			*ongoingDeveloperDiagnosticMessageForCall(1, "call-1", 0).Payload.CommittedRow,
+			*ongoingDeveloperDiagnosticMessageForCall(1, "call-2", 1).Payload.CommittedRow,
+		}
+
+		if _, _, err := controller.Accept(hydration); err != nil {
+			t.Fatalf("accept hydration: %v", err)
+		}
+		if loggedAfterApply != 2 {
+			t.Fatalf("diagnostics logged after terminal apply = %d, want 2", loggedAfterApply)
+		}
+	})
+
+	t.Run("queue", func(t *testing.T) {
+		surface := &ongoingSurfaceSpy{}
+		loggedAfterApply := 0
+		controller := newOngoingTranscriptController(
+			surface,
+			ongoingTestFrameProvider,
+			func(clientui.TranscriptMessage) tea.Cmd { return nil },
+			withOngoingTranscriptDeveloperDiagnostics(false, func(string, ...any) {
+				if got := surface.callKinds(); reflect.DeepEqual(got, []string{"apply", "apply"}) {
+					loggedAfterApply++
+				}
+			}),
+		)
+		if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+			t.Fatalf("accept hydration: %v", err)
+		}
+		surface.calls = nil
+		if _, err := controller.SetNormalBufferOwned(false); err != nil {
+			t.Fatalf("mark unowned: %v", err)
+		}
+		for sequence, callID := range []string{"call-1", "call-2"} {
+			message := ongoingDeveloperDiagnosticMessageForCall(uint64(sequence+2), callID, sequence)
+			if _, _, err := controller.Accept(message); err != nil {
+				t.Fatalf("queue diagnostic %d: %v", sequence, err)
+			}
+		}
+
+		if _, err := controller.SetNormalBufferOwned(true); err != nil {
+			t.Fatalf("restore ownership: %v", err)
+		}
+		if loggedAfterApply != 2 {
+			t.Fatalf("queued diagnostics logged after terminal apply = %d, want 2", loggedAfterApply)
+		}
+	})
+}
+
+func TestOngoingTranscriptControllerDebugLogsEveryDiagnosticBeforePanicking(t *testing.T) {
+	tests := []struct {
+		name           string
+		wantApplyCalls int
+		apply          func(*testing.T, *ongoingTranscriptController)
+	}{
+		{
+			name:           "hydration",
+			wantApplyCalls: 1,
+			apply: func(t *testing.T, controller *ongoingTranscriptController) {
+				hydration := ongoingHydrationMessage(1)
+				hydration.Payload.Hydration.CommittedRows = []clientui.TranscriptCommittedRow{
+					*ongoingDeveloperDiagnosticMessageForCall(1, "call-1", 0).Payload.CommittedRow,
+					*ongoingDeveloperDiagnosticMessageForCall(1, "call-2", 1).Payload.CommittedRow,
+				}
+				_, _, _ = controller.Accept(hydration)
+			},
+		},
+		{
+			name:           "queue",
+			wantApplyCalls: 3,
+			apply: func(t *testing.T, controller *ongoingTranscriptController) {
+				if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+					t.Fatalf("accept hydration: %v", err)
+				}
+				if _, err := controller.SetNormalBufferOwned(false); err != nil {
+					t.Fatalf("mark unowned: %v", err)
+				}
+				for sequence, callID := range []string{"call-1", "call-2"} {
+					message := ongoingDeveloperDiagnosticMessageForCall(uint64(sequence+2), callID, sequence)
+					if _, _, err := controller.Accept(message); err != nil {
+						t.Fatalf("queue diagnostic %d: %v", sequence, err)
+					}
+				}
+				_, _ = controller.SetNormalBufferOwned(true)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			surface := &ongoingSurfaceSpy{}
+			logCount := 0
+			controller := newOngoingTranscriptController(
+				surface,
+				ongoingTestFrameProvider,
+				func(clientui.TranscriptMessage) tea.Cmd { return nil },
+				withOngoingTranscriptDeveloperDiagnostics(true, func(string, ...any) {
+					logCount++
+				}),
+			)
+			defer func() {
+				if _, ok := recover().(ongoingTranscriptDeveloperDiagnosticError); !ok {
+					t.Fatal("multiple diagnostics did not panic with typed context")
+				}
+				if logCount != 2 {
+					t.Fatalf("diagnostics logged before panic = %d, want 2", logCount)
+				}
+				if got := len(surface.callKinds()); got != test.wantApplyCalls {
+					t.Fatalf("surface apply calls before panic = %d, want %d", got, test.wantApplyCalls)
+				}
+			}()
+			test.apply(t, controller)
+		})
+	}
+}
+
 func TestOngoingTranscriptControllerDrainsQueuedAssistantFinalizationAfterDetail(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	controller := newTestOngoingTranscriptController(surface, ongoingTestFrameProvider)
@@ -459,11 +589,15 @@ func newNoopOngoingTranscriptController(surface ongoingTranscriptSurface, frameP
 }
 
 func ongoingDeveloperDiagnosticMessage(sequence uint64) clientui.TranscriptMessage {
+	return ongoingDeveloperDiagnosticMessageForCall(sequence, "call-1", 0)
+}
+
+func ongoingDeveloperDiagnosticMessageForCall(sequence uint64, callID string, hunkOrdinal int) clientui.TranscriptMessage {
 	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
-		"call-1",
+		callID,
 		patchformat.WholeFileDeletionFactMismatchError{
 			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
-			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
+			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: hunkOrdinal},
 		},
 	)
 	row := clientui.TranscriptCommittedRow{
@@ -473,7 +607,7 @@ func ongoingDeveloperDiagnosticMessage(sequence uint64) clientui.TranscriptMessa
 		Notice: &clientui.TranscriptNoticeRow{
 			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:   clientui.TranscriptNoticeError,
-			Diagnostic: &clientui.TranscriptDiagnostic{Developer: &diagnostic},
+			Diagnostic: clientui.NewDeveloperTranscriptDiagnostic(diagnostic),
 		},
 	}
 	return clientui.TranscriptMessage{

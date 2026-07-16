@@ -7,6 +7,7 @@ import (
 	"core/server/llm"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -164,6 +165,56 @@ func TestToolCompletionDiagnosticRejectsMismatchedCompletionCallID(t *testing.T)
 	}
 }
 
+func TestToolCompletionDiagnosticRejectsFailedCompletionWithoutMutatingRestoreOrScanState(t *testing.T) {
+	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
+		"call-failed",
+		patchformat.WholeFileDeletionFactMismatchError{
+			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
+			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
+		},
+	)
+	completion := storedToolCompletion{
+		CallID:       "call-failed",
+		Name:         string(toolspec.ToolPatch),
+		IsError:      true,
+		Output:       json.RawMessage(`{"error":"failed"}`),
+		Presentation: deletionDiagnosticTestPresentation(),
+		Diagnostic:   &diagnostic,
+	}
+	payload, err := json.Marshal(completion)
+	if err != nil {
+		t.Fatalf("marshal completion payload: %v", err)
+	}
+
+	chat := newChatStore()
+	if err := chat.restoreToolCompletionPayload(payload); err == nil {
+		t.Fatal("restore accepted a diagnostic on a failed completion")
+	}
+	if len(chat.toolCompletions) != 0 || len(chat.toolCompletionDiagnostics) != 0 {
+		t.Fatalf(
+			"rejected restore mutated state: completions=%d diagnostics=%d",
+			len(chat.toolCompletions),
+			len(chat.toolCompletionDiagnostics),
+		)
+	}
+
+	scan := newStreamingTranscriptScan(
+		inMemoryTranscriptScanRequest{Offset: 0, Limit: 0},
+		config.CacheWarningModeDefault,
+	)
+	if err := scan.ApplyPersistedEvent(streamScanTestEvent(t, "tool_completed", completion)); err == nil {
+		t.Fatal("streaming scan accepted a diagnostic on a failed completion")
+	}
+	if len(scan.completions) != 0 || len(scan.diagnostics) != 0 || scan.scan.totalEntries != 0 {
+		t.Fatalf(
+			"rejected scan mutated state: completions=%d diagnostics=%d entries=%d",
+			len(scan.completions),
+			len(scan.diagnostics),
+			scan.scan.totalEntries,
+		)
+	}
+}
+
 func deletionDiagnosticTestPresentation() *transcript.ToolCallMeta {
 	rendered := patchformat.Render(
 		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
@@ -243,8 +294,12 @@ func TestToolResultPresentationMismatchPreservesSuccessfulUncountedCompletion(t 
 		finalization.Presentation.PatchRender.Files[0].WholeFileDeletions[0].CountKnown {
 		t.Fatalf("completion did not preserve original uncounted presentation: %+v", finalization.Presentation)
 	}
-	if finalization.Diagnostic == nil ||
-		finalization.Diagnostic.Kind() != transcript.DeveloperDiagnosticDeletionFactMismatch ||
+	if finalization.Diagnostic == nil {
+		t.Fatal("typed mismatch diagnostic is missing")
+	}
+	diagnosticKind, diagnosticKindPresent := finalization.Diagnostic.Kind()
+	if !diagnosticKindPresent ||
+		diagnosticKind != transcript.DeveloperDiagnosticDeletionFactMismatch ||
 		finalization.Diagnostic.DeletionFactMismatch == nil ||
 		finalization.Diagnostic.DeletionFactMismatch.CallID != call.ID ||
 		finalization.Diagnostic.DeletionFactMismatch.MismatchKind != patchformat.WholeFileDeletionFactMismatchUnmatched {

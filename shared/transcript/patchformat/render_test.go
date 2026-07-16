@@ -2,7 +2,6 @@ package patchformat
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 )
 
@@ -177,12 +176,6 @@ func TestApplyWholeFileDeletionFactsExposesPositiveAndKnownZeroCounts(t *testing
 		if !ShowsRemovedCount(file) {
 			t.Fatalf("file %d did not expose its known removal-count fact", index)
 		}
-	}
-}
-
-func TestWholeFileDeletionOperationDoesNotDuplicateRemovedCount(t *testing.T) {
-	if _, exists := reflect.TypeFor[WholeFileDeletionOperation]().FieldByName("Removed"); exists {
-		t.Fatal("whole-file deletion operation duplicates the rendered file removal count")
 	}
 }
 

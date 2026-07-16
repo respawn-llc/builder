@@ -12,36 +12,54 @@ import (
 )
 
 func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
-	return visibleChatEntriesFromMessage(msg, nil, nil)
+	projections := visibleChatEntryProjectionsFromMessage(msg, nil, nil)
+	entries := make([]ChatEntry, 0, len(projections))
+	for _, projection := range projections {
+		entries = append(entries, projection.Entry)
+	}
+	return entries
 }
 
-func visibleChatEntriesFromMessage(msg llm.Message, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []ChatEntry {
-	entries := make([]ChatEntry, 0, 1+len(msg.ToolCalls))
+type visibleChatEntryProjection struct {
+	Entry          ChatEntry
+	ToolCompletion *tools.Result
+}
+
+func visibleChatEntryProjectionsFromMessage(msg llm.Message, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []visibleChatEntryProjection {
+	entries := make([]visibleChatEntryProjection, 0, 1+len(msg.ToolCalls))
 	switch msg.Role {
 	case llm.RoleUser:
 		if entry, ok := visibleUserTranscriptEntry(msg); ok {
-			entries = append(entries, entry)
+			entries = append(entries, visibleChatEntryProjection{Entry: entry})
 		}
 	case llm.RoleAssistant:
 		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
-			entries = append(entries, ChatEntry{
+			entries = append(entries, visibleChatEntryProjection{Entry: ChatEntry{
 				Visibility: assistantTranscriptVisibility(msg.Phase),
 				Role:       "assistant",
 				Text:       msg.Content,
 				Phase:      msg.Phase,
-			})
+			}})
 		}
 		for _, call := range msg.ToolCalls {
-			entries = append(entries, formatPersistedToolCall(call))
+			entries = append(entries, visibleChatEntryProjection{Entry: formatPersistedToolCall(call)})
 			if result, ok := synthesizedToolResultForCall(call, completions, materializedToolCalls); ok {
-				entries = append(entries, toolResultChatEntry(result))
+				resultCopy := result
+				entries = append(entries, visibleChatEntryProjection{
+					Entry:          toolResultChatEntry(result),
+					ToolCompletion: &resultCopy,
+				})
 			}
 		}
 	case llm.RoleTool:
-		entries = append(entries, toolResultChatEntry(resolvedToolResultForMessage(msg, completions)))
+		result := resolvedToolResultForMessage(msg, completions)
+		entries = append(entries, visibleChatEntryProjection{
+			Entry:          toolResultChatEntry(result),
+			ToolCompletion: &result,
+		})
 	case llm.RoleDeveloper:
 		if entry, ok := visibleDeveloperChatEntry(msg); ok {
-			entries = append(entries, entry)
+			entries = append(entries, visibleChatEntryProjection{Entry: entry})
 		}
 	}
 	return entries

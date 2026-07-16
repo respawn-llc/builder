@@ -99,7 +99,7 @@ func TestTranscriptNoticeProjectionCarriesTypedDeveloperDiagnostic(t *testing.T)
 	if row.Notice == nil || row.Notice.Diagnostic == nil || row.Notice.Diagnostic.Developer == nil {
 		t.Fatalf("projected developer diagnostic = %+v", row.Notice)
 	}
-	if row.Notice.Diagnostic.Code != "" || row.Notice.Diagnostic.Detail != "" {
+	if row.Notice.Diagnostic.Code != nil || row.Notice.Diagnostic.Detail != nil {
 		t.Fatalf("developer diagnostic leaked legacy fields: %+v", row.Notice.Diagnostic)
 	}
 	if !transcript.DeveloperDiagnosticEqual(row.Notice.Diagnostic.Developer, &diagnostic) {

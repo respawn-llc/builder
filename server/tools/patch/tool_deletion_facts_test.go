@@ -18,6 +18,7 @@ func TestDeleteFileReturnsLogicalLineCountFacts(t *testing.T) {
 		wantRemoved int
 	}{
 		{name: "multi line", content: "first\r\nsecond\r\n", wantRemoved: 2},
+		{name: "one line without final newline", content: "only line", wantRemoved: 1},
 		{name: "empty", content: "", wantRemoved: 0},
 	}
 	for _, test := range tests {

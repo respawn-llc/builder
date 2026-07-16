@@ -37,11 +37,11 @@ func NewDeletionFactMismatchDeveloperDiagnostic(
 	}
 }
 
-func (d DeveloperDiagnostic) Kind() DeveloperDiagnosticKind {
+func (d DeveloperDiagnostic) Kind() (DeveloperDiagnosticKind, bool) {
 	if d.DeletionFactMismatch != nil {
-		return DeveloperDiagnosticDeletionFactMismatch
+		return DeveloperDiagnosticDeletionFactMismatch, true
 	}
-	return DeveloperDiagnosticKind("")
+	return "", false
 }
 
 func (d DeveloperDiagnostic) Validate() error {
@@ -83,7 +83,9 @@ func DeveloperDiagnosticEqual(left, right *DeveloperDiagnostic) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
-	if left.Kind() != right.Kind() {
+	leftKind, leftPresent := left.Kind()
+	rightKind, rightPresent := right.Kind()
+	if leftPresent != rightPresent || leftKind != rightKind {
 		return false
 	}
 	if left.DeletionFactMismatch == nil || right.DeletionFactMismatch == nil {

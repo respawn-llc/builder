@@ -17,8 +17,9 @@ func TestDeletionFactMismatchDeveloperDiagnosticOwnsRequiredTypedContext(t *test
 	if err := diagnostic.Validate(); err != nil {
 		t.Fatalf("validate diagnostic: %v", err)
 	}
-	if diagnostic.Kind() != DeveloperDiagnosticDeletionFactMismatch {
-		t.Fatalf("diagnostic kind = %q", diagnostic.Kind())
+	kind, present := diagnostic.Kind()
+	if !present || kind != DeveloperDiagnosticDeletionFactMismatch {
+		t.Fatalf("diagnostic kind = %q present=%t", kind, present)
 	}
 	context := diagnostic.DeletionFactMismatch
 	if context == nil ||
@@ -29,6 +30,13 @@ func TestDeletionFactMismatchDeveloperDiagnosticOwnsRequiredTypedContext(t *test
 	}
 	if DeveloperDiagnosticText(diagnostic) == "" {
 		t.Fatal("typed diagnostic did not derive display text")
+	}
+}
+
+func TestDeveloperDiagnosticKindReportsMissingVariantExplicitly(t *testing.T) {
+	kind, present := (DeveloperDiagnostic{}).Kind()
+	if present {
+		t.Fatalf("missing diagnostic variant reported kind %q", kind)
 	}
 }
 

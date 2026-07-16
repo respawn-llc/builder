@@ -4,29 +4,9 @@ use serde::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TranscriptDiagnostic {
-    pub code: String,
-    pub detail: String,
-    pub developer: Option<DeveloperDiagnostic>,
-}
-
-impl TranscriptDiagnostic {
-    fn validate(&self) -> Result<(), &'static str> {
-        let has_legacy = !self.code.trim().is_empty() || !self.detail.trim().is_empty();
-        let has_developer = self.developer.is_some();
-        if has_legacy == has_developer {
-            return Err(
-                "transcript diagnostic must contain exactly one legacy or developer variant",
-            );
-        }
-        if has_legacy && (self.code.trim().is_empty() || self.detail.trim().is_empty()) {
-            return Err("transcript diagnostic legacy code and detail are both required");
-        }
-        if let Some(developer) = &self.developer {
-            developer.validate()?;
-        }
-        Ok(())
-    }
+pub enum TranscriptDiagnostic {
+    Legacy { code: String, detail: String },
+    Developer(DeveloperDiagnostic),
 }
 
 impl Serialize for TranscriptDiagnostic {
@@ -34,11 +14,20 @@ impl Serialize for TranscriptDiagnostic {
     where
         S: Serializer,
     {
-        self.validate().map_err(S::Error::custom)?;
         let mut state = serializer.serialize_struct("TranscriptDiagnostic", 3)?;
-        state.serialize_field("Code", &self.code)?;
-        state.serialize_field("Detail", &self.detail)?;
-        state.serialize_field("Developer", &self.developer)?;
+        match self {
+            Self::Legacy { code, detail } => {
+                validate_legacy(code, detail).map_err(S::Error::custom)?;
+                state.serialize_field("Code", &Some(code))?;
+                state.serialize_field("Detail", &Some(detail))?;
+                state.serialize_field("Developer", &Option::<&DeveloperDiagnostic>::None)?;
+            }
+            Self::Developer(developer) => {
+                state.serialize_field("Code", &Option::<&String>::None)?;
+                state.serialize_field("Detail", &Option::<&String>::None)?;
+                state.serialize_field("Developer", &Some(developer))?;
+            }
+        }
         state.end()
     }
 }
@@ -51,37 +40,30 @@ impl<'de> Deserialize<'de> for TranscriptDiagnostic {
         #[derive(Deserialize)]
         struct WireDiagnostic {
             #[serde(rename = "Code")]
-            code: String,
+            code: Option<String>,
             #[serde(rename = "Detail")]
-            detail: String,
+            detail: Option<String>,
             #[serde(rename = "Developer", default)]
             developer: Option<DeveloperDiagnostic>,
         }
 
         let wire = WireDiagnostic::deserialize(deserializer)?;
-        let diagnostic = Self {
-            code: wire.code,
-            detail: wire.detail,
-            developer: wire.developer,
-        };
-        diagnostic.validate().map_err(D::Error::custom)?;
-        Ok(diagnostic)
+        match (wire.code, wire.detail, wire.developer) {
+            (Some(code), Some(detail), None) => {
+                validate_legacy(&code, &detail).map_err(D::Error::custom)?;
+                Ok(Self::Legacy { code, detail })
+            }
+            (None, None, Some(developer)) => Ok(Self::Developer(developer)),
+            _ => Err(D::Error::custom(
+                "transcript diagnostic must contain exactly one complete legacy or developer variant",
+            )),
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeveloperDiagnostic {
-    pub deletion_fact_mismatch: Option<DeletionFactMismatchDeveloperDiagnostic>,
-}
-
-impl DeveloperDiagnostic {
-    fn validate(&self) -> Result<(), &'static str> {
-        let mismatch = self
-            .deletion_fact_mismatch
-            .as_ref()
-            .ok_or("developer diagnostic variant is required")?;
-        mismatch.validate()
-    }
+pub enum DeveloperDiagnostic {
+    DeletionFactMismatch(DeletionFactMismatchDeveloperDiagnostic),
 }
 
 impl Serialize for DeveloperDiagnostic {
@@ -89,9 +71,13 @@ impl Serialize for DeveloperDiagnostic {
     where
         S: Serializer,
     {
-        self.validate().map_err(S::Error::custom)?;
         let mut state = serializer.serialize_struct("DeveloperDiagnostic", 1)?;
-        state.serialize_field("deletion_fact_mismatch", &self.deletion_fact_mismatch)?;
+        match self {
+            Self::DeletionFactMismatch(mismatch) => {
+                mismatch.validate().map_err(S::Error::custom)?;
+                state.serialize_field("deletion_fact_mismatch", mismatch)?;
+            }
+        }
         state.end()
     }
 }
@@ -108,12 +94,18 @@ impl<'de> Deserialize<'de> for DeveloperDiagnostic {
         }
 
         let wire = WireDeveloperDiagnostic::deserialize(deserializer)?;
-        let diagnostic = Self {
-            deletion_fact_mismatch: wire.deletion_fact_mismatch,
-        };
-        diagnostic.validate().map_err(D::Error::custom)?;
-        Ok(diagnostic)
+        let mismatch = wire
+            .deletion_fact_mismatch
+            .ok_or_else(|| D::Error::custom("developer diagnostic variant is required"))?;
+        Ok(Self::DeletionFactMismatch(mismatch))
     }
+}
+
+fn validate_legacy(code: &str, detail: &str) -> Result<(), &'static str> {
+    if code.trim().is_empty() || detail.trim().is_empty() {
+        return Err("transcript diagnostic legacy code and detail are both required");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

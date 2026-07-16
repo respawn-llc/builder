@@ -81,6 +81,9 @@ func validateStoredToolCompletionDiagnostic(completion storedToolCompletion) err
 	if completion.Diagnostic == nil {
 		return nil
 	}
+	if completion.IsError {
+		return errors.New("failed tool completion cannot carry a developer diagnostic")
+	}
 	if err := completion.Diagnostic.Validate(); err != nil {
 		return fmt.Errorf("tool completion diagnostic: %w", err)
 	}
