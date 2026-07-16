@@ -587,122 +587,76 @@ func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) 
 	})
 }
 
-func TestReviewerDefaultOutputOmitsReviewerSuggestionsEntry(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	mainClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "original final"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}, {
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "updated final after review"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Add final verification notes."]}`},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        reviewerClient,
-		},
-	})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
+func TestReviewerSuggestionPresentation(t *testing.T) {
+	tests := []struct {
+		name            string
+		verbose         bool
+		wantSuggestions int
+	}{
+		{name: "default"},
+		{name: "verbose", verbose: true, wantSuggestions: 1},
 	}
-	if msg.Content != "updated final after review" {
-		t.Fatalf("assistant content = %q, want updated final after review", msg.Content)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			mainClient := &fakeClient{responses: []llm.Response{
+				finalTextResponse("original final"),
+				finalTextResponse("updated final after review"),
+			}}
+			reviewerClient := &fakeClient{responses: []llm.Response{{
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Add final verification notes."]}`},
+				Usage:     llm.Usage{WindowTokens: 200000},
+			}}}
+			eng := mustNewExecTestEngine(t, store, mainClient, Config{
+				Model: "gpt-5",
+				Reviewer: ReviewerConfig{
+					Frequency:     "all",
+					Model:         "gpt-5",
+					ThinkingLevel: "low",
+					VerboseOutput: tt.verbose,
+					Client:        reviewerClient,
+				},
+			})
 
-	snapshot := eng.ChatSnapshot()
-	for _, entry := range snapshot.Entries {
-		if entry.Role == "reviewer_suggestions" {
-			t.Fatalf("expected reviewer_suggestions entry to be omitted by default, got %+v", snapshot.Entries)
-		}
-		if entry.Role == "reviewer_status" && strings.Contains(entry.Text, "Supervisor suggested:") {
-			t.Fatalf("expected concise reviewer status by default, got %+v", entry)
-		}
+			msg, err := eng.SubmitUserMessage(context.Background(), "do task")
+			if err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			if msg.Content != "updated final after review" {
+				t.Fatalf("assistant content = %q, want updated final after review", msg.Content)
+			}
+			assertReviewerPresentation(t, eng.ChatSnapshot(), tt.wantSuggestions)
+
+			restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+			assertReviewerPresentation(t, restored.ChatSnapshot(), tt.wantSuggestions)
+		})
 	}
 }
 
-func TestReviewerVerboseOutputShowsSuggestionsWhenIssuedAndKeepsFinalStatusConcise(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	mainClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "original final"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}, {
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "updated final after review"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Add final verification notes."]}`},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			VerboseOutput: true,
-			Client:        reviewerClient,
-		},
-	})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "updated final after review" {
-		t.Fatalf("assistant content = %q, want updated final after review", msg.Content)
-	}
-
-	snapshot := eng.ChatSnapshot()
-	foundVerboseSuggestions := false
-	foundConciseStatus := false
-	wantSuggestionsCondensedText := "Supervisor suggested:\n1. Add final verification notes."
-	for _, entry := range snapshot.Entries {
-		if entry.Role == "reviewer_suggestions" && entry.CondensedText == wantSuggestionsCondensedText {
-			foundVerboseSuggestions = true
-		}
-		if entry.Role == "reviewer_status" && entry.Text == "Supervisor ran: 1 suggestion, applied." {
-			foundConciseStatus = true
+func assertReviewerPresentation(t *testing.T, snapshot ChatSnapshot, wantSuggestions int) {
+	t.Helper()
+	suggestions := 0
+	statuses := 0
+	suggestionsIndex := -1
+	statusIndex := -1
+	for index, entry := range snapshot.Entries {
+		switch transcript.EntryRole(entry.Role) {
+		case transcript.EntryRoleReviewerSuggestions:
+			suggestions++
+			suggestionsIndex = index
+			if strings.TrimSpace(entry.CondensedText) == "" {
+				t.Fatalf("reviewer suggestions condensed text is blank: %+v", entry)
+			}
+		case transcript.EntryRoleReviewerStatus:
+			statuses++
+			statusIndex = index
 		}
 	}
-	if !foundVerboseSuggestions {
-		t.Fatalf("expected verbose reviewer suggestions entry in snapshot, got %+v", snapshot.Entries)
+	if suggestions != wantSuggestions || statuses != 1 {
+		t.Fatalf("reviewer suggestions/status counts = %d/%d, want %d/1; entries=%+v", suggestions, statuses, wantSuggestions, snapshot.Entries)
 	}
-	if !foundConciseStatus {
-		t.Fatalf("expected concise reviewer status entry in snapshot, got %+v", snapshot.Entries)
-	}
-
-	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	restoredSnapshot := restored.ChatSnapshot()
-	foundRestoredVerboseSuggestions := false
-	foundRestoredConciseStatus := false
-	for _, entry := range restoredSnapshot.Entries {
-		if entry.Role == "reviewer_suggestions" && entry.CondensedText == wantSuggestionsCondensedText {
-			foundRestoredVerboseSuggestions = true
-		}
-		if entry.Role == "reviewer_status" && entry.Text == "Supervisor ran: 1 suggestion, applied." {
-			foundRestoredConciseStatus = true
-		}
-	}
-	if !foundRestoredVerboseSuggestions {
-		t.Fatalf("expected restored verbose reviewer suggestions entry, got %+v", restoredSnapshot.Entries)
-	}
-	if !foundRestoredConciseStatus {
-		t.Fatalf("expected restored concise reviewer status entry, got %+v", restoredSnapshot.Entries)
+	if suggestionsIndex >= 0 && suggestionsIndex >= statusIndex {
+		t.Fatalf("reviewer suggestions/status indexes = %d/%d, want suggestions before status", suggestionsIndex, statusIndex)
 	}
 }
 

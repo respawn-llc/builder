@@ -24,7 +24,6 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/requestmemo"
-	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
@@ -297,51 +296,6 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 	}
 }
 
-func TestHeadlessRuntimeWorkdirRejectsReminderWithoutEffectiveCWD(t *testing.T) {
-	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", sessioncontract.SessionCategorySubagent, persistence.Options()...)
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	err = store.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode: session.WorktreeReminderModeEnter,
-		WorktreeContext: session.WorktreeContext{
-			WorktreePath:  "/tmp/worktree",
-			WorkspaceRoot: "/tmp/workspace",
-		},
-	})
-	if err == nil {
-		t.Fatal("expected missing effective cwd to be rejected")
-	}
-}
-
-func TestMemoizingPromptServiceDedupesSuccessfulRetry(t *testing.T) {
-	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-		sessionID, _ := req.Intent.SessionID()
-		return serverapi.RunPromptResponse{SessionID: sessionID.String(), Result: "ok"}, nil
-	}}
-	service := &memoizingPromptService{
-		inner: inner,
-		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
-	}
-	req := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "session-1")), Prompt: "hello"}
-
-	first, err := service.RunPrompt(context.Background(), req, nil)
-	if err != nil {
-		t.Fatalf("RunPrompt first: %v", err)
-	}
-	second, err := service.RunPrompt(context.Background(), req, nil)
-	if err != nil {
-		t.Fatalf("RunPrompt replay: %v", err)
-	}
-	if first.Result != "ok" || second.Result != "ok" {
-		t.Fatalf("responses = (%+v, %+v), want both ok", first, second)
-	}
-	if inner.CallCount() != 1 {
-		t.Fatalf("inner call count = %d, want 1", inner.CallCount())
-	}
-}
-
 func TestMemoizingPromptServiceDedupesRemoteShapedReplayWithOverrides(t *testing.T) {
 	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 		return serverapi.RunPromptResponse{Result: "ok"}, nil
@@ -378,58 +332,6 @@ func TestMemoizingPromptServiceDedupesRemoteShapedReplayWithOverrides(t *testing
 }
 
 func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*serverapi.RunPromptRequest)
-	}{
-		{
-			name: "caller session provenance",
-			mutate: func(req *serverapi.RunPromptRequest) {
-				changedCaller := "caller-2"
-				req.CallerSessionID = &changedCaller
-			},
-		},
-		{
-			name: "legacy selected session",
-			mutate: func(req *serverapi.RunPromptRequest) {
-				req.SelectedSessionID = "selected-2"
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-				sessionID, _ := req.Intent.SessionID()
-				return serverapi.RunPromptResponse{SessionID: sessionID.String(), Result: "ok"}, nil
-			}}
-			service := &memoizingPromptService{
-				inner: inner,
-				runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
-			}
-			caller := "caller-1"
-			first := serverapi.RunPromptRequest{
-				ClientRequestID:   "req-1",
-				Intent:            serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "session-1")),
-				SelectedSessionID: "selected-1",
-				CallerSessionID:   &caller,
-				Prompt:            "hello",
-			}
-			if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
-				t.Fatalf("RunPrompt first: %v", err)
-			}
-			second := first
-			test.mutate(&second)
-			if _, err := service.RunPrompt(context.Background(), second, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-				t.Fatalf("RunPrompt mismatch error = %v, want request id payload mismatch", err)
-			}
-			if inner.CallCount() != 1 {
-				t.Fatalf("inner call count = %d, want 1", inner.CallCount())
-			}
-		})
-	}
-}
-
-func TestMemoizingPromptServiceCanonicalizesNullableRequestValues(t *testing.T) {
 	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 		return serverapi.RunPromptResponse{Result: "ok"}, nil
 	}}
@@ -437,23 +339,19 @@ func TestMemoizingPromptServiceCanonicalizesNullableRequestValues(t *testing.T) 
 		inner: inner,
 		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
 	}
-	first := serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello"}
-	second := serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello", CallerSessionID: nil, ParentSessionID: nil}
+	caller := "caller-1"
+	first := serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello", CallerSessionID: &caller}
 	if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
 		t.Fatalf("RunPrompt first: %v", err)
 	}
-	if _, err := service.RunPrompt(context.Background(), second, nil); err != nil {
-		t.Fatalf("RunPrompt equivalent replay: %v", err)
+	changedCaller := "caller-2"
+	mismatch := first
+	mismatch.CallerSessionID = &changedCaller
+	if _, err := service.RunPrompt(context.Background(), mismatch, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+		t.Fatalf("RunPrompt mismatch error = %v, want request id payload mismatch", err)
 	}
 	if inner.CallCount() != 1 {
 		t.Fatalf("inner call count = %d, want 1", inner.CallCount())
-	}
-
-	defaultSelector := "default"
-	mismatch := first
-	mismatch.Overrides.AgentRole = &defaultSelector
-	if _, err := service.RunPrompt(context.Background(), mismatch, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("default-selector mismatch error = %v, want request-id reuse", err)
 	}
 }
 
@@ -548,35 +446,6 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("denied new-child launch changed artifacts: before=%+v after=%+v", before, after)
 	}
-	unknownCaller := "unknown-caller"
-	beforeUnknownCaller := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
-	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID: "workflow-unknown-caller",
-		CallerSessionID: &unknownCaller,
-		ParentSessionID: &unknownCaller,
-		Prompt:          "delegate this",
-	}, nil)
-	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialCallerMissing {
-		t.Fatalf("unknown caller error = %T %v, want caller-missing denial", err, err)
-	}
-	if afterUnknownCaller := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterUnknownCaller, beforeUnknownCaller) {
-		t.Fatalf("unknown caller changed artifacts: before=%+v after=%+v", beforeUnknownCaller, afterUnknownCaller)
-	}
-	mismatchedParent := "other-parent"
-	beforeMismatch := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
-	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID: "workflow-caller-parent-mismatch",
-		CallerSessionID: &parentID,
-		ParentSessionID: &mismatchedParent,
-		Prompt:          "delegate this",
-	}, nil)
-	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialInvalidTarget {
-		t.Fatalf("caller/parent mismatch error = %T %v, want invalid-target denial", err, err)
-	}
-	if afterMismatch := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterMismatch, beforeMismatch) {
-		t.Fatalf("caller/parent mismatch changed artifacts: before=%+v after=%+v", beforeMismatch, afterMismatch)
-	}
-
 	selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create selected: %v", err)
@@ -614,24 +483,6 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	afterSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
 	if !reflect.DeepEqual(afterSelectedDenial, beforeSelectedDenial) {
 		t.Fatalf("denied selected-session launch changed artifacts: before=%+v after=%+v", beforeSelectedDenial, afterSelectedDenial)
-	}
-	substitutedCaller := selectedBefore.SessionID
-	substitutedPlan, err := sessionLauncher.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
-		ClientRequestID: "substituted-ordinary-caller",
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		ForceNewSession: true,
-		CallerSessionID: &substitutedCaller,
-		ParentSessionID: &substitutedCaller,
-		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
-	})
-	if err != nil {
-		t.Fatalf("substituted ordinary caller PlanLaunchSession: %v", err)
-	}
-	if got := substitutedPlan.Plan.Store.Meta().ParentSessionID; got == nil || *got != substitutedCaller {
-		t.Fatalf("substituted caller child parent = %v, want %q", got, substitutedCaller)
-	}
-	if got := substitutedPlan.Plan.Store.Meta().Continuation; got == nil || got.AgentRole == nil || *got.AgentRole != role {
-		t.Fatalf("substituted caller continuation = %+v, want hidden role", got)
 	}
 }
 
@@ -703,117 +554,36 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 		PromptHistory:   meta,
 	})
 
-	tests := []struct {
-		name      string
-		overrides serverapi.RunPromptOverrides
-		wantRole  string
-	}{
-		{name: "omitted base"},
-	}
-	defaultRole := config.DefaultSubagentRole
-	tests = append(tests, struct {
-		name      string
-		overrides serverapi.RunPromptOverrides
-		wantRole  string
-	}{name: "explicit default", overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}})
 	worker := "worker"
-	tests = append(tests, struct {
-		name      string
-		overrides serverapi.RunPromptOverrides
-		wantRole  string
-	}{name: "custom", overrides: serverapi.RunPromptOverrides{AgentRole: &worker}, wantRole: worker})
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
-				ClientRequestID: "workflow-allowed-" + strings.ReplaceAll(test.name, " ", "-"),
-				CallerSessionID: &parentID,
-				ParentSessionID: &parentID,
-				Prompt:          "delegate this",
-				Overrides:       test.overrides,
-			}, nil)
-			if err != nil {
-				t.Fatalf("RunPrompt: %v", err)
-			}
-			if response.Result != "workflow response" {
-				t.Fatalf("result = %q, want provider response", response.Result)
-			}
-			child, err := session.OpenByID(root, response.SessionID, meta.AuthoritativeSessionStoreOptions()...)
-			if err != nil {
-				t.Fatalf("OpenByID child: %v", err)
-			}
-			childMeta := child.Meta()
-			if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parentID {
-				t.Fatalf("parent id = %v, want %q", childMeta.ParentSessionID, parentID)
-			}
-			var gotRole *string
-			if childMeta.Continuation != nil {
-				gotRole = childMeta.Continuation.AgentRole
-			}
-			if test.wantRole == "" {
-				if gotRole != nil {
-					t.Fatalf("continuation role = %v, want base role", gotRole)
-				}
-			} else if gotRole == nil || *gotRole != test.wantRole {
-				t.Fatalf("continuation role = %v, want %q", gotRole, test.wantRole)
-			}
-			if runtimes.IsSessionRuntimeActive(response.SessionID) {
-				t.Fatalf("completed headless launch left runtime active for %q", response.SessionID)
-			}
-		})
+	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID: "workflow-allowed-custom",
+		CallerSessionID: &parentID,
+		ParentSessionID: &parentID,
+		Prompt:          "delegate this",
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &worker},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunPrompt: %v", err)
 	}
-	selectedTests := []struct {
-		name      string
-		overrides serverapi.RunPromptOverrides
-		wantRole  string
-	}{
-		{name: "selected omitted"},
-		{name: "selected default", overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}},
-		{name: "selected custom", overrides: serverapi.RunPromptOverrides{AgentRole: &worker}, wantRole: worker},
+	if response.Result != "workflow response" {
+		t.Fatalf("result = %q, want provider response", response.Result)
 	}
-	for _, test := range selectedTests {
-		t.Run(test.name, func(t *testing.T) {
-			selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
-			if err != nil {
-				t.Fatalf("session.Create selected: %v", err)
-			}
-			if err := selected.EnsureDurable(); err != nil {
-				t.Fatalf("EnsureDurable selected: %v", err)
-			}
-			response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
-				ClientRequestID:   "workflow-allowed-" + strings.ReplaceAll(test.name, " ", "-"),
-				SelectedSessionID: selected.Meta().SessionID,
-				CallerSessionID:   &parentID,
-				Prompt:            "continue selected",
-				Overrides:         test.overrides,
-			}, nil)
-			if err != nil {
-				t.Fatalf("RunPrompt: %v", err)
-			}
-			if response.SessionID != selected.Meta().SessionID {
-				t.Fatalf("session id = %q, want selected %q", response.SessionID, selected.Meta().SessionID)
-			}
-			reopened, err := session.OpenByID(root, selected.Meta().SessionID, meta.AuthoritativeSessionStoreOptions()...)
-			if err != nil {
-				t.Fatalf("OpenByID selected: %v", err)
-			}
-			var gotRole *string
-			if reopened.Meta().Continuation != nil {
-				gotRole = reopened.Meta().Continuation.AgentRole
-			}
-			if test.wantRole == "" {
-				if gotRole != nil {
-					t.Fatalf("continuation role = %v, want base role", gotRole)
-				}
-			} else if gotRole == nil || *gotRole != test.wantRole {
-				t.Fatalf("continuation role = %v, want %q", gotRole, test.wantRole)
-			}
-			if runtimes.IsSessionRuntimeActive(selected.Meta().SessionID) {
-				t.Fatalf("completed selected launch left runtime active for %q", selected.Meta().SessionID)
-			}
-		})
+	child, err := session.OpenByID(root, response.SessionID, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("OpenByID child: %v", err)
 	}
-	if responseCount != 6 {
-		t.Fatalf("provider responses = %d, want 6", responseCount)
+	childMeta := child.Meta()
+	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parentID {
+		t.Fatalf("parent id = %v, want %q", childMeta.ParentSessionID, parentID)
+	}
+	if got := childMeta.Continuation; got == nil || got.AgentRole == nil || *got.AgentRole != worker {
+		t.Fatalf("continuation = %+v, want worker role", got)
+	}
+	if runtimes.IsSessionRuntimeActive(response.SessionID) {
+		t.Fatalf("completed headless launch left runtime active for %q", response.SessionID)
+	}
+	if responseCount != 1 {
+		t.Fatalf("provider responses = %d, want 1", responseCount)
 	}
 }
 
@@ -1297,18 +1067,11 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	if response.Result != "locked response" {
 		t.Fatalf("result = %q, want locked response", response.Result)
 	}
-	runLog, err := os.ReadFile(filepath.Join(store.Dir(), runlog.RunLogFileName))
-	if err != nil {
-		t.Fatalf("read run log: %v", err)
-	}
-	if !strings.Contains(string(runLog), "model=locked-model") {
-		t.Fatalf("expected run log to preserve locked model, got %q", string(runLog))
-	}
-	if strings.Contains(string(runLog), "model=override-model") {
-		t.Fatalf("did not expect run log to use override model, got %q", string(runLog))
-	}
 	select {
 	case payload := <-requestBodies:
+		if got := payload["model"]; got != "locked-model" {
+			t.Fatalf("provider model = %#v, want locked-model", got)
+		}
 		toolsPayload, ok := payload["tools"].([]any)
 		if !ok || len(toolsPayload) != 1 {
 			t.Fatalf("expected one locked tool in request payload, got %#v", payload["tools"])

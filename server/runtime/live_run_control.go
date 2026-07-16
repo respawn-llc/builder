@@ -269,14 +269,6 @@ func (e *Engine) completeLiveRunQueueItems(ids map[string]struct{}) {
 	e.liveRun.completeQueueItems(typedQueueItemIDSet(ids))
 }
 
-func (e *Engine) tagLiveRunQueueItem(queueItemID string) bool {
-	if e == nil {
-		return false
-	}
-	e.ensureOrchestrationCollaborators()
-	return e.liveRun.tagQueueItem(mustQueueItemID(queueItemID))
-}
-
 func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]struct{}) {
 	if e == nil || len(ids) == 0 {
 		return
@@ -341,18 +333,6 @@ func (c *liveRunCoordinator) hasActive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.current != nil
-}
-
-func (c *liveRunCoordinator) acceptsQueueItemPublication() bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.current == nil {
-		return false
-	}
-	return c.current.status == RunStatusRunning || c.current.status == RunStatusCompleted
 }
 
 func (c *liveRunCoordinator) hasPendingStopTarget() bool {
@@ -503,16 +483,6 @@ func (c *liveRunCoordinator) finishAdmission(admission liveRunAdmission, queueIt
 	if markAutoDrain != nil {
 		markAutoDrain(queueItemID.String())
 	}
-	return true
-}
-
-func (c *liveRunCoordinator) tagQueueItem(queueItemID runtimeids.QueueItemID) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.current == nil {
-		return false
-	}
-	c.current.trackQueuedItemForLiveRun(queueItemID)
 	return true
 }
 

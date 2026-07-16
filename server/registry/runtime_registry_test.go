@@ -340,15 +340,6 @@ func assertNoSleepObserverState(t *testing.T, notifications <-chan bool) {
 	}
 }
 
-func assertNoClose(t *testing.T, ch <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-ch:
-		t.Fatal("channel closed before release")
-	case <-time.After(50 * time.Millisecond):
-	}
-}
-
 func waitClosed(t *testing.T, ch <-chan struct{}) {
 	t.Helper()
 	select {
@@ -388,17 +379,6 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 		Activity:            activity,
 		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 	})
-}
-
-func idleRuntimeReadModelUpdate(version clientui.ReadModelVersion) clientui.RuntimeReadModelUpdate {
-	return clientui.RuntimeReadModelUpdate{
-		Version: version,
-		Activity: clientui.RuntimeActivity{
-			State:          clientui.RuntimeActivityRegisteredIdle,
-			QueueAccepting: true,
-		},
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-	}
 }
 
 func TestRuntimeRegistryTracksPendingPromptsPerSession(t *testing.T) {
