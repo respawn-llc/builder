@@ -921,78 +921,22 @@ func TestCLIOnboardingDoesNotOwnCapabilityFactDomains(t *testing.T) {
 		t.Fatalf("scan cli onboarding imports: %v", err)
 	}
 
-	bannedInternalFuncs := map[string]string{
-		"Supported":                   "provider catalog",
-		"SkillSupported":              "provider catalog",
-		"CommandSupported":            "provider catalog",
-		"ByID":                        "provider catalog lookup",
-		"Order":                       "provider ranking",
-		"OrderList":                   "provider ranking",
-		"SortedProviderIDs":           "provider ranking",
-		"RecommendedSymlinkChoiceID":  "import recommendation",
-		"ProviderWithMostItems":       "import recommendation",
-		"Discover":                    "generated skill discovery",
-		"DiscoverProviderSkills":      "provider source discovery",
-		"DiscoverDirectSkills":        "provider source discovery",
-		"DiscoverProviderCommands":    "provider source discovery",
-		"DiscoverDirectCommands":      "provider source discovery",
-		"ProviderSkillSourceAtBase":   "provider source discovery",
-		"ProviderCommandSourceAtBase": "provider source discovery",
-		"ShouldSkipTarget":            "duplicate/skip detection",
-		"ShouldSkipCommandImport":     "duplicate/skip detection",
-		"Candidates":                  "skill enablement projection",
-		"AnnotateDuplicateSources":    "duplicate/conflict projection",
-		"ParseSkillMetadata":          "skill metadata discovery",
-		"ParseName":                   "generated skill discovery",
-		"SplitFrontmatter":            "generated skill discovery",
-	}
-	bannedInternalTypes := map[string]string{
-		"Provider":      "provider catalog",
-		"Item":          "import item domain",
-		"CommandItem":   "import item domain",
-		"SkillMetadata": "skill metadata discovery",
-	}
 	internalRoot := filepath.Join(repoRoot, "cli", "app", "internal", "onboarding")
 	if err := filepath.WalkDir(internalRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if d.IsDir() || filepath.Ext(path) != ".go" {
 			return nil
-		}
-		fileSet := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-		if parseErr != nil {
-			return parseErr
 		}
 		relPath, relErr := filepath.Rel(repoRoot, path)
 		if relErr != nil {
-			relPath = path
+			return relErr
 		}
-		for _, decl := range file.Decls {
-			switch typedDecl := decl.(type) {
-			case *ast.FuncDecl:
-				if reason, banned := bannedInternalFuncs[typedDecl.Name.Name]; banned {
-					violations = append(violations, relPath+": internal onboarding must not own "+reason+" function "+typedDecl.Name.Name)
-				}
-			case *ast.GenDecl:
-				if typedDecl.Tok != token.TYPE {
-					continue
-				}
-				for _, spec := range typedDecl.Specs {
-					typeSpec, ok := spec.(*ast.TypeSpec)
-					if !ok {
-						continue
-					}
-					if reason, banned := bannedInternalTypes[typeSpec.Name.Name]; banned {
-						violations = append(violations, relPath+": internal onboarding must not own "+reason+" type "+typeSpec.Name.Name)
-					}
-				}
-			}
-		}
+		violations = append(violations, relPath+": deleted onboarding adapter package must not be reintroduced")
 		return nil
-	}); err != nil {
-		t.Fatalf("scan internal onboarding domain symbols: %v", err)
+	}); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("scan deleted internal onboarding package: %v", err)
 	}
 	if len(violations) > 0 {
 		t.Fatalf("cli onboarding capability-domain boundary violations:\n%s", strings.Join(violations, "\n"))
@@ -1079,7 +1023,6 @@ func TestCLIAppInternalPackageBoundaries(t *testing.T) {
 		{Name: "ProjectBinding", Packages: []string{"projectbinding"}, Label: "project binding package", ForbidServer: true},
 		{Name: "WorktreeUI", Packages: []string{"worktreeui"}, Label: "worktree UI package", ForbidServer: true},
 		{Name: "StartupConfig", Packages: []string{"startupconfig"}, Label: "startup config package"},
-		{Name: "Onboarding", Packages: []string{"onboarding"}, Label: "onboarding package"},
 		{Name: "EmbeddedAttach", Packages: []string{"embeddedattach"}, Label: "embedded attach package"},
 	}
 	for _, tc := range cases {
