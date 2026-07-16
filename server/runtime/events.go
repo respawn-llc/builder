@@ -117,6 +117,7 @@ type Event struct {
 	ModelResponse                *ModelResponseTrace
 	ToolCall                     *llm.ToolCall
 	ToolResult                   *tools.Result
+	ToolCompletionDiagnostic     *transcript.DeveloperDiagnostic
 	ToolAbortReason              string
 	Reviewer                     *ReviewerStatus
 	Compaction                   *CompactionStatus

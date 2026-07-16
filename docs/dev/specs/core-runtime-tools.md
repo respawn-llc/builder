@@ -73,8 +73,10 @@
 - `patch` apply is atomic: malformed/conflicting patches make no file changes.
 - `patch` supports add, update, move, and delete.
 - Patch targets are validated with real-path resolution.
+- A second whole-file deletion that resolves to the same canonical target as an earlier deletion in the patch is malformed, including when distinct requested paths are symlink aliases. The patch makes no file changes.
 - `patch` has no timeout and no automatic retries.
 - Patch success persistence includes patch input plus apply-result metadata.
+- If deletion-count result metadata cannot be matched to the successful patch presentation, Kent preserves the successful patch completion with its original uncounted presentation, fabricates no count, and appends exactly one typed `developer_error_feedback` operator diagnostic. The server does not panic for this presentation failure.
 - Outside-workspace edits are approval-gated unless explicitly enabled. `allow_non_cwd_edits=false` by default.
 - If outside-workspace approval is denied, Kent returns to the model an explicit non-circumvention tool error instructing manual user edits when essential.
 - `view_image` path resolution uses absolute and canonical real paths before access checks.

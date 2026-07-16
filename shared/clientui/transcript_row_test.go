@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *testing.T) {
@@ -141,5 +142,31 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 		if err := notice.Validate(); err == nil {
 			t.Fatalf("accepted notice without required typed payload: %+v", notice)
 		}
+	}
+}
+
+func TestTranscriptNoticeRowCarriesTypedDeveloperDiagnosticWithoutLegacyFields(t *testing.T) {
+	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
+		"call-1",
+		patchformat.WholeFileDeletionFactMismatchError{
+			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
+			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
+		},
+	)
+	notice := TranscriptNoticeRow{
+		Reason:   TranscriptNoticeRuntimeDiagnostic,
+		Severity: TranscriptNoticeError,
+		Diagnostic: &TranscriptDiagnostic{
+			Developer: &diagnostic,
+		},
+	}
+	if err := notice.Validate(); err != nil {
+		t.Fatalf("validate typed developer diagnostic notice: %v", err)
+	}
+
+	notice.Diagnostic.Code = "legacy"
+	notice.Diagnostic.Detail = "must not coexist"
+	if err := notice.Validate(); err == nil {
+		t.Fatal("accepted developer diagnostic with legacy code and detail")
 	}
 }

@@ -1855,6 +1855,27 @@ func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing
 	}
 }
 
+func TestDeveloperDiagnosticNoticeRendersTypedContext(t *testing.T) {
+	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
+		"call-1",
+		patchformat.WholeFileDeletionFactMismatchError{
+			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
+			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 2},
+		},
+	)
+	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
+			Severity:   clientui.TranscriptNoticeError,
+			Diagnostic: &clientui.TranscriptDiagnostic{Developer: &diagnostic},
+		},
+	}, 120, "", ModeDetailExpanded)
+	if got, want := rendered.Lines[0].Plain(), transcript.DeveloperDiagnosticText(diagnostic); !strings.Contains(got, want) {
+		t.Fatalf("developer diagnostic render = %q, want %q", got, want)
+	}
+}
+
 // Spec tui-transcript.md: collapsed detail + ongoing use compact text, expansion
 // reveals full entry content verbatim. For user/assistant, the compact form is
 // the server-provided CondensedText when present (else first non-empty line).

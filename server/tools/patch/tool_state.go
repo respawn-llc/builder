@@ -16,7 +16,7 @@ type applyState struct {
 	tool            *Tool
 	ctx             context.Context
 	state           map[string]*patchFileState
-	deleteTargets   map[string]struct{}
+	deleteTargets   map[string]patchformat.WholeFileDeletionOperationID
 	approvedOutside map[string]bool
 }
 
@@ -25,7 +25,7 @@ func newApplyState(tool *Tool, ctx context.Context) *applyState {
 		tool:            tool,
 		ctx:             ctx,
 		state:           map[string]*patchFileState{},
-		deleteTargets:   map[string]struct{}{},
+		deleteTargets:   map[string]patchformat.WholeFileDeletionOperationID{},
 		approvedOutside: map[string]bool{},
 	}
 }
@@ -155,12 +155,15 @@ func (s *applyState) addFile(op patchformat.AddFile) error {
 	return nil
 }
 
-func (s *applyState) deleteFile(op patchformat.DeleteFile) error {
+func (s *applyState) deleteFile(op patchformat.DeleteFile, operationID patchformat.WholeFileDeletionOperationID) error {
 	target, err := s.tool.resolvePath(s.ctx, op.Path, true, s.approvedOutside)
 	if err != nil {
 		return err
 	}
 	if _, exists := s.state[target]; exists {
+		return malformedFailure(fmt.Sprintf("delete target already referenced: %s", op.Path))
+	}
+	if _, exists := s.deleteTargets[target]; exists {
 		return malformedFailure(fmt.Sprintf("delete target already referenced: %s", op.Path))
 	}
 	snapshot, err := captureSnapshot(target)
@@ -170,7 +173,7 @@ func (s *applyState) deleteFile(op patchformat.DeleteFile) error {
 	if !snapshot.Exists {
 		return targetMissingFailure(op.Path, "cannot delete a file that does not exist")
 	}
-	s.deleteTargets[target] = struct{}{}
+	s.deleteTargets[target] = operationID
 	return nil
 }
 

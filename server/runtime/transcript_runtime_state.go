@@ -11,7 +11,6 @@ import (
 	"core/shared/config"
 	"core/shared/rollbacktarget"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -230,15 +229,7 @@ func (s *transcriptRuntimeState) RecordAssistantStreamFinalization(committedEntr
 }
 
 func (s *transcriptRuntimeState) RecordStoredToolCompletion(completion storedToolCompletion) {
-	s.chatProjection().recordToolCompletionWithProviderItems(tools.Result{
-		CallID:        completion.CallID,
-		Name:          toolspec.ID(completion.Name),
-		IsError:       completion.IsError,
-		Output:        completion.Output,
-		Summary:       completion.Summary,
-		CondensedText: completion.CondensedText,
-		Presentation:  completion.Presentation,
-	}, completion.ProviderItems)
+	s.chatProjection().recordStoredToolCompletion(completion)
 }
 
 func (s *transcriptRuntimeState) RestoreToolCompletionPayload(payload []byte) error {

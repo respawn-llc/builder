@@ -20,7 +20,8 @@ import (
 	"github.com/google/uuid"
 )
 
-func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (session.CommitReceipt, error) {
+func (e *Engine) persistToolCompletionRaw(stepID string, finalization toolCompletionFinalization) (session.CommitReceipt, error) {
+	r := finalization.Result
 	if r.PresentationDelta != nil {
 		panic(fmt.Sprintf(
 			"tool result presentation invariant violated: unconsumed presentation delta reached persistence (call_id=%q tool=%q)",
@@ -45,6 +46,10 @@ func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (sessio
 		CondensedText: r.CondensedText,
 		Presentation:  r.Presentation,
 		ProviderItems: e.providerItemsForToolCompletion(r),
+		Diagnostic:    transcript.CloneDeveloperDiagnostic(finalization.Diagnostic),
+	}
+	if err := validateStoredToolCompletionDiagnostic(payload); err != nil {
+		return session.CommitReceipt{}, err
 	}
 	_, receipt, err := e.store.AppendEvent(stepID, "tool_completed", payload)
 	if receipt.Committed {

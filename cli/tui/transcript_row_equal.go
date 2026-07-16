@@ -65,10 +65,19 @@ func transcriptNoticeRowEqual(left, right *clientui.TranscriptNoticeRow) bool {
 		pointersEqual(left.SourcePath, right.SourcePath) &&
 		transcriptWorktreeContextEqual(left.Worktree, right.Worktree) &&
 		pointersEqual(left.CacheWarning, right.CacheWarning) &&
-		pointersEqual(left.Diagnostic, right.Diagnostic) &&
+		transcriptDiagnosticEqual(left.Diagnostic, right.Diagnostic) &&
 		pointersEqual(left.Background, right.Background) &&
 		pointersEqual(left.CondensedText, right.CondensedText) &&
 		pointersEqual(left.CompactLabel, right.CompactLabel)
+}
+
+func transcriptDiagnosticEqual(left, right *clientui.TranscriptDiagnostic) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Code == right.Code &&
+		left.Detail == right.Detail &&
+		transcript.DeveloperDiagnosticEqual(left.Developer, right.Developer)
 }
 
 func transcriptWorktreeContextEqual(left, right *clientui.TranscriptWorktreeContext) bool {

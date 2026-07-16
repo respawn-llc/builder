@@ -4,8 +4,10 @@ use uuid::Uuid;
 use crate::config::null_to_default;
 
 pub mod main_view;
+mod transcript_diagnostic;
 
 pub use main_view::*;
+pub use transcript_diagnostic::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RunState {
@@ -285,14 +287,6 @@ pub struct TranscriptCacheWarning {
     pub lost_input_tokens: i32,
     #[serde(rename = "Visibility")]
     pub visibility: EntryVisibility,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct TranscriptDiagnostic {
-    #[serde(rename = "Code")]
-    pub code: String,
-    #[serde(rename = "Detail")]
-    pub detail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

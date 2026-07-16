@@ -9,6 +9,7 @@ import (
 	"core/server/tools"
 	"core/shared/rollbacktarget"
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 type transcriptPageSnapshot struct {
@@ -36,11 +37,17 @@ type inMemoryTranscriptScan struct {
 	compactionEntryStart    int
 	hasCompactionCheckpoint bool
 
-	toolCompletions       map[string]tools.Result
-	materializedToolCalls map[string]struct{}
+	toolCompletions           map[string]tools.Result
+	materializedToolCalls     map[string]struct{}
+	toolCompletionDiagnostics map[string]*transcript.DeveloperDiagnostic
 }
 
-func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) *inMemoryTranscriptScan {
+func newInMemoryTranscriptScan(
+	req inMemoryTranscriptScanRequest,
+	completions map[string]tools.Result,
+	materializedToolCalls map[string]struct{},
+	diagnostics map[string]*transcript.DeveloperDiagnostic,
+) *inMemoryTranscriptScan {
 	if req.Offset < 0 {
 		req.Offset = 0
 	}
@@ -51,10 +58,11 @@ func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions ma
 		req.TailLimit = 0
 	}
 	return &inMemoryTranscriptScan{
-		request:               req,
-		compactionEntryStart:  -1,
-		toolCompletions:       completions,
-		materializedToolCalls: materializedToolCalls,
+		request:                   req,
+		compactionEntryStart:      -1,
+		toolCompletions:           completions,
+		materializedToolCalls:     materializedToolCalls,
+		toolCompletionDiagnostics: diagnostics,
 	}
 }
 
@@ -69,6 +77,12 @@ func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID
 		}
 		entry.StepID = strings.TrimSpace(stepID)
 		s.appendEntry(entry)
+		if (entry.Role == "tool_result_ok" || entry.Role == "tool_result_error") &&
+			s.toolCompletionDiagnostics[strings.TrimSpace(entry.ToolCallID)] != nil {
+			diagnostic := toolCompletionDiagnosticChatEntry(*s.toolCompletionDiagnostics[strings.TrimSpace(entry.ToolCallID)])
+			diagnostic.StepID = strings.TrimSpace(stepID)
+			s.appendEntry(diagnostic)
+		}
 	}
 }
 

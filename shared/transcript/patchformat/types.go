@@ -15,6 +15,38 @@ type DeleteFile struct {
 	Path string
 }
 
+type WholeFileDeletionOperationID struct {
+	HunkOrdinal int
+}
+
+type WholeFileDeletionFact struct {
+	ID      WholeFileDeletionOperationID
+	Removed int
+}
+
+type WholeFileDeletionOperation struct {
+	ID         WholeFileDeletionOperationID
+	CountKnown bool
+}
+
+type WholeFileDeletionFactMismatchKind string
+
+const (
+	WholeFileDeletionFactMismatchDuplicate    WholeFileDeletionFactMismatchKind = "duplicate"
+	WholeFileDeletionFactMismatchUnmatched    WholeFileDeletionFactMismatchKind = "unmatched"
+	WholeFileDeletionFactMismatchMissing      WholeFileDeletionFactMismatchKind = "missing"
+	WholeFileDeletionFactMismatchInvalidCount WholeFileDeletionFactMismatchKind = "invalid_count"
+)
+
+type WholeFileDeletionFactMismatchError struct {
+	Kind WholeFileDeletionFactMismatchKind
+	ID   WholeFileDeletionOperationID
+}
+
+func (e *WholeFileDeletionFactMismatchError) Error() string {
+	return "whole-file deletion fact mismatch: " + string(e.Kind)
+}
+
 type UpdateFile struct {
 	Path    string
 	MoveTo  string
@@ -44,11 +76,12 @@ type RenderedLine struct {
 }
 
 type RenderedFile struct {
-	AbsPath string
-	RelPath string
-	Added   int
-	Removed int
-	Diff    []string
+	AbsPath            string
+	RelPath            string
+	Added              int
+	Removed            int
+	Diff               []string
+	WholeFileDeletions []WholeFileDeletionOperation
 }
 
 type RenderedPatch struct {
@@ -67,6 +100,10 @@ func Clone(in *RenderedPatch) *RenderedPatch {
 		for _, file := range in.Files {
 			copyFile := file
 			copyFile.Diff = append([]string(nil), file.Diff...)
+			copyFile.WholeFileDeletions = append(
+				[]WholeFileDeletionOperation(nil),
+				file.WholeFileDeletions...,
+			)
 			out.Files = append(out.Files, copyFile)
 		}
 	}

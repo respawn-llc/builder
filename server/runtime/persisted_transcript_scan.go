@@ -108,6 +108,7 @@ func clonePersistedChatEntry(entry ChatEntry) ChatEntry {
 	copyEntry.BackgroundExitCode = textutil.Pointer(entry.BackgroundExitCode)
 	copyEntry.WorktreeContext = session.CloneWorktreeContext(entry.WorktreeContext)
 	copyEntry.ToolCall = clonePersistedToolCallMeta(entry.ToolCall)
+	copyEntry.DeveloperDiagnostic = transcript.CloneDeveloperDiagnostic(entry.DeveloperDiagnostic)
 	return copyEntry
 }
 

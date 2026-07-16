@@ -93,6 +93,9 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 			return nil
 		}
 		entries = []ChatEntry{toolResultChatEntry(*evt.ToolResult)}
+		if evt.ToolCompletionDiagnostic != nil {
+			entries = append(entries, toolCompletionDiagnosticChatEntry(*evt.ToolCompletionDiagnostic))
+		}
 	case EventReviewerCompleted:
 		// Reviewer completion remains a runtime-status event only.
 		// Persisted reviewer terminal rows must arrive through local_entry_added

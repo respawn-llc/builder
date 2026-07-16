@@ -535,7 +535,16 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		}
 	}
 	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
-		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
+		developerText := ""
+		if row.Diagnostic.Developer != nil {
+			developerText = transcript.DeveloperDiagnosticText(*row.Diagnostic.Developer)
+		}
+		text = firstNonEmpty(
+			developerText,
+			row.Diagnostic.Detail,
+			string(row.Diagnostic.Code),
+			text,
+		)
 	}
 	return noticeStyleRole(row), text
 }

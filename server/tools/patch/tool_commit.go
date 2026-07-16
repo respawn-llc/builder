@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	patchformat "core/shared/transcript/patchformat"
 )
 
 type patchFileState struct {
@@ -54,10 +56,14 @@ func cleanupStagedFiles(states []*patchFileState) {
 	}
 }
 
-func commitStagedFiles(states []*patchFileState, deleteTargets map[string]struct{}) error {
+func commitStagedFiles(
+	states []*patchFileState,
+	deleteTargets map[string]patchformat.WholeFileDeletionOperationID,
+) ([]patchformat.WholeFileDeletionFact, error) {
 	committed := make([]committedWrite, 0, len(states))
 	removed := make([]removedSource, 0, len(states)*2)
 	removedPaths := make(map[string]struct{}, len(deleteTargets)+len(states))
+	deletionFacts := make([]patchformat.WholeFileDeletionFact, 0, len(deleteTargets))
 	rollback := func() error {
 		var rollbackErr error
 		for i := len(committed) - 1; i >= 0; i-- {
@@ -99,6 +105,12 @@ func commitStagedFiles(states []*patchFileState, deleteTargets map[string]struct
 			return primary
 		}
 		removed = append(removed, removedSource{Path: path, Before: before})
+		if operationID, explicitDelete := deleteTargets[path]; explicitDelete {
+			deletionFacts = append(deletionFacts, patchformat.WholeFileDeletionFact{
+				ID:      operationID,
+				Removed: len(splitLines(string(before.Data))),
+			})
+		}
 		return nil
 	}
 
@@ -109,14 +121,14 @@ func commitStagedFiles(states []*patchFileState, deleteTargets map[string]struct
 	sort.Strings(deletePaths)
 	for _, path := range deletePaths {
 		if err := removePath(path, "delete target"); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	for _, s := range states {
 		if s.NewPath != s.Original {
 			if err := removePath(s.Original, "moved source"); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -125,29 +137,32 @@ func commitStagedFiles(states []*patchFileState, deleteTargets map[string]struct
 		if err := os.MkdirAll(filepath.Dir(s.NewPath), 0o755); err != nil {
 			primary := fmt.Errorf("create parent dir for %s: %w", s.NewPath, err)
 			if rollbackErr := rollback(); rollbackErr != nil {
-				return errors.Join(primary, fmt.Errorf("rollback failed: %w", rollbackErr))
+				return nil, errors.Join(primary, fmt.Errorf("rollback failed: %w", rollbackErr))
 			}
-			return primary
+			return nil, primary
 		}
 		before, err := captureSnapshot(s.NewPath)
 		if err != nil {
 			primary := fmt.Errorf("snapshot target %s: %w", s.NewPath, err)
 			if rollbackErr := rollback(); rollbackErr != nil {
-				return errors.Join(primary, fmt.Errorf("rollback failed: %w", rollbackErr))
+				return nil, errors.Join(primary, fmt.Errorf("rollback failed: %w", rollbackErr))
 			}
-			return primary
+			return nil, primary
 		}
 		if err := os.Rename(s.StagedPath, s.NewPath); err != nil {
 			primary := fmt.Errorf("commit write %s: %w", s.NewPath, err)
 			if rollbackErr := rollback(); rollbackErr != nil {
-				return errors.Join(primary, fmt.Errorf("rollback failed: %w", rollbackErr))
+				return nil, errors.Join(primary, fmt.Errorf("rollback failed: %w", rollbackErr))
 			}
-			return primary
+			return nil, primary
 		}
 		committed = append(committed, committedWrite{Path: s.NewPath, Before: before})
 	}
 
-	return nil
+	sort.Slice(deletionFacts, func(i, j int) bool {
+		return deletionFacts[i].ID.HunkOrdinal < deletionFacts[j].ID.HunkOrdinal
+	})
+	return deletionFacts, nil
 }
 
 func createStagedFile(targetPath string, data []byte, mode os.FileMode) (string, error) {

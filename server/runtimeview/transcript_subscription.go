@@ -514,20 +514,38 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 			Visibility:      fact.CacheWarning.Visibility,
 		}
 	}
-	diagnosticCode := strings.TrimSpace(fact.DiagnosticCode)
-	diagnosticDetail := fact.DiagnosticDetail
-	if diagnosticCode != "" || strings.TrimSpace(diagnosticDetail) != "" {
-		if diagnosticCode == "" || strings.TrimSpace(diagnosticDetail) == "" {
+	hasLegacyDiagnostic := fact.DiagnosticCode != nil || fact.DiagnosticDetail != nil
+	hasDeveloperDiagnostic := fact.DeveloperDiagnostic != nil
+	if hasLegacyDiagnostic && hasDeveloperDiagnostic {
+		panic(fmt.Sprintf(
+			"runtime transcript notice has both legacy and developer diagnostic facts: code=%v detail=%v reason=%q",
+			fact.DiagnosticCode,
+			fact.DiagnosticDetail,
+			fact.Reason,
+		))
+	}
+	if hasLegacyDiagnostic {
+		if fact.DiagnosticCode == nil || fact.DiagnosticDetail == nil ||
+			strings.TrimSpace(*fact.DiagnosticCode) == "" ||
+			strings.TrimSpace(*fact.DiagnosticDetail) == "" {
 			panic(fmt.Sprintf(
-				"runtime transcript notice has partial diagnostic facts: code=%q detail_present=%t reason=%q",
-				diagnosticCode,
-				diagnosticDetail != "",
+				"runtime transcript notice has partial diagnostic facts: code=%v detail=%v reason=%q",
+				fact.DiagnosticCode,
+				fact.DiagnosticDetail,
 				fact.Reason,
 			))
 		}
 		notice.Diagnostic = &clientui.TranscriptDiagnostic{
-			Code:   clientui.TranscriptDiagnosticCode(diagnosticCode),
-			Detail: diagnosticDetail,
+			Code:   clientui.TranscriptDiagnosticCode(strings.TrimSpace(*fact.DiagnosticCode)),
+			Detail: *fact.DiagnosticDetail,
+		}
+	}
+	if hasDeveloperDiagnostic {
+		if err := fact.DeveloperDiagnostic.Validate(); err != nil {
+			panic(fmt.Sprintf("runtime transcript notice has invalid developer diagnostic: %v", err))
+		}
+		notice.Diagnostic = &clientui.TranscriptDiagnostic{
+			Developer: transcript.CloneDeveloperDiagnostic(fact.DeveloperDiagnostic),
 		}
 	}
 	activityID := strings.TrimSpace(fact.BackgroundActivityID)
