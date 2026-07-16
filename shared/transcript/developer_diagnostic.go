@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,6 +23,28 @@ type DeletionFactMismatchDeveloperDiagnostic struct {
 	CallID       string                                        `json:"call_id"`
 	OperationID  patchformat.WholeFileDeletionOperationID      `json:"operation_id"`
 	MismatchKind patchformat.WholeFileDeletionFactMismatchKind `json:"mismatch_kind"`
+}
+
+func (d *DeletionFactMismatchDeveloperDiagnostic) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		CallID      string `json:"call_id"`
+		OperationID *struct {
+			HunkOrdinal *int `json:"HunkOrdinal"`
+		} `json:"operation_id"`
+		MismatchKind patchformat.WholeFileDeletionFactMismatchKind `json:"mismatch_kind"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.OperationID == nil || wire.OperationID.HunkOrdinal == nil {
+		return errors.New("deletion fact mismatch diagnostic hunk ordinal is required")
+	}
+	*d = DeletionFactMismatchDeveloperDiagnostic{
+		CallID:       wire.CallID,
+		OperationID:  patchformat.WholeFileDeletionOperationID{HunkOrdinal: *wire.OperationID.HunkOrdinal},
+		MismatchKind: wire.MismatchKind,
+	}
+	return nil
 }
 
 func NewDeletionFactMismatchDeveloperDiagnostic(

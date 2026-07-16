@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -58,6 +59,19 @@ func TestDeveloperDiagnosticRejectsMissingOrInvalidVariantContext(t *testing.T) 
 	for index, diagnostic := range tests {
 		if err := diagnostic.Validate(); err == nil {
 			t.Fatalf("diagnostic %d unexpectedly validated: %+v", index, diagnostic)
+		}
+	}
+}
+
+func TestDeveloperDiagnosticJSONRejectsAbsentHunkOrdinal(t *testing.T) {
+	for _, payload := range []string{
+		`{"deletion_fact_mismatch":{"call_id":"call-1","operation_id":{},"mismatch_kind":"missing"}}`,
+		`{"deletion_fact_mismatch":{"call_id":"call-1","operation_id":{"HunkOrdinal":null},"mismatch_kind":"missing"}}`,
+		`{"deletion_fact_mismatch":{"call_id":"call-1","operation_id":null,"mismatch_kind":"missing"}}`,
+	} {
+		var diagnostic DeveloperDiagnostic
+		if err := json.Unmarshal([]byte(payload), &diagnostic); err == nil {
+			t.Fatalf("decoded diagnostic without hunk ordinal: %s", payload)
 		}
 	}
 }

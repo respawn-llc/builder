@@ -373,6 +373,20 @@ pub struct RenderedFile {
     pub removed: i32,
     #[serde(rename = "Diff", default, deserialize_with = "null_to_default")]
     pub diff: Vec<String>,
+    #[serde(
+        rename = "WholeFileDeletions",
+        default,
+        deserialize_with = "null_to_default"
+    )]
+    pub whole_file_deletions: Vec<WholeFileDeletionOperation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct WholeFileDeletionOperation {
+    #[serde(rename = "ID")]
+    pub id: WholeFileDeletionOperationId,
+    #[serde(rename = "CountKnown")]
+    pub count_known: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
