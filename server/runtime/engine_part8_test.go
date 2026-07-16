@@ -312,6 +312,54 @@ func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 	}
 }
 
+func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
+	const (
+		stepID = "22222222-2222-4222-8222-222222222222"
+		callID = "call-recovered-after-restart"
+	)
+	store := mustCreateTestSession(t)
+	if _, _, err := store.AppendEvent(stepID, "message", llm.Message{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{
+			ID:   callID,
+			Name: string(toolspec.ToolExecCommand),
+		}},
+	}); err != nil {
+		t.Fatalf("append dangling assistant tool call: %v", err)
+	}
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{
+		RecoveryID:             "recovery-dangling-tool",
+		StepID:                 stepID,
+		Reason:                 "test",
+		CreatedAt:              time.Now().UTC(),
+		OutstandingToolCallIDs: []string{callID},
+	}); err != nil {
+		t.Fatalf("set pending recovery: %v", err)
+	}
+
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
+	if err != nil {
+		t.Fatalf("re-open store: %v", err)
+	}
+	var events []Event
+	_ = mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			events = append(events, evt)
+		},
+	})
+	for _, evt := range events {
+		if evt.Kind == EventToolCallStarted &&
+			evt.StepID == stepID &&
+			evt.ToolCall != nil &&
+			evt.ToolCall.ID == callID &&
+			evt.ToolCall.Name == string(toolspec.ToolExecCommand) {
+			return
+		}
+	}
+	t.Fatalf("reopen events = %+v, want recovered tool start for %q", events, callID)
+}
+
 func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testing.T) {
 	store := mustCreateTestSession(t)
 	if _, _, err := store.AppendEvent("completed-step", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {

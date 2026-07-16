@@ -86,22 +86,14 @@ func runtimeFeedOperationRef(ledger *sessionLedger, ref clientui.RuntimeOperatio
 		return clientui.RuntimeOperationRef{}, "", err
 	}
 	operation := ref
-	if ref.Kind == clientui.RuntimeOperationKindQueuedMessage && ref.QueueItemID != nil {
-		if ledger == nil {
-			return clientui.RuntimeOperationRef{}, "", fmt.Errorf("queued-message queue item %q has no client request identity", ref.QueueItemID.String())
+	if ref.Kind == clientui.RuntimeOperationKindQueuedMessage && ref.QueueItemID != nil && ledger != nil {
+		if identity := ledger.queuedByQueueItemID[*ref.QueueItemID]; identity != nil {
+			operation.ClientRequestID = identity.clientRequestID
+			operation.QueueItemID = &identity.queueItemID
 		}
-		identity := ledger.queuedByQueueItemID[*ref.QueueItemID]
-		if identity == nil {
-			return clientui.RuntimeOperationRef{}, "", fmt.Errorf("queued-message queue item %q has no client request identity", ref.QueueItemID.String())
-		}
-		operation.ClientRequestID = identity.clientRequestID
-		operation.QueueItemID = &identity.queueItemID
 	} else if ref.Kind == clientui.RuntimeOperationKindQueuedMessage && ledger != nil {
-		clientRequestID := ref.ClientRequestID
-		if ref.Kind == clientui.RuntimeOperationKindQueuedMessage && ledger != nil {
-			if identity := ledger.queuedByClientRequestID[clientRequestID]; identity != nil {
-				operation.QueueItemID = &identity.queueItemID
-			}
+		if identity := ledger.queuedByClientRequestID[ref.ClientRequestID]; identity != nil {
+			operation.QueueItemID = &identity.queueItemID
 		}
 	}
 	if err := operation.Validate(); err != nil {

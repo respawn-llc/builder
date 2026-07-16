@@ -319,8 +319,14 @@ func TestCoordinatorRetainsQueuedIdentityThroughEvictionWindowThenReleasesIt(t *
 
 	now = now.Add(2 * time.Minute)
 	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
-	if _, err := coord.FeedSnapshot("session-1", []clientui.RuntimeOperationRef{queueRef}); err == nil {
-		t.Fatal("FeedSnapshot retained queued identity after its eviction window")
+	unknown, err := coord.FeedSnapshot("session-1", []clientui.RuntimeOperationRef{queueRef})
+	if err != nil {
+		t.Fatalf("FeedSnapshot after queued identity eviction: %v", err)
+	}
+	if len(unknown.Operations) != 1 ||
+		unknown.Operations[0].State != clientui.RuntimeInputReconciliationUnknown ||
+		unknown.Operations[0].Operation != queueRef {
+		t.Fatalf("unknown reconciliation = %+v, want original queued ref in unknown state", unknown.Operations)
 	}
 }
 

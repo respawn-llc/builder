@@ -327,7 +327,13 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	if err := eng.restoreMessages(); err != nil {
 		return nil, err
 	}
-	eng.seedTranscriptLiveToolsFromDanglingToolCalls()
+	recoveryStepID := ""
+	if meta.PendingModelRecovery != nil {
+		recoveryStepID = meta.PendingModelRecovery.StepID
+	}
+	if err := eng.seedTranscriptLiveToolsFromDanglingToolCalls(recoveryStepID); err != nil {
+		return nil, err
+	}
 	eng.restorePersistedUsageState(meta.UsageState)
 	if meta.PendingModelRecovery != nil {
 		recovery := cloneSessionPendingModelRecovery(meta.PendingModelRecovery)
@@ -391,26 +397,45 @@ func (e *Engine) pendingRecoveryDanglingToolCallIDs() map[string]struct{} {
 	return out
 }
 
-func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls() {
+func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls(stepID string) error {
 	if e == nil {
-		return
+		return nil
 	}
 	chat := e.transcriptRuntimeState().chatProjection()
 	if chat == nil {
-		return
+		return nil
 	}
 	dangling := chat.danglingToolCalls()
 	if len(dangling) == 0 {
-		return
+		return nil
 	}
+	stepID = strings.TrimSpace(stepID)
 	starts := make([]TranscriptLiveToolStart, 0, len(dangling))
 	for _, call := range dangling {
 		starts = append(starts, TranscriptLiveToolStart{
+			StepID:     stepID,
 			ToolCallID: strings.TrimSpace(call.callID),
 			ToolName:   strings.TrimSpace(call.name),
 		})
 	}
-	e.transcriptRuntimeState().SeedLiveTools(starts)
+	if stepID == "" {
+		e.transcriptRuntimeState().SeedLiveTools(starts)
+		return nil
+	}
+	for _, start := range starts {
+		call := llm.ToolCall{ID: start.ToolCallID, Name: start.ToolName}
+		if restored, ok := e.transcriptRuntimeState().ToolCallSnapshot(start.ToolCallID); ok {
+			call = restored
+		}
+		if err := e.steer(stepID, steerEventIntent(Event{
+			Kind:     EventToolCallStarted,
+			StepID:   stepID,
+			ToolCall: &call,
+		})); err != nil {
+			return fmt.Errorf("publish recovered tool start %q: %w", start.ToolCallID, err)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) pendingRecoveryStepHasTerminalAssistant(stepID string) (bool, error) {
