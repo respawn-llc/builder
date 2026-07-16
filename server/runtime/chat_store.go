@@ -4,6 +4,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
@@ -69,8 +70,7 @@ type storedToolCompletion struct {
 type chatStore struct {
 	mu sync.RWMutex
 
-	items          []llm.ResponseItem
-	messageStepIDs []string
+	messageRecords []chatMessageRecord
 	compact        *compactionCheckpoint
 	local          []localChatEntry
 
@@ -85,11 +85,16 @@ type chatStore struct {
 	streamingError                    string
 	cwd                               string
 	lastCommittedAssistantFinalAnswer string
-	messageCount                      int
 	transcriptEntryCount              int
 
 	providerTokenEstimate      int
 	providerTokenEstimateDirty bool
+}
+
+type chatMessageRecord struct {
+	StepID        string
+	Message       llm.Message
+	ProviderItems []llm.ResponseItem
 }
 
 type localChatEntry struct {
@@ -107,10 +112,7 @@ type assistantStreamingState struct {
 }
 
 type compactionCheckpoint struct {
-	CutoffItemCount    int
-	CutoffMessageCount int
-	CutoffLocalCount   int
-	Items              []llm.ResponseItem
+	Items []llm.ResponseItem
 }
 
 func newChatStore() *chatStore {
@@ -134,8 +136,11 @@ func (s *chatStore) appendMessage(stepID string, msg llm.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	msg = normalizeMessageForTranscript(msg, s.cwd)
-	s.items = append(s.items, llm.ItemsFromMessages([]llm.Message{msg})...)
-	s.messageStepIDs = append(s.messageStepIDs, strings.TrimSpace(stepID))
+	s.messageRecords = append(s.messageRecords, chatMessageRecord{
+		StepID:        strings.TrimSpace(stepID),
+		Message:       cloneChatStoreMessage(msg),
+		ProviderItems: llm.ItemsFromMessages([]llm.Message{msg}),
+	})
 	s.applyMessageStatsLocked(msg)
 	s.providerTokenEstimateDirty = true
 }
@@ -165,16 +170,11 @@ func (s *chatStore) replaceHistoryAtCommittedEntryStart(stepID string, items []l
 	s.appendProjectedHistoryReplacementEntriesLocked(projectedEntries)
 	s.local = append([]localChatEntry(nil), s.local[projectedStart:]...)
 	s.compact = &compactionCheckpoint{
-		CutoffItemCount:    0,
-		CutoffMessageCount: 0,
-		CutoffLocalCount:   0,
-		Items:              llm.CloneResponseItems(preparedItems),
+		Items: llm.CloneResponseItems(preparedItems),
 	}
 	s.activeSegmentEntryStart = activeSegmentEntryStart
 	s.pruneAssistantStreamIDsBeforeLocked(activeSegmentEntryStart)
-	s.items = nil
-	s.messageStepIDs = nil
-	s.messageCount = 0
+	s.messageRecords = nil
 	s.pruneToolCompletionsToWorkingSetLocked()
 	s.providerTokenEstimateDirty = true
 }
@@ -251,13 +251,7 @@ func (s *chatStore) toolCallSnapshot(callID string) (llm.ToolCall, bool) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if call, ok := toolCallSnapshotFromItems(s.items, callID); ok {
-		return call, true
-	}
-	if s.compact != nil {
-		return toolCallSnapshotFromItems(s.compact.Items, callID)
-	}
-	return llm.ToolCall{}, false
+	return toolCallSnapshotFromItems(s.providerItemsSourceLocked(), callID)
 }
 
 func toolCallSnapshotFromItems(items []llm.ResponseItem, callID string) (llm.ToolCall, bool) {
@@ -464,10 +458,9 @@ func (s *chatStore) appendLocalEntryRecord(entry ChatEntry) {
 	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	messageCount := s.messageCount
 	s.local = append(s.local, localChatEntry{
 		Entry:             entry,
-		AfterMessageCount: messageCount,
+		AfterMessageCount: len(s.messageRecords),
 	})
 	s.transcriptEntryCount++
 }
@@ -621,22 +614,44 @@ func isToolOutputItem(itemType llm.ResponseItemType) bool {
 }
 
 func (s *chatStore) providerItemsSourceLocked() []llm.ResponseItem {
+	active := s.activeProviderItemsLocked()
 	if s.compact == nil {
-		return llm.CloneResponseItems(s.items)
+		return active
 	}
 	base := llm.CloneResponseItems(s.compact.Items)
-	tailStart := s.compact.CutoffItemCount
-	if tailStart < 0 {
-		tailStart = 0
-	}
-	if tailStart >= len(s.items) {
-		return base
-	}
-	tail := llm.CloneResponseItems(s.items[tailStart:])
-	out := make([]llm.ResponseItem, 0, len(base)+len(tail))
+	out := make([]llm.ResponseItem, 0, len(base)+len(active))
 	out = append(out, base...)
-	out = append(out, tail...)
+	out = append(out, active...)
 	return out
+}
+
+func (s *chatStore) activeProviderItemsLocked() []llm.ResponseItem {
+	itemCount := 0
+	for _, record := range s.messageRecords {
+		itemCount += len(record.ProviderItems)
+	}
+	items := make([]llm.ResponseItem, 0, itemCount)
+	for _, record := range s.messageRecords {
+		items = append(items, record.ProviderItems...)
+	}
+	return llm.CloneResponseItems(items)
+}
+
+func cloneChatStoreMessage(msg llm.Message) llm.Message {
+	cloned := msg
+	cloned.WorktreeContext = session.CloneWorktreeContext(msg.WorktreeContext)
+	cloned.BackgroundExitCode = textutil.Pointer(msg.BackgroundExitCode)
+	if len(msg.ToolCalls) > 0 {
+		cloned.ToolCalls = append([]llm.ToolCall(nil), msg.ToolCalls...)
+		for index := range cloned.ToolCalls {
+			cloned.ToolCalls[index].Presentation = append(json.RawMessage(nil), msg.ToolCalls[index].Presentation...)
+			cloned.ToolCalls[index].Input = append(json.RawMessage(nil), msg.ToolCalls[index].Input...)
+		}
+	}
+	if len(msg.ReasoningItems) > 0 {
+		cloned.ReasoningItems = append([]llm.ReasoningItem(nil), msg.ReasoningItems...)
+	}
+	return cloned
 }
 
 func firstNonEmpty(values ...string) string {
@@ -649,7 +664,6 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (s *chatStore) applyMessageStatsLocked(msg llm.Message) {
-	s.messageCount++
 	s.applyLastCommittedAssistantFinalAnswerLocked(msg)
 	delta := len(VisibleChatEntriesFromMessage(msg))
 	switch msg.Role {
@@ -789,27 +803,14 @@ func (s *chatStore) walkProjectionLocked(
 			localIndex++
 		}
 	}
-	if s.compact != nil && s.compact.CutoffMessageCount == 0 && markCompactionBoundary != nil {
+	if s.compact != nil && markCompactionBoundary != nil {
 		markCompactionBoundary()
 	}
 	appendLocalEntries(0)
-	walker := newResponseItemMessageWalker(func(msg llm.Message) {
-		if messageIndex >= len(s.messageStepIDs) {
-			panic(fmt.Sprintf("transcript message/step identity alignment exhausted: message_index=%d step_id_count=%d", messageIndex, len(s.messageStepIDs)))
-		}
-		applyMessage(strings.TrimSpace(s.messageStepIDs[messageIndex]), msg)
+	for _, record := range s.messageRecords {
+		applyMessage(record.StepID, record.Message)
 		messageIndex++
-		if s.compact != nil && messageIndex == s.compact.CutoffMessageCount && markCompactionBoundary != nil {
-			markCompactionBoundary()
-		}
 		appendLocalEntries(messageIndex)
-	})
-	for _, item := range s.items {
-		walker.Apply(item)
-	}
-	walker.Flush()
-	if messageIndex != len(s.messageStepIDs) {
-		panic(fmt.Sprintf("transcript message/step identity alignment has unused identities: consumed=%d step_id_count=%d", messageIndex, len(s.messageStepIDs)))
 	}
 	appendLocalEntries(messageIndex)
 }
@@ -818,7 +819,7 @@ func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	materializedToolResults := collectMaterializedToolCalls(s.items)
+	materializedToolResults := collectMaterializedToolCalls(s.activeProviderItemsLocked())
 	streamIDsByEntry := make(map[int]uuid.UUID, len(s.assistantStreamIDsByEntry))
 	for entryIndex, streamID := range s.assistantStreamIDsByEntry {
 		streamIDsByEntry[entryIndex] = streamID
