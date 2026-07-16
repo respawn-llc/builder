@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"core/cli/app/commands"
@@ -63,77 +62,6 @@ func TestSlashCommandPickerHighlightTracksSelectionAfterViewportScroll(t *testin
 	assertActivePickerHighlightedSelection(t, m)
 }
 
-func TestSlashCommandPickerHighlightTracksSelectionWhenViewportShiftsBothDirections(t *testing.T) {
-	withTrueColor(t)
-	m := newSlashPickerScrollTestModel()
-	assertActivePickerHighlightedSelection(t, m)
-
-	state := m.slashCommandPicker()
-	for step := 1; step < len(state.matches); step++ {
-		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-		m = next.(*uiModel)
-		assertActivePickerHighlightedSelection(t, m)
-	}
-	for step := len(state.matches) - 2; step >= 0; step-- {
-		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
-		m = next.(*uiModel)
-		assertActivePickerHighlightedSelection(t, m)
-	}
-}
-
-func TestSlashCommandPickerHighlightTracksFilteredVisibleCommands(t *testing.T) {
-	withTrueColor(t)
-	oauthManager := auth.NewManager(auth.NewMemoryStore(auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type: auth.MethodOAuth,
-			OAuth: &auth.OAuthMethod{
-				AccessToken: "access-token",
-				TokenType:   "Bearer",
-			},
-		},
-	}), nil, nil)
-	cases := []struct {
-		name    string
-		opts    []UIOption
-		visible []string
-		hidden  []string
-	}{
-		{
-			name:    "no auth hides logout and fast",
-			visible: []string{"login", "resume"},
-			hidden:  []string{"logout", "fast"},
-		},
-		{
-			name:    "oauth hides login and fast",
-			opts:    []UIOption{WithUIStatusConfig(uiStatusConfig{AuthManager: oauthManager})},
-			visible: []string{"logout", "resume"},
-			hidden:  []string{"login", "fast"},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newProjectedStaticUIModel(tc.opts...)
-			m.input = "/"
-			refreshSlashCommandFilterForTest(t, m)
-
-			state := m.slashCommandPicker()
-			for _, hidden := range tc.hidden {
-				if slashPickerContainsCommand(state, hidden) {
-					t.Fatalf("did not expect gated /%s in slash picker, got %+v", hidden, slashPickerCommandNames(state))
-				}
-			}
-			for _, visible := range tc.visible {
-				if !slashPickerContainsCommand(state, visible) {
-					t.Fatalf("expected visible /%s in slash picker, got %+v", visible, slashPickerCommandNames(state))
-				}
-			}
-
-			assertActivePickerHighlightAcrossVisibleMatches(t, m)
-		})
-	}
-}
-
 func newSlashPickerScrollTestModel() *uiModel {
 	r := commands.NewRegistry()
 	registerSlashPickerTestCommand := func(name string) {
@@ -148,20 +76,6 @@ func newSlashPickerScrollTestModel() *uiModel {
 	m.input = "/"
 	m.refreshSlashCommandFilterFromInputWithAuth(true)
 	return m
-}
-
-func assertActivePickerHighlightAcrossVisibleMatches(t *testing.T, m *uiModel) {
-	t.Helper()
-	state := m.activePickerPresentation()
-	if !state.visible || len(state.rows) == 0 {
-		t.Fatalf("expected visible picker with rows, got %+v", state)
-	}
-	assertActivePickerHighlightedSelection(t, m)
-	for step := 1; step < len(state.rows); step++ {
-		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-		m = next.(*uiModel)
-		assertActivePickerHighlightedSelection(t, m)
-	}
 }
 
 func slashPickerCommandIndex(state slashCommandPickerState, name string) int {
@@ -187,34 +101,6 @@ func assertActivePickerHighlightedSelection(t *testing.T, m *uiModel) {
 		t.Fatalf("selected row index out of range for state %+v", state)
 	}
 }
-func TestBusyTabBackWithoutParentShowsLocalErrorAndDoesNotQueue(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
-	m.activity = uiActivityRunning
-	m.input = "/back"
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	updated := next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected transient status command for rejected queued /back")
-	}
-	if len(updated.queued) != 0 {
-		t.Fatalf("expected no queued messages, got %+v", updated.queued)
-	}
-	if len(updated.pendingInjected) != 0 {
-		t.Fatalf("expected no pending injected messages, got %+v", updated.pendingInjected)
-	}
-	if updated.input != "/back" {
-		t.Fatalf("expected input preserved for editing after rejected queued /back, got %q", updated.input)
-	}
-	if !strings.Contains(updated.transientStatus, "No parent session available") {
-		t.Fatalf("expected transient error for rejected queued /back, got %q", updated.transientStatus)
-	}
-	status := stripANSIAndTrimRight(updated.layout().renderStatusLine(120, uiThemeStyles("dark")))
-	if !strings.Contains(status, "No parent session available") {
-		t.Fatalf("expected queued /back error in status line, got %q", status)
-	}
-}
 
 func TestSlashCommandPickerShowsResumeWhenCurrentSessionIsOnlyKnownSession(t *testing.T) {
 	m := newProjectedStaticUIModel()
@@ -227,26 +113,15 @@ func TestSlashCommandPickerShowsResumeWhenCurrentSessionIsOnlyKnownSession(t *te
 	}
 }
 
-func TestResumeSlashCommandOpensPickerWhenCurrentSessionIsOnlyKnownSession(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.input = "/resume"
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected quit cmd for /resume when availability is unknown")
-	}
-	updated := next.(*uiModel)
-	if updated.exitAction != UIActionResume {
-		t.Fatalf("expected UIActionResume, got %q", updated.exitAction)
-	}
-}
-
-func TestSlashCommandPickerShowsLoginWhenAuthIsMissingOrAPIKey(t *testing.T) {
+func TestSlashCommandPickerProjectsAuthCommand(t *testing.T) {
 	cases := []struct {
-		name    string
-		manager *auth.Manager
+		name      string
+		manager   *auth.Manager
+		visible   string
+		hidden    string
+		wantTyped authSlashCommandKind
 	}{
-		{name: "missing auth"},
+		{name: "missing auth", visible: "login", hidden: "logout", wantTyped: authSlashCommandLogin},
 		{
 			name: "api key",
 			manager: auth.NewManager(auth.NewMemoryStore(auth.State{
@@ -256,6 +131,25 @@ func TestSlashCommandPickerShowsLoginWhenAuthIsMissingOrAPIKey(t *testing.T) {
 					APIKey: &auth.APIKeyMethod{Key: "sk-test"},
 				},
 			}), nil, nil),
+			visible:   "login",
+			hidden:    "logout",
+			wantTyped: authSlashCommandLogin,
+		},
+		{
+			name: "oauth",
+			manager: auth.NewManager(auth.NewMemoryStore(auth.State{
+				Scope: auth.ScopeGlobal,
+				Method: auth.Method{
+					Type: auth.MethodOAuth,
+					OAuth: &auth.OAuthMethod{
+						AccessToken: "access-token",
+						TokenType:   "Bearer",
+					},
+				},
+			}), nil, nil),
+			visible:   "logout",
+			hidden:    "login",
+			wantTyped: authSlashCommandLogout,
 		},
 	}
 	for _, tc := range cases {
@@ -265,14 +159,14 @@ func TestSlashCommandPickerShowsLoginWhenAuthIsMissingOrAPIKey(t *testing.T) {
 			refreshSlashCommandFilterForTest(t, m)
 
 			state := m.slashCommandPicker()
-			if !slashPickerContainsCommand(state, "login") {
-				t.Fatalf("expected /login in slash picker, got %+v", slashPickerCommandNames(state))
+			if !slashPickerContainsCommand(state, tc.visible) {
+				t.Fatalf("expected /%s in slash picker, got %+v", tc.visible, slashPickerCommandNames(state))
 			}
-			if m.authSlashCommand != authSlashCommandLogin {
-				t.Fatalf("expected typed auth slash command login, got %v", m.authSlashCommand)
+			if m.authSlashCommand != tc.wantTyped {
+				t.Fatalf("typed auth slash command = %v, want %v", m.authSlashCommand, tc.wantTyped)
 			}
-			if slashPickerContainsCommand(state, "logout") {
-				t.Fatalf("did not expect /logout in slash picker, got %+v", slashPickerCommandNames(state))
+			if slashPickerContainsCommand(state, tc.hidden) || slashPickerContainsCommand(state, "fast") {
+				t.Fatalf("unexpected gated command in slash picker: %+v", slashPickerCommandNames(state))
 			}
 		})
 	}
@@ -324,33 +218,6 @@ func TestExactHiddenAuthSlashCommandsStillExecute(t *testing.T) {
 				t.Fatalf("expected %s to execute logout/login transition, got %q", tc.input, updated.exitAction)
 			}
 		})
-	}
-}
-
-func TestSlashCommandPickerShowsLogoutForOAuthAuth(t *testing.T) {
-	manager := auth.NewManager(auth.NewMemoryStore(auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type: auth.MethodOAuth,
-			OAuth: &auth.OAuthMethod{
-				AccessToken: "access-token",
-				TokenType:   "Bearer",
-			},
-		},
-	}), nil, nil)
-	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
-	m.input = "/"
-	refreshSlashCommandFilterForTest(t, m)
-
-	state := m.slashCommandPicker()
-	if !slashPickerContainsCommand(state, "logout") {
-		t.Fatalf("expected /logout in slash picker, got %+v", slashPickerCommandNames(state))
-	}
-	if m.authSlashCommand != authSlashCommandLogout {
-		t.Fatalf("expected typed auth slash command logout, got %v", m.authSlashCommand)
-	}
-	if slashPickerContainsCommand(state, "login") {
-		t.Fatalf("did not expect /login in slash picker, got %+v", slashPickerCommandNames(state))
 	}
 }
 

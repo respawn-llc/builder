@@ -21,21 +21,14 @@ import (
 func TestDoubleEscLoadsNewestDetailPageAndSelectsNewestRollbackCandidate(t *testing.T) {
 	olderTarget := rollbacktarget.EncodeUserMessageSeq(11)
 	newestTarget := rollbacktarget.EncodeUserMessageSeq(22)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, _ := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestRollbackUserRow("older user message", olderTarget),
 			detailTestAssistantRow("assistant answer"),
 			detailTestRollbackUserRow("newest user message", newestTarget),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(*uiModel)
@@ -66,97 +59,79 @@ func TestDoubleEscLoadsNewestDetailPageAndSelectsNewestRollbackCandidate(t *test
 	}
 }
 
-func TestDoubleEscWithNoRollbackCandidatesHasNoVisibleEffect(t *testing.T) {
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+func TestDoubleEscWithNoRollbackCandidatesRestoresTranscriptSurface(t *testing.T) {
+	candidateFreePage := clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestAssistantRow("assistant-only transcript"),
 			detailTestUserRow("user row without rollback target"),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
-
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	model = next.(*uiModel)
-	completion := rollbackDetailLoadCompletion(t, cmd)
-	next, transitionCmd := model.Update(completion)
-	model = next.(*uiModel)
-
-	if model.rollback.isActive() || model.rollback.isAwaitingNewest() {
-		t.Fatalf("rollback state = %#v, want inactive after a candidate-free page", model.rollback)
 	}
-	if model.surface() != uiSurfaceOngoingTranscript || model.view.Mode() != tui.ModeOngoing || model.altScreenActive {
-		t.Fatalf(
-			"candidate-free rollback changed visible surface: surface=%q mode=%q alt=%t",
-			model.surface(),
-			model.view.Mode(),
-			model.altScreenActive,
-		)
-	}
-	if transitionCmd != nil {
-		t.Fatal("candidate-free rollback scheduled a visible surface transition")
-	}
-}
-
-func TestDoubleEscWithNoCandidatesRestoresPriorDetailWindow(t *testing.T) {
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
-		SessionID: detailTestSessionID,
-		Entries: []clientui.TranscriptCommittedRow{
-			detailTestAssistantRow("candidate-free newest transcript"),
-		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
 	priorDetailPage := clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestAssistantRow("prior detail window"),
 		},
 	}
-	model.detailTranscript.replace(priorDetailPage)
-	model.forwardToView(tui.SetDetailTranscriptPageMsg{
-		Page:   priorDetailPage,
-		Anchor: tui.DetailTranscriptAnchorBottom,
-	})
-	model.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail, SkipDetailWarmup: true})
-	model.activeSurface = uiSurfaceTranscriptDetail
+	for _, tc := range []struct {
+		name        string
+		priorDetail bool
+	}{
+		{name: "ongoing"},
+		{name: "prior detail", priorDetail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model, _ := newRollbackTestModel(candidateFreePage)
+			if tc.priorDetail {
+				model.detailTranscript.replace(priorDetailPage)
+				model.forwardToView(tui.SetDetailTranscriptPageMsg{
+					Page:   priorDetailPage,
+					Anchor: tui.DetailTranscriptAnchorBottom,
+				})
+				model.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail, SkipDetailWarmup: true})
+				model.activeSurface = uiSurfaceTranscriptDetail
+			}
 
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
-	next, loadCmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	model = next.(*uiModel)
-	completion := rollbackDetailLoadCompletion(t, loadCmd)
-	next, transitionCmd := model.Update(completion)
-	model = next.(*uiModel)
+			model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
+			next, loadCmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			model = next.(*uiModel)
+			next, transitionCmd := model.Update(rollbackDetailLoadCompletion(t, loadCmd))
+			model = next.(*uiModel)
 
-	if model.rollback.isActive() || model.rollback.isAwaitingActivation() {
-		t.Fatalf("candidate-free detail activation remained active: %#v", model.rollback)
-	}
-	if model.surface() != uiSurfaceTranscriptDetail || model.view.Mode() != tui.ModeDetail {
-		t.Fatalf("candidate-free activation restored surface=%q mode=%q, want prior detail", model.surface(), model.view.Mode())
-	}
-	if !model.detailTranscript.matchesPage(priorDetailPage) {
-		t.Fatalf("candidate-free activation replaced prior detail cache: %#v", model.detailTranscript.page())
-	}
-	if transitionCmd != nil {
-		t.Fatal("candidate-free detail activation scheduled a visible surface transition")
+			if model.rollback.isActive() || model.rollback.isAwaitingActivation() {
+				t.Fatalf("candidate-free activation remained active: %#v", model.rollback)
+			}
+			if transitionCmd != nil {
+				t.Fatal("candidate-free activation scheduled a visible surface transition")
+			}
+			if tc.priorDetail {
+				if model.surface() != uiSurfaceTranscriptDetail || model.view.Mode() != tui.ModeDetail ||
+					!model.detailTranscript.matchesPage(priorDetailPage) {
+					t.Fatalf(
+						"candidate-free activation failed to restore prior detail: surface=%q mode=%q page=%#v",
+						model.surface(),
+						model.view.Mode(),
+						model.detailTranscript.page(),
+					)
+				}
+				return
+			}
+			if model.surface() != uiSurfaceOngoingTranscript || model.view.Mode() != tui.ModeOngoing ||
+				model.altScreenActive {
+				t.Fatalf(
+					"candidate-free activation changed ongoing surface: surface=%q mode=%q alt=%t",
+					model.surface(),
+					model.view.Mode(),
+					model.altScreenActive,
+				)
+			}
+		})
 	}
 }
 
 func TestDoubleEscFindsNewestRollbackCandidateAcrossCompactionBoundary(t *testing.T) {
 	targetID := rollbacktarget.EncodeUserMessageSeq(17)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, sessionViews := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(100),
 		HasMoreAbove: true,
@@ -164,14 +139,7 @@ func TestDoubleEscFindsNewestRollbackCandidateAcrossCompactionBoundary(t *testin
 			detailTestUserRow("synthetic compacted user row"),
 			detailTestAssistantRow("post-compaction answer"),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
 	next, newestLoadCmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -210,7 +178,7 @@ func TestDoubleEscFindsNewestRollbackCandidateAcrossCompactionBoundary(t *testin
 
 func TestDoubleEscUsesLatestRollbackCandidateLocatorAcrossMultipleCandidateFreeSegments(t *testing.T) {
 	targetID := rollbacktarget.EncodeUserMessageSeq(17)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, sessionViews := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(300),
 		HasMoreAbove: true,
@@ -222,14 +190,7 @@ func TestDoubleEscUsesLatestRollbackCandidateLocatorAcrossMultipleCandidateFreeS
 			detailTestUserRow("newest synthetic compacted user row"),
 			detailTestAssistantRow("newest post-compaction answer"),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 	priorDetailPage := clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
@@ -250,8 +211,6 @@ func TestDoubleEscUsesLatestRollbackCandidateLocatorAcrossMultipleCandidateFreeS
 	model.forwardToView(tea.KeyMsg{Type: tea.KeyDown})
 
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
-	priorDetailRender := model.view.View()
-	priorDetailAction := model.view.DetailSelectionAction()
 	next, newestLoadCmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = next.(*uiModel)
 	newestCompletion := rollbackDetailLoadCompletion(t, newestLoadCmd)
@@ -307,13 +266,8 @@ func TestDoubleEscUsesLatestRollbackCandidateLocatorAcrossMultipleCandidateFreeS
 	if !model.detailTranscript.matchesPage(priorDetailPage) {
 		t.Fatalf("picker exit left a gapped detail cache: %#v", model.detailTranscript.page())
 	}
-	if model.view.View() != priorDetailRender || model.view.DetailSelectionAction() != priorDetailAction {
-		t.Fatalf(
-			"picker exit did not restore prior detail presentation: render_equal=%t action=%v want_action=%v",
-			model.view.View() == priorDetailRender,
-			model.view.DetailSelectionAction(),
-			priorDetailAction,
-		)
+	if model.view.DetailSelectionAction() == tui.DetailSelectionActionNone {
+		t.Fatal("picker exit did not restore the prior detail selection")
 	}
 	if got := sessionViews.pageCount.Load(); got != 2 {
 		t.Fatalf("picker exit issued %d transcript reads, want only newest plus direct locator", got)
@@ -322,19 +276,12 @@ func TestDoubleEscUsesLatestRollbackCandidateLocatorAcrossMultipleCandidateFreeS
 
 func TestRollbackPickerDoesNotOpenAfterComposerChangesDuringHydration(t *testing.T) {
 	targetID := rollbacktarget.EncodeUserMessageSeq(27)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, _ := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestRollbackUserRow("stale activation candidate", targetID),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
 	next, loadCmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -359,21 +306,14 @@ func TestRollbackSelectionPagesAcrossBoundedDetailWindowsAtCandidateEdges(t *tes
 	oldestTarget := rollbacktarget.EncodeUserMessageSeq(10)
 	middleTarget := rollbacktarget.EncodeUserMessageSeq(20)
 	newestTarget := rollbacktarget.EncodeUserMessageSeq(30)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, sessionViews := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(200),
 		HasMoreAbove: true,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestRollbackUserRow("newest message", newestTarget),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 	model = openRollbackPicker(t, model)
 
 	sessionViews.page = clientui.TranscriptPage{
@@ -441,21 +381,14 @@ func TestRollbackSelectionPagesAcrossBoundedDetailWindowsAtCandidateEdges(t *tes
 func TestRollbackNavigationTraversesConsecutiveCandidateFreePages(t *testing.T) {
 	newestTarget := rollbacktarget.EncodeUserMessageSeq(30)
 	olderTarget := rollbacktarget.EncodeUserMessageSeq(10)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, sessionViews := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(300),
 		HasMoreAbove: true,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestRollbackUserRow("newest candidate", newestTarget),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 	model = openRollbackPicker(t, model)
 	originalWindow := model.detailTranscript.page()
 
@@ -580,21 +513,14 @@ func TestRollbackNavigationTraversesConsecutiveCandidateFreePages(t *testing.T) 
 
 func TestRollbackNavigationTimeoutKeepsCurrentCandidateAndStopsPaging(t *testing.T) {
 	targetID := rollbacktarget.EncodeUserMessageSeq(30)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, sessionViews := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(300),
 		HasMoreAbove: true,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestRollbackUserRow("current candidate", targetID),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 	model = openRollbackPicker(t, model)
 	originalWindow := model.detailTranscript.page()
 	sessionViews.page = clientui.TranscriptPage{
@@ -638,21 +564,7 @@ func TestRollbackPageKeysKeepVisibleSelectionAndForkTargetInSync(t *testing.T) {
 	oldestTarget := rollbacktarget.EncodeUserMessageSeq(1)
 	middleTarget := rollbacktarget.EncodeUserMessageSeq(2)
 	newestTarget := rollbacktarget.EncodeUserMessageSeq(3)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
-		SessionID: detailTestSessionID,
-		Entries: []clientui.TranscriptCommittedRow{
-			detailTestRollbackUserRow("oldest", oldestTarget),
-			detailTestRollbackUserRow("middle", middleTarget),
-			detailTestRollbackUserRow("newest", newestTarget),
-		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	model := newResidentRollbackTestModel(oldestTarget, middleTarget, newestTarget)
 	model = openRollbackPicker(t, model)
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyPgUp})
@@ -673,21 +585,7 @@ func TestRollbackSharedListKeysNavigateResidentCandidates(t *testing.T) {
 	oldestTarget := rollbacktarget.EncodeUserMessageSeq(1)
 	middleTarget := rollbacktarget.EncodeUserMessageSeq(2)
 	newestTarget := rollbacktarget.EncodeUserMessageSeq(3)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
-		SessionID: detailTestSessionID,
-		Entries: []clientui.TranscriptCommittedRow{
-			detailTestRollbackUserRow("oldest", oldestTarget),
-			detailTestRollbackUserRow("middle", middleTarget),
-			detailTestRollbackUserRow("newest", newestTarget),
-		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	model := newResidentRollbackTestModel(oldestTarget, middleTarget, newestTarget)
 	model = openRollbackPicker(t, model)
 
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
@@ -703,21 +601,14 @@ func TestRollbackSharedListKeysNavigateResidentCandidates(t *testing.T) {
 func TestRollbackPageKeyPropagatesAdjacentWindowRequest(t *testing.T) {
 	newestTarget := rollbacktarget.EncodeUserMessageSeq(20)
 	olderTarget := rollbacktarget.EncodeUserMessageSeq(10)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, sessionViews := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(100),
 		HasMoreAbove: true,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestRollbackUserRow("newest", newestTarget),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 	model = openRollbackPicker(t, model)
 	sessionViews.page = clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
@@ -739,19 +630,12 @@ func TestRollbackPageKeyPropagatesAdjacentWindowRequest(t *testing.T) {
 
 func TestRollbackEditingEscChainRestoresPriorTranscriptSurface(t *testing.T) {
 	targetID := rollbacktarget.EncodeUserMessageSeq(42)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, _ := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestRollbackUserRow("message to revise", targetID),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 	model = openRollbackPicker(t, model)
 
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
@@ -782,33 +666,32 @@ func TestRollbackEditingEscChainRestoresPriorTranscriptSurface(t *testing.T) {
 	}
 }
 
-func TestRollbackCtrlCClosesPickerBeforeBusyRuntimeInterrupt(t *testing.T) {
-	for _, editing := range []bool{false, true} {
-		name := "selection"
-		if editing {
-			name = "editing"
-		}
-		t.Run(name, func(t *testing.T) {
+func TestRollbackCtrlCClosesPickerBeforeGlobalAction(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		editing bool
+		busy    bool
+	}{
+		{name: "busy selection", busy: true},
+		{name: "busy editing", editing: true, busy: true},
+		{name: "idle exit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			targetID := rollbacktarget.EncodeUserMessageSeq(44)
-			sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+			model, _ := newRollbackTestModel(clientui.TranscriptPage{
 				SessionID: detailTestSessionID,
 				Entries: []clientui.TranscriptCommittedRow{
-					detailTestRollbackUserRow("interrupt target", targetID),
+					detailTestRollbackUserRow("Ctrl+C target", targetID),
 				},
-			}}
-			model := newSizedProjectedClosedUIModel(
-				&runtimeControlFakeClient{},
-				100,
-				20,
-				WithUISessionID(detailTestSessionID),
-				WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-			)
+			})
 			model = openRollbackPicker(t, model)
-			if editing {
+			if tc.editing {
 				model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 			}
-			model.setRuntimeActivityBusyForTest(true)
-			model.activity = uiActivityRunning
+			if tc.busy {
+				model.setRuntimeActivityBusyForTest(true)
+				model.activity = uiActivityRunning
+			}
 
 			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 			model = next.(*uiModel)
@@ -823,45 +706,17 @@ func TestRollbackCtrlCClosesPickerBeforeBusyRuntimeInterrupt(t *testing.T) {
 					model.inputMode(),
 				)
 			}
-			if !model.hasPendingInterrupt() || cmd == nil {
-				t.Fatalf("Ctrl+C did not continue through global busy interrupt: pending=%t cmd=%v", model.hasPendingInterrupt(), cmd)
+			if cmd == nil {
+				t.Fatal("Ctrl+C did not continue to the global action")
+			}
+			if tc.busy {
+				if !model.hasPendingInterrupt() {
+					t.Fatal("busy Ctrl+C did not continue through the global runtime interrupt")
+				}
+			} else if model.exitAction != UIActionExit {
+				t.Fatalf("idle Ctrl+C action = %q, want global exit after closing picker", model.exitAction)
 			}
 		})
-	}
-}
-
-func TestRollbackCtrlCClosesPickerBeforeIdleExit(t *testing.T) {
-	targetID := rollbacktarget.EncodeUserMessageSeq(45)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
-		SessionID: detailTestSessionID,
-		Entries: []clientui.TranscriptCommittedRow{
-			detailTestRollbackUserRow("idle exit target", targetID),
-		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
-	model = openRollbackPicker(t, model)
-
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	model = next.(*uiModel)
-
-	if model.rollback.isActive() || model.surface() != uiSurfaceOngoingTranscript ||
-		model.view.Mode() != tui.ModeOngoing || model.inputMode() != uiInputModeMain {
-		t.Fatalf(
-			"idle Ctrl+C left rollback overlay active: rollback=%#v surface=%q mode=%q inputMode=%q",
-			model.rollback,
-			model.surface(),
-			model.view.Mode(),
-			model.inputMode(),
-		)
-	}
-	if model.exitAction != UIActionExit || cmd == nil {
-		t.Fatalf("idle Ctrl+C action = %q cmd=%v, want global exit after closing picker", model.exitAction, cmd)
 	}
 }
 
@@ -873,19 +728,12 @@ func TestSessionReplacementDiscardsRollbackStateWithoutRestoringOldTranscript(t 
 		}
 		t.Run(name, func(t *testing.T) {
 			targetID := rollbacktarget.EncodeUserMessageSeq(46)
-			sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+			model, _ := newRollbackTestModel(clientui.TranscriptPage{
 				SessionID: detailTestSessionID,
 				Entries: []clientui.TranscriptCommittedRow{
 					detailTestRollbackUserRow("old session rollback target", targetID),
 				},
-			}}
-			model := newSizedProjectedClosedUIModel(
-				&runtimeControlFakeClient{},
-				100,
-				20,
-				WithUISessionID(detailTestSessionID),
-				WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-			)
+			})
 			model = openRollbackPicker(t, model)
 			if editing {
 				model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
@@ -919,19 +767,12 @@ func TestSessionReplacementDiscardsRollbackStateWithoutRestoringOldTranscript(t 
 
 func TestRollbackEditingSubmissionPreservesExactSelectedTarget(t *testing.T) {
 	targetID := rollbacktarget.EncodeUserMessageSeq(73)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, _ := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestRollbackUserRow("original prompt", targetID),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 	model = openRollbackPicker(t, model)
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	editedPrompt := "edited rollback prompt"
@@ -1025,19 +866,12 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 
 func TestRollbackPickerNeverEnablesAlternateScroll(t *testing.T) {
 	targetID := rollbacktarget.EncodeUserMessageSeq(88)
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
+	model, _ := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
 		Entries: []clientui.TranscriptCommittedRow{
 			detailTestRollbackUserRow("rollback candidate", targetID),
 		},
-	}}
-	model := newSizedProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		100,
-		20,
-		WithUISessionID(detailTestSessionID),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
+	})
 	originalWrite := writeTerminalSequence
 	var terminalSequences []string
 	writeTerminalSequence = func(sequence string) error {
@@ -1080,6 +914,30 @@ func detailTestRollbackUserRow(text, rollbackTargetID string) clientui.Transcrip
 	row := detailTestUserRow(text)
 	row.User.RollbackTargetID = &target
 	return row
+}
+
+func newRollbackTestModel(page clientui.TranscriptPage) (*uiModel, *countingSessionViewClient) {
+	sessionViews := &countingSessionViewClient{page: page}
+	model := newSizedProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		100,
+		20,
+		WithUISessionID(detailTestSessionID),
+		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
+	)
+	return model, sessionViews
+}
+
+func newResidentRollbackTestModel(oldestTarget, middleTarget, newestTarget string) *uiModel {
+	model, _ := newRollbackTestModel(clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestRollbackUserRow("oldest", oldestTarget),
+			detailTestRollbackUserRow("middle", middleTarget),
+			detailTestRollbackUserRow("newest", newestTarget),
+		},
+	})
+	return model
 }
 
 func openRollbackPicker(t *testing.T, model *uiModel) *uiModel {

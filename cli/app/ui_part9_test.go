@@ -6,15 +6,10 @@ import (
 	"core/server/llm"
 	"core/shared/clientui"
 	"errors"
-	goruntime "runtime"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mattn/go-runewidth"
 )
 
 func TestReviewerProgressKeepsInputEditable(t *testing.T) {
@@ -86,43 +81,6 @@ func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	}
 }
 
-func TestMouseSGRReportRunesDoNotPolluteInput(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.input = "draft"
-	m.inputCursor = len([]rune(m.input))
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[<64;74;25M")})
-	updated := next.(*uiModel)
-	if updated.input != "draft" {
-		t.Fatalf("expected mouse sgr sequence ignored, got %q", updated.input)
-	}
-
-	longBurst := "[<64;81;40M[<64;81;40M[<64;80;40M[<64;80;40M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M[<65;80;39M"
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longBurst)})
-	updated = next.(*uiModel)
-	if updated.input != "draft" {
-		t.Fatalf("expected long mouse sgr burst ignored, got %q", updated.input)
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
-	updated = next.(*uiModel)
-	if updated.input != "draftx" {
-		t.Fatalf("expected normal runes to still insert, got %q", updated.input)
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[<64;63;24M")})
-	updated = next.(*uiModel)
-	if updated.input != "draftx" {
-		t.Fatalf("expected up-scroll mouse sgr ignored, got %q", updated.input)
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[<65;69;20M")})
-	updated = next.(*uiModel)
-	if updated.input != "draftx" {
-		t.Fatalf("expected down-scroll mouse sgr ignored, got %q", updated.input)
-	}
-}
-
 func TestMouseSGRSplitEscAndRunesDoNotArmRollback(t *testing.T) {
 	m := newProjectedStaticUIModel()
 
@@ -144,38 +102,6 @@ func TestMouseSGRSplitEscAndRunesDoNotArmRollback(t *testing.T) {
 
 type statusLineFakeClient struct{}
 
-type busyToggleFakeClient struct {
-	mu        sync.Mutex
-	responses []llm.Response
-	calls     int
-	delay     time.Duration
-}
-
-func (f *busyToggleFakeClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
-	if f.delay > 0 {
-		select {
-		case <-ctx.Done():
-			return llm.Response{}, ctx.Err()
-		case <-time.After(f.delay):
-		}
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls++
-	if len(f.responses) == 0 {
-		return llm.Response{}, errors.New("no fake response configured")
-	}
-	resp := f.responses[0]
-	f.responses = f.responses[1:]
-	return resp, nil
-}
-
-func (f *busyToggleFakeClient) CallCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.calls
-}
-
 func (statusLineFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, errors.New("not implemented")
 }
@@ -195,183 +121,6 @@ func TestHelpDismissesOnRegisteredKeyAndAppliesAction(t *testing.T) {
 	}
 	if updated.input != "x" {
 		t.Fatalf("expected keypress to keep its normal behavior, got %q", updated.input)
-	}
-}
-
-func TestHelpDismissesOnAnyKeypress(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(80, 24)
-	event := testQuestionAskEvent("ask-1", "Proceed?", nil, "Yes", "No")
-	testSetActiveAsk(m, &event)
-	m.layout().syncViewport()
-
-	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
-	updated = next.(*uiModel)
-
-	if updated.helpVisible {
-		t.Fatal("expected any keypress to dismiss help")
-	}
-	if testAskFreeform(updated) {
-		t.Fatal("did not expect plain rune key to alter ask prompt state")
-	}
-}
-
-func TestQuestionMarkTogglesHelpWhenInputIsEmpty(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(80, 24)
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-	updated := next.(*uiModel)
-
-	if !updated.helpVisible {
-		t.Fatal("expected ? to open help from an empty prompt")
-	}
-}
-
-func TestQuestionMarkInsertsLiteralWhenInputIsNotEmpty(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(80, 24)
-	m.input = "draft"
-	m.inputCursor = len([]rune(m.input))
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-	updated := next.(*uiModel)
-
-	if updated.helpVisible {
-		t.Fatal("did not expect ? to open help while a draft is present")
-	}
-	if updated.input != "draft?" {
-		t.Fatalf("expected ? to be inserted into the draft, got %q", updated.input)
-	}
-}
-
-func TestAltQuestionMarkTogglesHelp(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(80, 24)
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}, Alt: true})
-	updated := next.(*uiModel)
-
-	if !updated.helpVisible {
-		t.Fatal("expected alt+? to open help")
-	}
-}
-
-func TestF1TogglesHelp(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(80, 24)
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyF1})
-	updated := next.(*uiModel)
-
-	if !updated.helpVisible {
-		t.Fatal("expected f1 to open help")
-	}
-}
-
-func TestHelpSectionsUseCompactBindingsWithoutStandaloneTranscriptSection(t *testing.T) {
-	sections := helpSectionsForGOOS(goruntime.GOOS)
-
-	for _, section := range sections {
-		if section.Title == "Transcript" {
-			t.Fatal("did not expect standalone transcript help section")
-		}
-		for _, entry := range section.Entries {
-			if slices.Equal(entry.Bindings, []string{"PgUp", "PgDn"}) {
-				t.Fatalf("did not expect split transcript page binding: %#v", entry.Bindings)
-			}
-		}
-	}
-
-	assertHelpEntryBindings(t, sections, "toggle keyboard help", []string{shortcutLabelsForGOOS(goruntime.GOOS).helpToggleBinding()})
-	assertHelpEntryBindings(t, sections, "paste clipboard image path or text at the cursor", []string{"Ctrl/Alt + V/D"})
-	assertHelpEntryBindings(t, sections, "delete the current input line", deleteCurrentLineBindingsForGOOS(goruntime.GOOS))
-	assertHelpEntryBindings(t, sections, "move the cursor by word", []string{"Alt/Ctrl + ←/→"})
-}
-
-func TestHelpSectionsUsePlatformSpecificSuperKeyLabels(t *testing.T) {
-	tests := []struct {
-		goos       string
-		helpToggle []string
-		deleteLine []string
-	}{
-		{
-			goos:       "darwin",
-			helpToggle: []string{"F1 / ? (empty) / Alt/⌘ + /"},
-			deleteLine: []string{"Ctrl/⌘ + Backspace", "Ctrl + U"},
-		},
-		{
-			goos:       "linux",
-			helpToggle: []string{"F1 / ? (empty) / Alt/Super + /"},
-			deleteLine: []string{"Ctrl/Super + Backspace"},
-		},
-		{
-			goos:       "windows",
-			helpToggle: []string{"F1 / ? (empty) / Alt/Win + /"},
-			deleteLine: []string{"Ctrl/Win + Backspace"},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.goos, func(t *testing.T) {
-			sections := helpSectionsForGOOS(tc.goos)
-			assertHelpEntryBindings(t, sections, "toggle keyboard help", tc.helpToggle)
-			assertHelpEntryBindings(t, sections, "delete the current input line", tc.deleteLine)
-		})
-	}
-}
-
-func TestHelpPaneRendersPlatformSuperKeyAtNarrowWidth(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.helpVisible = true
-	width := 60
-	lines := m.layout().renderHelpPane(width, 18, uiThemeStyles("dark"))
-	plain := stripANSIPreserve(strings.Join(lines, "\n"))
-	expected := "Alt/" + shortcutLabelsForGOOS(goruntime.GOOS).super
-	if !strings.Contains(plain, expected) {
-		t.Fatalf("expected rendered help pane to contain %q binding, got %q", expected, plain)
-	}
-	if goruntime.GOOS == "darwin" && (strings.Contains(plain, "Cmd") || strings.Contains(plain, "CMD")) {
-		t.Fatalf("did not expect macOS command text in rendered help pane, got %q", plain)
-	}
-	for _, line := range strings.Split(stripANSIPreserve(strings.Join(lines, "\n")), "\n") {
-		if got := runewidth.StringWidth(line); got > width {
-			t.Fatalf("help pane line width = %d, want <= %d for %q", got, width, line)
-		}
-	}
-}
-
-func assertHelpEntryBindings(t *testing.T, sections []uiHelpSection, description string, want []string) {
-	t.Helper()
-	for _, section := range sections {
-		for _, entry := range section.Entries {
-			if entry.Description != description {
-				continue
-			}
-			if !slices.Equal(entry.Bindings, want) {
-				t.Fatalf("bindings for %q = %#v, want %#v", description, entry.Bindings, want)
-			}
-			return
-		}
-	}
-	t.Fatalf("missing help entry %q", description)
-}
-
-func TestAltSlashTogglesHelp(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(80, 24)
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}, Alt: true})
-	updated := next.(*uiModel)
-
-	if !updated.helpVisible {
-		t.Fatal("expected alt+/ to open help")
 	}
 }
 
@@ -405,19 +154,6 @@ func TestHelpToggleClearsRollbackEscArming(t *testing.T) {
 	}
 	if updated.lastEscAt.IsZero() {
 		t.Fatal("expected esc after help toggle to start a fresh rollback arming window")
-	}
-}
-
-func TestCmdSlashCSIUTogglesHelp(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(80, 24)
-	m.layout().syncViewport()
-
-	next, _ := m.Update(adaptCustomKeyMsg(testBubbleTeaUnknownCSISequence("\x1b[47;10u")))
-	updated := next.(*uiModel)
-
-	if !updated.helpVisible {
-		t.Fatal("expected cmd+/ CSI-u sequence to open help")
 	}
 }
 

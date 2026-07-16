@@ -13,24 +13,14 @@ import (
 )
 
 func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithBlankGroupSeparators(t *testing.T) {
-	var out bytes.Buffer
-	surface := NewSurface(&out)
-
-	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageHydration,
-		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
-			userRow("first user"),
-			userRow("second user"),
-			assistantRow("assistant answer"),
-			toolRow("tool result"),
-			noticeRow("notice"),
-		}}},
-	}, testFrame())
-	if err != nil {
-		t.Fatalf("apply hydration: %v", err)
-	}
-
-	rows := immutableAppendedRows(parseTerminalOps(out.String()))
+	output := renderTerminalMessageForTest(t, hydrationMessage(
+		userRow("first user"),
+		userRow("second user"),
+		assistantRow("assistant answer"),
+		toolRow("tool result"),
+		noticeRow("notice"),
+	), testFrame())
+	rows := immutableAppendedRows(parseTerminalOps(output))
 	// Two consecutive user rows form one group: no separator between them.
 	// Each group transition (user->assistant, assistant->tool, tool->notice)
 	// emits exactly one blank line immediately before the new group.
@@ -45,8 +35,8 @@ func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithBlankGroupSepa
 		{content: "ℹ notice"},
 	}
 	assertRowStructure(t, rows, wantStructure)
-	if out.String() == ansi.Strip(out.String()) {
-		t.Fatalf("immutable append text = %q, want styled ANSI output", out.String())
+	if output == ansi.Strip(output) {
+		t.Fatalf("immutable append text = %q, want styled ANSI output", output)
 	}
 }
 
@@ -75,22 +65,12 @@ func TestApplyTerminalMessageDoesNotEmitSeparatorForConsecutiveSameGroup(t *test
 }
 
 func TestBackgroundShellCompletionStaysFlushWithToolActivity(t *testing.T) {
-	var out bytes.Buffer
-	surface := NewSurface(&out)
-
-	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageHydration,
-		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
-			toolRow("backgrounded command"),
-			backgroundNoticeRow("background complete"),
-			noticeRow("ordinary notice"),
-		}}},
-	}, testFrame())
-	if err != nil {
-		t.Fatalf("apply hydration: %v", err)
-	}
-
-	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+	output := renderTerminalMessageForTest(t, hydrationMessage(
+		toolRow("backgrounded command"),
+		backgroundNoticeRow("background complete"),
+		noticeRow("ordinary notice"),
+	), testFrame())
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(output)), []rowKind{
 		{content: "• backgrounded command"},
 		{content: "ℹ background complete"},
 		{separator: true},
@@ -99,32 +79,22 @@ func TestBackgroundShellCompletionStaysFlushWithToolActivity(t *testing.T) {
 }
 
 func TestCommittedAssistantFinalWithoutStreamRendersFullAnswer(t *testing.T) {
-	var out bytes.Buffer
-	surface := NewSurface(&out)
 	row := assistantRow("first final line\nsecond final line")
 	row.Visibility = clientui.EntryVisibilityOngoingCollapsed
 
-	if _, err := surface.ApplyTerminalMessage(committedMessage(row), testFrame()); err != nil {
-		t.Fatalf("apply final assistant row: %v", err)
-	}
-
-	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+	output := renderTerminalMessageForTest(t, committedMessage(row), testFrame())
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(output)), []rowKind{
 		{content: "❮ first final line second final line"},
 	})
 }
 
 func TestCommittedUserParagraphAppendsOneLogicalLineAtNarrowWidth(t *testing.T) {
-	var out bytes.Buffer
-	surface := NewSurface(&out)
-
-	if _, err := surface.ApplyTerminalMessage(
+	output := renderTerminalMessageForTest(
+		t,
 		committedMessage(userRow("alpha beta gamma delta")),
 		FrameInput{Size: Size{Width: 10, Height: 6}},
-	); err != nil {
-		t.Fatalf("apply committed user row: %v", err)
-	}
-
-	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(out.String())), []rowKind{
+	)
+	assertRowStructure(t, immutableAppendedRows(parseTerminalOps(output)), []rowKind{
 		{content: "❯ alpha beta gamma delta"},
 	})
 }
@@ -133,20 +103,12 @@ func TestCommittedAssistantFinalFallbackUsesFrameTheme(t *testing.T) {
 	frame := testFrame()
 	frame.Theme = "light"
 
-	var expected bytes.Buffer
-	if _, err := NewSurface(&expected).ApplyTerminalMessage(committedMessage(assistantRow("themed answer")), frame); err != nil {
-		t.Fatalf("apply ordinary committed assistant row: %v", err)
-	}
-
+	expected := renderTerminalMessageForTest(t, committedMessage(assistantRow("themed answer")), frame)
 	streamID := runtimeids.NewAssistantStreamID()
 	fallbackRow := assistantRow("themed answer")
 	fallbackRow.Assistant.StreamID = &streamID
-	var actual bytes.Buffer
-	if _, err := NewSurface(&actual).ApplyTerminalMessage(committedMessage(fallbackRow), frame); err != nil {
-		t.Fatalf("apply fallback committed assistant row: %v", err)
-	}
-
-	if actual.String() != expected.String() {
+	actual := renderTerminalMessageForTest(t, committedMessage(fallbackRow), frame)
+	if actual != expected {
 		t.Fatalf("fallback committed assistant row did not preserve the frame theme")
 	}
 }
@@ -171,23 +133,13 @@ func TestSurfaceDoesNotRetainCommittedRowContentAfterAppend(t *testing.T) {
 }
 
 func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
-	var out bytes.Buffer
-	surface := NewSurface(&out)
-
-	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageHydration,
-		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
-			userRow("user\x1b[2J\nnext\tline\rafter"),
-			assistantRow("assistant\x1b]0;spoof\a **answer**"),
-			toolRow("tool\x1b[3;1H result"),
-			noticeRow("notice\x07 value"),
-		}}},
-	}, testFrame())
-	if err != nil {
-		t.Fatalf("apply malicious hydration: %v", err)
-	}
-
-	rows := immutableAppendedRows(parseTerminalOps(out.String()))
+	output := renderTerminalMessageForTest(t, hydrationMessage(
+		userRow("user\x1b[2J\nnext\tline\rafter"),
+		assistantRow("assistant\x1b]0;spoof\a **answer**"),
+		toolRow("tool\x1b[3;1H result"),
+		noticeRow("notice\x07 value"),
+	), testFrame())
+	rows := immutableAppendedRows(parseTerminalOps(output))
 	wantStructure := []rowKind{
 		{content: "❯ user[2J next lineafter"},
 		{separator: true},
@@ -201,23 +153,13 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 }
 
 func TestCommittedRowsFilterNonOngoingVisibility(t *testing.T) {
-	var out bytes.Buffer
-	surface := NewSurface(&out)
-
-	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageHydration,
-		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
-			visibleRow(userRow("ongoing"), clientui.EntryVisibilityOngoing),
-			visibleRow(userRow("collapsed ongoing"), clientui.EntryVisibilityOngoingCollapsed),
-			visibleRow(userRow("detail only"), clientui.EntryVisibilityDetail),
-			visibleRow(userRow("hidden"), clientui.EntryVisibilityHidden),
-		}}},
-	}, testFrame())
-	if err != nil {
-		t.Fatalf("apply visibility hydration: %v", err)
-	}
-
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+	output := renderTerminalMessageForTest(t, hydrationMessage(
+		visibleRow(userRow("ongoing"), clientui.EntryVisibilityOngoing),
+		visibleRow(userRow("collapsed ongoing"), clientui.EntryVisibilityOngoingCollapsed),
+		visibleRow(userRow("detail only"), clientui.EntryVisibilityDetail),
+		visibleRow(userRow("hidden"), clientui.EntryVisibilityHidden),
+	), testFrame())
+	assertVisibleTextOps(t, parseTerminalOps(output), []string{
 		"❯ ongoing",
 		"❯ collapsed ongoing",
 	})
@@ -241,18 +183,14 @@ func TestCommittedRowsRejectUnresolvedVisibility(t *testing.T) {
 func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 	multiLine := "first line\nsecond line\nthird line"
 	cases := []struct {
-		name              string
-		visibility        clientui.EntryVisibility
-		wantContentRows   int
-		wantCompactMarker bool
+		name       string
+		visibility clientui.EntryVisibility
 	}{
-		{name: "O shows compact single line", visibility: clientui.EntryVisibilityOngoing, wantContentRows: 1, wantCompactMarker: true},
-		{name: "OC shows compact single line", visibility: clientui.EntryVisibilityOngoingCollapsed, wantContentRows: 1, wantCompactMarker: true},
+		{name: "O", visibility: clientui.EntryVisibilityOngoing},
+		{name: "OC", visibility: clientui.EntryVisibilityOngoingCollapsed},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			var out bytes.Buffer
-			surface := NewSurface(&out)
 			row := clientui.TranscriptCommittedRow{
 				Kind:       clientui.TranscriptRowAssistant,
 				Visibility: tt.visibility,
@@ -263,35 +201,19 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 					Phase:  transcript.AssistantPhaseCommentary,
 				},
 			}
-			if _, err := surface.ApplyTerminalMessage(committedMessage(row), FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
-				t.Fatalf("apply: %v", err)
+			output := renderTerminalMessageForTest(t, committedMessage(row), FrameInput{Size: Size{Width: 80, Height: 24}})
+			rows := visibleTextRows(parseTerminalOps(output))
+			if len(rows) != 1 {
+				t.Fatalf("compact rows = %v, want one logical row", rows)
 			}
-			rows := visibleTextRows(parseTerminalOps(out.String()))
-			contentRows := 0
-			for _, r := range rows {
-				if r == "" {
-					continue
-				}
-				contentRows++
-			}
-			if contentRows != tt.wantContentRows {
-				t.Fatalf("content rows = %d, want %d (rows=%v)", contentRows, tt.wantContentRows, rows)
-			}
-			if tt.wantCompactMarker {
-				// OC compact form shows only the first non-empty line, never "second line".
-				for _, r := range rows {
-					if strings.Contains(r, "second line") || strings.Contains(r, "third line") {
-						t.Fatalf("OC compact form leaked non-first body line: %q (rows=%v)", r, rows)
-					}
-				}
+			if strings.Contains(rows[0], "second line") || strings.Contains(rows[0], "third line") {
+				t.Fatalf("compact form leaked non-first body line: %q", rows[0])
 			}
 		})
 	}
 }
 
 func TestAnsweredQuestionRendersFullQuestionAndSelectedAnswer(t *testing.T) {
-	var out bytes.Buffer
-	surface := NewSurface(&out)
 	condensedText := "Recursive scan\nUser also said:\ninclude tests"
 	row := clientui.TranscriptCommittedRow{
 		Kind:       clientui.TranscriptRowTool,
@@ -315,14 +237,8 @@ func TestAnsweredQuestionRendersFullQuestionAndSelectedAnswer(t *testing.T) {
 		},
 	}
 
-	if _, err := surface.ApplyTerminalMessage(
-		committedMessage(row),
-		FrameInput{Size: Size{Width: 80, Height: 24}},
-	); err != nil {
-		t.Fatalf("apply answered question: %v", err)
-	}
-
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+	output := renderTerminalMessageForTest(t, committedMessage(row), FrameInput{Size: Size{Width: 80, Height: 24}})
+	assertVisibleTextOps(t, parseTerminalOps(output), []string{
 		"? Choose scope?",
 		"│ Keep generated files in scope?",
 		"│ Recursive scan",
@@ -332,64 +248,29 @@ func TestAnsweredQuestionRendersFullQuestionAndSelectedAnswer(t *testing.T) {
 }
 
 func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
-	for _, phase := range []transcript.AssistantPhase{transcript.AssistantPhaseFinal} {
-		t.Run(string(phase), func(t *testing.T) {
-			var out bytes.Buffer
-			surface := NewSurface(&out)
-			condensedText := "compact answer"
-			row := clientui.TranscriptCommittedRow{
-				Kind:       clientui.TranscriptRowAssistant,
-				Visibility: clientui.EntryVisibilityOngoing,
-				Integrity:  transcript.RowIntegrityValid,
-				Assistant: &clientui.TranscriptAssistantRow{
-					StepID:        assistantFinalizationStepID(),
-					Text:          "first line\nsecond line\nthird line",
-					CondensedText: &condensedText,
-					Phase:         phase,
-				},
-			}
-
-			if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-				Kind: clientui.TranscriptMessageHydration,
-				Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{
-					CommittedRows: []clientui.TranscriptCommittedRow{row},
-				}},
-			}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
-				t.Fatalf("apply hydration: %v", err)
-			}
-
-			assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
-				"❮ first line second line third line",
-			})
-		})
-	}
+	condensedText := "compact answer"
+	row := assistantRow("first line\nsecond line\nthird line")
+	row.Assistant.CondensedText = &condensedText
+	output := renderTerminalMessageForTest(
+		t,
+		hydrationMessage(row),
+		FrameInput{Size: Size{Width: 80, Height: 24}},
+	)
+	assertVisibleTextOps(t, parseTerminalOps(output), []string{
+		"❮ first line second line third line",
+	})
 }
 
 func TestHydrationRendersFullUserPrompt(t *testing.T) {
-	var out bytes.Buffer
-	surface := NewSurface(&out)
 	condensedText := "/review"
-	row := clientui.TranscriptCommittedRow{
-		Kind:       clientui.TranscriptRowUser,
-		Visibility: clientui.EntryVisibilityOngoing,
-		Integrity:  transcript.RowIntegrityValid,
-		User: &clientui.TranscriptUserRow{
-			StepID:        assistantFinalizationStepID(),
-			Text:          "/review\nInspect every changed file.\nReport architectural regressions.",
-			CondensedText: &condensedText,
-		},
-	}
-
-	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageHydration,
-		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{
-			CommittedRows: []clientui.TranscriptCommittedRow{row},
-		}},
-	}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
-		t.Fatalf("apply hydration: %v", err)
-	}
-
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+	row := userRow("/review\nInspect every changed file.\nReport architectural regressions.")
+	row.User.CondensedText = &condensedText
+	output := renderTerminalMessageForTest(
+		t,
+		hydrationMessage(row),
+		FrameInput{Size: Size{Width: 80, Height: 24}},
+	)
+	assertVisibleTextOps(t, parseTerminalOps(output), []string{
 		"❯ /review Inspect every changed file. Report architectural regressions.",
 	})
 }
@@ -399,6 +280,24 @@ func committedMessage(row clientui.TranscriptCommittedRow) clientui.TranscriptMe
 		Kind:    clientui.TranscriptMessageCommittedRow,
 		Payload: clientui.TranscriptPayload{CommittedRow: &row},
 	}
+}
+
+func hydrationMessage(rows ...clientui.TranscriptCommittedRow) clientui.TranscriptMessage {
+	return clientui.TranscriptMessage{
+		Kind: clientui.TranscriptMessageHydration,
+		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{
+			CommittedRows: rows,
+		}},
+	}
+}
+
+func renderTerminalMessageForTest(t *testing.T, message clientui.TranscriptMessage, frame FrameInput) string {
+	t.Helper()
+	var out bytes.Buffer
+	if _, err := NewSurface(&out).ApplyTerminalMessage(message, frame); err != nil {
+		t.Fatalf("apply terminal message: %v", err)
+	}
+	return out.String()
 }
 
 func userRow(text string) clientui.TranscriptCommittedRow {

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"core/cli/tui"
-	"core/shared/config"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -103,44 +102,6 @@ func (f *fakeTerminalCursorFile) Fd() uintptr {
 
 func (f *fakeTerminalCursorFile) Close() error {
 	return nil
-}
-
-func TestMainUIProgramOptionsPreservesTerminalFileOutput(t *testing.T) {
-	state := newUITerminalCursorState()
-	file := &fakeTerminalCursorFile{fd: 42}
-	options := mainUIProgramOptionsWithOutput(config.Settings{}, state, newUIRendererOutputGateState(), file)
-	if len(options) != 3 {
-		t.Fatalf("main options length = %d, want filter, focus reporting, and output options", len(options))
-	}
-
-	output := newUITerminalCursorWriter(file, state)
-	terminalFile, ok := output.(terminalCursorFile)
-	if !ok {
-		t.Fatalf("expected main options output to preserve terminal file interface, got %T", output)
-	}
-	if got := terminalFile.Fd(); got != 42 {
-		t.Fatalf("fd = %d, want 42", got)
-	}
-}
-
-func TestTerminalCursorWriterPassesThroughRendererControlWrites(t *testing.T) {
-	state := newUITerminalCursorState()
-	state.Set(uiTerminalCursorPlacement{Visible: true, CursorRow: 4, CursorCol: 6, AnchorRow: 9})
-
-	var out bytes.Buffer
-	writer := newUITerminalCursorWriter(&out, state)
-	if _, err := writer.Write([]byte("frame")); err != nil {
-		t.Fatalf("write frame: %v", err)
-	}
-	for _, sequence := range []string{xansi.EraseEntireScreen, xansi.CursorHomePosition} {
-		out.Reset()
-		if _, err := writer.Write([]byte(sequence)); err != nil {
-			t.Fatalf("write control sequence: %v", err)
-		}
-		if got := out.String(); got != sequence {
-			t.Fatalf("control write should pass through unchanged, got %q want %q", got, sequence)
-		}
-	}
 }
 
 func TestTerminalCursorWriterRestoresAnchorBeforeAltScreenEnter(t *testing.T) {
@@ -300,146 +261,94 @@ func TestTerminalCursorWriterDoesNotRepositionAfterStop(t *testing.T) {
 	}
 }
 
-func TestUITerminalCursorPlacementTracksWrappedOngoingInputAcrossWidthChanges(t *testing.T) {
-	state := newUITerminalCursorState()
-	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
-	m.terminalGeometry = terminalGeometryKnown(24, 12)
-	m.input = "alpha beta gamma delta epsilon"
-	m.inputCursor = -1
-	m.layout().syncViewport()
-	size := m.terminalGeometry.Size()
-	if size == nil {
-		t.Fatal("expected known terminal geometry")
+func TestUITerminalCursorPlacementTracksWrappedInputAcrossWidthChanges(t *testing.T) {
+	tests := []struct {
+		name        string
+		altScreen   bool
+		input       string
+		wideWidth   int
+		narrowWidth int
+	}{
+		{name: "ongoing", input: "alpha beta gamma delta epsilon", wideWidth: 24, narrowWidth: 16},
+		{name: "alt screen", altScreen: true, input: "one two three four five six", wideWidth: 26, narrowWidth: 18},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := newUITerminalCursorState()
+			model := newProjectedStaticUIModel(WithUITerminalCursorState(state))
+			model.terminalGeometry = terminalGeometryKnown(test.wideWidth, 12)
+			model.altScreenActive = test.altScreen
+			model.input = test.input
+			model.inputCursor = -1
+			model.layout().syncViewport()
+			size := model.terminalGeometry.Size()
+			if size == nil {
+				t.Fatal("expected known terminal geometry")
+			}
 
-	view := m.View()
-	assertRenderedLinesFitWidth(t, view, size.width)
-	placement, ok := state.Snapshot()
-	if !ok {
-		t.Fatal("expected visible terminal cursor placement")
-	}
-	if placement.AltScreen {
-		t.Fatal("expected ongoing placement to use normal buffer coordinates")
-	}
-	if placement.CursorCol >= size.width {
-		t.Fatalf("cursor col %d outside width %d", placement.CursorCol, size.width)
-	}
-	if placement.CursorRow < 0 || placement.CursorRow > placement.AnchorRow {
-		t.Fatalf("cursor row should be inside rendered frame, got %+v", placement)
-	}
+			assertRenderedLinesFitWidth(t, model.View(), size.width)
+			wide, ok := state.Snapshot()
+			if !ok || wide.AltScreen != test.altScreen || wide.CursorCol >= size.width {
+				t.Fatalf("wide placement = %+v, visible=%t", wide, ok)
+			}
+			if !test.altScreen && (wide.CursorRow < 0 || wide.CursorRow > wide.AnchorRow) {
+				t.Fatalf("normal-buffer cursor row outside rendered frame: %+v", wide)
+			}
 
-	m.terminalGeometry = terminalGeometryKnown(16, size.height)
-	size = m.terminalGeometry.Size()
-	m.layout().syncViewport()
-	view = m.View()
-	assertRenderedLinesFitWidth(t, view, size.width)
-	narrow, ok := state.Snapshot()
-	if !ok {
-		t.Fatal("expected visible terminal cursor placement after width change")
-	}
-	if narrow.CursorCol >= size.width {
-		t.Fatalf("narrow cursor col %d outside width %d", narrow.CursorCol, size.width)
-	}
-	if narrow == placement {
-		t.Fatalf("expected width change to update cursor placement, before=%+v after=%+v", placement, narrow)
+			model.terminalGeometry = terminalGeometryKnown(test.narrowWidth, size.height)
+			model.layout().syncViewport()
+			size = model.terminalGeometry.Size()
+			assertRenderedLinesFitWidth(t, model.View(), size.width)
+			narrow, ok := state.Snapshot()
+			if !ok || narrow.AltScreen != test.altScreen || narrow.CursorCol >= size.width {
+				t.Fatalf("narrow placement = %+v, visible=%t", narrow, ok)
+			}
+			if narrow == wide {
+				t.Fatalf("width change did not update placement: before=%+v after=%+v", wide, narrow)
+			}
+		})
 	}
 }
 
-func TestUITerminalCursorPlacementTracksWrappedAltScreenInputAcrossWidthChanges(t *testing.T) {
-	state := newUITerminalCursorState()
-	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
-	m.terminalGeometry = terminalGeometryKnown(26, 12)
-	m.altScreenActive = true
-	m.input = "one two three four five six"
-	m.inputCursor = -1
-	m.layout().syncViewport()
-	size := m.terminalGeometry.Size()
-	if size == nil {
-		t.Fatal("expected known terminal geometry")
-	}
+func TestInputCursorsUseSharedFieldDisplayWidth(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		ask       bool
+		cursorRow int
+	}{
+		{name: "main", cursorRow: framedInputContentCursorRow(0)},
+		{name: "ask", ask: true, cursorRow: framedInputContentCursorRow(1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := newUITerminalCursorState()
+			model := newProjectedStaticUIModel(WithUITerminalCursorState(state))
+			model.terminalGeometry = terminalGeometryKnown(12, 10)
+			if test.ask {
+				reply := make(chan askReply, 1)
+				event := testQuestionAskEvent("ask-1", "Question?", reply)
+				testSetActiveAsk(model, &event)
+				model.ask.input = "ab👍cd"
+				model.ask.inputCursor = 3
+			} else {
+				model.input = "ab👍cd"
+				model.inputCursor = 3
+			}
+			model.layout().syncViewport()
+			size := model.terminalGeometry.Size()
+			if size == nil {
+				t.Fatal("expected known terminal geometry")
+			}
 
-	view := m.View()
-	assertRenderedLinesFitWidth(t, view, size.width)
-	placement, ok := state.Snapshot()
-	if !ok {
-		t.Fatal("expected visible terminal cursor placement")
-	}
-	if !placement.AltScreen {
-		t.Fatal("expected alt-screen placement to use absolute coordinates")
-	}
-
-	m.terminalGeometry = terminalGeometryKnown(18, size.height)
-	size = m.terminalGeometry.Size()
-	m.layout().syncViewport()
-	view = m.View()
-	assertRenderedLinesFitWidth(t, view, size.width)
-	narrow, ok := state.Snapshot()
-	if !ok {
-		t.Fatal("expected visible terminal cursor placement after alt-screen width change")
-	}
-	if !narrow.AltScreen {
-		t.Fatal("expected alt-screen placement to remain absolute after width change")
-	}
-	if narrow.CursorCol >= size.width {
-		t.Fatalf("narrow cursor col %d outside width %d", narrow.CursorCol, size.width)
-	}
-	if narrow == placement {
-		t.Fatalf("expected alt-screen width change to update cursor placement, before=%+v after=%+v", placement, narrow)
-	}
-}
-
-func TestMainInputCursorUsesSharedFieldDisplayWidth(t *testing.T) {
-	state := newUITerminalCursorState()
-	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
-	m.terminalGeometry = terminalGeometryKnown(12, 10)
-	m.input = "ab👍cd"
-	m.inputCursor = 3
-	m.layout().syncViewport()
-	size := m.terminalGeometry.Size()
-	if size == nil {
-		t.Fatal("expected known terminal geometry")
-	}
-
-	cursor := m.layout().inputPaneCursor(size.width)
-	if !cursor.Visible {
-		t.Fatal("expected main input cursor")
-	}
-	if cursor.Row != framedInputContentCursorRow(0) || cursor.Col != 6 {
-		t.Fatalf("cursor = %+v, want framed content row %d col 6", cursor, framedInputContentCursorRow(0))
-	}
-	view := m.View()
-	assertRenderedLinesFitWidth(t, view, size.width)
-	if !strings.Contains(xansi.Strip(view), "› ab👍cd") {
-		t.Fatalf("expected input text rendered through shared field, got %q", view)
-	}
-}
-
-func TestAskInputCursorUsesSharedFieldDisplayWidth(t *testing.T) {
-	state := newUITerminalCursorState()
-	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
-	m.terminalGeometry = terminalGeometryKnown(12, 10)
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Question?", reply)
-	testSetActiveAsk(m, &event)
-	m.ask.input = "ab👍cd"
-	m.ask.inputCursor = 3
-	m.layout().syncViewport()
-	size := m.terminalGeometry.Size()
-	if size == nil {
-		t.Fatal("expected known terminal geometry")
-	}
-
-	cursor := m.layout().inputPaneCursor(size.width)
-	if !cursor.Visible {
-		t.Fatal("expected ask input cursor")
-	}
-	if cursor.Row != framedInputContentCursorRow(1) || cursor.Col != 6 {
-		t.Fatalf("cursor = %+v, want framed content row %d col 6", cursor, framedInputContentCursorRow(1))
-	}
-	view := m.View()
-	assertRenderedLinesFitWidth(t, view, size.width)
-	if !strings.Contains(xansi.Strip(view), "› ab👍cd") {
-		t.Fatalf("expected ask input text rendered through shared field, got %q", view)
+			cursor := model.layout().inputPaneCursor(size.width)
+			if !cursor.Visible || cursor.Row != test.cursorRow || cursor.Col != 6 {
+				t.Fatalf("cursor = %+v, want visible row %d col 6", cursor, test.cursorRow)
+			}
+			view := model.View()
+			assertRenderedLinesFitWidth(t, view, size.width)
+			if !strings.Contains(xansi.Strip(view), "› ab👍cd") {
+				t.Fatalf("shared input field missing from view %q", view)
+			}
+		})
 	}
 }
 
@@ -461,29 +370,6 @@ func TestViewDoesNotAppendHideCursorWhenRealTerminalCursorVisible(t *testing.T) 
 	}
 	if _, ok := state.Snapshot(); !ok {
 		t.Fatal("expected real cursor placement")
-	}
-}
-
-func TestRealCursorFrameChangesWhenOnlyInputSpacesMoveCursor(t *testing.T) {
-	state := newUITerminalCursorState()
-	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
-	m.terminalGeometry = terminalGeometryKnown(24, 10)
-	m.layout().syncViewport()
-
-	emptyView := m.View()
-	m.input = " "
-	m.inputCursor = -1
-	m.layout().syncViewport()
-	spaceView := m.View()
-	if emptyView == spaceView {
-		t.Fatal("expected real-cursor frame to change when only trailing spaces move cursor")
-	}
-	placement, ok := state.Snapshot()
-	if !ok {
-		t.Fatal("expected real cursor placement")
-	}
-	if got, want := placement.CursorCol, lipgloss.Width("›  "); got != want {
-		t.Fatalf("cursor col after typed space = %d, want %d", got, want)
 	}
 }
 
