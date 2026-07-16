@@ -47,6 +47,7 @@ type Session struct {
 	FirstPromptPreview string
 	InputDraft         string
 	ParentSessionID    sql.NullString
+	Category           sql.NullString
 	CreatedAtUnixMs    int64
 	UpdatedAtUnixMs    int64
 	LastSequence       int64
@@ -57,7 +58,6 @@ type Session struct {
 	LockedJson         string
 	UsageStateJson     string
 	MetadataJson       string
-	Category           sql.NullString
 }
 
 type SessionPromptHistoryEntry struct {
@@ -66,6 +66,12 @@ type SessionPromptHistoryEntry struct {
 	SourceID        string
 	Text            string
 	CreatedAtUnixMs int64
+}
+
+type SqliteSchema struct {
+	Type string
+	Name string
+	Sql  sql.NullString
 }
 
 type Task struct {

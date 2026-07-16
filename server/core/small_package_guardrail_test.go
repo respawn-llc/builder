@@ -101,6 +101,7 @@ func listRepoPackages(t *testing.T, repoRoot string) []smallPackageInfo {
 }
 
 var allowedSmallPackages = map[string]string{
+	"cmd/dumpmetadataschema":                      "narrow developer-only metadata schema audit command that reuses the authoritative metadata migration and generated-query paths",
 	"cmd/dumpmodelrequest":                        "temporary standalone model-request inspector command that keeps diagnostic request serialization out of production server startup paths",
 	"cli/app/internal/daemonlaunch":               "narrow process helper that intentionally isolates daemon process ownership and termination behavior from attachment policy",
 	"cli/app/internal/embeddedattach":             "narrow embedded-server attachment seam after absorbing embedded binding/startup helpers",

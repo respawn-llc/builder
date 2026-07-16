@@ -4360,3 +4360,20 @@ ORDER BY r.started_at_unix_ms DESC, (
     FROM task_runs storage
     WHERE storage.id = r.id
 ) DESC;
+
+-- name: ListMetadataSchemaDefinitions :many
+SELECT
+    type AS object_kind,
+    name AS object_name,
+    CAST(sql AS TEXT) AS ddl
+FROM sqlite_schema
+WHERE sql IS NOT NULL
+  AND name != 'sqlite_sequence'
+ORDER BY
+    CASE type
+        WHEN 'table' THEN 0
+        WHEN 'view' THEN 1
+        WHEN 'index' THEN 2
+        WHEN 'trigger' THEN 3
+    END,
+    name;
