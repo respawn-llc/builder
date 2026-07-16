@@ -36,7 +36,8 @@ type runtimeController interface {
 	RunWorktreeTransition(
 		ctx context.Context,
 		sessionID string,
-		fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+		origin *serverapi.RuntimeStepOrigin,
+		fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
 	) error
 	PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome)
 	SteerWorktreeTransitionFailure(ctx context.Context, sessionID string, outcome clientui.WorktreeTransitionOutcome) error

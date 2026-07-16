@@ -49,6 +49,9 @@ func (s *blockingBackgroundStepLifecycle) Snapshot() *RunSnapshot {
 func (s *blockingBackgroundStepLifecycle) WithActiveStep(func(stepID string) error) (bool, error) {
 	return false, nil
 }
+func (s *blockingBackgroundStepLifecycle) ApplyForActiveStep(string, func() error) error {
+	return ErrActiveStepInactive
+}
 
 func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *testing.T) {
 	steps := &blockingBackgroundStepLifecycle{

@@ -245,6 +245,18 @@ func (s *defaultExclusiveStepLifecycle) WithActiveStep(fn func(stepID string) er
 	return true, fn(s.active.stepID)
 }
 
+func (s *defaultExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply func() error) error {
+	if s == nil || apply == nil {
+		return errors.New("active step authority action is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil || s.active.stepID != stepID || s.active.closing || s.active.interrupted {
+		return ErrActiveStepInactive
+	}
+	return apply()
+}
+
 func (s *defaultExclusiveStepLifecycle) closeActiveStepQueue(stepID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

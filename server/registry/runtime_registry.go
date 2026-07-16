@@ -863,6 +863,9 @@ func (r *RuntimeRegistry) AwaitPromptResponse(ctx context.Context, sessionID str
 	if r == nil {
 		return askquestion.AskQuestionResponse{}, fmt.Errorf("runtime registry is required")
 	}
+	if _, err := runtimeids.ParseStepID(req.StepID); err != nil {
+		return askquestion.AskQuestionResponse{}, fmt.Errorf("pending prompt step identity: %w", err)
+	}
 	id := strings.TrimSpace(sessionID)
 	entry := r.directory.Entry(id)
 	if entry == nil {

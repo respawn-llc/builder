@@ -30,6 +30,7 @@ type exclusiveStepLifecycle interface {
 	IsBusy() bool
 	Snapshot() *RunSnapshot
 	WithActiveStep(fn func(stepID string) error) (bool, error)
+	ApplyForActiveStep(stepID string, apply func() error) error
 }
 
 type backgroundNoticeScheduler interface {
