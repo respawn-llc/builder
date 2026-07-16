@@ -333,6 +333,84 @@ func TestPlanLaunchSessionRejectsUnknownParentBeforeRegisteringStore(t *testing.
 	}
 }
 
+func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
+	ctx := context.Background()
+	persistenceRoot := t.TempDir()
+	workspace := t.TempDir()
+	meta, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(ctx, workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(persistenceRoot, "projects", binding.ProjectID, "sessions")
+	workflowCaller, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create workflow caller: %v", err)
+	}
+	if err := workflowCaller.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1"}); err != nil {
+		t.Fatalf("SetWorkflowSessionState: %v", err)
+	}
+	ordinaryCaller, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create ordinary caller: %v", err)
+	}
+
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.Workflow = config.WorkflowSettings{Subagents: false}
+	roleSettings := cfg.Settings
+	roleSettings.ThinkingLevel = "high"
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"worker": {
+			Settings:         roleSettings,
+			Sources:          map[string]string{"thinking_level": "file"},
+			AgentCallable:    true,
+			AgentCallableSet: true,
+		},
+	}
+	stores := &countingStoreRegistrar{}
+	service := NewService(launch.Planner{
+		Config:            cfg,
+		ContainerDir:      containerDir,
+		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
+		PersistedSessions: meta,
+	}, stores)
+	worker := "worker"
+	workflowCallerID := workflowCaller.Meta().SessionID
+	workflowCallerRuntimeID := mustSessionLaunchIntentID(t, workflowCallerID)
+	_, err = service.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
+		ClientRequestID: "workflow-caller-target",
+		Mode:            serverapi.SessionLaunchModeHeadless,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(workflowCallerRuntimeID)),
+		CallerSessionID: &workflowCallerID,
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &worker},
+	})
+	var denied *serverapi.SubagentLaunchDeniedError
+	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
+		t.Fatalf("workflow caller error = %T %v, want not-callable denial", err, err)
+	}
+	if stores.registrations != 0 {
+		t.Fatalf("workflow denial store registrations = %d, want 0", stores.registrations)
+	}
+
+	ordinaryCallerID := ordinaryCaller.Meta().SessionID
+	ordinaryCallerRuntimeID := mustSessionLaunchIntentID(t, ordinaryCallerID)
+	if _, err := service.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
+		ClientRequestID: "ordinary-caller-target",
+		Mode:            serverapi.SessionLaunchModeHeadless,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(ordinaryCallerRuntimeID)),
+		CallerSessionID: &ordinaryCallerID,
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &worker},
+	}); err != nil {
+		t.Fatalf("ordinary caller target: %v", err)
+	}
+	if stores.registrations != 1 {
+		t.Fatalf("ordinary launch store registrations = %d, want 1", stores.registrations)
+	}
+}
 func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()

@@ -16,8 +16,7 @@ type Target struct {
 }
 
 type Caller struct {
-	Workflow  bool
-	AgentRole *string
+	Workflow bool
 }
 
 func TargetFromOverride(override serverapi.RunPromptAgentRoleOverride) Target {

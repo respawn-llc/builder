@@ -123,10 +123,7 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 				if callerErr != nil {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialCallerMissing}
 				}
-				caller = &subagentpolicy.Caller{
-					Workflow:  callerContext.WorkflowSession,
-					AgentRole: callerContext.AgentRole,
-				}
+				caller = &subagentpolicy.Caller{Workflow: callerContext.WorkflowSession}
 				if parentAgentSessionID != nil {
 					callerSessionID, parseErr := runtimeids.ParseSessionID(*req.CallerSessionID)
 					if parseErr != nil || *parentAgentSessionID != callerSessionID {

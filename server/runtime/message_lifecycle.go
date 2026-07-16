@@ -415,9 +415,6 @@ func newActiveMetaContextBuilder(meta session.Meta, model, thinkingLevel, global
 	builder := newMetaContextBuilder(roots.discoveryRoot, model, thinkingLevel, skillPolicy, now).
 		withEnvironmentCWD(roots.environmentCWD).
 		withGlobalConfigDir(globalConfigDir)
-	if meta.Continuation != nil {
-		builder = builder.withSubagentCallerRole(meta.Continuation.AgentRole)
-	}
 	return builder
 }
 
