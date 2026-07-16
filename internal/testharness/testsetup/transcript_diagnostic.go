@@ -1,4 +1,4 @@
-package clientuitest
+package testsetup
 
 import "core/shared/clientui"
 

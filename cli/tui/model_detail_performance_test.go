@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/internal/testharness/clientuitest"
+	"core/internal/testharness/testsetup"
 	"core/shared/clientui"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -303,12 +303,12 @@ func detailPerformanceVisibleTail() []clientui.TranscriptCommittedRow {
 		detailNotice(clientui.TranscriptNoticeRow{
 			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:   clientui.TranscriptNoticeInfo,
-			Diagnostic: clientuitest.LegacyTranscriptDiagnostic("tail_diagnostic", "tail diagnostic one"),
+			Diagnostic: testsetup.LegacyTranscriptDiagnostic("tail_diagnostic", "tail diagnostic one"),
 		}),
 		detailNotice(clientui.TranscriptNoticeRow{
 			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:   clientui.TranscriptNoticeInfo,
-			Diagnostic: clientuitest.LegacyTranscriptDiagnostic("tail_diagnostic", "tail diagnostic two"),
+			Diagnostic: testsetup.LegacyTranscriptDiagnostic("tail_diagnostic", "tail diagnostic two"),
 		}),
 		{
 			Visibility: clientui.EntryVisibilityOngoing,
