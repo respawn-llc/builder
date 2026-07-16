@@ -313,6 +313,39 @@ func TestWorktreeEnterAndLeaveReturnScheduledAcknowledgements(t *testing.T) {
 	}
 }
 
+func TestWorktreeEnterAndLeaveHumanConfirmationsAreStableAndActionSpecific(t *testing.T) {
+	remote := &worktreeCommandTestRemote{}
+	replaceWorktreeCommandRemote(t, remote)
+	t.Setenv("KENT_SESSION_ID", "shell-session")
+
+	run := func(args ...string) string {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if exitCode := rootCommand(args, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", args, exitCode, stderr.String())
+		}
+		if stdout.Len() == 0 {
+			t.Fatalf("%v returned an empty confirmation", args)
+		}
+		return stdout.String()
+	}
+
+	firstEnter := run("worktree", "enter", "feature/a")
+	secondEnter := run("worktree", "enter", "feature/a")
+	if firstEnter != secondEnter {
+		t.Fatal("worktree enter confirmation varied with its operation acknowledgement")
+	}
+
+	firstLeave := run("worktree", "leave")
+	secondLeave := run("worktree", "leave")
+	if firstLeave != secondLeave {
+		t.Fatal("worktree leave confirmation varied with its operation acknowledgement")
+	}
+	if firstEnter == firstLeave {
+		t.Fatal("worktree enter and leave returned the same human confirmation")
+	}
+}
+
 func TestWorktreeCreateDoesNotEnterAndReturnsCreatedSelector(t *testing.T) {
 	remote := &worktreeCommandTestRemote{
 		resolve: serverapi.WorktreeCreateTargetResolveResponse{
