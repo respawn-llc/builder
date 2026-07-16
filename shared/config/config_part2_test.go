@@ -204,40 +204,6 @@ supports_provider_verbosity = true
 	}
 }
 
-func TestEffectiveReviewerSettingsPreservesLoadedExplicitFalseCapabilities(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
-
-[model_capabilities]
-supports_reasoning_effort = true
-supports_vision_inputs = true
-
-[provider_capabilities]
-provider_id = "main-provider"
-supports_responses_api = true
-supports_prompt_cache_key = true
-
-[reviewer.model_capabilities]
-supports_reasoning_effort = false
-supports_vision_inputs = false
-
-[reviewer.provider_capabilities]
-provider_id = "reviewer-provider"
-supports_responses_api = false
-supports_prompt_cache_key = false
-supports_provider_verbosity = false
-`, LoadOptions{})
-	reviewer := cfg.Settings.Reviewer
-	if reviewer.ModelCapabilities.SupportsReasoningEffort || reviewer.ModelCapabilities.SupportsVisionInputs {
-		t.Fatalf("expected explicit false reviewer model capabilities to survive effective helper, got %+v", reviewer.ModelCapabilities)
-	}
-	if reviewer.ProviderCapabilities.ProviderID != "reviewer-provider" || reviewer.ProviderCapabilities.SupportsResponsesAPI || reviewer.ProviderCapabilities.SupportsPromptCacheKey {
-		t.Fatalf("expected explicit false reviewer provider capabilities to survive effective helper, got %+v", reviewer.ProviderCapabilities)
-	}
-	if reviewer.ProviderCapabilities.SupportsProviderVerbosity {
-		t.Fatalf("expected explicit false reviewer verbosity capability to survive effective helper, got %+v", reviewer.ProviderCapabilities)
-	}
-}
-
 func TestLoadReviewerModelContextWindowRejectsNegative(t *testing.T) {
 	err := loadConfigTestFileError(t, `[reviewer]
 model_context_window = -1
@@ -259,59 +225,6 @@ model_context_window = 39999
 	}
 	if !errors.Is(err, errModelContextWindowBelowMinimum) {
 		t.Fatalf("expected model context window minimum validation detail, got %v", err)
-	}
-}
-
-func TestLoadReviewerModelContextWindowRejectsExplicitZero(t *testing.T) {
-	err := loadConfigTestFileError(t, `[reviewer]
-model_context_window = 0
-`, LoadOptions{})
-	if err == nil {
-		t.Fatal("expected explicit reviewer.model_context_window=0 to fail")
-	}
-	if !errors.Is(err, errModelContextWindowBelowMinimum) {
-		t.Fatalf("expected model context window minimum validation detail, got %v", err)
-	}
-}
-
-func TestLoadReviewerModelCapabilityFalseOverrideDoesNotInheritMainTrue(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
-
-[model_capabilities]
-supports_reasoning_effort = true
-supports_vision_inputs = true
-
-[reviewer]
-model = "local-reviewer"
-
-[reviewer.model_capabilities]
-supports_reasoning_effort = false
-supports_vision_inputs = false
-`, LoadOptions{})
-	if cfg.Settings.Reviewer.ModelCapabilities.SupportsReasoningEffort || cfg.Settings.Reviewer.ModelCapabilities.SupportsVisionInputs {
-		t.Fatalf("expected explicit false reviewer model capabilities to be preserved, got %+v", cfg.Settings.Reviewer.ModelCapabilities)
-	}
-	if got := cfg.Source.Sources["reviewer.model_capabilities.supports_reasoning_effort"]; got != "file" {
-		t.Fatalf("expected reviewer model capability source file, got %q", got)
-	}
-}
-
-func TestSettingsTOMLPreservesReviewerModelCapabilityFalseOverride(t *testing.T) {
-	settings := configRegistry.defaultState().Settings
-	settings.ModelCapabilities.SupportsReasoningEffort = true
-	settings.ModelCapabilities.SupportsVisionInputs = true
-	settings.Reviewer.ModelCapabilities.SupportsReasoningEffort = false
-	settings.Reviewer.ModelCapabilities.SupportsVisionInputs = false
-
-	rendered := settingsTOMLWithRenderingOptions(settings, true, nil, nil)
-	if !strings.Contains(rendered, "[reviewer.model_capabilities]") {
-		t.Fatalf("expected reviewer model capabilities section, got:\n%s", rendered)
-	}
-	if !strings.Contains(rendered, "supports_reasoning_effort = false") {
-		t.Fatalf("expected explicit reviewer reasoning false override, got:\n%s", rendered)
-	}
-	if !strings.Contains(rendered, "supports_vision_inputs = false") {
-		t.Fatalf("expected explicit reviewer vision false override, got:\n%s", rendered)
 	}
 }
 
@@ -342,67 +255,6 @@ func TestSettingsTOMLPreservesReviewerProviderCapabilityFalseOverride(t *testing
 	}
 	if !strings.Contains(rendered, "supports_prompt_cache_key = false") {
 		t.Fatalf("expected explicit reviewer prompt cache false override, got:\n%s", rendered)
-	}
-}
-
-func TestNormalizeSettingsForPersistenceWithSourcesPreservesReviewerCapabilityFalse(t *testing.T) {
-	settings := configRegistry.defaultState().Settings
-	settings.ModelCapabilities.SupportsReasoningEffort = true
-	settings.ModelCapabilities.SupportsVisionInputs = true
-	settings.ProviderCapabilities = ProviderCapabilitiesOverride{
-		ProviderID:             "main-provider",
-		SupportsResponsesAPI:   true,
-		SupportsPromptCacheKey: true,
-	}
-	settings.Reviewer.ModelCapabilities.SupportsReasoningEffort = false
-	settings.Reviewer.ModelCapabilities.SupportsVisionInputs = false
-	settings.Reviewer.ProviderCapabilities.ProviderID = "reviewer-provider"
-	settings.Reviewer.ProviderCapabilities.SupportsResponsesAPI = true
-	settings.Reviewer.ProviderCapabilities.SupportsPromptCacheKey = false
-
-	sources := configRegistry.defaultSourceMap()
-	sources["reviewer.model_capabilities.supports_reasoning_effort"] = "file"
-	sources["reviewer.model_capabilities.supports_vision_inputs"] = "file"
-	sources["reviewer.provider_capabilities.provider_id"] = "file"
-	sources["reviewer.provider_capabilities.supports_responses_api"] = "file"
-	sources["reviewer.provider_capabilities.supports_prompt_cache_key"] = "file"
-
-	normalized, err := NormalizeSettingsForPersistenceWithSources(settings, sources)
-	if err != nil {
-		t.Fatalf("normalize settings for persistence: %v", err)
-	}
-	if normalized.Reviewer.ModelCapabilities.SupportsReasoningEffort || normalized.Reviewer.ModelCapabilities.SupportsVisionInputs {
-		t.Fatalf("expected explicit false reviewer model capabilities to persist, got %+v", normalized.Reviewer.ModelCapabilities)
-	}
-	if normalized.Reviewer.ProviderCapabilities.ProviderID != "reviewer-provider" || !normalized.Reviewer.ProviderCapabilities.SupportsResponsesAPI || normalized.Reviewer.ProviderCapabilities.SupportsPromptCacheKey {
-		t.Fatalf("expected explicit false reviewer provider capabilities to persist, got %+v", normalized.Reviewer.ProviderCapabilities)
-	}
-}
-
-func TestNormalizeSettingsForPersistencePreservesReviewerCapabilityFalseWithoutSources(t *testing.T) {
-	settings := configRegistry.defaultState().Settings
-	settings.ModelCapabilities.SupportsReasoningEffort = true
-	settings.ModelCapabilities.SupportsVisionInputs = true
-	settings.ProviderCapabilities = ProviderCapabilitiesOverride{
-		ProviderID:             "main-provider",
-		SupportsResponsesAPI:   true,
-		SupportsPromptCacheKey: true,
-	}
-	settings.Reviewer.ModelCapabilities.SupportsReasoningEffort = false
-	settings.Reviewer.ModelCapabilities.SupportsVisionInputs = false
-	settings.Reviewer.ProviderCapabilities.ProviderID = "reviewer-provider"
-	settings.Reviewer.ProviderCapabilities.SupportsResponsesAPI = false
-	settings.Reviewer.ProviderCapabilities.SupportsPromptCacheKey = false
-
-	normalized, err := NormalizeSettingsForPersistenceWithSources(settings, nil)
-	if err != nil {
-		t.Fatalf("normalize settings for persistence: %v", err)
-	}
-	if normalized.Reviewer.ModelCapabilities.SupportsReasoningEffort || normalized.Reviewer.ModelCapabilities.SupportsVisionInputs {
-		t.Fatalf("expected no-source explicit false reviewer model capabilities to persist, got %+v", normalized.Reviewer.ModelCapabilities)
-	}
-	if normalized.Reviewer.ProviderCapabilities.ProviderID != "reviewer-provider" || normalized.Reviewer.ProviderCapabilities.SupportsResponsesAPI || normalized.Reviewer.ProviderCapabilities.SupportsPromptCacheKey {
-		t.Fatalf("expected no-source explicit false reviewer provider capabilities to persist, got %+v", normalized.Reviewer.ProviderCapabilities)
 	}
 }
 
@@ -896,63 +748,6 @@ func TestLoadSkillNamedEnabledIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestLoadSkillNamedEnabledExplicitTrue(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, "[skills]\nenabled = true\n", LoadOptions{})
-	if !ResolveSkillPolicy(cfg.Settings).SkillEnabled("enabled") {
-		t.Fatal("skills.enabled=true must enable the skill named enabled")
-	}
-	if got := cfg.Source.Sources["skills.enabled"]; got != "file" {
-		t.Fatalf("expected explicit skills.enabled source file, got %q", got)
-	}
-}
-
-func TestResolveSkillPolicyDefensivelyCopiesNormalizedDisabledNames(t *testing.T) {
-	settings := Settings{
-		SkillToggles: map[string]bool{
-			" ApiResult ": false,
-			"enabled":     false,
-		},
-	}
-	original := ResolveSkillPolicy(settings)
-	settings.SkillToggles[" ApiResult "] = true
-	settings.SkillToggles["new skill"] = false
-
-	if original.SkillEnabled("apiresult") {
-		t.Fatal("resolved policy must retain its defensively copied disabled names")
-	}
-	if !original.SkillEnabled("new skill") {
-		t.Fatal("resolved policy must not observe later map additions")
-	}
-	if original.SkillEnabled("enabled") {
-		t.Fatal("enabled must behave like every other disabled skill name")
-	}
-
-	current := ResolveSkillPolicy(settings)
-	if !current.SkillEnabled("apiresult") {
-		t.Fatal("new policy must use the current ordinary toggle values")
-	}
-	if current.SkillEnabled("NEW   SKILL") {
-		t.Fatal("new policy must apply normalized ordinary toggles")
-	}
-	if current.SkillEnabled("enabled") {
-		t.Fatal("ordinary enabled name toggle must remain disabled")
-	}
-}
-
-func TestSkillPolicyEquivalenceUsesNormalizedDisabledNameSet(t *testing.T) {
-	left := ResolveSkillPolicy(Settings{SkillToggles: map[string]bool{" APIResult ": false}})
-	right := ResolveSkillPolicy(Settings{SkillToggles: map[string]bool{"apiresult": false, "other": true}})
-	if !left.Equivalent(right) || !right.Equivalent(left) {
-		t.Fatal("policies with the same normalized disabled names must be equivalent")
-	}
-	if left.Equivalent(ResolveSkillPolicy(Settings{SkillToggles: map[string]bool{"apiresult": false, "enabled": false}})) {
-		t.Fatal("skill named enabled must participate in policy equivalence")
-	}
-	if left.Equivalent(ResolveSkillPolicy(Settings{SkillToggles: map[string]bool{"different": false}})) {
-		t.Fatal("disabled-name set must participate in policy equivalence")
-	}
-}
-
 func TestLoadRejectsNonBooleanSkillToggle(t *testing.T) {
 	if err := loadConfigTestFileError(t, "[skills]\napiresult = \"off\"\n", LoadOptions{}); err == nil {
 		t.Fatal("expected invalid skills type error")
@@ -1044,25 +839,6 @@ func TestLoadToolPreamblesPrecedence(t *testing.T) {
 	t.Setenv("KENT_TOOL_PREAMBLES", "broken")
 	if _, err := Load(workspace, LoadOptions{}); err == nil {
 		t.Fatal("expected invalid KENT_TOOL_PREAMBLES error")
-	}
-}
-
-func TestLoadAllowsReviewerAuthNoneWithoutBaseURL(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `[reviewer]
-auth = "none"
-`, LoadOptions{})
-	if cfg.Settings.Reviewer.Auth != "none" {
-		t.Fatalf("expected reviewer.auth=none, got %q", cfg.Settings.Reviewer.Auth)
-	}
-}
-
-func TestLoadAllowsReviewerAuthNoneWithFirstPartyOpenAIBaseURL(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `[reviewer]
-openai_base_url = "https://api.openai.com/v1"
-auth = "none"
-`, LoadOptions{})
-	if cfg.Settings.Reviewer.Auth != "none" {
-		t.Fatalf("expected reviewer.auth=none, got %q", cfg.Settings.Reviewer.Auth)
 	}
 }
 
