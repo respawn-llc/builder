@@ -264,7 +264,7 @@ func TestDetailModeCachedRowsPreserveVisibility(t *testing.T) {
 		Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 		Severity:     clientui.TranscriptNoticeInfo,
 		CompactLabel: &compactNotice,
-		Diagnostic: clientui.NewLegacyTranscriptDiagnostic(
+		Diagnostic: legacyTranscriptDiagnosticForTest(
 			"detail_cache_test",
 			"diagnostic detail",
 		),
@@ -539,7 +539,7 @@ func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 				Severity:     clientui.TranscriptNoticeInfo,
 				MessageType:  &messageType,
 				CompactLabel: &compactLabel,
-				Diagnostic: clientui.NewLegacyTranscriptDiagnostic(
+				Diagnostic: legacyTranscriptDiagnosticForTest(
 					clientui.TranscriptDiagnosticCode(role),
 					"review result",
 				),
@@ -551,10 +551,14 @@ func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 			if row.Notice == nil || row.Notice.Diagnostic == nil {
 				t.Fatalf("reviewer row = %+v", row)
 			}
-			code, _, legacy := row.Notice.Diagnostic.Legacy()
-			if !legacy || code != clientui.TranscriptDiagnosticCode(role) {
-				t.Fatalf("reviewer diagnostic code = %q legacy=%t, want %q", code, legacy, role)
+			if row.Notice.Diagnostic.Code == nil ||
+				*row.Notice.Diagnostic.Code != clientui.TranscriptDiagnosticCode(role) {
+				t.Fatalf("reviewer diagnostic = %+v, want code %q", row.Notice.Diagnostic, role)
 			}
 		})
 	}
+}
+
+func legacyTranscriptDiagnosticForTest(code clientui.TranscriptDiagnosticCode, detail string) *clientui.TranscriptDiagnostic {
+	return &clientui.TranscriptDiagnostic{Code: &code, Detail: &detail}
 }

@@ -302,12 +302,12 @@ func detailPerformanceVisibleTail() []clientui.TranscriptCommittedRow {
 		detailNotice(clientui.TranscriptNoticeRow{
 			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:   clientui.TranscriptNoticeInfo,
-			Diagnostic: clientui.NewLegacyTranscriptDiagnostic("tail_diagnostic", "tail diagnostic one"),
+			Diagnostic: legacyTranscriptDiagnosticForTest("tail_diagnostic", "tail diagnostic one"),
 		}),
 		detailNotice(clientui.TranscriptNoticeRow{
 			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:   clientui.TranscriptNoticeInfo,
-			Diagnostic: clientui.NewLegacyTranscriptDiagnostic("tail_diagnostic", "tail diagnostic two"),
+			Diagnostic: legacyTranscriptDiagnosticForTest("tail_diagnostic", "tail diagnostic two"),
 		}),
 		{
 			Visibility: clientui.EntryVisibilityOngoing,

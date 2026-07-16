@@ -9,7 +9,8 @@ import (
 )
 
 func TestTranscriptDiagnosticJSONUsesNullableInactiveVariantFields(t *testing.T) {
-	legacyJSON, err := json.Marshal(NewLegacyTranscriptDiagnostic("legacy_code", "legacy detail"))
+	legacy := legacyTranscriptDiagnosticForTest("legacy_code", "legacy detail")
+	legacyJSON, err := json.Marshal(legacy)
 	if err != nil {
 		t.Fatalf("marshal legacy diagnostic: %v", err)
 	}
@@ -24,7 +25,7 @@ func TestTranscriptDiagnosticJSONUsesNullableInactiveVariantFields(t *testing.T)
 			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
 		},
 	)
-	developerJSON, err := json.Marshal(NewDeveloperTranscriptDiagnostic(developer))
+	developerJSON, err := json.Marshal(developerTranscriptDiagnosticForTest(developer))
 	if err != nil {
 		t.Fatalf("marshal developer diagnostic: %v", err)
 	}
@@ -53,21 +54,32 @@ func TestTranscriptDiagnosticJSONRejectsMissingPartialBlankAndMixedVariants(t *t
 		`{"Code":"legacy","Detail":"detail","Developer":{"deletion_fact_mismatch":{"call_id":"call-1","operation_id":{"HunkOrdinal":0},"mismatch_kind":"missing"}}}`,
 	} {
 		var diagnostic TranscriptDiagnostic
-		if err := json.Unmarshal([]byte(payload), &diagnostic); err == nil {
-			t.Fatalf("decoded invalid diagnostic payload: %s", payload)
+		if err := json.Unmarshal([]byte(payload), &diagnostic); err != nil {
+			t.Fatalf("decode diagnostic payload for validation: %v", err)
+		}
+		if err := diagnostic.Validate(); err == nil {
+			t.Fatalf("validated invalid diagnostic payload: %s", payload)
 		}
 	}
 
-	blank := NewLegacyTranscriptDiagnostic(" ", "detail")
-	if _, err := json.Marshal(blank); err == nil {
-		t.Fatal("encoded blank legacy diagnostic")
+	blank := legacyTranscriptDiagnosticForTest(" ", "detail")
+	if err := blank.Validate(); err == nil {
+		t.Fatal("validated blank legacy diagnostic")
 	}
-	mixed := NewDeveloperTranscriptDiagnostic(developer)
+	mixed := developerTranscriptDiagnosticForTest(developer)
 	code := TranscriptDiagnosticCode("legacy")
 	detail := "detail"
 	mixed.Code = &code
 	mixed.Detail = &detail
-	if _, err := json.Marshal(mixed); err == nil {
-		t.Fatal("encoded mixed legacy and developer diagnostic")
+	if err := mixed.Validate(); err == nil {
+		t.Fatal("validated mixed legacy and developer diagnostic")
 	}
+}
+
+func legacyTranscriptDiagnosticForTest(code TranscriptDiagnosticCode, detail string) *TranscriptDiagnostic {
+	return &TranscriptDiagnostic{Code: &code, Detail: &detail}
+}
+
+func developerTranscriptDiagnosticForTest(diagnostic transcript.DeveloperDiagnostic) *TranscriptDiagnostic {
+	return &TranscriptDiagnostic{Developer: transcript.CloneDeveloperDiagnostic(&diagnostic)}
 }

@@ -75,11 +75,8 @@ func transcriptDiagnosticEqual(left, right *clientui.TranscriptDiagnostic) bool 
 	if left == nil || right == nil {
 		return left == right
 	}
-	leftCode, leftDetail, leftLegacy := left.Legacy()
-	rightCode, rightDetail, rightLegacy := right.Legacy()
-	return leftLegacy == rightLegacy &&
-		leftCode == rightCode &&
-		leftDetail == rightDetail &&
+	return pointersEqual(left.Code, right.Code) &&
+		pointersEqual(left.Detail, right.Detail) &&
 		transcript.DeveloperDiagnosticEqual(left.Developer, right.Developer)
 }
 

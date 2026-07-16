@@ -605,9 +605,11 @@ func ongoingDeveloperDiagnosticMessageForCall(sequence uint64, callID string, hu
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowNotice,
 		Notice: &clientui.TranscriptNoticeRow{
-			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
-			Severity:   clientui.TranscriptNoticeError,
-			Diagnostic: clientui.NewDeveloperTranscriptDiagnostic(diagnostic),
+			Reason:   clientui.TranscriptNoticeRuntimeDiagnostic,
+			Severity: clientui.TranscriptNoticeError,
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Developer: transcript.CloneDeveloperDiagnostic(&diagnostic),
+			},
 		},
 	}
 	return clientui.TranscriptMessage{

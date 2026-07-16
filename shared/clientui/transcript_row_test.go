@@ -110,7 +110,7 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 				Reason:     "cache_miss",
 				Visibility: transcript.EntryVisibilityOngoing,
 			},
-			Diagnostic: NewLegacyTranscriptDiagnostic(
+			Diagnostic: legacyTranscriptDiagnosticForTest(
 				TranscriptDiagnosticCode("runtime"),
 				"contradictory",
 			),
@@ -123,7 +123,7 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 				Reason:     "cache_miss",
 				Visibility: transcript.EntryVisibilityOngoing,
 			},
-			Diagnostic: NewLegacyTranscriptDiagnostic(
+			Diagnostic: legacyTranscriptDiagnosticForTest(
 				TranscriptDiagnosticCode("runtime"),
 				"failed",
 			),
@@ -132,7 +132,7 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 			Reason:     TranscriptNoticeLegacyUntypedNotice,
 			Severity:   TranscriptNoticeInfo,
 			LegacyText: &legacyText,
-			Diagnostic: NewLegacyTranscriptDiagnostic(
+			Diagnostic: legacyTranscriptDiagnosticForTest(
 				TranscriptDiagnosticCode("runtime"),
 				"contradictory",
 			),
@@ -156,7 +156,7 @@ func TestTranscriptNoticeRowCarriesTypedDeveloperDiagnosticWithoutLegacyFields(t
 	notice := TranscriptNoticeRow{
 		Reason:     TranscriptNoticeRuntimeDiagnostic,
 		Severity:   TranscriptNoticeError,
-		Diagnostic: NewDeveloperTranscriptDiagnostic(diagnostic),
+		Diagnostic: developerTranscriptDiagnosticForTest(diagnostic),
 	}
 	if err := notice.Validate(); err != nil {
 		t.Fatalf("validate typed developer diagnostic notice: %v", err)

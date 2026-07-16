@@ -430,7 +430,7 @@ func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) 
 			Severity:     clientui.TranscriptNoticeInfo,
 			MessageType:  &messageType,
 			CompactLabel: &compactLabel,
-			Diagnostic:   clientui.NewLegacyTranscriptDiagnostic("background_completion", compactLabel),
+			Diagnostic:   legacyTranscriptDiagnosticForTest("background_completion", compactLabel),
 			Background: &clientui.TranscriptBackgroundNoticeIdentity{
 				ActivityID: runtimeids.NewBackgroundActivityID(),
 				ProcessID:  "background-process",
@@ -479,7 +479,7 @@ func TestWorktreeNoticeRendersTypedClientContext(t *testing.T) {
 				WorkspaceRoot: "/tmp/workspace",
 				EffectiveCwd:  effectiveCWD,
 			},
-			Diagnostic: clientui.NewLegacyTranscriptDiagnostic(
+			Diagnostic: legacyTranscriptDiagnosticForTest(
 				"worktree_transition",
 				"model-only instructions",
 			),
@@ -495,7 +495,7 @@ func TestWorktreeNoticeRendersTypedClientContext(t *testing.T) {
 		if !strings.Contains(text, branch) || !strings.Contains(text, effectiveCWD) {
 			t.Fatalf("mode %v rendered worktree facts = %q, want branch and effective cwd", mode, text)
 		}
-		_, diagnosticDetail, _ := row.Notice.Diagnostic.Legacy()
+		diagnosticDetail := *row.Notice.Diagnostic.Detail
 		if strings.Contains(text, diagnosticDetail) {
 			t.Fatalf("mode %v rendered model instructions instead of client presentation: %q", mode, text)
 		}
@@ -1600,7 +1600,7 @@ func TestBackgroundExitStatusDoesNotOverridePrimaryNoticeSymbol(t *testing.T) {
 				Severity:     clientui.TranscriptNoticeInfo,
 				MessageType:  &messageType,
 				CompactLabel: &compactLabel,
-				Diagnostic:   clientui.NewLegacyTranscriptDiagnostic("background_completion", compactLabel),
+				Diagnostic:   legacyTranscriptDiagnosticForTest("background_completion", compactLabel),
 				Background: &clientui.TranscriptBackgroundNoticeIdentity{
 					ActivityID: runtimeids.NewBackgroundActivityID(),
 					ProcessID:  "background-process",
@@ -1821,7 +1821,7 @@ func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing
 			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:     clientui.TranscriptNoticeInfo,
 			CompactLabel: &compactLabel,
-			Diagnostic:   clientui.NewLegacyTranscriptDiagnostic("agents_context", "raw diagnostic body"),
+			Diagnostic:   legacyTranscriptDiagnosticForTest("agents_context", "raw diagnostic body"),
 		},
 	}, 80, "", ModeDetailCollapsed)
 
@@ -1836,7 +1836,7 @@ func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing
 			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:     clientui.TranscriptNoticeInfo,
 			CompactLabel: &compactLabel,
-			Diagnostic:   clientui.NewLegacyTranscriptDiagnostic("agents_context", "raw diagnostic body"),
+			Diagnostic:   legacyTranscriptDiagnosticForTest("agents_context", "raw diagnostic body"),
 		},
 	}, 80, "", ModeDetailExpanded)
 	if got, want := expanded.Lines[0].Plain(), "ℹ raw diagnostic body"; got != want {
@@ -1855,9 +1855,11 @@ func TestDeveloperDiagnosticNoticeRendersTypedContext(t *testing.T) {
 	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowNotice,
 		Notice: &clientui.TranscriptNoticeRow{
-			Reason:     clientui.TranscriptNoticeRuntimeDiagnostic,
-			Severity:   clientui.TranscriptNoticeError,
-			Diagnostic: clientui.NewDeveloperTranscriptDiagnostic(diagnostic),
+			Reason:   clientui.TranscriptNoticeRuntimeDiagnostic,
+			Severity: clientui.TranscriptNoticeError,
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Developer: transcript.CloneDeveloperDiagnostic(&diagnostic),
+			},
 		},
 	}, 120, "", ModeDetailExpanded)
 	if got, want := rendered.Lines[0].Plain(), transcript.DeveloperDiagnosticText(diagnostic); !strings.Contains(got, want) {
@@ -1913,7 +1915,7 @@ func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
 			Severity:     clientui.TranscriptNoticeInfo,
 			MessageType:  &messageType,
 			CompactLabel: &compactLabel,
-			Diagnostic: clientui.NewLegacyTranscriptDiagnostic(
+			Diagnostic: legacyTranscriptDiagnosticForTest(
 				clientui.TranscriptDiagnosticCode(transcript.EntryRoleReviewerSuggestions),
 				compactLabel,
 			),
@@ -1929,6 +1931,10 @@ func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
 			t.Fatalf("mode %v reviewer line = %q, want reviewer glyph", mode, got)
 		}
 	}
+}
+
+func legacyTranscriptDiagnosticForTest(code clientui.TranscriptDiagnosticCode, detail string) *clientui.TranscriptDiagnostic {
+	return &clientui.TranscriptDiagnostic{Code: &code, Detail: &detail}
 }
 
 func toolRow(name string, presentation transcript.ToolPresentationKind, text string, isError bool) clientui.TranscriptCommittedRow {

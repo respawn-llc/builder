@@ -539,11 +539,18 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		if row.Diagnostic.Developer != nil {
 			developerText = transcript.DeveloperDiagnosticText(*row.Diagnostic.Developer)
 		}
-		legacyCode, legacyDetail, _ := row.Diagnostic.Legacy()
+		legacyCode := ""
+		if row.Diagnostic.Code != nil {
+			legacyCode = string(*row.Diagnostic.Code)
+		}
+		legacyDetail := ""
+		if row.Diagnostic.Detail != nil {
+			legacyDetail = *row.Diagnostic.Detail
+		}
 		text = firstNonEmpty(
 			developerText,
 			legacyDetail,
-			string(legacyCode),
+			legacyCode,
 			text,
 		)
 	}
@@ -631,8 +638,8 @@ func noticeDiagnosticHasReviewerRole(row *clientui.TranscriptNoticeRow) bool {
 	if row == nil || row.Diagnostic == nil {
 		return false
 	}
-	code, _, legacy := row.Diagnostic.Legacy()
-	return legacy && transcript.IsReviewerEntryRole(strings.TrimSpace(string(code)))
+	return row.Diagnostic.Code != nil &&
+		transcript.IsReviewerEntryRole(strings.TrimSpace(string(*row.Diagnostic.Code)))
 }
 
 func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {

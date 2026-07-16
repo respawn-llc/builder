@@ -781,10 +781,12 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 		State:       outcome.State,
 	}
 	if outcome.Failure != nil {
-		transcriptOutcome.Failure = clientui.NewLegacyTranscriptDiagnostic(
-			clientui.TranscriptDiagnosticCode("worktree_transition_failed"),
-			outcome.Failure.Diagnostic,
-		)
+		code := clientui.TranscriptDiagnosticCode("worktree_transition_failed")
+		detail := outcome.Failure.Diagnostic
+		transcriptOutcome.Failure = &clientui.TranscriptDiagnostic{
+			Code:   &code,
+			Detail: &detail,
+		}
 	}
 	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
 		Kind:    clientui.TranscriptMessageWorktreeTransitionOutcome,

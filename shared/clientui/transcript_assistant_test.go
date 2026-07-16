@@ -96,7 +96,7 @@ func TestTranscriptAssistantAbortRequiresTypedFailureDiagnostic(t *testing.T) {
 	if err := abort.Validate(); err == nil {
 		t.Fatal("accepted failed assistant abort without diagnostic")
 	}
-	abort.Diagnostic = NewLegacyTranscriptDiagnostic(
+	abort.Diagnostic = legacyTranscriptDiagnosticForTest(
 		TranscriptDiagnosticCode("assistant_stream_failed"),
 		"provider stream failed",
 	)
