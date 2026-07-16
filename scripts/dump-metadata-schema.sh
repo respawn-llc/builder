@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Execute a built binary so command exit statuses pass through unchanged.
 BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kent-dump-metadata-schema.XXXXXX")"
 cleanup() {
   local command_status=$?
