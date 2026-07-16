@@ -26,6 +26,7 @@ type ptyCheckpointScenarioState struct {
 	targetFinalSequence          *uint64
 	scenarioComplete             bool
 	finalAppliedEmitted          bool
+	toolStartedEmitted           bool
 }
 
 func newPTYCheckpointScenarioState(
@@ -106,6 +107,19 @@ func (state *ptyCheckpointScenarioState) claimScenarioFinalApplied(sequence uint
 	return true
 }
 
+func (state *ptyCheckpointScenarioState) claimToolStarted() bool {
+	if state == nil {
+		panic("claim tool started on nil PTY checkpoint scenario state")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.toolStartedEmitted {
+		return false
+	}
+	state.toolStartedEmitted = true
+	return true
+}
+
 func newPTYCheckpointModel(
 	inner tea.Model,
 	output *checkpoint.Writer,
@@ -129,6 +143,7 @@ func (model *ptyCheckpointModel) Init() tea.Cmd {
 
 func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	initialDetailLoad := initialDetailLoadCandidate(model.inner, msg)
+	toolStart := ongoingToolStartCandidate(model.inner, msg)
 	ongoingFinal := ongoingAssistantFinalCandidate(model.inner, msg)
 	queuedTargetFinal := ongoingTargetFinalDrainCandidate(model.inner, msg, model.scenario)
 	next, cmd := model.inner.Update(msg)
@@ -139,11 +154,16 @@ func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if initialDetailLoad.appliedBy(next) {
 		model.detailPageAppliedPending = true
 	}
+	if toolStart.acceptedBy(next) && model.scenario.claimToolStarted() {
+		if err := model.output.Emit(checkpoint.KindToolStarted, nil); err != nil {
+			panic(fmt.Sprintf("emit PTY tool-started checkpoint: error=%v", err))
+		}
+	}
 	emitScenarioFinalApplied := false
 	if ongoingFinal.acceptedBy(next) &&
-		model.scenario.recordAcceptedAssistantFinal(ongoingFinal.sequence) &&
+		model.scenario.recordAcceptedAssistantFinal(ongoingFinal.acceptance.sequence) &&
 		ongoingFinal.terminalAppliedBy(next) {
-		emitScenarioFinalApplied = model.scenario.claimScenarioFinalApplied(ongoingFinal.sequence)
+		emitScenarioFinalApplied = model.scenario.claimScenarioFinalApplied(ongoingFinal.acceptance.sequence)
 	}
 	if queuedTargetFinal.terminalAppliedBy(next) {
 		emitScenarioFinalApplied = model.scenario.claimScenarioFinalApplied(queuedTargetFinal.sequence)
@@ -166,33 +186,66 @@ func (model *ptyCheckpointModel) emitScenarioFinalApplied() {
 }
 
 type ptyOngoingAssistantFinalCandidate struct {
-	sequence          uint64
+	acceptance        ptyOngoingTranscriptAcceptanceCandidate
 	terminalImmediate bool
-	valid             bool
 }
 
 func ongoingAssistantFinalCandidate(model tea.Model, msg tea.Msg) ptyOngoingAssistantFinalCandidate {
-	event, ok := msg.(ongoingTranscriptEvent)
+	event, ok := ptyCheckpointTranscriptEvent(msg)
 	if !ok ||
-		event.Kind != ongoingTranscriptEventMessage ||
 		!isCommittedAssistantFinal(event.Message) {
 		return ptyOngoingAssistantFinalCandidate{}
 	}
+	acceptance := ongoingTranscriptAcceptanceCandidate(model, event)
+	if !acceptance.valid {
+		return ptyOngoingAssistantFinalCandidate{}
+	}
 	appModel, ok := model.(*uiModel)
-	if !ok ||
-		appModel.ongoingTranscript == nil ||
-		!appModel.ongoingTranscript.hydrated ||
-		event.Message.Sequence != appModel.ongoingTranscript.lastSequence+1 {
+	if !ok {
 		return ptyOngoingAssistantFinalCandidate{}
 	}
 	return ptyOngoingAssistantFinalCandidate{
-		sequence:          event.Message.Sequence,
+		acceptance:        acceptance,
 		terminalImmediate: appModel.ongoingTranscript.normalOwned && appModel.nativeOngoingSurfaceActive(),
-		valid:             true,
 	}
 }
 
 func (candidate ptyOngoingAssistantFinalCandidate) acceptedBy(model tea.Model) bool {
+	return candidate.acceptance.acceptedBy(model)
+}
+
+func (candidate ptyOngoingAssistantFinalCandidate) terminalAppliedBy(model tea.Model) bool {
+	if !candidate.terminalImmediate || !candidate.acceptedBy(model) {
+		return false
+	}
+	appModel := model.(*uiModel)
+	return appModel.ongoingTranscript.normalOwned && appModel.nativeOngoingSurfaceActive()
+}
+
+type ptyOngoingTranscriptAcceptanceCandidate struct {
+	sequence uint64
+	valid    bool
+}
+
+func ongoingTranscriptAcceptanceCandidate(
+	model tea.Model,
+	event ongoingTranscriptEvent,
+) ptyOngoingTranscriptAcceptanceCandidate {
+	appModel, ok := model.(*uiModel)
+	if !ok ||
+		event.Kind != ongoingTranscriptEventMessage ||
+		appModel.ongoingTranscript == nil ||
+		!appModel.ongoingTranscript.hydrated ||
+		event.Message.Sequence != appModel.ongoingTranscript.lastSequence+1 {
+		return ptyOngoingTranscriptAcceptanceCandidate{}
+	}
+	return ptyOngoingTranscriptAcceptanceCandidate{
+		sequence: event.Message.Sequence,
+		valid:    true,
+	}
+}
+
+func (candidate ptyOngoingTranscriptAcceptanceCandidate) acceptedBy(model tea.Model) bool {
 	if !candidate.valid {
 		return false
 	}
@@ -203,12 +256,27 @@ func (candidate ptyOngoingAssistantFinalCandidate) acceptedBy(model tea.Model) b
 		appModel.ongoingTranscript.lastSequence == candidate.sequence
 }
 
-func (candidate ptyOngoingAssistantFinalCandidate) terminalAppliedBy(model tea.Model) bool {
-	if !candidate.terminalImmediate || !candidate.acceptedBy(model) {
-		return false
+func ongoingToolStartCandidate(
+	model tea.Model,
+	msg tea.Msg,
+) ptyOngoingTranscriptAcceptanceCandidate {
+	event, ok := ptyCheckpointTranscriptEvent(msg)
+	if !ok || event.Message.Kind != clientui.TranscriptMessageToolStart {
+		return ptyOngoingTranscriptAcceptanceCandidate{}
 	}
-	appModel := model.(*uiModel)
-	return appModel.ongoingTranscript.normalOwned && appModel.nativeOngoingSurfaceActive()
+	return ongoingTranscriptAcceptanceCandidate(model, event)
+}
+
+func ptyCheckpointTranscriptEvent(msg tea.Msg) (ongoingTranscriptEvent, bool) {
+	dispatched, ok := msg.(uiDispatchedEventMsg)
+	if !ok {
+		return ongoingTranscriptEvent{}, false
+	}
+	return dispatched.event, true
+}
+
+func dispatchPTYCheckpointTranscriptEvent(event ongoingTranscriptEvent) uiDispatchedEventMsg {
+	return uiDispatchedEventMsg{event: event}
 }
 
 type ptyOngoingTargetFinalDrainCandidate struct {
@@ -265,13 +333,13 @@ func (candidate ptyOngoingTargetFinalDrainCandidate) terminalAppliedBy(model tea
 
 func isCommittedAssistantFinal(message clientui.TranscriptMessage) bool {
 	if message.Kind != clientui.TranscriptMessageCommittedRow ||
-		message.CommittedRow == nil ||
-		message.CommittedRow.Kind != clientui.TranscriptRowAssistant ||
-		message.CommittedRow.Assistant == nil {
+		message.Payload.CommittedRow == nil ||
+		message.Payload.CommittedRow.Kind != clientui.TranscriptRowAssistant ||
+		message.Payload.CommittedRow.Assistant == nil {
 		return false
 	}
-	switch message.CommittedRow.Assistant.Phase {
-	case transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal:
+	switch message.Payload.CommittedRow.Assistant.Phase {
+	case transcript.AssistantPhaseFinal:
 		return true
 	default:
 		return false

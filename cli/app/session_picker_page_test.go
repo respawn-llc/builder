@@ -161,6 +161,36 @@ func TestSessionPickerRejectsPageCategoryMismatch(t *testing.T) {
 	}
 }
 
+func TestSessionPickerRejectsPageLargerThanRequestedBound(t *testing.T) {
+	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+		sessionIDs := make([]string, sessionPickerPageSize+1)
+		for index := range sessionIDs {
+			sessionIDs[index] = fmt.Sprintf("oversized-%d", index)
+		}
+		return sessionPageLoadResult{response: pickerPageResponse(t, request, sessionIDs...)}
+	}}
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
+
+	runSessionPickerCommands(t, model, model.Init())
+
+	for _, category := range []sessioncontract.SessionCategory{
+		sessioncontract.SessionCategoryMain,
+		sessioncontract.SessionCategorySubagent,
+	} {
+		tab := model.tab(category)
+		if tab.bodyPhase != sessionPickerBodyFailed {
+			t.Fatalf("%s body phase = %q, want failed", category, tab.bodyPhase)
+		}
+		if got := tab.residentSessionCount(); got != 0 {
+			t.Fatalf("%s resident sessions after oversized page = %d, want 0", category, got)
+		}
+		failure, ok := model.startupStatus.failure(category, sessionPickerOperationBodyPage)
+		if !ok || failure.Kind != sessionPickerFailurePageContract {
+			t.Fatalf("%s oversized page failure = %+v/%v, want typed contract failure", category, failure, ok)
+		}
+	}
+}
+
 func TestSessionPickerPageRequestFailureKeepsDiagnosticOutOfOperatorProjection(t *testing.T) {
 	diagnostic := errors.New("read tcp 127.0.0.1:1234: connection reset by peer")
 	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
@@ -279,6 +309,66 @@ func TestSessionPickerRetriesFailedTabFromNewest(t *testing.T) {
 	calls := loader.snapshotCalls()
 	if calls[len(calls)-1].Position.Kind() != serverapi.SessionPagePositionNewest {
 		t.Fatalf("retry position = %q, want newest", calls[len(calls)-1].Position.Kind())
+	}
+}
+
+func TestSessionPickerRetrySchedulesFreshSpinnerTick(t *testing.T) {
+	model := newSessionPickerModel(
+		context.Background(),
+		&recordingSessionPageLoader{},
+		"dark",
+		sessionPickerHeaderInfo{},
+	)
+	tab := model.tab(sessioncontract.SessionCategoryMain)
+	tab.bodyRequest = nil
+	tab.directional = nil
+	tab.bodyPhase = sessionPickerBodyFailed
+	model.scheduledSpinnerGeneration = nil
+
+	command := model.startBodyRequest(sessioncontract.SessionCategoryMain, sessionPickerBodyRequestRetry)
+	if command == nil {
+		t.Fatal("retry command is nil")
+	}
+	if model.scheduledSpinnerGeneration == nil {
+		t.Fatal("retry did not schedule a spinner tick")
+	}
+	message := command()
+	batch, ok := message.(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("retry command message = %T/%d, want two-effect batch", message, len(batch))
+	}
+}
+
+func TestSessionPickerPageDownTraversesOlderBoundedPage(t *testing.T) {
+	older := mustPickerContinuation(t, "page-down-older")
+	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+		if request.Category == sessioncontract.SessionCategorySubagent {
+			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
+		}
+		switch request.Position.Kind() {
+		case serverapi.SessionPagePositionNewest:
+			response := pickerPageResponse(t, request, "page-down-4", "page-down-3")
+			response.Older = &older
+			return sessionPageLoadResult{response: response}
+		case serverapi.SessionPagePositionOlder:
+			return sessionPageLoadResult{response: pickerPageResponse(t, request, "page-down-2", "page-down-1")}
+		default:
+			t.Fatalf("unexpected page request: %+v", request)
+			return sessionPageLoadResult{}
+		}
+	}}
+	model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
+	runSessionPickerCommands(t, model, model.Init())
+
+	runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, tea.KeyMsg{Type: tea.KeyPgDown}))
+
+	selected, ok := model.main.selected.(sessionPickerSessionSelection)
+	if !ok || selected.sessionID.String() != "page-down-2" {
+		t.Fatalf("PgDn bounded-page selection = %+v, want first older resident", model.main.selected)
+	}
+	calls := loader.snapshotCalls()
+	if calls[len(calls)-1].Position.Kind() != serverapi.SessionPagePositionOlder {
+		t.Fatalf("PgDn request position = %q, want older", calls[len(calls)-1].Position.Kind())
 	}
 }
 

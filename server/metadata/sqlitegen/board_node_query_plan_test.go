@@ -1,9 +1,7 @@
 package sqlitegen
 
 import (
-	"context"
 	"database/sql"
-	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -62,9 +60,11 @@ CREATE TABLE task_transition_records (
 
 	for _, direction := range []string{"older", "newer"} {
 		t.Run(direction, func(t *testing.T) {
-			rows, err := db.QueryContext(
-				context.Background(),
-				"EXPLAIN QUERY PLAN "+listBoardNodeTasks,
+			requireQueryUsesIndexWithoutSort(
+				t,
+				db,
+				listBoardNodeTasks,
+				"tasks_project_workflow_updated_idx",
 				"project-1",
 				"workflow-1",
 				"node-1",
@@ -74,62 +74,6 @@ CREATE TABLE task_transition_records (
 				"task-anchor",
 				int64(26),
 			)
-			if err != nil {
-				t.Fatalf("explain %s board-node query: %v", direction, err)
-			}
-			steps := readBoardNodeQueryPlan(t, rows)
-			if !boardNodePlanUsesIndex(steps, "tasks_project_workflow_updated_idx") {
-				t.Fatalf("%s plan does not use tasks_project_workflow_updated_idx: %+v", direction, steps)
-			}
-			if boardNodePlanUsesRootTemporaryBTree(steps) {
-				t.Fatalf("%s plan uses a temporary B-tree for ordering: %+v", direction, steps)
-			}
 		})
 	}
-}
-
-type boardNodeQueryPlanStep struct {
-	ID     int
-	Parent int
-	Detail string
-}
-
-func readBoardNodeQueryPlan(t *testing.T, rows *sql.Rows) []boardNodeQueryPlanStep {
-	t.Helper()
-	defer rows.Close()
-	var steps []boardNodeQueryPlanStep
-	for rows.Next() {
-		var step boardNodeQueryPlanStep
-		var unused int
-		if err := rows.Scan(&step.ID, &step.Parent, &unused, &step.Detail); err != nil {
-			t.Fatalf("scan query plan: %v", err)
-		}
-		steps = append(steps, step)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate query plan: %v", err)
-	}
-	return steps
-}
-
-func boardNodePlanUsesIndex(steps []boardNodeQueryPlanStep, indexName string) bool {
-	for _, step := range steps {
-		fields := strings.Fields(step.Detail)
-		for index, field := range fields {
-			if field == "INDEX" && index+1 < len(fields) && fields[index+1] == indexName {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func boardNodePlanUsesRootTemporaryBTree(steps []boardNodeQueryPlanStep) bool {
-	for _, step := range steps {
-		fields := strings.Fields(step.Detail)
-		if step.Parent == 0 && len(fields) >= 3 && fields[0] == "USE" && fields[1] == "TEMP" && fields[2] == "B-TREE" {
-			return true
-		}
-	}
-	return false
 }

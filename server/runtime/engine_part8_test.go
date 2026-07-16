@@ -200,11 +200,9 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 }
 
 func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
-	observer := &armedTestPersistenceObserver{
-		delegate: runtimeTestSessionPersistence,
-		err:      errors.New("clear persistence failed"),
-	}
-	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(observer))
+	clearErr := errors.New("clear persistence failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))
 	sessionDir := store.Dir()
 
 	client := &fakeClient{responses: []llm.Response{{
@@ -228,7 +226,7 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 			}
 			mu.Unlock()
 			if shouldArmFailure {
-				observer.armed.Store(true)
+				gate.FailNext(clearErr)
 			}
 		},
 	})
@@ -262,8 +260,8 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	if openErr != nil {
 		t.Fatalf("re-open session store: %v", openErr)
 	}
-	if reopened.Meta().PendingModelRecovery == nil {
-		t.Fatalf("expected pending model recovery to remain after clear failure")
+	if reopened.Meta().PendingModelRecovery != nil {
+		t.Fatalf("committed pending model recovery clear retained retry ownership: %+v", reopened.Meta().PendingModelRecovery)
 	}
 }
 
@@ -312,6 +310,54 @@ func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 	if !seenInterruptionEvent || !seenConsumedEvent {
 		t.Fatalf("expected persisted interruption and recovery-consumed events on reopen, got %+v", events)
 	}
+}
+
+func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
+	const (
+		stepID = "22222222-2222-4222-8222-222222222222"
+		callID = "call-recovered-after-restart"
+	)
+	store := mustCreateTestSession(t)
+	if _, _, err := store.AppendEvent(stepID, "message", llm.Message{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{
+			ID:   callID,
+			Name: string(toolspec.ToolExecCommand),
+		}},
+	}); err != nil {
+		t.Fatalf("append dangling assistant tool call: %v", err)
+	}
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{
+		RecoveryID:             "recovery-dangling-tool",
+		StepID:                 stepID,
+		Reason:                 "test",
+		CreatedAt:              time.Now().UTC(),
+		OutstandingToolCallIDs: []string{callID},
+	}); err != nil {
+		t.Fatalf("set pending recovery: %v", err)
+	}
+
+	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
+	if err != nil {
+		t.Fatalf("re-open store: %v", err)
+	}
+	var events []Event
+	_ = mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			events = append(events, evt)
+		},
+	})
+	for _, evt := range events {
+		if evt.Kind == EventToolCallStarted &&
+			evt.StepID == stepID &&
+			evt.ToolCall != nil &&
+			evt.ToolCall.ID == callID &&
+			evt.ToolCall.Name == string(toolspec.ToolExecCommand) {
+			return
+		}
+	}
+	t.Fatalf("reopen events = %+v, want recovered tool start for %q", events, callID)
 }
 
 func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testing.T) {
@@ -916,7 +962,7 @@ func TestPersistedAssistantToolCallsContainNoUIDisplayMarkers(t *testing.T) {
 	}
 }
 
-func TestExecuteToolCallsFailsOnToolCompletionPersistence(t *testing.T) {
+func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 	tests := []struct {
 		name     string
 		registry *tools.Registry
@@ -940,25 +986,37 @@ func TestExecuteToolCallsFailsOnToolCompletionPersistence(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			observer := &armedTestPersistenceObserver{
-				delegate: runtimeTestSessionPersistence,
-				err:      errors.New("tool completion persistence failed"),
-			}
-			store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(observer))
-
+		t.Run(tc.name+"/uncommitted", func(t *testing.T) {
+			store := mustCreateTestSession(t)
 			eng := mustNewTestEngine(t, store, &fakeClient{}, tc.registry, Config{Model: "gpt-5"})
-			observer.armed.Store(true)
+			mustBlockTestEventLogAppends(t, store)
 
-			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{
-				{ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`)},
-			})
+			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
+			}})
 			if !errors.Is(err, errPersistToolCompletion) {
 				t.Fatalf("expected errPersistToolCompletion, got %v", err)
 			}
-
 			if got := eng.transcriptRuntimeState().ToolCompletionCount(); got != 0 {
-				t.Fatalf("expected no in-memory tool completions when persistence fails, got %d", got)
+				t.Fatalf("uncommitted tool completions = %d, want 0", got)
+			}
+		})
+
+		t.Run(tc.name+"/committed_observer_error", func(t *testing.T) {
+			observerErr := errors.New("tool completion observer failed")
+			gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+			store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))
+			eng := mustNewTestEngine(t, store, &fakeClient{}, tc.registry, Config{Model: "gpt-5"})
+			gate.FailNext(observerErr)
+
+			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
+			}})
+			if !errors.Is(err, errPersistToolCompletion) || !errors.Is(err, observerErr) {
+				t.Fatalf("tool completion error = %v, want persistence wrapper and observer error", err)
+			}
+			if got := eng.transcriptRuntimeState().ToolCompletionCount(); got != 1 {
+				t.Fatalf("committed tool completions = %d, want 1", got)
 			}
 		})
 	}

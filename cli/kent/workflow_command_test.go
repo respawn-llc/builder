@@ -18,7 +18,7 @@ import (
 	"core/server/workflowstore"
 	"core/server/workflowsvc"
 	"core/server/workflowview"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -26,7 +26,7 @@ import (
 )
 
 type workflowCommandLoopbackRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	cfg                   config.App
 	binding               metadata.Binding
 	projectBindingsByRoot map[string]serverapi.ProjectBinding
@@ -716,7 +716,7 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 		t.Fatalf("workflowsvc.New: %v", err)
 	}
 	remote := &workflowCommandLoopbackRemote{
-		WorkflowClient:        client.NewLoopbackWorkflowClient(service),
+		WorkflowService:       service,
 		cfg:                   cfg,
 		binding:               binding,
 		projectBindingsByRoot: map[string]serverapi.ProjectBinding{},
@@ -911,25 +911,8 @@ func workflowCommandStoredEdgeByID(t *testing.T, ctx context.Context, store *wor
 	return workflow.Edge{}
 }
 
-func workflowCommandEdgeRecord(edge workflow.Edge) workflowstore.EdgeRecord {
-	return workflowstore.EdgeRecord{
-		ID:                 edge.ID,
-		WorkflowID:         edge.WorkflowID,
-		TransitionGroupID:  edge.TransitionGroupID,
-		Key:                edge.Key,
-		TargetNodeID:       edge.TargetNodeID,
-		RequiresApproval:   edge.RequiresApproval,
-		ContextMode:        edge.ContextMode,
-		ContextSource:      edge.ContextSource,
-		InputBindings:      edge.InputBindings,
-		PromptTemplate:     edge.PromptTemplate,
-		Parameters:         edge.Parameters,
-		OutputRequirements: edge.OutputRequirements,
-	}
-}
-
 type pagedWorkflowListRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	definitions         map[string]serverapi.WorkflowDefinition
 	pages               map[string]serverapi.WorkflowListResponse
 	requests            []serverapi.WorkflowListRequest
@@ -981,7 +964,7 @@ func (r *pagedWorkflowListRemote) GetWorkflow(ctx context.Context, req serverapi
 }
 
 type preservingNodeUpdateRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	updateReq serverapi.WorkflowNodeUpdateRequest
 }
 

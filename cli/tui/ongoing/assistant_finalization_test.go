@@ -10,13 +10,14 @@ import (
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/analyzer"
 	"core/shared/clientui"
-	"github.com/google/uuid"
+	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 func TestAssistantFinalizationEqualSourceFlushesUnpromotedTailAndClearsStream(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(streamID, "hello"), FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
 		t.Fatalf("apply delta: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestAssistantFinalizationEqualSourceFlushesUnpromotedTailAndClearsStream(t 
 func TestAssistantFinalizationExtensionEmitsOnlyMissingSuffix(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(streamID, "hello\n\n"), FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
 		t.Fatalf("apply initial delta: %v", err)
 	}
@@ -54,7 +55,7 @@ func TestAssistantFinalizationExtensionEmitsOnlyMissingSuffix(t *testing.T) {
 func TestAssistantFinalizationAfterClosedParagraphStreamAppendsSuffix(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(streamID, "roundtrip commentary\n\n"), FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
 		t.Fatalf("apply initial delta: %v", err)
 	}
@@ -81,7 +82,7 @@ func TestAssistantFinalizationDoesNotLeaveBlankRowsFromVolatileTail(t *testing.T
 		t.Fatalf("append previous tool: %v", err)
 	}
 
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	source := "```text\nalpha\nbeta\ngamma"
 	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(streamID, source), frame); err != nil {
 		t.Fatalf("stream multiline volatile tail: %v", err)
@@ -121,7 +122,7 @@ func TestAssistantFinalizationDoesNotLeaveBlankRowsFromVolatileTail(t *testing.T
 
 func TestAssistantFinalizationMismatchPanics(t *testing.T) {
 	surface := NewSurface(&bytes.Buffer{})
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(streamID, "hello"), FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
 		t.Fatalf("apply delta: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestAssistantFinalizationMismatchPanics(t *testing.T) {
 
 func TestAssistantFinalizationOtherStreamPanics(t *testing.T) {
 	surface := NewSurface(&bytes.Buffer{})
-	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(uuid.New(), "hello"), FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(runtimeids.NewAssistantStreamID(), "hello"), FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
 		t.Fatalf("apply delta: %v", err)
 	}
 
@@ -147,22 +148,24 @@ func TestAssistantFinalizationOtherStreamPanics(t *testing.T) {
 		}
 	}()
 
-	_, _ = surface.ApplyTerminalMessage(committedAssistantMessage(uuid.New(), "hello"), FrameInput{Size: Size{Width: 40, Height: 5}})
+	_, _ = surface.ApplyTerminalMessage(committedAssistantMessage(runtimeids.NewAssistantStreamID(), "hello"), FrameInput{Size: Size{Width: 40, Height: 5}})
 }
 
 func TestHydrationRestoresActiveAssistantStreamAndFinalizes(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 
 	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageHydration,
-		Hydration: &clientui.TranscriptHydration{
-			ActiveAssistantStream: &clientui.TranscriptAssistantStream{
+		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{
+			ActiveAssistant: &clientui.TranscriptAssistantStream{
+				StepID:   assistantFinalizationStepID(),
 				StreamID: streamID,
 				Text:     "Stable paragraph.\n\nopen tail",
+				Phase:    transcript.AssistantPhaseCommentary,
 			},
-		},
+		}},
 	}, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
 		t.Fatalf("apply hydration: %v", err)
 	}
@@ -186,7 +189,7 @@ func TestHydrationRestoresActiveAssistantStreamAndFinalizes(t *testing.T) {
 func TestAssistantAbortClearsVolatileTailWithoutImmutableAppend(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(streamID, "volatile tail"), FrameInput{Size: Size{Width: 40, Height: 3}}); err != nil {
 		t.Fatalf("apply delta: %v", err)
 	}
@@ -197,9 +200,11 @@ func TestAssistantAbortClearsVolatileTailWithoutImmutableAppend(t *testing.T) {
 
 	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageAssistantStreamAbort,
-		AssistantStreamAbort: &clientui.TranscriptAssistantStreamAbort{
+		Payload: clientui.TranscriptPayload{AssistantStreamAbort: &clientui.TranscriptAssistantStreamAbort{
+			StepID:   assistantFinalizationStepID(),
 			StreamID: streamID,
-		},
+			Reason:   clientui.AssistantStreamAbortSuperseded,
+		}},
 	}, FrameInput{Size: Size{Width: 40, Height: 3}}); err != nil {
 		t.Fatalf("abort stream: %v", err)
 	}
@@ -216,9 +221,9 @@ func TestAssistantAbortClearsVolatileTailWithoutImmutableAppend(t *testing.T) {
 
 func TestNoopFinalStreamNeverPromotesIntoImmutableScrollback(t *testing.T) {
 	surface := NewSurface(&bytes.Buffer{})
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	message := assistantDeltaMessage(streamID, "NO_OP\n\n")
-	message.AssistantDelta.Phase = clientui.MessagePhaseFinal
+	message.Payload.AssistantDelta.Phase = transcript.AssistantPhaseFinal
 
 	if _, err := surface.ApplyTerminalMessage(message, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
 		t.Fatalf("apply no-op final delta: %v", err)
@@ -230,16 +235,16 @@ func TestNoopFinalStreamNeverPromotesIntoImmutableScrollback(t *testing.T) {
 
 func TestNoopFinalSegmentAfterCommentaryNeverPromotesIntoImmutableScrollback(t *testing.T) {
 	surface := NewSurface(&bytes.Buffer{})
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	commentary := assistantDeltaMessage(streamID, "commentary\n\n")
-	commentary.AssistantDelta.Phase = clientui.MessagePhaseCommentary
+	commentary.Payload.AssistantDelta.Phase = transcript.AssistantPhaseCommentary
 	if _, err := surface.ApplyTerminalMessage(commentary, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
 		t.Fatalf("apply commentary delta: %v", err)
 	}
 	promotedBeforeFinal := surface.activeAssistant.promotedSourceBoundary
 
 	final := assistantDeltaMessage(streamID, "NO_OP\n\n")
-	final.AssistantDelta.Phase = clientui.MessagePhaseFinal
+	final.Payload.AssistantDelta.Phase = transcript.AssistantPhaseFinal
 	if _, err := surface.ApplyTerminalMessage(final, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
 		t.Fatalf("apply no-op final delta after commentary: %v", err)
 	}
@@ -248,31 +253,44 @@ func TestNoopFinalSegmentAfterCommentaryNeverPromotesIntoImmutableScrollback(t *
 	}
 }
 
-func assistantDeltaMessage(streamID uuid.UUID, delta string) clientui.TranscriptMessage {
+func assistantDeltaMessage(streamID runtimeids.AssistantStreamID, delta string) clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageAssistantDelta,
-		AssistantDelta: &clientui.TranscriptAssistantDelta{
+		Payload: clientui.TranscriptPayload{AssistantDelta: &clientui.TranscriptAssistantDelta{
+			StepID:   assistantFinalizationStepID(),
 			StreamID: streamID,
 			Delta:    delta,
-		},
+			Phase:    transcript.AssistantPhaseCommentary,
+		}},
 	}
 }
 
-func committedAssistantMessage(streamID uuid.UUID, text string) clientui.TranscriptMessage {
+func committedAssistantMessage(streamID runtimeids.AssistantStreamID, text string) clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageCommittedRow,
-		CommittedRow: &clientui.TranscriptCommittedRow{
+		Payload: clientui.TranscriptPayload{CommittedRow: &clientui.TranscriptCommittedRow{
 			Visibility: clientui.EntryVisibilityOngoing,
+			Integrity:  transcript.RowIntegrityValid,
 			Kind:       clientui.TranscriptRowAssistant,
 			Assistant: &clientui.TranscriptAssistantRow{
+				StepID:   assistantFinalizationStepID(),
 				StreamID: &streamID,
 				Text:     text,
+				Phase:    transcript.AssistantPhaseFinal,
 			},
-		},
+		}},
 	}
 }
 
-func nonZeroStreamID(t *testing.T) uuid.UUID {
+func nonZeroStreamID(t *testing.T) runtimeids.AssistantStreamID {
 	t.Helper()
-	return uuid.New()
+	return runtimeids.NewAssistantStreamID()
+}
+
+func assistantFinalizationStepID() runtimeids.StepID {
+	stepID, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		panic(err)
+	}
+	return stepID
 }

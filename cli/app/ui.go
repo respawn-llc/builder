@@ -2,16 +2,13 @@ package app
 
 import (
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/serverapi"
-	"core/shared/transcriptdiag"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -25,8 +22,8 @@ func (m *uiModel) clearReviewerState() {
 	m.setReviewerBlocking(false)
 }
 
-func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, askEvents <-chan askEvent, opts ...UIOption) tea.Model {
-	m := newUIModelDefaults(runtimeClient, runtimeEvents, askEvents)
+func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) tea.Model {
+	m := newUIModelDefaults(runtimeClient)
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -34,7 +31,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-c
 		m.pathReferenceSearch = newUIPathReferenceSearch()
 		m.pathReferenceEvents = m.pathReferenceSearch.Events()
 	}
-	m.updateTranscriptDiagnosticsMode()
 	m.refreshAutocompleteFromInput()
 	if configurable, ok := m.engine.(interface{ SetConnectionStateObserver(func(error)) }); ok {
 		runtimeConnectionEvents := make(chan runtimeConnectionStateChangedMsg, 1)
@@ -75,82 +71,9 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-c
 	return m
 }
 
-func (m *uiModel) applyRunLoggerDiagnostic(diag runLoggerDiagnostic) tea.Cmd {
-	message := strings.TrimSpace(diag.Message)
-	if message == "" {
-		message = "run logger diagnostic"
-	}
-	m.logf("run_logger.diagnostic kind=%s message=%q", strings.TrimSpace(diag.Kind), message)
-	if diag.Err != nil {
-		m.logf("run_logger.diagnostic.err kind=%s err=%q", strings.TrimSpace(diag.Kind), diag.Err.Error())
-	}
-	return m.sendTransientStatusWithNoticeID(message, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-}
-
-func (m *uiModel) handleRuntimeEventBatch(events []clientui.Event) (*uiModel, tea.Cmd) {
-	m.logTranscriptDiag(transcriptdiag.FormatLine("transcript.diag.client.runtime_batch", map[string]string{
-		"session_id":             strings.TrimSpace(m.sessionID),
-		"mode":                   string(m.view.Mode()),
-		"event_count":            strconv.Itoa(len(events)),
-		"pending_runtime_events": strconv.Itoa(len(m.pendingRuntimeEvents)),
-		"wait_after_hydration":   strconv.FormatBool(m.waitRuntimeEventAfterHydration),
-	}))
-	result := m.runtimeAdapter().applyProjectedRuntimeEventsBatch(events)
-	cmd := result.cmd
-	cmd = tea.Batch(cmd, m.reconcileSpinnerTicking(true))
-	if !result.awaitsHydration {
-		cmd = sequenceCmds(cmd, m.flushQueuedInputsAfterHydration())
-		cmd = sequenceCmds(cmd, m.inputController().resumeQueuedInputsAfterIdleRuntime())
-	}
-	m.layout().syncViewport()
-	if result.awaitsHydration {
-		m.logTranscriptDiag(transcriptdiag.FormatLine("transcript.diag.client.runtime_batch_pause", map[string]string{
-			"session_id":             strings.TrimSpace(m.sessionID),
-			"mode":                   string(m.view.Mode()),
-			"pending_runtime_events": strconv.Itoa(len(m.pendingRuntimeEvents)),
-		}))
-		m.waitRuntimeEventAfterHydration = true
-	}
-	if result.awaitsHydration {
-		return m, cmd
-	}
-	return m, tea.Batch(m.waitRuntimeEventCmd(), cmd)
-}
-
-func (m *uiModel) waitRuntimeEventCmd() tea.Cmd {
-	if m == nil {
-		return nil
-	}
-	if m.waitRuntimeEventAfterHydration {
-		m.logTranscriptDiag(transcriptdiag.FormatLine("transcript.diag.client.wait_runtime_event_blocked", map[string]string{
-			"session_id":             strings.TrimSpace(m.sessionID),
-			"mode":                   string(m.view.Mode()),
-			"pending_runtime_events": strconv.Itoa(len(m.pendingRuntimeEvents)),
-			"wait_after_hydration":   strconv.FormatBool(m.waitRuntimeEventAfterHydration),
-		}))
-		return nil
-	}
-	if len(m.pendingRuntimeEvents) == 0 {
-		return waitRuntimeEvent(m.runtimeEvents)
-	}
-	evt := m.pendingRuntimeEvents[0]
-	m.pendingRuntimeEvents = append([]clientui.Event(nil), m.pendingRuntimeEvents[1:]...)
-	m.logTranscriptDiag(transcriptdiag.FormatLine("transcript.diag.client.wait_runtime_event_resume_pending", map[string]string{
-		"session_id":             strings.TrimSpace(m.sessionID),
-		"mode":                   string(m.view.Mode()),
-		"kind":                   string(evt.Kind),
-		"pending_runtime_events": strconv.Itoa(len(m.pendingRuntimeEvents)),
-	}))
-	return func() tea.Msg {
-		return runtimeEventBatchMsg{events: []clientui.Event{evt}}
-	}
-}
-
 func (m *uiModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		m.waitRuntimeEventCmd(),
-		waitAskEvent(m.askEvents),
-		waitOngoingTranscriptEvent(m.ongoingEvents),
+		m.eventDispatcher.wait(),
 		waitPathReferenceSearchEvent(m.pathReferenceEvents),
 		tea.SetWindowTitle(sessionTitle(m.sessionName)),
 		tea.WindowSize(),
@@ -292,29 +215,6 @@ func (m *uiModel) logf(format string, args ...any) {
 	}
 }
 
-func (m *uiModel) logTranscriptDiag(line string) {
-	if m == nil || !m.transcriptDiagnosticsEnabled() {
-		return
-	}
-	m.logf("%s", strings.TrimSpace(line))
-}
-
-func (m *uiModel) transcriptDiagnosticsEnabled() bool {
-	if m == nil {
-		return false
-	}
-	return m.transcriptDiagnostics || transcriptdiag.Enabled(m.debugMode, os.Getenv)
-}
-
-func (m *uiModel) updateTranscriptDiagnosticsMode() {
-	if m == nil {
-		return
-	}
-	if configurable, ok := m.engine.(interface{ SetTranscriptDiagnosticsEnabled(bool) }); ok {
-		configurable.SetTranscriptDiagnosticsEnabled(m.transcriptDiagnosticsEnabled())
-	}
-}
-
 func (m *uiModel) inputController() uiInputController {
 	return uiInputController{model: m}
 }
@@ -339,10 +239,6 @@ func worktreeDeleteForceConfirmation(state serverapi.WorktreeDirtyState) string 
 
 func (m *uiModel) askController() uiAskController {
 	return uiAskController{model: m}
-}
-
-func (m *uiModel) runtimeAdapter() uiRuntimeAdapter {
-	return uiRuntimeAdapter{model: m}
 }
 
 func (m *uiModel) sendTransientStatusWithNoticeID(message string, kind uiStatusNoticeKind, duration time.Duration, delivery uiStatusNoticeDelivery, noticeID string) tea.Cmd {
@@ -372,7 +268,7 @@ func (m *uiModel) showTransientStatusNotice(notice uiStatusNotice) tea.Cmd {
 	m.transientStatus = strings.TrimSpace(notice.Text)
 	m.transientStatusKind = notice.Kind
 	m.transientStatusNoticeID = strings.TrimSpace(notice.NoticeID)
-	m.transientStatusRequestID = valuecopy.Pointer(notice.RequestID)
+	m.transientStatusRequestID = textutil.Pointer(notice.RequestID)
 	if notice.Duration <= 0 {
 		return nil
 	}

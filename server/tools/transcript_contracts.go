@@ -1,17 +1,19 @@
 package tools
 
 import (
-	"core/shared/toolspec"
-	"core/shared/transcript"
-	patchformat "core/shared/transcript/patchformat"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"core/shared/toolspec"
+	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 const noOutputText = "No output"
@@ -948,11 +950,7 @@ func renderPlain(v any) string {
 		if len(x) == 0 {
 			return "{}"
 		}
-		keys := make([]string, 0, len(x))
-		for k := range x {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
+		keys := slices.Sorted(maps.Keys(x))
 		lines := make([]string, 0, len(keys))
 		for _, k := range keys {
 			rendered := strings.TrimSpace(renderPlain(x[k]))

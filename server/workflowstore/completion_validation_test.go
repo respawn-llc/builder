@@ -58,18 +58,13 @@ func TestCompleteRunInfersSingleTransitionID(t *testing.T) {
 func TestCompleteRunRejectsMissingTransitionIDWhenAmbiguous(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	agent := nodeByKey(t, def, "agent")
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-blocked-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "blocked", DisplayName: "Blocked"}); err != nil {
-		t.Fatalf("AddTransitionGroup blocked: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-blocked-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-blocked-" + string(workflowID)), Key: "blocked", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge blocked: %v", err)
-	}
+	blockedGroup := workflow.TransitionGroupID("group-blocked-" + string(workflowID))
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		agent := nodeByKey(t, def, "agent")
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: blockedGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "blocked", DisplayName: "Blocked"})
+		req.Edges = append(req.Edges, EdgeRecord{ID: workflow.EdgeID("edge-blocked-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: blockedGroup, Key: "blocked", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession})
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
@@ -91,27 +86,21 @@ func TestCompleteRunRejectsUnknownOutputField(t *testing.T) {
 func TestCompleteRunRejectsParameterDeclaredOnlyByAnotherTransition(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	agent := nodeByKey(t, def, "agent")
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
 	blockedGroup := workflow.TransitionGroupID("group-blocked-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: blockedGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "blocked", DisplayName: "Blocked"}); err != nil {
-		t.Fatalf("AddTransitionGroup blocked: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{
-		ID:                workflow.EdgeID("edge-blocked-" + string(workflowID)),
-		WorkflowID:        workflowID,
-		TransitionGroupID: blockedGroup,
-		Key:               "blocked",
-		TargetNodeID:      workflow.NodeIDOf(done),
-		ContextMode:       workflow.ContextModeNewSession,
-		Parameters:        []workflow.Parameter{{Key: "blocked_reason", Description: "Why the task is blocked."}},
-	}); err != nil {
-		t.Fatalf("AddEdge blocked: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		agent := nodeByKey(t, def, "agent")
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: blockedGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "blocked", DisplayName: "Blocked"})
+		req.Edges = append(req.Edges, EdgeRecord{
+			ID:                workflow.EdgeID("edge-blocked-" + string(workflowID)),
+			WorkflowID:        workflowID,
+			TransitionGroupID: blockedGroup,
+			Key:               "blocked",
+			TargetNodeID:      workflow.NodeIDOf(done),
+			ContextMode:       workflow.ContextModeNewSession,
+			Parameters:        []workflow.Parameter{{Key: "blocked_reason", Description: "Why the task is blocked."}},
+		})
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)

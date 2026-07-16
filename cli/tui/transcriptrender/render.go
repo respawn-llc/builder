@@ -58,7 +58,7 @@ func renderCommittedRow(
 			Group: clientui.TranscriptRowUser,
 			Lines: renderUserAssistantTextBlock(
 				StyleRoleUser,
-				userAssistantDisplayText(row.User.Text, row.User.CondensedText, mode),
+				userAssistantDisplayText(row.User.Text, optionalString(row.User.CondensedText), mode),
 				width,
 				mode,
 				linkPresentation,
@@ -69,7 +69,7 @@ func renderCommittedRow(
 			Group: clientui.TranscriptRowAssistant,
 			Lines: renderUserAssistantTextBlock(
 				StyleRoleAssistant,
-				userAssistantDisplayText(row.Assistant.Text, row.Assistant.CondensedText, mode),
+				userAssistantDisplayText(row.Assistant.Text, optionalString(row.Assistant.CondensedText), mode),
 				width,
 				mode,
 				linkPresentation,
@@ -90,7 +90,7 @@ func renderCommittedRow(
 		role, text := noticeRoleAndText(row.Notice, row.Visibility, mode)
 		meta := toolMeta{}
 		group := clientui.TranscriptRowNotice
-		if row.Notice != nil && row.Notice.Data.MessageType == clientui.MessageTypeBackgroundNotice {
+		if row.Notice != nil && row.Notice.MessageType != nil && *row.Notice.MessageType == clientui.TranscriptMessageBackgroundNotice {
 			symbolRole := StyleRoleNoticePrimary
 			meta.SymbolStyleRole = &symbolRole
 			group = clientui.TranscriptRowTool
@@ -113,6 +113,13 @@ func userAssistantDisplayText(text, condensed string, mode Mode) string {
 		return compact
 	}
 	return text
+}
+
+func optionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
@@ -258,10 +265,6 @@ func textLines(role StyleRole, lines []string, meta toolMeta, mode Mode) []Line 
 		out = append(out, Line{Spans: []Span{contentRoleSpan(line, role, mode)}})
 	}
 	return out
-}
-
-func attachPrefix(role StyleRole, lines []Line, width int, forceEllipsis bool, mode Mode) []Line {
-	return attachPrefixWithMeta(role, lines, width, forceEllipsis, mode, toolMeta{})
 }
 
 func attachPrefixWithMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, mode Mode, meta toolMeta) []Line {
@@ -518,27 +521,27 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
-	if text, ok := worktreeNoticeText(row.Data); ok {
+	if text, ok := worktreeNoticeText(row); ok {
 		return noticeStyleRole(row), text
 	}
-	cacheWarningText := cacheWarningNoticeText(row.Data.CacheWarning)
-	typedCompactText := firstNonEmpty(row.Data.CompactLabel, row.Data.CondensedText, noticeLegacyText(row), cacheWarningText, row.Data.SourcePath)
+	cacheWarningText := cacheWarningNoticeText(row.CacheWarning)
+	typedCompactText := firstNonEmpty(optionalString(row.CompactLabel), optionalString(row.CondensedText), noticeLegacyText(row), cacheWarningText, optionalString(row.SourcePath))
 	compactText := firstNonEmpty(typedCompactText, string(row.Reason), "notice")
 	text := compactText
 	if mode == ModeDetailExpanded {
-		text = firstNonBlankPreservingWhitespace(noticeLegacyText(row), row.Data.CondensedText, row.Data.CompactLabel, cacheWarningText, row.Data.SourcePath)
+		text = firstNonBlankPreservingWhitespace(noticeLegacyText(row), optionalString(row.CondensedText), optionalString(row.CompactLabel), cacheWarningText, optionalString(row.SourcePath))
 		if strings.TrimSpace(text) == "" {
 			text = firstNonEmpty(string(row.Reason), "notice")
 		}
 	}
 	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
-		text = firstNonEmpty(row.Diagnostic.Detail, row.Diagnostic.Code, text)
+		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
 	}
 	return noticeStyleRole(row), text
 }
 
-func worktreeNoticeText(data clientui.TranscriptNoticeData) (string, bool) {
-	context := data.WorktreeContext
+func worktreeNoticeText(row *clientui.TranscriptNoticeRow) (string, bool) {
+	context := row.Worktree
 	if context == nil {
 		return "", false
 	}
@@ -546,8 +549,11 @@ func worktreeNoticeText(data clientui.TranscriptNoticeData) (string, bool) {
 	if effectiveCWD == "" {
 		effectiveCWD = strings.TrimSpace(context.WorktreePath)
 	}
-	switch data.MessageType {
-	case clientui.MessageTypeWorktreeMode:
+	if row.MessageType == nil {
+		return "", false
+	}
+	switch *row.MessageType {
+	case clientui.TranscriptMessageWorktreeMode:
 		name := ""
 		if context.Branch != nil {
 			name = strings.TrimSpace(*context.Branch)
@@ -562,7 +568,7 @@ func worktreeNoticeText(data clientui.TranscriptNoticeData) (string, bool) {
 			return "Switched worktree to " + name, true
 		}
 		return "Switched worktree to " + name + ": " + effectiveCWD, true
-	case clientui.MessageTypeWorktreeModeExit:
+	case clientui.TranscriptMessageWorktreeModeExit:
 		if effectiveCWD == "" {
 			return "Switched worktree to main workspace", true
 		}
@@ -582,26 +588,29 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	if row.Severity == clientui.TranscriptNoticeWarning || row.Reason == clientui.TranscriptNoticeCacheWarning {
 		return StyleRoleWarning
 	}
-	if row.Data.MessageType == clientui.MessageTypeReviewerFeedback || noticeDiagnosticHasReviewerRole(row) {
+	if row.MessageType != nil && *row.MessageType == clientui.TranscriptMessageReviewerFeedback || noticeDiagnosticHasReviewerRole(row) {
 		return StyleRoleNoticeReviewer
 	}
-	switch row.Data.MessageType {
-	case clientui.MessageTypeInterruption, clientui.MessageTypeErrorFeedback:
-		return StyleRoleError
-	case clientui.MessageTypeCompactionSoonReminder:
-		return StyleRoleWarning
-	case clientui.MessageTypeCompactionSummary,
-		clientui.MessageTypeManualCompactionCarryover:
-		return StyleRoleNoticeSecondary
-	case clientui.MessageTypeHandoffFutureMessage,
-		clientui.MessageTypeWorktreeMode,
-		clientui.MessageTypeSubagents:
+	if row.MessageType == nil {
 		return StyleRoleNotice
-	case clientui.MessageTypeGoal, clientui.MessageTypeWorkflowMode:
+	}
+	switch *row.MessageType {
+	case clientui.TranscriptMessageInterruption, clientui.TranscriptMessageErrorFeedback:
+		return StyleRoleError
+	case clientui.TranscriptMessageCompactionSoonReminder:
+		return StyleRoleWarning
+	case clientui.TranscriptMessageCompactionSummary,
+		clientui.TranscriptMessageManualCompactionCarryover:
+		return StyleRoleNoticeSecondary
+	case clientui.TranscriptMessageHandoffFutureMessage,
+		clientui.TranscriptMessageWorktreeMode,
+		clientui.TranscriptMessageSubagents:
+		return StyleRoleNotice
+	case clientui.TranscriptMessageGoal, clientui.TranscriptMessageWorkflowMode:
 		return StyleRoleNoticePrimary
-	case clientui.MessageTypeBackgroundNotice:
+	case clientui.TranscriptMessageBackgroundNotice:
 		return StyleRoleNoticeForeground
-	case clientui.MessageTypeWorktreeModeExit:
+	case clientui.TranscriptMessageWorktreeModeExit:
 		return StyleRoleNoticeForeground
 	default:
 		return StyleRoleNotice
@@ -612,17 +621,17 @@ func noticeDiagnosticHasReviewerRole(row *clientui.TranscriptNoticeRow) bool {
 	if row == nil || row.Diagnostic == nil {
 		return false
 	}
-	return transcript.IsReviewerEntryRole(strings.TrimSpace(row.Diagnostic.Code))
+	return transcript.IsReviewerEntryRole(strings.TrimSpace(string(row.Diagnostic.Code)))
 }
 
 func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {
-	if row == nil || row.Data.LegacyText == nil {
+	if row == nil || row.LegacyText == nil {
 		return ""
 	}
-	return *row.Data.LegacyText
+	return *row.LegacyText
 }
 
-func cacheWarningNoticeText(data *clientui.TranscriptCacheWarningData) string {
+func cacheWarningNoticeText(data *clientui.TranscriptCacheWarning) string {
 	if data == nil {
 		return ""
 	}

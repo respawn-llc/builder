@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	"core/server/llm"
 	"core/shared/config"
@@ -89,12 +90,5 @@ func newRuntimeClientFromFactory(ctx context.Context, factory RuntimeClientFacto
 }
 
 func cloneSources(sources map[string]string) map[string]string {
-	if sources == nil {
-		return nil
-	}
-	cloned := make(map[string]string, len(sources))
-	for key, value := range sources {
-		cloned[key] = value
-	}
-	return cloned
+	return maps.Clone(sources)
 }

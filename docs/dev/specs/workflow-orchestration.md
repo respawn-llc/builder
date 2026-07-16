@@ -6,7 +6,7 @@
 - Users define workflows made of nodes, transition groups, and edges.
 - Tasks move through graph nodes, Kanban statuses, agent workers, review loops, joins, and terminal states.
 - Backend/domain/persistence/runtime are primary. Frontend surfaces follow backend API/read-model needs.
-- Workflow API/read-model shapes are mutable before Kent 2.0.
+- Bundled clients and the server may make hard workflow RPC contract cutovers together. Incompatible cutovers bump the protocol version and do not retain old-client compatibility adapters.
 - CLI is an internal backend-testing and agent-control surface, not the primary user manual QA surface.
 - Real-provider workflow QA requires explicit User approval because it spends provider credits and can fail for provider/model reasons unrelated to orchestration correctness.
 
@@ -49,6 +49,7 @@
 - Edges configure transitions: target node, approval/manual interaction, context preservation, context source, input bindings, output requirements, routing, and join/aggregation behavior.
 - Subagent role is the executable node assignee. There is no separate assignee field.
 - Workflow nodes select existing subagent roles only. There are no per-node model/provider/tool/auth overrides.
+- Agent nodes do not own invocation prompts. Each transition branch into an agent node owns its prompt template; node add/update contracts and persistence contain no node prompt or prompt fallback.
 - Every agent node's effective subagent role, including the default and built-in roles, must have `ask_question` enabled. Validation reports every affected node without rewriting role configuration; drafts and Backlog tasks remain allowed. Ordinary task start and every manual move from Start/Backlog to an executable target validate before execution-target, placement, transition, approval, or run mutation, regardless of automatic or edge-required approval. Tasks that have already left Start continue under their existing run/session contracts and are not revalidated against later role-tool configuration changes.
 - Visible executable/terminal node identity is Kanban column/status identity. Join nodes are internal merge plumbing omitted from board read models.
 - Workflows can contain start, agent, script, join, and terminal nodes. Approval is an edge property, not a manual-node requirement.
@@ -59,7 +60,7 @@
 - Task creation and execution validation accumulate all safe actionable errors and reject invalid graph/role/input configurations.
 - Execution-valid graphs reject detached islands: every node reachable from start, every non-terminal can reach terminal, terminal cannot auto-run.
 - Cycles/self-loops are allowed outside restricted fan-out branch paths.
-- Graph identity uses opaque server-generated primary keys plus stable human/model-facing keys.
+- New draft nodes, node groups, transition groups, and edges receive client-generated UUIDv4 IDs. Preview and save validate and persist those IDs unchanged; no temporary-ID mapping or reservation RPC exists. Human/model-facing keys remain stable semantic references.
 - `node_key`, `transition_id`, `edge_key`, output field names, and binding names match `^[a-z][a-z0-9_]{0,63}$`.
 - Workflow display names are labels, not references, and are trimmed non-empty strings capped at 120 chars.
 
@@ -176,6 +177,9 @@
 ## Scheduler And Recovery
 
 - Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime execution are live memory, not durable run states.
+- `task_runs.session_id` is the sole durable workflow/session relation. A current workflow owner is a referencing task run with no persisted terminal outcome; an interrupted run is terminal for ownership even though it remains resumable.
+- Persistence enforces at most one current workflow owner per session atomically when a run attaches to a session, records its terminal outcome, or resumes by clearing/replacing an interrupted outcome. Resume rejects an ownership conflict before mutation.
+- Current-owner lookup returns none for zero matches and the run for one match. Multiple matches produce a typed invariant failure with diagnostics; Kent never orders them, chooses one, or treats the violation as absence.
 - Runnable work derives from active executable placements with approved automation intent, no terminal run outcome, and no task cancellation.
 - An executable task whose run has not started is `queued`.
 - Pending-work ordering is scheduler memory.

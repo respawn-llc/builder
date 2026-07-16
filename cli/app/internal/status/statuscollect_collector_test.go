@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestCollectEnvironmentDisabledSkillsStillCollectsAgents(t *testing.T) {
+func TestCollectEnvironmentDisabledSkillRemainsVisibleAndStillCollectsAgents(t *testing.T) {
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("workspace guidance"), 0o644); err != nil {
@@ -29,17 +29,17 @@ func TestCollectEnvironmentDisabledSkillsStillCollectsAgents(t *testing.T) {
 		WorkspaceRoot:   workspace,
 		PersistenceRoot: persistenceRoot,
 		Settings: config.Settings{
-			SkillSubsystem: config.SkillSubsystemDisabled,
+			SkillToggles: map[string]bool{"hidden-skill": false},
 		},
 	}, Snapshot{})
 
-	if result.SkillDiscoveryState != config.SkillSubsystemDisabled {
-		t.Fatalf("skill discovery state = %q, want disabled", result.SkillDiscoveryState)
+	if len(result.Skills) != 1 || result.Skills[0].Name != "hidden-skill" || !result.Skills[0].Loaded || !result.Skills[0].Disabled {
+		t.Fatalf("disabled skill inspection = %+v, want visible loaded disabled skill", result.Skills)
 	}
-	if len(result.Skills) != 0 || len(result.SkillTokenCounts) != 0 {
-		t.Fatalf("disabled skills must not be enumerated or tokenized: %+v", result)
+	if len(result.SkillTokenCounts) != 0 {
+		t.Fatalf("disabled skill must not be tokenized for model visibility: %+v", result.SkillTokenCounts)
 	}
-	if strings.Contains(result.CollectorWarning, "skills:") {
+	if result.CollectorWarning != "" {
 		t.Fatalf("disabled skills emitted a collector warning: %q", result.CollectorWarning)
 	}
 	if len(result.AgentsPaths) == 0 || len(result.AgentTokenCounts) == 0 {

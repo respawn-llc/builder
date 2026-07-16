@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"core/shared/textutil"
 	"core/shared/theme"
 	"core/shared/toolspec"
-	"core/shared/valuecopy"
 )
 
 type settingsState struct {
@@ -58,9 +58,10 @@ type fileKeyTree struct {
 }
 
 type settingsRegistry struct {
-	settings   []registrySetting
-	validators []settingsValidator
-	fileKeys   *fileKeyTree
+	settings           []registrySetting
+	validators         []settingsValidator
+	fileKeys           *fileKeyTree
+	subagentRoleValues map[string]subagentRoleValueSetting
 }
 
 type settingDocOptions struct {
@@ -77,6 +78,7 @@ type scalarSetting[T any] struct {
 	defaultValue       T
 	apply              func(*settingsState, T)
 	get                func(settingsState) T
+	equal              func(T, T) bool
 	decodeFile         func(settingsFile, []string) (T, bool, error)
 	transformFileValue func(T, string) (T, error)
 	envName            string
@@ -100,6 +102,12 @@ type subagentRoleApplicableSetting interface {
 	appliesToSubagentRole() bool
 }
 
+type subagentRoleValueSetting interface {
+	subagentRoleKey() string
+	applySubagentRoleValue(*settingsState, settingsState)
+	subagentRoleValueDiffers(settingsState, settingsState) bool
+}
+
 type rootOnlySetting[T any] struct {
 	scalarSetting[T]
 }
@@ -111,6 +119,40 @@ func (rootOnlySetting[T]) appliesToSubagentRole() bool {
 func settingAppliesToSubagentRole(setting registrySetting) bool {
 	scoped, ok := setting.(subagentRoleApplicableSetting)
 	return !ok || scoped.appliesToSubagentRole()
+}
+
+func (s scalarSetting[T]) subagentRoleKey() string {
+	return s.key
+}
+
+func (s scalarSetting[T]) applySubagentRoleValue(target *settingsState, role settingsState) {
+	s.apply(target, s.get(role))
+}
+
+func (s scalarSetting[T]) subagentRoleValueDiffers(base settingsState, role settingsState) bool {
+	return !s.equal(s.get(base), s.get(role))
+}
+
+func (s optionalStringSetting) subagentRoleKey() string {
+	return s.key
+}
+
+func (s optionalStringSetting) applySubagentRoleValue(target *settingsState, role settingsState) {
+	value := s.get(role)
+	if value != nil {
+		copied := *value
+		value = &copied
+	}
+	s.apply(target, value)
+}
+
+func (s optionalStringSetting) subagentRoleValueDiffers(base settingsState, role settingsState) bool {
+	left := s.get(base)
+	right := s.get(role)
+	if left == nil || right == nil {
+		return left != right
+	}
+	return strings.TrimSpace(*left) != strings.TrimSpace(*right)
 }
 
 var configRegistry = newSettingsRegistry()
@@ -681,7 +723,6 @@ func newSettingsRegistry() settingsRegistry {
 			validateBGShellsOutput,
 			validateShellPostprocessing,
 			validateCacheWarningMode,
-			validateSkillSubsystemState,
 			validateContextWindow,
 			validateCompactionMode,
 			validateReviewer,
@@ -691,10 +732,23 @@ func newSettingsRegistry() settingsRegistry {
 	}
 
 	registry.fileKeys = newFileKeyTree()
+	registry.subagentRoleValues = make(map[string]subagentRoleValueSetting)
 	for _, setting := range registry.settings {
 		if fileKeySetting, ok := setting.(fileKeyRegisteringSetting); ok {
 			fileKeySetting.registerFileKeys(registry.fileKeys)
 		}
+		if !settingAppliesToSubagentRole(setting) {
+			continue
+		}
+		roleSetting, ok := setting.(subagentRoleValueSetting)
+		if !ok {
+			continue
+		}
+		key := roleSetting.subagentRoleKey()
+		if _, exists := registry.subagentRoleValues[key]; exists {
+			panic("duplicate subagent role setting: " + key)
+		}
+		registry.subagentRoleValues[key] = roleSetting
 	}
 	registerSubagentFileKeys(registry.fileKeys, registry.settings)
 	return registry
@@ -793,10 +847,13 @@ func newStringSetting[T ~string](
 		}
 	}
 	return scalarSetting[T]{
-		key:                key,
-		defaultValue:       defaultValue,
-		apply:              apply,
-		get:                get,
+		key:          key,
+		defaultValue: defaultValue,
+		apply:        apply,
+		get:          get,
+		equal: func(left T, right T) bool {
+			return strings.TrimSpace(string(left)) == strings.TrimSpace(string(right))
+		},
 		transformFileValue: transformFileValue,
 		decodeFile: func(raw settingsFile, path []string) (T, bool, error) {
 			lookup := lookupFileString
@@ -870,7 +927,7 @@ func (s optionalStringSetting) applyFile(raw settingsFile, _ string, state *sett
 	if trimmed == "" {
 		return fmt.Errorf("%s cannot be empty; remove the setting to leave it unset", s.key)
 	}
-	s.apply(state, valuecopy.Pointer(&trimmed))
+	s.apply(state, textutil.Pointer(&trimmed))
 	sources[s.key] = "file"
 	return nil
 }
@@ -887,7 +944,7 @@ func (s optionalStringSetting) applyEnv(lookup envLookup, state *settingsState, 
 	if trimmed == "" {
 		return fmt.Errorf("%s cannot be empty; unset the environment variable to leave it unset", s.envName)
 	}
-	s.apply(state, valuecopy.Pointer(&trimmed))
+	s.apply(state, textutil.Pointer(&trimmed))
 	sources[s.key] = "env"
 	return nil
 }
@@ -920,6 +977,7 @@ func newBoolSetting(
 		defaultValue: defaultValue,
 		apply:        apply,
 		get:          get,
+		equal:        func(left bool, right bool) bool { return left == right },
 		decodeFile:   lookupFileBool,
 		envName:      envName,
 		decodeEnv: func(raw string, envName string) (bool, error) {
@@ -947,6 +1005,7 @@ func newIntSetting(
 		defaultValue: defaultValue,
 		apply:        apply,
 		get:          get,
+		equal:        func(left int, right int) bool { return left == right },
 		decodeFile:   lookupFileInt,
 		envName:      envName,
 		decodeEnv: func(raw string, envName string) (int, error) {
@@ -1151,12 +1210,7 @@ func (toolsSetting) appendDefaultLines(lines *[]defaultConfigLine, state setting
 }
 
 func (skillsSetting) applyDefault(state *settingsState) {
-	state.Settings.SkillSubsystem = SkillSubsystemEnabled
 	state.Settings.SkillToggles = map[string]bool{}
-}
-
-func (skillsSetting) initSources(sources map[string]string) {
-	sources[skillsEnabledSourceKey] = "default"
 }
 
 func (skillsSetting) applyFile(raw settingsFile, settingsPath string, state *settingsState, sources map[string]string) error {
@@ -1184,11 +1238,6 @@ func (skillsSetting) applyFile(raw settingsFile, settingsPath string, state *set
 			return &SettingsKeyTypeError{Key: strings.Join(append([]string{"skills"}, key), "."), ExpectedType: "boolean"}
 		}
 		seenNormalized[normalized] = key
-		if normalized == skillsEnabledKey {
-			state.Settings.SkillSubsystem = skillSubsystemStateFromEnabled(enabled)
-			sources[skillsEnabledSourceKey] = "file"
-			continue
-		}
 		state.Settings.SkillToggles[normalized] = enabled
 		sources[skillSourceKey(normalized)] = "file"
 	}

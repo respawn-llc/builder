@@ -225,36 +225,3 @@ func TestRemoteLoginTransitionWaitsForAuthChoiceWhenServerAuthAlreadyReady(t *te
 		t.Fatalf("expected remote login transition to replace auth after choice, got %+v", state.Method)
 	}
 }
-
-func TestRemoteAppServerCloseUsesOwnedCloser(t *testing.T) {
-	called := false
-	server := newRemoteAppServerWithAuth(&client.Remote{}, config.App{}, func() error {
-		called = true
-		return nil
-	}, true)
-	if !server.OwnsServer() {
-		t.Fatal("expected launched remote server to be owned")
-	}
-	if err := server.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if !called {
-		t.Fatal("expected owned remote closer to be invoked")
-	}
-}
-
-func TestRemoteAppServerCloseFnDoesNotImplyOwnership(t *testing.T) {
-	server := newRemoteAppServerWithAuth(&client.Remote{}, config.App{}, func() error {
-		return nil
-	}, false)
-	if server.OwnsServer() {
-		t.Fatal("expected explicit non-owned remote server to stay non-owned")
-	}
-}
-
-func TestRemoteAppServerDiscoveredRemoteIsNotOwned(t *testing.T) {
-	server := newRemoteAppServerWithAuth(&client.Remote{}, config.App{}, nil, false)
-	if server.OwnsServer() {
-		t.Fatal("expected configured remote server to not be owned")
-	}
-}

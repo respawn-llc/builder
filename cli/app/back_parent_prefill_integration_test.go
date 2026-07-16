@@ -7,18 +7,18 @@ import (
 
 	"core/server/llm"
 	serverstartup "core/server/startup"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/google/uuid"
 )
 
 type backParentPrefillScenarioServer interface {
 	interactiveSessionServer
 	ProjectID() string
-	SessionViewClient() client.SessionViewClient
+	SessionViewClient() apicontract.SessionViewService
 }
 
 func TestBackParentPrefillTransportParity(t *testing.T) {
@@ -125,7 +125,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			_, err := server.SessionLifecycleClient().PersistInputDraft(
 				context.Background(),
 				serverapi.SessionPersistInputDraftRequest{
-					ClientRequestID: uuid.NewString(),
+					ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 					SessionID:       parent.Meta().SessionID,
 					Input:           "conflicting parent draft",
 					RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
@@ -134,11 +134,19 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 							ID:              "pending-parent-input",
 							ClientRequestID: "pending-parent-request",
 							Text:            "conflicting pending input",
+							OperationRef: clientui.RuntimeOperationRef{
+								Kind:            clientui.RuntimeOperationKindQueuedMessage,
+								ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+							},
 						},
 						{
 							Kind: serverapi.SessionDraftRecoveryBufferQueuedInput,
 							ID:   "queued-parent-input",
 							Text: "conflicting queued input",
+							OperationRef: clientui.RuntimeOperationRef{
+								Kind:            clientui.RuntimeOperationKindQueuedMessage,
+								ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+							},
 						},
 					},
 				},

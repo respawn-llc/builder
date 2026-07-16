@@ -2,9 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io"
+	"path/filepath"
+	"strings"
+	"sync"
+
 	"core/cli/app/commands"
 	"core/cli/app/internal/status"
-	"core/internal/testharness/runtimewirefixture"
 	"core/server/auth"
 	"core/server/authservice"
 	"core/server/launch"
@@ -20,20 +25,10 @@ import (
 	"core/server/sessionservice"
 	serverstartup "core/server/startup"
 	shelltool "core/server/tools/shell"
-	rpccontract "core/shared/apicontract"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
-	"errors"
-	"io"
-	"path/filepath"
-	"strings"
-	"sync"
-	"testing"
-	"time"
-
-	"github.com/google/uuid"
 )
 
 type testEmbeddedServer struct {
@@ -44,24 +39,23 @@ type testEmbeddedServer struct {
 	fastModeState        *runtime.FastModeState
 	background           *shelltool.Manager
 	backgroundRouter     serverstartup.BackgroundRouter
-	runPromptClient      client.RunPromptClient
+	runPromptClient      apicontract.RunPromptService
 	projectID            string
 	boundWorkspaceID     string
-	askViewClient        client.AskViewClient
-	approvalViewClient   client.ApprovalViewClient
-	attentionClient      client.AttentionNotificationClient
-	promptControlClient  client.PromptControlClient
-	promptActivityClient client.PromptActivityClient
-	projectViewClient    client.ProjectViewClient
-	processControlClient client.ProcessControlClient
-	processOutputClient  client.ProcessOutputClient
-	processViewClient    client.ProcessViewClient
-	runtimeControlClient client.RuntimeControlClient
-	sessionLaunch        client.SessionLaunchClient
-	sessionActivity      client.SessionActivityClient
-	sessionLifecycle     client.SessionLifecycleClient
-	sessionRuntime       client.SessionRuntimeClient
-	sessionViewClient    client.SessionViewClient
+	askViewClient        apicontract.AskViewService
+	approvalViewClient   apicontract.ApprovalViewService
+	attentionClient      apicontract.AttentionNotificationService
+	promptControlClient  apicontract.PromptControlService
+	projectViewClient    apicontract.ProjectViewService
+	processControlClient apicontract.ProcessControlService
+	processOutputClient  apicontract.ProcessOutputService
+	processViewClient    apicontract.ProcessViewService
+	runtimeControlClient apicontract.RuntimeControlService
+	sessionLaunch        apicontract.SessionLaunchService
+	sessionLifecycle     apicontract.SessionLifecycleService
+	sessionRuntime       apicontract.SessionRuntimeService
+	sessionTranscript    apicontract.SessionTranscriptService
+	sessionViewClient    apicontract.SessionViewService
 	sessionStores        *registry.SessionStoreRegistry
 	sessionPersistence   *sessiontest.Persistence
 	metadataOnce         sync.Once
@@ -71,14 +65,6 @@ type testEmbeddedServer struct {
 	prepareRuntime       func(ctx context.Context, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error)
 	reauthenticate       func(ctx context.Context, interactor authInteractor) error
 }
-
-type noOpSessionActivitySubscription struct{}
-
-func (noOpSessionActivitySubscription) Next(context.Context) (clientui.Event, error) {
-	return clientui.Event{}, io.EOF
-}
-
-func (noOpSessionActivitySubscription) Close() error { return nil }
 
 type recordingSessionRuntimeClient struct {
 	activate func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error)
@@ -97,40 +83,6 @@ func (c *recordingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Contex
 		return c.release(ctx, req)
 	}
 	return serverapi.SessionRuntimeReleaseResponse{}, nil
-}
-
-type recordingSessionActivityClient struct {
-	subscribe func(context.Context, serverapi.SessionActivitySubscribeRequest) (serverapi.SessionActivitySubscription, error)
-}
-
-func (c *recordingSessionActivityClient) SubscribeSessionActivity(ctx context.Context, req serverapi.SessionActivitySubscribeRequest) (serverapi.SessionActivitySubscription, error) {
-	if c.subscribe != nil {
-		return c.subscribe(ctx, req)
-	}
-	return noOpSessionActivitySubscription{}, nil
-}
-
-type recordingPromptActivityClient struct {
-	subscribe func(context.Context, serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error)
-}
-
-func (c *recordingPromptActivityClient) SubscribePromptActivity(ctx context.Context, req serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error) {
-	if c.subscribe != nil {
-		return c.subscribe(ctx, req)
-	}
-	return nil, nil
-}
-
-type stubEmbeddedProcessViewClient struct {
-	listResp serverapi.ProcessListResponse
-	getResp  serverapi.ProcessGetResponse
-	err      error
-}
-
-type stubEmbeddedProcessControlClient struct {
-	inlineResp serverapi.ProcessInlineOutputResponse
-	err        error
-	killed     []string
 }
 
 func (s *testEmbeddedServer) Close() error {
@@ -171,16 +123,15 @@ func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID s
 		approvalViewClient:   s.approvalViewClient,
 		attentionClient:      s.attentionClient,
 		promptControlClient:  s.promptControlClient,
-		promptActivityClient: s.promptActivityClient,
 		projectViewClient:    s.projectViewClient,
 		processControlClient: s.processControlClient,
 		processOutputClient:  s.processOutputClient,
 		processViewClient:    s.processViewClient,
 		runtimeControlClient: s.runtimeControlClient,
 		sessionLaunch:        s.sessionLaunch,
-		sessionActivity:      s.sessionActivity,
 		sessionLifecycle:     s.sessionLifecycle,
 		sessionRuntime:       s.sessionRuntime,
+		sessionTranscript:    s.sessionTranscript,
 		sessionViewClient:    s.sessionViewClient,
 		sessionStores:        s.sessionStores,
 		sessionPersistence:   s.sessionPersistence,
@@ -229,14 +180,14 @@ func (s *testEmbeddedServer) metadataBinding() (*metadata.Store, metadata.Bindin
 	return s.metadataStore, s.metadataBindingData, true
 }
 
-func (s *testEmbeddedServer) ProjectViewClient() client.ProjectViewClient {
+func (s *testEmbeddedServer) ProjectViewClient() apicontract.ProjectViewService {
 	if s.projectViewClient != nil {
 		return s.projectViewClient
 	}
 	if metadataStore, binding, ok := s.metadataBinding(); ok {
 		service, err := projectview.NewMetadataService(metadataStore, binding.ProjectID)
 		if err == nil {
-			return client.NewLoopbackProjectViewClient(service)
+			return service
 		}
 	}
 	if strings.TrimSpace(s.cfg.PersistenceRoot) == "" {
@@ -252,21 +203,17 @@ func (s *testEmbeddedServer) ProjectViewClient() client.ProjectViewClient {
 		_ = store.Close()
 		return nil
 	}
-	return client.NewLoopbackProjectViewClient(service)
+	return service
 }
 
-func (s *testEmbeddedServer) AskViewClient() client.AskViewClient { return s.askViewClient }
+func (s *testEmbeddedServer) AskViewClient() apicontract.AskViewService { return s.askViewClient }
 
-func (s *testEmbeddedServer) ApprovalViewClient() client.ApprovalViewClient {
+func (s *testEmbeddedServer) ApprovalViewClient() apicontract.ApprovalViewService {
 	return s.approvalViewClient
 }
 
-func (s *testEmbeddedServer) PromptControlClient() client.PromptControlClient {
+func (s *testEmbeddedServer) PromptControlClient() apicontract.PromptControlService {
 	return s.promptControlClient
-}
-
-func (s *testEmbeddedServer) PromptActivityClient() client.PromptActivityClient {
-	return s.promptActivityClient
 }
 
 func (s *testEmbeddedServer) ContainerDir() string { return s.containerDir }
@@ -286,7 +233,7 @@ func (s *testEmbeddedServer) AuthStatePath() string {
 	return config.GlobalAuthConfigPath(s.cfg)
 }
 
-func (s *testEmbeddedServer) AuthStatusClient() client.AuthStatusClient {
+func (s *testEmbeddedServer) AuthStatusClient() apicontract.AuthStatusService {
 	return nil
 }
 
@@ -298,26 +245,26 @@ func (s *testEmbeddedServer) BackgroundRouter() serverstartup.BackgroundRouter {
 	return s.backgroundRouter
 }
 
-func (s *testEmbeddedServer) RunPromptClient() client.RunPromptClient { return s.runPromptClient }
+func (s *testEmbeddedServer) RunPromptClient() apicontract.RunPromptService { return s.runPromptClient }
 
-func (s *testEmbeddedServer) ProcessControlClient() client.ProcessControlClient {
+func (s *testEmbeddedServer) ProcessControlClient() apicontract.ProcessControlService {
 	return s.processControlClient
 }
 
-func (s *testEmbeddedServer) ProcessOutputClient() client.ProcessOutputClient {
+func (s *testEmbeddedServer) ProcessOutputClient() apicontract.ProcessOutputService {
 	return s.processOutputClient
 }
 
-func (s *testEmbeddedServer) ProcessViewClient() client.ProcessViewClient {
+func (s *testEmbeddedServer) ProcessViewClient() apicontract.ProcessViewService {
 	return s.processViewClient
 }
 
-func (s *testEmbeddedServer) RuntimeControlClient() client.RuntimeControlClient {
+func (s *testEmbeddedServer) RuntimeControlClient() apicontract.RuntimeControlService {
 	if s.runtimeControlClient != nil {
 		return s.runtimeControlClient
 	}
 	registry := registry.NewRuntimeRegistry()
-	return client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry))
+	return runtimecontrol.NewService(registry)
 }
 
 func (s *testEmbeddedServer) sessionStoreRegistry() *registry.SessionStoreRegistry {
@@ -355,7 +302,7 @@ func (s *testEmbeddedServer) sessionWorkspaceRetargeter(metadataStore *metadata.
 	return sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimes, maintenance, testSessionProcessSource{manager: s.background})
 }
 
-func (s *testEmbeddedServer) SessionLaunchClient() client.SessionLaunchClient {
+func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchService {
 	if s.sessionLaunch != nil {
 		return s.sessionLaunch
 	}
@@ -365,7 +312,7 @@ func (s *testEmbeddedServer) SessionLaunchClient() client.SessionLaunchClient {
 			ContainerDir: filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
 			StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
 		}, s.sessionStoreRegistry())
-		return client.NewLoopbackSessionLaunchClient(service)
+		return service
 	}
 	var storeOptions []session.StoreOption
 	if s.sessionPersistence != nil {
@@ -376,14 +323,10 @@ func (s *testEmbeddedServer) SessionLaunchClient() client.SessionLaunchClient {
 		ContainerDir: s.containerDir,
 		StoreOptions: storeOptions,
 	}, s.sessionStoreRegistry())
-	return client.NewLoopbackSessionLaunchClient(service)
+	return service
 }
 
-func (s *testEmbeddedServer) SessionActivityClient() client.SessionActivityClient {
-	return s.sessionActivity
-}
-
-func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleClient {
+func (s *testEmbeddedServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if s.sessionLifecycle != nil {
 		return s.sessionLifecycle
 	}
@@ -395,7 +338,7 @@ func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleCli
 			metadataStore.AuthoritativeSessionStoreOptions()...,
 		).WithPersistenceRoot(s.cfg.PersistenceRoot).
 			WithWorkspaceRetargeter(s.sessionWorkspaceRetargeter(metadataStore))
-		return client.NewLoopbackSessionLifecycleClient(service)
+		return service
 	}
 	containerDir := strings.TrimSpace(s.containerDir)
 	if containerDir == "" {
@@ -406,18 +349,31 @@ func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleCli
 		containerDir = filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), projectID, "sessions")
 	}
 	service := sessionservice.NewSessionLifecycleService(containerDir, s.sessionStoreRegistry(), s.authManager).WithPersistenceRoot(s.cfg.PersistenceRoot)
-	return client.NewLoopbackSessionLifecycleClient(service)
+	return service
 }
 
-func (s *testEmbeddedServer) SessionRuntimeClient() client.SessionRuntimeClient {
+func (s *testEmbeddedServer) SessionRuntimeClient() apicontract.SessionRuntimeService {
 	return s.sessionRuntime
 }
 
-func (s *testEmbeddedServer) SessionViewClient() client.SessionViewClient {
-	return s.sessionViewClient
+func (s *testEmbeddedServer) SessionViewClient() apicontract.SessionViewService {
+	if s.sessionViewClient != nil {
+		return s.sessionViewClient
+	}
+	return stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+		root := strings.TrimSpace(s.cfg.WorkspaceRoot)
+		return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
+			SessionID: req.SessionID,
+			ExecutionTarget: clientui.SessionExecutionTarget{
+				WorkspaceRoot:         root,
+				WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+				EffectiveWorkdir:      root,
+			},
+		}}}, nil
+	}}
 }
 
-func (s *testEmbeddedServer) WorktreeClient() client.WorktreeClient {
+func (s *testEmbeddedServer) WorktreeClient() apicontract.WorktreeService {
 	return nil
 }
 
@@ -428,18 +384,15 @@ func (s *testEmbeddedServer) RuntimeAttachmentClients() runtimeAttachmentClients
 		attention = &recordingAttentionNotificationClient{}
 	}
 	return runtimeAttachmentClients{
-		ApprovalViews:                   s.approvalViewClient,
-		AskViews:                        s.askViewClient,
 		Attention:                       attention,
 		AttentionNotificationsSupported: supported,
 		ProcessControls:                 s.processControlClient,
 		ProcessOutput:                   s.processOutputClient,
 		ProcessViews:                    s.processViewClient,
-		PromptActivity:                  s.promptActivityClient,
 		PromptControl:                   s.promptControlClient,
 		RuntimeControls:                 s.RuntimeControlClient(),
-		SessionActivity:                 s.sessionActivity,
 		SessionRuntime:                  s.sessionRuntime,
+		SessionTranscript:               s.sessionTranscript,
 		SessionViews:                    s.sessionViewClient,
 		Worktrees:                       s.WorktreeClient(),
 	}
@@ -456,8 +409,8 @@ func (s *testEmbeddedServer) Reauthenticate(ctx context.Context, interactor auth
 	if s.reauthenticate != nil {
 		return s.reauthenticate(ctx, interactor)
 	}
-	service := authservice.NewBootstrapService(s.authManager, s.oauthOpts, s.cfg.Settings, rpccontract.AllowedPreAuthMethods())
-	remote := client.NewLoopbackAuthBootstrapClient(service)
+	service := authservice.NewBootstrapService(s.authManager, s.oauthOpts, s.cfg.Settings, apicontract.AllowedPreAuthMethods())
+	remote := service
 	status, err := remote.GetAuthBootstrapStatus(ctx, serverapi.AuthGetBootstrapStatusRequest{})
 	if err != nil {
 		return err
@@ -469,367 +422,6 @@ func (s *testEmbeddedServer) Reauthenticate(ctx context.Context, interactor auth
 }
 
 func (s *testEmbeddedServer) EnsureAuthReady(ctx context.Context, interactor authInteractor, interactiveAuth bool) error {
-	service := authservice.NewBootstrapService(s.authManager, s.oauthOpts, s.cfg.Settings, rpccontract.AllowedPreAuthMethods())
-	return ensureRemoteAuthReady(ctx, client.NewLoopbackAuthBootstrapClient(service), s.cfg.Settings, interactor, interactiveAuth)
-}
-
-func (s *stubEmbeddedProcessViewClient) ListProcesses(context.Context, serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
-	if s.err != nil {
-		return serverapi.ProcessListResponse{}, s.err
-	}
-	return s.listResp, nil
-}
-
-func (s *stubEmbeddedProcessViewClient) GetProcess(context.Context, serverapi.ProcessGetRequest) (serverapi.ProcessGetResponse, error) {
-	if s.err != nil {
-		return serverapi.ProcessGetResponse{}, s.err
-	}
-	return s.getResp, nil
-}
-
-func (s *stubEmbeddedProcessControlClient) KillProcess(_ context.Context, req serverapi.ProcessKillRequest) (serverapi.ProcessKillResponse, error) {
-	if s.err != nil {
-		return serverapi.ProcessKillResponse{}, s.err
-	}
-	s.killed = append(s.killed, req.ProcessID)
-	return serverapi.ProcessKillResponse{}, nil
-}
-
-func (s *stubEmbeddedProcessControlClient) GetInlineOutput(context.Context, serverapi.ProcessInlineOutputRequest) (serverapi.ProcessInlineOutputResponse, error) {
-	if s.err != nil {
-		return serverapi.ProcessInlineOutputResponse{}, s.err
-	}
-	return s.inlineResp, nil
-}
-
-func TestEmbeddedAppServerPrepareRuntimeRegistersRuntimeForSessionViews(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test prepare runtime")
-	defer runtimePlan.Close()
-	if err := runtimePlan.Wiring.runtimeControls.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Level: "high"}); err != nil {
-		t.Fatalf("set thinking level: %v", err)
-	}
-
-	resp, err := server.SessionViewClient().GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: plan.SessionID})
-	if err != nil {
-		t.Fatalf("get session main view while runtime attached: %v", err)
-	}
-	if resp.MainView.Session.SessionID != plan.SessionID {
-		t.Fatalf("session id = %q, want %q", resp.MainView.Session.SessionID, plan.SessionID)
-	}
-	if resp.MainView.Status.ThinkingLevel != "high" {
-		t.Fatalf("thinking level = %q, want high", resp.MainView.Status.ThinkingLevel)
-	}
-}
-
-func TestEmbeddedAppServerPrepareRuntimeWiresProcessReadsForUIHydration(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test prepare runtime process reads")
-	defer runtimePlan.Close()
-	if runtimePlan.Wiring.processViews == nil {
-		t.Fatal("expected PrepareRuntime to wire process view client")
-	}
-
-	manager := server.inner.Background()
-	if manager == nil {
-		t.Fatal("expected server background manager")
-	}
-	manager.SetMinimumExecToBgTime(fastBackgroundTestYield)
-	res, err := manager.Start(context.Background(), shelltool.ExecRequest{
-		Command:        []string{"sh", "-c", "printf 'local\n'; sleep 1"},
-		DisplayCommand: "local-process",
-		OwnerSessionID: plan.SessionID,
-		OwnerRunID:     "local-run",
-		OwnerStepID:    "local-step",
-		Workdir:        workspace,
-		YieldTime:      fastBackgroundTestYield,
-	})
-	if err != nil {
-		t.Fatalf("start background process: %v", err)
-	}
-	if !res.Backgrounded {
-		t.Fatal("expected backgrounded local process")
-	}
-
-	runtimePlan.Wiring.processViews = &stubEmbeddedProcessViewClient{listResp: serverapi.ProcessListResponse{Processes: []clientui.BackgroundProcess{{
-		ID:             "remote-proc",
-		OwnerSessionID: plan.SessionID,
-		OwnerRunID:     "remote-run",
-		OwnerStepID:    "remote-step",
-		Command:        "remote-process",
-	}}}}
-
-	processClient := newUIProcessClientWithReads(runtimePlan.Wiring.processViews, runtimePlan.Wiring.processControls)
-	got, err := processClient.ListProcesses(context.Background())
-	if err != nil {
-		t.Fatalf("ListProcesses: %v", err)
-	}
-	if len(got) != 1 || got[0].ID != "remote-proc" || got[0].OwnerRunID != "remote-run" || got[0].OwnerStepID != "remote-step" {
-		t.Fatalf("expected shared process reads to win over local manager snapshot, got %+v", got)
-	}
-}
-
-func TestEmbeddedAppServerPrepareRuntimeExposesPendingAsksAndApprovals(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test prepare runtime pending prompts")
-	defer runtimePlan.Close()
-	if runtimePlan.Wiring.askViews == nil || runtimePlan.Wiring.approvalViews == nil || runtimePlan.Wiring.promptControl == nil {
-		t.Fatal("expected PrepareRuntime to wire shared prompt clients")
-	}
-}
-
-func waitForPendingAskResources(t *testing.T, client client.AskViewClient, sessionID string, want int) []clientui.PendingAsk {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := client.ListPendingAsksBySession(context.Background(), serverapi.AskListPendingBySessionRequest{SessionID: sessionID})
-		if err != nil {
-			t.Fatalf("ListPendingAsksBySession: %v", err)
-		}
-		if len(resp.Asks) == want {
-			return resp.Asks
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	resp, err := client.ListPendingAsksBySession(context.Background(), serverapi.AskListPendingBySessionRequest{SessionID: sessionID})
-	if err != nil {
-		t.Fatalf("ListPendingAsksBySession final: %v", err)
-	}
-	t.Fatalf("timed out waiting for %d pending asks, got %+v", want, resp.Asks)
-	return nil
-}
-
-func waitForPendingApprovalResources(t *testing.T, client client.ApprovalViewClient, sessionID string, want int) []clientui.PendingApproval {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := client.ListPendingApprovalsBySession(context.Background(), serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionID})
-		if err != nil {
-			t.Fatalf("ListPendingApprovalsBySession: %v", err)
-		}
-		if len(resp.Approvals) == want {
-			return resp.Approvals
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	resp, err := client.ListPendingApprovalsBySession(context.Background(), serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionID})
-	if err != nil {
-		t.Fatalf("ListPendingApprovalsBySession final: %v", err)
-	}
-	t.Fatalf("timed out waiting for %d pending approvals, got %+v", want, resp.Approvals)
-	return nil
-}
-
-func TestEmbeddedAppServerPrepareRuntimeWiresSessionActivityForSharedClients(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test prepare runtime session activity")
-	defer runtimePlan.Close()
-
-	reads := server.SessionViewClient()
-	if reads == nil {
-		t.Fatal("expected session view client")
-	}
-	hydrated, err := reads.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: plan.SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionMainView: %v", err)
-	}
-	if hydrated.MainView.Session.SessionID != plan.SessionID {
-		t.Fatalf("unexpected hydrated session: %+v", hydrated.MainView.Session)
-	}
-
-	activity := server.inner.SessionActivityClient()
-	if activity == nil {
-		t.Fatal("expected session activity client")
-	}
-	first, err := activity.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: plan.SessionID})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity first: %v", err)
-	}
-	defer func() { _ = first.Close() }()
-	second, err := activity.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: plan.SessionID})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity second: %v", err)
-	}
-	defer func() { _ = second.Close() }()
-
-	runtimePlan.Wiring.runtimeClient.AppendCommittedEntry("user", "hello from client one")
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	firstEvt, err := first.Next(ctx)
-	if err != nil {
-		t.Fatalf("first.Next: %v", err)
-	}
-	secondEvt, err := second.Next(ctx)
-	if err != nil {
-		t.Fatalf("second.Next: %v", err)
-	}
-	if firstEvt.Kind != clientui.EventLocalEntryAdded || secondEvt.Kind != clientui.EventLocalEntryAdded {
-		t.Fatalf("unexpected activity events: first=%+v second=%+v", firstEvt, secondEvt)
-	}
-
-	if _, err := reads.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: plan.SessionID}); err != nil {
-		t.Fatalf("GetSessionMainView refreshed: %v", err)
-	}
-}
-
-func TestEmbeddedAppServerPrepareRuntimeIsolatesSessionActivityBetweenSessions(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	planA, runtimePlanA := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test prepare runtime session activity A")
-	defer runtimePlanA.Close()
-
-	planB, runtimePlanB := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test prepare runtime session activity B")
-	defer runtimePlanB.Close()
-
-	activity := server.inner.SessionActivityClient()
-	if activity == nil {
-		t.Fatal("expected session activity client")
-	}
-	subA, err := activity.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: planA.SessionID})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity A: %v", err)
-	}
-	defer func() { _ = subA.Close() }()
-	subB, err := activity.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: planB.SessionID})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity B: %v", err)
-	}
-	defer func() { _ = subB.Close() }()
-
-	runtimePlanA.Wiring.runtimeClient.AppendCommittedEntry("user", "session-a-only")
-
-	ctxA, cancelA := context.WithTimeout(context.Background(), time.Second)
-	defer cancelA()
-	evtA, err := subA.Next(ctxA)
-	if err != nil {
-		t.Fatalf("subA.Next: %v", err)
-	}
-	if evtA.Kind != clientui.EventLocalEntryAdded {
-		t.Fatalf("unexpected session A event: %+v", evtA)
-	}
-	ctxB, cancelB := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancelB()
-	if evtB, err := subB.Next(ctxB); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected session B stream to stay idle, got evt=%+v err=%v", evtB, err)
-	}
-
-	runtimePlanB.Wiring.runtimeClient.AppendCommittedEntry("assistant", "session-b-only")
-
-	ctxB2, cancelB2 := context.WithTimeout(context.Background(), time.Second)
-	defer cancelB2()
-	evtB, err := subB.Next(ctxB2)
-	if err != nil {
-		t.Fatalf("subB.Next after session B append: %v", err)
-	}
-	if evtB.Kind != clientui.EventLocalEntryAdded {
-		t.Fatalf("unexpected session B event: %+v", evtB)
-	}
-	ctxA2, cancelA2 := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancelA2()
-	if evtA2, err := subA.Next(ctxA2); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected session A stream to stay idle after session B append, got evt=%+v err=%v", evtA2, err)
-	}
-
-}
-
-func TestEmbeddedAppServerRoutesBackgroundCompletionToOwningSessionOnly(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	planA, runtimePlanA := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test background completion isolation A")
-	defer runtimePlanA.Close()
-
-	planB, runtimePlanB := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test background completion isolation B")
-	defer runtimePlanB.Close()
-
-	activity := server.inner.SessionActivityClient()
-	if activity == nil {
-		t.Fatal("expected session activity client")
-	}
-	subA, err := activity.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: planA.SessionID})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity A: %v", err)
-	}
-	defer func() { _ = subA.Close() }()
-	subB, err := activity.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: planB.SessionID})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity B: %v", err)
-	}
-	defer func() { _ = subB.Close() }()
-
-	processID := "bg-owned-a"
-	event := runtimewirefixture.BackgroundCompletionEvent(processID, planA.SessionID, workspace)
-	event.NoticeSuppressed = true
-	server.inner.BackgroundRouter().Handle(event)
-
-	evtA := waitForSessionActivityEvent(t, subA, 5*time.Second, func(evt clientui.Event) bool {
-		return evt.Kind == clientui.EventBackgroundUpdated && evt.Background != nil && evt.Background.ID == processID && evt.Background.Type == "completed"
-	})
-	if evtA.Background == nil || evtA.Background.ID != processID {
-		t.Fatalf("unexpected session A background event: %+v", evtA.Background)
-	}
-
-	ctxB, cancelB := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancelB()
-	if evtB, err := subB.Next(ctxB); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected session B stream to stay idle for session A background completion, got evt=%+v err=%v", evtB, err)
-	}
-}
-
-func waitForSessionActivityEvent(t *testing.T, sub serverapi.SessionActivitySubscription, timeout time.Duration, match func(clientui.Event) bool) clientui.Event {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Until(deadline))
-		evt, err := sub.Next(ctx)
-		cancel()
-		if err != nil {
-			t.Fatalf("session activity Next: %v", err)
-		}
-		if match == nil || match(evt) {
-			return evt
-		}
-	}
-	t.Fatal("timed out waiting for matching session activity event")
-	return clientui.Event{}
+	service := authservice.NewBootstrapService(s.authManager, s.oauthOpts, s.cfg.Settings, apicontract.AllowedPreAuthMethods())
+	return ensureRemoteAuthReady(ctx, service, s.cfg.Settings, interactor, interactiveAuth)
 }

@@ -7,8 +7,8 @@ import (
 
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/transcript"
-	"github.com/google/uuid"
 )
 
 type Size struct {
@@ -108,9 +108,9 @@ type Surface struct {
 }
 
 type activeAssistantState struct {
-	streamID               *uuid.UUID
+	streamID               *runtimeids.AssistantStreamID
 	source                 string
-	phase                  clientui.MessagePhase
+	phase                  transcript.AssistantPhase
 	phaseSourceStart       int
 	promotedSourceBoundary int
 	rolePrefixState        assistantRolePrefixState
@@ -163,14 +163,14 @@ func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame
 	if message.Kind == clientui.TranscriptMessageHydration {
 		return s.applyHydration(message, frame)
 	}
-	if message.Kind == clientui.TranscriptMessageAssistantDelta && message.AssistantDelta != nil {
-		return s.applyAssistantDelta(message.AssistantDelta.StreamID, message.AssistantDelta.Delta, message.AssistantDelta.Phase, frame)
+	if message.Kind == clientui.TranscriptMessageAssistantDelta && message.Payload.AssistantDelta != nil {
+		return s.applyAssistantDelta(message.Payload.AssistantDelta.StreamID, message.Payload.AssistantDelta.Delta, message.Payload.AssistantDelta.Phase, frame)
 	}
-	if message.Kind == clientui.TranscriptMessageAssistantStreamAbort && message.AssistantStreamAbort != nil {
-		return s.abortAssistantStream(message.AssistantStreamAbort.StreamID, frame)
+	if message.Kind == clientui.TranscriptMessageAssistantStreamAbort && message.Payload.AssistantStreamAbort != nil {
+		return s.abortAssistantStream(message.Payload.AssistantStreamAbort.StreamID, frame)
 	}
 	if isAssistantFinalization(message) {
-		return s.finalizeAssistantStream(*message.CommittedRow.Assistant.StreamID, message.CommittedRow.Assistant.Text, frame)
+		return s.finalizeAssistantStream(*message.Payload.CommittedRow.Assistant.StreamID, message.Payload.CommittedRow.Assistant.Text, frame)
 	}
 	lines := s.immutableLines(message, frame.Size.Width, frame.Theme)
 	if len(lines) == 0 {
@@ -180,11 +180,11 @@ func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame
 }
 
 func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
-	if message.Hydration == nil {
+	if message.Payload.Hydration == nil {
 		return Result{}, nil
 	}
-	lines := s.hydrationImmutableLines(*message.Hydration, frame.Size.Width, frame.Theme)
-	activeStreamHydrated := s.hydrateActiveAssistantStream(message.Hydration.ActiveAssistantStream)
+	lines := s.hydrationImmutableLines(*message.Payload.Hydration, frame.Size.Width, frame.Theme)
+	activeStreamHydrated := s.hydrateActiveAssistantStream(message.Payload.Hydration.ActiveAssistant)
 	if activeStreamHydrated && !s.activeAssistantPromotionDeferred() {
 		projection := newMarkdownProjector(nil, frame.Theme, s.markdownLinks).Project(markdownProjectionInput{
 			Source:           s.activeAssistant.source,
@@ -224,7 +224,7 @@ func (s *Surface) hydrateActiveAssistantStream(stream *clientui.TranscriptAssist
 	return stream.Text != ""
 }
 
-func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, phase clientui.MessagePhase, frame FrameInput) (Result, error) {
+func (s *Surface) applyAssistantDelta(streamID runtimeids.AssistantStreamID, delta string, phase transcript.AssistantPhase, frame FrameInput) (Result, error) {
 	if s.activeAssistant.streamID == nil {
 		streamIDCopy := streamID
 		s.activeAssistant.streamID = &streamIDCopy
@@ -266,11 +266,11 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, phase cl
 }
 
 func (s *Surface) activeAssistantPromotionDeferred() bool {
-	return s.activeAssistant.phase == clientui.MessagePhaseFinal &&
+	return s.activeAssistant.phase == transcript.AssistantPhaseFinal &&
 		transcript.IsNoopFinalText(s.activeAssistant.source[s.activeAssistant.phaseSourceStart:])
 }
 
-func (s *Surface) abortAssistantStream(streamID uuid.UUID, frame FrameInput) (Result, error) {
+func (s *Surface) abortAssistantStream(streamID runtimeids.AssistantStreamID, frame FrameInput) (Result, error) {
 	if s.activeAssistant.streamID != nil && *s.activeAssistant.streamID != streamID {
 		panicOngoingDeveloperError("assistant_abort", "stream id does not match active stream", map[string]any{
 			"active_stream_id":  s.activeAssistant.streamID.String(),
@@ -283,7 +283,7 @@ func (s *Surface) abortAssistantStream(streamID uuid.UUID, frame FrameInput) (Re
 	return s.Render(frame)
 }
 
-func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame FrameInput) (Result, error) {
+func (s *Surface) finalizeAssistantStream(streamID runtimeids.AssistantStreamID, text string, frame FrameInput) (Result, error) {
 	if s.activeAssistant.streamID == nil {
 		return s.appendAssistantFinalWithoutActiveStream(text, frame)
 	}
@@ -329,9 +329,9 @@ func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame Fra
 
 func isAssistantFinalization(message clientui.TranscriptMessage) bool {
 	return message.Kind == clientui.TranscriptMessageCommittedRow &&
-		message.CommittedRow != nil &&
-		message.CommittedRow.Assistant != nil &&
-		message.CommittedRow.Assistant.StreamID != nil
+		message.Payload.CommittedRow != nil &&
+		message.Payload.CommittedRow.Assistant != nil &&
+		message.Payload.CommittedRow.Assistant.StreamID != nil
 }
 
 func (s *Surface) Render(frame FrameInput) (Result, error) {
@@ -391,18 +391,18 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int, themeName string) []string {
 	switch message.Kind {
 	case clientui.TranscriptMessageHydration:
-		if message.Hydration == nil {
+		if message.Payload.Hydration == nil {
 			return nil
 		}
-		return s.hydrationImmutableLines(*message.Hydration, width, themeName)
+		return s.hydrationImmutableLines(*message.Payload.Hydration, width, themeName)
 	case clientui.TranscriptMessageCommittedRow:
-		if message.CommittedRow == nil {
+		if message.Payload.CommittedRow == nil {
 			return nil
 		}
-		if !committedRowVisibleInOngoing(*message.CommittedRow) {
+		if !committedRowVisibleInOngoing(*message.Payload.CommittedRow) {
 			return nil
 		}
-		return s.renderCommittedRow(*message.CommittedRow, width, themeName)
+		return s.renderCommittedRow(*message.Payload.CommittedRow, width, themeName)
 	default:
 		return nil
 	}
@@ -467,7 +467,7 @@ func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrende
 		return ongoingRenderMode(row)
 	}
 	switch row.Assistant.Phase {
-	case transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal:
+	case transcript.AssistantPhaseFinal:
 		return transcriptrender.ModeOngoingStable
 	case transcript.AssistantPhaseCommentary:
 		return ongoingRenderMode(row)
@@ -671,10 +671,6 @@ func (s *Surface) minimumLiveBandFits(frame FrameInput, liveLines []string) bool
 	return enforcedMinimumLiveBandHeight(frame, s.activeAssistant, liveLines) <= frame.Size.Height
 }
 
-func (s *Surface) liveBandLines(frame FrameInput) []string {
-	return liveBandLineTexts(s.liveBandLayout(frame))
-}
-
 func (s *Surface) liveBandLayout(frame FrameInput) []liveBandLine {
 	lines := activeAssistantLinesWithLinkPresentation(
 		s.activeAssistant,
@@ -699,18 +695,6 @@ func (s *Surface) shrinkLiveBandLayoutToFrame(frame FrameInput, liveLayout []liv
 		return lines[len(lines)-frame.Size.Height:]
 	}
 	return lines
-}
-
-func minimumLiveBandLines(frame FrameInput, assistant activeAssistantState) []string {
-	return liveBandLineTexts(minimumLiveBandLayout(frame, assistant))
-}
-
-func minimumLiveBandLayout(frame FrameInput, assistant activeAssistantState) []liveBandLine {
-	return minimumLiveBandLayoutWithLinkPresentation(
-		frame,
-		assistant,
-		transcriptrender.MarkdownLinkLabelOnly,
-	)
 }
 
 func minimumLiveBandLayoutWithLinkPresentation(
@@ -765,19 +749,6 @@ func minimumLiveBandLayoutWithLinkPresentation(
 		}
 	}
 	return layout
-}
-
-func activeAssistantLines(
-	state activeAssistantState,
-	width int,
-	themeName string,
-) []string {
-	return activeAssistantLinesWithLinkPresentation(
-		state,
-		width,
-		themeName,
-		transcriptrender.MarkdownLinkLabelOnly,
-	)
 }
 
 func activeAssistantLinesWithLinkPresentation(

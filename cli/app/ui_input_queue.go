@@ -6,6 +6,7 @@ import (
 	"core/cli/app/commands"
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -59,7 +60,18 @@ func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMes
 	if serverID == "" {
 		return
 	}
-	if m.injectedQueueIndexByAnyID(serverID) >= 0 {
+	index := m.injectedQueueIndexByAnyID(serverID)
+	if index < 0 {
+		index = m.injectedQueueIndexByAnyID(queued.ClientRequestID)
+	}
+	if index >= 0 {
+		item := m.injectedQueue[index]
+		item.ServerID = serverID
+		item.Text = queued.Text
+		item.ClientRequestID = queued.ClientRequestID
+		item.State = injectedRuntimeQueueEnqueued
+		m.injectedQueue[index] = item
+		m.replacePendingInjectedID(item.LocalID, queued)
 		return
 	}
 	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: serverID, Text: queued.Text, ClientRequestID: queued.ClientRequestID})
@@ -79,17 +91,17 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 		return nil
 	}
 	token := m.nextInjectedQueueToken()
-	clientRequestID := uuid.NewString()
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
 	var approvalCommentaryAnswer *clientui.PromptAnswer
 	if answer != nil {
 		snap := *answer
 		approvalCommentaryAnswer = &snap
 	}
-	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: localID, Text: trimmed, ClientRequestID: clientRequestID})
+	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: localID, Text: trimmed, ClientRequestID: clientRequestID.String()})
 	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
 		LocalID:                  localID,
 		Text:                     trimmed,
-		ClientRequestID:          clientRequestID,
+		ClientRequestID:          clientRequestID.String(),
 		State:                    injectedRuntimeQueuePendingCreate,
 		CreateToken:              token,
 		ApprovalCommentaryAnswer: approvalCommentaryAnswer,
@@ -101,7 +113,7 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 	}
 }
 
-func queueRuntimeUserMessage(client clientui.RuntimeClient, text string, clientRequestID string) (clientui.QueuedUserMessage, error) {
+func queueRuntimeUserMessage(client clientui.RuntimeClient, text string, clientRequestID runtimeids.RuntimeClientRequestID) (clientui.QueuedUserMessage, error) {
 	return client.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{
 		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: clientRequestID},
 		Text:         text,
@@ -406,7 +418,7 @@ func (m *uiModel) injectedQueueIndexByAnyID(id string) int {
 		return -1
 	}
 	for index, item := range m.injectedQueue {
-		if item.LocalID == id || item.ServerID == id {
+		if item.LocalID == id || item.ServerID == id || item.ClientRequestID == id {
 			return index
 		}
 	}

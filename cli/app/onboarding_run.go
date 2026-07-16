@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 
@@ -16,7 +16,7 @@ import (
 
 var ErrOnboardingCanceled = errors.New("first-time setup canceled")
 
-func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient client.CapabilityFactsClient, finalizer client.OnboardingFinalizeClient) (onboardingResult, error) {
+func runOnboardingFlow(ctx context.Context, cfg config.App, factsClient apicontract.CapabilityFactsService, finalizer apicontract.OnboardingFinalizeService) (onboardingResult, error) {
 	if factsClient == nil {
 		return onboardingResult{}, errors.New("capability facts client is required")
 	}

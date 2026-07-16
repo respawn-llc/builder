@@ -28,11 +28,21 @@ func ParseSessionID(raw string) (SessionID, error) {
 		return SessionID{value: raw, canonicalUUIDv4: true}, nil
 	}
 	if filepath.IsAbs(raw) || raw == "." || raw == ".." ||
-		strings.Contains(raw, "/") || strings.Contains(raw, `\`) ||
+		hasPathSeparator(raw) ||
 		filepath.Clean(raw) != raw {
 		return SessionID{}, fmt.Errorf("session_id must be a path-safe persisted identifier")
 	}
 	return SessionID{value: raw}, nil
+}
+
+func hasPathSeparator(value string) bool {
+	for _, character := range value {
+		switch character {
+		case '/', '\\':
+			return true
+		}
+	}
+	return false
 }
 
 func NewSessionID() SessionID {

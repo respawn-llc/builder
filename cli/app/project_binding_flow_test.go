@@ -12,7 +12,6 @@ import (
 
 	"core/cli/app/internal/projectbinding"
 	"core/server/metadata"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -281,7 +280,7 @@ func TestEnsureInteractiveProjectBindingUsesServerBrowsingForMissingServerPath(t
 	server := &testEmbeddedServer{
 		cfg:               cfg,
 		containerDir:      filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), "project-placeholder", "sessions"),
-		projectViewClient: client.NewLoopbackProjectViewClient(service),
+		projectViewClient: service,
 	}
 
 	bound, err := ensureInteractiveProjectBinding(context.Background(), server)
@@ -321,7 +320,7 @@ func TestEnsureInteractiveProjectBindingRebindsSameProjectToResolvedWorkspace(t 
 		containerDir:      filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), "project-1", "sessions"),
 		projectID:         "project-1",
 		boundWorkspaceID:  "workspace-a",
-		projectViewClient: client.NewLoopbackProjectViewClient(service),
+		projectViewClient: service,
 	}
 
 	bound, err := ensureInteractiveProjectBinding(context.Background(), server)
@@ -551,7 +550,7 @@ func TestEnsureInteractiveServerBrowsingBindingUsesConfiguredServerPickerNotice(
 	server := &testEmbeddedServer{
 		cfg:               cfg,
 		containerDir:      filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), "project-placeholder", "sessions"),
-		projectViewClient: client.NewLoopbackProjectViewClient(service),
+		projectViewClient: service,
 	}
 
 	bound, err := ensureInteractiveServerBrowsingBinding(context.Background(), server, service.listProjectsResp.Projects)

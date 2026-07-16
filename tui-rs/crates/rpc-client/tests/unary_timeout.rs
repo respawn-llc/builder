@@ -160,8 +160,6 @@ fn remote_client_unary_timeout_is_used_for_setup_and_unary_call_receives() {
                             "session_runtime": true,
                             "runtime_control": true,
                             "prompt_control": true,
-                            "prompt_activity": true,
-                            "session_activity": true,
                             "process_output": true
                         }
                     }
@@ -212,8 +210,6 @@ fn direct_client_unary_timeout_is_used_for_startup_control_calls() {
                         "session_runtime": true,
                         "runtime_control": true,
                         "prompt_control": true,
-                        "prompt_activity": true,
-                        "session_activity": true,
                         "process_output": true
                     }
                 }
@@ -261,8 +257,6 @@ fn direct_and_remote_clients_invoke_io_guard_before_rpc_calls() {
                         "session_runtime": true,
                         "runtime_control": true,
                         "prompt_control": true,
-                        "prompt_activity": true,
-                        "session_activity": true,
                         "process_output": true
                     }
                 }
@@ -303,8 +297,6 @@ fn direct_and_remote_clients_invoke_io_guard_before_rpc_calls() {
                         "session_runtime": true,
                         "runtime_control": true,
                         "prompt_control": true,
-                        "prompt_activity": true,
-                        "session_activity": true,
                         "process_output": true
                     }
                 }

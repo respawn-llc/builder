@@ -616,6 +616,29 @@ func TestToolCallPassesPreparedBatchMetadataToAskBroker(t *testing.T) {
 	}
 }
 
+func TestToolCallPassesExecutionIdentityToAskBroker(t *testing.T) {
+	b := NewAskQuestionBroker()
+	var got AskQuestionRequest
+	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+		got = req
+		return AskQuestionResponse{RequestID: req.ID, Answer: "answer"}, nil
+	})
+	tool := NewAskQuestionTool(b, func() bool { return true })
+	_, err := tool.Call(context.Background(), Call{
+		ID:     "ask-1",
+		Name:   toolspec.ToolAskQuestion,
+		Input:  json.RawMessage(`{"question":"one?"}`),
+		RunID:  "run-1",
+		StepID: "step-1",
+	})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if got.Origin != AskQuestionOriginModelTool || got.RunID != "run-1" || got.StepID != "step-1" || got.ToolCallID != "ask-1" {
+		t.Fatalf("broker request identity = %+v", got)
+	}
+}
+
 func TestToolCallReportsPreparedBatchSkippedWhenQuestionsBecomeDisabled(t *testing.T) {
 	tool := NewAskQuestionTool(NewAskQuestionBroker(), func() bool { return false })
 	meta := &AskQuestionBatchMetadata{

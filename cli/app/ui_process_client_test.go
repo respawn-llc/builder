@@ -9,7 +9,6 @@ import (
 
 	"core/server/processview"
 	shelltool "core/server/tools/shell"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -25,8 +24,8 @@ func withUIBackgroundManagerForTest(manager *shelltool.Manager) UIOption {
 		}
 		processes := processview.NewProcessViewService(manager)
 		m.processClient = newUIProcessClientWithReads(
-			client.NewLoopbackProcessViewClient(processes),
-			client.NewLoopbackProcessControlClient(processes),
+			processes,
+			processes,
 		)
 	}
 }
@@ -104,8 +103,8 @@ func TestUIProcessClientProjectsManagerSnapshots(t *testing.T) {
 
 	processes := processview.NewProcessViewService(manager)
 	client := newUIProcessClientWithReads(
-		client.NewLoopbackProcessViewClient(processes),
-		client.NewLoopbackProcessControlClient(processes),
+		processes,
+		processes,
 	)
 	waitForTestCondition(t, 2*time.Second, "background process to finish", func() bool {
 		entries, err := client.ListProcesses(context.Background())
@@ -188,10 +187,10 @@ func TestExplicitUIProcessClientWinsOverBackgroundManagerOptionOrder(t *testing.
 	}
 }
 
-func TestUIProcessClientUsesLoopbackReadsWhenAvailable(t *testing.T) {
-	reads := client.NewLoopbackProcessViewClient(&stubProcessViewService{
+func TestUIProcessClientUsesSharedReadsWhenAvailable(t *testing.T) {
+	reads := &stubProcessViewService{
 		listResp: serverapi.ProcessListResponse{Processes: []clientui.BackgroundProcess{{ID: "proc-1", OwnerRunID: "run-1", OwnerStepID: "step-1"}}},
-	})
+	}
 	processClient := newUIProcessClientWithReads(reads, nil)
 	got, err := processClient.ListProcesses(context.Background())
 	if err != nil {
@@ -222,15 +221,15 @@ func TestUIProcessClientDoesNotBypassSharedReadBoundaryOnError(t *testing.T) {
 		t.Fatal("expected background process")
 	}
 
-	processClient := newUIProcessClientWithReads(client.NewLoopbackProcessViewClient(&stubProcessViewService{err: errors.New("boom")}), nil)
+	processClient := newUIProcessClientWithReads(&stubProcessViewService{err: errors.New("boom")}, nil)
 	if got, err := processClient.ListProcesses(context.Background()); err == nil || got != nil {
 		t.Fatalf("expected shared-read failure to fail closed, got entries=%+v err=%v", got, err)
 	}
 }
 
-func TestUIProcessClientUsesLoopbackControlWhenAvailable(t *testing.T) {
+func TestUIProcessClientUsesSharedControlWhenAvailable(t *testing.T) {
 	controls := &stubProcessControlService{inlineResp: serverapi.ProcessInlineOutputResponse{Output: "hello", LogPath: "/tmp/proc.log"}}
-	processClient := newUIProcessClientWithReads(nil, client.NewLoopbackProcessControlClient(controls))
+	processClient := newUIProcessClientWithReads(nil, controls)
 
 	preview, logPath, err := processClient.InlineOutput(context.Background(), "proc-1", 123)
 	if err != nil {
@@ -268,7 +267,7 @@ func TestUIProcessClientDoesNotBypassSharedControlBoundaryOnError(t *testing.T) 
 	}
 
 	controlErr := errors.New("shared control boundary failure")
-	processClient := newUIProcessClientWithReads(nil, client.NewLoopbackProcessControlClient(&stubProcessControlService{err: controlErr}))
+	processClient := newUIProcessClientWithReads(nil, &stubProcessControlService{err: controlErr})
 	if _, _, err := processClient.InlineOutput(context.Background(), res.SessionID, 12_000); !errors.Is(err, controlErr) {
 		t.Fatalf("expected shared control error from InlineOutput, got %v", err)
 	}

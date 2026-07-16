@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -21,7 +22,7 @@ var (
 )
 
 type ProjectViewRemote interface {
-	client.ProjectViewClient
+	apicontract.ProjectViewService
 	Close() error
 	Identity() protocol.ServerIdentity
 	// RequireRoot pins the persistence-root id that every (re)connect handshake
@@ -205,19 +206,6 @@ func SupportsRuntimeLiveControl(flags protocol.CapabilityFlags) bool {
 	return flags.RuntimeLiveControl && flags.RuntimeControl && flags.AuthBootstrap
 }
 
-func SupportsInteractiveSession(flags protocol.CapabilityFlags) bool {
-	return flags.AuthBootstrap &&
-		flags.ProjectAttach &&
-		flags.SessionPlan &&
-		flags.SessionLifecycle &&
-		flags.SessionRuntime &&
-		flags.RuntimeControl &&
-		flags.PromptControl &&
-		flags.PromptActivity &&
-		flags.SessionActivity &&
-		flags.ProcessOutput
-}
-
 func HeadlessWorkspaceRegistrationError(workspaceRoot string) error {
 	trimmedRoot := strings.TrimSpace(workspaceRoot)
 	if trimmedRoot == "" {
@@ -226,7 +214,7 @@ func HeadlessWorkspaceRegistrationError(workspaceRoot string) error {
 	return fmt.Errorf("%w: %s is not attached to a project. Run `kent project` in a workspace that already belongs to the target project, then run `kent attach <path>` from there or `kent attach --project <project-id> <path>`", serverapi.ErrWorkspaceNotRegistered, trimmedRoot)
 }
 
-func resolveInteractiveBinding(ctx context.Context, projectViews client.ProjectViewClient, workspaceRoot string) (*serverapi.ProjectBinding, error) {
+func resolveInteractiveBinding(ctx context.Context, projectViews apicontract.ProjectViewService, workspaceRoot string) (*serverapi.ProjectBinding, error) {
 	resp, err := projectViews.PlanWorkspaceBinding(ctx, serverapi.ProjectBindingPlanRequest{Path: workspaceRoot, Mode: serverapi.ProjectBindingPlanModeInteractive})
 	if err != nil {
 		return nil, err

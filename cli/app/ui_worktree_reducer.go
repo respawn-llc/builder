@@ -12,32 +12,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type uiWorktreeFeatureReducer struct {
-	model *uiModel
-}
-
-func (a uiRuntimeAdapter) reconcileWorktreeTransitionOutcome(evt clientui.Event) tea.Cmd {
-	m := a.model
+func (m *uiModel) reconcileTranscriptWorktreeTransitionOutcome(outcome clientui.TranscriptWorktreeTransitionOutcome) tea.Cmd {
 	if m == nil {
 		return nil
-	}
-	if evt.Kind == clientui.EventStreamGap {
-		if m.worktrees.open {
-			return m.requestWorktreeListCmd()
-		}
-		return nil
-	}
-	if evt.Kind != clientui.EventWorktreeTransitionOutcome || evt.WorktreeTransition == nil {
-		return nil
-	}
-	outcome := *evt.WorktreeTransition
-	if err := outcome.Validate(); err != nil {
-		return m.sendTransientStatusWithNoticeID("invalid worktree transition outcome: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	var statusCmd tea.Cmd
 	if outcome.State == clientui.WorktreeTransitionFailed {
 		statusCmd = m.sendTransientStatusWithNoticeID(
-			outcome.Failure.Diagnostic,
+			outcome.Failure.Detail,
 			uiStatusNoticeError,
 			transientStatusDuration,
 			uiStatusNoticeReplace,
@@ -59,12 +41,7 @@ func (a uiRuntimeAdapter) reconcileWorktreeTransitionOutcome(evt clientui.Event)
 	return tea.Batch(statusCmd, refresh)
 }
 
-func (m *uiModel) worktreeReducer() uiWorktreeFeatureReducer {
-	return uiWorktreeFeatureReducer{model: m}
-}
-
-func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case worktreeListDoneMsg:
 		if !m.worktrees.open || msg.token != m.worktreeListGeneration {

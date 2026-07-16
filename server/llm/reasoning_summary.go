@@ -19,9 +19,10 @@ func normalizeReasoningEntries(entries []ReasoningEntry) []ReasoningEntry {
 
 func reasoningSummaryDeltaFromText(key, role, text string) ReasoningSummaryDelta {
 	return ReasoningSummaryDelta{
-		Key:  key,
-		Role: role,
-		Text: normalizeReasoningSummaryLines(strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")),
+		Key:           key,
+		Role:          role,
+		Text:          text,
+		CurrentStatus: currentReasoningStatus(text),
 	}
 }
 

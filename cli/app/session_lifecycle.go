@@ -3,12 +3,11 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 
 	"core/cli/app/commands"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -17,19 +16,11 @@ import (
 )
 
 type sessionLifecycleClientProvider interface {
-	SessionLifecycleClient() client.SessionLifecycleClient
+	SessionLifecycleClient() apicontract.SessionLifecycleService
 }
 
 type sessionConfigProvider interface {
 	Config() config.App
-}
-
-type sessionInitialInputServer interface {
-	sessionLifecycleClientProvider
-}
-
-type sessionDraftPersistenceServer interface {
-	sessionLifecycleClientProvider
 }
 
 type sessionTransitionServer interface {
@@ -37,32 +28,19 @@ type sessionTransitionServer interface {
 	Reauthenticate(ctx context.Context, interactor authInteractor, interactive bool) error
 }
 
-type sessionAuthReadinessServer interface {
-	EnsureAuthReady(ctx context.Context, interactor authInteractor, interactive bool) error
-}
-
 type sessionWorkspaceChangeServer interface {
 	sessionLifecycleClientProvider
 	sessionConfigProvider
 }
 
-type interactiveProjectBindingServer interface {
-	Config() config.App
-	PresentationTheme() string
-	ClientPromptRoots() (commands.ClientPromptRoots, error)
-	ProjectViewClient() client.ProjectViewClient
-	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error)
-}
-
 type interactiveSessionServer interface {
 	appServerCore
-	interactiveProjectBindingServer
 	launchPlannerServer
 	sessionWorkspaceChangeServer
-	sessionInitialInputServer
-	sessionDraftPersistenceServer
 	sessionTransitionServer
-	sessionAuthReadinessServer
+	ClientPromptRoots() (commands.ClientPromptRoots, error)
+	EnsureAuthReady(ctx context.Context, interactor authInteractor, interactive bool) error
+	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error)
 }
 
 type sessionLifecycleOptions struct {
@@ -94,13 +72,13 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 	}
 	server = boundServer
 	planner := newSessionLaunchPlanner(server)
-	next := serverapi.SelectSessionLifecycleResult(serverapi.SessionAuthPreparationKeepCurrent)
+	next := serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent)
 	if opts.Intent != nil {
-		next = serverapi.LaunchSessionLifecycleResult(
+		next = serverapi.LaunchSessionDirective(
 			*opts.Intent,
 			serverapi.NewSessionLaunchPreparation(
 				nil,
-				serverapi.RestoreStoredDraftSessionInitialInputPolicy(),
+				serverapi.RestoreStoredDraftSessionDraftDisposition(),
 				serverapi.SessionAuthPreparationKeepCurrent,
 			),
 		)
@@ -110,9 +88,9 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 	var pickerNotice *startupPickerNotice
 	for {
 		switch next.Kind() {
-		case serverapi.SessionLifecycleResultStop:
+		case serverapi.SessionDirectiveStop:
 			return nil
-		case serverapi.SessionLifecycleResultSelectSession:
+		case serverapi.SessionDirectiveSelectSession:
 			picked, err := planner.selectSession(ctx, pickerNotice)
 			if err != nil {
 				return err
@@ -120,41 +98,41 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			pickerNotice = nil
 			switch picked := picked.(type) {
 			case sessionPickerCancelResult:
-				next = serverapi.StopSessionLifecycleResult()
+				next = serverapi.StopSessionDirective()
 			case sessionPickerCreateResult:
-				next = serverapi.LaunchSessionLifecycleResult(
+				next = serverapi.LaunchSessionDirective(
 					serverapi.CreateNewSessionLaunchIntent(nil),
 					serverapi.NewSessionLaunchPreparation(
 						nil,
-						serverapi.RestoreStoredDraftSessionInitialInputPolicy(),
+						serverapi.RestoreStoredDraftSessionDraftDisposition(),
 						serverapi.SessionAuthPreparationKeepCurrent,
 					),
 				)
 			case sessionPickerOpenResult:
 				sessionID := picked.sessionID
-				selectedWorkspaceRoot, err := loadSelectedSessionWorkspaceRoot(ctx, server.SessionViewClient(), sessionID.String())
+				executionTarget, err := loadSelectedSessionExecutionTarget(ctx, server.SessionViewClient(), sessionID.String())
 				if err != nil {
 					pickerNotice = &startupPickerNotice{
 						Text:       "Could not inspect the selected session. Try again.",
 						Kind:       startupPickerNoticeError,
 						Diagnostic: err,
 					}
-					next = serverapi.SelectSessionLifecycleResult(serverapi.SessionAuthPreparationKeepCurrent)
+					next = serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent)
 					continue
 				}
-				workspaceChangeAction, err := maybeHandlePickedSessionWorkspaceChange(ctx, server, sessionID.String(), selectedWorkspaceRoot)
+				workspaceChangeAction, err := maybeHandlePickedSessionWorkspaceChange(ctx, server, sessionID.String(), executionTarget)
 				if err != nil {
 					return err
 				}
 				if workspaceChangeAction == sessionWorkspaceChangePickAgain {
-					next = serverapi.SelectSessionLifecycleResult(serverapi.SessionAuthPreparationKeepCurrent)
+					next = serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent)
 					continue
 				}
-				next = serverapi.LaunchSessionLifecycleResult(
+				next = serverapi.LaunchSessionDirective(
 					serverapi.OpenExistingSessionLaunchIntent(sessionID),
 					serverapi.NewSessionLaunchPreparation(
 						nil,
-						serverapi.RestoreStoredDraftSessionInitialInputPolicy(),
+						serverapi.RestoreStoredDraftSessionDraftDisposition(),
 						serverapi.SessionAuthPreparationKeepCurrent,
 					),
 				)
@@ -162,18 +140,18 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 				return errors.New("session picker returned an invalid result")
 			}
 			continue
-		case serverapi.SessionLifecycleResultLaunch:
+		case serverapi.SessionDirectiveLaunch:
 		default:
 			return errors.New("session lifecycle returned no result")
 		}
 
 		intent, present := next.LaunchIntent()
 		if !present {
-			return errors.New("launch lifecycle result is missing an intent")
+			return errors.New("launch directive is missing an intent")
 		}
 		preparation, present := next.LaunchPreparation()
 		if !present {
-			return errors.New("launch lifecycle result is missing preparation")
+			return errors.New("launch directive is missing preparation")
 		}
 		launchRequest, err := sessionLaunchRequestFromIntent(intent, nextSessionOverrides)
 		if err != nil {
@@ -232,16 +210,16 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 	}
 }
 
-func resolveAndReleaseSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition, runtimePlan *runtimeLaunchPlan) (serverapi.SessionLifecycleResult, error) {
+func resolveAndReleaseSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition, runtimePlan *runtimeLaunchPlan) (serverapi.SessionDirective, error) {
 	resolved, err := resolveSessionAction(ctx, server, interactor, sessionID, transition)
 	if err != nil {
 		if closeErr := runtimePlan.Close(); closeErr != nil {
-			return serverapi.SessionLifecycleResult{}, errors.Join(err, closeErr)
+			return serverapi.SessionDirective{}, errors.Join(err, closeErr)
 		}
-		return serverapi.SessionLifecycleResult{}, err
+		return serverapi.SessionDirective{}, err
 	}
 	if err := runtimePlan.Close(); err != nil {
-		return serverapi.SessionLifecycleResult{}, err
+		return serverapi.SessionDirective{}, err
 	}
 	return resolved, nil
 }
@@ -257,18 +235,9 @@ func prepareSessionUIRun(
 	overrideStoredDraft bool,
 	startupUpdateNotice bool,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
-	diagnosticWriter := os.Stderr
-	runtimePlan, err := planner.PrepareRuntime(ctx, plan, diagnosticWriter, "app.start session_id="+plan.SessionID+" workspace="+plan.WorkspaceRoot+" model="+plan.ActiveSettings.Model)
+	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
 	if err != nil {
 		return nil, uiLoopRequest{}, err
-	}
-	if plan.Recovery != nil && plan.Recovery.Kind == serverapi.SessionPlanRecoveryKindDeletedManagedWorktree {
-		warning := "Managed worktree no longer exists; resumed in project root " + plan.Recovery.WorkspaceRoot + ". Worktree-only uncommitted changes are unavailable."
-		if err := runtimePlan.Wiring.runtimeClient.AppendCommittedEntry("warning", warning); err != nil {
-			if _, warningErr := fmt.Fprintf(diagnosticWriter, "%s\nWarning persistence failed: %v\n", warning, err); warningErr != nil {
-				return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, errors.Join(err, warningErr))
-			}
-		}
 	}
 	promptRoots, err := server.ClientPromptRoots()
 	if err != nil {
@@ -291,7 +260,6 @@ func prepareSessionUIRun(
 	return runtimePlan, uiLoopRequest{
 		wiring:                       runtimePlan.Wiring,
 		active:                       plan.ActiveSettings,
-		logger:                       runtimePlan.Logger,
 		commandRegistry:              commandRegistry,
 		initialPrompt:                initialPrompt,
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
@@ -346,7 +314,7 @@ type sessionLaunchInitialState struct {
 
 func sessionLaunchInitialStateFromServer(
 	ctx context.Context,
-	server sessionInitialInputServer,
+	server sessionLifecycleClientProvider,
 	sessionID string,
 	transitionInput string,
 	overrideStoredDraft bool,
@@ -365,7 +333,7 @@ func sessionLaunchInitialStateFromServer(
 	return sessionLaunchInitialState{Input: resp.Input, RecoveryBuffers: resp.RecoveryBuffers}, nil
 }
 
-func persistSessionDraftToServer(ctx context.Context, server sessionDraftPersistenceServer, sessionID string, model any) error {
+func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleClientProvider, sessionID string, model any) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
@@ -412,50 +380,50 @@ func sessionLaunchPreparationValues(preparation serverapi.SessionLaunchPreparati
 		initialPrompt = prompt.Text
 		initialPromptHistoryRecorded = prompt.HistoryRecorded
 	}
-	switch policy := preparation.InitialInputPolicy(); policy.Kind() {
-	case serverapi.SessionInitialInputPolicyRestoreStoredDraft:
+	switch disposition := preparation.DraftDisposition(); disposition.Kind() {
+	case serverapi.SessionDraftDispositionRestoreStoredDraft:
 		return initialPrompt, initialPromptHistoryRecorded, "", false, nil
-	case serverapi.SessionInitialInputPolicyOverrideStoredDraft:
-		text, present := policy.OverrideText()
+	case serverapi.SessionDraftDispositionOverrideStoredDraft:
+		text, present := disposition.OverrideText()
 		if !present {
-			return "", false, "", false, errors.New("override-stored-draft policy is missing text")
+			return "", false, "", false, errors.New("override-stored-draft disposition is missing text")
 		}
 		return initialPrompt, initialPromptHistoryRecorded, text, true, nil
 	default:
-		return "", false, "", false, errors.New("session initial input policy kind is invalid")
+		return "", false, "", false, errors.New("session draft disposition kind is invalid")
 	}
 }
 
-func lifecycleResultAuthPreparation(result serverapi.SessionLifecycleResult) (serverapi.SessionAuthPreparation, bool, error) {
+func lifecycleResultAuthPreparation(result serverapi.SessionDirective) (serverapi.SessionAuthPreparation, bool, error) {
 	if err := result.Validate(); err != nil {
 		return "", false, err
 	}
 	switch result.Kind() {
-	case serverapi.SessionLifecycleResultStop:
+	case serverapi.SessionDirectiveStop:
 		return "", false, nil
-	case serverapi.SessionLifecycleResultSelectSession:
+	case serverapi.SessionDirectiveSelectSession:
 		authPreparation, present := result.AuthPreparation()
 		if !present {
-			return "", false, errors.New("select-session lifecycle result is missing auth preparation")
+			return "", false, errors.New("select-session directive is missing auth preparation")
 		}
 		return authPreparation, true, nil
-	case serverapi.SessionLifecycleResultLaunch:
+	case serverapi.SessionDirectiveLaunch:
 		preparation, present := result.LaunchPreparation()
 		if !present {
-			return "", false, errors.New("launch lifecycle result is missing preparation")
+			return "", false, errors.New("launch directive is missing preparation")
 		}
 		return preparation.AuthPreparation(), true, nil
 	default:
-		return "", false, errors.New("session lifecycle result kind is invalid")
+		return "", false, errors.New("session directive kind is invalid")
 	}
 }
 
-func resolveSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition) (serverapi.SessionLifecycleResult, error) {
+func resolveSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition) (serverapi.SessionDirective, error) {
 	if transition.Exit {
-		return serverapi.StopSessionLifecycleResult(), nil
+		return serverapi.StopSessionDirective(), nil
 	}
 	if server == nil || server.SessionLifecycleClient() == nil {
-		return serverapi.SessionLifecycleResult{}, errors.New("session lifecycle client is required")
+		return serverapi.SessionDirective{}, errors.New("session lifecycle client is required")
 	}
 	resolved, err := server.SessionLifecycleClient().ResolveTransition(ctx, serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: uuid.NewString(),
@@ -471,15 +439,15 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 		},
 	})
 	if err != nil {
-		return serverapi.SessionLifecycleResult{}, err
+		return serverapi.SessionDirective{}, err
 	}
 	authPreparation, hasAuthPreparation, err := lifecycleResultAuthPreparation(resolved)
 	if err != nil {
-		return serverapi.SessionLifecycleResult{}, err
+		return serverapi.SessionDirective{}, err
 	}
 	if hasAuthPreparation && authPreparation == serverapi.SessionAuthPreparationReauthenticate {
 		if err := server.Reauthenticate(ctx, interactor, true); err != nil {
-			return serverapi.SessionLifecycleResult{}, err
+			return serverapi.SessionDirective{}, err
 		}
 	}
 	return resolved, nil

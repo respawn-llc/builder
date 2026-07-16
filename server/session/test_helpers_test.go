@@ -32,10 +32,24 @@ func (p *testSessionMetadata) ObserveEventLogReconciliation(_ context.Context, r
 	if !ok {
 		return ErrSessionNotFound
 	}
+	invalidateUsageState, err := reconciliation.UsageState.InvalidatesUsageState()
+	if err != nil {
+		return err
+	}
 	meta := cloneTestMeta(record.Meta)
+	if meta.LastSequence != reconciliation.ObservedLastSequence {
+		return EventLogReconciliationConflictError{
+			SessionID:            reconciliation.SessionID,
+			ObservedLastSequence: reconciliation.ObservedLastSequence,
+			CurrentLastSequence:  meta.LastSequence,
+		}
+	}
 	meta.LastSequence = reconciliation.LastSequence
 	meta.ConversationEstablished = reconciliation.ConversationEstablished
 	meta.UpdatedAt = reconciliation.UpdatedAt
+	if invalidateUsageState {
+		meta.UsageState = nil
+	}
 	record.Meta = meta
 	p.sharedStore().Put(reconciliation.SessionID, record)
 	return nil
@@ -105,15 +119,6 @@ func newSessionTestLazyStoreAt(t *testing.T, root string) *Store {
 		t.Fatalf("new lazy store: %v", err)
 	}
 	return store
-}
-
-func reopenSessionTestStore(t *testing.T, store *Store) *Store {
-	t.Helper()
-	reopened, err := Open(store.Dir(), sessionTestPersistence.options()...)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	return reopened
 }
 
 func openSessionTestStore(store *Store) (*Store, error) {

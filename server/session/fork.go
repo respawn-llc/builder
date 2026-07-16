@@ -10,7 +10,7 @@ import (
 
 	"core/shared/rollbacktarget"
 	"core/shared/sessioncontract"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 var errForkReplayBoundary = errors.New("fork replay boundary reached")
@@ -175,7 +175,7 @@ func rebaseHistoryReplacementRollbackCandidate(
 	if err := json.Unmarshal(payload, &engine); err != nil {
 		return nil, fmt.Errorf("%w: %w", errDecodeForkHistoryReplacement, err)
 	}
-	if strings.TrimSpace(engine.Engine) == legacyReviewerRollbackEngine {
+	if IsLegacyReviewerRollbackHistoryReplacementEngine(engine.Engine) {
 		return append(json.RawMessage(nil), payload...), nil
 	}
 
@@ -233,7 +233,7 @@ func cloneLockedContract(in *LockedContract) *LockedContract {
 		toolPreambles := *in.ToolPreambles
 		copyLocked.ToolPreambles = &toolPreambles
 	}
-	copyLocked.ProviderContract.SupportsProviderVerbosity = valuecopy.Pointer(in.ProviderContract.SupportsProviderVerbosity)
+	copyLocked.ProviderContract.SupportsProviderVerbosity = textutil.Pointer(in.ProviderContract.SupportsProviderVerbosity)
 	copyLocked.SystemPrompt = strings.TrimSpace(in.SystemPrompt)
 	copyLocked.ReviewerPrompt = strings.TrimSpace(in.ReviewerPrompt)
 	return &copyLocked
@@ -340,18 +340,12 @@ func (d *replayDerivedState) apply(evt ReplayEvent) {
 		if err := json.Unmarshal(evt.Payload, &replacement); err != nil {
 			return
 		}
-		if strings.TrimSpace(replacement.Engine) == legacyReviewerRollbackEngine {
+		if IsLegacyReviewerRollbackHistoryReplacementEngine(replacement.Engine) {
 			return
 		}
 		d.reminderIssued = false
 	}
 }
-
-type historyReplacementEngine struct {
-	Engine string `json:"engine"`
-}
-
-const legacyReviewerRollbackEngine = "reviewer_rollback"
 
 func isCompactionSoonReminderMessage(msg reminderEventMessage) bool {
 	return strings.TrimSpace(msg.Role) == "developer" && strings.TrimSpace(msg.MessageType) == "compaction_soon_reminder" && strings.TrimSpace(msg.Content) != ""

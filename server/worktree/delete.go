@@ -68,16 +68,10 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 			return serverapi.WorktreeDeleteResult{}, err
 		}
 		release()
-		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
-			apply := func() error {
-				_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
-				return err
-			}
-			if authority != nil {
-				return authority(apply)
-			}
-			return apply()
-		}, req.Origin)
+		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, sync transitionTargetSync) error {
+			_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
+			return err
+		})
 		if err != nil {
 			return serverapi.WorktreeDeleteResult{}, err
 		}

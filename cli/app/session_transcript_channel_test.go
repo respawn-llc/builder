@@ -12,10 +12,6 @@ import (
 )
 
 func TestStartSessionTranscriptEventsWaitsForExplicitRehydrationAfterLoss(t *testing.T) {
-	originalDelay := sessionActivityResubscribeDelay
-	sessionActivityResubscribeDelay = time.Millisecond
-	defer func() { sessionActivityResubscribeDelay = originalDelay }()
-
 	subscriber := &recordingTranscriptSubscriber{
 		subs: []*scriptedTranscriptSubscription{
 			{

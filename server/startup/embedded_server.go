@@ -10,7 +10,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
 	"core/server/runtime"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 )
 
@@ -25,7 +25,7 @@ type EmbeddedOnboardingHandler func(ctx context.Context, req EmbeddedOnboardingR
 type EmbeddedOnboardingRequest struct {
 	Config                config.App
 	AuthManager           *auth.Manager
-	CapabilityFactsClient client.CapabilityFactsClient
+	CapabilityFactsClient apicontract.CapabilityFactsService
 	ReloadConfig          func() (config.App, error)
 }
 

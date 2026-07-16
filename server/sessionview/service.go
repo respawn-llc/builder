@@ -15,7 +15,6 @@ import (
 	"core/server/session"
 	"core/server/worktree"
 	servicecontract "core/shared/apicontract"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -44,7 +43,7 @@ type Service struct {
 	updates          UpdateStatusProvider
 	operations       *runtimeops.Coordinator
 	app              config.App
-	auth             client.AuthStatusClient
+	auth             servicecontract.AuthStatusService
 	git              *worktree.GitInspector
 	cacheWarningMu   sync.RWMutex
 	cacheWarningMode config.CacheWarningMode
@@ -57,7 +56,7 @@ func (s *Service) WithExecutionEnvironmentConfig(app config.App) *Service {
 	return s
 }
 
-func (s *Service) WithExecutionEnvironmentAuth(provider client.AuthStatusClient) *Service {
+func (s *Service) WithExecutionEnvironmentAuth(provider servicecontract.AuthStatusService) *Service {
 	if s != nil {
 		s.auth = provider
 	}
@@ -214,7 +213,11 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 		return serverapi.SessionMainViewResponse{}, err
 	}
 	if len(view.InputReconciliation.Operations) == 0 && len(req.PendingOperationRefs) > 0 {
-		view.InputReconciliation = s.operations.Snapshot(strings.TrimSpace(req.SessionID), view.Version, req.PendingOperationRefs)
+		reconciliation, err := s.operations.FeedSnapshot(strings.TrimSpace(req.SessionID), req.PendingOperationRefs)
+		if err != nil {
+			return serverapi.SessionMainViewResponse{}, err
+		}
+		view.InputReconciliation = reconciliation
 	}
 	return serverapi.SessionMainViewResponse{MainView: view}, nil
 }
@@ -309,26 +312,6 @@ func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req server
 	return serverapi.SessionExecutionEnvironmentResponse{Environment: environment}, nil
 }
 
-func (s *Service) GetSessionExecutionWorkspaceRoot(ctx context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionExecutionWorkspaceRootResponse{}, err
-	}
-	if s == nil || s.targets == nil {
-		return serverapi.SessionExecutionWorkspaceRootResponse{}, errors.New("session execution target resolver is required")
-	}
-	target, err := s.targets.ResolveSessionExecutionTarget(ctx, req.SessionID.String())
-	if err != nil {
-		return serverapi.SessionExecutionWorkspaceRootResponse{}, err
-	}
-	response := serverapi.SessionExecutionWorkspaceRootResponse{
-		WorkspaceRoot: strings.TrimSpace(target.WorkspaceRoot),
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.SessionExecutionWorkspaceRootResponse{}, err
-	}
-	return response, nil
-}
-
 func (s *Service) resolveExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
 	if s.targets == nil {
 		return clientui.SessionExecutionTarget{}, nil
@@ -343,7 +326,7 @@ func resolveSessionExecutionWorkspace(target clientui.SessionExecutionTarget) se
 			serverapi.SessionExecutionWorkspaceUnavailableNotConfigured,
 		)
 	}
-	availability := target.WorkspaceAvailability
+	availability := string(target.WorkspaceAvailability)
 	targetKind := "workspace"
 	if target.Worktree != nil {
 		availability = target.Worktree.Availability

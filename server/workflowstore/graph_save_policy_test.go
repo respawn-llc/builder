@@ -189,15 +189,11 @@ func TestWorkflowGraphSaveAllowsUnrelatedEditsWhileTasksExist(t *testing.T) {
 		spareDoneID := workflow.NodeID("node-spare-done-" + string(workflowID))
 		spareGroupID := workflow.TransitionGroupID("group-spare-done-" + string(workflowID))
 		spareEdgeID := workflow.EdgeID("edge-spare-done-" + string(workflowID))
-		if _, err := store.AddNode(ctx, NodeRecord{ID: spareDoneID, WorkflowID: workflowID, Key: "spare_done", Kind: workflow.NodeKindTerminal, DisplayName: "Spare Done"}); err != nil {
-			t.Fatalf("AddNode spare terminal: %v", err)
-		}
-		if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: spareGroupID, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "spare_done", DisplayName: "Spare Done"}); err != nil {
-			t.Fatalf("AddTransitionGroup spare terminal: %v", err)
-		}
-		if _, err := store.AddEdge(ctx, EdgeRecord{ID: spareEdgeID, WorkflowID: workflowID, TransitionGroupID: spareGroupID, Key: "spare_done", TargetNodeID: spareDoneID, ContextMode: workflow.ContextModeNewSession}); err != nil {
-			t.Fatalf("AddEdge spare terminal: %v", err)
-		}
+		saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+			req.Nodes = append(req.Nodes, NodeRecord{ID: spareDoneID, WorkflowID: workflowID, Key: "spare_done", Kind: workflow.NodeKindTerminal, DisplayName: "Spare Done"})
+			req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: spareGroupID, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "spare_done", DisplayName: "Spare Done"})
+			req.Edges = append(req.Edges, EdgeRecord{ID: spareEdgeID, WorkflowID: workflowID, TransitionGroupID: spareGroupID, Key: "spare_done", TargetNodeID: spareDoneID, ContextMode: workflow.ContextModeNewSession})
+		})
 		task := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Active", Body: "Body"})
 		startTask(t, ctx, store, task.ID)
 		def, record, err := store.GetDefinition(ctx, workflowID)

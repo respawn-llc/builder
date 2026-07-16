@@ -12,9 +12,7 @@ type uiFeatureUpdateResult struct {
 	handled bool
 }
 
-type uiFeatureReducer interface {
-	Update(tea.Msg) uiFeatureUpdateResult
-}
+type uiFeatureReducer func(tea.Msg) uiFeatureUpdateResult
 
 func handledUIFeatureUpdate(model *uiModel, cmd tea.Cmd) uiFeatureUpdateResult {
 	return uiFeatureUpdateResult{model: model, cmd: cmd, handled: true}
@@ -22,39 +20,29 @@ func handledUIFeatureUpdate(model *uiModel, cmd tea.Cmd) uiFeatureUpdateResult {
 
 func (m *uiModel) reduceFeatureMessage(msg tea.Msg) uiFeatureUpdateResult {
 	reducers := []uiFeatureReducer{
-		m.keyReducer(),
-		m.windowReducer(),
-		m.ongoingReducer(),
-		m.presentationReducer(),
-		m.runtimeReducer(),
-		m.statusReducer(),
-		m.worktreeReducer(),
-		m.diagnosticsReducer(),
-		m.askReducer(),
-		m.pathReferenceReducer(),
-		m.noticeReducer(),
-		m.inputAsyncReducer(),
-		m.processReducer(),
-		m.clipboardReducer(),
+		m.reduceKeyMessage,
+		m.reduceWindowMessage,
+		m.reduceDispatchedEvent,
+		m.reduceOngoingMessage,
+		m.reduceRuntimeMessage,
+		m.reduceStatusMessage,
+		m.reduceWorktreeMessage,
+		m.reduceAskMessage,
+		m.reducePathReferenceMessage,
+		m.reduceNoticeMessage,
+		m.reduceInputAsyncMessage,
+		m.reduceProcessMessage,
+		m.reduceClipboardMessage,
 	}
 	for _, reducer := range reducers {
-		if result := reducer.Update(msg); result.handled {
+		if result := reducer(msg); result.handled {
 			return result
 		}
 	}
 	return uiFeatureUpdateResult{}
 }
 
-type uiStatusFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) statusReducer() uiStatusFeatureReducer {
-	return uiStatusFeatureReducer{model: m}
-}
-
-func (r uiStatusFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceStatusMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case statusRefreshDoneMsg:
 		if msg.token != m.status.refreshToken {
@@ -88,7 +76,6 @@ func (r uiStatusFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			snapshot.Git = m.status.snapshot.Git
 		}
 		snapshot.SkillPolicy = m.status.snapshot.SkillPolicy
-		snapshot.SkillDiscoveryState = m.status.snapshot.SkillDiscoveryState
 		if m.status.snapshot.Skills != nil {
 			snapshot.Skills = m.status.snapshot.Skills
 		}
@@ -139,7 +126,6 @@ func (r uiStatusFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			return handledUIFeatureUpdate(m, nil)
 		}
 		m.status.snapshot.SkillPolicy = msg.result.SkillPolicy
-		m.status.snapshot.SkillDiscoveryState = msg.result.SkillDiscoveryState
 		m.status.snapshot.Skills = msg.result.Skills
 		m.status.snapshot.SkillTokenCounts = msg.result.SkillTokenCounts
 		m.status.snapshot.AgentsPaths = msg.result.AgentsPaths

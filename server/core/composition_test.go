@@ -72,10 +72,10 @@ func TestNewWithContextComposesRequiredBundles(t *testing.T) {
 	if appCore.bundles.Projects == nil || appCore.bundles.Projects.projectViews == nil {
 		t.Fatal("expected project bundle client")
 	}
-	if appCore.bundles.Prompts == nil || appCore.bundles.Prompts.askViews == nil || appCore.bundles.Prompts.approvalViews == nil || appCore.bundles.Prompts.promptControl == nil || appCore.bundles.Prompts.promptActivity == nil {
+	if appCore.bundles.Prompts == nil || appCore.bundles.Prompts.askViews == nil || appCore.bundles.Prompts.approvalViews == nil || appCore.bundles.Prompts.promptControl == nil {
 		t.Fatal("expected prompt bundle clients")
 	}
-	if appCore.bundles.Runtime == nil || appCore.bundles.Runtime.background == nil || appCore.bundles.Runtime.backgroundRouter == nil || appCore.bundles.Runtime.runtimeRegistry == nil || appCore.bundles.Runtime.runtimeControls == nil || appCore.bundles.Runtime.sessionRuntime == nil || appCore.bundles.Runtime.sessionActivity == nil || appCore.bundles.Runtime.sessionTranscript == nil {
+	if appCore.bundles.Runtime == nil || appCore.bundles.Runtime.background == nil || appCore.bundles.Runtime.backgroundRouter == nil || appCore.bundles.Runtime.runtimeRegistry == nil || appCore.bundles.Runtime.runtimeControls == nil || appCore.bundles.Runtime.sessionRuntime == nil || appCore.bundles.Runtime.sessionTranscript == nil {
 		t.Fatal("expected runtime bundle services")
 	}
 	if appCore.bundles.Sessions == nil || appCore.bundles.Sessions.sessionLaunch == nil || appCore.bundles.Sessions.sessionViews == nil || appCore.bundles.Sessions.sessionLifecycle == nil || appCore.bundles.Sessions.runPrompt == nil {
@@ -441,7 +441,14 @@ func TestComposedAttentionClientKeepsGenericPromptsOffDesktopRootStream(t *testi
 		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
 	}
 
-	appCore.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-generic", Question: "Generic prompt?"})
+	appCore.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{
+		ID:         "ask-generic",
+		Question:   "Generic prompt?",
+		Origin:     askquestion.AskQuestionOriginModelTool,
+		RunID:      "11111111-1111-4111-8111-111111111111",
+		StepID:     "22222222-2222-4222-8222-222222222222",
+		ToolCallID: "tool-ask-generic",
+	})
 	pending := nextCoreAttentionEvent(t, sessionSub)
 	if pending.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
 		t.Fatalf("generic prompt target = %+v", pending.Pending.Target)
@@ -527,13 +534,21 @@ func registerCoreRuntime(t *testing.T, appCore *Core, sessionID string) {
 }
 
 func coreTaskBatchAskRequest(askID string, projectID string, taskID string, sessionID string) askquestion.AskQuestionRequest {
+	const (
+		runID  = "11111111-1111-4111-8111-111111111111"
+		stepID = "22222222-2222-4222-8222-222222222222"
+	)
 	return askquestion.AskQuestionRequest{
-		ID:       askID,
-		Question: "Task question?",
+		ID:         askID,
+		Question:   "Task question?",
+		Origin:     askquestion.AskQuestionOriginModelTool,
+		RunID:      runID,
+		StepID:     stepID,
+		ToolCallID: "tool-" + askID,
 		QuestionBatch: &askquestion.AskQuestionBatchMetadata{
 			Origin:              askquestion.AskQuestionOriginModelTool,
-			RunID:               "run-" + taskID,
-			StepID:              "step-" + taskID,
+			RunID:               runID,
+			StepID:              stepID,
 			BatchID:             "batch-" + taskID,
 			PromptID:            askID,
 			BatchPromptIDs:      []string{askID},

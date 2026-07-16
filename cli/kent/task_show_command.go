@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -43,12 +42,11 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "task show requires <short-id-or-task-id>")
 		return 2
 	}
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
 		return 1
 	}
-	defer func() { _ = remote.Close() }()
+	defer closeRemote()
 	requestedProjectID, task, err := getWorkflowTaskForShow(context.Background(), cfg, remote, *projectRef, positionals[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -62,11 +60,7 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if err := json.NewEncoder(stdout).Encode(taskShowOutputFromDetail(task)); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
+		return writeCommandJSON(stdout, stderr, taskShowOutputFromDetail(task))
 	}
 	if err := writeTaskDetail(stdout, task); err != nil {
 		fmt.Fprintln(stderr, err)

@@ -113,7 +113,7 @@ func TestHeadlessToInteractiveReopenPreservesPromptCachePrefix(t *testing.T) {
 	assertPromptCacheChunkPrefix(t, lastHeadlessRequest, interactiveClient.calls[0])
 }
 
-func TestSkillsPolicyChangesOnlyAtReviewerOrMainContextReconstruction(t *testing.T) {
+func TestSkillsPolicyChangesOnlyAtMainContextReconstruction(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	workspace := filepath.Join(root, "workspace")
@@ -163,7 +163,7 @@ func TestSkillsPolicyChangesOnlyAtReviewerOrMainContextReconstruction(t *testing
 	}
 
 	reopenedStore := mustOpenTestSession(t, store.Dir())
-	disabledPolicy := brand.ResolveSkillPolicy(brand.Settings{SkillSubsystem: brand.SkillSubsystemDisabled})
+	disabledPolicy := brand.ResolveSkillPolicy(brand.Settings{SkillToggles: map[string]bool{"cache-skill": false}})
 	disabledClient := &fakeCompactionClient{
 		caps:      caps,
 		responses: []llm.Response{finalOutputItemResponse("disabled response")},
@@ -197,8 +197,8 @@ func TestSkillsPolicyChangesOnlyAtReviewerOrMainContextReconstruction(t *testing
 	if err != nil {
 		t.Fatalf("build reviewer request: %v", err)
 	}
-	if _, found := skillMessageContent(requestMessages(reviewerRequest)); found {
-		t.Fatalf("reviewer must rebuild current disabled skills context: %+v", requestMessages(reviewerRequest))
+	if _, found := skillMessageContent(requestMessages(reviewerRequest)); !found {
+		t.Fatalf("reviewer must retain generation-snapshotted skills context: %+v", requestMessages(reviewerRequest))
 	}
 	if !reflect.DeepEqual(disabled.transcriptRuntimeState().SnapshotMessages(), mainBeforeReviewer) {
 		t.Fatal("reviewer reconstruction mutated the main transcript")
@@ -219,7 +219,7 @@ func TestSkillsPolicyChangesOnlyAtReviewerOrMainContextReconstruction(t *testing
 	}
 }
 
-func TestLiveReloadedSkillsPolicyAppliesAtCompactionAndReviewerReconstruction(t *testing.T) {
+func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	persistence := filepath.Join(root, "sessions")
@@ -257,12 +257,13 @@ func TestLiveReloadedSkillsPolicyAppliesAtCompactionAndReviewerReconstruction(t 
 	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("enabled submit: %v", err)
 	}
-	if _, found := skillMessageContent(eng.transcriptRuntimeState().SnapshotMessages()); !found {
+	generationSkills, found := skillMessageContent(eng.transcriptRuntimeState().SnapshotMessages())
+	if !found {
 		t.Fatal("fresh enabled transcript omitted skills")
 	}
 
 	mainBeforeReload := eng.transcriptRuntimeState().SnapshotMessages()
-	reloader.settings = brand.Settings{SkillSubsystem: brand.SkillSubsystemDisabled}
+	reloader.settings = brand.Settings{SkillToggles: map[string]bool{"blocked": false}}
 	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeReload) {
 		t.Fatal("changing reloaded settings mutated the active main transcript")
 	}
@@ -271,41 +272,28 @@ func TestLiveReloadedSkillsPolicyAppliesAtCompactionAndReviewerReconstruction(t 
 	if err != nil {
 		t.Fatalf("build disabled reviewer request: %v", err)
 	}
-	if _, found := skillMessageContent(requestMessages(reviewerDisabled)); found {
-		t.Fatalf("live-reloaded disabled reviewer retained skills: %+v", requestMessages(reviewerDisabled))
+	reviewerSkills, found := skillMessageContent(requestMessages(reviewerDisabled))
+	if !found || reviewerSkills != generationSkills {
+		t.Fatalf("reviewer changed generation-snapshotted skills context: %+v", requestMessages(reviewerDisabled))
 	}
 	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeReload) {
 		t.Fatal("disabled reviewer reconstruction mutated the main transcript")
 	}
 
-	reloader.settings = brand.Settings{
-		SkillSubsystem: brand.SkillSubsystemEnabled,
-		SkillToggles:   map[string]bool{"blocked": false},
-	}
-	reviewerReenabled, err := eng.buildReviewerRequest(context.Background(), client)
-	if err != nil {
-		t.Fatalf("build re-enabled reviewer request: %v", err)
-	}
-	if _, found := skillMessageContent(requestMessages(reviewerReenabled)); !found {
-		t.Fatalf("role-resolved re-enabled reviewer omitted typed skills message: %+v", requestMessages(reviewerReenabled))
-	}
-	inspection, err := InspectSkills(workspace, "", brand.ResolveSkillPolicy(reloader.settings))
-	if err != nil {
-		t.Fatalf("inspect role-resolved re-enabled skills: %v", err)
-	}
-	if !skillInspectionMatches(inspection.Inspections, "allowed", false) || !skillInspectionMatches(inspection.Inspections, "blocked", true) {
-		t.Fatalf("role-resolved ordinary toggles not reflected in typed inspection: %+v", inspection.Inspections)
-	}
-	if !reflect.DeepEqual(eng.transcriptRuntimeState().SnapshotMessages(), mainBeforeReload) {
-		t.Fatal("re-enabled reviewer reconstruction mutated the main transcript")
-	}
-
-	reloader.settings = brand.Settings{SkillSubsystem: brand.SkillSubsystemDisabled}
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact with live-reloaded disabled policy: %v", err)
+		t.Fatalf("compact with live-reloaded per-skill policy: %v", err)
 	}
-	if _, found := skillMessageContent(eng.transcriptRuntimeState().SnapshotMessages()); found {
-		t.Fatalf("post-compaction active transcript retained live-reloaded disabled skills: %+v", eng.transcriptRuntimeState().SnapshotMessages())
+	postCompactionSkills, found := skillMessageContent(eng.transcriptRuntimeState().SnapshotMessages())
+	if !found || postCompactionSkills == generationSkills {
+		t.Fatalf("post-compaction active transcript did not apply live-reloaded per-skill policy: %+v", eng.transcriptRuntimeState().SnapshotMessages())
+	}
+	reviewerAfterCompaction, err := eng.buildReviewerRequest(context.Background(), client)
+	if err != nil {
+		t.Fatalf("build post-compaction reviewer request: %v", err)
+	}
+	reviewerPostCompactionSkills, found := skillMessageContent(requestMessages(reviewerAfterCompaction))
+	if !found || reviewerPostCompactionSkills != postCompactionSkills {
+		t.Fatalf("post-compaction reviewer changed generation-snapshotted skills: %+v", requestMessages(reviewerAfterCompaction))
 	}
 }
 
@@ -584,9 +572,10 @@ type promptCacheProjection struct {
 // representation mismatch.
 func captureRuntimeProjection(t *testing.T, engine *Engine) promptCacheProjection {
 	t.Helper()
+	page := mustEngineNewestSegmentPage(t, engine)
 	return promptCacheProjection{
 		MainViewJSON:   mustMarshalCanonicalJSON(t, runtimeMainViewComparable(engine)),
-		TranscriptJSON: mustMarshalCanonicalJSON(t, engine.RecentTailTranscriptWindow(500)),
+		TranscriptJSON: mustMarshalCanonicalJSON(t, page.Snapshot),
 	}
 }
 
@@ -597,7 +586,7 @@ func capturePersistedProjectionFromStore(t *testing.T, store *session.Store) pro
 	scan := mustScanPersistedTranscript(t, store)
 	return promptCacheProjection{
 		MainViewJSON:   mustMarshalCanonicalJSON(t, persistedMainViewComparable(t, store, scan)),
-		TranscriptJSON: mustMarshalCanonicalJSON(t, scan.RecentTailSnapshot()),
+		TranscriptJSON: mustMarshalCanonicalJSON(t, scan.RecentTailSnapshot().Snapshot),
 	}
 }
 

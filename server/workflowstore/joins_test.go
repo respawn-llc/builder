@@ -250,18 +250,13 @@ func TestJoinDownstreamCanUseSelectedPriorContextSource(t *testing.T) {
 	}
 	planNode := nodeByKey(t, def, "plan")
 	synthNode := nodeByKey(t, def, "synth")
-	if _, err := store.UpdateEdge(ctx, EdgeRecord{
-		ID:                workflow.EdgeID("edge-join-synth-" + string(workflowID)),
-		WorkflowID:        workflowID,
-		TransitionGroupID: workflow.TransitionGroupID("group-join-synth-" + string(workflowID)),
-		Key:               "synth",
-		TargetNodeID:      workflow.NodeIDOf(synthNode),
-		ContextMode:       workflow.ContextModeContinueSession,
-		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "plan"},
-		PromptTemplate:    "Synthesize {{.Params.joined}}.",
-	}); err != nil {
-		t.Fatalf("UpdateEdge join synth: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-join-synth-"+string(workflowID)))
+		edge.TargetNodeID = workflow.NodeIDOf(synthNode)
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "plan"}
+		edge.PromptTemplate = "Synthesize {{.Params.joined}}."
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)

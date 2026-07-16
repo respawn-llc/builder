@@ -12,6 +12,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/skillcatalog"
 	"core/server/subagentpolicy"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -177,18 +178,22 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 	}
 
 	if opts.IncludeSkills {
-		discovery, err := discoverInjectedSkills(b.workspaceRoot, b.globalConfigDir, b.skillPolicy)
+		result, err := skillcatalog.Discover(skillcatalog.Options{
+			WorkspaceRoot: b.workspaceRoot,
+			ConfigRoot:    b.globalConfigDir,
+			Policy:        b.skillPolicy,
+		})
 		if err != nil {
 			return metaContextBuildResult{}, err
 		}
 		if opts.IncludeSkillWarnings {
-			collector.addWarnings(skillDiscoveryWarningTexts(discovery.Issues))
+			collector.addWarnings(skillDiscoveryWarningTexts(result.Issues))
 		}
-		if len(discovery.Skills) > 0 {
+		if len(result.Skills) > 0 {
 			collector.addMessages([]llm.Message{{
 				Role:        llm.RoleDeveloper,
 				MessageType: llm.MessageTypeSkills,
-				Content:     renderSkillsContext(discovery.Skills),
+				Content:     renderSkillsContext(result.Skills),
 			}})
 		}
 	}
@@ -564,7 +569,7 @@ func worktreeBranchPromptValue(branch *string) string {
 	return *branch
 }
 
-func skillDiscoveryWarningTexts(issues []skillDiscoveryIssue) []string {
+func skillDiscoveryWarningTexts(issues []skillcatalog.Issue) []string {
 	if len(issues) == 0 {
 		return nil
 	}

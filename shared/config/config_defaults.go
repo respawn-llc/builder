@@ -1,11 +1,14 @@
 package config
 
 import (
-	"core/shared/theme"
-	"core/shared/toolspec"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+
+	"core/shared/theme"
+	"core/shared/toolspec"
 )
 
 const (
@@ -47,14 +50,6 @@ func settingsTOMLForOnboarding(settings Settings, preservedDefaults map[string]b
 		preserved["model"] = true
 	}
 	return settingsTOMLWithRenderingOptions(settings, true, preserved, map[string]bool{"debug": true})
-}
-
-func onboardingDefaultSettingsTOML(selectedTheme string) string {
-	settings := configRegistry.defaultState().Settings
-	if normalized := theme.Normalize(selectedTheme); normalized != "" {
-		settings.Theme = normalized
-	}
-	return settingsTOMLWithRenderingOptions(settings, true, nil, map[string]bool{"debug": true})
 }
 
 func settingsTOMLWithRenderingOptions(settings Settings, includeToolSection bool, preservedDefaults map[string]bool, omittedKeys map[string]bool) string {
@@ -266,11 +261,7 @@ func writeSkillTogglesSection(builder *strings.Builder, skillToggles map[string]
 	if len(skillToggles) == 0 {
 		return
 	}
-	keys := make([]string, 0, len(skillToggles))
-	for key := range skillToggles {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(skillToggles))
 	builder.WriteString("[skills]\n")
 	for _, key := range keys {
 		builder.WriteString(strconv.Quote(key))

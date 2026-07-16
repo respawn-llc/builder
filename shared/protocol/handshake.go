@@ -89,7 +89,6 @@ const (
 	MethodWorkflowTaskGet                               = "workflow.task.get"
 	MethodSessionPlan                                   = "session.plan"
 	MethodSessionGetMainView                            = "session.getMainView"
-	MethodSessionGetExecutionWorkspaceRoot              = "session.getExecutionWorkspaceRoot"
 	MethodSessionGetExecutionEnvironment                = "session.getExecutionEnvironment"
 	MethodSessionGetTranscriptPage                      = "session.getTranscriptPage"
 	MethodSessionGetLatestCommittedAssistantFinalAnswer = "session.getLatestCommittedAssistantFinalAnswer"
@@ -146,9 +145,6 @@ const (
 	MethodAskAnswer                                     = "ask.answer"
 	MethodApprovalListPending                           = "approval.listPendingBySession"
 	MethodApprovalAnswer                                = "approval.answer"
-	MethodPromptSubscribeActivity                       = "prompt.subscribeActivity"
-	MethodPromptActivityEvent                           = "prompt.activity"
-	MethodPromptActivityComplete                        = "prompt.activity.complete"
 	MethodAttentionNotificationSubscribe                = "attention.notification.subscribe"
 	MethodAttentionNotificationEvent                    = "attention.notification"
 	MethodAttentionNotificationComplete                 = "attention.notification.complete"
@@ -157,9 +153,6 @@ const (
 	MethodAttentionSessionNotificationComplete          = "attention.sessionNotification.complete"
 	MethodRunPrompt                                     = "run.prompt"
 	MethodRunPromptProgress                             = "run.prompt.progress"
-	MethodSessionSubscribeActivity                      = "session.subscribeActivity"
-	MethodSessionActivityEvent                          = "session.activity"
-	MethodSessionActivityComplete                       = "session.activity.complete"
 	MethodSessionSubscribeTranscript                    = "session.subscribeTranscript"
 	MethodSessionTranscriptEvent                        = "session.transcript"
 	MethodSessionTranscriptComplete                     = "session.transcript.complete"
@@ -198,20 +191,12 @@ type SubscribeResponse struct {
 	Stream string `json:"stream"`
 }
 
-type SessionActivityEventParams struct {
-	Event clientui.Event `json:"event"`
-}
-
 type SessionTranscriptEventParams struct {
 	Message clientui.TranscriptMessage `json:"message"`
 }
 
 type ProcessOutputEventParams struct {
 	Chunk clientui.ProcessOutputChunk `json:"chunk"`
-}
-
-type PromptActivityEventParams struct {
-	Event clientui.PendingPromptEvent `json:"event"`
 }
 
 type AttentionNotificationEventParams struct {

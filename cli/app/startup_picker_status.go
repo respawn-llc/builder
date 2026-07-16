@@ -105,6 +105,19 @@ type startupPickerStatusProjection struct {
 	Failure *startupPickerStatusFailure
 }
 
+type startupPickerStatusRenderKind uint8
+
+const (
+	startupPickerStatusRenderNotice startupPickerStatusRenderKind = iota + 1
+	startupPickerStatusRenderFailure
+)
+
+type startupPickerStatusRenderProjection struct {
+	Kind    startupPickerStatusRenderKind
+	Text    string
+	IsError bool
+}
+
 func projectStartupPickerStatus(model *startupPickerStatusModel) startupPickerStatusProjection {
 	if model == nil {
 		return startupPickerStatusProjection{}
@@ -147,12 +160,12 @@ func (s startupPickerStatusSurface) RenderStatus(width int) string {
 }
 
 func renderStartupPickerStatus(projection startupPickerStatusProjection, width int) string {
-	text := strings.TrimSpace(projection.Notice.Text)
-	isError := projection.Notice.Kind == startupPickerNoticeError
-	if projection.Failure != nil {
-		text = sessionPickerFailureOperatorText(projection.Failure.Kind)
-		isError = true
+	renderProjection := projectStartupPickerStatusRender(projection)
+	if renderProjection == nil {
+		return ""
 	}
+	text := strings.TrimSpace(renderProjection.Text)
+	isError := renderProjection.IsError
 	if text == "" {
 		return ""
 	}
@@ -165,6 +178,24 @@ func renderStartupPickerStatus(projection startupPickerStatusProjection, width i
 		style = lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Error.Adaptive()).Bold(true)
 	}
 	return style.Render(truncateQueuedMessageLine(text, width))
+}
+
+func projectStartupPickerStatusRender(projection startupPickerStatusProjection) *startupPickerStatusRenderProjection {
+	if projection.Failure != nil {
+		return &startupPickerStatusRenderProjection{
+			Kind:    startupPickerStatusRenderFailure,
+			Text:    sessionPickerFailureOperatorText(projection.Failure.Kind),
+			IsError: true,
+		}
+	}
+	if strings.TrimSpace(projection.Notice.Text) == "" {
+		return nil
+	}
+	return &startupPickerStatusRenderProjection{
+		Kind:    startupPickerStatusRenderNotice,
+		Text:    projection.Notice.Text,
+		IsError: projection.Notice.Kind == startupPickerNoticeError,
+	}
 }
 
 func renderStartupPickerNotice(notice startupPickerNotice, width int) string {

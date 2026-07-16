@@ -207,15 +207,6 @@ func (s *pendingPromptStore) Close(err error) {
 	}
 }
 
-func (s *pendingPromptStore) WithLockedSnapshotResult(fn func([]PendingPromptSnapshot) (*promptActivitySubscription, error)) (*promptActivitySubscription, error) {
-	if s == nil {
-		return nil, fmt.Errorf("pending prompt store is required")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return fn(s.listLocked())
-}
-
 func (s *pendingPromptStore) WithLockedAttentionSnapshotResult(fn func([]PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error)) (serverapi.AttentionNotificationSubscription, error) {
 	if s == nil {
 		return nil, fmt.Errorf("pending prompt store is required")
@@ -234,10 +225,19 @@ func (s *pendingPromptStore) listLocked() []PendingPromptSnapshot {
 		items = append(items, item.PendingPromptSnapshot)
 	}
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
-			return items[i].Request.ID < items[j].Request.ID
-		}
-		return items[i].CreatedAt.Before(items[j].CreatedAt)
+		return pendingPromptOrderLess(
+			items[i].CreatedAt,
+			items[i].Request.ID,
+			items[j].CreatedAt,
+			items[j].Request.ID,
+		)
 	})
 	return items
+}
+
+func pendingPromptOrderLess(leftCreatedAt time.Time, leftID string, rightCreatedAt time.Time, rightID string) bool {
+	if leftCreatedAt.Equal(rightCreatedAt) {
+		return leftID < rightID
+	}
+	return leftCreatedAt.Before(rightCreatedAt)
 }

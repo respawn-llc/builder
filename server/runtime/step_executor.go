@@ -102,7 +102,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err != nil {
 			return stepLoopResult{}, err
 		}
-		if err := e.recordLastUsage(resp.Usage); err != nil {
+		if _, err := e.recordLastUsage(resp.Usage); err != nil {
 			return stepLoopResult{}, err
 		}
 
@@ -196,7 +196,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if len(hostedToolExecutions) > 0 {
 					_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
 				}
-				if _, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
@@ -205,7 +205,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: commentaryWithoutToolCallsWarning}})); err != nil {
 					return stepLoopResult{}, err
 				}
-				if _, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
@@ -214,13 +214,13 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: finalWithoutContentWarning}})); err != nil {
 					return stepLoopResult{}, err
 				}
-				if _, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
 			}
 
-			flushed, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs)
+			flushed, err := s.flushPendingUserInjections(stepID, options)
 			if err != nil {
 				return stepLoopResult{}, err
 			}
@@ -340,10 +340,18 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{Message: assistantMsg, ExecutedToolCall: true}, nil
 		}
-		if _, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs); err != nil {
+		if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 			return stepLoopResult{}, err
 		}
 	}
+}
+
+func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
+	flushed, receipt, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs)
+	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
+		options.OnQueuedUserFlushCommitted(receipt)
+	}
+	return flushed, err
 }
 
 func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response) (preparedCompletedResponse, error) {
@@ -623,31 +631,26 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
 		return false, false, nil
 	}
-	outcome, err := s.workflowCompletionAdapter().Evaluate(ctx, content)
-	if err != nil {
-		return false, false, err
-	}
-	if outcome.Applicable {
-		if !outcome.Done {
-			terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, outcome.Continue)
-			return true, terminal, nudgeErr
-		}
-		if completeErr := outcome.Complete(ctx); completeErr != nil {
-			terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
-			return true, terminal, nudgeErr
-		}
-		return true, true, nil
-	}
 	mode, err := e.workflowCompletionMode(ctx)
 	if err != nil {
 		return false, false, err
 	}
 	content = strings.TrimSpace(content)
-	if mode == workflowruntime.CompletionModeShellCommand {
+	var (
+		parsed workflowruntime.ParsedCompletion
+		source WorkflowCompletionSource
+	)
+	switch mode {
+	case workflowruntime.CompletionModeStructuredOutput:
+		parsed, err = workflowruntime.DecodeCompletion([]byte(content), e.cfg.WorkflowRun.Contract)
+		source = WorkflowCompletionSourceStructuredOutput
+	case workflowruntime.CompletionModeUnstructuredOutput:
+		parsed, err = workflowruntime.DecodeUnstructuredCompletion(content, e.cfg.WorkflowRun.Contract)
+		source = WorkflowCompletionSourceUnstructured
+	case workflowruntime.CompletionModeShellCommand:
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, errors.New("normal final answers do not complete shell-command workflow nodes"))
 		return true, terminal, nudgeErr
-	}
-	if mode == workflowruntime.CompletionModeTool {
+	case workflowruntime.CompletionModeTool:
 		record, recordErr := e.recordWorkflowProtocolViolation(ctx, workflowruntime.ViolationKindInvalidCompletion, content)
 		if recordErr != nil {
 			return true, false, recordErr
@@ -659,8 +662,19 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 			return true, false, err
 		}
 		return true, false, nil
+	default:
+		return false, false, nil
 	}
-	return false, false, nil
+	if err != nil {
+		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, err)
+		return true, terminal, nudgeErr
+	}
+	if completeErr := s.completeWorkflowRunFromParsed(ctx, parsed); completeErr != nil {
+		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
+		return true, terminal, nudgeErr
+	}
+	e.setWorkflowTerminalState(source)
+	return true, true, nil
 }
 
 func (s *defaultStepExecutor) completeWorkflowRunFromParsed(ctx context.Context, parsed workflowruntime.ParsedCompletion) error {

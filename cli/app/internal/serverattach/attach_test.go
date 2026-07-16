@@ -96,8 +96,6 @@ func allCapabilities() protocol.CapabilityFlags {
 		SessionRuntime:   true,
 		RuntimeControl:   true,
 		PromptControl:    true,
-		PromptActivity:   true,
-		SessionActivity:  true,
 		ProcessOutput:    true,
 	}
 }

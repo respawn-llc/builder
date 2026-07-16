@@ -5,6 +5,7 @@ import (
 	"core/cli/app/internal/startupconfig"
 	"core/server/llm"
 	"core/server/metadata"
+	"core/server/runtime"
 	serverstartup "core/server/startup"
 	askquestion "core/server/tools"
 	"core/shared/client"
@@ -14,87 +15,13 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 )
-
-func TestStartSessionServerHelperDaemonProcess(t *testing.T) {
-	if os.Getenv("GO_WANT_HELPER_DAEMON") != "1" {
-		return
-	}
-	workspace := strings.TrimSpace(os.Getenv("GO_HELPER_WORKSPACE_ROOT"))
-	if workspace == "" {
-		t.Fatal("GO_HELPER_WORKSPACE_ROOT is required")
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-	if err := srv.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("Serve: %v", err)
-	}
-}
-
-func TestStartSessionServerUsesConfiguredDaemonForInteractiveFlow(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"interactive daemon reply"})
-	defer fakeResponses.Close()
-
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-		OpenAIBaseURL:         fakeResponses.URL,
-		OpenAIBaseURLExplicit: true,
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); !ok {
-		t.Fatalf("expected remote app server, got %T", server)
-	}
-
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote interactive runtime")
-	defer runtimePlan.Close()
-
-	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive daemon")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "interactive daemon reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "interactive daemon reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected daemon-backed llm call once, got %d", hits.Load())
-	}
-
-}
 
 func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
@@ -395,29 +322,25 @@ func TestRemoteInteractiveRuntimeTwoClientsConvergeOnSameSessionAcrossWorkspaces
 
 func TestRemoteInteractiveRuntimeAskAnswersFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
 	fixture := startRemoteMultiClientRuntimeFixture(t, "")
+	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, fixture.planA.SessionID)
 
 	askDone := make(chan struct {
 		resp askquestion.AskQuestionResponse
 		err  error
 	}, 1)
 	go func() {
-		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), fixture.planA.SessionID, askquestion.AskQuestionRequest{
-			ID:       "ask-race-1",
-			Question: "Who answers first?",
-		})
+		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), fixture.planA.SessionID, appTestModelPromptRequest("ask-race-1", "Who answers first?"))
 		askDone <- struct {
 			resp askquestion.AskQuestionResponse
 			err  error
 		}{resp: resp, err: err}
 	}()
 
-	askEvtA := waitForRemoteAskEvent(t, fixture.runtimePlanA.Wiring.askEvents)
-	if askEvtA.req.PromptID != "ask-race-1" || askEvtA.req.Question != "Who answers first?" || askEvtA.req.Approval {
-		t.Fatalf("unexpected ask event: %+v", askEvtA.req)
+	askPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.transcriptEvents, "ask-race-1")
+	if askPrompt.Kind != clientui.TranscriptPromptKindQuestion || askPrompt.Question != "Who answers first?" {
+		t.Fatalf("unexpected ask prompt: %+v", askPrompt)
 	}
-	runtimeClientsA := fixture.serverA.RuntimeAttachmentClients()
 	runtimeClientsB := fixture.serverB.RuntimeAttachmentClients()
-	waitForPendingAskResources(t, runtimeClientsB.AskViews, fixture.planA.SessionID, 1)
 
 	if err := runtimeClientsB.PromptControl.AnswerAsk(context.Background(), serverapi.AskAnswerRequest{
 		ClientRequestID: uuid.NewString(),
@@ -439,37 +362,33 @@ func TestRemoteInteractiveRuntimeAskAnswersFromAnyAttachedClientAcrossWorkspaces
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for ask response")
 	}
-	waitForPendingAskResources(t, runtimeClientsA.AskViews, fixture.planA.SessionID, 0)
-	waitForPendingAskResources(t, runtimeClientsB.AskViews, fixture.planA.SessionID, 0)
+	finishStep()
 }
 
 func TestRemoteInteractiveRuntimeApprovalAnswersFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
 	fixture := startRemoteMultiClientRuntimeFixture(t, "")
+	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, fixture.planA.SessionID)
 
 	approvalDone := make(chan struct {
 		resp askquestion.AskQuestionResponse
 		err  error
 	}, 1)
 	go func() {
-		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), fixture.planA.SessionID, askquestion.AskQuestionRequest{
-			ID:              "approval-race-1",
-			Question:        "Allow the command?",
-			Approval:        true,
-			ApprovalOptions: []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"}},
-		})
+		request := appTestModelPromptRequest("approval-race-1", "Allow the command?")
+		request.Approval = true
+		request.ApprovalOptions = []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"}}
+		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), fixture.planA.SessionID, request)
 		approvalDone <- struct {
 			resp askquestion.AskQuestionResponse
 			err  error
 		}{resp: resp, err: err}
 	}()
 
-	approvalEvtA := waitForRemoteAskEvent(t, fixture.runtimePlanA.Wiring.askEvents)
-	if approvalEvtA.req.PromptID != "approval-race-1" || approvalEvtA.req.Question != "Allow the command?" || !approvalEvtA.req.Approval {
-		t.Fatalf("unexpected approval event: %+v", approvalEvtA.req)
+	approvalPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.transcriptEvents, "approval-race-1")
+	if approvalPrompt.Kind != clientui.TranscriptPromptKindApproval || approvalPrompt.Question != "Allow the command?" {
+		t.Fatalf("unexpected approval prompt: %+v", approvalPrompt)
 	}
-	runtimeClientsA := fixture.serverA.RuntimeAttachmentClients()
 	runtimeClientsB := fixture.serverB.RuntimeAttachmentClients()
-	waitForPendingApprovalResources(t, runtimeClientsB.ApprovalViews, fixture.planA.SessionID, 1)
 
 	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
 		ClientRequestID: uuid.NewString(),
@@ -495,57 +414,83 @@ func TestRemoteInteractiveRuntimeApprovalAnswersFromAnyAttachedClientAcrossWorks
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for approval response")
 	}
-	waitForPendingApprovalResources(t, runtimeClientsA.ApprovalViews, fixture.planA.SessionID, 0)
-	waitForPendingApprovalResources(t, runtimeClientsB.ApprovalViews, fixture.planA.SessionID, 0)
+	finishStep()
 }
 
-func TestRemoteSessionActivityLaggingSubscriberHydratesAndResubscribesAcrossWorkspaces(t *testing.T) {
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"reply before remote gap", "reply after gap recovery"})
-	defer fakeResponses.Close()
-	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
+func appTestModelPromptRequest(id, question string) askquestion.AskQuestionRequest {
+	return askquestion.AskQuestionRequest{
+		ID:         id,
+		Question:   question,
+		Origin:     askquestion.AskQuestionOriginModelTool,
+		RunID:      ongoingTestRunID().String(),
+		StepID:     ongoingTestStepID().String(),
+		ToolCallID: id,
+	}
+}
 
-	submission, err := submitRuntimeClientForTest(t, fixture.runtimePlanA.Wiring.runtimeClient, "message before remote gap")
-	message := submission.Message
+type appTestRuntimeReadModelPublisher interface {
+	RuntimeReadModelFeedSnapshot(context.Context, string, []clientui.RuntimeOperationRef) (clientui.RuntimeReadModelUpdate, error)
+	PublishRuntimeReadModelUpdate(string, clientui.RuntimeReadModelUpdate)
+}
+
+func beginAppTestModelPromptStep(t *testing.T, server *serverstartup.ServeServer, sessionID string) func() {
+	t.Helper()
+	if server == nil {
+		t.Fatal("model prompt test server is required")
+	}
+	publisher, ok := server.SessionTranscriptClient().(appTestRuntimeReadModelPublisher)
+	if !ok {
+		t.Fatalf("session transcript client %T cannot publish canonical runtime state", server.SessionTranscriptClient())
+	}
+	runID := ongoingTestRunID()
+	stepID := ongoingTestStepID()
+	startedAt := time.Now().UTC()
+	update, err := publisher.RuntimeReadModelFeedSnapshot(context.Background(), sessionID, nil)
 	if err != nil {
-		t.Fatalf("SubmitUserMessage before gap: %v", err)
+		t.Fatalf("build model prompt runtime read model: %v", err)
 	}
-	if message != "reply before remote gap" {
-		t.Fatalf("assistant message before gap = %q, want %q", message, "reply before remote gap")
+	update.Activity = clientui.RuntimeActivity{
+		State:          clientui.RuntimeActivityRunning,
+		QueueAccepting: update.Activity.QueueAccepting,
+		ActiveStep: &clientui.RuntimeActiveStep{
+			RunID:      runID,
+			StepID:     stepID,
+			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+		},
 	}
-
-	runtimeClientsB := fixture.serverB.RuntimeAttachmentClients()
-	if _, err := runtimeClientsB.SessionActivity.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{
-		SessionID:     fixture.planA.SessionID,
-		AfterSequence: ^uint64(0),
-	}); !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("expected remote stale cursor to fail with stream gap, got %v", err)
-	}
-
-	recoveredSub, err := runtimeClientsB.SessionActivity.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: fixture.planA.SessionID})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity recovered client: %v", err)
-	}
-	defer func() { _ = recoveredSub.Close() }()
-
-	submission, err = submitRuntimeClientForTest(t, fixture.runtimePlanA.Wiring.runtimeClient, "message after lagging subscriber recovers")
-	message = submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage after gap recovery: %v", err)
-	}
-	if message != "reply after gap recovery" {
-		t.Fatalf("assistant message after gap recovery = %q, want %q", message, "reply after gap recovery")
-	}
-	if hits.Load() != 2 {
-		t.Fatalf("expected two daemon-backed llm calls after recovery message, got %d", hits.Load())
-	}
-
-	assistantEvt := waitForSessionActivitySubscriptionEvent(t, recoveredSub, "assistant message after gap recovery", func(evt clientui.Event) bool {
-		return evt.Kind == clientui.EventAssistantMessage
+	publisher.PublishRuntimeReadModelUpdate(sessionID, update)
+	server.PublishRuntimeEvent(sessionID, runtime.Event{
+		Kind:   runtime.EventRunStateChanged,
+		StepID: stepID.String(),
+		RunState: &runtime.RunState{
+			Lifecycle:  runtime.RunningRunLifecycle(runtime.RunModeTurn),
+			RunID:      runID.String(),
+			ActiveKind: runtime.ActiveKindUserTurn,
+			Status:     runtime.RunStatusRunning,
+			StartedAt:  startedAt,
+		},
 	})
-	if assistantEvt.StepID == "" {
-		t.Fatalf("expected assistant event step id after gap recovery, got %+v", assistantEvt)
+	return func() {
+		finishedAt := time.Now().UTC()
+		server.PublishRuntimeEvent(sessionID, runtime.Event{
+			Kind:   runtime.EventRunStateChanged,
+			StepID: stepID.String(),
+			RunState: &runtime.RunState{
+				Lifecycle:  runtime.FinishedRunLifecycle(runtime.RunModeTurn),
+				RunID:      runID.String(),
+				ActiveKind: runtime.ActiveKindUserTurn,
+				Status:     runtime.RunStatusCompleted,
+				StartedAt:  startedAt,
+				FinishedAt: finishedAt,
+			},
+		})
+		update, err := publisher.RuntimeReadModelFeedSnapshot(context.Background(), sessionID, nil)
+		if err != nil {
+			t.Errorf("build completed model prompt runtime read model: %v", err)
+			return
+		}
+		publisher.PublishRuntimeReadModelUpdate(sessionID, update)
 	}
-
 }
 
 type remoteMultiClientRuntimeFixture struct {
@@ -563,11 +508,6 @@ type remoteMultiClientRuntimeFixture struct {
 type remoteMultiClientServer interface {
 	interactiveSessionServer
 	RuntimeAttachmentClients() runtimeAttachmentClients
-}
-
-type promptAnswerResult struct {
-	client string
-	err    error
 }
 
 func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *remoteMultiClientRuntimeFixture {

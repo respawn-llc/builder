@@ -1,12 +1,12 @@
 package runtime
 
 import (
-	"context"
 	"encoding/json"
-	"reflect"
-	"sync/atomic"
+	"errors"
+	"path/filepath"
 	"testing"
 
+	"core/internal/testharness/filemode"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -70,17 +70,21 @@ func mustCreateTestSession(t *testing.T, workspaceRoot ...string) *session.Store
 
 var runtimeTestSessionPersistence = sessiontest.NewPersistence()
 
-type armedTestPersistenceObserver struct {
-	delegate session.PersistenceObserver
-	armed    atomic.Bool
-	err      error
+type testEventLogAppendBlocker = filemode.EventLogAppendBlocker
+
+func blockTestEventLogAppends(store *session.Store) (*testEventLogAppendBlocker, error) {
+	if store == nil {
+		return nil, errors.New("event-log append blocker requires a session store")
+	}
+	return filemode.BlockEventLogAppends(filepath.Join(store.Dir(), "events.jsonl"))
 }
 
-func (o *armedTestPersistenceObserver) ObservePersistedStore(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
-	if o.armed.Load() {
-		return o.err
+func mustBlockTestEventLogAppends(t *testing.T, store *session.Store) *testEventLogAppendBlocker {
+	t.Helper()
+	if store == nil {
+		t.Fatal("event-log append blocker requires a session store")
 	}
-	return o.delegate.ObservePersistedStore(ctx, snapshot)
+	return filemode.MustBlockEventLogAppends(t, filepath.Join(store.Dir(), "events.jsonl"))
 }
 
 func mustCreateTestSessionAt(t *testing.T, root string, options ...session.StoreOption) *session.Store {
@@ -211,38 +215,5 @@ func assertModelCallCount(t *testing.T, client *fakeClient, want int) {
 	t.Helper()
 	if len(client.calls) != want {
 		t.Fatalf("model calls = %d, want %d", len(client.calls), want)
-	}
-}
-
-type expectedChatEntry struct {
-	Role string
-	Text string
-}
-
-type chatEntryCase struct {
-	name string
-	seed func(*chatStore)
-	want []expectedChatEntry
-}
-
-func runChatEntryCases(t *testing.T, cases []chatEntryCase) {
-	t.Helper()
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			store := newChatStore()
-			tc.seed(store)
-			assertChatEntries(t, store.snapshotWithMetadata().Snapshot.Entries, tc.want)
-		})
-	}
-}
-
-func assertChatEntries(t *testing.T, got []ChatEntry, want []expectedChatEntry) {
-	t.Helper()
-	normalized := make([]expectedChatEntry, 0, len(got))
-	for _, entry := range got {
-		normalized = append(normalized, expectedChatEntry{Role: entry.Role, Text: entry.Text})
-	}
-	if !reflect.DeepEqual(normalized, want) {
-		t.Fatalf("chat entries mismatch\n got: %+v\nwant: %+v", normalized, want)
 	}
 }

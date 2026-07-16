@@ -8,8 +8,8 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/transcript"
-	"core/shared/valuecopy"
 )
 
 type PersistedTranscriptScanRequest struct {
@@ -104,8 +104,8 @@ func clonePersistedChatEntries(entries []ChatEntry) []ChatEntry {
 
 func clonePersistedChatEntry(entry ChatEntry) ChatEntry {
 	copyEntry := entry
-	copyEntry.RollbackTargetID = valuecopy.Pointer(entry.RollbackTargetID)
-	copyEntry.BackgroundExitCode = valuecopy.Pointer(entry.BackgroundExitCode)
+	copyEntry.RollbackTargetID = textutil.Pointer(entry.RollbackTargetID)
+	copyEntry.BackgroundExitCode = textutil.Pointer(entry.BackgroundExitCode)
 	copyEntry.WorktreeContext = session.CloneWorktreeContext(entry.WorktreeContext)
 	copyEntry.ToolCall = clonePersistedToolCallMeta(entry.ToolCall)
 	return copyEntry

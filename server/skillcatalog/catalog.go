@@ -33,15 +33,7 @@ type Options struct {
 	ConfigRoot               string
 	Policy                   brand.SkillPolicy
 	IncludeEmbeddedGenerated bool
-	ReadDir                  func(string) ([]os.DirEntry, error)
 }
-
-type DiscoveryState = brand.SkillSubsystemState
-
-const (
-	DiscoveryStateEnabled  = brand.SkillSubsystemEnabled
-	DiscoveryStateDisabled = brand.SkillSubsystemDisabled
-)
 
 type Skill struct {
 	Name        string
@@ -71,7 +63,6 @@ type Inspection struct {
 }
 
 type Result struct {
-	State       DiscoveryState
 	Roots       []Root
 	Skills      []Skill
 	Issues      []Issue
@@ -89,16 +80,9 @@ type skillFrontmatter struct {
 }
 
 func Discover(opts Options) (Result, error) {
-	if !opts.Policy.Enabled() {
-		return Result{State: DiscoveryStateDisabled}, nil
-	}
 	roots, err := Roots(opts.WorkspaceRoot, opts.ConfigRoot)
 	if err != nil {
 		return Result{}, err
-	}
-	readDir := opts.ReadDir
-	if readDir == nil {
-		readDir = os.ReadDir
 	}
 	candidates := make([]Skill, 0)
 	issues := make([]Issue, 0)
@@ -106,7 +90,7 @@ func Discover(opts Options) (Result, error) {
 	seenLoadedPaths := map[string]bool{}
 	userSkillNames := map[string]bool{}
 	for _, root := range roots {
-		rootInspections, rootSkills, rootIssues, err := discoverRoot(root, readDir, opts.IncludeEmbeddedGenerated)
+		rootInspections, rootSkills, rootIssues, err := discoverRoot(root, opts.IncludeEmbeddedGenerated)
 		if err != nil {
 			return Result{}, err
 		}
@@ -165,7 +149,7 @@ func Discover(opts Options) (Result, error) {
 		}
 		return inspections[i].Path < inspections[j].Path
 	})
-	return Result{State: DiscoveryStateEnabled, Roots: roots, Skills: loaded, Issues: issues, Inspections: inspections}, nil
+	return Result{Roots: roots, Skills: loaded, Issues: issues, Inspections: inspections}, nil
 }
 
 func DiscoverGenerated(configRoot string, policy brand.SkillPolicy) ([]Inspection, error) {
@@ -218,11 +202,11 @@ func Roots(workspaceRoot, configRoot string) ([]Root, error) {
 	return roots, nil
 }
 
-func discoverRoot(root Root, readDir func(string) ([]os.DirEntry, error), includeEmbeddedGenerated bool) ([]Inspection, []Skill, []Issue, error) {
+func discoverRoot(root Root, includeEmbeddedGenerated bool) ([]Inspection, []Skill, []Issue, error) {
 	if root.Kind == SourceKindGenerated && includeEmbeddedGenerated {
 		return discoverEmbeddedGenerated(root.Path)
 	}
-	entries, err := readDir(root.Path)
+	entries, err := os.ReadDir(root.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, nil, nil

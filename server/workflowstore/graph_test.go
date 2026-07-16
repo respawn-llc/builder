@@ -116,9 +116,9 @@ func TestScriptNodePersistsNullableScriptPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	if _, err := store.AddNode(ctx, NodeRecord{ID: "node-script", WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script"}); err != nil {
-		t.Fatalf("AddNode script: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		req.Nodes = append(req.Nodes, NodeRecord{ID: "node-script", WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script"})
+	})
 	def, _, err := store.GetDefinition(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
@@ -130,9 +130,15 @@ func TestScriptNodePersistsNullableScriptPath(t *testing.T) {
 	if path, ok := workflow.NodeScriptPath(script).Value(); ok || path != "" {
 		t.Fatalf("script path = %q/%t, want absent", path, ok)
 	}
-	if _, err := store.UpdateNode(ctx, NodeRecord{ID: "node-script", WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script", ScriptPath: "scripts/complete"}); err != nil {
-		t.Fatalf("UpdateNode script path: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		for index := range req.Nodes {
+			if req.Nodes[index].ID == "node-script" {
+				req.Nodes[index].ScriptPath = "scripts/complete"
+				return
+			}
+		}
+		t.Fatal("script node missing from workflow fixture")
+	})
 	def, _, err = store.GetDefinition(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetDefinition after path update: %v", err)
@@ -145,32 +151,9 @@ func TestScriptNodePersistsNullableScriptPath(t *testing.T) {
 
 func TestStartTaskSchedulesScriptFirstTargetRun(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
-	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Script Start Workflow"})
-	if err != nil {
-		t.Fatalf("CreateWorkflow: %v", err)
-	}
-	def, _, err := store.GetDefinition(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	start := nodeByKind(t, def, workflow.NodeKindStart)
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	if _, err := store.AddNode(ctx, NodeRecord{ID: "node-script", WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script", ScriptPath: "scripts/complete"}); err != nil {
-		t.Fatalf("AddNode script: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-start", WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
-		t.Fatalf("AddTransitionGroup start: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-start", WorkflowID: created.ID, TransitionGroupID: "group-start", Key: "start", TargetNodeID: "node-script", ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge start: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-done", WorkflowID: created.ID, SourceNodeID: "node-script", TransitionID: "done", DisplayName: "Done"}); err != nil {
-		t.Fatalf("AddTransitionGroup done: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-done", WorkflowID: created.ID, TransitionGroupID: "group-done", Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge done: %v", err)
-	}
-	linkWorkflow(t, ctx, store, binding.ProjectID, created.ID, true)
+	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
+	scriptID := workflow.NodeID("node-script-" + string(workflowID))
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
 	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
@@ -191,46 +174,23 @@ func TestStartTaskSchedulesScriptFirstTargetRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].NodeID != "node-script" {
+	if len(runs) != 1 || runs[0].NodeID != scriptID {
 		t.Fatalf("runs = %+v, want one script run", runs)
 	}
 	runnable, err := store.ListRunnableRuns(ctx, 10)
 	if err != nil {
 		t.Fatalf("ListRunnableRuns: %v", err)
 	}
-	if len(runnable) != 1 || runnable[0].ID != started.RunID || runnable[0].NodeID != "node-script" {
+	if len(runnable) != 1 || runnable[0].ID != started.RunID || runnable[0].NodeID != scriptID {
 		t.Fatalf("runnable = %+v, want script run", runnable)
 	}
 }
 
 func TestRunStartContextLoadsClearedLiveScriptPath(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
-	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Script Clear Workflow"})
-	if err != nil {
-		t.Fatalf("CreateWorkflow: %v", err)
-	}
-	def, _, err := store.GetDefinition(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	start := nodeByKind(t, def, workflow.NodeKindStart)
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	if _, err := store.AddNode(ctx, NodeRecord{ID: "node-script", WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script", ScriptPath: "scripts/complete"}); err != nil {
-		t.Fatalf("AddNode script: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-start", WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
-		t.Fatalf("AddTransitionGroup start: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-start", WorkflowID: created.ID, TransitionGroupID: "group-start", Key: "start", TargetNodeID: "node-script", ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge start: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-done", WorkflowID: created.ID, SourceNodeID: "node-script", TransitionID: "done", DisplayName: "Done"}); err != nil {
-		t.Fatalf("AddTransitionGroup done: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-done", WorkflowID: created.ID, TransitionGroupID: "group-done", Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge done: %v", err)
-	}
-	linkWorkflow(t, ctx, store, binding.ProjectID, created.ID, true)
+	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
+	scriptID := workflow.NodeID("node-script-" + string(workflowID))
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
 	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
@@ -248,9 +208,15 @@ func TestRunStartContextLoadsClearedLiveScriptPath(t *testing.T) {
 	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRun: %v", err)
 	}
-	if _, err := store.UpdateNode(ctx, NodeRecord{ID: "node-script", WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script"}); err != nil {
-		t.Fatalf("UpdateNode clear script path: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		for index := range req.Nodes {
+			if req.Nodes[index].ID == scriptID {
+				req.Nodes[index].ScriptPath = ""
+				return
+			}
+		}
+		t.Fatalf("script node %q missing from workflow fixture", scriptID)
+	})
 
 	input, err := store.GetRunStartContext(ctx, started.RunID)
 	if err != nil {
@@ -263,32 +229,8 @@ func TestRunStartContextLoadsClearedLiveScriptPath(t *testing.T) {
 
 func TestScriptCompletionUsesLiveOutputContract(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
-	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Script Live Contract Workflow"})
-	if err != nil {
-		t.Fatalf("CreateWorkflow: %v", err)
-	}
-	def, _, err := store.GetDefinition(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	start := nodeByKind(t, def, workflow.NodeKindStart)
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	if _, err := store.AddNode(ctx, NodeRecord{ID: "node-script", WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script", ScriptPath: "scripts/complete"}); err != nil {
-		t.Fatalf("AddNode script: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-start", WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
-		t.Fatalf("AddTransitionGroup start: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-start", WorkflowID: created.ID, TransitionGroupID: "group-start", Key: "start", TargetNodeID: "node-script", ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge start: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-done", WorkflowID: created.ID, SourceNodeID: "node-script", TransitionID: "done", DisplayName: "Done"}); err != nil {
-		t.Fatalf("AddTransitionGroup done: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-done", WorkflowID: created.ID, TransitionGroupID: "group-done", Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge done: %v", err)
-	}
-	linkWorkflow(t, ctx, store, binding.ProjectID, created.ID, true)
+	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
 	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
@@ -307,7 +249,7 @@ func TestScriptCompletionUsesLiveOutputContract(t *testing.T) {
 	// Intentional direct graph mutation: the separate graph-edit policy controls
 	// whether live edits are accepted. This test isolates the script completion
 	// contract once the current graph has changed.
-	if _, err := store.db.ExecContext(ctx, `UPDATE workflow_edges SET parameters_json = ? WHERE id = ?`, parameters, "edge-done"); err != nil {
+	if _, err := store.db.ExecContext(ctx, `UPDATE workflow_edges SET parameters_json = ? WHERE id = ?`, parameters, "edge-done-"+string(workflowID)); err != nil {
 		t.Fatalf("force live script output contract: %v", err)
 	}
 
@@ -385,36 +327,12 @@ func TestResumeTaskRunsSkipsAgentRoleValidationForScriptRun(t *testing.T) {
 
 func TestStartTaskBlocksInvalidScriptFirstTarget(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
-	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Missing Script Start Workflow"})
-	if err != nil {
-		t.Fatalf("CreateWorkflow: %v", err)
-	}
-	def, _, err := store.GetDefinition(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	start := nodeByKind(t, def, workflow.NodeKindStart)
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	if _, err := store.AddNode(ctx, NodeRecord{ID: "node-script", WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script", ScriptPath: "missing"}); err != nil {
-		t.Fatalf("AddNode script: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-start", WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
-		t.Fatalf("AddTransitionGroup start: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-start", WorkflowID: created.ID, TransitionGroupID: "group-start", Key: "start", TargetNodeID: "node-script", ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge start: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-done", WorkflowID: created.ID, SourceNodeID: "node-script", TransitionID: "done", DisplayName: "Done"}); err != nil {
-		t.Fatalf("AddTransitionGroup done: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-done", WorkflowID: created.ID, TransitionGroupID: "group-done", Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge done: %v", err)
-	}
-	linkWorkflow(t, ctx, store, binding.ProjectID, created.ID, true)
+	workflowID := createScriptStartWorkflow(t, ctx, store, "missing")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, filepath.Join(t.TempDir(), "script-worktree"))
 
-	_, err = store.StartTask(ctx, task.ID)
+	_, err := store.StartTask(ctx, task.ID)
 	var validationErr workflowscript.ValidationError
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("StartTask error = %v, want script validation", err)
@@ -430,38 +348,26 @@ func TestCompleteRunReturnsPreInterruptedScriptTargetRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	def, _, err := store.GetDefinition(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	start := nodeByKind(t, def, workflow.NodeKindStart)
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
 	agentID := workflow.NodeID("node-agent")
 	scriptID := workflow.NodeID("node-script")
-	if _, err := store.AddNode(ctx, NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Do work."}); err != nil {
-		t.Fatalf("AddNode agent: %v", err)
-	}
-	if _, err := store.AddNode(ctx, NodeRecord{ID: scriptID, WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script"}); err != nil {
-		t.Fatalf("AddNode script: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-start", WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
-		t.Fatalf("AddTransitionGroup start: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-start", WorkflowID: created.ID, TransitionGroupID: "group-start", Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."}); err != nil {
-		t.Fatalf("AddEdge start: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-next", WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "next", DisplayName: "Next"}); err != nil {
-		t.Fatalf("AddTransitionGroup next: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-next", WorkflowID: created.ID, TransitionGroupID: "group-next", Key: "next", TargetNodeID: scriptID, ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge next: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-done", WorkflowID: created.ID, SourceNodeID: scriptID, TransitionID: "done", DisplayName: "Done"}); err != nil {
-		t.Fatalf("AddTransitionGroup done: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-done", WorkflowID: created.ID, TransitionGroupID: "group-done", Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge done: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		start := nodeByKind(t, def, workflow.NodeKindStart)
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		req.Nodes = append(req.Nodes,
+			NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Do work."},
+			NodeRecord{ID: scriptID, WorkflowID: created.ID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script"},
+		)
+		req.TransitionGroups = append(req.TransitionGroups,
+			TransitionGroupRecord{ID: "group-start", WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
+			TransitionGroupRecord{ID: "group-next", WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "next", DisplayName: "Next"},
+			TransitionGroupRecord{ID: "group-done", WorkflowID: created.ID, SourceNodeID: scriptID, TransitionID: "done", DisplayName: "Done"},
+		)
+		req.Edges = append(req.Edges,
+			EdgeRecord{ID: "edge-start", WorkflowID: created.ID, TransitionGroupID: "group-start", Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
+			EdgeRecord{ID: "edge-next", WorkflowID: created.ID, TransitionGroupID: "group-next", Key: "next", TargetNodeID: scriptID, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: "edge-done", WorkflowID: created.ID, TransitionGroupID: "group-done", Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+		)
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, created.ID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, filepath.Join(t.TempDir(), "script-worktree"))

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -27,7 +27,7 @@ type RuntimeControl struct {
 }
 
 type Service struct {
-	Client             client.WorktreeClient
+	Client             apicontract.WorktreeService
 	SessionID          string
 	Runtime            RuntimeControl
 	ResolveContext     func() (context.Context, context.CancelFunc)
@@ -89,16 +89,6 @@ func (s Service) Enter(selector string) (serverapi.WorktreeScheduledAcknowledgem
 			OperationID: operationID,
 			SessionID:   s.SessionID,
 			Selector:    strings.TrimSpace(selector),
-		})
-	})
-}
-
-func (s Service) Leave() (serverapi.WorktreeScheduledAcknowledgement, error) {
-	operationID := s.operationID()
-	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeScheduledAcknowledgement, error) {
-		return s.Client.LeaveWorktree(ctx, serverapi.WorktreeLeaveRequest{
-			OperationID: operationID,
-			SessionID:   s.SessionID,
 		})
 	})
 }

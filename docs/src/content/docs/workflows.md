@@ -50,14 +50,14 @@ description = "Implements approved tasks and leaves reviewable changes."
 model = "gpt-5.6-sol"
 thinking_level = "high"
 system_prompt_file = "agents/implementer.md"
-agent_callable = true # don't let regular sessions call this as a subagent
+agent_callable = false # prevent ordinary Kent sessions from delegating to this role
 
 [subagents.reviewer]
 description = "Reviews changes and returns actionable findings."
 model = "gpt-5.6-sol"
 thinking_level = "xhigh"
 system_prompt_file = "agents/reviewer.md"
-workflow_subagent = false # don't let workflow nodes call this role as a subagent
+workflow_subagent = false # prevent workflow agents from delegating to this role
 ```
 
 See [Headless runs](../headless/#subagent-roles) for the role configuration reference.
@@ -276,14 +276,15 @@ The workflow's execution-target policy chooses where executable agent and script
 
 | Policy | Execution root |
 | --- | --- |
-| Ask when execution starts | Select each time a task starts.  |
-| No managed worktree | The task's source workspace. This is mainly for non-Git workspaces. If many agents work in one workspace, they can start overlapping with each other, produce conflicting changes, and panic, so this should be used for tasks that don't extensively rely on the filesystem (such as coding). |
-| Source HEAD | Task will create a worktree from the commit that the main workspace uses. This may result in worktrees being created from non-main branches if the main workspace is not on main. |
-| Repository default branch | The worktree will be selected by best-effort estimate of the repo's default branch on the remote. Although usually `main`, this option requires proper git metadata. |
-| Custom Git revision | Specify any branch, tag, or commit as the source. |
+| Ask when execution starts | Select one of the four concrete targets when an unlocked task first reaches executable work. |
+| No managed worktree | The task's source workspace. This supports non-Git workspaces and tracks source-workspace changes. |
+| Source HEAD | A managed task worktree created from the source repository's current commit. |
+| Repository default branch | A managed task worktree created from the default branch configured by local remote-HEAD metadata. |
+| Custom Git revision | A managed task worktree created from any branch, tag, or commit that resolves to a commit. |
 
+New workflows ask when execution starts. Kent Desktop offers all four concrete targets when selection is required, preselects the repository default branch, and uses the same dialog when a configured Git target cannot be resolved.
 
-Once the task starts, it cannot move to another source - this prevents agents becoming confused about their environment, since kent does not warn them of external workspace changes. You can restart the same task to use the new workspace config.
+Target selection occurs on the first executable start, manual move, or approval. The task locks the selected mode and managed requested/resolved commit facts only when that initiating action succeeds. Later workflow nodes reuse the locked target; a locked target cannot be replaced with another mode.
 
 Configure a workflow policy or select a concrete target when starting, approving, or manually moving a task:
 
@@ -295,5 +296,7 @@ kent task start <task> --execution-target none|head|default-branch|ref:<revision
 kent task approve <transition-id> --execution-target none|head|default-branch|ref:<revision>
 kent task move <task> <target-node-id> --execution-target none|head|default-branch|ref:<revision>
 ```
+
+These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the target mode, execution root, requested revision, resolved commit, current named branch when available, and managed worktree.
 
 More about worktrees on the [Worktree](../worktrees/) page.

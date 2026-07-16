@@ -128,7 +128,7 @@ func resubscribeSessionTranscript(ctx context.Context, sessionID string, subscri
 		if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() != nil {
 			return nil, err
 		}
-		emitWait := waitSessionActivityRetry(ctx)
+		emitWait := waitSubscriptionRetry(ctx)
 		if !emitWait {
 			return nil, ctx.Err()
 		}

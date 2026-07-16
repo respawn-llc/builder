@@ -67,95 +67,6 @@ const (
 	RuntimeActivityActiveKindRuntimeMaintenance  RuntimeActivityActiveKind = "runtime_maintenance"
 )
 
-type RuntimeActivity struct {
-	State              RuntimeActivityState
-	ActiveKind         RuntimeActivityActiveKind
-	RunID              string
-	StepID             string
-	QueueAccepting     bool
-	DiagnosticRecovery bool
-}
-
-type RuntimeActivityOptions struct {
-	ActiveKind         RuntimeActivityActiveKind
-	RunID              string
-	StepID             string
-	QueueAccepting     bool
-	DiagnosticRecovery bool
-}
-
-func NewRuntimeActivity(state RuntimeActivityState, options RuntimeActivityOptions) (RuntimeActivity, error) {
-	activity := RuntimeActivity{
-		State:              state,
-		ActiveKind:         options.ActiveKind,
-		RunID:              strings.TrimSpace(options.RunID),
-		StepID:             strings.TrimSpace(options.StepID),
-		QueueAccepting:     options.QueueAccepting,
-		DiagnosticRecovery: options.DiagnosticRecovery,
-	}
-	if err := activity.Validate(); err != nil {
-		return RuntimeActivity{}, err
-	}
-	return activity, nil
-}
-
-func MustRuntimeActivity(state RuntimeActivityState, options RuntimeActivityOptions) RuntimeActivity {
-	activity, err := NewRuntimeActivity(state, options)
-	if err != nil {
-		panic(err)
-	}
-	return activity
-}
-
-func (a RuntimeActivity) Validate() error {
-	switch a.State {
-	case RuntimeActivityUnavailable:
-		if a.QueueAccepting {
-			return fmt.Errorf("unavailable runtime activity cannot accept queue work")
-		}
-		return validateNoActiveStep(a)
-	case RuntimeActivityRegisteredIdle:
-		return validateNoActiveStep(a)
-	case RuntimeActivityStarting:
-		if a.QueueAccepting {
-			return fmt.Errorf("starting runtime activity cannot accept queue work")
-		}
-		return validateNoActiveStep(a)
-	case RuntimeActivityRunning, RuntimeActivityAwaitingPrompt:
-		if err := a.ActiveKind.Validate(); err != nil {
-			return err
-		}
-		if strings.TrimSpace(a.RunID) == "" {
-			return fmt.Errorf("%s runtime activity requires run id", a.State)
-		}
-		if strings.TrimSpace(a.StepID) == "" {
-			return fmt.Errorf("%s runtime activity requires step id", a.State)
-		}
-		return nil
-	case RuntimeActivityDraining, RuntimeActivityClosing:
-		if a.QueueAccepting {
-			return fmt.Errorf("%s runtime activity cannot accept queue work", a.State)
-		}
-		if a.ActiveKind != "" {
-			if err := a.ActiveKind.Validate(); err != nil {
-				return err
-			}
-		}
-		return nil
-	default:
-		return fmt.Errorf("unknown runtime activity state %q", a.State)
-	}
-}
-
-func (a RuntimeActivity) ActiveForControl() bool {
-	switch a.State {
-	case RuntimeActivityStarting, RuntimeActivityRunning, RuntimeActivityAwaitingPrompt, RuntimeActivityDraining, RuntimeActivityClosing:
-		return true
-	default:
-		return false
-	}
-}
-
 func (k RuntimeActivityActiveKind) Validate() error {
 	switch k {
 	case RuntimeActivityActiveKindUserTurn,
@@ -172,19 +83,6 @@ func (k RuntimeActivityActiveKind) Validate() error {
 	}
 }
 
-func validateNoActiveStep(activity RuntimeActivity) error {
-	if activity.ActiveKind != "" {
-		return fmt.Errorf("%s runtime activity cannot carry active kind", activity.State)
-	}
-	if strings.TrimSpace(activity.RunID) != "" {
-		return fmt.Errorf("%s runtime activity cannot carry run id", activity.State)
-	}
-	if strings.TrimSpace(activity.StepID) != "" {
-		return fmt.Errorf("%s runtime activity cannot carry step id", activity.State)
-	}
-	return nil
-}
-
 type RuntimeOperationKind string
 
 const (
@@ -195,12 +93,6 @@ const (
 	RuntimeOperationKindPreSubmitCompact RuntimeOperationKind = "pre_submit_compact"
 	RuntimeOperationKindSubmitQueued     RuntimeOperationKind = "submit_queued"
 )
-
-type RuntimeOperationRef struct {
-	Kind            RuntimeOperationKind
-	ClientRequestID string
-	QueueItemID     string
-}
 
 func (k RuntimeOperationKind) Validate() error {
 	switch k {
@@ -216,41 +108,17 @@ func (k RuntimeOperationKind) Validate() error {
 	}
 }
 
-func (r RuntimeOperationRef) Validate() error {
-	if err := r.Kind.Validate(); err != nil {
-		return err
-	}
-	clientRequestID := strings.TrimSpace(r.ClientRequestID)
-	queueItemID := strings.TrimSpace(r.QueueItemID)
-	if r.Kind == RuntimeOperationKindQueuedMessage {
-		switch {
-		case queueItemID == "" && clientRequestID == "":
-			return fmt.Errorf("queued-message runtime operation ref requires client request id or queue item id")
-		case queueItemID != "" && clientRequestID != "":
-			return fmt.Errorf("queued-message runtime operation ref cannot carry both client request id and queue item id")
-		}
-		return nil
-	}
-	if clientRequestID == "" {
-		return fmt.Errorf("runtime operation ref client request id is required")
-	}
-	if queueItemID != "" {
-		return fmt.Errorf("%s runtime operation ref cannot carry queue item id", r.Kind)
-	}
-	return nil
-}
-
 func (r RuntimeOperationRef) Key() string {
 	if err := r.Validate(); err != nil {
 		return ""
 	}
 	if r.Kind == RuntimeOperationKindQueuedMessage {
-		if clientRequestID := strings.TrimSpace(r.ClientRequestID); clientRequestID != "" {
-			return string(r.Kind) + ":client_request:" + clientRequestID
+		if r.QueueItemID != nil {
+			return string(r.Kind) + ":queue_item:" + r.QueueItemID.String()
 		}
-		return string(r.Kind) + ":queue_item:" + strings.TrimSpace(r.QueueItemID)
+		return string(r.Kind) + ":client_request:" + r.ClientRequestID.String()
 	}
-	return string(r.Kind) + ":" + strings.TrimSpace(r.ClientRequestID)
+	return string(r.Kind) + ":" + r.ClientRequestID.String()
 }
 
 type RuntimeInputReconciliationState string
@@ -264,12 +132,6 @@ const (
 	RuntimeInputReconciliationUnknown              RuntimeInputReconciliationState = "unknown"
 	RuntimeInputReconciliationEvicted              RuntimeInputReconciliationState = "evicted"
 )
-
-type RuntimeInputReconciliation struct {
-	Version      ReadModelVersion
-	OperationRef RuntimeOperationRef
-	State        RuntimeInputReconciliationState
-}
 
 func (s RuntimeInputReconciliationState) Validate() error {
 	switch s {
@@ -286,43 +148,12 @@ func (s RuntimeInputReconciliationState) Validate() error {
 	}
 }
 
-func (r RuntimeInputReconciliation) Validate() error {
-	if err := r.Version.Validate(); err != nil {
-		return err
-	}
-	if err := r.OperationRef.Validate(); err != nil {
-		return err
-	}
-	return r.State.Validate()
-}
-
 func (r RuntimeInputReconciliation) RestoreRecommended() bool {
 	return r.State == RuntimeInputReconciliationCanceledNotCommitted || r.State == RuntimeInputReconciliationFailedWithRestore
 }
 
 func (r RuntimeInputReconciliation) Ambiguous() bool {
 	return r.State == RuntimeInputReconciliationUnknown || r.State == RuntimeInputReconciliationEvicted
-}
-
-type RuntimeInputReconciliationSnapshot struct {
-	Version    ReadModelVersion
-	Operations []RuntimeInputReconciliation
-}
-
-func NewEmptyRuntimeInputReconciliationSnapshot(version ReadModelVersion) RuntimeInputReconciliationSnapshot {
-	return RuntimeInputReconciliationSnapshot{Version: version}
-}
-
-func NewUnknownRuntimeInputReconciliationSnapshot(version ReadModelVersion, refs []RuntimeOperationRef) RuntimeInputReconciliationSnapshot {
-	operations := make([]RuntimeInputReconciliation, 0, len(refs))
-	for _, ref := range refs {
-		operations = append(operations, RuntimeInputReconciliation{
-			Version:      version,
-			OperationRef: ref,
-			State:        RuntimeInputReconciliationUnknown,
-		})
-	}
-	return RuntimeInputReconciliationSnapshot{Version: version, Operations: operations}
 }
 
 type RuntimeSubmitRequest struct {
@@ -335,10 +166,8 @@ func (r RuntimeSubmitRequest) Validate() error {
 	if err := validateOperationRefKind(r.OperationRef, RuntimeOperationKindSubmit); err != nil {
 		return err
 	}
-	if !isZeroRuntimeOperationRef(r.PreSubmitCompactionOperationRef) {
-		if err := validateOperationRefKind(r.PreSubmitCompactionOperationRef, RuntimeOperationKindPreSubmitCompact); err != nil {
-			return err
-		}
+	if err := validateOperationRefKind(r.PreSubmitCompactionOperationRef, RuntimeOperationKindPreSubmitCompact); err != nil {
+		return err
 	}
 	if strings.TrimSpace(r.Text) == "" {
 		return fmt.Errorf("submit text is required")
@@ -395,7 +224,7 @@ func (r RuntimeQueueUserMessageRequest) Validate() error {
 	if err := validateOperationRefKind(r.OperationRef, RuntimeOperationKindQueuedMessage); err != nil {
 		return err
 	}
-	if strings.TrimSpace(r.OperationRef.QueueItemID) != "" {
+	if r.OperationRef.QueueItemID != nil {
 		return fmt.Errorf("queued-message create request operation ref must use client request id before server queue item id exists")
 	}
 	if strings.TrimSpace(r.Text) == "" {
@@ -412,8 +241,4 @@ func validateOperationRefKind(ref RuntimeOperationRef, kind RuntimeOperationKind
 		return fmt.Errorf("runtime operation ref kind = %q, want %q", ref.Kind, kind)
 	}
 	return nil
-}
-
-func isZeroRuntimeOperationRef(ref RuntimeOperationRef) bool {
-	return ref.Kind == "" && strings.TrimSpace(ref.ClientRequestID) == "" && strings.TrimSpace(ref.QueueItemID) == ""
 }

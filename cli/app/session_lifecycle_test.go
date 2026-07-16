@@ -2,19 +2,6 @@ package app
 
 import (
 	"context"
-	"core/server/launch"
-	"core/server/metadata"
-	"core/server/registry"
-	"core/server/session"
-	"core/server/session/sessiontest"
-	"core/server/sessionlaunch"
-	shelltool "core/server/tools/shell"
-	"core/shared/client"
-	"core/shared/clientui"
-	"core/shared/config"
-	"core/shared/runtimeids"
-	"core/shared/serverapi"
-	"core/shared/toolspec"
 	"errors"
 	"io"
 	"os"
@@ -22,7 +9,21 @@ import (
 	"testing"
 	"time"
 
+	"core/server/launch"
+	"core/server/metadata"
+	"core/server/registry"
+	"core/server/session"
+	"core/server/session/sessiontest"
+	"core/server/sessionlaunch"
+	shelltool "core/server/tools/shell"
+	"core/shared/apicontract"
+	"core/shared/clientui"
+	"core/shared/config"
+	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/toolspec"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -41,7 +42,7 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 		containerDir:       containerDir,
 		sessionPersistence: persistence,
 		projectID:          "project-1",
-		projectViewClient: client.NewLoopbackProjectViewClient(projectBindingFlowStubProjectViewService{
+		projectViewClient: projectBindingFlowStubProjectViewService{
 			resolveResp: serverapi.ProjectResolvePathResponse{
 				CanonicalRoot: missingWorkspace,
 				Binding: &serverapi.ProjectBinding{
@@ -51,10 +52,10 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 					WorkspaceStatus: string(clientui.ProjectAvailabilityAvailable),
 				},
 			},
-		}),
+		},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
 			_, _, _, err := buildToolRegistry(
-				plan.WorkspaceRoot,
+				plan.ExecutionTarget.EffectiveWorkdir,
 				plan.SessionID,
 				[]toolspec.ID{toolspec.ToolPatch},
 				15*time.Second,
@@ -163,7 +164,7 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 		cfg:               cfg,
 		projectID:         binding.ProjectID,
 		projectViewClient: sessionLifecycleProjectViewClient(binding, cfg.WorkspaceRoot, nil),
-		sessionLaunch:     client.NewLoopbackSessionLaunchClient(service),
+		sessionLaunch:     service,
 	}
 
 	sessionID := sessionLifecycleSessionID(t, store.Meta().SessionID)
@@ -190,7 +191,10 @@ func TestMaybeHandlePickedSessionWorkspaceChangeSkipsPromptWhenWorkspaceUnchange
 		context.Background(),
 		&testEmbeddedServer{cfg: config.App{WorkspaceRoot: "/tmp/workspace", Settings: config.Settings{Theme: "dark"}}},
 		"session-1",
-		"/tmp/workspace",
+		clientui.SessionExecutionTarget{
+			WorkspaceRoot:         "/tmp/workspace",
+			WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		},
 	)
 	if err != nil {
 		t.Fatalf("maybeHandlePickedSessionWorkspaceChange: %v", err)
@@ -221,13 +225,52 @@ func TestMaybeHandlePickedSessionWorkspaceChangeCanonicalizesAliases(t *testing.
 		context.Background(),
 		&testEmbeddedServer{cfg: config.App{WorkspaceRoot: aliasRoot, Settings: config.Settings{Theme: "dark"}}},
 		"session-1",
-		realRoot,
+		clientui.SessionExecutionTarget{
+			WorkspaceRoot:         realRoot,
+			WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		},
 	)
 	if err != nil {
 		t.Fatalf("maybeHandlePickedSessionWorkspaceChange: %v", err)
 	}
 	if action != sessionWorkspaceChangeProceed {
 		t.Fatalf("action = %v, want proceed", action)
+	}
+	if promptCalls != 0 {
+		t.Fatalf("prompt calls = %d, want 0", promptCalls)
+	}
+}
+
+func TestMaybeHandlePickedSessionWorkspaceChangeSkipsUnavailableTargets(t *testing.T) {
+	originalPrompt := runWorkspaceChangePromptFlow
+	defer func() { runWorkspaceChangePromptFlow = originalPrompt }()
+	promptCalls := 0
+	runWorkspaceChangePromptFlow = func(string, string, string) (workspaceChangePromptResult, error) {
+		promptCalls++
+		return workspaceChangePromptResult{Rebind: true}, nil
+	}
+
+	for _, availability := range []clientui.ProjectAvailability{
+		clientui.ProjectAvailabilityMissing,
+		clientui.ProjectAvailabilityInaccessible,
+	} {
+		t.Run(string(availability), func(t *testing.T) {
+			action, err := maybeHandlePickedSessionWorkspaceChange(
+				context.Background(),
+				&testEmbeddedServer{cfg: config.App{WorkspaceRoot: "/tmp/current", Settings: config.Settings{Theme: "dark"}}},
+				"session-1",
+				clientui.SessionExecutionTarget{
+					WorkspaceRoot:         "/tmp/previous",
+					WorkspaceAvailability: availability,
+				},
+			)
+			if err != nil {
+				t.Fatalf("maybeHandlePickedSessionWorkspaceChange: %v", err)
+			}
+			if action != sessionWorkspaceChangeProceed {
+				t.Fatalf("action = %v, want proceed", action)
+			}
+		})
 	}
 	if promptCalls != 0 {
 		t.Fatalf("prompt calls = %d, want 0", promptCalls)
@@ -280,11 +323,19 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 		},
 		projectID:         binding.ProjectID,
 		projectViewClient: projectViews,
-		sessionViewClient: stubSessionViewClient{getSessionWorkspaceRoot: func(_ context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
-			if req.SessionID.String() != store.Meta().SessionID {
-				return serverapi.SessionExecutionWorkspaceRootResponse{}, errors.New("unexpected session id")
+		sessionViewClient: stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+			if req.SessionID != store.Meta().SessionID {
+				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
 			}
-			return serverapi.SessionExecutionWorkspaceRootResponse{WorkspaceRoot: previousWorkspace}, nil
+			targetRoot := previousWorkspace
+			if launchCalls > 0 {
+				targetRoot = cfg.WorkspaceRoot
+			}
+			return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{
+				WorkspaceRoot:         targetRoot,
+				WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+				EffectiveWorkdir:      targetRoot,
+			}}}}, nil
 		}},
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 			launchCalls++
@@ -298,7 +349,6 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 			}
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
 				SessionID:      store.Meta().SessionID,
-				WorkspaceRoot:  cfg.WorkspaceRoot,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
@@ -307,8 +357,8 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 			if plan.SessionID != store.Meta().SessionID {
 				t.Fatalf("prepared session = %q, want %q", plan.SessionID, store.Meta().SessionID)
 			}
-			if plan.WorkspaceRoot != cfg.WorkspaceRoot {
-				t.Fatalf("prepared workspace = %q, want %q", plan.WorkspaceRoot, cfg.WorkspaceRoot)
+			if plan.ExecutionTarget.EffectiveWorkdir != cfg.WorkspaceRoot {
+				t.Fatalf("prepared workspace = %q, want %q", plan.ExecutionTarget.EffectiveWorkdir, cfg.WorkspaceRoot)
 			}
 			return nil, stopErr
 		},
@@ -377,11 +427,15 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 		},
 		projectID:         binding.ProjectID,
 		projectViewClient: projectViews,
-		sessionViewClient: stubSessionViewClient{getSessionWorkspaceRoot: func(_ context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
-			if req.SessionID.String() != store.Meta().SessionID {
-				return serverapi.SessionExecutionWorkspaceRootResponse{}, errors.New("unexpected session id")
+		sessionViewClient: stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+			if req.SessionID != store.Meta().SessionID {
+				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
 			}
-			return serverapi.SessionExecutionWorkspaceRootResponse{WorkspaceRoot: previousWorkspace}, nil
+			return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{
+				WorkspaceRoot:         previousWorkspace,
+				WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+				EffectiveWorkdir:      previousWorkspace,
+			}}}}, nil
 		}},
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 			launchCalls++
@@ -391,7 +445,6 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 			}
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
 				SessionID:      store.Meta().SessionID,
-				WorkspaceRoot:  cfg.WorkspaceRoot,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
@@ -481,14 +534,18 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 		},
 		projectID:         binding.ProjectID,
 		projectViewClient: projectViews,
-		sessionViewClient: stubSessionViewClient{getSessionWorkspaceRoot: func(_ context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
-			switch req.SessionID.String() {
+		sessionViewClient: stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+			switch req.SessionID {
 			case staleSessionID:
-				return serverapi.SessionExecutionWorkspaceRootResponse{}, session.ErrSessionNotFound
+				return serverapi.SessionMainViewResponse{}, session.ErrSessionNotFound
 			case validStore.Meta().SessionID:
-				return serverapi.SessionExecutionWorkspaceRootResponse{WorkspaceRoot: cfg.WorkspaceRoot}, nil
+				return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{
+					WorkspaceRoot:         cfg.WorkspaceRoot,
+					WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+					EffectiveWorkdir:      cfg.WorkspaceRoot,
+				}}}}, nil
 			default:
-				return serverapi.SessionExecutionWorkspaceRootResponse{}, errors.New("unexpected session id")
+				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
 			}
 		}},
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
@@ -496,7 +553,6 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 			selectedID, _ := req.Intent.SessionID()
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
 				SessionID:      selectedID.String(),
-				WorkspaceRoot:  cfg.WorkspaceRoot,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
@@ -569,13 +625,12 @@ func TestRunSessionLifecycleExplicitSessionIDBypassesWorkspaceChangePrompt(t *te
 			}
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
 				SessionID:      store.Meta().SessionID,
-				WorkspaceRoot:  cfg.WorkspaceRoot,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
-			if plan.WorkspaceRoot != cfg.WorkspaceRoot {
-				t.Fatalf("prepared workspace = %q, want %q", plan.WorkspaceRoot, cfg.WorkspaceRoot)
+			if plan.ExecutionTarget.EffectiveWorkdir != cfg.WorkspaceRoot {
+				t.Fatalf("prepared workspace = %q, want %q", plan.ExecutionTarget.EffectiveWorkdir, cfg.WorkspaceRoot)
 			}
 			return nil, stopErr
 		},
@@ -604,8 +659,8 @@ func (s stubSessionLaunchClient) PlanSession(ctx context.Context, req serverapi.
 	return s.planSession(ctx, req)
 }
 
-func sessionLifecycleProjectViewClient(binding metadata.Binding, workspaceRoot string, sessions []clientui.SessionSummary) client.ProjectViewClient {
-	return client.NewLoopbackProjectViewClient(sessionLifecycleProjectViewService{
+func sessionLifecycleProjectViewClient(binding metadata.Binding, workspaceRoot string, sessions []clientui.SessionSummary) apicontract.ProjectViewService {
+	return sessionLifecycleProjectViewService{
 		projectBindingFlowStubProjectViewService: projectBindingFlowStubProjectViewService{
 			resolveResp: serverapi.ProjectResolvePathResponse{
 				CanonicalRoot: workspaceRoot,
@@ -618,7 +673,7 @@ func sessionLifecycleProjectViewClient(binding metadata.Binding, workspaceRoot s
 			},
 		},
 		sessions: sessions,
-	})
+	}
 }
 
 type sessionLifecycleProjectViewService struct {
@@ -752,7 +807,7 @@ func TestResolveSessionActionExitStaysClientLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if resolved.Kind() != serverapi.SessionLifecycleResultStop {
+	if resolved.Kind() != serverapi.SessionDirectiveStop {
 		t.Fatalf("result kind = %q, want stop", resolved.Kind())
 	}
 }
@@ -769,7 +824,7 @@ func TestResolveSessionActionNewSessionUsesForceNewFlow(t *testing.T) {
 		t.Fatalf("resolve session action: %v", err)
 	}
 	parent := requireSessionCreateDestination(t, resolved)
-	if parent == nil || parent.SessionID() != "parent-1" {
+	if parent == nil || *parent != "parent-1" {
 		t.Fatalf("expected parent session id passthrough, got %+v", parent)
 	}
 	preparation, present := resolved.LaunchPreparation()
@@ -792,11 +847,11 @@ func TestResolveSessionActionPreservesInitialPromptHistoryRecorded(t *testing.T)
 				Text:            req.Transition.InitialPrompt,
 				HistoryRecorded: req.Transition.InitialPromptHistoryRecorded,
 			}
-			return serverapi.LaunchSessionLifecycleResult(
+			return serverapi.LaunchSessionDirective(
 				serverapi.CreateNewSessionLaunchIntent(nil),
 				serverapi.NewSessionLaunchPreparation(
 					&prompt,
-					serverapi.RestoreStoredDraftSessionInitialInputPolicy(),
+					serverapi.RestoreStoredDraftSessionDraftDisposition(),
 					serverapi.SessionAuthPreparationKeepCurrent,
 				),
 			), nil
@@ -852,7 +907,7 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 		t.Fatalf("resolve session action: %v", err)
 	}
 	parent := requireSessionCreateDestination(t, resolved)
-	if parent == nil || parent.SessionID() != "parent-1" {
+	if parent == nil || *parent != "parent-1" {
 		t.Fatalf("expected new-session parent, got %+v", parent)
 	}
 	preparation, present := resolved.LaunchPreparation()
@@ -1028,10 +1083,10 @@ func TestResolveSessionActionOpenSessionUsesTargetID(t *testing.T) {
 	if _, present := preparation.InitialPrompt(); present {
 		t.Fatal("expected no initial prompt")
 	}
-	if preparation.InitialInputPolicy().Kind() != serverapi.SessionInitialInputPolicyOverrideStoredDraft {
-		t.Fatalf("input policy = %q, want override stored draft", preparation.InitialInputPolicy().Kind())
+	if preparation.DraftDisposition().Kind() != serverapi.SessionDraftDispositionOverrideStoredDraft {
+		t.Fatalf("input policy = %q, want override stored draft", preparation.DraftDisposition().Kind())
 	}
-	override, present := preparation.InitialInputPolicy().OverrideText()
+	override, present := preparation.DraftDisposition().OverrideText()
 	if !present || override != "draft reply" {
 		t.Fatalf("input override = %q/%v, want draft reply/true", override, present)
 	}
@@ -1072,11 +1127,11 @@ func TestResolveSessionActionReauthenticatesThroughNarrowServer(t *testing.T) {
 				t.Fatalf("transition = %+v, want open next-1", req.Transition)
 			}
 			targetID := sessionLifecycleSessionID(t, "next-1")
-			return serverapi.LaunchSessionLifecycleResult(
+			return serverapi.LaunchSessionDirective(
 				serverapi.OpenExistingSessionLaunchIntent(targetID),
 				serverapi.NewSessionLaunchPreparation(
 					nil,
-					serverapi.RestoreStoredDraftSessionInitialInputPolicy(),
+					serverapi.RestoreStoredDraftSessionDraftDisposition(),
 					serverapi.SessionAuthPreparationReauthenticate,
 				),
 			), nil
@@ -1171,13 +1226,13 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 			return serverapi.SessionPersistInputDraftResponse{}, nil
 		},
 	}
-	model := newUIModelDefaults(nil, nil, nil)
+	model := newUIModelDefaults(nil)
 	model.input = "visible draft"
 	model.activeSubmit = activeSubmitState{
 		text: "submitted before forced exit",
 		operationRef: clientui.RuntimeOperationRef{
 			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: "submit-1",
+			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 	}
 	model.pendingInjected = queuedUserMessagesForTest("pending injected")
@@ -1198,7 +1253,7 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 }
 
 func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *testing.T) {
-	model := NewProjectedUIModel(nil, nil, nil,
+	model := NewProjectedUIModel(nil,
 		WithUIInitialInput("visible draft"),
 		WithUIInitialRecoveryBuffers([]serverapi.SessionDraftRecoveryBuffer{
 			{Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit, Text: "submitted before forced exit"},
@@ -1283,7 +1338,7 @@ func TestResumeReleaseCompletesBeforePickerAndPickerCancelDoesNotReleaseAgain(t 
 		context.Background(),
 		narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
 			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-				return serverapi.SelectSessionLifecycleResult(serverapi.SessionAuthPreparationKeepCurrent), nil
+				return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent), nil
 			},
 		}},
 		nil,
@@ -1316,12 +1371,12 @@ func TestForcedLocalExitPropagatesDetachReleaseFailure(t *testing.T) {
 }
 
 type narrowSessionLifecycleServer struct {
-	lifecycle      client.SessionLifecycleClient
+	lifecycle      apicontract.SessionLifecycleService
 	cfg            config.App
 	reauthenticate func(context.Context, authInteractor) error
 }
 
-func (s narrowSessionLifecycleServer) SessionLifecycleClient() client.SessionLifecycleClient {
+func (s narrowSessionLifecycleServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	return s.lifecycle
 }
 

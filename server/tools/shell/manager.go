@@ -263,7 +263,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 			return ExecResult{}, err
 		}
 		display, truncated, _ := truncateWithTemplate(processed.Output, maxOutputChars, truncationBannerTemplate)
-		result.ExitCode = textutil.CloneInt(snapshot.ExitCode)
+		result.ExitCode = textutil.Pointer(snapshot.ExitCode)
 		result.Output = display
 		result.Truncated = truncated
 		result.Warning = processed.Warning
@@ -383,7 +383,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		OutputPath:         snapshot.LogPath,
 		Running:            snapshot.Running,
 		Backgrounded:       snapshot.Backgrounded,
-		ExitCode:           textutil.CloneInt(snapshot.ExitCode),
+		ExitCode:           textutil.Pointer(snapshot.ExitCode),
 		RawOutputRequested: snapshot.RawOutputRequested,
 		Truncated:          sourceTruncated || displayTruncated,
 	}, nil

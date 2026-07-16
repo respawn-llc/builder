@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"core/cli/app/internal/worktreeui"
-	sharedclient "core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -133,7 +132,7 @@ func (c *worktreeCommandTestClient) consumeReconnectFailure(kind string) bool {
 
 func newWorktreeTestRuntimeClient(sessionID string) *sessionRuntimeClient {
 	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}}}
-	return newUIRuntimeClientWithReads(sessionID, reads, sharedclient.NewLoopbackRuntimeControlClient(nil)).(*sessionRuntimeClient)
+	return newUIRuntimeClientWithReads(sessionID, reads, &reconnectRetryRuntimeControlClient{}).(*sessionRuntimeClient)
 }
 
 func newWorktreeTestModel(t *testing.T, client *worktreeCommandTestClient, opts ...UIOption) *uiModel {
@@ -144,7 +143,7 @@ func newWorktreeTestModel(t *testing.T, client *worktreeCommandTestClient, opts 
 
 	allOpts := []UIOption{WithUIWorktreeClient(client), WithUISessionID("session-1")}
 	allOpts = append(allOpts, opts...)
-	model := newProjectedTestUIModel(newWorktreeTestRuntimeClient("session-1"), nil, nil, allOpts...)
+	model := newProjectedTestUIModel(newWorktreeTestRuntimeClient("session-1"), allOpts...)
 	if runtimeClient, ok := model.runtimeClient().(*sessionRuntimeClient); ok && strings.TrimSpace(model.sessionName) != "" {
 		runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: model.sessionID, SessionName: model.sessionName}})
 	}
@@ -164,10 +163,6 @@ func applyWorktreeCmdMessages(t *testing.T, model *uiModel, cmd tea.Cmd) *uiMode
 	return model
 }
 
-func worktreeStatusLine(model *uiModel) string {
-	return stripANSIAndTrimRight(model.layout().renderStatusLine(120, uiThemeStyles("dark")))
-}
-
 func testMainWorktreeListResponse() serverapi.WorktreeListResponse {
 	return serverapi.WorktreeListResponse{
 		Target: clientui.SessionExecutionTarget{
@@ -179,28 +174,6 @@ func testMainWorktreeListResponse() serverapi.WorktreeListResponse {
 			testRegisteredWorktreeListEntry("wt-main", "main", "/repo", "main", true, true, true, false),
 		},
 	}
-}
-
-func worktreeListResponseForRoots(mainRoot string, featureRoot string) serverapi.WorktreeListResponse {
-	resp := serverapi.WorktreeListResponse{
-		Target: clientui.SessionExecutionTarget{
-			WorkspaceID:      "workspace-1",
-			WorkspaceRoot:    mainRoot,
-			EffectiveWorkdir: mainRoot,
-		},
-		Worktrees: []serverapi.WorktreeListEntry{
-			testRegisteredWorktreeListEntry("wt-main", "main", mainRoot, "main", true, featureRoot == "", true, false),
-		},
-	}
-	if strings.TrimSpace(featureRoot) != "" {
-		resp.Target.Worktree = &clientui.SessionExecutionWorktreeTarget{ID: "wt-feature", Root: featureRoot}
-		resp.Target.EffectiveWorkdir = featureRoot
-		resp.Worktrees[0].Projection.IsCurrent = false
-		resp.Worktrees = append(resp.Worktrees, testRegisteredWorktreeListEntry(
-			"wt-feature", "feature", featureRoot, "feature", false, true, true, true,
-		))
-	}
-	return resp
 }
 
 func testLinkedWorktreeListResponse() serverapi.WorktreeListResponse {

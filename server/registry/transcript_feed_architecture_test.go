@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +31,55 @@ func TestRuntimeRegistryDoesNotBypassSessionFeedSequencerForTranscriptBroker(t *
 		}
 		t.Fatalf("runtime_registry.go calls transcript broker %s directly; route through sessionFeed sequencer", selector.Sel.Name)
 		return false
+	})
+}
+
+func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {
+	repoRoot := findRegistryRepoRoot(t)
+	registryFiles, err := filepath.Glob(filepath.Join(repoRoot, "server", "registry", "*.go"))
+	if err != nil {
+		t.Fatalf("list registry files: %v", err)
+	}
+	for _, path := range registryFiles {
+		base := filepath.Base(path)
+		if strings.HasSuffix(base, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", base, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := selector.X.(*ast.Ident)
+			if !ok || pkg.Name != "clientui" {
+				return true
+			}
+			switch selector.Sel.Name {
+			case "TranscriptMessageRuntimeActivity", "TranscriptMessageInputReconciliation":
+				t.Fatalf("%s references deleted legacy runtime read-model transcript kind %s", base, selector.Sel.Name)
+			}
+			return true
+		})
+	}
+
+	path := filepath.Join(repoRoot, "server", "registry", "session_feed_sequencer.go")
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse session feed sequencer: %v", err)
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		ident, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if ident.Name == "runtimeActivity" || ident.Name == "inputReconciliation" {
+			t.Fatalf("session feed sequencer retains legacy read-model state %s; store one canonical runtimeReadModel", ident.Name)
+		}
+		return true
 	})
 }
 

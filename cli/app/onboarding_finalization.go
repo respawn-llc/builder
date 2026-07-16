@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 	"core/shared/theme"
 
@@ -17,7 +17,7 @@ import (
 const onboardingFinalizationTimeout = 30 * time.Second
 
 type onboardingFinalization struct {
-	finalizer client.OnboardingFinalizeClient
+	finalizer apicontract.OnboardingFinalizeService
 	flowCtx   context.Context
 	timeout   time.Duration
 
@@ -30,7 +30,7 @@ type onboardingFinalizationAttempt struct {
 	done    chan struct{}
 }
 
-func newOnboardingFinalization(finalizer client.OnboardingFinalizeClient, flowCtx context.Context) *onboardingFinalization {
+func newOnboardingFinalization(finalizer apicontract.OnboardingFinalizeService, flowCtx context.Context) *onboardingFinalization {
 	if flowCtx == nil {
 		flowCtx = context.Background()
 	}

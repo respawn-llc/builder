@@ -8,9 +8,8 @@ import (
 type AssistantPhase string
 
 const (
-	AssistantPhaseCommentary  AssistantPhase = "commentary"
-	AssistantPhaseFinal       AssistantPhase = "final_answer"
-	AssistantPhaseLegacyFinal AssistantPhase = "legacy_final_answer"
+	AssistantPhaseCommentary AssistantPhase = "commentary"
+	AssistantPhaseFinal      AssistantPhase = "final_answer"
 )
 
 func ClassifyAssistantPhase(raw string) AssistantPhase {
@@ -18,7 +17,7 @@ func ClassifyAssistantPhase(raw string) AssistantPhase {
 		return phase
 	}
 	if strings.TrimSpace(raw) == "" {
-		return AssistantPhaseLegacyFinal
+		return AssistantPhaseFinal
 	}
 	panic(fmt.Sprintf("unsupported transcript assistant phase %q", raw))
 }

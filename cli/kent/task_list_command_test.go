@@ -10,7 +10,7 @@ import (
 
 	"core/server/workflow"
 	"core/server/workflowstore"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -204,7 +204,7 @@ func TestTaskListParsesTypedStatusFilters(t *testing.T) {
 }
 
 type capturingTaskListRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	requests []serverapi.WorkflowTaskListRequest
 	response serverapi.WorkflowTaskListResponse
 	err      error

@@ -13,6 +13,7 @@ import (
 	"core/internal/testharness/runtimewirefixture"
 	"core/server/auth"
 	"core/server/llm"
+	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/tools"
@@ -130,7 +131,7 @@ func TestBuildToolRegistry_ViewImageApprovedOutsidePathSucceeds(t *testing.T) {
 	}
 
 	sessionDir := t.TempDir()
-	logger, err := newRunLogger(sessionDir, nil)
+	logger, err := runlog.NewRunLogger(sessionDir, nil)
 	if err != nil {
 		t.Fatalf("new run logger: %v", err)
 	}
@@ -266,7 +267,7 @@ func TestNewRuntimeWiring_ProviderOverrideSupportsAliasModelsForMainAndReviewer(
 		},
 	}), nil, time.Now)
 
-	logger, err := newRunLogger(t.TempDir(), nil)
+	logger, err := runlog.NewRunLogger(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("new run logger: %v", err)
 	}
@@ -300,7 +301,7 @@ func TestNewRuntimeWiring_ReviewerProviderCanUseLocalAnonymousModel(t *testing.T
 
 	authMgr := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now)
 
-	logger, err := newRunLogger(t.TempDir(), nil)
+	logger, err := runlog.NewRunLogger(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("new run logger: %v", err)
 	}

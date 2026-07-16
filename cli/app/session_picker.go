@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -187,9 +188,9 @@ func (m *sessionPickerModel) handleKey(key tea.KeyMsg) tea.Cmd {
 	case tea.KeyDown:
 		return m.moveSelection(1)
 	case tea.KeyPgUp:
-		return m.moveSelection(-m.pageSelectionStep())
+		return m.moveSelectionPage(-1)
 	case tea.KeyPgDown:
-		return m.moveSelection(m.pageSelectionStep())
+		return m.moveSelectionPage(1)
 	case tea.KeyTab, tea.KeyShiftTab, tea.KeyLeft, tea.KeyRight:
 		return m.switchTab()
 	case tea.KeyRunes:
@@ -228,15 +229,6 @@ func (m *sessionPickerModel) handleKey(key tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *sessionPickerModel) pageSelectionStep() int {
-	tab := m.tab(m.activeTab)
-	rows := m.visibleRowsFromOffset(tab, tab.offset)
-	if len(rows) < 2 {
-		return 1
-	}
-	return len(rows) - 1
-}
-
 func (m *sessionPickerModel) switchTab() tea.Cmd {
 	if m.activeTab == sessioncontract.SessionCategoryMain {
 		m.activeTab = sessioncontract.SessionCategorySubagent
@@ -259,16 +251,13 @@ func (m *sessionPickerModel) moveSelection(delta int) tea.Cmd {
 	index := tab.selectedIndex()
 	if index == nil {
 		if tab.itemCount() > 0 {
-			tab.selectIndex(0)
-			m.ensureSelectedVisible(tab)
+			return m.selectTabIndex(tab, 0)
 		}
 		return nil
 	}
 	next := *index + delta
 	if next >= 0 && next < tab.itemCount() {
-		tab.selectIndex(next)
-		m.ensureSelectedVisible(tab)
-		return nil
+		return m.selectTabIndex(tab, next)
 	}
 	if tab.directional != nil {
 		return nil
@@ -292,6 +281,65 @@ func (m *sessionPickerModel) moveSelection(delta int) tea.Cmd {
 	return nil
 }
 
+func (m *sessionPickerModel) moveSelectionPage(direction int) tea.Cmd {
+	if direction != -1 && direction != 1 {
+		panic("session picker page direction must be -1 or 1")
+	}
+	tab := m.tab(m.activeTab)
+	if tab.bodyPhase != sessionPickerBodyReady && tab.bodyPhase != sessionPickerBodyEmpty {
+		return nil
+	}
+	index := tab.selectedIndex()
+	if index == nil {
+		if tab.itemCount() == 0 {
+			return nil
+		}
+		if direction > 0 {
+			return m.selectTabIndex(tab, 0)
+		}
+		return m.selectTabIndex(tab, tab.itemCount()-1)
+	}
+	pageSize := len(m.visibleRowsFromOffset(tab, tab.offset))
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	next := *index + direction*pageSize
+	if next >= 0 && next < tab.itemCount() {
+		return m.selectTabIndex(tab, next)
+	}
+	if tab.directional != nil {
+		return nil
+	}
+	if direction > 0 {
+		if len(tab.segments) > 0 {
+			continuation := tab.segments[len(tab.segments)-1].older
+			if continuation != nil {
+				return m.startDirectionalRequest(tab, serverapi.OlderSessionPagePosition(*continuation), direction)
+			}
+		}
+		if tab.itemCount() > 0 {
+			return m.selectTabIndex(tab, tab.itemCount()-1)
+		}
+		return nil
+	}
+	if !tab.containsNewestEdge() {
+		continuation := tab.segments[0].newer
+		if continuation != nil {
+			return m.startDirectionalRequest(tab, serverapi.NewerSessionPagePosition(*continuation), direction)
+		}
+	}
+	if tab.itemCount() > 0 {
+		return m.selectTabIndex(tab, 0)
+	}
+	return nil
+}
+
+func (m *sessionPickerModel) selectTabIndex(tab *sessionPickerTab, index int) tea.Cmd {
+	tab.selectIndex(index)
+	m.ensureSelectedVisible(tab)
+	return nil
+}
+
 func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCategory, kind sessionPickerBodyRequestKind) tea.Cmd {
 	tab := m.tab(category)
 	if tab.bodyRequest != nil || tab.directional != nil {
@@ -309,7 +357,11 @@ func (m *sessionPickerModel) startBodyRequest(category sessioncontract.SessionCa
 	}
 	tab.bodyRequest = request
 	tab.bodyPhase = sessionPickerBodyInitialLoading
-	return m.loadPageCmd(category, request.generation, request.position)
+	load := m.loadPageCmd(category, request.generation, request.position)
+	if kind == sessionPickerBodyRequestRetry {
+		return tea.Batch(load, m.reconcileSpinnerTick())
+	}
+	return load
 }
 
 func (m *sessionPickerModel) startDirectionalRequest(tab *sessionPickerTab, position serverapi.SessionPagePosition, move int) tea.Cmd {
@@ -367,6 +419,13 @@ func validateSessionPickerPage(
 			"session picker page category %q does not match requested category %q",
 			response.Category,
 			expectedCategory,
+		)
+	}
+	if len(response.Sessions) > sessionPickerPageSize {
+		return fmt.Errorf(
+			"session picker page contains %d sessions, exceeding requested bound %d",
+			len(response.Sessions),
+			sessionPickerPageSize,
 		)
 	}
 	return nil
@@ -469,21 +528,106 @@ func (m *sessionPickerModel) reconcileSpinnerTick() tea.Cmd {
 }
 
 func runSessionPicker(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
-	var lifecycle *sessionPickerLifecycle
-	lifecycle = newSessionPickerLifecycle(sessionPickerLifecycleOptions{
+	lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
 		Loader: loader,
 		Theme:  theme,
 		Header: header,
-		RunProgram: func(ctx context.Context, _ *sessionPickerModel) (sessionPickerResult, error) {
-			finalModel, err := tea.NewProgram(lifecycle, tea.WithContext(ctx)).Run()
-			if err != nil {
-				return nil, err
-			}
-			if finalModel != lifecycle {
-				return nil, fmt.Errorf("unexpected picker lifecycle model type %T", finalModel)
-			}
-			return lifecycle.Result(), nil
-		},
 	})
-	return lifecycle.Run(context.Background())
+	defer lifecycle.Close()
+	terminal := sessionPickerTerminal{state: sessionPickerTerminalInactive}
+	if err := terminal.Enter(); err != nil {
+		return nil, err
+	}
+	finalModel, runErr := tea.NewProgram(lifecycle).Run()
+	closeErr := terminal.Close()
+	if runErr != nil && closeErr != nil {
+		return nil, errors.Join(runErr, closeErr)
+	}
+	if runErr != nil {
+		return nil, runErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if finalModel != lifecycle {
+		return nil, fmt.Errorf("unexpected picker lifecycle model type %T", finalModel)
+	}
+	result := lifecycle.Result()
+	if err := validateSessionPickerLifecycleResult(result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+type sessionPickerTerminalState uint8
+
+const (
+	sessionPickerTerminalInactive sessionPickerTerminalState = iota + 1
+	sessionPickerTerminalAltScreen
+	sessionPickerTerminalAlternateScroll
+	sessionPickerTerminalCleaned
+)
+
+type sessionPickerTerminalError struct {
+	Operation string
+	Err       error
+}
+
+func (e sessionPickerTerminalError) Error() string {
+	return fmt.Sprintf("session picker terminal %s failed: %v", e.Operation, e.Err)
+}
+
+func (e sessionPickerTerminalError) Unwrap() error {
+	return e.Err
+}
+
+type sessionPickerTerminal struct {
+	state sessionPickerTerminalState
+}
+
+func (t *sessionPickerTerminal) Enter() error {
+	if t == nil || t.state != sessionPickerTerminalInactive {
+		return errors.New("session picker terminal must be inactive before entry")
+	}
+	if err := writeTerminalSequence("\x1b[?1049h"); err != nil {
+		return sessionPickerTerminalError{Operation: "enter alt-screen", Err: err}
+	}
+	t.state = sessionPickerTerminalAltScreen
+	if err := writeTerminalSequence("\x1b[?1007h"); err != nil {
+		cleanupErr := t.Close()
+		if cleanupErr != nil {
+			return errors.Join(sessionPickerTerminalError{Operation: "enable alternate scroll", Err: err}, cleanupErr)
+		}
+		return sessionPickerTerminalError{Operation: "enable alternate scroll", Err: err}
+	}
+	t.state = sessionPickerTerminalAlternateScroll
+	return nil
+}
+
+func (t *sessionPickerTerminal) Close() error {
+	if t == nil || t.state == sessionPickerTerminalCleaned {
+		return nil
+	}
+	var cleanupErr error
+	switch t.state {
+	case sessionPickerTerminalAlternateScroll:
+		if err := writeTerminalSequence("\x1b[?1007l"); err != nil {
+			cleanupErr = sessionPickerTerminalError{Operation: "disable alternate scroll", Err: err}
+		}
+		fallthrough
+	case sessionPickerTerminalAltScreen:
+		if err := writeTerminalSequence("\x1b[?1049l"); err != nil {
+			exitErr := sessionPickerTerminalError{Operation: "exit alt-screen", Err: err}
+			if cleanupErr != nil {
+				cleanupErr = errors.Join(cleanupErr, exitErr)
+			} else {
+				cleanupErr = exitErr
+			}
+		}
+	case sessionPickerTerminalInactive:
+	default:
+		panic(fmt.Sprintf("unknown session picker terminal state %d", t.state))
+	}
+	t.state = sessionPickerTerminalCleaned
+	return cleanupErr
 }

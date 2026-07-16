@@ -285,8 +285,8 @@ func TestFilelessEventPersistenceDoesNotAppendToEventLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append inspection event: %v", err)
 	}
-	if !committed || event.Seq != 2 || inspection.Meta().LastSequence != 2 {
-		t.Fatalf("inspection event = %+v, committed = %t, meta = %+v", event, committed, inspection.Meta())
+	if !committed.Committed || event.Seq != 2 || inspection.Meta().LastSequence != 2 {
+		t.Fatalf("inspection event = %+v, receipt = %+v, meta = %+v", event, committed, inspection.Meta())
 	}
 
 	after, err := os.ReadFile(eventsPath)
@@ -403,8 +403,8 @@ func TestEventAppendRequiresPersistenceObserverWithoutCreatingArtifact(t *testin
 	if err != nil {
 		t.Fatalf("NewLazy: %v", err)
 	}
-	if _, committed, err := store.AppendEvent("step-1", "message", map[string]string{"role": "user"}); !errors.Is(err, errPersistenceObserverRequired) || committed {
-		t.Fatalf("AppendEvent error = %v committed = %t, want observer failure before commit", err, committed)
+	if _, receipt, err := store.AppendEvent("step-1", "message", map[string]string{"role": "user"}); !errors.Is(err, errPersistenceObserverRequired) || receipt.Committed {
+		t.Fatalf("AppendEvent error = %v receipt = %+v, want observer failure before commit", err, receipt)
 	}
 	if store.Meta().LastSequence != 0 {
 		t.Fatalf("last sequence = %d, want unchanged", store.Meta().LastSequence)
@@ -444,6 +444,31 @@ func TestMetadataPersistenceRetriesSameValueUntilObserverSucceeds(t *testing.T) 
 	}
 	if observer.callCount != 2 || observer.lastSnapshot.Meta.InputDraft != "draft" {
 		t.Fatalf("observer calls = %d, snapshot = %+v", observer.callCount, observer.lastSnapshot.Meta)
+	}
+}
+
+func TestSetUsageStateReportsCommitAndRollsBackObserverFailure(t *testing.T) {
+	observer := &flakyPersistenceObserver{failuresRemaining: 1}
+	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
+	if err != nil {
+		t.Fatalf("NewLazy: %v", err)
+	}
+	usage := &UsageState{InputTokens: 900, WindowTokens: 200_000}
+
+	receipt, err := store.SetUsageState(usage)
+	if err == nil || receipt.Committed {
+		t.Fatalf("first SetUsageState receipt=%+v error=%v, want uncommitted observer failure", receipt, err)
+	}
+	if stored := store.Meta().UsageState; stored != nil {
+		t.Fatalf("failed usage mutation leaked into Store metadata: %+v", stored)
+	}
+
+	receipt, err = store.SetUsageState(usage)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("retried SetUsageState receipt=%+v error=%v, want committed success", receipt, err)
+	}
+	if stored := store.Meta().UsageState; stored == nil || stored.InputTokens != usage.InputTokens {
+		t.Fatalf("committed usage state = %+v, want %+v", stored, usage)
 	}
 }
 

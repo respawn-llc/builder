@@ -67,7 +67,7 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 
 ## Workspace-Change Prompt
 
-- Picking a session whose stored workspace root differs from the current root shows a `Workspace changed` confirmation: `Yes` retargets the session, `No` returns to the picker. Rebinding is always explicit user action. (owner: tui-transcript :: Startup And Session Selection; core-runtime-tools :: Sessions And Persistence)
+- Picking a session whose attached `SessionExecutionTarget` has an available canonical workspace root different from the current root shows a `Workspace changed` confirmation: `Yes` retargets the session, `No` returns to the picker. A detached historical workspace-root snapshot never triggers or supplies this retarget. Rebinding is always explicit user action. (owner: tui-transcript :: Startup And Session Selection; core-runtime-tools :: Sessions And Persistence)
 
 ## Multi-Client Attach
 

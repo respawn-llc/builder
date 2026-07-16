@@ -82,21 +82,19 @@ func TestCompleteRunBuildsChildSnapshotFromParentRevision(t *testing.T) {
 	agent := nodeByKey(t, def, "agent")
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
 	reviewerID := workflow.NodeID("node-reviewer-" + string(workflowID))
-	if _, err := store.AddNode(ctx, NodeRecord{ID: reviewerID, WorkflowID: workflowID, Key: "reviewer", Kind: workflow.NodeKindAgent, DisplayName: "Reviewer", SubagentRole: "coder", PromptTemplate: "Review work.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}); err != nil {
-		t.Fatalf("AddNode reviewer: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-review-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "review", DisplayName: "Review"}); err != nil {
-		t.Fatalf("AddTransitionGroup review: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-review-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-review-" + string(workflowID)), Key: "review", TargetNodeID: reviewerID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review work."}); err != nil {
-		t.Fatalf("AddEdge review: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-review-done-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: reviewerID, TransitionID: "review_done", DisplayName: "Review Done"}); err != nil {
-		t.Fatalf("AddTransitionGroup review done: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-review-done-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-review-done-" + string(workflowID)), Key: "review_done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}}); err != nil {
-		t.Fatalf("AddEdge review done: %v", err)
-	}
+	reviewGroupID := workflow.TransitionGroupID("group-review-" + string(workflowID))
+	reviewDoneGroupID := workflow.TransitionGroupID("group-review-done-" + string(workflowID))
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		req.Nodes = append(req.Nodes, NodeRecord{ID: reviewerID, WorkflowID: workflowID, Key: "reviewer", Kind: workflow.NodeKindAgent, DisplayName: "Reviewer", SubagentRole: "coder", PromptTemplate: "Review work.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}})
+		req.TransitionGroups = append(req.TransitionGroups,
+			TransitionGroupRecord{ID: reviewGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "review", DisplayName: "Review"},
+			TransitionGroupRecord{ID: reviewDoneGroupID, WorkflowID: workflowID, SourceNodeID: reviewerID, TransitionID: "review_done", DisplayName: "Review Done"},
+		)
+		req.Edges = append(req.Edges,
+			EdgeRecord{ID: workflow.EdgeID("edge-review-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reviewGroupID, Key: "review", TargetNodeID: reviewerID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review work."},
+			EdgeRecord{ID: workflow.EdgeID("edge-review-done-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reviewDoneGroupID, Key: "review_done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}},
+		)
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
@@ -432,18 +430,10 @@ func TestTransitionOptionsFromSnapshotUnionFanoutBranchParameters(t *testing.T) 
 func TestPriorTransitionParameterApprovalFreezesOutputValue(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createPromptNodeReferenceWorkflow(t, ctx, store)
-	if _, err := store.UpdateEdge(ctx, EdgeRecord{
-		ID:                workflow.EdgeID("edge-audit-" + string(workflowID)),
-		WorkflowID:        workflowID,
-		TransitionGroupID: workflow.TransitionGroupID("group-audit-" + string(workflowID)),
-		Key:               "audit",
-		TargetNodeID:      workflow.NodeID("node-audit-" + string(workflowID)),
-		ContextMode:       workflow.ContextModeNewSession,
-		PromptTemplate:    "Audit {{.Params.next.summary}}.",
-		RequiresApproval:  true,
-	}); err != nil {
-		t.Fatalf("UpdateEdge approval: %v", err)
-	}
+	auditEdgeID := workflow.EdgeID("edge-audit-" + string(workflowID))
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(t, req.Edges, auditEdgeID).RequiresApproval = true
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)

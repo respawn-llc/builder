@@ -464,6 +464,10 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 		notifyAskQuestionBatchSkipped(c)
 		return ErrorResult(c, prepareErr.Error()), nil
 	}
+	req.Origin = AskQuestionOriginModelTool
+	req.RunID = c.RunID
+	req.StepID = c.StepID
+	req.ToolCallID = c.ID
 	if c.AskQuestionBatch != nil {
 		batch := *c.AskQuestionBatch
 		batch.BatchPromptIDs = append([]string(nil), c.AskQuestionBatch.BatchPromptIDs...)

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/theme"
@@ -27,7 +27,7 @@ func (f *recordingOnboardingFinalizer) FinalizeOnboarding(_ context.Context, req
 	return f.response, f.err
 }
 
-var _ client.OnboardingFinalizeClient = (*recordingOnboardingFinalizer)(nil)
+var _ apicontract.OnboardingFinalizeService = (*recordingOnboardingFinalizer)(nil)
 
 type onboardingCapabilityFactsClientFunc func(context.Context, serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error)
 
@@ -35,7 +35,7 @@ func (fn onboardingCapabilityFactsClientFunc) GetCapabilityFacts(ctx context.Con
 	return fn(ctx, req)
 }
 
-var _ client.CapabilityFactsClient = onboardingCapabilityFactsClientFunc(nil)
+var _ apicontract.CapabilityFactsService = onboardingCapabilityFactsClientFunc(nil)
 
 func TestOnboardingDefaultsFinalizeThroughServerAPI(t *testing.T) {
 	finalizer := &recordingOnboardingFinalizer{response: serverapi.OnboardingFinalizeResponse{

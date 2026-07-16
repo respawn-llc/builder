@@ -14,15 +14,13 @@ import (
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
-	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
-	servicecontract "core/shared/apicontract"
-	"core/shared/client"
+	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/transcriptdiag"
 
@@ -50,7 +48,7 @@ type HeadlessBootstrap struct {
 	RuntimeRegistry interface {
 		PublishRuntimeEvent(sessionID string, evt runtime.Event)
 		PublishRuntimeEventForEngine(sessionID string, engine *runtime.Engine, evt runtime.Event)
-		PublishRuntimeActivitySnapshot(sessionID string, snapshot runtimeactivity.ResponseSnapshot)
+		PublishRuntimeReadModelUpdate(sessionID string, update clientui.RuntimeReadModelUpdate)
 	}
 	PromptHistory  promptHistoryStore
 	SessionRuntime *sessionruntime.Service
@@ -60,16 +58,12 @@ type HeadlessBootstrap struct {
 	PersistenceRoot string
 }
 
-func NewLoopbackRunPromptClient(boot HeadlessBootstrap) client.RunPromptClient {
+func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
 	launcher := &headlessPromptLauncher{boot: boot}
-	var service servicecontract.RunPromptService = NewPromptService(launcher)
-	if service != nil {
-		service = &memoizingPromptService{
-			inner: service,
-			runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
-		}
+	return &memoizingPromptService{
+		inner: NewPromptService(launcher),
+		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
 	}
-	return client.NewLoopbackRunPromptClient(service)
 }
 
 type headlessPromptLauncher struct {
@@ -174,7 +168,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	workdir := headlessRuntimeWorkdir(plan)
 	diagLogger.Logf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, plan.WorkspaceRoot, workdir, plan.ActiveSettings.Model)
 	diagLogger.Logf("config.settings path=%s created=%t", plan.Source.SettingsPath, plan.Source.CreatedDefaultConfig)
-	for _, line := range configSourceLines(plan.Source.Sources) {
+	for _, line := range runlog.FormatConfigSourceLines(plan.Source.Sources) {
 		diagLogger.Logf("config.source %s", line)
 	}
 	var eventBridge *runtimewire.EventBridge
@@ -204,9 +198,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 			OnEvent: func(evt runtime.Event) {
 				engineLogger.Logf("%s", runlog.FormatRuntimeEvent(evt))
 				if transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv) {
-					projected := runtimeview.EventFromRuntime(evt)
-					engineLogger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
-					engineLogger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
+					engineLogger.Logf("%s", runlog.FormatTranscriptRuntimeEventDiagnostic(sessionID, evt))
 				}
 				publishRuntimeEvent(evt)
 				PublishRunPromptProgress(progress, evt)

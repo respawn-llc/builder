@@ -26,7 +26,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protocol"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
@@ -374,107 +373,6 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 	}
 	if !sawUser || !sawAssistant {
 		t.Fatalf("expected persisted user and assistant messages, sawUser=%t sawAssistant=%t", sawUser, sawAssistant)
-	}
-}
-
-func TestRunPromptClientPublishesHeadlessSessionActivity(t *testing.T) {
-	workspace := newRegisteredEmbeddedWorkspace(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	releaseResponse := make(chan struct{})
-	responseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 11) {
-			return
-		}
-		if r.URL.Path != "/responses" {
-			t.Fatalf("unexpected path %q", r.URL.Path)
-		}
-		select {
-		case <-releaseResponse:
-		case <-r.Context().Done():
-			return
-		case <-ctx.Done():
-			return
-		}
-		modelstub.WriteCompletedResponseStream(w, "hello from headless activity", 11, 7)
-	}))
-	defer responseServer.Close()
-
-	server := startReadyEmbeddedServer(t, serverbootstrap.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		OpenAIBaseURL:         responseServer.URL,
-		OpenAIBaseURLExplicit: true,
-		LoadOptions: config.LoadOptions{
-			Model: "gpt-5",
-		},
-	})
-
-	store := createEmbeddedProjectSession(t, server, workspace)
-	if err := store.SetName("headless activity"); err != nil {
-		t.Fatalf("set session name: %v", err)
-	}
-	_ = openEmbeddedSessionByID(t, server, store.Meta().SessionID)
-
-	responseCh := make(chan serverapi.RunPromptResponse, 1)
-	errCh := make(chan error, 1)
-	sessionID, parseErr := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if parseErr != nil {
-		t.Fatalf("ParseSessionID: %v", parseErr)
-	}
-	go func() {
-		resp, err := server.RunPromptClient().RunPrompt(ctx, serverapi.RunPromptRequest{
-			ClientRequestID: "embedded-run-activity-1",
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
-			Prompt:          "hello from user",
-		}, nil)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		responseCh <- resp
-	}()
-
-	activity := server.SessionActivityClient()
-	if activity == nil {
-		t.Fatal("expected session activity client")
-	}
-	var sub serverapi.SessionActivitySubscription
-	var err error
-	for {
-		sub, err = activity.SubscribeSessionActivity(ctx, serverapi.SessionActivitySubscribeRequest{SessionID: store.Meta().SessionID})
-		if err == nil {
-			break
-		}
-		select {
-		case runErr := <-errCh:
-			t.Fatalf("RunPrompt early failure: %v", runErr)
-		case <-ctx.Done():
-			t.Fatal("timed out waiting for headless session activity subscription")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	defer func() { _ = sub.Close() }()
-
-	close(releaseResponse)
-	evt, err := sub.Next(ctx)
-	if err != nil {
-		t.Fatalf("headless session activity Next: %v", err)
-	}
-	if evt.Kind == "" {
-		t.Fatalf("expected a projected headless activity event, got %+v", evt)
-	}
-
-	select {
-	case runErr := <-errCh:
-		t.Fatalf("RunPrompt: %v", runErr)
-	case resp := <-responseCh:
-		if resp.Result != "hello from headless activity" {
-			t.Fatalf("unexpected result: %+v", resp)
-		}
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for headless run prompt response")
 	}
 }
 

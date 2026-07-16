@@ -9,7 +9,7 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
 	tuiinput "core/cli/tui/input"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -487,7 +487,7 @@ func (m *uiModel) worktreeCreateCmd(req serverapi.WorktreeCreateRequest) tea.Cmd
 	return tea.Batch(subscribeCmd, createCmd, worktreeSetupEventCmd(setupEvents))
 }
 
-func subscribeWorktreeSetupEvents(ctx context.Context, worktreeClient client.WorktreeClient, token uint64, setupOperationID serverapi.WorktreeSetupOperationID, ready chan<- error, events chan worktreeSetupEventMsg) {
+func subscribeWorktreeSetupEvents(ctx context.Context, worktreeClient apicontract.WorktreeService, token uint64, setupOperationID serverapi.WorktreeSetupOperationID, ready chan<- error, events chan worktreeSetupEventMsg) {
 	defer close(events)
 	if worktreeClient == nil {
 		ready <- worktreeui.ErrClientUnavailable

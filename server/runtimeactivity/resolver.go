@@ -1,6 +1,10 @@
 package runtimeactivity
 
-import "core/shared/clientui"
+import (
+	"core/shared/clientui"
+	"core/shared/runtimeids"
+	"fmt"
+)
 
 type RegistrySnapshot struct {
 	Registered     bool
@@ -29,32 +33,46 @@ type ResolverSnapshot struct {
 }
 
 func ResolveRuntimeActivity(snapshot ResolverSnapshot) (clientui.RuntimeActivity, error) {
+	return resolveRuntimeFeedActivity(snapshot)
+}
+
+func resolveRuntimeFeedActivity(snapshot ResolverSnapshot) (clientui.RuntimeActivity, error) {
+	var activity clientui.RuntimeActivity
 	if !snapshot.Registry.Registered {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
-	}
-	if snapshot.Registry.Closing {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityClosing, clientui.RuntimeActivityOptions{})
-	}
-	if snapshot.Registry.Draining {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityDraining, clientui.RuntimeActivityOptions{})
-	}
-	if snapshot.Active != nil {
-		state := clientui.RuntimeActivityRunning
+		activity.State = clientui.RuntimeActivityUnavailable
+	} else if snapshot.Registry.Closing {
+		activity.State = clientui.RuntimeActivityClosing
+	} else if snapshot.Registry.Draining {
+		activity.State = clientui.RuntimeActivityDraining
+	} else if snapshot.Active != nil {
+		activity.State = clientui.RuntimeActivityRunning
 		if snapshot.PromptWait {
-			state = clientui.RuntimeActivityAwaitingPrompt
+			activity.State = clientui.RuntimeActivityAwaitingPrompt
 		}
-		return clientui.NewRuntimeActivity(state, clientui.RuntimeActivityOptions{
-			ActiveKind:     snapshot.Active.ActiveKind,
-			RunID:          snapshot.Active.RunID,
-			StepID:         snapshot.Active.StepID,
-			QueueAccepting: snapshot.Registry.QueueAccepting,
-		})
+		runID, err := runtimeids.ParseRunID(snapshot.Active.RunID)
+		if err != nil {
+			return clientui.RuntimeActivity{}, fmt.Errorf("parse runtime active run id: %w", err)
+		}
+		stepID, err := runtimeids.ParseStepID(snapshot.Active.StepID)
+		if err != nil {
+			return clientui.RuntimeActivity{}, fmt.Errorf("parse runtime active step id: %w", err)
+		}
+		activity.ActiveStep = &clientui.RuntimeActiveStep{
+			RunID:      runID,
+			StepID:     stepID,
+			ActiveKind: snapshot.Active.ActiveKind,
+		}
+		activity.QueueAccepting = snapshot.Registry.QueueAccepting
+	} else if snapshot.LiveRunActive {
+		activity.State = clientui.RuntimeActivityDraining
+	} else if snapshot.Registry.Starting || snapshot.PendingContinuation.Promoted {
+		activity.State = clientui.RuntimeActivityStarting
+	} else {
+		activity.State = clientui.RuntimeActivityRegisteredIdle
+		activity.QueueAccepting = snapshot.Registry.QueueAccepting
 	}
-	if snapshot.LiveRunActive {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityDraining, clientui.RuntimeActivityOptions{})
+	if err := activity.Validate(); err != nil {
+		return clientui.RuntimeActivity{}, err
 	}
-	if snapshot.Registry.Starting || snapshot.PendingContinuation.Promoted {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityStarting, clientui.RuntimeActivityOptions{})
-	}
-	return clientui.NewRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: snapshot.Registry.QueueAccepting})
+	return activity, nil
 }

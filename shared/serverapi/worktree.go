@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -170,18 +169,11 @@ type WorktreeEnterRequest struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`
 	Selector    string              `json:"selector"`
-	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
-}
-
-type RuntimeStepOrigin struct {
-	RunID  string `json:"run_id"`
-	StepID string `json:"step_id"`
 }
 
 type WorktreeLeaveRequest struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`
-	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
 }
 
 type WorktreeDeleteRequest struct {
@@ -190,7 +182,6 @@ type WorktreeDeleteRequest struct {
 	Selector            string                    `json:"selector"`
 	ForceFolderRemoval  bool                      `json:"force_folder_removal"`
 	BranchCleanupPolicy WorktreeBranchCleanupMode `json:"branch_cleanup_policy"`
-	Origin              *RuntimeStepOrigin        `json:"origin,omitempty"`
 }
 
 type WorktreeScheduledAcknowledgement struct {
@@ -408,36 +399,17 @@ func (request WorktreeEnterRequest) Validate() error {
 	if err := request.OperationID.Validate(); err != nil {
 		return err
 	}
-	if err := (WorktreeSelectorPreviewRequest{
+	return (WorktreeSelectorPreviewRequest{
 		SessionID: request.SessionID,
 		Selector:  request.Selector,
-	}).Validate(); err != nil {
-		return err
-	}
-	if request.Origin != nil {
-		return request.Origin.Validate()
-	}
-	return nil
-}
-
-func (origin RuntimeStepOrigin) Validate() error {
-	if err := runtimeids.ValidateUUIDv4(origin.RunID, "run_id"); err != nil {
-		return err
-	}
-	return runtimeids.ValidateUUIDv4(origin.StepID, "step_id")
+	}).Validate()
 }
 
 func (request WorktreeLeaveRequest) Validate() error {
 	if err := request.OperationID.Validate(); err != nil {
 		return err
 	}
-	if err := validateRequiredSessionID(request.SessionID); err != nil {
-		return err
-	}
-	if request.Origin != nil {
-		return request.Origin.Validate()
-	}
-	return nil
+	return validateRequiredSessionID(request.SessionID)
 }
 
 func (request WorktreeDeleteRequest) Validate() error {
@@ -449,11 +421,6 @@ func (request WorktreeDeleteRequest) Validate() error {
 		Selector:  request.Selector,
 	}).Validate(); err != nil {
 		return err
-	}
-	if request.Origin != nil {
-		if err := request.Origin.Validate(); err != nil {
-			return err
-		}
 	}
 	return request.BranchCleanupPolicy.Validate()
 }

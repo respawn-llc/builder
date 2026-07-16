@@ -8,8 +8,6 @@ import (
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
-
-	"github.com/google/uuid"
 )
 
 func ValidateTranscriptCommittedRow(row clientui.TranscriptCommittedRow) error {
@@ -60,10 +58,10 @@ func ValidateTranscriptCommittedRow(row clientui.TranscriptCommittedRow) error {
 	if row.Integrity != transcript.RowIntegrityValid {
 		return nil
 	}
-	if row.Assistant != nil && row.Assistant.StreamID != nil && *row.Assistant.StreamID == uuid.Nil {
+	if row.Assistant != nil && row.Assistant.StreamID != nil && row.Assistant.StreamID.IsZero() {
 		return fmt.Errorf("committed assistant row has zero stream_id")
 	}
-	if row.Tool != nil && strings.TrimSpace(row.Tool.ToolCallID) == "" {
+	if row.Tool != nil && strings.TrimSpace(string(row.Tool.ToolCallID)) == "" {
 		return fmt.Errorf("committed tool row has empty tool_call_id")
 	}
 	return nil

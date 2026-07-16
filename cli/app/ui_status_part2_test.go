@@ -2,17 +2,16 @@ package app
 
 import (
 	"context"
-	"core/cli/app/internal/status"
-	"core/server/auth"
-	"core/server/sessionview"
-	"core/shared/client"
-	"core/shared/clientui"
-	"core/shared/config"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"core/cli/app/internal/status"
+	"core/server/auth"
+	"core/server/sessionview"
+	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -23,8 +22,6 @@ func TestStatusLineGitStartupRefreshCachesBranch(t *testing.T) {
 	close(search.events)
 	m := newProjectedTestUIModel(
 		nil,
-		closedProjectedRuntimeEvents(),
-		closedAskEvents(),
 		WithUIPathReferenceSearch(search),
 		WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: repoRoot}),
 	)
@@ -53,8 +50,6 @@ func TestStatusLineGitStartupUsesRuntimeWorktreeRootBranch(t *testing.T) {
 	close(search.events)
 	m := newProjectedTestUIModel(
 		runtimeClient,
-		closedProjectedRuntimeEvents(),
-		closedAskEvents(),
 		WithUIPathReferenceSearch(search),
 		WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: workspaceRoot}),
 	)
@@ -238,30 +233,20 @@ func TestStatusOverlayOmitsServerOwnershipRow(t *testing.T) {
 	}
 }
 
-func TestStatusOverlayDisabledSkillsUsesNeutralStateWithoutEnumeration(t *testing.T) {
+func TestStatusOverlayDisabledSkillUsesEnumeratedPresentation(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.status.snapshot = uiStatusSnapshot{
-		Workdir:             "/workspace",
-		Model:               uiStatusModelInfo{Summary: "gpt-5"},
-		SkillDiscoveryState: config.SkillSubsystemDisabled,
+		Workdir: "/workspace",
+		Model:   uiStatusModelInfo{Summary: "gpt-5"},
 		Skills: []uiStatusSkillInspection{{
-			Name:   "must-not-render",
-			Path:   "/workspace/.kent/skills/must-not-render/SKILL.md",
-			Loaded: true,
+			Name:     "visible-disabled",
+			Path:     "/workspace/.kent/skills/visible-disabled/SKILL.md",
+			Loaded:   true,
+			Disabled: true,
 		}},
-		SkillTokenCounts: map[string]int{
-			"/workspace/.kent/skills/must-not-render/SKILL.md": 123,
-		},
 	}
-	if got := statusSkillsPresentation(m.status.snapshot, false); got != statusSkillsPresentationDisabled {
-		t.Fatalf("skills presentation mode = %d, want disabled", got)
-	}
-
-	plain := stripANSIAndTrimRight(strings.Join(m.layout().statusOverlayContentLines(80), "\n"))
-	for _, forbidden := range []string{"must-not-render", "/workspace/.kent/skills", "1 skills", "123"} {
-		if strings.Contains(plain, forbidden) {
-			t.Fatalf("disabled skills rendered dynamic enumeration %q: %q", forbidden, plain)
-		}
+	if got := statusSkillsPresentation(m.status.snapshot, false); got != statusSkillsPresentationEnumerated {
+		t.Fatalf("skills presentation mode = %d, want enumerated", got)
 	}
 }
 
@@ -306,7 +291,7 @@ func TestStatusParentSessionNameResolvesFromSessionViews(t *testing.T) {
 	if err := parentStore.SetName("incident-root"); err != nil {
 		t.Fatalf("set parent name: %v", err)
 	}
-	sessionViews := client.NewLoopbackSessionViewClient(sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil))
+	sessionViews := sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil)
 	got, warning := status.Collector{ParentSessionReadTimeout: uiRuntimeReadTimeout}.ParentSessionName(context.Background(), sessionViews, parentStore.Meta().SessionID)
 	if warning != "" {
 		t.Fatalf("unexpected warning: %q", warning)
@@ -322,7 +307,7 @@ func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testi
 	if err := parentStore.SetName("incident-root"); err != nil {
 		t.Fatalf("set parent name: %v", err)
 	}
-	sessionViews := client.NewLoopbackSessionViewClient(sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil))
+	sessionViews := sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil)
 	collector := &stubProgressiveStatusCollector{base: uiStatusSnapshot{ParentSessionID: parentStore.Meta().SessionID}}
 	m := newProjectedStaticUIModel(
 		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),

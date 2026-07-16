@@ -9,8 +9,6 @@ import (
 
 	"core/server/skillcatalog"
 	"core/shared/config"
-
-	"gopkg.in/yaml.v3"
 )
 
 type SkillInspection struct {
@@ -24,24 +22,18 @@ type SkillInspection struct {
 	Reason      string
 }
 
-type SkillInspectionResult struct {
-	State       skillcatalog.DiscoveryState
-	Inspections []SkillInspection
-}
-
 func (e *Engine) CompactionCount() int {
 	return e.compactionRuntimeState().Count()
 }
 
-func InspectSkills(workspaceRoot, globalConfigDir string, policy config.SkillPolicy) (SkillInspectionResult, error) {
+func InspectSkills(workspaceRoot, globalConfigDir string, policy config.SkillPolicy) ([]SkillInspection, error) {
 	result, err := skillcatalog.Discover(skillcatalog.Options{
 		WorkspaceRoot: workspaceRoot,
 		ConfigRoot:    globalConfigDir,
 		Policy:        policy,
-		ReadDir:       readSkillsDir,
 	})
 	if err != nil {
-		return SkillInspectionResult{}, err
+		return nil, err
 	}
 	inspections := make([]SkillInspection, 0, len(result.Inspections))
 	for _, inspection := range result.Inspections {
@@ -56,69 +48,7 @@ func InspectSkills(workspaceRoot, globalConfigDir string, policy config.SkillPol
 			Reason:      inspection.Reason,
 		})
 	}
-	return SkillInspectionResult{State: result.State, Inspections: inspections}, nil
-}
-
-func inspectSkillAtPath(fallbackName, skillPath string) SkillInspection {
-	resolvedPath := filepath.ToSlash(skillPath)
-	if canonical, err := filepath.EvalSymlinks(skillPath); err == nil {
-		resolvedPath = filepath.ToSlash(canonical)
-	}
-
-	contents, err := os.ReadFile(skillPath)
-	if err != nil {
-		reason := "could not read SKILL.md"
-		if os.IsNotExist(err) {
-			reason = "missing SKILL.md"
-		}
-		return SkillInspection{
-			Name:   sanitizeSkillSingleLine(fallbackName),
-			Path:   resolvedPath,
-			Loaded: false,
-			Reason: reason,
-		}
-	}
-
-	frontmatter, ok := extractSkillFrontmatter(string(contents))
-	if !ok {
-		return SkillInspection{
-			Name:   sanitizeSkillSingleLine(fallbackName),
-			Path:   resolvedPath,
-			Loaded: false,
-			Reason: "missing or invalid frontmatter",
-		}
-	}
-
-	var parsed skillFrontmatter
-	if err := yamlUnmarshal([]byte(frontmatter), &parsed); err != nil {
-		return SkillInspection{
-			Name:   sanitizeSkillSingleLine(fallbackName),
-			Path:   resolvedPath,
-			Loaded: false,
-			Reason: "invalid frontmatter YAML",
-		}
-	}
-
-	name := sanitizeSkillSingleLine(parsed.Name)
-	if name == "" {
-		name = sanitizeSkillSingleLine(fallbackName)
-	}
-	description := sanitizeSkillSingleLine(parsed.Description)
-	if name == "" || description == "" {
-		return SkillInspection{
-			Name:   name,
-			Path:   resolvedPath,
-			Loaded: false,
-			Reason: "missing name or description",
-		}
-	}
-
-	return SkillInspection{
-		Name:        name,
-		Description: description,
-		Path:        resolvedPath,
-		Loaded:      true,
-	}
+	return inspections, nil
 }
 
 func InstalledAgentsPaths(workspaceRoot, globalConfigDir string) ([]string, error) {
@@ -142,8 +72,4 @@ func InstalledAgentsPaths(workspaceRoot, globalConfigDir string) ([]string, erro
 	}
 	sort.Strings(installed)
 	return installed, nil
-}
-
-var yamlUnmarshal = func(data []byte, out any) error {
-	return yaml.Unmarshal(data, out)
 }

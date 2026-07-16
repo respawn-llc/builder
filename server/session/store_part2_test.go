@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -58,8 +57,12 @@ func TestOpenRejectsMalformedPersistedSessionCategory(t *testing.T) {
 	if err == nil {
 		t.Fatal("open malformed category session succeeded")
 	}
-	if !strings.Contains(err.Error(), "malformed-category-session") || !strings.Contains(err.Error(), "worker") {
-		t.Fatalf("error = %q, want session identity and raw category", err)
+	var invalid InvalidSessionCategoryError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("error = %T, want InvalidSessionCategoryError", err)
+	}
+	if invalid.SessionID != meta.SessionID || invalid.Category != *meta.Category {
+		t.Fatalf("invalid category error = %+v, want session/category from persisted metadata", invalid)
 	}
 }
 
@@ -446,14 +449,17 @@ func TestOpenReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 
 	meta := store.Meta()
 	meta.LastSequence = 0
+	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{
+		meta.SessionID: {
+			SessionDir: store.Dir(),
+			Meta:       &meta,
+		},
+	}}
 
 	reopened, err := Open(
 		store.Dir(),
-		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
-			SessionDir: store.Dir(),
-			Meta:       &meta,
-		}}),
-		WithPersistenceObserver(sessionTestPersistence),
+		WithPersistedSessionResolver(persistence),
+		WithPersistenceObserver(persistence),
 	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)

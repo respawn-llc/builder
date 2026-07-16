@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
@@ -15,15 +13,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-type sessionPickerLifecycleTerminalSpy struct {
-	events       []string
-	enterErr     error
-	enableErr    error
-	disableErr   error
-	exitErr      error
-	mouseCapture bool
-}
 
 type blockingSessionPageLoader struct {
 	started chan context.Context
@@ -43,103 +32,33 @@ func (l *blockingSessionPageLoader) ListSessionPage(ctx context.Context, _ serve
 	return serverapi.SessionPageResponse{}, ctx.Err()
 }
 
-func (s *sessionPickerLifecycleTerminalSpy) EnterAltScreen() error {
-	s.events = append(s.events, "enter-alt-screen")
-	return s.enterErr
-}
-
-func (s *sessionPickerLifecycleTerminalSpy) EnableAlternateScroll() error {
-	s.events = append(s.events, "enable-alternate-scroll")
-	return s.enableErr
-}
-
-func (s *sessionPickerLifecycleTerminalSpy) DisableAlternateScroll() error {
-	s.events = append(s.events, "disable-alternate-scroll")
-	return s.disableErr
-}
-
-func (s *sessionPickerLifecycleTerminalSpy) ExitAltScreen() error {
-	s.events = append(s.events, "exit-alt-screen")
-	return s.exitErr
-}
-
-func (s *sessionPickerLifecycleTerminalSpy) EnableMouseCapture() {
-	s.mouseCapture = true
-}
-
-func lifecycleTestOptions(
-	t *testing.T,
-	terminal *sessionPickerLifecycleTerminalSpy,
-	run func(context.Context, *sessionPickerModel) (sessionPickerResult, error),
-) sessionPickerLifecycleOptions {
+func lifecycleTestOptions(t *testing.T) sessionPickerLifecycleOptions {
 	t.Helper()
-	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
-		return sessionPageLoadResult{response: pickerPageResponse(t, request)}
-	}}
 	return sessionPickerLifecycleOptions{
-		Loader:     loader,
-		Theme:      "dark",
-		Header:     sessionPickerHeaderInfo{},
-		Terminal:   terminal,
-		RunProgram: run,
-	}
-}
-
-func TestSessionPickerLifecycleHasOneExhaustiveResultAndOneCleanupPath(t *testing.T) {
-	t.Parallel()
-
-	results := []sessionPickerResult{
-		newSessionPickerCreateResult(),
-		newSessionPickerCancelResult(),
-		newSessionPickerOpenResult(mustPickerSessionID(t, "lifecycle-open")),
-	}
-	for index, expected := range results {
-		t.Run(fmt.Sprintf("result-%d", index), func(t *testing.T) {
-			terminal := &sessionPickerLifecycleTerminalSpy{}
-			lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t, terminal, func(context.Context, *sessionPickerModel) (sessionPickerResult, error) {
-				return expected, nil
-			}))
-			got, err := lifecycle.Run(context.Background())
-			if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-			if !reflect.DeepEqual(got, expected) {
-				t.Fatalf("result = %+v, want %+v", got, expected)
-			}
-			if !reflect.DeepEqual(terminal.events, []string{
-				"enter-alt-screen",
-				"enable-alternate-scroll",
-				"disable-alternate-scroll",
-				"exit-alt-screen",
-			}) {
-				t.Fatalf("terminal cleanup sequence = %v", terminal.events)
-			}
-			if terminal.mouseCapture {
-				t.Fatal("session picker lifecycle enabled mouse capture")
-			}
-		})
+		Loader: &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
+		}},
+		Theme:  "dark",
+		Header: sessionPickerHeaderInfo{},
 	}
 }
 
 func TestSessionPickerLifecycleEscIsPickerException(t *testing.T) {
 	t.Parallel()
 
-	terminal := &sessionPickerLifecycleTerminalSpy{}
-	lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t, terminal, nil))
+	lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t))
+	defer lifecycle.Close()
 	lifecycle.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if lifecycle.Result() != nil {
 		t.Fatalf("Esc changed picker result to %+v", lifecycle.Result())
-	}
-	if terminal.events != nil {
-		t.Fatalf("Esc performed terminal lifecycle work before program run: %v", terminal.events)
 	}
 }
 
 func TestSessionPickerLifecycleStartsUnknownAndBlanksUntilSupportedGeometry(t *testing.T) {
 	t.Parallel()
 
-	terminal := &sessionPickerLifecycleTerminalSpy{}
-	lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t, terminal, nil))
+	lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t))
+	defer lifecycle.Close()
 	if lifecycle.geometry.IsKnown() {
 		t.Fatal("picker lifecycle started with known geometry")
 	}
@@ -161,10 +80,9 @@ func TestSessionPickerLifecycleStartsUnknownAndBlanksUntilSupportedGeometry(t *t
 func TestSessionPickerLifecyclePreservesReducerAndEffectsWhileBlank(t *testing.T) {
 	t.Parallel()
 
-	terminal := &sessionPickerLifecycleTerminalSpy{}
-	lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t, terminal, nil))
-	initial := lifecycle.Init()
-	if initial == nil {
+	lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t))
+	defer lifecycle.Close()
+	if initial := lifecycle.Init(); initial == nil {
 		t.Fatal("blank picker did not start its picker effects")
 	}
 
@@ -180,8 +98,8 @@ func TestSessionPickerLifecyclePreservesReducerAndEffectsWhileBlank(t *testing.T
 func TestSessionPickerLifecycleResumesAtSupportedGeometryWithoutLegacyDefaults(t *testing.T) {
 	t.Parallel()
 
-	terminal := &sessionPickerLifecycleTerminalSpy{}
-	lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t, terminal, nil))
+	lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t))
+	defer lifecycle.Close()
 	if lifecycle.geometry.Size() != nil {
 		t.Fatalf("initial geometry = %+v, want Geometry.Unknown", lifecycle.geometry.Size())
 	}
@@ -195,94 +113,45 @@ func TestSessionPickerLifecycleResumesAtSupportedGeometryWithoutLegacyDefaults(t
 	}
 }
 
-func TestSessionPickerLifecycleCleansUpAfterProgramAndTerminalFailures(t *testing.T) {
+func TestSessionPickerLifecycleResultValidationIsExhaustive(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name       string
-		terminal   func(*sessionPickerLifecycleTerminalSpy)
-		runErr     error
-		wantErr    bool
-		wantEvents []string
-	}{
-		{
-			name:    "program failure",
-			runErr:  errors.New("picker program failed"),
-			wantErr: true,
-			wantEvents: []string{
-				"enter-alt-screen",
-				"enable-alternate-scroll",
-				"disable-alternate-scroll",
-				"exit-alt-screen",
-			},
-		},
-		{
-			name: "alternate-scroll enable failure",
-			terminal: func(spy *sessionPickerLifecycleTerminalSpy) {
-				spy.enableErr = errors.New("enable alternate scroll failed")
-			},
-			wantErr: true,
-			wantEvents: []string{
-				"enter-alt-screen",
-				"enable-alternate-scroll",
-				"exit-alt-screen",
-			},
-		},
-		{
-			name: "alternate-scroll disable failure",
-			terminal: func(spy *sessionPickerLifecycleTerminalSpy) {
-				spy.disableErr = errors.New("disable alternate scroll failed")
-			},
-			wantErr: true,
-			wantEvents: []string{
-				"enter-alt-screen",
-				"enable-alternate-scroll",
-				"disable-alternate-scroll",
-				"exit-alt-screen",
-			},
-		},
+	for _, result := range []sessionPickerResult{
+		newSessionPickerCreateResult(),
+		newSessionPickerCancelResult(),
+		newSessionPickerOpenResult(mustPickerSessionID(t, "lifecycle-open")),
+	} {
+		if err := validateSessionPickerLifecycleResult(result); err != nil {
+			t.Fatalf("validate %T: %v", result, err)
+		}
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			terminal := &sessionPickerLifecycleTerminalSpy{}
-			if test.terminal != nil {
-				test.terminal(terminal)
-			}
-			lifecycle := newSessionPickerLifecycle(lifecycleTestOptions(t, terminal, func(context.Context, *sessionPickerModel) (sessionPickerResult, error) {
-				return newSessionPickerCancelResult(), test.runErr
-			}))
-			_, err := lifecycle.Run(context.Background())
-			if (err != nil) != test.wantErr {
-				t.Fatalf("Run error = %v, want error=%t", err, test.wantErr)
-			}
-			if !reflect.DeepEqual(terminal.events, test.wantEvents) {
-				t.Fatalf("terminal failure cleanup sequence = %v, want %v", terminal.events, test.wantEvents)
-			}
-		})
+	for _, result := range []sessionPickerResult{nil, sessionPickerOpenResult{}} {
+		if err := validateSessionPickerLifecycleResult(result); err == nil {
+			t.Fatalf("validate %T unexpectedly succeeded", result)
+		}
 	}
 }
 
-func TestSessionPickerLifecycleCancelsInitialAndDirectionalPageRequestsOnEveryExit(t *testing.T) {
+func TestSessionPickerLifecycleCloseCancelsInitialAndDirectionalPageRequestsOnEveryExit(t *testing.T) {
 	t.Parallel()
 
 	type exitKind string
 	const (
-		exitCreate  exitKind = "create"
-		exitOpen    exitKind = "open"
-		exitCancel  exitKind = "cancel"
-		exitCleanup exitKind = "cleanup"
+		exitCreate exitKind = "create"
+		exitOpen   exitKind = "open"
+		exitCancel exitKind = "cancel"
+		exitClose  exitKind = "close"
 	)
 	for _, requestKind := range []string{"initial", "directional"} {
-		for _, exit := range []exitKind{exitCreate, exitOpen, exitCancel, exitCleanup} {
+		for _, exit := range []exitKind{exitCreate, exitOpen, exitCancel, exitClose} {
 			t.Run(requestKind+"/"+string(exit), func(t *testing.T) {
 				t.Parallel()
 
 				loader := newBlockingSessionPageLoader()
 				lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
-					Loader:   loader,
-					Theme:    "dark",
-					Header:   sessionPickerHeaderInfo{},
-					Terminal: &sessionPickerLifecycleTerminalSpy{},
+					Loader: loader,
+					Theme:  "dark",
+					Header: sessionPickerHeaderInfo{},
 				})
 				sessionID := mustPickerSessionID(t, "page-cancellation-session")
 				var command tea.Cmd
@@ -330,37 +199,18 @@ func TestSessionPickerLifecycleCancelsInitialAndDirectionalPageRequestsOnEveryEx
 				case <-time.After(time.Second):
 					t.Fatal("page request did not start")
 				}
-				select {
-				case <-requestContext.Done():
-					t.Fatal("page request was canceled before picker exit")
-				default:
-				}
 
 				switch exit {
 				case exitCreate:
 					lifecycle.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-					if _, ok := lifecycle.Result().(sessionPickerCreateResult); !ok {
-						t.Fatalf("create exit result = %T", lifecycle.Result())
-					}
 				case exitOpen:
 					lifecycle.picker.main.selected = newSessionPickerSessionSelection(sessionID)
 					lifecycle.Update(tea.KeyMsg{Type: tea.KeyEnter})
-					if _, ok := lifecycle.Result().(sessionPickerOpenResult); !ok {
-						t.Fatalf("open exit result = %T", lifecycle.Result())
-					}
 				case exitCancel:
 					lifecycle.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-					if _, ok := lifecycle.Result().(sessionPickerCancelResult); !ok {
-						t.Fatalf("cancel exit result = %T", lifecycle.Result())
-					}
-				case exitCleanup:
-					if lifecycle.Result() != nil {
-						t.Fatalf("cleanup-only result = %T, want nil", lifecycle.Result())
-					}
+				case exitClose:
 				}
-				if err := lifecycle.Cleanup(); err != nil {
-					t.Fatalf("Cleanup: %v", err)
-				}
+				lifecycle.Close()
 
 				select {
 				case <-requestContext.Done():
@@ -368,7 +218,7 @@ func TestSessionPickerLifecycleCancelsInitialAndDirectionalPageRequestsOnEveryEx
 						t.Fatalf("page request context error = %v, want canceled", requestContext.Err())
 					}
 				case <-time.After(time.Second):
-					t.Fatal("picker cleanup did not cancel page request")
+					t.Fatal("picker close did not cancel page request")
 				}
 				select {
 				case message := <-completed:

@@ -792,27 +792,27 @@ func TestNewRuntimeWiringRejectsEmptyModelAfterBypassingConfigDefaults(t *testin
 	}
 }
 
-func TestRuntimeWiringUsesResolvedParentAndSubagentSkillsPolicies(t *testing.T) {
+func TestRuntimeWiringUsesResolvedParentAndSubagentPerSkillPolicies(t *testing.T) {
 	tests := []struct {
-		name             string
-		globalEnabled    bool
-		roleEnabled      bool
-		wantParentSkills bool
-		wantRoleSkills   bool
+		name               string
+		globalSkillEnabled bool
+		roleSkillEnabled   bool
+		wantParentSkills   bool
+		wantRoleSkills     bool
 	}{
 		{
-			name:             "role disables globally enabled skills",
-			globalEnabled:    true,
-			roleEnabled:      false,
-			wantParentSkills: true,
-			wantRoleSkills:   false,
+			name:               "role disables globally enabled skill",
+			globalSkillEnabled: true,
+			roleSkillEnabled:   false,
+			wantParentSkills:   true,
+			wantRoleSkills:     false,
 		},
 		{
-			name:             "role re-enables globally disabled skills",
-			globalEnabled:    false,
-			roleEnabled:      true,
-			wantParentSkills: false,
-			wantRoleSkills:   true,
+			name:               "role re-enables globally disabled skill",
+			globalSkillEnabled: false,
+			roleSkillEnabled:   true,
+			wantParentSkills:   false,
+			wantRoleSkills:     true,
 		},
 	}
 
@@ -821,7 +821,7 @@ func TestRuntimeWiringUsesResolvedParentAndSubagentSkillsPolicies(t *testing.T) 
 			configRoot := t.TempDir()
 			workspace := t.TempDir()
 			configPath := filepath.Join(configRoot, "config.toml")
-			configBody := fmt.Sprintf("[skills]\nenabled = %t\n\n[subagents.worker.skills]\nenabled = %t\n", tt.globalEnabled, tt.roleEnabled)
+			configBody := fmt.Sprintf("[skills]\nworkspace-skill = %t\n\n[subagents.worker.skills]\nworkspace-skill = %t\n", tt.globalSkillEnabled, tt.roleSkillEnabled)
 			if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
@@ -857,8 +857,8 @@ func TestRuntimeWiringUsesResolvedParentAndSubagentSkillsPolicies(t *testing.T) 
 
 			parentRequest, parentWarning := runResolvedSkillsRequest(t, app, parentStore, workspace, configRoot)
 			roleRequest, roleWarning := runResolvedSkillsRequest(t, app, roleStore, workspace, configRoot)
-			assertSkillsRequestState(t, parentRequest, parentWarning, tt.wantParentSkills)
-			assertSkillsRequestState(t, roleRequest, roleWarning, tt.wantRoleSkills)
+			assertSkillsRequestState(t, parentRequest, parentWarning, tt.wantParentSkills, true)
+			assertSkillsRequestState(t, roleRequest, roleWarning, tt.wantRoleSkills, true)
 		})
 	}
 }
@@ -1174,7 +1174,7 @@ func runResolvedSkillsRequest(t *testing.T, app config.App, store *session.Store
 	return client.LastRequest(), hasWarning
 }
 
-func assertSkillsRequestState(t *testing.T, request llm.Request, hasWarning bool, wantSkills bool) {
+func assertSkillsRequestState(t *testing.T, request llm.Request, hasWarning bool, wantSkills bool, wantWarning bool) {
 	t.Helper()
 	foundSkills := false
 	for _, message := range llm.MessagesFromItems(request.Items) {
@@ -1186,8 +1186,8 @@ func assertSkillsRequestState(t *testing.T, request llm.Request, hasWarning bool
 	if foundSkills != wantSkills {
 		t.Fatalf("skills context present = %t, want %t; messages=%+v", foundSkills, wantSkills, llm.MessagesFromItems(request.Items))
 	}
-	if hasWarning != wantSkills {
-		t.Fatalf("skill discovery warning present = %t, want %t", hasWarning, wantSkills)
+	if hasWarning != wantWarning {
+		t.Fatalf("skill discovery warning present = %t, want %t", hasWarning, wantWarning)
 	}
 }
 
@@ -1198,7 +1198,7 @@ func newRuntimeWireToolRegistry(t *testing.T, workspace string, enabled ...tools
 
 func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Logger, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
-	registry, broker, _, err := BuildToolRegistry(LocalToolRegistryOptions{
+	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:       workspace,
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
@@ -1209,12 +1209,12 @@ func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Log
 	if err != nil {
 		t.Fatalf("build tool registry: %v", err)
 	}
-	return registry, broker
+	return binding.Registry(), broker
 }
 
 func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, configRoot string, allowNonCwdEdits bool, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
-	registry, broker, _, err := BuildToolRegistry(LocalToolRegistryOptions{
+	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:       workspace,
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
@@ -1226,7 +1226,7 @@ func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, config
 	if err != nil {
 		t.Fatalf("build tool registry: %v", err)
 	}
-	return registry, broker
+	return binding.Registry(), broker
 }
 
 func newRuntimeWireBinding(t *testing.T, workspace string, enabled ...toolspec.ID) *LocalToolRegistryBinding {

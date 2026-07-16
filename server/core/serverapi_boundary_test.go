@@ -212,11 +212,6 @@ func isAllowedServerAPIInterfaceName(name string) bool {
 }
 
 func isServerOwnedExecutionTypeName(name string) bool {
-	switch name {
-	case "SessionInitialInputPolicyKind", "SessionInitialInputPolicy",
-		"SessionLifecycleResultKind", "SessionLifecycleResult":
-		return false
-	}
 	if name == "SessionRuntimeReleaseClosePolicy" {
 		return false
 	}

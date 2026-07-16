@@ -11,84 +11,55 @@ type compactionCarryoverCoordinator struct {
 	engine *Engine
 }
 
-type postCompactionMessage struct {
-	message                  llm.Message
-	pendingHandoffFutureText string
-}
-
 func newCompactionCarryoverCoordinator(engine *Engine) compactionCarryoverCoordinator {
 	return compactionCarryoverCoordinator{engine: engine}
 }
 
-func manualCompactionCarryoverMessage(text string) llm.Message {
+func manualCompactionCarryoverMessage(text string) (llm.Message, bool) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return llm.Message{}
+		return llm.Message{}, false
 	}
 	content := trimCompactionCarryoverText(trimmed, manualCompactionCarryoverMaxChars)
 	return llm.Message{
 		Role:        llm.RoleDeveloper,
 		MessageType: llm.MessageTypeManualCompactionCarryover,
 		Content:     manualCompactionCarryoverHeader + "\n\n" + content,
-	}
+	}, true
 }
 
-func handoffFutureAgentMessage(text string) llm.Message {
+func handoffFutureAgentMessage(text string) (llm.Message, bool) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return llm.Message{}
+		return llm.Message{}, false
 	}
 	return llm.Message{
 		Role:        llm.RoleDeveloper,
 		MessageType: llm.MessageTypeHandoffFutureMessage,
 		Content:     prompts.FormatHandoffFutureAgentMessage(trimmed),
-	}
+	}, true
 }
 
-func (c compactionCarryoverCoordinator) postCompactionMessages(mode compactionMode, manualCarryover string) []postCompactionMessage {
+func (c compactionCarryoverCoordinator) appendHandoffFutureMessage(stepID string) error {
 	e := c.engine
-	out := make([]postCompactionMessage, 0, 2)
-	if mode == compactionModeManual {
-		if carryover := manualCompactionCarryoverMessage(manualCarryover); strings.TrimSpace(carryover.Content) != "" {
-			out = append(out, postCompactionMessage{message: carryover})
-		}
+	req := e.handoffRuntimeState().RequestSnapshot()
+	if req == nil {
+		return nil
 	}
-	if mode == compactionModeHandoff {
-		if req := e.handoffRuntimeState().RequestSnapshot(); req != nil {
-			if strings.TrimSpace(req.futureAgentMessage) != "" {
-				futureMessage := handoffFutureAgentMessage(req.futureAgentMessage)
-				out = append(out, postCompactionMessage{
-					message:                  futureMessage,
-					pendingHandoffFutureText: req.futureAgentMessage,
-				})
-			}
-		}
+	futureMessage, ok := handoffFutureAgentMessage(req.futureAgentMessage)
+	if !ok {
+		return nil
 	}
-	return out
-}
-
-func (c compactionCarryoverCoordinator) appendPostCompactionMessages(stepID string, messages []postCompactionMessage) error {
-	e := c.engine
-	for _, item := range messages {
-		message := item.message
-		switch message.MessageType {
-		case llm.MessageTypeManualCompactionCarryover:
-			if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
-				return err
-			}
-		default:
-			if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
-				if message.MessageType == llm.MessageTypeHandoffFutureMessage {
-					e.handoffRuntimeState().QueueFutureMessage(item.pendingHandoffFutureText)
-				}
-				return err
-			}
-			if message.MessageType == llm.MessageTypeHandoffFutureMessage {
-				e.handoffRuntimeState().ClearFutureMessage()
-			}
-		}
+	receipt, err := e.steerWithCommitReceipt(
+		stepID,
+		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{futureMessage}),
+	)
+	if receipt.Committed {
+		e.handoffRuntimeState().ClearFutureMessage()
+	} else if err != nil {
+		e.handoffRuntimeState().QueueFutureMessage(req.futureAgentMessage)
 	}
-	return nil
+	return err
 }
 
 func trimCompactionCarryoverText(text string, maxChars int) string {

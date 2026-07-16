@@ -35,21 +35,6 @@ func renderOngoingLiveInputLines(inputs []ongoingLiveInput, width int) []transcr
 	return lines
 }
 
-func renderOngoingLiveTextLines(texts []string, width int, role transcriptrender.StyleRole, faint bool) []transcriptrender.Line {
-	if width <= 0 {
-		width = 80
-	}
-	lines := make([]transcriptrender.Line, 0, len(texts))
-	for _, text := range texts {
-		text = ongoing.TerminalSafeSingleLine(text)
-		if text == "" {
-			continue
-		}
-		lines = append(lines, renderOngoingLiveTextLine(text, width, role, faint))
-	}
-	return lines
-}
-
 func renderOngoingLiveTextLine(text string, width int, role transcriptrender.StyleRole, faint bool) transcriptrender.Line {
 	span := transcriptrender.SemanticSpan(text, role)
 	if faint {

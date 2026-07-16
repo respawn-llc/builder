@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"core/cli/app/internal/status"
-	"core/shared/client"
+	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 
@@ -41,9 +41,8 @@ type sessionLaunchPlan struct {
 	PromptHistory       []string
 	ModelContractLocked bool
 	StatusConfig        uiStatusConfig
-	WorkspaceRoot       string
+	ExecutionTarget     clientui.SessionExecutionTarget
 	Source              config.SourceReport
-	Recovery            *serverapi.SessionPlanRecovery
 }
 
 type resolvedSessionPlanRequest struct {
@@ -51,7 +50,6 @@ type resolvedSessionPlanRequest struct {
 }
 
 type runtimeLaunchPlan struct {
-	Logger      *runLogger
 	Wiring      *runtimeWiring
 	close       func() error
 	detachClose func() error
@@ -77,7 +75,7 @@ func (p *runtimeLaunchPlan) DetachOnlyClose() error {
 type sessionPickerRunner func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
 
 type sessionViewReader interface {
-	GetSessionExecutionWorkspaceRoot(ctx context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error)
+	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
 }
 
 type launchPlannerServer interface {
@@ -85,10 +83,10 @@ type launchPlannerServer interface {
 	Config() config.App
 	PresentationTheme() string
 	ProjectID() string
-	AuthStatusClient() client.AuthStatusClient
-	ProjectViewClient() client.ProjectViewClient
-	SessionLaunchClient() client.SessionLaunchClient
-	SessionViewClient() client.SessionViewClient
+	AuthStatusClient() apicontract.AuthStatusService
+	ProjectViewClient() apicontract.ProjectViewService
+	SessionLaunchClient() apicontract.SessionLaunchService
+	SessionViewClient() apicontract.SessionViewService
 }
 
 type launchPlannerAuthStateProvider interface {
@@ -121,7 +119,7 @@ func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
 
 type projectScopedSessionPageLoader struct {
 	projectID string
-	client    client.ProjectViewClient
+	client    apicontract.ProjectViewService
 }
 
 func (l projectScopedSessionPageLoader) ProjectID() string {
@@ -144,6 +142,10 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
+	executionTarget, err := loadSelectedSessionExecutionTarget(ctx, p.server.SessionViewClient(), resp.Plan.SessionID)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
 	enabledTools := make([]toolspec.ID, 0, len(resp.Plan.EnabledToolIDs))
 	for _, raw := range resp.Plan.EnabledToolIDs {
 		if id, ok := toolspec.ParseID(raw); ok {
@@ -162,7 +164,8 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{
-			WorkspaceRoot:   resp.Plan.WorkspaceRoot,
+			WorkspaceRoot:   executionTarget.EffectiveWorkdir,
+			ExecutionTarget: executionTarget,
 			PersistenceRoot: cfg.PersistenceRoot,
 			SessionViews:    p.server.SessionViewClient(),
 			Settings:        resp.Plan.ActiveSettings,
@@ -172,9 +175,8 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 			AuthStatePath:   authState.Path,
 			OwnsServer:      p.server.OwnsServer(),
 		},
-		WorkspaceRoot: resp.Plan.WorkspaceRoot,
-		Source:        resp.Plan.Source,
-		Recovery:      resp.Plan.Recovery,
+		ExecutionTarget: executionTarget,
+		Source:          resp.Plan.Source,
 	}, nil
 }
 
@@ -189,22 +191,15 @@ func launchPlannerAuthState(server launchPlannerServer) launchPlannerAuthStateMe
 	}
 }
 
-func loadSelectedSessionWorkspaceRoot(ctx context.Context, sessionViews sessionViewReader, sessionID string) (string, error) {
+func loadSelectedSessionExecutionTarget(ctx context.Context, sessionViews sessionViewReader, sessionID string) (clientui.SessionExecutionTarget, error) {
 	if sessionViews == nil {
-		return "", errors.New("session view client is required")
+		return clientui.SessionExecutionTarget{}, errors.New("session view client is required")
 	}
-	typedSessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	resp, err := sessionViews.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: strings.TrimSpace(sessionID)})
 	if err != nil {
-		return "", err
+		return clientui.SessionExecutionTarget{}, err
 	}
-	resp, err := sessionViews.GetSessionExecutionWorkspaceRoot(ctx, serverapi.SessionExecutionWorkspaceRootRequest{SessionID: typedSessionID})
-	if err != nil {
-		return "", err
-	}
-	if err := resp.Validate(); err != nil {
-		return "", err
-	}
-	return resp.WorkspaceRoot, nil
+	return clientui.NormalizeSessionExecutionTarget(resp.MainView.Session.ExecutionTarget), nil
 }
 
 func (p *launchPlanner) PrepareRuntime(ctx context.Context, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {

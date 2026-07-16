@@ -18,6 +18,7 @@ import (
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/sessionenv"
@@ -364,13 +365,14 @@ func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T
 		t.Fatalf("persisted goal after rejected overwrite = %+v", goal)
 	}
 
+	shellRequestID := runtimeids.NewRuntimeClientRequestID()
 	if err := remote.SubmitUserShellCommand(context.Background(), serverapi.RuntimeSubmitUserShellCommandRequest{
-		ClientRequestID: "shell-goal-complete-e2e",
+		ClientRequestID: shellRequestID.String(),
 		SessionID:       store.Meta().SessionID,
 		Command:         shellQuote(kentPath) + " goal complete --confirm",
 		OperationRef: clientui.RuntimeOperationRef{
 			Kind:            clientui.RuntimeOperationKindUserShell,
-			ClientRequestID: "shell-goal-complete-e2e",
+			ClientRequestID: shellRequestID,
 		},
 	}); err != nil {
 		t.Fatalf("shell goal complete: %v", err)

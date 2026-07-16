@@ -231,7 +231,7 @@ func TestResolveSessionActionLogoutUsesBootstrapAuthInteractor(t *testing.T) {
 	if got := requireSessionOpenDestination(t, resolved); got != store.Meta().SessionID {
 		t.Fatalf("expected session to continue in place, got %q", got)
 	}
-	if resolved.Kind() != serverapi.SessionLifecycleResultLaunch {
+	if resolved.Kind() != serverapi.SessionDirectiveLaunch {
 		t.Fatalf("logout result kind = %q, want launch", resolved.Kind())
 	}
 
@@ -387,8 +387,8 @@ func TestResolveSessionActionLogoutRetryPreservesStoredAuthUntilSuccess(t *testi
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if resolved.IsZero() {
-		t.Fatal("expected successful retry to continue session")
+	if err := resolved.Validate(); err != nil {
+		t.Fatalf("expected successful retry directive: %v", err)
 	}
 	if pickCalls != 2 {
 		t.Fatalf("expected one retry, got %d picker calls", pickCalls)
@@ -619,8 +619,8 @@ func TestResolveSessionActionLoginSkipClearsStoredAuthOnOptionalAuthSetup(t *tes
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
-	if resolved.IsZero() {
-		t.Fatal("expected login skip flow to continue")
+	if err := resolved.Validate(); err != nil {
+		t.Fatalf("expected login skip directive: %v", err)
 	}
 
 	state, err := mgr.StoredState(ctx)

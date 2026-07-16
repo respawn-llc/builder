@@ -8,147 +8,6 @@ pub mod main_view;
 pub use main_view::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct Event {
-    #[serde(rename = "Sequence")]
-    pub sequence: u64,
-    #[serde(rename = "Kind")]
-    pub kind: EventKind,
-    #[serde(rename = "StepID")]
-    pub step_id: String,
-    #[serde(rename = "RecoveryCause")]
-    pub recovery_cause: TranscriptRecoveryCause,
-    #[serde(rename = "CommittedTranscriptChanged")]
-    pub committed_transcript_changed: bool,
-    #[serde(rename = "Error")]
-    pub error: String,
-    #[serde(rename = "AssistantDelta")]
-    pub assistant_delta: String,
-    #[serde(rename = "ReasoningDelta")]
-    pub reasoning_delta: Option<ReasoningDelta>,
-    #[serde(rename = "UserMessage")]
-    pub user_message: String,
-    #[serde(
-        rename = "UserMessageBatch",
-        default,
-        deserialize_with = "null_to_default"
-    )]
-    pub user_message_batch: Vec<String>,
-    #[serde(
-        rename = "UserMessageBatchQueueItemIDs",
-        default,
-        deserialize_with = "null_to_default"
-    )]
-    pub user_message_batch_queue_item_ids: Vec<String>,
-    #[serde(
-        rename = "TranscriptEntries",
-        default,
-        deserialize_with = "null_to_default"
-    )]
-    pub transcript_entries: Vec<ChatEntry>,
-    #[serde(rename = "Compaction")]
-    pub compaction: Option<CompactionStatus>,
-    #[serde(rename = "CacheWarning")]
-    pub cache_warning: Option<CacheWarning>,
-    #[serde(rename = "CacheWarningVisibility")]
-    pub cache_warning_visibility: EntryVisibility,
-    #[serde(rename = "RunState")]
-    pub run_state: Option<RunState>,
-    #[serde(rename = "ContextUsage")]
-    pub context_usage: Option<RuntimeContextUsage>,
-    #[serde(rename = "Background")]
-    pub background: Option<BackgroundShellEvent>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub enum EventKind {
-    #[serde(rename = "conversation_updated")]
-    ConversationUpdated,
-    #[serde(rename = "stream_gap")]
-    StreamGap,
-    #[serde(rename = "assistant_delta")]
-    AssistantDelta,
-    #[serde(rename = "assistant_delta_reset")]
-    AssistantDeltaReset,
-    #[serde(rename = "streaming_error_updated")]
-    OngoingErrorUpdated,
-    #[serde(rename = "reasoning_delta")]
-    ReasoningDelta,
-    #[serde(rename = "reasoning_delta_reset")]
-    ReasoningDeltaReset,
-    #[serde(rename = "assistant_message")]
-    AssistantMessage,
-    #[serde(rename = "model_response_received")]
-    ModelResponse,
-    #[serde(rename = "user_message_flushed")]
-    UserMessageFlushed,
-    #[serde(rename = "tool_call_started")]
-    ToolCallStarted,
-    #[serde(rename = "tool_call_completed")]
-    ToolCallCompleted,
-    #[serde(rename = "reviewer_started")]
-    ReviewerStarted,
-    #[serde(rename = "reviewer_completed")]
-    ReviewerCompleted,
-    #[serde(rename = "in_flight_clear_failed")]
-    InFlightClearFailed,
-    #[serde(rename = "context_compaction_started")]
-    CompactionStarted,
-    #[serde(rename = "context_compaction_completed")]
-    CompactionCompleted,
-    #[serde(rename = "context_compaction_failed")]
-    CompactionFailed,
-    #[serde(rename = "cache_warning")]
-    CacheWarning,
-    #[serde(rename = "local_entry_added")]
-    LocalEntryAdded,
-    #[serde(rename = "run_state_changed")]
-    RunStateChanged,
-    #[serde(rename = "background_updated")]
-    BackgroundUpdated,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub enum TranscriptRecoveryCause {
-    #[serde(rename = "")]
-    None,
-    #[serde(rename = "stream_gap")]
-    StreamGap,
-    #[serde(rename = "hydrate_retry")]
-    HydrateRetry,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ReasoningDelta {
-    #[serde(rename = "Key")]
-    pub key: String,
-    #[serde(rename = "Role")]
-    pub role: String,
-    #[serde(rename = "Text")]
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct CompactionStatus {
-    #[serde(rename = "Mode")]
-    pub mode: String,
-    #[serde(rename = "Count")]
-    pub count: i32,
-    #[serde(rename = "Error")]
-    pub error: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct CacheWarning {
-    #[serde(default)]
-    pub scope: String,
-    pub reason: String,
-    #[serde(default)]
-    pub cache_key: String,
-    #[serde(default)]
-    pub lost_input_tokens: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RunState {
     #[serde(rename = "Lifecycle")]
     pub lifecycle: RunLifecycle,
@@ -263,70 +122,6 @@ pub struct RuntimeContextUsage {
     pub has_cache_hit_percentage: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct BackgroundShellEvent {
-    #[serde(rename = "Type")]
-    pub kind: String,
-    #[serde(rename = "ID")]
-    pub id: String,
-    #[serde(rename = "State")]
-    pub state: String,
-    #[serde(rename = "Command")]
-    pub command: String,
-    #[serde(rename = "Workdir")]
-    pub workdir: String,
-    #[serde(rename = "LogPath")]
-    pub log_path: String,
-    #[serde(rename = "NoticeText")]
-    pub notice_text: String,
-    #[serde(rename = "CompactText")]
-    pub compact_text: String,
-    #[serde(rename = "Preview")]
-    pub preview: String,
-    #[serde(rename = "Removed")]
-    pub removed: i32,
-    #[serde(rename = "ExitCode")]
-    pub exit_code: Option<i32>,
-    #[serde(rename = "UserRequestedKill")]
-    pub user_requested_kill: bool,
-    #[serde(rename = "NoticeSuppressed")]
-    pub notice_suppressed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ChatEntry {
-    #[serde(rename = "Visibility")]
-    pub visibility: EntryVisibility,
-    #[serde(rename = "RollbackTargetID")]
-    pub rollback_target_id: String,
-    #[serde(rename = "Role")]
-    pub role: String,
-    #[serde(rename = "Text")]
-    pub text: String,
-    #[serde(
-        rename = "CondensedText",
-        default,
-        skip_serializing_if = "String::is_empty"
-    )]
-    pub ongoing_text: String,
-    #[serde(rename = "Phase")]
-    pub phase: String,
-    #[serde(rename = "MessageType")]
-    pub message_type: String,
-    #[serde(rename = "SourcePath")]
-    pub source_path: String,
-    #[serde(rename = "CompactLabel")]
-    pub compact_label: String,
-    #[serde(rename = "ToolResultSummary")]
-    pub tool_result_summary: String,
-    #[serde(rename = "ToolCallID")]
-    pub tool_call_id: String,
-    #[serde(rename = "NoticeID")]
-    pub notice_id: String,
-    #[serde(rename = "ToolCall")]
-    pub tool_call: Option<ToolCallMeta>,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct TranscriptWindow(String);
@@ -394,26 +189,34 @@ pub struct TranscriptCommittedRow {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TranscriptUserRow {
+    #[serde(rename = "StepID")]
+    pub step_id: Uuid,
     #[serde(rename = "Text")]
     pub text: String,
     #[serde(rename = "CondensedText")]
-    pub condensed_text: String,
+    pub condensed_text: Option<String>,
+    #[serde(rename = "RollbackTargetID")]
+    pub rollback_target_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TranscriptAssistantRow {
+    #[serde(rename = "StepID")]
+    pub step_id: Uuid,
+    #[serde(rename = "StreamID")]
+    pub stream_id: Option<Uuid>,
     #[serde(rename = "Text")]
     pub text: String,
     #[serde(rename = "CondensedText")]
-    pub condensed_text: String,
+    pub condensed_text: Option<String>,
     #[serde(rename = "Phase")]
     pub phase: String,
-    #[serde(rename = "StreamID")]
-    pub stream_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TranscriptToolRow {
+    #[serde(rename = "StepID")]
+    pub step_id: Uuid,
     #[serde(rename = "ToolCallID")]
     pub tool_call_id: String,
     #[serde(rename = "ToolName")]
@@ -423,49 +226,57 @@ pub struct TranscriptToolRow {
     #[serde(rename = "IsError")]
     pub is_error: bool,
     #[serde(rename = "ResultSummary")]
-    pub result_summary: String,
+    pub result_summary: Option<String>,
     #[serde(rename = "CondensedText")]
-    pub condensed_text: String,
-    #[serde(rename = "ToolPresentation")]
-    pub tool_presentation: Option<ToolCallMeta>,
+    pub condensed_text: Option<String>,
+    #[serde(rename = "Presentation")]
+    pub presentation: Option<ToolCallMeta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TranscriptNoticeRow {
+    #[serde(rename = "StepID")]
+    pub step_id: Option<Uuid>,
     #[serde(rename = "Reason")]
     pub reason: TranscriptNoticeReason,
     #[serde(rename = "Severity")]
     pub severity: TranscriptNoticeSeverity,
-    #[serde(rename = "Data")]
-    pub data: TranscriptNoticeData,
-    #[serde(rename = "Diagnostic")]
-    pub diagnostic: Option<TranscriptDiagnosticData>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct TranscriptNoticeData {
+    #[serde(rename = "MessageType")]
+    pub message_type: Option<String>,
     #[serde(rename = "LegacyText")]
     pub legacy_text: Option<String>,
     #[serde(rename = "NoticeID")]
     pub notice_id: Option<String>,
-    #[serde(rename = "CacheWarning")]
-    pub cache_warning: Option<TranscriptCacheWarningData>,
-    #[serde(rename = "RuntimeDiagnostic")]
-    pub runtime_diagnostic: Option<TranscriptDiagnosticData>,
-    #[serde(rename = "MessageType")]
-    pub message_type: String,
     #[serde(rename = "SourcePath")]
-    pub source_path: String,
+    pub source_path: Option<String>,
+    #[serde(rename = "Worktree")]
+    pub worktree: Option<TranscriptWorktreeContext>,
+    #[serde(rename = "CacheWarning")]
+    pub cache_warning: Option<TranscriptCacheWarning>,
+    #[serde(rename = "Diagnostic")]
+    pub diagnostic: Option<TranscriptDiagnostic>,
+    #[serde(rename = "Background")]
+    pub background: Option<TranscriptBackgroundNoticeIdentity>,
     #[serde(rename = "CondensedText")]
-    pub condensed_text: String,
+    pub condensed_text: Option<String>,
     #[serde(rename = "CompactLabel")]
-    pub compact_label: String,
-    #[serde(rename = "BackgroundExitCode")]
-    pub background_exit_code: Option<i32>,
+    pub compact_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct TranscriptCacheWarningData {
+pub struct TranscriptWorktreeContext {
+    #[serde(rename = "Branch")]
+    pub branch: Option<String>,
+    #[serde(rename = "WorktreePath")]
+    pub worktree_path: String,
+    #[serde(rename = "WorkspaceRoot")]
+    pub workspace_root: String,
+    #[serde(rename = "EffectiveCwd")]
+    pub effective_cwd: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptCacheWarning {
     #[serde(rename = "Scope")]
     pub scope: String,
     #[serde(rename = "Reason")]
@@ -477,11 +288,21 @@ pub struct TranscriptCacheWarningData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct TranscriptDiagnosticData {
+pub struct TranscriptDiagnostic {
     #[serde(rename = "Code")]
     pub code: String,
     #[serde(rename = "Detail")]
     pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptBackgroundNoticeIdentity {
+    #[serde(rename = "ActivityID")]
+    pub activity_id: Uuid,
+    #[serde(rename = "ProcessID")]
+    pub process_id: String,
+    #[serde(rename = "ExitCode")]
+    pub exit_code: Option<i32>,
 }
 
 pub type ConversationFreshness = u8;
@@ -530,6 +351,10 @@ pub struct ToolCallMeta {
     pub raw_output_requested: bool,
     #[serde(rename = "OutputTruncated")]
     pub output_truncated: bool,
+    #[serde(rename = "MovedToBackground")]
+    pub moved_to_background: bool,
+    #[serde(rename = "ShellExitCode")]
+    pub shell_exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -578,52 +403,6 @@ pub struct ToolRenderHint {
     pub result_only: bool,
     #[serde(rename = "ShellDialect")]
     pub shell_dialect: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct PendingPromptEvent {
-    #[serde(rename = "Sequence")]
-    pub sequence: u64,
-    #[serde(rename = "Type")]
-    pub event_type: PendingPromptEventType,
-    #[serde(rename = "PromptID")]
-    pub prompt_id: String,
-    #[serde(rename = "SessionID")]
-    pub session_id: String,
-    #[serde(rename = "Question")]
-    pub question: String,
-    #[serde(rename = "Suggestions", default, deserialize_with = "null_to_default")]
-    pub suggestions: Vec<String>,
-    #[serde(rename = "RecommendedOptionIndex")]
-    pub recommended_option_index: i32,
-    #[serde(rename = "Approval")]
-    pub approval: bool,
-    #[serde(
-        rename = "ApprovalOptions",
-        default,
-        deserialize_with = "null_to_default"
-    )]
-    pub approval_options: Vec<ApprovalOption>,
-    #[serde(rename = "CreatedAt")]
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub enum PendingPromptEventType {
-    #[serde(rename = "pending")]
-    Pending,
-    #[serde(rename = "resolved")]
-    Resolved,
-    #[serde(rename = "snapshot_complete")]
-    Snapshot,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ApprovalOption {
-    #[serde(rename = "Decision")]
-    pub decision: ApprovalDecision,
-    #[serde(rename = "Label")]
-    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

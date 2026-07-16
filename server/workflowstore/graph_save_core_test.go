@@ -205,36 +205,11 @@ func hasWorkflowValidationCode(errors []workflow.ValidationError, want workflow.
 
 func TestWorkflowGraphSavePersistsScriptPathOnlyEdit(t *testing.T) {
 	ctx, store, _ := newTestStoreContext(t)
-	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Script Workflow"})
-	if err != nil {
-		t.Fatalf("CreateWorkflow: %v", err)
-	}
-	workflowID := created.ID
+	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/old")
+	scriptID := workflow.NodeID("node-script-" + string(workflowID))
 	def, record, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
-	}
-	start := nodeByKind(t, def, workflow.NodeKindStart)
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	scriptID := workflow.NodeID("node-script")
-	if _, err := store.AddNode(ctx, NodeRecord{ID: scriptID, WorkflowID: workflowID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script", ScriptPath: "scripts/old"}); err != nil {
-		t.Fatalf("AddNode script: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-start", WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
-		t.Fatalf("AddTransitionGroup start: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-start", WorkflowID: workflowID, TransitionGroupID: "group-start", Key: "start", TargetNodeID: scriptID, ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge start: %v", err)
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-done", WorkflowID: workflowID, SourceNodeID: scriptID, TransitionID: "done", DisplayName: "Done"}); err != nil {
-		t.Fatalf("AddTransitionGroup done: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-done", WorkflowID: workflowID, TransitionGroupID: "group-done", Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge done: %v", err)
-	}
-	def, record, err = store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition script: %v", err)
 	}
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 	for index := range req.Nodes {

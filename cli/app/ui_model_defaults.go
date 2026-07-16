@@ -12,9 +12,10 @@ import (
 	"core/shared/theme"
 )
 
-func newUIModelDefaults(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, askEvents <-chan askEvent) *uiModel {
+func newUIModelDefaults(runtimeClient clientui.RuntimeClient) *uiModel {
 	return &uiModel{
-		uiRuntimeFeatureState:           newUIRuntimeFeatureState(runtimeClient, runtimeEvents, askEvents),
+		eventDispatcher:                 newUIEventDispatcher(nil),
+		uiRuntimeFeatureState:           newUIRuntimeFeatureState(runtimeClient),
 		uiInputFeatureState:             newUIInputFeatureState(),
 		uiPresentationFeatureState:      newUIPresentationFeatureState(),
 		uiConversationFeatureState:      newUIConversationFeatureState(),
@@ -24,12 +25,10 @@ func newUIModelDefaults(runtimeClient clientui.RuntimeClient, runtimeEvents <-ch
 	}
 }
 
-func newUIRuntimeFeatureState(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, askEvents <-chan askEvent) uiRuntimeFeatureState {
+func newUIRuntimeFeatureState(runtimeClient clientui.RuntimeClient) uiRuntimeFeatureState {
 	return uiRuntimeFeatureState{
-		engine:        runtimeClient,
-		view:          tui.NewModel(),
-		runtimeEvents: runtimeEvents,
-		askEvents:     askEvents,
+		engine: runtimeClient,
+		view:   tui.NewModel(),
 	}
 }
 
@@ -72,12 +71,11 @@ func newUISessionTransitionFeatureState() uiSessionTransitionFeatureState {
 func newUIStatusFeatureState() uiStatusFeatureState {
 	debug := envFlagEnabled("KENT_DEBUG")
 	return uiStatusFeatureState{
-		statusRepository:      status.NewMemoryRepository(),
-		clipboardPaster:       newSystemClipboardPaster(),
-		clipboardTextCopier:   newSystemClipboardTextCopier(),
-		debugKeys:             envFlagEnabled("KENT_DEBUG_KEYS"),
-		debugMode:             debug,
-		transcriptDiagnostics: envFlagEnabled("KENT_TRANSCRIPT_DIAGNOSTICS"),
+		statusRepository:    status.NewMemoryRepository(),
+		clipboardPaster:     newSystemClipboardPaster(),
+		clipboardTextCopier: newSystemClipboardTextCopier(),
+		debugKeys:           envFlagEnabled("KENT_DEBUG_KEYS"),
+		debugMode:           debug,
 	}
 }
 

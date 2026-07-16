@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/skillcatalog"
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/toolspec"
@@ -420,14 +421,16 @@ func TestCompactionReinjectedSkillsFollowCurrentPolicy(t *testing.T) {
 		wantSkills bool
 	}{
 		{
-			name:   "disabled policy omits skills",
-			policy: config.ResolveSkillPolicy(config.Settings{SkillSubsystem: config.SkillSubsystemDisabled}),
+			name: "all discovered skills disabled omits skills",
+			policy: config.ResolveSkillPolicy(config.Settings{SkillToggles: map[string]bool{
+				"allowed": false,
+				"blocked": false,
+			}}),
 		},
 		{
-			name: "role re-enabled policy applies ordinary toggles",
+			name: "per-skill policy retains enabled skills",
 			policy: config.ResolveSkillPolicy(config.Settings{
-				SkillSubsystem: config.SkillSubsystemEnabled,
-				SkillToggles:   map[string]bool{"blocked": false},
+				SkillToggles: map[string]bool{"blocked": false},
 			}),
 			wantSkills: true,
 		},
@@ -447,7 +450,10 @@ func TestCompactionReinjectedSkillsFollowCurrentPolicy(t *testing.T) {
 			if found != tt.wantSkills {
 				t.Fatalf("skills message present = %t, want %t; messages=%+v", found, tt.wantSkills, messages)
 			}
-			inspection, err := InspectSkills(workspace, "", tt.policy)
+			inspection, err := skillcatalog.Discover(skillcatalog.Options{
+				WorkspaceRoot: workspace,
+				Policy:        tt.policy,
+			})
 			if err != nil {
 				t.Fatalf("inspect skills policy: %v", err)
 			}
@@ -557,7 +563,7 @@ func skillMessageContent(messages []llm.Message) (string, bool) {
 	return "", false
 }
 
-func skillInspectionMatches(inspections []SkillInspection, name string, disabled bool) bool {
+func skillInspectionMatches(inspections []skillcatalog.Inspection, name string, disabled bool) bool {
 	for _, inspection := range inspections {
 		if inspection.Name == name {
 			return inspection.Loaded && inspection.Disabled == disabled

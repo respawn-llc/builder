@@ -9,6 +9,7 @@ import (
 )
 
 type TranscriptLiveToolStart struct {
+	StepID       string
 	ToolCallID   string
 	ToolName     string
 	Presentation *transcript.ToolCallMeta
@@ -73,22 +74,6 @@ func (l *transcriptLiveToolLedger) AbortAll() []TranscriptLiveToolStart {
 	return out
 }
 
-func (l *transcriptLiveToolLedger) Snapshot() []TranscriptLiveToolStart {
-	if l == nil {
-		return nil
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if len(l.inFlight) == 0 {
-		return nil
-	}
-	out := make([]TranscriptLiveToolStart, 0, len(l.inFlight))
-	for _, start := range l.inFlight {
-		out = append(out, cloneTranscriptLiveToolStart(start))
-	}
-	return out
-}
-
 func (l *transcriptLiveToolLedger) Lookup(callID string) (TranscriptLiveToolStart, bool) {
 	if l == nil {
 		return TranscriptLiveToolStart{}, false
@@ -128,6 +113,7 @@ func (l *transcriptLiveToolLedger) Seed(starts []TranscriptLiveToolStart) {
 
 func normalizeTranscriptLiveToolStart(start TranscriptLiveToolStart) (TranscriptLiveToolStart, error) {
 	normalized := TranscriptLiveToolStart{
+		StepID:       strings.TrimSpace(start.StepID),
 		ToolCallID:   strings.TrimSpace(start.ToolCallID),
 		ToolName:     strings.TrimSpace(start.ToolName),
 		Presentation: cloneTranscriptToolCallMeta(start.Presentation),
@@ -138,8 +124,9 @@ func normalizeTranscriptLiveToolStart(start TranscriptLiveToolStart) (Transcript
 	return normalized, nil
 }
 
-func transcriptLiveToolStartFromCall(call llm.ToolCall) TranscriptLiveToolStart {
+func transcriptLiveToolStartFromCall(stepID string, call llm.ToolCall) TranscriptLiveToolStart {
 	return TranscriptLiveToolStart{
+		StepID:       strings.TrimSpace(stepID),
 		ToolCallID:   strings.TrimSpace(call.ID),
 		ToolName:     strings.TrimSpace(call.Name),
 		Presentation: decodeToolCallMeta(call),
@@ -148,6 +135,7 @@ func transcriptLiveToolStartFromCall(call llm.ToolCall) TranscriptLiveToolStart 
 
 func cloneTranscriptLiveToolStart(start TranscriptLiveToolStart) TranscriptLiveToolStart {
 	return TranscriptLiveToolStart{
+		StepID:       start.StepID,
 		ToolCallID:   start.ToolCallID,
 		ToolName:     start.ToolName,
 		Presentation: cloneTranscriptToolCallMeta(start.Presentation),

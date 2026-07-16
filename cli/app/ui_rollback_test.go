@@ -12,7 +12,6 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/sessionview"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 
@@ -892,9 +891,7 @@ func TestSessionReplacementDiscardsRollbackStateWithoutRestoringOldTranscript(t 
 				model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 			}
 
-			cmd := model.runtimeAdapter().applyProjectedSessionMetadata(clientui.RuntimeSessionView{
-				SessionID: detailTestReplacementSessionID,
-			})
+			cmd := applyDetailTestSessionReplacement(t, model, detailTestReplacementSessionID)
 
 			if model.rollback.isActive() || model.rollback.isAwaitingActivation() ||
 				model.rollback.restoreDetailTranscript != nil {
@@ -998,7 +995,7 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 		}
 	})
 	resolver := sessionview.NewStaticRuntimeResolver(restartedEngine)
-	reads := client.NewLoopbackSessionViewClient(sessionview.NewService(nil, resolver, nil))
+	reads := sessionview.NewService(nil, resolver, nil)
 	model := newSizedProjectedClosedUIModel(
 		newUIRuntimeClientFromEngine(restartedEngine),
 		100,

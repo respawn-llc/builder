@@ -10,9 +10,8 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/analyzer"
-	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/google/uuid"
 )
 
 func TestRenderPaintsLiveAreaWhenMinimumFits(t *testing.T) {
@@ -103,13 +102,10 @@ func TestRenderHidesEntireLiveAreaWhenMinimumDoesNotFit(t *testing.T) {
 func TestRenderAddsAssistantTailOnlyFromSurfaceState(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
-	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageAssistantDelta,
-		AssistantDelta: &clientui.TranscriptAssistantDelta{
-			StreamID: uuid.New(),
-			Delta:    "streaming commentary",
-		},
-	}, FrameInput{Size: Size{Width: 30, Height: 4}}); err != nil {
+	if _, err := surface.ApplyTerminalMessage(
+		assistantDeltaMessage(runtimeids.NewAssistantStreamID(), "streaming commentary"),
+		FrameInput{Size: Size{Width: 30, Height: 4}},
+	); err != nil {
 		t.Fatalf("apply assistant delta: %v", err)
 	}
 	out.Reset()

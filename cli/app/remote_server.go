@@ -7,6 +7,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/remoteattach"
+	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -121,7 +122,7 @@ func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID st
 	return next, nil
 }
 
-func (s *remoteAppServer) AuthStatusClient() client.AuthStatusClient {
+func (s *remoteAppServer) AuthStatusClient() apicontract.AuthStatusService {
 	if s == nil {
 		return nil
 	}
@@ -140,17 +141,13 @@ func (s *remoteAppServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 		return runtimeAttachmentClients{}
 	}
 	return runtimeAttachmentClients{
-		ApprovalViews:                   s.remote,
-		AskViews:                        s.remote,
 		Attention:                       s.remote,
 		AttentionNotificationsSupported: s.remote.Identity().Capabilities.AttentionNotifications,
 		ProcessControls:                 s.remote,
 		ProcessOutput:                   s.remote,
 		ProcessViews:                    s.remote,
-		PromptActivity:                  s.remote,
 		PromptControl:                   s.remote,
 		RuntimeControls:                 s.remote,
-		SessionActivity:                 s.remote,
 		SessionTranscript:               s.remote,
 		SessionRuntime:                  s.remote,
 		SessionViews:                    s.remote,
@@ -158,28 +155,28 @@ func (s *remoteAppServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 	}
 }
 
-func (s *remoteAppServer) ProjectViewClient() client.ProjectViewClient {
+func (s *remoteAppServer) ProjectViewClient() apicontract.ProjectViewService {
 	if s == nil {
 		return nil
 	}
 	return s.remote
 }
 
-func (s *remoteAppServer) SessionLaunchClient() client.SessionLaunchClient {
+func (s *remoteAppServer) SessionLaunchClient() apicontract.SessionLaunchService {
 	if s == nil {
 		return nil
 	}
 	return s.remote
 }
 
-func (s *remoteAppServer) SessionLifecycleClient() client.SessionLifecycleClient {
+func (s *remoteAppServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if s == nil {
 		return nil
 	}
 	return s.remote
 }
 
-func (s *remoteAppServer) SessionViewClient() client.SessionViewClient {
+func (s *remoteAppServer) SessionViewClient() apicontract.SessionViewService {
 	if s == nil {
 		return nil
 	}

@@ -38,7 +38,6 @@ import (
 	"core/server/workflowview"
 	"core/server/worktree"
 	rpccontract "core/shared/apicontract"
-	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -142,14 +141,13 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	projectService.WithRuntimeActivitySources(runtimeRegistry, sessionRuntimeService)
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
 	promptControlService := promptcontrol.NewPromptControlService(runtimeRegistry)
-	promptActivityService := promptcontrol.NewPromptActivityService(runtimeRegistry)
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
 	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithOperationCoordinator(runtimeOperations).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
 	gitInspector := worktree.NewGitInspector(nil)
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript, SetupTimeoutSeconds: cfg.Settings.Worktrees.SetupTimeoutSeconds})
-	projectViews := client.NewLoopbackProjectViewClient(projectService)
+	projectViews := projectService
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg)
@@ -164,7 +162,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter)
-	sessionActivityService := sessionservice.NewSessionActivityService(runtimeRegistry)
 	var workflowRuntimeStarter *workflowrunner.Starter
 	var workflowScheduler *workflowrunner.SchedulerService
 	cleanupNewFailure := func() {
@@ -228,14 +225,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		processService:          processService,
 		processOutputService:    processOutputService,
 		promptControlService:    promptControlService,
-		promptActivityService:   promptActivityService,
-		attentionService:        client.NewLoopbackAttentionNotificationClient(runtimeRegistry),
+		attentionService:        runtimeRegistry,
 		runtimeControlService:   runtimeControlService,
 		serverStatusService:     serverStatusService,
 		sessionRuntimeService:   sessionRuntimeService,
 		sessionViewService:      sessionViewService,
 		sessionLifecycleService: sessionLifecycleService,
-		sessionActivityService:  sessionActivityService,
 		updateStatusService:     updateStatusService,
 		workflowService:         workflowService,
 		workflowScheduler:       workflowScheduler,

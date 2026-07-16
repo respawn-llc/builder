@@ -88,8 +88,8 @@ func buildLocalRuntimeHandler(def tools.Definition, ctx localToolRuntimeContext)
 	})
 }
 
-func buildToolRegistry(workspaceRoot string, ownerSessionID string, enabled []toolspec.ID, minimumExecToBgTime time.Duration, shellOutputMaxChars int, allowNonCwdEdits bool, supportsVision bool, logger *runLogger, background *shelltool.Manager) (*tools.Registry, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
-	return runtimewire.BuildToolRegistry(runtimewire.LocalToolRegistryOptions{
+func buildToolRegistry(workspaceRoot string, ownerSessionID string, enabled []toolspec.ID, minimumExecToBgTime time.Duration, shellOutputMaxChars int, allowNonCwdEdits bool, supportsVision bool, logger runtimewire.Logger, background *shelltool.Manager) (*tools.Registry, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
+	binding, broker, background, err := runtimewire.NewLocalToolRegistryBinding(runtimewire.LocalToolRegistryOptions{
 		WorkspaceRoot:       workspaceRoot,
 		OwnerSessionID:      ownerSessionID,
 		Enabled:             enabled,
@@ -100,4 +100,8 @@ func buildToolRegistry(workspaceRoot string, ownerSessionID string, enabled []to
 		Logger:              logger,
 		Background:          background,
 	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return binding.Registry(), broker, background, nil
 }

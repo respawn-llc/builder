@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -185,9 +186,11 @@ func TestDetailPrependedPagePreservesLineScrollBoundary(t *testing.T) {
 
 func TestDetailPrependedPageIgnoresHiddenEntriesWhenPreservingBoundary(t *testing.T) {
 	model := NewModel()
+	hiddenOlderLabel := "hidden older"
 	hiddenOlder := detailNotice(clientui.TranscriptNoticeRow{
-		Severity: clientui.TranscriptNoticeInfo,
-		Data:     clientui.TranscriptNoticeData{CompactLabel: "hidden older"},
+		Reason:       clientui.TranscriptNoticeLegacyUntypedNotice,
+		Severity:     clientui.TranscriptNoticeInfo,
+		CompactLabel: &hiddenOlderLabel,
 	})
 	hiddenOlder.Visibility = clientui.EntryVisibilityHidden
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
@@ -239,14 +242,18 @@ func TestDetailPrependedPageIgnoresHiddenEntriesWhenPreservingBoundary(t *testin
 // rendered line, not re-fire a page request when content already sits above.
 func TestDetailPrependedAllHiddenPageDoesNotJumpToTopOrRefire(t *testing.T) {
 	model := NewModel()
+	hiddenOneLabel := "hidden one"
 	hiddenOne := detailNotice(clientui.TranscriptNoticeRow{
-		Severity: clientui.TranscriptNoticeInfo,
-		Data:     clientui.TranscriptNoticeData{CompactLabel: "hidden one"},
+		Reason:       clientui.TranscriptNoticeLegacyUntypedNotice,
+		Severity:     clientui.TranscriptNoticeInfo,
+		CompactLabel: &hiddenOneLabel,
 	})
 	hiddenOne.Visibility = clientui.EntryVisibilityHidden
+	hiddenTwoLabel := "hidden two"
 	hiddenTwo := detailNotice(clientui.TranscriptNoticeRow{
-		Severity: clientui.TranscriptNoticeInfo,
-		Data:     clientui.TranscriptNoticeData{CompactLabel: "hidden two"},
+		Reason:       clientui.TranscriptNoticeLegacyUntypedNotice,
+		Severity:     clientui.TranscriptNoticeInfo,
+		CompactLabel: &hiddenTwoLabel,
 	})
 	hiddenTwo.Visibility = clientui.EntryVisibilityHidden
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
@@ -499,10 +506,10 @@ func TestDetailFrontEvictionPreservesExpandedWrappedPatchLine(t *testing.T) {
 		ToolCallID: "3d5e4cfb-f04f-4b14-a623-c6fa70c5caa7",
 		ToolName:   "patch",
 		Text:       renderedPatch.DetailText(),
-		ToolPresentation: &clientui.ToolCallMeta{
+		Presentation: &transcript.ToolCallMeta{
 			ToolName:    "patch",
 			PatchRender: &renderedPatch,
-			RenderHint:  &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff},
+			RenderHint:  &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
 		},
 	})
 	keptRows := []clientui.TranscriptCommittedRow{wrappedMarkdown, structuredPatch}
@@ -532,11 +539,13 @@ func TestDetailFrontEvictionPreservesExpandedWrappedPatchLine(t *testing.T) {
 	const relativePatchLine = 2
 	model.detailScroll = oldPatchRange.first + relativePatchLine
 
+	newerNoticeLabel := "newer notice"
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
 		Page: clientui.TranscriptPage{
 			Entries: append(keptRows, detailNotice(clientui.TranscriptNoticeRow{
-				Severity: clientui.TranscriptNoticeInfo,
-				Data:     clientui.TranscriptNoticeData{CompactLabel: "newer notice"},
+				Reason:       clientui.TranscriptNoticeLegacyUntypedNotice,
+				Severity:     clientui.TranscriptNoticeInfo,
+				CompactLabel: &newerNoticeLabel,
 			})),
 		},
 		Anchor:              DetailTranscriptAnchorPreserve,

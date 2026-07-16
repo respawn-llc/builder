@@ -3,14 +3,15 @@ package runlog
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"core/server/runtime"
-	"core/shared/clientui"
 	"core/shared/transcriptdiag"
 )
 
@@ -79,31 +80,62 @@ func (l *RunLogger) Logf(format string, args ...any) {
 	}
 }
 
-func FormatTranscriptProjectionDiagnostic(sessionID string, evt clientui.Event) string {
+func FormatConfigSourceLines(sources map[string]string) []string {
+	keys := slices.Sorted(maps.Keys(sources))
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", key, strings.TrimSpace(sources[key])))
+	}
+	return lines
+}
+
+func FormatTranscriptRuntimeEventDiagnostic(sessionID string, evt runtime.Event) string {
 	fields := map[string]string{
 		"session_id":            strings.TrimSpace(sessionID),
-		"path":                  "live_event",
+		"path":                  "runtime_event",
 		"kind":                  string(evt.Kind),
 		"step_id":               strings.TrimSpace(evt.StepID),
-		"event_digest":          transcriptdiag.EventDigest(evt),
+		"event_digest":          runtimeEventDigest(evt),
 		"assistant_delta_chars": fmt.Sprintf("%d", len(evt.AssistantDelta)),
 	}
 	if evt.ReasoningDelta != nil {
 		fields["reasoning_key"] = strings.TrimSpace(evt.ReasoningDelta.Key)
 		fields["reasoning_chars"] = fmt.Sprintf("%d", len(evt.ReasoningDelta.Text))
 	}
-	return transcriptdiag.FormatLine("transcript.diag.server.project_event", fields)
+	return transcriptdiag.FormatLine("transcript.diag.server.runtime_event", fields)
 }
 
-func FormatTranscriptPublishDiagnostic(sessionID string, evt clientui.Event) string {
-	fields := map[string]string{
-		"session_id":   strings.TrimSpace(sessionID),
-		"path":         "live_event",
-		"kind":         string(evt.Kind),
-		"step_id":      strings.TrimSpace(evt.StepID),
-		"event_digest": transcriptdiag.EventDigest(evt),
+func runtimeEventDigest(evt runtime.Event) string {
+	parts := []string{
+		string(evt.Kind),
+		evt.StepID,
+		evt.AssistantDelta,
+		evt.UserMessage,
+		strings.Join(evt.UserMessageBatch, "\x1e"),
 	}
-	return transcriptdiag.FormatLine("transcript.diag.server.publish_activity", fields)
+	if evt.ReasoningDelta != nil {
+		parts = append(parts, evt.ReasoningDelta.Key, evt.ReasoningDelta.Role, evt.ReasoningDelta.Text)
+	}
+	if evt.RunState != nil {
+		parts = append(
+			parts,
+			evt.RunState.RunID,
+			string(evt.RunState.Status),
+			string(evt.RunState.Lifecycle.Phase),
+			string(evt.RunState.Lifecycle.Mode),
+		)
+	}
+	if evt.Background != nil {
+		parts = append(
+			parts,
+			string(evt.Background.Type),
+			evt.Background.ID,
+			evt.Background.State,
+			evt.Background.Command,
+			evt.Background.Preview,
+		)
+	}
+	return transcriptdiag.Digest(parts...)
 }
 
 func FormatRuntimeEvent(evt runtime.Event) string {

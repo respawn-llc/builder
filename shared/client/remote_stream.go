@@ -23,14 +23,6 @@ type remoteSubscription[Wire any, Event any] struct {
 	once  sync.Once
 }
 
-func (c *Remote) SubscribePromptActivity(ctx context.Context, req serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error) {
-	conn, route, err := c.subscribeRPC(ctx, protocol.MethodPromptSubscribeActivity, "subscribe-prompt-activity", req, req.SessionID, true)
-	if err != nil {
-		return nil, err
-	}
-	return newRemoteSubscription(conn, route, func(params protocol.PromptActivityEventParams) clientui.PendingPromptEvent { return params.Event }), nil
-}
-
 func (c *Remote) SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
 	conn, route, err := c.subscribeRPC(ctx, protocol.MethodAttentionNotificationSubscribe, "subscribe-attention-notification", req, "", false)
 	if err != nil {
@@ -100,14 +92,6 @@ func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, 
 		}
 		return result, nil
 	}
-}
-
-func (c *Remote) SubscribeSessionActivity(ctx context.Context, req serverapi.SessionActivitySubscribeRequest) (serverapi.SessionActivitySubscription, error) {
-	conn, route, err := c.subscribeRPC(ctx, protocol.MethodSessionSubscribeActivity, "subscribe-session-activity", req, req.SessionID, true)
-	if err != nil {
-		return nil, err
-	}
-	return newRemoteSubscription(conn, route, func(params protocol.SessionActivityEventParams) clientui.Event { return params.Event }), nil
 }
 
 func (c *Remote) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {

@@ -428,12 +428,10 @@ func TestManualMoveRejectsPreviousTargetOrNewContextSourceV1(t *testing.T) {
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-manual-rework-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"}); err != nil {
-		t.Fatalf("AddTransitionGroup rework: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-manual-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "Rework."}); err != nil {
-		t.Fatalf("AddEdge rework: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"})
+		req.Edges = append(req.Edges, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-manual-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "Rework."})
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)

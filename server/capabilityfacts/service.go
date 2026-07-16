@@ -12,7 +12,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 const (
@@ -61,10 +61,10 @@ func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.Capabili
 		return serverapi.CapabilityFactsResponse{}, err
 	}
 	imports, err := onboardingimports.Discover(onboardingimports.Options{
-		ConfigRoot:     s.cfg.PersistenceRoot,
-		WorkspaceRoot:  req.WorkspaceRoot,
-		HomeDir:        s.homeDir,
-		DisabledSkills: config.DisabledSkillToggles(s.cfg.Settings),
+		ConfigRoot:    s.cfg.PersistenceRoot,
+		WorkspaceRoot: req.WorkspaceRoot,
+		HomeDir:       s.homeDir,
+		SkillPolicy:   config.ResolveSkillPolicy(s.cfg.Settings),
 	})
 	if err != nil {
 		return serverapi.CapabilityFactsResponse{}, err
@@ -219,7 +219,7 @@ func thinkingDefaultFact(raw string) serverapi.ThinkingDefaultFact {
 
 func importFacts(result onboardingimports.Result) serverapi.ImportCapabilityFacts {
 	return serverapi.ImportCapabilityFacts{
-		Workspace:       serverapi.ImportWorkspaceFact{Root: valuecopy.Pointer(result.Workspace.Root)},
+		Workspace:       serverapi.ImportWorkspaceFact{Root: textutil.Pointer(result.Workspace.Root)},
 		Skills:          itemGroupFact(result.Skills),
 		Commands:        itemGroupFact(result.Commands),
 		SkillEnablement: skillEnablementFacts(result.SkillEnablement),
@@ -250,7 +250,7 @@ func importChoiceFacts(choices []onboardingimports.Choice) []serverapi.ImportCho
 		out = append(out, serverapi.ImportChoiceFact{
 			Ref:              choiceRefFact(choice.Ref),
 			ImportProviderID: providerIDPtr(choice.ProviderID),
-			SourceRootPath:   valuecopy.Pointer(choice.SourceRoot),
+			SourceRootPath:   textutil.Pointer(choice.SourceRoot),
 			ItemCount:        choice.ItemCount,
 		})
 	}
@@ -282,7 +282,7 @@ func importItemFact(item onboardingimports.Item) serverapi.ImportItemFact {
 	return serverapi.ImportItemFact{
 		Ref:            itemRefFact(item.Ref),
 		Conflicts:      conflictFacts(item.Conflicts),
-		DefaultEnabled: valuecopy.Pointer(item.DefaultEnabled),
+		DefaultEnabled: textutil.Pointer(item.DefaultEnabled),
 	}
 }
 
@@ -291,11 +291,11 @@ func itemRefFact(ref onboardingimports.ItemRef) serverapi.ImportItemRef {
 		ItemKind:         string(ref.ItemKind),
 		SourceKind:       string(ref.SourceKind),
 		ImportProviderID: providerIDPtr(ref.ProviderID),
-		SourceRootPath:   valuecopy.Pointer(ref.SourceRoot),
-		SourcePath:       valuecopy.Pointer(ref.SourcePath),
+		SourceRootPath:   textutil.Pointer(ref.SourceRoot),
+		SourcePath:       textutil.Pointer(ref.SourcePath),
 		TargetName:       ref.TargetName,
-		Name:             valuecopy.Pointer(ref.Name),
-		ModifiedUnixMs:   valuecopy.Pointer(ref.ModifiedUnixMs),
+		Name:             textutil.Pointer(ref.Name),
+		ModifiedUnixMs:   textutil.Pointer(ref.ModifiedUnixMs),
 	}
 }
 
@@ -304,7 +304,7 @@ func choiceRefFact(ref onboardingimports.ChoiceRef) serverapi.ImportChoiceRef {
 		Mode:             string(ref.Mode),
 		SourceKind:       sourceKindPtr(ref.SourceKind),
 		ImportProviderID: providerIDPtr(ref.ProviderID),
-		SourceRootPath:   valuecopy.Pointer(ref.SourceRoot),
+		SourceRootPath:   textutil.Pointer(ref.SourceRoot),
 	}
 }
 
@@ -314,7 +314,7 @@ func conflictFacts(conflicts []onboardingimports.Conflict) []serverapi.ImportCon
 		out = append(out, serverapi.ImportConflictFact{
 			SourceKind:       string(conflict.SourceKind),
 			ImportProviderID: providerIDPtr(conflict.ProviderID),
-			Path:             valuecopy.Pointer(conflict.Path),
+			Path:             textutil.Pointer(conflict.Path),
 		})
 	}
 	return out
@@ -339,7 +339,7 @@ func importErrorFacts(errs []onboardingimports.Error) []serverapi.ImportErrorFac
 			Scope:            string(err.Scope),
 			ItemKind:         importErrorItemKind(err.ItemKind),
 			ImportProviderID: providerIDPtr(err.ProviderID),
-			Path:             valuecopy.Pointer(err.Path),
+			Path:             textutil.Pointer(err.Path),
 			Operation:        err.Operation,
 			Message:          err.Message,
 		})

@@ -471,9 +471,6 @@ func (a *reasoningAccumulator) Append(role, key, delta string) {
 }
 
 func (a *reasoningAccumulator) Set(role, key, text string) {
-	if text == "" {
-		return
-	}
 	entry := a.ensure(role, key)
 	if entry == nil {
 		return

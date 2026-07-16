@@ -852,7 +852,5 @@ func TestServiceResolveTransitionLogoutDedupesSuccessfulRetry(t *testing.T) {
 	if preparation.AuthPreparation() != serverapi.SessionAuthPreparationReauthenticate {
 		t.Fatalf("auth preparation = %q, want reauthenticate", preparation.AuthPreparation())
 	}
-	if !secondResp.Equal(firstResp) {
-		t.Fatalf("expected duplicate transition replay response %+v, got %+v", firstResp, secondResp)
-	}
+	requireSessionDirectiveWireEqual(t, secondResp, firstResp)
 }

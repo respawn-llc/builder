@@ -44,10 +44,14 @@ func TestSessionSnapshotSourcesParityForTranscriptTailEntries(t *testing.T) {
 }
 
 func TestSessionSnapshotSourcesParityForRollbackLocatorAcrossCandidateFreeCompactions(t *testing.T) {
+	const (
+		userStepID    = "11111111-1111-4111-8111-111111111111"
+		compactStepID = "22222222-2222-4222-8222-222222222222"
+	)
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
 	appended, err := store.AppendEventWithEndByteCursor(
-		"user-step",
+		userStepID,
 		"message",
 		llm.Message{Role: llm.RoleUser, Content: "candidate before dormant compactions"},
 	)
@@ -62,7 +66,7 @@ func TestSessionSnapshotSourcesParityForRollbackLocatorAcrossCandidateFreeCompac
 		CandidatePageEndByte: *appended.EndByteCursor,
 	}
 	for index := 0; index < 3; index++ {
-		if _, _, err := store.AppendEvent("compact-step", "history_replaced", map[string]any{
+		if _, _, err := store.AppendEvent(compactStepID, "history_replaced", map[string]any{
 			"engine":                    "local",
 			"latest_rollback_candidate": locator,
 			"items": llm.ItemsFromMessages([]llm.Message{{

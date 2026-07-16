@@ -127,7 +127,7 @@ func TestBuildReviewerRequestPreservesTranscriptBytes(t *testing.T) {
 	}
 }
 
-func TestReviewerRebuildUsesCurrentDisabledSkillsPolicyWithoutMutatingMainTranscript(t *testing.T) {
+func TestReviewerRebuildRetainsGenerationSkillsWithoutMutatingMainTranscript(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
 	writeTestSkill(t, filepath.Join(workspace, config.ConfigDirName, "skills", "review-skill"), "review-skill", "review skill")
@@ -142,7 +142,7 @@ func TestReviewerRebuildUsesCurrentDisabledSkillsPolicyWithoutMutatingMainTransc
 		{Role: llm.RoleUser, Content: "request"},
 	}
 	original := append([]llm.Message(nil), messages...)
-	disabledPolicy := config.ResolveSkillPolicy(config.Settings{SkillSubsystem: config.SkillSubsystemDisabled})
+	disabledPolicy := config.ResolveSkillPolicy(config.Settings{SkillToggles: map[string]bool{"review-skill": false}})
 	rebuilt, err := buildReviewerRequestMessagesWithBuilder(
 		messages,
 		newMetaContextBuilder(workspace, "gpt-5", "medium", disabledPolicy, time.Now()),
@@ -151,8 +151,9 @@ func TestReviewerRebuildUsesCurrentDisabledSkillsPolicyWithoutMutatingMainTransc
 	if err != nil {
 		t.Fatalf("build reviewer request messages: %v", err)
 	}
-	if _, found := skillMessageContent(rebuilt); found {
-		t.Fatalf("disabled reviewer rebuild retained skills context: %+v", rebuilt)
+	content, found := skillMessageContent(rebuilt)
+	if !found || content != persistedSkills.Content {
+		t.Fatalf("reviewer rebuild changed generation skills context: %+v", rebuilt)
 	}
 	if !reflect.DeepEqual(messages, original) {
 		t.Fatalf("reviewer rebuild mutated main transcript\nbefore=%+v\nafter=%+v", original, messages)

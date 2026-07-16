@@ -11,11 +11,11 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/invariant"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/transcript"
-
-	"github.com/google/uuid"
 )
+
+const transcriptSubscriptionBufferSize = 256
 
 type transcriptSubscriptionBroker struct {
 	mu          sync.Mutex
@@ -25,7 +25,7 @@ type transcriptSubscriptionBroker struct {
 }
 
 type transcriptSubscription struct {
-	ch      chan clientui.TranscriptSubscriptionMessage
+	ch      chan clientui.TranscriptMessage
 	onClose func()
 
 	mu       sync.Mutex
@@ -50,11 +50,11 @@ func (b *transcriptSubscriptionBroker) SubscriberCount() int {
 	return len(b.subscribers)
 }
 
-func (b *transcriptSubscriptionBroker) Subscribe(hydration clientui.TranscriptSubscriptionMessage) (*transcriptSubscription, error) {
+func (b *transcriptSubscriptionBroker) Subscribe(hydration clientui.TranscriptMessage) (*transcriptSubscription, error) {
 	if b == nil {
 		return nil, fmt.Errorf("transcript stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
-	sub := &transcriptSubscription{ch: make(chan clientui.TranscriptSubscriptionMessage, sessionActivityBufferSize)}
+	sub := &transcriptSubscription{ch: make(chan clientui.TranscriptMessage, transcriptSubscriptionBufferSize)}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -78,7 +78,7 @@ func (b *transcriptSubscriptionBroker) Subscribe(hydration clientui.TranscriptSu
 	return sub, nil
 }
 
-func (b *transcriptSubscriptionBroker) Publish(messages []clientui.TranscriptSubscriptionMessage) {
+func (b *transcriptSubscriptionBroker) Publish(messages []clientui.TranscriptMessage) {
 	if b == nil || len(messages) == 0 {
 		return
 	}
@@ -123,7 +123,7 @@ func (b *transcriptSubscriptionBroker) Close(err error) {
 	}
 }
 
-func (s *transcriptSubscription) publish(message clientui.TranscriptSubscriptionMessage) error {
+func (s *transcriptSubscription) publish(message clientui.TranscriptMessage) error {
 	if s == nil {
 		return errTranscriptContractViolation("transcript subscription is nil")
 	}
@@ -180,23 +180,20 @@ func transcriptPublishError(err error) error {
 
 type transcriptSubscriptionContract struct {
 	hydrated      bool
-	activeStream  *uuid.UUID
-	inFlightTools map[string]struct{}
+	activeStream  *runtimeids.AssistantStreamID
+	inFlightTools map[clientui.ToolCallID]struct{}
 }
 
-func (c *transcriptSubscriptionContract) Validate(message clientui.TranscriptSubscriptionMessage) error {
-	if err := message.ValidatePayload(); err != nil {
+func (c *transcriptSubscriptionContract) Validate(message clientui.TranscriptMessage) error {
+	if err := message.Validate(); err != nil {
 		return errTranscriptContractViolation(err.Error())
 	}
-	if message.Sequence == 0 {
-		return errTranscriptContractViolation("message sequence is required")
-	}
 	if !c.hydrated {
-		if message.Sequence != 1 || message.Kind != clientui.TranscriptMessageHydration || message.Hydration == nil {
+		if message.Kind != clientui.TranscriptMessageHydration || message.Payload.Hydration == nil {
 			return errTranscriptContractViolation(fmt.Sprintf("first message must be hydration seq=1, got kind=%q seq=%d", message.Kind, message.Sequence))
 		}
 		c.hydrated = true
-		return c.validateHydration(*message.Hydration)
+		return c.validateHydration(*message.Payload.Hydration)
 	}
 	if message.Kind == clientui.TranscriptMessageHydration {
 		return errTranscriptContractViolation(fmt.Sprintf("hydration repeated at seq=%d", message.Sequence))
@@ -205,11 +202,8 @@ func (c *transcriptSubscriptionContract) Validate(message clientui.TranscriptSub
 }
 
 func (c *transcriptSubscriptionContract) validateHydration(hydration clientui.TranscriptHydration) error {
-	if hydration.ActiveAssistantStream != nil {
-		if hydration.ActiveAssistantStream.StreamID == uuid.Nil {
-			return errTranscriptContractViolation("hydration active assistant stream has zero stream_id")
-		}
-		c.activeStream = cloneUUID(hydration.ActiveAssistantStream.StreamID)
+	if hydration.ActiveAssistant != nil {
+		c.activeStream = cloneAssistantStreamID(hydration.ActiveAssistant.StreamID)
 	}
 	for _, tool := range hydration.InFlightTools {
 		if err := c.trackToolStart(tool, "hydration in-flight tool"); err != nil {
@@ -224,34 +218,26 @@ func (c *transcriptSubscriptionContract) validateHydration(hydration clientui.Tr
 	return nil
 }
 
-func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.TranscriptSubscriptionMessage) error {
+func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.TranscriptMessage) error {
+	payload := message.Payload
 	switch message.Kind {
 	case clientui.TranscriptMessageAssistantDelta:
-		if message.AssistantDelta.StreamID == uuid.Nil {
-			return errTranscriptContractViolation(fmt.Sprintf("assistant_delta at seq=%d has zero stream_id", message.Sequence))
-		}
-		return c.matchOrStartStream(message.AssistantDelta.StreamID, message.Sequence, "assistant_delta")
+		return c.matchOrStartStream(payload.AssistantDelta.StreamID, message.Sequence, "assistant_delta")
 	case clientui.TranscriptMessageAssistantStreamAbort:
-		if message.AssistantStreamAbort.StreamID == uuid.Nil {
-			return errTranscriptContractViolation(fmt.Sprintf("assistant_stream_abort at seq=%d has zero stream_id", message.Sequence))
-		}
-		if err := c.matchActiveStream(message.AssistantStreamAbort.StreamID, message.Sequence, "assistant_stream_abort"); err != nil {
+		if err := c.matchActiveStream(payload.AssistantStreamAbort.StreamID, message.Sequence, "assistant_stream_abort"); err != nil {
 			return err
 		}
 		c.activeStream = nil
 		return nil
 	case clientui.TranscriptMessageToolStart:
-		return c.trackToolStart(*message.ToolStart, fmt.Sprintf("tool_start at seq=%d", message.Sequence))
+		return c.trackToolStart(*payload.ToolStart, fmt.Sprintf("tool_start at seq=%d", message.Sequence))
 	case clientui.TranscriptMessageToolAbort:
-		return c.trackToolTerminal(message.ToolAbort.ToolCallID, fmt.Sprintf("tool_abort at seq=%d", message.Sequence))
+		return c.trackToolTerminal(payload.ToolAbort.ToolCallID, fmt.Sprintf("tool_abort at seq=%d", message.Sequence))
 	case clientui.TranscriptMessageCommittedRow:
-		if err := validateCommittedRow(*message.CommittedRow); err != nil {
+		if err := validateCommittedRow(*payload.CommittedRow); err != nil {
 			return err
 		}
-		if row := message.CommittedRow; row.Assistant != nil {
-			if row.Integrity != transcript.RowIntegrityValid {
-				return nil
-			}
+		if row := payload.CommittedRow; row.Assistant != nil {
 			if row.Assistant.StreamID != nil {
 				if err := c.matchActiveStream(*row.Assistant.StreamID, message.Sequence, "committed assistant row"); err != nil {
 					return err
@@ -261,25 +247,22 @@ func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.Tr
 				return errTranscriptContractViolation(fmt.Sprintf("committed assistant row at seq=%d has nil stream_id while stream %s is active", message.Sequence, c.activeStream.String()))
 			}
 		}
-		if row := message.CommittedRow; row.Tool != nil {
-			if row.Integrity != transcript.RowIntegrityValid && strings.TrimSpace(row.Tool.ToolCallID) == "" {
-				return nil
-			}
+		if row := payload.CommittedRow; row.Tool != nil {
 			return c.trackToolTerminal(row.Tool.ToolCallID, fmt.Sprintf("committed tool row at seq=%d", message.Sequence))
 		}
 	}
 	return nil
 }
 
-func (c *transcriptSubscriptionContract) matchOrStartStream(streamID uuid.UUID, seq uint64, op string) error {
+func (c *transcriptSubscriptionContract) matchOrStartStream(streamID runtimeids.AssistantStreamID, seq uint64, op string) error {
 	if c.activeStream == nil {
-		c.activeStream = cloneUUID(streamID)
+		c.activeStream = cloneAssistantStreamID(streamID)
 		return nil
 	}
 	return c.matchActiveStream(streamID, seq, op)
 }
 
-func (c *transcriptSubscriptionContract) matchActiveStream(streamID uuid.UUID, seq uint64, op string) error {
+func (c *transcriptSubscriptionContract) matchActiveStream(streamID runtimeids.AssistantStreamID, seq uint64, op string) error {
 	if c.activeStream == nil {
 		return errTranscriptContractViolation(fmt.Sprintf("%s at seq=%d has stream_id %s with no active assistant stream", op, seq, streamID.String()))
 	}
@@ -290,12 +273,12 @@ func (c *transcriptSubscriptionContract) matchActiveStream(streamID uuid.UUID, s
 }
 
 func (c *transcriptSubscriptionContract) trackToolStart(tool clientui.TranscriptToolStart, op string) error {
-	toolID := strings.TrimSpace(tool.ToolCallID)
+	toolID := clientui.ToolCallID(strings.TrimSpace(string(tool.ToolCallID)))
 	if toolID == "" {
 		return errTranscriptContractViolation(op + " has empty tool_call_id")
 	}
 	if c.inFlightTools == nil {
-		c.inFlightTools = make(map[string]struct{})
+		c.inFlightTools = make(map[clientui.ToolCallID]struct{})
 	}
 	if _, exists := c.inFlightTools[toolID]; exists {
 		return nil
@@ -304,8 +287,8 @@ func (c *transcriptSubscriptionContract) trackToolStart(tool clientui.Transcript
 	return nil
 }
 
-func (c *transcriptSubscriptionContract) trackToolTerminal(toolCallID string, op string) error {
-	toolID := strings.TrimSpace(toolCallID)
+func (c *transcriptSubscriptionContract) trackToolTerminal(toolCallID clientui.ToolCallID, op string) error {
+	toolID := clientui.ToolCallID(strings.TrimSpace(string(toolCallID)))
 	if toolID == "" {
 		return errTranscriptContractViolation(op + " has empty tool_call_id")
 	}
@@ -320,18 +303,18 @@ func validateCommittedRow(row clientui.TranscriptCommittedRow) error {
 	return nil
 }
 
-func cloneUUID(value uuid.UUID) *uuid.UUID {
+func cloneAssistantStreamID(value runtimeids.AssistantStreamID) *runtimeids.AssistantStreamID {
 	copied := value
 	return &copied
 }
 
-func (s *transcriptSubscription) Next(ctx context.Context) (clientui.TranscriptSubscriptionMessage, error) {
+func (s *transcriptSubscription) Next(ctx context.Context) (clientui.TranscriptMessage, error) {
 	if s == nil {
-		return clientui.TranscriptSubscriptionMessage{}, io.EOF
+		return clientui.TranscriptMessage{}, io.EOF
 	}
 	select {
 	case <-ctx.Done():
-		return clientui.TranscriptSubscriptionMessage{}, ctx.Err()
+		return clientui.TranscriptMessage{}, ctx.Err()
 	case evt, ok := <-s.ch:
 		if ok {
 			return evt, nil
@@ -339,9 +322,9 @@ func (s *transcriptSubscription) Next(ctx context.Context) (clientui.TranscriptS
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.err != nil {
-			return clientui.TranscriptSubscriptionMessage{}, serverapi.NormalizeStreamError(s.err)
+			return clientui.TranscriptMessage{}, serverapi.NormalizeStreamError(s.err)
 		}
-		return clientui.TranscriptSubscriptionMessage{}, io.EOF
+		return clientui.TranscriptMessage{}, io.EOF
 	}
 }
 
@@ -373,4 +356,4 @@ func (s *transcriptSubscription) closeWithError(err error) {
 	}
 }
 
-var _ serverapi.SessionTranscriptSubscription = (*transcriptSubscription)(nil)
+var _ serverapi.TranscriptSubscription = (*transcriptSubscription)(nil)

@@ -103,6 +103,49 @@ func TestGitInspectorListParsesPorcelainTopology(t *testing.T) {
 	}
 }
 
+func TestForceRemovePrunableWorktreeRejectsSymlinkedRegistrationParent(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	initGitRepo(t, workspaceRoot)
+	worktreeRoot := filepath.Join(t.TempDir(), "target")
+	runGit(t, workspaceRoot, "worktree", "add", "-q", "-b", "feature/prunable-symlink", worktreeRoot, "HEAD")
+
+	commonDir := strings.TrimSpace(runGit(t, workspaceRoot, "rev-parse", "--git-common-dir"))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(workspaceRoot, commonDir)
+	}
+	worktreesRoot := filepath.Join(canonicalTestPath(t, commonDir), "worktrees")
+	entries, err := os.ReadDir(worktreesRoot)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("worktree registrations = %+v, err=%v", entries, err)
+	}
+	externalWorktreesRoot := filepath.Join(t.TempDir(), "worktrees")
+	if err := os.Rename(worktreesRoot, externalWorktreesRoot); err != nil {
+		t.Fatalf("move worktree registrations: %v", err)
+	}
+	if err := os.Symlink(externalWorktreesRoot, worktreesRoot); err != nil {
+		t.Fatalf("symlink worktree registrations: %v", err)
+	}
+	if err := os.Remove(filepath.Join(worktreeRoot, ".git")); err != nil {
+		t.Fatalf("remove worktree git marker: %v", err)
+	}
+	sentinel := filepath.Join(externalWorktreesRoot, entries[0].Name(), "sentinel")
+	if err := os.WriteFile(sentinel, []byte("preserve"), 0o644); err != nil {
+		t.Fatalf("write external sentinel: %v", err)
+	}
+
+	err = NewGitInspector(nil).ForceRemovePrunableWorktree(context.Background(), workspaceRoot, worktreeRoot)
+	var recoveryError *PrunableWorktreeRecoveryError
+	if !errors.As(err, &recoveryError) || recoveryError.Destructive {
+		t.Fatalf("cleanup error = %v, want non-destructive recovery error", err)
+	}
+	if _, err := os.Stat(worktreeRoot); err != nil {
+		t.Fatalf("worktree root changed after rejected cleanup: %v", err)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("external registration changed after rejected cleanup: %v", err)
+	}
+}
+
 func TestGitInspectorListClassifiesActualNonRepositoryWithoutRunningGit(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	runner := &stubGitCommandRunner{}

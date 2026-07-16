@@ -35,13 +35,6 @@ func TestTranscriptSubscriptionRequestHasNoCursor(t *testing.T) {
 	if typ.NumField() != 1 || typ.Field(0).Name != "SessionID" {
 		t.Fatalf("TranscriptSubscribeRequest fields = %v, want only SessionID", typ)
 	}
-	activity, ok := RouteByMethod(protocol.MethodSessionSubscribeActivity)
-	if !ok {
-		t.Fatal("legacy session activity route missing")
-	}
-	if activity.RequestType != reflect.TypeOf(serverapi.SessionActivitySubscribeRequest{}) {
-		t.Fatalf("session activity request type changed to %v", activity.RequestType)
-	}
 }
 
 func TestLatestCommittedAssistantFinalAnswerRouteContract(t *testing.T) {
@@ -57,21 +50,5 @@ func TestLatestCommittedAssistantFinalAnswerRouteContract(t *testing.T) {
 	}
 	if !route.ValidatesRequest {
 		t.Fatal("latest committed assistant final answer route must validate its request")
-	}
-}
-
-func TestSessionExecutionWorkspaceRootRouteContract(t *testing.T) {
-	route, ok := RouteByMethod(protocol.MethodSessionGetExecutionWorkspaceRoot)
-	if !ok {
-		t.Fatal("session execution workspace root route missing")
-	}
-	if route.Kind != KindUnary || route.Auth != AuthPreServerAuth || route.Scope != ScopeSessionActiveProject || route.Connection != ConnectionControl || route.Dependency != DependencySessionView {
-		t.Fatalf("route = %+v", route)
-	}
-	if route.RequestType != reflect.TypeOf(serverapi.SessionExecutionWorkspaceRootRequest{}) || route.ResponseType != reflect.TypeOf(serverapi.SessionExecutionWorkspaceRootResponse{}) {
-		t.Fatalf("route request/response = %v / %v", route.RequestType, route.ResponseType)
-	}
-	if !route.ValidatesRequest {
-		t.Fatal("session execution workspace root route must validate its request")
 	}
 }

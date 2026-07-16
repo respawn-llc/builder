@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"core/server/core"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -26,14 +26,14 @@ func (s *sessionLaunchIntentGatewayService) PlanSession(_ context.Context, req s
 
 type sessionLaunchIntentGatewayDependencies struct {
 	*core.Core
-	launch client.SessionLaunchClient
+	launch apicontract.SessionLaunchService
 }
 
-func (d *sessionLaunchIntentGatewayDependencies) SessionLaunchClientForProjectWorkspace(context.Context, string, string) (client.SessionLaunchClient, error) {
+func (d *sessionLaunchIntentGatewayDependencies) SessionLaunchClientForProjectWorkspace(context.Context, string, string) (apicontract.SessionLaunchService, error) {
 	return d.launch, nil
 }
 
-func (d *sessionLaunchIntentGatewayDependencies) SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (client.SessionLaunchClient, error) {
+func (d *sessionLaunchIntentGatewayDependencies) SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (apicontract.SessionLaunchService, error) {
 	return d.launch, nil
 }
 
@@ -157,4 +157,4 @@ func mustGatewayIntentSessionID(t *testing.T, raw string) runtimeids.SessionID {
 
 var _ GatewayDependencies = (*sessionLaunchIntentGatewayDependencies)(nil)
 
-var _ client.SessionLaunchClient = (*sessionLaunchIntentGatewayService)(nil)
+var _ apicontract.SessionLaunchService = (*sessionLaunchIntentGatewayService)(nil)

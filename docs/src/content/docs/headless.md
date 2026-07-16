@@ -35,14 +35,14 @@ kent run wait <session-id> # wait for the model's turn to end
 
 Roles are needed to create specialized subagent types for different tasks and workflows. Treat them like different employees or specialists.
 
-`--agent <role>` selects a named subagent role from `[subagents.<role>]` in the local or global config file.
+`--agent <role>` selects a named subagent role from `[subagents.<role>]` in the local or global config file. `--agent default` clears a resumed role and uses the base settings; `none` and `self` are not run-agent selectors.
 To open an interactive session with a role, run:
 
 ```bash
 kent --agent research
 ```
 
-To apply a role while reopening a specific session, combine it with `--session` or `--continue`. To prevent cache invalidation and hallucinations, the role cannot be changed after you already set it.
+To apply a role while reopening a specific session, combine it with `--session` or `--continue`. Unlocked sessions may select another role or clear the role with `--agent default`. If the session has a locked model request shape, the selected role must match the persisted role and `--agent default` cannot clear it.
 
 Example subagent config:
 

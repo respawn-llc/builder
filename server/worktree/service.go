@@ -36,8 +36,7 @@ type runtimeController interface {
 	RunWorktreeTransition(
 		ctx context.Context,
 		sessionID string,
-		origin *serverapi.RuntimeStepOrigin,
-		fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+		fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
 	) error
 	PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome)
 	SteerWorktreeTransitionFailure(ctx context.Context, sessionID string, outcome clientui.WorktreeTransitionOutcome) error
@@ -1365,17 +1364,6 @@ func (s *Service) resolveSessionWorkspaceContext(ctx context.Context, sessionID 
 		workspaceRoot: strings.TrimSpace(target.WorkspaceRoot),
 		sessionID:     strings.TrimSpace(sessionID),
 	}, nil
-}
-
-func (s *Service) ensureDeletionUnblocked(ctx context.Context, currentSessionID string, worktreeID string, worktreeRoot string) (func(), error) {
-	taskBlockers, err := s.metadata.Queries().CountNonTerminalTasksByManagedWorktree(ctx, sql.NullString{String: strings.TrimSpace(worktreeID), Valid: true})
-	if err != nil {
-		return func() {}, err
-	}
-	if taskBlockers > 0 {
-		return func() {}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree is still managed by %d non-terminal workflow task(s)", taskBlockers))
-	}
-	return s.ensureDeletionSessionAndProcessUnblocked(ctx, currentSessionID, worktreeID, worktreeRoot)
 }
 
 func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, currentSessionID string, worktreeID string, worktreeRoot string) (func(), error) {

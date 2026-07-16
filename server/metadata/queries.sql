@@ -3035,12 +3035,17 @@ UPDATE sessions
 SET
     last_sequence = sqlc.arg(last_sequence),
     updated_at_unix_ms = MAX(updated_at_unix_ms, sqlc.arg(updated_at_unix_ms)),
+    usage_state_json = CASE
+        WHEN sqlc.arg(invalidate_usage_state) <> 0 THEN 'null'
+        ELSE usage_state_json
+    END,
     metadata_json = json_set(
         CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
         '$.conversation_established',
         json(CASE WHEN sqlc.arg(conversation_established) <> 0 THEN 'true' ELSE 'false' END)
     )
-WHERE id = sqlc.arg(session_id);
+WHERE id = sqlc.arg(session_id)
+  AND last_sequence = sqlc.arg(observed_last_sequence);
 
 -- name: GetProjectDisplayName :one
 SELECT display_name
@@ -3208,10 +3213,7 @@ SELECT
 FROM sessions
 WHERE project_id = sqlc.arg(project_id)
   AND launch_visible <> 0
-  AND (
-      (sqlc.arg(category) = 'main' AND (category = 'main' OR category IS NULL))
-      OR category = sqlc.arg(category)
-  )
+  AND COALESCE(category, 'main') = sqlc.arg(category)
 ORDER BY updated_at_unix_ms DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
@@ -3225,10 +3227,7 @@ SELECT
 FROM sessions
 WHERE project_id = sqlc.arg(project_id)
   AND launch_visible <> 0
-  AND (
-      (sqlc.arg(category) = 'main' AND (category = 'main' OR category IS NULL))
-      OR category = sqlc.arg(category)
-  )
+  AND COALESCE(category, 'main') = sqlc.arg(category)
   AND (
       updated_at_unix_ms < sqlc.arg(boundary_updated_at_unix_ms)
       OR (
@@ -3249,10 +3248,7 @@ SELECT
 FROM sessions
 WHERE project_id = sqlc.arg(project_id)
   AND launch_visible <> 0
-  AND (
-      (sqlc.arg(category) = 'main' AND (category = 'main' OR category IS NULL))
-      OR category = sqlc.arg(category)
-  )
+  AND COALESCE(category, 'main') = sqlc.arg(category)
   AND (
       updated_at_unix_ms > sqlc.arg(boundary_updated_at_unix_ms)
       OR (

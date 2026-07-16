@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -23,12 +23,10 @@ var errRuntimeTranscriptRefreshUnsupported = errors.New("runtime transcript refr
 var uiRuntimeReadTimeout = 300 * time.Millisecond
 
 type sessionRuntimeClient struct {
-	reads                    client.SessionViewClient
-	controls                 client.RuntimeControlClient
+	reads                    apicontract.SessionViewService
+	controls                 apicontract.RuntimeControlService
 	sessionID                string
 	reactivator              *runtimeReactivator
-	diagLogf                 func(string)
-	transcriptDiagnostics    bool
 	connectionStateObserver  func(error)
 	reconnectWarningObserver func(string, clientui.EntryVisibility)
 
@@ -38,7 +36,7 @@ type sessionRuntimeClient struct {
 	readModelStale bool
 }
 
-func newUIRuntimeClientWithReads(sessionID string, reads client.SessionViewClient, controls client.RuntimeControlClient) clientui.RuntimeClient {
+func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService) clientui.RuntimeClient {
 	if reads == nil || controls == nil {
 		return nil
 	}
@@ -139,13 +137,6 @@ func runtimeControlCallNoResult(c *sessionRuntimeClient, call func(ctx context.C
 	return err
 }
 
-func runtimeRequestCallNoResult(ctx context.Context, c *sessionRuntimeClient, call func(ctx context.Context, requestID string) error) error {
-	_, err := runtimeRequestCall(ctx, c, true, func(ctx context.Context, requestID string) (struct{}, error) {
-		return struct{}{}, call(ctx, requestID)
-	})
-	return err
-}
-
 func retryRuntimeUnavailableCall[T any](ctx context.Context, recoverRuntimeConnection func(context.Context, error, bool) error, appendRecoveryWarning bool, call func() (T, error)) (T, error) {
 	value, err := call()
 	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
@@ -156,27 +147,6 @@ func retryRuntimeUnavailableCall[T any](ctx context.Context, recoverRuntimeConne
 		return zero, recoverErr
 	}
 	return call()
-}
-
-func (c *sessionRuntimeClient) SetTranscriptDiagnosticLogger(logf func(string)) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.diagLogf = logf
-}
-
-func (c *sessionRuntimeClient) SetTranscriptDiagnosticsEnabled(enabled bool) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.transcriptDiagnostics = enabled
-	if enabled {
-		return
-	}
 }
 
 func (c *sessionRuntimeClient) SetConnectionStateObserver(observer func(error)) {
@@ -217,15 +187,6 @@ func (c *sessionRuntimeClient) RefreshMainViewWithPendingRefs(refs []clientui.Ru
 	return c.refreshMainViewSync(uiRuntimeHydrationReadTimeout, refs)
 }
 
-func (c *sessionRuntimeClient) transcriptDiagnosticsEnabled() bool {
-	if c == nil {
-		return false
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.transcriptDiagnostics
-}
-
 func (c *sessionRuntimeClient) Status() clientui.RuntimeStatus {
 	return c.MainView().Status
 }
@@ -239,48 +200,6 @@ func (c *sessionRuntimeClient) readContext(timeout time.Duration) (context.Conte
 		timeout = uiRuntimeReadTimeout
 	}
 	return context.WithTimeout(context.Background(), timeout)
-}
-
-func (c *sessionRuntimeClient) observeRuntimeEventStatus(evt clientui.Event) {
-	if c == nil {
-		return
-	}
-	if evt.Kind == clientui.EventRuntimeActivityChanged && evt.RuntimeActivity != nil && evt.InputReconciliation != nil {
-		c.patchVersionedRuntimeActivity(runtimeActivitySnapshotPatch{
-			Version:             evt.ReadModelVersion,
-			Activity:            *evt.RuntimeActivity,
-			InputReconciliation: *evt.InputReconciliation,
-		})
-	}
-	if evt.ContextUsage == nil && evt.GoalStatus == nil {
-		return
-	}
-	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		if evt.ContextUsage != nil {
-			view.Status.ContextUsage = *evt.ContextUsage
-		}
-		if evt.Kind == clientui.EventGoalStatusUpdated && evt.GoalStatus != nil {
-			view.Status.Goal = runtimeGoalFromStatusUpdate(view.Status.Goal, *evt.GoalStatus)
-		}
-	})
-}
-
-func runtimeGoalFromStatusUpdate(existing *clientui.RuntimeGoal, update clientui.RuntimeGoalStatusUpdate) *clientui.RuntimeGoal {
-	if update.Cleared {
-		return nil
-	}
-	goal := &clientui.RuntimeGoal{
-		ID:        strings.TrimSpace(update.ID),
-		Objective: update.Objective,
-		Status:    update.Status,
-	}
-	if existing != nil &&
-		strings.TrimSpace(existing.ID) == goal.ID &&
-		existing.Status == clientui.RuntimeGoalStatusActive &&
-		goal.Status == clientui.RuntimeGoalStatusActive {
-		goal.Suspended = existing.Suspended
-	}
-	return goal
 }
 
 func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration, refs []clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error) {
@@ -328,17 +247,4 @@ func (c *sessionRuntimeClient) notifyRuntimeReconnectWarning(text string, visibi
 		return
 	}
 	observer(text, visibility)
-}
-
-func (c *sessionRuntimeClient) logTranscriptDiag(line string) {
-	if c == nil {
-		return
-	}
-	c.mu.RLock()
-	logf := c.diagLogf
-	c.mu.RUnlock()
-	if logf == nil {
-		return
-	}
-	logf(strings.TrimSpace(line))
 }

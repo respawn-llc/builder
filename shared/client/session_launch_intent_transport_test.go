@@ -11,63 +11,6 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-type recordingSessionLaunchService struct {
-	last serverapi.SessionPlanRequest
-}
-
-func (s *recordingSessionLaunchService) PlanSession(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-	s.last = req
-	return serverapi.SessionPlanResponse{}, nil
-}
-
-func TestLoopbackSessionLaunchPreservesTypedIntent(t *testing.T) {
-	parent := mustTransportSessionID(t, "parent-session")
-	target := mustTransportSessionID(t, "target-session")
-
-	tests := []struct {
-		name   string
-		intent serverapi.SessionLaunchIntent
-		assert func(t *testing.T, got serverapi.SessionLaunchIntent)
-	}{
-		{
-			name:   "create new without parent",
-			intent: serverapi.CreateNewSessionLaunchIntent(nil),
-			assert: func(t *testing.T, got serverapi.SessionLaunchIntent) {
-				assertTransportIntent(t, got, serverapi.SessionLaunchIntentCreateNew, nil, nil)
-			},
-		},
-		{
-			name:   "create new with parent",
-			intent: serverapi.CreateNewSessionLaunchIntent(&parent),
-			assert: func(t *testing.T, got serverapi.SessionLaunchIntent) {
-				assertTransportIntent(t, got, serverapi.SessionLaunchIntentCreateNew, &parent, nil)
-			},
-		},
-		{
-			name:   "open existing",
-			intent: serverapi.OpenExistingSessionLaunchIntent(target),
-			assert: func(t *testing.T, got serverapi.SessionLaunchIntent) {
-				assertTransportIntent(t, got, serverapi.SessionLaunchIntentOpenExisting, nil, &target)
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			service := &recordingSessionLaunchService{}
-			launch := NewLoopbackSessionLaunchClient(service)
-			if _, err := launch.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-				ClientRequestID: "loopback-request",
-				Mode:            serverapi.SessionLaunchModeInteractive,
-				Intent:          test.intent,
-			}); err != nil {
-				t.Fatalf("PlanSession: %v", err)
-			}
-			test.assert(t, service.last.Intent)
-		})
-	}
-}
-
 func TestRemoteSessionLaunchPreservesTypedIntent(t *testing.T) {
 	parent := mustTransportSessionID(t, "parent-session")
 	target := mustTransportSessionID(t, "target-session")

@@ -8,7 +8,6 @@ import (
 
 	"core/server/registry"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -55,16 +54,15 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 func (s *Service) RunWorktreeTransition(
 	ctx context.Context,
 	sessionID string,
-	origin *serverapi.RuntimeStepOrigin,
-	fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+	fn func(context.Context, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
 ) error {
 	if fn == nil {
 		return nil
 	}
-	return s.runSessionMaintenance(ctx, sessionID, origin, func(runCtx context.Context, _ *session.Store, guard registry.RuntimeGuard, engine *runtime.Engine) error {
+	return s.runSessionMaintenance(ctx, sessionID, func(runCtx context.Context, _ *session.Store, guard registry.RuntimeGuard, _ *runtime.Engine) error {
 		trimmedSessionID := strings.TrimSpace(sessionID)
 		if guard == nil {
-			return fn(runCtx, nil, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+			return fn(runCtx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 				if err := s.syncInactiveExecutionTarget(syncCtx, trimmedSessionID, target, reminder); err != nil {
 					return err
 				}
@@ -74,11 +72,7 @@ func (s *Service) RunWorktreeTransition(
 				return nil
 			})
 		}
-		var authority func(func() error) error
-		if origin != nil {
-			authority = func(apply func() error) error { return engine.ApplyForActiveStep(origin.StepID, apply) }
-		}
-		return fn(runCtx, authority, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+		return fn(runCtx, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 			if err := s.syncGuardedExecutionTarget(syncCtx, trimmedSessionID, target, guard, reminder); err != nil {
 				return err
 			}
@@ -98,7 +92,7 @@ func (s *Service) RunSessionMaintenance(
 	if fn == nil {
 		return nil
 	}
-	return s.runSessionMaintenance(ctx, sessionID, nil, func(runCtx context.Context, store *session.Store, guard registry.RuntimeGuard, engine *runtime.Engine) error {
+	return s.runSessionMaintenance(ctx, sessionID, func(runCtx context.Context, store *session.Store, guard registry.RuntimeGuard, engine *runtime.Engine) error {
 		if guard == nil {
 			return fn(runCtx, store, nil)
 		}
@@ -134,7 +128,6 @@ func (m *ActiveRuntimeMaintenance) Validate() error {
 func (s *Service) runSessionMaintenance(
 	ctx context.Context,
 	sessionID string,
-	origin *serverapi.RuntimeStepOrigin,
 	fn func(context.Context, *session.Store, registry.RuntimeGuard, *runtime.Engine) error,
 ) error {
 	if fn == nil {
@@ -153,9 +146,6 @@ func (s *Service) runSessionMaintenance(
 			return err
 		}
 		if guard == nil {
-			if origin != nil {
-				return serverapi.NewWorktreeImmediateTransitionError(serverapi.WorktreeImmediateTransitionOriginInactive, runtimeUnavailableErr(trimmedSessionID))
-			}
 			store, err := s.resolveStore(ctx, trimmedSessionID)
 			if err != nil {
 				return err
@@ -165,34 +155,15 @@ func (s *Service) runSessionMaintenance(
 		defer guard.Release()
 		engine := guard.Engine()
 		if engine == nil {
-			unavailable := runtimeUnavailableErr(trimmedSessionID)
-			if origin != nil {
-				return serverapi.NewWorktreeImmediateTransitionError(serverapi.WorktreeImmediateTransitionOriginInactive, unavailable)
-			}
-			return unavailable
+			return runtimeUnavailableErr(trimmedSessionID)
 		}
-		run := func() error {
+		return engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, func() error {
 			store, err := s.resolveStore(ctx, trimmedSessionID)
 			if err != nil {
 				return err
 			}
 			return fn(ctx, store, guard, engine)
-		}
-		if origin == nil {
-			return engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, run)
-		}
-		active := runtimeactivity.ActiveStepFromProvider(engine)
-		if active == nil || active.RunID != origin.RunID || active.StepID != origin.StepID {
-			return serverapi.NewWorktreeImmediateTransitionError(serverapi.WorktreeImmediateTransitionOriginInactive, runtime.ErrActiveStepInactive)
-		}
-		if err := run(); err != nil {
-			kind := serverapi.WorktreeImmediateTransitionApplyFailed
-			if errors.Is(err, runtime.ErrActiveStepInactive) {
-				kind = serverapi.WorktreeImmediateTransitionOriginInactive
-			}
-			return serverapi.NewWorktreeImmediateTransitionError(kind, err)
-		}
-		return nil
+		})
 	}
 }
 

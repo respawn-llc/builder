@@ -1,28 +1,21 @@
 package app
 
 import (
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 )
 
 type runtimeWiring struct {
-	turnQueueHook         turnQueueHook
+	turnQueueHook         *bellHooks
 	terminalFocus         *terminalFocusState
-	runtimeEvents         <-chan clientui.Event
 	transcriptEvents      <-chan ongoingTranscriptEvent
 	requestTranscriptOpen func()
-	askEvents             <-chan askEvent
+	promptAnswers         *transcriptPromptAnswerer
+	promptAttention       *bellHooks
 	runtimeClient         clientui.RuntimeClient
-	promptControl         client.PromptControlClient
-	runtimeControls       client.RuntimeControlClient
-	worktrees             client.WorktreeClient
-	processControls       client.ProcessControlClient
-	processOutput         client.ProcessOutputClient
-	processViews          client.ProcessViewClient
-	approvalViews         client.ApprovalViewClient
-	askViews              client.AskViewClient
-	sessionActivity       client.SessionActivityClient
-	sessionTranscript     client.SessionTranscriptClient
-	sessionViews          client.SessionViewClient
+	worktrees             apicontract.WorktreeService
+	processControls       apicontract.ProcessControlService
+	processOutput         apicontract.ProcessOutputService
+	processViews          apicontract.ProcessViewService
 	promptHistory         []string
 }

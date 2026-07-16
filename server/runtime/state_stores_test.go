@@ -456,17 +456,15 @@ func TestTranscriptRuntimeStateRejectsEmptyWorkingDir(t *testing.T) {
 	}
 }
 
-func TestTranscriptPersistenceCoordinatorOwnsChatMutationTransitions(t *testing.T) {
+func TestTranscriptRuntimeStateOwnsChatMutationTransitions(t *testing.T) {
 	state := newTranscriptRuntimeState("/workspace")
-	persistence := newTranscriptPersistenceCoordinator(state)
-	persistence.AppendMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless mode"})
-	persistence.AppendLocalEntryRecord(ChatEntry{Role: "notice", Text: "local note"})
-	snap := state.chatProjection().snapshotWithMetadata().Snapshot
-	if len(snap.Entries) != 2 || snap.Entries[1].Role != "notice" || snap.Entries[1].Text != "local note" {
-		t.Fatalf("unexpected transcript entries after local append: %+v", snap.Entries)
+	state.AppendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless mode"})
+	state.AppendLocalEntryRecord(ChatEntry{Role: "notice", Text: "local note"})
+	if got := state.CommittedEntryCount(); got != 2 {
+		t.Fatalf("committed entry count after message and local append = %d, want 2", got)
 	}
 
-	persistence.ReplaceHistory(llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}))
+	state.ReplaceHistoryAtCommittedEntryStart(chatStoreTestStepID, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}), nil)
 	items := state.SnapshotItems()
 	if len(items) != 1 || items[0].MessageType != llm.MessageTypeCompactionSummary {
 		t.Fatalf("unexpected provider items after replace history: %+v", items)

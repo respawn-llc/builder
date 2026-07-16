@@ -22,6 +22,8 @@ import (
 	"core/shared/sessioncontract"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
+
+	"github.com/google/uuid"
 )
 
 type ScriptFile struct {
@@ -283,7 +285,7 @@ func assistantDeltas(values []string) []llm.AssistantDelta {
 }
 
 func appendSeedTranscriptEntry(store *session.Store, workspaceRoot string, idx int, entry SeedTranscriptEntryFile) error {
-	stepID := fmt.Sprintf("seed-%03d", idx+1)
+	stepID := uuid.NewString()
 	switch strings.TrimSpace(entry.Kind) {
 	case "", "message":
 		msg := seedMessage(entry)

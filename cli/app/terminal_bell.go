@@ -238,19 +238,6 @@ func attentionNotificationApprovalMessage(notification clientui.AttentionNotific
 	return notification.Approval.Message
 }
 
-func (h *bellHooks) OnProjectedRuntimeEvent(evt clientui.Event) {
-	if isNoopProjectedAssistantEvent(evt) {
-		h.clearPendingTurnCompletionForSilentFinal(evt.StepID)
-		return
-	}
-	switch evt.Kind {
-	case clientui.EventToolCallStarted:
-		h.recordToolCall(evt.StepID)
-	case clientui.EventAssistantMessage:
-		h.recordTurnCompletion(evt.StepID, "")
-	}
-}
-
 func (h *bellHooks) recordToolCall(stepID string) {
 	stepID = strings.TrimSpace(stepID)
 	if stepID == "" {

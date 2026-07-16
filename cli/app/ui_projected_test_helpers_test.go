@@ -10,21 +10,9 @@ import (
 	"core/server/runtimecontrol"
 	"core/server/runtimeview"
 	"core/server/sessionview"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 )
-
-func closedProjectedRuntimeEvents() <-chan clientui.Event {
-	ch := make(chan clientui.Event)
-	close(ch)
-	return ch
-}
-
-func closedAskEvents() <-chan askEvent {
-	ch := make(chan askEvent)
-	close(ch)
-	return ch
-}
 
 func waitForTestCondition(t *testing.T, timeout time.Duration, label string, condition func() bool) {
 	t.Helper()
@@ -40,30 +28,16 @@ func waitForTestCondition(t *testing.T, timeout time.Duration, label string, con
 	}
 }
 
-func newProjectedTestUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, askEvents <-chan askEvent, opts ...UIOption) *uiModel {
-	if runtimeEvents == nil {
-		runtimeEvents = make(chan clientui.Event)
-	}
-	if askEvents == nil {
-		askEvents = make(chan askEvent)
-	}
-	return NewProjectedUIModel(runtimeClient, runtimeEvents, askEvents, opts...).(*uiModel)
+func newProjectedTestUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {
+	return NewProjectedUIModel(runtimeClient, opts...).(*uiModel)
 }
 
 func newProjectedClosedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {
-	return newProjectedTestUIModel(runtimeClient, closedProjectedRuntimeEvents(), closedAskEvents(), opts...)
-}
-
-func newProjectedRuntimeEventsUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, opts ...UIOption) *uiModel {
-	return newProjectedTestUIModel(runtimeClient, runtimeEvents, closedAskEvents(), opts...)
+	return newProjectedTestUIModel(runtimeClient, opts...)
 }
 
 func newSizedProjectedClosedUIModel(runtimeClient clientui.RuntimeClient, width, height int, opts ...UIOption) *uiModel {
 	return sizedTestUIModel(newProjectedClosedUIModel(runtimeClient, opts...), width, height)
-}
-
-func newSizedProjectedRuntimeEventsUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, width, height int, opts ...UIOption) *uiModel {
-	return sizedTestUIModel(newProjectedRuntimeEventsUIModel(runtimeClient, runtimeEvents, opts...), width, height)
 }
 
 func setTestUITerminalSize(m *uiModel, width, height int) *uiModel {
@@ -77,11 +51,11 @@ func sizedTestUIModel(m *uiModel, width, height int) *uiModel {
 }
 
 func newProjectedStaticUIModel(opts ...UIOption) *uiModel {
-	return newProjectedTestUIModel(nil, nil, nil, opts...)
+	return newProjectedTestUIModel(nil, opts...)
 }
 
 func newProjectedEngineUIModel(engine *runtime.Engine, opts ...UIOption) *uiModel {
-	return newProjectedTestUIModel(newUIRuntimeClient(engine), nil, nil, opts...)
+	return newProjectedTestUIModel(newUIRuntimeClient(engine), opts...)
 }
 
 func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient {
@@ -89,10 +63,10 @@ func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient
 		return nil
 	}
 	resolver := sessionview.NewStaticRuntimeResolver(engine)
-	reads := client.NewLoopbackSessionViewClient(sessionview.NewService(nil, resolver, nil))
+	reads := sessionview.NewService(nil, resolver, nil)
 	controlRegistry := registry.NewRuntimeRegistry()
 	registerUIRuntime(controlRegistry, engine.SessionID(), engine)
-	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(controlRegistry))
+	controls := runtimecontrol.NewService(controlRegistry)
 	runtimeClient := newUIRuntimeClientWithReads(engine.SessionID(), reads, controls).(*sessionRuntimeClient)
 	snapshot, err := controlRegistry.RuntimeReadModelSnapshot(context.Background(), engine.SessionID(), nil)
 	if err != nil {
@@ -114,10 +88,49 @@ func newUIRuntimeClient(engine *runtime.Engine) clientui.RuntimeClient {
 	return newUIRuntimeClientFromEngine(engine)
 }
 
-func newTestSessionRuntimeClient(reads client.SessionViewClient, controls client.RuntimeControlClient) *sessionRuntimeClient {
+func newTestSessionRuntimeClient(reads apicontract.SessionViewService, controls apicontract.RuntimeControlService) *sessionRuntimeClient {
 	return newUIRuntimeClientWithReads("session-1", reads, controls).(*sessionRuntimeClient)
 }
 
-func newTestSessionRuntimeClientWithControls(controls client.RuntimeControlClient) *sessionRuntimeClient {
+func newTestSessionRuntimeClientWithControls(controls apicontract.RuntimeControlService) *sessionRuntimeClient {
 	return newTestSessionRuntimeClient(&countingSessionViewClient{}, controls)
+}
+
+func testQuestionPrompt(id, question string, suggestions ...string) clientui.TranscriptPrompt {
+	return clientui.TranscriptPrompt{
+		Kind:        clientui.TranscriptPromptKindQuestion,
+		State:       clientui.TranscriptPromptStatePending,
+		PromptID:    clientui.PromptID(id),
+		SessionID:   ongoingTestSessionID(),
+		StepID:      ongoingTestStepID(),
+		Question:    question,
+		CreatedAt:   time.Unix(1, 0).UTC(),
+		Suggestions: append([]string(nil), suggestions...),
+	}
+}
+
+func testApprovalPrompt(id, question string, decisions ...clientui.ApprovalDecision) clientui.TranscriptPrompt {
+	return clientui.TranscriptPrompt{
+		Kind:            clientui.TranscriptPromptKindApproval,
+		State:           clientui.TranscriptPromptStatePending,
+		PromptID:        clientui.PromptID(id),
+		SessionID:       ongoingTestSessionID(),
+		StepID:          ongoingTestStepID(),
+		Question:        question,
+		CreatedAt:       time.Unix(1, 0).UTC(),
+		ApprovalOptions: append([]clientui.ApprovalDecision(nil), decisions...),
+	}
+}
+
+func testQuestionAskEvent(id, question string, reply chan askReply, suggestions ...string) askEvent {
+	return askEvent{prompt: testQuestionPrompt(id, question, suggestions...), reply: reply}
+}
+
+func testQuestionAskEventPtr(id, question string, suggestions ...string) *askEvent {
+	event := testQuestionAskEvent(id, question, nil, suggestions...)
+	return &event
+}
+
+func testApprovalAskEvent(id, question string, reply chan askReply, decisions ...clientui.ApprovalDecision) askEvent {
+	return askEvent{prompt: testApprovalPrompt(id, question, decisions...), reply: reply}
 }

@@ -43,30 +43,39 @@ func TestDiscoverOrdersRootsAndReadsEmbeddedGeneratedWhenUnseeded(t *testing.T) 
 	}
 }
 
-func TestDiscoverDisabledPolicyReturnsBeforeResolvingOrReadingRoots(t *testing.T) {
-	readCalled := false
+func TestDiscoverDisabledSkillNamedEnabledStillEnumeratesCatalog(t *testing.T) {
+	root := t.TempDir()
+	enabledPath := writeSkill(t, filepath.Join(root, SkillsDirName, "enabled"), "enabled", "enabled skill")
+	otherPath := writeSkill(t, filepath.Join(root, SkillsDirName, "other"), "other", "other skill")
+
 	result, err := Discover(Options{
-		ConfigRoot: "\x00invalid",
+		ConfigRoot: root,
 		Policy: brand.ResolveSkillPolicy(brand.Settings{
-			SkillSubsystem: brand.SkillSubsystemDisabled,
+			SkillToggles: map[string]bool{"enabled": false},
 		}),
-		ReadDir: func(string) ([]os.DirEntry, error) {
-			readCalled = true
-			t.Fatal("disabled discovery must not read skill roots")
-			return nil, nil
-		},
 	})
 	if err != nil {
-		t.Fatalf("Discover disabled policy: %v", err)
+		t.Fatalf("Discover: %v", err)
 	}
-	if readCalled {
-		t.Fatal("disabled discovery touched the filesystem")
+	if len(result.Roots) != 2 {
+		t.Fatalf("roots = %+v, want global and generated roots", result.Roots)
 	}
-	if result.State != DiscoveryStateDisabled {
-		t.Fatalf("discovery state = %q, want disabled", result.State)
+	disabledPath := canonicalSlashPath(t, enabledPath)
+	requireSkillPath(t, result.Skills, canonicalSlashPath(t, otherPath))
+	for _, skill := range result.Skills {
+		if skill.Path == disabledPath {
+			t.Fatalf("disabled skill named enabled remained model-visible: %+v", result.Skills)
+		}
 	}
-	if len(result.Roots) != 0 || len(result.Skills) != 0 || len(result.Issues) != 0 || len(result.Inspections) != 0 {
-		t.Fatalf("disabled result must be empty: %+v", result)
+	var disabled Inspection
+	for _, inspection := range result.Inspections {
+		if inspection.Path == disabledPath {
+			disabled = inspection
+			break
+		}
+	}
+	if !disabled.Loaded || !disabled.Disabled {
+		t.Fatalf("disabled inspection = %+v, want loaded and disabled", disabled)
 	}
 }
 
@@ -136,6 +145,26 @@ func TestDiscoverDeduplicatesResolvedSkillPaths(t *testing.T) {
 	}
 }
 
+func TestDiscoverReportsBrokenSymlinkedSkillDirectory(t *testing.T) {
+	root := t.TempDir()
+	skillsRoot := filepath.Join(root, SkillsDirName)
+	brokenLinkPath := filepath.Join(skillsRoot, "broken-skill")
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		t.Fatalf("mkdir skills root: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing-skill-dir"), brokenLinkPath); err != nil {
+		t.Fatalf("symlink broken skill dir: %v", err)
+	}
+
+	result, err := Discover(Options{ConfigRoot: root})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(result.Issues) != 1 || result.Issues[0].Path != filepath.ToSlash(brokenLinkPath) || strings.TrimSpace(result.Issues[0].Reason) == "" {
+		t.Fatalf("broken symlink issues = %+v, want one structured issue", result.Issues)
+	}
+}
+
 func canonicalSlashPath(t *testing.T, path string) string {
 	t.Helper()
 	resolved, err := filepath.EvalSymlinks(path)
@@ -147,18 +176,12 @@ func canonicalSlashPath(t *testing.T, path string) string {
 
 func TestDiscoverReportsUnreadableRootAsStructuredError(t *testing.T) {
 	root := t.TempDir()
-	readErr := errors.New("denied")
-	_, err := Discover(Options{
-		ConfigRoot: root,
-		ReadDir: func(path string) ([]os.DirEntry, error) {
-			if path == filepath.Join(root, SkillsDirName) {
-				return nil, readErr
-			}
-			return os.ReadDir(path)
-		},
-	})
-	if !errors.Is(err, ErrReadSkillsDirectory) || !errors.Is(err, readErr) {
-		t.Fatalf("Discover error = %v, want ErrReadSkillsDirectory wrapping read error", err)
+	if err := os.WriteFile(filepath.Join(root, SkillsDirName), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write non-directory skills root: %v", err)
+	}
+	_, err := Discover(Options{ConfigRoot: root})
+	if !errors.Is(err, ErrReadSkillsDirectory) {
+		t.Fatalf("Discover error = %v, want ErrReadSkillsDirectory", err)
 	}
 }
 

@@ -89,6 +89,11 @@ type QueuedUserMessageStatusEvent struct {
 	RestoreText     string
 }
 
+type QueuedUserMessageIdentity struct {
+	QueueItemID     string
+	ClientRequestID string
+}
+
 type Event struct {
 	Kind                         EventKind
 	StepID                       string
@@ -107,6 +112,7 @@ type Event struct {
 	UserMessage                  string
 	UserMessageBatch             []string
 	UserMessageBatchQueueItemIDs []string
+	UserMessageBatchQueuedItems  []QueuedUserMessageIdentity
 	Message                      llm.Message
 	ModelResponse                *ModelResponseTrace
 	ToolCall                     *llm.ToolCall
@@ -143,6 +149,8 @@ type BackgroundShellEvent struct {
 	Type              BackgroundShellEventType
 	ID                string
 	ActivityID        uuid.UUID
+	OwnerRunID        string
+	OwnerStepID       string
 	State             string
 	Command           string
 	Workdir           string

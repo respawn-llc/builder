@@ -27,7 +27,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 				delete(l.operations, key)
 			}
 			delete(l.failedReqs, key)
-			l.recordEvictedLocked(key, record.OperationRef, now)
+			l.recordEvictedLocked(key, record.Operation, now)
 			continue
 		}
 		retained = append(retained, key)
@@ -43,7 +43,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 			delete(l.operations, key)
 		}
 		delete(l.failedReqs, key)
-		l.recordEvictedLocked(key, record.OperationRef, now)
+		l.recordEvictedLocked(key, record.Operation, now)
 	}
 	for key, createdAt := range l.tombstoneAt {
 		if !createdAt.IsZero() && now.Sub(createdAt) >= ttl {
@@ -54,7 +54,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 			if record, ok := l.records[key]; ok {
 				if _, terminal := l.terminal[key]; !terminal {
 					delete(l.records, key)
-					l.recordEvictedLocked(key, record.OperationRef, now)
+					l.recordEvictedLocked(key, record.Operation, now)
 				}
 			}
 		}
@@ -67,6 +67,9 @@ func (l *sessionLedger) nonEvictableLocked(key string) bool {
 		return true
 	}
 	if entry := l.operations[key]; entry != nil && !entry.completed {
+		return true
+	}
+	if l.commitBarriers[key] != nil {
 		return true
 	}
 	return false
@@ -120,6 +123,7 @@ func (l *sessionLedger) pruneEvictedLocked(limit int, ttl time.Duration, now tim
 		if !evictedAt.IsZero() && now.Sub(evictedAt) >= ttl {
 			delete(l.evictedAt, key)
 			delete(l.evicted, key)
+			l.removeQueuedOperationIdentity(key)
 			continue
 		}
 		retained = append(retained, key)
@@ -130,5 +134,6 @@ func (l *sessionLedger) pruneEvictedLocked(limit int, ttl time.Duration, now tim
 		l.evictedOrder = l.evictedOrder[1:]
 		delete(l.evictedAt, key)
 		delete(l.evicted, key)
+		l.removeQueuedOperationIdentity(key)
 	}
 }

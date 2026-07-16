@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/shared/textutil"
 )
 
@@ -16,7 +17,7 @@ func newCompactionPersistence(engine *Engine) compactionPersistence {
 	return compactionPersistence{engine: engine}
 }
 
-func (p compactionPersistence) replaceHistory(stepID, engine string, mode compactionMode, items []llm.ResponseItem) error {
+func (p compactionPersistence) replaceHistory(stepID, engine string, mode compactionMode, items []llm.ResponseItem) (session.CommitReceipt, error) {
 	e := p.engine
 	workflowRunID := ""
 	if e.cfg.WorkflowRun != nil {
@@ -26,7 +27,7 @@ func (p compactionPersistence) replaceHistory(stepID, engine string, mode compac
 	if req := e.handoffRuntimeState().RequestSnapshot(); req != nil {
 		pendingHandoffFutureMessage = strings.TrimSpace(req.futureAgentMessage)
 	}
-	return e.steer(stepID, steerHistoryReplacementIntent(engine, mode, workflowRunID, e.compactionRuntimeState().Count()+1, pendingHandoffFutureMessage, e.LastCommittedAssistantFinalAnswer(), items))
+	return e.steerWithCommitReceipt(stepID, steerHistoryReplacementIntent(engine, mode, workflowRunID, e.compactionRuntimeState().Count()+1, pendingHandoffFutureMessage, e.LastCommittedAssistantFinalAnswer(), items))
 }
 
 func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode compactionMode, engine, provider string, trimmed *int, count int, errText string) error {
@@ -35,7 +36,7 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 		Mode:              string(mode),
 		Engine:            strings.TrimSpace(engine),
 		Provider:          strings.TrimSpace(provider),
-		TrimmedItemsCount: textutil.CloneInt(trimmed),
+		TrimmedItemsCount: textutil.Pointer(trimmed),
 		Count:             count,
 		Error:             strings.TrimSpace(errText),
 	}

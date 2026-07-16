@@ -54,6 +54,9 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 	clientUIRoot := filepath.Join(repoRoot, "shared", "clientui")
 	allowedTypes := map[string]struct{}{
 		"ApprovalDecision":                         {},
+		"ApprovalOption":                           {},
+		"ApprovalPromptAnswer":                     {},
+		"AssistantStreamAbortReason":               {},
 		"AttentionNotification":                    {},
 		"AttentionNotificationApprovalState":       {},
 		"AttentionNotificationEvent":               {},
@@ -67,55 +70,48 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"AttentionNotificationTarget":              {},
 		"AttentionNotificationTargetKind":          {},
 		"AttentionNotificationTaskDetailFocus":     {},
-		"ApprovalOption":                           {},
-		"ApprovalPromptAnswer":                     {},
+		"BackgroundLifecycle":                      {},
 		"BackgroundProcess":                        {},
-		"BackgroundShellEvent":                     {},
-		"ChatEntry":                                {},
 		"CompactionLifecycle":                      {},
-		"CompactionStatus":                         {},
+		"CompactionState":                          {},
 		"ConversationFreshness":                    {},
 		"EntryVisibility":                          {},
-		"Event":                                    {},
-		"EventKind":                                {},
-		"ExternalRuntimeState":                     {},
-		"ExternalRuntimeStatus":                    {},
 		"MessagePhase":                             {},
 		"MessageType":                              {},
+		"NoticeID":                                 {},
+		"OperationalDiagnosticCode":                {},
 		"PendingApproval":                          {},
 		"PendingAsk":                               {},
-		"PendingPromptEvent":                       {},
-		"PendingPromptEventType":                   {},
 		"ProcessClient":                            {},
+		"ProcessID":                                {},
 		"ProcessOutputChunk":                       {},
 		"ProjectAvailability":                      {},
 		"ProjectOverview":                          {},
 		"ProjectSummary":                           {},
 		"ProjectWorkspaceSummary":                  {},
 		"PromptAnswer":                             {},
+		"PromptID":                                 {},
 		"QueuedUserMessage":                        {},
 		"QueuedUserMessageFailureReason":           {},
 		"QueuedUserMessageStatus":                  {},
-		"QueuedUserMessageStatusEvent":             {},
-		"ReasoningDelta":                           {},
+		"ReadModelVersion":                         {},
+		"ReasoningStatus":                          {},
 		"ReviewerLifecycle":                        {},
+		"ReviewerState":                            {},
 		"RunLifecycle":                             {},
 		"RunLifecyclePhase":                        {},
 		"RunMode":                                  {},
-		"RunState":                                 {},
 		"RunStatus":                                {},
-		"RunView":                                  {},
+		"RuntimeActiveStep":                        {},
+		"RuntimeActivity":                          {},
+		"RuntimeActivityActiveKind":                {},
+		"RuntimeActivityState":                     {},
 		"RuntimeClient":                            {},
+		"RuntimeCompactRequest":                    {},
 		"RuntimeConnectionLifecycle":               {},
 		"RuntimeContextUsage":                      {},
 		"RuntimeGoal":                              {},
-		"RuntimeGoalStatusUpdate":                  {},
 		"RuntimeGoalStatus":                        {},
-		"RuntimeActivity":                          {},
-		"RuntimeActivityActiveKind":                {},
-		"RuntimeActivityOptions":                   {},
-		"RuntimeActivityState":                     {},
-		"RuntimeCompactRequest":                    {},
 		"RuntimeInputReconciliation":               {},
 		"RuntimeInputReconciliationSnapshot":       {},
 		"RuntimeInputReconciliationState":          {},
@@ -124,68 +120,72 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"RuntimeOperationRef":                      {},
 		"RuntimePreSubmitCompactRequest":           {},
 		"RuntimeQueueUserMessageRequest":           {},
-		"RuntimeShellRequest":                      {},
+		"RuntimeReadModelUpdate":                   {},
 		"RuntimeSessionView":                       {},
+		"RuntimeShellRequest":                      {},
 		"RuntimeStatus":                            {},
 		"RuntimeSubmitQueuedRequest":               {},
 		"RuntimeSubmitRequest":                     {},
-		"ReadModelVersion":                         {},
 		"SessionExecutionTarget":                   {},
 		"SessionExecutionWorktreeTarget":           {},
 		"SessionSummary":                           {},
-		"ToolCallMeta":                             {},
-		"ToolCallRenderBehavior":                   {},
-		"ToolPresentationKind":                     {},
-		"ToolRenderHint":                           {},
-		"ToolRenderKind":                           {},
-		"ToolShellDialect":                         {},
+		"StepLifecycleState":                       {},
+		"ToolAbortReason":                          {},
+		"ToolCallID":                               {},
+		"ToolProvenance":                           {},
+		"TranscriptAssistantDelta":                 {},
+		"TranscriptAssistantRow":                   {},
+		"TranscriptAssistantStream":                {},
+		"TranscriptAssistantStreamAbort":           {},
+		"TranscriptBackgroundActivity":             {},
+		"TranscriptBackgroundNoticeIdentity":       {},
+		"TranscriptCacheWarning":                   {},
+		"TranscriptCommittedRow":                   {},
+		"TranscriptCompactionStatus":               {},
+		"TranscriptContextUsage":                   {},
+		"TranscriptDiagnostic":                     {},
+		"TranscriptDiagnosticCode":                 {},
+		"TranscriptGoal":                           {},
+		"TranscriptGoalStatus":                     {},
+		"TranscriptHydration":                      {},
+		"TranscriptMessage":                        {},
+		"TranscriptMessageKind":                    {},
+		"TranscriptMessageType":                    {},
+		"TranscriptNoticeReason":                   {},
+		"TranscriptNoticeRow":                      {},
+		"TranscriptNoticeSeverity":                 {},
+		"TranscriptOperationalDiagnostic":          {},
+		"TranscriptPage":                           {},
+		"TranscriptPageRequest":                    {},
+		"TranscriptPayload":                        {},
+		"TranscriptPrompt":                         {},
+		"TranscriptPromptKind":                     {},
+		"TranscriptPromptState":                    {},
+		"TranscriptQueuedMessageState":             {},
+		"TranscriptReasoningReset":                 {},
+		"TranscriptReasoningUpdate":                {},
+		"TranscriptReviewerState":                  {},
+		"TranscriptRowKind":                        {},
+		"TranscriptSessionIdentity":                {},
+		"TranscriptSessionStatus":                  {},
+		"TranscriptStepState":                      {},
+		"TranscriptToolAbort":                      {},
+		"TranscriptToolRow":                        {},
+		"TranscriptToolStart":                      {},
+		"TranscriptUserMessageFlushed":             {},
+		"TranscriptUserRow":                        {},
+		"TranscriptWorkflowSession":                {},
+		"TranscriptWorktreeContext":                {},
+		"TranscriptWorktreeTransitionOutcome":      {},
+		"UpdateStatus":                             {},
+		"UserTurnSubmission":                       {},
+		"WorkflowSessionStatus":                    {},
 		"WorktreeTransitionFailure":                {},
 		"WorktreeTransitionID":                     {},
 		"WorktreeTransitionKind":                   {},
 		"WorktreeTransitionOutcome":                {},
 		"WorktreeTransitionState":                  {},
-		"TranscriptAssistantDelta":                 {},
-		"TranscriptAssistantRow":                   {},
-		"TranscriptAssistantStream":                {},
-		"TranscriptAssistantStreamAbort":           {},
-		"TranscriptAssistantStreamAbortReason":     {},
-		"TranscriptBackgroundActivity":             {},
-		"TranscriptCacheWarningData":               {},
-		"TranscriptCommittedRow":                   {},
-		"TranscriptPage":                           {},
-		"TranscriptPageRequest":                    {},
-		"TranscriptCompactionStatus":               {},
-		"TranscriptDiagnosticData":                 {},
-		"TranscriptGoalStatus":                     {},
-		"TranscriptHydration":                      {},
-		"TranscriptNotice":                         {},
-		"TranscriptNoticeData":                     {},
-		"TranscriptNoticeReason":                   {},
-		"TranscriptNoticeRow":                      {},
-		"TranscriptNoticeSeverity":                 {},
-		"TranscriptWorktreeContext":                {},
-		"TranscriptPendingSessionPrompt":           {},
-		"TranscriptPendingSessionPromptData":       {},
-		"TranscriptPromptKind":                     {},
-		"TranscriptPromptState":                    {},
-		"TranscriptQueuedOrSteeredMessageState":    {},
-		"TranscriptRowKind":                        {},
-		"TranscriptRowGroupKind":                   {},
-		"TranscriptSessionIdentity":                {},
-		"TranscriptSessionStatus":                  {},
-		"TranscriptMessage":                        {},
-		"TranscriptMessageKind":                    {},
-		"TranscriptSubscriptionMessage":            {},
-		"TranscriptSubscriptionMessageKind":        {},
-		"TranscriptToolAbort":                      {},
-		"TranscriptToolAbortReason":                {},
-		"TranscriptToolRow":                        {},
-		"TranscriptToolStart":                      {},
-		"TranscriptUserRow":                        {},
-		"TranscriptRecoveryCause":                  {},
-		"UpdateStatus":                             {},
-		"UserTurnSubmission":                       {},
-		"WorkflowSessionStatus":                    {},
+		"transcriptPayloadValidator":               {},
 	}
 	allowedFuncs := map[string]struct{}{
 		"CompactionLifecycle.IsRunning":                 {},
@@ -193,13 +193,17 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"IdleRunLifecycle":                              {},
 		"MustRunLifecycle":                              {},
 		"NewCompactionLifecycle":                        {},
+		"NewReadModelVersion":                           {},
 		"NewReviewerLifecycle":                          {},
 		"NewRunLifecycle":                               {},
 		"NewRuntimeConnectionLifecycle":                 {},
-		"NormalizeMessagePhase":                         {},
+		"NewWorktreeTransitionID":                       {},
 		"NormalizeSessionExecutionTarget":               {},
 		"NormalizeThinkingLevel":                        {},
-		"PendingPromptEvent.IsZero":                     {},
+		"ParseWorktreeTransitionID":                     {},
+		"PromptID.Validate":                             {},
+		"ReadModelVersion.NewerThan":                    {},
+		"ReadModelVersion.Validate":                     {},
 		"ReviewerLifecycle.IsBlocking":                  {},
 		"ReviewerLifecycle.IsRunning":                   {},
 		"ReviewerLifecycle.Validate":                    {},
@@ -207,45 +211,90 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"RunLifecycle.IsGoalLoopRunning":                {},
 		"RunLifecycle.IsRunning":                        {},
 		"RunLifecycle.Validate":                         {},
-		"RuntimeConnectionLifecycle.IsDisconnected":     {},
-		"MustRuntimeActivity":                           {},
-		"NewEmptyRuntimeInputReconciliationSnapshot":    {},
-		"NewReadModelVersion":                           {},
-		"NewRuntimeActivity":                            {},
-		"NewUnknownRuntimeInputReconciliationSnapshot":  {},
-		"ReadModelVersion.NewerThan":                    {},
-		"ReadModelVersion.Validate":                     {},
+		"RuntimeActiveStep.Validate":                    {},
 		"RuntimeActivity.ActiveForControl":              {},
 		"RuntimeActivity.Validate":                      {},
-		"SessionSummary.Validate":                       {},
 		"RuntimeActivityActiveKind.Validate":            {},
 		"RuntimeCompactRequest.Validate":                {},
+		"RuntimeConnectionLifecycle.IsDisconnected":     {},
 		"RuntimeInputReconciliation.Ambiguous":          {},
 		"RuntimeInputReconciliation.RestoreRecommended": {},
 		"RuntimeInputReconciliation.Validate":           {},
+		"RuntimeInputReconciliationSnapshot.Validate":   {},
 		"RuntimeInputReconciliationState.Validate":      {},
 		"RuntimeOperationKind.Validate":                 {},
 		"RuntimeOperationRef.Key":                       {},
 		"RuntimeOperationRef.Validate":                  {},
-		"RuntimeQueueUserMessageRequest.Validate":       {},
 		"RuntimePreSubmitCompactRequest.Validate":       {},
+		"RuntimeQueueUserMessageRequest.Validate":       {},
+		"RuntimeReadModelUpdate.Validate":               {},
 		"RuntimeShellRequest.Validate":                  {},
 		"RuntimeSubmitQueuedRequest.Validate":           {},
 		"RuntimeSubmitRequest.Validate":                 {},
 		"SessionExecutionTargetIsZero":                  {},
 		"SessionExecutionTargetsEqual":                  {},
+		"ToolCallID.Validate":                           {},
+		"ToolProvenance.Validate":                       {},
+		"TranscriptAssistantDelta.Validate":             {},
+		"TranscriptAssistantRow.Validate":               {},
+		"TranscriptAssistantStream.Validate":            {},
+		"TranscriptAssistantStreamAbort.Validate":       {},
+		"TranscriptBackgroundActivity.Validate":         {},
+		"TranscriptBackgroundNoticeIdentity.Validate":   {},
+		"TranscriptCacheWarning.Validate":               {},
+		"TranscriptCommittedRow.Validate":               {},
+		"TranscriptCompactionStatus.Validate":           {},
+		"TranscriptContextUsage.Validate":               {},
+		"TranscriptDiagnostic.Validate":                 {},
+		"TranscriptGoal.Validate":                       {},
+		"TranscriptGoalStatus.Validate":                 {},
+		"TranscriptHydration.Validate":                  {},
+		"TranscriptHydration.validateActiveOwnership":   {},
+		"TranscriptMessage.Validate":                    {},
 		"TranscriptMessage.ValidatePayload":             {},
-		"NewWorktreeTransitionID":                       {},
-		"ParseWorktreeTransitionID":                     {},
+		"TranscriptMessageType.Validate":                {},
+		"TranscriptPayload.validateCardinality":         {},
+		"TranscriptPayload.validatorForKind":            {},
+		"TranscriptNoticeRow.Validate":                  {},
+		"TranscriptOperationalDiagnostic.Validate":      {},
+		"TranscriptPrompt.Validate":                     {},
+		"TranscriptPrompt.validateApproval":             {},
+		"TranscriptPrompt.validateQuestion":             {},
+		"TranscriptPromptKind.Validate":                 {},
+		"TranscriptPromptState.Validate":                {},
+		"TranscriptQueuedMessageState.Validate":         {},
+		"TranscriptReasoningReset.Validate":             {},
+		"TranscriptReasoningUpdate.Validate":            {},
+		"TranscriptReviewerState.Validate":              {},
+		"TranscriptSessionIdentity.Validate":            {},
+		"TranscriptSessionStatus.Validate":              {},
+		"TranscriptStepState.Validate":                  {},
+		"TranscriptToolAbort.Validate":                  {},
+		"TranscriptToolRow.Validate":                    {},
+		"TranscriptToolStart.Validate":                  {},
+		"TranscriptUserMessageFlushed.Validate":         {},
+		"TranscriptUserRow.Validate":                    {},
+		"TranscriptWorkflowSession.Validate":            {},
+		"TranscriptWorktreeContext.Validate":            {},
+		"TranscriptWorktreeTransitionOutcome.Validate":  {},
 		"WorktreeTransitionID.MarshalJSON":              {},
 		"WorktreeTransitionID.String":                   {},
 		"WorktreeTransitionID.UnmarshalJSON":            {},
 		"WorktreeTransitionID.Validate":                 {},
 		"WorktreeTransitionOutcome.Validate":            {},
-		"isZeroRuntimeOperationRef":                     {},
+		"validateHydrationBackgrounds":                  {},
+		"validateHydrationPrompts":                      {},
+		"validateHydrationQueuedMessages":               {},
+		"validateHydrationStepOwner":                    {},
+		"validateHydrationTools":                        {},
+		"validateOptionalNonEmptyString":                {},
 		"validateOperationRefKind":                      {},
-		"validateNoActiveStep":                          {},
+		"validatePresentSessionExecutionTarget":         {},
+		"validateRequiredOptionalText":                  {},
+		"validateSessionExecutionWorktree":              {},
 	}
+	seenTypes := make(map[string]struct{}, len(allowedTypes))
+	seenFuncs := make(map[string]struct{}, len(allowedFuncs))
 	violations := make([]string, 0)
 	if err := filepath.WalkDir(clientUIRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -271,6 +320,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 			case *ast.FuncDecl:
 				name := funcDeclBoundaryName(typedDecl)
 				if _, allowed := allowedFuncs[name]; allowed {
+					seenFuncs[name] = struct{}{}
 					continue
 				}
 				if funcUsesRuntimeEventPolicyType(typedDecl.Type) {
@@ -288,7 +338,9 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 						continue
 					}
 					name := typeSpec.Name.Name
-					if _, allowed := allowedTypes[name]; !allowed {
+					if _, allowed := allowedTypes[name]; allowed {
+						seenTypes[name] = struct{}{}
+					} else {
 						violations = append(violations, relPath+": DTO-only package added type "+name+" without DTO-boundary review")
 					}
 				}
@@ -297,6 +349,16 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("scan shared clientui DTO boundaries: %v", err)
+	}
+	for name := range allowedTypes {
+		if _, found := seenTypes[name]; !found {
+			violations = append(violations, "remove stale shared/clientui DTO type allowance "+name)
+		}
+	}
+	for name := range allowedFuncs {
+		if _, found := seenFuncs[name]; !found {
+			violations = append(violations, "remove stale shared/clientui DTO function allowance "+name)
+		}
 	}
 	if len(violations) > 0 {
 		t.Fatalf("shared/clientui DTO boundary violations:\n%s", strings.Join(violations, "\n"))
@@ -516,10 +578,6 @@ func allowedCLIServerImports() map[string]map[string]string {
 			"core/server/auth":        "embedded startup composes server auth readiness",
 			"core/server/authservice": "embedded startup composes server auth flow readiness",
 			"core/server/startup":     "embedded startup delegates to server startup",
-		},
-		filepath.Join("cli", "app", "internal", "onboarding", "onboardingready_ready.go"): {
-			"core/server/auth":    "onboarding readiness requires server auth manager types",
-			"core/server/startup": "onboarding readiness delegates to the server-owned onboarding flow",
 		},
 		filepath.Join("cli", "kent", "serve.go"): {
 			"core/server/startup": "kent serve command is a composition root",
@@ -863,78 +921,22 @@ func TestCLIOnboardingDoesNotOwnCapabilityFactDomains(t *testing.T) {
 		t.Fatalf("scan cli onboarding imports: %v", err)
 	}
 
-	bannedInternalFuncs := map[string]string{
-		"Supported":                   "provider catalog",
-		"SkillSupported":              "provider catalog",
-		"CommandSupported":            "provider catalog",
-		"ByID":                        "provider catalog lookup",
-		"Order":                       "provider ranking",
-		"OrderList":                   "provider ranking",
-		"SortedProviderIDs":           "provider ranking",
-		"RecommendedSymlinkChoiceID":  "import recommendation",
-		"ProviderWithMostItems":       "import recommendation",
-		"Discover":                    "generated skill discovery",
-		"DiscoverProviderSkills":      "provider source discovery",
-		"DiscoverDirectSkills":        "provider source discovery",
-		"DiscoverProviderCommands":    "provider source discovery",
-		"DiscoverDirectCommands":      "provider source discovery",
-		"ProviderSkillSourceAtBase":   "provider source discovery",
-		"ProviderCommandSourceAtBase": "provider source discovery",
-		"ShouldSkipTarget":            "duplicate/skip detection",
-		"ShouldSkipCommandImport":     "duplicate/skip detection",
-		"Candidates":                  "skill enablement projection",
-		"AnnotateDuplicateSources":    "duplicate/conflict projection",
-		"ParseSkillMetadata":          "skill metadata discovery",
-		"ParseName":                   "generated skill discovery",
-		"SplitFrontmatter":            "generated skill discovery",
-	}
-	bannedInternalTypes := map[string]string{
-		"Provider":      "provider catalog",
-		"Item":          "import item domain",
-		"CommandItem":   "import item domain",
-		"SkillMetadata": "skill metadata discovery",
-	}
 	internalRoot := filepath.Join(repoRoot, "cli", "app", "internal", "onboarding")
 	if err := filepath.WalkDir(internalRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if d.IsDir() || filepath.Ext(path) != ".go" {
 			return nil
-		}
-		fileSet := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-		if parseErr != nil {
-			return parseErr
 		}
 		relPath, relErr := filepath.Rel(repoRoot, path)
 		if relErr != nil {
-			relPath = path
+			return relErr
 		}
-		for _, decl := range file.Decls {
-			switch typedDecl := decl.(type) {
-			case *ast.FuncDecl:
-				if reason, banned := bannedInternalFuncs[typedDecl.Name.Name]; banned {
-					violations = append(violations, relPath+": internal onboarding must not own "+reason+" function "+typedDecl.Name.Name)
-				}
-			case *ast.GenDecl:
-				if typedDecl.Tok != token.TYPE {
-					continue
-				}
-				for _, spec := range typedDecl.Specs {
-					typeSpec, ok := spec.(*ast.TypeSpec)
-					if !ok {
-						continue
-					}
-					if reason, banned := bannedInternalTypes[typeSpec.Name.Name]; banned {
-						violations = append(violations, relPath+": internal onboarding must not own "+reason+" type "+typeSpec.Name.Name)
-					}
-				}
-			}
-		}
+		violations = append(violations, relPath+": deleted onboarding adapter package must not be reintroduced")
 		return nil
-	}); err != nil {
-		t.Fatalf("scan internal onboarding domain symbols: %v", err)
+	}); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("scan deleted internal onboarding package: %v", err)
 	}
 	if len(violations) > 0 {
 		t.Fatalf("cli onboarding capability-domain boundary violations:\n%s", strings.Join(violations, "\n"))
@@ -1021,7 +1023,6 @@ func TestCLIAppInternalPackageBoundaries(t *testing.T) {
 		{Name: "ProjectBinding", Packages: []string{"projectbinding"}, Label: "project binding package", ForbidServer: true},
 		{Name: "WorktreeUI", Packages: []string{"worktreeui"}, Label: "worktree UI package", ForbidServer: true},
 		{Name: "StartupConfig", Packages: []string{"startupconfig"}, Label: "startup config package"},
-		{Name: "Onboarding", Packages: []string{"onboarding"}, Label: "onboarding package"},
 		{Name: "EmbeddedAttach", Packages: []string{"embeddedattach"}, Label: "embedded attach package"},
 	}
 	for _, tc := range cases {

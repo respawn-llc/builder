@@ -1,15 +1,20 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/config"
 	"core/shared/rollbacktarget"
+	"core/shared/textutil"
+	"core/shared/toolspec"
 	"core/shared/transcript"
-	"core/shared/valuecopy"
+
+	"github.com/google/uuid"
 )
 
 type transcriptRuntimeState struct {
@@ -65,7 +70,7 @@ func (s *transcriptRuntimeState) LatestRollbackCandidate() *rollbacktarget.Candi
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return valuecopy.Pointer(s.latestRollbackCandidate)
+	return textutil.Pointer(s.latestRollbackCandidate)
 }
 
 func (s *transcriptRuntimeState) chatProjection() *chatStore {
@@ -92,9 +97,9 @@ func (s *transcriptRuntimeState) liveToolLedger() *transcriptLiveToolLedger {
 	return s.liveTools
 }
 
-func (s *transcriptRuntimeState) RecordLiveToolStart(call llm.ToolCall) error {
+func (s *transcriptRuntimeState) RecordLiveToolStart(stepID string, call llm.ToolCall) error {
 	if ledger := s.liveToolLedger(); ledger != nil {
-		return ledger.RecordStart(transcriptLiveToolStartFromCall(call))
+		return ledger.RecordStart(transcriptLiveToolStartFromCall(stepID, call))
 	}
 	return nil
 }
@@ -109,13 +114,6 @@ func (s *transcriptRuntimeState) SeedLiveTools(starts []TranscriptLiveToolStart)
 	if ledger := s.liveToolLedger(); ledger != nil {
 		ledger.Seed(starts)
 	}
-}
-
-func (s *transcriptRuntimeState) LiveToolSnapshot() []TranscriptLiveToolStart {
-	if ledger := s.liveToolLedger(); ledger != nil {
-		return ledger.Snapshot()
-	}
-	return nil
 }
 
 func (s *transcriptRuntimeState) ToolCallSnapshot(callID string) (llm.ToolCall, bool) {
@@ -209,4 +207,68 @@ func (s *transcriptRuntimeState) ToolCompletionCount() int {
 		return len(chat.toolCompletions)
 	}
 	return 0
+}
+
+func (s *transcriptRuntimeState) AppendMessage(stepID string, msg llm.Message) {
+	s.chatProjection().appendMessage(stepID, msg)
+}
+
+func (s *transcriptRuntimeState) AppendLocalEntryRecord(entry ChatEntry) {
+	s.chatProjection().appendLocalEntryRecord(entry)
+}
+
+func (s *transcriptRuntimeState) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility) {
+	s.chatProjection().appendLocalEntryRecord(ChatEntry{Visibility: visibility, Role: role, Text: text})
+}
+
+func (s *transcriptRuntimeState) AppendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) (*AssistantStreamMetadata, *uuid.UUID) {
+	return s.chatProjection().appendStreamingDelta(stepID, baseRevision, baseCommittedEntryCount, delta, phase)
+}
+
+func (s *transcriptRuntimeState) RecordAssistantStreamFinalization(committedEntryStart int, streamID *uuid.UUID) {
+	s.chatProjection().recordAssistantStreamFinalization(committedEntryStart, streamID)
+}
+
+func (s *transcriptRuntimeState) RecordStoredToolCompletion(completion storedToolCompletion) {
+	s.chatProjection().recordToolCompletionWithProviderItems(tools.Result{
+		CallID:        completion.CallID,
+		Name:          toolspec.ID(completion.Name),
+		IsError:       completion.IsError,
+		Output:        completion.Output,
+		Summary:       completion.Summary,
+		CondensedText: completion.CondensedText,
+		Presentation:  completion.Presentation,
+	}, completion.ProviderItems)
+}
+
+func (s *transcriptRuntimeState) RestoreToolCompletionPayload(payload []byte) error {
+	return s.chatProjection().restoreToolCompletionPayload(payload)
+}
+
+func (s *transcriptRuntimeState) ReplaceHistoryAtCommittedEntryStart(stepID string, items []llm.ResponseItem, committedEntryStart *int) {
+	s.chatProjection().replaceHistoryAtCommittedEntryStart(stepID, items, committedEntryStart)
+}
+
+func (s *transcriptRuntimeState) ClearStreamingAssistantState() (*AssistantStreamMetadata, *uuid.UUID) {
+	chat := s.chatProjection()
+	metadata, streamID := chat.discardStreaming()
+	chat.clearStreamingError()
+	return metadata, streamID
+}
+
+func (s *transcriptRuntimeState) SetStreamingError(text string) {
+	s.chatProjection().setStreamingError(text)
+}
+
+func (s *transcriptRuntimeState) ClearStreamingError() {
+	s.chatProjection().clearStreamingError()
+}
+
+func applyPersistedCacheWarningToTranscript(state *transcriptRuntimeState, payload []byte, mode config.CacheWarningMode) error {
+	var warning transcript.CacheWarning
+	if err := json.Unmarshal(payload, &warning); err != nil {
+		return fmt.Errorf("decode %s event: %w", sessionEventCacheWarning, err)
+	}
+	state.AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), cacheWarningEntryVisibility(mode))
+	return nil
 }

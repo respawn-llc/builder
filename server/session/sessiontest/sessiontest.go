@@ -41,10 +41,24 @@ func (p *Persistence) ObserveEventLogReconciliation(_ context.Context, reconcili
 	if !ok {
 		return session.ErrSessionNotFound
 	}
+	invalidateUsageState, err := reconciliation.UsageState.InvalidatesUsageState()
+	if err != nil {
+		return err
+	}
 	meta := cloneMeta(record.Meta)
+	if meta.LastSequence != reconciliation.ObservedLastSequence {
+		return session.EventLogReconciliationConflictError{
+			SessionID:            reconciliation.SessionID,
+			ObservedLastSequence: reconciliation.ObservedLastSequence,
+			CurrentLastSequence:  meta.LastSequence,
+		}
+	}
 	meta.LastSequence = reconciliation.LastSequence
 	meta.ConversationEstablished = reconciliation.ConversationEstablished
 	meta.UpdatedAt = reconciliation.UpdatedAt
+	if invalidateUsageState {
+		meta.UsageState = nil
+	}
 	record.Meta = meta
 	p.records.Put(reconciliation.SessionID, record)
 	return nil
@@ -110,23 +124,4 @@ type Snapshot struct {
 	Meta                  session.Meta
 	Events                []session.Event
 	ConversationFreshness session.ConversationFreshness
-}
-
-// SnapshotFromDir opens the persisted session at dir and projects its durable
-// state into a Snapshot using the production streaming readers. It surfaces the
-// same symlink/integrity rejections as session.Open. Test-only.
-func SnapshotFromDir(dir string, options ...session.StoreOption) (Snapshot, error) {
-	store, err := session.Open(dir, options...)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	events, err := CollectEvents(store)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	return Snapshot{
-		Meta:                  store.Meta(),
-		Events:                events,
-		ConversationFreshness: store.ConversationFreshness(),
-	}, nil
 }

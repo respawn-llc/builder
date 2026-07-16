@@ -514,7 +514,6 @@ func protocolError(resp *protocol.ResponseError) error {
 	switch resp.Code {
 	case protocol.ErrCodeWorktreeSelector,
 		protocol.ErrCodeWorktreeTransitionPending,
-		protocol.ErrCodeWorktreeImmediateTransition,
 		protocol.ErrCodeWorktreeSetupRetained,
 		protocol.ErrCodeWorktreeDeletePrecondition:
 		if len(resp.Data) > 0 {

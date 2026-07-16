@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 )
 
 type contextObservingProjectViewClient struct {
-	client.ProjectViewClient
+	apicontract.ProjectViewService
 	received chan context.Context
 }
 

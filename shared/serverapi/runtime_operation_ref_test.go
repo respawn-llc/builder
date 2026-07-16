@@ -4,44 +4,51 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 func TestInputBearingRuntimeRequestsRequireMatchingOperationRefs(t *testing.T) {
+	submitID := runtimeids.NewRuntimeClientRequestID()
+	preCompactID := runtimeids.NewRuntimeClientRequestID()
+	shellID := runtimeids.NewRuntimeClientRequestID()
+	compactID := runtimeids.NewRuntimeClientRequestID()
+	submitQueuedID := runtimeids.NewRuntimeClientRequestID()
+	queueCreateID := runtimeids.NewRuntimeClientRequestID()
 	for name, err := range map[string]error{
 		"submit": (RuntimeSubmitUserTurnRequest{
-			ClientRequestID:                 "submit-1",
+			ClientRequestID:                 submitID.String(),
 			SessionID:                       "session-1",
 			Text:                            "hello",
-			OperationRef:                    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-1"},
-			PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: "pre-compact-1"},
+			OperationRef:                    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: submitID},
+			PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: preCompactID},
 		}).Validate(),
 		"shell": (RuntimeSubmitUserShellCommandRequest{
-			ClientRequestID: "shell-1",
+			ClientRequestID: shellID.String(),
 			SessionID:       "session-1",
 			Command:         "pwd",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: "shell-1"},
+			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: shellID},
 		}).Validate(),
 		"compact": (RuntimeCompactContextRequest{
-			ClientRequestID: "compact-1",
+			ClientRequestID: compactID.String(),
 			SessionID:       "session-1",
 			Args:            "notes",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: "compact-1"},
+			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: compactID},
 		}).Validate(),
 		"pre-submit compact": (RuntimeCompactContextForPreSubmitRequest{
-			ClientRequestID: "pre-compact-1",
+			ClientRequestID: preCompactID.String(),
 			SessionID:       "session-1",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: "pre-compact-1"},
+			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: preCompactID},
 		}).Validate(),
 		"submit queued": (RuntimeSubmitQueuedUserMessagesRequest{
-			ClientRequestID: "submit-queued-1",
+			ClientRequestID: submitQueuedID.String(),
 			SessionID:       "session-1",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "submit-queued-1"},
+			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: submitQueuedID},
 		}).Validate(),
 		"queue user message": (RuntimeQueueUserMessageRequest{
-			ClientRequestID: "queue-create-1",
+			ClientRequestID: queueCreateID.String(),
 			SessionID:       "session-1",
 			Text:            "queued",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "queue-create-1"},
+			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: queueCreateID},
 		}).Validate(),
 	} {
 		if err != nil {
@@ -51,6 +58,11 @@ func TestInputBearingRuntimeRequestsRequireMatchingOperationRefs(t *testing.T) {
 }
 
 func TestInputBearingRuntimeRequestsRejectHiddenOrMismatchedOperationRefs(t *testing.T) {
+	submitID := runtimeids.NewRuntimeClientRequestID()
+	shellID := runtimeids.NewRuntimeClientRequestID()
+	otherID := runtimeids.NewRuntimeClientRequestID()
+	queueCreateID := runtimeids.NewRuntimeClientRequestID()
+	queueItemID := runtimeids.NewQueueItemID()
 	tests := []struct {
 		name string
 		req  interface{ Validate() error }
@@ -58,7 +70,7 @@ func TestInputBearingRuntimeRequestsRejectHiddenOrMismatchedOperationRefs(t *tes
 		{
 			name: "missing ref",
 			req: RuntimeSubmitUserTurnRequest{
-				ClientRequestID: "submit-1",
+				ClientRequestID: submitID.String(),
 				SessionID:       "session-1",
 				Text:            "hello",
 			},
@@ -66,28 +78,28 @@ func TestInputBearingRuntimeRequestsRejectHiddenOrMismatchedOperationRefs(t *tes
 		{
 			name: "wrong kind",
 			req: RuntimeSubmitUserTurnRequest{
-				ClientRequestID: "submit-1",
+				ClientRequestID: submitID.String(),
 				SessionID:       "session-1",
 				Text:            "hello",
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: "submit-1"},
+				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: submitID},
 			},
 		},
 		{
 			name: "request id mismatch",
 			req: RuntimeSubmitUserShellCommandRequest{
-				ClientRequestID: "shell-1",
+				ClientRequestID: shellID.String(),
 				SessionID:       "session-1",
 				Command:         "pwd",
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: "other"},
+				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: otherID},
 			},
 		},
 		{
 			name: "queue create with server queue id",
 			req: RuntimeQueueUserMessageRequest{
-				ClientRequestID: "queue-create-1",
+				ClientRequestID: queueCreateID.String(),
 				SessionID:       "session-1",
 				Text:            "queued",
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "queue-1"},
+				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: queueCreateID, QueueItemID: &queueItemID},
 			},
 		},
 	}
@@ -101,9 +113,11 @@ func TestInputBearingRuntimeRequestsRejectHiddenOrMismatchedOperationRefs(t *tes
 }
 
 func TestRuntimeInterruptRequestValidatesOptionalTargetOperationRef(t *testing.T) {
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-1"}
+	submitID := runtimeids.NewRuntimeClientRequestID()
+	interruptID := runtimeids.NewRuntimeClientRequestID()
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: submitID}
 	if err := (RuntimeInterruptRequest{
-		ClientRequestID:      "interrupt-1",
+		ClientRequestID:      interruptID.String(),
 		SessionID:            "session-1",
 		TargetOperationRef:   &ref,
 		PendingOperationRefs: []clientui.RuntimeOperationRef{ref},
@@ -112,7 +126,7 @@ func TestRuntimeInterruptRequestValidatesOptionalTargetOperationRef(t *testing.T
 	}
 	bad := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage}
 	if err := (RuntimeInterruptRequest{
-		ClientRequestID:    "interrupt-1",
+		ClientRequestID:    interruptID.String(),
 		SessionID:          "session-1",
 		TargetOperationRef: &bad,
 	}).Validate(); err == nil {

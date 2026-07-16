@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -13,14 +13,14 @@ import (
 
 type testServer struct {
 	cfg       config.App
-	client    client.ProjectViewClient
+	client    apicontract.ProjectViewService
 	bindCalls []serverapi.ProjectBinding
 }
 
 func (s *testServer) Config() config.App { return s.cfg }
 
 func (s *testServer) PresentationTheme() string { return "dark" }
-func (s *testServer) ProjectViewClient() client.ProjectViewClient {
+func (s *testServer) ProjectViewClient() apicontract.ProjectViewService {
 	return s.client
 }
 func (s *testServer) BindProjectWorkspace(_ context.Context, projectID string, workspaceID string) (*testServer, error) {

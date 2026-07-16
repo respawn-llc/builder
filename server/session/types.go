@@ -27,6 +27,40 @@ type LockedContract struct {
 	LockedAt          time.Time                  `json:"locked_at"`
 }
 
+func (c LockedContract) WithPromptFacingSnapshotsStale() LockedContract {
+	c.SystemPrompt = ""
+	c.HasSystemPrompt = false
+	c.ReviewerPrompt = ""
+	c.HasReviewerPrompt = false
+	return c
+}
+
+func (c LockedContract) WithMainPromptSnapshot(snapshot LockedMainPromptSnapshot) LockedContract {
+	c.SystemPrompt = snapshot.SystemPrompt
+	c.HasSystemPrompt = snapshot.HasSystemPrompt
+	c.ToolPreambles = snapshot.ToolPreambles
+	if snapshot.ContextWindow > 0 {
+		c.ContextWindow = snapshot.ContextWindow
+	}
+	if snapshot.ContextPercent > 0 {
+		c.ContextPercent = snapshot.ContextPercent
+	}
+	return c
+}
+
+func (c LockedContract) WithReviewerPromptSnapshot(snapshot LockedReviewerPromptSnapshot) LockedContract {
+	c.ReviewerPrompt = snapshot.ReviewerPrompt
+	c.HasReviewerPrompt = snapshot.HasReviewerPrompt
+	return c
+}
+
+func (c LockedContract) WithRequestShape(fields LockedRequestShapeBackfill) LockedContract {
+	c.EnabledTools = append([]string(nil), fields.EnabledTools...)
+	c.HasEnabledTools = fields.HasEnabledTools
+	c.WebSearchMode = fields.WebSearchMode
+	return c
+}
+
 type LockedMainPromptSnapshot struct {
 	SystemPrompt    string
 	HasSystemPrompt bool

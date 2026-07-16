@@ -143,21 +143,18 @@ func (s *Service) trySubmitUserTurnAsActiveLiveSteer(ctx context.Context, attemp
 }
 
 func (s *Service) runPreSubmitCompaction(ctx context.Context, sessionID string, ref clientui.RuntimeOperationRef, engine *runtime.Engine) error {
-	if ref.Validate() != nil {
-		return engine.CompactContextForPreSubmit(ctx)
-	}
 	_, err := runtimeops.Do(s.operations, ctx, sessionID, ref, sessionOnlyMemoRequest{SessionID: strings.TrimSpace(sessionID)}, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool {
 		return a.SessionID == b.SessionID
 	}, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
 		runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
 		defer stopRunCtx()
-		compactErr := engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
+		receipt, compactErr := engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
 			s.operations.MarkOperationActive(sessionID, ref)
 		})
-		if s.operationAttemptCanceled(compactErr, attempt) {
+		if !receipt.Committed && s.operationAttemptCanceled(compactErr, attempt) {
 			s.operations.RecordCanceledNotCommitted(sessionID, ref)
 		} else {
-			s.operations.RecordCompactCompletion(sessionID, ref, compactErr)
+			s.operations.RecordCompactCompletion(sessionID, ref, receipt, compactErr)
 		}
 		return struct{}{}, compactErr
 	})

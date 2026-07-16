@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"core/shared/clientui"
 	"core/shared/llmerrors"
@@ -176,7 +175,7 @@ func TestRemoteRunPromptCarriesCallerLineageAndExplicitDefault(t *testing.T) {
 	}
 }
 
-func TestLoopbackAndRemoteRunPromptPreserveNullableProvenanceAndSelectors(t *testing.T) {
+func TestInProcessAndRemoteRunPromptPreserveNullableProvenanceAndSelectors(t *testing.T) {
 	caller := "caller-session"
 	parent := "parent-session"
 	defaultRole := "default"
@@ -192,12 +191,11 @@ func TestLoopbackAndRemoteRunPromptPreserveNullableProvenanceAndSelectors(t *tes
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			loopbackService := &capturedRunPromptService{}
-			loopback := NewLoopbackRunPromptClient(loopbackService)
-			if _, err := loopback.RunPrompt(context.Background(), tc.req, nil); err != nil {
-				t.Fatalf("loopback RunPrompt: %v", err)
+			inProcess := &capturedRunPromptService{}
+			if _, err := inProcess.RunPrompt(context.Background(), tc.req, nil); err != nil {
+				t.Fatalf("in-process RunPrompt: %v", err)
 			}
-			assertSameRunPromptWireContract(t, loopbackService.request, tc.req)
+			assertSameRunPromptWireContract(t, inProcess.request, tc.req)
 
 			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 				acceptRemoteHandshake(t, ws)
@@ -315,127 +313,6 @@ func TestRemoteGetsLatestCommittedAssistantFinalAnswer(t *testing.T) {
 	}
 }
 
-func TestRemoteSessionActivitySubscriptionNextHonorsCanceledContext(t *testing.T) {
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			return
-		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "session", SessionID: "session-1"})); err != nil {
-			return
-		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
-			return
-		}
-		<-time.After(2 * time.Second)
-	})
-
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemote: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	sub, err := remote.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: "session-1"})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := sub.Next(ctx)
-		errCh <- err
-	}()
-
-	<-time.After(50 * time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-errCh:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Next error = %v, want context canceled", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for Next to honor cancellation")
-	}
-}
-
-func TestRemoteSessionActivitySubscriptionDecodesRuntimeActivityChanged(t *testing.T) {
-	version := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 21}
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
-		ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
-		RunID:      "run-1",
-		StepID:     "step-1",
-	})
-	reconciliation := clientui.NewEmptyRuntimeInputReconciliationSnapshot(version)
-	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		var req protocol.Request
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
-			return
-		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "session", SessionID: "session-1"})); err != nil {
-			return
-		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			return
-		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
-			return
-		}
-		evt := protocol.SessionActivityEventParams{Event: clientui.Event{
-			Kind:                clientui.EventRuntimeActivityChanged,
-			Sequence:            7,
-			ReadModelVersion:    version,
-			RuntimeActivity:     &activity,
-			InputReconciliation: &reconciliation,
-		}}
-		_ = websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodSessionActivityEvent, Params: mustJSON(t, evt)})
-	})
-
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemote: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	sub, err := remote.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: "session-1"})
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	evt, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
-	if evt.Kind != clientui.EventRuntimeActivityChanged || evt.Sequence != 7 {
-		t.Fatalf("event = %+v, want runtime activity changed", evt)
-	}
-	if evt.ReadModelVersion != version || evt.RuntimeActivity == nil || *evt.RuntimeActivity != activity {
-		t.Fatalf("runtime activity payload = %+v version=%+v, want %+v %+v", evt.RuntimeActivity, evt.ReadModelVersion, activity, version)
-	}
-	if evt.InputReconciliation == nil || evt.InputReconciliation.Version != version {
-		t.Fatalf("reconciliation = %+v, want version %+v", evt.InputReconciliation, version)
-	}
-}
-
 func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)
@@ -468,9 +345,12 @@ func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(
 			t.Fatalf("send subscribe response: %v", err)
 		}
 		event := protocol.SessionTranscriptEventParams{Message: clientui.TranscriptMessage{
-			Sequence:  1,
-			Kind:      clientui.TranscriptMessageHydration,
-			Hydration: &clientui.TranscriptHydration{},
+			Sequence: 2,
+			Kind:     clientui.TranscriptMessageOperationalDiagnostic,
+			Payload: clientui.TranscriptPayload{OperationalDiagnostic: &clientui.TranscriptOperationalDiagnostic{
+				Code:   clientui.OperationalDiagnosticSleepGuardFailed,
+				Detail: "sleep prevention failed",
+			}},
 		}}
 		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodSessionTranscriptEvent, Params: mustJSON(t, event)}); err != nil {
 			t.Fatalf("send transcript event: %v", err)
@@ -493,8 +373,8 @@ func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(
 	if err != nil {
 		t.Fatalf("Next: %v", err)
 	}
-	if message.Sequence != 1 || message.Kind != clientui.TranscriptMessageHydration || message.Hydration == nil {
-		t.Fatalf("transcript message = %+v, want seq=1 hydration", message)
+	if message.Sequence != 2 || message.Kind != clientui.TranscriptMessageOperationalDiagnostic || message.Payload.OperationalDiagnostic == nil {
+		t.Fatalf("transcript message = %+v, want seq=2 operational diagnostic", message)
 	}
 }
 
@@ -1071,7 +951,6 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 			SessionID:          "session",
 			PendingOperationID: operationID,
 		},
-		serverapi.NewWorktreeImmediateTransitionError(serverapi.WorktreeImmediateTransitionApplyFailed, errors.New("retarget failed")),
 		&serverapi.WorktreeSetupRetainedError{
 			Worktree: serverapi.WorktreeTopologyEntry{
 				Variant: serverapi.WorktreeTopologyVariantRegistered,
@@ -1107,11 +986,6 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 		var decoded *serverapi.WorktreeTransitionPendingError
 		if !errors.As(err, &decoded) || decoded.PendingOperationID != operationID || decoded.SessionID != "session" {
 			t.Fatalf("decoded pending transition = %+v (%v)", decoded, err)
-		}
-	case *serverapi.WorktreeImmediateTransitionError:
-		var decoded *serverapi.WorktreeImmediateTransitionError
-		if !errors.As(err, &decoded) || decoded.Kind != serverapi.WorktreeImmediateTransitionApplyFailed || decoded.Error() != source.Error() {
-			t.Fatalf("decoded immediate transition = %+v (%v)", decoded, err)
 		}
 	case *serverapi.WorktreeSetupRetainedError:
 		var decoded *serverapi.WorktreeSetupRetainedError

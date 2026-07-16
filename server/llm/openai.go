@@ -220,7 +220,7 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	return CompactionResponse{
 		OutputItems:       CloneResponseItems(providerResp.OutputItems),
 		Usage:             providerResp.Usage,
-		TrimmedItemsCount: textutil.CloneInt(providerResp.TrimmedItemsCount),
+		TrimmedItemsCount: textutil.Pointer(providerResp.TrimmedItemsCount),
 	}, nil
 }
 

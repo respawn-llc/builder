@@ -109,14 +109,8 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 	handler(g, conn, ctx, state, route, req)
 }
 
-func (g *Gateway) serveSessionActivitySubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.SessionActivityClient().SubscribeSessionActivity, func(evt clientui.Event) protocol.SessionActivityEventParams {
-		return protocol.SessionActivityEventParams{Event: evt}
-	})
-}
-
 func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.SessionTranscriptClient().SubscribeSessionTranscript, func(message clientui.TranscriptSubscriptionMessage) protocol.SessionTranscriptEventParams {
+	serveGatewaySubscription(conn, ctx, route, req, g.deps.SessionTranscriptClient().SubscribeSessionTranscript, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
 		return protocol.SessionTranscriptEventParams{Message: message}
 	})
 }
@@ -168,12 +162,6 @@ func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire
 func (g *Gateway) serveProcessOutputSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
 	serveGatewaySubscription(conn, ctx, route, req, g.deps.ProcessOutputClient().SubscribeProcessOutput, func(chunk clientui.ProcessOutputChunk) protocol.ProcessOutputEventParams {
 		return protocol.ProcessOutputEventParams{Chunk: chunk}
-	})
-}
-
-func (g *Gateway) servePromptActivitySubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.PromptActivityClient().SubscribePromptActivity, func(evt clientui.PendingPromptEvent) protocol.PromptActivityEventParams {
-		return protocol.PromptActivityEventParams{Event: evt}
 	})
 }
 

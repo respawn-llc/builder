@@ -101,6 +101,34 @@ fn lint_policy_rejects_inline_tests_in_src() {
 }
 
 #[test]
+fn lint_policy_rejects_removed_protocol_contracts() {
+    let repo = repo();
+    let old_event = ["Ev", "ent"].concat();
+    let old_prompt = ["Pending", "PromptEvent"].concat();
+    let old_route = ["prompt.", "subscribeActivity"].concat();
+    let old_phase = ["legacy_", "final_answer"].concat();
+    let source = format!(
+        "#![forbid(unsafe_code)]\npub struct {old_event};\npub struct {old_prompt};\nconst ROUTE: &str = \"{old_route}\";\nconst PHASE: &str = \"{old_phase}\";\n"
+    );
+    write(
+        &repo
+            .path()
+            .join("tui-rs/crates/client-contracts/src/clientui.rs"),
+        &source,
+    );
+
+    let findings = manifest_check::lint_policy::check(repo.path()).unwrap_err();
+
+    assert_eq!(
+        findings
+            .iter()
+            .filter(|finding| finding.code == "rust_obsolete_protocol_symbol")
+            .count(),
+        4
+    );
+}
+
+#[test]
 fn lint_policy_rejects_auto_discovered_integration_tests() {
     let repo = repo();
     write(

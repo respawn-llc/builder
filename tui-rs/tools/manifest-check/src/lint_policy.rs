@@ -109,6 +109,31 @@ impl<'a> LintVisitor<'a> {
 }
 
 impl<'a, 'ast> Visit<'ast> for LintVisitor<'a> {
+    fn visit_ident(&mut self, node: &'ast syn::Ident) {
+        let identifier = node.to_string();
+        if obsolete_protocol_identifier(&identifier)
+            || (is_client_contracts_clientui_source(self.repo_root, self.path)
+                && obsolete_clientui_identifier(&identifier))
+        {
+            self.finding(
+                "rust_obsolete_protocol_symbol",
+                &format!("obsolete protocol identifier {identifier} must stay deleted"),
+            );
+        }
+        visit::visit_ident(self, node);
+    }
+
+    fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
+        let value = node.value();
+        if obsolete_protocol_wire_value(&value) {
+            self.finding(
+                "rust_obsolete_protocol_symbol",
+                &format!("obsolete protocol wire value {value} must stay deleted"),
+            );
+        }
+        visit::visit_lit_str(self, node);
+    }
+
     fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
         self.finding("rust_unsafe_code", "unsafe block is forbidden");
         visit::visit_expr_unsafe(self, node);
@@ -170,6 +195,73 @@ impl<'a, 'ast> Visit<'ast> for LintVisitor<'a> {
         }
         visit::visit_expr_call(self, node);
     }
+}
+
+fn obsolete_protocol_identifier(identifier: &str) -> bool {
+    const IDENTIFIERS: &[&str] = &[
+        concat!("Assistant", "PhaseLegacyFinal"),
+        concat!("METHOD_", "PROMPT_SUBSCRIBE_ACTIVITY"),
+        concat!("METHOD_", "SESSION_SUBSCRIBE_ACTIVITY"),
+        concat!("Pending", "PromptEvent"),
+        concat!("Pending", "PromptEventType"),
+        concat!("Prompt", "ActivityEventParams"),
+        concat!("Prompt", "ActivitySubscribeRequest"),
+        concat!("REQUEST_ID_", "SUBSCRIBE_PROMPT_ACTIVITY"),
+        concat!("REQUEST_ID_", "SUBSCRIBE_SESSION_ACTIVITY"),
+        concat!("Session", "ActivityEventParams"),
+        concat!("Session", "ActivitySubscribeRequest"),
+        concat!("Session", "TranscriptEventParams"),
+        concat!("Session", "TranscriptSubscribeRequest"),
+        concat!("Transcript", "AssistantStreamAbortReason"),
+        concat!("Transcript", "CacheWarningData"),
+        concat!("Transcript", "DiagnosticData"),
+        concat!("Transcript", "NoticeData"),
+        concat!("Transcript", "RecoveryCause"),
+        concat!("Transcript", "ToolAbortReason"),
+        concat!("Typed", "StreamItem"),
+        concat!("Typed", "Subscription"),
+        concat!("prompt_", "activity"),
+        concat!("session_", "activity"),
+        concat!("subscribe_", "prompt_activity"),
+        concat!("subscribe_", "session_activity"),
+        concat!("subscribe_", "session_transcript"),
+    ];
+    IDENTIFIERS.contains(&identifier)
+}
+
+fn obsolete_clientui_identifier(identifier: &str) -> bool {
+    const IDENTIFIERS: &[&str] = &[
+        concat!("Background", "ShellEvent"),
+        concat!("Cache", "Warning"),
+        concat!("Chat", "Entry"),
+        concat!("Compaction", "Status"),
+        concat!("Event", "Kind"),
+        concat!("Ev", "ent"),
+        concat!("Reasoning", "Delta"),
+    ];
+    IDENTIFIERS.contains(&identifier)
+}
+
+fn obsolete_protocol_wire_value(value: &str) -> bool {
+    const VALUES: &[&str] = &[
+        concat!("legacy_", "final_answer"),
+        concat!("prompt.", "activity"),
+        concat!("prompt.", "activity.complete"),
+        concat!("prompt.", "subscribeActivity"),
+        concat!("prompt_", "activity"),
+        concat!("session.", "activity"),
+        concat!("session.", "activity.complete"),
+        concat!("session.", "subscribeActivity"),
+        concat!("session_", "activity"),
+        concat!("subscribe-", "prompt-activity"),
+        concat!("subscribe-", "session-activity"),
+    ];
+    VALUES.contains(&value)
+}
+
+fn is_client_contracts_clientui_source(repo_root: &Path, path: &Path) -> bool {
+    path == repo_root.join("tui-rs/crates/client-contracts/src/clientui.rs")
+        || path.starts_with(repo_root.join("tui-rs/crates/client-contracts/src/clientui"))
 }
 
 fn check_attr(

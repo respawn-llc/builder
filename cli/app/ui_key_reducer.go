@@ -6,16 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type uiKeyFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) keyReducer() uiKeyFeatureReducer {
-	return uiKeyFeatureReducer{model: m}
-}
-
-func (r uiKeyFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceKeyMessage(msg tea.Msg) uiFeatureUpdateResult {
 	if keyMsg, ok, source := normalizeKeyMsgWithSource(msg); ok {
 		if m.debugKeys {
 			m.setDebugKeyTransientStatus(msg, keyMsg, source)

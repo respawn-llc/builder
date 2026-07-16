@@ -285,8 +285,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.SessionMainViewRequest:
 		return p.SessionID, true
-	case serverapi.SessionExecutionWorkspaceRootRequest:
-		return p.SessionID.String(), true
 	case serverapi.SessionTranscriptPageRequest:
 		return p.SessionID, true
 	case serverapi.SessionLatestCommittedAssistantFinalAnswerRequest:
@@ -379,11 +377,7 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.ApprovalAnswerRequest:
 		return p.SessionID, true
-	case serverapi.SessionActivitySubscribeRequest:
-		return p.SessionID, true
 	case serverapi.TranscriptSubscribeRequest:
-		return p.SessionID, true
-	case serverapi.PromptActivitySubscribeRequest:
 		return p.SessionID, true
 	case serverapi.AttentionSessionNotificationSubscribeRequest:
 		return p.SessionID, true

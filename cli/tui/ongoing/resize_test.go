@@ -5,8 +5,7 @@ import (
 	"testing"
 
 	"core/cli/tui/transcriptrender"
-
-	"github.com/google/uuid"
+	"core/shared/runtimeids"
 )
 
 func TestWidthChangeBeforeImmutableScrollbackRepaintsOnly(t *testing.T) {
@@ -58,7 +57,7 @@ func TestWidthChangeAfterAssistantPromotionRepaintsWithoutRehydration(t *testing
 	if _, err := surface.Render(FrameInput{Size: Size{Width: 20, Height: 3}}); err != nil {
 		t.Fatalf("render initial frame: %v", err)
 	}
-	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(uuid.New(), "stable\n\n"), FrameInput{Size: Size{Width: 20, Height: 3}}); err != nil {
+	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(runtimeids.NewAssistantStreamID(), "stable\n\n"), FrameInput{Size: Size{Width: 20, Height: 3}}); err != nil {
 		t.Fatalf("promote assistant row: %v", err)
 	}
 	out.Reset()

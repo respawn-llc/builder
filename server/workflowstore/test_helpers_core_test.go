@@ -103,19 +103,62 @@ func hasWorkflowDeleteBlocker(blockers []WorkflowDeleteBlocker, code string, cou
 
 func workflowGraphSaveRequestFromDefinition(workflowID workflow.WorkflowID, revision int64, confirmed bool, def workflow.Definition) WorkflowGraphSaveRequest {
 	req := WorkflowGraphSaveRequest{WorkflowID: workflowID, ExpectedVersion: revision, Confirmed: confirmed}
-	for _, group := range def.NodeGroups {
-		req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: group.ID, WorkflowID: workflowID, Key: group.Key, DisplayName: group.DisplayName})
+	groupKeyByID := make(map[string]string, len(def.NodeGroups))
+	for index, group := range def.NodeGroups {
+		req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: group.ID, WorkflowID: workflowID, Key: group.Key, DisplayName: group.DisplayName, SortOrder: int64(index * 100)})
+		groupKeyByID[group.ID] = string(group.Key)
 	}
 	for _, node := range def.Nodes {
-		req.Nodes = append(req.Nodes, NodeRecord{ID: workflow.NodeIDOf(node), WorkflowID: workflowID, Key: workflow.NodeKey(node), Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node), GroupID: workflow.NodeGroupID(node), SubagentRole: workflow.NodeSubagentRole(node), PromptTemplate: workflow.NodePromptTemplate(node), CompletionMode: workflow.NodeCompletionMode(node), ScriptPath: workflow.NodeScriptPath(node).String(), InputFields: workflow.NodeInputFields(node), JoinInputProviders: workflow.NodeJoinInputProviders(node), OutputFields: workflow.NodeOutputFields(node)})
+		groupID := workflow.NodeGroupID(node)
+		req.Nodes = append(req.Nodes, NodeRecord{ID: workflow.NodeIDOf(node), WorkflowID: workflowID, Key: workflow.NodeKey(node), Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node), GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: workflow.NodeSubagentRole(node), PromptTemplate: workflow.NodePromptTemplate(node), CompletionMode: workflow.NodeCompletionMode(node), ScriptPath: workflow.NodeScriptPath(node).String(), InputFields: workflow.NodeInputFields(node), JoinInputProviders: workflow.NodeJoinInputProviders(node), OutputFields: workflow.NodeOutputFields(node)})
 	}
 	for _, group := range def.TransitionGroups {
-		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: group.ID, WorkflowID: workflowID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName})
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: group.ID, WorkflowID: workflowID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
 	}
 	for _, edge := range def.Edges {
 		req.Edges = append(req.Edges, EdgeRecord{ID: edge.ID, WorkflowID: workflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, RequiresApproval: edge.RequiresApproval, PromptTemplate: edge.PromptTemplate, Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements})
 	}
 	return req
+}
+
+func saveWorkflowGraphFixture(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, edit func(workflow.Definition, *WorkflowGraphSaveRequest)) WorkflowGraphSaveResult {
+	t.Helper()
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition workflow fixture: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	edit(def, &req)
+	result, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph workflow fixture: %v", err)
+	}
+	if !result.Saved {
+		t.Fatalf("SaveWorkflowGraph workflow fixture rejected: blockers=%+v validation=%+v", result.Blockers, result.ValidationErrors)
+	}
+	return result
+}
+
+func workflowGraphSaveNodeRecord(t *testing.T, nodes []NodeRecord, nodeID workflow.NodeID) *NodeRecord {
+	t.Helper()
+	for index := range nodes {
+		if nodes[index].ID == nodeID {
+			return &nodes[index]
+		}
+	}
+	t.Fatalf("node record %q missing from %+v", nodeID, nodes)
+	return nil
+}
+
+func workflowGraphSaveEdgeRecord(t *testing.T, edges []EdgeRecord, edgeID workflow.EdgeID) *EdgeRecord {
+	t.Helper()
+	for index := range edges {
+		if edges[index].ID == edgeID {
+			return &edges[index]
+		}
+	}
+	t.Fatalf("edge record %q missing from %+v", edgeID, edges)
+	return nil
 }
 
 func renameWorkflowGraphSaveNode(nodes []NodeRecord, nodeID workflow.NodeID, displayName string) []NodeRecord {
@@ -134,6 +177,9 @@ func setWorkflowGraphSaveNodeGroup(nodes []NodeRecord, nodeID workflow.NodeID, g
 	for _, node := range nodes {
 		if node.ID == nodeID {
 			node.GroupID = groupID
+			if groupID == "" {
+				node.GroupKey = ""
+			}
 		}
 		changed = append(changed, node)
 	}

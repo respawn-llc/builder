@@ -174,7 +174,7 @@ func (e *Engine) observePromptCacheRequest(stepID string, prepared preparedCache
 	}
 	events := make([]session.EventInput, 0, 1)
 	events = append(events, session.EventInput{Kind: sessionEventCacheRequestObserved, Payload: prepared.request})
-	if _, err := e.store.AppendTurnAtomic(stepID, events); err != nil {
+	if _, _, err := e.store.AppendTurnAtomic(stepID, events); err != nil {
 		return err
 	}
 	return nil
@@ -217,15 +217,11 @@ func (e *Engine) observePromptCacheResponse(stepID string, prepared preparedCach
 		}
 	}
 	events = append(events, session.EventInput{Kind: sessionEventCacheResponseObserved, Payload: response})
-	if warning != nil {
-		if err := e.steer(stepID, steerCacheObservationIntent(events, *warning, cacheWarningEntryVisibility(e.cfg.CacheWarningMode), true)); err != nil {
-			return err
-		}
-	} else if _, err := e.store.AppendTurnAtomic(stepID, events); err != nil {
-		return err
-	}
-	e.modelRequests().RequestCache().RecordResponse(response)
-	return nil
+	_, err := e.steerWithCommitReceipt(
+		stepID,
+		steerCacheObservationIntent(events, response, warning, cacheWarningEntryVisibility(e.cfg.CacheWarningMode), true),
+	)
+	return err
 }
 
 func shouldWarnOnCacheReuseDrop(mode config.CacheWarningMode, prepared preparedCacheRequestObservation, usage llm.Usage) bool {

@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 func TestSessionPersistInputDraftAcceptsStructuredRecoveryBuffers(t *testing.T) {
+	submitID := runtimeids.NewRuntimeClientRequestID()
 	req := SessionPersistInputDraftRequest{
 		ClientRequestID: "draft-1",
 		SessionID:       "session-1",
@@ -17,7 +19,7 @@ func TestSessionPersistInputDraftAcceptsStructuredRecoveryBuffers(t *testing.T) 
 			Text: "submitted before forced exit",
 			OperationRef: clientui.RuntimeOperationRef{
 				Kind:            clientui.RuntimeOperationKindSubmit,
-				ClientRequestID: "submit-1",
+				ClientRequestID: submitID,
 			},
 		}},
 	}

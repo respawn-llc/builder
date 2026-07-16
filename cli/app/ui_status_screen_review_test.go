@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/config"
-
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -20,17 +18,19 @@ func TestStatusOverlayScreenReview(t *testing.T) {
 		setup  func(*uiModel)
 	}{
 		{
-			name: "normal-disabled", width: 80, height: 24,
+			name: "normal-disabled-skill", width: 80, height: 24,
 			setup: func(model *uiModel) {
 				model.status.snapshot = statusScreenReviewSnapshot()
-				model.status.snapshot.SkillDiscoveryState = config.SkillSubsystemDisabled
+				model.status.snapshot.Skills[0].Disabled = true
+				model.status.snapshot.SkillTokenCounts = nil
 			},
 		},
 		{
-			name: "narrow-disabled", width: 32, height: 12,
+			name: "narrow-disabled-skill", width: 32, height: 12,
 			setup: func(model *uiModel) {
 				model.status.snapshot = statusScreenReviewSnapshot()
-				model.status.snapshot.SkillDiscoveryState = config.SkillSubsystemDisabled
+				model.status.snapshot.Skills[0].Disabled = true
+				model.status.snapshot.SkillTokenCounts = nil
 			},
 		},
 		{

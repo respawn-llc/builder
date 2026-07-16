@@ -46,3 +46,25 @@ func ParseStepID(raw string) (StepID, error) {
 	id, err := parseUUIDv4Value(raw, "step_id")
 	return StepID{uuidv4Value: id}, err
 }
+
+type AssistantStreamID struct{ uuidv4Value }
+
+func ParseAssistantStreamID(raw string) (AssistantStreamID, error) {
+	id, err := parseUUIDv4Value(raw, "assistant_stream_id")
+	return AssistantStreamID{uuidv4Value: id}, err
+}
+
+func NewAssistantStreamID() AssistantStreamID {
+	return AssistantStreamID{uuidv4Value: newUUIDv4Value()}
+}
+
+type BackgroundActivityID struct{ uuidv4Value }
+
+func ParseBackgroundActivityID(raw string) (BackgroundActivityID, error) {
+	id, err := parseUUIDv4Value(raw, "background_activity_id")
+	return BackgroundActivityID{uuidv4Value: id}, err
+}
+
+func NewBackgroundActivityID() BackgroundActivityID {
+	return BackgroundActivityID{uuidv4Value: newUUIDv4Value()}
+}

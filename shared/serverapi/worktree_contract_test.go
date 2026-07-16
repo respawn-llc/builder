@@ -213,20 +213,15 @@ func TestWorktreeDeleteResultAndCleanupPoliciesAreDiscriminated(t *testing.T) {
 
 func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	operationID := NewWorktreeOperationID()
-	origin := &RuntimeStepOrigin{
-		RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
-		StepID: "018fdd67-89ab-4cde-8123-456789abc002",
-	}
 	valid := []interface{ Validate() error }{
 		WorktreeSelectorPreviewRequest{SessionID: "session", Selector: "feature"},
-		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature", Origin: origin},
-		WorktreeLeaveRequest{OperationID: operationID, SessionID: "session", Origin: origin},
+		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature"},
+		WorktreeLeaveRequest{OperationID: operationID, SessionID: "session"},
 		WorktreeDeleteRequest{
 			OperationID:         operationID,
 			SessionID:           "session",
 			Selector:            "feature",
 			BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
-			Origin:              origin,
 		},
 	}
 	for _, request := range valid {
@@ -243,30 +238,6 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	for _, request := range invalid {
 		if err := request.Validate(); err == nil {
 			t.Fatalf("%T validated without required facts", request)
-		}
-	}
-}
-
-func TestWorktreeTransitionRequestsRejectInvalidOrigins(t *testing.T) {
-	operationID := NewWorktreeOperationID()
-	invalidOrigin := &RuntimeStepOrigin{
-		RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
-		StepID: "invalid",
-	}
-	requests := []interface{ Validate() error }{
-		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature", Origin: invalidOrigin},
-		WorktreeLeaveRequest{OperationID: operationID, SessionID: "session", Origin: invalidOrigin},
-		WorktreeDeleteRequest{
-			OperationID:         operationID,
-			SessionID:           "session",
-			Selector:            "feature",
-			BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
-			Origin:              invalidOrigin,
-		},
-	}
-	for _, request := range requests {
-		if err := request.Validate(); err == nil {
-			t.Fatalf("%T validated an invalid origin", request)
 		}
 	}
 }

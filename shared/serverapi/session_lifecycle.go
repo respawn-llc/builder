@@ -88,7 +88,7 @@ type SessionResolveTransitionRequest struct {
 	Transition      SessionTransition `json:"transition"`
 }
 
-type SessionResolveTransitionResponse = SessionLifecycleResult
+type SessionResolveTransitionResponse = SessionDirective
 
 func (r SessionPersistInputDraftRequest) Validate() error {
 	if strings.TrimSpace(r.ClientRequestID) == "" {

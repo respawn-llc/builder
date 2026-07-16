@@ -117,27 +117,6 @@ func (m *uiModel) beginSubmitAttempt(text string, queuedID string, operationRef 
 	return m.submitToken
 }
 
-func (m *uiModel) markActiveSubmitFlushed(evt clientui.Event) {
-	if m == nil || m.activeSubmit.token == 0 {
-		return
-	}
-	switch evt.Kind {
-	case clientui.EventRunStateChanged:
-		if evt.RunState == nil || !evt.RunState.Lifecycle.IsRunning() || strings.TrimSpace(m.activeSubmit.stepID) != "" {
-			return
-		}
-		m.activeSubmit.stepID = strings.TrimSpace(evt.StepID)
-	case clientui.EventUserMessageFlushed:
-		if strings.TrimSpace(m.activeSubmit.stepID) != "" && strings.TrimSpace(evt.StepID) != strings.TrimSpace(m.activeSubmit.stepID) {
-			return
-		}
-		if strings.TrimSpace(evt.UserMessage) != "" && strings.TrimSpace(evt.UserMessage) != strings.TrimSpace(m.activeSubmit.text) {
-			return
-		}
-		m.activeSubmit.flushed = true
-	}
-}
-
 type uiCompactionOrigin uint8
 
 const (
@@ -216,7 +195,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	m.clearPendingRuntimeOperations(clientui.RuntimeOperationKindPreSubmitCompact)
 	c.finishRuntimeOperationAffordance(false)
 	if msg.token == 0 || !m.hasRuntimeClient() {
-		_ = m.applyRuntimeActivityProjection(clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{}))
+		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle})
 	}
 	m.discardQueuedInput(activeQueuedID)
 	if msg.err != nil {
@@ -400,7 +379,7 @@ func (m *uiModel) shouldRestoreSubmittedTextOnSubmitError(err error) bool {
 	}
 	view := m.cachedRuntimeMainView()
 	for _, record := range view.InputReconciliation.Operations {
-		if record.OperationRef != ref {
+		if record.Operation != ref {
 			continue
 		}
 		switch record.State {

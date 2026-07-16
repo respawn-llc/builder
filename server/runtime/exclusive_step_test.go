@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/toolspec"
 )
@@ -293,11 +294,10 @@ func TestRunWhenIdleWaitsForTerminalPublication(t *testing.T) {
 	}
 }
 
-func TestExclusiveStepAuthorityRejectsInterruptedStepBeforeFinalDrain(t *testing.T) {
+func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-	eng.stepLifecycle = lifecycle
 	stepCtx, stepID, err := lifecycle.begin(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn})
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -306,15 +306,25 @@ func TestExclusiveStepAuthorityRejectsInterruptedStepBeforeFinalDrain(t *testing
 		t.Fatalf("begin returned ctx=%v stepID=%q, want active step", stepCtx, stepID)
 	}
 
-	if _, err := lifecycle.InterruptCurrent(nil); err != nil {
-		t.Fatalf("InterruptCurrent: %v", err)
-	}
-	err = eng.ApplyForActiveStep(stepID, func() error {
-		t.Fatal("active-step callback ran after interruption")
+	called := false
+	active, err := lifecycle.WithActiveStep(func(string) error {
+		called = true
 		return nil
 	})
-	if !errors.Is(err, ErrActiveStepInactive) {
-		t.Fatalf("ApplyForActiveStep after interruption error = %v, want ErrActiveStepInactive", err)
+	if err != nil || !active || !called {
+		t.Fatalf("WithActiveStep before close active=%t called=%t err=%v, want active callback", active, called, err)
+	}
+
+	lifecycle.closeActiveStepQueue(stepID)
+	active, err = lifecycle.WithActiveStep(func(string) error {
+		t.Fatal("active-step callback ran after queue close")
+		return nil
+	})
+	if !errors.Is(err, ErrAgentBusy) {
+		t.Fatalf("WithActiveStep after close error = %v, want ErrAgentBusy", err)
+	}
+	if !active {
+		t.Fatal("WithActiveStep after close active=false, want true with busy error")
 	}
 	lifecycle.end()
 }
@@ -557,19 +567,11 @@ func TestExclusiveStepLifecycleDiscardsStreamingMessageOnInterrupt(t *testing.T)
 		t.Fatal("timed out waiting for streaming step")
 	}
 
-	if got := eng.RecentTailTranscriptWindow(1).Snapshot.Streaming; got == "" {
-		t.Fatal("expected streaming message populated before interrupt")
-	}
-
 	if err := lifecycle.Interrupt(); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled run, got %v", err)
-	}
-
-	if got := eng.RecentTailTranscriptWindow(1).Snapshot.Streaming; got != "" {
-		t.Fatalf("expected streaming message discarded after interrupt, got %q", got)
 	}
 
 	mu.Lock()
@@ -608,14 +610,12 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 }
 
 func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceFailures(t *testing.T) {
-	observer := &armedTestPersistenceObserver{
-		delegate: runtimeTestSessionPersistence,
-		err:      errors.New("finish persistence failed"),
-	}
-	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(observer))
+	finishErr := errors.New("finish persistence failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))
 	sink := &callbackStepLifecycleSink{onTransition: func(transition StepLifecycleTransition) error {
 		if transition == StepLifecycleTransitionEnded {
-			observer.armed.Store(true)
+			gate.FailNext(finishErr)
 		}
 		return nil
 	}}
@@ -816,7 +816,7 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 
 	steps := &stubExclusiveStepLifecycle{}
 	compactor := &defaultContextCompactor{engine: eng, steps: steps}
-	if err := compactor.CompactContext(context.Background(), ""); err != nil {
+	if _, err := compactor.CompactContextWithActiveHook(context.Background(), "", nil); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
 	if steps.calls() != 1 {

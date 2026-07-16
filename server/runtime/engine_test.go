@@ -338,8 +338,6 @@ type fakeStreamClient struct {
 
 type fakeAsyncLateDeltaClient struct{}
 
-type fakeSimpleStreamClient struct{}
-
 type fakeNoopStreamClient struct{}
 
 type fakeReasoningStreamClient struct{}
@@ -482,21 +480,6 @@ func (fakeAsyncLateDeltaClient) GenerateStream(_ context.Context, _ llm.Request,
 	}
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "final"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}, nil
-}
-
-func (fakeSimpleStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("not implemented")
-}
-
-func (fakeSimpleStreamClient) GenerateStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
-	if onDelta != nil {
-		onDelta("a")
-		onDelta("b")
-	}
-	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ab"},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }

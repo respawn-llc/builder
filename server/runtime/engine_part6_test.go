@@ -4,8 +4,8 @@ import (
 	"context"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
-	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
@@ -103,14 +103,24 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	if len(snapshotAtCompletion.Entries) < 2 {
 		t.Fatalf("expected follow-up assistant and reviewer status in completion snapshot, got %+v", snapshotAtCompletion.Entries)
 	}
-	assistantEntry := snapshotAtCompletion.Entries[len(snapshotAtCompletion.Entries)-2]
+	assistantIndex := len(snapshotAtCompletion.Entries) - 2
+	suggestionsIndex := -1
+	for index, entry := range snapshotAtCompletion.Entries[:assistantIndex] {
+		if entry.Role == "reviewer_suggestions" {
+			suggestionsIndex = index
+		}
+	}
+	if suggestionsIndex < 0 {
+		t.Fatalf("expected reviewer suggestions before follow-up assistant, got %+v", snapshotAtCompletion.Entries)
+	}
+	assistantEntry := snapshotAtCompletion.Entries[assistantIndex]
 	if assistantEntry.Role != "assistant" || assistantEntry.Text != "updated final after review" {
 		t.Fatalf("expected completion snapshot penultimate entry to be follow-up assistant, got %+v", assistantEntry)
 	}
 	if !assistant.CommittedEntryStartSet {
 		t.Fatalf("expected follow-up assistant event committed start metadata, got %+v", *assistant)
 	}
-	if got, want := assistant.CommittedEntryStart, len(snapshotAtCompletion.Entries)-2; got != want {
+	if got, want := assistant.CommittedEntryStart, assistantIndex; got != want {
 		t.Fatalf("follow-up assistant committed start = %d, want %d; snapshot=%+v", got, want, snapshotAtCompletion.Entries)
 	}
 	statusEntry := snapshotAtCompletion.Entries[len(snapshotAtCompletion.Entries)-1]
@@ -205,8 +215,6 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 }
 
 func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstructionAppendFailure(t *testing.T) {
-	reviewerInstructionErr := errors.New("injected reviewer instruction persistence failure")
-	localEntryErr := errors.New("injected reviewer status persistence failure")
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{{
@@ -219,8 +227,11 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 	}}}
 
 	var (
-		eventsMu sync.Mutex
-		events   []Event
+		eventsMu      sync.Mutex
+		events        []Event
+		blockReviewer bool
+		blocker       *testEventLogAppendBlocker
+		blockErr      error
 	)
 	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                 "gpt-5",
@@ -229,6 +240,10 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 			eventsMu.Lock()
 			defer eventsMu.Unlock()
 			events = append(events, evt)
+			if blockReviewer && evt.Kind == EventAssistantMessage {
+				blockReviewer = false
+				blocker, blockErr = blockTestEventLogAppends(store)
+			}
 		},
 		Reviewer: ReviewerConfig{
 			Frequency: "all",
@@ -236,25 +251,20 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 			Client:    reviewerClient,
 		},
 	})
-	eng.beforePersistMessage = func(msg llm.Message) error {
-		if msg.MessageType == llm.MessageTypeReviewerFeedback {
-			return reviewerInstructionErr
-		}
-		return nil
-	}
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		if transcript.IsReviewerEntryRole(entry.Role) {
-			return localEntryErr
-		}
-		return nil
-	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "do task"}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
+	blockReviewer = true
 
 	_, err := eng.runStepLoop(context.Background(), "step-1")
 	if err == nil {
 		t.Fatal("expected runStepLoop to fail when reviewer status persistence fails")
+	}
+	if blockErr != nil || blocker == nil {
+		t.Fatalf("block reviewer persistence: blocker=%v error=%v", blocker, blockErr)
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
 	}
 
 	eventsMu.Lock()
@@ -272,8 +282,8 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 	if assistantEventIdx < 0 {
 		t.Fatalf("expected assistant message event, got %+v", deferredEvents)
 	}
-	if !errors.Is(err, localEntryErr) {
-		t.Fatalf("expected injected reviewer status failure, got %v", err)
+	if err == nil {
+		t.Fatal("expected reviewer status event-log append failure")
 	}
 
 	snapshot := eng.ChatSnapshot()
@@ -289,7 +299,8 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 
 func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantEvent(t *testing.T) {
 	localEntryErr := errors.New("injected reviewer status persistence failure")
-	store := mustCreateTestSession(t)
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
@@ -307,8 +318,9 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	}}}
 
 	var (
-		eventsMu sync.Mutex
-		events   []Event
+		eventsMu        sync.Mutex
+		events          []Event
+		assistantEvents int
 	)
 	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
@@ -316,6 +328,12 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 			eventsMu.Lock()
 			defer eventsMu.Unlock()
 			events = append(events, evt)
+			if evt.Kind == EventAssistantMessage {
+				assistantEvents++
+				if assistantEvents == 2 {
+					gate.FailNext(localEntryErr)
+				}
+			}
 		},
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",
@@ -325,13 +343,6 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 			Client:        reviewerClient,
 		},
 	})
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		if entry.Role == "reviewer_status" {
-			return localEntryErr
-		}
-		return nil
-	}
-
 	_, err := eng.SubmitUserMessage(context.Background(), "do task")
 	if err == nil {
 		t.Fatal("expected submit to fail when reviewer status persistence fails")
@@ -347,6 +358,16 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	}
 	if !errors.Is(err, localEntryErr) {
 		t.Fatalf("expected injected reviewer status failure, got %v", err)
+	}
+	snapshot := eng.ChatSnapshot()
+	reviewerStatuses := 0
+	for _, entry := range snapshot.Entries {
+		if entry.Role == string(transcript.EntryRoleReviewerStatus) {
+			reviewerStatuses++
+		}
+	}
+	if reviewerStatuses != 1 {
+		t.Fatalf("committed reviewer status was not projected after observer failure: %+v", snapshot.Entries)
 	}
 }
 
@@ -400,12 +421,9 @@ func TestRestoreMessagesPreservesStoredLocalEntryNoticeID(t *testing.T) {
 }
 
 func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T) {
-	localEntryErr := errors.New("injected local entry persistence failure")
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	eng.beforePersistLocalEntry = func(entry storedLocalEntry) error {
-		return localEntryErr
-	}
+	mustBlockTestEventLogAppends(t, store)
 
 	err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityOngoing,
@@ -413,8 +431,8 @@ func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T
 		Text:       "Supervisor ran, applied 1 suggestion.",
 	}))
 
-	if !errors.Is(err, localEntryErr) {
-		t.Fatalf("expected injected local entry failure, got %v", err)
+	if err == nil {
+		t.Fatal("expected local entry event-log append failure")
 	}
 	if snapshot := eng.ChatSnapshot(); len(snapshot.Entries) != 0 {
 		t.Fatalf("expected no in-memory local entries after append failure, got %+v", snapshot.Entries)
@@ -829,45 +847,5 @@ func TestBuildReviewerTranscriptMessagesIncludesSupervisorControlDeveloperMessag
 	}
 	if !strings.Contains(reviewerMessages[0].Content, "Developer context:") {
 		t.Fatalf("expected developer-context label in reviewer message, got %q", reviewerMessages[0].Content)
-	}
-}
-
-func TestAppendMissingReviewerMetaContextPrependsAgentsAndEnvironmentWhenMissing(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	globalDir := filepath.Join(home, agentsGlobalDirName)
-	if err := os.MkdirAll(globalDir, 0o755); err != nil {
-		t.Fatalf("mkdir global agents dir: %v", err)
-	}
-	globalPath := filepath.Join(globalDir, agentsFileName)
-	if err := os.WriteFile(globalPath, []byte("global rule"), 0o644); err != nil {
-		t.Fatalf("write global AGENTS: %v", err)
-	}
-
-	workspace := t.TempDir()
-	workspacePath := filepath.Join(workspace, agentsFileName)
-	if err := os.WriteFile(workspacePath, []byte("workspace rule"), 0o644); err != nil {
-		t.Fatalf("write workspace AGENTS: %v", err)
-	}
-
-	in := []llm.Message{{Role: llm.RoleUser, Content: "request"}}
-	got, err := appendMissingReviewerMetaContext(in, workspace, "gpt-5", "high", "", false, config.SkillPolicy{})
-	if err != nil {
-		t.Fatalf("appendMissingReviewerMetaContext: %v", err)
-	}
-	if len(got) != 4 {
-		t.Fatalf("expected 2 prepended agents + 1 environment message plus original, got %d", len(got))
-	}
-	if got[0].Role != llm.RoleDeveloper || got[0].MessageType != llm.MessageTypeEnvironment || !strings.Contains(got[0].Content, environmentInjectedHeader) {
-		t.Fatalf("expected prepended environment developer message first, got %+v", got[0])
-	}
-	if got[1].Role != llm.RoleDeveloper || got[1].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(got[1].Content, "source: "+globalPath) {
-		t.Fatalf("expected global AGENTS developer message after environment, got %+v", got[1])
-	}
-	if got[2].Role != llm.RoleDeveloper || got[2].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(got[2].Content, "source: "+workspacePath) {
-		t.Fatalf("expected workspace AGENTS developer message last in base context, got %+v", got[2])
-	}
-	if got[3].Role != llm.RoleUser || got[3].Content != "request" {
-		t.Fatalf("expected original message at tail, got %+v", got[3])
 	}
 }

@@ -12,9 +12,30 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestDeleteWorktreeRequiresForceThenCleansPrunableRegistration(t *testing.T) {
+func TestDeleteWorktreeRequiresExplicitForceForDirtyTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-precondition")
+	if err := os.WriteFile(filepath.Join(created.CanonicalRoot, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+		OperationID:         serverapi.NewWorktreeOperationID(),
+		SessionID:           env.session.Meta().SessionID,
+		Selector:            created.WorktreeID,
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+	})
+	var precondition *serverapi.WorktreeDeletePreconditionError
+	if !errors.As(err, &precondition) || precondition.DirtyState.Kind != serverapi.WorktreeDirtyStateDirty {
+		t.Fatalf("delete error = %v, want dirty precondition", err)
+	}
+	if _, err := os.Stat(created.CanonicalRoot); err != nil {
+		t.Fatalf("dirty worktree changed after rejected delete: %v", err)
+	}
+}
+
+func TestDeleteWorktreeRequiresForceThenCleansPrunableRegistration(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/delete-prunable-registration")
 	if err := os.Remove(filepath.Join(created.CanonicalRoot, ".git")); err != nil {
 		t.Fatal(err)
 	}
@@ -107,34 +128,6 @@ func TestDeleteCurrentWorktreeRequiresExplicitForceBeforeScheduling(t *testing.T
 	}
 	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("forced dirty worktree root still exists: %v", err)
-	}
-}
-
-func TestModelStepCurrentDeleteRejectsInactiveOriginWithoutDeletion(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/inactive-model-delete")
-	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	env.runtime.originActive = func() bool { return false }
-
-	result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Meta().SessionID,
-		Selector:            created.WorktreeID,
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
-		Origin:              testModelStepOrigin(),
-	})
-	var immediate *serverapi.WorktreeImmediateTransitionError
-	if !errors.As(err, &immediate) ||
-		immediate.Kind != serverapi.WorktreeImmediateTransitionOriginInactive ||
-		result != (serverapi.WorktreeDeleteResult{}) {
-		t.Fatalf("result=%+v err=%v, want inactive-origin failure without scheduled result", result, err)
-	}
-	target := mustResolveServiceTestTarget(t, env)
-	if target.Worktree == nil || target.Worktree.ID != created.WorktreeID {
-		t.Fatalf("target after rejected delete = %+v, want worktree %q", target, created.WorktreeID)
-	}
-	if _, err := os.Stat(created.CanonicalRoot); err != nil {
-		t.Fatalf("worktree changed after rejected delete: %v", err)
 	}
 }
 

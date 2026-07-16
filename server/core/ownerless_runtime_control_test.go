@@ -38,10 +38,14 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 	t.Run("runtime control queue user message", func(t *testing.T) {
 		runSecondClientLiveControlsActiveRun(t, func(t *testing.T, appCore *Core, sessionID string) {
 			clientRequestID := uuid.NewString()
+			operationID, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
+			if err != nil {
+				t.Fatalf("parse client request id: %v", err)
+			}
 			queueResp, err := appCore.RuntimeControlClient().QueueUserMessage(context.Background(), serverapi.RuntimeQueueUserMessageRequest{
 				ClientRequestID: clientRequestID,
 				SessionID:       sessionID,
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: clientRequestID},
+				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: operationID},
 				Text:            "steer me",
 			})
 			if err != nil {
@@ -55,11 +59,19 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 	t.Run("runtime control submit user turn", func(t *testing.T) {
 		runSecondClientLiveControlsActiveRun(t, func(t *testing.T, appCore *Core, sessionID string) {
 			clientRequestID := uuid.NewString()
+			operationID, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
+			if err != nil {
+				t.Fatalf("parse client request id: %v", err)
+			}
 			submitResp, err := appCore.RuntimeControlClient().SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
 				ClientRequestID: clientRequestID,
 				SessionID:       sessionID,
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: clientRequestID},
-				Text:            "steer me",
+				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: operationID},
+				PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{
+					Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
+					ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+				},
+				Text: "steer me",
 			})
 			if err != nil {
 				t.Fatalf("SubmitUserTurn during active run: %v", err)

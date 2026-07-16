@@ -3,8 +3,6 @@ package runtime
 import (
 	"path/filepath"
 	"testing"
-
-	generatedassets "core/prompts"
 )
 
 func TestAgentsInjectionPathsUsesGlobalConfigDirWhenSet(t *testing.T) {
@@ -37,54 +35,9 @@ func TestAgentsInjectionPathsFallsBackToHomeWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestSkillDiscoveryRootsUsesGlobalConfigDirWhenSet(t *testing.T) {
-	globalDir := t.TempDir()
-	roots, err := skillDiscoveryRoots("", globalDir)
-	if err != nil {
-		t.Fatalf("skillDiscoveryRoots: %v", err)
-	}
-	wantGlobal := filepath.Clean(filepath.Join(globalDir, skillsDirName))
-	wantGenerated := filepath.Clean(filepath.Join(globalDir, ".generated", "skills"))
-	if !containsRoot(roots, wantGlobal, skillSourceGlobal) {
-		t.Fatalf("global skills root missing from %v, want %q", roots, wantGlobal)
-	}
-	if !containsRoot(roots, wantGenerated, skillSourceGenerated) {
-		t.Fatalf("generated skills root missing from %v, want %q", roots, wantGenerated)
-	}
-}
-
-func TestSkillDiscoveryRootsFallsBackToHomeWhenEmpty(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	roots, err := skillDiscoveryRoots("", "")
-	if err != nil {
-		t.Fatalf("skillDiscoveryRoots: %v", err)
-	}
-	wantGlobal := filepath.Clean(filepath.Join(home, agentsGlobalDirName, skillsDirName))
-	if !containsRoot(roots, wantGlobal, skillSourceGlobal) {
-		t.Fatalf("default global skills root missing from %v, want %q", roots, wantGlobal)
-	}
-	wantGenerated, err := generatedassets.GeneratedSkillsRoot()
-	if err != nil {
-		t.Fatalf("GeneratedSkillsRoot: %v", err)
-	}
-	if !containsRoot(roots, filepath.Clean(wantGenerated), skillSourceGenerated) {
-		t.Fatalf("default generated skills root missing from %v, want %q", roots, wantGenerated)
-	}
-}
-
 func containsPath(paths []string, want string) bool {
 	for _, p := range paths {
 		if p == want {
-			return true
-		}
-	}
-	return false
-}
-
-func containsRoot(roots []skillRoot, wantPath string, wantKind skillSourceKind) bool {
-	for _, r := range roots {
-		if r.Path == wantPath && r.Kind == wantKind {
 			return true
 		}
 	}

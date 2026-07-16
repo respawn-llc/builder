@@ -3,29 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
-
-	"core/shared/serverapi"
 )
-
-func testTaskCard(taskID string, shortID string, title string) serverapi.WorkflowBoardTaskCard {
-	return serverapi.WorkflowBoardTaskCard{
-		TaskID:     taskID,
-		ShortID:    shortID,
-		Title:      title,
-		WorkflowID: "workflow-1",
-		Status:     serverapi.WorkflowTaskStatus{Kind: "active"},
-	}
-}
-
-func testDoneTaskCard(taskID string, shortID string, title string) serverapi.WorkflowBoardTaskCard {
-	return serverapi.WorkflowBoardTaskCard{
-		TaskID:     taskID,
-		ShortID:    shortID,
-		Title:      title,
-		WorkflowID: "workflow-1",
-		Status:     serverapi.WorkflowTaskStatus{Kind: "done"},
-	}
-}
 
 func labeledOutputValue(t *testing.T, output string, label string) string {
 	t.Helper()

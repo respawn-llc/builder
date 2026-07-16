@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -28,7 +28,7 @@ func TestResolveWorkflowTaskIDUsesDirectShortIDLookup(t *testing.T) {
 }
 
 type directTaskResolveRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	taskRequests  []serverapi.WorkflowTaskGetRequest
 	boardRequests int
 }

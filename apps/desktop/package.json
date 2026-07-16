@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "dev:browser": "vite --host 127.0.0.1 --open /",
-    "dev:showcase": "vite --host 127.0.0.1 --open /dev-showcase.html",
     "build": "pnpm build:web",
     "build:web": "node ./node_modules/typescript7/bin/tsc -b --pretty false && vite build && node ../scripts/check-desktop-font-assets.mjs",
     "preview": "vite preview",

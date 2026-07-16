@@ -86,9 +86,13 @@ func (s *SessionLifecycleService) GetInitialInput(_ context.Context, req servera
 		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
 	}
 	meta := store.Meta()
+	recoveryBuffers, err := sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers)
+	if err != nil {
+		return serverapi.SessionInitialInputResponse{}, err
+	}
 	return serverapi.SessionInitialInputResponse{
 		Input:           initialSessionInput(store, req.TransitionInput),
-		RecoveryBuffers: sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers),
+		RecoveryBuffers: recoveryBuffers,
 	}, nil
 }
 
@@ -179,17 +183,17 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 		}
 		currentID := strings.TrimSpace(req.SessionID)
 		if currentID == "" {
-			return serverapi.SelectSessionLifecycleResult(serverapi.SessionAuthPreparationReauthenticate), nil
+			return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationReauthenticate), nil
 		}
 		sessionID, err := runtimeids.ParseSessionID(currentID)
 		if err != nil {
 			return serverapi.SessionResolveTransitionResponse{}, err
 		}
-		return serverapi.LaunchSessionLifecycleResult(
+		return serverapi.LaunchSessionDirective(
 			serverapi.OpenExistingSessionLaunchIntent(sessionID),
 			serverapi.NewSessionLaunchPreparation(
 				nil,
-				serverapi.RestoreStoredDraftSessionInitialInputPolicy(),
+				serverapi.RestoreStoredDraftSessionDraftDisposition(),
 				serverapi.SessionAuthPreparationReauthenticate,
 			),
 		), nil

@@ -93,12 +93,10 @@ func TestSelectedContextSourceUsesLatestCompletedPriorNodeRun(t *testing.T) {
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	reworkGroup := workflow.TransitionGroupID("group-rework-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"}); err != nil {
-		t.Fatalf("AddTransitionGroup rework: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Rework summary."}}}); err != nil {
-		t.Fatalf("AddEdge rework: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"})
+		req.Edges = append(req.Edges, EdgeRecord{ID: workflow.EdgeID("edge-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Rework summary."}}})
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
@@ -210,16 +208,14 @@ func TestPreviousTargetOrNewContextSourceFallsBackThenContinuesTargetRun(t *test
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	acceptEdge := edgeByKey(t, def, "accept")
-	if _, err := store.UpdateEdge(ctx, EdgeRecord{ID: acceptEdge.ID, WorkflowID: workflowID, TransitionGroupID: acceptEdge.TransitionGroupID, Key: acceptEdge.Key, TargetNodeID: acceptEdge.TargetNodeID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: acceptEdge.PromptTemplate, Parameters: acceptEdge.Parameters}); err != nil {
-		t.Fatalf("UpdateEdge accept context source: %v", err)
-	}
 	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-rework-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"}); err != nil {
-		t.Fatalf("AddTransitionGroup rework: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."}); err != nil {
-		t.Fatalf("AddEdge rework: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		updatedAcceptEdge := workflowGraphSaveEdgeRecord(t, req.Edges, acceptEdge.ID)
+		updatedAcceptEdge.ContextMode = workflow.ContextModeContinueSession
+		updatedAcceptEdge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"})
+		req.Edges = append(req.Edges, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."})
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
@@ -268,9 +264,12 @@ func TestPendingApprovalFreezesPreviousTargetOrNewFallbackToNew(t *testing.T) {
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	acceptEdge := edgeByKey(t, def, "accept")
-	if _, err := store.UpdateEdge(ctx, EdgeRecord{ID: acceptEdge.ID, WorkflowID: workflowID, TransitionGroupID: acceptEdge.TransitionGroupID, Key: acceptEdge.Key, TargetNodeID: acceptEdge.TargetNodeID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, RequiresApproval: true, PromptTemplate: acceptEdge.PromptTemplate, Parameters: acceptEdge.Parameters}); err != nil {
-		t.Fatalf("UpdateEdge accept context source: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		updatedAcceptEdge := workflowGraphSaveEdgeRecord(t, req.Edges, acceptEdge.ID)
+		updatedAcceptEdge.ContextMode = workflow.ContextModeContinueSession
+		updatedAcceptEdge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+		updatedAcceptEdge.RequiresApproval = true
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
@@ -308,16 +307,15 @@ func TestPendingApprovalFreezesPreviousTargetOrNewPriorTargetRun(t *testing.T) {
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	acceptEdge := edgeByKey(t, def, "accept")
-	if _, err := store.UpdateEdge(ctx, EdgeRecord{ID: acceptEdge.ID, WorkflowID: workflowID, TransitionGroupID: acceptEdge.TransitionGroupID, Key: acceptEdge.Key, TargetNodeID: acceptEdge.TargetNodeID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, RequiresApproval: true, PromptTemplate: acceptEdge.PromptTemplate, Parameters: acceptEdge.Parameters}); err != nil {
-		t.Fatalf("UpdateEdge accept context source: %v", err)
-	}
 	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-approval-rework-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"}); err != nil {
-		t.Fatalf("AddTransitionGroup rework: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-approval-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."}); err != nil {
-		t.Fatalf("AddEdge rework: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		updatedAcceptEdge := workflowGraphSaveEdgeRecord(t, req.Edges, acceptEdge.ID)
+		updatedAcceptEdge.ContextMode = workflow.ContextModeContinueSession
+		updatedAcceptEdge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+		updatedAcceptEdge.RequiresApproval = true
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"})
+		req.Edges = append(req.Edges, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-approval-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."})
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
@@ -481,9 +479,9 @@ func TestPendingApprovalResolvesSelectedContextSourceOnApproval(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	openPREdge := edgeByKey(t, def, "open_pr")
-	if _, err := store.UpdateEdge(ctx, EdgeRecord{ID: openPREdge.ID, WorkflowID: workflowID, TransitionGroupID: openPREdge.TransitionGroupID, Key: openPREdge.Key, TargetNodeID: openPREdge.TargetNodeID, ContextMode: openPREdge.ContextMode, ContextSource: openPREdge.ContextSource, PromptTemplate: openPREdge.PromptTemplate, Parameters: openPREdge.Parameters, RequiresApproval: true}); err != nil {
-		t.Fatalf("UpdateEdge open_pr approval: %v", err)
-	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(t, req.Edges, openPREdge.ID).RequiresApproval = true
+	})
 	def, _, err = store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition updated: %v", err)

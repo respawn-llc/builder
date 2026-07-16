@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"core/cli/app/internal/remoteattach"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -33,7 +33,7 @@ type WorkspacePickerResult struct {
 type Server[T any] interface {
 	Config() config.App
 	PresentationTheme() string
-	ProjectViewClient() client.ProjectViewClient
+	ProjectViewClient() apicontract.ProjectViewService
 	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (T, error)
 }
 
@@ -170,7 +170,7 @@ type WorkspaceSelectionRequest struct {
 	Server interface {
 		Config() config.App
 		PresentationTheme() string
-		ProjectViewClient() client.ProjectViewClient
+		ProjectViewClient() apicontract.ProjectViewService
 	}
 	ProjectID     string
 	PickWorkspace func([]clientui.ProjectWorkspaceSummary, string) (WorkspacePickerResult, error)

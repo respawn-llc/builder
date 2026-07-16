@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"core/prompts"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -639,7 +639,7 @@ func replaceTaskStartSessionPolling(t *testing.T, timeout time.Duration, interva
 }
 
 type taskSessionPollingRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	task serverapi.WorkflowTaskDetail
 }
 
@@ -654,7 +654,7 @@ func (r *taskSessionPollingRemote) GetWorkflowTask(context.Context, serverapi.Wo
 }
 
 type taskStartPollingRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	projectID         string
 	taskID            string
 	shortID           string
@@ -722,7 +722,7 @@ func (r *taskStartPollingRemote) taskDetail(sessionID string) serverapi.Workflow
 }
 
 type setupProgressLifecycleRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	projectID           string
 	taskID              string
 	shortID             string

@@ -15,24 +15,19 @@ func TestEnvironmentCacheRejectsMismatchedSkillPolicies(t *testing.T) {
 		request config.Settings
 	}{
 		{
-			name:    "enabled to disabled",
-			cached:  config.Settings{},
-			request: config.Settings{SkillSubsystem: config.SkillSubsystemDisabled},
+			name:    "disabled name changes",
+			cached:  config.Settings{SkillToggles: map[string]bool{"apiresult": false}},
+			request: config.Settings{SkillToggles: map[string]bool{"other": false}},
 		},
 		{
-			name:    "disabled to enabled",
-			cached:  config.Settings{SkillSubsystem: config.SkillSubsystemDisabled},
+			name:    "disabled name removed",
+			cached:  config.Settings{SkillToggles: map[string]bool{"apiresult": false}},
 			request: config.Settings{},
 		},
 		{
-			name:    "parent to re-enabled subagent sharing workspace",
-			cached:  config.Settings{SkillSubsystem: config.SkillSubsystemDisabled},
-			request: config.Settings{SkillSubsystem: config.SkillSubsystemEnabled},
-		},
-		{
-			name:    "per-skill toggle change",
-			cached:  config.Settings{SkillToggles: map[string]bool{"apiresult": false}},
-			request: config.Settings{SkillToggles: map[string]bool{"other": false}},
+			name:    "skill named enabled changes",
+			cached:  config.Settings{SkillToggles: map[string]bool{"enabled": false}},
+			request: config.Settings{SkillToggles: map[string]bool{"enabled": true}},
 		},
 	}
 	for _, tt := range tests {
@@ -41,9 +36,8 @@ func TestEnvironmentCacheRejectsMismatchedSkillPolicies(t *testing.T) {
 			repository := NewMemoryRepository()
 			cachedPolicy := config.ResolveSkillPolicy(tt.cached)
 			repository.StoreEnvironment("shared-workspace", EnvironmentStageResult{
-				SkillPolicy:         cachedPolicy,
-				SkillDiscoveryState: config.SkillSubsystemEnabled,
-				Skills:              []SkillInspection{{Name: "stale", Path: "/stale/SKILL.md", Loaded: true}},
+				SkillPolicy: cachedPolicy,
+				Skills:      []SkillInspection{{Name: "stale", Path: "/stale/SKILL.md", Loaded: true}},
 			}, now)
 
 			seed := repository.SeedSnapshot(Request{
@@ -67,9 +61,8 @@ func TestEnvironmentCacheSeedsEquivalentSkillPolicy(t *testing.T) {
 	settings := config.Settings{SkillToggles: map[string]bool{" APIResult ": false}}
 	policy := config.ResolveSkillPolicy(settings)
 	repository.StoreEnvironment("workspace", EnvironmentStageResult{
-		SkillPolicy:         policy,
-		SkillDiscoveryState: config.SkillSubsystemEnabled,
-		Skills:              []SkillInspection{{Name: "cached", Loaded: true}},
+		SkillPolicy: policy,
+		Skills:      []SkillInspection{{Name: "cached", Loaded: true}},
 	}, now)
 
 	seed := repository.SeedSnapshot(Request{

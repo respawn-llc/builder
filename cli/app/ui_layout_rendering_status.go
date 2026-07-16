@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -265,19 +264,6 @@ func (l uiViewLayout) renderStatusNotice(available int) string {
 	}
 	text = truncateQueuedMessageLine(text, available)
 	return statusNoticeStyle(m.theme, kind).Render(text)
-}
-
-func rootCauseErrorText(err error) string {
-	if err == nil {
-		return ""
-	}
-	for {
-		unwrapped := errors.Unwrap(err)
-		if unwrapped == nil {
-			return err.Error()
-		}
-		err = unwrapped
-	}
 }
 
 func (l uiViewLayout) renderReasoningStatus(available int) string {

@@ -12,14 +12,19 @@ import (
 	"core/shared/invariant"
 )
 
-type recordingRuntimeActivityPublisher struct {
-	snapshots     []runtimeactivity.ResponseSnapshot
+const (
+	stepLifecycleTestRunID  = "11111111-1111-4111-8111-111111111111"
+	stepLifecycleTestStepID = "22222222-2222-4222-8222-222222222222"
+)
+
+type recordingRuntimeReadModelPublisher struct {
+	snapshots     []clientui.RuntimeReadModelUpdate
 	panicNext     bool
 	panicMessage  string
 	panicConsumed bool
 }
 
-func (p *recordingRuntimeActivityPublisher) PublishRuntimeActivitySnapshot(_ string, snapshot runtimeactivity.ResponseSnapshot) {
+func (p *recordingRuntimeReadModelPublisher) PublishRuntimeReadModelUpdate(_ string, snapshot clientui.RuntimeReadModelUpdate) {
 	if p.panicNext && !p.panicConsumed {
 		p.panicConsumed = true
 		panic(p.panicMessage)
@@ -27,17 +32,17 @@ func (p *recordingRuntimeActivityPublisher) PublishRuntimeActivitySnapshot(_ str
 	p.snapshots = append(p.snapshots, snapshot)
 }
 
-type registrySnapshotRuntimeActivityPublisher struct {
-	recordingRuntimeActivityPublisher
+type registrySnapshotRuntimeReadModelPublisher struct {
+	recordingRuntimeReadModelPublisher
 	registry runtimeactivity.RegistrySnapshot
 }
 
-func (p *registrySnapshotRuntimeActivityPublisher) RuntimeActivityRegistrySnapshot(string) runtimeactivity.RegistrySnapshot {
+func (p *registrySnapshotRuntimeReadModelPublisher) RuntimeActivityRegistrySnapshot(string) runtimeactivity.RegistrySnapshot {
 	return p.registry
 }
 
 func TestStepLifecycleSinkPublishesVersionedRunningThenIdleActivity(t *testing.T) {
-	publisher := &recordingRuntimeActivityPublisher{}
+	publisher := &recordingRuntimeReadModelPublisher{}
 	sink := NewStepLifecycleSink("session-1", publisher)
 	if sink == nil {
 		t.Fatal("expected step lifecycle sink")
@@ -45,8 +50,8 @@ func TestStepLifecycleSinkPublishesVersionedRunningThenIdleActivity(t *testing.T
 	startedAt := time.Now().UTC()
 	if err := sink.StepBegan(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-1",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindGoalLoop,
 		StartedAt:  startedAt,
 	}); err != nil {
@@ -54,8 +59,8 @@ func TestStepLifecycleSinkPublishesVersionedRunningThenIdleActivity(t *testing.T
 	}
 	if err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-1",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindGoalLoop,
 		StartedAt:  startedAt,
 		FinishedAt: time.Now().UTC(),
@@ -66,7 +71,8 @@ func TestStepLifecycleSinkPublishesVersionedRunningThenIdleActivity(t *testing.T
 		t.Fatalf("snapshot count = %d, want 2", len(publisher.snapshots))
 	}
 	if publisher.snapshots[0].Activity.State != clientui.RuntimeActivityRunning ||
-		publisher.snapshots[0].Activity.ActiveKind != clientui.RuntimeActivityActiveKindGoalLoop {
+		publisher.snapshots[0].Activity.ActiveStep == nil ||
+		publisher.snapshots[0].Activity.ActiveStep.ActiveKind != clientui.RuntimeActivityActiveKindGoalLoop {
 		t.Fatalf("began snapshot = %+v, want running goal_loop", publisher.snapshots[0].Activity)
 	}
 	if publisher.snapshots[1].Activity.State != clientui.RuntimeActivityRegisteredIdle {
@@ -78,13 +84,13 @@ func TestStepLifecycleSinkPublishesVersionedRunningThenIdleActivity(t *testing.T
 }
 
 func TestStepLifecycleSinkUsesPublisherRegistrySnapshotForTerminalActivity(t *testing.T) {
-	publisher := &registrySnapshotRuntimeActivityPublisher{registry: runtimeactivity.RegistrySnapshot{Registered: true, Draining: true}}
+	publisher := &registrySnapshotRuntimeReadModelPublisher{registry: runtimeactivity.RegistrySnapshot{Registered: true, Draining: true}}
 	sink := NewStepLifecycleSink("session-draining", publisher)
 
 	if err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-draining",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindUserTurn,
 	}); err != nil {
 		t.Fatalf("StepEnded: %v", err)
@@ -98,9 +104,9 @@ func TestStepLifecycleSinkUsesPublisherRegistrySnapshotForTerminalActivity(t *te
 }
 
 func TestStepLifecycleSinkPublishesSafeRecoveryActivityOnTerminalPublicationInvariantFailure(t *testing.T) {
-	publisher := &registrySnapshotRuntimeActivityPublisher{
-		recordingRuntimeActivityPublisher: recordingRuntimeActivityPublisher{panicNext: true, panicMessage: "broken publication"},
-		registry:                          runtimeactivity.RegistrySnapshot{Registered: true, QueueAccepting: true},
+	publisher := &registrySnapshotRuntimeReadModelPublisher{
+		recordingRuntimeReadModelPublisher: recordingRuntimeReadModelPublisher{panicNext: true, panicMessage: "broken publication"},
+		registry:                           runtimeactivity.RegistrySnapshot{Registered: true, QueueAccepting: true},
 	}
 	var diagnostics []invariant.Diagnostic
 	policy := invariant.NewPolicy(
@@ -113,8 +119,8 @@ func TestStepLifecycleSinkPublishesSafeRecoveryActivityOnTerminalPublicationInva
 
 	err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-recovery",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindGoalLoop,
 		FinishedAt: time.Now().UTC(),
 	})
@@ -138,16 +144,13 @@ func TestStepLifecycleSinkPublishesSafeRecoveryActivityOnTerminalPublicationInva
 		!recovery.Activity.QueueAccepting {
 		t.Fatalf("recovery activity = %+v, want diagnostic registered idle", recovery.Activity)
 	}
-	if err := recovery.Version.Validate(); err != nil {
-		t.Fatalf("recovery version invalid: %v", err)
-	}
-	if recovery.InputReconciliation.Version != recovery.Version {
-		t.Fatalf("recovery reconciliation version = %+v, want %+v", recovery.InputReconciliation.Version, recovery.Version)
+	if err := recovery.Validate(); err != nil {
+		t.Fatalf("recovery read model invalid: %v", err)
 	}
 }
 
 func TestStepLifecycleSinkPanicsOnPublicationInvariantFailureInPanicMode(t *testing.T) {
-	publisher := &recordingRuntimeActivityPublisher{panicNext: true, panicMessage: "broken publication"}
+	publisher := &recordingRuntimeReadModelPublisher{panicNext: true, panicMessage: "broken publication"}
 	sink := NewStepLifecycleSinkWithInvariantPolicy("session-panic", publisher, invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)))
 
 	defer func() {
@@ -160,8 +163,8 @@ func TestStepLifecycleSinkPanicsOnPublicationInvariantFailureInPanicMode(t *test
 	}()
 	err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-panic",
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      stepLifecycleTestRunID,
+		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindGoalLoop,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {

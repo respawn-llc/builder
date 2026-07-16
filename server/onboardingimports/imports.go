@@ -3,8 +3,10 @@ package onboardingimports
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -42,10 +44,10 @@ const (
 )
 
 type Options struct {
-	ConfigRoot     string
-	WorkspaceRoot  *string
-	HomeDir        string
-	DisabledSkills map[string]bool
+	ConfigRoot    string
+	WorkspaceRoot *string
+	HomeDir       string
+	SkillPolicy   brand.SkillPolicy
 }
 
 type Provider struct {
@@ -182,7 +184,7 @@ func Discover(opts Options) (Result, error) {
 	existingNames, existingErrs := existingSkillNames(opts.ConfigRoot, result.Workspace.Root)
 	result.Errors = append(result.Errors, existingErrs...)
 
-	generated, err := generatedSkillItems(opts.ConfigRoot, opts.DisabledSkills)
+	generated, err := generatedSkillItems(opts.ConfigRoot, opts.SkillPolicy)
 	if err != nil {
 		result.Errors = append(result.Errors, Error{Code: "generated_discovery_failed", Scope: ErrorScopeGenerated, ItemKind: itemKindPointer(ItemKindSkill), Operation: "discover_generated_skills", Message: err.Error()})
 	}
@@ -205,7 +207,7 @@ func Discover(opts Options) (Result, error) {
 	result.Errors = append(result.Errors, commandTargetErrors...)
 	result.Recommendations.Skills = recommendationForChoices(result.Skills.Choices, result.Skills.Items, result.Skills.Target)
 	result.Recommendations.Commands = recommendationForChoices(result.Commands.Choices, result.Commands.Items, result.Commands.Target)
-	result.SkillEnablement = skillEnablementProjections(result.Skills.Choices, result.Skills.Items, generated, existingNames, opts.DisabledSkills)
+	result.SkillEnablement = skillEnablementProjections(result.Skills.Choices, result.Skills.Items, generated, existingNames, opts.SkillPolicy)
 	_ = workspaceOK
 	return result, nil
 }
@@ -345,14 +347,7 @@ func discoverDirectCommands(providerID ProviderID, root string) ([]Item, error) 
 	return items, nil
 }
 
-func generatedSkillItems(configRoot string, disabled map[string]bool) ([]Item, error) {
-	toggles := make(map[string]bool, len(disabled))
-	for name, isDisabled := range disabled {
-		if isDisabled {
-			toggles[name] = false
-		}
-	}
-	policy := brand.ResolveSkillPolicy(brand.Settings{SkillToggles: toggles})
+func generatedSkillItems(configRoot string, policy brand.SkillPolicy) ([]Item, error) {
 	inspections, err := skillcatalog.DiscoverGenerated(configRoot, policy)
 	if err != nil {
 		return nil, err
@@ -382,10 +377,7 @@ func choicesForItems(items []Item, kind ItemKind) []Choice {
 		sourceKind := SourceKindExternalProvider
 		refs[key] = ChoiceRef{Mode: ChoiceModeSymlinkSource, SourceKind: &sourceKind, ProviderID: item.Ref.ProviderID, SourceRoot: item.Ref.SourceRoot}
 	}
-	keys := make([]string, 0, len(grouped))
-	for key := range grouped {
-		keys = append(keys, key)
-	}
+	keys := slices.Collect(maps.Keys(grouped))
 	sort.Slice(keys, func(i, j int) bool {
 		left, right := refs[keys[i]], refs[keys[j]]
 		if providerRank(*left.ProviderID) != providerRank(*right.ProviderID) {
@@ -423,12 +415,15 @@ func recommendationForChoices(choices []Choice, items []Item, target Target) *Mo
 	return &ModeRecommendation{ChoiceRef: best.Ref, ItemCount: best.ItemCount, SourcePaths: paths}
 }
 
-func skillEnablementProjections(choices []Choice, allItems []Item, generated []Item, existing map[string]bool, disabled map[string]bool) []SkillEnablementProjection {
+func skillEnablementProjections(choices []Choice, allItems []Item, generated []Item, existing map[string]bool, policy brand.SkillPolicy) []SkillEnablementProjection {
 	projections := make([]SkillEnablementProjection, 0, len(choices))
 	for _, choice := range choices {
 		imported := itemsForChoice(allItems, choice.Ref)
 		candidates := append([]Item(nil), imported...)
-		shadowing := cloneBoolMap(existing)
+		shadowing := maps.Clone(existing)
+		if shadowing == nil {
+			shadowing = map[string]bool{}
+		}
 		for _, item := range imported {
 			if item.Ref.Name != nil {
 				shadowing[normalizeName(*item.Ref.Name)] = true
@@ -443,8 +438,8 @@ func skillEnablementProjections(choices []Choice, allItems []Item, generated []I
 		candidates = annotateConflicts(candidates)
 		for idx := range candidates {
 			enabled := true
-			if candidates[idx].Ref.Name != nil && normalizedDisabled(disabled)[normalizeName(*candidates[idx].Ref.Name)] {
-				enabled = false
+			if candidates[idx].Ref.Name != nil {
+				enabled = policy.SkillEnabled(*candidates[idx].Ref.Name)
 			}
 			candidates[idx].DefaultEnabled = &enabled
 		}
@@ -591,24 +586,6 @@ func providerRank(provider ProviderID) int {
 		}
 	}
 	return len(Providers())
-}
-
-func normalizedDisabled(values map[string]bool) map[string]bool {
-	out := map[string]bool{}
-	for key, value := range values {
-		if value {
-			out[normalizeName(key)] = true
-		}
-	}
-	return out
-}
-
-func cloneBoolMap(values map[string]bool) map[string]bool {
-	out := make(map[string]bool, len(values))
-	for key, value := range values {
-		out[key] = value
-	}
-	return out
 }
 
 func normalizeName(raw string) string {

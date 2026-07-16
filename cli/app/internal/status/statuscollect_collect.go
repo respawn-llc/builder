@@ -2,15 +2,16 @@ package status
 
 import (
 	"context"
-	"core/prompts"
-	"core/server/runtime"
-	"core/shared/auth"
-	"core/shared/client"
-	"core/shared/config"
-	"core/shared/serverapi"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"core/prompts"
+	"core/server/runtime"
+	"core/shared/apicontract"
+	"core/shared/auth"
+	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 const DefaultUsageBaseURL = "https://chatgpt.com/backend-api"
@@ -36,7 +37,6 @@ func (c Collector) Collect(ctx context.Context, req Request) (Snapshot, error) {
 	snapshot.Subscription = authResult.Subscription
 	snapshot.Git = gitResult.Git
 	snapshot.SkillPolicy = envResult.SkillPolicy
-	snapshot.SkillDiscoveryState = envResult.SkillDiscoveryState
 	snapshot.Skills = envResult.Skills
 	snapshot.SkillTokenCounts = envResult.SkillTokenCounts
 	snapshot.AgentsPaths = envResult.AgentsPaths
@@ -123,7 +123,7 @@ func JoinWarnings(existing string, warning string) string {
 	return strings.Join(parts, " | ")
 }
 
-func (c Collector) ParentSessionName(ctx context.Context, sessionViews client.SessionViewClient, parentSessionID string) (string, string) {
+func (c Collector) ParentSessionName(ctx context.Context, sessionViews apicontract.SessionViewService, parentSessionID string) (string, string) {
 	parentID := strings.TrimSpace(parentSessionID)
 	if sessionViews == nil || parentID == "" {
 		return "", ""
@@ -234,12 +234,9 @@ func (Collector) CollectEnvironment(_ context.Context, req Request, _ Snapshot) 
 	if skillsErr != nil {
 		warnings = append(warnings, "skills: "+skillsErr.Error())
 	} else {
-		result.SkillDiscoveryState = inspectedSkills.State
-		skills := SkillInspectionsFromRuntime(inspectedSkills.Inspections)
+		skills := SkillInspectionsFromRuntime(inspectedSkills)
 		result.Skills = skills
-		if inspectedSkills.State != config.SkillSubsystemDisabled {
-			result.SkillTokenCounts = EstimateSkillTokens(skills)
-		}
+		result.SkillTokenCounts = EstimateSkillTokens(skills)
 	}
 	agentsPaths, agentsErr := runtime.InstalledAgentsPaths(workspaceRoot, req.PersistenceRoot)
 	if agentsErr != nil {

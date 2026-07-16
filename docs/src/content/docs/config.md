@@ -90,7 +90,9 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 
 ### Workflow subagent delegation
 
-By default Kent does not allow workflow nodes to use subagents, because models can eagerly duplicate work that later nodes also do (such as calling code review subagents when the next node is already calling that subagent). You can change that by setting `[workflow] subagents` to true and customizing `workflo_subagent` value for each subagent you have.
+`[workflow] subagents` defaults to `false` and has no environment override. Set it to `true` to let workflow agents delegate to eligible custom roles. This setting does not affect direct workflow-node assignment.
+
+`workflow_subagent` is optional role metadata and defaults to `true`. A custom role is callable by a workflow agent only when `agent_callable`, `[workflow] subagents`, and its effective `workflow_subagent` value all permit it. The global workflow setting remains authoritative.
 
 ## CLI Overrides
 
@@ -260,21 +262,17 @@ More info on the [Subagents page](../headless/).
 
 ### Skills
 
-`[skills]` is a file-only boolean table in `config.toml`. Set the reserved `enabled` key to `false` to disable skill discovery and model-visible skill reminders globally. Skills are enabled when this key is omitted.
+`[skills]` is a file-only per-skill boolean table in `config.toml`. Disabled skills remain visible in clients but are omitted from model context. Keys are matched case-insensitively.
 
 ```toml
 [skills]
-enabled = false
 "<skill name>" = false
 
 [subagents.worker.skills]
-enabled = true
 "<skill name>" = false
 ```
 
 Notes:
 
-- `[subagents.<role>.skills].enabled` overrides the global setting for that role. An omitted role setting inherits the global policy, while an explicit `true` re-enables skills for the role.
-- Per-skill toggles remain configured while the subsystem is disabled and apply again when it is re-enabled.
-- Skill keys are matched case-insensitively. Every case variant of `enabled` is reserved, so a skill with that normalized name cannot be toggled individually.
+- `[subagents.<role>.skills]` overlays per-skill toggles for that role.
 - Use `"quoted names"` to refer to skill keys containing spaces.

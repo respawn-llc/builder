@@ -130,49 +130,6 @@ type WorktreeTransitionPendingError struct {
 	PendingOperationID WorktreeOperationID `json:"pending_operation_id"`
 }
 
-type WorktreeImmediateTransitionErrorKind string
-
-const (
-	WorktreeImmediateTransitionOriginInactive WorktreeImmediateTransitionErrorKind = "origin_inactive"
-	WorktreeImmediateTransitionApplyFailed    WorktreeImmediateTransitionErrorKind = "apply_failed"
-	worktreeImmediateTransitionErrorMessage                                        = "worktree transition could not become authoritative before command completion"
-)
-
-type WorktreeImmediateTransitionError struct {
-	Kind  WorktreeImmediateTransitionErrorKind `json:"kind"`
-	Cause error                                `json:"-"`
-}
-
-func NewWorktreeImmediateTransitionError(kind WorktreeImmediateTransitionErrorKind, cause error) *WorktreeImmediateTransitionError {
-	if cause != nil {
-		cause = fmt.Errorf("%s: %w", worktreeImmediateTransitionErrorMessage, cause)
-	}
-	return &WorktreeImmediateTransitionError{Kind: kind, Cause: cause}
-}
-
-func (e *WorktreeImmediateTransitionError) Error() string {
-	if e == nil || e.Cause == nil {
-		return worktreeImmediateTransitionErrorMessage
-	}
-	return e.Cause.Error()
-}
-
-func (e *WorktreeImmediateTransitionError) Unwrap() error { return e.Cause }
-
-func (e *WorktreeImmediateTransitionError) RPCErrorCode() int {
-	return protocol.ErrCodeWorktreeImmediateTransition
-}
-
-func (e *WorktreeImmediateTransitionError) RPCErrorData() json.RawMessage {
-	if e == nil {
-		return nil
-	}
-	return marshalRPCErrorData(struct {
-		Type string                               `json:"type"`
-		Kind WorktreeImmediateTransitionErrorKind `json:"kind"`
-	}{"worktree_immediate_transition", e.Kind})
-}
-
 func (e *WorktreeTransitionPendingError) Error() string {
 	return ErrWorktreeTransitionPending.Error()
 }
@@ -419,15 +376,6 @@ func DecodeWorktreeRPCError(data json.RawMessage, message string) error {
 			return fallbackWorktreeRPCError(message)
 		}
 		return result
-	case "worktree_immediate_transition":
-		var result WorktreeImmediateTransitionError
-		if err := json.Unmarshal(data, &result); err != nil ||
-			(result.Kind != WorktreeImmediateTransitionOriginInactive && result.Kind != WorktreeImmediateTransitionApplyFailed) ||
-			strings.TrimSpace(message) == "" {
-			return fallbackWorktreeRPCError(message)
-		}
-		result.Cause = errors.New(message)
-		return &result
 	case "worktree_setup_retained":
 		var payload struct {
 			Type       string                `json:"type"`

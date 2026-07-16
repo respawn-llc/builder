@@ -4,10 +4,7 @@ import (
 	"context"
 	"core/cli/tui"
 	"core/server/llm"
-	"core/server/runtime"
-	"core/server/tools"
 	"core/shared/clientui"
-	"encoding/json"
 	"errors"
 	goruntime "runtime"
 	"slices"
@@ -26,8 +23,11 @@ func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 	m.activity = uiActivityRunning
 	m.input = "keep this draft"
 
-	next, _ := m.Update(projectedRuntimeEventMsg(runtime.Event{Kind: runtime.EventReviewerStarted}))
-	started := next.(*uiModel)
+	m.applyTranscriptReviewerState(clientui.TranscriptReviewerState{
+		StepID: ongoingTestStepID(),
+		State:  clientui.ReviewerStateRunning,
+	})
+	started := m
 	if !started.isReviewerBlocking() {
 		t.Fatal("expected reviewer state to be marked running")
 	}
@@ -37,14 +37,17 @@ func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 		t.Fatalf("expected original draft visible while reviewer runs, got %q", plain)
 	}
 
-	next, _ = started.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	next, _ := started.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	locked := next.(*uiModel)
 	if locked.input != "keep this draftx" {
 		t.Fatalf("expected key input accepted while reviewer runs, got %q", locked.input)
 	}
 
-	next, _ = locked.Update(projectedRuntimeEventMsg(runtime.Event{Kind: runtime.EventReviewerCompleted}))
-	completed := next.(*uiModel)
+	locked.applyTranscriptReviewerState(clientui.TranscriptReviewerState{
+		StepID: ongoingTestStepID(),
+		State:  clientui.ReviewerStateCompleted,
+	})
+	completed := locked
 	if completed.isReviewerBlocking() {
 		t.Fatal("expected reviewer state cleared after completion")
 	}
@@ -61,13 +64,16 @@ func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	m.activity = uiActivityRunning
 	m.input = "steer after review"
 
-	next, _ := m.Update(projectedRuntimeEventMsg(runtime.Event{Kind: runtime.EventReviewerStarted}))
-	started := next.(*uiModel)
+	m.applyTranscriptReviewerState(clientui.TranscriptReviewerState{
+		StepID: ongoingTestStepID(),
+		State:  clientui.ReviewerStateRunning,
+	})
+	started := m
 	if !started.isReviewerRunning() {
 		t.Fatal("expected reviewer to be running")
 	}
 
-	next, _ = started.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := started.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
 	if len(updated.queued) != 0 {
 		t.Fatalf("did not expect post-turn queue for reviewer steering, got %+v", updated.queued)
@@ -138,21 +144,11 @@ func TestMouseSGRSplitEscAndRunesDoNotArmRollback(t *testing.T) {
 
 type statusLineFakeClient struct{}
 
-type statusLineFastClient struct{}
-
-type statusLineAzureClient struct{}
-
 type busyToggleFakeClient struct {
 	mu        sync.Mutex
 	responses []llm.Response
 	calls     int
 	delay     time.Duration
-}
-
-type requestCaptureFakeClient struct {
-	mu        sync.Mutex
-	responses []llm.Response
-	requests  []llm.Request
 }
 
 func (f *busyToggleFakeClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
@@ -180,70 +176,8 @@ func (f *busyToggleFakeClient) CallCount() int {
 	return f.calls
 }
 
-func (f *requestCaptureFakeClient) Generate(_ context.Context, req llm.Request) (llm.Response, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.requests = append(f.requests, req)
-	if len(f.responses) == 0 {
-		return llm.Response{}, errors.New("no fake response configured")
-	}
-	resp := f.responses[0]
-	f.responses = f.responses[1:]
-	return resp, nil
-}
-
-func (f *requestCaptureFakeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
-	}, nil
-}
-
-func (f *requestCaptureFakeClient) Requests() []llm.Request {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]llm.Request, len(f.requests))
-	copy(out, f.requests)
-	return out
-}
-
-type busyTogglePatchTool struct {
-	delay time.Duration
-}
-
-func (t busyTogglePatchTool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
-	if t.delay > 0 {
-		select {
-		case <-ctx.Done():
-			return tools.Result{}, ctx.Err()
-		case <-time.After(t.delay):
-		}
-	}
-	return tools.Result{CallID: c.ID, Name: c.Name, Output: json.RawMessage(`{"ok":true}`)}, nil
-}
-
 func (statusLineFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, errors.New("not implemented")
-}
-
-func (statusLineFastClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("not implemented")
-}
-
-func (statusLineFastClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
-}
-
-func (statusLineAzureClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("not implemented")
-}
-
-func (statusLineAzureClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{ProviderID: "azure-openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: false}, nil
 }
 
 func TestHelpDismissesOnRegisteredKeyAndAppliesAction(t *testing.T) {
@@ -267,7 +201,8 @@ func TestHelpDismissesOnRegisteredKeyAndAppliesAction(t *testing.T) {
 func TestHelpDismissesOnAnyKeypress(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(80, 24)
-	testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{Question: "Proceed?", Suggestions: []string{"Yes", "No"}}})
+	event := testQuestionAskEvent("ask-1", "Proceed?", nil, "Yes", "No")
+	testSetActiveAsk(m, &event)
 	m.layout().syncViewport()
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})

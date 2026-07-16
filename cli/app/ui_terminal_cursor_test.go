@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"core/cli/tui"
-	"core/shared/clientui"
 	"core/shared/config"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -247,24 +246,6 @@ func (w *failingTerminalCursorWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-type shortTerminalCursorWriter struct {
-	limit int
-	out   bytes.Buffer
-}
-
-func (w *shortTerminalCursorWriter) Write(p []byte) (int, error) {
-	if len(p) > w.limit {
-		_, _ = w.out.Write(p[:w.limit])
-		return w.limit, nil
-	}
-	_, _ = w.out.Write(p)
-	return len(p), nil
-}
-
-func (w *shortTerminalCursorWriter) String() string {
-	return w.out.String()
-}
-
 func TestTerminalCursorWriterDoesNotRestoreFromStalePlacementAfterClearScreen(t *testing.T) {
 	state := newUITerminalCursorState()
 	state.Set(uiTerminalCursorPlacement{Visible: true, CursorRow: 4, CursorCol: 6, AnchorRow: 9})
@@ -438,7 +419,8 @@ func TestAskInputCursorUsesSharedFieldDisplayWidth(t *testing.T) {
 	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
 	m.terminalGeometry = terminalGeometryKnown(12, 10)
 	reply := make(chan askReply, 1)
-	testSetActiveAsk(m, &askEvent{req: clientui.PendingPromptEvent{Question: "Question?"}, reply: reply})
+	event := testQuestionAskEvent("ask-1", "Question?", reply)
+	testSetActiveAsk(m, &event)
 	m.ask.input = "ab👍cd"
 	m.ask.inputCursor = 3
 	m.layout().syncViewport()

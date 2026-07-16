@@ -9,7 +9,7 @@ import (
 
 	"core/cli/app/internal/status"
 	"core/server/auth"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -38,7 +38,7 @@ func (fastOnlyAuthResolver) CurrentState(context.Context) (auth.State, error) {
 	panic("session picker must not resolve current auth state")
 }
 
-var _ client.AuthStatusClient = panicAuthStatusClient{}
+var _ apicontract.AuthStatusService = panicAuthStatusClient{}
 
 func newTestSessionPickerModel(t *testing.T, summaries []clientui.SessionSummary, header sessionPickerHeaderInfo) *sessionPickerModel {
 	t.Helper()
@@ -75,15 +75,6 @@ func pickerTestSummary(t *testing.T, raw string, updatedAt time.Time) clientui.S
 	}
 }
 
-func selectedPickerSessionID(t *testing.T, selection sessionPickerSelection) runtimeids.SessionID {
-	t.Helper()
-	selected, ok := selection.(sessionPickerSessionSelection)
-	if !ok {
-		t.Fatalf("picker selection = %T, want session selection", selection)
-	}
-	return selected.sessionID
-}
-
 func TestSessionPickerScrollsAndSelects(t *testing.T) {
 	now := time.Date(2026, time.February, 8, 12, 0, 0, 0, time.UTC)
 	summaries := make([]clientui.SessionSummary, 0, 20)
@@ -112,6 +103,30 @@ func TestSessionPickerScrollsAndSelects(t *testing.T) {
 	open, present := m.result.(sessionPickerOpenResult)
 	if !present || open.sessionID != summaries[15].SessionID {
 		t.Fatalf("selected=%+v want %s", m.result, summaries[15].SessionID.String())
+	}
+}
+
+func TestSessionPickerPageKeysMoveByVisibleWindow(t *testing.T) {
+	now := time.Date(2026, time.February, 8, 12, 0, 0, 0, time.UTC)
+	summaries := make([]clientui.SessionSummary, 0, 20)
+	for i := 0; i < 20; i++ {
+		summaries = append(summaries, pickerTestSummary(t, fmt.Sprintf("page-%02d", i), now.Add(-time.Duration(i)*time.Minute)))
+	}
+	model := newTestSessionPickerModel(t, summaries, sessionPickerHeaderInfo{})
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
+	tab := model.tab(sessioncontract.SessionCategoryMain)
+	pageSize := len(model.visibleRowsFromOffset(tab, tab.offset))
+	if pageSize < 1 {
+		t.Fatal("visible picker page is empty")
+	}
+
+	runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, tea.KeyMsg{Type: tea.KeyPgDown}))
+	if selected := tab.selectedIndex(); selected == nil || *selected != pageSize {
+		t.Fatalf("PgDn selected index = %v, want %d", selected, pageSize)
+	}
+	runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, tea.KeyMsg{Type: tea.KeyPgUp}))
+	if selected := tab.selectedIndex(); selected == nil || *selected != 0 {
+		t.Fatalf("PgUp selected index = %v, want 0", selected)
 	}
 }
 

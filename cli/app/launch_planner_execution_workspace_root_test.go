@@ -4,43 +4,60 @@ import (
 	"context"
 	"testing"
 
+	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
-type executionWorkspaceRootReader struct {
-	request       serverapi.SessionExecutionWorkspaceRootRequest
-	workspaceRoot string
+type executionTargetReader struct {
+	request serverapi.SessionMainViewRequest
+	target  clientui.SessionExecutionTarget
 }
 
-func (r *executionWorkspaceRootReader) GetSessionExecutionWorkspaceRoot(
+func (r *executionTargetReader) GetSessionMainView(
 	_ context.Context,
-	request serverapi.SessionExecutionWorkspaceRootRequest,
-) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
+	request serverapi.SessionMainViewRequest,
+) (serverapi.SessionMainViewResponse, error) {
 	r.request = request
-	return serverapi.SessionExecutionWorkspaceRootResponse{WorkspaceRoot: r.workspaceRoot}, nil
+	return serverapi.SessionMainViewResponse{
+		MainView: clientui.RuntimeMainView{
+			Session: clientui.RuntimeSessionView{ExecutionTarget: r.target},
+		},
+	}, nil
 }
 
-func TestLoadSelectedSessionWorkspaceRootUsesExecutionWorkspaceRootRead(t *testing.T) {
-	reader := &executionWorkspaceRootReader{
-		workspaceRoot: "/workspace",
+func TestLoadSelectedSessionExecutionTargetUsesMainViewAuthority(t *testing.T) {
+	reader := &executionTargetReader{
+		target: clientui.SessionExecutionTarget{
+			WorkspaceRoot:         " /workspace ",
+			WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		},
 	}
 
-	root, err := loadSelectedSessionWorkspaceRoot(context.Background(), reader, "selected-session")
+	target, err := loadSelectedSessionExecutionTarget(context.Background(), reader, "selected-session")
 	if err != nil {
-		t.Fatalf("loadSelectedSessionWorkspaceRoot: %v", err)
+		t.Fatalf("loadSelectedSessionExecutionTarget: %v", err)
 	}
-	if root != "/workspace" {
-		t.Fatalf("workspace root = %q, want %q", root, "/workspace")
+	if target.WorkspaceRoot != "/workspace" ||
+		target.WorkspaceAvailability != clientui.ProjectAvailabilityAvailable {
+		t.Fatalf("execution target = %+v", target)
 	}
-	if reader.request.SessionID.String() != "selected-session" {
-		t.Fatalf("requested session = %q, want %q", reader.request.SessionID.String(), "selected-session")
+	if reader.request.SessionID != "selected-session" {
+		t.Fatalf("requested session = %q, want %q", reader.request.SessionID, "selected-session")
 	}
 }
 
-func TestLoadSelectedSessionWorkspaceRootRejectsMissingTarget(t *testing.T) {
-	reader := &executionWorkspaceRootReader{}
-
-	if _, err := loadSelectedSessionWorkspaceRoot(context.Background(), reader, "selected-session"); err == nil {
-		t.Fatal("loadSelectedSessionWorkspaceRoot error = nil")
+func TestLoadSelectedSessionExecutionTargetPreservesUnavailableTarget(t *testing.T) {
+	reader := &executionTargetReader{
+		target: clientui.SessionExecutionTarget{
+			WorkspaceRoot:         "/missing",
+			WorkspaceAvailability: clientui.ProjectAvailabilityMissing,
+		},
+	}
+	target, err := loadSelectedSessionExecutionTarget(context.Background(), reader, "selected-session")
+	if err != nil {
+		t.Fatalf("loadSelectedSessionExecutionTarget: %v", err)
+	}
+	if target.WorkspaceAvailability != clientui.ProjectAvailabilityMissing {
+		t.Fatalf("execution target = %+v, want missing", target)
 	}
 }

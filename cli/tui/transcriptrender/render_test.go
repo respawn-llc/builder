@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
@@ -25,9 +26,9 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 	}{
 		{name: "user", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "hello"}}, want: "❯ hello", wantRole: StyleRoleUser, wantColor: ColorRoleForeground},
 		{name: "model", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "answer"}}, want: "❮ answer", wantRole: StyleRoleAssistant, wantColor: ColorRoleForeground},
-		{name: "warning", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeWarning, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "⚠ neutral notice", wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
-		{name: "error", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeError, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "! neutral notice", wantRole: StyleRoleError, wantColor: ColorRoleError},
-		{name: "notice", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeInfo, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "ℹ neutral notice", wantRole: StyleRoleNotice, wantColor: ColorRoleForeground},
+		{name: "warning", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeLegacyUntypedNotice, Severity: clientui.TranscriptNoticeWarning, LegacyText: &legacy}}, want: "⚠ neutral notice", wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
+		{name: "error", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeLegacyUntypedNotice, Severity: clientui.TranscriptNoticeError, LegacyText: &legacy}}, want: "! neutral notice", wantRole: StyleRoleError, wantColor: ColorRoleError},
+		{name: "notice", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeLegacyUntypedNotice, Severity: clientui.TranscriptNoticeInfo, LegacyText: &legacy}}, want: "ℹ neutral notice", wantRole: StyleRoleNotice, wantColor: ColorRoleForeground},
 	}
 
 	for _, tt := range cases {
@@ -58,11 +59,12 @@ func TestFaintRowsUseBaseForegroundWithTerminalFaintAttribute(t *testing.T) {
 	notice := RenderCommittedRow(clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowNotice,
 		Notice: &clientui.TranscriptNoticeRow{
-			Severity: clientui.TranscriptNoticeInfo,
-			Data:     clientui.TranscriptNoticeData{LegacyText: &legacy},
+			Reason:     clientui.TranscriptNoticeLegacyUntypedNotice,
+			Severity:   clientui.TranscriptNoticeInfo,
+			LegacyText: &legacy,
 		},
 	}, 80, "dark", ModeDetailCollapsed)
-	tool := RenderCommittedRow(toolRow("ask_question", clientui.ToolPresentationDefault, "question", false), 80, "dark", ModeDetailCollapsed)
+	tool := RenderCommittedRow(toolRow("ask_question", transcript.ToolPresentationDefault, "question", false), 80, "dark", ModeDetailCollapsed)
 
 	for name, row := range map[string]Row{"notice": notice, "tool": tool} {
 		if len(row.Lines) != 1 {
@@ -88,10 +90,10 @@ func TestFaintRowsUseBaseForegroundWithTerminalFaintAttribute(t *testing.T) {
 }
 
 func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "sed -n '1,10p' cli/tui/model.go", false)
-	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{
-		Kind:         clientui.ToolRenderKindShell,
-		ShellDialect: clientui.ToolShellDialectPosix,
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "sed -n '1,10p' cli/tui/model.go", false)
+	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{
+		Kind:         transcript.ToolRenderKindShell,
+		ShellDialect: transcript.ToolShellDialectPosix,
 	}
 	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed, ModeDetailExpanded} {
 		rendered := RenderCommittedRow(row, 120, "", mode)
@@ -107,10 +109,10 @@ func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 }
 
 func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
-	row := toolRow("write_stdin", clientui.ToolPresentationShell, "process completed output", false)
-	row.Tool.ToolPresentation.Command = "Polled session 1149 for 2s"
-	row.Tool.ToolPresentation.CompactText = row.Tool.ToolPresentation.Command
-	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindPlain}
+	row := toolRow("write_stdin", transcript.ToolPresentationShell, "process completed output", false)
+	row.Tool.Presentation.Command = "Polled session 1149 for 2s"
+	row.Tool.Presentation.CompactText = row.Tool.Presentation.Command
+	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindPlain}
 	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed, ModeDetailExpanded} {
 		rendered := RenderCommittedRow(row, 120, "", mode)
 		if len(rendered.Lines) == 0 {
@@ -129,29 +131,29 @@ func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
 	pending := RenderPendingTool(clientui.TranscriptToolStart{
 		ToolCallID: "b5c34536-1994-46bd-a3e4-839402a5ee1e",
 		ToolName:   "write_stdin",
-		ToolPresentation: &clientui.ToolCallMeta{
+		Presentation: &transcript.ToolCallMeta{
 			ToolName:     "write_stdin",
-			Presentation: clientui.ToolPresentationShell,
+			Presentation: transcript.ToolPresentationShell,
 			Command:      "Polled session 1149 for 2s",
 			CompactText:  "Polled session 1149 for 2s",
-			RenderHint:   &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindPlain},
+			RenderHint:   &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindPlain},
 		},
 	}, 120, "", "⢎ ")
 	assertShellLineIsPlainText(t, pending, true)
 }
 
 func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "package transcriptrender\n\nfunc example() {}", false)
-	row.Tool.ToolPresentation.Command = "sed -n '1,20p' cli/tui/transcriptrender/render.go"
-	row.Tool.ToolPresentation.CompactText = row.Tool.ToolPresentation.Command
-	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{
-		Kind:       clientui.ToolRenderKindSource,
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "package transcriptrender\n\nfunc example() {}", false)
+	row.Tool.Presentation.Command = "sed -n '1,20p' cli/tui/transcriptrender/render.go"
+	row.Tool.Presentation.CompactText = row.Tool.Presentation.Command
+	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{
+		Kind:       transcript.ToolRenderKindSource,
 		Path:       "cli/tui/transcriptrender/render.go",
 		ResultOnly: true,
 	}
 
 	presentation := RenderDetailPresentation(row, 120, "dark")
-	if got := presentation.Collapsed[0].Plain(); !strings.Contains(got, row.Tool.ToolPresentation.Command) {
+	if got := presentation.Collapsed[0].Plain(); !strings.Contains(got, row.Tool.Presentation.Command) {
 		t.Fatalf("collapsed source read = %q, want typed command preview", got)
 	}
 	expanded := strings.Join(PlainLines(presentation.Expanded), "\n")
@@ -159,7 +161,7 @@ func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
 		!strings.Contains(expanded, "func example() {}") {
 		t.Fatalf("expanded source read = %q, want source result", expanded)
 	}
-	if !strings.Contains(expanded, row.Tool.ToolPresentation.Command) {
+	if !strings.Contains(expanded, row.Tool.Presentation.Command) {
 		t.Fatalf("expanded source read = %q, want typed command before source result", expanded)
 	}
 	if got, want := PlainLines(presentation.Expanded)[1], "│ "; got != want {
@@ -186,11 +188,11 @@ func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
 }
 
 func TestDetailExpandedRowsRemoveFaintStyling(t *testing.T) {
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "package example\n\nfunc main() {}", false)
-	row.Tool.ToolPresentation.Command = "sed -n '1,20p' example.go"
-	row.Tool.ToolPresentation.CompactText = row.Tool.ToolPresentation.Command
-	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{
-		Kind:       clientui.ToolRenderKindSource,
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "package example\n\nfunc main() {}", false)
+	row.Tool.Presentation.Command = "sed -n '1,20p' example.go"
+	row.Tool.Presentation.CompactText = row.Tool.Presentation.Command
+	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{
+		Kind:       transcript.ToolRenderKindSource,
 		Path:       "example.go",
 		ResultOnly: true,
 	}
@@ -213,19 +215,19 @@ func TestDetailExpandedRowsRemoveFaintStyling(t *testing.T) {
 func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 	cases := []struct {
 		name    string
-		dialect clientui.ToolShellDialect
+		dialect transcript.ToolShellDialect
 		command string
 	}{
-		{name: "posix", dialect: clientui.ToolShellDialectPosix, command: "printf 'ok' # comment"},
-		{name: "powershell", dialect: clientui.ToolShellDialectPowerShell, command: "Write-Host \"ok\" # comment"},
-		{name: "windows command", dialect: clientui.ToolShellDialectWindowsCommand, command: "rem comment"},
+		{name: "posix", dialect: transcript.ToolShellDialectPosix, command: "printf 'ok' # comment"},
+		{name: "powershell", dialect: transcript.ToolShellDialectPowerShell, command: "Write-Host \"ok\" # comment"},
+		{name: "windows command", dialect: transcript.ToolShellDialectWindowsCommand, command: "rem comment"},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			row := toolRow("exec_command", clientui.ToolPresentationShell, tt.command, false)
-			row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{
-				Kind:         clientui.ToolRenderKindShell,
+			row := toolRow("exec_command", transcript.ToolPresentationShell, tt.command, false)
+			row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{
+				Kind:         transcript.ToolRenderKindShell,
 				ShellDialect: tt.dialect,
 			}
 			rendered := RenderCommittedRow(row, 120, "", ModeOngoing)
@@ -237,13 +239,13 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 			pending := RenderPendingTool(clientui.TranscriptToolStart{
 				ToolCallID: "2d97d231-7765-471a-bf55-a4c17157af01",
 				ToolName:   "exec_command",
-				ToolPresentation: &clientui.ToolCallMeta{
+				Presentation: &transcript.ToolCallMeta{
 					ToolName:     "exec_command",
-					Presentation: clientui.ToolPresentationShell,
+					Presentation: transcript.ToolPresentationShell,
 					Command:      tt.command,
 					CompactText:  tt.command,
-					RenderHint: &clientui.ToolRenderHint{
-						Kind:         clientui.ToolRenderKindShell,
+					RenderHint: &transcript.ToolRenderHint{
+						Kind:         transcript.ToolRenderKindShell,
 						ShellDialect: tt.dialect,
 					},
 				},
@@ -254,8 +256,8 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 }
 
 func TestMovedToBackgroundShellRowKeepsMovedToBackgroundSuffixAtNarrowWidth(t *testing.T) {
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "sleep 20; printf completed", false)
-	row.Tool.ToolPresentation.MovedToBackground = true
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "sleep 20; printf completed", false)
+	row.Tool.Presentation.MovedToBackground = true
 
 	rendered := RenderCommittedRow(row, 24, "", ModeOngoing)
 	if len(rendered.Lines) != 1 {
@@ -282,8 +284,8 @@ func TestMovedToBackgroundShellRowKeepsMovedToBackgroundSuffixAtNarrowWidth(t *t
 
 func TestMovedToBackgroundMultilineShellStacksHiddenLineCount(t *testing.T) {
 	command := "sleep 20;\nprintf completed;\necho done"
-	row := toolRow("exec_command", clientui.ToolPresentationShell, command, false)
-	row.Tool.ToolPresentation.MovedToBackground = true
+	row := toolRow("exec_command", transcript.ToolPresentationShell, command, false)
+	row.Tool.Presentation.MovedToBackground = true
 
 	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
 	if len(rendered.Lines) != 1 {
@@ -296,8 +298,8 @@ func TestMovedToBackgroundMultilineShellStacksHiddenLineCount(t *testing.T) {
 
 func TestMovedToBackgroundMultilineShellShowsCountOnlyWhileDetailIsCollapsed(t *testing.T) {
 	command := "sleep 20;\nprintf completed;\necho done"
-	row := toolRow("exec_command", clientui.ToolPresentationShell, command, false)
-	row.Tool.ToolPresentation.MovedToBackground = true
+	row := toolRow("exec_command", transcript.ToolPresentationShell, command, false)
+	row.Tool.Presentation.MovedToBackground = true
 
 	for _, tt := range []struct {
 		mode Mode
@@ -347,7 +349,7 @@ func assertShellLineHasTypedSyntax(t *testing.T, line Line, wantFaint bool) {
 }
 
 func TestDefaultToolRowsDoNotUseChromaSyntax(t *testing.T) {
-	rendered := RenderCommittedRow(toolRow("custom_tool", clientui.ToolPresentationDefault, "sed -n '1,10p' cli/tui/model.go", false), 120, "", ModeOngoing)
+	rendered := RenderCommittedRow(toolRow("custom_tool", transcript.ToolPresentationDefault, "sed -n '1,10p' cli/tui/model.go", false), 120, "", ModeOngoing)
 	if len(rendered.Lines) == 0 {
 		t.Fatal("rendered no custom tool row lines")
 	}
@@ -359,10 +361,10 @@ func TestDefaultToolRowsDoNotUseChromaSyntax(t *testing.T) {
 }
 
 func TestToolSymbolsUseSeparateMetadataFromBodies(t *testing.T) {
-	rawShell := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
-	rawShell.Tool.ToolPresentation.RawOutputRequested = true
-	patchTool := toolRow("patch", clientui.ToolPresentationDefault, "ignored", false)
-	patchTool.Tool.ToolPresentation.PatchRender = &patchformat.RenderedPatch{
+	rawShell := toolRow("exec_command", transcript.ToolPresentationShell, "go test ./...", false)
+	rawShell.Tool.Presentation.RawOutputRequested = true
+	patchTool := toolRow("patch", transcript.ToolPresentationDefault, "ignored", false)
+	patchTool.Tool.Presentation.PatchRender = &patchformat.RenderedPatch{
 		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2}},
 		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go +2", FileIndex: 0}},
 	}
@@ -371,9 +373,9 @@ func TestToolSymbolsUseSeparateMetadataFromBodies(t *testing.T) {
 		name string
 		row  clientui.TranscriptCommittedRow
 	}{
-		{name: "successful tool", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false)},
+		{name: "successful tool", row: toolRow("custom_tool", transcript.ToolPresentationDefault, "custom preview", false)},
 		{name: "raw shell", row: rawShell},
-		{name: "failed tool", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "failed input", true)},
+		{name: "failed tool", row: toolRow("custom_tool", transcript.ToolPresentationDefault, "failed input", true)},
 		{name: "patch tool", row: patchTool},
 	}
 
@@ -394,7 +396,7 @@ func TestToolSymbolsUseSeparateMetadataFromBodies(t *testing.T) {
 
 func TestRoleSymbolOwnsTypedLeadingSlotOutsideBodySpans(t *testing.T) {
 	rendered := RenderCommittedRow(
-		toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false),
+		toolRow("exec_command", transcript.ToolPresentationShell, "go test ./...", false),
 		80,
 		"",
 		ModeOngoing,
@@ -419,13 +421,22 @@ func TestRoleSymbolOwnsTypedLeadingSlotOutsideBodySpans(t *testing.T) {
 }
 
 func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) {
+	messageType := clientui.TranscriptMessageBackgroundNotice
+	compactLabel := "background complete"
 	row := clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowNotice,
 		Notice: &clientui.TranscriptNoticeRow{
-			Severity: clientui.TranscriptNoticeInfo,
-			Data: clientui.TranscriptNoticeData{
-				MessageType:  clientui.MessageTypeBackgroundNotice,
-				CompactLabel: "background complete",
+			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
+			Severity:     clientui.TranscriptNoticeInfo,
+			MessageType:  &messageType,
+			CompactLabel: &compactLabel,
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   "background_completion",
+				Detail: compactLabel,
+			},
+			Background: &clientui.TranscriptBackgroundNoticeIdentity{
+				ActivityID: runtimeids.NewBackgroundActivityID(),
+				ProcessID:  "background-process",
 			},
 		},
 	}
@@ -458,20 +469,23 @@ func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) 
 func TestWorktreeNoticeRendersTypedClientContext(t *testing.T) {
 	branch := "feature/client-rendered-context"
 	effectiveCWD := "/tmp/worktree/client-rendered-context"
+	messageType := clientui.TranscriptMessageWorktreeMode
 	row := clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowNotice,
 		Notice: &clientui.TranscriptNoticeRow{
-			Severity: clientui.TranscriptNoticeInfo,
-			Data: clientui.TranscriptNoticeData{
-				MessageType: clientui.MessageTypeWorktreeMode,
-				WorktreeContext: &clientui.TranscriptWorktreeContext{
-					Branch:        &branch,
-					WorktreePath:  "/tmp/worktree",
-					WorkspaceRoot: "/tmp/workspace",
-					EffectiveCwd:  effectiveCWD,
-				},
+			Reason:      clientui.TranscriptNoticeRuntimeDiagnostic,
+			Severity:    clientui.TranscriptNoticeInfo,
+			MessageType: &messageType,
+			Worktree: &clientui.TranscriptWorktreeContext{
+				Branch:        &branch,
+				WorktreePath:  "/tmp/worktree",
+				WorkspaceRoot: "/tmp/workspace",
+				EffectiveCwd:  effectiveCWD,
 			},
-			Diagnostic: &clientui.TranscriptDiagnosticData{Detail: "model-only instructions"},
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   "worktree_transition",
+				Detail: "model-only instructions",
+			},
 		},
 	}
 
@@ -531,13 +545,14 @@ func TestRenderDetailPresentationDoesNotExpandIdenticalValidLines(t *testing.T) 
 }
 
 func TestRenderDetailPresentationExpandsDifferingValidLines(t *testing.T) {
+	condensedText := "compact answer"
 	presentation := RenderDetailPresentation(
 		clientui.TranscriptCommittedRow{
 			Integrity: transcript.RowIntegrityValid,
 			Kind:      clientui.TranscriptRowAssistant,
 			Assistant: &clientui.TranscriptAssistantRow{
 				Text:          "full first line\nfull second line",
-				CondensedText: "compact answer",
+				CondensedText: &condensedText,
 			},
 		},
 		80,
@@ -556,8 +571,8 @@ func TestRenderDetailPresentationKeepsRecoverableMalformedRowsExpandable(t *test
 		{Integrity: transcript.RowIntegrityRecoverableMalformed, Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "legacy assistant"}},
 		{Integrity: transcript.RowIntegrityRecoverableMalformed, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{Text: "legacy tool"}},
 		{Integrity: transcript.RowIntegrityRecoverableMalformed, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
-			Reason: clientui.TranscriptNoticeLegacyUntypedNotice,
-			Data:   clientui.TranscriptNoticeData{LegacyText: &legacyNotice},
+			Reason:     clientui.TranscriptNoticeLegacyUntypedNotice,
+			LegacyText: &legacyNotice,
 		}},
 	}
 
@@ -591,11 +606,12 @@ func TestRenderDetailPresentationDoesNotExpandUnrecoverableMalformedRows(t *test
 }
 
 func TestOngoingUserAssistantRowsUseCompactText(t *testing.T) {
+	condensedText := "compact assistant"
 	row := clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowAssistant,
 		Assistant: &clientui.TranscriptAssistantRow{
 			Text:          "full first line\nfull second line",
-			CondensedText: "compact assistant",
+			CondensedText: &condensedText,
 		},
 	}
 
@@ -614,8 +630,8 @@ func TestPendingToolChangesOnlyCommittedSymbolText(t *testing.T) {
 	start := clientui.TranscriptToolStart{
 		ToolCallID: "2d97d231-7765-471a-bf55-a4c17157af02",
 		ToolName:   "exec_command",
-		ToolPresentation: &clientui.ToolCallMeta{
-			Presentation: clientui.ToolPresentationShell,
+		Presentation: &transcript.ToolCallMeta{
+			Presentation: transcript.ToolPresentationShell,
 			Command:      "go test ./...",
 		},
 	}
@@ -641,9 +657,9 @@ func TestPendingMultilineShellShowsExplicitHiddenLineCount(t *testing.T) {
 	line := RenderPendingTool(clientui.TranscriptToolStart{
 		ToolCallID: "db2b88a0-3a53-442e-a47b-84bb38ba7f77",
 		ToolName:   "exec_command",
-		ToolPresentation: &clientui.ToolCallMeta{
+		Presentation: &transcript.ToolCallMeta{
 			ToolName:     "exec_command",
-			Presentation: clientui.ToolPresentationShell,
+			Presentation: transcript.ToolPresentationShell,
 			Command:      command,
 			CompactText:  command,
 		},
@@ -655,8 +671,8 @@ func TestPendingMultilineShellShowsExplicitHiddenLineCount(t *testing.T) {
 }
 
 func TestRenderPatchToolShowsStructuredPathAndCounts(t *testing.T) {
-	row := toolRow("patch", clientui.ToolPresentationDefault, "ignored", false)
-	row.Tool.ToolPresentation.PatchRender = &patchformat.RenderedPatch{
+	row := toolRow("patch", transcript.ToolPresentationDefault, "ignored", false)
+	row.Tool.Presentation.PatchRender = &patchformat.RenderedPatch{
 		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2, Removed: 1}},
 		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go -1 +2", FileIndex: 0}},
 	}
@@ -674,9 +690,9 @@ func TestDetailCompilerRendersStructuredPatchSyntaxAndDiffSemantics(t *testing.T
 		"*** Begin Patch\n*** Update File: example.go\n@@\n package main\n-var oldValue = \"old\"\n+var newValue = \"new\"\n*** End Patch\n",
 		"/workspace",
 	)
-	row := toolRow("patch", clientui.ToolPresentationDefault, renderedPatch.DetailText(), false)
-	row.Tool.ToolPresentation.PatchRender = &renderedPatch
-	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+	row := toolRow("patch", transcript.ToolPresentationDefault, renderedPatch.DetailText(), false)
+	row.Tool.Presentation.PatchRender = &renderedPatch
+	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
 
 	presentation := NewDetailCompiler(100, "dark").Compile(row)
 	added, addedOK := detailLineContaining(presentation.Expanded, "newValue")
@@ -735,10 +751,11 @@ func TestDetailCompilerKeepsStructuredPatchInputAheadOfResult(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			row := toolRow("patch", clientui.ToolPresentationDefault, "unstructured result fallback", test.isError)
-			row.Tool.ResultSummary = test.result
-			row.Tool.ToolPresentation.PatchRender = &renderedPatch
-			row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+			row := toolRow("patch", transcript.ToolPresentationDefault, "unstructured result fallback", test.isError)
+			result := test.result
+			row.Tool.ResultSummary = &result
+			row.Tool.Presentation.PatchRender = &renderedPatch
+			row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
 
 			expanded := NewDetailCompiler(80, "dark").Compile(row).Expanded
 			if len(expanded) < 3 || expanded[0].LeadingSymbol == nil {
@@ -773,9 +790,9 @@ func TestDetailCompilerKeepsStructuredPatchInputAheadOfResult(t *testing.T) {
 
 func TestDetailCompilerKeepsRawPatchFallbackSemantic(t *testing.T) {
 	raw := patchformat.Raw("unstructured patch input\nsecond raw line")
-	row := toolRow("patch", clientui.ToolPresentationDefault, "unstructured result fallback", false)
-	row.Tool.ToolPresentation.PatchRender = &raw
-	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+	row := toolRow("patch", transcript.ToolPresentationDefault, "unstructured result fallback", false)
+	row.Tool.Presentation.PatchRender = &raw
+	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
 
 	expanded := NewDetailCompiler(80, "dark").Compile(row).Expanded
 	if got, want := PlainLines(expanded), []string{
@@ -803,9 +820,9 @@ func TestDetailCompilerWrapsStructuredPatchWithOneMarkerPerSourceLine(t *testing
 		"*** Begin Patch\n*** Update File: example.go\n+var extremelyLongIdentifier = \"a long source value\"\n*** End Patch\n",
 		"/workspace",
 	)
-	row := toolRow("patch", clientui.ToolPresentationDefault, renderedPatch.DetailText(), false)
-	row.Tool.ToolPresentation.PatchRender = &renderedPatch
-	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+	row := toolRow("patch", transcript.ToolPresentationDefault, renderedPatch.DetailText(), false)
+	row.Tool.Presentation.PatchRender = &renderedPatch
+	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
 
 	const width = 14
 	expanded := NewDetailCompiler(width, "dark").Compile(row).Expanded
@@ -869,9 +886,9 @@ func TestDetailCompilerSanitizesStructuredPatchSpans(t *testing.T) {
 			},
 		},
 	}
-	row := toolRow("patch", clientui.ToolPresentationDefault, renderedPatch.DetailText(), false)
-	row.Tool.ToolPresentation.PatchRender = &renderedPatch
-	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+	row := toolRow("patch", transcript.ToolPresentationDefault, renderedPatch.DetailText(), false)
+	row.Tool.Presentation.PatchRender = &renderedPatch
+	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
 
 	expanded := NewDetailCompiler(80, "dark").Compile(row).Expanded
 	for lineIndex, line := range expanded {
@@ -909,7 +926,7 @@ func TestPendingPatchToolUsesStructuredPathAndCounts(t *testing.T) {
 	line := RenderPendingTool(clientui.TranscriptToolStart{
 		ToolCallID: "e5d6245b-579f-487c-87f7-cd57e21a0d38",
 		ToolName:   "patch",
-		ToolPresentation: &clientui.ToolCallMeta{
+		Presentation: &transcript.ToolCallMeta{
 			ToolName: "patch",
 			PatchRender: &patchformat.RenderedPatch{
 				Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2, Removed: 1}},
@@ -938,8 +955,8 @@ func TestPendingPatchToolUsesStructuredPathAndCounts(t *testing.T) {
 func TestPatchFamilyToolsDoNotFallbackToToolName(t *testing.T) {
 	for _, toolName := range []string{"patch", "edit", "replace", "write"} {
 		t.Run(toolName, func(t *testing.T) {
-			row := toolRow(toolName, clientui.ToolPresentationDefault, toolName, false)
-			row.Tool.ToolPresentation = &clientui.ToolCallMeta{ToolName: toolName}
+			row := toolRow(toolName, transcript.ToolPresentationDefault, toolName, false)
+			row.Tool.Presentation = &transcript.ToolCallMeta{ToolName: toolName}
 			rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
 			if len(rendered.Lines) == 0 {
 				t.Fatal("rendered no patch-family lines")
@@ -949,9 +966,9 @@ func TestPatchFamilyToolsDoNotFallbackToToolName(t *testing.T) {
 			}
 
 			pending := RenderPendingTool(clientui.TranscriptToolStart{
-				ToolCallID:       "2d97d231-7765-471a-bf55-a4c17157af03",
-				ToolName:         toolName,
-				ToolPresentation: &clientui.ToolCallMeta{ToolName: toolName},
+				ToolCallID:   "2d97d231-7765-471a-bf55-a4c17157af03",
+				ToolName:     toolName,
+				Presentation: &transcript.ToolCallMeta{ToolName: toolName},
 			}, 80, "", "")
 			if got := pending.Plain(); got != "⇄ tool call" {
 				t.Fatalf("pending patch-family row fell back to tool name or unexpected fallback: %q", got)
@@ -961,8 +978,9 @@ func TestPatchFamilyToolsDoNotFallbackToToolName(t *testing.T) {
 }
 
 func TestCollapsedToolResultSummaryRendersAsFaintInlineMetadata(t *testing.T) {
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
-	row.Tool.ResultSummary = "passed"
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "go test ./...", false)
+	resultSummary := "passed"
+	row.Tool.ResultSummary = &resultSummary
 
 	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
 	if len(rendered.Lines) == 0 {
@@ -984,9 +1002,9 @@ func TestCollapsedToolResultSummaryRendersAsFaintInlineMetadata(t *testing.T) {
 
 func TestCommittedMultilineShellStacksHiddenLineCountBeforeStatus(t *testing.T) {
 	command := "body=$(kent task show KENT-224 --project . --json |\n  jq -r '.body')\necho \"$body\""
-	row := toolRow("exec_command", clientui.ToolPresentationShell, command, false)
+	row := toolRow("exec_command", transcript.ToolPresentationShell, command, false)
 	exitCode := 7
-	row.Tool.ToolPresentation.ShellExitCode = &exitCode
+	row.Tool.Presentation.ShellExitCode = &exitCode
 
 	ongoing := RenderCommittedRow(row, 120, "", ModeOngoing)
 	if len(ongoing.Lines) != 1 {
@@ -1009,8 +1027,8 @@ func TestCommittedMultilineShellStacksHiddenLineCountBeforeStatus(t *testing.T) 
 
 func TestNonZeroShellExitUsesErrorDollarAndReservedStatusSuffix(t *testing.T) {
 	exitCode := 7
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "printf a-very-long-command", false)
-	row.Tool.ToolPresentation.ShellExitCode = &exitCode
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "printf a-very-long-command", false)
+	row.Tool.Presentation.ShellExitCode = &exitCode
 
 	rendered := RenderCommittedRow(row, 22, "", ModeOngoing)
 	if len(rendered.Lines) != 1 {
@@ -1034,8 +1052,8 @@ func TestNonZeroShellExitUsesErrorDollarAndReservedStatusSuffix(t *testing.T) {
 
 func TestZeroShellExitDoesNotRenderStatusSuffix(t *testing.T) {
 	exitCode := 0
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
-	row.Tool.ToolPresentation.ShellExitCode = &exitCode
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "go test ./...", false)
+	row.Tool.Presentation.ShellExitCode = &exitCode
 
 	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
 	line := rendered.Lines[0]
@@ -1053,11 +1071,12 @@ func TestZeroShellExitDoesNotRenderStatusSuffix(t *testing.T) {
 }
 
 func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.T) {
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw output text", false)
-	row.Tool.CondensedText = "passed"
-	row.Tool.ResultSummary = "passed"
-	row.Tool.ToolPresentation.Command = "go test ./..."
-	row.Tool.ToolPresentation.CompactText = "go test ./..."
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "raw output text", false)
+	resultSummary := "passed"
+	row.Tool.CondensedText = &resultSummary
+	row.Tool.ResultSummary = &resultSummary
+	row.Tool.Presentation.Command = "go test ./..."
+	row.Tool.Presentation.CompactText = "go test ./..."
 
 	for _, mode := range []Mode{ModeOngoing, ModeOngoingCollapsed, ModeDetailCollapsed} {
 		rendered := RenderCommittedRow(row, 80, "", mode)
@@ -1080,10 +1099,11 @@ func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.
 }
 
 func TestExpandedToolRowsKeepTypedInputAheadOfOutput(t *testing.T) {
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw output text", false)
-	row.Tool.ResultSummary = "passed"
-	row.Tool.ToolPresentation.Command = "go test ./..."
-	row.Tool.ToolPresentation.CompactText = "run tests"
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "raw output text", false)
+	resultSummary := "passed"
+	row.Tool.ResultSummary = &resultSummary
+	row.Tool.Presentation.Command = "go test ./..."
+	row.Tool.Presentation.CompactText = "run tests"
 
 	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
 	if got, want := PlainLines(rendered.Lines), []string{"$ go test ./...", "│ ", "│ raw output text", "└ passed"}; !slices.Equal(got, want) {
@@ -1092,9 +1112,10 @@ func TestExpandedToolRowsKeepTypedInputAheadOfOutput(t *testing.T) {
 }
 
 func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
-	row := toolRow("patch", clientui.ToolPresentationDefault, "raw patch output", true)
-	row.Tool.ResultSummary = "failed"
-	row.Tool.ToolPresentation.PatchDetail = "cli/tui/model.go\n-old\n+new"
+	row := toolRow("patch", transcript.ToolPresentationDefault, "raw patch output", true)
+	resultSummary := "failed"
+	row.Tool.ResultSummary = &resultSummary
+	row.Tool.Presentation.PatchDetail = "cli/tui/model.go\n-old\n+new"
 
 	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
 	if got, want := PlainLines(rendered.Lines), []string{"⇄ cli/tui/model.go", "│ -old", "│ +new", "│ ", "│ raw patch output", "└ failed"}; !slices.Equal(got, want) {
@@ -1103,11 +1124,12 @@ func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
 }
 
 func TestToolErrorRowsKeepAuthoritativeInputFirstAndErrorClassification(t *testing.T) {
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw failure output", true)
-	row.Tool.CondensedText = "permission denied"
-	row.Tool.ResultSummary = "permission denied"
-	row.Tool.ToolPresentation.Command = "cat /root/secret"
-	row.Tool.ToolPresentation.CompactText = "cat /root/secret"
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "raw failure output", true)
+	resultSummary := "permission denied"
+	row.Tool.CondensedText = &resultSummary
+	row.Tool.ResultSummary = &resultSummary
+	row.Tool.Presentation.Command = "cat /root/secret"
+	row.Tool.Presentation.CompactText = "cat /root/secret"
 
 	tests := []struct {
 		mode        Mode
@@ -1571,14 +1593,23 @@ func TestCommittedMarkdownLinksAdaptToTerminalPresentation(t *testing.T) {
 
 func TestBackgroundExitStatusDoesNotOverridePrimaryNoticeSymbol(t *testing.T) {
 	render := func(exitCode *int) Line {
+		messageType := clientui.TranscriptMessageBackgroundNotice
+		compactLabel := "background complete"
 		row := clientui.TranscriptCommittedRow{
 			Kind: clientui.TranscriptRowNotice,
 			Notice: &clientui.TranscriptNoticeRow{
-				Severity: clientui.TranscriptNoticeInfo,
-				Data: clientui.TranscriptNoticeData{
-					MessageType:        clientui.MessageTypeBackgroundNotice,
-					CompactLabel:       "background complete",
-					BackgroundExitCode: exitCode,
+				Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
+				Severity:     clientui.TranscriptNoticeInfo,
+				MessageType:  &messageType,
+				CompactLabel: &compactLabel,
+				Diagnostic: &clientui.TranscriptDiagnostic{
+					Code:   "background_completion",
+					Detail: compactLabel,
+				},
+				Background: &clientui.TranscriptBackgroundNoticeIdentity{
+					ActivityID: runtimeids.NewBackgroundActivityID(),
+					ProcessID:  "background-process",
+					ExitCode:   exitCode,
 				},
 			},
 		}
@@ -1601,10 +1632,12 @@ func TestBackgroundExitStatusDoesNotOverridePrimaryNoticeSymbol(t *testing.T) {
 }
 
 func TestPatchToolErrorKeepsAuthoritativeInputFirstAndErrorClassification(t *testing.T) {
-	row := toolRow("patch", clientui.ToolPresentationDefault, "patch failure output", true)
-	row.Tool.CondensedText = "patch failed"
-	row.Tool.ResultSummary = "failed"
-	row.Tool.ToolPresentation.PatchRender = &patchformat.RenderedPatch{
+	row := toolRow("patch", transcript.ToolPresentationDefault, "patch failure output", true)
+	condensedText := "patch failed"
+	resultSummary := "failed"
+	row.Tool.CondensedText = &condensedText
+	row.Tool.ResultSummary = &resultSummary
+	row.Tool.Presentation.PatchRender = &patchformat.RenderedPatch{
 		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2, Removed: 1}},
 		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go -1 +2", FileIndex: 0}},
 	}
@@ -1651,8 +1684,9 @@ func assertFailedToolClassification(t *testing.T, mode Mode, line Line) {
 }
 
 func TestCollapsedToolResultSummarySanitizesMetadataBeforeInlineRender(t *testing.T) {
-	row := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
-	row.Tool.ResultSummary = "passed\x1b[31m"
+	row := toolRow("exec_command", transcript.ToolPresentationShell, "go test ./...", false)
+	resultSummary := "passed\x1b[31m"
+	row.Tool.ResultSummary = &resultSummary
 
 	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
 	spans := rendered.Lines[0].Spans
@@ -1688,12 +1722,11 @@ func TestCacheWarningNoticeRendersStructuredPayload(t *testing.T) {
 		Notice: &clientui.TranscriptNoticeRow{
 			Reason:   clientui.TranscriptNoticeReason(transcript.NoticeReasonCacheWarning),
 			Severity: clientui.TranscriptNoticeWarning,
-			Data: clientui.TranscriptNoticeData{
-				CacheWarning: &clientui.TranscriptCacheWarningData{
-					Scope:           string(warning.Scope),
-					Reason:          string(warning.Reason),
-					LostInputTokens: warning.LostInputTokens,
-				},
+			CacheWarning: &clientui.TranscriptCacheWarning{
+				Scope:           string(warning.Scope),
+				Reason:          string(warning.Reason),
+				LostInputTokens: warning.LostInputTokens,
+				Visibility:      transcript.EntryVisibilityOngoing,
 			},
 		},
 	}
@@ -1785,13 +1818,16 @@ func firstRune(s string) rune {
 }
 
 func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing.T) {
+	compactLabel := "AGENTS.md file content"
 	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
 		Visibility: clientui.EntryVisibilityDetail,
 		Kind:       clientui.TranscriptRowNotice,
 		Notice: &clientui.TranscriptNoticeRow{
-			Severity: clientui.TranscriptNoticeInfo,
-			Data:     clientui.TranscriptNoticeData{CompactLabel: "AGENTS.md file content"},
-			Diagnostic: &clientui.TranscriptDiagnosticData{
+			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
+			Severity:     clientui.TranscriptNoticeInfo,
+			CompactLabel: &compactLabel,
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   "agents_context",
 				Detail: "raw diagnostic body",
 			},
 		},
@@ -1805,9 +1841,11 @@ func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing
 		Visibility: clientui.EntryVisibilityDetail,
 		Kind:       clientui.TranscriptRowNotice,
 		Notice: &clientui.TranscriptNoticeRow{
-			Severity: clientui.TranscriptNoticeInfo,
-			Data:     clientui.TranscriptNoticeData{CompactLabel: "AGENTS.md file content"},
-			Diagnostic: &clientui.TranscriptDiagnosticData{
+			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
+			Severity:     clientui.TranscriptNoticeInfo,
+			CompactLabel: &compactLabel,
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   "agents_context",
 				Detail: "raw diagnostic body",
 			},
 		},
@@ -1826,9 +1864,9 @@ func TestUserAssistantCompactTextToggleBetweenCollapsedAndExpanded(t *testing.T)
 		row    func(text, condensed string) clientui.TranscriptCommittedRow
 		symbol string
 	}{{"user", func(text, condensed string) clientui.TranscriptCommittedRow {
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: text, CondensedText: condensed}}
+		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: text, CondensedText: &condensed}}
 	}, "❯"}, {"assistant", func(text, condensed string) clientui.TranscriptCommittedRow {
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: text, CondensedText: condensed}}
+		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: text, CondensedText: &condensed}}
 	}, "❮"}} {
 		t.Run(kind.name, func(t *testing.T) {
 			full := "first body line\nsecond body line\nthird body line"
@@ -1855,16 +1893,20 @@ func TestUserAssistantCompactTextToggleBetweenCollapsedAndExpanded(t *testing.T)
 }
 
 func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
+	messageType := clientui.TranscriptMessageReviewerFeedback
+	compactLabel := "Reviewer made 1 suggestion."
 	row := clientui.TranscriptCommittedRow{
 		Visibility: clientui.EntryVisibilityOngoingCollapsed,
 		Kind:       clientui.TranscriptRowNotice,
 		Notice: &clientui.TranscriptNoticeRow{
-			Severity: clientui.TranscriptNoticeInfo,
-			Data: clientui.TranscriptNoticeData{
-				MessageType:  clientui.MessageTypeReviewerFeedback,
-				CompactLabel: "Reviewer made 1 suggestion.",
+			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
+			Severity:     clientui.TranscriptNoticeInfo,
+			MessageType:  &messageType,
+			CompactLabel: &compactLabel,
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   clientui.TranscriptDiagnosticCode(transcript.EntryRoleReviewerSuggestions),
+				Detail: compactLabel,
 			},
-			Diagnostic: &clientui.TranscriptDiagnosticData{Code: string(transcript.EntryRoleReviewerSuggestions)},
 		},
 	}
 
@@ -1879,41 +1921,14 @@ func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
 	}
 }
 
-func noticeMessageTypeRow(messageType clientui.MessageType, severity clientui.TranscriptNoticeSeverity) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{
-		Kind: clientui.TranscriptRowNotice,
-		Notice: &clientui.TranscriptNoticeRow{
-			Severity: severity,
-			Data: clientui.TranscriptNoticeData{
-				MessageType:  messageType,
-				CompactLabel: "notice",
-			},
-		},
-	}
-}
-
-func reviewerNoticeRow(severity clientui.TranscriptNoticeSeverity, role transcript.EntryRole) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{
-		Kind: clientui.TranscriptRowNotice,
-		Notice: &clientui.TranscriptNoticeRow{
-			Severity: severity,
-			Data: clientui.TranscriptNoticeData{
-				MessageType:  clientui.MessageTypeReviewerFeedback,
-				CompactLabel: "reviewer",
-			},
-			Diagnostic: &clientui.TranscriptDiagnosticData{Code: string(role)},
-		},
-	}
-}
-
-func toolRow(name string, presentation clientui.ToolPresentationKind, text string, isError bool) clientui.TranscriptCommittedRow {
+func toolRow(name string, presentation transcript.ToolPresentationKind, text string, isError bool) clientui.TranscriptCommittedRow {
 	return clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowTool,
 		Tool: &clientui.TranscriptToolRow{
 			ToolName: name,
 			Text:     text,
 			IsError:  isError,
-			ToolPresentation: &clientui.ToolCallMeta{
+			Presentation: &transcript.ToolCallMeta{
 				ToolName:     name,
 				Presentation: presentation,
 				Command:      text,

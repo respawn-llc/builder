@@ -1,7 +1,7 @@
 package app
 
-import "core/shared/client"
+import "core/shared/apicontract"
 
-func newHeadlessRunPromptClient(server *embeddedAppServer) client.RunPromptClient {
+func newHeadlessRunPromptClient(server *embeddedAppServer) apicontract.RunPromptService {
 	return server.RunPromptClient()
 }

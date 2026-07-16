@@ -2,7 +2,8 @@ package workflowstore
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"core/server/workflow"
@@ -370,10 +371,5 @@ func knownOutputIssues(group transitionContractSnapshot, values map[string]strin
 }
 
 func sortedStringKeys(values map[string]string) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(values))
 }

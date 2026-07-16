@@ -7,7 +7,7 @@ import (
 	"core/cli/app/commands"
 	"core/cli/tui"
 	"core/cli/tui/transcriptrender"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -40,27 +40,12 @@ const (
 func WithUILogger(logger uiLogger) UIOption {
 	return func(m *uiModel) {
 		m.logger = logger
-		if logger != nil {
-			if configurable, ok := m.engine.(interface{ SetTranscriptDiagnosticLogger(func(string)) }); ok {
-				configurable.SetTranscriptDiagnosticLogger(func(line string) {
-					logger.Logf("%s", strings.TrimSpace(line))
-				})
-			}
-		}
-	}
-}
-
-func WithUITranscriptDiagnostics(enabled bool) UIOption {
-	return func(m *uiModel) {
-		m.transcriptDiagnostics = enabled
-		m.updateTranscriptDiagnosticsMode()
 	}
 }
 
 func WithUIDebug(enabled bool) UIOption {
 	return func(m *uiModel) {
 		m.debugMode = enabled
-		m.updateTranscriptDiagnosticsMode()
 	}
 }
 
@@ -92,18 +77,6 @@ func WithUIConfiguredModelName(model string) UIOption {
 func WithUIThinkingLevel(thinkingLevel string) UIOption {
 	return func(m *uiModel) {
 		m.thinkingLevel = strings.TrimSpace(thinkingLevel)
-	}
-}
-
-func WithUIFastModeAvailable(available bool) UIOption {
-	return func(m *uiModel) {
-		m.fastModeAvailable = available
-	}
-}
-
-func WithUIFastModeEnabled(enabled bool) UIOption {
-	return func(m *uiModel) {
-		m.fastModeEnabled = enabled
 	}
 }
 
@@ -200,13 +173,13 @@ func WithUIProcessClient(client clientui.ProcessClient) UIOption {
 	}
 }
 
-func WithUIWorktreeClient(client client.WorktreeClient) UIOption {
+func WithUIWorktreeClient(client apicontract.WorktreeService) UIOption {
 	return func(m *uiModel) {
 		m.worktreeClient = client
 	}
 }
 
-func WithUITurnQueueHook(hook turnQueueHook) UIOption {
+func WithUITurnQueueHook(hook *bellHooks) UIOption {
 	return func(m *uiModel) {
 		m.turnQueueHook = hook
 	}

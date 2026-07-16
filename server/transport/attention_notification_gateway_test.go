@@ -46,7 +46,7 @@ func TestGatewayRemoteAttentionDesktopRouteIsRootGlobalAndLiveOnly(t *testing.T)
 		t.Fatalf("desktop cross-project events = %+v then %+v", first, second)
 	}
 
-	appCore.BeginPendingPrompt(sessionOne.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", Question: "Generic?"})
+	appCore.BeginPendingPrompt(sessionOne.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
 	if event, err := desktop.Next(shortGatewayAttentionContext(t)); err == nil {
 		t.Fatalf("desktop received generic session prompt: %+v", event)
 	}
@@ -99,7 +99,7 @@ func TestGatewayRemoteSessionAttentionReceivesAuthorizedGenericPrompt(t *testing
 	if err != nil {
 		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
 	}
-	appCore.BeginPendingPrompt(sessionStore.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", Question: "Generic?"})
+	appCore.BeginPendingPrompt(sessionStore.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
 	pending := nextGatewayAttentionEvent(t, sub)
 	if pending.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt || pending.Pending.Target.SessionID != sessionStore.Meta().SessionID {
 		t.Fatalf("session prompt pending = %+v", pending)
@@ -109,11 +109,12 @@ func TestGatewayRemoteSessionAttentionReceivesAuthorizedGenericPrompt(t *testing
 func gatewayTaskBatchAskRequest(askID string, projectID string, taskID string, sessionID string) askquestion.AskQuestionRequest {
 	return askquestion.AskQuestionRequest{
 		ID:       askID,
+		StepID:   gatewayAttentionStepID,
 		Question: "Task question?",
 		QuestionBatch: &askquestion.AskQuestionBatchMetadata{
 			Origin:              askquestion.AskQuestionOriginModelTool,
 			RunID:               "run-" + taskID,
-			StepID:              "step-" + taskID,
+			StepID:              gatewayAttentionStepID,
 			BatchID:             "batch-" + taskID,
 			PromptID:            askID,
 			BatchPromptIDs:      []string{askID},
@@ -133,6 +134,8 @@ func gatewayTaskBatchAskRequest(askID string, projectID string, taskID string, s
 		},
 	}
 }
+
+const gatewayAttentionStepID = "11111111-1111-4111-8111-111111111111"
 
 func nextGatewayAttentionEvent(t *testing.T, sub serverapi.AttentionNotificationSubscription) clientui.AttentionNotificationEvent {
 	t.Helper()

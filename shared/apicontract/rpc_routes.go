@@ -80,9 +80,7 @@ const (
 	DependencyAskView               Dependency = "ask_view"
 	DependencyApprovalView          Dependency = "approval_view"
 	DependencyPromptControl         Dependency = "prompt_control"
-	DependencyPromptActivity        Dependency = "prompt_activity"
 	DependencyAttentionNotification Dependency = "attention_notification"
-	DependencySessionActivity       Dependency = "session_activity"
 	DependencySessionTranscript     Dependency = "session_transcript"
 	DependencyRunPrompt             Dependency = "run_prompt"
 	DependencyStreamNotification    Dependency = "stream_notification"
@@ -256,7 +254,6 @@ var routeContracts = []Route{
 	unary[serverapi.WorkflowTaskGetRequest, serverapi.WorkflowTaskGetResponse](protocol.MethodWorkflowTaskGet, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.SessionPlanRequest, serverapi.SessionPlanResponse](protocol.MethodSessionPlan, AuthServer, ScopeProjectWorkspace, ConnectionControl, DependencySessionLaunch),
 	unary[serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](protocol.MethodSessionGetMainView, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),
-	unary[serverapi.SessionExecutionWorkspaceRootRequest, serverapi.SessionExecutionWorkspaceRootResponse](protocol.MethodSessionGetExecutionWorkspaceRoot, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),
 	unary[serverapi.SessionTranscriptPageRequest, serverapi.SessionTranscriptPageResponse](protocol.MethodSessionGetTranscriptPage, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),
 	unary[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest, serverapi.SessionLatestCommittedAssistantFinalAnswerResponse](protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),
 	unary[serverapi.SessionExecutionEnvironmentRequest, serverapi.SessionExecutionEnvironmentResponse](protocol.MethodSessionGetExecutionEnvironment, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),
@@ -312,23 +309,17 @@ var routeContracts = []Route{
 	unary[serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](protocol.MethodApprovalListPending, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencyApprovalView),
 	unary[serverapi.ApprovalAnswerRequest, struct{}](protocol.MethodApprovalAnswer, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyPromptControl),
 	progress[serverapi.RunPromptRequest, serverapi.RunPromptResponse, serverapi.RunPromptProgress](protocol.MethodRunPrompt, ScopeProjectWorkspace, DependencyRunPrompt, protocol.MethodRunPromptProgress),
-	subscription[serverapi.SessionActivitySubscribeRequest, protocol.SessionActivityEventParams](protocol.MethodSessionSubscribeActivity, AuthServer, ScopeAttachedSession, DependencySessionActivity, protocol.MethodSessionActivityEvent, protocol.MethodSessionActivityComplete),
 	subscription[serverapi.TranscriptSubscribeRequest, protocol.SessionTranscriptEventParams](protocol.MethodSessionSubscribeTranscript, AuthServer, ScopeAttachedSession, DependencySessionTranscript, protocol.MethodSessionTranscriptEvent, protocol.MethodSessionTranscriptComplete),
 	subscription[serverapi.ProcessOutputSubscribeRequest, protocol.ProcessOutputEventParams](protocol.MethodProcessSubscribeOutput, AuthServer, ScopeProcessActiveProject, DependencyProcessOutput, protocol.MethodProcessOutputEvent, protocol.MethodProcessOutputComplete),
-	subscription[serverapi.PromptActivitySubscribeRequest, protocol.PromptActivityEventParams](protocol.MethodPromptSubscribeActivity, AuthServer, ScopeAttachedSession, DependencyPromptActivity, protocol.MethodPromptActivityEvent, protocol.MethodPromptActivityComplete),
 	subscription[serverapi.AttentionNotificationSubscribeRequest, protocol.AttentionNotificationEventParams](protocol.MethodAttentionNotificationSubscribe, AuthServer, ScopeNone, DependencyAttentionNotification, protocol.MethodAttentionNotificationEvent, protocol.MethodAttentionNotificationComplete),
 	subscription[serverapi.AttentionSessionNotificationSubscribeRequest, protocol.AttentionNotificationEventParams](protocol.MethodAttentionSessionNotificationSubscribe, AuthServer, ScopeAttachedSession, DependencyAttentionNotification, protocol.MethodAttentionSessionNotificationEvent, protocol.MethodAttentionSessionNotificationComplete),
 	subscription[serverapi.WorkflowSubscribeRequest, protocol.WorkflowProjectEventParams](protocol.MethodWorkflowSubscribe, AuthServer, ScopeNone, DependencyWorkflow, protocol.MethodWorkflowEvent, protocol.MethodWorkflowComplete),
 	subscription[serverapi.WorkflowProjectSubscribeRequest, protocol.WorkflowProjectEventParams](protocol.MethodWorkflowSubscribeProject, AuthServer, ScopeProjectView, DependencyWorkflow, protocol.MethodWorkflowProjectEvent, protocol.MethodWorkflowProjectComplete),
 	notification[serverapi.RunPromptProgress](protocol.MethodRunPromptProgress),
-	notification[protocol.SessionActivityEventParams](protocol.MethodSessionActivityEvent),
-	notification[protocol.StreamCompleteParams](protocol.MethodSessionActivityComplete),
 	notification[protocol.SessionTranscriptEventParams](protocol.MethodSessionTranscriptEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodSessionTranscriptComplete),
 	notification[protocol.ProcessOutputEventParams](protocol.MethodProcessOutputEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodProcessOutputComplete),
-	notification[protocol.PromptActivityEventParams](protocol.MethodPromptActivityEvent),
-	notification[protocol.StreamCompleteParams](protocol.MethodPromptActivityComplete),
 	notification[protocol.AttentionNotificationEventParams](protocol.MethodAttentionNotificationEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodAttentionNotificationComplete),
 	notification[protocol.AttentionNotificationEventParams](protocol.MethodAttentionSessionNotificationEvent),

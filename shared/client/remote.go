@@ -3,10 +3,12 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
@@ -287,8 +289,22 @@ func (c *Remote) ListSessionPage(ctx context.Context, req serverapi.SessionPageR
 	if err != nil {
 		return serverapi.SessionPageResponse{}, err
 	}
-	if err := validateSessionPageResponseIdentity(req, response); err != nil {
-		return serverapi.SessionPageResponse{}, err
+	if err := response.Validate(); err != nil {
+		return serverapi.SessionPageResponse{}, fmt.Errorf("session page response is invalid: %w", err)
+	}
+	if response.ProjectID != req.ProjectID {
+		return serverapi.SessionPageResponse{}, fmt.Errorf(
+			"session page response project %q does not match request project %q",
+			response.ProjectID,
+			req.ProjectID,
+		)
+	}
+	if response.Category != req.Category {
+		return serverapi.SessionPageResponse{}, fmt.Errorf(
+			"session page response category %q does not match request category %q",
+			response.Category,
+			req.Category,
+		)
 	}
 	return response, nil
 }
@@ -497,11 +513,6 @@ func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanReque
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	var resp serverapi.SessionMainViewResponse
 	return resp, c.call(ctx, protocol.MethodSessionGetMainView, req, &resp)
-}
-
-func (c *Remote) GetSessionExecutionWorkspaceRoot(ctx context.Context, req serverapi.SessionExecutionWorkspaceRootRequest) (serverapi.SessionExecutionWorkspaceRootResponse, error) {
-	var resp serverapi.SessionExecutionWorkspaceRootResponse
-	return resp, c.call(ctx, protocol.MethodSessionGetExecutionWorkspaceRoot, req, &resp)
 }
 
 func (c *Remote) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
@@ -833,21 +844,20 @@ func dialConfiguredRemote(ctx context.Context, cfg config.App, projectID string,
 	return dialRemoteWithTransport(ctx, plan, rpcwire.NewWebSocketTransport(), projectID, workspaceID, workspaceRoot, sessionID)
 }
 
-var _ ProjectViewClient = (*Remote)(nil)
-var _ AuthStatusClient = (*Remote)(nil)
-var _ SessionLaunchClient = (*Remote)(nil)
-var _ SessionViewClient = (*Remote)(nil)
-var _ SessionLifecycleClient = (*Remote)(nil)
-var _ SessionRuntimeClient = (*Remote)(nil)
-var _ RuntimeControlClient = (*Remote)(nil)
-var _ RuntimeLiveControlClient = (*Remote)(nil)
-var _ ProcessViewClient = (*Remote)(nil)
-var _ ProcessControlClient = (*Remote)(nil)
-var _ ProcessOutputClient = (*Remote)(nil)
-var _ SessionActivityClient = (*Remote)(nil)
-var _ SessionTranscriptClient = (*Remote)(nil)
-var _ AttentionNotificationClient = (*Remote)(nil)
-var _ RunPromptClient = (*Remote)(nil)
-var _ AskViewClient = (*Remote)(nil)
-var _ PromptControlClient = (*Remote)(nil)
-var _ ApprovalViewClient = (*Remote)(nil)
+var _ apicontract.ProjectViewService = (*Remote)(nil)
+var _ apicontract.AuthStatusService = (*Remote)(nil)
+var _ apicontract.SessionLaunchService = (*Remote)(nil)
+var _ apicontract.SessionViewService = (*Remote)(nil)
+var _ apicontract.SessionLifecycleService = (*Remote)(nil)
+var _ apicontract.SessionRuntimeService = (*Remote)(nil)
+var _ apicontract.RuntimeControlService = (*Remote)(nil)
+var _ apicontract.RuntimeLiveControlService = (*Remote)(nil)
+var _ apicontract.ProcessViewService = (*Remote)(nil)
+var _ apicontract.ProcessControlService = (*Remote)(nil)
+var _ apicontract.ProcessOutputService = (*Remote)(nil)
+var _ apicontract.SessionTranscriptService = (*Remote)(nil)
+var _ apicontract.AttentionNotificationService = (*Remote)(nil)
+var _ apicontract.RunPromptService = (*Remote)(nil)
+var _ apicontract.AskViewService = (*Remote)(nil)
+var _ apicontract.PromptControlService = (*Remote)(nil)
+var _ apicontract.ApprovalViewService = (*Remote)(nil)

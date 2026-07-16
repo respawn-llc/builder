@@ -189,25 +189,14 @@ func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 }
 
 type SessionPlan struct {
-	SessionID           string               `json:"session_id"`
-	ActiveSettings      config.Settings      `json:"active_settings"`
-	EnabledToolIDs      []string             `json:"enabled_tool_ids,omitempty"`
-	ConfiguredModelName string               `json:"configured_model_name,omitempty"`
-	SessionName         string               `json:"session_name,omitempty"`
-	PromptHistory       []string             `json:"prompt_history,omitempty"`
-	ModelContractLocked bool                 `json:"model_contract_locked,omitempty"`
-	WorkspaceRoot       string               `json:"workspace_root,omitempty"`
-	Source              config.SourceReport  `json:"source"`
-	Recovery            *SessionPlanRecovery `json:"recovery,omitempty"`
-}
-
-type SessionPlanRecoveryKind string
-
-const SessionPlanRecoveryKindDeletedManagedWorktree SessionPlanRecoveryKind = "deleted_managed_worktree"
-
-type SessionPlanRecovery struct {
-	Kind          SessionPlanRecoveryKind `json:"kind"`
-	WorkspaceRoot string                  `json:"workspace_root"`
+	SessionID           string              `json:"session_id"`
+	ActiveSettings      config.Settings     `json:"active_settings"`
+	EnabledToolIDs      []string            `json:"enabled_tool_ids,omitempty"`
+	ConfiguredModelName string              `json:"configured_model_name,omitempty"`
+	SessionName         string              `json:"session_name,omitempty"`
+	PromptHistory       []string            `json:"prompt_history,omitempty"`
+	ModelContractLocked bool                `json:"model_contract_locked,omitempty"`
+	Source              config.SourceReport `json:"source"`
 }
 
 type SessionPlanResponse struct {

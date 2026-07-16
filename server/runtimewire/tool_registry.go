@@ -256,14 +256,6 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 	return binding, broker, background, nil
 }
 
-func BuildToolRegistry(opts LocalToolRegistryOptions) (*tools.Registry, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
-	binding, broker, background, err := NewLocalToolRegistryBinding(opts)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return binding.Registry(), broker, background, nil
-}
-
 func enabledToolsNeedEditDenyPolicy(enabled []toolspec.ID) bool {
 	for _, id := range enabled {
 		if id == toolspec.ToolPatch || id == toolspec.ToolEdit {

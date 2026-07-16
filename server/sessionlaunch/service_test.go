@@ -2,6 +2,7 @@ package sessionlaunch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -128,8 +129,18 @@ func TestServicePlanSessionRegistersStoreAndReturnsPlan(t *testing.T) {
 	if resp.Plan.SessionID == "" {
 		t.Fatal("expected session id")
 	}
-	if resp.Plan.WorkspaceRoot != "/tmp/workspace-a" {
-		t.Fatalf("workspace root = %q, want /tmp/workspace-a", resp.Plan.WorkspaceRoot)
+	encoded, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("json.Marshal plan response: %v", err)
+	}
+	var wire struct {
+		Plan map[string]json.RawMessage `json:"plan"`
+	}
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("json.Unmarshal plan response: %v", err)
+	}
+	if _, exists := wire.Plan["workspace_root"]; exists {
+		t.Fatalf("session plan exposed parallel raw workspace authority: %s", encoded)
 	}
 	if resp.Plan.ActiveSettings.OpenAIBaseURL != "http://config.local/v1" {
 		t.Fatalf("active OpenAI base URL = %q, want http://config.local/v1", resp.Plan.ActiveSettings.OpenAIBaseURL)

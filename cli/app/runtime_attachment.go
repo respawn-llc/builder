@@ -9,10 +9,8 @@ import (
 	"sync"
 
 	"core/cli/app/internal/runtimeattach"
-	"core/shared/client"
-	"core/shared/clientui"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
-	"core/shared/transcriptdiag"
 )
 
 const runtimeReleaseTimeout = runtimeattach.ReleaseTimeout
@@ -22,21 +20,17 @@ type runtimeAttachmentSource interface {
 }
 
 type runtimeAttachmentClients struct {
-	ApprovalViews                   client.ApprovalViewClient
-	AskViews                        client.AskViewClient
-	Attention                       client.AttentionNotificationClient
+	Attention                       apicontract.AttentionNotificationService
 	AttentionNotificationsSupported bool
-	ProcessControls                 client.ProcessControlClient
-	ProcessOutput                   client.ProcessOutputClient
-	ProcessViews                    client.ProcessViewClient
-	PromptActivity                  client.PromptActivityClient
-	PromptControl                   client.PromptControlClient
-	RuntimeControls                 client.RuntimeControlClient
-	SessionActivity                 client.SessionActivityClient
-	SessionTranscript               client.SessionTranscriptClient
-	SessionRuntime                  client.SessionRuntimeClient
-	SessionViews                    client.SessionViewClient
-	Worktrees                       client.WorktreeClient
+	ProcessControls                 apicontract.ProcessControlService
+	ProcessOutput                   apicontract.ProcessOutputService
+	ProcessViews                    apicontract.ProcessViewService
+	PromptControl                   apicontract.PromptControlService
+	RuntimeControls                 apicontract.RuntimeControlService
+	SessionTranscript               apicontract.SessionTranscriptService
+	SessionRuntime                  apicontract.SessionRuntimeService
+	SessionViews                    apicontract.SessionViewService
+	Worktrees                       apicontract.WorktreeService
 }
 
 func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {
@@ -48,33 +42,42 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	if err != nil {
 		return nil, err
 	}
-	activities, err := runtimeattach.SubscribeActivities(ctx, runtimeattach.ActivityRequest{
-		SessionID:                       plan.SessionID,
-		OwnerID:                         ownerID,
-		Runtime:                         clients.SessionRuntime,
-		SessionActivity:                 clients.SessionActivity,
-		Attention:                       clients.Attention,
-		AttentionNotificationsSupported: clients.AttentionNotificationsSupported,
-		PromptActivity:                  clients.PromptActivity,
-	})
-	if err != nil {
-		return nil, err
+	if clients.SessionTranscript == nil {
+		_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
+		return nil, errors.New("session transcript service is required")
 	}
-	logger := &runLogger{}
+	var attentionSubscription serverapi.AttentionNotificationSubscription
+	if clients.AttentionNotificationsSupported {
+		if clients.Attention == nil {
+			_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
+			return nil, errors.New("attention notification service is required")
+		}
+		attentionSubscription, err = clients.Attention.SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{
+			SessionID:                    plan.SessionID,
+			IncludePendingPromptSnapshot: true,
+		})
+		if err != nil {
+			_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
+			return nil, err
+		}
+	}
 	_ = diagnosticWriter
-	logger.Logf("%s", startLogLine)
-	wiring, stopRuntimeEvents, stopAskEvents, stopAttentionEvents, stopTranscriptEvents := prepareSharedRuntimeWiring(ctx, clients, plan, activities, reactivator, logger)
+	_ = startLogLine
+	wiring, stopAttentionEvents, stopTranscriptEvents := prepareSharedRuntimeWiring(
+		ctx,
+		clients,
+		plan,
+		attentionSubscription,
+		reactivator,
+	)
 	var stopStreamsOnce sync.Once
 	stopStreams := func() {
 		stopStreamsOnce.Do(func() {
 			stopAttentionEvents()
 			stopTranscriptEvents()
-			stopAskEvents()
-			stopRuntimeEvents()
 		})
 	}
 	return &runtimeLaunchPlan{
-		Logger: logger,
 		Wiring: wiring,
 		close: func() error {
 			stopStreams()
@@ -102,22 +105,19 @@ func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients
 	return reactivator, lease.OwnerID, nil
 }
 
-func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan, activities runtimeattach.Activities, reactivator *runtimeReactivator, logger *runLogger) (*runtimeWiring, func(), func(), func(), func()) {
+func prepareSharedRuntimeWiring(
+	ctx context.Context,
+	clients runtimeAttachmentClients,
+	plan sessionLaunchPlan,
+	attentionSubscription serverapi.AttentionNotificationSubscription,
+	reactivator *runtimeReactivator,
+) (*runtimeWiring, func(), func()) {
 	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
 	if reactivator != nil {
 		runtimeClient.SetRuntimeReactivator(reactivator)
 	}
-	runtimeClient.SetTranscriptDiagnosticsEnabled(transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv))
-	runtimeEvents, stopRuntimeEvents := startSessionActivityEvents(ctx, activities.Session, func(ctx context.Context, afterSequence uint64) (serverapi.SessionActivitySubscription, error) {
-		return clients.SessionActivity.SubscribeSessionActivity(ctx, serverapi.SessionActivitySubscribeRequest{SessionID: plan.SessionID, AfterSequence: afterSequence})
-	}, runtimeClient.transcriptDiagnosticsEnabled, func(line string) {
-		logger.Logf("%s", line)
-	})
-	var subscribeTranscript sessionTranscriptSubscriber
-	if clients.SessionTranscript != nil {
-		subscribeTranscript = func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
-			return clients.SessionTranscript.SubscribeSessionTranscript(ctx, req)
-		}
+	subscribeTranscript := func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+		return clients.SessionTranscript.SubscribeSessionTranscript(ctx, req)
 	}
 	transcriptStream := startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
 	transcriptEvents := transcriptStream.Events
@@ -132,45 +132,26 @@ func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentCl
 		}
 		return strings.TrimSpace(plan.SessionName)
 	}, terminalFocus.FocusedForAttention)
-	askEvents, stopAskEvents := newClosedAskEventStream()
-	if activities.Prompt != nil {
-		var promptNotificationFallback attentionNotificationHook
-		if activities.Attention == nil {
-			promptNotificationFallback = turnQueueHook
-		}
-		askEvents, stopAskEvents = startPendingPromptEvents(ctx, activities.Prompt, func(ctx context.Context, afterVersion clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
-			return clients.PromptActivity.SubscribePromptActivity(ctx, serverapi.PromptActivitySubscribeRequest{SessionID: plan.SessionID, AfterReadModelVersion: afterVersion})
-		}, clients.PromptControl, promptNotificationFallback)
+	var promptAttention *bellHooks
+	if attentionSubscription == nil {
+		promptAttention = turnQueueHook
 	}
-	stopAttentionEvents := startAttentionNotificationEvents(ctx, activities.Attention, func(ctx context.Context) (serverapi.AttentionNotificationSubscription, error) {
+	stopAttentionEvents := startAttentionNotificationEvents(ctx, attentionSubscription, func(ctx context.Context) (serverapi.AttentionNotificationSubscription, error) {
 		return clients.Attention.SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: plan.SessionID, IncludePendingPromptSnapshot: true})
 	}, turnQueueHook)
 	wiring := &runtimeWiring{
-		runtimeEvents:         runtimeEvents,
 		transcriptEvents:      transcriptEvents,
 		requestTranscriptOpen: requestTranscriptOpen,
-		askEvents:             askEvents,
+		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl),
+		promptAttention:       promptAttention,
 		turnQueueHook:         turnQueueHook,
 		terminalFocus:         terminalFocus,
 		runtimeClient:         runtimeClient,
-		promptControl:         clients.PromptControl,
-		runtimeControls:       clients.RuntimeControls,
 		worktrees:             clients.Worktrees,
 		processControls:       clients.ProcessControls,
 		processOutput:         clients.ProcessOutput,
 		processViews:          clients.ProcessViews,
-		approvalViews:         clients.ApprovalViews,
-		askViews:              clients.AskViews,
-		sessionActivity:       clients.SessionActivity,
-		sessionTranscript:     clients.SessionTranscript,
-		sessionViews:          clients.SessionViews,
 		promptHistory:         append([]string(nil), plan.PromptHistory...),
 	}
-	return wiring, stopRuntimeEvents, stopAskEvents, stopAttentionEvents, stopTranscriptEvents
-}
-
-func newClosedAskEventStream() (<-chan askEvent, func()) {
-	ch := make(chan askEvent)
-	close(ch)
-	return ch, func() {}
+	return wiring, stopAttentionEvents, stopTranscriptEvents
 }

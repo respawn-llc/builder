@@ -50,10 +50,11 @@ func (s *Store) bootstrapEventLogStateLocked() (*eventLogReconciliationObservati
 			s.pendingFsyncWrites = 0
 			s.conversationFreshness = ConversationFreshnessFresh
 			if needsReconciliation {
+				observedLastSequence := s.meta.LastSequence
 				s.meta.LastSequence = 0
 				s.meta.ConversationEstablished = false
 				s.meta.UpdatedAt = time.Now().UTC()
-				return s.persistEventLogReconciliationLocked()
+				return s.persistEventLogReconciliationLocked(observedLastSequence, UsageStateReconciliationPreserve)
 			}
 			return nil, nil
 		}
@@ -87,10 +88,23 @@ func (s *Store) bootstrapEventLogStateLocked() (*eventLogReconciliationObservati
 		lastSequence = window.Events[n-1].Seq
 	}
 
+	persistedLastSequence := s.meta.LastSequence
 	metaChanged := false
-	if lastSequence != s.meta.LastSequence {
+	usageStateReconciliation := UsageStateReconciliationPreserve
+	if lastSequence != persistedLastSequence {
 		s.meta.LastSequence = lastSequence
 		metaChanged = true
+	}
+	if lastSequence > persistedLastSequence && s.meta.UsageState != nil {
+		invalidated, err := s.compactionInvalidatedUsageAfterSequenceLocked(persistedLastSequence)
+		if err != nil {
+			return nil, err
+		}
+		if invalidated {
+			s.meta.UsageState = nil
+			usageStateReconciliation = UsageStateReconciliationInvalidate
+			metaChanged = true
+		}
 	}
 	if established && !s.meta.ConversationEstablished {
 		s.meta.ConversationEstablished = true
@@ -98,12 +112,25 @@ func (s *Store) bootstrapEventLogStateLocked() (*eventLogReconciliationObservati
 	}
 	if metaChanged {
 		s.meta.UpdatedAt = time.Now().UTC()
-		return s.persistEventLogReconciliationLocked()
+		return s.persistEventLogReconciliationLocked(persistedLastSequence, usageStateReconciliation)
 	}
 	return nil, nil
 }
 
-func (s *Store) persistEventLogReconciliationLocked() (*eventLogReconciliationObservation, error) {
+func (s *Store) compactionInvalidatedUsageAfterSequenceLocked(sequence int64) (bool, error) {
+	activeWindow, err := readNewestSegmentBackwardFile(s.eventsFP, activeTailReverseChunkBytes, isCompactionHistoryReplacementEvent)
+	if err != nil {
+		return false, err
+	}
+	for _, event := range activeWindow.Events {
+		if event.Seq > sequence && isCompactionHistoryReplacementEvent(event) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) persistEventLogReconciliationLocked(observedLastSequence int64, usageState UsageStateReconciliation) (*eventLogReconciliationObservation, error) {
 	if s.options.filelessEvents {
 		s.metadataVersion++
 		return nil, nil
@@ -118,9 +145,11 @@ func (s *Store) persistEventLogReconciliationLocked() (*eventLogReconciliationOb
 	return &eventLogReconciliationObservation{
 		reconciliation: PersistedEventLogReconciliation{
 			SessionID:               s.meta.SessionID,
+			ObservedLastSequence:    observedLastSequence,
 			LastSequence:            s.meta.LastSequence,
 			ConversationEstablished: s.meta.ConversationEstablished,
 			UpdatedAt:               s.meta.UpdatedAt,
+			UsageState:              usageState,
 		},
 		version: s.metadataVersion,
 	}, nil

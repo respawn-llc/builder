@@ -113,6 +113,9 @@ Kent discovers skills from:
 
 - `<workspace>/.kent/skills`
 - `~/.kent/skills`
+- `<persistence-root>/.generated/skills`
+
+The generated root is managed by Kent. Copy a generated skill into a workspace or global skill root before customizing it.
 
 You can disable skills for new sessions in `config.toml`:
 
@@ -120,7 +123,7 @@ You can disable skills for new sessions in `config.toml`:
 [skills]
 creating-skills = false
 ```
-Changes take effect when you start a new session.
+Changes take effect when a session starts or after compaction.
 
 Kent discovers custom slash commands from Markdown files in:
 

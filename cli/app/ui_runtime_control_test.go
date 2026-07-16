@@ -235,7 +235,7 @@ func (f *runtimeControlFakeClient) QueueRuntimeUserMessage(req clientui.RuntimeQ
 	}
 	f.queueUserMessageCalls++
 	f.queuedText = req.Text
-	f.queuedClientRequestID = strings.TrimSpace(req.OperationRef.ClientRequestID)
+	f.queuedClientRequestID = req.OperationRef.ClientRequestID.String()
 	if f.queueUserMessageErr != nil {
 		return clientui.QueuedUserMessage{}, f.queueUserMessageErr
 	}
@@ -262,7 +262,7 @@ func TestThinkingQueryUsesStatusOnly(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
 	client := &runtimeControlFakeClient{status: clientui.RuntimeStatus{ThinkingLevel: "medium"}}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m := newProjectedTestUIModel(client)
 
 	next, cmd := m.inputController().handleThinkingLevelCommand("")
 	updated := next.(*uiModel)
@@ -303,7 +303,7 @@ func TestThinkingRuntimeCompletionUsesStatusOnly(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
 	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m := newProjectedTestUIModel(client)
 	cmd := m.runtimeControlCommand(runtimeControlSetThinkingLevel, "high", false, "")
 	msgs := collectCmdMessages(t, cmd)
 
@@ -333,7 +333,7 @@ func TestThinkingRuntimeCompletionUsesStatusOnly(t *testing.T) {
 
 func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m := newProjectedTestUIModel(client)
 	m.startupCmds = nil
 
 	sessionCmd := m.runtimeControlCommand(runtimeControlSetSessionName, "incident triage", false, "")
@@ -364,7 +364,7 @@ func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 }
 func TestRuntimeControlStaleSessionCompletionClearsPendingToggle(t *testing.T) {
 	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m := newProjectedTestUIModel(client)
 	m.startupCmds = nil
 	m.sessionID = "session-old"
 	m.fastModeAvailable = true
@@ -498,7 +498,7 @@ func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
 
 func TestRuntimeControlMarksDisconnectOnTransportError(t *testing.T) {
 	client := &runtimeControlFakeClient{submitErr: io.EOF}
-	m := newProjectedTestUIModel(client, nil, nil)
+	m := newProjectedTestUIModel(client)
 
 	if _, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); !errors.Is(err, io.EOF) {
 		t.Fatalf("submit runtime user message err = %v, want EOF", err)
@@ -510,7 +510,7 @@ func TestRuntimeControlMarksDisconnectOnTransportError(t *testing.T) {
 
 func TestRuntimeControlClearsDisconnectOnReachableServerError(t *testing.T) {
 	client := &runtimeControlFakeClient{submitErr: &llm.APIStatusError{StatusCode: 429, Body: "rate limit"}}
-	m := newProjectedTestUIModel(client, nil, nil)
+	m := newProjectedTestUIModel(client)
 	m.setRuntimeDisconnected(true)
 
 	if _, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); err == nil {
@@ -523,7 +523,7 @@ func TestRuntimeControlClearsDisconnectOnReachableServerError(t *testing.T) {
 
 func TestRuntimeControlTimeoutDoesNotMarkDisconnect(t *testing.T) {
 	client := &runtimeControlFakeClient{submitErr: context.DeadlineExceeded}
-	m := newProjectedTestUIModel(client, nil, nil)
+	m := newProjectedTestUIModel(client)
 
 	if _, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("submit runtime user message err = %v, want deadline exceeded", err)
@@ -535,7 +535,7 @@ func TestRuntimeControlTimeoutDoesNotMarkDisconnect(t *testing.T) {
 
 func TestRuntimeControlTimeoutDoesNotClearExistingDisconnect(t *testing.T) {
 	client := &runtimeControlFakeClient{submitErr: context.DeadlineExceeded}
-	m := newProjectedTestUIModel(client, nil, nil)
+	m := newProjectedTestUIModel(client)
 	m.setRuntimeDisconnected(true)
 
 	if _, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); !errors.Is(err, context.DeadlineExceeded) {
@@ -548,7 +548,7 @@ func TestRuntimeControlTimeoutDoesNotClearExistingDisconnect(t *testing.T) {
 
 func TestRuntimeControlURLTimeoutDoesNotMarkDisconnect(t *testing.T) {
 	client := &runtimeControlFakeClient{submitErr: &url.Error{Op: "Get", URL: "http://example.test", Err: timeoutNetError{}}}
-	m := newProjectedTestUIModel(client, nil, nil)
+	m := newProjectedTestUIModel(client)
 
 	if _, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); err == nil {
 		t.Fatal("expected submit runtime user message error")
@@ -560,7 +560,7 @@ func TestRuntimeControlURLTimeoutDoesNotMarkDisconnect(t *testing.T) {
 
 func TestRuntimeControlOpTimeoutDoesNotMarkDisconnect(t *testing.T) {
 	client := &runtimeControlFakeClient{submitErr: &net.OpError{Op: "read", Net: "tcp", Err: timeoutNetError{}}}
-	m := newProjectedTestUIModel(client, nil, nil)
+	m := newProjectedTestUIModel(client)
 
 	if _, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); err == nil {
 		t.Fatal("expected submit runtime user message error")

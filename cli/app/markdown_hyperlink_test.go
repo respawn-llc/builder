@@ -9,10 +9,11 @@ import (
 	"core/cli/tui/transcriptrender"
 	tuitest "core/internal/testharness/pty"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
+	"core/shared/transcript"
 
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/google/uuid"
 )
 
 func TestStartupMarkdownRendererEmitsMarkdownHyperlinks(t *testing.T) {
@@ -167,9 +168,13 @@ func TestResolvedTerminalCapabilitiesControlBoundedAndOngoingMarkdownLinks(t *te
 			_, err := surface.ApplyTerminalMessage(
 				clientui.TranscriptMessage{
 					Kind: clientui.TranscriptMessageAssistantDelta,
-					AssistantDelta: &clientui.TranscriptAssistantDelta{
-						StreamID: uuid.New(),
-						Delta:    "[label](" + target + ")\n\n",
+					Payload: clientui.TranscriptPayload{
+						AssistantDelta: &clientui.TranscriptAssistantDelta{
+							StepID:   mustMarkdownHyperlinkStepID(t),
+							StreamID: runtimeids.NewAssistantStreamID(),
+							Delta:    "[label](" + target + ")\n\n",
+							Phase:    transcript.AssistantPhaseCommentary,
+						},
 					},
 				},
 				ongoing.FrameInput{Size: ongoing.Size{Width: 80, Height: 12}},
@@ -182,6 +187,15 @@ func TestResolvedTerminalCapabilitiesControlBoundedAndOngoingMarkdownLinks(t *te
 			}
 		})
 	}
+}
+
+func mustMarkdownHyperlinkStepID(t *testing.T) runtimeids.StepID {
+	t.Helper()
+	id, err := runtimeids.ParseStepID("11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatalf("parse Markdown hyperlink step ID: %v", err)
+	}
+	return id
 }
 
 func TestStartupMarkdownRendererLeavesPlainPRReferenceUnlinked(t *testing.T) {

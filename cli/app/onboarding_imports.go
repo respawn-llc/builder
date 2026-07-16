@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"core/shared/serverapi"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -131,7 +131,7 @@ func skillImportItemFromFact(item serverapi.ImportItemFact) onboardingSkillImpor
 	if ref.Name != nil && strings.TrimSpace(*ref.Name) != "" {
 		name = *ref.Name
 	}
-	sourceDir := valuecopy.Pointer(ref.SourcePath)
+	sourceDir := textutil.Pointer(ref.SourcePath)
 	defaultEnabled := true
 	if item.DefaultEnabled != nil {
 		defaultEnabled = *item.DefaultEnabled

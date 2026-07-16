@@ -14,16 +14,35 @@ kent worktree leave
 kent worktree delete <selector>
 ```
 
-Every command supports `--json`.
+Every command supports `--json`. Session-scoped commands use `KENT_SESSION_ID` inside a Kent shell or accept `--session <id>` explicitly.
 
-- `list` labels worktrees by availability:
-  - **registered**: available to Git and managed by Kent
-  - **external**: available to Git but not managed by Kent; entering it registers it
-  - **missing**: managed by Kent, but absent from Git
-- `create` prepares the checkout and runs its setup script, but does not move the agent into it yet.
-The agent can then call `enter` to teleport itself into a worktree, and `leave` to go back to the main checkout.
+## Select
 
-Dirty worktrees, or worktrees whose state cannot be determined, require `--force`. Agent-shell deletion by default retains branches, so instruct the agent to use --force or delete the branch if you want full cleanup.
+Select a worktree by its exact ID, branch, display name, or path. IDs take precedence, followed by branch, display name, and path. Ambiguous selectors fail.
+
+`list` labels worktrees by availability:
+
+- **registered**: available to Git and managed by Kent
+- **external**: available to Git but not managed by Kent; entering it registers it
+- **missing**: managed by Kent, but absent from Git
+
+`list` resolves the workspace bound to the current directory and does not require a session. When `KENT_SESSION_ID` or `--session` is present, it marks that session's current worktree with `*`; Kent does not infer a session from workspace history.
+
+`status` reports a missing checkout or branch without changing the session's worktree.
+
+## Create and enter
+
+`create` prepares the checkout and runs its setup script. The CLI prints a separate `kent worktree enter` command; the TUI enters the worktree after creation succeeds.
+
+`enter`, `leave`, and deletion of the active worktree may finish after the command returns. Kent applies them after the active agent step and reports completion or failure in session activity. A server restart cancels a pending change.
+
+## Delete
+
+The main workspace worktree cannot be deleted. Deletion blocks while another session has active work in the worktree or a background process uses it. Idle sessions using the worktree move to the main workspace before removal.
+
+Dirty worktrees, or worktrees whose state cannot be determined, require `--force`. This flag applies only to the worktree folder. Agent-shell deletion always retains branches; other CLI callers can pass `--delete-branch` to delete a branch only when Git considers it safe.
+
+If Git retains the branch, deletion succeeds and the CLI prints `Kept branch <name>: <diagnostic>`.
 
 ## Configuration
 
@@ -40,8 +59,7 @@ base_dir = "~/.kent/worktrees"
 - `setup_script` runs after Kent creates a worktree and before the create command or a workflow run uses it. Relative paths resolve from the source workspace root.
 - `setup_timeout_seconds` sets the setup script timeout. The default is `60`; `0` or a negative value disables the timeout.
 
-- Kent waits for setup to finish before the agent can proceed, so the script should be relatively fast and shell out to async processes if it needs a lot of time to complete. 
-- If setup fails, times out, or is canceled, the worktree is not cleaned up, leaving it possibly in an incomplete state, so design the script to, ideally, be idempotent and reversible.
+Kent waits for setup to finish. If setup fails, times out, or is canceled, creation fails and the worktree remains available for inspection, repair, or deletion.
 
 Kent invokes the script with the new worktree as its cwd and three positional arguments:
 
@@ -49,7 +67,7 @@ Kent invokes the script with the new worktree as its cwd and three positional ar
 2. branch name
 3. worktree root
 
-Kent supplies these reserved environment variables:
+Kent supplies these reserved environment variables, replacing conflicting inherited values:
 
 - `KENT_WORKTREE_SOURCE_WORKSPACE_ROOT` - Original/main workspace root that created the worktree, e.g. `/home/user/dev/app` or `C:\Users\user\dev\app`.
 - `KENT_WORKTREE_BRANCH_NAME` - Branch/ref name selected for the new worktree, e.g. `feature/search-fix`.

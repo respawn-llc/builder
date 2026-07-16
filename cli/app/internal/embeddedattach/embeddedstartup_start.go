@@ -6,7 +6,7 @@ import (
 	serverauth "core/server/auth"
 	"core/server/authservice"
 	serverstartup "core/server/startup"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 )
 
@@ -34,7 +34,7 @@ type StartupRequest struct {
 type OnboardingRequest struct {
 	Config                config.App
 	AuthManager           *AuthManager
-	CapabilityFactsClient client.CapabilityFactsClient
+	CapabilityFactsClient apicontract.CapabilityFactsService
 	ReloadConfig          func() (config.App, error)
 }
 

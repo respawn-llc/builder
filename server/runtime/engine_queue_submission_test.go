@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/transcript"
 )
@@ -89,6 +91,60 @@ func TestSubmitQueuedUserMessagesSurfacesRunError(t *testing.T) {
 	}
 	if snapshot.StreamingError == "" {
 		t.Fatal("expected explicit queued-drain failure to set the streaming error banner")
+	}
+}
+
+func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *testing.T) {
+	store := mustCreateTestSession(t)
+	providerErr := &llm.ProviderAPIError{
+		ProviderID: "openai",
+		Code:       llm.UnifiedErrorCodeProviderContract,
+		Message:    "provider down",
+	}
+	client := &fakeClient{errors: []error{providerErr}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng.QueueUserMessage("steer now")
+
+	_, receipt, err := eng.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
+	if !receipt.Committed || !errors.Is(err, providerErr) {
+		t.Fatalf("queued submission receipt=%+v error=%v, want committed provider error", receipt, err)
+	}
+	if eng.HasQueuedUserWork() {
+		t.Fatal("committed queued flush retained retry ownership")
+	}
+	userEntries := 0
+	for _, entry := range eng.ChatSnapshot().Entries {
+		if entry.Role == string(llm.RoleUser) && entry.Text == "steer now" {
+			userEntries++
+		}
+	}
+	if userEntries != 1 {
+		t.Fatalf("projected queued user messages = %d, want 1", userEntries)
+	}
+}
+
+func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizationError(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	finalizationErr := errors.New("step finalization failed")
+	eng.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, _ exclusiveStepOptions, run func(context.Context, string) error) error {
+		if err := run(ctx, "queued-step"); err != nil {
+			return err
+		}
+		return finalizationErr
+	}}
+	eng.QueueUserMessage("steer now")
+
+	_, receipt, err := eng.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
+	if !receipt.Committed || !errors.Is(err, finalizationErr) {
+		t.Fatalf("queued submission receipt=%+v error=%v, want committed finalization error", receipt, err)
+	}
+	if eng.HasQueuedUserWork() {
+		t.Fatal("committed queued flush retained retry ownership")
 	}
 }
 
@@ -347,7 +403,6 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "unused"},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
-	persistErr := errors.New("persist queued flush")
 	var statuses []QueuedUserMessageStatusEvent
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model: "gpt-5",
@@ -357,17 +412,15 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 			}
 		},
 	})
-	eng.beforePersistMessage = func(msg llm.Message) error {
-		if msg.Role == llm.RoleUser && msg.Content == "queued steer" {
-			return persistErr
-		}
-		return nil
+	if err := eng.ensureMetaContextForRequest(context.Background(), "prep"); err != nil {
+		t.Fatalf("prepare request context: %v", err)
 	}
 	queued := eng.QueueUserMessageWithClientRequestID("queued steer", "req-queued")
+	mustBlockTestEventLogAppends(t, store)
 
 	err := eng.DrainQueuedUserMessagesBeforeClose(context.Background())
-	if !errors.Is(err, persistErr) {
-		t.Fatalf("DrainQueuedUserMessagesBeforeClose error = %v, want %v", err, persistErr)
+	if err == nil {
+		t.Fatal("DrainQueuedUserMessagesBeforeClose did not surface the event-log append failure")
 	}
 	if eng.HasQueuedUserWork() {
 		t.Fatal("queued user work remained after close-drain failure")
@@ -377,6 +430,49 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 	}
 	if statuses[1].QueueItemID != queued.ID || statuses[1].ClientRequestID != "req-queued" || statuses[1].RestoreText != "queued steer" || statuses[1].FailureReason != QueuedUserMessageFailureClosing {
 		t.Fatalf("failed status = %+v, want correlated close failure restore", statuses[1])
+	}
+}
+
+func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure(t *testing.T) {
+	observerErr := errors.New("queued flush observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var statuses []QueuedUserMessageStatusEvent
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			if evt.QueuedUserMessageStatus != nil {
+				statuses = append(statuses, *evt.QueuedUserMessageStatus)
+			}
+		},
+	})
+	if err := eng.ensureMetaContextForRequest(context.Background(), "prep"); err != nil {
+		t.Fatalf("prepare request context: %v", err)
+	}
+	queued := eng.QueueUserMessageWithClientRequestID("queued steer", "req-queued")
+	gate.FailNext(observerErr)
+
+	err := eng.DrainQueuedUserMessagesBeforeClose(context.Background())
+	if !errors.Is(err, observerErr) {
+		t.Fatalf("DrainQueuedUserMessagesBeforeClose error = %v, want observer error", err)
+	}
+	if eng.HasQueuedUserWork() {
+		t.Fatal("committed queued user work retained retry ownership")
+	}
+	if len(statuses) != 2 || statuses[0].Status != QueuedUserMessageAccepted || statuses[1].Status != QueuedUserMessageSubmitted {
+		t.Fatalf("queued statuses = %+v, want accepted then submitted", statuses)
+	}
+	if statuses[1].QueueItemID != queued.ID || statuses[1].ClientRequestID != "req-queued" {
+		t.Fatalf("submitted status lost queue identity: %+v", statuses[1])
+	}
+	userEntries := 0
+	for _, entry := range eng.ChatSnapshot().Entries {
+		if entry.Role == string(llm.RoleUser) {
+			userEntries++
+		}
+	}
+	if userEntries != 1 {
+		t.Fatalf("committed queued flush projected user entries = %d, want 1", userEntries)
 	}
 }
 
@@ -491,7 +587,7 @@ func (m *blockingQueueMessageLifecycle) RestoreMessages() error {
 	return m.wrapped.RestoreMessages()
 }
 
-func (m *blockingQueueMessageLifecycle) FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, error) {
+func (m *blockingQueueMessageLifecycle) FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error) {
 	return m.wrapped.FlushPendingUserInjections(stepID, queueItemIDs)
 }
 
@@ -984,15 +1080,6 @@ func fakeClientCallCount(client *fakeClient) int {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	return len(client.calls)
-}
-
-func fakeClientRequestAt(client *fakeClient, index int) llm.Request {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if index < 0 || index >= len(client.calls) {
-		return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic}
-	}
-	return client.calls[index]
 }
 
 func waitEngineLifecycleTasks(t *testing.T, eng *Engine) {

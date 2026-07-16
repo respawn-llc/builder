@@ -93,98 +93,131 @@ type SessionExecutionBranch struct {
 	Name string `json:"name"`
 }
 
-type SessionExecutionWorkspaceField struct {
-	state rpcwire.FieldResult[SessionExecutionWorkspace, SessionExecutionWorkspaceUnavailableReason, SessionExecutionFieldError]
+type sessionExecutionWorkspaceFieldShape struct{}
+type sessionExecutionBranchFieldShape struct{}
+type sessionExecutionAuthFieldShape struct{}
+type sessionExecutionModelFieldShape struct{}
+
+type SessionExecutionField[T any, R ~string, S rpcwire.FieldResultSchema[T, R]] struct {
+	state rpcwire.FieldResult[T, R, SessionExecutionFieldError]
 }
-type SessionExecutionBranchField struct {
-	state rpcwire.FieldResult[SessionExecutionBranch, SessionExecutionBranchUnavailableReason, SessionExecutionFieldError]
+
+type SessionExecutionWorkspaceField = SessionExecutionField[
+	SessionExecutionWorkspace,
+	SessionExecutionWorkspaceUnavailableReason,
+	sessionExecutionWorkspaceFieldShape,
+]
+type SessionExecutionBranchField = SessionExecutionField[
+	SessionExecutionBranch,
+	SessionExecutionBranchUnavailableReason,
+	sessionExecutionBranchFieldShape,
+]
+type SessionExecutionAuthField = SessionExecutionField[
+	SessionExecutionAuth,
+	SessionExecutionAuthUnavailableReason,
+	sessionExecutionAuthFieldShape,
+]
+type SessionExecutionModelField = SessionExecutionField[
+	SessionExecutionModel,
+	SessionExecutionModelUnavailableReason,
+	sessionExecutionModelFieldShape,
+]
+
+func availableSessionExecutionField[T any, R ~string, S rpcwire.FieldResultSchema[T, R]](value T) SessionExecutionField[T, R, S] {
+	return SessionExecutionField[T, R, S]{state: rpcwire.AvailableField[T, R, SessionExecutionFieldError](value)}
 }
-type SessionExecutionAuthField struct {
-	state rpcwire.FieldResult[SessionExecutionAuth, SessionExecutionAuthUnavailableReason, SessionExecutionFieldError]
+
+func unavailableSessionExecutionField[T any, R ~string, S rpcwire.FieldResultSchema[T, R]](reason R) SessionExecutionField[T, R, S] {
+	return SessionExecutionField[T, R, S]{state: rpcwire.UnavailableField[T, R, SessionExecutionFieldError](reason)}
 }
-type SessionExecutionModelField struct {
-	state rpcwire.FieldResult[SessionExecutionModel, SessionExecutionModelUnavailableReason, SessionExecutionFieldError]
+
+func failedSessionExecutionField[T any, R ~string, S rpcwire.FieldResultSchema[T, R]](failure SessionExecutionFieldError) SessionExecutionField[T, R, S] {
+	return SessionExecutionField[T, R, S]{state: rpcwire.FailedField[T, R](failure)}
 }
 
 func AvailableSessionExecutionWorkspace(path string) SessionExecutionWorkspaceField {
-	return SessionExecutionWorkspaceField{state: rpcwire.AvailableField[
+	return availableSessionExecutionField[
 		SessionExecutionWorkspace,
 		SessionExecutionWorkspaceUnavailableReason,
-		SessionExecutionFieldError,
-	](SessionExecutionWorkspace{Path: path})}
+		sessionExecutionWorkspaceFieldShape,
+	](SessionExecutionWorkspace{Path: path})
 }
 func FailedSessionExecutionWorkspace(err SessionExecutionFieldError) SessionExecutionWorkspaceField {
-	return SessionExecutionWorkspaceField{state: rpcwire.FailedField[
+	return failedSessionExecutionField[
 		SessionExecutionWorkspace,
 		SessionExecutionWorkspaceUnavailableReason,
-	](err)}
+		sessionExecutionWorkspaceFieldShape,
+	](err)
 }
 func UnavailableSessionExecutionWorkspace(reason SessionExecutionWorkspaceUnavailableReason) SessionExecutionWorkspaceField {
-	return SessionExecutionWorkspaceField{state: rpcwire.UnavailableField[
+	return unavailableSessionExecutionField[
 		SessionExecutionWorkspace,
 		SessionExecutionWorkspaceUnavailableReason,
-		SessionExecutionFieldError,
-	](reason)}
+		sessionExecutionWorkspaceFieldShape,
+	](reason)
 }
 func UnavailableSessionExecutionBranch(reason SessionExecutionBranchUnavailableReason) SessionExecutionBranchField {
-	return SessionExecutionBranchField{state: rpcwire.UnavailableField[
+	return unavailableSessionExecutionField[
 		SessionExecutionBranch,
 		SessionExecutionBranchUnavailableReason,
-		SessionExecutionFieldError,
-	](reason)}
+		sessionExecutionBranchFieldShape,
+	](reason)
 }
 func AvailableSessionExecutionBranch(name string) SessionExecutionBranchField {
-	return SessionExecutionBranchField{state: rpcwire.AvailableField[
+	return availableSessionExecutionField[
 		SessionExecutionBranch,
 		SessionExecutionBranchUnavailableReason,
-		SessionExecutionFieldError,
-	](SessionExecutionBranch{Name: name})}
+		sessionExecutionBranchFieldShape,
+	](SessionExecutionBranch{Name: name})
 }
 func FailedSessionExecutionBranch(err SessionExecutionFieldError) SessionExecutionBranchField {
-	return SessionExecutionBranchField{state: rpcwire.FailedField[
+	return failedSessionExecutionField[
 		SessionExecutionBranch,
 		SessionExecutionBranchUnavailableReason,
-	](err)}
+		sessionExecutionBranchFieldShape,
+	](err)
 }
 func AvailableSessionExecutionAuth(value SessionExecutionAuth) SessionExecutionAuthField {
-	return SessionExecutionAuthField{state: rpcwire.AvailableField[
+	return availableSessionExecutionField[
 		SessionExecutionAuth,
 		SessionExecutionAuthUnavailableReason,
-		SessionExecutionFieldError,
-	](value)}
+		sessionExecutionAuthFieldShape,
+	](value)
 }
 func UnavailableSessionExecutionAuth(reason SessionExecutionAuthUnavailableReason) SessionExecutionAuthField {
-	return SessionExecutionAuthField{state: rpcwire.UnavailableField[
+	return unavailableSessionExecutionField[
 		SessionExecutionAuth,
 		SessionExecutionAuthUnavailableReason,
-		SessionExecutionFieldError,
-	](reason)}
+		sessionExecutionAuthFieldShape,
+	](reason)
 }
 func FailedSessionExecutionAuth(err SessionExecutionFieldError) SessionExecutionAuthField {
-	return SessionExecutionAuthField{state: rpcwire.FailedField[
+	return failedSessionExecutionField[
 		SessionExecutionAuth,
 		SessionExecutionAuthUnavailableReason,
-	](err)}
+		sessionExecutionAuthFieldShape,
+	](err)
 }
 func AvailableSessionExecutionModel(value SessionExecutionModel) SessionExecutionModelField {
-	return SessionExecutionModelField{state: rpcwire.AvailableField[
+	return availableSessionExecutionField[
 		SessionExecutionModel,
 		SessionExecutionModelUnavailableReason,
-		SessionExecutionFieldError,
-	](value)}
+		sessionExecutionModelFieldShape,
+	](value)
 }
 func UnavailableSessionExecutionModel(reason SessionExecutionModelUnavailableReason) SessionExecutionModelField {
-	return SessionExecutionModelField{state: rpcwire.UnavailableField[
+	return unavailableSessionExecutionField[
 		SessionExecutionModel,
 		SessionExecutionModelUnavailableReason,
-		SessionExecutionFieldError,
-	](reason)}
+		sessionExecutionModelFieldShape,
+	](reason)
 }
 func FailedSessionExecutionModel(err SessionExecutionFieldError) SessionExecutionModelField {
-	return SessionExecutionModelField{state: rpcwire.FailedField[
+	return failedSessionExecutionField[
 		SessionExecutionModel,
 		SessionExecutionModelUnavailableReason,
-	](err)}
+		sessionExecutionModelFieldShape,
+	](err)
 }
 
 func sessionExecutionFieldKind[T any, R ~string](
@@ -206,69 +239,25 @@ func sessionExecutionFieldKind[T any, R ~string](
 	}
 }
 
-func (f SessionExecutionWorkspaceField) Kind() SessionExecutionFieldKind {
-	return sessionExecutionFieldKind[SessionExecutionWorkspace, SessionExecutionWorkspaceUnavailableReason](f.state)
-}
-func (f SessionExecutionBranchField) Kind() SessionExecutionFieldKind {
-	return sessionExecutionFieldKind[SessionExecutionBranch, SessionExecutionBranchUnavailableReason](f.state)
-}
-func (f SessionExecutionAuthField) Kind() SessionExecutionFieldKind {
-	return sessionExecutionFieldKind[SessionExecutionAuth, SessionExecutionAuthUnavailableReason](f.state)
-}
-func (f SessionExecutionModelField) Kind() SessionExecutionFieldKind {
-	return sessionExecutionFieldKind[SessionExecutionModel, SessionExecutionModelUnavailableReason](f.state)
+func (f SessionExecutionField[T, R, S]) Kind() SessionExecutionFieldKind {
+	return sessionExecutionFieldKind[T, R](f.state)
 }
 
-func (f SessionExecutionWorkspaceField) Value() (SessionExecutionWorkspace, bool) {
-	return rpcwire.FieldValue[SessionExecutionWorkspace, SessionExecutionWorkspaceUnavailableReason, SessionExecutionFieldError](f.state)
-}
-func (f SessionExecutionBranchField) Value() (SessionExecutionBranch, bool) {
-	return rpcwire.FieldValue[SessionExecutionBranch, SessionExecutionBranchUnavailableReason, SessionExecutionFieldError](f.state)
-}
-func (f SessionExecutionAuthField) Value() (SessionExecutionAuth, bool) {
-	return rpcwire.FieldValue[SessionExecutionAuth, SessionExecutionAuthUnavailableReason, SessionExecutionFieldError](f.state)
-}
-func (f SessionExecutionModelField) Value() (SessionExecutionModel, bool) {
-	return rpcwire.FieldValue[SessionExecutionModel, SessionExecutionModelUnavailableReason, SessionExecutionFieldError](f.state)
+func (f SessionExecutionField[T, R, S]) Value() (T, bool) {
+	return rpcwire.FieldValue[T, R, SessionExecutionFieldError](f.state)
 }
 
-func (f SessionExecutionWorkspaceField) UnavailableReason() (SessionExecutionWorkspaceUnavailableReason, bool) {
-	return rpcwire.FieldUnavailableReason[SessionExecutionWorkspace, SessionExecutionWorkspaceUnavailableReason, SessionExecutionFieldError](f.state)
-}
-func (f SessionExecutionBranchField) UnavailableReason() (SessionExecutionBranchUnavailableReason, bool) {
-	return rpcwire.FieldUnavailableReason[SessionExecutionBranch, SessionExecutionBranchUnavailableReason, SessionExecutionFieldError](f.state)
-}
-func (f SessionExecutionAuthField) UnavailableReason() (SessionExecutionAuthUnavailableReason, bool) {
-	return rpcwire.FieldUnavailableReason[SessionExecutionAuth, SessionExecutionAuthUnavailableReason, SessionExecutionFieldError](f.state)
-}
-func (f SessionExecutionModelField) UnavailableReason() (SessionExecutionModelUnavailableReason, bool) {
-	return rpcwire.FieldUnavailableReason[SessionExecutionModel, SessionExecutionModelUnavailableReason, SessionExecutionFieldError](f.state)
+func (f SessionExecutionField[T, R, S]) UnavailableReason() (R, bool) {
+	return rpcwire.FieldUnavailableReason[T, R, SessionExecutionFieldError](f.state)
 }
 
-func (f SessionExecutionWorkspaceField) Failure() (SessionExecutionFieldError, bool) {
-	return rpcwire.FieldFailure[SessionExecutionWorkspace, SessionExecutionWorkspaceUnavailableReason, SessionExecutionFieldError](f.state)
-}
-func (f SessionExecutionBranchField) Failure() (SessionExecutionFieldError, bool) {
-	return rpcwire.FieldFailure[SessionExecutionBranch, SessionExecutionBranchUnavailableReason, SessionExecutionFieldError](f.state)
-}
-func (f SessionExecutionAuthField) Failure() (SessionExecutionFieldError, bool) {
-	return rpcwire.FieldFailure[SessionExecutionAuth, SessionExecutionAuthUnavailableReason, SessionExecutionFieldError](f.state)
-}
-func (f SessionExecutionModelField) Failure() (SessionExecutionFieldError, bool) {
-	return rpcwire.FieldFailure[SessionExecutionModel, SessionExecutionModelUnavailableReason, SessionExecutionFieldError](f.state)
+func (f SessionExecutionField[T, R, S]) Failure() (SessionExecutionFieldError, bool) {
+	return rpcwire.FieldFailure[T, R, SessionExecutionFieldError](f.state)
 }
 
-func (f SessionExecutionWorkspaceField) MarshalJSON() ([]byte, error) {
-	return marshalSessionExecutionField("workspace", f.state, validateSessionExecutionWorkspace, validateSessionExecutionWorkspaceReason)
-}
-func (f SessionExecutionBranchField) MarshalJSON() ([]byte, error) {
-	return marshalSessionExecutionField("branch", f.state, validateSessionExecutionBranch, validateSessionExecutionBranchReason)
-}
-func (f SessionExecutionAuthField) MarshalJSON() ([]byte, error) {
-	return marshalSessionExecutionField("auth", f.state, validateSessionExecutionAuth, validateSessionExecutionAuthReason)
-}
-func (f SessionExecutionModelField) MarshalJSON() ([]byte, error) {
-	return marshalSessionExecutionField("model", f.state, validateSessionExecutionModel, validateSessionExecutionModelReason)
+func (f SessionExecutionField[T, R, S]) validate() error {
+	var shape S
+	return validateSessionExecutionField(f.state, shape)
 }
 
 type sessionExecutionFieldWire[T any, R ~string] struct {
@@ -278,31 +267,28 @@ type sessionExecutionFieldWire[T any, R ~string] struct {
 	Error  *SessionExecutionFieldError `json:"error,omitempty"`
 }
 
-func marshalSessionExecutionField[T any, R ~string](
-	label string,
-	state rpcwire.FieldResult[T, R, SessionExecutionFieldError],
-	validateValue func(T) error,
-	validateReason func(R) error,
-) ([]byte, error) {
-	if err := validateSessionExecutionField(label, state, validateValue, validateReason); err != nil {
+func (f SessionExecutionField[T, R, S]) MarshalJSON() ([]byte, error) {
+	if err := f.validate(); err != nil {
 		return nil, err
 	}
-	wire := sessionExecutionFieldWire[T, R]{Kind: sessionExecutionFieldKind[T, R](state)}
+	var shape S
+	label := shape.Label()
+	wire := sessionExecutionFieldWire[T, R]{Kind: f.Kind()}
 	switch wire.Kind {
 	case SessionExecutionFieldAvailable:
-		value, ok := rpcwire.FieldValue[T, R, SessionExecutionFieldError](state)
+		value, ok := f.Value()
 		if !ok {
 			panic(fmt.Sprintf("%s available field has no value", label))
 		}
 		wire.Value = &value
 	case SessionExecutionFieldUnavailable:
-		reason, ok := rpcwire.FieldUnavailableReason[T, R, SessionExecutionFieldError](state)
+		reason, ok := f.UnavailableReason()
 		if !ok {
 			panic(fmt.Sprintf("%s unavailable field has no reason", label))
 		}
 		wire.Reason = &reason
 	case SessionExecutionFieldFailed:
-		failure, ok := rpcwire.FieldFailure[T, R, SessionExecutionFieldError](state)
+		failure, ok := f.Failure()
 		if !ok {
 			panic(fmt.Sprintf("%s failed field has no failure", label))
 		}
@@ -311,12 +297,11 @@ func marshalSessionExecutionField[T any, R ~string](
 	return json.Marshal(wire)
 }
 
-func decodeSessionExecutionField[T any, R ~string](
+func decodeSessionExecutionField[T any, R ~string, S rpcwire.FieldResultSchema[T, R]](
 	data []byte,
-	label string,
-	validateValue func(T) error,
-	validateReason func(R) error,
 ) (rpcwire.FieldResult[T, R, SessionExecutionFieldError], error) {
+	var shape S
+	label := shape.Label()
 	var wire sessionExecutionFieldWire[T, R]
 	if err := decodeStrictJSON(data, &wire); err != nil {
 		return nil, err
@@ -349,61 +334,14 @@ func decodeSessionExecutionField[T any, R ~string](
 	default:
 		return nil, fmt.Errorf("%s field kind %q is invalid", label, wire.Kind)
 	}
-	if err := validateSessionExecutionField(label, state, validateValue, validateReason); err != nil {
+	if err := validateSessionExecutionField(state, shape); err != nil {
 		return nil, err
 	}
 	return state, nil
 }
 
-func (f *SessionExecutionWorkspaceField) UnmarshalJSON(data []byte) error {
-	state, err := decodeSessionExecutionField(
-		data,
-		"workspace",
-		validateSessionExecutionWorkspace,
-		validateSessionExecutionWorkspaceReason,
-	)
-	if err != nil {
-		return err
-	}
-	f.state = state
-	return nil
-}
-
-func (f *SessionExecutionBranchField) UnmarshalJSON(data []byte) error {
-	state, err := decodeSessionExecutionField(
-		data,
-		"branch",
-		validateSessionExecutionBranch,
-		validateSessionExecutionBranchReason,
-	)
-	if err != nil {
-		return err
-	}
-	f.state = state
-	return nil
-}
-
-func (f *SessionExecutionAuthField) UnmarshalJSON(data []byte) error {
-	state, err := decodeSessionExecutionField(
-		data,
-		"auth",
-		validateSessionExecutionAuth,
-		validateSessionExecutionAuthReason,
-	)
-	if err != nil {
-		return err
-	}
-	f.state = state
-	return nil
-}
-
-func (f *SessionExecutionModelField) UnmarshalJSON(data []byte) error {
-	state, err := decodeSessionExecutionField(
-		data,
-		"model",
-		validateSessionExecutionModel,
-		validateSessionExecutionModelReason,
-	)
+func (f *SessionExecutionField[T, R, S]) UnmarshalJSON(data []byte) error {
+	state, err := decodeSessionExecutionField[T, R, S](data)
 	if err != nil {
 		return err
 	}
@@ -412,11 +350,10 @@ func (f *SessionExecutionModelField) UnmarshalJSON(data []byte) error {
 }
 
 func validateSessionExecutionField[T any, R ~string](
-	label string,
 	state rpcwire.FieldResult[T, R, SessionExecutionFieldError],
-	validateValue func(T) error,
-	validateReason func(R) error,
+	schema rpcwire.FieldResultSchema[T, R],
 ) error {
+	label := schema.Label()
 	kind, ok := rpcwire.FieldResultKindOf[T, R, SessionExecutionFieldError](state)
 	if !ok {
 		return fmt.Errorf("%s field state is required", label)
@@ -427,7 +364,7 @@ func validateSessionExecutionField[T any, R ~string](
 		if !valueOK {
 			panic(fmt.Sprintf("%s available field has no value", label))
 		}
-		if err := validateValue(value); err != nil {
+		if err := schema.ValidateValue(value); err != nil {
 			return fmt.Errorf("%s available value is invalid: %w", label, err)
 		}
 	case rpcwire.FieldResultUnavailable:
@@ -435,7 +372,7 @@ func validateSessionExecutionField[T any, R ~string](
 		if !reasonOK {
 			panic(fmt.Sprintf("%s unavailable field has no reason", label))
 		}
-		if err := validateReason(reason); err != nil {
+		if err := schema.ValidateUnavailableReason(reason); err != nil {
 			return fmt.Errorf("%s unavailable reason is invalid: %w", label, err)
 		}
 	case rpcwire.FieldResultFailed:
@@ -518,6 +455,38 @@ func validateSessionExecutionModelReason(reason SessionExecutionModelUnavailable
 	return nil
 }
 
+func (sessionExecutionWorkspaceFieldShape) Label() string { return "workspace" }
+func (sessionExecutionWorkspaceFieldShape) ValidateValue(value SessionExecutionWorkspace) error {
+	return validateSessionExecutionWorkspace(value)
+}
+func (sessionExecutionWorkspaceFieldShape) ValidateUnavailableReason(reason SessionExecutionWorkspaceUnavailableReason) error {
+	return validateSessionExecutionWorkspaceReason(reason)
+}
+
+func (sessionExecutionBranchFieldShape) Label() string { return "branch" }
+func (sessionExecutionBranchFieldShape) ValidateValue(value SessionExecutionBranch) error {
+	return validateSessionExecutionBranch(value)
+}
+func (sessionExecutionBranchFieldShape) ValidateUnavailableReason(reason SessionExecutionBranchUnavailableReason) error {
+	return validateSessionExecutionBranchReason(reason)
+}
+
+func (sessionExecutionAuthFieldShape) Label() string { return "auth" }
+func (sessionExecutionAuthFieldShape) ValidateValue(value SessionExecutionAuth) error {
+	return validateSessionExecutionAuth(value)
+}
+func (sessionExecutionAuthFieldShape) ValidateUnavailableReason(reason SessionExecutionAuthUnavailableReason) error {
+	return validateSessionExecutionAuthReason(reason)
+}
+
+func (sessionExecutionModelFieldShape) Label() string { return "model" }
+func (sessionExecutionModelFieldShape) ValidateValue(value SessionExecutionModel) error {
+	return validateSessionExecutionModel(value)
+}
+func (sessionExecutionModelFieldShape) ValidateUnavailableReason(reason SessionExecutionModelUnavailableReason) error {
+	return validateSessionExecutionModelReason(reason)
+}
+
 type SessionExecutionEnvironment struct {
 	SessionID runtimeids.SessionID           `json:"session_id"`
 	Workspace SessionExecutionWorkspaceField `json:"workspace"`
@@ -530,36 +499,16 @@ func (e SessionExecutionEnvironment) Validate() error {
 	if e.SessionID.IsZero() {
 		return errors.New("session execution environment session_id is required")
 	}
-	if err := validateSessionExecutionField(
-		"workspace",
-		e.Workspace.state,
-		validateSessionExecutionWorkspace,
-		validateSessionExecutionWorkspaceReason,
-	); err != nil {
+	if err := e.Workspace.validate(); err != nil {
 		return err
 	}
-	if err := validateSessionExecutionField(
-		"branch",
-		e.Branch.state,
-		validateSessionExecutionBranch,
-		validateSessionExecutionBranchReason,
-	); err != nil {
+	if err := e.Branch.validate(); err != nil {
 		return err
 	}
-	if err := validateSessionExecutionField(
-		"auth",
-		e.Auth.state,
-		validateSessionExecutionAuth,
-		validateSessionExecutionAuthReason,
-	); err != nil {
+	if err := e.Auth.validate(); err != nil {
 		return err
 	}
-	return validateSessionExecutionField(
-		"model",
-		e.Model.state,
-		validateSessionExecutionModel,
-		validateSessionExecutionModelReason,
-	)
+	return e.Model.validate()
 }
 
 func (e SessionExecutionEnvironment) MarshalJSON() ([]byte, error) {

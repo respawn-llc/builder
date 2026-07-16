@@ -24,7 +24,6 @@ type uiProgramComposition struct {
 type uiLoopRequest struct {
 	wiring                       *runtimeWiring
 	active                       config.Settings
-	logger                       *runLogger
 	commandRegistry              *commands.Registry
 	initialPrompt                string
 	initialPromptHistoryRecorded bool
@@ -86,11 +85,8 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		rendererOutputGate,
 		terminalOutput,
 	)
-	tuiLogger, err := newRollingTUILogger(request.statusConfig.PersistenceRoot)
-	if err != nil && request.logger != nil {
-		request.logger.Logf("tui_log.open err=%q", err.Error())
-	}
-	uiLogger := newMultiUILogger(request.logger, tuiLogger)
+	tuiLogger, _ := newRollingTUILogger(request.statusConfig.PersistenceRoot)
+	uiLogger := newMultiUILogger(tuiLogger)
 	runtimeClient := request.wiring.runtimeClient
 	if runtimeClient == nil {
 		if tuiLogger != nil {
@@ -98,19 +94,11 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("runtime client is required")
 	}
-	runtimeEvents := request.wiring.runtimeEvents
-	if runtimeEvents == nil {
+	if request.wiring.transcriptEvents == nil {
 		if tuiLogger != nil {
 			_ = tuiLogger.Close()
 		}
-		return nil, errors.New("runtime event stream is required")
-	}
-	askEvents := request.wiring.askEvents
-	if askEvents == nil {
-		if tuiLogger != nil {
-			_ = tuiLogger.Close()
-		}
-		return nil, errors.New("prompt event stream is required")
+		return nil, errors.New("transcript event stream is required")
 	}
 	// The first renderer write occurs only after Bubble Tea owns terminal mode.
 	// Queue the native-cursor signal there, so it is a real input-ready boundary.
@@ -124,8 +112,6 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 
 	rawModel := NewProjectedUIModel(
 		runtimeClient,
-		runtimeEvents,
-		askEvents,
 		WithUILogger(uiLogger),
 		WithUIModelName(request.active.Model),
 		WithUIConfiguredModelName(request.configuredModelName),
@@ -161,7 +147,13 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("projected UI model has unexpected type")
 	}
-	model.ongoingTranscript = newOngoingTranscriptController(ongoingSurface, model.ongoingFrameInput)
+	model.promptAnswers = request.wiring.promptAnswers
+	model.promptAttention = request.wiring.promptAttention
+	model.ongoingTranscript = newOngoingTranscriptController(
+		ongoingSurface,
+		model.ongoingFrameInput,
+		model.applyTranscriptMessageState,
+	)
 	return &uiProgramComposition{
 		model:   model,
 		options: options,

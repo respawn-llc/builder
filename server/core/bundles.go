@@ -25,7 +25,7 @@ import (
 	"core/server/workflowrunner"
 	"core/server/workflowsvc"
 	"core/server/worktree"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 )
 
@@ -46,14 +46,14 @@ type Bundles struct {
 
 type AuthBundle struct {
 	support       serverbootstrap.AuthSupport
-	authBootstrap client.AuthBootstrapClient
-	authStatus    client.AuthStatusClient
-	serverStatus  client.ServerStatusClient
+	authBootstrap apicontract.AuthBootstrapService
+	authStatus    apicontract.AuthStatusService
+	serverStatus  apicontract.ServerStatusService
 	authRequired  bool
 }
 
 type CapabilityBundle struct {
-	facts client.CapabilityFactsClient
+	facts apicontract.CapabilityFactsService
 }
 
 type PersistenceBundle struct {
@@ -63,24 +63,23 @@ type PersistenceBundle struct {
 }
 
 type ProcessBundle struct {
-	processControls client.ProcessControlClient
-	processOutput   client.ProcessOutputClient
-	processViews    client.ProcessViewClient
+	processControls apicontract.ProcessControlService
+	processOutput   apicontract.ProcessOutputService
+	processViews    apicontract.ProcessViewService
 }
 
 type ProjectBundle struct {
 	cfg          config.App
 	containerDir string
 	projectID    string
-	projectViews client.ProjectViewClient
+	projectViews apicontract.ProjectViewService
 }
 
 type PromptBundle struct {
-	askViews               client.AskViewClient
-	approvalViews          client.ApprovalViewClient
-	promptControl          client.PromptControlClient
-	promptActivity         client.PromptActivityClient
-	attentionNotifications client.AttentionNotificationClient
+	askViews               apicontract.AskViewService
+	approvalViews          apicontract.ApprovalViewService
+	promptControl          apicontract.PromptControlService
+	attentionNotifications apicontract.AttentionNotificationService
 }
 
 type RuntimeBundle struct {
@@ -88,11 +87,10 @@ type RuntimeBundle struct {
 	background          *shelltool.Manager
 	backgroundRouter    *runtimewire.BackgroundEventRouter
 	runtimeRegistry     *registry.RuntimeRegistry
-	runtimeControls     client.RuntimeControlClient
-	runtimeLiveControls client.RuntimeLiveControlClient
-	sessionRuntime      client.SessionRuntimeClient
-	sessionActivity     client.SessionActivityClient
-	sessionTranscript   client.SessionTranscriptClient
+	runtimeControls     apicontract.RuntimeControlService
+	runtimeLiveControls apicontract.RuntimeLiveControlService
+	sessionRuntime      apicontract.SessionRuntimeService
+	sessionTranscript   apicontract.SessionTranscriptService
 
 	sessionRuntimeService *sessionruntime.Service
 }
@@ -100,13 +98,13 @@ type RuntimeBundle struct {
 type SessionBundle struct {
 	mu               sync.Mutex
 	runPromptMu      sync.Mutex
-	sessionLaunchMap map[string]client.SessionLaunchClient
+	sessionLaunchMap map[string]apicontract.SessionLaunchService
 	sessionServices  map[string]*sessionlaunch.Service
-	runPromptMap     map[string]client.RunPromptClient
-	sessionLaunch    client.SessionLaunchClient
-	sessionViews     client.SessionViewClient
-	sessionLifecycle client.SessionLifecycleClient
-	runPrompt        client.RunPromptClient
+	runPromptMap     map[string]apicontract.RunPromptService
+	sessionLaunch    apicontract.SessionLaunchService
+	sessionViews     apicontract.SessionViewService
+	sessionLifecycle apicontract.SessionLifecycleService
+	runPrompt        apicontract.RunPromptService
 }
 
 type UpdateBundle struct {
@@ -114,11 +112,11 @@ type UpdateBundle struct {
 }
 
 type WorktreeBundle struct {
-	worktrees client.WorktreeClient
+	worktrees apicontract.WorktreeService
 }
 
 type WorkflowBundle struct {
-	workflows client.WorkflowClient
+	workflows apicontract.WorkflowService
 	scheduler *workflowrunner.SchedulerService
 }
 
@@ -175,9 +173,9 @@ func (b *Bundles) withDefaults() *Bundles {
 
 func emptySessionBundle() *SessionBundle {
 	return &SessionBundle{
-		sessionLaunchMap: make(map[string]client.SessionLaunchClient),
+		sessionLaunchMap: make(map[string]apicontract.SessionLaunchService),
 		sessionServices:  make(map[string]*sessionlaunch.Service),
-		runPromptMap:     make(map[string]client.RunPromptClient),
+		runPromptMap:     make(map[string]apicontract.RunPromptService),
 	}
 }
 
@@ -191,7 +189,7 @@ type bundleCompositionInput struct {
 	metadataStore           *metadata.Store
 	sessionStoreRegistry    *registry.SessionStoreRegistry
 	runtimeRegistry         *registry.RuntimeRegistry
-	projectViews            client.ProjectViewClient
+	projectViews            apicontract.ProjectViewService
 	authBootstrapService    *authservice.BootstrapService
 	authStatusService       *authservice.StatusService
 	askService              *promptcontrol.AskViewService
@@ -199,14 +197,12 @@ type bundleCompositionInput struct {
 	processService          *processview.ProcessViewService
 	processOutputService    *processview.ProcessOutputService
 	promptControlService    *promptcontrol.PromptControlService
-	promptActivityService   *promptcontrol.PromptActivityService
-	attentionService        client.AttentionNotificationClient
+	attentionService        apicontract.AttentionNotificationService
 	runtimeControlService   *runtimecontrol.Service
 	serverStatusService     *serverstatus.ServerStatusService
 	sessionRuntimeService   *sessionruntime.Service
 	sessionViewService      *sessionview.Service
 	sessionLifecycleService *sessionservice.SessionLifecycleService
-	sessionActivityService  *sessionservice.SessionActivityService
 	updateStatusService     *serverstatus.UpdateStatusService
 	workflowService         *workflowsvc.Service
 	workflowScheduler       *workflowrunner.SchedulerService
@@ -251,27 +247,27 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore, in.sessionStoreRegistry),
 		Processes:   newProcessBundle(in.processService, in.processOutputService),
 		Projects:    newProjectBundle(in.cfg, in.containerDir, in.projectViews),
-		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.promptActivityService, in.attentionService),
-		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService, in.sessionActivityService),
+		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.attentionService),
+		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
 		Updates:     &UpdateBundle{updateStatus: in.updateStatusService},
 		Workflows:   newWorkflowBundle(in.workflowService, in.workflowScheduler),
-		Worktrees:   &WorktreeBundle{worktrees: client.NewLoopbackWorktreeClient(in.worktreeService)},
+		Worktrees:   &WorktreeBundle{worktrees: in.worktreeService},
 	}
 }
 
 func newAuthBundle(authSupport serverbootstrap.AuthSupport, bootstrapService *authservice.BootstrapService, statusService *authservice.StatusService, serverStatusService *serverstatus.ServerStatusService, authRequired bool) *AuthBundle {
 	return &AuthBundle{
 		support:       authSupport,
-		authBootstrap: client.NewLoopbackAuthBootstrapClient(bootstrapService),
-		authStatus:    client.NewLoopbackAuthStatusClient(statusService),
-		serverStatus:  client.NewLoopbackServerStatusClient(serverStatusService),
+		authBootstrap: bootstrapService,
+		authStatus:    statusService,
+		serverStatus:  serverStatusService,
 		authRequired:  authRequired,
 	}
 }
 
 func newCapabilityBundle(factsService *capabilityfacts.Service) *CapabilityBundle {
-	return &CapabilityBundle{facts: client.NewLoopbackCapabilityFactsClient(factsService)}
+	return &CapabilityBundle{facts: factsService}
 }
 
 func newPersistenceBundle(rootLease *RootLockLease, metadataStore *metadata.Store, sessionStoreRegistry *registry.SessionStoreRegistry) *PersistenceBundle {
@@ -284,13 +280,13 @@ func newPersistenceBundle(rootLease *RootLockLease, metadataStore *metadata.Stor
 
 func newProcessBundle(processService *processview.ProcessViewService, processOutputService *processview.ProcessOutputService) *ProcessBundle {
 	return &ProcessBundle{
-		processControls: client.NewLoopbackProcessControlClient(processService),
-		processOutput:   client.NewLoopbackProcessOutputClient(processOutputService),
-		processViews:    client.NewLoopbackProcessViewClient(processService),
+		processControls: processService,
+		processOutput:   processOutputService,
+		processViews:    processService,
 	}
 }
 
-func newProjectBundle(cfg config.App, containerDir string, projectViews client.ProjectViewClient) *ProjectBundle {
+func newProjectBundle(cfg config.App, containerDir string, projectViews apicontract.ProjectViewService) *ProjectBundle {
 	return &ProjectBundle{
 		cfg:          cfg,
 		containerDir: containerDir,
@@ -298,47 +294,45 @@ func newProjectBundle(cfg config.App, containerDir string, projectViews client.P
 	}
 }
 
-func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *promptcontrol.ApprovalViewService, promptControlService *promptcontrol.PromptControlService, promptActivityService *promptcontrol.PromptActivityService, attentionService client.AttentionNotificationClient) *PromptBundle {
+func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *promptcontrol.ApprovalViewService, promptControlService *promptcontrol.PromptControlService, attentionService apicontract.AttentionNotificationService) *PromptBundle {
 	if attentionService == nil {
 		attentionService = unavailableAttentionNotificationClient{}
 	}
 	return &PromptBundle{
-		askViews:               client.NewLoopbackAskViewClient(askService),
-		approvalViews:          client.NewLoopbackApprovalViewClient(approvalService),
-		promptControl:          client.NewLoopbackPromptControlClient(promptControlService),
-		promptActivity:         client.NewLoopbackPromptActivityClient(promptActivityService),
+		askViews:               askService,
+		approvalViews:          approvalService,
+		promptControl:          promptControlService,
 		attentionNotifications: attentionService,
 	}
 }
 
-func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegistry *registry.RuntimeRegistry, runtimeControlService *runtimecontrol.Service, sessionRuntimeService *sessionruntime.Service, sessionActivityService *sessionservice.SessionActivityService) *RuntimeBundle {
+func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegistry *registry.RuntimeRegistry, runtimeControlService *runtimecontrol.Service, sessionRuntimeService *sessionruntime.Service) *RuntimeBundle {
 	return &RuntimeBundle{
 		fastModeState:       runtimeSupport.FastModeState,
 		background:          runtimeSupport.Background,
 		backgroundRouter:    runtimeSupport.BackgroundRouter,
 		runtimeRegistry:     runtimeRegistry,
-		runtimeControls:     client.NewLoopbackRuntimeControlClient(runtimeControlService),
-		runtimeLiveControls: client.NewLoopbackRuntimeLiveControlClient(runtimeControlService),
-		sessionRuntime:      client.NewLoopbackSessionRuntimeClient(sessionRuntimeService),
-		sessionActivity:     client.NewLoopbackSessionActivityClient(sessionActivityService),
-		sessionTranscript:   client.NewLoopbackSessionTranscriptClient(runtimeRegistry),
+		runtimeControls:     runtimeControlService,
+		runtimeLiveControls: runtimeControlService,
+		sessionRuntime:      sessionRuntimeService,
+		sessionTranscript:   runtimeRegistry,
 
 		sessionRuntimeService: sessionRuntimeService,
 	}
 }
 
 func newWorkflowBundle(workflowService *workflowsvc.Service, scheduler *workflowrunner.SchedulerService) *WorkflowBundle {
-	return &WorkflowBundle{workflows: client.NewLoopbackWorkflowClient(workflowService), scheduler: scheduler}
+	return &WorkflowBundle{workflows: workflowService, scheduler: scheduler}
 }
 
 func newSessionBundle(sessionViewService *sessionview.Service, sessionLifecycleService *sessionservice.SessionLifecycleService) *SessionBundle {
 	return &SessionBundle{
-		sessionLaunchMap: make(map[string]client.SessionLaunchClient),
+		sessionLaunchMap: make(map[string]apicontract.SessionLaunchService),
 		sessionServices:  make(map[string]*sessionlaunch.Service),
-		runPromptMap:     make(map[string]client.RunPromptClient),
+		runPromptMap:     make(map[string]apicontract.RunPromptService),
 		sessionLaunch:    unregisteredSessionLaunchClient{},
-		sessionViews:     client.NewLoopbackSessionViewClient(sessionViewService),
-		sessionLifecycle: client.NewLoopbackSessionLifecycleClient(sessionLifecycleService),
+		sessionViews:     sessionViewService,
+		sessionLifecycle: sessionLifecycleService,
 		runPrompt:        unregisteredRunPromptClient{},
 	}
 }

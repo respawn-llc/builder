@@ -18,10 +18,13 @@ func sameOperationRequest[Req any](existing any, req Req, same func(Req, Req) bo
 }
 
 func operationRequestID(ref clientui.RuntimeOperationRef) string {
-	if strings.TrimSpace(ref.ClientRequestID) != "" {
-		return strings.TrimSpace(ref.ClientRequestID)
+	if !ref.ClientRequestID.IsZero() {
+		return ref.ClientRequestID.String()
 	}
-	return strings.TrimSpace(ref.QueueItemID)
+	if ref.QueueItemID != nil {
+		return ref.QueueItemID.String()
+	}
+	return ""
 }
 
 func operationCancellationInterruptsActive(ref clientui.RuntimeOperationRef) bool {

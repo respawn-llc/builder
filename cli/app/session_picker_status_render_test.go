@@ -207,7 +207,7 @@ func TestSessionPickerFailureProjectionRetryRetainsUnrelatedFailure(t *testing.T
 	}
 }
 
-func TestSessionPickerFailureRenderingKeepsDiagnosticsInternal(t *testing.T) {
+func TestSessionPickerFailureRenderProjectionExcludesDiagnostics(t *testing.T) {
 	t.Parallel()
 
 	for _, kind := range []sessionPickerFailureKind{
@@ -229,12 +229,9 @@ func TestSessionPickerFailureRenderingKeepsDiagnosticsInternal(t *testing.T) {
 			if projection.Failure == nil || !errors.Is(projection.Failure.Diagnostic, diagnostic) {
 				t.Fatal("status projection discarded the typed diagnostic cause")
 			}
-			rendered := ansi.Strip(renderStartupPickerStatus(projection, 120))
-			if strings.Contains(rendered, diagnostic.Error()) {
-				t.Fatal("operator status rendered its internal diagnostic")
-			}
-			if strings.TrimSpace(rendered) == "" {
-				t.Fatal("operator status rendered no failure guidance")
+			renderProjection := projectStartupPickerStatusRender(projection)
+			if renderProjection == nil || renderProjection.Kind != startupPickerStatusRenderFailure || !renderProjection.IsError {
+				t.Fatalf("render projection = %+v, want typed failure", renderProjection)
 			}
 		})
 	}

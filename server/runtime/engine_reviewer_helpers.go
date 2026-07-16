@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/config"
 	"core/shared/transcript"
 )
 
@@ -73,7 +71,6 @@ func buildReviewerRequestMessagesWithBuilder(messages []llm.Message, builder met
 	metaResult, err := builder.Build(metaContextBuildOptions{
 		ExistingMessages:          metaMessages,
 		IncludeAgents:             true,
-		IncludeSkills:             true,
 		IncludeEnvironment:        true,
 		IncludeHeadless:           headless,
 		PermissiveAgentsReadError: true,
@@ -95,7 +92,6 @@ func buildReviewerRequestItemsWithBuilder(items []llm.ResponseItem, builder meta
 	metaResult, err := builder.Build(metaContextBuildOptions{
 		ExistingMessages:          metaMessages,
 		IncludeAgents:             true,
-		IncludeSkills:             true,
 		IncludeEnvironment:        true,
 		IncludeHeadless:           headless,
 		PermissiveAgentsReadError: true,
@@ -414,36 +410,14 @@ func reviewerSessionID(sessionID string) string {
 	return trimmed + "/supervisor"
 }
 
-func appendMissingReviewerMetaContext(messages []llm.Message, workspaceRoot string, model string, thinkingLevel string, globalConfigDir string, headless bool, skillPolicy config.SkillPolicy) ([]llm.Message, error) {
-	metaMessages, transcript := splitMetaContextMessages(messages)
-	metaMessages = filterReviewerMetaMessages(metaMessages)
-	builder := newMetaContextBuilder(workspaceRoot, model, thinkingLevel, skillPolicy, time.Now()).withGlobalConfigDir(globalConfigDir)
-	metaResult, err := builder.Build(metaContextBuildOptions{
-		ExistingMessages:          metaMessages,
-		IncludeAgents:             true,
-		IncludeSkills:             true,
-		IncludeEnvironment:        true,
-		IncludeHeadless:           headless,
-		PermissiveAgentsReadError: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := append(metaResult.OrderedMetaMessages(), transcript...)
-	return out, nil
-}
-
 func filterReviewerMetaMessages(messages []llm.Message) []llm.Message {
 	if len(messages) == 0 {
 		return nil
 	}
 	out := make([]llm.Message, 0, len(messages))
 	for _, message := range messages {
-		if message.Role == llm.RoleDeveloper {
-			switch message.MessageType {
-			case llm.MessageTypeSkills, llm.MessageTypeSubagents:
-				continue
-			}
+		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeSubagents {
+			continue
 		}
 		out = append(out, message)
 	}

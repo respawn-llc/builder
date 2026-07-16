@@ -12,13 +12,6 @@ import (
 var ErrOnboardingCanceled = errors.New("first-time setup canceled")
 var ErrOnboardingRequired = errors.New("first-time setup is required")
 
-func writeHeadlessDefaultSettings(settingsPath string) (string, bool, error) {
-	if settingsPath != "" {
-		return config.WriteDefaultSettingsFileAt(settingsPath)
-	}
-	return config.WriteDefaultSettingsFile()
-}
-
 // ErrAuthManagerRequired and ErrInteractiveRunnerRequired guard interactive
 // onboarding readiness. Callers and tests match these with errors.Is rather
 // than comparing rendered message text.

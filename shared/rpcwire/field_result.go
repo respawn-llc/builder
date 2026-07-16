@@ -8,6 +8,12 @@ const (
 	FieldResultFailed
 )
 
+type FieldResultSchema[T any, R any] interface {
+	Label() string
+	ValidateValue(T) error
+	ValidateUnavailableReason(R) error
+}
+
 type FieldResult[T any, R any, E any] interface {
 	isFieldResult()
 }

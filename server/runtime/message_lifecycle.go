@@ -47,13 +47,13 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if err := rollbackLocator.ObserveMessage(evt.Seq, msg); err != nil {
 				return err
 			}
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendMessage(msg)
+			e.transcriptRuntimeState().AppendMessage(evt.StepID, msg)
 			recoveredHandoff.ApplyMessage(msg)
 			if isCompactionSoonReminderMessage(msg) {
 				reminderIssued = true
 			}
 		case "tool_completed":
-			if err := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).RestoreToolCompletionPayload(evt.Payload); err != nil {
+			if err := e.transcriptRuntimeState().RestoreToolCompletionPayload(evt.Payload); err != nil {
 				return err
 			}
 			if err := recoveredHandoff.ApplyToolCompletion(evt.Payload); err != nil {
@@ -65,9 +65,11 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("decode local_entry event: %w", err)
 			}
 			e.diagnosticDedupeStore().RestoreLocal(entry.DiagnosticKey)
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendLocalEntryRecord(*localEntryChatEntry(entry))
+			restored := *localEntryChatEntry(entry)
+			restored.StepID = strings.TrimSpace(evt.StepID)
+			e.transcriptRuntimeState().AppendLocalEntryRecord(restored)
 		case sessionEventCacheWarning:
-			if err := applyPersistedCacheWarningToTranscript(newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()), evt.Payload, e.cfg.CacheWarningMode); err != nil {
+			if err := applyPersistedCacheWarningToTranscript(e.transcriptRuntimeState(), evt.Payload, e.cfg.CacheWarningMode); err != nil {
 				return err
 			}
 		case sessionEventCacheRequestObserved:
@@ -87,7 +89,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				continue
 			}
 			e.resetLocalDiagnostics()
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistoryAtCommittedEntryStart(payload.Items, payload.CommittedEntryStart)
+			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(evt.StepID, payload.Items, payload.CommittedEntryStart)
 			e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(payload.LastCommittedAssistantFinalAnswer)
 			if payload.CompactionNumber > 0 {
 				e.compactionRuntimeState().SetCount(payload.CompactionNumber)
@@ -296,7 +298,7 @@ func queuedUserMessagesForFlush(messages []queuedUserSteeringIntent) []QueuedUse
 // FlushPendingUserInjections flushes queued user injections for the step. An empty
 // queueItemIDs flushes every pending injection; a non-empty set flushes only those
 // IDs.
-func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, error) {
+func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error) {
 	var pending []queuedUserSteeringIntent
 	if len(queueItemIDs) == 0 {
 		pending = m.queue.Drain()
@@ -307,48 +309,56 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, queu
 	return m.flushPendingUserInjections(stepID, pending)
 }
 
-func (m *defaultMessageLifecycle) flushPendingUserInjections(stepID string, pending []queuedUserSteeringIntent) (int, error) {
+func (m *defaultMessageLifecycle) flushPendingUserInjections(stepID string, pending []queuedUserSteeringIntent) (int, session.CommitReceipt, error) {
 	e := m.engine
 	flushed := 0
-	pendingNotices := []steeringIntent(nil)
-	if m.background != nil {
-		pendingNotices = m.background.DrainPendingNotices()
-	}
+	var flushReceipt session.CommitReceipt
 
 	queuedMessages := normalizeQueuedUserMessages(pending)
 	if len(queuedMessages) > 0 {
 		pending = e.dropStoppedLiveRunQueueItems(pending)
 		queuedMessages = normalizeQueuedUserMessages(pending)
 		if len(queuedMessages) == 0 {
-			return flushed, nil
+			return flushed, flushReceipt, nil
 		}
 		joined := strings.Join(queuedMessages, "\n\n")
-		committed, err := e.commitLiveRunQueueItemsUnlessStopped(pending, func() error {
-			return e.steer(stepID, steerQueuedUserMessageFlushIntent(joined, queuedMessages, queuedUserMessagesForFlush(pending)))
+		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(pending, func() error {
+			receipt, persistErr := e.steerWithCommitReceipt(
+				stepID,
+				steerQueuedUserMessageFlushIntent(joined, queuedMessages, queuedUserMessagesForFlush(pending)),
+			)
+			flushReceipt = receipt
+			return persistErr
 		})
 		if err != nil {
-			m.queue.RestoreFront(pending)
-			return flushed, err
+			if !flushReceipt.Committed {
+				m.queue.RestoreFront(pending)
+			}
+			return flushed, flushReceipt, err
 		}
-		if !committed {
+		if !publishAllowed {
 			for _, item := range pending {
 				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
 				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 			}
-			return flushed, nil
+			return flushed, flushReceipt, nil
 		}
 		flushed++
 	}
 	for _, item := range pending {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
 	}
+	pendingNotices := []steeringIntent(nil)
+	if m.background != nil {
+		pendingNotices = m.background.DrainPendingNotices()
+	}
 	for _, notice := range pendingNotices {
 		if err := e.steer(stepID, notice); err != nil {
-			return flushed, err
+			return flushed, flushReceipt, err
 		}
 		flushed++
 	}
-	return flushed, nil
+	return flushed, flushReceipt, nil
 }
 
 func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) QueuedUserMessage {

@@ -103,7 +103,7 @@ type SessionExecutionTarget struct {
 	WorkspaceID           string
 	WorkspaceName         string
 	WorkspaceRoot         string
-	WorkspaceAvailability string
+	WorkspaceAvailability ProjectAvailability
 	Worktree              *SessionExecutionWorktreeTarget
 	CwdRelpath            string
 	EffectiveWorkdir      string
@@ -130,7 +130,7 @@ func NormalizeSessionExecutionTarget(target SessionExecutionTarget) SessionExecu
 		WorkspaceID:           strings.TrimSpace(target.WorkspaceID),
 		WorkspaceName:         strings.TrimSpace(target.WorkspaceName),
 		WorkspaceRoot:         strings.TrimSpace(target.WorkspaceRoot),
-		WorkspaceAvailability: strings.TrimSpace(target.WorkspaceAvailability),
+		WorkspaceAvailability: ProjectAvailability(strings.TrimSpace(string(target.WorkspaceAvailability))),
 		Worktree:              worktree,
 		CwdRelpath:            strings.TrimSpace(target.CwdRelpath),
 		EffectiveWorkdir:      strings.TrimSpace(target.EffectiveWorkdir),

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -194,14 +194,14 @@ func createRunnableWorkflowForCommandTest(t *testing.T, name string) string {
 }
 
 type crossProjectTaskShowRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 	scopedErr     error
 	unscopedErr   error
 	unscopedCalls int
 }
 
 type unknownTaskStatusRemote struct {
-	client.WorkflowClient
+	apicontract.WorkflowService
 }
 
 func (r *unknownTaskStatusRemote) Close() error { return nil }

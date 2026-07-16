@@ -65,41 +65,6 @@ func (m *uiModel) runtimeMainView() clientui.RuntimeMainView {
 	}
 }
 
-func (m *uiModel) refreshRuntimeMainView() clientui.RuntimeMainView {
-	m.checkTUIBlockingOperation("runtime main-view refresh", "RefreshMainView")
-	if client := m.runtimeClient(); client != nil {
-		var (
-			view clientui.RuntimeMainView
-			err  error
-		)
-		if requestClient, ok := client.(runtimeMainViewReconciliationClient); ok {
-			view, err = requestClient.RefreshMainViewWithPendingRefs(m.pendingRuntimeOperationRefs())
-		} else {
-			view, err = client.RefreshMainView()
-		}
-		if err == nil {
-			m.observeRuntimeRequestResult(nil)
-			return view
-		}
-		m.observeRuntimeRequestResult(err)
-		return client.MainView()
-	}
-	return clientui.RuntimeMainView{
-		Status:  m.localRuntimeStatus(),
-		Session: m.localRuntimeSessionView(),
-	}
-}
-
-func (m *uiModel) runtimeStatus() clientui.RuntimeStatus {
-	m.checkTUIBlockingOperation("runtime status read", "Status/MainView")
-	view := m.runtimeMainView()
-	status := view.Status
-	if m.runtimeContextUsageAppliesTo(view.Session.SessionID) {
-		status.ContextUsage = m.runtimeContextUsage
-	}
-	return status
-}
-
 func (m *uiModel) cachedRuntimeMainView() clientui.RuntimeMainView {
 	client := m.runtimeClient()
 	if cached, ok := client.(interface {
@@ -175,28 +140,6 @@ func (m *uiModel) statusLineSpinning() bool {
 	return (m.runtimeActivityBusy() && m.activity != uiActivityQuestion) ||
 		m.runtimeLifecycle.Compaction.IsRunning() ||
 		m.runtimeLifecycle.Reviewer.IsRunning()
-}
-
-func (m *uiModel) refreshRuntimeStatus() clientui.RuntimeStatus {
-	m.checkTUIBlockingOperation("runtime status refresh", "RefreshMainView")
-	view := m.refreshRuntimeMainView()
-	status := view.Status
-	if m.runtimeContextUsageAppliesTo(view.Session.SessionID) {
-		status.ContextUsage = m.runtimeContextUsage
-	}
-	return status
-}
-
-func (m *uiModel) applyRuntimeEventStatus(evt clientui.Event) {
-	if m == nil || (evt.ContextUsage == nil && evt.GoalStatus == nil && evt.Kind != clientui.EventRuntimeActivityChanged) {
-		return
-	}
-	if evt.ContextUsage != nil {
-		m.setRuntimeContextUsage(m.currentRuntimeSessionID(), *evt.ContextUsage)
-	}
-	if observer, ok := m.runtimeClient().(interface{ observeRuntimeEventStatus(clientui.Event) }); ok {
-		observer.observeRuntimeEventStatus(evt)
-	}
 }
 
 func (m *uiModel) setRuntimeContextUsage(sessionID string, usage clientui.RuntimeContextUsage) {

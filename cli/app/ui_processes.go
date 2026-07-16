@@ -47,52 +47,51 @@ func (m *uiModel) applyProcessEntries(entries []clientui.BackgroundProcess) {
 	}
 }
 
-func (m *uiModel) applyBackgroundProcessEventToCache(evt *clientui.BackgroundShellEvent) {
-	if m == nil || evt == nil {
+func (m *uiModel) applyTranscriptBackgroundActivity(activity clientui.TranscriptBackgroundActivity) {
+	if m == nil {
 		return
 	}
-	id := strings.TrimSpace(evt.ID)
-	if id == "" {
-		return
+	processID := strings.TrimSpace(string(activity.ProcessID))
+	if processID == "" {
+		panic("transcript background activity is missing process id")
 	}
-	state := strings.TrimSpace(evt.State)
-	remove := strings.EqualFold(strings.TrimSpace(evt.Type), "removed") || strings.EqualFold(state, "removed")
-	if remove {
-		for idx, entry := range m.processList.entries {
-			if entry.ID == id {
-				m.processList.entries = append(m.processList.entries[:idx], m.processList.entries[idx+1:]...)
-				if m.processList.selection >= len(m.processList.entries) {
-					m.processList.selection = max(0, len(m.processList.entries)-1)
-				}
-				return
-			}
-		}
-		return
+	update := clientui.BackgroundProcess{
+		ID:            processID,
+		OwnerRunID:    activity.OwnerRunID.String(),
+		OwnerStepID:   activity.OwnerStepID.String(),
+		State:         string(activity.Lifecycle),
+		Command:       activity.Command,
+		Workdir:       activity.Workdir,
+		ExitCode:      activity.ExitCode,
+		Running:       activity.Lifecycle == clientui.BackgroundLifecycleBackgrounded,
+		Backgrounded:  true,
+		KillRequested: activity.UserRequestedKill,
 	}
-	upsert := clientui.BackgroundProcess{
-		ID:              id,
-		State:           state,
-		Command:         strings.TrimSpace(evt.Command),
-		Workdir:         strings.TrimSpace(evt.Workdir),
-		LogPath:         strings.TrimSpace(evt.LogPath),
-		RecentOutput:    evt.Preview,
-		OutputAvailable: strings.TrimSpace(evt.Preview) != "",
-		ExitCode:        evt.ExitCode,
-		Running:         backgroundProcessEventRunning(evt),
-		Backgrounded:    true,
+	if activity.LogPath != nil {
+		update.LogPath = *activity.LogPath
 	}
-	for idx, existing := range m.processList.entries {
-		if existing.ID != id {
+	if activity.Preview != nil {
+		update.RecentOutput = *activity.Preview
+		update.OutputAvailable = true
+	}
+	for index, existing := range m.processList.entries {
+		if existing.ID != processID {
 			continue
 		}
-		m.processList.entries[idx] = mergeBackgroundProcessCacheEntry(existing, upsert)
+		m.processList.entries[index] = mergeBackgroundProcessCacheEntry(existing, update)
 		return
 	}
-	m.processList.entries = append([]clientui.BackgroundProcess{upsert}, m.processList.entries...)
+	m.processList.entries = append([]clientui.BackgroundProcess{update}, m.processList.entries...)
 }
 
 func mergeBackgroundProcessCacheEntry(existing, update clientui.BackgroundProcess) clientui.BackgroundProcess {
 	next := existing
+	if update.OwnerRunID != "" {
+		next.OwnerRunID = update.OwnerRunID
+	}
+	if update.OwnerStepID != "" {
+		next.OwnerStepID = update.OwnerStepID
+	}
 	if update.State != "" {
 		next.State = update.State
 		next.Running = update.Running
@@ -114,22 +113,8 @@ func mergeBackgroundProcessCacheEntry(existing, update clientui.BackgroundProces
 		next.ExitCode = update.ExitCode
 	}
 	next.Backgrounded = next.Backgrounded || update.Backgrounded
+	next.KillRequested = update.KillRequested
 	return next
-}
-
-func backgroundProcessEventRunning(evt *clientui.BackgroundShellEvent) bool {
-	if evt == nil {
-		return false
-	}
-	state := strings.ToLower(strings.TrimSpace(evt.State))
-	switch state {
-	case "starting", "running":
-		return true
-	case "completed", "failed", "canceled", "cancelled", "done", "exited", "killed", "removed":
-		return false
-	}
-	eventType := strings.ToLower(strings.TrimSpace(evt.Type))
-	return eventType == "started" || eventType == "running" || eventType == "backgrounded"
 }
 
 func (m *uiModel) openProcessList() {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/filemode"
 	"core/shared/sessioncontract"
 )
 
@@ -247,7 +248,7 @@ func TestSetInputDraftRecoveryPersistsAcrossReopenAndClearsWithDraft(t *testing.
 
 func TestSetUsageStatePersistsAcrossReopen(t *testing.T) {
 	store := newSessionTestLazyStore(t)
-	if err := store.SetUsageState(&UsageState{
+	if _, err := store.SetUsageState(&UsageState{
 		InputTokens:             900,
 		OutputTokens:            120,
 		WindowTokens:            400_000,
@@ -762,14 +763,17 @@ func TestOpenRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
 
 	meta := store.Meta()
 	meta.LastSequence = 0
+	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{
+		meta.SessionID: {
+			SessionDir: store.Dir(),
+			Meta:       &meta,
+		},
+	}}
 
 	opened, err := Open(
 		store.Dir(),
-		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
-			SessionDir: store.Dir(),
-			Meta:       &meta,
-		}}),
-		WithPersistenceObserver(sessionTestPersistence),
+		WithPersistedSessionResolver(persistence),
+		WithPersistenceObserver(persistence),
 	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -797,11 +801,70 @@ func TestFirstPromptPreviewSkipsCompactionSummaryMessages(t *testing.T) {
 
 func TestAppendTurnAtomicPersistsFirstPromptPreview(t *testing.T) {
 	store := newSessionTestStore(t)
-	if _, err := store.AppendTurnAtomic("s1", []EventInput{{Kind: "message", Payload: map[string]any{"role": "assistant", "content": "hello"}}, {Kind: "message", Payload: map[string]any{"role": "user", "content": "Atomic preview source\nmore"}}}); err != nil {
+	if _, receipt, err := store.AppendTurnAtomic("s1", []EventInput{{Kind: "message", Payload: map[string]any{"role": "assistant", "content": "hello"}}, {Kind: "message", Payload: map[string]any{"role": "user", "content": "Atomic preview source\nmore"}}}); err != nil {
 		t.Fatalf("append turn: %v", err)
+	} else if !receipt.Committed {
+		t.Fatal("append turn returned an uncommitted receipt")
 	}
 	if got := store.Meta().FirstPromptPreview; got != "Atomic preview source" {
 		t.Fatalf("preview = %q, want %q", got, "Atomic preview source")
+	}
+}
+
+func TestAppendTurnAtomicReportsUncommittedEventLogFailure(t *testing.T) {
+	store := newSessionTestStore(t)
+	filemode.MustBlockEventLogAppends(t, store.eventsFP)
+
+	events, receipt, err := store.AppendTurnAtomic("s1", []EventInput{{
+		Kind:    "message",
+		Payload: map[string]any{"role": "user", "content": "must not commit"},
+	}})
+	if err == nil {
+		t.Fatal("append turn did not surface the event-log failure")
+	}
+	if receipt.Committed {
+		t.Fatalf("append turn receipt = %+v, want uncommitted", receipt)
+	}
+	if len(events) != 1 {
+		t.Fatalf("built events = %+v, want the attempted event", events)
+	}
+	if meta := store.Meta(); meta.LastSequence != 0 || meta.FirstPromptPreview != "" {
+		t.Fatalf("metadata mutated after uncommitted append: %+v", meta)
+	}
+}
+
+func TestAppendTurnAtomicReportsCommittedObserverFailure(t *testing.T) {
+	observer := &recordingPersistenceObserver{}
+	store, err := Create(
+		t.TempDir(),
+		"workspace",
+		t.TempDir(),
+		testSessionCategory,
+		WithPersistenceObserver(observer),
+	)
+	if err != nil {
+		t.Fatalf("create observed store: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist observed store: %v", err)
+	}
+	observer.err = os.ErrPermission
+
+	events, receipt, err := store.AppendTurnAtomic("s1", []EventInput{{
+		Kind:    "message",
+		Payload: map[string]any{"role": "user", "content": "committed despite observer failure"},
+	}})
+	if err == nil {
+		t.Fatal("append turn did not surface the observer failure")
+	}
+	if !receipt.Committed {
+		t.Fatalf("append turn receipt = %+v, want committed", receipt)
+	}
+	if len(events) != 1 || events[0].Seq != 1 {
+		t.Fatalf("committed events = %+v, want one sequence-1 event", events)
+	}
+	if meta := store.Meta(); meta.LastSequence != 1 || meta.FirstPromptPreview != "committed despite observer failure" {
+		t.Fatalf("metadata after committed observer failure = %+v", meta)
 	}
 }
 
@@ -1127,7 +1190,7 @@ func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testi
 	if err := parent.SetContinuationContext(ContinuationContext{OpenAIBaseURL: "http://parent.local/v1"}); err != nil {
 		t.Fatalf("SetContinuationContext parent: %v", err)
 	}
-	if err := parent.SetUsageState(&UsageState{InputTokens: 123}); err != nil {
+	if _, err := parent.SetUsageState(&UsageState{InputTokens: 123}); err != nil {
 		t.Fatalf("SetUsageState parent: %v", err)
 	}
 	if err := parent.SetWorktreeReminderState(&WorktreeReminderState{

@@ -4,10 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
-
-	"core/shared/clientui"
 )
 
 func EnabledFromEnv(getenv func(string) string) bool {
@@ -33,38 +32,13 @@ func Enabled(debug bool, getenv func(string) string) bool {
 	return EnabledFromEnv(getenv)
 }
 
-func EventDigest(evt clientui.Event) string {
-	parts := []string{
-		string(evt.Kind),
-		evt.StepID,
-		evt.AssistantDelta,
-		evt.UserMessage,
-		strings.Join(evt.UserMessageBatch, "\x1e"),
-	}
-	if evt.ReasoningDelta != nil {
-		parts = append(parts, evt.ReasoningDelta.Key, evt.ReasoningDelta.Role, evt.ReasoningDelta.Text)
-	}
-	if evt.RunState != nil {
-		parts = append(
-			parts,
-			evt.RunState.RunID,
-			string(evt.RunState.Status),
-			string(evt.RunState.Lifecycle.Phase),
-			string(evt.RunState.Lifecycle.Mode),
-		)
-	}
-	if evt.Background != nil {
-		parts = append(parts, evt.Background.Type, evt.Background.ID, evt.Background.State, evt.Background.Command, evt.Background.Preview)
-	}
-	return digest(parts)
+func Digest(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1d")))
+	return hex.EncodeToString(sum[:8])
 }
 
 func FormatLine(name string, fields map[string]string) string {
-	keys := make([]string, 0, len(fields))
-	for key := range fields {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(fields))
 	parts := make([]string, 0, len(keys)+1)
 	parts = append(parts, strings.TrimSpace(name))
 	for _, key := range keys {
@@ -79,9 +53,4 @@ func FormatLine(name string, fields map[string]string) string {
 		}
 	}
 	return strings.Join(parts, " ")
-}
-
-func digest(parts []string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1d")))
-	return hex.EncodeToString(sum[:8])
 }

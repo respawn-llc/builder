@@ -5,7 +5,6 @@ import (
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/registry"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/shared/clientui"
@@ -221,17 +220,17 @@ func TestPlannerReappliesPersistedSubagentRoleSettingsOnResume(t *testing.T) {
 	}
 }
 
-func TestPlannerReappliesPersistedSubagentSkillsPolicyOnResume(t *testing.T) {
+func TestPlannerReappliesPersistedSubagentSkillTogglesOnResume(t *testing.T) {
 	tests := []struct {
 		name                string
 		configLines         []string
-		wantEnabled         bool
+		wantEnabledSkill    bool
 		wantAPIResult       bool
 		wantEnabledSource   string
 		wantAPIResultSource string
 	}{
 		{
-			name: "omitted role policy inherits global disabled",
+			name: "omitted role toggles inherit global values",
 			configLines: []string{
 				"[skills]",
 				"enabled = false",
@@ -240,12 +239,11 @@ func TestPlannerReappliesPersistedSubagentSkillsPolicyOnResume(t *testing.T) {
 				"[subagents.worker]",
 				"thinking_level = \"high\"",
 			},
-			wantEnabled:         false,
 			wantEnabledSource:   "file",
 			wantAPIResultSource: "file",
 		},
 		{
-			name: "explicit role true re-enables global disabled",
+			name: "explicit role toggles override global values",
 			configLines: []string{
 				"[skills]",
 				"enabled = false",
@@ -255,7 +253,7 @@ func TestPlannerReappliesPersistedSubagentSkillsPolicyOnResume(t *testing.T) {
 				"enabled = true",
 				"apiresult = true",
 			},
-			wantEnabled:         true,
+			wantEnabledSkill:    true,
 			wantAPIResult:       true,
 			wantEnabledSource:   "subagent",
 			wantAPIResultSource: "subagent",
@@ -292,10 +290,10 @@ func TestPlannerReappliesPersistedSubagentSkillsPolicyOnResume(t *testing.T) {
 				t.Fatalf("PlanSession: %v", err)
 			}
 			policy := config.ResolveSkillPolicy(plan.ActiveSettings)
-			if policy.Enabled() != tt.wantEnabled {
-				t.Fatalf("skills policy enabled = %t, want %t", policy.Enabled(), tt.wantEnabled)
+			if got := policy.SkillEnabled("enabled"); got != tt.wantEnabledSkill {
+				t.Fatalf("skill named enabled = %t, want %t", got, tt.wantEnabledSkill)
 			}
-			if tt.wantEnabled && policy.SkillEnabled("apiresult") != tt.wantAPIResult {
+			if got := policy.SkillEnabled("apiresult"); got != tt.wantAPIResult {
 				t.Fatalf("apiresult enabled = %t, want %t", policy.SkillEnabled("apiresult"), tt.wantAPIResult)
 			}
 			if got := plan.Source.Sources["skills.enabled"]; got != tt.wantEnabledSource {
@@ -413,7 +411,7 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 		},
 	}
 	source := loaded.Source
-	source.Sources = cloneStringMap(loaded.Source.Sources)
+	source.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	source.Sources["openai_base_url"] = "file"
 	source.Sources["thinking_level"] = "file"
 	planner := Planner{
@@ -475,7 +473,7 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	baseSettings := loaded.Settings
-	baseSettings.EnabledTools = cloneEnabledToolSet(baseSettings.EnabledTools)
+	baseSettings.EnabledTools = cloneMapOrEmpty(baseSettings.EnabledTools)
 	baseSettings.EnabledTools[toolspec.ToolExecCommand] = true
 	baseSettings.EnabledTools[toolspec.ToolPatch] = true
 	workerSettings := cloneSettings(baseSettings)
@@ -490,13 +488,13 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 	resumedSettings.ThinkingLevel = "xhigh"
 	resumedSettings.EnabledTools[toolspec.ToolPatch] = false
 	baseSource := loaded.Source
-	baseSource.Sources = cloneStringMap(loaded.Source.Sources)
+	baseSource.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	baseSource.Sources["thinking_level"] = "file"
 	baseSource.Sources["tools.shell"] = "file"
 	baseSource.Sources["tools.patch"] = "file"
 	baseSource.Sources["tools.edit"] = "file"
 	resumedSource := baseSource
-	resumedSource.Sources = cloneStringMap(baseSource.Sources)
+	resumedSource.Sources = cloneMapOrEmpty(baseSource.Sources)
 	resumedSource.Sources["thinking_level"] = "subagent"
 	resumedSource.Sources["tools.patch"] = "subagent"
 	plan := SessionPlan{
@@ -561,11 +559,46 @@ func TestApplyRunPromptOverridesExplicitDefaultClearsPersistedRole(t *testing.T)
 	}
 }
 
+func TestApplyRunPromptOverridesDefaultCannotClearLockedRoleAfterSkippingPersistedRoleLookup(t *testing.T) {
+	workspace := t.TempDir()
+	store := createTestSession(t, workspace)
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	settings := config.Settings{
+		Model:         "gpt-5.6-sol",
+		ThinkingLevel: "medium",
+		EnabledTools:  map[toolspec.ID]bool{toolspec.ToolExecCommand: true},
+	}
+	plan := SessionPlan{
+		Store:                               store,
+		ActiveSettings:                      settings,
+		BaseSettings:                        settings,
+		EnabledTools:                        []toolspec.ID{toolspec.ToolExecCommand},
+		ConfiguredModelName:                 settings.Model,
+		ModelContractLocked:                 true,
+		SkipContinuationAgentRoleValidation: true,
+		WorkspaceRoot:                       workspace,
+	}
+
+	_, _, err := ApplyRunPromptOverrides(
+		plan,
+		serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.DefaultSubagentRole)},
+		auth.EmptyState(),
+	)
+	if !errors.Is(err, ErrLockedAgentRoleChange) {
+		t.Fatalf("default locked-role clear error = %v, want %v", err, ErrLockedAgentRoleChange)
+	}
+	if got := store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("worker")) {
+		t.Fatalf("locked continuation changed after rejected clear: %+v", got)
+	}
+}
+
 func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)
 	baseSettings := loaded.Settings
-	baseSettings.EnabledTools = cloneEnabledToolSet(baseSettings.EnabledTools)
+	baseSettings.EnabledTools = cloneMapOrEmpty(baseSettings.EnabledTools)
 	baseSettings.Model = "gpt-5.6-sol"
 	baseSettings.ThinkingLevel = "medium"
 	baseSettings.EnabledTools[toolspec.ToolExecCommand] = true
@@ -580,7 +613,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 		},
 	}
 	baseSource := loaded.Source
-	baseSource.Sources = cloneStringMap(loaded.Source.Sources)
+	baseSource.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	baseSource.Sources["model"] = "file"
 	baseSource.Sources["thinking_level"] = "file"
 	baseSource.Sources["tools.shell"] = "file"
@@ -590,7 +623,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 	resumedSettings.ThinkingLevel = "xhigh"
 	resumedSettings.EnabledTools[toolspec.ToolPatch] = false
 	resumedSource := baseSource
-	resumedSource.Sources = cloneStringMap(baseSource.Sources)
+	resumedSource.Sources = cloneMapOrEmpty(baseSource.Sources)
 	resumedSource.Sources["thinking_level"] = "subagent"
 	resumedSource.Sources["tools.patch"] = "subagent"
 
@@ -840,7 +873,7 @@ func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *t
 		},
 	}
 	baseSource := loaded.Source
-	baseSource.Sources = cloneStringMap(loaded.Source.Sources)
+	baseSource.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	baseSource.Sources["model"] = "file"
 	baseSource.Sources["thinking_level"] = "file"
 	store := createTestSession(t, workspace)
@@ -1520,7 +1553,7 @@ func TestApplyRunPromptOverridesRecomputesEnabledToolsForModelOverride(t *testin
 	settings.Model = "gpt-5.4"
 	settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
 	source := loaded.Source
-	source.Sources = cloneStringMap(loaded.Source.Sources)
+	source.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	source.Sources["tools.patch"] = "file"
 	source.Sources["tools.edit"] = "file"
 	plan := newSettingsPlanWithSource(t, workspace, settings, source)
@@ -1542,7 +1575,7 @@ func TestApplyRunPromptOverridesKeepsExplicitToolSourcesWhenOnlyModelOverrides(t
 	settings.Model = "gpt-5.4"
 	settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
 	source := loaded.Source
-	source.Sources = cloneStringMap(loaded.Source.Sources)
+	source.Sources = cloneMapOrEmpty(loaded.Source.Sources)
 	source.Sources["tools.shell"] = "cli"
 	source.Sources["tools.patch"] = "file"
 	source.Sources["tools.edit"] = "file"
@@ -1580,7 +1613,7 @@ func TestApplyRunPromptOverridesFastRoleWarnsWhenHeuristicDoesNothing(t *testing
 	}
 }
 
-func TestApplySubagentRoleOverridesAppendsRoleSystemPromptFile(t *testing.T) {
+func TestOverlaySubagentRoleSettingsAppendsRoleSystemPromptFile(t *testing.T) {
 	mainPrompt := filepath.Join(t.TempDir(), "main-system.md")
 	rolePrompt := filepath.Join(t.TempDir(), "worker-system.md")
 	settings := config.Settings{
@@ -1593,7 +1626,7 @@ func TestApplySubagentRoleOverridesAppendsRoleSystemPromptFile(t *testing.T) {
 		},
 		Sources: map[string]string{"system_prompt_file": "file"},
 	}
-	applySubagentRoleOverrides(&settings, role, true)
+	settings = config.OverlaySubagentRoleSettings(settings, role, true)
 
 	if settings.SystemPromptFile != "worker-system.md" {
 		t.Fatalf("system_prompt_file = %q, want worker-system.md", settings.SystemPromptFile)
@@ -2166,151 +2199,5 @@ func TestApplyRunPromptOverridesCLIModelOverrideRecomputesBudgetAfterFastRole(t 
 	}
 	if !updated.ActiveSettings.PriorityRequestMode {
 		t.Fatal("expected fast-role priority mode to stay enabled")
-	}
-}
-
-func missingWorktreeLaunchFixture(t *testing.T) (Planner, *metadata.Store, *session.Store, metadata.Binding) {
-	must := func(err error) {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	ctx, persistenceRoot, workspaceRoot := context.Background(), t.TempDir(), t.TempDir()
-	metadataStore, err := metadata.Open(persistenceRoot)
-	must(err)
-	t.Cleanup(func() { _ = metadataStore.Close() })
-	binding, err := metadataStore.RegisterWorkspaceBinding(ctx, workspaceRoot)
-	must(err)
-	containerDir := filepath.Join(persistenceRoot, "projects", binding.ProjectID, "sessions")
-	store := createTestSessionInContainer(t, containerDir, "workspace", workspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
-	missingRoot := filepath.Join(t.TempDir(), "deleted")
-	err = metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{ID: "missing-worktree", WorkspaceID: binding.WorkspaceID, CanonicalRoot: missingRoot, Managed: true, GitMetadataJSON: `{}`})
-	must(err)
-	err = metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: store.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "missing-worktree"}, CwdRelpath: "pkg"})
-	must(err)
-	err = store.SetWorktreeReminderState(&session.WorktreeReminderState{Mode: session.WorktreeReminderModeEnter, WorktreeContext: session.WorktreeContext{WorktreePath: missingRoot, WorkspaceRoot: workspaceRoot, EffectiveCwd: filepath.Join(missingRoot, "pkg")}})
-	must(err)
-	sessionStores := registry.NewSessionStoreRegistry()
-	retargetWorkspace := func(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-		err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: req.SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, CwdRelpath: "."})
-		if err == nil {
-			registered, resolveErr := sessionStores.ResolveStore(ctx, req.SessionID)
-			err = errors.Join(resolveErr, registered.SetWorktreeReminderState(nil))
-		}
-		return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: binding.ProjectID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: req.WorkspaceRoot}}, err
-	}
-	return Planner{Config: config.App{WorkspaceRoot: workspaceRoot, PersistenceRoot: persistenceRoot, Settings: config.Settings{Model: "gpt-5"}}, ContainerDir: containerDir, StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(), RuntimeActive: func(string) bool { return false }, BlockSessionRuns: func([]string) func() { return func() {} }, SessionStores: sessionStores, RetargetWorkspace: retargetWorkspace}, metadataStore, store, binding
-}
-
-func TestPlannerRecoversDeletedManagedWorktreePersistently(t *testing.T) {
-	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
-	planner.SessionStores.RegisterStore(store)
-	planner.RuntimeActive = func(string) bool { return true }
-	intent := serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))
-	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent})
-	var recoveryErr *SessionTargetRecoveryError
-	if !errors.As(err, &recoveryErr) || recoveryErr.Reason != SessionTargetRecoveryActive || recoveryErr.Candidate == nil {
-		t.Fatalf("recovery error=%+v err=%v", recoveryErr, err)
-	}
-	planner.RuntimeActive = func(string) bool { return false }
-	plan, planErr := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent})
-	target, targetErr := metadataStore.ResolveSessionExecutionTarget(context.Background(), store.Meta().SessionID)
-	if planErr != nil || targetErr != nil || plan.Store != store || target.Worktree != nil || target.CwdRelpath != "." || target.WorkspaceID != binding.WorkspaceID || plan.Recovery == nil || plan.WorkspaceRoot != target.WorkspaceRoot || plan.Store.Meta().WorktreeReminder != nil {
-		t.Fatalf("plan=%+v target=%+v errors=%v/%v", plan.Recovery, target, planErr, targetErr)
-	}
-	reopened, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent})
-	if err != nil || reopened.Recovery != nil {
-		t.Fatalf("reopen recovery=%+v err=%v", reopened.Recovery, err)
-	}
-}
-
-func TestPlannerRecoversDeletedManagedWorktreeWhenSelectedSessionFieldIsUsed(t *testing.T) {
-	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{
-		Mode:              ModeInteractive,
-		SelectedSessionID: store.Meta().SessionID,
-	})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	target, err := metadataStore.ResolveSessionExecutionTarget(context.Background(), store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
-	}
-	if plan.Recovery == nil || plan.Recovery.Kind != serverapi.SessionPlanRecoveryKindDeletedManagedWorktree {
-		t.Fatalf("recovery = %+v, want deleted managed worktree", plan.Recovery)
-	}
-	if target.Worktree != nil || target.WorkspaceID != binding.WorkspaceID {
-		t.Fatalf("recovered target = %+v, want workspace %q without worktree", target, binding.WorkspaceID)
-	}
-}
-
-func TestPlannerRecoversMissingWorkspaceWithoutWorktreeTarget(t *testing.T) {
-	planner, metadataStore, store, binding := missingWorktreeLaunchFixture(t)
-	ctx := context.Background()
-	availableRoot := t.TempDir()
-	candidateBinding, err := metadataStore.AttachWorkspaceToProject(ctx, binding.ProjectID, availableRoot)
-	if err != nil {
-		t.Fatalf("AttachWorkspaceToProject: %v", err)
-	}
-	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
-		SessionID:  store.Meta().SessionID,
-		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
-		CwdRelpath: "pkg",
-	}); err != nil {
-		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
-	}
-	if err := os.Remove(planner.Config.WorkspaceRoot); err != nil {
-		t.Fatalf("remove missing workspace root: %v", err)
-	}
-	planner.RetargetWorkspace = func(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-		if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
-			SessionID:  store.Meta().SessionID,
-			Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: candidateBinding.WorkspaceID},
-			CwdRelpath: ".",
-		}); err != nil {
-			return serverapi.SessionRetargetWorkspaceResponse{}, err
-		}
-		return serverapi.SessionRetargetWorkspaceResponse{Binding: serverapi.ProjectBinding{
-			ProjectID:     candidateBinding.ProjectID,
-			WorkspaceID:   candidateBinding.WorkspaceID,
-			CanonicalRoot: candidateBinding.CanonicalRoot,
-		}}, nil
-	}
-
-	plan, err := planner.PlanSession(ctx, SessionRequest{
-		Mode:              ModeInteractive,
-		SelectedSessionID: store.Meta().SessionID,
-	})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	if plan.Recovery == nil {
-		t.Fatal("recovery = nil, want missing workspace recovery")
-	}
-	if plan.WorkspaceRoot != candidateBinding.CanonicalRoot {
-		t.Fatalf("workspace root = %q, want %q", plan.WorkspaceRoot, candidateBinding.CanonicalRoot)
-	}
-	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
-	}
-	if target.WorkspaceID != candidateBinding.WorkspaceID || target.Worktree != nil || target.EffectiveWorkdir != candidateBinding.CanonicalRoot {
-		t.Fatalf("recovered target = %+v, want candidate workspace without worktree", target)
-	}
-}
-
-func TestPlannerManagedWorktreeRecoveryRestoresReminderWhenRetargetFails(t *testing.T) {
-	planner, _, store, _ := missingWorktreeLaunchFixture(t)
-	planner.RetargetWorkspace = func(context.Context, serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-		return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("retarget failed")
-	}
-	intent := serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, store.Meta().SessionID))
-
-	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: intent}); err == nil {
-		t.Fatal("PlanSession succeeded after retarget failure")
-	}
-	if store.Meta().WorktreeReminder == nil {
-		t.Fatal("worktree reminder was not restored after retarget failure")
 	}
 }

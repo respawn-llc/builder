@@ -181,7 +181,7 @@ func TestReopenedSessionAfterTriggerHandoffDoesNotRequeueWhenAnyCompactionAlread
 	if err := eng.steer("step-1", steerToolCompletionIntent(tools.Result{CallID: handoffCall.ID, Name: toolspec.ToolTriggerHandoff, Output: resultOutput})); err != nil {
 		t.Fatalf("persist tool completion: %v", err)
 	}
-	if err := newCompactionPersistence(eng).replaceHistory("step-1", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-1", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 

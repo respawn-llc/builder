@@ -114,6 +114,7 @@ const (
 	PhaseInputApplied             = analyzer.PhaseInputApplied
 	PhaseDetailInitialPageApplied = analyzer.PhaseDetailInitialPageApplied
 	PhaseScenarioFinalApplied     = analyzer.PhaseScenarioFinalApplied
+	PhaseToolStarted              = analyzer.PhaseToolStarted
 )
 
 type WindowID = analyzer.WindowID

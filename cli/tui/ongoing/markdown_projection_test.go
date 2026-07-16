@@ -9,7 +9,7 @@ import (
 	"core/cli/tui/transcriptrender"
 	tuitest "core/internal/testharness/pty"
 	"core/shared/clientui"
-	"github.com/google/uuid"
+	"core/shared/runtimeids"
 )
 
 func TestTerminalMarkdownRendererAdaptsExplicitLinksToTerminalCapabilities(t *testing.T) {
@@ -119,15 +119,12 @@ func TestTerminalMarkdownRendererKeepsAdjacentHyperlinkTargetsDistinct(t *testin
 func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 
-	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageAssistantDelta,
-		AssistantDelta: &clientui.TranscriptAssistantDelta{
-			StreamID: streamID,
-			Delta:    "Stable paragraph.\n\nopen tail",
-		},
-	}, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+	if _, err := surface.ApplyTerminalMessage(
+		assistantDeltaMessage(streamID, "Stable paragraph.\n\nopen tail"),
+		FrameInput{Size: Size{Width: 40, Height: 5}},
+	); err != nil {
 		t.Fatalf("apply assistant delta: %v", err)
 	}
 
@@ -152,7 +149,7 @@ func TestAssistantDeltaPromotesParagraphAsOneLogicalLineAtNarrowWidth(t *testing
 	surface := NewSurface(&out)
 
 	if _, err := surface.ApplyTerminalMessage(
-		assistantDeltaMessage(uuid.New(), "alpha beta gamma delta\n\nopen tail"),
+		assistantDeltaMessage(runtimeids.NewAssistantStreamID(), "alpha beta gamma delta\n\nopen tail"),
 		FrameInput{Size: Size{Width: 10, Height: 6}},
 	); err != nil {
 		t.Fatalf("apply assistant delta: %v", err)
@@ -167,19 +164,16 @@ func TestAssistantDeltaPromotesParagraphAsOneLogicalLineAtNarrowWidth(t *testing
 func TestAssistantDeltaPromotionOpensAssistantGroupAfterPriorGroup(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("previous user")), FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
 		t.Fatalf("apply previous row: %v", err)
 	}
 	out.Reset()
 
-	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageAssistantDelta,
-		AssistantDelta: &clientui.TranscriptAssistantDelta{
-			StreamID: streamID,
-			Delta:    "Stable paragraph.\n\nopen tail",
-		},
-	}, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+	if _, err := surface.ApplyTerminalMessage(
+		assistantDeltaMessage(streamID, "Stable paragraph.\n\nopen tail"),
+		FrameInput{Size: Size{Width: 40, Height: 5}},
+	); err != nil {
 		t.Fatalf("apply assistant delta: %v", err)
 	}
 
@@ -195,7 +189,7 @@ func TestAssistantDeltaPromotionOpensAssistantGroupAfterPriorGroup(t *testing.T)
 func TestAssistantDeltaPromotesInlineAndBlockCodeThroughTranscriptRenderer(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
-	streamID := uuid.New()
+	streamID := runtimeids.NewAssistantStreamID()
 
 	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(
 		streamID,

@@ -3,7 +3,7 @@ package runtimeview
 import (
 	"core/server/runtime"
 	"core/shared/clientui"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 )
 
 const RecentTailEntryLimit = 500
@@ -41,7 +41,7 @@ func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui
 		HasMoreAbove:            page.HasMoreAbove,
 		NewerCursor:             transcriptCursor(page.HasMoreBelow, page.NewerCursor),
 		HasMoreBelow:            page.HasMoreBelow,
-		LatestRollbackCandidate: valuecopy.Pointer(page.LatestRollbackCandidate),
+		LatestRollbackCandidate: textutil.Pointer(page.LatestRollbackCandidate),
 		Entries:                 transcriptRowsFromFacts(runtime.TranscriptCommittedRowFactsFromSnapshot(page.Snapshot)),
 	}
 }

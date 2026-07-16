@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -13,11 +13,11 @@ import (
 )
 
 type backgroundUIProcessClient struct {
-	reads   client.ProcessViewClient
-	control client.ProcessControlClient
+	reads   apicontract.ProcessViewService
+	control apicontract.ProcessControlService
 }
 
-func newUIProcessClientWithReads(reads client.ProcessViewClient, control client.ProcessControlClient) clientui.ProcessClient {
+func newUIProcessClientWithReads(reads apicontract.ProcessViewService, control apicontract.ProcessControlService) clientui.ProcessClient {
 	if reads == nil && control == nil {
 		return nil
 	}

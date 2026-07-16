@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"core/shared/apicontract"
 	"core/shared/auth"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 )
@@ -40,13 +40,13 @@ type Request struct {
 	WorkspaceRoot         string
 	PersistenceRoot       string
 	ExecutionTarget       clientui.SessionExecutionTarget
-	SessionViews          client.SessionViewClient
+	SessionViews          apicontract.SessionViewService
 	Settings              config.Settings
 	Source                config.SourceReport
 	AuthCacheIdentity     string
 	AuthCacheUnseedable   bool
 	CacheKeys             CacheKeys
-	AuthStatus            client.AuthStatusClient
+	AuthStatus            apicontract.AuthStatusService
 	AuthStatePath         string
 	SessionName           string
 	SessionID             string
@@ -64,28 +64,27 @@ type Request struct {
 }
 
 type Snapshot struct {
-	CollectedAt         time.Time
-	Workdir             string
-	SessionName         string
-	SessionID           string
-	ParentSessionID     string
-	ParentSessionName   string
-	OwnsServer          bool
-	Git                 GitInfo
-	Auth                AuthInfo
-	Context             ContextInfo
-	Model               ModelInfo
-	Update              UpdateInfo
-	Config              ConfigInfo
-	Subscription        SubscriptionInfo
-	SkillPolicy         config.SkillPolicy
-	SkillDiscoveryState config.SkillSubsystemState
-	Skills              []SkillInspection
-	SkillTokenCounts    map[string]int
-	AgentsPaths         []string
-	AgentTokenCounts    map[string]int
-	CompactionCount     int
-	CollectorWarning    string
+	CollectedAt       time.Time
+	Workdir           string
+	SessionName       string
+	SessionID         string
+	ParentSessionID   string
+	ParentSessionName string
+	OwnsServer        bool
+	Git               GitInfo
+	Auth              AuthInfo
+	Context           ContextInfo
+	Model             ModelInfo
+	Update            UpdateInfo
+	Config            ConfigInfo
+	Subscription      SubscriptionInfo
+	SkillPolicy       config.SkillPolicy
+	Skills            []SkillInspection
+	SkillTokenCounts  map[string]int
+	AgentsPaths       []string
+	AgentTokenCounts  map[string]int
+	CompactionCount   int
+	CollectorWarning  string
 }
 
 type AuthInfo struct {
@@ -183,13 +182,12 @@ type GitStageResult struct {
 }
 
 type EnvironmentStageResult struct {
-	SkillPolicy         config.SkillPolicy
-	SkillDiscoveryState config.SkillSubsystemState
-	Skills              []SkillInspection
-	SkillTokenCounts    map[string]int
-	AgentsPaths         []string
-	AgentTokenCounts    map[string]int
-	CollectorWarning    string
+	SkillPolicy      config.SkillPolicy
+	Skills           []SkillInspection
+	SkillTokenCounts map[string]int
+	AgentsPaths      []string
+	AgentTokenCounts map[string]int
+	CollectorWarning string
 }
 
 type memoryRepository struct {
@@ -258,7 +256,6 @@ func (r *memoryRepository) SeedSnapshot(req Request, base Snapshot, now time.Tim
 	}
 	if envCached {
 		seed.Snapshot.SkillPolicy = envEntry.result.SkillPolicy
-		seed.Snapshot.SkillDiscoveryState = envEntry.result.SkillDiscoveryState
 		seed.Snapshot.Skills = append([]SkillInspection(nil), envEntry.result.Skills...)
 		seed.Snapshot.SkillTokenCounts = CloneTokenMap(envEntry.result.SkillTokenCounts)
 		seed.Snapshot.AgentsPaths = append([]string(nil), envEntry.result.AgentsPaths...)

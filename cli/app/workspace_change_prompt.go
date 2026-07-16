@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
-	"core/shared/serverapi"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"core/shared/clientui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -39,15 +41,19 @@ type workspaceChangePromptModel struct {
 	result       workspaceChangePromptResult
 }
 
-func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server sessionWorkspaceChangeServer, sessionID string, selectedWorkspaceRoot string) (sessionWorkspaceChangeAction, error) {
+func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server sessionWorkspaceChangeServer, sessionID string, executionTarget clientui.SessionExecutionTarget) (sessionWorkspaceChangeAction, error) {
 	if server == nil {
 		return sessionWorkspaceChangeProceed, errors.New("embedded server is required")
 	}
 	if strings.TrimSpace(sessionID) == "" {
 		return sessionWorkspaceChangeProceed, errors.New("session id is required")
 	}
+	executionTarget = clientui.NormalizeSessionExecutionTarget(executionTarget)
+	if executionTarget.WorkspaceAvailability != clientui.ProjectAvailabilityAvailable {
+		return sessionWorkspaceChangeProceed, nil
+	}
 	currentRoot := normalizeWorkspaceChangeDisplayRoot(server.Config().WorkspaceRoot)
-	selectedRoot := normalizeWorkspaceChangeDisplayRoot(selectedWorkspaceRoot)
+	selectedRoot := normalizeWorkspaceChangeDisplayRoot(executionTarget.WorkspaceRoot)
 	if comparableWorkspaceChangeRoot(currentRoot) == "" || comparableWorkspaceChangeRoot(selectedRoot) == "" || comparableWorkspaceChangeRoot(currentRoot) == comparableWorkspaceChangeRoot(selectedRoot) {
 		return sessionWorkspaceChangeProceed, nil
 	}

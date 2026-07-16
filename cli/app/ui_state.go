@@ -4,11 +4,10 @@ import (
 	"time"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/runtimestate"
 	"core/cli/tui"
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -17,6 +16,7 @@ import (
 )
 
 type uiModel struct {
+	eventDispatcher *uiEventDispatcher
 	uiRuntimeFeatureState
 	uiInputFeatureState
 	uiPresentationFeatureState
@@ -35,20 +35,16 @@ type uiRuntimeFeatureState struct {
 
 	processClient         clientui.ProcessClient
 	processClientExplicit bool
-	worktreeClient        client.WorktreeClient
+	worktreeClient        apicontract.WorktreeService
 
-	runtimeEvents                  <-chan clientui.Event
-	pendingRuntimeEvents           []clientui.Event
-	waitRuntimeEventAfterHydration bool
-	askEvents                      <-chan askEvent
-	pathReferenceEvents            <-chan uiPathReferenceSearchEvent
-	runtimeConnectionEvents        <-chan runtimeConnectionStateChangedMsg
-	runtimeReconnectWarning        <-chan runtimeReconnectWarningMsg
-	runtimeContextUsage            clientui.RuntimeContextUsage
-	runtimeContextUsageSession     string
-	runtimeReadModelVersion        clientui.ReadModelVersion
-	runtimeActivityProjection      clientui.RuntimeActivity
-	logger                         uiLogger
+	pathReferenceEvents        <-chan uiPathReferenceSearchEvent
+	runtimeConnectionEvents    <-chan runtimeConnectionStateChangedMsg
+	runtimeReconnectWarning    <-chan runtimeReconnectWarningMsg
+	runtimeContextUsage        clientui.RuntimeContextUsage
+	runtimeContextUsageSession string
+	runtimeReadModelVersion    clientui.ReadModelVersion
+	runtimeActivityProjection  clientui.RuntimeActivity
+	logger                     uiLogger
 }
 
 type uiInputFeatureState struct {
@@ -61,7 +57,7 @@ type uiInputFeatureState struct {
 	promptHistoryDraft       string
 	promptHistoryDraftCursor int
 	activity                 uiActivity
-	runtimeLifecycle         runtimestate.RuntimeRunState
+	runtimeLifecycle         uiRuntimeLifecycle
 	reviewerEnabled          bool
 	reviewerMode             string
 	autoCompactionEnabled    bool
@@ -135,7 +131,6 @@ type uiPresentationFeatureState struct {
 	rendererOutputGate          *uiRendererOutputGateState
 	ongoingSurface              *ongoing.Surface
 	ongoingTranscript           *ongoingTranscriptController
-	ongoingEvents               <-chan ongoingTranscriptEvent
 	requestOngoingOpen          func()
 	ongoingWidthToken           uint64
 	pendingOngoingScratchReset  *ongoing.RehydrateReason
@@ -152,6 +147,8 @@ type uiPresentationFeatureState struct {
 type uiConversationFeatureState struct {
 	interaction                        uiInteractionState
 	ask                                uiAskState
+	promptAnswers                      *transcriptPromptAnswerer
+	promptAttention                    *bellHooks
 	startupSubmit                      string
 	startupSubmitPromptHistoryRecorded bool
 }
@@ -172,7 +169,7 @@ type uiSessionTransitionFeatureState struct {
 type uiStatusFeatureState struct {
 	processList                 uiProcessListState
 	reasoningStatusHeader       string
-	turnQueueHook               turnQueueHook
+	turnQueueHook               *bellHooks
 	statusConfig                uiStatusConfig
 	statusCollector             uiStatusCollector
 	statusRepository            uiStatusRepository
@@ -196,7 +193,6 @@ type uiStatusFeatureState struct {
 	startupUpdateShown       bool
 	debugKeys                bool
 	debugMode                bool
-	transcriptDiagnostics    bool
 }
 
 type uiTranscriptFeatureState struct {

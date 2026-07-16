@@ -303,15 +303,6 @@ func validateCacheWarningMode(state settingsState, _ map[string]string) error {
 	}
 }
 
-func validateSkillSubsystemState(state settingsState, _ map[string]string) error {
-	switch state.Settings.SkillSubsystem {
-	case SkillSubsystemEnabled, SkillSubsystemDisabled:
-		return nil
-	default:
-		return fmt.Errorf("%w: %d", errInvalidSkillSubsystemState, state.Settings.SkillSubsystem)
-	}
-}
-
 func validateWorkflowSettings(state settingsState, _ map[string]string) error {
 	if state.Settings.Workflow.CompletionMode == "" &&
 		state.Settings.Workflow.Concurrency == 0 &&

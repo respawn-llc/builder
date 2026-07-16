@@ -8,54 +8,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type uiDiagnosticsFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) diagnosticsReducer() uiDiagnosticsFeatureReducer {
-	return uiDiagnosticsFeatureReducer{model: m}
-}
-
-func (r uiDiagnosticsFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
-	switch msg := msg.(type) {
-	case runLoggerDiagnosticMsg:
-		cmd := m.applyRunLoggerDiagnostic(msg.diagnostic)
-		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, cmd)
-	}
-	return uiFeatureUpdateResult{}
-}
-
-type uiAskFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) askReducer() uiAskFeatureReducer {
-	return uiAskFeatureReducer{model: m}
-}
-
-func (r uiAskFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case askEventMsg:
 		m.askController().acceptEvent(msg.event)
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, waitAskEvent(m.askEvents))
+		return handledUIFeatureUpdate(m, nil)
 	}
 	return uiFeatureUpdateResult{}
 }
 
-type uiPathReferenceFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) pathReferenceReducer() uiPathReferenceFeatureReducer {
-	return uiPathReferenceFeatureReducer{model: m}
-}
-
-func (r uiPathReferenceFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reducePathReferenceMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case uiPathReferenceCorpusReadyMsg:
 		m.handlePathReferenceCorpusReady(msg)
@@ -77,16 +40,7 @@ func (r uiPathReferenceFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult
 	return uiFeatureUpdateResult{}
 }
 
-type uiNoticeFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) noticeReducer() uiNoticeFeatureReducer {
-	return uiNoticeFeatureReducer{model: m}
-}
-
-func (r uiNoticeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceNoticeMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case clearTransientStatusMsg:
 		if msg.token == m.transientStatusToken {
@@ -107,16 +61,7 @@ func (r uiNoticeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	return uiFeatureUpdateResult{}
 }
 
-type uiInputAsyncFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) inputAsyncReducer() uiInputAsyncFeatureReducer {
-	return uiInputAsyncFeatureReducer{model: m}
-}
-
-func (r uiInputAsyncFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceInputAsyncMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case latestFinalAnswerDoneMsg:
 		cmd := m.handleLatestFinalAnswerDone(msg)
@@ -192,16 +137,7 @@ func (r uiInputAsyncFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	return uiFeatureUpdateResult{}
 }
 
-type uiProcessFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) processReducer() uiProcessFeatureReducer {
-	return uiProcessFeatureReducer{model: m}
-}
-
-func (r uiProcessFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceProcessMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case processListRefreshTickMsg:
 		if !m.processList.open {
@@ -244,16 +180,7 @@ func (r uiProcessFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	return uiFeatureUpdateResult{}
 }
 
-type uiClipboardFeatureReducer struct {
-	model *uiModel
-}
-
-func (m *uiModel) clipboardReducer() uiClipboardFeatureReducer {
-	return uiClipboardFeatureReducer{model: m}
-}
-
-func (r uiClipboardFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
-	m := r.model
+func (m *uiModel) reduceClipboardMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case clipboardPasteDoneMsg:
 		cmd := m.handleClipboardPasteDone(msg)

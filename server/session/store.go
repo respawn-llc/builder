@@ -14,7 +14,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 	"github.com/google/uuid"
 )
 
@@ -42,6 +42,20 @@ func (e GoalAgentOverwriteBlockedError) Unwrap() error {
 	return ErrGoalAgentOverwriteBlocked
 }
 
+type InvalidSessionCategoryError struct {
+	SessionID string
+	Category  sessioncontract.SessionCategory
+	Err       error
+}
+
+func (e InvalidSessionCategoryError) Error() string {
+	return fmt.Sprintf("session %q has invalid category %q: %v", e.SessionID, e.Category, e.Err)
+}
+
+func (e InvalidSessionCategoryError) Unwrap() error {
+	return e.Err
+}
+
 type Store struct {
 	mu                    sync.Mutex
 	mutationMu            sync.Mutex
@@ -60,6 +74,12 @@ type Store struct {
 type persistenceObservation struct {
 	snapshot *PersistedStoreSnapshot
 	version  uint64
+}
+
+type metadataMutationCheckpoint struct {
+	meta                 Meta
+	metadataVersion      uint64
+	persistedMetaVersion uint64
 }
 
 func Create(workspaceContainerDir, workspaceContainerName, workspaceRoot string, category sessioncontract.SessionCategory, options ...StoreOption) (*Store, error) {
@@ -115,20 +135,36 @@ func newLazyWithStoreOptions(workspaceContainerDir, workspaceContainerName, work
 
 func Open(sessionDir string, options ...StoreOption) (*Store, error) {
 	storeOpts := normalizeStoreOptions(options...)
-	resolvedMeta, err := resolvePersistedSessionMetaForDir(sessionDir, storeOpts)
-	if err != nil {
-		return nil, err
-	}
-	return openPersistedSession(sessionDir, resolvedMeta, storeOpts)
+	return openPersistedSessionWithReconciliationRefresh(storeOpts, func() (PersistedSessionRecord, error) {
+		resolvedMeta, err := resolvePersistedSessionMetaForDir(sessionDir, storeOpts)
+		if err != nil {
+			return PersistedSessionRecord{}, err
+		}
+		return PersistedSessionRecord{SessionDir: sessionDir, Meta: resolvedMeta}, nil
+	})
 }
 
 func OpenByID(persistenceRoot, sessionID string, options ...StoreOption) (*Store, error) {
 	storeOpts := normalizeStoreOptions(options...)
-	record, err := resolvePersistedSessionRecord(persistenceRoot, sessionID, storeOpts)
+	return openPersistedSessionWithReconciliationRefresh(storeOpts, func() (PersistedSessionRecord, error) {
+		return resolvePersistedSessionRecord(persistenceRoot, sessionID, storeOpts)
+	})
+}
+
+func openPersistedSessionWithReconciliationRefresh(storeOpts storeOptions, resolve func() (PersistedSessionRecord, error)) (*Store, error) {
+	record, err := resolve()
 	if err != nil {
 		return nil, err
 	}
-	return openPersistedSession(record.SessionDir, record.Meta, storeOpts)
+	opened, err := openPersistedSession(record.SessionDir, record.Meta, storeOpts)
+	if !errors.Is(err, ErrEventLogReconciliationConflict) {
+		return opened, err
+	}
+	refreshed, refreshErr := resolve()
+	if refreshErr != nil {
+		return nil, errors.Join(err, fmt.Errorf("refresh session metadata after event-log reconciliation conflict: %w", refreshErr))
+	}
+	return openPersistedSession(refreshed.SessionDir, refreshed.Meta, storeOpts)
 }
 
 func openPersistedSession(sessionDir string, resolvedMeta *Meta, storeOpts storeOptions) (*Store, error) {
@@ -366,6 +402,37 @@ func (s *Store) unlockAndObservePersistence(observation *persistenceObservation,
 	return s.observePersistence(observation)
 }
 
+func (s *Store) metadataMutationCheckpointLocked() metadataMutationCheckpoint {
+	return metadataMutationCheckpoint{
+		meta:                 cloneMeta(s.meta),
+		metadataVersion:      s.metadataVersion,
+		persistedMetaVersion: s.persistedMetaVersion,
+	}
+}
+
+func (s *Store) restoreMetadataMutationLocked(checkpoint metadataMutationCheckpoint) {
+	s.meta = checkpoint.meta
+	s.metadataVersion = checkpoint.metadataVersion
+	s.persistedMetaVersion = checkpoint.persistedMetaVersion
+}
+
+func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metadataMutationCheckpoint) (CommitReceipt, error) {
+	observation, err := s.persistMetaLocked()
+	if err != nil {
+		s.restoreMetadataMutationLocked(checkpoint)
+		s.mu.Unlock()
+		return CommitReceipt{}, err
+	}
+	s.mu.Unlock()
+	if err := s.observePersistence(observation); err != nil {
+		s.mu.Lock()
+		s.restoreMetadataMutationLocked(checkpoint)
+		s.mu.Unlock()
+		return CommitReceipt{}, err
+	}
+	return CommitReceipt{Committed: true}, nil
+}
+
 func (s *Store) mutateLockedContractWithCommitStatus(mutator func(*LockedContract)) (LockedContractMutationResult, error) {
 	if mutator == nil {
 		return LockedContractMutationResult{}, nil
@@ -398,9 +465,7 @@ func (s *Store) mutateMetaAndReplaceLockedContractWithCommitStatus(metaMutator f
 		s.mu.Unlock()
 		return LockedContractMutationResult{}, err
 	}
-	previousMeta := cloneMeta(s.meta)
-	previousMetadataVersion := s.metadataVersion
-	previousPersistedMetaVersion := s.persistedMetaVersion
+	checkpoint := s.metadataMutationCheckpointLocked()
 	if metaMutator != nil {
 		metaMutator(&s.meta)
 	}
@@ -408,26 +473,12 @@ func (s *Store) mutateMetaAndReplaceLockedContractWithCommitStatus(metaMutator f
 		s.meta.Locked = lockedMutator(cloneLockedContract(s.meta.Locked))
 	}
 	s.meta.UpdatedAt = time.Now().UTC()
-	observation, persistErr := s.persistMetaLocked()
-	if persistErr != nil {
-		s.meta = previousMeta
-		s.metadataVersion = previousMetadataVersion
-		s.persistedMetaVersion = previousPersistedMetaVersion
-		s.mu.Unlock()
-		return LockedContractMutationResult{Committed: false, Locked: cloneLockedContract(previousMeta.Locked)}, persistErr
-	}
 	committed := cloneLockedContract(s.meta.Locked)
-	s.mu.Unlock()
-	observeErr := s.observePersistence(observation)
-	if observeErr != nil {
-		s.mu.Lock()
-		s.meta = previousMeta
-		s.metadataVersion = previousMetadataVersion
-		s.persistedMetaVersion = previousPersistedMetaVersion
-		s.mu.Unlock()
-		return LockedContractMutationResult{Committed: false, Locked: cloneLockedContract(previousMeta.Locked)}, observeErr
+	receipt, err := s.persistMetadataMutationWithCommitReceiptLocked(checkpoint)
+	if !receipt.Committed {
+		return LockedContractMutationResult{Committed: false, Locked: cloneLockedContract(checkpoint.meta.Locked)}, err
 	}
-	return LockedContractMutationResult{Committed: true, Locked: committed}, observeErr
+	return LockedContractMutationResult{Committed: true, Locked: committed}, err
 }
 
 func (s *Store) EnsureDurable() error {
@@ -656,10 +707,14 @@ func (s *Store) PromoteSubagentToMain() (bool, error) {
 		return false, nil
 	}
 	if *s.meta.Category != sessioncontract.SessionCategorySubagent {
-		raw := string(*s.meta.Category)
+		category := *s.meta.Category
 		sessionID := s.meta.SessionID
 		s.mu.Unlock()
-		return false, fmt.Errorf("session %q has invalid category %q", sessionID, raw)
+		_, err := sessioncontract.ParseSessionCategory(string(category))
+		if err == nil {
+			panic(fmt.Sprintf("unsupported session category %q passed category validation", category))
+		}
+		return false, InvalidSessionCategoryError{SessionID: sessionID, Category: category, Err: err}
 	}
 	mainCategory := sessioncontract.SessionCategoryMain
 	s.meta.Category = &mainCategory
@@ -678,7 +733,7 @@ func validateMetaCategory(meta *Meta) error {
 	raw := string(*meta.Category)
 	category, err := sessioncontract.ParseSessionCategory(raw)
 	if err != nil {
-		return fmt.Errorf("session %q has invalid category %q: %w", meta.SessionID, raw, err)
+		return InvalidSessionCategoryError{SessionID: meta.SessionID, Category: *meta.Category, Err: err}
 	}
 	meta.Category = sessionCategoryPointer(category)
 	return nil
@@ -941,7 +996,7 @@ func (s *Store) buildGoalEventsLocked(kind string, payload any, extraEvents []Ev
 	return events, nil
 }
 
-func (s *Store) SetUsageState(state *UsageState) error {
+func (s *Store) SetUsageState(state *UsageState) (CommitReceipt, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
@@ -949,15 +1004,16 @@ func (s *Store) SetUsageState(state *UsageState) error {
 	normalized := normalizeUsageState(state)
 	if usageStatesEqual(s.meta.UsageState, normalized) && (!s.persisted || s.hasDurableMetadataLocked()) {
 		s.mu.Unlock()
-		return nil
+		return CommitReceipt{Committed: true}, nil
 	}
 	if err := s.requireMetadataPersistenceLocked(); err != nil {
 		s.mu.Unlock()
-		return err
+		return CommitReceipt{}, err
 	}
+	checkpoint := s.metadataMutationCheckpointLocked()
 	s.meta.UsageState = normalized
 	s.meta.UpdatedAt = time.Now().UTC()
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.persistMetadataMutationWithCommitReceiptLocked(checkpoint)
 }
 
 func (s *Store) SetContinuationContext(ctx ContinuationContext) error {
@@ -1135,10 +1191,7 @@ func (s *Store) BackfillLockedReviewerPrompt(reviewerPrompt string) error {
 
 func (s *Store) MarkLockedPromptFacingSnapshotsStale() (LockedContractMutationResult, error) {
 	return s.mutateLockedContractWithCommitStatus(func(locked *LockedContract) {
-		locked.SystemPrompt = ""
-		locked.HasSystemPrompt = false
-		locked.ReviewerPrompt = ""
-		locked.HasReviewerPrompt = false
+		*locked = locked.WithPromptFacingSnapshotsStale()
 	})
 }
 
@@ -1147,10 +1200,7 @@ func (s *Store) MarkLockedPromptFacingContractStale() (LockedContractMutationRes
 }
 
 func markLockedPromptFacingContractStale(locked *LockedContract) {
-	locked.SystemPrompt = ""
-	locked.HasSystemPrompt = false
-	locked.ReviewerPrompt = ""
-	locked.HasReviewerPrompt = false
+	*locked = locked.WithPromptFacingSnapshotsStale()
 	locked.EnabledTools = nil
 	locked.HasEnabledTools = false
 	locked.WebSearchMode = ""
@@ -1159,36 +1209,35 @@ func markLockedPromptFacingContractStale(locked *LockedContract) {
 
 func (s *Store) RefreshLockedMainPromptSnapshot(snapshot LockedMainPromptSnapshot) (LockedContractMutationResult, error) {
 	return s.mutateLockedContractWithCommitStatus(func(locked *LockedContract) {
-		locked.SystemPrompt = strings.TrimSpace(snapshot.SystemPrompt)
-		locked.HasSystemPrompt = snapshot.HasSystemPrompt
-		locked.ToolPreambles = valuecopy.Pointer(snapshot.ToolPreambles)
-		if snapshot.ContextWindow > 0 {
-			locked.ContextWindow = snapshot.ContextWindow
-		}
-		if snapshot.ContextPercent > 0 {
-			locked.ContextPercent = snapshot.ContextPercent
-		}
+		snapshot.SystemPrompt = strings.TrimSpace(snapshot.SystemPrompt)
+		snapshot.ToolPreambles = textutil.Pointer(snapshot.ToolPreambles)
+		*locked = locked.WithMainPromptSnapshot(snapshot)
 	})
 }
 
 func (s *Store) RefreshLockedReviewerPromptSnapshot(snapshot LockedReviewerPromptSnapshot) (LockedContractMutationResult, error) {
 	return s.mutateLockedContractWithCommitStatus(func(locked *LockedContract) {
-		locked.ReviewerPrompt = strings.TrimSpace(snapshot.ReviewerPrompt)
-		locked.HasReviewerPrompt = snapshot.HasReviewerPrompt
+		snapshot.ReviewerPrompt = strings.TrimSpace(snapshot.ReviewerPrompt)
+		*locked = locked.WithReviewerPromptSnapshot(snapshot)
 	})
 }
 
 func (s *Store) BackfillLockedRequestShape(fields LockedRequestShapeBackfill) (LockedContractMutationResult, error) {
 	return s.mutateLockedContractWithCommitStatus(func(locked *LockedContract) {
-		locked.EnabledTools = append([]string(nil), fields.EnabledTools...)
-		locked.HasEnabledTools = fields.HasEnabledTools
-		locked.WebSearchMode = strings.TrimSpace(fields.WebSearchMode)
+		fields.WebSearchMode = strings.TrimSpace(fields.WebSearchMode)
+		*locked = locked.WithRequestShape(fields)
 	})
 }
 
+// CommitReceipt reports whether the requested durable mutation committed before
+// its returned operational error.
+type CommitReceipt struct {
+	Committed bool
+}
+
 type EventAppendResult struct {
-	Event         Event
-	Committed     bool
+	Event Event
+	CommitReceipt
 	EndByteCursor *int64
 }
 
@@ -1198,12 +1247,24 @@ type eventAppendOutcome struct {
 	endByteCursor *int64
 }
 
-func (s *Store) AppendEvent(stepID, kind string, payload any) (Event, bool, error) {
+func (s *Store) AppendEvent(stepID, kind string, payload any) (Event, CommitReceipt, error) {
+	return s.appendEvent(stepID, kind, payload, nil)
+}
+
+func (s *Store) appendEvent(stepID, kind string, payload any, transition func(*Meta)) (Event, CommitReceipt, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
-	outcome, err := s.appendEventLocked(stepID, kind, payload)
-	return outcome.event, outcome.committed, err
+	outcome, err := s.appendEventLocked(stepID, kind, payload, transition)
+	return outcome.event, CommitReceipt{Committed: outcome.committed}, err
+}
+
+// AppendCompactionHistoryReplacement appends the durable history replacement
+// while invalidating usage derived from the replaced active history.
+func (s *Store) AppendCompactionHistoryReplacement(stepID string, payload any) (Event, CommitReceipt, error) {
+	return s.appendEvent(stepID, "history_replaced", payload, func(meta *Meta) {
+		meta.UsageState = nil
+	})
 }
 
 func (s *Store) AppendEventWithEndByteCursor(stepID, kind string, payload any) (EventAppendResult, error) {
@@ -1214,11 +1275,11 @@ func (s *Store) AppendEventWithEndByteCursor(stepID, kind string, payload any) (
 		s.mu.Unlock()
 		return EventAppendResult{}, errors.New("event-log byte cursor is unavailable with fileless event persistence")
 	}
-	outcome, err := s.appendEventLocked(stepID, kind, payload)
+	outcome, err := s.appendEventLocked(stepID, kind, payload, nil)
 	result := EventAppendResult{
 		Event:         outcome.event,
-		Committed:     outcome.committed,
-		EndByteCursor: valuecopy.Pointer(outcome.endByteCursor),
+		CommitReceipt: CommitReceipt{Committed: outcome.committed},
+		EndByteCursor: textutil.Pointer(outcome.endByteCursor),
 	}
 	if err != nil {
 		return result, err
@@ -1229,13 +1290,13 @@ func (s *Store) AppendEventWithEndByteCursor(stepID, kind string, payload any) (
 	return result, nil
 }
 
-func (s *Store) appendEventLocked(stepID, kind string, payload any) (eventAppendOutcome, error) {
+func (s *Store) appendEventLocked(stepID, kind string, payload any, transition func(*Meta)) (eventAppendOutcome, error) {
 	evt, err := s.buildEventLocked(stepID, kind, payload, time.Now().UTC())
 	if err != nil {
 		s.mu.Unlock()
 		return eventAppendOutcome{}, err
 	}
-	committed, endByteCursor, err := s.appendObservedEventsLockedWithCommitStatus([]Event{evt})
+	committed, endByteCursor, err := s.appendObservedEventsWithMetaTransitionLocked([]Event{evt}, transition)
 	return eventAppendOutcome{
 		event:         evt,
 		committed:     committed,
@@ -1257,14 +1318,14 @@ func (s *Store) buildEventLocked(stepID, kind string, payload any, now time.Time
 	}, nil
 }
 
-func (s *Store) AppendTurnAtomic(stepID string, events []EventInput) ([]Event, error) {
+func (s *Store) AppendTurnAtomic(stepID string, events []EventInput) ([]Event, CommitReceipt, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
 
 	if len(events) == 0 {
 		s.mu.Unlock()
-		return nil, nil
+		return nil, CommitReceipt{}, nil
 	}
 	built := make([]Event, 0, len(events))
 	seq := s.meta.LastSequence
@@ -1273,7 +1334,7 @@ func (s *Store) AppendTurnAtomic(stepID string, events []EventInput) ([]Event, e
 		body, err := json.Marshal(in.Payload)
 		if err != nil {
 			s.mu.Unlock()
-			return nil, fmt.Errorf("marshal event payload: %w", err)
+			return nil, CommitReceipt{}, fmt.Errorf("marshal event payload: %w", err)
 		}
 		seq++
 		built = append(built, Event{
@@ -1284,10 +1345,12 @@ func (s *Store) AppendTurnAtomic(stepID string, events []EventInput) ([]Event, e
 			Payload:   body,
 		})
 	}
-	if _, _, err := s.appendObservedEventsLockedWithCommitStatus(built); err != nil {
-		return nil, err
+	committed, _, err := s.appendObservedEventsLockedWithCommitStatus(built)
+	receipt := CommitReceipt{Committed: committed}
+	if err != nil {
+		return built, receipt, err
 	}
-	return built, nil
+	return built, receipt, nil
 }
 
 type ReplayEvent struct {
@@ -1357,10 +1420,17 @@ func (s *Store) appendReplayEventsLocked(events []ReplayEvent) (replayEventsAppe
 }
 
 func (s *Store) appendObservedEventsLockedWithCommitStatus(events []Event) (bool, *int64, error) {
+	return s.appendObservedEventsWithMetaTransitionLocked(events, nil)
+}
+
+func (s *Store) appendObservedEventsWithMetaTransitionLocked(events []Event, transition func(*Meta)) (bool, *int64, error) {
 	previousMeta := cloneMeta(s.meta)
 	previousFreshness := s.conversationFreshness
 	s.captureFirstPromptPreviewLocked(events)
 	s.advanceConversationFreshnessLocked(events)
+	if transition != nil {
+		transition(&s.meta)
+	}
 	observation, committed, err := s.appendEventsAtomicLockedWithCommitStatus(events)
 	var endByteCursor *int64
 	if committed && !s.options.filelessEvents {

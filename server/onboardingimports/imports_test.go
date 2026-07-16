@@ -218,7 +218,11 @@ func TestSkillEnablementProjectionsShadowGeneratedAndMarkDefaults(t *testing.T) 
 	home := t.TempDir()
 	writeProviderSkill(t, home, ProviderAgents, "skills", "creating-skills", "creating-skills", "External override")
 
-	result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home, DisabledSkills: map[string]bool{"kent-dogfooding": true}})
+	result, err := Discover(Options{
+		ConfigRoot:  configRoot,
+		HomeDir:     home,
+		SkillPolicy: brand.ResolveSkillPolicy(brand.Settings{SkillToggles: map[string]bool{"kent-dogfooding": false}}),
+	})
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -250,7 +254,11 @@ func TestGeneratedDisabledSkillRemainsCandidateWithDisabledDefault(t *testing.T)
 	configRoot := t.TempDir()
 	home := t.TempDir()
 
-	result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home, DisabledSkills: map[string]bool{"kent-dogfooding": true}})
+	result, err := Discover(Options{
+		ConfigRoot:  configRoot,
+		HomeDir:     home,
+		SkillPolicy: brand.ResolveSkillPolicy(brand.Settings{SkillToggles: map[string]bool{"kent-dogfooding": false}}),
+	})
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}

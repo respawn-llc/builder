@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"core/cli/app/internal/startupconfig"
-	"core/shared/client"
+	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
@@ -23,7 +23,7 @@ type RunPromptResult struct {
 	Warnings    []string
 }
 
-func runPrompt(ctx context.Context, client client.RunPromptClient, opts Options, caller startupconfig.CallerContext, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
+func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Options, caller startupconfig.CallerContext, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
 	intent, err := runPromptLaunchIntent(opts, initialSessionID)
 	if err != nil {
 		return RunPromptResult{}, err
