@@ -248,21 +248,7 @@ func (f writerFunc) Write(p []byte) (int, error) {
 }
 
 func TestMetadataSchemaDumpScriptWorksOutsideRepository(t *testing.T) {
-	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
-	scriptPath := filepath.Join(repositoryRoot, "scripts", "dump-metadata-schema.sh")
-
-	shadowBin := t.TempDir()
-	shadowSQLite := filepath.Join(shadowBin, "sqlite3")
-	if err := os.WriteFile(shadowSQLite, []byte("#!/bin/sh\nexit 97\n"), 0o755); err != nil {
-		t.Fatalf("write sqlite3 shadow: %v", err)
-	}
-
-	command := exec.Command(scriptPath)
-	command.Dir = t.TempDir()
-	command.Env = append(os.Environ(), "PATH="+shadowBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	command, temporaryBase := metadataSchemaDumpScriptCommand(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -276,5 +262,67 @@ func TestMetadataSchemaDumpScriptWorksOutsideRepository(t *testing.T) {
 	if stdout.Len() == 0 {
 		t.Fatal("script stdout is empty")
 	}
+	assertDirectoryEmpty(t, temporaryBase)
 	assertExecutableMetadataSchemaDump(t, stdout.Bytes())
+}
+
+func TestMetadataSchemaDumpScriptPreservesUsageExitStatus(t *testing.T) {
+	command, temporaryBase := metadataSchemaDumpScriptCommand(t, "--output", "schema.sql")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	exitError, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("script error = %v, want process exit error", err)
+	}
+	if exitCode := exitError.ExitCode(); exitCode != 2 {
+		t.Fatalf("script exit code = %d, want 2", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("script stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("script did not write usage or an error")
+	}
+	assertDirectoryEmpty(t, temporaryBase)
+}
+
+func metadataSchemaDumpScriptCommand(t *testing.T, args ...string) (*exec.Cmd, string) {
+	t.Helper()
+
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	scriptPath := filepath.Join(repositoryRoot, "scripts", "dump-metadata-schema.sh")
+
+	shadowBin := t.TempDir()
+	shadowSQLite := filepath.Join(shadowBin, "sqlite3")
+	if err := os.WriteFile(shadowSQLite, []byte("#!/bin/sh\nexit 97\n"), 0o755); err != nil {
+		t.Fatalf("write sqlite3 shadow: %v", err)
+	}
+
+	command := exec.Command(scriptPath, args...)
+	command.Dir = t.TempDir()
+	temporaryBase := t.TempDir()
+	command.Env = append(
+		os.Environ(),
+		"PATH="+shadowBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TMPDIR="+temporaryBase,
+	)
+	return command, temporaryBase
+}
+
+func assertDirectoryEmpty(t *testing.T, path string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatalf("read temporary base: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("temporary artifacts remain: %v", entries)
+	}
 }

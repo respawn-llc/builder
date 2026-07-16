@@ -26,8 +26,11 @@ func TestListMetadataSchemaDefinitionsUsesDependencyOrder(t *testing.T) {
 		"index":   2,
 		"trigger": 3,
 	}
-	previousRank := -1
-	previousName := ""
+	type catalogPosition struct {
+		rank int
+		name string
+	}
+	var previous *catalogPosition
 	for _, row := range rows {
 		if row.ObjectName == "sqlite_sequence" {
 			t.Fatal("sqlite_sequence was included in metadata schema definitions")
@@ -36,16 +39,16 @@ func TestListMetadataSchemaDefinitionsUsesDependencyOrder(t *testing.T) {
 		if !ok {
 			t.Fatalf("unexpected schema object kind %q", row.ObjectKind)
 		}
-		if rank < previousRank || (rank == previousRank && row.ObjectName < previousName) {
+		current := catalogPosition{rank: rank, name: row.ObjectName}
+		if previous != nil && (current.rank < previous.rank || (current.rank == previous.rank && current.name < previous.name)) {
 			t.Fatalf(
 				"schema definitions are not ordered by kind and name: %s/%s follows rank=%d name=%q",
 				row.ObjectKind,
 				row.ObjectName,
-				previousRank,
-				previousName,
+				previous.rank,
+				previous.name,
 			)
 		}
-		previousRank = rank
-		previousName = row.ObjectName
+		previous = &current
 	}
 }

@@ -12,4 +12,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-go run ./cmd/dumpmetadataschema "$@"
+BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kent-dump-metadata-schema.XXXXXX")"
+cleanup() {
+  local command_status=$?
+  trap - EXIT
+  if ! find "$BUILD_DIR" -depth -delete; then
+    printf 'dump-metadata-schema.sh: remove temporary build directory: %s\n' "$BUILD_DIR" >&2
+    if [[ $command_status -eq 0 ]]; then
+      command_status=1
+    fi
+  fi
+  exit "$command_status"
+}
+trap cleanup EXIT
+
+go build -o "$BUILD_DIR/dumpmetadataschema" ./cmd/dumpmetadataschema
+"$BUILD_DIR/dumpmetadataschema" "$@"
