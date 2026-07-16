@@ -1107,6 +1107,53 @@ func TestGatewayAllowsOptionalSessionLifecycleRequestsWithoutSessionID(t *testin
 	}
 }
 
+func TestGatewayDraftRecoveryRoundTripKeepsServerAvailable(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	store := createGatewayAuthoritativeSession(t, appCore)
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	wantRecovery := []serverapi.SessionDraftRecoveryBuffer{
+		{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "  pending steering\n"},
+		{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "\tqueued later  "},
+	}
+	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
+		ClientRequestID: "gateway-draft-recovery",
+		SessionID:       store.Meta().SessionID,
+		Input:           "visible draft",
+		RecoveryBuffers: wantRecovery,
+	}); err != nil {
+		t.Fatalf("PersistInputDraft: %v", err)
+	}
+	initialInput, err := remote.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
+		SessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("GetInitialInput: %v", err)
+	}
+	if initialInput.Input != "visible draft" ||
+		len(initialInput.RecoveryBuffers) != len(wantRecovery) ||
+		initialInput.RecoveryBuffers[0] != wantRecovery[0] ||
+		initialInput.RecoveryBuffers[1] != wantRecovery[1] {
+		t.Fatalf("initial input = %+v, want visible draft and ordered byte-preserved recovery %+v", initialInput, wantRecovery)
+	}
+	projects, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{})
+	if err != nil {
+		t.Fatalf("follow-up ListProjects: %v", err)
+	}
+	if len(projects.Projects) == 0 {
+		t.Fatal("follow-up ListProjects returned no projects")
+	}
+}
+
 func TestGatewayProjectReattachClearsStaleSessionAttachment(t *testing.T) {
 	home := t.TempDir()
 	workspaceA := t.TempDir()

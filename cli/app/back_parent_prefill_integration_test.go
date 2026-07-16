@@ -130,23 +130,12 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 					Input:           "conflicting parent draft",
 					RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
 						{
-							Kind:            serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
-							ID:              "pending-parent-input",
-							ClientRequestID: "pending-parent-request",
-							Text:            "conflicting pending input",
-							OperationRef: clientui.RuntimeOperationRef{
-								Kind:            clientui.RuntimeOperationKindQueuedMessage,
-								ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-							},
+							Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+							Text: "conflicting pending input",
 						},
 						{
 							Kind: serverapi.SessionDraftRecoveryBufferQueuedInput,
-							ID:   "queued-parent-input",
 							Text: "conflicting queued input",
-							OperationRef: clientui.RuntimeOperationRef{
-								Kind:            clientui.RuntimeOperationKindQueuedMessage,
-								ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-							},
 						},
 					},
 				},

@@ -1,15 +1,13 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
-
-	"core/shared/clientui"
-	"core/shared/runtimeids"
 )
 
-func TestSessionPersistInputDraftAcceptsStructuredRecoveryBuffers(t *testing.T) {
-	submitID := runtimeids.NewRuntimeClientRequestID()
+func TestSessionPersistInputDraftMarshalsInertRecoveryBuffers(t *testing.T) {
 	req := SessionPersistInputDraftRequest{
 		ClientRequestID: "draft-1",
 		SessionID:       "session-1",
@@ -17,14 +15,33 @@ func TestSessionPersistInputDraftAcceptsStructuredRecoveryBuffers(t *testing.T) 
 		RecoveryBuffers: []SessionDraftRecoveryBuffer{{
 			Kind: SessionDraftRecoveryBufferActiveSubmit,
 			Text: "submitted before forced exit",
-			OperationRef: clientui.RuntimeOperationRef{
-				Kind:            clientui.RuntimeOperationKindSubmit,
-				ClientRequestID: submitID,
-			},
 		}},
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal payload: %v", err)
+	}
+	recoveryBuffers, ok := payload["recovery_buffers"].([]any)
+	if !ok || len(recoveryBuffers) != 1 {
+		t.Fatalf("recovery_buffers = %#v, want one entry", payload["recovery_buffers"])
+	}
+	got, ok := recoveryBuffers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("recovery buffer = %#v, want JSON object", recoveryBuffers[0])
+	}
+	want := map[string]any{
+		"kind": string(SessionDraftRecoveryBufferActiveSubmit),
+		"text": "submitted before forced exit",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("recovery buffer = %#v, want category/text only %#v", got, want)
 	}
 }
 

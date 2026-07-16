@@ -798,14 +798,8 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
 	buffers := []session.InputDraftRecoveryBuffer{{
-		Kind:                     "queued_input",
-		ID:                       "buffer-1",
-		ServerID:                 "server-1",
-		ClientRequestID:          "request-1",
-		Text:                     "recover this draft",
-		OperationClientRequestID: "operation-request-1",
-		OperationQueueItemID:     "queue-item-1",
-		OperationKind:            "steer",
+		Kind: "queued_input",
+		Text: "recover this draft",
 	}}
 	if err := sess.SetInputDraftRecovery("draft", buffers); err != nil {
 		t.Fatalf("SetInputDraftRecovery: %v", err)

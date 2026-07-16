@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -161,14 +162,11 @@ func TestServiceGetInitialInputOverrideReturnsOnlyExactTransitionInput(t *testin
 				Input:           "conflicting parent draft",
 				RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
 					{
-						Kind:            serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
-						ID:              "pending-parent-input",
-						ClientRequestID: "pending-parent-request",
-						Text:            "conflicting pending input",
+						Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+						Text: "conflicting pending input",
 					},
 					{
 						Kind: serverapi.SessionDraftRecoveryBufferQueuedInput,
-						ID:   "queued-parent-input",
 						Text: "conflicting queued input",
 					},
 				},
@@ -249,11 +247,8 @@ func TestServicePersistInputDraftRoundTripsStructuredRecoveryBuffers(t *testing.
 	}
 	service := newTestSessionLifecycleService(containerDir, nil)
 	recovery := []serverapi.SessionDraftRecoveryBuffer{{
-		Kind:            serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
-		ID:              "local-queue-1",
-		ServerID:        "server-queue-1",
-		ClientRequestID: "queue-create-1",
-		Text:            "queued steering before forced exit",
+		Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+		Text: "queued steering before forced exit",
 	}}
 	if _, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "draft-recovery-1",
@@ -272,8 +267,104 @@ func TestServicePersistInputDraftRoundTripsStructuredRecoveryBuffers(t *testing.
 		t.Fatalf("initial input response = %+v, want visible draft and one recovery buffer", resp)
 	}
 	got := resp.RecoveryBuffers[0]
-	if got.Kind != recovery[0].Kind || got.ServerID != "server-queue-1" || got.ClientRequestID != "queue-create-1" || got.Text != recovery[0].Text {
+	if got != recovery[0] {
 		t.Fatalf("recovery buffer = %+v, want %+v", got, recovery[0])
+	}
+}
+
+func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *testing.T) {
+	cfg, metadataStore, _, sess := createAuthoritativeSessionLifecycleSession(t, t.TempDir())
+	legacyBuffers := []map[string]any{
+		{
+			"kind":                        "pending_injected_input",
+			"id":                          "legacy-local-1",
+			"server_id":                   "legacy-server-1",
+			"client_request_id":           "legacy-request-1",
+			"text":                        "first recovered draft",
+			"operation_client_request_id": "not-a-runtime-request-id",
+			"operation_queue_item_id":     "not-a-queue-item-id",
+			"operation_kind":              "queued_message",
+		},
+		{
+			"kind":                        "queued_input",
+			"id":                          "legacy-local-2",
+			"server_id":                   "legacy-server-2",
+			"client_request_id":           "legacy-request-2",
+			"text":                        "second recovered draft",
+			"operation_client_request_id": "also-invalid",
+			"operation_queue_item_id":     "also-invalid",
+			"operation_kind":              "submit",
+		},
+	}
+	legacyMetadata, err := json.Marshal(map[string]any{
+		"workspace_root":               cfg.WorkspaceRoot,
+		"workspace_container":          filepath.Base(cfg.WorkspaceRoot),
+		"input_draft_recovery_buffers": legacyBuffers,
+	})
+	if err != nil {
+		t.Fatalf("marshal legacy metadata: %v", err)
+	}
+	if _, err := metadataStore.DB().ExecContext(
+		t.Context(),
+		"UPDATE sessions SET input_draft = ?, metadata_json = ? WHERE id = ?",
+		"visible draft",
+		string(legacyMetadata),
+		sess.Meta().SessionID,
+	); err != nil {
+		t.Fatalf("seed legacy metadata: %v", err)
+	}
+
+	service := NewGlobalSessionLifecycleService(
+		cfg.PersistenceRoot,
+		nil,
+		nil,
+		metadataStore.AuthoritativeSessionStoreOptions()...,
+	)
+	resp, err := service.GetInitialInput(t.Context(), serverapi.SessionInitialInputRequest{
+		SessionID: sess.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("GetInitialInput: %v", err)
+	}
+	wantRecovery := []serverapi.SessionDraftRecoveryBuffer{
+		{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "first recovered draft"},
+		{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "second recovered draft"},
+	}
+	if resp.Input != "visible draft" || !reflect.DeepEqual(resp.RecoveryBuffers, wantRecovery) {
+		t.Fatalf("initial input response = %+v, want visible draft and ordered category/text %+v", resp, wantRecovery)
+	}
+
+	reopened, err := session.OpenByID(
+		cfg.PersistenceRoot,
+		sess.Meta().SessionID,
+		metadataStore.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("open legacy session: %v", err)
+	}
+	if err := reopened.SetName("rewritten legacy recovery"); err != nil {
+		t.Fatalf("rewrite metadata through ordinary mutation: %v", err)
+	}
+	var rewrittenMetadata string
+	if err := metadataStore.DB().QueryRowContext(
+		t.Context(),
+		"SELECT metadata_json FROM sessions WHERE id = ?",
+		sess.Meta().SessionID,
+	).Scan(&rewrittenMetadata); err != nil {
+		t.Fatalf("read rewritten metadata: %v", err)
+	}
+	var rewritten struct {
+		RecoveryBuffers []map[string]any `json:"input_draft_recovery_buffers"`
+	}
+	if err := json.Unmarshal([]byte(rewrittenMetadata), &rewritten); err != nil {
+		t.Fatalf("decode rewritten metadata: %v", err)
+	}
+	wantBuffers := []map[string]any{
+		{"kind": "pending_injected_input", "text": "first recovered draft"},
+		{"kind": "queued_input", "text": "second recovered draft"},
+	}
+	if !reflect.DeepEqual(rewritten.RecoveryBuffers, wantBuffers) {
+		t.Fatalf("rewritten recovery buffers = %#v, want category/text only %#v", rewritten.RecoveryBuffers, wantBuffers)
 	}
 }
 

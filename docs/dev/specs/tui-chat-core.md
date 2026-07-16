@@ -46,6 +46,9 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - The interrupt also drains pending messages: queued and steering queue contents populate the main input, so nothing typed is lost and the user can edit or resend.
 - `Ctrl+C` while idle exits the TUI.
 - Draft recovery does not depend on a graceful shutdown callback. Closing the terminal window or otherwise losing the TUI process preserves the current main-input draft; opening the session later seeds the input from that draft verbatim.
+- Structured draft-recovery entries preserve only their recovery category and text. They carry no runtime operation, request, or queue identity.
+- Recovered entries return as editable composer text and are never reconstructed into operational queues, resumed, or replayed automatically; sending them again requires an explicit user action.
+- Older recovery metadata that contains operation or queue identity remains readable. Kent ignores the obsolete identity while preserving the recovery category and text, without an upgrade warning.
 - Graceful TUI exit through Ctrl+C or `/exit` flushes the current main-input draft to the server before release. (owner: tui-startup.md :: Session Picker).
 - `/exit` is a client detach, not a runtime interrupt. An active server-owned run continues after this TUI releases its attachment.
 - Session-navigation commands persist the outgoing draft, resolve the typed transition, release the originating attachment, and only then plan or attach the destination. A release failure aborts navigation before destination attachment; an `/exit` release failure is reported after terminal teardown and exits nonzero.
