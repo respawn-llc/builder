@@ -33,20 +33,7 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	if _, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, resolved.Config.WorkspaceRoot); err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-
-	appCore, err := New(resolved.Config, authSupport, runtimeSupport)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
 
 	if appCore.Config().WorkspaceRoot == "" {
 		t.Fatal("expected workspace root")
@@ -96,20 +83,7 @@ func TestNewProvidesRegistrationSafeClientsForUnregisteredWorkspace(t *testing.T
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-
-	appCore, err := New(resolved.Config, authSupport, runtimeSupport)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
 
 	if got := appCore.ProjectID(); got != "" {
 		t.Fatalf("project id = %q, want empty for unregistered workspace", got)
@@ -142,21 +116,7 @@ func TestNewRejectsSecondCoreForSamePersistenceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
 	}
-	authSupportA, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport A: %v", err)
-	}
-	runtimeSupportA, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport A: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupportA.Background.Close() })
-
-	first, err := New(resolved.Config, authSupportA, runtimeSupportA)
-	if err != nil {
-		t.Fatalf("New first: %v", err)
-	}
-	t.Cleanup(func() { _ = first.Close() })
+	newCoreTestApp(t, resolved.Config, auth.EmptyState())
 	generatedSkillsRoot := filepath.Join(home, brand.ConfigDirName, ".generated", "skills")
 	if entries, err := os.ReadDir(generatedSkillsRoot); err != nil {
 		t.Fatalf("expected first core to seed generated skills: %v", err)
@@ -189,21 +149,7 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsMissingProject(t *testing.
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-
-	appCore, err := New(resolved.Config, authSupport, runtimeSupport)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = appCore.Close() })
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
 
 	_, err = appCore.SessionLaunchClientForProjectWorkspace(context.Background(), "project-missing", workspace)
 	if !errors.Is(err, serverapi.ErrProjectNotFound) {
@@ -234,21 +180,7 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsUnavailableProjectRoot(t *
 	if err != nil {
 		t.Fatalf("ResolveConfig B: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolvedB.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-
-	appCore, err := New(resolvedB.Config, authSupport, runtimeSupport)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = appCore.Close() })
+	appCore := newCoreTestApp(t, resolvedB.Config, auth.EmptyState())
 
 	_, err = appCore.SessionLaunchClientForProjectWorkspace(context.Background(), binding.ProjectID, workspaceB)
 	if !errors.Is(err, serverapi.ErrProjectUnavailable) {
@@ -276,21 +208,7 @@ func TestSessionLaunchClientForProjectWorkspaceReplaysForceNewSessionAcrossClien
 	if err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-
-	appCore, err := New(resolved.Config, authSupport, runtimeSupport)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = appCore.Close() })
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
 
 	firstClient, err := appCore.SessionLaunchClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
 	if err != nil {
@@ -342,21 +260,7 @@ func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testi
 	if err != nil {
 		t.Fatalf("RegisterBinding B: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolvedA.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-
-	appCore, err := New(resolvedA.Config, authSupport, runtimeSupport)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = appCore.Close() })
+	appCore := newCoreTestApp(t, resolvedA.Config, auth.EmptyState())
 
 	client, err := appCore.SessionLaunchClientForProjectWorkspace(context.Background(), bindingB.ProjectID, workspaceB)
 	if err != nil {
@@ -400,24 +304,10 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	if err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.State{
+	appCore := newCoreTestApp(t, resolved.Config, auth.State{
 		Scope:  auth.ScopeGlobal,
 		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
-	}), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-
-	appCore, err := New(resolved.Config, authSupport, runtimeSupport)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = appCore.Close() })
+	})
 
 	firstClient, err := appCore.RunPromptClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
 	if err != nil {
@@ -505,21 +395,7 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t 
 	if err != nil {
 		t.Fatalf("ResolveConfig B: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolvedB.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-
-	appCore, err := New(resolvedB.Config, authSupport, runtimeSupport)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = appCore.Close() })
+	appCore := newCoreTestApp(t, resolvedB.Config, auth.EmptyState())
 
 	_, err = appCore.SessionLaunchClientForProjectWorkspace(context.Background(), binding.ProjectID, workspaceB)
 	if !errors.Is(err, serverapi.ErrProjectUnavailable) {
@@ -532,4 +408,23 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t 
 	if unavailable.ProjectID != binding.ProjectID || unavailable.Availability != clientui.ProjectAvailabilityInaccessible {
 		t.Fatalf("unexpected unavailable project: %+v", unavailable)
 	}
+}
+
+func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State) *Core {
+	t.Helper()
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(state), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildAuthSupport: %v", err)
+	}
+	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)
+	if err != nil {
+		t.Fatalf("BuildRuntimeSupport: %v", err)
+	}
+	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
+	appCore, err := New(cfg, authSupport, runtimeSupport)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+	return appCore
 }

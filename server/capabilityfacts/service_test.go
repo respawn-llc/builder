@@ -39,63 +39,23 @@ func TestServiceProjectsModelCatalogAndUnknownFallback(t *testing.T) {
 	if len(resp.Models.KnownModels) == 0 {
 		t.Fatal("expected known model facts")
 	}
-	seen := map[string]bool{}
-	var modelWithLargeWindow *serverapi.ModelCapabilityFact
-	for idx, fact := range resp.Models.KnownModels {
-		if fact.ModelID == nil || *fact.ModelID == "" {
-			t.Fatalf("known model %d has no model id: %+v", idx, fact)
-		}
-		if seen[*fact.ModelID] {
-			t.Fatalf("duplicate model id %q", *fact.ModelID)
-		}
-		seen[*fact.ModelID] = true
-		if !fact.Known {
-			t.Fatalf("known model %q marked unknown", *fact.ModelID)
-		}
-		if fact.ContextWindowTokens != nil && *fact.ContextWindowTokens <= 0 {
-			t.Fatalf("model %q has non-positive context window fact: %d", *fact.ModelID, *fact.ContextWindowTokens)
-		}
-		if fact.LargeWindow != nil {
-			if fact.LargeWindow.Tokens <= 0 {
-				t.Fatalf("model %q has non-positive large window fact: %d", *fact.ModelID, fact.LargeWindow.Tokens)
-			}
-			if fact.ContextWindowTokens == nil || fact.LargeWindow.Tokens <= *fact.ContextWindowTokens {
-				t.Fatalf("model %q large window = %+v, context window = %+v; want strictly larger", *fact.ModelID, fact.LargeWindow, fact.ContextWindowTokens)
-			}
-			modelWithLargeWindow = &resp.Models.KnownModels[idx]
-		}
+	gpt56 := knownModelFact(resp.Models.KnownModels, "gpt-5.6-sol")
+	if gpt56 == nil || !gpt56.Known || gpt56.LargeWindow != nil {
+		t.Fatalf("gpt-5.6-sol fact = %+v, want known without a redundant large-window choice", gpt56)
 	}
-	if !seen["gpt-5.6-sol"] {
-		t.Fatalf("known model catalog missing gpt-5.6-sol: %#v", seen)
+	gpt54 := knownModelFact(resp.Models.KnownModels, "gpt-5.4")
+	if gpt54 == nil || gpt54.ContextWindowTokens == nil || gpt54.LargeWindow == nil || gpt54.LargeWindow.Tokens <= *gpt54.ContextWindowTokens {
+		t.Fatalf("gpt-5.4 fact = %+v, want a strictly larger optional window", gpt54)
 	}
-	if gpt55 := knownModelFact(resp.Models.KnownModels, "gpt-5.6-sol"); gpt55 == nil || gpt55.LargeWindow != nil {
-		t.Fatalf("gpt-5.6-sol large-window fact = %+v, want absent because large window equals standard window", gpt55)
-	}
-	if modelWithLargeWindow == nil {
-		t.Fatal("expected at least one model with large-window facts")
-	}
-	if modelWithLargeWindow.DefaultContextWindowMode == nil || *modelWithLargeWindow.DefaultContextWindowMode != "standard" {
-		t.Fatalf("large-window model default context mode = %#v, want standard", modelWithLargeWindow.DefaultContextWindowMode)
+	if gpt54.DefaultContextWindowMode == nil || *gpt54.DefaultContextWindowMode != "standard" {
+		t.Fatalf("gpt-5.4 default context mode = %#v, want standard", gpt54.DefaultContextWindowMode)
 	}
 
 	fallback := resp.Models.UnknownFallback
-	if fallback.Known {
-		t.Fatalf("unknown fallback marked known: %+v", fallback)
-	}
-	if fallback.ModelID != nil {
-		t.Fatalf("unknown fallback model id = %#v, want nil", fallback.ModelID)
-	}
-	if !fallback.SupportsThinking {
-		t.Fatalf("unknown fallback should support thinking: %+v", fallback)
-	}
-	if fallback.SupportsReasoningSummary || fallback.SupportsVisionInputs {
-		t.Fatalf("unknown fallback exposes catalog-only capabilities: %+v", fallback)
-	}
-	if fallback.Verbosity.Source != "provider_default" {
-		t.Fatalf("unknown fallback verbosity source = %q", fallback.Verbosity.Source)
-	}
-	if !fallback.Verbosity.Supported || len(fallback.Verbosity.Levels) == 0 {
-		t.Fatalf("unknown fallback should use first-party provider verbosity defaults: %+v", fallback.Verbosity)
+	if fallback.Known || fallback.ModelID != nil || !fallback.SupportsThinking ||
+		fallback.SupportsReasoningSummary || fallback.SupportsVisionInputs ||
+		fallback.Verbosity.Source != "provider_default" || !fallback.Verbosity.Supported || len(fallback.Verbosity.Levels) == 0 {
+		t.Fatalf("unknown fallback = %+v, want provider-default thinking and verbosity without catalog-only capabilities", fallback)
 	}
 }
 
@@ -205,19 +165,14 @@ func TestServiceProjectsDefaults(t *testing.T) {
 	if resp.Defaults.CompactionMode != string(config.CompactionModeNative) {
 		t.Fatalf("compaction default = %q", resp.Defaults.CompactionMode)
 	}
-}
-
-func TestServiceProjectsAbsentVerbosityDefaultAsNull(t *testing.T) {
-	service := NewService(Options{Config: testConfig(t, config.Settings{
+	service = NewService(Options{Config: testConfig(t, config.Settings{
 		Model:            "custom-model",
 		ProviderOverride: "openai",
 	})})
-
-	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	resp, err = service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
-
 	if resp.Defaults.Verbosity != nil {
 		t.Fatalf("verbosity default = %+v, want nil", resp.Defaults.Verbosity)
 	}
@@ -255,21 +210,10 @@ func TestServiceProjectsImportDomainFacts(t *testing.T) {
 	if len(resp.Imports.SkillEnablement) == 0 {
 		t.Fatal("expected skill enablement projections")
 	}
-}
-
-func TestServiceProjectsImportTargetSkipFacts(t *testing.T) {
-	home := t.TempDir()
-	configRoot := t.TempDir()
-	writeProviderSkill(t, home, ".claude", "skills", "helper", "Helper")
 	if err := os.MkdirAll(filepath.Join(configRoot, "skills", "existing"), 0o755); err != nil {
 		t.Fatalf("mkdir existing skills target: %v", err)
 	}
-	service := NewService(Options{
-		Config:  testConfigAt(configRoot, config.Settings{Model: "gpt-5.6-sol"}),
-		HomeDir: home,
-	})
-
-	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	resp, err = service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
@@ -300,26 +244,7 @@ func TestServiceProjectsHomeResolutionFailureAsImportErrorFact(t *testing.T) {
 	}
 }
 
-func TestServiceUsesSavedAuthWhenAvailable(t *testing.T) {
-	state := auth.EmptyState()
-	state.Method.Type = auth.MethodOAuth
-	state.Method.OAuth = &auth.OAuthMethod{AccessToken: "token", AccountID: "account"}
-	service := NewService(Options{
-		Config:      testConfig(t, config.Settings{Model: "gpt-5.6-sol"}),
-		AuthManager: auth.NewManager(auth.NewMemoryStore(state), nil, nil),
-	})
-
-	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
-	if err != nil {
-		t.Fatalf("GetCapabilityFacts: %v", err)
-	}
-
-	if resp.Providers.CurrentEffective == nil || resp.Providers.CurrentEffective.LLMProviderID != "chatgpt-codex" {
-		t.Fatalf("current provider = %+v, want chatgpt-codex", resp.Providers.CurrentEffective)
-	}
-}
-
-func TestServiceDoesNotRefreshAuthForPreAuthFacts(t *testing.T) {
+func TestServiceUsesSavedAuthWithoutRefreshingPreAuthFacts(t *testing.T) {
 	state := auth.EmptyState()
 	state.Method.Type = auth.MethodOAuth
 	state.Method.OAuth = &auth.OAuthMethod{

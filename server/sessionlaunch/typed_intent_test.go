@@ -69,18 +69,3 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 		t.Fatal("different typed intent reused the same client request ID")
 	}
 }
-
-func mustSessionLaunchIntentID(t *testing.T, raw string) runtimeids.SessionID {
-	t.Helper()
-	id, err := runtimeids.ParseSessionID(raw)
-	if err != nil {
-		t.Fatalf("ParseSessionID(%q): %v", raw, err)
-	}
-	return id
-}
-
-func createNewSessionLaunchIntentWithParent(t *testing.T, raw string) serverapi.SessionLaunchIntent {
-	t.Helper()
-	parentID := mustSessionLaunchIntentID(t, raw)
-	return serverapi.CreateNewSessionLaunchIntent(&parentID)
-}

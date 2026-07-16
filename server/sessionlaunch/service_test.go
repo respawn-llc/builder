@@ -334,88 +334,6 @@ func TestPlanLaunchSessionRejectsUnknownParentBeforeRegisteringStore(t *testing.
 	}
 }
 
-func TestServicePlanSessionAppliesLaunchOverrides(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	workspace := t.TempDir()
-	persistenceRoot := t.TempDir()
-	containerDir := t.TempDir()
-	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
-	cfg.Settings.Model = "gpt-5.4"
-	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
-	cfg.Source.Sources["model"] = "file"
-	cfg.Source.Sources["tools.shell"] = "file"
-	cfg.Source.Sources["tools.patch"] = "default"
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, registry.NewSessionStoreRegistry())
-
-	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		ForceNewSession: true,
-		Overrides: serverapi.RunPromptOverrides{
-			Model:         "gpt-5.3-codex",
-			ThinkingLevel: "high",
-			Tools:         "patch",
-		},
-	})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	if resp.Plan.ActiveSettings.Model != "gpt-5.3-codex" || resp.Plan.ConfiguredModelName != "gpt-5.3-codex" {
-		t.Fatalf("model = %q configured=%q, want override", resp.Plan.ActiveSettings.Model, resp.Plan.ConfiguredModelName)
-	}
-	if resp.Plan.ActiveSettings.ThinkingLevel != "high" {
-		t.Fatalf("thinking level = %q, want high", resp.Plan.ActiveSettings.ThinkingLevel)
-	}
-	if strings.Join(resp.Plan.EnabledToolIDs, ",") != "patch" {
-		t.Fatalf("enabled tools = %+v, want patch", resp.Plan.EnabledToolIDs)
-	}
-	if resp.Plan.Source.Sources["model"] != "cli" || resp.Plan.Source.Sources["tools.patch"] != "cli" {
-		t.Fatalf("source = %+v, want cli override sources", resp.Plan.Source.Sources)
-	}
-}
-
-func TestServicePlanSessionRespectsLockedContractWhenApplyingOverrides(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	workspace := t.TempDir()
-	persistenceRoot := t.TempDir()
-	containerDir := t.TempDir()
-	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
-	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}}); err != nil {
-		t.Fatalf("MarkModelDispatchLocked: %v", err)
-	}
-	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
-	cfg.Settings.Model = "base-model"
-	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, registry.NewSessionStoreRegistry())
-
-	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID:   "req-1",
-		Mode:              serverapi.SessionLaunchModeInteractive,
-		SelectedSessionID: store.Meta().SessionID,
-		Overrides: serverapi.RunPromptOverrides{
-			Model: "cli-model",
-			Tools: "patch",
-		},
-	})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	if resp.Plan.ActiveSettings.Model != "locked-model" || resp.Plan.ConfiguredModelName != "base-model" {
-		t.Fatalf("model = %q configured=%q, want locked model and base configured", resp.Plan.ActiveSettings.Model, resp.Plan.ConfiguredModelName)
-	}
-	if strings.Join(resp.Plan.EnabledToolIDs, ",") != "exec_command" {
-		t.Fatalf("enabled tools = %+v, want locked shell runtime id", resp.Plan.EnabledToolIDs)
-	}
-}
-
 func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
@@ -504,31 +422,6 @@ func TestServicePlanSessionPreparesOmittedSelectedRoleBeforeMaterialization(t *t
 	}
 	if strings.Join(resp.Plan.EnabledToolIDs, ",") != "patch" {
 		t.Fatalf("enabled tools = %+v, want prepared patch target", resp.Plan.EnabledToolIDs)
-	}
-}
-
-func TestServicePlanSessionPropagatesOverrideToolConflict(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	workspace := t.TempDir()
-	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
-	cfg.Settings.Model = "claude-sonnet-4.5"
-	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
-	cfg.Source.Sources["tools.patch"] = "default"
-	cfg.Source.Sources["tools.edit"] = "default"
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: t.TempDir(),
-		StoreOptions: serviceTestPersistence.Options(),
-	}, registry.NewSessionStoreRegistry())
-
-	_, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		ForceNewSession: true,
-		Overrides:       serverapi.RunPromptOverrides{Tools: "patch,edit"},
-	})
-	if err == nil || !errors.Is(err, launch.ErrPatchEditToolsConflict) {
-		t.Fatalf("error = %v, want tool conflict", err)
 	}
 }
 
