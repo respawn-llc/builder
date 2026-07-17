@@ -253,12 +253,7 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 }
 
 func sameSessionPlanMemoRequest(a sessionPlanMemoRequest, b sessionPlanMemoRequest) bool {
-	return a.Mode == b.Mode &&
-		a.SelectedSessionID == b.SelectedSessionID &&
-		a.ForceNewSession == b.ForceNewSession &&
-		a.CallerSessionID == b.CallerSessionID &&
-		a.ParentSessionID == b.ParentSessionID &&
-		a.Overrides == b.Overrides
+	return a == b
 }
 
 var _ servicecontract.SessionLaunchService = (*Service)(nil)

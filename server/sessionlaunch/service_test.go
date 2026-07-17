@@ -51,6 +51,14 @@ func sessionLaunchStringPtr(value string) *string {
 	return &value
 }
 
+func newSessionLaunchTestService(cfg config.App, containerDir string, stores sessionStoreRegistrar) *Service {
+	return NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: serviceTestPersistence.Options(),
+	}, stores)
+}
+
 func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -108,15 +116,11 @@ func TestServicePlanSessionRegistersStoreAndReturnsPlan(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
 	stores := registry.NewSessionStoreRegistry()
-	service := NewService(launch.Planner{
-		Config: config.App{
-			WorkspaceRoot:   "/tmp/workspace-a",
-			PersistenceRoot: persistenceRoot,
-			Settings:        config.Settings{Model: "gpt-5", OpenAIBaseURL: "http://config.local/v1"},
-		},
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, stores)
+	service := newSessionLaunchTestService(config.App{
+		WorkspaceRoot:   "/tmp/workspace-a",
+		PersistenceRoot: persistenceRoot,
+		Settings:        config.Settings{Model: "gpt-5", OpenAIBaseURL: "http://config.local/v1"},
+	}, containerDir, stores)
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "req-1",
@@ -158,15 +162,11 @@ func TestServicePlanSessionDedupesForceNewSessionRequestID(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
 	stores := &countingStoreRegistrar{}
-	service := NewService(launch.Planner{
-		Config: config.App{
-			WorkspaceRoot:   "/tmp/workspace-a",
-			PersistenceRoot: persistenceRoot,
-			Settings:        config.Settings{Model: "gpt-5"},
-		},
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, stores)
+	service := newSessionLaunchTestService(config.App{
+		WorkspaceRoot:   "/tmp/workspace-a",
+		PersistenceRoot: persistenceRoot,
+		Settings:        config.Settings{Model: "gpt-5"},
+	}, containerDir, stores)
 	req := serverapi.SessionPlanRequest{
 		ClientRequestID: "req-1",
 		Mode:            serverapi.SessionLaunchModeInteractive,
@@ -264,11 +264,7 @@ func TestPlanLaunchSessionRejectsInvalidPreparedNamedTargetBeforeCreatingSession
 	}
 	containerDir := t.TempDir()
 	stores := registry.NewSessionStoreRegistry()
-	service := NewService(launch.Planner{
-		Config:       snapshot,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, stores)
+	service := newSessionLaunchTestService(snapshot, containerDir, stores)
 	role := "invalid"
 	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "invalid-prepared-target",
@@ -309,15 +305,11 @@ func TestSessionPlanMemoRequestUsesCanonicalNullableValues(t *testing.T) {
 
 func TestPlanLaunchSessionRejectsUnknownParentBeforeRegisteringStore(t *testing.T) {
 	stores := &countingStoreRegistrar{}
-	service := NewService(launch.Planner{
-		Config: config.App{
-			WorkspaceRoot:   t.TempDir(),
-			PersistenceRoot: t.TempDir(),
-			Settings:        config.Settings{Model: "gpt-5"},
-		},
-		ContainerDir: t.TempDir(),
-		StoreOptions: serviceTestPersistence.Options(),
-	}, stores)
+	service := newSessionLaunchTestService(config.App{
+		WorkspaceRoot:   t.TempDir(),
+		PersistenceRoot: t.TempDir(),
+		Settings:        config.Settings{Model: "gpt-5"},
+	}, t.TempDir(), stores)
 	unknownParent := "unknown-parent"
 	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "req-1",
@@ -358,11 +350,7 @@ func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T
 			AgentCallableSet: true,
 		},
 	}
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, registry.NewSessionStoreRegistry())
+	service := newSessionLaunchTestService(cfg, containerDir, registry.NewSessionStoreRegistry())
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID:   "locked-named-tools",
@@ -402,11 +390,7 @@ func TestServicePlanSessionPreparesOmittedSelectedRoleBeforeMaterialization(t *t
 			AgentCallableSet: true,
 		},
 	}
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, registry.NewSessionStoreRegistry())
+	service := newSessionLaunchTestService(cfg, containerDir, registry.NewSessionStoreRegistry())
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID:   "omitted-selected-role",
@@ -435,11 +419,7 @@ func TestPlanLaunchSessionRejectsOmittedTargetBeforeMaterializingSession(t *test
 	cfg.Source.Sources["tools.patch"] = "default"
 	cfg.Source.Sources["tools.edit"] = "default"
 	stores := &countingStoreRegistrar{}
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, stores)
+	service := newSessionLaunchTestService(cfg, containerDir, stores)
 
 	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "omitted-target-conflict",
@@ -477,15 +457,11 @@ func loadSessionLaunchTestConfig(t *testing.T, workspace string, persistenceRoot
 func TestServicePlanSessionDefaultRoleClearDoesNotRequireAuthState(t *testing.T) {
 	workspace := t.TempDir()
 	containerDir := t.TempDir()
-	service := NewService(launch.Planner{
-		Config: config.App{
-			WorkspaceRoot:   workspace,
-			PersistenceRoot: t.TempDir(),
-			Settings:        config.Settings{Model: "gpt-5.6-sol"},
-		},
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(failingAuthStateReader{})
+	service := newSessionLaunchTestService(config.App{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: t.TempDir(),
+		Settings:        config.Settings{Model: "gpt-5.6-sol"},
+	}, containerDir, registry.NewSessionStoreRegistry()).WithAuthStateReader(failingAuthStateReader{})
 
 	if _, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "req-1",
@@ -516,11 +492,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 			Sources:  map[string]string{"model": "file", "context_compaction_threshold_tokens": "file"},
 		},
 	}
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, registry.NewSessionStoreRegistry())
+	service := newSessionLaunchTestService(cfg, containerDir, registry.NewSessionStoreRegistry())
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID:   "req-1",
@@ -562,11 +534,7 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 			Sources:  map[string]string{"model": "file", "context_compaction_threshold_tokens": "file"},
 		},
 	}
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, registry.NewSessionStoreRegistry())
+	service := newSessionLaunchTestService(cfg, containerDir, registry.NewSessionStoreRegistry())
 
 	_, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID:   "req-1",
@@ -596,11 +564,7 @@ func TestPlanLaunchSessionHeadlessSelectedSessionAllowsHumanContinuationOfNonCal
 			AgentCallable:    false,
 		},
 	}
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, &countingStoreRegistrar{})
+	service := newSessionLaunchTestService(cfg, containerDir, &countingStoreRegistrar{})
 
 	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID:   "req-persisted-role",
@@ -623,11 +587,7 @@ func TestPlanLaunchSessionHeadlessSelectedSessionAllowsRemovedContinuationRole(t
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, &countingStoreRegistrar{})
+	service := newSessionLaunchTestService(cfg, containerDir, &countingStoreRegistrar{})
 
 	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID:   "req-removed-persisted-role",
@@ -647,11 +607,7 @@ func TestPlanLaunchSessionHeadlessSelectedSessionKeepsOmittedContinuationRoleDef
 	containerDir := t.TempDir()
 	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, &countingStoreRegistrar{})
+	service := newSessionLaunchTestService(cfg, containerDir, &countingStoreRegistrar{})
 
 	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID:   "req-omitted-persisted-role",
@@ -685,11 +641,7 @@ func TestServicePlanSessionInvalidRoleOverridePrecedesPersistedRoleValidation(t 
 			Sources:  map[string]string{"model": "file", "context_compaction_threshold_tokens": "file"},
 		},
 	}
-	service := NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: serviceTestPersistence.Options(),
-	}, registry.NewSessionStoreRegistry())
+	service := newSessionLaunchTestService(cfg, containerDir, registry.NewSessionStoreRegistry())
 
 	for _, role := range []string{"none", "self"} {
 		t.Run(role, func(t *testing.T) {
