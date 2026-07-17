@@ -26,13 +26,10 @@ type defaultExclusiveStepLifecycle struct {
 
 	mu                 sync.Mutex
 	active             *exclusiveRunState
-	nextWaiters        []*exclusiveStepWaiter
+	nextWaiters        int
+	nextChanged        chan struct{}
 	runSeq             uint64
 	terminalPublishing bool
-}
-
-type exclusiveStepWaiter struct {
-	ready chan struct{}
 }
 
 type exclusiveRunState struct {
@@ -181,7 +178,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 func (s *defaultExclusiveStepLifecycle) IsBusy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active != nil || s.terminalPublishing || len(s.nextWaiters) > 0
+	return s.active != nil || s.terminalPublishing || s.nextWaiters > 0
 }
 
 func (s *defaultExclusiveStepLifecycle) Snapshot() *RunSnapshot {
@@ -222,7 +219,7 @@ func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclu
 		return nil, "", err
 	}
 	s.mu.Lock()
-	if s.active != nil || s.terminalPublishing || len(s.nextWaiters) > 0 {
+	if s.active != nil || s.terminalPublishing || s.nextWaiters > 0 {
 		s.mu.Unlock()
 		return nil, "", ErrAgentBusy
 	}
@@ -244,36 +241,41 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	}
 
 	s.mu.Lock()
-	if s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0 {
+	if s.active == nil && !s.terminalPublishing && s.nextWaiters == 0 {
 		stepCtx, stepID := s.activateLocked(ctx, options)
 		s.mu.Unlock()
 		return s.publishStepBegan(options, stepCtx, stepID)
 	}
-	waiter := &exclusiveStepWaiter{ready: make(chan struct{})}
-	s.nextWaiters = append(s.nextWaiters, waiter)
-	s.mu.Unlock()
-
-	select {
-	case <-ctx.Done():
-	case <-waiter.ready:
-	}
-	if err := ctx.Err(); err != nil {
-		idle := s.cancelNextWaiter(waiter)
-		if idle {
-			return nil, "", errors.Join(err, s.scheduleIdleWork(true))
+	s.nextWaiters++
+	for {
+		changed := s.nextChanged
+		if changed == nil {
+			changed = make(chan struct{})
+			s.nextChanged = changed
 		}
-		return nil, "", err
-	}
-
-	s.mu.Lock()
-	if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter || s.active != nil || s.terminalPublishing {
 		s.mu.Unlock()
-		return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
+		select {
+		case <-ctx.Done():
+		case <-changed:
+		}
+		s.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			s.nextWaiters--
+			idle := s.active == nil && !s.terminalPublishing && s.nextWaiters == 0
+			s.signalNextWaitersLocked()
+			s.mu.Unlock()
+			if idle {
+				return nil, "", errors.Join(err, s.scheduleIdleWork(true))
+			}
+			return nil, "", err
+		}
+		if s.active == nil && !s.terminalPublishing {
+			s.nextWaiters--
+			stepCtx, stepID := s.activateLocked(ctx, options)
+			s.mu.Unlock()
+			return s.publishStepBegan(options, stepCtx, stepID)
+		}
 	}
-	s.nextWaiters = s.nextWaiters[1:]
-	stepCtx, stepID := s.activateLocked(ctx, options)
-	s.mu.Unlock()
-	return s.publishStepBegan(options, stepCtx, stepID)
 }
 
 func validateExclusiveStepStart(ctx context.Context, options exclusiveStepOptions) error {
@@ -337,29 +339,10 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 	return stepCtx, stepID, nil
 }
 
-func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWaiter) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for index, candidate := range s.nextWaiters {
-		if candidate != waiter {
-			continue
-		}
-		s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
-		s.notifyNextWaiterLocked()
-		return s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0
-	}
-	return false
-}
-
-func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
-	if s.active != nil || s.terminalPublishing || len(s.nextWaiters) == 0 {
-		return
-	}
-	waiter := s.nextWaiters[0]
-	select {
-	case <-waiter.ready:
-	default:
-		close(waiter.ready)
+func (s *defaultExclusiveStepLifecycle) signalNextWaitersLocked() {
+	if changed := s.nextChanged; changed != nil {
+		s.nextChanged = nil
+		close(changed)
 	}
 }
 
@@ -377,7 +360,7 @@ func (s *defaultExclusiveStepLifecycle) scheduleIdleWork(scheduleQueuedUserWork 
 func (s *defaultExclusiveStepLifecycle) end() {
 	s.mu.Lock()
 	s.active = nil
-	s.notifyNextWaiterLocked()
+	s.signalNextWaitersLocked()
 	s.mu.Unlock()
 }
 
@@ -391,7 +374,7 @@ func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 	s.mu.Lock()
 	s.terminalPublishing = false
-	s.notifyNextWaiterLocked()
+	s.signalNextWaitersLocked()
 	s.mu.Unlock()
 }
 

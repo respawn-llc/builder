@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"core/prompts"
 	"core/server/llm"
@@ -46,6 +47,7 @@ var (
 	errHandoffTooEarly = errors.New(handoffTooEarlyMessage)
 	// errCompactionDisabledModeNone is returned when manual compaction is requested while compaction_mode=none.
 	errCompactionDisabledModeNone = errors.New("context compaction is disabled (compaction_mode=none)")
+	ErrManualCompactionPending    = errors.New("manual compaction is already pending")
 )
 
 type compactionResult struct {
@@ -61,6 +63,7 @@ type compactionResult struct {
 type defaultContextCompactor struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle
+	manual atomic.Bool
 }
 
 func (e *Engine) CompactContext(ctx context.Context, args string) error {
@@ -91,6 +94,10 @@ func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall l
 }
 
 func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
+	if !c.manual.CompareAndSwap(false, true) {
+		return session.CommitReceipt{}, ErrManualCompactionPending
+	}
+	defer c.manual.Store(false)
 	return c.compactContext(ctx, compactionModeManual, args, true, onActive)
 }
 

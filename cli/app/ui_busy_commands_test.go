@@ -113,6 +113,12 @@ func TestBusyEnterDispatchesCompact(t *testing.T) {
 		t.Fatalf("dispatched compact result = cmd %v, input %q, compacting %t", cmd, updated.input, updated.isCompacting())
 	}
 	requireBusyCommandQueuesEmpty(t, updated)
+	updated.input = "/compact again"
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = next.(*uiModel)
+	if refs := updated.pendingRuntimeOperationRefs(); len(refs) != 1 {
+		t.Fatalf("repeat compact pending refs = %+v, want one visible cancellable operation", refs)
+	}
 }
 
 func TestBusyNavigationCommandsStartTheirExistingTransitions(t *testing.T) {
