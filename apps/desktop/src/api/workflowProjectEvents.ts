@@ -19,6 +19,8 @@ export type WorkflowProjectEventHandler = Readonly<{
   onError(error: Error): void;
 }>;
 
+export type WorkflowProjectEventMethod = "workflow.event" | "workflow.project";
+
 const workflowProjectEventParamsSchema = z
   .object({
     event: z.object({
@@ -42,6 +44,7 @@ const workflowProjectEventParamsSchema = z
   }));
 
 export function workflowProjectEventRpcHandler(
+  expectedMethod: WorkflowProjectEventMethod,
   handler: WorkflowProjectEventHandler,
 ): RpcEventHandler {
   return {
@@ -49,12 +52,17 @@ export function workflowProjectEventRpcHandler(
     onComplete: handler.onComplete,
     onError: handler.onError,
     onEvent(method, params) {
-      if (method !== "workflow.event") {
+      if (method !== expectedMethod) {
+        handler.onError(
+          new ContractError(
+            `workflow subscription expected event method ${expectedMethod} but received ${method}.`,
+          ),
+        );
         return;
       }
       const parsed = workflowProjectEventParamsSchema.safeParse(params);
       if (!parsed.success) {
-        handler.onError(new ContractError("workflow event did not match GUI contract."));
+        handler.onError(new ContractError(`${expectedMethod} payload did not match GUI contract.`));
         return;
       }
       handler.onEvent(parsed.data.event);

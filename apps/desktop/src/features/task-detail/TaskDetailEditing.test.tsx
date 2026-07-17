@@ -308,7 +308,7 @@ describe("TaskDetailSurface editing", () => {
 
     hasQuestion = true;
     act(() => {
-      services.transport.emit("workflow.event", taskQuestionWaitingEvent);
+      services.transport.emit("workflow.project", taskQuestionWaitingEvent);
     });
 
     const question = await screen.findByRole("region", { name: "Question" });
@@ -346,7 +346,7 @@ describe("TaskDetailSurface editing", () => {
     serverBody = "Agent rewrote the body";
     serverUpdatedAt = 99;
     act(() => {
-      services.transport.emit("workflow.event", taskUpdatedEvent);
+      services.transport.emit("workflow.project", taskUpdatedEvent);
     });
 
     await waitFor(() => {
@@ -385,7 +385,7 @@ describe("TaskDetailSurface editing", () => {
     serverTitle = "Renamed by agent";
     serverUpdatedAt = 99;
     act(() => {
-      services.transport.emit("workflow.event", taskUpdatedEvent);
+      services.transport.emit("workflow.project", taskUpdatedEvent);
     });
 
     await waitFor(() => {

@@ -650,7 +650,7 @@ export class ApiClient implements ApiService {
     return this.#transport.subscribe(
       "workflow.subscribeProject",
       { project_id: projectID },
-      workflowProjectEventRpcHandler(handler),
+      workflowProjectEventRpcHandler("workflow.project", handler),
     );
   }
 
@@ -658,7 +658,7 @@ export class ApiClient implements ApiService {
     return this.#transport.subscribe(
       "workflow.subscribe",
       { workflow_id: workflowID },
-      workflowProjectEventRpcHandler(handler),
+      workflowProjectEventRpcHandler("workflow.event", handler),
     );
   }
 

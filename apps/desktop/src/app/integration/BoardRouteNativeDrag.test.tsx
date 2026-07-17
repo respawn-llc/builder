@@ -302,7 +302,7 @@ async function renderActiveBoard(frames: FakeAnimationFrames) {
     dataTransfer: new TestDataTransfer(),
     removeSource: () => {
       sourcePresent = false;
-      services.transport.emit("workflow.event", {
+      services.transport.emit("workflow.project", {
         event: {
           action: "updated",
           changed_ids: ["task-1"],

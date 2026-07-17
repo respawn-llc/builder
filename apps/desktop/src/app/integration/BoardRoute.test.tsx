@@ -55,7 +55,7 @@ describe("BoardRoute live refresh", () => {
     expect(screen.queryByRole("button", { name: appI18n.t("board.newTask") })).not.toBeInTheDocument();
 
     act(() => {
-      services.transport.emit("workflow.event", {
+      services.transport.emit("workflow.project", {
         event: {
           action: "linked",
           changed_ids: ["workflow-link-1"],
@@ -97,7 +97,7 @@ describe("BoardRoute live refresh", () => {
     });
 
     act(() => {
-      services.transport.emit("workflow.event", {
+      services.transport.emit("workflow.project", {
         event: {
           action: "deleted",
           changed_ids: ["task-1"],
