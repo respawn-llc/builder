@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+func testApprovalRequest(id string) AskQuestionRequest {
+	return AskQuestionRequest{
+		ID:       id,
+		Question: "approve?",
+		Approval: true,
+		ApprovalOptions: []AskQuestionApprovalOption{
+			{Decision: AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: AskQuestionApprovalDecisionAllowSession, Label: "Allow for this session"},
+			{Decision: AskQuestionApprovalDecisionDeny, Label: "Deny"},
+		},
+	}
+}
+
 func TestBrokerFIFOQueue(t *testing.T) {
 	b := NewAskQuestionBroker()
 
@@ -124,7 +137,7 @@ func TestSubmitApprovalResponse(t *testing.T) {
 	done := make(chan out, 1)
 
 	go func() {
-		resp, err := b.Ask(ctx, AskQuestionRequest{ID: "approval", Question: "approve?", Approval: true, ApprovalOptions: []AskQuestionApprovalOption{{Decision: AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: AskQuestionApprovalDecisionAllowSession, Label: "Allow for this session"}, {Decision: AskQuestionApprovalDecisionDeny, Label: "Deny"}}})
+		resp, err := b.Ask(ctx, testApprovalRequest("approval"))
 		done <- out{resp: resp, err: err}
 	}()
 
@@ -186,27 +199,14 @@ func TestValidateAskQuestionResponseForApprovalPrompt(t *testing.T) {
 	}
 }
 
-func TestValidateAskQuestionResponseRejectsNonPositiveSelectedOption(t *testing.T) {
-	zeroOption := 0
-	if err := ValidateAskQuestionResponse(
-		AskQuestionRequest{ID: "ask-1", Question: "Proceed?", Suggestions: []string{"yes"}},
-		AskQuestionResponse{SelectedOptionNumber: &zeroOption},
-	); err == nil {
-		t.Fatal("expected zero selected option to be rejected")
-	}
-	negativeOption := -1
-	if err := ValidateAskQuestionResponse(
-		AskQuestionRequest{ID: "ask-1", Question: "Proceed?", Suggestions: []string{"yes"}},
-		AskQuestionResponse{SelectedOptionNumber: &negativeOption},
-	); err == nil {
-		t.Fatal("expected negative selected option to be rejected")
-	}
-	outOfRange := 2
-	if err := ValidateAskQuestionResponse(
-		AskQuestionRequest{ID: "ask-1", Question: "Proceed?", Suggestions: []string{"yes"}},
-		AskQuestionResponse{SelectedOptionNumber: &outOfRange},
-	); err == nil {
-		t.Fatal("expected out-of-range selected option to be rejected")
+func TestValidateAskQuestionResponseRejectsInvalidSelectedOption(t *testing.T) {
+	for _, option := range []int{0, -1, 2} {
+		if err := ValidateAskQuestionResponse(
+			AskQuestionRequest{ID: "ask-1", Question: "Proceed?", Suggestions: []string{"yes"}},
+			AskQuestionResponse{SelectedOptionNumber: &option},
+		); err == nil {
+			t.Fatalf("expected selected option %d to be rejected", option)
+		}
 	}
 }
 
@@ -239,17 +239,9 @@ func TestApprovalAskIgnoresRecommendedOptionIndex(t *testing.T) {
 		return AskQuestionResponse{RequestID: req.ID, Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionAllowOnce}}, nil
 	})
 
-	resp, err := b.Ask(context.Background(), AskQuestionRequest{
-		ID:                     "approval",
-		Question:               "approve?",
-		Approval:               true,
-		RecommendedOptionIndex: 1,
-		ApprovalOptions: []AskQuestionApprovalOption{
-			{Decision: AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
-			{Decision: AskQuestionApprovalDecisionAllowSession, Label: "Allow for this session"},
-			{Decision: AskQuestionApprovalDecisionDeny, Label: "Deny"},
-		},
-	})
+	req := testApprovalRequest("approval")
+	req.RecommendedOptionIndex = 1
+	resp, err := b.Ask(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -260,19 +252,9 @@ func TestApprovalAskIgnoresRecommendedOptionIndex(t *testing.T) {
 
 func TestApprovalAskRejectsSuggestions(t *testing.T) {
 	b := NewAskQuestionBroker()
-	_, err := b.Ask(context.Background(), AskQuestionRequest{
-		ID:       "approval",
-		Question: "approve?",
-		Approval: true,
-		Suggestions: []string{
-			"do not use suggestions here",
-		},
-		ApprovalOptions: []AskQuestionApprovalOption{
-			{Decision: AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
-			{Decision: AskQuestionApprovalDecisionAllowSession, Label: "Allow for this session"},
-			{Decision: AskQuestionApprovalDecisionDeny, Label: "Deny"},
-		},
-	})
+	req := testApprovalRequest("approval")
+	req.Suggestions = []string{"do not use suggestions here"}
+	_, err := b.Ask(context.Background(), req)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -305,16 +287,7 @@ func TestSubmitRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 		err  error
 	}
 	done := make(chan out, 1)
-	approvalReq := AskQuestionRequest{
-		ID:       "approval",
-		Question: "approve?",
-		Approval: true,
-		ApprovalOptions: []AskQuestionApprovalOption{
-			{Decision: AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
-			{Decision: AskQuestionApprovalDecisionAllowSession, Label: "Allow for this session"},
-			{Decision: AskQuestionApprovalDecisionDeny, Label: "Deny"},
-		},
-	}
+	approvalReq := testApprovalRequest("approval")
 
 	go func() {
 		resp, err := b.Ask(ctx, approvalReq)
@@ -358,16 +331,7 @@ func TestAskHandlerRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 		return AskQuestionResponse{Answer: "allow once"}, nil
 	})
 
-	_, err := b.Ask(context.Background(), AskQuestionRequest{
-		ID:       "approval",
-		Question: "approve?",
-		Approval: true,
-		ApprovalOptions: []AskQuestionApprovalOption{
-			{Decision: AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
-			{Decision: AskQuestionApprovalDecisionAllowSession, Label: "Allow for this session"},
-			{Decision: AskQuestionApprovalDecisionDeny, Label: "Deny"},
-		},
-	})
+	_, err := b.Ask(context.Background(), testApprovalRequest("approval"))
 	if err == nil {
 		t.Fatal("expected error")
 	}
