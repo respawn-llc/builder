@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { dispatchBoardDrag, FakeAnimationFrames, setScrollportGeometry } from "../../testSupport/boardDrag";
+import { dispatchBoardDrag, FakeAnimationFrames, setScrollportGeometry } from "@/test-support/board-drag";
 import { useBoardDragAutoScroll } from "./BoardDragAutoScroll";
 
 describe("useBoardDragAutoScroll", () => {

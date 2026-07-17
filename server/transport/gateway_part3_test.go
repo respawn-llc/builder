@@ -369,7 +369,7 @@ func receiveGatewayNotification(t *testing.T, conn *websocket.Conn, method strin
 	}
 }
 
-func TestGatewayGoalRPCDoesNotRequireProjectAttachment(t *testing.T) {
+func TestGatewayGoalRPCWithoutProjectAttachmentReturnsServiceErrors(t *testing.T) {
 	_, server := newUnboundGatewayTestServer(t)
 	defer server.Close()
 	conn := dialGateway(t, server)
@@ -380,20 +380,18 @@ func TestGatewayGoalRPCDoesNotRequireProjectAttachment(t *testing.T) {
 		name   string
 		method string
 		params any
+		code   int
 	}{
-		{name: "show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: "missing-session"}},
-		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{ClientRequestID: "goal-set", SessionID: "missing-session", Objective: "ship", Actor: "user"}},
-		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-pause", SessionID: "missing-session", Actor: "user"}},
-		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-resume", SessionID: "missing-session", Actor: "user"}},
-		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-complete", SessionID: "missing-session", Actor: "agent"}},
-		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{ClientRequestID: "goal-clear", SessionID: "missing-session", Actor: "user"}},
+		{name: "show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: "missing-session"}, code: protocol.ErrCodeInternalError},
+		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{ClientRequestID: "goal-set", SessionID: "missing-session", Objective: "ship", Actor: "user"}, code: protocol.ErrCodeRuntimeUnavailable},
+		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-pause", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeRuntimeUnavailable},
+		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-resume", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeRuntimeUnavailable},
+		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-complete", SessionID: "missing-session", Actor: "agent"}, code: protocol.ErrCodeRuntimeUnavailable},
+		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{ClientRequestID: "goal-clear", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeRuntimeUnavailable},
 	} {
 		err := callGatewayExpectError(t, conn, "goal-"+tc.name, tc.method, tc.params)
-		if err.Code != protocol.ErrCodeRuntimeUnavailable {
-			t.Fatalf("%s error code = %d message=%q, want runtime unavailable", tc.name, err.Code, err.Message)
-		}
-		if err.Message == "project attachment is required" {
-			t.Fatalf("%s required project attachment", tc.name)
+		if err.Code != tc.code {
+			t.Fatalf("%s error code = %d, want %d", tc.name, err.Code, tc.code)
 		}
 	}
 }

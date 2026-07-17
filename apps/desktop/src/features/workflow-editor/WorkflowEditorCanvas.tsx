@@ -1,18 +1,16 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
-import { useAppServices } from "../../app/useAppServices";
-import { useStatusController } from "../../app/useStatusController";
+import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
 import { WorkflowGraphCanvas } from "./WorkflowGraphCanvas";
 import type { WorkflowGraphLayout } from "./workflowGraphLayout";
 import {
   workflowDeleteNeedsConfirmation,
   workflowDeletionConfirmationCounts,
 } from "./workflowDeleteConfirmationPolicy";
-import {
-  workflowEditorGraphMutationWarnings,
-} from "./workflowEditorGraphMutations";
+import { workflowEditorGraphMutationWarnings } from "./workflowEditorGraphMutations";
 import {
   cascadeRowCount,
   copyWorkflowNodeText,
@@ -71,8 +69,12 @@ export function WorkflowEditorCanvas({
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const { push: pushStatus } = useStatusController();
-  const [pendingConnectedCreation, setPendingConnectedCreation] = useState<PendingConnectedCreation | null>(null);
-  const [graphSelectionRequest, setGraphSelectionRequest] = useState<PendingGraphSelectionRequest | null>(null);
+  const [pendingConnectedCreation, setPendingConnectedCreation] = useState<PendingConnectedCreation | null>(
+    null,
+  );
+  const [graphSelectionRequest, setGraphSelectionRequest] = useState<PendingGraphSelectionRequest | null>(
+    null,
+  );
   const clearPendingConnectedCreation = (): void => {
     setGraphSelectionRequest(null);
     setPendingConnectedCreation(null);

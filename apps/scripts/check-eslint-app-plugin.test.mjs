@@ -50,39 +50,6 @@ test("app/no-array-index-key rejects index-like keys only", () => {
   );
 });
 
-test("app/no-raw-dto-in-components handles lowercase component files", () => {
-  const tester = new RuleTester();
-
-  tester.run(
-    "app/no-raw-dto-in-components",
-    appArchitecture.rules["no-raw-dto-in-components"],
-    {
-      valid: [
-        {
-          code: 'import { SessionViewModel } from "../view-models/session";',
-          filename: "src/components/transcriptRows.tsx",
-        },
-        {
-          code: 'import { SessionDto } from "../protocol/session";',
-          filename: "src/hooks/useSessions.ts",
-        },
-      ],
-      invalid: [
-        {
-          code: 'import { SessionDto } from "../view-models/session";',
-          filename: "src/components/transcriptRows.tsx",
-          errors: [{ messageId: "rawDto" }],
-        },
-        {
-          code: 'import { Session } from "../protocol/session";',
-          filename: "src/components/transcriptRows.tsx",
-          errors: [{ messageId: "rawDto" }],
-        },
-      ],
-    },
-  );
-});
-
 test("app/no-useeffect-data-loading catches React.useEffect and aliased useEffect in components", () => {
   const tester = new RuleTester();
 

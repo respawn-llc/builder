@@ -1,5 +1,10 @@
-import { attentionItemSchema, runSchema, taskStatusSchema, transitionSchema, validationErrorSchema } from "./common";
-import { normalizeWorkflowValidationErrors } from "../../features/workflow/workflowValidationIssueNormalization";
+import {
+  attentionItemSchema,
+  runSchema,
+  taskStatusSchema,
+  transitionSchema,
+  validationErrorSchema,
+} from "./common";
 
 const baseAttentionItem = {
   id: "question:run-1:ask-1",
@@ -133,9 +138,12 @@ describe("validationErrorSchema", () => {
 
   it("normalizes omitted or null role-tool details to null", () => {
     const omitted = validationErrorSchema.parse(base);
-    const present = validationErrorSchema.parse({ ...base, details: { role: "coder", required_tool: "ask_question" } });
+    const present = validationErrorSchema.parse({
+      ...base,
+      details: { role: "coder", required_tool: "ask_question" },
+    });
     expect(omitted.details).toMatchObject({ role: null, requiredTool: null });
-    expect(normalizeWorkflowValidationErrors([omitted, present])).toHaveLength(2);
+    expect(present.details).toMatchObject({ role: "coder", requiredTool: "ask_question" });
   });
 
   it("rejects present blank role-tool details", () => {

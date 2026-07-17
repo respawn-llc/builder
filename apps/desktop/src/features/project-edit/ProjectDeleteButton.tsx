@@ -3,15 +3,16 @@ import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 
-import { errorMessage } from "../../api/errors";
-import { useAppNavigation } from "../../app/navigation";
-import { completeProjectDeletion } from "../../app/projectDeletionEvents";
-import { useAppServices } from "../../app/useAppServices";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { useNativeDialogFallback } from "../../app/useNativeDialogFallback";
-import { useSidebar } from "../../app/sidebarContext";
-import { useStatusController } from "../../app/useStatusController";
-import { Button, Dialog, NativeDialogWindow } from "../../ui";
+import { errorMessage } from "@/api";
+import { useAppNavigation } from "@/app-facade";
+import { completeProjectDeletion } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { useNativeDialogFallback } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { NativeDialogWindow } from "@/shared/native-dialog";
+import { Button, Dialog } from "@/ui";
 import { useProjectDelete } from "./useProjectEditData";
 
 const projectDeleteNativeDialogPath = "/native-dialog/project-delete";

@@ -1,16 +1,14 @@
 import { createRoute, type AnyRootRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
-import { TaskDeleteWindowRoute } from "../features/board/TaskDeleteConfirmation";
-import { taskDeleteNativeDialogPath } from "../features/board/taskDeleteConfirmationModel";
-import { ProjectCreateWindowRoute } from "../features/home/ProjectCreateForm";
-import { ProjectDeleteWindowRoute } from "../features/project-edit/ProjectDeleteButton";
-import { WorkspaceUnlinkWindowRoute } from "../features/project-edit/ProjectEditParts";
-import { TaskDetailWindowRoute } from "../features/task-detail/TaskDetailWindowRoute";
-import { NewTaskWindowRoute } from "../features/tasks/NewTaskDialog";
+import { TaskDeleteWindowRoute, taskDeleteNativeDialogPath } from "@/features/board";
+import { ProjectCreateWindowRoute } from "@/features/home";
+import { ProjectDeleteWindowRoute, WorkspaceUnlinkWindowRoute } from "@/features/project-edit";
+import { TaskDetailWindowRoute } from "@/features/task-detail";
+import { NewTaskWindowRoute } from "@/features/tasks";
 import { InvalidNativeDialogRoute } from "./InvalidNativeDialogRoute";
 import { taskDetailNativeDialogPath } from "./sidebarPopOut";
-import { useWindowChromeTitle } from "./windowChromeTitle";
+import { useWindowChromeTitle } from "@/app-facade";
 
 export const projectDeleteNativeDialogPath = "/native-dialog/project-delete";
 export const workspaceUnlinkNativeDialogPath = "/native-dialog/workspace-unlink";

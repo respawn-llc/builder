@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../api/errors";
-import { useAppServices } from "../../app/useAppServices";
-import { useStatusController } from "../../app/useStatusController";
-import { Button, Dialog, NativeDialogWindow } from "../../ui";
+import { errorMessage } from "@/api";
+import { useAppServices } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { NativeDialogWindow } from "@/shared/native-dialog";
+import { Button, Dialog } from "@/ui";
 import { taskDeleteDialogWidth, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
 
 export function TaskDeleteConfirmationFallbackDialog({
@@ -76,7 +77,10 @@ export function TaskDeleteWindowRoute({ taskID }: TaskDeleteTarget) {
   }
 
   return (
-    <NativeDialogWindow contentMaxWidth={`${taskDeleteDialogWidth.toString()}px`} title={t("board.deleteTaskTitle")}>
+    <NativeDialogWindow
+      contentMaxWidth={`${taskDeleteDialogWidth.toString()}px`}
+      title={t("board.deleteTaskTitle")}
+    >
       <TaskDeleteConfirmationContent
         actionError={actionError}
         disabled={pending}

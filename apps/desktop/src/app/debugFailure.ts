@@ -1,5 +1,5 @@
-import { errorMessage } from "../api/errors";
-import type { AppServices } from "./services";
+import { errorMessage } from "@/api";
+import type { AppServices } from "@/app-facade";
 
 type Logger = AppServices["logger"];
 

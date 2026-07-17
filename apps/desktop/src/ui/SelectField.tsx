@@ -3,7 +3,7 @@ import { useId, useMemo, useState, type ReactNode } from "react";
 import { DisabledInteractionGuard } from "./DisabledInteractionGuard";
 import { FieldShell, type FieldError } from "./Field";
 import { SelectOptionsList, SelectTrigger } from "./SelectFieldParts";
-import { DropdownMenu, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuTrigger } from "./radix/dropdown-menu";
 
 export type SelectFieldOption = Readonly<{
   label: ReactNode;

@@ -36,15 +36,8 @@ import {
   createTauriNativeNotifications,
   type NativeNotificationBridge,
 } from "./notifications";
-import {
-  createBrowserWindowFocusControls,
-  createTauriWindowFocusControls,
-} from "./windowFocus";
-import {
-  createBrowserUpdates,
-  createTauriUpdates,
-  type NativeUpdateBridge,
-} from "./updates";
+import { createBrowserWindowFocusControls, createTauriWindowFocusControls } from "./windowFocus";
+import { createBrowserUpdates, createTauriUpdates, type NativeUpdateBridge } from "./updates";
 
 export type { NativeDialogContentSize, NativeDialogTheme, NativeDialogWindowOptions } from "./dialogs";
 export type {
@@ -68,10 +61,7 @@ export {
   type NativeCapabilityState,
   type NativePlatform,
 } from "./capabilities";
-export {
-  NativeNotificationIDMapper,
-  type NativeNotificationBackendID,
-} from "./notificationIds";
+export { NativeNotificationIDMapper, type NativeNotificationBackendID } from "./notificationIds";
 export {
   createUnavailableNativeNotifications,
   createBrowserNativeNotifications,

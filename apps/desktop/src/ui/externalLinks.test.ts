@@ -27,12 +27,8 @@ describe("safeExternalUrl", () => {
 
 describe("compactExternalUrlLabel", () => {
   it("returns the bare host for http(s) URLs", () => {
-    expect(compactExternalUrlLabel("https://github.com/respawn-llc/kent/issues/1")).toBe(
-      "github.com",
-    );
-    expect(compactExternalUrlLabel("http://docs.example.com:8080/path?q=1")).toBe(
-      "docs.example.com",
-    );
+    expect(compactExternalUrlLabel("https://github.com/respawn-llc/kent/issues/1")).toBe("github.com");
+    expect(compactExternalUrlLabel("http://docs.example.com:8080/path?q=1")).toBe("docs.example.com");
   });
 
   it("strips a leading www.", () => {
@@ -40,8 +36,6 @@ describe("compactExternalUrlLabel", () => {
   });
 
   it("falls back to the full value when there is no host", () => {
-    expect(compactExternalUrlLabel("mailto:support@respawn.pro")).toBe(
-      "mailto:support@respawn.pro",
-    );
+    expect(compactExternalUrlLabel("mailto:support@respawn.pro")).toBe("mailto:support@respawn.pro");
   });
 });

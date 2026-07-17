@@ -24,3 +24,6 @@ onlyBuiltDependencies: []
 # PNPM 11 requires an explicit decision for ignored lifecycle scripts.
 allowBuilds:
   msw: false
+  # The resolver ships platform bindings as optional dependencies. Its postinstall
+  # fallback is unnecessary for the supported workspace toolchains.
+  unrs-resolver: false

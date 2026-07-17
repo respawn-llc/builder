@@ -1,16 +1,12 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { AttentionItem, TaskDetail } from "../../api";
-import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
-import { sameTaskDetailInitialFocus } from "../../app/taskDetailInitialFocus";
-import { useAppServices } from "../../app/useAppServices";
-import { Island } from "../../ui";
-import {
-  ApprovalBox,
-  InterruptedRunBox,
-  QuestionBox,
-} from "./TaskDetailAttention";
+import type { AttentionItem, TaskDetail } from "@/api";
+import type { TaskDetailInitialFocus } from "@/app-facade";
+import { sameTaskDetailInitialFocus } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { Island } from "@/ui";
+import { ApprovalBox, InterruptedRunBox, QuestionBox } from "./TaskDetailAttention";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { useTaskMutations } from "./useTaskDetailData";
 
@@ -93,16 +89,17 @@ function focusedAttentionItemID(
         itemIDByAskID.set(item.askID, item.id);
       }
     }
-    return initialFocus.askIDs.map((askID) => itemIDByAskID.get(askID)).find((itemID) => itemID !== undefined);
+    return initialFocus.askIDs
+      .map((askID) => itemIDByAskID.get(askID))
+      .find((itemID) => itemID !== undefined);
   }
   if (initialFocus.kind === "approval") {
     return attentionItems.find(
       (item) => item.kind === "approval" && item.taskTransitionID === initialFocus.taskTransitionID,
     )?.id;
   }
-  return attentionItems.find(
-    (item) => item.kind === "interrupted_run" && item.runID === initialFocus.runID,
-  )?.id;
+  return attentionItems.find((item) => item.kind === "interrupted_run" && item.runID === initialFocus.runID)
+    ?.id;
 }
 
 function InboxItem({
@@ -185,7 +182,12 @@ function InboxItem({
   }
   return (
     <div ref={focusTargetRef}>
-      <Island aria-label={attention.kind || t("task.inbox")} className="grid gap-[var(--space-2)]" level={1} radius="l">
+      <Island
+        aria-label={attention.kind || t("task.inbox")}
+        className="grid gap-[var(--space-2)]"
+        level={1}
+        radius="l"
+      >
         <h3 className="m-0">{attention.kind || t("task.inbox")}</h3>
         <p className="m-0">{attention.message}</p>
       </Island>

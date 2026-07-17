@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import type { BoardColumn } from "../../api";
+import type { BoardColumn } from "@/api";
 import type { BoardCardDragPayload } from "./BoardDragTypes";
 import { classifyDrop } from "./BoardDropActions";
 
 describe("classifyDrop", () => {
   it("prioritizes Backlog start over the same server-provided manual target", () => {
-    expect(classifyDrop(baseColumn, { ...baseDragPayload, canStart: true, manualMoveTargetNodeIDs: ["node-target"] }, "node-target")).toEqual({ kind: "start" });
+    expect(
+      classifyDrop(
+        baseColumn,
+        { ...baseDragPayload, canStart: true, manualMoveTargetNodeIDs: ["node-target"] },
+        "node-target",
+      ),
+    ).toEqual({ kind: "start" });
   });
 
   it("does not force target-union output fields onto allowed manual moves", () => {
@@ -26,7 +32,11 @@ describe("classifyDrop", () => {
   it("rejects source-less moves into join columns", () => {
     expect(
       classifyDrop(
-        { ...baseColumn, kind: "join", transitionOutputFields: [{ name: "summary", description: "Summary" }] },
+        {
+          ...baseColumn,
+          kind: "join",
+          transitionOutputFields: [{ name: "summary", description: "Summary" }],
+        },
         { ...baseDragPayload, activeNodeIDs: [], statusKind: "backlog" },
         undefined,
       ),
@@ -37,7 +47,12 @@ describe("classifyDrop", () => {
     expect(
       classifyDrop(
         { ...baseColumn, id: "node-join", kind: "join" },
-        { ...baseDragPayload, activeNodeIDs: [], manualMoveTargetNodeIDs: ["node-join"], statusKind: "backlog" },
+        {
+          ...baseDragPayload,
+          activeNodeIDs: [],
+          manualMoveTargetNodeIDs: ["node-join"],
+          statusKind: "backlog",
+        },
         undefined,
       ),
     ).toEqual({ kind: "move" });

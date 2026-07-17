@@ -1,4 +1,10 @@
-import { forwardRef, useId, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
+import {
+  forwardRef,
+  useId,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from "react";
 import { z } from "zod";
 
 import { cx } from "./classes";
@@ -74,7 +80,15 @@ export type TextInputProps = Readonly<{
 }> &
   InputHTMLAttributes<HTMLInputElement>;
 
-export function TextInput({ label, labelHelp, error, hint, className, trailingControl, ...props }: TextInputProps) {
+export function TextInput({
+  label,
+  labelHelp,
+  error,
+  hint,
+  className,
+  trailingControl,
+  ...props
+}: TextInputProps) {
   const generatedId = useId();
   const inputId = props.id ?? generatedId;
   const hintId = `${inputId}-hint`;

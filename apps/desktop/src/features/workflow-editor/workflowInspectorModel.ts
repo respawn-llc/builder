@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowNode, WorkflowTransitionGroup } from "../../api";
+import type { WorkflowDefinition, WorkflowNode, WorkflowTransitionGroup } from "@/api";
 
 export function fallbackLabel(fallback: string, ...candidates: readonly (string | undefined)[]): string {
   return candidates.find((candidate) => candidate !== undefined && candidate.trim().length > 0) ?? fallback;

@@ -1,4 +1,4 @@
-import type { WorkflowParameter } from "../../api";
+import type { WorkflowParameter } from "@/api";
 import { isWorkflowModelKeyValid } from "./workflowEditorGraphKeys";
 
 export type PromptTemplatePlaceholderTone = "muted" | "primary";

@@ -5,7 +5,7 @@ import { useBoardMoveRunFeedback } from "./BoardMoveRunFeedback";
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
 
-vi.mock("../../app/useStatusController", () => ({
+vi.mock("@/app-facade", () => ({
   useStatusController: () => ({ push }),
 }));
 

@@ -1,5 +1,5 @@
-import type { TaskStatus } from "../../api";
-import type { BadgeTone } from "../../ui";
+import type { TaskStatus } from "@/api";
+import type { BadgeTone } from "@/ui";
 
 export function taskStatusTone(status: TaskStatus): BadgeTone {
   if (status.kind === "canceled" || status.nativeState === "canceled") {

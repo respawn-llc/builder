@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/rpcwire"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -158,7 +159,7 @@ func (e *Engine) compactWithRetry(ctx context.Context, stepID string, client llm
 		if i == len(delays) {
 			break
 		}
-		if err := waitForRetryDelay(ctx, delays[i]); err != nil {
+		if err := rpcwire.WaitForRetry(ctx, delays[i]); err != nil {
 			return llm.CompactionResponse{}, err
 		}
 	}

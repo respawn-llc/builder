@@ -2,9 +2,9 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
-import type { WorkflowNodeKind } from "../../api";
-import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
+import { initializeI18n } from "@/i18n";
+import type { WorkflowNodeKind } from "@/api";
+import { workflowEditorEnglish } from "@/i18n";
 import {
   WorkflowGraphCanvas,
   type WorkflowGraphCanvasProps,

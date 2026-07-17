@@ -146,11 +146,7 @@ describe("JsonRpcWebSocketTransport", () => {
   it("keeps no-timeout control calls pending past the generic request deadline", async () => {
     vi.useFakeTimers();
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const mutation = transport.call(
-      "workflow.task.start",
-      { task_id: "task-1" },
-      { timeoutMs: null },
-    );
+    const mutation = transport.call("workflow.task.start", { task_id: "task-1" }, { timeoutMs: null });
     let settled = false;
     mutation.then(
       () => {

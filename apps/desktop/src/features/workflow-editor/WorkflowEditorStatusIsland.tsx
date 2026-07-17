@@ -1,14 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type {
-  WorkflowGraphSaveImpact,
-  WorkflowGraphSavePreview,
-  WorkflowValidationError,
-} from "../../api";
-import { Button, FloatingNoticeIsland } from "../../ui";
-import { WorkflowValidationIssues } from "../workflow/WorkflowValidationIssues";
-import { normalizeWorkflowValidationErrors } from "../workflow/workflowValidationIssueNormalization";
+import type { WorkflowGraphSaveImpact, WorkflowGraphSavePreview, WorkflowValidationError } from "@/api";
+import { normalizeWorkflowValidationErrors, WorkflowValidationIssues } from "@/shared/workflow-validation";
+import { Button, FloatingNoticeIsland } from "@/ui";
 import type { WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 
 export function WorkflowEditorStatusIsland({

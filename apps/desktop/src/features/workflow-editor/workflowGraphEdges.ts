@@ -1,6 +1,6 @@
 import type { ElkExtendedEdge } from "elkjs/lib/elk-api";
 
-import type { WorkflowDefinition } from "../../api";
+import type { WorkflowDefinition } from "@/api";
 import {
   workflowGraphEndpointPortID,
   workflowGraphEndpointPortY,
@@ -71,8 +71,10 @@ export function visibleWorkflowGraphEdgeModels(
   return inputs.map((input) =>
     workflowGraphEdgeModel({
       ...input,
-      sourcePort: sourcePortByEdgeID.get(input.edgeID) ?? fallbackEndpointPort(input, "source", nodeHeightByID),
-      targetPort: targetPortByEdgeID.get(input.edgeID) ?? fallbackEndpointPort(input, "target", nodeHeightByID),
+      sourcePort:
+        sourcePortByEdgeID.get(input.edgeID) ?? fallbackEndpointPort(input, "source", nodeHeightByID),
+      targetPort:
+        targetPortByEdgeID.get(input.edgeID) ?? fallbackEndpointPort(input, "target", nodeHeightByID),
     }),
   );
 }
@@ -136,7 +138,9 @@ function edgeLabel(
 function workflowNodeHeightByID(
   nodes: readonly WorkflowDefinition["nodes"][number][],
 ): ReadonlyMap<string, number> {
-  return new Map(nodes.map((node) => [node.id, node.kind === "join" ? workflowJoinNodeSize : workflowNodeHeight]));
+  return new Map(
+    nodes.map((node) => [node.id, node.kind === "join" ? workflowJoinNodeSize : workflowNodeHeight]),
+  );
 }
 
 function endpointPortByEdgeID(

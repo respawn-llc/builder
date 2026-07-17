@@ -2,14 +2,14 @@ export type ConnectionPhase = "idle" | "connecting" | "connected" | "disconnecte
 
 export type ConnectionSnapshot = Readonly<{
   phase: ConnectionPhase;
-  lastError: string;
+  lastError: string | null;
   generation: number;
 }>;
 
 export type ConnectionListener = () => void;
 
 export class ConnectionStore {
-  #snapshot: ConnectionSnapshot = { phase: "idle", lastError: "", generation: 0 };
+  #snapshot: ConnectionSnapshot = { phase: "idle", lastError: null, generation: 0 };
   #listeners = new Set<ConnectionListener>();
 
   snapshot(): ConnectionSnapshot {
@@ -23,7 +23,7 @@ export class ConnectionStore {
     };
   }
 
-  set(phase: ConnectionPhase, lastError = ""): void {
+  set(phase: ConnectionPhase, lastError: string | null = null): void {
     if (this.#snapshot.phase === phase && this.#snapshot.lastError === lastError) {
       return;
     }

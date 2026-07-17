@@ -1,4 +1,4 @@
-import type { BoardCard, BoardColumn, BoardGroup, MarkdownPreview, TaskStatusKind } from "../../api";
+import type { BoardCard, BoardColumn, BoardGroup, MarkdownPreview, TaskStatusKind } from "@/api";
 
 export type KanbanGroupVM = Readonly<{
   id: string;

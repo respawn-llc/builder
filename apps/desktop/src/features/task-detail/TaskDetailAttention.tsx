@@ -1,19 +1,17 @@
 import { useTranslation } from "react-i18next";
 
-import type { AttentionItem, TaskTransition } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { useAppServices } from "../../app/useAppServices";
-import { Button, Island, showStatusToast } from "../../ui";
-import { writeClipboardText } from "../../ui/clipboard";
-import { WorkflowEdgeRouteGraphic } from "../workflow-editor/WorkflowEdgeRouteGraphic";
-import {
-  ExecutionTargetContinuationDialog,
-} from "../execution-target/ExecutionTargetContinuationDialog";
-import { useExecutionTargetContinuation } from "../execution-target/useExecutionTargetContinuation";
+import type { AttentionItem, TaskTransition } from "@/api";
+import { errorMessage } from "@/api";
+import { useAppServices } from "@/app-facade";
 import {
   approveExecutionTargetAction,
+  ExecutionTargetContinuationDialog,
   executeExecutionTargetAction,
-} from "../execution-target/executionTargetContinuation";
+  useExecutionTargetContinuation,
+} from "@/shared/execution-target";
+import { writeClipboardText } from "@/shared/native-clipboard";
+import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
+import { Button, Island, showStatusToast } from "@/ui";
 import type { useTaskMutations } from "./useTaskDetailData";
 
 export { QuestionBox } from "./TaskDetailQuestionForm";
@@ -70,62 +68,62 @@ export function ApprovalBox({
       >
         {transition !== undefined ? (
           <div className="grid gap-[var(--space-2)]">
-          <div
-            className="flex min-w-0 items-center gap-[var(--space-2)]"
-            data-testid="task-approval-route-action-row"
-          >
-            <WorkflowEdgeRouteGraphic
-              className="-ml-[var(--space-2)]"
-              contextMode=""
-              layout="compact"
-              neutralArrow
-              sourceLabel={transition.sourceNodeName}
-              targetLabel={transitionTargetLabel(transition, t)}
-            />
-            <span className="min-w-0 flex-1" />
-            <Button
-              className="shrink-0"
-              disabled={
-                disabled ||
-                executionTargetContinuation.running ||
-                executionTargetContinuation.pending !== null
-              }
-              onClick={approve}
-              variant="primary"
+            <div
+              className="flex min-w-0 items-center gap-[var(--space-2)]"
+              data-testid="task-approval-route-action-row"
             >
-              {t("task.approve")}
-            </Button>
+              <WorkflowEdgeRouteGraphic
+                className="-ml-[var(--space-2)]"
+                contextMode=""
+                layout="compact"
+                neutralArrow
+                sourceLabel={transition.sourceNodeName}
+                targetLabel={transitionTargetLabel(transition, t)}
+              />
+              <span className="min-w-0 flex-1" />
+              <Button
+                className="shrink-0"
+                disabled={
+                  disabled ||
+                  executionTargetContinuation.running ||
+                  executionTargetContinuation.pending !== null
+                }
+                onClick={approve}
+                variant="primary"
+              >
+                {t("task.approve")}
+              </Button>
+            </div>
+            {transition.commentary.length > 0 ? (
+              <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-muted)]">
+                {transition.commentary}
+              </p>
+            ) : null}
+            <ApprovalOutputValues
+              nativeBridge={nativeBridge}
+              outputValues={transition.outputValues}
+              onCopied={(name) => {
+                showStatusToast({
+                  id: `task-approval-output-copied-${name}`,
+                  title: t("task.outputValueCopied", { name }),
+                  tone: "success",
+                });
+              }}
+              onCopyFailed={(name, error) => {
+                showStatusToast({
+                  body: errorMessage(error),
+                  id: `task-approval-output-copy-failed-${name}`,
+                  title: t("task.outputValueCopyFailed", { name }),
+                  tone: "danger",
+                });
+              }}
+            />
+            {stale ? (
+              <p className="m-0 text-sm text-[var(--color-warning)]">
+                <strong>{t("task.staleApproval")}</strong> {t("task.staleApprovalBody")}
+              </p>
+            ) : null}
           </div>
-          {transition.commentary.length > 0 ? (
-            <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-muted)]">
-              {transition.commentary}
-            </p>
-          ) : null}
-          <ApprovalOutputValues
-            nativeBridge={nativeBridge}
-            outputValues={transition.outputValues}
-            onCopied={(name) => {
-              showStatusToast({
-                id: `task-approval-output-copied-${name}`,
-                title: t("task.outputValueCopied", { name }),
-                tone: "success",
-              });
-            }}
-            onCopyFailed={(name, error) => {
-              showStatusToast({
-                body: errorMessage(error),
-                id: `task-approval-output-copy-failed-${name}`,
-                title: t("task.outputValueCopyFailed", { name }),
-                tone: "danger",
-              });
-            }}
-          />
-          {stale ? (
-            <p className="m-0 text-sm text-[var(--color-warning)]">
-              <strong>{t("task.staleApproval")}</strong> {t("task.staleApprovalBody")}
-            </p>
-          ) : null}
-        </div>
         ) : (
           <>
             <p>{t("task.unavailableSnapshot")}</p>

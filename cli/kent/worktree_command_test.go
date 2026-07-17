@@ -312,6 +312,21 @@ func TestWorktreeEnterRejectsPartialRuntimeOriginBeforeRPC(t *testing.T) {
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
 	t.Setenv(sessionenv.RunIDEnv, "018fdd67-89ab-4cde-8123-456789abc001")
+	previousStepID, hadStepID := os.LookupEnv(sessionenv.StepIDEnv)
+	if err := os.Unsetenv(sessionenv.StepIDEnv); err != nil {
+		t.Fatalf("unset %s: %v", sessionenv.StepIDEnv, err)
+	}
+	t.Cleanup(func() {
+		var err error
+		if hadStepID {
+			err = os.Setenv(sessionenv.StepIDEnv, previousStepID)
+		} else {
+			err = os.Unsetenv(sessionenv.StepIDEnv)
+		}
+		if err != nil {
+			t.Errorf("restore %s: %v", sessionenv.StepIDEnv, err)
+		}
+	})
 
 	_, stderr, exitCode := runRootCommand("worktree", "enter", "feature/a")
 	if exitCode != 2 {

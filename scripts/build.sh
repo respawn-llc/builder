@@ -54,8 +54,7 @@ run_desktop_build() {
 
 	local log_file
 	log_file="$(mktemp -t kent-frontend-build.XXXXXX.log)"
-	export npm_config_confirm_modules_purge=false
-	if pnpm --dir apps install --frozen-lockfile >"$log_file" 2>&1 </dev/null &&
+	if ./scripts/install-frontend-dependencies.sh >"$log_file" 2>&1 </dev/null &&
 		pnpm --dir apps build >>"$log_file" 2>&1 </dev/null; then
 		rm -f "$log_file"
 		return

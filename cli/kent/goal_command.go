@@ -19,6 +19,17 @@ import (
 
 const goalCommandTimeout = 5 * time.Second
 
+type goalRuntimeUnavailablePresentationError struct {
+	SessionID string
+}
+
+func (e goalRuntimeUnavailablePresentationError) Error() string {
+	return fmt.Sprintf(
+		"No session is currently running under that goal, and updating it without an active run can make the model confused. Please start session %s.",
+		e.SessionID,
+	)
+}
+
 type goalCommandRemote interface {
 	ShowGoal(context.Context, serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error)
 	SetGoal(context.Context, serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error)
@@ -99,7 +110,7 @@ func goalShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		defer cancel()
 		resp, err := remote.ShowGoal(ctx, serverapi.RuntimeGoalShowRequest{SessionID: target})
 		if err != nil {
-			fmt.Fprintln(stderr, formatGoalCommandError(err))
+			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
@@ -137,7 +148,7 @@ func goalSetSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		defer cancel()
 		resp, err := remote.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: uuid.NewString(), SessionID: target, Objective: objective, Actor: actor, RunID: runID, StepID: stepID})
 		if err != nil {
-			fmt.Fprintln(stderr, formatGoalCommandError(err))
+			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
 			return 1
 		}
 		writeGoalShowText(stdout, resp.Goal)
@@ -182,7 +193,7 @@ func goalStatusSubcommand(action string, args []string, stdout io.Writer, stderr
 			resp, callErr = remote.ResumeGoal(ctx, req)
 		}
 		if callErr != nil {
-			fmt.Fprintln(stderr, formatGoalCommandError(callErr))
+			fmt.Fprintln(stderr, goalMutationCommandError(target, callErr))
 			return 1
 		}
 		writeGoalShowText(stdout, resp.Goal)
@@ -211,7 +222,7 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		current, err := remote.ShowGoal(showCtx, serverapi.RuntimeGoalShowRequest{SessionID: target})
 		showCancel()
 		if err != nil {
-			fmt.Fprintln(stderr, formatGoalCommandError(err))
+			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if goalAlreadyComplete(current.Goal) {
@@ -236,7 +247,7 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		defer completeCancel()
 		resp, err := remote.CompleteGoal(completeCtx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: uuid.NewString(), SessionID: target, Actor: actor, RunID: runID, StepID: stepID})
 		if err != nil {
-			fmt.Fprintln(stderr, formatGoalCommandError(err))
+			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
 			return 1
 		}
 		writeGoalShowText(stdout, resp.Goal)
@@ -271,7 +282,7 @@ func goalClearSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		ctx, cancel := context.WithTimeout(context.Background(), goalCommandTimeout)
 		defer cancel()
 		if _, err := remote.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: uuid.NewString(), SessionID: target, Actor: "user"}); err != nil {
-			fmt.Fprintln(stderr, formatGoalCommandError(err))
+			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
 			return 1
 		}
 		fmt.Fprintln(stdout, "Goal cleared")
@@ -319,9 +330,9 @@ func writeGoalShowText(stdout io.Writer, goal *serverapi.RuntimeGoal) {
 	fmt.Fprintf(stdout, "Goal: %s\nStatus: %s\n", goal.Objective, goal.Status)
 }
 
-func formatGoalCommandError(err error) string {
+func goalMutationCommandError(sessionID string, err error) error {
 	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		return "live-runtime-unavailable: " + err.Error()
+		return goalRuntimeUnavailablePresentationError{SessionID: strings.TrimSpace(sessionID)}
 	}
-	return err.Error()
+	return err
 }

@@ -118,9 +118,18 @@ export declare const ReactFlow: ComponentType<
 >;
 
 export declare const ReactFlowProvider: ComponentType<Readonly<{ children?: ReactNode }>>;
-export declare const Background: ComponentType<Readonly<{ bgColor?: string; color?: string; gap?: number; size?: number; variant?: string }>>;
+export declare const Background: ComponentType<
+  Readonly<{ bgColor?: string; color?: string; gap?: number; size?: number; variant?: string }>
+>;
 export declare const BackgroundVariant: Readonly<{ Dots: string }>;
-export declare const BaseEdge: ComponentType<Readonly<{ "data-testid"?: string; markerEnd?: string | Readonly<{ color?: string; type: string }>; path: string; style?: CSSProperties }>>;
+export declare const BaseEdge: ComponentType<
+  Readonly<{
+    "data-testid"?: string;
+    markerEnd?: string | Readonly<{ color?: string; type: string }>;
+    path: string;
+    style?: CSSProperties;
+  }>
+>;
 export declare const EdgeLabelRenderer: ComponentType<Readonly<{ children?: ReactNode }>>;
 export declare const Handle: ComponentType<
   Readonly<{

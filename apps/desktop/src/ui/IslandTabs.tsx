@@ -82,7 +82,9 @@ function IslandTab<TValue extends string>({
         type="button"
       >
         <span className="min-w-0 truncate">{item.label}</span>
-        {item.meta !== undefined ? <span className="shrink-0 text-xs text-[var(--color-muted)]">{item.meta}</span> : null}
+        {item.meta !== undefined ? (
+          <span className="shrink-0 text-xs text-[var(--color-muted)]">{item.meta}</span>
+        ) : null}
       </button>
       {item.action !== undefined ? (
         <button

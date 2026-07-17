@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { useAppServices } from "../../app/useAppServices";
+import { useAppServices } from "@/app-facade";
 
 export type ScriptOpenAvailabilityTarget = Readonly<{
   basePath: string | null;

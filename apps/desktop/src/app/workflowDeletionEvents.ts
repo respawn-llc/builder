@@ -2,10 +2,10 @@ import type { NativeBridge, NativeWorkflowDeleted } from "@app/native-bridge";
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import { errorMessage } from "../api/errors";
-import { queryKeys } from "./queryKeys";
-import type { SidebarController } from "./sidebarContext";
-import { useAppServices } from "./useAppServices";
+import { errorMessage } from "@/api";
+import { queryKeys } from "@/app-facade";
+import type { SidebarController } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
 
 export function useWorkflowDeletedEvents(
   nativeBridge: NativeBridge,

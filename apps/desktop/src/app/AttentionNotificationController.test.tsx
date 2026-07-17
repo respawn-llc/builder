@@ -8,21 +8,21 @@ import {
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 
-import { App } from "../App";
-import { RpcError } from "../api/errors";
-import { rpcErrorCodes } from "../api/rpcErrorCodes";
-import { createTestServices, startupRoutes } from "../testSupport/appServices";
-import { dismissStatusToast, showStatusToast, type StatusNotice } from "../ui";
-import type * as uiModule from "../ui";
+import { App } from "./startup/App";
+import { RpcError } from "@/api";
+import { rpcErrorCodes } from "@/api";
+import { createTestServices, startupRoutes } from "@/test-support/app-services";
+import { dismissStatusToast, showStatusToast, type StatusNotice } from "@/ui";
+import type * as uiModule from "@/ui";
 import { AppProviders } from "./AppProviders";
 import { AttentionNotificationController } from "./AttentionNotificationController";
-import { SidebarContext, type SidebarController } from "./sidebarContext";
+import { SidebarContext, type SidebarController } from "@/app-facade";
 
 const statusToastHarness = vi.hoisted(() => ({
   notices: new Map<string, StatusNotice>(),
 }));
 
-vi.mock("../ui", async (importOriginal) => {
+vi.mock("@/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof uiModule>();
   return {
     ...actual,

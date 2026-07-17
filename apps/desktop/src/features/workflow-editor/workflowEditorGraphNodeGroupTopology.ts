@@ -1,4 +1,4 @@
-import type { WorkflowEdge } from "../../api";
+import type { WorkflowEdge } from "@/api";
 import type { DraftWorkflowDefinition, DraftWorkflowNode } from "./workflowEditorDraftTypes";
 import { uniqueWorkflowModelKey } from "./workflowEditorGraphKeys";
 import {
@@ -63,7 +63,13 @@ function inferNodeGroupV1TopologyFacts(
   const fanout = inferExistingGroupFanoutTopology(draft, topology.existingBranches);
   return fanout === null || !hasExistingBranchJoinTopology(draft, topology.existingBranches, topology.join.id)
     ? null
-    : { addedBranch, fanoutEdgeKeys: fanout.fanoutEdgeKeys, fanoutGroupID: fanout.fanoutGroupID, join: topology.join, kind: "additional" };
+    : {
+        addedBranch,
+        fanoutEdgeKeys: fanout.fanoutEdgeKeys,
+        fanoutGroupID: fanout.fanoutGroupID,
+        join: topology.join,
+        kind: "additional",
+      };
 }
 
 function inferNodeGroupMembers(
@@ -96,7 +102,9 @@ function inferInitialFanoutTopology(
   if (incomingToExistingBranch.length !== 1) {
     return null;
   }
-  const fanoutGroup = draft.transitionGroups.find((group) => group.id === incomingToExistingBranch[0]?.transitionGroupID);
+  const fanoutGroup = draft.transitionGroups.find(
+    (group) => group.id === incomingToExistingBranch[0]?.transitionGroupID,
+  );
   const fanoutSource = draft.nodes.find((node) => node.id === fanoutGroup?.sourceNodeID);
   if (fanoutGroup === undefined || fanoutSource === undefined || fanoutSource.kind === "start") {
     return null;
@@ -118,13 +126,19 @@ function inferExistingGroupFanoutTopology(
     return null;
   }
   const fanoutGroupID = incomingByBranch[0]?.[0]?.transitionGroupID;
-  if (fanoutGroupID === undefined || incomingByBranch.some((incoming) => incoming[0]?.transitionGroupID !== fanoutGroupID)) {
+  if (
+    fanoutGroupID === undefined ||
+    incomingByBranch.some((incoming) => incoming[0]?.transitionGroupID !== fanoutGroupID)
+  ) {
     return null;
   }
   const fanoutEdges = edgesForTransitionGroup(draft, fanoutGroupID);
   const existingBranchIDs = new Set(existingBranches.map((branch) => branch.id));
   const fanoutTargets = new Set(fanoutEdges.map((edge) => edge.targetNodeID));
-  if (fanoutEdges.length !== existingBranchIDs.size || ![...existingBranchIDs].every((id) => fanoutTargets.has(id))) {
+  if (
+    fanoutEdges.length !== existingBranchIDs.size ||
+    ![...existingBranchIDs].every((id) => fanoutTargets.has(id))
+  ) {
     return null;
   }
   return { fanoutEdgeKeys: fanoutEdges.map((edge) => edge.key), fanoutGroupID };
@@ -152,8 +166,13 @@ function inferDownstreamGroup(
   existingBranchID: string,
   joinID: string,
 ): DraftWorkflowDefinition["transitionGroups"][number] | null {
-  const existingOutgoingGroups = draft.transitionGroups.filter((group) => group.sourceNodeID === existingBranchID);
-  if (existingOutgoingGroups.length !== 1 || draft.transitionGroups.some((group) => group.sourceNodeID === joinID)) {
+  const existingOutgoingGroups = draft.transitionGroups.filter(
+    (group) => group.sourceNodeID === existingBranchID,
+  );
+  if (
+    existingOutgoingGroups.length !== 1 ||
+    draft.transitionGroups.some((group) => group.sourceNodeID === joinID)
+  ) {
     return null;
   }
   const downstreamGroup = existingOutgoingGroups[0];
@@ -171,7 +190,10 @@ function applyNodeGroupV1Topology(
 ): DraftWorkflowDefinition {
   return {
     ...draft,
-    edges: [...nodeGroupV1TopologyExistingEdges(draft, topology), ...nodeGroupV1TopologyEdges(draft, ids, topology)],
+    edges: [
+      ...nodeGroupV1TopologyExistingEdges(draft, topology),
+      ...nodeGroupV1TopologyEdges(draft, ids, topology),
+    ],
     transitionGroups: [
       ...draft.transitionGroups.map((group) =>
         topology.kind === "initial" && group.id === topology.downstreamGroup.id
@@ -247,7 +269,10 @@ function nodeGroupV1TopologyTransitionGroups(
       id: ids.addedBranchJoinTransitionGroupID,
       name: topology.join.name,
       sourceNodeID: topology.addedBranch.id,
-      transitionID: uniqueWorkflowModelKey(topology.join.key, transitionIDsForSource(draft, topology.addedBranch.id)),
+      transitionID: uniqueWorkflowModelKey(
+        topology.join.key,
+        transitionIDsForSource(draft, topology.addedBranch.id),
+      ),
       workflowID: draft.workflow.id,
     }),
   ];
@@ -257,7 +282,10 @@ function nodeGroupV1TopologyTransitionGroups(
           id: ids.existingBranchJoinTransitionGroupID,
           name: topology.join.name,
           sourceNodeID: topology.existingBranch.id,
-          transitionID: uniqueWorkflowModelKey(topology.join.key, transitionIDsForSource(draft, topology.existingBranch.id)),
+          transitionID: uniqueWorkflowModelKey(
+            topology.join.key,
+            transitionIDsForSource(draft, topology.existingBranch.id),
+          ),
           workflowID: draft.workflow.id,
         }),
         ...groups,

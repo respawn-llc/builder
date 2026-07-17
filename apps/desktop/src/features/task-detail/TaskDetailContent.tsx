@@ -1,9 +1,9 @@
 import { useState } from "react";
 
-import type { TaskDetail } from "../../api";
-import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { useUpdateTask } from "../tasks/useTaskMutations";
+import type { TaskDetail } from "@/api";
+import type { TaskDetailInitialFocus } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { useUpdateTask } from "@/shared/task-mutations";
 import {
   initialDescriptionPresentationState,
   type DescriptionPresentationState,

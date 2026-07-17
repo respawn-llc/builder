@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import type { NativeBridge } from "@app/native-bridge";
+
+import type { AppServices } from "@/app-facade";
 
 export type PendingWorkflowGraphDeleteConfirmation = Readonly<{
   requestID: string;
@@ -13,7 +14,7 @@ export function useWorkflowGraphDeleteConfirmationListener<
   onListenerError,
   pendingDeleteRef,
 }: Readonly<{
-  nativeBridge: NativeBridge;
+  nativeBridge: AppServices["nativeBridge"];
   onConfirmed: (deleteRequest: TPending) => void;
   onListenerError?: ((error: unknown) => void) | undefined;
   pendingDeleteRef: { current: TPending | null };

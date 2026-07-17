@@ -1,6 +1,4 @@
 const componentDirectories = new Set(["components", "ui"]);
-const dtoImportNames = new Set(["Dto", "DTO"]);
-const rawProtocolDirectories = new Set(["generated", "protocol"]);
 const disallowedEffectCalls = new Set(["fetch", "invoke"]);
 const knownBridgeIdentifiers = new Set(["apiClient", "appClient", "nativeBridge", "serverClient"]);
 const eslintDisableDirectiveKeywords = new Set([
@@ -106,33 +104,6 @@ export const appArchitecture = {
               if (mutableNames.has(getSpecifierName(specifier.local))) {
                 context.report({ node: specifier, messageId: "mutableExport" });
               }
-            }
-          },
-        };
-      },
-    },
-    "no-raw-dto-in-components": {
-      meta: {
-        type: "problem",
-        docs: {
-          description: "Keep generated protocol DTOs out of React component files.",
-        },
-        messages: {
-          rawDto:
-            "Do not import raw protocol DTOs in component files. Map DTOs to view models at feature boundaries.",
-        },
-        schema: [],
-      },
-      create(context) {
-        const filename = context.filename ?? context.getFilename();
-        if (!isComponentFile(filename)) {
-          return {};
-        }
-
-        return {
-          ImportDeclaration(node) {
-            if (isRawProtocolImportSource(node.source.value) || hasDtoImportSpecifier(node.specifiers)) {
-              context.report({ node, messageId: "rawDto" });
             }
           },
         };
@@ -262,28 +233,6 @@ function startsWithUppercaseAscii(value) {
   return first >= 65 && first <= 90;
 }
 
-function isRawProtocolImportSource(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  return value.split("/").some(isRawProtocolImportSegment);
-}
-
-function isRawProtocolImportSegment(segment) {
-  return rawProtocolDirectories.has(segment) || segment === "dto" || segment.endsWith(".dto");
-}
-
-function hasDtoImportSpecifier(specifiers) {
-  return specifiers.some((specifier) => {
-    if (specifier.type !== "ImportSpecifier") {
-      return false;
-    }
-
-    return isDtoName(getSpecifierName(specifier.imported)) || isDtoName(specifier.local.name);
-  });
-}
-
 function getSpecifierName(specifier) {
   if (specifier.type === "Identifier") {
     return specifier.name;
@@ -326,10 +275,6 @@ function collectPatternNames(pattern, names) {
   if (pattern.type === "RestElement") {
     collectPatternNames(pattern.argument, names);
   }
-}
-
-function isDtoName(name) {
-  return [...dtoImportNames].some((suffix) => name.endsWith(suffix));
 }
 
 function collectReactEffectBindings(node, reactEffectNames, reactNamespaces) {

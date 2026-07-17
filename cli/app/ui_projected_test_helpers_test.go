@@ -13,6 +13,9 @@ import (
 	"core/server/sessionview"
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/serverapi"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func waitForTestCondition(t *testing.T, timeout time.Duration, label string, condition func() bool) {
@@ -44,6 +47,75 @@ func sizedTestUIModel(m *uiModel, width, height int) *uiModel {
 
 func newProjectedStaticUIModel(opts ...UIOption) *uiModel {
 	return newProjectedTestUIModel(nil, opts...)
+}
+
+type recordingPromptControl struct {
+	askRequests      chan serverapi.AskAnswerRequest
+	approvalRequests chan serverapi.ApprovalAnswerRequest
+}
+
+func newRecordingPromptControl() *recordingPromptControl {
+	return &recordingPromptControl{
+		askRequests:      make(chan serverapi.AskAnswerRequest, 8),
+		approvalRequests: make(chan serverapi.ApprovalAnswerRequest, 8),
+	}
+}
+
+func (c *recordingPromptControl) AnswerAsk(_ context.Context, request serverapi.AskAnswerRequest) error {
+	c.askRequests <- request
+	return nil
+}
+
+func (c *recordingPromptControl) AnswerApproval(_ context.Context, request serverapi.ApprovalAnswerRequest) error {
+	c.approvalRequests <- request
+	return nil
+}
+
+func newProjectedPromptTestUIModel(t *testing.T, opts ...UIOption) (*uiModel, *recordingPromptControl) {
+	t.Helper()
+	control := newRecordingPromptControl()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	model := newProjectedStaticUIModel(opts...)
+	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
+	return model, control
+}
+
+func runPromptDeliveryCommand(t *testing.T, model *uiModel, command tea.Cmd) *uiModel {
+	t.Helper()
+	if command == nil {
+		t.Fatal("expected prompt delivery command")
+	}
+	return updateUIModel(t, model, command())
+}
+
+func submitAskPromptKey(t *testing.T, model *uiModel, control *recordingPromptControl, key tea.KeyMsg) (*uiModel, serverapi.AskAnswerRequest) {
+	t.Helper()
+	next, command := model.Update(key)
+	updated := runPromptDeliveryCommand(t, next.(*uiModel), command)
+	return updated, requireAskRequest(t, control)
+}
+
+func requireAskRequest(t *testing.T, control *recordingPromptControl) serverapi.AskAnswerRequest {
+	t.Helper()
+	select {
+	case request := <-control.askRequests:
+		return request
+	default:
+		t.Fatal("completed prompt delivery recorded no ask request")
+		return serverapi.AskAnswerRequest{}
+	}
+}
+
+func requireApprovalRequest(t *testing.T, control *recordingPromptControl) serverapi.ApprovalAnswerRequest {
+	t.Helper()
+	select {
+	case request := <-control.approvalRequests:
+		return request
+	default:
+		t.Fatal("completed prompt delivery recorded no approval request")
+		return serverapi.ApprovalAnswerRequest{}
+	}
 }
 
 func newProjectedEngineUIModel(engine *runtime.Engine, opts ...UIOption) *uiModel {
@@ -114,15 +186,15 @@ func testApprovalPrompt(id, question string, decisions ...clientui.ApprovalDecis
 	}
 }
 
-func testQuestionAskEvent(id, question string, reply chan askReply, suggestions ...string) askEvent {
-	return askEvent{prompt: testQuestionPrompt(id, question, suggestions...), reply: reply}
+func testQuestionAskEvent(id, question string, suggestions ...string) askEvent {
+	return askEvent{prompt: testQuestionPrompt(id, question, suggestions...)}
 }
 
 func testQuestionAskEventPtr(id, question string, suggestions ...string) *askEvent {
-	event := testQuestionAskEvent(id, question, nil, suggestions...)
+	event := testQuestionAskEvent(id, question, suggestions...)
 	return &event
 }
 
-func testApprovalAskEvent(id, question string, reply chan askReply, decisions ...clientui.ApprovalDecision) askEvent {
-	return askEvent{prompt: testApprovalPrompt(id, question, decisions...), reply: reply}
+func testApprovalAskEvent(id, question string, decisions ...clientui.ApprovalDecision) askEvent {
+	return askEvent{prompt: testApprovalPrompt(id, question, decisions...)}
 }

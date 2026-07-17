@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 
-import { useAppNavigation } from "../../app/navigation";
-import { Button } from "../../ui";
+import { useAppNavigation } from "@/app-facade";
+import { Button } from "@/ui";
 import { TaskDetailSurface } from "./TaskDetailSurface";
 
 export type StandaloneTaskRouteProps = Readonly<{

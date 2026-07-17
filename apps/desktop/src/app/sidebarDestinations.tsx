@@ -1,14 +1,12 @@
 import type { ReactElement } from "react";
 
-import { ProjectEditRoute } from "../features/project-edit/ProjectEditRoute";
-import { TaskDetailSurface } from "../features/task-detail/TaskDetailSurface";
-import { NewTaskForm } from "../features/tasks/NewTaskDialog";
-import { WorkflowInspectorSidebar } from "../features/workflow-editor/WorkflowInspectorSidebar";
-import { WorkflowEditorRoute } from "../features/workflow-editor/WorkflowEditorRoute";
-import { LinkWorkflowSidebar } from "../features/workflows/LinkWorkflowSidebar";
-import { WorkflowCreateForm } from "../features/workflows/WorkflowCreateForm";
-import { useAppNavigation } from "./navigation";
-import type { SidebarController, SidebarDestination } from "./sidebarContext";
+import { ProjectEditRoute } from "@/features/project-edit";
+import { TaskDetailSurface } from "@/features/task-detail";
+import { NewTaskForm } from "@/features/tasks";
+import { WorkflowEditorRoute, WorkflowInspectorSidebar } from "@/features/workflow-editor";
+import { LinkWorkflowSidebar, WorkflowCreateForm } from "@/features/workflows";
+import { useAppNavigation } from "@/app-facade";
+import type { SidebarController, SidebarDestination } from "@/app-facade";
 
 export function SidebarDestinationView({
   closeSidebar,

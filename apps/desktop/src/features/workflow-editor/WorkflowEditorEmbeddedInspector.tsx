@@ -1,8 +1,8 @@
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 
-import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
-import { Button, IslandSurface } from "../../ui";
+import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "@/app-facade";
+import { Button, IslandSurface } from "@/ui";
 import { WorkflowInspectorSidebar } from "./WorkflowInspectorSidebar";
 
 export function WorkflowEditorEmbeddedInspector({

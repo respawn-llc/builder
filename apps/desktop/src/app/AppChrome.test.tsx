@@ -2,8 +2,8 @@ import { createBrowserNativeBridge, type NativePlatform } from "@app/native-brid
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach } from "vitest";
 
-import { App } from "../App";
-import { createTestServices, startupRoutes } from "../testSupport/appServices";
+import { App } from "./startup/App";
+import { createTestServices, startupRoutes } from "@/test-support/app-services";
 
 describe("AppChrome debug theme toggle", () => {
   afterEach(() => {
@@ -47,7 +47,12 @@ describe("AppChrome debug theme toggle", () => {
 
     for (const testCase of cases) {
       const view = render(
-        <App services={createTestServices(startupRoutes, createBrowserNativeBridge({ platform: testCase.platform }))} />,
+        <App
+          services={createTestServices(
+            startupRoutes,
+            createBrowserNativeBridge({ platform: testCase.platform }),
+          )}
+        />,
       );
       await screen.findByTestId("home-route-root");
       const treatments = screen.getAllByTestId("app-chrome-top-treatment");

@@ -2,25 +2,25 @@ import type { DragEvent, SyntheticEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { useAppNavigation } from "../../app/navigation";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { useSidebar } from "../../app/sidebarContext";
-import { useAppServices } from "../../app/useAppServices";
-import { useNativeDialogFallback } from "../../app/useNativeDialogFallback";
-import { useStatusController } from "../../app/useStatusController";
-import { useWindowChromeTitle } from "../../app/windowChromeTitle";
-import { Button, EmptyState, ErrorState, FloatingNoticeIsland, LoadingState } from "../../ui";
-import { WorkflowValidationIssues } from "../workflow/WorkflowValidationIssues";
-import { ExecutionTargetContinuationDialog } from "../execution-target/ExecutionTargetContinuationDialog";
-import { useExecutionTargetContinuation } from "../execution-target/useExecutionTargetContinuation";
+import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
+import { errorMessage } from "@/api";
+import { useAppNavigation } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useNativeDialogFallback } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { useWindowChromeTitle } from "@/app-facade";
 import {
+  ExecutionTargetContinuationDialog,
   executeExecutionTargetAction,
   moveExecutionTargetAction,
   startExecutionTargetAction,
   type ExecutionTargetContinuationAction,
-} from "../execution-target/executionTargetContinuation";
+  useExecutionTargetContinuation,
+} from "@/shared/execution-target";
+import { WorkflowValidationIssues } from "@/shared/workflow-validation";
+import { Button, EmptyState, ErrorState, FloatingNoticeIsland, LoadingState } from "@/ui";
 import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { useBoardDragAutoScroll } from "./BoardDragAutoScroll";

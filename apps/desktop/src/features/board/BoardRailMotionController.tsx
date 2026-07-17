@@ -10,8 +10,8 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
-import type { BoardColumn, SelectedWorkflowBoard } from "../../api";
-import { chromeContentPaddingClassName } from "../../ui/chromePadding";
+import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
+import { chromeContentPaddingClassName } from "@/ui";
 import { type BoardColumnQueryDataSnapshot, type BoardColumnQuerySnapshot } from "./BoardColumnDataOwner";
 import { BoardColumnMotionBoundary } from "./BoardColumnMotionBoundary";
 import { runBoardCardMotionTransition } from "./BoardCardMotionAnimator";

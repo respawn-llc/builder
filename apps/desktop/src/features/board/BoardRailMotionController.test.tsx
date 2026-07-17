@@ -3,9 +3,9 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BoardCard, BoardColumn, SelectedWorkflowBoard, WorkflowPickerItem } from "../../api";
-import { appI18n, initializeI18n } from "../../i18n/setup";
-import { TestDataTransfer } from "../../testSupport/boardDrag";
+import type { BoardCard, BoardColumn, SelectedWorkflowBoard, WorkflowPickerItem } from "@/api";
+import { appI18n, initializeI18n } from "@/i18n";
+import { TestDataTransfer } from "@/test-support/board-drag";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import type { KanbanCardVM } from "./BoardColumnViewModel";
 import type { BoardCardDragPayload } from "./BoardDragTypes";

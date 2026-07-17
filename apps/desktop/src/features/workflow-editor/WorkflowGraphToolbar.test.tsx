@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
+import { initializeI18n } from "@/i18n";
 import { WorkflowGraphCanvas } from "./WorkflowGraphCanvas";
 
 void initializeI18n();
@@ -34,10 +34,9 @@ describe("WorkflowGraphToolbar", () => {
 
     const toolbar = within(screen.getByTestId("workflow-editor-tools"));
     expect(
-      toolbar.getAllByRole("button").map((button) => [
-        button.getAttribute("aria-label"),
-        button.getAttribute("title"),
-      ]),
+      toolbar
+        .getAllByRole("button")
+        .map((button) => [button.getAttribute("aria-label"), button.getAttribute("title")]),
     ).toEqual([
       ["Add node", "Add node"],
       ["Inspect workflow", null],

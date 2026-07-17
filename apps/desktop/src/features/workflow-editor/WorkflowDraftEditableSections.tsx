@@ -18,7 +18,7 @@ import { GripVertical, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import type { WorkflowDefinition, WorkflowParameter } from "../../api";
+import type { WorkflowDefinition, WorkflowParameter } from "@/api";
 import {
   Button,
   identifierInputAttributes,
@@ -28,9 +28,8 @@ import {
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "../../ui";
-import { cx } from "../../ui/classes";
-import { fieldInputClassName } from "../../ui/fieldInputStyles";
+} from "@/ui";
+import { cx, fieldInputClassName } from "@/ui";
 import { DetailSection } from "./WorkflowInspectorPrimitives";
 import { type DraftWorkflowEdge, type DraftWorkflowNode } from "./workflowEditorDraft";
 import { type WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
@@ -120,11 +119,7 @@ function PromptPlaceholderChips({
     >
       <TooltipProvider delayDuration={0}>
         {placeholders.map((placeholder) => (
-          <PromptPlaceholderChip
-            key={placeholder.label}
-            onInsert={onInsert}
-            placeholder={placeholder}
-          />
+          <PromptPlaceholderChip key={placeholder.label} onInsert={onInsert} placeholder={placeholder} />
         ))}
       </TooltipProvider>
     </div>
@@ -140,7 +135,10 @@ function PromptPlaceholderChip({
 }>) {
   const { t } = useTranslation();
   const [infoOpen, setInfoOpen] = useState(false);
-  const className = cx(promptPlaceholderChipBaseClassName, promptPlaceholderChipToneClassNames[placeholder.tone]);
+  const className = cx(
+    promptPlaceholderChipBaseClassName,
+    promptPlaceholderChipToneClassNames[placeholder.tone],
+  );
   if (placeholder.kind === "insert") {
     return (
       <button

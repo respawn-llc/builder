@@ -1,9 +1,5 @@
 export type WorkflowExecutionTargetMode =
-  | "none"
-  | "head"
-  | "default_branch"
-  | "custom_ref"
-  | "ask_on_first_execution";
+  "none" | "head" | "default_branch" | "custom_ref" | "ask_on_first_execution";
 
 export type WorkflowExecutionTargetPolicy = Readonly<{
   mode: WorkflowExecutionTargetMode;
@@ -21,11 +17,7 @@ export type WorkflowExecutionTargetSelection = Readonly<{
 }>;
 
 export type WorkflowExecutionTargetUnavailableCause =
-  | "invalid_revision"
-  | "non_commit"
-  | "default_branch_missing"
-  | "default_branch_ambiguous"
-  | "git_failure";
+  "invalid_revision" | "non_commit" | "default_branch_missing" | "default_branch_ambiguous" | "git_failure";
 
 export type WorkflowExecutionTargetSelectionRequirement =
   | Readonly<{
@@ -41,10 +33,7 @@ export type WorkflowExecutionTargetSelectionRequirement =
     }>;
 
 export type WorkflowExecutionTargetProvenance = "resolved" | "legacy_observed";
-export type WorkflowExecutionTargetWorktreeAvailability =
-  | "available"
-  | "missing"
-  | "inaccessible";
+export type WorkflowExecutionTargetWorktreeAvailability = "available" | "missing" | "inaccessible";
 
 export type WorkflowExecutionTargetWorktree = Readonly<{
   id: string;
@@ -75,9 +64,7 @@ export type WorkflowManagedExecutionTarget = Readonly<{
   managedWorktree: WorkflowExecutionTargetWorktree | null;
 }>;
 
-export type WorkflowExecutionTarget =
-  | WorkflowNoManagedExecutionTarget
-  | WorkflowManagedExecutionTarget;
+export type WorkflowExecutionTarget = WorkflowNoManagedExecutionTarget | WorkflowManagedExecutionTarget;
 
 export const defaultWorkflowExecutionTargetPolicy: WorkflowExecutionTargetPolicy = {
   mode: "ask_on_first_execution",

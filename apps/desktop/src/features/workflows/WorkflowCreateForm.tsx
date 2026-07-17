@@ -2,11 +2,11 @@ import { useState, type SyntheticEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import type { ProjectWorkflowLink, WorkflowRecord } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
-import { Button, ErrorState, TextArea, TextInput } from "../../ui";
+import type { ProjectWorkflowLink, WorkflowRecord } from "@/api";
+import { errorMessage } from "@/api";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { Button, ErrorState, TextArea, TextInput } from "@/ui";
 
 export type WorkflowCreateResult = Readonly<{
   workflow: WorkflowRecord;

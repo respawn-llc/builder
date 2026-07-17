@@ -1,6 +1,4 @@
-export {
-  addConnectedWorkflowNode,
-} from "./workflowEditorGraphConnectedNodeMutations";
+export { addConnectedWorkflowNode } from "./workflowEditorGraphConnectedNodeMutations";
 export {
   connectWorkflowNodes,
   deleteWorkflowEdge,

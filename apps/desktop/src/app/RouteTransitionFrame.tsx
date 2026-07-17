@@ -1,6 +1,6 @@
 import { Outlet, useLocation } from "@tanstack/react-router";
 
-import { cx } from "../ui/classes";
+import { cx } from "@/ui";
 import { routeFramePaddingClassName } from "./routeLayout";
 
 export function RouteTransitionFrame() {

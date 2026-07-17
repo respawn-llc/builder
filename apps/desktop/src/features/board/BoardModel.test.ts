@@ -1,4 +1,4 @@
-import type { BoardColumn, WorkflowBoard } from "../../api";
+import type { BoardColumn, WorkflowBoard } from "@/api";
 import { boardSections } from "./BoardModel";
 
 describe("boardSections", () => {

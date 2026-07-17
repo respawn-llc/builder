@@ -1,13 +1,8 @@
-import {
-  CircleCheckIcon,
-  InfoIcon,
-  OctagonXIcon,
-  TriangleAlertIcon,
-} from "lucide-react";
+import { CircleCheckIcon, InfoIcon, OctagonXIcon, TriangleAlertIcon } from "lucide-react";
 import { Toaster as SonnerToaster } from "sonner";
 
-import { readEffectiveTheme } from "../appEnvironment";
 import { Spinner } from "./Spinner";
+import { readEffectiveTheme } from "./theme";
 
 export function Toaster() {
   if (import.meta.env.MODE === "test") {

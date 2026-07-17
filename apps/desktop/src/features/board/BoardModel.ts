@@ -1,4 +1,4 @@
-import type { BoardColumn, BoardGroup, WorkflowBoard } from "../../api";
+import type { BoardColumn, BoardGroup, WorkflowBoard } from "@/api";
 
 export type BoardSection = Readonly<
   | { kind: "column"; id: string; column: BoardColumn }

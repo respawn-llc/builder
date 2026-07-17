@@ -208,6 +208,7 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	if previousSessionID == "" || previousSessionID == nextSessionID {
 		return titleCmd
 	}
+	m.reconcileTranscriptPrompts(nil)
 	rollbackCmd := m.discardRollbackStateForSessionReplacement()
 	cancelCmd := m.cancelPendingDetailTranscriptRequest()
 	m.detailTranscript.reset()
@@ -329,7 +330,6 @@ func (m *uiModel) transcriptPromptEvent(prompt clientui.TranscriptPrompt) askEve
 	}
 	return askEvent{
 		prompt: cloneTranscriptPromptForAsk(prompt),
-		reply:  make(chan askReply, 1),
 	}
 }
 

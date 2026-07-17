@@ -1,11 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
-import type { ServerReadiness } from "../../api";
-import { ProtocolMismatchError, TransportError, errorMessage } from "../../api/errors";
-import { protocolVersion } from "../../api/jsonRpcSocket";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import type { ServerReadiness } from "@/api";
+import { ProtocolMismatchError, TransportError, errorMessage } from "@/api";
 
 export type StartupViewModel =
   | Readonly<{ kind: "loading" }>
@@ -14,7 +13,7 @@ export type StartupViewModel =
   | Readonly<{ kind: "error"; titleKey: string; body: string; retry(): void }>;
 
 export function useStartup(): StartupViewModel {
-  const { api } = useAppServices();
+  const { api, protocolVersion } = useAppServices();
   const { t } = useTranslation();
   const readiness = useQuery({
     queryKey: queryKeys.readiness,

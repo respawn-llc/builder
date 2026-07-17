@@ -1,11 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import type { WorkflowDefinition, WorkflowEdge } from "../../api";
-import { appI18n, initializeI18n } from "../../i18n/setup";
-import {
-  groupableWorkflowDefinition,
-  workflowDefinition,
-} from "../../test-support/workflow-editor/workflowEditorGraphMutationFixtures";
+import type { WorkflowDefinition, WorkflowEdge } from "@/api";
+import { appI18n, initializeI18n } from "@/i18n";
+import { groupableWorkflowDefinition, workflowDefinition } from "./workflowEditorGraphMutationFixtures";
 import {
   contextSourceFromSelectValue,
   contextSourceOptions,

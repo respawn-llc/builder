@@ -14,6 +14,10 @@ func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 		m.askController().acceptEvent(msg.event)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, nil)
+	case promptAnswerDeliveryResultMsg:
+		cmd := m.askController().applyDeliveryResult(msg)
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(m, cmd)
 	}
 	return uiFeatureUpdateResult{}
 }

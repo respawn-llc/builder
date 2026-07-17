@@ -39,7 +39,9 @@ export function AppUpdateChip({ state }: AppUpdateChipProps) {
         onClick={state.install}
         type="button"
       >
-        {installing ? <Loader2 aria-hidden="true" className="animate-spin" size={12} strokeWidth={1.75} /> : null}
+        {installing ? (
+          <Loader2 aria-hidden="true" className="animate-spin" size={12} strokeWidth={1.75} />
+        ) : null}
         {label}
       </button>
       {installing ? null : (

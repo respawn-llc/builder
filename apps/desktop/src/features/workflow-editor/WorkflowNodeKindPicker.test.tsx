@@ -2,8 +2,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
-import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
+import { initializeI18n } from "@/i18n";
+import { workflowEditorEnglish } from "@/i18n";
 import { WorkflowNodeKindPicker } from "./WorkflowNodeKindPicker";
 
 void initializeI18n();

@@ -1,4 +1,4 @@
-import type { BoardColumn, WorkflowOutputField } from "../../api";
+import type { BoardColumn, WorkflowOutputField } from "@/api";
 import type { BoardCardDragPayload } from "./BoardDragTypes";
 
 export type BoardDropAction =

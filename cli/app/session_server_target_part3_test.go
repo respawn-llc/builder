@@ -218,7 +218,18 @@ func answerRemoteTranscriptPrompt(t *testing.T, answerer *transcriptPromptAnswer
 	if answerer == nil {
 		t.Fatal("transcript prompt answerer is required")
 	}
-	answerer.event(prompt).reply <- askReply{response: answer}
+	_, cmd, err := answerer.delivery(prompt, answer, nil)
+	if err != nil {
+		t.Fatalf("prepare transcript prompt answer: %v", err)
+	}
+	msg := cmd()
+	result, ok := msg.(promptAnswerDeliveryResultMsg)
+	if !ok {
+		t.Fatalf("transcript prompt answer result type = %T", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("deliver transcript prompt answer: %v", result.err)
+	}
 }
 
 func waitForRemoteProcess(t *testing.T, views apicontract.ProcessViewService, sessionID string, processID string) clientui.BackgroundProcess {

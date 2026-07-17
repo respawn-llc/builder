@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import { showStatusToast } from "../../ui";
+import { showStatusToast } from "@/ui";
 
 export type CopyText = (value: string) => Promise<void> | void;
 

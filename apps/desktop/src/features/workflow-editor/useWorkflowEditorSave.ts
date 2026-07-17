@@ -2,10 +2,10 @@ import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowGraphSavePreview, WorkflowGraphValidationResults } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
+import type { WorkflowGraphSavePreview, WorkflowGraphValidationResults } from "@/api";
+import { errorMessage } from "@/api";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
 import {
   workflowEditorDirtyState,
   workflowEditorDraftGraph,
@@ -69,9 +69,7 @@ export function useWorkflowEditorSave(
 
   const setSaveConfirmationPreview = useCallback(
     (preview: WorkflowGraphSavePreview | null): void => {
-      setSaveConfirmationPreviewEntry(
-        preview === null ? null : { key: saveConfirmationPreviewKey, preview },
-      );
+      setSaveConfirmationPreviewEntry(preview === null ? null : { key: saveConfirmationPreviewKey, preview });
     },
     [saveConfirmationPreviewKey],
   );
@@ -142,7 +140,12 @@ type WorkflowEditorApi = ReturnType<typeof useAppServices>["api"];
 type Translate = ReturnType<typeof useTranslation>["t"];
 
 type WorkflowSaveOutcome =
-  | Readonly<{ kind: "draftInvalid"; version: number; results: WorkflowGraphValidationResults; message: string }>
+  | Readonly<{
+      kind: "draftInvalid";
+      version: number;
+      results: WorkflowGraphValidationResults;
+      message: string;
+    }>
   | Readonly<{ kind: "confirmationRequired"; preview: WorkflowGraphSavePreview }>
   | Readonly<{ kind: "blocked"; blockers: readonly string[] }>
   | Readonly<{
@@ -248,9 +251,7 @@ async function applySaveOutcome(
     applySavedDefinition: (definition: WorkflowEditorDraftState["source"]) => Promise<void>;
     setSaveBlockers: (blockers: readonly string[]) => void;
     setSaveConfirmationPreview: (preview: WorkflowGraphSavePreview | null) => void;
-    setSaveValidation: (
-      value: { version: number; results: WorkflowGraphValidationResults } | null,
-    ) => void;
+    setSaveValidation: (value: { version: number; results: WorkflowGraphValidationResults } | null) => void;
   }>,
 ): Promise<void> {
   if (outcome.kind === "draftInvalid") {

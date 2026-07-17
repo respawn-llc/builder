@@ -1,8 +1,9 @@
 import { z } from "zod";
 
+import type { ApiService } from "./apiService";
 import { ApiClient } from "./client";
 import { ContractError } from "./errors";
-import { FakeRpcTransport } from "./fakeTransport";
+import { FakeRpcTransport } from "@/test-support/api";
 import { protocolVersion } from "./jsonRpcSocket";
 
 const startTaskParamsSchema = z.object({
@@ -20,6 +21,20 @@ const appliedStartResponse = {
 } as const;
 
 describe("ApiClient", () => {
+  it("exposes connection state through the feature-safe API port", () => {
+    const transport = new FakeRpcTransport([]);
+    const service: ApiService = new ApiClient(transport);
+
+    expect(service.connection.snapshot()).toMatchObject({ phase: "connected" });
+
+    transport.connection.set("disconnected", "offline");
+
+    expect(service.connection.snapshot()).toMatchObject({
+      phase: "disconnected",
+      lastError: "offline",
+    });
+  });
+
   it("parses readiness and sends mutation params through typed method boundary", async () => {
     const transport = new FakeRpcTransport([
       {

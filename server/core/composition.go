@@ -143,7 +143,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
-	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithOperationCoordinator(runtimeOperations).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
+	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).
+		WithOperationCoordinator(runtimeOperations).
+		WithPromptHistoryStore(metadataStore).
+		WithWorkflowSessionResolver(sessionStoreResolver).
+		WithPersistedSessionResolver(metadataStore)
 	gitInspector := worktree.NewGitInspector(nil)
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{
 		BaseDir: cfg.Settings.Worktrees.BaseDir,

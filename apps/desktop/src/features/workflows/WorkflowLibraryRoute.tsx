@@ -2,14 +2,13 @@ import { Plus } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowRecord } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { useAppNavigation } from "../../app/navigation";
-import { useSidebar } from "../../app/sidebarContext";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { Button, EmptyState, ErrorState, LoadingState, VirtualizedInfiniteList } from "../../ui";
-import { WorkflowCard } from "./WorkflowCard";
-import { useWorkflowPages } from "./WorkflowData";
+import type { WorkflowRecord } from "@/api";
+import { errorMessage } from "@/api";
+import { useAppNavigation } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { WorkflowCard, useWorkflowPages } from "@/shared/workflow-library";
+import { Button, EmptyState, ErrorState, LoadingState, VirtualizedInfiniteList } from "@/ui";
 
 const workflowLibraryItemMaxWidthClassName = "[&>*]:max-w-[1280px]";
 
@@ -65,12 +64,7 @@ export function WorkflowLibraryRoute() {
           estimateSize={() => 96}
           getItemKey={(workflow) => workflow.id}
           hasNextPage={workflowsQuery.hasNextPage}
-          header={
-            <WorkflowLibraryHeader
-              disabled={createDisabled}
-              onCreate={openCreateWorkflow}
-            />
-          }
+          header={<WorkflowLibraryHeader disabled={createDisabled} onCreate={openCreateWorkflow} />}
           isFetchingNextPage={workflowsQuery.isFetchingNextPage}
           items={workflows}
           loadingLabel={t("app.loadingMore")}
@@ -103,7 +97,10 @@ function WorkflowLibraryCard({ workflow }: Readonly<{ workflow: WorkflowRecord }
   );
 }
 
-function WorkflowLibraryHeader({ disabled, onCreate }: Readonly<{ disabled: boolean; onCreate: () => void }>) {
+function WorkflowLibraryHeader({
+  disabled,
+  onCreate,
+}: Readonly<{ disabled: boolean; onCreate: () => void }>) {
   const { t } = useTranslation();
   return (
     <div className="flex items-center justify-between gap-[var(--space-3)] pb-[var(--space-2)]">

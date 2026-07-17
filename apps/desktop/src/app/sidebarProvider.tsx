@@ -7,14 +7,14 @@ import {
   type SidebarDestination,
   type SidebarPhase,
   type SidebarResult,
-} from "./sidebarContext";
+} from "@/app-facade";
 import {
   sidebarSizePreference,
   sidebarWidthProfile,
   sidebarWidthProfileEquals,
   type SidebarWidthProfile,
-} from "./sidebarDestinationSizing";
-import { initialSidebarWidthForViewport, type ResolvedSidebarWidth } from "./sidebarSizing";
+} from "@/app-facade";
+import { initialSidebarWidthForViewport, type ResolvedSidebarWidth } from "@/app-facade";
 
 const sidebarExitAnimationMs = 140;
 type SidebarWidthEntry = Readonly<{
@@ -30,9 +30,8 @@ type PendingSidebar = Readonly<{
 
 export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [activeDestination, setActiveDestination] = useState<SidebarDestination | null>(null);
-  const [activeWidthProfile, setActiveWidthProfile] = useState<SidebarWidthProfile>(
-    defaultSidebarWidthProfile,
-  );
+  const [activeWidthProfile, setActiveWidthProfile] =
+    useState<SidebarWidthProfile>(defaultSidebarWidthProfile);
   const [phase, setPhase] = useState<SidebarPhase>("open");
   const [sidebarWidths, setSidebarWidths] = useState<SidebarWidths>(() => [
     { profile: defaultSidebarWidthProfile, widthPx: defaultSidebarWidth() },

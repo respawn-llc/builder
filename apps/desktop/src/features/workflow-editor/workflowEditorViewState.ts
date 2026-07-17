@@ -1,6 +1,6 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 
-import type { WorkflowValidation } from "../../api";
+import type { WorkflowValidation } from "@/api";
 import type { WorkflowGraphLayout } from "./workflowGraphLayout";
 import type { WorkflowEditorData } from "./useWorkflowEditorData";
 
@@ -42,10 +42,7 @@ function isLinkGateLoading(data: WorkflowEditorData): boolean {
   return data.projectContext && data.linksQuery.isPending;
 }
 
-function isGraphLoading(
-  data: WorkflowEditorData,
-  layoutQuery: UseQueryResult<WorkflowGraphLayout>,
-): boolean {
+function isGraphLoading(data: WorkflowEditorData, layoutQuery: UseQueryResult<WorkflowGraphLayout>): boolean {
   return data.workflowQuery.isPending || data.validationQuery.isPending || layoutQuery.isPending;
 }
 

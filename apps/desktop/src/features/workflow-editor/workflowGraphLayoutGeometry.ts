@@ -1,4 +1,4 @@
-import type { WorkflowNodeKind } from "../../api";
+import type { WorkflowNodeKind } from "@/api";
 import type { WorkflowGraphNode } from "./workflowGraphLayout";
 import { z } from "zod";
 
