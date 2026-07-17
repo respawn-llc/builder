@@ -14,10 +14,7 @@ import (
 
 func TestSyncSeedsMissingGeneratedRoot(t *testing.T) {
 	home := t.TempDir()
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS()})
-	if err != nil {
-		t.Fatalf("Sync: %v", err)
-	}
+	result := runGeneratedSync(t, "Sync", GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS()})
 	if result.Recovered {
 		t.Fatalf("did not expect recovery: %+v", result)
 	}
@@ -81,14 +78,9 @@ func TestSyncUpgradesCleanGeneratedRootWithoutRecovery(t *testing.T) {
 	oldFS := fstest.MapFS{
 		"skills/old-skill/SKILL.md": {Data: []byte(testSkillMarkdown("old-skill", "old"))},
 	}
-	if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: oldFS}); err != nil {
-		t.Fatalf("seed old: %v", err)
-	}
+	runGeneratedSync(t, "seed old", GeneratedSyncOptions{HomeDir: home, FS: oldFS})
 	newFS := testGeneratedFS()
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: newFS})
-	if err != nil {
-		t.Fatalf("upgrade: %v", err)
-	}
+	result := runGeneratedSync(t, "upgrade", GeneratedSyncOptions{HomeDir: home, FS: newFS})
 	if result.Recovered {
 		t.Fatalf("did not expect recovery for clean upgrade: %+v", result)
 	}
@@ -102,28 +94,18 @@ func TestSyncUpgradesCleanGeneratedRootWithoutRecovery(t *testing.T) {
 }
 
 func TestSyncRecoversEditedGeneratedRoot(t *testing.T) {
-	home := t.TempDir()
-	now := fixedNow()
-	if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: now}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(home, configDirName, ".generated", "skills", "skill-creator", "SKILL.md"), []byte("edited"), 0o644); err != nil {
+	fixture := newSeededGeneratedRoot(t)
+	if err := os.WriteFile(filepath.Join(fixture.root, "skills", "skill-creator", "SKILL.md"), []byte("edited"), 0o644); err != nil {
 		t.Fatalf("edit generated skill: %v", err)
 	}
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: now})
-	if err != nil {
-		t.Fatalf("recover edited: %v", err)
-	}
-	if !result.Recovered {
-		t.Fatalf("expected recovery: %+v", result)
-	}
-	wantRecovery := filepath.Join(home, configDirName, "recovered", "2026-05-04T18-43-16Z", ".generated")
+	result := fixture.recover(t, "recover edited")
+	wantRecovery := filepath.Join(fixture.home, configDirName, "recovered", "2026-05-04T18-43-16Z", ".generated")
 	if result.RecoveryPath != wantRecovery {
 		t.Fatalf("recovery path = %q, want %q", result.RecoveryPath, wantRecovery)
 	}
 	assertFile(t, filepath.Join(wantRecovery, "skills", "skill-creator", "SKILL.md"), "edited")
-	assertFile(t, filepath.Join(home, configDirName, ".generated", "skills", "skill-creator", "SKILL.md"), testSkillMarkdown("skill-creator", "create skills"))
-	wantWarning := recoveredWarning(filepath.Join(home, configDirName, generatedDirName), filepath.Join(home, configDirName, recoveredDirName))
+	assertFile(t, filepath.Join(fixture.root, "skills", "skill-creator", "SKILL.md"), testSkillMarkdown("skill-creator", "create skills"))
+	wantWarning := recoveredWarning(filepath.Join(fixture.home, configDirName, generatedDirName), filepath.Join(fixture.home, configDirName, recoveredDirName))
 	if !result.RecoveredRootNonEmpty || result.RecoveredWarning != wantWarning {
 		t.Fatalf("expected recovered warning state, got %+v", result)
 	}
@@ -161,47 +143,27 @@ func TestSyncRecoversAddedDeletedAndRenamedEntries(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()}); err != nil {
-				t.Fatalf("seed: %v", err)
-			}
-			root := filepath.Join(home, configDirName, ".generated")
-			tc.mutate(t, root)
-			result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
-			if err != nil {
-				t.Fatalf("recover: %v", err)
-			}
-			if !result.Recovered {
-				t.Fatalf("expected recovery for %s: %+v", tc.name, result)
-			}
+			fixture := newSeededGeneratedRoot(t)
+			tc.mutate(t, fixture.root)
+			fixture.recover(t, "recover "+tc.name)
 		})
 	}
 }
 
 func TestSyncRecoversEmptiedGeneratedRoot(t *testing.T) {
-	home := t.TempDir()
-	root := filepath.Join(home, configDirName, ".generated")
-	if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	entries, err := os.ReadDir(root)
+	fixture := newSeededGeneratedRoot(t)
+	entries, err := os.ReadDir(fixture.root)
 	if err != nil {
 		t.Fatalf("read generated root: %v", err)
 	}
 	for _, entry := range entries {
-		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
+		if err := os.RemoveAll(filepath.Join(fixture.root, entry.Name())); err != nil {
 			t.Fatalf("empty generated root: %v", err)
 		}
 	}
 
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
-	if err != nil {
-		t.Fatalf("recover empty root: %v", err)
-	}
-	if !result.Recovered {
-		t.Fatalf("expected recovery for empty generated root: %+v", result)
-	}
-	wantRecovery := filepath.Join(home, configDirName, "recovered", "2026-05-04T18-43-16Z", ".generated")
+	fixture.recover(t, "recover empty root")
+	wantRecovery := filepath.Join(fixture.home, configDirName, "recovered", "2026-05-04T18-43-16Z", ".generated")
 	info, err := os.Stat(wantRecovery)
 	if err != nil {
 		t.Fatalf("expected recovered empty generated root: %v", err)
@@ -209,7 +171,7 @@ func TestSyncRecoversEmptiedGeneratedRoot(t *testing.T) {
 	if !info.IsDir() {
 		t.Fatalf("expected recovered generated root to be a directory, mode=%s", info.Mode())
 	}
-	assertFile(t, filepath.Join(root, "skills", "skill-creator", "SKILL.md"), testSkillMarkdown("skill-creator", "create skills"))
+	assertFile(t, filepath.Join(fixture.root, "skills", "skill-creator", "SKILL.md"), testSkillMarkdown("skill-creator", "create skills"))
 }
 
 func TestSyncRecoversPermissionOnlyEdits(t *testing.T) {
@@ -246,21 +208,12 @@ func TestSyncRecoversPermissionOnlyEdits(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()}); err != nil {
-				t.Fatalf("seed: %v", err)
-			}
-			target := filepath.Join(home, configDirName, ".generated", tc.path)
+			fixture := newSeededGeneratedRoot(t)
+			target := filepath.Join(fixture.root, tc.path)
 			if err := os.Chmod(target, tc.perm); err != nil {
 				t.Fatalf("chmod generated %s: %v", tc.path, err)
 			}
-			result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
-			if err != nil {
-				t.Fatalf("recover mode edit: %v", err)
-			}
-			if !result.Recovered {
-				t.Fatalf("expected recovery for mode edit: %+v", result)
-			}
+			fixture.recover(t, "recover "+tc.name+" mode edit")
 			tc.verify(t, target)
 		})
 	}
@@ -273,13 +226,8 @@ func TestSyncMarkerTracksOnDiskModesUnderRestrictiveUmask(t *testing.T) {
 	})
 
 	home := t.TempDir()
-	if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
-	if err != nil {
-		t.Fatalf("sync clean generated root: %v", err)
-	}
+	runGeneratedSync(t, "seed", GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
+	result := runGeneratedSync(t, "sync clean generated root", GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
 	if result.Recovered {
 		t.Fatalf("did not expect recovery for clean umask-masked tree: %+v", result)
 	}
@@ -288,24 +236,15 @@ func TestSyncMarkerTracksOnDiskModesUnderRestrictiveUmask(t *testing.T) {
 }
 
 func TestSyncRecoversSymlinkWithoutFollowing(t *testing.T) {
-	home := t.TempDir()
-	if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	outside := filepath.Join(home, "outside")
+	fixture := newSeededGeneratedRoot(t)
+	outside := filepath.Join(fixture.home, "outside")
 	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
 		t.Fatalf("write outside: %v", err)
 	}
-	if err := os.Symlink(outside, filepath.Join(home, configDirName, ".generated", "link")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(fixture.root, "link")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
-	if err != nil {
-		t.Fatalf("recover symlink: %v", err)
-	}
-	if !result.Recovered {
-		t.Fatalf("expected recovery: %+v", result)
-	}
+	result := fixture.recover(t, "recover symlink")
 	assertFile(t, outside, "outside")
 	linkPath := filepath.Join(result.RecoveryPath, "link")
 	info, err := os.Lstat(linkPath)
@@ -328,11 +267,8 @@ func TestSyncRecoversInvalidOrMissingMarker(t *testing.T) {
 		{name: "wrong-schema", marker: `{"schema_version":2,"tree_hash":"sha256:abc"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()}); err != nil {
-				t.Fatalf("seed: %v", err)
-			}
-			markerPath := filepath.Join(home, configDirName, ".generated", markerFileName)
+			fixture := newSeededGeneratedRoot(t)
+			markerPath := filepath.Join(fixture.root, markerFileName)
 			if tc.remove {
 				if err := os.Remove(markerPath); err != nil {
 					t.Fatalf("remove marker: %v", err)
@@ -340,13 +276,7 @@ func TestSyncRecoversInvalidOrMissingMarker(t *testing.T) {
 			} else if err := os.WriteFile(markerPath, []byte(tc.marker), 0o644); err != nil {
 				t.Fatalf("write marker: %v", err)
 			}
-			result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
-			if err != nil {
-				t.Fatalf("recover marker: %v", err)
-			}
-			if !result.Recovered {
-				t.Fatalf("expected recovery: %+v", result)
-			}
+			fixture.recover(t, "recover "+tc.name+" marker")
 		})
 	}
 }
@@ -363,13 +293,13 @@ func TestSyncRecoversGeneratedRootFileAndTimestampCollision(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(configRoot, "recovered", "2026-05-04T18-43-16Z"), 0o755); err != nil {
 		t.Fatalf("create collision: %v", err)
 	}
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
-	if err != nil {
-		t.Fatalf("recover generated file: %v", err)
+	result := runGeneratedSync(t, "recover generated file", GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
+	if !result.Recovered {
+		t.Fatalf("recover generated file did not recover generated root: %+v", result)
 	}
 	want := filepath.Join(configRoot, "recovered", "2026-05-04T18-43-16Z-2", ".generated")
 	if result.RecoveryPath != want {
-		t.Fatalf("recovery path = %q, want %q", result.RecoveryPath, want)
+		t.Fatalf("recovery path = %q, want %q, result=%+v", result.RecoveryPath, want, result)
 	}
 	assertFile(t, want, "file")
 }
@@ -379,10 +309,7 @@ func TestSyncDetectsRecoveredRootNonEmptyWithoutNewRecovery(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, configDirName, "recovered", "old"), 0o755); err != nil {
 		t.Fatalf("mkdir recovered: %v", err)
 	}
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
+	result := runGeneratedSync(t, "sync", GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
 	if result.Recovered {
 		t.Fatalf("did not expect new recovery: %+v", result)
 	}
@@ -402,10 +329,7 @@ func TestSyncIgnoresRecoveredRootWarningCheckFailure(t *testing.T) {
 		t.Fatalf("write recovered file: %v", err)
 	}
 
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
-	if err != nil {
-		t.Fatalf("sync with invalid recovered root: %v", err)
-	}
+	result := runGeneratedSync(t, "sync with invalid recovered root", GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
 	if result.RecoveredRootNonEmpty || result.RecoveredWarning != "" {
 		t.Fatalf("expected warning check failure to be ignored, got %+v", result)
 	}
@@ -414,9 +338,7 @@ func TestSyncIgnoresRecoveredRootWarningCheckFailure(t *testing.T) {
 
 func TestSyncWritesMarkerWithTreeHash(t *testing.T) {
 	home := t.TempDir()
-	if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()}); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
+	runGeneratedSync(t, "sync", GeneratedSyncOptions{HomeDir: home, FS: testGeneratedFS(), Now: fixedNow()})
 	data, err := os.ReadFile(filepath.Join(home, configDirName, ".generated", markerFileName))
 	if err != nil {
 		t.Fatalf("read marker: %v", err)
@@ -428,6 +350,41 @@ func TestSyncWritesMarkerWithTreeHash(t *testing.T) {
 	if parsed.SchemaVersion != markerSchemaVersion || !strings.HasPrefix(parsed.TreeHash, treeHashPrefix) {
 		t.Fatalf("unexpected marker: %+v", parsed)
 	}
+}
+
+type seededGeneratedRoot struct {
+	home string
+	root string
+}
+
+func runGeneratedSync(t *testing.T, operation string, options GeneratedSyncOptions) GeneratedSyncResult {
+	t.Helper()
+	result, err := GeneratedSync(context.Background(), options)
+	if err != nil {
+		t.Fatalf("%s: %v", operation, err)
+	}
+	return result
+}
+
+func newSeededGeneratedRoot(t *testing.T) seededGeneratedRoot {
+	t.Helper()
+	home := t.TempDir()
+	fixture := seededGeneratedRoot{home: home, root: filepath.Join(home, configDirName, generatedDirName)}
+	runGeneratedSync(t, "seed", fixture.options())
+	return fixture
+}
+
+func (f seededGeneratedRoot) options() GeneratedSyncOptions {
+	return GeneratedSyncOptions{HomeDir: f.home, FS: testGeneratedFS(), Now: fixedNow()}
+}
+
+func (f seededGeneratedRoot) recover(t *testing.T, operation string) GeneratedSyncResult {
+	t.Helper()
+	result := runGeneratedSync(t, operation, f.options())
+	if !result.Recovered {
+		t.Fatalf("%s did not recover generated root: %+v", operation, result)
+	}
+	return result
 }
 
 func testGeneratedFS() fstest.MapFS {
@@ -475,10 +432,7 @@ func assertPerm(t *testing.T, path string, want os.FileMode) {
 
 func TestSyncWithConfigRootSeedsUnderRoot(t *testing.T) {
 	configRoot := filepath.Join(t.TempDir(), "isolated-root")
-	result, err := GeneratedSync(context.Background(), GeneratedSyncOptions{ConfigRoot: configRoot, FS: testGeneratedFS()})
-	if err != nil {
-		t.Fatalf("Sync: %v", err)
-	}
+	result := runGeneratedSync(t, "Sync", GeneratedSyncOptions{ConfigRoot: configRoot, FS: testGeneratedFS()})
 	wantGeneratedRoot := filepath.Join(configRoot, ".generated")
 	if result.GeneratedRoot != wantGeneratedRoot {
 		t.Fatalf("generated root = %q, want %q", result.GeneratedRoot, wantGeneratedRoot)
@@ -496,9 +450,7 @@ func TestSyncWithConfigRootSeedsUnderRoot(t *testing.T) {
 func TestSyncConfigRootTakesPrecedenceOverHome(t *testing.T) {
 	home := t.TempDir()
 	configRoot := filepath.Join(t.TempDir(), "isolated-root")
-	if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{HomeDir: home, ConfigRoot: configRoot, FS: testGeneratedFS()}); err != nil {
-		t.Fatalf("Sync: %v", err)
-	}
+	runGeneratedSync(t, "Sync", GeneratedSyncOptions{HomeDir: home, ConfigRoot: configRoot, FS: testGeneratedFS()})
 	if _, err := os.Stat(filepath.Join(configRoot, ".generated", "skills")); err != nil {
 		t.Fatalf("expected generated assets under config root: %v", err)
 	}
@@ -559,9 +511,7 @@ func TestRecoveredRootNonEmptyForUsesConfigRoot(t *testing.T) {
 
 func TestSyncRendersReadmeFromConfigRoot(t *testing.T) {
 	configRoot := t.TempDir()
-	if _, err := GeneratedSync(context.Background(), GeneratedSyncOptions{ConfigRoot: configRoot, FS: testGeneratedFS()}); err != nil {
-		t.Fatalf("Sync: %v", err)
-	}
+	runGeneratedSync(t, "Sync", GeneratedSyncOptions{ConfigRoot: configRoot, FS: testGeneratedFS()})
 	readme := readFile(t, filepath.Join(configRoot, ".generated", "README.md"))
 	wantHomeSkills := filepath.Join(configRoot, generatedSkillsDir)
 	wantRecovered := filepath.Join(configRoot, recoveredDirName)
