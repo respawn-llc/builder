@@ -566,6 +566,10 @@ func (s *Service) registeredWorktreeRoot(ctx context.Context, workspaceRoot stri
 }
 
 func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp TaskWorktreeMaterialization, err error) {
+	setupSettings, err := s.worktreeSetupSettings(req.Workspace.RootPath)
+	if err != nil {
+		return TaskWorktreeMaterialization{}, err
+	}
 	createSpec, err := normalizeCreateSpec(req.CreateSpec)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
@@ -658,6 +662,7 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
 		SetupOperationID:    req.SetupOperationID,
 		SourceWorkspaceRoot: req.Workspace.RootPath,
+		ResolvedSettings:    &setupSettings,
 		BranchName:          branchName,
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
@@ -1548,6 +1553,7 @@ func nextAvailableWorktreeRoot(baseRoot string) (string, error) {
 type setupExecutionRequest struct {
 	SetupOperationID    serverapi.WorktreeSetupOperationID
 	SourceWorkspaceRoot string
+	ResolvedSettings    *config.WorktreeSettings
 	BranchName          string
 	WorktreeRoot        string
 	ScriptPayload       setupScriptPayload
@@ -1555,16 +1561,13 @@ type setupExecutionRequest struct {
 }
 
 func (s *Service) runSetupForWorktree(ctx context.Context, req setupExecutionRequest) error {
-	settings := config.WorktreeSettings{
-		SetupScript:         s.setupScript,
-		SetupTimeoutSeconds: s.setupTimeoutSeconds,
-	}
-	if s.resolveSetup != nil {
-		resolved, err := s.resolveSetup(req.SourceWorkspaceRoot)
+	settings := req.ResolvedSettings
+	if settings == nil {
+		resolved, err := s.worktreeSetupSettings(req.SourceWorkspaceRoot)
 		if err != nil {
-			return fmt.Errorf("resolve worktree setup settings: %w", err)
+			return err
 		}
-		settings = resolved
+		settings = &resolved
 	}
 	trimmedScript := strings.TrimSpace(settings.SetupScript)
 	if trimmedScript == "" {
@@ -1629,6 +1632,20 @@ func (s *Service) runSetupForWorktree(ctx context.Context, req setupExecutionReq
 	completed.Phase = serverapi.WorktreeSetupPhaseCompleted
 	s.publishSetupEvent(completed)
 	return nil
+}
+
+func (s *Service) worktreeSetupSettings(sourceWorkspaceRoot string) (config.WorktreeSettings, error) {
+	if s.resolveSetup == nil {
+		return config.WorktreeSettings{
+			SetupScript:         s.setupScript,
+			SetupTimeoutSeconds: s.setupTimeoutSeconds,
+		}, nil
+	}
+	settings, err := s.resolveSetup(sourceWorkspaceRoot)
+	if err != nil {
+		return config.WorktreeSettings{}, fmt.Errorf("resolve worktree setup settings: %w", err)
+	}
+	return settings, nil
 }
 
 func (s *Service) runSetupScript(ctx context.Context, scriptPath string, payload setupScriptPayload, timeoutSeconds int) error {

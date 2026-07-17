@@ -73,8 +73,9 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("create source workspace config directory: %v", err)
 	}
-	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("[worktrees]\nsetup_script = %q\n", filepath.ToSlash(setupScript))), 0o644); err != nil {
-		t.Fatalf("write source workspace config: %v", err)
+	validSetupConfig := fmt.Sprintf("[worktrees]\nsetup_script = %q\n", filepath.ToSlash(setupScript))
+	if err := os.WriteFile(configPath, []byte("[worktrees]\nsetup_timeout_seconds = \"invalid\"\n"), 0o644); err != nil {
+		t.Fatalf("write invalid source workspace config: %v", err)
 	}
 	if resolved.Config.Settings.Worktrees.SetupScript != "" {
 		t.Fatalf("server startup config unexpectedly contains source workspace setup script")
@@ -123,6 +124,18 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("CreateWorkflowTask: %v", err)
+	}
+	if _, err := appCore.WorkflowClient().StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	}); err == nil {
+		t.Fatal("StartWorkflowTask accepted invalid source workspace setup configuration")
+	}
+	if err := os.WriteFile(configPath, []byte(validSetupConfig), 0o644); err != nil {
+		t.Fatalf("write corrected source workspace config: %v", err)
 	}
 	started, err := appCore.WorkflowClient().StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           task.Task.ID,
