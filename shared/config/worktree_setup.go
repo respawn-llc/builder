@@ -7,6 +7,7 @@ import (
 )
 
 const (
+	worktreeBaseDirKey      = "worktrees.base_dir"
 	worktreeSetupScriptKey  = "worktrees.setup_script"
 	worktreeSetupTimeoutKey = "worktrees.setup_timeout_seconds"
 )
@@ -28,6 +29,22 @@ func LoadWorktreeSetupSettings(workspaceRoot string, persistenceRoot string) (Wo
 	if err != nil {
 		return WorktreeSettings{}, err
 	}
+	worktreeSettings, err := configRegistry.settingsForKeys(
+		worktreeBaseDirKey,
+		worktreeSetupScriptKey,
+		worktreeSetupTimeoutKey,
+	)
+	if err != nil {
+		return WorktreeSettings{}, err
+	}
+	keyTree := newFileKeyTree()
+	for _, setting := range worktreeSettings {
+		fileSetting, ok := setting.(fileKeyRegisteringSetting)
+		if !ok {
+			return WorktreeSettings{}, errors.New("worktree setting cannot validate file keys")
+		}
+		fileSetting.registerFileKeys(keyTree)
+	}
 	state := settingsState{}
 	sources := map[string]string{}
 	for _, setting := range settings {
@@ -37,6 +54,11 @@ func LoadWorktreeSetupSettings(workspaceRoot string, persistenceRoot string) (Wo
 		file, err := readOptionalSettingsFile(path)
 		if err != nil {
 			return WorktreeSettings{}, err
+		}
+		if worktrees, exists := file["worktrees"]; exists {
+			if err := validateSettingsFileKeys(settingsFile{"worktrees": worktrees}, keyTree); err != nil {
+				return WorktreeSettings{}, err
+			}
 		}
 		for _, setting := range settings {
 			if err := setting.applyFile(file, path, &state, sources); err != nil {

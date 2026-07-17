@@ -82,7 +82,7 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 		filepath.Join(blockedBase, "worktrees"),
 		filepath.ToSlash(setupScript),
 	)
-	if err := os.WriteFile(configPath, []byte("[worktrees]\nsetup_timeout_seconds = \"invalid\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte("[worktrees]\nsetup_scrip = \"scripts/misspelled.sh\"\n"), 0o644); err != nil {
 		t.Fatalf("write invalid source workspace config: %v", err)
 	}
 	if resolved.Config.Settings.Worktrees.SetupScript != "" {
