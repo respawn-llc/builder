@@ -333,6 +333,7 @@ func TestMapOpenAIStreamErrorPayload_UsesSharedStructuredDecoder(t *testing.T) {
 			name: "response failed",
 			body: `{"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"too many tokens"}}}`,
 		},
+		{name: "provider prefill capacity", body: `{"type":"error","code":"prefill_memory_exceeded","message":"provider detail"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

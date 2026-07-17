@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"text/template"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -341,6 +342,31 @@ func workflowInstructionsTestArgs(taskNumberOfComments int64) WorkflowNodeContex
 			{ID: "not_actionable", DisplayName: "Not Actionable"},
 		},
 		NodePrompt: "Triage the ticket.",
+	}
+}
+
+func TestGoalPromptTemplatesKeepTypedCompositionContracts(t *testing.T) {
+	guidanceData := goalContinuationGuidanceTemplateData{LaunchCommand: LaunchCommand()}
+	guidance := renderGoalContinuationGuidance()
+	tests := []struct {
+		name, source string
+		data         any
+		wantFields   []string
+	}{
+		{"active goal continuation", ActiveGoalContinuationPrompt, activeGoalContinuationTemplateData{GoalText: "goal", SharedGuidance: guidance}, []string{"GoalText", "SharedGuidance"}},
+		{"ordinary goal nudge", GoalNudgePrompt, goalNudgeTemplateData{Objective: "goal", SharedGuidance: guidance}, []string{"Objective", "SharedGuidance"}},
+		{"shared guidance", GoalContinuationGuidancePrompt, guidanceData, []string{"LaunchCommand"}},
+	}
+	for _, tt := range tests {
+		if err := validateTemplatePlaceholders(tt.name, tt.source, tt.data); err != nil {
+			t.Fatalf("validate %s: %v", tt.name, err)
+		}
+		tmpl := template.Must(template.New(tt.name).Parse(tt.source))
+		var fields []string
+		walkRootFieldIdents(tmpl.Root, func(field string) bool { fields = append(fields, field); return true })
+		if !reflect.DeepEqual(fields, tt.wantFields) {
+			t.Fatalf("%s fields = %#v, want %#v", tt.name, fields, tt.wantFields)
+		}
 	}
 }
 

@@ -229,6 +229,10 @@ func UserFacingError(err error) string {
 		if providerErr.Code == UnifiedErrorCodeAuthentication || providerErr.StatusCode == 401 || providerErr.StatusCode == 403 {
 			return authenticationFailedWarning(providerErr.ProviderID, providerErr.StatusCode)
 		}
+		if providerErr.Code == UnifiedErrorCodeContextLengthOverflow {
+			return "The model provider could not process the request because the input was too large. Try again or choose a model with more context capacity."
+		}
+		return "The model provider rejected the request. Try again; if it persists, check the selected model and provider."
 	}
 	var statusErr *APIStatusError
 	if errors.As(err, &statusErr) {

@@ -601,26 +601,23 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 }
 
 func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) {
+	setStatus := func(status session.GoalStatus) func(*Engine) error {
+		return func(engine *Engine) error {
+			if _, err := engine.SetGoal("inactive goal", session.GoalActorUser); err != nil {
+				return err
+			}
+			_, err := engine.SetGoalStatus(status, session.GoalActorUser)
+			return err
+		}
+	}
 	tests := []struct {
 		name     string
 		workflow bool
 		mutate   func(*Engine) error
 	}{
 		{name: "absent"},
-		{name: "paused", mutate: func(engine *Engine) error {
-			if _, err := engine.SetGoal("paused goal", session.GoalActorUser); err != nil {
-				return err
-			}
-			_, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
-			return err
-		}},
-		{name: "complete", mutate: func(engine *Engine) error {
-			if _, err := engine.SetGoal("complete goal", session.GoalActorUser); err != nil {
-				return err
-			}
-			_, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorUser)
-			return err
-		}},
+		{name: "paused", mutate: setStatus(session.GoalStatusPaused)},
+		{name: "complete", mutate: setStatus(session.GoalStatusComplete)},
 		{name: "cleared", mutate: func(engine *Engine) error {
 			if _, err := engine.SetGoal("cleared goal", session.GoalActorUser); err != nil {
 				return err

@@ -13,26 +13,32 @@ import (
 )
 
 func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
-	first := llm.Message{
-		Role:           llm.RoleDeveloper,
-		MessageType:    llm.MessageTypeActiveGoalContinuation,
-		Content:        "preserved continuation",
-		CompactContent: clientui.GoalNudgeCompactLabel,
-	}
+	first := activeGoalContinuationTestMessage("preserved continuation")
 	second := first
 	second.Content = "duplicate continuation"
-	activeGoal := session.GoalState{Objective: "new mutable goal", Status: session.GoalStatusActive}
-
 	result, err := newMetaContextBuilder(t.TempDir(), "", "", config.SkillPolicy{}, time.Unix(0, 0)).Build(metaContextBuildOptions{
-		ExistingMessages: []llm.Message{first, second},
-		ActiveGoal:       &activeGoal,
+		ExistingMessages: []llm.Message{
+			first, second,
+			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorktreeMode, Content: "worktree"},
+			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, Content: "workflow"},
+			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless"},
+			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: "environment"},
+		},
+		ActiveGoal: &session.GoalState{Objective: "new mutable goal", Status: session.GoalStatusActive},
 	})
 	if err != nil {
-		t.Fatalf("build meta context: %v", err)
+		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(result.ActiveGoalContinuation, []llm.Message{first}) {
 		t.Fatalf("active-goal continuation slot = %+v, want first existing message preserved", result.ActiveGoalContinuation)
 	}
+	assertMessageTypesInOrder(t, result.OrderedMetaMessages(),
+		llm.MessageTypeEnvironment,
+		llm.MessageTypeHeadlessMode,
+		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeWorkflowMode,
+		llm.MessageTypeWorktreeMode,
+	)
 
 	meta, ordinary := splitMetaContextMessages([]llm.Message{first, {Role: llm.RoleUser, Content: "request"}})
 	if !reflect.DeepEqual(meta, []llm.Message{first}) {
@@ -43,45 +49,8 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 	}
 }
 
-func TestActiveGoalContinuationCanonicalOrdering(t *testing.T) {
-	activeGoal := session.GoalState{Objective: "ship resumed goal", Status: session.GoalStatusActive}
-	existing := []llm.Message{
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorktreeMode, Content: "worktree"},
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, Content: "workflow"},
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless"},
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: "environment"},
-	}
-	result, err := newMetaContextBuilder(t.TempDir(), "", "", config.SkillPolicy{}, time.Unix(0, 0)).Build(metaContextBuildOptions{
-		ExistingMessages: existing,
-		ActiveGoal:       &activeGoal,
-	})
-	if err != nil {
-		t.Fatalf("build meta context: %v", err)
-	}
-	ordered := result.OrderedMetaMessages()
-	got := make([]llm.MessageType, 0, len(ordered))
-	for _, message := range ordered {
-		got = append(got, message.MessageType)
-	}
-	want := []llm.MessageType{
-		llm.MessageTypeEnvironment,
-		llm.MessageTypeHeadlessMode,
-		llm.MessageTypeActiveGoalContinuation,
-		llm.MessageTypeWorkflowMode,
-		llm.MessageTypeWorktreeMode,
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("ordered message types = %#v, want %#v", got, want)
-	}
-}
-
 func TestReviewerReconstructionPreservesActiveGoalContinuationBeforeBoundary(t *testing.T) {
-	continuation := llm.Message{
-		Role:           llm.RoleDeveloper,
-		MessageType:    llm.MessageTypeActiveGoalContinuation,
-		Content:        "preserved active-goal continuation",
-		CompactContent: clientui.GoalNudgeCompactLabel,
-	}
+	continuation := activeGoalContinuationTestMessage("preserved active-goal continuation")
 	rebuilt, err := buildReviewerRequestMessagesWithBuilder(
 		[]llm.Message{continuation, {Role: llm.RoleUser, Content: "request"}},
 		newMetaContextBuilder(t.TempDir(), "test-model", "", config.SkillPolicy{}, time.Unix(0, 0)),
@@ -97,27 +66,18 @@ func TestReviewerReconstructionPreservesActiveGoalContinuationBeforeBoundary(t *
 				t.Fatalf("reviewer reconstruction duplicated active-goal continuation: %+v", rebuilt)
 			}
 			continuationIndex = index
-			if !reflect.DeepEqual(message, continuation) {
-				t.Fatalf("reviewer continuation = %+v, want preserved %+v", message, continuation)
-			}
 		}
 		if message.Role == llm.RoleDeveloper && message.MessageType == "" && message.Content == reviewerMetaBoundaryMessage {
 			boundaryIndex = index
 		}
 	}
-	if continuationIndex < 0 || boundaryIndex < 0 || continuationIndex >= boundaryIndex {
-		t.Fatalf("continuation/boundary indexes = %d/%d, want canonical continuation before reviewer boundary", continuationIndex, boundaryIndex)
+	if continuationIndex < 0 || boundaryIndex <= continuationIndex || !reflect.DeepEqual(rebuilt[continuationIndex], continuation) {
+		t.Fatalf("reviewer continuation/boundary = %d/%d in %+v", continuationIndex, boundaryIndex, rebuilt)
 	}
 }
 
 func TestActiveGoalContinuationProjectsAsDetailDeveloperContext(t *testing.T) {
-	message := llm.Message{
-		Role:           llm.RoleDeveloper,
-		MessageType:    llm.MessageTypeActiveGoalContinuation,
-		Content:        "active-goal continuation",
-		CompactContent: clientui.GoalNudgeCompactLabel,
-	}
-	entries := VisibleChatEntriesFromMessage(message)
+	entries := VisibleChatEntriesFromMessage(activeGoalContinuationTestMessage("active-goal continuation"))
 	if len(entries) != 1 {
 		t.Fatalf("entries = %+v, want one active-goal continuation row", entries)
 	}
@@ -129,4 +89,8 @@ func TestActiveGoalContinuationProjectsAsDetailDeveloperContext(t *testing.T) {
 		entry.CompactLabel != clientui.GoalNudgeCompactLabel {
 		t.Fatalf("active-goal continuation projection = %+v", entry)
 	}
+}
+
+func activeGoalContinuationTestMessage(content string) llm.Message {
+	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeActiveGoalContinuation, Content: content, CompactContent: clientui.GoalNudgeCompactLabel}
 }

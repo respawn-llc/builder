@@ -217,10 +217,11 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", StepLifecycle: sink})
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
 	releaseStep := make(chan struct{})
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
+		firstDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindCompaction, Reservation: reservation}, func(context.Context, string) error {
 			<-releaseStep
 			return nil
 		})
@@ -245,6 +246,10 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil })
 	if !errors.Is(err, ErrAgentBusy) {
 		t.Fatalf("successor run while terminal publication is pending err = %v, want ErrAgentBusy", err)
+	}
+	err = lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindCompaction, Reservation: reservation}, func(context.Context, string) error { return nil })
+	if !errors.Is(err, ErrExclusiveStepReservationPending) {
+		t.Fatalf("duplicate reservation during terminal publication err = %v, want pending rejection", err)
 	}
 
 	close(sink.releaseEnded)

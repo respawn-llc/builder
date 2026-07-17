@@ -16,22 +16,7 @@ var ErrAgentBusy = errors.New("agent is busy")
 
 var ErrEngineClosed = errors.New("runtime engine is closed")
 
-var ErrExclusiveStepReservationPending = errors.New("exclusive step reservation is already pending")
-
-type exclusiveStepReservationPendingError struct {
-	kind exclusiveStepReservationKind
-}
-
-func (e exclusiveStepReservationPendingError) Error() string {
-	if e.kind == exclusiveStepReservationManualCompaction {
-		return "manual compaction is already pending"
-	}
-	return ErrExclusiveStepReservationPending.Error()
-}
-
-func (e exclusiveStepReservationPendingError) Unwrap() error {
-	return ErrExclusiveStepReservationPending
-}
+var ErrExclusiveStepReservationPending = errors.New("manual compaction is already pending")
 
 // errPendingModelRecoveryClear wraps failures to clear the recovery marker at
 // step end after terminal transcript state has already been published.
@@ -41,11 +26,12 @@ type defaultExclusiveStepLifecycle struct {
 	engine     *Engine
 	background backgroundNoticeScheduler
 
-	mu                 sync.Mutex
-	active             *exclusiveRunState
-	nextWaiters        []*exclusiveStepWaiter
-	runSeq             uint64
-	terminalPublishing bool
+	mu                  sync.Mutex
+	active              *exclusiveRunState
+	nextWaiters         []*exclusiveStepWaiter
+	runSeq              uint64
+	terminalPublishing  bool
+	terminalReservation *exclusiveStepReservation
 }
 
 type exclusiveStepWaiter struct {
@@ -265,7 +251,7 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	s.mu.Lock()
 	if s.reservationPendingLocked(options.Reservation) {
 		s.mu.Unlock()
-		return nil, "", exclusiveStepReservationPendingError{kind: options.Reservation.Kind}
+		return nil, "", ErrExclusiveStepReservationPending
 	}
 	if s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0 {
 		stepCtx, stepID := s.activateLocked(ctx, options)
@@ -371,6 +357,9 @@ func (s *defaultExclusiveStepLifecycle) reservationPendingLocked(reservation *ex
 	if s.active != nil && s.active.reservation != nil && s.active.reservation.Kind == reservation.Kind {
 		return true
 	}
+	if s.terminalReservation != nil && s.terminalReservation.Kind == reservation.Kind {
+		return true
+	}
 	for _, waiter := range s.nextWaiters {
 		if waiter.reservation != nil && waiter.reservation.Kind == reservation.Kind {
 			return true
@@ -423,6 +412,7 @@ func (s *defaultExclusiveStepLifecycle) end() {
 
 func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 	s.mu.Lock()
+	s.terminalReservation = s.active.reservation
 	s.active = nil
 	s.terminalPublishing = true
 	s.mu.Unlock()
@@ -430,7 +420,7 @@ func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 
 func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 	s.mu.Lock()
-	s.terminalPublishing = false
+	s.terminalReservation, s.terminalPublishing = nil, false
 	s.notifyNextWaiterLocked()
 	s.mu.Unlock()
 }

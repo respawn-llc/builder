@@ -84,6 +84,10 @@ func TestTranscriptNoticeRowCarriesTypedCacheWarningFacts(t *testing.T) {
 	if err := notice.Validate(); err != nil {
 		t.Fatalf("validate typed cache-warning notice: %v", err)
 	}
+	messageType := TranscriptMessageActiveGoalContinuation
+	if err := (TranscriptNoticeRow{Reason: TranscriptNoticeLegacyUntypedNotice, Severity: TranscriptNoticeInfo, MessageType: &messageType}).Validate(); err != nil {
+		t.Fatalf("validate active-goal continuation notice: %v", err)
+	}
 }
 
 func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
