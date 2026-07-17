@@ -74,46 +74,43 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		selectorValue := selector.String()
 		selectedWorkflowSelector = &selectorValue
 	}
-	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
-	if !opened {
-		return 1
-	}
-	defer closeRemote()
-	projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	request := serverapi.WorkflowTaskListRequest{
-		ProjectID:      &projectID,
-		WorkflowID:     selectedWorkflowID,
-		ColumnKeys:     columnKeys,
-		StatusKinds:    statusKinds,
-		AttentionKinds: attentionKinds,
-		Sort:           sortSelectors,
-		PageSize:       *pageSize,
-		PageToken:      *pageToken,
-	}
-	resp, err := workflowTaskList(context.Background(), remote, request)
-	if err != nil {
-		writeTaskListError(stderr, err, taskListCommandContext{
-			ProjectRef:         *projectRef,
-			ResolvedProjectID:  projectID,
-			SelectedWorkflowID: selectedWorkflowSelector,
-			ColumnKeys:         columnKeys,
-			StatusKinds:        statusKinds,
-			AttentionKinds:     attentionKinds,
-			Sort:               sortSelectors,
-			PageSize:           *pageSize,
-			PageToken:          *pageToken,
-			JSON:               *jsonOut,
-		})
-		return 1
-	}
-	return writeTaskListResponse(stdout, stderr, resp, taskListExpectedScope{
-		ProjectID:  projectID,
-		WorkflowID: selectedWorkflowID,
-	}, *jsonOut)
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		request := serverapi.WorkflowTaskListRequest{
+			ProjectID:      &projectID,
+			WorkflowID:     selectedWorkflowID,
+			ColumnKeys:     columnKeys,
+			StatusKinds:    statusKinds,
+			AttentionKinds: attentionKinds,
+			Sort:           sortSelectors,
+			PageSize:       *pageSize,
+			PageToken:      *pageToken,
+		}
+		resp, err := workflowTaskList(context.Background(), remote, request)
+		if err != nil {
+			writeTaskListError(stderr, err, taskListCommandContext{
+				ProjectRef:         *projectRef,
+				ResolvedProjectID:  projectID,
+				SelectedWorkflowID: selectedWorkflowSelector,
+				ColumnKeys:         columnKeys,
+				StatusKinds:        statusKinds,
+				AttentionKinds:     attentionKinds,
+				Sort:               sortSelectors,
+				PageSize:           *pageSize,
+				PageToken:          *pageToken,
+				JSON:               *jsonOut,
+			})
+			return 1
+		}
+		return writeTaskListResponse(stdout, stderr, resp, taskListExpectedScope{
+			ProjectID:  projectID,
+			WorkflowID: selectedWorkflowID,
+		}, *jsonOut)
+	})
 }
 
 func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
