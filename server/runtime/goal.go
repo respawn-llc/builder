@@ -697,10 +697,6 @@ func goalStatusCompactText(goal session.GoalState) string {
 	}
 }
 
-func goalNudgeCompactText(goal session.GoalState) string {
-	return "Continue active goal: " + strconvQuoteForGoalPreview(goal.Objective)
-}
-
 func formatGoalDuration(duration time.Duration) string {
 	if duration < 0 {
 		duration = 0

@@ -6,6 +6,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/clientui"
 )
 
 type goalContinuation struct {
@@ -33,7 +34,7 @@ func (c goalContinuation) nudgeMessage() (llm.Message, bool) {
 		Role:           llm.RoleDeveloper,
 		MessageType:    llm.MessageTypeGoal,
 		Content:        prompts.RenderGoalNudgePrompt(goal.Objective, string(goal.Status)),
-		CompactContent: goalNudgeCompactText(goal),
+		CompactContent: clientui.GoalNudgeCompactLabel,
 	}, c.engine.transcriptWorkingDir()), true
 }
 

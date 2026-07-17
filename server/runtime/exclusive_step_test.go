@@ -18,6 +18,7 @@ type stubExclusiveStepLifecycle struct {
 	mu           sync.Mutex
 	busy         bool
 	runCalls     int
+	runNextCalls int
 	runFn        func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
 	snapshot     *RunSnapshot
 	activeStepID string
@@ -102,6 +103,18 @@ func (s *stubExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveS
 	return fn(ctx, "stub-step")
 }
 
+func (s *stubExclusiveStepLifecycle) RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+	s.mu.Lock()
+	s.runNextCalls++
+	s.mu.Unlock()
+	if s.runFn != nil {
+		return s.runFn(ctx, options, fn)
+	}
+	return fn(ctx, "stub-step")
+}
+
+func (s *stubExclusiveStepLifecycle) AcquireReservation(*exclusiveStepReservation) error { return nil }
+func (s *stubExclusiveStepLifecycle) ReleaseReservation(*exclusiveStepReservation)       {}
 func (s *stubExclusiveStepLifecycle) Interrupt() error {
 	return nil
 }
@@ -141,7 +154,7 @@ func (s *stubExclusiveStepLifecycle) setBusy(busy bool) {
 func (s *stubExclusiveStepLifecycle) calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.runCalls
+	return s.runCalls + s.runNextCalls
 }
 
 func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
@@ -206,24 +219,36 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", StepLifecycle: sink})
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
+	if err := lifecycle.AcquireReservation(reservation); err != nil {
+		t.Fatalf("acquire reservation: %v", err)
+	}
+	if !lifecycle.IsBusy() {
+		t.Fatal("held reservation must keep exclusive lifecycle busy")
+	}
+	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil }); !errors.Is(err, ErrAgentBusy) {
+		t.Fatalf("ordinary run with held reservation err = %v, want busy", err)
+	}
+	maintenanceDone := make(chan error, 1)
+	go func() {
+		maintenanceDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
+			return nil
+		})
+	}()
 	releaseStep := make(chan struct{})
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
+		firstDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindCompaction, Reservation: reservation}, func(context.Context, string) error {
 			<-releaseStep
 			return nil
 		})
 	}()
 
 	close(releaseStep)
-	var ended StepLifecycleSnapshot
 	select {
-	case ended = <-sink.endedStarted:
+	case <-sink.endedStarted:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for terminal publication")
-	}
-	if ended.Transition != StepLifecycleTransitionEnded || ended.RunID == "" {
-		t.Fatalf("unexpected terminal snapshot: %+v", ended)
 	}
 	if snapshot := lifecycle.Snapshot(); snapshot != nil {
 		t.Fatalf("active snapshot must be cleared before terminal publication, got %+v", snapshot)
@@ -235,17 +260,31 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	if !errors.Is(err, ErrAgentBusy) {
 		t.Fatalf("successor run while terminal publication is pending err = %v, want ErrAgentBusy", err)
 	}
+	err = lifecycle.AcquireReservation(&exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction})
+	if !errors.Is(err, ErrExclusiveStepReservationPending) {
+		t.Fatalf("duplicate reservation during terminal publication err = %v, want pending rejection", err)
+	}
 
 	close(sink.releaseEnded)
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil }); err != nil {
-		t.Fatalf("successor after terminal publication: %v", err)
+	err = lifecycle.AcquireReservation(&exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction})
+	if !errors.Is(err, ErrExclusiveStepReservationPending) {
+		t.Fatalf("duplicate reservation after terminal publication err = %v, want pending rejection", err)
+	}
+	select {
+	case err := <-maintenanceDone:
+		t.Fatalf("non-holder RunNext finished before reservation release: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	lifecycle.ReleaseReservation(reservation)
+	if err := <-maintenanceDone; err != nil {
+		t.Fatalf("maintenance after reservation release: %v", err)
 	}
 }
 
-func TestRunWhenIdleWaitsForTerminalPublication(t *testing.T) {
+func TestRunNextPreservesOrderAcrossTerminalPublicationAndCancellation(t *testing.T) {
 	store := mustCreateTestSession(t)
 	sink := newBlockingStepLifecycleSink()
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5", StepLifecycle: sink})
@@ -266,17 +305,41 @@ func TestRunWhenIdleWaitsForTerminalPublication(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for terminal publication")
 	}
-	startedSuccessor := make(chan struct{})
-	successorDone := make(chan error, 1)
+	waitQueued := func(want int) {
+		t.Helper()
+		for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+			lifecycle.mu.Lock()
+			got := len(lifecycle.nextWaiters)
+			lifecycle.mu.Unlock()
+			if got == want {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("queued RunNext callers did not reach %d", want)
+	}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	started := make(chan string, 2)
+	firstQueuedDone := make(chan error, 1)
 	go func() {
-		successorDone <- eng.RunWhenIdle(context.Background(), ActiveKindRuntimeMaintenance, func() error {
-			close(startedSuccessor)
+		firstQueuedDone <- lifecycle.RunNext(firstCtx, exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(stepCtx context.Context, _ string) error {
+			started <- "first"
+			<-stepCtx.Done()
+			return stepCtx.Err()
+		})
+	}()
+	waitQueued(1)
+	secondQueuedDone := make(chan error, 1)
+	go func() {
+		secondQueuedDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
+			started <- "second"
 			return nil
 		})
 	}()
+	waitQueued(2)
 	select {
-	case <-startedSuccessor:
-		t.Fatal("RunWhenIdle successor started before terminal publication completed")
+	case got := <-started:
+		t.Fatalf("RunNext caller %q started before terminal publication completed", got)
 	case <-time.After(50 * time.Millisecond):
 	}
 
@@ -285,12 +348,24 @@ func TestRunWhenIdleWaitsForTerminalPublication(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 	select {
-	case <-startedSuccessor:
+	case got := <-started:
+		if got != "first" {
+			t.Fatalf("first admitted RunNext caller = %q, want first", got)
+		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for RunWhenIdle successor after terminal publication")
+		t.Fatal("timed out waiting for first queued RunNext caller")
 	}
-	if err := <-successorDone; err != nil {
-		t.Fatalf("RunWhenIdle successor: %v", err)
+	cancelFirst()
+	if err := <-firstQueuedDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first queued RunNext error = %v, want context canceled", err)
+	}
+	<-sink.endedStarted
+	if got := <-started; got != "second" {
+		t.Fatalf("second admitted RunNext caller = %q, want second", got)
+	}
+	<-sink.endedStarted
+	if err := <-secondQueuedDone; err != nil {
+		t.Fatalf("second queued RunNext: %v", err)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"core/server/subagentpolicy"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/toolspec"
 )
@@ -30,6 +31,7 @@ const (
 	metaContextKindEnvironment
 	metaContextKindHeadless
 	metaContextKindHeadlessExit
+	metaContextKindActiveGoalContinuation
 	metaContextKindWorkflow
 	metaContextKindWorktree
 	metaContextKindWorktreeExit
@@ -52,6 +54,7 @@ type metaContextBuildOptions struct {
 	IncludeEnvironment        bool
 	IncludeHeadless           bool
 	IncludeHeadlessExit       bool
+	ActiveGoal                *session.GoalState
 	IncludeWorkflow           bool
 	WorkflowCompletionMode    workflowruntime.CompletionMode
 	WorkflowRun               *workflowruntime.Config
@@ -62,23 +65,25 @@ type metaContextBuildOptions struct {
 }
 
 type metaContextBuildResult struct {
-	Agents        []llm.Message
-	SkillWarnings []string
-	Skills        []llm.Message
-	Subagents     []llm.Message
-	Environment   []llm.Message
-	Headless      []llm.Message
-	HeadlessExit  []llm.Message
-	Workflow      []llm.Message
-	Worktree      []llm.Message
-	WorktreeExit  []llm.Message
+	Agents                 []llm.Message
+	SkillWarnings          []string
+	Skills                 []llm.Message
+	Subagents              []llm.Message
+	Environment            []llm.Message
+	Headless               []llm.Message
+	HeadlessExit           []llm.Message
+	ActiveGoalContinuation []llm.Message
+	Workflow               []llm.Message
+	Worktree               []llm.Message
+	WorktreeExit           []llm.Message
 }
 
 func (r metaContextBuildResult) OrderedMetaMessages() []llm.Message {
-	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Environment)+len(r.Headless)+len(r.HeadlessExit)+len(r.Workflow)+len(r.Worktree)+len(r.WorktreeExit))
+	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Environment)+len(r.Headless)+len(r.HeadlessExit)+len(r.ActiveGoalContinuation)+len(r.Workflow)+len(r.Worktree)+len(r.WorktreeExit))
 	out = append(out, r.OrderedBaseMessages()...)
 	out = append(out, r.Headless...)
 	out = append(out, r.HeadlessExit...)
+	out = append(out, r.ActiveGoalContinuation...)
 	out = append(out, r.Workflow...)
 	out = append(out, r.Worktree...)
 	out = append(out, r.WorktreeExit...)
@@ -227,6 +232,11 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 			collector.addMessages([]llm.Message{message})
 		}
 	}
+	if opts.ActiveGoal != nil {
+		if message, ok := activeGoalContinuationMetaMessage(*opts.ActiveGoal); ok {
+			collector.addMessages([]llm.Message{message})
+		}
+	}
 	if opts.IncludeWorkflow {
 		message, ok, err := workflowModeMetaMessage(opts.WorkflowCompletionMode, opts.WorkflowRun, opts.WorkflowTaskCommentCount)
 		if err != nil {
@@ -256,6 +266,19 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 	}
 
 	return collector.result(), nil
+}
+
+func activeGoalContinuationMetaMessage(goal session.GoalState) (llm.Message, bool) {
+	content := prompts.RenderActiveGoalContinuationPrompt(goal.Objective)
+	if strings.TrimSpace(content) == "" {
+		return llm.Message{}, false
+	}
+	return llm.Message{
+		Role:           llm.RoleDeveloper,
+		MessageType:    llm.MessageTypeActiveGoalContinuation,
+		Content:        content,
+		CompactContent: clientui.GoalNudgeCompactLabel,
+	}, true
 }
 
 func (b metaContextBuilder) agentPathRanks() (map[string]int, error) {
@@ -587,20 +610,21 @@ type metaContextAgentMessage struct {
 }
 
 type metaContextCollector struct {
-	agentRanks          map[string]int
-	nextAgentSequence   int
-	seenAgentKeys       map[string]bool
-	seenWarningMessages map[string]bool
-	agents              []metaContextAgentMessage
-	skills              *llm.Message
-	subagents           *llm.Message
-	environment         *llm.Message
-	headless            *llm.Message
-	headlessExit        *llm.Message
-	workflow            *llm.Message
-	worktree            *llm.Message
-	worktreeExit        *llm.Message
-	warnings            []string
+	agentRanks             map[string]int
+	nextAgentSequence      int
+	seenAgentKeys          map[string]bool
+	seenWarningMessages    map[string]bool
+	agents                 []metaContextAgentMessage
+	skills                 *llm.Message
+	subagents              *llm.Message
+	environment            *llm.Message
+	headless               *llm.Message
+	headlessExit           *llm.Message
+	activeGoalContinuation *llm.Message
+	workflow               *llm.Message
+	worktree               *llm.Message
+	worktreeExit           *llm.Message
+	warnings               []string
 }
 
 func newMetaContextCollector(agentRanks map[string]int) *metaContextCollector {
@@ -674,6 +698,8 @@ func (c *metaContextCollector) slot(kind metaContextKind) **llm.Message {
 		return &c.headless
 	case metaContextKindHeadlessExit:
 		return &c.headlessExit
+	case metaContextKindActiveGoalContinuation:
+		return &c.activeGoalContinuation
 	case metaContextKindWorkflow:
 		return &c.workflow
 	case metaContextKindWorktree:
@@ -713,6 +739,9 @@ func (c *metaContextCollector) result() metaContextBuildResult {
 	}
 	if c.headlessExit != nil {
 		result.HeadlessExit = []llm.Message{*c.headlessExit}
+	}
+	if c.activeGoalContinuation != nil {
+		result.ActiveGoalContinuation = []llm.Message{*c.activeGoalContinuation}
 	}
 	if c.workflow != nil {
 		result.Workflow = []llm.Message{*c.workflow}
@@ -765,6 +794,8 @@ func classifyMetaContextMessage(message llm.Message) (metaContextClassification,
 		return metaContextClassification{kind: metaContextKindHeadless, key: "headless", messageType: llm.MessageTypeHeadlessMode}, true
 	case llm.MessageTypeHeadlessModeExit:
 		return metaContextClassification{kind: metaContextKindHeadlessExit, key: "headless_exit", messageType: llm.MessageTypeHeadlessModeExit}, true
+	case llm.MessageTypeActiveGoalContinuation:
+		return metaContextClassification{kind: metaContextKindActiveGoalContinuation, key: "active_goal_continuation", messageType: llm.MessageTypeActiveGoalContinuation}, true
 	case llm.MessageTypeWorkflowMode:
 		return metaContextClassification{
 			kind:        metaContextKindWorkflow,

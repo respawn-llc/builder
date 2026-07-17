@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
@@ -461,6 +462,9 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 		Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
+	if _, err := eng.SetGoal("survive handoff compaction", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
 	if err := store.SetHeadlessActive(true); err != nil {
 		t.Fatalf("mark headless active: %v", err)
 	}
@@ -476,6 +480,8 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	futureIdx := -1
 	headlessIdx := -1
+	goalIdx := -1
+	goalCount := 0
 	for idx, message := range messages {
 		switch message.MessageType {
 		case llm.MessageTypeHandoffFutureMessage:
@@ -483,6 +489,12 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 		case llm.MessageTypeHeadlessMode:
 			if idx > 0 {
 				headlessIdx = idx
+			}
+		case llm.MessageTypeActiveGoalContinuation:
+			goalIdx = idx
+			goalCount++
+			if message.Content != prompts.RenderActiveGoalContinuationPrompt("survive handoff compaction") {
+				t.Fatalf("active-goal continuation content = %q", message.Content)
 			}
 		}
 	}
@@ -492,8 +504,11 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 	if headlessIdx < 0 {
 		t.Fatalf("expected headless enter reinjection after handoff compaction, got %+v", messages)
 	}
-	if headlessIdx >= futureIdx {
-		t.Fatalf("expected atomic headless context before future-agent carryover, headless=%d future=%d messages=%+v", headlessIdx, futureIdx, messages)
+	if goalIdx < 0 || goalCount != 1 {
+		t.Fatalf("expected one active-goal continuation after handoff compaction, count=%d messages=%+v", goalCount, messages)
+	}
+	if !(headlessIdx < goalIdx && goalIdx < futureIdx) {
+		t.Fatalf("expected headless then active goal then future-agent carryover, headless=%d goal=%d future=%d messages=%+v", headlessIdx, goalIdx, futureIdx, messages)
 	}
 }
 
@@ -537,6 +552,9 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 	}
 
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
+	if _, err := eng.SetGoal("survive process reopen", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "please keep tests green"}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
@@ -564,5 +582,6 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 	if carryoverMessages != 1 {
 		t.Fatalf("manual compaction carryover message count = %d, want 1; messages=%+v", carryoverMessages, messages)
 	}
+	assertSingleActiveGoalContinuation(t, llm.ItemsFromMessages(messages), "survive process reopen")
 
 }

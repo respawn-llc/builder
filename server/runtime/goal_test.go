@@ -9,12 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/clientui"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -528,6 +530,12 @@ func TestGoalTurnAppendsNudgePromptAndRunsModel(t *testing.T) {
 	if len(messages) < 2 {
 		t.Fatalf("goal developer messages len = %d, want at least 2", len(messages))
 	}
+	if got := messages[1].Content; got != prompts.RenderGoalNudgePrompt("ship goal mode", "active") {
+		t.Fatalf("nudge prompt = %q", got)
+	}
+	if got := messages[1].CompactContent; clientui.GoalNudgeCompactLabel == "" || got != clientui.GoalNudgeCompactLabel {
+		t.Fatalf("nudge compact content = %q, want non-empty shared label %q", got, clientui.GoalNudgeCompactLabel)
+	}
 }
 
 func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
@@ -578,6 +586,32 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 	}
 }
 
+func TestGoalDeveloperMessageVisibleInOngoingWithDetailPrompt(t *testing.T) {
+	msg := llm.Message{
+		Role:           llm.RoleDeveloper,
+		MessageType:    llm.MessageTypeGoal,
+		Content:        prompts.RenderGoalNudgePrompt("ship goal mode", "active"),
+		CompactContent: clientui.GoalNudgeCompactLabel,
+	}
+
+	entries := VisibleChatEntriesFromMessage(msg)
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Role != string(transcript.EntryRoleGoalFeedback) {
+		t.Fatalf("goal role = %q, want %q", entry.Role, transcript.EntryRoleGoalFeedback)
+	}
+	if entry.Visibility != transcript.EntryVisibilityOngoing {
+		t.Fatalf("goal visibility = %q, want ongoing", entry.Visibility)
+	}
+	if entry.Text != msg.Content {
+		t.Fatalf("goal detail text = %q, want full prompt", entry.Text)
+	}
+	if entry.CondensedText != msg.CompactContent {
+		t.Fatalf("goal condensed text = %q, want compact", entry.CondensedText)
+	}
+}
 func TestSurfaceRunErrorPersistsOperatorFeedback(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -998,6 +1032,47 @@ func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
 			t.Fatalf("did not expect busy retry to persist goal-loop error, entries=%+v", engine.ChatSnapshot().Entries)
 		}
 	}
+}
+
+func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	client := newScriptedGoalLoopClient()
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	client.beforeReturn = func(call int) {
+		if call == 3 {
+			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+		}
+	}
+	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	client.waitStarted(t, 1)
+
+	compactDone := make(chan error, 2)
+	go func() { compactDone <- engine.CompactContext(context.Background(), "preserve active goal") }()
+	go func() { compactDone <- engine.CompactContext(context.Background(), "duplicate request") }()
+	time.Sleep(75 * time.Millisecond)
+	client.releaseCall(1)
+
+	client.waitStarted(t, 2)
+	if active := engine.ActiveRun(); active == nil || active.ActiveKind != ActiveKindCompaction {
+		t.Fatalf("second model request active run = %+v, want compaction before the next goal turn", active)
+	}
+	client.releaseCall(2)
+	first, second := <-compactDone, <-compactDone
+	if (first == nil) == (second == nil) || (!errors.Is(first, ErrExclusiveStepReservationPending) && !errors.Is(second, ErrExclusiveStepReservationPending)) {
+		t.Fatalf("duplicate compact errors = (%v, %v), want one success and one pending rejection", first, second)
+	}
+	if got := engine.CompactionCount(); got != 1 {
+		t.Fatalf("compaction count = %d, want 1", got)
+	}
+
+	client.waitStarted(t, 3)
+	client.releaseCall(3)
+	waitGoalLoopRunning(t, engine, false)
 }
 
 func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {

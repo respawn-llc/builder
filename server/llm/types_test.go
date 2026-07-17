@@ -244,6 +244,23 @@ func TestMessagesFromItems_PreservesSkillsMessageType(t *testing.T) {
 	}
 }
 
+func TestMessagesFromItems_PreservesActiveGoalContinuationMessageType(t *testing.T) {
+	items := []ResponseItem{{
+		Type:        ResponseItemTypeMessage,
+		Role:        RoleDeveloper,
+		MessageType: MessageTypeActiveGoalContinuation,
+		Content:     "active-goal continuation",
+	}}
+	messages := MessagesFromItems(items)
+	if len(messages) != 1 || messages[0].MessageType != MessageTypeActiveGoalContinuation {
+		t.Fatalf("messages = %+v, want active-goal continuation type", messages)
+	}
+	roundTrip := ItemsFromMessages(messages)
+	if len(roundTrip) != 1 || roundTrip[0].MessageType != MessageTypeActiveGoalContinuation {
+		t.Fatalf("round-trip items = %+v, want active-goal continuation type", roundTrip)
+	}
+}
+
 func TestMessagesFromItems_PreservesHeadlessExitMessageType(t *testing.T) {
 	items := []ResponseItem{
 		{

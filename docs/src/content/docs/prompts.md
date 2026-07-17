@@ -29,6 +29,10 @@ System prompt files replace Kent's built-in default "product engineer" / SWE-foc
 
 Kent snapshots the rendered system prompt on each compaction to prevent cache misses. Edits to system prompt files take effect after a successful compaction and the next model request.
 
+## Goal Continuation
+
+After successful automatic, manual, or handoff compaction, a non-workflow session with an active goal resumes with the exact goal text and Kent's goal work and completion guidance. Paused, completed, cleared, and absent goals add no continuation guidance, and reopening a session without compaction does not add it.
+
 ## Placeholders
 
 You can assemble your own system prompt from building blocks provided by Kent. It's highly recommended to leave the instructions about the harness (`HarnessWorkflowAutonomy`) intact.
