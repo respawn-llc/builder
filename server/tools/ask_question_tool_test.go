@@ -7,6 +7,7 @@ import (
 	"core/shared/toolspec"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -606,123 +607,80 @@ func TestToolCallRejectsUnsupportedFields(t *testing.T) {
 	}
 }
 
-func TestToolCallSerializesSelectedOptionWithFreeformAsPlainText(t *testing.T) {
-	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
-		return AskQuestionResponse{RequestID: req.ID, SelectedOptionNumber: textutil.Int(2), FreeformAnswer: "need extra context"}, nil
-	})
-	result := callAskQuestionTool(t, b, "call-structured", `{
-			"question":"Pick one",
-			"suggestions":["alpha","beta"],
-			"recommended_option_index":1
-		}`)
-	if result.IsError {
-		t.Fatalf("expected success result, got %+v", result)
+func TestToolCallSerializesResponsesAsPlainText(t *testing.T) {
+	tests := []struct {
+		id, input, condensedText string
+		response                 AskQuestionResponse
+	}{
+		{
+			"call-structured",
+			`{"question":"Pick one","suggestions":["alpha","beta"],"recommended_option_index":1}`,
+			"beta\nUser also said:\nneed extra context",
+			AskQuestionResponse{
+				RequestID:            "call-structured",
+				SelectedOptionNumber: textutil.Int(2),
+				FreeformAnswer:       "need extra context",
+			},
+		},
+		{"call-freeform", `{"question":"What else?","suggestions":["alpha","beta"],"recommended_option_index":1}`,
+			"need extra context", AskQuestionResponse{RequestID: "call-freeform", FreeformAnswer: "need extra context"}},
 	}
-	var payload string
-	if err := json.Unmarshal(result.Output, &payload); err != nil {
-		t.Fatalf("decode tool output: %v", err)
-	}
-	if payload == "" {
-		t.Fatal("expected non-empty plain-text summary")
-	}
-	if result.CondensedText != "beta\nUser also said:\nneed extra context" {
-		t.Fatalf("unexpected ongoing text: %q", result.CondensedText)
-	}
-}
-
-func TestToolCallSerializesPureFreeformAsPlainText(t *testing.T) {
-	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
-		return AskQuestionResponse{RequestID: req.ID, FreeformAnswer: "need extra context"}, nil
-	})
-	result := callAskQuestionTool(t, b, "call-freeform", `{
-			"question":"What else?",
-			"suggestions":["alpha","beta"],
-			"recommended_option_index":1
-		}`)
-	if result.IsError {
-		t.Fatalf("expected success result, got %+v", result)
-	}
-	var payload string
-	if err := json.Unmarshal(result.Output, &payload); err != nil {
-		t.Fatalf("decode tool output: %v", err)
-	}
-	if payload == "" {
-		t.Fatal("expected non-empty plain-text summary")
-	}
-	if result.CondensedText != "need extra context" {
-		t.Fatalf("expected ongoing freeform answer without model prefix, got %q", result.CondensedText)
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			b := NewAskQuestionBroker()
+			b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+				if req.ID != tt.response.RequestID {
+					t.Fatalf("request id = %q, want %q", req.ID, tt.response.RequestID)
+				}
+				return tt.response, nil
+			})
+			result := callAskQuestionTool(t, b, tt.id, tt.input)
+			if result.IsError {
+				t.Fatalf("expected success result, got %+v", result)
+			}
+			var payload string
+			if err := json.Unmarshal(result.Output, &payload); err != nil {
+				t.Fatalf("decode tool output: %v", err)
+			}
+			if payload == "" {
+				t.Fatal("expected non-empty plain-text summary")
+			}
+			if result.CondensedText != tt.condensedText {
+				t.Fatalf("condensed text = %q, want %q", result.CondensedText, tt.condensedText)
+			}
+		})
 	}
 }
 
-func TestToolCallAllowsFreeformOnlyWithoutRecommendedOptionIndex(t *testing.T) {
-	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
-		if req.RecommendedOptionIndex != 0 {
-			t.Fatalf("did not expect recommended option index for freeform ask, got %+v", req)
-		}
-		return AskQuestionResponse{RequestID: req.ID, FreeformAnswer: "typed answer"}, nil
-	})
-	result := callAskQuestionTool(t, b, "call-freeform-only", `{"question":"What else?"}`)
-	if result.IsError {
-		t.Fatalf("expected success result, got %+v", result)
+func TestToolCallNormalizesRecommendedOptionIndex(t *testing.T) {
+	tests := []struct {
+		id, input   string
+		suggestions []string
+	}{
+		{"call-freeform-only", `{"question":"What else?"}`, nil},
+		{"call-missing-recommended", `{"question":"Pick one","suggestions":["alpha","beta"]}`, []string{"alpha", "beta"}},
+		{"call-bad-recommended", `{"question":"Pick one","suggestions":["alpha","beta"],"recommended_option_index":3}`, []string{"alpha", "beta"}},
+		{"call-bad-normalized-recommended", `{"question":"Pick one","suggestions":["","beta"],"recommended_option_index":2}`, []string{"beta"}},
 	}
-}
-
-func TestToolCallAllowsSuggestionAskWithoutRecommendedOptionIndex(t *testing.T) {
-	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
-		if req.RecommendedOptionIndex != 0 {
-			t.Fatalf("did not expect recommended option index, got %+v", req)
-		}
-		return AskQuestionResponse{RequestID: req.ID, FreeformAnswer: "typed answer"}, nil
-	})
-	result := callAskQuestionTool(t, b, "call-missing-recommended", `{
-			"question":"Pick one",
-			"suggestions":["alpha","beta"]
-		}`)
-	if result.IsError {
-		t.Fatalf("expected success result, got %+v", result)
-	}
-}
-
-func TestToolCallIgnoresOutOfRangeRecommendedOptionIndex(t *testing.T) {
-	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
-		if req.RecommendedOptionIndex != 0 {
-			t.Fatalf("expected out-of-range recommendation to be ignored, got %+v", req)
-		}
-		return AskQuestionResponse{RequestID: req.ID, FreeformAnswer: "typed answer"}, nil
-	})
-	result := callAskQuestionTool(t, b, "call-bad-recommended", `{
-			"question":"Pick one",
-			"suggestions":["alpha","beta"],
-			"recommended_option_index":3
-		}`)
-	if result.IsError {
-		t.Fatalf("expected success result, got %+v", result)
-	}
-}
-
-func TestToolCallIgnoresRecommendedIndexAfterBlankSuggestionsAreDropped(t *testing.T) {
-	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
-		if req.RecommendedOptionIndex != 0 {
-			t.Fatalf("expected invalid recommendation to be ignored after normalization, got %+v", req)
-		}
-		if len(req.Suggestions) != 1 || req.Suggestions[0] != "beta" {
-			t.Fatalf("expected normalized suggestions, got %+v", req)
-		}
-		return AskQuestionResponse{RequestID: req.ID, FreeformAnswer: "typed answer"}, nil
-	})
-	result := callAskQuestionTool(t, b, "call-bad-normalized-recommended", `{
-			"question":"Pick one",
-			"suggestions":["", "beta"],
-			"recommended_option_index":2
-		}`)
-	if result.IsError {
-		t.Fatalf("expected success result, got %+v", result)
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			b := NewAskQuestionBroker()
+			b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+				if req.ID != tt.id {
+					t.Fatalf("request id = %q, want %q", req.ID, tt.id)
+				}
+				if req.RecommendedOptionIndex != 0 {
+					t.Fatalf("recommended option index = %d, want 0", req.RecommendedOptionIndex)
+				}
+				if !slices.Equal(req.Suggestions, tt.suggestions) {
+					t.Fatalf("suggestions = %q, want %q", req.Suggestions, tt.suggestions)
+				}
+				return AskQuestionResponse{RequestID: req.ID, FreeformAnswer: "typed answer"}, nil
+			})
+			if result := callAskQuestionTool(t, b, tt.id, tt.input); result.IsError {
+				t.Fatalf("expected success result, got %+v", result)
+			}
+		})
 	}
 }
 
