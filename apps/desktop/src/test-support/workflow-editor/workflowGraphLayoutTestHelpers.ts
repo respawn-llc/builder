@@ -1,4 +1,8 @@
-import type { WorkflowGraphNode, WorkflowGraphPoint } from "../../features/workflow-editor/workflowGraphLayout";
+import type {
+  WorkflowGraphEdge,
+  WorkflowGraphNode,
+  WorkflowGraphPoint,
+} from "../../features/workflow-editor/workflowGraphLayout";
 import { z } from "zod";
 
 type WorkflowGraphEndpointSide = "source" | "target";
@@ -41,7 +45,7 @@ export function workflowGraphAbsoluteNodeRect(
   node: WorkflowGraphNode,
   nodes: readonly WorkflowGraphNode[],
 ): WorkflowGraphNodeAbsoluteRect {
-  const parent = node.parentId === undefined ? undefined : workflowGraphNodeByID(nodes, node.parentId);
+  const parent = node.parentId === undefined ? undefined : requireWorkflowGraphNode(nodes, node.parentId);
   const parentRect = parent === undefined ? { x: 0, y: 0 } : workflowGraphAbsoluteNodeRect(parent, nodes);
   return {
     height: Number(node.style?.height ?? 0),
@@ -49,6 +53,49 @@ export function workflowGraphAbsoluteNodeRect(
     x: parentRect.x + node.position.x,
     y: parentRect.y + node.position.y,
   };
+}
+
+export function requireWorkflowGraphNode(nodes: readonly WorkflowGraphNode[], id: string): WorkflowGraphNode {
+  const node = nodes.find((item) => item.id === id);
+  if (node === undefined) {
+    throw new Error(`Node ${id} not found`);
+  }
+  return node;
+}
+
+export function requireWorkflowGraphEdge(edges: readonly WorkflowGraphEdge[], id: string): WorkflowGraphEdge {
+  const edge = edges.find((item) => item.id === id);
+  if (edge === undefined) {
+    throw new Error(`Edge ${id} not found`);
+  }
+  return edge;
+}
+
+export function requireWorkflowGraphRoutePoints(edge: WorkflowGraphEdge): readonly WorkflowGraphPoint[] {
+  const points = edge.data?.routePoints ?? [];
+  if (points.length < 2) {
+    throw new Error(`Edge ${edge.id} has no routed points`);
+  }
+  return points;
+}
+
+export function workflowGraphRouteIsOrthogonal(points: readonly WorkflowGraphPoint[]): boolean {
+  return points.every((point, index) => {
+    const previous = points[index - 1];
+    return previous === undefined || point.x === previous.x || point.y === previous.y;
+  });
+}
+
+export function workflowGraphRouteHasCorner(points: readonly WorkflowGraphPoint[]): boolean {
+  return points.some((point, index) => {
+    const previous = points[index - 1];
+    const next = points[index + 1];
+    return (
+      previous !== undefined &&
+      next !== undefined &&
+      (previous.x - point.x) * (next.y - point.y) !== (previous.y - point.y) * (next.x - point.x)
+    );
+  });
 }
 
 function workflowGraphEndpointPort(
@@ -71,14 +118,6 @@ function workflowGraphEndpointPort(
     throw new Error(`Endpoint port ${endpointHandleID.data} not found for ${node.id}`);
   }
   return port;
-}
-
-function workflowGraphNodeByID(nodes: readonly WorkflowGraphNode[], id: string): WorkflowGraphNode {
-  const node = nodes.find((item) => item.id === id);
-  if (node === undefined) {
-    throw new Error(`Node ${id} not found`);
-  }
-  return node;
 }
 
 function isWorkflowGraphEndpointPort(value: unknown): value is WorkflowGraphEndpointPort {
