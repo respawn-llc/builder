@@ -254,10 +254,13 @@ func TestServiceUsesSavedAuthWithoutRefreshingPreAuthFacts(t *testing.T) {
 		Expiry:       time.Now().Add(-time.Hour),
 		AccountID:    "account",
 	}
-	refresher := auth.NewOAuthRefresher(nil, time.Now, time.Second)
-	refresher.Refresh = func(context.Context, auth.Method) (auth.Method, error) {
-		return auth.Method{}, errors.New("refresh must not run for capability facts")
-	}
+	refresher := auth.NewOAuthRefresher(
+		time.Now,
+		time.Second,
+		func(context.Context, auth.Method) (auth.Method, error) {
+			return auth.Method{}, errors.New("refresh must not run for capability facts")
+		},
+	)
 	service := NewService(Options{
 		Config:      testConfig(t, config.Settings{Model: "gpt-5.6-sol"}),
 		AuthManager: auth.NewManager(auth.NewMemoryStore(state), refresher, time.Now),

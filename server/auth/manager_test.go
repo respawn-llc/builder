@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"golang.org/x/oauth2"
 )
 
 var managerTestNow = time.Date(2026, time.January, 1, 10, 0, 0, 0, time.UTC)
@@ -37,9 +35,13 @@ func TestAuthorizationHeaderSurfacesOAuthRefreshFailure(t *testing.T) {
 	store := NewMemoryStore(managerTestOAuthState("stale-token", "refresh-token", managerTestNow.Add(-time.Minute)))
 
 	refreshErr := errors.New("refresh failed")
-	refresher := NewOAuthRefresher(stubTokenFactory{source: stubTokenSource{err: refreshErr}}, func() time.Time {
-		return managerTestNow
-	}, 30*time.Second)
+	refresher := NewOAuthRefresher(
+		func() time.Time { return managerTestNow },
+		30*time.Second,
+		func(context.Context, Method) (Method, error) {
+			return Method{}, errors.Join(ErrOAuthRefreshFailed, refreshErr)
+		},
+	)
 	mgr := NewManager(store, refresher, func() time.Time { return managerTestNow })
 
 	_, err := mgr.AuthorizationHeader(context.Background())
@@ -57,12 +59,15 @@ func TestCurrentStateRefreshesAndPersistsOAuthState(t *testing.T) {
 	initial := managerTestOAuthState("stale-token", "refresh-token", managerTestNow.Add(-time.Minute))
 	initial.Method.OAuth.AccountID = "acct-123"
 	store := NewMemoryStore(initial)
-	refresher := NewOAuthRefresher(nil, func() time.Time { return managerTestNow }, 30*time.Second)
-	refresher.Refresh = func(context.Context, Method) (Method, error) {
-		method := managerTestOAuthMethod("fresh-token", "refresh-token", managerTestNow.Add(time.Hour))
-		method.OAuth.AccountID = "acct-123"
-		return method, nil
-	}
+	refresher := NewOAuthRefresher(
+		func() time.Time { return managerTestNow },
+		30*time.Second,
+		func(context.Context, Method) (Method, error) {
+			method := managerTestOAuthMethod("fresh-token", "refresh-token", managerTestNow.Add(time.Hour))
+			method.OAuth.AccountID = "acct-123"
+			return method, nil
+		},
+	)
 	mgr := NewManager(store, refresher, func() time.Time { return managerTestNow.Add(2 * time.Minute) })
 
 	state, err := mgr.CurrentState(context.Background())
@@ -225,24 +230,4 @@ func managerTestOAuthState(accessToken string, refreshToken string, expiry time.
 		Method:    managerTestOAuthMethod(accessToken, refreshToken, expiry),
 		UpdatedAt: managerTestNow,
 	}
-}
-
-type stubTokenFactory struct {
-	source OAuthTokenSource
-}
-
-func (f stubTokenFactory) TokenSource(context.Context, oauth2.Token) OAuthTokenSource {
-	return f.source
-}
-
-type stubTokenSource struct {
-	tok *oauth2.Token
-	err error
-}
-
-func (s stubTokenSource) Token() (*oauth2.Token, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	return s.tok, nil
 }

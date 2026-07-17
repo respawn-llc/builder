@@ -62,19 +62,22 @@ func TestCollectorUsesRefreshedOAuthStateForUsageFetch(t *testing.T) {
 			},
 		},
 	})
-	refresher := auth.NewOAuthRefresher(nil, func() time.Time { return now }, 30*time.Second)
-	refresher.Refresh = func(context.Context, auth.Method) (auth.Method, error) {
-		return auth.Method{
-			Type: auth.MethodOAuth,
-			OAuth: &auth.OAuthMethod{
-				AccessToken:  "fresh-token",
-				RefreshToken: "refresh-token",
-				TokenType:    "Bearer",
-				Expiry:       now.Add(time.Hour),
-				AccountID:    "acct-456",
-			},
-		}, nil
-	}
+	refresher := auth.NewOAuthRefresher(
+		func() time.Time { return now },
+		30*time.Second,
+		func(context.Context, auth.Method) (auth.Method, error) {
+			return auth.Method{
+				Type: auth.MethodOAuth,
+				OAuth: &auth.OAuthMethod{
+					AccessToken:  "fresh-token",
+					RefreshToken: "refresh-token",
+					TokenType:    "Bearer",
+					Expiry:       now.Add(time.Hour),
+					AccountID:    "acct-456",
+				},
+			}, nil
+		},
+	)
 	manager := auth.NewManager(store, refresher, func() time.Time { return now.Add(time.Minute) })
 	collector := Collector{
 		AuthManager:  manager,
@@ -145,10 +148,13 @@ func TestCollectorPreservesStoredAuthStateWhenRefreshFails(t *testing.T) {
 		},
 		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
 	})
-	refresher := auth.NewOAuthRefresher(nil, func() time.Time { return now }, 30*time.Second)
-	refresher.Refresh = func(context.Context, auth.Method) (auth.Method, error) {
-		return auth.Method{}, auth.ErrOAuthRefreshFailed
-	}
+	refresher := auth.NewOAuthRefresher(
+		func() time.Time { return now },
+		30*time.Second,
+		func(context.Context, auth.Method) (auth.Method, error) {
+			return auth.Method{}, auth.ErrOAuthRefreshFailed
+		},
+	)
 	manager := auth.NewManager(store, refresher, func() time.Time { return now.Add(time.Minute) })
 
 	collector := Collector{AuthManager: manager}
