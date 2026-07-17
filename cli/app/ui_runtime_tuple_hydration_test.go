@@ -188,9 +188,8 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	}
 }
 
-func TestAcceptedHydrationStartsUnaryMetadataRefreshAfterWholeEventConsumption(t *testing.T) {
+func TestAcceptedHydrationDoesNotAdvanceCacheWithUnaryRead(t *testing.T) {
 	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
-	v12.Status.ThinkingLevel = "hydrated metadata refresh"
 	reads := &countingSessionViewClient{view: v12}
 	runtimeClient := newTestSessionRuntimeClient(reads, runtimecontrol.NewService(registry.NewRuntimeRegistry()))
 	runtimeClient.storeMainView(runtimeTupleTestView(
@@ -219,14 +218,16 @@ func TestAcceptedHydrationStartsUnaryMetadataRefreshAfterWholeEventConsumption(t
 	if got := surface.appliedKinds(); !reflect.DeepEqual(got, []clientui.TranscriptMessageKind{clientui.TranscriptMessageHydration}) {
 		t.Fatalf("surface messages before refresh execution = %v", got)
 	}
-	var refreshed runtimeMainViewRefreshedMsg
-	for _, message := range collectCmdMessages(t, cmd) {
-		if candidate, ok := message.(runtimeMainViewRefreshedMsg); ok {
-			refreshed = candidate
-		}
+	_ = collectCmdMessages(t, cmd)
+	if got := reads.mainViewCount.Load(); got != 0 {
+		t.Fatalf("main-view reads after accepted hydration = %d, want 0", got)
 	}
-	if refreshed.view.Version != v12.Version {
-		t.Fatalf("post-hydration refresh candidate version = %+v, want %+v", refreshed.view.Version, v12.Version)
+	if m.runtimeMainViewBusy || m.runtimeMainViewPendingSet {
+		t.Fatalf(
+			"accepted hydration scheduled unary refresh: busy=%t pending=%t",
+			m.runtimeMainViewBusy,
+			m.runtimeMainViewPendingSet,
+		)
 	}
 	assertRuntimeTupleView(t, runtimeClient.MainView(), runtimeTupleTestView(
 		11,

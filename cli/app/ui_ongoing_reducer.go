@@ -38,10 +38,7 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	)
 	switch event.Kind {
 	case ongoingTranscriptEventMessage:
-		var (
-			stateCmd                tea.Cmd
-			postHydrationRefreshCmd tea.Cmd
-		)
+		var stateCmd tea.Cmd
 		result, stateCmd, err = m.ongoingTranscript.Accept(event.Message)
 		if err != nil {
 			var developerErr ongoing.DeveloperError
@@ -52,16 +49,10 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 		}
 		stateCmd = sequenceCmds(stateCmd, m.inputController().resumeQueuedInputsAfterIdleRuntime())
 		if m.ongoingTranscript.acceptedHydration(event.Message) {
-			refreshCause := runtimeMainViewRefreshCauseManual
-			if m.startupUpdateNotice {
-				refreshCause = runtimeMainViewRefreshCauseStartupUpdate
-			}
-			refresh := m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(refreshCause))
 			stateCmd = sequenceCmds(stateCmd, m.flushQueuedInputsAfterHydration())
-			postHydrationRefreshCmd = refresh.cmd
 		}
 		m.layout().syncViewport()
-		return tea.Batch(stateCmd, postHydrationRefreshCmd, m.handleOngoingResult(result), m.reconcileSpinnerTicking(true))
+		return tea.Batch(stateCmd, m.handleOngoingResult(result), m.reconcileSpinnerTicking(true))
 	case ongoingTranscriptEventLoss:
 		result = m.ongoingTranscript.HandleSubscriptionLoss()
 	default:
