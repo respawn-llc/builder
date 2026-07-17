@@ -236,7 +236,7 @@ var startupNoopOnboarding = OnboardingHandler(func(_ context.Context, req Onboar
 	return reloaded, nil
 })
 
-func TestStartCoreOnboardingReceivesPreCoreCapabilityFactsClient(t *testing.T) {
+func TestStartWithOptionsOnboardingReceivesPreCoreCapabilityFactsClient(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
@@ -261,11 +261,11 @@ func TestStartCoreOnboardingReceivesPreCoreCapabilityFactsClient(t *testing.T) {
 		return startupNoopOnboarding(ctx, req)
 	})
 
-	appCore, err := StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, startupEnvAuthHandler{}, onboarding)
+	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, startupEnvAuthHandler{}, onboarding, Options{})
 	if err != nil {
-		t.Fatalf("StartCore: %v", err)
+		t.Fatalf("StartWithOptions: %v", err)
 	}
-	t.Cleanup(func() { _ = appCore.Close() })
+	t.Cleanup(func() { _ = server.Close() })
 	if !onboardingCalled {
 		t.Fatal("expected onboarding to run")
 	}
@@ -282,49 +282,49 @@ func factsContainGeneratedSkillCandidate(facts serverapi.CapabilityFactsResponse
 	return false
 }
 
-func TestHeadlessHandlersStartCoreWithoutCLIFrontendDependencies(t *testing.T) {
+func TestHeadlessHandlersStartWithOptionsWithoutCLIFrontendDependencies(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
 
 	authHandler, onboardingHandler := NewHeadlessHandlers(startupTestAuthLookupEnv)
 	registerStartupWorkspace(t, workspace)
-	appCore, err := StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler)
+	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler, Options{})
 	if err != nil {
-		t.Fatalf("StartCore: %v", err)
+		t.Fatalf("StartWithOptions: %v", err)
 	}
-	defer func() { _ = appCore.Close() }()
+	defer func() { _ = server.Close() }()
 
-	if appCore.Config().WorkspaceRoot != workspace {
-		t.Fatalf("workspace root = %q, want %q", appCore.Config().WorkspaceRoot, workspace)
+	if server.Config().WorkspaceRoot != workspace {
+		t.Fatalf("workspace root = %q, want %q", server.Config().WorkspaceRoot, workspace)
 	}
-	if !appCore.Config().Source.SettingsFileExists {
+	if !server.Config().Source.SettingsFileExists {
 		t.Fatal("expected headless startup onboarding to ensure settings file exists")
 	}
-	if appCore.Config().Source.SettingsPath == "" {
+	if server.Config().Source.SettingsPath == "" {
 		t.Fatal("expected settings path to be populated after headless onboarding")
 	}
-	if _, err := os.Stat(appCore.Config().Source.SettingsPath); err != nil {
+	if _, err := os.Stat(server.Config().Source.SettingsPath); err != nil {
 		t.Fatalf("expected settings file to exist: %v", err)
 	}
 }
 
-func TestStartCoreRejectsSecondOwnerForSamePersistenceRoot(t *testing.T) {
+func TestStartWithOptionsRejectsSecondOwnerForSamePersistenceRoot(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
 
 	authHandler, onboardingHandler := NewHeadlessHandlers(startupTestAuthLookupEnv)
 	registerStartupWorkspace(t, workspace)
-	first, err := StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler)
+	first, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler, Options{})
 	if err != nil {
-		t.Fatalf("StartCore first: %v", err)
+		t.Fatalf("StartWithOptions first: %v", err)
 	}
 	defer func() { _ = first.Close() }()
 
-	_, err = StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler)
+	_, err = StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler, Options{})
 	if !errors.Is(err, corepkg.ErrPersistenceRootBusy) {
-		t.Fatalf("StartCore second error = %v, want ErrPersistenceRootBusy", err)
+		t.Fatalf("StartWithOptions second error = %v, want ErrPersistenceRootBusy", err)
 	}
 }
 
@@ -335,7 +335,7 @@ func TestHeadlessHandlersFailFastWithoutCredentials(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 
 	authHandler, onboardingHandler := NewHeadlessHandlers(nil)
-	_, err := StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler)
+	_, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler, Options{})
 	if !errors.Is(err, auth.ErrAuthNotConfigured) {
 		t.Fatalf("expected auth not configured, got %v", err)
 	}
@@ -349,19 +349,19 @@ func TestHeadlessHandlersAllowExplicitOpenAIBaseURLWithoutCredentials(t *testing
 
 	authHandler, onboardingHandler := NewHeadlessHandlers(nil)
 	registerStartupWorkspace(t, workspace)
-	appCore, err := StartCore(context.Background(), Request{
+	server, err := StartWithOptions(context.Background(), Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		OpenAIBaseURL:         "http://127.0.0.1:8080/v1",
 		OpenAIBaseURLExplicit: true,
-	}, authHandler, onboardingHandler)
+	}, authHandler, onboardingHandler, Options{})
 	if err != nil {
-		t.Fatalf("StartCore: %v", err)
+		t.Fatalf("StartWithOptions: %v", err)
 	}
-	defer func() { _ = appCore.Close() }()
+	defer func() { _ = server.Close() }()
 
-	if appCore.Config().Settings.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
-		t.Fatalf("openai base url = %q", appCore.Config().Settings.OpenAIBaseURL)
+	if server.Config().Settings.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
+		t.Fatalf("openai base url = %q", server.Config().Settings.OpenAIBaseURL)
 	}
 }
 

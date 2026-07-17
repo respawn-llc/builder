@@ -6,14 +6,8 @@ import (
 
 	"core/server/auth"
 	"core/server/core"
-	"core/server/runtime"
 	"core/shared/config"
 )
-
-type BackgroundRouter interface {
-	SetActiveSession(sessionID string, engine *runtime.Engine)
-	ClearActiveSession(sessionID string, engine *runtime.Engine)
-}
 
 type EmbeddedServer struct {
 	*core.Core

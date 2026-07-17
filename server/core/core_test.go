@@ -121,7 +121,7 @@ func TestNewRejectsSecondCoreForSamePersistenceRoot(t *testing.T) {
 		t.Fatal("expected first core to seed at least one generated skill")
 	}
 
-	authSupportB, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	authSupportB, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil)
 	if err != nil {
 		t.Fatalf("BuildAuthSupport B: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t 
 
 func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State) *Core {
 	t.Helper()
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(state), nil, nil)
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(state), nil)
 	if err != nil {
 		t.Fatalf("BuildAuthSupport: %v", err)
 	}

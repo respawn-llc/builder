@@ -13,7 +13,6 @@ import (
 	"core/server/metadata"
 	"core/server/runprompt"
 	"core/server/runtime"
-	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionlaunch"
 	askquestion "core/server/tools"
@@ -372,13 +371,6 @@ func (s *Core) Background() *shelltool.Manager {
 		return nil
 	}
 	return s.safeBundles().Runtime.background
-}
-
-func (s *Core) BackgroundRouter() *runtimewire.BackgroundEventRouter {
-	if s == nil {
-		return nil
-	}
-	return s.safeBundles().Runtime.backgroundRouter
 }
 
 func (s *Core) SessionViewClient() apicontract.SessionViewService {

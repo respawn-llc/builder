@@ -95,7 +95,7 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 
 func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authHandler startupAuthHandler, onboardingHandler OnboardingHandler) (config.App, bool, error) {
 	store := authHandler.WrapStore(auth.NewFileStore(config.GlobalAuthConfigPath(cfg)))
-	authSupport, err := serverbootstrap.BuildAuthSupport(store, bootstrapReq.LookupEnv, bootstrapReq.Now)
+	authSupport, err := serverbootstrap.BuildAuthSupport(store, bootstrapReq.LookupEnv)
 	if err != nil {
 		return config.App{}, false, err
 	}
@@ -143,7 +143,7 @@ func buildStartupControlSurface(ctx context.Context, bootstrapReq serverbootstra
 		return config.App{}, nil, errStartupControlSurfaceNotRequired
 	}
 	store := authHandler.WrapStore(auth.NewFileStore(config.GlobalAuthConfigPath(cfg)))
-	authSupport, err := serverbootstrap.BuildAuthSupport(store, bootstrapReq.LookupEnv, bootstrapReq.Now)
+	authSupport, err := serverbootstrap.BuildAuthSupport(store, bootstrapReq.LookupEnv)
 	if err != nil {
 		_ = rootLease.Close()
 		return config.App{}, nil, err

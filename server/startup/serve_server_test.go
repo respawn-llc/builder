@@ -144,24 +144,24 @@ func configureServeTestServerPort(t *testing.T) {
 	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
 }
 
-func TestStartBuildsStandaloneServerFromCoreStartup(t *testing.T) {
+func TestStartServeServerMatchesEmbeddedStartup(t *testing.T) {
 	workspace := newServeWorkspace(t)
 
 	request := Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
 	authHandler := envAuthHandler{}
 	onboarding := noopOnboarding
 
-	appCore, err := StartCore(context.Background(), request, authHandler, onboarding)
+	embeddedServer, err := StartWithOptions(context.Background(), request, authHandler, onboarding, Options{})
 	if err != nil {
-		t.Fatalf("StartCore: %v", err)
+		t.Fatalf("StartWithOptions: %v", err)
 	}
-	coreProjectID := appCore.ProjectID()
-	coreProjects, err := appCore.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{})
+	embeddedProjectID := embeddedServer.ProjectID()
+	embeddedProjects, err := embeddedServer.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{})
 	if err != nil {
-		t.Fatalf("core ListProjects: %v", err)
+		t.Fatalf("embedded ListProjects: %v", err)
 	}
-	if err := appCore.Close(); err != nil {
-		t.Fatalf("appCore.Close: %v", err)
+	if err := embeddedServer.Close(); err != nil {
+		t.Fatalf("embeddedServer.Close: %v", err)
 	}
 
 	server := startServeTestServer(t, request, authHandler, onboarding)
@@ -169,8 +169,8 @@ func TestStartBuildsStandaloneServerFromCoreStartup(t *testing.T) {
 	if server.Core == nil {
 		t.Fatal("expected standalone server to expose core")
 	}
-	if server.ProjectID() != coreProjectID {
-		t.Fatalf("project id mismatch: server=%q core=%q", server.ProjectID(), coreProjectID)
+	if server.ProjectID() != embeddedProjectID {
+		t.Fatalf("project id mismatch: server=%q embedded=%q", server.ProjectID(), embeddedProjectID)
 	}
 	if server.ProjectViewClient() == nil || server.SessionViewClient() == nil || server.ProcessViewClient() == nil || server.ProcessOutputClient() == nil || server.RunPromptClient() == nil {
 		t.Fatal("expected standalone server to expose core-backed clients")
@@ -179,11 +179,11 @@ func TestStartBuildsStandaloneServerFromCoreStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("server ListProjects: %v", err)
 	}
-	if len(coreProjects.Projects) != 1 || len(serverProjects.Projects) != 1 {
-		t.Fatalf("unexpected project counts core=%d server=%d", len(coreProjects.Projects), len(serverProjects.Projects))
+	if len(embeddedProjects.Projects) != 1 || len(serverProjects.Projects) != 1 {
+		t.Fatalf("unexpected project counts embedded=%d server=%d", len(embeddedProjects.Projects), len(serverProjects.Projects))
 	}
-	if coreProjects.Projects[0].ProjectID != serverProjects.Projects[0].ProjectID {
-		t.Fatalf("project listing mismatch core=%+v server=%+v", coreProjects.Projects[0], serverProjects.Projects[0])
+	if embeddedProjects.Projects[0].ProjectID != serverProjects.Projects[0].ProjectID {
+		t.Fatalf("project listing mismatch embedded=%+v server=%+v", embeddedProjects.Projects[0], serverProjects.Projects[0])
 	}
 }
 
@@ -400,9 +400,9 @@ func TestServeExposesDerivedLocalUnixSocketAndCleansStalePath(t *testing.T) {
 func TestEmbeddedServeBackgroundExposesAttachEndpointUntilClose(t *testing.T) {
 	workspace := newServeWorkspace(t)
 
-	server, err := Start(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, noopOnboarding)
+	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, noopOnboarding, Options{})
 	if err != nil {
-		t.Fatalf("Start embedded: %v", err)
+		t.Fatalf("StartWithOptions: %v", err)
 	}
 	releaseServeTestPortForConfig(server.Config())
 	if err := server.ServeBackground(); err != nil {
