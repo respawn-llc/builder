@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -1228,15 +1230,8 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 	}
 	model := newUIModelDefaults(nil)
 	model.input = "visible draft"
-	model.activeSubmit = activeSubmitState{
-		text: "submitted before forced exit",
-		operationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
-	}
-	model.pendingInjected = queuedUserMessagesForTest("pending injected")
-	model.queued = queuedInputsForTest("queued later")
+	model.pendingInjected = queuedUserMessagesForTest("  pending injected\n")
+	model.queued = queuedInputsForTest("\tqueued later  ")
 
 	if err := persistSessionDraftToServer(context.Background(), narrowSessionLifecycleServer{lifecycle: client}, " session-1 ", model); err != nil {
 		t.Fatalf("persistSessionDraftToServer: %v", err)
@@ -1247,8 +1242,15 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 	if len(captured.RecoveryBuffers) != 2 {
 		t.Fatalf("recovery buffers = %+v, want pending injected and queued", captured.RecoveryBuffers)
 	}
-	if captured.RecoveryBuffers[0].Kind != serverapi.SessionDraftRecoveryBufferPendingInjectedInput {
-		t.Fatalf("first recovery buffer = %+v, want pending injected input", captured.RecoveryBuffers[0])
+	want := []serverapi.SessionDraftRecoveryBuffer{
+		{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "  pending injected\n"},
+		{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "\tqueued later  "},
+	}
+	if !reflect.DeepEqual(captured.RecoveryBuffers, want) {
+		t.Fatalf("recovery buffers = %+v, want ordered byte-preserved category/text %+v", captured.RecoveryBuffers, want)
+	}
+	if _, err := json.Marshal(captured); err != nil {
+		t.Fatalf("marshal captured draft request: %v", err)
 	}
 }
 
@@ -1257,8 +1259,8 @@ func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *te
 		WithUIInitialInput("visible draft"),
 		WithUIInitialRecoveryBuffers([]serverapi.SessionDraftRecoveryBuffer{
 			{Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit, Text: "submitted before forced exit"},
-			{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, ID: "server-1", ClientRequestID: "queue-1", Text: "pending steering"},
-			{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, ID: "queued-1", Text: "queued later"},
+			{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "pending steering"},
+			{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "queued later"},
 		}),
 	).(*uiModel)
 

@@ -17,10 +17,8 @@ func (m *uiModel) sessionDraftRecoveryBuffers() []serverapi.SessionDraftRecovery
 			continue
 		}
 		buffers = append(buffers, serverapi.SessionDraftRecoveryBuffer{
-			Kind:            serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
-			ID:              strings.TrimSpace(pending.ID),
-			ClientRequestID: strings.TrimSpace(pending.ClientRequestID),
-			Text:            pending.Text,
+			Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+			Text: pending.Text,
 		})
 	}
 	for _, queued := range m.queued {
@@ -30,7 +28,6 @@ func (m *uiModel) sessionDraftRecoveryBuffers() []serverapi.SessionDraftRecovery
 		}
 		buffers = append(buffers, serverapi.SessionDraftRecoveryBuffer{
 			Kind: serverapi.SessionDraftRecoveryBufferQueuedInput,
-			ID:   strings.TrimSpace(queued.ID),
 			Text: queued.Text,
 		})
 	}

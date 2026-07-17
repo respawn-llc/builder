@@ -77,6 +77,53 @@ func acceptRemoteHandshake(t *testing.T, ws *websocket.Conn) protocol.Request {
 	return req
 }
 
+func TestRemotePersistInputDraftSendsInertRecoveryBuffers(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Fatalf("receive persist input draft: %v", err)
+		}
+		if request.Method != protocol.MethodSessionPersistInputDraft {
+			t.Fatalf("method = %q, want %q", request.Method, protocol.MethodSessionPersistInputDraft)
+		}
+		var decoded serverapi.SessionPersistInputDraftRequest
+		if err := json.Unmarshal(request.Params, &decoded); err != nil {
+			t.Fatalf("decode persist input draft: %v", err)
+		}
+		want := []serverapi.SessionDraftRecoveryBuffer{{
+			Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+			Text: "pending steering",
+		}}
+		if !reflect.DeepEqual(decoded.RecoveryBuffers, want) {
+			t.Fatalf("recovery buffers = %+v, want %+v", decoded.RecoveryBuffers, want)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.SessionPersistInputDraftResponse{})); err != nil {
+			t.Fatalf("send persist input draft response: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	_, err = remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
+		ClientRequestID: "draft-1",
+		SessionID:       "session-1",
+		Input:           "visible draft",
+		RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{{
+			Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+			Text: "pending steering",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("PersistInputDraft: %v", err)
+	}
+}
+
 func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)

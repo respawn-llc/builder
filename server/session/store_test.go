@@ -216,11 +216,8 @@ func TestSetInputDraftClearsPersistedValue(t *testing.T) {
 func TestSetInputDraftRecoveryPersistsAcrossReopenAndClearsWithDraft(t *testing.T) {
 	store := newSessionTestLazyStore(t)
 	if err := store.SetInputDraftRecovery("visible", []InputDraftRecoveryBuffer{{
-		Kind:                     "active_submit",
-		ID:                       "queued-1",
-		Text:                     "submitted before forced exit",
-		OperationKind:            "submit",
-		OperationClientRequestID: "submit-1",
+		Kind: "active_submit",
+		Text: "submitted before forced exit",
 	}}); err != nil {
 		t.Fatalf("set input draft recovery: %v", err)
 	}
@@ -231,8 +228,9 @@ func TestSetInputDraftRecoveryPersistsAcrossReopenAndClearsWithDraft(t *testing.
 	if reopened.Meta().InputDraft != "visible" || len(reopened.Meta().InputDraftRecoveryBuffers) != 1 {
 		t.Fatalf("reopened draft metadata = %+v", reopened.Meta())
 	}
-	if reopened.Meta().InputDraftRecoveryBuffers[0].OperationClientRequestID != "submit-1" {
-		t.Fatalf("recovery buffer = %+v, want operation client request id", reopened.Meta().InputDraftRecoveryBuffers[0])
+	wantBuffer := InputDraftRecoveryBuffer{Kind: "active_submit", Text: "submitted before forced exit"}
+	if reopened.Meta().InputDraftRecoveryBuffers[0] != wantBuffer {
+		t.Fatalf("recovery buffer = %+v, want %+v", reopened.Meta().InputDraftRecoveryBuffers[0], wantBuffer)
 	}
 	if err := reopened.SetInputDraft(""); err != nil {
 		t.Fatalf("clear input draft: %v", err)

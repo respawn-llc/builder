@@ -220,14 +220,8 @@ type PendingModelRecovery struct {
 }
 
 type InputDraftRecoveryBuffer struct {
-	Kind                     string `json:"kind"`
-	ID                       string `json:"id,omitempty"`
-	ServerID                 string `json:"server_id,omitempty"`
-	ClientRequestID          string `json:"client_request_id,omitempty"`
-	Text                     string `json:"text,omitempty"`
-	OperationClientRequestID string `json:"operation_client_request_id,omitempty"`
-	OperationQueueItemID     string `json:"operation_queue_item_id,omitempty"`
-	OperationKind            string `json:"operation_kind,omitempty"`
+	Kind string `json:"kind"`
+	Text string `json:"text,omitempty"`
 }
 
 type WorkflowSessionState struct {
