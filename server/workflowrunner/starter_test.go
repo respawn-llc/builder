@@ -946,8 +946,8 @@ func TestSchedulerRunsNextAgentWithBoundInputsAndTaskWorktreeContext(t *testing.
 	assertPromptContains(t, reqs[1], []string{"\nCWD: " + worktreeRoot + "\n"})
 }
 
-func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) {
-	instructions, err := BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
+func workflowTaskInstructionContext(promptTemplate string) workflowstore.RunStartContext {
+	return workflowstore.RunStartContext{
 		Task: workflowstore.TaskRecord{
 			ID:         "task-1",
 			WorkflowID: "workflow-1",
@@ -961,10 +961,15 @@ func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) 
 			Key:         "review",
 			DisplayName: "Review",
 		},
-		PromptTemplate:       "Use {{.Params.direct}} and {{.Params.plan.summary}}.",
-		ParameterValues:      map[string]string{"direct": "direct parameter"},
-		PriorParameterValues: map[string]map[string]string{"plan": {"summary": "plan parameter"}},
-	})
+		PromptTemplate: promptTemplate,
+	}
+}
+
+func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) {
+	input := workflowTaskInstructionContext("Use {{.Params.direct}} and {{.Params.plan.summary}}.")
+	input.ParameterValues = map[string]string{"direct": "direct parameter"}
+	input.PriorParameterValues = map[string]map[string]string{"plan": {"summary": "plan parameter"}}
+	instructions, err := BuildWorkflowTaskInstructions(input)
 	if err != nil {
 		t.Fatalf("BuildWorkflowTaskInstructions: %v", err)
 	}
@@ -974,51 +979,25 @@ func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) 
 }
 
 func TestBuildWorkflowTaskInstructionsRendersTransitionCommentaryParameter(t *testing.T) {
-	instructions, err := BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
-		Task: workflowstore.TaskRecord{
-			ID:         "task-1",
-			WorkflowID: "workflow-1",
-			ShortID:    "RUN-1",
-			Title:      "Task title",
-			Body:       "Task body",
-		},
-		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
-		Node: workflowstore.NodeRecord{
-			ID:          "node-review",
-			Key:         "review",
-			DisplayName: "Review",
-		},
-		PromptTemplate: "Use {{.Params.commentary}}.",
-	})
-	if err != nil {
-		t.Fatalf("BuildWorkflowTaskInstructions without commentary: %v", err)
-	}
-	if instructions.NodePrompt != "Use ." {
-		t.Fatalf("node prompt without commentary = %q", instructions.NodePrompt)
-	}
-
-	instructions, err = BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
-		Task: workflowstore.TaskRecord{
-			ID:         "task-1",
-			WorkflowID: "workflow-1",
-			ShortID:    "RUN-1",
-			Title:      "Task title",
-			Body:       "Task body",
-		},
-		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
-		Node: workflowstore.NodeRecord{
-			ID:          "node-review",
-			Key:         "review",
-			DisplayName: "Review",
-		},
-		PromptTemplate:  "Use {{.Params.commentary}}.",
-		ParameterValues: map[string]string{"commentary": "ready for review"},
-	})
-	if err != nil {
-		t.Fatalf("BuildWorkflowTaskInstructions with commentary: %v", err)
-	}
-	if instructions.NodePrompt != "Use ready for review." {
-		t.Fatalf("node prompt with commentary = %q", instructions.NodePrompt)
+	for _, test := range []struct {
+		name   string
+		values map[string]string
+		want   string
+	}{
+		{name: "absent", want: "Use ."},
+		{name: "present", values: map[string]string{"commentary": "ready for review"}, want: "Use ready for review."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := workflowTaskInstructionContext("Use {{.Params.commentary}}.")
+			input.ParameterValues = test.values
+			instructions, err := BuildWorkflowTaskInstructions(input)
+			if err != nil {
+				t.Fatalf("BuildWorkflowTaskInstructions: %v", err)
+			}
+			if instructions.NodePrompt != test.want {
+				t.Fatalf("node prompt = %q, want %q", instructions.NodePrompt, test.want)
+			}
+		})
 	}
 }
 
