@@ -21,6 +21,14 @@ const (
 	testProjectID          = "project-a"
 )
 
+func newTestPlanner(cfg config.App, containerDir string, storeOptions ...session.StoreOption) Planner {
+	return Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: storeOptions,
+	}
+}
+
 func createTestSession(t *testing.T, workspace string) *session.Store {
 	t.Helper()
 	return createTestSessionInContainer(t, filepath.Join(t.TempDir(), "projects", testProjectID, "sessions"), testWorkspaceContainer, workspace)
