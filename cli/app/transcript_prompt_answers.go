@@ -48,8 +48,7 @@ func newTranscriptPromptAnswerer(ctx context.Context, control apicontract.Prompt
 		return nil
 	}
 	return &transcriptPromptAnswerer{
-		ctx:         ctx,
-		control:     control,
+		ctx: ctx, control: control,
 		retryDelays: transcriptPromptAnswerRetryDelays,
 		retryWait:   rpcwire.WaitForRetry,
 	}

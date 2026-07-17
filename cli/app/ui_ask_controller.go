@@ -514,6 +514,7 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 		return nil
 	}
 	c.cancelActiveDelivery()
+	m.activity = uiActivityQuestion
 	if errors.Is(result.err, context.Canceled) || runtimeattach.IsRuntimeConnectionError(result.err) {
 		return nil
 	}

@@ -197,6 +197,9 @@ func TestAskDeadlineKeepsEditedRetryDraftActionableUntilCanonicalResolution(t *t
 	if testActiveAsk(model) == nil {
 		t.Fatal("deadline locally resolved the prompt")
 	}
+	if model.activity != uiActivityQuestion {
+		t.Fatalf("deadline activity = %d, want question", model.activity)
+	}
 	if got := testAskInput(model); got != "original edited" {
 		t.Fatalf("retry draft = %q after deadline, want edited draft preserved", got)
 	}
@@ -553,6 +556,9 @@ func TestAskConnectionExhaustionUsesOnlyGlobalDisconnectNotice(t *testing.T) {
 	}
 	if testPromptAnswerDeliveryActive(model) || testActiveAsk(model) == nil {
 		t.Fatal("connection exhaustion did not restore the unresolved prompt")
+	}
+	if model.activity != uiActivityQuestion {
+		t.Fatalf("connection exhaustion activity = %d, want question", model.activity)
 	}
 	if len(control.requests()) != 6 {
 		t.Fatalf("service calls = %d, want bounded six calls", len(control.requests()))
