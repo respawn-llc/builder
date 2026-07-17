@@ -272,9 +272,10 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 		return cached
 	}
 	service := sessionlaunch.NewService(launch.Planner{
-		Config:       projectCtx.config,
-		ContainerDir: projectCtx.projectSession,
-		StoreOptions: s.safeBundles().Persistence.metadataStore.AuthoritativeSessionStoreOptions(),
+		Config:            projectCtx.config,
+		ContainerDir:      projectCtx.projectSession,
+		StoreOptions:      s.safeBundles().Persistence.metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions: s.safeBundles().Persistence.metadataStore,
 		ReloadConfig: func() (config.App, error) {
 			return s.configForWorkspace(projectCtx.projectRoot)
 		},

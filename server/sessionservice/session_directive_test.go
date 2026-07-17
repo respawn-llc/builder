@@ -20,7 +20,6 @@ import (
 
 func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 	parentID := mustSessionLifecycleResultID(t, "parent-session")
-	targetID := mustSessionLifecycleResultID(t, "target-session")
 	service := newTestSessionLifecycleService(t.TempDir(), nil)
 
 	tests := []struct {
@@ -48,7 +47,7 @@ func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 				Action:                       serverapi.SessionTransitionActionNewSession,
 				InitialPrompt:                "seed prompt",
 				InitialPromptHistoryRecorded: true,
-				ParentSessionID:              parentID.String(),
+				PreviousSessionID:            &parentID,
 			},
 			wantKind: serverapi.SessionDirectiveLaunch,
 			assert: func(t *testing.T, result serverapi.SessionDirective) {
@@ -56,9 +55,10 @@ func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 				if intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
 					t.Fatalf("intent kind = %q, want create new", intent.Kind())
 				}
-				parent, ok := intent.ParentID()
-				if !ok || parent != parentID {
-					t.Fatalf("parent = %q/%v, want %q", parent.String(), ok, parentID.String())
+				origin, ok := intent.CreateOrigin()
+				source, hasSource := origin.SessionID()
+				if !ok || origin.Kind() != serverapi.SessionCreateOriginPreviousSession || !hasSource || source != parentID {
+					t.Fatalf("origin = %+v/%v source=%q/%v, want previous session %q", origin, ok, source.String(), hasSource, parentID.String())
 				}
 				assertSessionLaunchPreparation(
 					t,
@@ -67,34 +67,6 @@ func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 					serverapi.SessionDraftDispositionRestoreStoredDraft,
 					"",
 					false,
-					serverapi.SessionAuthPreparationKeepCurrent,
-				)
-			},
-		},
-		{
-			name: "open session launches target with empty input override",
-			transition: serverapi.SessionTransition{
-				Action:          serverapi.SessionTransitionActionOpenSession,
-				TargetSessionID: targetID.String(),
-				InitialInput:    "",
-			},
-			wantKind: serverapi.SessionDirectiveLaunch,
-			assert: func(t *testing.T, result serverapi.SessionDirective) {
-				intent, preparation := requireSessionLifecycleLaunch(t, result)
-				if intent.Kind() != serverapi.SessionLaunchIntentOpenExisting {
-					t.Fatalf("intent kind = %q, want open existing", intent.Kind())
-				}
-				target, ok := intent.SessionID()
-				if !ok || target != targetID {
-					t.Fatalf("target = %q/%v, want %q", target.String(), ok, targetID.String())
-				}
-				assertSessionLaunchPreparation(
-					t,
-					preparation,
-					nil,
-					serverapi.SessionDraftDispositionOverrideStoredDraft,
-					"",
-					true,
 					serverapi.SessionAuthPreparationKeepCurrent,
 				)
 			},
@@ -235,6 +207,35 @@ func TestSessionTransitionMemoizationUsesTypedLifecycleResult(t *testing.T) {
 	if _, err := service.ResolveTransition(context.Background(), req); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("changed transition error = %v, want request ID reuse", err)
 	}
+}
+
+func TestSessionTransitionMemoizationComparesPreviousSessionIDByValue(t *testing.T) {
+	parentID := mustSessionLifecycleResultID(t, "parent-session")
+	service := newTestSessionLifecycleService(t.TempDir(), nil)
+	req := serverapi.SessionResolveTransitionRequest{
+		ClientRequestID: "previous-session-replay",
+		Transition: serverapi.SessionTransition{
+			Action:            serverapi.SessionTransitionActionNewSession,
+			PreviousSessionID: &parentID,
+		},
+	}
+	first, err := service.ResolveTransition(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ResolveTransition first: %v", err)
+	}
+	encoded, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal request: %v", err)
+	}
+	var decoded serverapi.SessionResolveTransitionRequest
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal request: %v", err)
+	}
+	second, err := service.ResolveTransition(context.Background(), decoded)
+	if err != nil {
+		t.Fatalf("ResolveTransition replay after JSON round trip: %v", err)
+	}
+	requireSessionDirectiveWireEqual(t, second, first)
 }
 
 func requireSessionDirectiveWireEqual(t *testing.T, got serverapi.SessionDirective, want serverapi.SessionDirective) {

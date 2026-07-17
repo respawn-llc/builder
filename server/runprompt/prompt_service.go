@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -67,25 +66,7 @@ func (s *PromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRe
 		return serverapi.RunPromptResponse{}, ErrPromptRequired
 	}
 	if err := req.Intent.Validate(); err != nil {
-		if strings.TrimSpace(req.SelectedSessionID) != "" {
-			sessionID, parseErr := runtimeids.ParseSessionID(req.SelectedSessionID)
-			if parseErr != nil {
-				return serverapi.RunPromptResponse{}, parseErr
-			}
-			req.Intent = serverapi.OpenExistingSessionLaunchIntent(sessionID)
-		} else if req.CallerSessionID != nil || req.ParentSessionID != nil {
-			var parentID *runtimeids.SessionID
-			if req.ParentSessionID != nil {
-				parsed, parseErr := runtimeids.ParseSessionID(*req.ParentSessionID)
-				if parseErr != nil {
-					return serverapi.RunPromptResponse{}, parseErr
-				}
-				parentID = &parsed
-			}
-			req.Intent = serverapi.CreateNewSessionLaunchIntent(parentID)
-		} else {
-			return serverapi.RunPromptResponse{}, err
-		}
+		return serverapi.RunPromptResponse{}, err
 	}
 	if err := req.Overrides.ValidateAgentRoleOverride(); err != nil {
 		return serverapi.RunPromptResponse{}, err

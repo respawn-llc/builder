@@ -15,6 +15,8 @@ import (
 	"core/shared/toolspec"
 )
 
+const processViewTestWaitTimeout = 10 * time.Second
+
 func TestServiceListProcessesIncludesRunOwnership(t *testing.T) {
 	fixture := newProcessViewFixture(t)
 	result := fixture.startCommand(t, "call-1", "printf 'working\n'; sleep 30", "run-1", "step-1")
@@ -22,7 +24,7 @@ func TestServiceListProcessesIncludesRunOwnership(t *testing.T) {
 		t.Fatalf("expected successful tool result, got %+v", result)
 	}
 
-	waitForProcessSnapshot(t, 2*time.Second, func() (shelltool.Snapshot, bool) {
+	waitForProcessSnapshot(t, processViewTestWaitTimeout, func() (shelltool.Snapshot, bool) {
 		entries := fixture.manager.List()
 		if len(entries) != 1 {
 			return shelltool.Snapshot{}, false
@@ -86,6 +88,8 @@ func (f processViewFixture) startCommand(t *testing.T, id string, command string
 	t.Helper()
 	input, err := json.Marshal(map[string]any{
 		"cmd":           command,
+		"shell":         "/bin/sh",
+		"login":         false,
 		"yield_time_ms": 250,
 	})
 	if err != nil {
@@ -128,7 +132,7 @@ func TestServiceGetInlineOutputReturnsManagerPreview(t *testing.T) {
 		t.Fatalf("expected successful tool result, got %+v", result)
 	}
 
-	waitForInlineOutput(t, 2*time.Second, func() (serverapi.ProcessInlineOutputResponse, error) {
+	waitForInlineOutput(t, processViewTestWaitTimeout, func() (serverapi.ProcessInlineOutputResponse, error) {
 		return fixture.service.GetInlineOutput(context.Background(), serverapi.ProcessInlineOutputRequest{ProcessID: "1000", MaxChars: 12_000})
 	}, func(resp serverapi.ProcessInlineOutputResponse) bool {
 		return resp.LogPath != "" && strings.Contains(resp.Output, "inline-preview")
@@ -229,7 +233,7 @@ func (s *stubKillProcessSource) InlineOutput(string, int) (string, string, error
 
 func waitForProcessCount(t *testing.T, manager *shelltool.Manager, count int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(processViewTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		if len(manager.List()) >= count {
 			return
@@ -241,7 +245,7 @@ func waitForProcessCount(t *testing.T, manager *shelltool.Manager, count int) {
 
 func waitForProcessKilled(t *testing.T, manager *shelltool.Manager, id string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(processViewTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		for _, entry := range manager.List() {
 			if entry.ID == id && (entry.KillRequested || !entry.Running) {

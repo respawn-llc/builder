@@ -3,6 +3,7 @@ package workflowstore
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -161,11 +162,13 @@ func createTestSession(t *testing.T, ctx context.Context, store *Store, binding 
 	return sessionStore.Meta().SessionID
 }
 
-func linkWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string, workflowID workflow.WorkflowID, isDefault bool) {
+func linkWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string, workflowID workflow.WorkflowID, isDefault bool) ProjectWorkflowLinkRecord {
 	t.Helper()
-	if _, err := store.LinkWorkflow(ctx, projectID, workflowID, isDefault); err != nil {
+	link, err := store.LinkWorkflow(ctx, projectID, workflowID, isDefault)
+	if err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
+	return link
 }
 
 func createLinkedValidWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string) workflow.WorkflowID {
@@ -255,6 +258,77 @@ func createScriptStartWorkflow(t *testing.T, ctx context.Context, store *Store, 
 		)
 	})
 	return created.ID
+}
+
+type scriptExecutionFixture struct {
+	ctx        context.Context
+	store      *Store
+	workflowID workflow.WorkflowID
+	scriptID   workflow.NodeID
+	task       TaskRecord
+}
+
+func newScriptExecutionFixture(t *testing.T, scriptPath string, contents []byte) scriptExecutionFixture {
+	t.Helper()
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createScriptStartWorkflow(t, ctx, store, scriptPath)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
+	if contents != nil {
+		path := filepath.Join(worktreeRoot, scriptPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create script dir: %v", err)
+		}
+		if err := os.WriteFile(path, contents, 0o755); err != nil {
+			t.Fatalf("write script: %v", err)
+		}
+	}
+	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
+	return scriptExecutionFixture{ctx: ctx, store: store, workflowID: workflowID, scriptID: workflow.NodeID("node-script-" + string(workflowID)), task: task}
+}
+
+func (f scriptExecutionFixture) requireLiveSummary(t *testing.T) {
+	t.Helper()
+	parameters, err := marshalJSONArray([]workflow.Parameter{{Key: "summary", Description: "Live summary."}})
+	if err != nil {
+		t.Fatalf("marshal parameters: %v", err)
+	}
+	// Intentional direct graph mutation: graph-edit policy is owned separately;
+	// these tests isolate the execution contract once the live graph has changed.
+	if _, err := f.store.db.ExecContext(f.ctx, `UPDATE workflow_edges SET parameters_json = ? WHERE id = ?`, parameters, "edge-done-"+string(f.workflowID)); err != nil {
+		t.Fatalf("force live script output contract: %v", err)
+	}
+}
+
+func attachManagedWorktree(t *testing.T, ctx context.Context, store *Store, workspaceID string, taskID workflow.TaskID, worktreeRoot string) {
+	t.Helper()
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatalf("create worktree root: %v", err)
+	}
+	worktreeID := "worktree-" + string(taskID)
+	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{ID: worktreeID, WorkspaceID: workspaceID, CanonicalRoot: worktreeRoot, Managed: true, CreatedBranch: true}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE tasks
+SET source_workspace_id = ?,
+    managed_worktree_id = ?,
+    execution_target_mode = ?,
+    execution_target_requested_ref = ?,
+    execution_target_commit_oid = ?,
+    execution_target_provenance = ?
+WHERE id = ?`,
+		workspaceID,
+		worktreeID,
+		string(workflow.ExecutionTargetModeHead),
+		"HEAD",
+		"fixture-commit",
+		string(ExecutionTargetProvenanceResolved),
+		string(taskID),
+	); err != nil {
+		t.Fatalf("attach managed worktree to task: %v", err)
+	}
 }
 
 func createChainedContextModeWorkflow(t *testing.T, ctx context.Context, store *Store, contextMode workflow.ContextMode, targetRole string) workflow.WorkflowID {

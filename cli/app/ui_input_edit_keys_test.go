@@ -31,16 +31,6 @@ func TestSharedInputEditKeyCtrlUUsesPlatformSpecificPolicy(t *testing.T) {
 	}
 }
 
-func TestDeleteCurrentLineKeyCtrlUPlatformCheck(t *testing.T) {
-	msg := tea.KeyMsg{Type: tea.KeyCtrlU}
-	if !isDeleteCurrentLineKeyForGOOS(msg, "darwin") {
-		t.Fatal("expected ctrl+u to delete current line on darwin")
-	}
-	if isDeleteCurrentLineKeyForGOOS(msg, "linux") {
-		t.Fatal("did not expect ctrl+u to delete current line on linux")
-	}
-}
-
 func TestSharedInputEditKeyAltDeleteUsesForwardWord(t *testing.T) {
 	var actions []string
 	handled := handleSharedInputEditKeyForGOOS(tea.KeyMsg{Type: tea.KeyDelete, Alt: true}, uiSharedInputEditActions{

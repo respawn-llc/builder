@@ -80,6 +80,65 @@ func hasProjectWorkflowUnlinkBlocker(blockers []ProjectWorkflowUnlinkBlocker, co
 	return false
 }
 
+type workflowDeletionFixture struct {
+	ctx       context.Context
+	store     *Store
+	projectID string
+}
+
+func newWorkflowDeletionFixture(t *testing.T) workflowDeletionFixture {
+	t.Helper()
+	ctx, store, binding := newTestStoreContext(t)
+	return workflowDeletionFixture{ctx: ctx, store: store, projectID: binding.ProjectID}
+}
+
+func (f workflowDeletionFixture) linkedWorkflow(t *testing.T, isDefault bool) (workflow.WorkflowID, ProjectWorkflowLinkRecord) {
+	t.Helper()
+	workflowID := createValidWorkflow(t, f.ctx, f.store)
+	return workflowID, linkWorkflow(t, f.ctx, f.store, f.projectID, workflowID, isDefault)
+}
+
+func (f workflowDeletionFixture) unlink(t *testing.T, linkID, replacementDefaultLinkID string) ProjectWorkflowUnlinkResult {
+	t.Helper()
+	result, err := f.store.UnlinkProjectWorkflow(f.ctx, linkID, replacementDefaultLinkID)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkflow: %v", err)
+	}
+	return result
+}
+
+func (f workflowDeletionFixture) preview(t *testing.T, workflowID workflow.WorkflowID) WorkflowDeleteImpact {
+	t.Helper()
+	impact, err := f.store.PreviewWorkflowDelete(f.ctx, workflowID)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowDelete: %v", err)
+	}
+	return impact
+}
+
+func (f workflowDeletionFixture) delete(t *testing.T, req WorkflowDeleteRequest) WorkflowDeleteResult {
+	t.Helper()
+	result, err := f.store.DeleteWorkflow(f.ctx, req)
+	if err != nil {
+		t.Fatalf("DeleteWorkflow: %v", err)
+	}
+	return result
+}
+
+func (f workflowDeletionFixture) confirmDelete(t *testing.T, impact WorkflowDeleteImpact, cleanupArtifacts bool) WorkflowDeleteResult {
+	t.Helper()
+	return f.delete(t, confirmedWorkflowDeleteRequest(impact, cleanupArtifacts))
+}
+
+func (f workflowDeletionFixture) links(t *testing.T) []ProjectWorkflowLinkRecord {
+	t.Helper()
+	links, err := f.store.ListProjectWorkflowLinks(f.ctx, f.projectID)
+	if err != nil {
+		t.Fatalf("ListProjectWorkflowLinks: %v", err)
+	}
+	return links
+}
+
 func confirmedWorkflowDeleteRequest(impact WorkflowDeleteImpact, cleanupArtifacts bool) WorkflowDeleteRequest {
 	return WorkflowDeleteRequest{
 		WorkflowID:           impact.WorkflowID,

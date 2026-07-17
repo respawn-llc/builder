@@ -70,9 +70,10 @@ func TestPlannerInteractiveReopensSelectedSessionWithinActiveContainer(t *testin
 	}
 	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Meta().SessionID))
 	planner := Planner{
-		Config:       config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir: containerA,
-		StoreOptions: persistence.Options(),
+		Config:            config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
+		ContainerDir:      containerA,
+		StoreOptions:      persistence.Options(),
+		PersistedSessions: persistence,
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
@@ -104,9 +105,10 @@ func TestPlannerSelectedSessionUsesAuthoritativeMetadata(t *testing.T) {
 		t.Fatalf("record authoritative session metadata: %v", err)
 	}
 	planner := Planner{
-		Config:       config.App{WorkspaceRoot: authoritative.WorkspaceRoot, PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir: container,
-		StoreOptions: persistence.Options(),
+		Config:            config.App{WorkspaceRoot: authoritative.WorkspaceRoot, PersistenceRoot: root, Settings: config.Settings{}},
+		ContainerDir:      container,
+		StoreOptions:      persistence.Options(),
+		PersistedSessions: persistence,
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
@@ -118,7 +120,7 @@ func TestPlannerSelectedSessionUsesAuthoritativeMetadata(t *testing.T) {
 	}
 }
 
-func TestPlannerSelectedSessionIDUsesActiveContainerScope(t *testing.T) {
+func TestPlannerSelectedSessionIDUsesAuthoritativePersistedIdentity(t *testing.T) {
 	root := t.TempDir()
 	containerA := filepath.Join(root, "projects", "project-a", "sessions")
 	containerB := filepath.Join(root, "projects", "project-b", "sessions")
@@ -129,9 +131,10 @@ func TestPlannerSelectedSessionIDUsesActiveContainerScope(t *testing.T) {
 	}
 	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Meta().SessionID))
 	planner := Planner{
-		Config:       config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir: containerA,
-		StoreOptions: persistence.Options(),
+		Config:            config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
+		ContainerDir:      containerA,
+		StoreOptions:      persistence.Options(),
+		PersistedSessions: persistence,
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
@@ -141,25 +144,28 @@ func TestPlannerSelectedSessionIDUsesActiveContainerScope(t *testing.T) {
 	requireSameSessionDir(t, plan.Store.Dir(), selected.Dir())
 }
 
-func TestPlannerSelectedSessionIDDoesNotFallbackOutsideActiveContainer(t *testing.T) {
+func TestPlannerSelectedSessionIDDoesNotOpenAcrossProjectContainers(t *testing.T) {
 	root := t.TempDir()
 	projectContainer := filepath.Join(root, "projects", "project-123", "sessions")
 	otherProjectContainer := filepath.Join(root, "projects", "project-456", "sessions")
 	if err := os.MkdirAll(projectContainer, 0o755); err != nil {
 		t.Fatalf("mkdir project container: %v", err)
 	}
-	otherProjectSession := createTestSessionInContainer(t, otherProjectContainer, "sessions", "/tmp/other-project-workspace")
+	persistence := sessiontest.NewPersistence()
+	otherProjectSession := createTestSessionInContainer(t, otherProjectContainer, "sessions", "/tmp/other-project-workspace", persistence.Options()...)
 	if err := otherProjectSession.SetName("other project session"); err != nil {
 		t.Fatalf("persist other project session meta: %v", err)
 	}
 	planner := Planner{
-		Config:       config.App{WorkspaceRoot: "/tmp/project-workspace", PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir: projectContainer,
+		Config:            config.App{WorkspaceRoot: "/tmp/project-workspace", PersistenceRoot: root, Settings: config.Settings{}},
+		ContainerDir:      projectContainer,
+		StoreOptions:      persistence.Options(),
+		PersistedSessions: persistence,
 	}
 
 	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, otherProjectSession.Meta().SessionID))})
 	if err == nil || !errors.Is(err, session.ErrSessionNotFound) {
-		t.Fatalf("plan session err = %v, want ErrSessionNotFound", err)
+		t.Fatalf("plan session error = %v, want project-scoped ErrSessionNotFound", err)
 	}
 }
 
@@ -170,13 +176,16 @@ func TestPlannerSelectedSessionIDRejectsSymlinkOutsideActiveContainer(t *testing
 	if err := os.MkdirAll(containerA, 0o755); err != nil {
 		t.Fatalf("mkdir container A: %v", err)
 	}
-	escaped := createTestSessionInContainer(t, containerB, "sessions", "/tmp/workspace-b")
+	persistence := sessiontest.NewPersistence()
+	escaped := createTestSessionInContainer(t, containerB, "sessions", "/tmp/workspace-b", persistence.Options()...)
 	if err := os.Symlink(escaped.Dir(), filepath.Join(containerA, "escaped-link")); err != nil {
 		t.Fatalf("symlink escaped session: %v", err)
 	}
 	planner := Planner{
-		Config:       config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir: containerA,
+		Config:            config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
+		ContainerDir:      containerA,
+		StoreOptions:      persistence.Options(),
+		PersistedSessions: persistence,
 	}
 
 	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, "escaped-link"))}); err == nil {

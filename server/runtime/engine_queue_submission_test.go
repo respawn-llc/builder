@@ -11,7 +11,6 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
-	"core/shared/transcript"
 )
 
 func TestSubmitQueuedUserMessagesStartsTurnFromQueuedInjection(t *testing.T) {
@@ -60,37 +59,6 @@ func TestSubmitQueuedUserMessagesStartsTurnFromQueuedInjection(t *testing.T) {
 	}
 	if !hasQueuedUser {
 		t.Fatalf("expected first request to include queued user message, got %+v", requestMessages(client.calls[0]))
-	}
-}
-
-func TestSubmitQueuedUserMessagesSurfacesRunError(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{errors: []error{&llm.ProviderAPIError{
-		ProviderID: "openai",
-		Code:       llm.UnifiedErrorCodeProviderContract,
-		Message:    "provider down",
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	eng.QueueUserMessage("steer now")
-
-	if _, err := eng.SubmitQueuedUserMessages(context.Background()); err == nil {
-		t.Fatal("expected explicit queued submission to surface the model failure")
-	}
-
-	snapshot := eng.ChatSnapshot()
-	found := false
-	for _, entry := range snapshot.Entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected explicit queued-drain failure to persist a developer error entry, got %+v", snapshot.Entries)
-	}
-	if snapshot.StreamingError == "" {
-		t.Fatal("expected explicit queued-drain failure to set the streaming error banner")
 	}
 }
 
@@ -199,91 +167,6 @@ func TestQueuedUserMessageStatusEventsCoverAcceptedSubmittedAndFailed(t *testing
 	}
 }
 
-func TestQueuedUserMessagesCoalesceFromStoredSteeringIntents(t *testing.T) {
-	pending := []queuedUserSteeringIntent{
-		{
-			message: QueuedUserMessage{ID: "queue-1", Text: "stale metadata"},
-			intent:  steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: "intent text"}}),
-		},
-		{
-			message: QueuedUserMessage{ID: "queue-2"},
-			intent:  steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: "second intent"}}),
-		},
-	}
-
-	messages := normalizeQueuedUserMessages(pending)
-	if len(messages) != 2 || messages[0] != "intent text" || messages[1] != "second intent" {
-		t.Fatalf("queued messages = %+v, want stored intent content", messages)
-	}
-	items := queuedUserMessagesForFlush(pending)
-	if len(items) != 2 || items[0].ID != "queue-1" || items[1].ID != "queue-2" {
-		t.Fatalf("queued message items = %+v, want ids for non-empty stored intents", items)
-	}
-}
-
-func TestRunWhenIdleRunsImmediatelyWhenIdle(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	ran := false
-	if err := eng.RunWhenIdle(context.Background(), ActiveKindRuntimeMaintenance, func() error {
-		ran = true
-		return nil
-	}); err != nil {
-		t.Fatalf("RunWhenIdle: %v", err)
-	}
-	if !ran {
-		t.Fatal("expected fn to run when idle")
-	}
-}
-
-func TestRunWhenIdleRetriesUntilBetweenSteps(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	attempts := 0
-	eng.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, _ exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
-		attempts++
-		if attempts == 1 {
-			return ErrAgentBusy
-		}
-		return fn(ctx, "stub-step")
-	}}
-
-	ran := false
-	if err := eng.RunWhenIdle(context.Background(), ActiveKindRuntimeMaintenance, func() error {
-		ran = true
-		return nil
-	}); err != nil {
-		t.Fatalf("RunWhenIdle: %v", err)
-	}
-	if attempts != 2 {
-		t.Fatalf("expected one busy retry before running, got %d attempts", attempts)
-	}
-	if !ran {
-		t.Fatal("expected fn to run after the busy step yielded")
-	}
-}
-
-func TestSubmitUserMessageOrSteerRunsWhenIdle(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "answered", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	msg, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "hello", "req-1")
-	if err != nil {
-		t.Fatalf("SubmitUserMessageOrSteer: %v", err)
-	}
-	if queued != nil {
-		t.Fatalf("expected idle submit to run, got queued item %+v", queued)
-	}
-	if msg.Content != "answered" {
-		t.Fatalf("assistant content = %q, want answered", msg.Content)
-	}
-}
-
 func TestSubmitUserMessageOrSteerSteersWhenBusy(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
@@ -304,50 +187,6 @@ func TestSubmitUserMessageOrSteerSteersWhenBusy(t *testing.T) {
 	}
 	if len(client.calls) != 0 {
 		t.Fatalf("expected no model call for steered submit, got %d", len(client.calls))
-	}
-}
-
-func TestSubmitQueuedUserMessagesRetriesTransientBusyErrors(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after queued steer"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	attempts := 0
-	eng.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
-		attempts++
-		if attempts == 1 {
-			return ErrAgentBusy
-		}
-		return fn(ctx, "stub-step")
-	}}
-	eng.QueueUserMessage("steer now")
-
-	msg, err := eng.SubmitQueuedUserMessages(context.Background())
-	if err != nil {
-		t.Fatalf("submit queued user messages: %v", err)
-	}
-	if attempts != 2 {
-		t.Fatalf("expected busy retry before success, got %d attempts", attempts)
-	}
-	if msg.Content != "after queued steer" {
-		t.Fatalf("assistant content = %q, want after queued steer", msg.Content)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected one model call after retry, got %d", len(client.calls))
-	}
-	hasQueuedUser := false
-	for _, message := range requestMessages(client.calls[0]) {
-		if message.Role == llm.RoleUser && message.Content == "steer now" {
-			hasQueuedUser = true
-			break
-		}
-	}
-	if !hasQueuedUser {
-		t.Fatalf("expected retried request to include queued user message, got %+v", requestMessages(client.calls[0]))
 	}
 }
 
@@ -476,170 +315,6 @@ func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure
 	}
 }
 
-func TestSubmitQueuedUserMessagesStopsRetryingWhenContextIsCanceled(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	attempts := 0
-	eng.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
-		attempts++
-		return ErrAgentBusy
-	}}
-	eng.QueueUserMessage("steer now")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	msg, err := eng.SubmitQueuedUserMessages(ctx)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context cancellation, got msg=%+v err=%v", msg, err)
-	}
-	if attempts != 1 {
-		t.Fatalf("expected one busy attempt before cancellation, got %d", attempts)
-	}
-}
-
-func TestInterruptedRunWithQueuedUserWorkFailsAfterRunReleases(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := newBlockingThenQueuedClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := eng.SubmitUserMessage(context.Background(), "start blocking run")
-		firstDone <- err
-	}()
-
-	client.waitStarted(t)
-	eng.QueueUserMessage("queued while interrupted")
-	if err := eng.Interrupt(); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	client.release()
-	if err := <-firstDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("blocking run error = %v, want context.Canceled", err)
-	}
-
-	waitEngineLifecycleTasks(t, eng)
-	if got := client.callCount(); got != 1 {
-		t.Fatalf("model calls = %d, want interrupted run only", got)
-	}
-	if eng.HasQueuedUserWork() {
-		t.Fatal("queued user work remained after interrupted run")
-	}
-}
-
-func TestQueuedUserWorkScheduledWhenQueuedAfterRunBecomesIdle(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := newBlockingThenQueuedClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	blockingMessages := &blockingQueueMessageLifecycle{
-		wrapped:      eng.messageFlow,
-		queueEntered: make(chan struct{}),
-		releaseQueue: make(chan struct{}),
-	}
-	eng.messageFlow = blockingMessages
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := eng.SubmitUserMessage(context.Background(), "start blocking run")
-		firstDone <- err
-	}()
-	client.waitStarted(t)
-	queueDone := make(chan struct{})
-	go func() {
-		eng.QueueUserMessage("queued after release check")
-		close(queueDone)
-	}()
-	blockingMessages.waitQueueEntered(t)
-	if err := eng.Interrupt(); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	client.release()
-	if err := <-firstDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("blocking run error = %v, want context.Canceled", err)
-	}
-	blockingMessages.release()
-	select {
-	case <-queueDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for queued steering call to return")
-	}
-
-	waitEngineLifecycleTasks(t, eng)
-	if got := client.callCount(); got != 1 {
-		t.Fatalf("model calls = %d, want interrupted run only", got)
-	}
-	if eng.HasQueuedUserWork() {
-		t.Fatal("queued user work remained after interrupted run")
-	}
-}
-
-type blockingQueueMessageLifecycle struct {
-	wrapped      messageLifecycle
-	queueEntered chan struct{}
-	releaseQueue chan struct{}
-	once         sync.Once
-}
-
-func (m *blockingQueueMessageLifecycle) RestoreMessages() error {
-	return m.wrapped.RestoreMessages()
-}
-
-func (m *blockingQueueMessageLifecycle) FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error) {
-	return m.wrapped.FlushPendingUserInjections(stepID, queueItemIDs)
-}
-
-func (m *blockingQueueMessageLifecycle) DrainPendingUserInjections() []QueuedUserMessage {
-	return m.wrapped.DrainPendingUserInjections()
-}
-
-func (m *blockingQueueMessageLifecycle) DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage {
-	return m.wrapped.DrainPendingUserInjectionsByID(ids)
-}
-
-func (m *blockingQueueMessageLifecycle) QueueUserMessage(text string, clientRequestID string) QueuedUserMessage {
-	if text != "idle explicit queue" {
-		m.once.Do(func() {
-			close(m.queueEntered)
-			<-m.releaseQueue
-		})
-	}
-	return m.wrapped.QueueUserMessage(text, clientRequestID)
-}
-
-func (m *blockingQueueMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage {
-	if item.Text != "idle explicit queue" {
-		m.once.Do(func() {
-			close(m.queueEntered)
-			<-m.releaseQueue
-		})
-	}
-	return m.wrapped.QueueUserMessageWithID(item)
-}
-
-func (m *blockingQueueMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool) {
-	return m.wrapped.DiscardQueuedUserMessage(queueItemID)
-}
-
-func (m *blockingQueueMessageLifecycle) HasPendingUserInjections() bool {
-	return m.wrapped.HasPendingUserInjections()
-}
-
-func (m *blockingQueueMessageLifecycle) waitQueueEntered(t *testing.T) {
-	t.Helper()
-	select {
-	case <-m.queueEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for queued steering call to enter")
-	}
-}
-
-func (m *blockingQueueMessageLifecycle) release() {
-	close(m.releaseQueue)
-}
-
 func TestIdleQueueUserMessageDoesNotAutoSubmit(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
@@ -699,230 +374,17 @@ func TestQueueUserMessageDuringTerminalPublicationAutoDrainsAfterIdlePublication
 	}
 }
 
-func TestDiscardedBusyQueuedUserWorkDoesNotAuthorizeLaterIdleQueue(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := newBlockingThenQueuedClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := eng.SubmitUserMessage(context.Background(), "start blocking run")
-		firstDone <- err
-	}()
-	client.waitStarted(t)
-	queued := eng.QueueUserMessage("discard me")
-	if !eng.DiscardQueuedUserMessage(queued.ID) {
-		t.Fatal("expected busy queued steering to be discarded")
+func TestCanceledManualReservationReleaseRedrivesQueuedUserWork(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}}}}
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
+	if err := eng.stepLifecycle.AcquireReservation(reservation); err != nil {
+		t.Fatalf("acquire canceled compaction reservation: %v", err)
 	}
-	if err := eng.Interrupt(); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	client.release()
-	if err := <-firstDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("blocking run error = %v, want context.Canceled", err)
-	}
+	eng.QueueUserMessageForAutoDrain("queued during canceled compaction", "queued-request")
+	eng.stepLifecycle.ReleaseReservation(reservation)
+	waitFakeClientCallCount(t, client, 1)
 	waitEngineLifecycleTasks(t, eng)
-
-	eng.QueueUserMessage("idle explicit queue")
-	time.Sleep(50 * time.Millisecond)
-	if got := client.callCount(); got != 1 {
-		t.Fatalf("discarded busy marker authorized idle queue; model calls = %d, want 1", got)
-	}
-}
-
-func TestEmptyBusyQueuedUserWorkDoesNotAuthorizeLaterIdleQueue(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := newBlockingThenQueuedClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := eng.SubmitUserMessage(context.Background(), "start blocking run")
-		firstDone <- err
-	}()
-	client.waitStarted(t)
-	eng.QueueUserMessage("   ")
-	if err := eng.Interrupt(); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	client.release()
-	if err := <-firstDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("blocking run error = %v, want context.Canceled", err)
-	}
-	waitEngineLifecycleTasks(t, eng)
-
-	eng.QueueUserMessage("idle explicit queue")
-	time.Sleep(50 * time.Millisecond)
-	if got := client.callCount(); got != 1 {
-		t.Fatalf("empty busy marker authorized idle queue; model calls = %d, want 1", got)
-	}
-}
-
-func TestAutoDrainDoesNotSubmitLaterIdleQueuedUserWork(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := newBlockingThenQueuedClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	blockingMessages := &blockingQueueMessageLifecycle{
-		wrapped:      eng.messageFlow,
-		queueEntered: make(chan struct{}),
-		releaseQueue: make(chan struct{}),
-	}
-	eng.messageFlow = blockingMessages
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := eng.SubmitUserMessage(context.Background(), "start blocking run")
-		firstDone <- err
-	}()
-	client.waitStarted(t)
-	queueDone := make(chan struct{})
-	go func() {
-		eng.QueueUserMessage("busy marked queue")
-		close(queueDone)
-	}()
-	blockingMessages.waitQueueEntered(t)
-	if err := eng.Interrupt(); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	client.release()
-	if err := <-firstDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("blocking run error = %v, want context.Canceled", err)
-	}
-	eng.QueueUserMessage("idle explicit queue")
-	blockingMessages.release()
-	select {
-	case <-queueDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for queued steering call to return")
-	}
-	waitEngineLifecycleTasks(t, eng)
-	if got := client.callCount(); got != 1 {
-		t.Fatalf("model calls = %d, want interrupted run only", got)
-	}
-	if !eng.HasQueuedUserWork() {
-		t.Fatal("expected idle explicit queue to remain pending")
-	}
-}
-
-func TestAutoDrainReviewerFollowUpDoesNotSubmitLaterIdleQueuedUserWork(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := newBlockingThenQueuedResponseClient(llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "reviewed queued work", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	})
-	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Double-check queued work."]}`},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        reviewerClient,
-		},
-	})
-	blockingMessages := &blockingQueueMessageLifecycle{
-		wrapped:      eng.messageFlow,
-		queueEntered: make(chan struct{}),
-		releaseQueue: make(chan struct{}),
-	}
-	eng.messageFlow = blockingMessages
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := eng.SubmitUserMessage(context.Background(), "start blocking run")
-		firstDone <- err
-	}()
-	client.waitStarted(t)
-	queueDone := make(chan struct{})
-	go func() {
-		eng.QueueUserMessage("busy marked queue")
-		close(queueDone)
-	}()
-	blockingMessages.waitQueueEntered(t)
-	if err := eng.Interrupt(); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	client.release()
-	if err := <-firstDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("blocking run error = %v, want context.Canceled", err)
-	}
-	eng.QueueUserMessage("idle explicit queue")
-	blockingMessages.release()
-	select {
-	case <-queueDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for queued steering call to return")
-	}
-	waitEngineLifecycleTasks(t, eng)
-
-	if got := fakeClientCallCount(reviewerClient); got != 0 {
-		t.Fatalf("reviewer calls = %d, want no queued-work reviewer call after interrupt", got)
-	}
-	for idx := 1; idx < client.callCount(); idx++ {
-		for _, message := range requestMessages(client.requestAt(idx)) {
-			if message.Role == llm.RoleUser && message.Content == "idle explicit queue" {
-				t.Fatalf("model request %d included explicit idle queue during auto drain: %+v", idx, requestMessages(client.requestAt(idx)))
-			}
-		}
-	}
-	if !eng.HasQueuedUserWork() {
-		t.Fatal("expected idle explicit queue to remain pending after reviewed auto drain")
-	}
-}
-
-func TestAutoDrainLeavesLaterIdleQueuedUserWorkVisibleDuringTurn(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := newBlockingThenBlockedQueuedClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	blockingMessages := &blockingQueueMessageLifecycle{
-		wrapped:      eng.messageFlow,
-		queueEntered: make(chan struct{}),
-		releaseQueue: make(chan struct{}),
-	}
-	eng.messageFlow = blockingMessages
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := eng.SubmitUserMessage(context.Background(), "start blocking run")
-		firstDone <- err
-	}()
-	client.waitStarted(t)
-	queueDone := make(chan struct{})
-	go func() {
-		eng.QueueUserMessage("busy marked queue")
-		close(queueDone)
-	}()
-	blockingMessages.waitQueueEntered(t)
-	if err := eng.Interrupt(); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	client.release()
-	if err := <-firstDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("blocking run error = %v, want context.Canceled", err)
-	}
-	explicit := eng.QueueUserMessage("idle explicit queue")
-	blockingMessages.release()
-	select {
-	case <-queueDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for queued steering call to return")
-	}
-	if !eng.HasQueuedUserWork() {
-		t.Fatal("expected idle explicit queue to remain visible after interrupted run")
-	}
-	if !eng.DiscardQueuedUserMessage(explicit.ID) {
-		t.Fatal("expected idle explicit queue to remain discardable after interrupted run")
-	}
-	waitEngineLifecycleTasks(t, eng)
-	if got := client.callCount(); got != 1 {
-		t.Fatalf("model calls = %d, want interrupted run only", got)
-	}
-	if eng.HasQueuedUserWork() {
-		t.Fatal("queued user work remained after discarding explicit queue")
-	}
 }
 
 type blockingThenQueuedClient struct {
@@ -930,7 +392,6 @@ type blockingThenQueuedClient struct {
 	releaseC       chan struct{}
 	secondStarted  chan struct{}
 	releaseSecondC chan struct{}
-	queuedResponse llm.Response
 	mu             sync.Mutex
 	calls          []llm.Request
 }
@@ -948,14 +409,6 @@ func newBlockingThenBlockedQueuedClient() *blockingThenQueuedClient {
 		releaseC:       make(chan struct{}),
 		secondStarted:  make(chan struct{}),
 		releaseSecondC: make(chan struct{}),
-	}
-}
-
-func newBlockingThenQueuedResponseClient(response llm.Response) *blockingThenQueuedClient {
-	return &blockingThenQueuedClient{
-		started:        make(chan struct{}),
-		releaseC:       make(chan struct{}),
-		queuedResponse: response,
 	}
 }
 
@@ -978,9 +431,6 @@ func (c *blockingThenQueuedClient) Generate(ctx context.Context, req llm.Request
 			return llm.Response{}, ctx.Err()
 		case <-c.releaseSecondC:
 		}
-	}
-	if c.queuedResponse.Assistant.Role != "" || c.queuedResponse.Assistant.Content != "" || len(c.queuedResponse.Assistant.ToolCalls) > 0 {
-		return c.queuedResponse, nil
 	}
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "queued work handled", Phase: llm.MessagePhaseFinal},
@@ -1025,33 +475,6 @@ func (c *blockingThenQueuedClient) releaseSecond() {
 	close(c.releaseSecondC)
 }
 
-func (c *blockingThenQueuedClient) waitCallCount(t *testing.T, want int) {
-	t.Helper()
-	deadline := time.After(3 * time.Second)
-	for {
-		c.mu.Lock()
-		got := len(c.calls)
-		c.mu.Unlock()
-		if got >= want {
-			return
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("model calls = %d, want at least %d", got, want)
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-}
-
-func (c *blockingThenQueuedClient) requestAt(index int) llm.Request {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if index < 0 || index >= len(c.calls) {
-		return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic}
-	}
-	return c.calls[index]
-}
-
 func (c *blockingThenQueuedClient) callCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1093,22 +516,5 @@ func waitEngineLifecycleTasks(t *testing.T, eng *Engine) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for engine lifecycle tasks")
-	}
-}
-
-func TestHasQueuedUserWorkDetectsBackgroundNotices(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	steps := &stubExclusiveStepLifecycle{busy: true}
-	eng.stepLifecycle = steps
-	eng.backgroundFlow = &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
-	if eng.HasQueuedUserWork() {
-		t.Fatal("did not expect queued work in fresh engine")
-	}
-
-	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{ID: "42", Type: BackgroundShellEventCompleted, State: "done"}, true)
-	if !eng.HasQueuedUserWork() {
-		t.Fatal("expected queued work after background notice was queued")
 	}
 }

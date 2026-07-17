@@ -284,8 +284,8 @@ func TestChildSessionSnapshotsRoleSystemPromptOnFirstRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new child: %v", err)
 	}
-	if err := session.InitializeChildFromParentWithOptions(child, parent, session.ChildContextOptions{}); err != nil {
-		t.Fatalf("InitializeChildFromParentWithOptions: %v", err)
+	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourceParentAgent, session.ChildContextOptions{}); err != nil {
+		t.Fatalf("InitializeCreationContext: %v", err)
 	}
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},

@@ -149,10 +149,15 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 	}
 	model.promptAnswers = request.wiring.promptAnswers
 	model.promptAttention = request.wiring.promptAttention
+	sessionClient, ok := runtimeClient.(*sessionRuntimeClient)
+	if !ok {
+		return nil, errors.New("projected UI model runtime client has unexpected type")
+	}
 	model.ongoingTranscript = newOngoingTranscriptController(
 		ongoingSurface,
 		model.ongoingFrameInput,
-		model.applyTranscriptMessageState,
+		sessionClient.admitTranscriptMessageState,
+		model.applyAdmittedTranscriptMessageState,
 	)
 	return &uiProgramComposition{
 		model:   model,

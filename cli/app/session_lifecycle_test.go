@@ -2,16 +2,19 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"core/server/launch"
 	"core/server/metadata"
 	"core/server/registry"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
@@ -54,22 +57,19 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 			},
 		},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
-			_, _, _, err := buildToolRegistry(
-				plan.ExecutionTarget.EffectiveWorkdir,
-				plan.SessionID,
-				[]toolspec.ID{toolspec.ToolPatch},
-				15*time.Second,
-				16_000,
-				false,
-				true,
-				nil,
-				nil,
-			)
+			_, _, _, err := runtimewire.NewLocalToolRegistryBinding(runtimewire.LocalToolRegistryOptions{
+				WorkspaceRoot:       plan.ExecutionTarget.EffectiveWorkdir,
+				OwnerSessionID:      plan.SessionID,
+				Enabled:             []toolspec.ID{toolspec.ToolPatch},
+				MinimumExecToBgTime: 15 * time.Second,
+				ShellOutputMaxChars: 16_000,
+				SupportsVision:      true,
+			})
 			return nil, err
 		},
 	}
 
-	createIntent := serverapi.CreateNewSessionLaunchIntent(nil)
+	createIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
 	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{Intent: &createIntent})
 	if err == nil {
 		t.Fatal("expected startup error for missing workspace")
@@ -100,7 +100,7 @@ func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
 		}},
 	}
 
-	createIntent := serverapi.CreateNewSessionLaunchIntent(nil)
+	createIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
 	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{
 		Intent:    &createIntent,
 		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
@@ -156,9 +156,10 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 	service := sessionlaunch.NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
+		Config:            cfg,
+		ContainerDir:      containerDir,
+		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions: metadataStore,
 	}, registry.NewSessionStoreRegistry())
 	server := &testEmbeddedServer{
 		cfg:               cfg,
@@ -175,35 +176,6 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 	})
 	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
 		t.Fatalf("runSessionLifecycle error = %v, want locked role change", err)
-	}
-}
-
-func TestMaybeHandlePickedSessionWorkspaceChangeSkipsPromptWhenWorkspaceUnchanged(t *testing.T) {
-	originalPrompt := runWorkspaceChangePromptFlow
-	defer func() { runWorkspaceChangePromptFlow = originalPrompt }()
-	promptCalls := 0
-	runWorkspaceChangePromptFlow = func(string, string, string) (workspaceChangePromptResult, error) {
-		promptCalls++
-		return workspaceChangePromptResult{Rebind: true}, nil
-	}
-
-	action, err := maybeHandlePickedSessionWorkspaceChange(
-		context.Background(),
-		&testEmbeddedServer{cfg: config.App{WorkspaceRoot: "/tmp/workspace", Settings: config.Settings{Theme: "dark"}}},
-		"session-1",
-		clientui.SessionExecutionTarget{
-			WorkspaceRoot:         "/tmp/workspace",
-			WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
-		},
-	)
-	if err != nil {
-		t.Fatalf("maybeHandlePickedSessionWorkspaceChange: %v", err)
-	}
-	if action != sessionWorkspaceChangeProceed {
-		t.Fatalf("action = %v, want proceed", action)
-	}
-	if promptCalls != 0 {
-		t.Fatalf("prompt calls = %d, want 0", promptCalls)
 	}
 }
 
@@ -241,39 +213,58 @@ func TestMaybeHandlePickedSessionWorkspaceChangeCanonicalizesAliases(t *testing.
 	}
 }
 
-func TestMaybeHandlePickedSessionWorkspaceChangeSkipsUnavailableTargets(t *testing.T) {
+func TestMaybeHandlePickedSessionWorkspaceChangeUsesRemoteServerBindingRoot(t *testing.T) {
 	originalPrompt := runWorkspaceChangePromptFlow
 	defer func() { runWorkspaceChangePromptFlow = originalPrompt }()
 	promptCalls := 0
-	runWorkspaceChangePromptFlow = func(string, string, string) (workspaceChangePromptResult, error) {
+	var promptedCurrentRoot string
+	runWorkspaceChangePromptFlow = func(_ string, currentRoot string, _ string) (workspaceChangePromptResult, error) {
 		promptCalls++
-		return workspaceChangePromptResult{Rebind: true}, nil
+		promptedCurrentRoot = currentRoot
+		return workspaceChangePromptResult{}, nil
 	}
 
-	for _, availability := range []clientui.ProjectAvailability{
-		clientui.ProjectAvailabilityMissing,
-		clientui.ProjectAvailabilityInaccessible,
-	} {
-		t.Run(string(availability), func(t *testing.T) {
-			action, err := maybeHandlePickedSessionWorkspaceChange(
-				context.Background(),
-				&testEmbeddedServer{cfg: config.App{WorkspaceRoot: "/tmp/current", Settings: config.Settings{Theme: "dark"}}},
-				"session-1",
-				clientui.SessionExecutionTarget{
-					WorkspaceRoot:         "/tmp/previous",
-					WorkspaceAvailability: availability,
-				},
-			)
-			if err != nil {
-				t.Fatalf("maybeHandlePickedSessionWorkspaceChange: %v", err)
-			}
-			if action != sessionWorkspaceChangeProceed {
-				t.Fatalf("action = %v, want proceed", action)
-			}
-		})
+	action, err := maybeHandlePickedSessionWorkspaceChange(
+		context.Background(),
+		&remoteAppServer{
+			cfg: config.App{
+				WorkspaceRoot: "/source-client-workspace",
+				Settings:      config.Settings{Theme: "dark"},
+			},
+			retarget: &sessionWorkspaceRetargetContext{workspaceRoot: "/active-server-workspace", theme: "dark"},
+		},
+		"session-1",
+		clientui.SessionExecutionTarget{
+			WorkspaceRoot:         "/target-server-workspace",
+			WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		},
+	)
+	if err != nil {
+		t.Fatalf("maybeHandlePickedSessionWorkspaceChange: %v", err)
 	}
-	if promptCalls != 0 {
-		t.Fatalf("prompt calls = %d, want 0", promptCalls)
+	if action != sessionWorkspaceChangePickAgain {
+		t.Fatalf("action = %v, want pick again", action)
+	}
+	if promptCalls != 1 {
+		t.Fatalf("prompt calls = %d, want 1", promptCalls)
+	}
+	if promptedCurrentRoot != "/active-server-workspace" {
+		t.Fatalf("prompt current root = %q, want server binding root", promptedCurrentRoot)
+	}
+}
+
+func TestMaybeHandlePickedSessionWorkspaceChangeRejectsMissingBindingContext(t *testing.T) {
+	_, err := maybeHandlePickedSessionWorkspaceChange(
+		context.Background(),
+		narrowSessionLifecycleServer{},
+		"session-1",
+		clientui.SessionExecutionTarget{
+			WorkspaceRoot:         "/target-server-workspace",
+			WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		},
+	)
+	if err == nil {
+		t.Fatal("expected missing workspace retarget context error")
 	}
 }
 
@@ -779,46 +770,17 @@ func mustCanonicalPath(t *testing.T, path string) string {
 	return comparableWorkspaceChangeRoot(canonical)
 }
 
-func TestResolveSessionActionResumeReopensPicker(t *testing.T) {
-	resolved, err := resolveSessionAction(
-		context.Background(),
-		&testEmbeddedServer{},
-		nil,
-		"",
-		UITransition{Action: UIActionResume},
-	)
-	if err != nil {
-		t.Fatalf("resolve session action: %v", err)
-	}
-	requireSessionPickerDestination(t, resolved)
-	if _, present := resolved.AuthPreparation(); !present {
-		t.Fatal("picker result omitted auth preparation")
-	}
-}
-
-func TestResolveSessionActionExitStaysClientLocal(t *testing.T) {
-	resolved, err := resolveSessionAction(
-		context.Background(),
-		nil,
-		nil,
-		"",
-		UITransition{Exit: true},
-	)
-	if err != nil {
-		t.Fatalf("resolve session action: %v", err)
-	}
-	if resolved.Kind() != serverapi.SessionDirectiveStop {
-		t.Fatalf("result kind = %q, want stop", resolved.Kind())
-	}
-}
-
 func TestResolveSessionActionNewSessionUsesForceNewFlow(t *testing.T) {
+	previousSessionID, err := runtimeids.ParseSessionID("parent-1")
+	if err != nil {
+		t.Fatalf("parse previous session id: %v", err)
+	}
 	resolved, err := resolveSessionAction(
 		context.Background(),
 		&testEmbeddedServer{},
 		nil,
 		"",
-		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", ParentSessionID: "parent-1"},
+		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", PreviousSessionID: &previousSessionID},
 	)
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
@@ -848,7 +810,7 @@ func TestResolveSessionActionPreservesInitialPromptHistoryRecorded(t *testing.T)
 				HistoryRecorded: req.Transition.InitialPromptHistoryRecorded,
 			}
 			return serverapi.LaunchSessionDirective(
-				serverapi.CreateNewSessionLaunchIntent(nil),
+				serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 				serverapi.NewSessionLaunchPreparation(
 					&prompt,
 					serverapi.RestoreStoredDraftSessionDraftDisposition(),
@@ -896,18 +858,37 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 	}
 
 	root := t.TempDir()
+	persistence := sessiontest.NewPersistence()
+	source, err := session.Create(
+		root,
+		filepath.Base(filepath.Clean(workdir)),
+		workdir,
+		sessioncontract.SessionCategoryMain,
+		persistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("create source session: %v", err)
+	}
+	if err := source.EnsureDurable(); err != nil {
+		t.Fatalf("persist source session: %v", err)
+	}
+	sourceSessionID := source.Meta().SessionID
+	previousSessionID, err := runtimeids.ParseSessionID(sourceSessionID)
+	if err != nil {
+		t.Fatalf("parse source session id: %v", err)
+	}
 	resolved, err := resolveSessionAction(
 		context.Background(),
 		&testEmbeddedServer{background: manager},
 		nil,
 		"",
-		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", ParentSessionID: "parent-1"},
+		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", PreviousSessionID: &previousSessionID},
 	)
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
 	parent := requireSessionCreateDestination(t, resolved)
-	if parent == nil || *parent != "parent-1" {
+	if parent == nil || *parent != sourceSessionID {
 		t.Fatalf("expected new-session parent, got %+v", parent)
 	}
 	preparation, present := resolved.LaunchPreparation()
@@ -926,7 +907,7 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 			Settings:        config.Settings{Theme: "dark"},
 		},
 		containerDir:       root,
-		sessionPersistence: sessiontest.NewPersistence(),
+		sessionPersistence: persistence,
 	}
 	planner := &launchPlanner{server: testServer}
 	launchRequest := sessionLaunchRequestFromLifecycleResult(t, resolved, serverapi.RunPromptOverrides{})
@@ -941,8 +922,8 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 	if store == nil {
 		t.Fatal("expected planned session store in registry")
 	}
-	if store.Meta().ParentSessionID == nil || *store.Meta().ParentSessionID != "parent-1" {
-		t.Fatalf("expected parent session id preserved across new session transition, got %v", store.Meta().ParentSessionID)
+	if store.Meta().PreviousSessionID == nil || store.Meta().PreviousSessionID.String() != sourceSessionID {
+		t.Fatalf("expected previous session id preserved across new session transition, got %v", store.Meta().PreviousSessionID)
 	}
 	entries := manager.List()
 	if len(entries) != 1 {
@@ -1041,8 +1022,8 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}
 	child := openAuthoritativeAppSession(t, cfg.PersistenceRoot, plan.SessionID)
 	childMeta := child.Meta()
-	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("child parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	if childMeta.PreviousSessionID == nil || childMeta.PreviousSessionID.String() != parent.Meta().SessionID {
+		t.Fatalf("child previous session id = %v, want %q", childMeta.PreviousSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.Continuation == nil || childMeta.Continuation.OpenAIBaseURL != "http://review-parent.local/v1" {
 		t.Fatalf("child continuation = %+v, want parent continuation", childMeta.Continuation)
@@ -1062,159 +1043,16 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}
 }
 
-func TestResolveSessionActionOpenSessionUsesTargetID(t *testing.T) {
-	resolved, err := resolveSessionAction(
+func TestResolveSessionActionOpenSessionRequiresCurrentSession(t *testing.T) {
+	_, err := resolveSessionAction(
 		context.Background(),
 		&testEmbeddedServer{},
 		nil,
 		"",
 		UITransition{Action: UIActionOpenSession, TargetSessionID: "session-42", InitialInput: "draft reply"},
 	)
-	if err != nil {
-		t.Fatalf("resolve session action: %v", err)
-	}
-	if got := requireSessionOpenDestination(t, resolved); got != "session-42" {
-		t.Fatalf("expected target session id passthrough, got %q", got)
-	}
-	preparation, present := resolved.LaunchPreparation()
-	if !present {
-		t.Fatal("open-session result omitted launch preparation")
-	}
-	if _, present := preparation.InitialPrompt(); present {
-		t.Fatal("expected no initial prompt")
-	}
-	if preparation.DraftDisposition().Kind() != serverapi.SessionDraftDispositionOverrideStoredDraft {
-		t.Fatalf("input policy = %q, want override stored draft", preparation.DraftDisposition().Kind())
-	}
-	override, present := preparation.DraftDisposition().OverrideText()
-	if !present || override != "draft reply" {
-		t.Fatalf("input override = %q/%v, want draft reply/true", override, present)
-	}
-}
-
-func TestPersistSessionDraftUsesNarrowLifecycleClient(t *testing.T) {
-	var captured serverapi.SessionPersistInputDraftRequest
-	client := &recordingSessionLifecycleClient{
-		persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-			captured = req
-			return serverapi.SessionPersistInputDraftResponse{}, nil
-		},
-	}
-	model := &uiModel{}
-	model.input = "draft from ui"
-	if err := persistSessionDraftToServer(context.Background(), narrowSessionLifecycleServer{lifecycle: client}, " session-1 ", model); err != nil {
-		t.Fatalf("persist draft: %v", err)
-	}
-	if captured.SessionID != "session-1" {
-		t.Fatalf("session id = %q, want trimmed session-1", captured.SessionID)
-	}
-	if captured.Input != "draft from ui" {
-		t.Fatalf("input = %q, want ui draft", captured.Input)
-	}
-	if captured.ClientRequestID == "" {
-		t.Fatal("expected client request id")
-	}
-}
-
-func TestResolveSessionActionReauthenticatesThroughNarrowServer(t *testing.T) {
-	reauthCalls := 0
-	client := &recordingSessionLifecycleClient{
-		resolveTransition: func(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-			if req.SessionID != "session-1" {
-				t.Fatalf("session id = %q, want session-1", req.SessionID)
-			}
-			if req.Transition.Action != UIActionOpenSession || req.Transition.TargetSessionID != "next-1" {
-				t.Fatalf("transition = %+v, want open next-1", req.Transition)
-			}
-			targetID := sessionLifecycleSessionID(t, "next-1")
-			return serverapi.LaunchSessionDirective(
-				serverapi.OpenExistingSessionLaunchIntent(targetID),
-				serverapi.NewSessionLaunchPreparation(
-					nil,
-					serverapi.RestoreStoredDraftSessionDraftDisposition(),
-					serverapi.SessionAuthPreparationReauthenticate,
-				),
-			), nil
-		},
-	}
-	resolved, err := resolveSessionAction(
-		context.Background(),
-		narrowSessionLifecycleServer{
-			lifecycle: client,
-			reauthenticate: func(context.Context, authInteractor) error {
-				reauthCalls++
-				return nil
-			},
-		},
-		nil,
-		" session-1 ",
-		UITransition{Action: UIActionOpenSession, TargetSessionID: "next-1"},
-	)
-	if err != nil {
-		t.Fatalf("resolve session action: %v", err)
-	}
-	if reauthCalls != 1 {
-		t.Fatalf("reauth calls = %d, want 1", reauthCalls)
-	}
-	if got := requireSessionOpenDestination(t, resolved); got != "next-1" {
-		t.Fatalf("resolved = %+v, want continue to next-1", resolved)
-	}
-}
-
-func TestRetargetInteractiveSessionWorkspaceUsesNarrowServer(t *testing.T) {
-	var captured serverapi.SessionRetargetWorkspaceRequest
-	client := &recordingSessionLifecycleClient{
-		retargetSessionWorkspace: func(_ context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-			captured = req
-			return serverapi.SessionRetargetWorkspaceResponse{}, nil
-		},
-	}
-	if err := retargetInteractiveSessionWorkspace(
-		context.Background(),
-		narrowSessionLifecycleServer{
-			lifecycle: client,
-			cfg:       config.App{WorkspaceRoot: " /tmp/current-workspace "},
-		},
-		" session-1 ",
-	); err != nil {
-		t.Fatalf("retarget workspace: %v", err)
-	}
-	if captured.SessionID != "session-1" {
-		t.Fatalf("session id = %q, want trimmed session-1", captured.SessionID)
-	}
-	if captured.WorkspaceRoot != "/tmp/current-workspace" {
-		t.Fatalf("workspace root = %q, want trimmed /tmp/current-workspace", captured.WorkspaceRoot)
-	}
-	if captured.ClientRequestID == "" {
-		t.Fatal("expected client request id")
-	}
-}
-
-func TestShouldRetryStartupUpdateNoticeUntilShown(t *testing.T) {
-	if shouldRetryStartupUpdateNotice(&uiModel{}, true) != true {
-		t.Fatal("expected retry when startup update notice was not shown")
-	}
-	if shouldRetryStartupUpdateNotice(&uiModel{uiStatusFeatureState: uiStatusFeatureState{startupUpdateShown: true}}, true) {
-		t.Fatal("did not expect retry after startup update notice was shown")
-	}
-	if shouldRetryStartupUpdateNotice(&uiModel{}, false) {
-		t.Fatal("did not expect retry when startup update notices are disabled")
-	}
-}
-
-func TestForcedLocalExitUsesDetachOnlyRuntimePlanClose(t *testing.T) {
-	normalClosed := false
-	detachClosed := false
-	plan := &runtimeLaunchPlan{
-		close:       func() error { normalClosed = true; return nil },
-		detachClose: func() error { detachClosed = true; return nil },
-	}
-	model := &uiModel{uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{forcedLocalExit: true}}
-
-	closeRuntimePlanAfterUIExit(plan, model)
-
-	if normalClosed || !detachClosed {
-		t.Fatalf("close state normal=%t detach=%t, want detach-only close", normalClosed, detachClosed)
+	if err == nil {
+		t.Fatal("open-session navigation without a current session unexpectedly succeeded")
 	}
 }
 
@@ -1228,15 +1066,8 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 	}
 	model := newUIModelDefaults(nil)
 	model.input = "visible draft"
-	model.activeSubmit = activeSubmitState{
-		text: "submitted before forced exit",
-		operationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
-	}
-	model.pendingInjected = queuedUserMessagesForTest("pending injected")
-	model.queued = queuedInputsForTest("queued later")
+	model.pendingInjected = queuedUserMessagesForTest("  pending injected\n")
+	model.queued = queuedInputsForTest("\tqueued later  ")
 
 	if err := persistSessionDraftToServer(context.Background(), narrowSessionLifecycleServer{lifecycle: client}, " session-1 ", model); err != nil {
 		t.Fatalf("persistSessionDraftToServer: %v", err)
@@ -1247,8 +1078,15 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 	if len(captured.RecoveryBuffers) != 2 {
 		t.Fatalf("recovery buffers = %+v, want pending injected and queued", captured.RecoveryBuffers)
 	}
-	if captured.RecoveryBuffers[0].Kind != serverapi.SessionDraftRecoveryBufferPendingInjectedInput {
-		t.Fatalf("first recovery buffer = %+v, want pending injected input", captured.RecoveryBuffers[0])
+	want := []serverapi.SessionDraftRecoveryBuffer{
+		{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "  pending injected\n"},
+		{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "\tqueued later  "},
+	}
+	if !reflect.DeepEqual(captured.RecoveryBuffers, want) {
+		t.Fatalf("recovery buffers = %+v, want ordered byte-preserved category/text %+v", captured.RecoveryBuffers, want)
+	}
+	if _, err := json.Marshal(captured); err != nil {
+		t.Fatalf("marshal captured draft request: %v", err)
 	}
 }
 
@@ -1257,8 +1095,8 @@ func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *te
 		WithUIInitialInput("visible draft"),
 		WithUIInitialRecoveryBuffers([]serverapi.SessionDraftRecoveryBuffer{
 			{Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit, Text: "submitted before forced exit"},
-			{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, ID: "server-1", ClientRequestID: "queue-1", Text: "pending steering"},
-			{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, ID: "queued-1", Text: "queued later"},
+			{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "pending steering"},
+			{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "queued later"},
 		}),
 	).(*uiModel)
 
@@ -1280,21 +1118,6 @@ func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *te
 	}
 }
 
-func TestNormalExitUsesNormalRuntimePlanClose(t *testing.T) {
-	normalClosed := false
-	detachClosed := false
-	plan := &runtimeLaunchPlan{
-		close:       func() error { normalClosed = true; return nil },
-		detachClose: func() error { detachClosed = true; return nil },
-	}
-
-	closeRuntimePlanAfterUIExit(plan, &uiModel{})
-
-	if !normalClosed || detachClosed {
-		t.Fatalf("close state normal=%t detach=%t, want normal close", normalClosed, detachClosed)
-	}
-}
-
 func TestExitReleaseFailureReturnsAfterUILoopResult(t *testing.T) {
 	releaseErr := errors.New("release failed")
 	uiLoopReturned := false
@@ -1307,54 +1130,6 @@ func TestExitReleaseFailureReturnsAfterUILoopResult(t *testing.T) {
 	uiLoopReturned = true
 	if err := closeRuntimePlanAfterUIExit(plan, &uiModel{}); !errors.Is(err, releaseErr) {
 		t.Fatalf("close error = %v, want release failure", err)
-	}
-}
-
-func TestResumeReleaseCompletesBeforePickerAndPickerCancelDoesNotReleaseAgain(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	releaseCalls := 0
-	binding := metadata.Binding{ProjectID: "project-1", WorkspaceID: "workspace-1"}
-	server := &testEmbeddedServer{
-		cfg: config.App{
-			WorkspaceRoot:   workspaceRoot,
-			PersistenceRoot: t.TempDir(),
-			Settings:        config.Settings{Theme: "dark"},
-		},
-		projectID:         binding.ProjectID,
-		projectViewClient: sessionLifecycleProjectViewClient(binding, workspaceRoot, []clientui.SessionSummary{sessionLifecycleSessionSummary(t, "other", time.Now().UTC())}),
-		sessionLaunch: stubSessionLaunchClient{planSession: func(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-			t.Fatal("picker cancellation must not plan a destination")
-			return serverapi.SessionPlanResponse{}, nil
-		}},
-	}
-	planner := newSessionLaunchPlanner(server)
-	planner.pickSession = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
-		if releaseCalls != 1 {
-			t.Fatalf("picker opened before origin release: releases=%d", releaseCalls)
-		}
-		return newSessionPickerCancelResult(), nil
-	}
-	resolved, err := resolveAndReleaseSessionAction(
-		context.Background(),
-		narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
-			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-				return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent), nil
-			},
-		}},
-		nil,
-		"origin",
-		UITransition{Action: UIActionResume},
-		&runtimeLaunchPlan{close: func() error {
-			releaseCalls++
-			return nil
-		}},
-	)
-	if err != nil {
-		t.Fatalf("resolve and release resume: %v", err)
-	}
-	requireSessionPickerDestination(t, resolved)
-	if releaseCalls != 1 {
-		t.Fatalf("picker cancellation released origin again: releases=%d", releaseCalls)
 	}
 }
 

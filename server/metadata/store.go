@@ -1908,25 +1908,45 @@ func decodeSessionPageToken(continuation serverapi.SessionPageContinuation, proj
 }
 
 func (s *Store) ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
-	if s == nil || s.queries == nil {
-		return clientui.SessionExecutionTarget{}, errors.New("metadata store is required")
-	}
-	row, err := s.queries.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(sessionID))
+	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
 	if err != nil {
-		return clientui.SessionExecutionTarget{}, fmt.Errorf("get session execution target: %w", err)
+		return clientui.SessionExecutionTarget{}, err
 	}
 	return sessionExecutionTargetFromRow(row), nil
 }
 
+func (s *Store) ResolveSessionNavigationBinding(ctx context.Context, sessionID string) (serverapi.SessionNavigationBinding, error) {
+	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
+	if err != nil {
+		return serverapi.SessionNavigationBinding{}, err
+	}
+	binding := serverapi.SessionNavigationBinding{
+		ProjectID:   strings.TrimSpace(row.ProjectID),
+		WorkspaceID: strings.TrimSpace(row.WorkspaceID),
+	}
+	if err := binding.Validate(); err != nil {
+		return serverapi.SessionNavigationBinding{}, err
+	}
+	return binding, nil
+}
+
 func (s *Store) SessionBelongsToProject(ctx context.Context, sessionID string, projectID string) (bool, error) {
+	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(row.ProjectID) == strings.TrimSpace(projectID), nil
+}
+
+func (s *Store) resolveSessionExecutionTargetRow(ctx context.Context, sessionID string) (sqlitegen.GetSessionExecutionTargetByIDRow, error) {
 	if s == nil || s.queries == nil {
-		return false, errors.New("metadata store is required")
+		return sqlitegen.GetSessionExecutionTargetByIDRow{}, errors.New("metadata store is required")
 	}
 	row, err := s.queries.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
-		return false, fmt.Errorf("get session execution target: %w", err)
+		return sqlitegen.GetSessionExecutionTargetByIDRow{}, fmt.Errorf("get session execution target: %w", err)
 	}
-	return strings.TrimSpace(row.ProjectID) == strings.TrimSpace(projectID), nil
+	return row, nil
 }
 
 func (s *Store) ResolvePersistedSession(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error) {
@@ -2103,26 +2123,27 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		launchVisible = 1
 	}
 	return s.queries.UpsertSession(ctx, sqlitegen.UpsertSessionParams{
-		ID:                 snapshot.Meta.SessionID,
-		ProjectID:          binding.ProjectID,
-		WorkspaceID:        sql.NullString{String: binding.WorkspaceID, Valid: strings.TrimSpace(binding.WorkspaceID) != ""},
-		WorktreeID:         worktreeID,
-		ArtifactRelpath:    relpath,
-		Name:               snapshot.Meta.Name,
-		FirstPromptPreview: snapshot.Meta.FirstPromptPreview,
-		InputDraft:         snapshot.Meta.InputDraft,
-		ParentSessionID:    nullableParentSessionID(snapshot.Meta.ParentSessionID),
-		Category:           category,
-		CreatedAtUnixMs:    snapshot.Meta.CreatedAt.UTC().UnixMilli(),
-		UpdatedAtUnixMs:    snapshot.Meta.UpdatedAt.UTC().UnixMilli(),
-		LastSequence:       snapshot.Meta.LastSequence,
-		ModelRequestCount:  snapshot.Meta.ModelRequestCount,
-		LaunchVisible:      launchVisible,
-		CwdRelpath:         cwdRelpath,
-		ContinuationJson:   continuationJSON,
-		LockedJson:         lockedJSON,
-		UsageStateJson:     usageStateJSON,
-		MetadataJson:       metadataJSON,
+		ID:                   snapshot.Meta.SessionID,
+		ProjectID:            binding.ProjectID,
+		WorkspaceID:          sql.NullString{String: binding.WorkspaceID, Valid: strings.TrimSpace(binding.WorkspaceID) != ""},
+		WorktreeID:           worktreeID,
+		ArtifactRelpath:      relpath,
+		Name:                 snapshot.Meta.Name,
+		FirstPromptPreview:   snapshot.Meta.FirstPromptPreview,
+		InputDraft:           snapshot.Meta.InputDraft,
+		PreviousSessionID:    nullableSessionID(snapshot.Meta.PreviousSessionID),
+		ParentAgentSessionID: nullableSessionID(snapshot.Meta.ParentAgentSessionID),
+		Category:             category,
+		CreatedAtUnixMs:      snapshot.Meta.CreatedAt.UTC().UnixMilli(),
+		UpdatedAtUnixMs:      snapshot.Meta.UpdatedAt.UTC().UnixMilli(),
+		LastSequence:         snapshot.Meta.LastSequence,
+		ModelRequestCount:    snapshot.Meta.ModelRequestCount,
+		LaunchVisible:        launchVisible,
+		CwdRelpath:           cwdRelpath,
+		ContinuationJson:     continuationJSON,
+		LockedJson:           lockedJSON,
+		UsageStateJson:       usageStateJSON,
+		MetadataJson:         metadataJSON,
 	})
 }
 
@@ -2178,7 +2199,7 @@ func sessionLaunchVisible(meta session.Meta) bool {
 	if strings.TrimSpace(meta.InputDraft) != "" {
 		return true
 	}
-	if meta.ParentSessionID != nil && strings.TrimSpace(*meta.ParentSessionID) != "" {
+	if meta.PreviousSessionID != nil || meta.ParentAgentSessionID != nil {
 		return true
 	}
 	return meta.ModelRequestCount > 0
@@ -2260,6 +2281,14 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 	if workspaceContainer == "" {
 		workspaceContainer = filepath.Base(filepath.Clean(workspaceRoot))
 	}
+	previousSessionID, err := optionalSessionID(row.ID, "previous_session_id", row.PreviousSessionID)
+	if err != nil {
+		return session.Meta{}, err
+	}
+	parentAgentSessionID, err := optionalSessionID(row.ID, "parent_agent_session_id", row.ParentAgentSessionID)
+	if err != nil {
+		return session.Meta{}, err
+	}
 	return session.Meta{
 		SessionID:                       row.ID,
 		Category:                        category,
@@ -2267,7 +2296,8 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		FirstPromptPreview:              row.FirstPromptPreview,
 		InputDraft:                      row.InputDraft,
 		InputDraftRecoveryBuffers:       metadataPayload.InputDraftRecoveryBuffers,
-		ParentSessionID:                 optionalParentSessionID(row.ParentSessionID),
+		PreviousSessionID:               previousSessionID,
+		ParentAgentSessionID:            parentAgentSessionID,
 		WorkspaceRoot:                   workspaceRoot,
 		WorkspaceContainer:              workspaceContainer,
 		Continuation:                    continuation,
@@ -2312,26 +2342,25 @@ func sessionCategoryFromStored(sessionID string, stored sql.NullString) (*sessio
 	return &category, nil
 }
 
-func nullableParentSessionID(parentSessionID *string) sql.NullString {
-	if parentSessionID == nil {
+func nullableSessionID(sessionID *runtimeids.SessionID) sql.NullString {
+	if sessionID == nil {
 		return sql.NullString{}
 	}
-	value := strings.TrimSpace(*parentSessionID)
-	if value == "" {
-		panic("metadata persistence received an empty parent session id")
+	if sessionID.IsZero() {
+		panic("metadata persistence received an empty session provenance id")
 	}
-	return sql.NullString{String: value, Valid: true}
+	return sql.NullString{String: sessionID.String(), Valid: true}
 }
 
-func optionalParentSessionID(parentSessionID sql.NullString) *string {
-	if !parentSessionID.Valid {
-		return nil
+func optionalSessionID(ownerSessionID string, field string, stored sql.NullString) (*runtimeids.SessionID, error) {
+	if !stored.Valid {
+		return nil, nil
 	}
-	value := strings.TrimSpace(parentSessionID.String)
-	if value == "" {
-		panic("metadata persistence read an empty parent session id")
+	parsed, err := runtimeids.ParseSessionID(stored.String)
+	if err != nil {
+		return nil, fmt.Errorf("session %q has invalid %s %q: %w", ownerSessionID, field, stored.String, err)
 	}
-	return &value
+	return &parsed, nil
 }
 
 func unmarshalStoredJSON(body string, target any) error {

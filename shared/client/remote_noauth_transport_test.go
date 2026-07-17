@@ -52,12 +52,12 @@ func TestRemoteNoAuthAcknowledgementPropagatesToFreshConnectionStrategies(t *tes
 					return
 				}
 				attached = true
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "project", ProjectID: "project-1", WorkspaceRoot: "/tmp/workspace-a"}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
 					reportHandlerError(handlerErrs, "send attach response: %w", err)
 					return
 				}
 			case protocol.MethodAttachSession:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "session", SessionID: "session-1"}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a", "session-1")))); err != nil {
 					reportHandlerError(handlerErrs, "send attach-session response: %w", err)
 					return
 				}
@@ -112,7 +112,7 @@ func TestRemoteNoAuthAcknowledgementPropagatesToFreshConnectionStrategies(t *tes
 		t.Fatalf("SubscribeSessionTranscript: %v", err)
 	}
 	_ = sub.Close()
-	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "run-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hi"}, nil); err != nil {
+	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "run-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hi"}, nil); err != nil {
 		t.Fatalf("RunPrompt: %v", err)
 	}
 	if got := freshAckCount.Load(); got != 3 {
@@ -147,7 +147,7 @@ func TestRemoteNoAuthAcknowledgementDisabledWhenServerReportsRealAuthReady(t *te
 			}
 			switch req.Method {
 			case protocol.MethodAttachProject:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "project", ProjectID: "project-1", WorkspaceRoot: "/tmp/workspace-a"}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
 					reportHandlerError(handlerErrs, "send attach response: %w", err)
 					return
 				}
@@ -214,7 +214,7 @@ func TestRemoteRealAuthCompletionDisablesNoAuthAcknowledgementPolicy(t *testing.
 			}
 			switch req.Method {
 			case protocol.MethodAttachProject:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "project", ProjectID: "project-1", WorkspaceRoot: "/tmp/workspace-a"}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
 					reportHandlerError(handlerErrs, "send attach response: %w", err)
 					return
 				}
@@ -292,7 +292,7 @@ func TestRemoteDoesNotAcknowledgeNoAuthWhenPolicyDisabled(t *testing.T) {
 			}
 			switch req.Method {
 			case protocol.MethodAttachProject:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "project", ProjectID: "project-1", WorkspaceRoot: "/tmp/workspace-a"}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
 					reportHandlerError(handlerErrs, "send attach response: %w", err)
 					return
 				}

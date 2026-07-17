@@ -1,8 +1,9 @@
 package app
 
 import (
+	"errors"
+
 	"core/cli/tui/ongoing"
-	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -39,16 +40,18 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	case ongoingTranscriptEventMessage:
 		var stateCmd tea.Cmd
 		result, stateCmd, err = m.ongoingTranscript.Accept(event.Message)
-		if err == nil {
-			stateCmd = sequenceCmds(stateCmd, m.inputController().resumeQueuedInputsAfterIdleRuntime())
+		if err != nil {
+			var developerErr ongoing.DeveloperError
+			if errors.As(err, &developerErr) {
+				return m.handleOngoingDeveloperError(developerErr)
+			}
+			return m.handleOngoingSurfaceError(err)
 		}
-		if event.Message.Kind == clientui.TranscriptMessageHydration {
+		stateCmd = sequenceCmds(stateCmd, m.inputController().resumeQueuedInputsAfterIdleRuntime())
+		if m.ongoingTranscript.acceptedHydration(event.Message) {
 			stateCmd = sequenceCmds(stateCmd, m.flushQueuedInputsAfterHydration())
 		}
 		m.layout().syncViewport()
-		if err != nil {
-			return m.handleOngoingSurfaceError(err)
-		}
 		return tea.Batch(stateCmd, m.handleOngoingResult(result), m.reconcileSpinnerTicking(true))
 	case ongoingTranscriptEventLoss:
 		result = m.ongoingTranscript.HandleSubscriptionLoss()

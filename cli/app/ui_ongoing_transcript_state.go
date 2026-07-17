@@ -10,21 +10,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func (m *uiModel) applyTranscriptMessageState(message clientui.TranscriptMessage) tea.Cmd {
+func (m *uiModel) applyAdmittedTranscriptMessageState(
+	message clientui.TranscriptMessage,
+	admission runtimeTupleMergeResult,
+) tea.Cmd {
 	if m == nil {
 		return nil
-	}
-	if observer, ok := m.runtimeClient().(interface {
-		observeTranscriptMessageState(clientui.TranscriptMessage)
-	}); ok {
-		observer.observeTranscriptMessageState(message)
 	}
 	if message.Kind != clientui.TranscriptMessageHydration && m.turnQueueHook != nil {
 		m.turnQueueHook.OnTranscriptMessage(message)
 	}
 	switch message.Kind {
 	case clientui.TranscriptMessageHydration:
-		return m.applyTranscriptHydration(*message.Payload.Hydration)
+		return m.applyTranscriptHydration(*message.Payload.Hydration, admission)
 	case clientui.TranscriptMessageReasoningUpdate:
 		m.applyTranscriptReasoningUpdate(*message.Payload.ReasoningUpdate)
 	case clientui.TranscriptMessageReasoningReset:
@@ -39,7 +37,7 @@ func (m *uiModel) applyTranscriptMessageState(message clientui.TranscriptMessage
 	case clientui.TranscriptMessageReviewerState:
 		m.applyTranscriptReviewerState(*message.Payload.ReviewerState)
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
-		return m.applyTranscriptRuntimeReadModelUpdate(*message.Payload.RuntimeReadModelUpdate)
+		return m.applyTranscriptRuntimeReadModelUpdate(admission)
 	case clientui.TranscriptMessageSessionStatus:
 		m.applyTranscriptSessionStatus(*message.Payload.SessionStatus)
 	case clientui.TranscriptMessageSessionIdentity:
@@ -70,11 +68,14 @@ func (m *uiModel) applyTranscriptMessageState(message clientui.TranscriptMessage
 	return nil
 }
 
-func (m *uiModel) applyTranscriptHydration(hydration clientui.TranscriptHydration) tea.Cmd {
+func (m *uiModel) applyTranscriptHydration(
+	hydration clientui.TranscriptHydration,
+	admission runtimeTupleMergeResult,
+) tea.Cmd {
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.applyTranscriptSessionIdentity(hydration.SessionIdentity))
 	m.applyTranscriptSessionStatus(hydration.SessionStatus)
-	cmds = append(cmds, m.applyTranscriptRuntimeReadModelUpdate(hydration.RuntimeReadModelUpdate))
+	cmds = append(cmds, m.applyTranscriptRuntimeReadModelUpdate(admission))
 
 	m.reasoningStatusHeader = ""
 	if hydration.ActiveReasoning != nil {
@@ -108,9 +109,16 @@ func (m *uiModel) applyTranscriptHydration(hydration clientui.TranscriptHydratio
 	return batchCmds(cmds...)
 }
 
-func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(update clientui.RuntimeReadModelUpdate) tea.Cmd {
-	m.runtimeReadModelVersion = update.Version
-	if err := m.applyRuntimeActivityProjection(update.Activity); err != nil {
+func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMergeResult) tea.Cmd {
+	switch admission.decision {
+	case runtimeTupleRefresh:
+		return m.startRuntimeMainViewRefreshRequest(runtimeReadModelResetMainViewRefreshRequest()).cmd
+	}
+	if !admission.project {
+		return nil
+	}
+	view := admission.view
+	if err := m.applyRuntimeActivityProjection(view.Activity); err != nil {
 		m.activity = uiActivityError
 		return m.sendTransientStatusWithNoticeID(
 			"invalid runtime activity: "+err.Error(),
@@ -120,7 +128,7 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(update clientui.RuntimeR
 			"",
 		)
 	}
-	if update.Activity.ActiveForControl() {
+	if view.Activity.ActiveForControl() {
 		return nil
 	}
 	var cmd tea.Cmd

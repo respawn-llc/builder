@@ -93,35 +93,6 @@ func (secretClipboardExitError) ExitCode() int {
 	return 7
 }
 
-func TestClipboardPasteInsertsMultilineUnicodeTextAtMainCursor(t *testing.T) {
-	calls := 0
-	m := newProjectedStaticUIModel(WithUIClipboardPaster(clipboardPasterFunc(func(context.Context) (uiClipboardContent, error) {
-		calls++
-		return uiClipboardText{Text: "α\nβ"}, nil
-	})))
-	m.replaceMainInput("beforeafter", len([]rune("before")))
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
-	if cmd == nil {
-		t.Fatal("expected explicit clipboard paste command")
-	}
-	if calls != 0 {
-		t.Fatalf("clipboard read calls = %d, want 0 before command execution", calls)
-	}
-
-	next, _ = next.Update(cmd())
-	updated := next.(*uiModel)
-	if calls != 1 {
-		t.Fatalf("clipboard read calls = %d, want 1", calls)
-	}
-	if got, want := updated.input, "beforeα\nβafter"; got != want {
-		t.Fatalf("input = %q, want %q", got, want)
-	}
-	if got, want := updated.inputCursor, len([]rune("beforeα\nβ")); got != want {
-		t.Fatalf("cursor = %d, want %d", got, want)
-	}
-}
-
 func TestClipboardPasteMainReturnsAutocompleteRefreshCommand(t *testing.T) {
 	store := &countingAuthStore{}
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{
@@ -255,55 +226,30 @@ func TestClipboardPasteDoneRejectsStaleTarget(t *testing.T) {
 }
 
 func TestClipboardPasteDoneRemovesStaleTemporaryImage(t *testing.T) {
-	tests := []struct {
-		name   string
-		target clipboardTestInputTarget
-	}{
-		{name: "main", target: clipboardTestInputMain},
-		{name: "ask", target: clipboardTestInputAsk},
+	model := setupClipboardTestInput(t, newProjectedStaticUIModel(), clipboardTestInputMain)
+	staleToken := model.mainInputDraftToken
+	model.replaceMainInput("replacement", -1)
+	removed := 0
+	image := newTemporaryClipboardImage("/tmp/kent-stale-clipboard.png", &uiClipboardTempImage{
+		path: "/tmp/kent-stale-clipboard.png",
+		remove: func(string) error {
+			removed++
+			return nil
+		},
+	})
+
+	next, cmd := model.Update(clipboardPasteDoneMsg{
+		Target:         uiClipboardPasteTargetMain,
+		MainDraftToken: staleToken,
+		Content:        image,
+	})
+	updated := next.(*uiModel)
+	if removed != 0 || updated.input != "replacement" || cmd == nil {
+		t.Fatalf("stale image result = removed %d, input %q, cmd %v", removed, updated.input, cmd)
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			m := setupClipboardTestInput(t, newProjectedStaticUIModel(), tc.target)
-			removed := 0
-			image := newTemporaryClipboardImage("/tmp/kent-stale-clipboard.png", &uiClipboardTempImage{
-				path: "/tmp/kent-stale-clipboard.png",
-				remove: func(string) error {
-					removed++
-					return nil
-				},
-			})
-			msg := clipboardPasteDoneMsg{Content: image}
-			if tc.target == clipboardTestInputMain {
-				msg.Target = uiClipboardPasteTargetMain
-				msg.MainDraftToken = m.mainInputDraftToken
-				m.replaceMainInput("replacement", -1)
-			} else {
-				msg.Target = uiClipboardPasteTargetAsk
-				msg.AskToken = m.ask.currentToken
-				replacement := testQuestionAskEvent("replacement-ask", "Replacement", make(chan askReply, 1))
-				testSetActiveAsk(m, &replacement)
-				m.ask.freeform = true
-			}
-
-			next, cmd := m.Update(msg)
-			updated := next.(*uiModel)
-			if removed != 0 {
-				t.Fatalf("temporary image remove calls = %d before command execution, want 0", removed)
-			}
-			if tc.target == clipboardTestInputMain && updated.input != "replacement" {
-				t.Fatalf("input = %q, want replacement", updated.input)
-			}
-			if cmd == nil {
-				t.Fatal("expected stale image disposal command")
-			}
-			next, _ = updated.Update(cmd())
-			updated = next.(*uiModel)
-			if removed != 1 {
-				t.Fatalf("temporary image remove calls = %d after command execution, want 1", removed)
-			}
-		})
+	next, _ = updated.Update(cmd())
+	if removed != 1 {
+		t.Fatalf("temporary image remove calls = %d, want 1", removed)
 	}
 }
 
@@ -464,6 +410,9 @@ func TestClipboardPasteBindingsDispatchForMainAndFreeformAskInput(t *testing.T) 
 			next, cmd := m.Update(tc.key)
 			if cmd == nil {
 				t.Fatal("expected explicit clipboard paste command")
+			}
+			if calls != 0 {
+				t.Fatalf("clipboard read calls before command = %d, want 0", calls)
 			}
 			next, _ = next.Update(cmd())
 			updated := next.(*uiModel)

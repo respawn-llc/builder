@@ -127,6 +127,9 @@ const (
 
 func (c uiInputController) startCompactionWithOrigin(args string, origin uiCompactionOrigin) tea.Cmd {
 	m := c.model
+	if m.hasPendingRuntimeOperationKind(clientui.RuntimeOperationKindCompact) {
+		return nil
+	}
 	c.startRuntimeOperationAffordance(true)
 	m.compactionOrigin = origin
 	m.logf("compaction.start args_chars=%d", len(strings.TrimSpace(args)))

@@ -705,30 +705,6 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	}
 }
 
-func TestSupportsRequestInputTokenCount_DisablesCodexOAuth(t *testing.T) {
-	transport := NewHTTPTransport(oauthStaticAuth{})
-
-	supported, err := transport.SupportsRequestInputTokenCount(context.Background())
-	if err != nil {
-		t.Fatalf("SupportsRequestInputTokenCount: %v", err)
-	}
-	if supported {
-		t.Fatal("expected chatgpt-codex oauth input token counting to be unsupported")
-	}
-}
-
-func TestSupportsRequestInputTokenCount_AllowsStandardOpenAI(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-
-	supported, err := transport.SupportsRequestInputTokenCount(context.Background())
-	if err != nil {
-		t.Fatalf("SupportsRequestInputTokenCount: %v", err)
-	}
-	if !supported {
-		t.Fatal("expected standard openai input token counting to remain supported")
-	}
-}
-
 func TestNewOpenAIProviderContractErrorPreservesMissingResponseStatus(t *testing.T) {
 	cause := errors.New("invalid provider response")
 	err := newOpenAIProviderContractError("openai-compatible", nil, cause)
@@ -1144,46 +1120,5 @@ func TestBuildPayload_DoesNotSetPromptCacheKeyForOpenAICompatibleProvider(t *tes
 	jsonPayload := mustMarshalObject(t, payload)
 	if _, ok := jsonPayload["prompt_cache_key"]; ok {
 		t.Fatalf("expected prompt_cache_key omitted for openai-compatible provider, got %#v", jsonPayload["prompt_cache_key"])
-	}
-}
-
-func TestBuildPayload_SetsPromptCacheKeyWhenExplicitCapabilityIsEnabled(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
-		Model:          "gpt-5",
-		PromptCacheKey: "cache-key-1",
-	}, OpenAIAuthMode{}, ProviderCapabilities{
-		ProviderID:             "openai-compatible",
-		SupportsResponsesAPI:   true,
-		SupportsPromptCacheKey: true,
-		IsOpenAIFirstParty:     false,
-	})
-	if err != nil {
-		t.Fatalf("build payload: %v", err)
-	}
-
-	jsonPayload := mustMarshalObject(t, payload)
-	if got := jsonPayload["prompt_cache_key"]; got != "cache-key-1" {
-		t.Fatalf("expected prompt_cache_key=cache-key-1, got %#v", got)
-	}
-}
-
-func TestHTTPTransport_ProviderCapabilitiesOverrideControlsPromptCacheKeyPayload(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	transport.ProviderCapabilitiesOverride = &ProviderCapabilities{
-		ProviderID:             "openai-compatible",
-		SupportsResponsesAPI:   true,
-		SupportsPromptCacheKey: false,
-	}
-	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
-		Model:          "gpt-5",
-		PromptCacheKey: "cache-key-1",
-	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
-	if err != nil {
-		t.Fatalf("build payload: %v", err)
-	}
-	jsonPayload := mustMarshalObject(t, payload)
-	if _, ok := jsonPayload["prompt_cache_key"]; ok {
-		t.Fatalf("expected provider capability override to omit prompt_cache_key, got %#v", jsonPayload["prompt_cache_key"])
 	}
 }

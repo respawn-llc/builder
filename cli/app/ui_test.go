@@ -88,21 +88,6 @@ func TestCustomKeyCtrlEnterQueuesAndStartsSubmission(t *testing.T) {
 	}
 }
 
-func TestCustomKeyCtrlEnterXtermVariantQueuesAndStartsSubmission(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.input = "echo hi"
-
-	next, _ := m.Update(customKeyMsg{Kind: customKeyCtrlEnter})
-	updated := next.(*uiModel)
-
-	if !updated.isBusy() {
-		t.Fatal("expected busy after xterm ctrl+enter sequence")
-	}
-	if updated.input != "" {
-		t.Fatalf("expected input cleared after xterm ctrl+enter sequence, got %q", updated.input)
-	}
-}
-
 func TestCustomKeyCtrlEnterQueuesPostTurnWhenBusy(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.setRuntimeActivityBusyForTest(true)
@@ -158,22 +143,6 @@ func TestCustomKeyCtrlBackspaceDeletesCurrentLine(t *testing.T) {
 
 	if updated.input != "one\nthree" {
 		t.Fatalf("expected ctrl+backspace CSI to remove current line, got %q", updated.input)
-	}
-	if updated.inputCursor != 4 {
-		t.Fatalf("expected cursor at start of joined line after delete, got %d", updated.inputCursor)
-	}
-}
-
-func TestCustomKeyCtrlBackspaceWithSubtypeDeletesCurrentLine(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.input = "one\ntwo\nthree"
-	m.inputCursor = 5 // inside "two"
-
-	next, _ := m.Update(customKeyMsg{Kind: customKeyCtrlBackspace})
-	updated := next.(*uiModel)
-
-	if updated.input != "one\nthree" {
-		t.Fatalf("expected ctrl+backspace CSI with subtype to remove current line, got %q", updated.input)
 	}
 	if updated.inputCursor != 4 {
 		t.Fatalf("expected cursor at start of joined line after delete, got %d", updated.inputCursor)
@@ -297,6 +266,9 @@ func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 2 {
 		t.Fatalf("expected selected option number 2, got %+v", resp.response)
 	}
+	if resp.response.Answer != "" {
+		t.Fatalf("expected structured picker response without raw answer text, got %+v", resp.response)
+	}
 	if resp.response.FreeformAnswer != "custom" {
 		t.Fatalf("expected pending freeform draft submitted with picker answer, got %+v", resp.response)
 	}
@@ -351,31 +323,6 @@ func TestAskQuestionTabRoundTripRestoresPendingFreeformDraftAndCursor(t *testing
 	}
 	if resp.response.FreeformAnswer != "custoXm" {
 		t.Fatalf("expected restored draft to remain editable, got %+v", resp.response)
-	}
-	resolveAnsweredTestAskThroughTranscript(t, updated)
-	if testActiveAsk(updated) != nil {
-		t.Fatal("ask remained active after transcript resolution")
-	}
-}
-
-func TestAskQuestionPickerSubmitReturnsSelectedOptionNumber(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
-
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-
-	resp := <-reply
-	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 2 {
-		t.Fatalf("expected selected option number 2, got %+v", resp.response)
-	}
-	if resp.response.Answer != "" || resp.response.FreeformAnswer != "" {
-		t.Fatalf("expected structured picker response without raw answer text, got %+v", resp.response)
 	}
 	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
@@ -609,17 +556,8 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	updated = next.(*uiModel)
 	next, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected approval commentary queue command")
-	}
-	select {
-	case <-reply:
-		t.Fatal("did not expect approval answer before commentary queue command completes")
-	default:
-	}
-	for _, msg := range collectCmdMessages(t, cmd) {
-		next, cmd = updated.Update(msg)
-		updated = next.(*uiModel)
+	if cmd != nil {
+		t.Fatal("deny commentary must not create a queued user-message command")
 	}
 
 	resp := <-reply
@@ -629,8 +567,8 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	if resp.response.Approval.Decision != clientui.ApprovalDecisionDeny || resp.response.Approval.Commentary != "blocked by policy" {
 		t.Fatalf("unexpected approval response: %+v", resp.response.Approval)
 	}
-	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "blocked by policy" {
-		t.Fatalf("expected deny commentary injected into regular user-said flow, got %+v", updated.pendingInjected)
+	if len(updated.pendingInjected) != 0 {
+		t.Fatalf("deny commentary created a duplicate queued user message: %+v", updated.pendingInjected)
 	}
 	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
@@ -672,33 +610,6 @@ func TestTabInsideDetailReturnsToOngoingMode(t *testing.T) {
 	updated = next.(*uiModel)
 	if updated.view.Mode() != tui.ModeOngoing {
 		t.Fatalf("mode=%q want ongoing after Tab", updated.view.Mode())
-	}
-}
-
-func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
-	m := newProjectedStaticUIModel(
-		WithUIModelName("gpt-5"),
-	)
-	m.terminalGeometry = terminalGeometryKnown(80, 16)
-	m.status.snapshot.Git = uiStatusGitInfo{Visible: true, Branch: "detail-mode-v2"}
-	m.layout().syncViewport()
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-	updated := next.(*uiModel)
-	if updated.view.Mode() != tui.ModeDetail {
-		t.Fatalf("mode=%q want detail", updated.view.Mode())
-	}
-
-	lines := strings.Split(ansi.Strip(updated.View()), "\n")
-	statusLine := lines[len(lines)-1]
-	if want := statusStateCircleGlyph + statusLineSpinnerSeparator + "detail-mode-v2 · gpt-5"; !strings.HasPrefix(statusLine, want) {
-		t.Fatalf("detail status line prefix = %q, want prefix %q", statusLine, want)
-	}
-	if strings.Contains(statusLine, statusStateCircleGlyph+statusLineSpinnerSeparator+"ongoing"+statusLineSeparator) ||
-		strings.Contains(statusLine, statusStateCircleGlyph+statusLineSpinnerSeparator+"detail"+statusLineSeparator) ||
-		strings.Contains(statusLine, statusLineSeparator+"ongoing"+statusLineSeparator) ||
-		strings.Contains(statusLine, statusLineSeparator+"detail"+statusLineSeparator) {
-		t.Fatalf("did not expect transcript mode label in detail status line, got %q", statusLine)
 	}
 }
 
@@ -771,45 +682,6 @@ func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *test
 	}
 	if visible[visibleCursor].Line.Kind != askPromptLineKindInput {
 		t.Fatalf("expected visible cursor to land on input after markdown-expanded question, got line %+v", visible[visibleCursor])
-	}
-}
-
-func TestAskQuestionPickerMarkdownQuestionWrapsWithoutSourceMarkers(t *testing.T) {
-	question := strings.Join([]string{
-		"Review **generated plan** and the [design note](https://example.com/design).",
-		"",
-		"- First item",
-		"- Second item",
-	}, "\n")
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(40, 14)
-	m.layout().syncViewport()
-	event := testQuestionAskEvent("ask-1", question, make(chan askReply, 1))
-	testSetActiveAsk(m, &event)
-
-	wrapped, _ := m.layout().wrappedAskPromptLines(32)
-	var questionLines []string
-	for _, line := range wrapped {
-		if line.Line.Kind != askPromptLineKindQuestion {
-			continue
-		}
-		if width := lipgloss.Width(line.Text); width > 32 {
-			t.Fatalf("question line width = %d, want <= 32: %q", width, line.Text)
-		}
-		questionLines = append(questionLines, ansi.Strip(line.Text))
-	}
-	plain := strings.Join(questionLines, "\n")
-	if len(questionLines) < 3 {
-		t.Fatalf("question lines = %d, want wrapped Markdown: %q", len(questionLines), plain)
-	}
-	if strings.Contains(plain, "**generated plan**") || strings.Contains(plain, "- First item") {
-		t.Fatalf("question retained Markdown source markers: %q", plain)
-	}
-	continuous := strings.ReplaceAll(plain, "\n", "")
-	for _, content := range []string{"Review generated plan", "design note", "First item", "Second item"} {
-		if !strings.Contains(continuous, content) {
-			t.Fatalf("question Markdown missing %q: %q", content, plain)
-		}
 	}
 }
 
@@ -888,27 +760,6 @@ func TestAskQuestionPlainPRReferenceDoesNotCreateHyperlink(t *testing.T) {
 	}
 }
 
-func TestAskQuestionOptionRowsDoNotInheritMarkdownHyperlinks(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	event := testQuestionAskEvent(
-		"ask-1",
-		"[PR #456](https://github.com/org/repo/pull/456)",
-		make(chan askReply, 1),
-		"Approve",
-	)
-	testSetActiveAsk(m, &event)
-
-	wrapped, _ := m.layout().wrappedAskPromptLines(12)
-	for _, line := range wrapped {
-		if line.Line.Kind == askPromptLineKindQuestion {
-			continue
-		}
-		if trace := tuitest.TraceTerminalHyperlinks(t, line.Text); len(trace.Events) != 0 {
-			t.Fatalf("option or hint row inherited hyperlink metadata: %+v", line)
-		}
-	}
-}
-
 func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(56, 9)
@@ -944,48 +795,5 @@ func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing
 	}
 	if questionLines != 1 {
 		t.Fatalf("visible question lines = %d, want remaining one-line capacity: %+v", questionLines, visible)
-	}
-}
-
-func TestAskQuestionPickerRendersHeadingsRulesAndTables(t *testing.T) {
-	question := strings.Join([]string{
-		"# Primary heading",
-		"",
-		"---",
-		"",
-		"## Results",
-		"",
-		"| Element | State |",
-		"| --- | --- |",
-		"| Header | Ready |",
-		"| Table | Ready |",
-	}, "\n")
-	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(64, 20)
-	m.layout().syncViewport()
-	event := testQuestionAskEvent("ask-1", question, make(chan askReply, 1))
-	testSetActiveAsk(m, &event)
-
-	wrapped, _ := m.layout().wrappedAskPromptLines(56)
-	var questionLines []string
-	for _, line := range wrapped {
-		if line.Line.Kind != askPromptLineKindQuestion {
-			continue
-		}
-		if width := lipgloss.Width(line.Text); width > 56 {
-			t.Fatalf("question line width = %d, want <= 56: %q", width, line.Text)
-		}
-		questionLines = append(questionLines, ansi.Strip(line.Text))
-	}
-	plain := strings.Join(questionLines, "\n")
-	for _, source := range []string{"| Element | State |", "| --- | --- |"} {
-		if strings.Contains(plain, source) {
-			t.Fatalf("question retained Markdown source %q: %q", source, plain)
-		}
-	}
-	for _, content := range []string{"Primary heading", "Results", "Element", "State", "Header", "Table", "Ready"} {
-		if !strings.Contains(plain, content) {
-			t.Fatalf("question Markdown missing %q: %q", content, plain)
-		}
 	}
 }

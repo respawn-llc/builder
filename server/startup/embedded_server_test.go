@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,7 +20,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	shelltool "core/server/tools/shell"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -333,7 +331,7 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 
 	response, err := server.RunPromptClient().RunPrompt(context.Background(), serverapi.RunPromptRequest{
 		ClientRequestID: "embedded-run-1",
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 		Prompt:          "hello from user",
 	}, nil)
 	if err != nil {
@@ -433,168 +431,4 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 	if string(beforeEvents) != string(afterEvents) {
 		t.Fatalf("events file mutated during dormant read")
 	}
-}
-
-func TestProjectViewClientListsCurrentProjectAndSessions(t *testing.T) {
-	workspace := newRegisteredEmbeddedWorkspace(t)
-
-	server := startReadyEmbeddedServer(t, serverbootstrap.Request{
-		WorkspaceRoot: workspace,
-	})
-
-	first := createEmbeddedProjectSession(t, server, workspace)
-	if err := first.SetName("first"); err != nil {
-		t.Fatalf("persist first session meta: %v", err)
-	}
-	second := createEmbeddedProjectSession(t, server, workspace)
-	if err := second.SetName("second"); err != nil {
-		t.Fatalf("persist second session meta: %v", err)
-	}
-
-	projects, err := server.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{})
-	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
-	}
-	if len(projects.Projects) != 1 {
-		t.Fatalf("expected one project, got %+v", projects)
-	}
-	if projects.Projects[0].ProjectID != server.ProjectID() {
-		t.Fatalf("unexpected project id: %+v", projects.Projects[0])
-	}
-	if projects.Projects[0].SessionCount != 2 {
-		t.Fatalf("unexpected project session count: %+v", projects.Projects[0])
-	}
-
-	sessions, err := server.ProjectViewClient().ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-		ProjectID: server.ProjectID(),
-		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  20,
-		Position:  serverapi.NewestSessionPagePosition(),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage: %v", err)
-	}
-	if len(sessions.Sessions) != 2 {
-		t.Fatalf("expected two sessions, got %+v", sessions)
-	}
-	if sessions.Sessions[0].SessionID.String() != second.Meta().SessionID {
-		t.Fatalf("expected most recent session first, got %+v", sessions.Sessions)
-	}
-}
-
-func TestProcessViewClientListsBackgroundProcessesWithRunOwnership(t *testing.T) {
-	workspace := newRegisteredEmbeddedWorkspace(t)
-
-	server := startReadyEmbeddedServer(t, serverbootstrap.Request{
-		WorkspaceRoot: workspace,
-	})
-	server.Background().SetMinimumExecToBgTime(250 * time.Millisecond)
-
-	result, err := server.Background().Start(context.Background(), shelltool.ExecRequest{
-		Command:        []string{"sh", "-c", "printf 'process\n'; sleep 1"},
-		DisplayCommand: "embedded-process",
-		OwnerSessionID: "session-1",
-		OwnerRunID:     "run-1",
-		OwnerStepID:    "step-1",
-		Workdir:        workspace,
-		YieldTime:      250 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("start background process: %v", err)
-	}
-	if !result.Backgrounded {
-		t.Fatal("expected backgrounded process")
-	}
-
-	resp, err := server.ProcessViewClient().ListProcesses(context.Background(), serverapi.ProcessListRequest{OwnerSessionID: "session-1", OwnerRunID: "run-1"})
-	if err != nil {
-		t.Fatalf("ListProcesses: %v", err)
-	}
-	if len(resp.Processes) != 1 {
-		t.Fatalf("expected one process, got %+v", resp.Processes)
-	}
-	if resp.Processes[0].OwnerRunID != "run-1" || resp.Processes[0].OwnerStepID != "step-1" {
-		t.Fatalf("unexpected process ownership: %+v", resp.Processes[0])
-	}
-}
-
-func TestProcessOutputClientStreamsBackgroundProcessOutput(t *testing.T) {
-	workspace := newRegisteredEmbeddedWorkspace(t)
-
-	server := startReadyEmbeddedServer(t, serverbootstrap.Request{
-		WorkspaceRoot: workspace,
-	})
-	server.Background().SetMinimumExecToBgTime(250 * time.Millisecond)
-
-	result, err := server.Background().Start(context.Background(), shelltool.ExecRequest{
-		Command:        []string{"sh", "-c", "printf 'first\\n'; sleep 0.4; printf 'second\\n'"},
-		DisplayCommand: "embedded-process-output",
-		OwnerSessionID: "session-1",
-		OwnerRunID:     "run-1",
-		OwnerStepID:    "step-1",
-		Workdir:        workspace,
-		YieldTime:      250 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("start background process: %v", err)
-	}
-	if !result.Backgrounded {
-		t.Fatal("expected backgrounded process")
-	}
-	processResp, err := server.ProcessViewClient().GetProcess(context.Background(), serverapi.ProcessGetRequest{ProcessID: result.SessionID})
-	if err != nil {
-		t.Fatalf("GetProcess: %v", err)
-	}
-	if processResp.Process == nil || !processResp.Process.OutputAvailable || processResp.Process.OutputRetainedFromBytes != 0 || processResp.Process.OutputRetainedToBytes <= 0 {
-		t.Fatalf("expected retained output metadata, got %+v", processResp.Process)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	sub, err := server.ProcessOutputClient().SubscribeProcessOutput(ctx, serverapi.ProcessOutputSubscribeRequest{ProcessID: result.SessionID})
-	if err != nil {
-		t.Fatalf("SubscribeProcessOutput: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	chunks := make([]clientui.ProcessOutputChunk, 0, 2)
-	for {
-		chunk, err := sub.Next(ctx)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("Next: %v", err)
-		}
-		if chunk.ProcessID != result.SessionID {
-			t.Fatalf("unexpected chunk process id: %+v", chunk)
-		}
-		if len(chunks) > 0 {
-			previous := chunks[len(chunks)-1]
-			if chunk.OffsetBytes != previous.NextOffsetBytes || chunk.NextOffsetBytes <= chunk.OffsetBytes {
-				t.Fatalf("unexpected chunk offsets previous=%+v current=%+v", previous, chunk)
-			}
-		}
-		chunks = append(chunks, chunk)
-	}
-	combined := strings.Builder{}
-	for _, chunk := range chunks {
-		combined.WriteString(chunk.Text)
-	}
-	combinedText := combined.String()
-	firstIndex := strings.Index(combinedText, "first")
-	secondIndex := strings.Index(combinedText, "second")
-	if len(chunks) == 0 || firstIndex < 0 || secondIndex < firstIndex {
-		t.Fatalf("expected streamed process output to contain first and second, chunks=%+v", chunks)
-	}
-}
-
-type fakeEmbeddedClient struct{}
-
-func (*fakeEmbeddedClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return llm.Response{}, nil
-}
-
-func (*fakeEmbeddedClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }

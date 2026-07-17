@@ -165,16 +165,22 @@ func (c *Remote) subscribeRPC(ctx context.Context, method string, requestID stri
 		return nil, rpccontract.Route{}, err
 	}
 	if attachSession {
-		if c.sessionID != nil && strings.TrimSpace(*c.sessionID) != strings.TrimSpace(sessionID) {
+		attachedSessionID, attachedToSession := c.attachIntent.sessionID()
+		if attachedToSession && attachedSessionID != strings.TrimSpace(sessionID) {
 			cleanup()
 			return nil, rpccontract.Route{}, fmt.Errorf(
 				"remote is attached to session %q, cannot subscribe to session %q",
-				strings.TrimSpace(*c.sessionID),
+				attachedSessionID,
 				strings.TrimSpace(sessionID),
 			)
 		}
-		if c.sessionID == nil {
-			if err := attachSessionRPC(ctx, conn, sessionID); err != nil {
+		if !attachedToSession {
+			intent, err := newRemoteSessionAttachmentIntent(sessionID)
+			if err != nil {
+				cleanup()
+				return nil, rpccontract.Route{}, err
+			}
+			if _, err := attachSessionRPC(ctx, conn, intent); err != nil {
 				cleanup()
 				return nil, rpccontract.Route{}, err
 			}

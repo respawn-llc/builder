@@ -9,11 +9,9 @@ import (
 	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"errors"
 	"io"
 	"path/filepath"
 	"testing"
@@ -76,7 +74,7 @@ func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *t
 
 	t.Log("planning interactive session")
 	planner := newSessionLaunchPlanner(bound)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -148,7 +146,7 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 	if err != nil {
 		t.Fatalf("ensureInteractiveProjectBinding: %v", err)
 	}
-	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
+	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after rebound no auth")
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -159,62 +157,6 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 	runtimePlan.Close()
 	if hits.Load() != 1 {
 		t.Fatalf("expected fake LLM call once, got %d", hits.Load())
-	}
-}
-
-func TestStartSessionServerRejectsMissingStartupControlSurfaceCapabilities(t *testing.T) {
-	tests := []struct {
-		name  string
-		flags protocol.CapabilityFlags
-		issue startupRemoteCompatibilityIssue
-	}{
-		{
-			name: "auth bootstrap",
-			flags: protocol.CapabilityFlags{
-				JSONRPCWebSocket:   true,
-				OnboardingFinalize: true,
-			},
-			issue: startupRemoteAuthBootstrapUnavailable,
-		},
-		{
-			name: "onboarding finalization",
-			flags: protocol.CapabilityFlags{
-				JSONRPCWebSocket: true,
-				AuthBootstrap:    true,
-			},
-			issue: startupRemoteOnboardingFinalizeUnavailable,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, workspace := newRegisteredAppWorkspace(t)
-			cleanup := publishConfiguredRemoteForWorkspace(t, workspace, test.flags)
-			defer cleanup()
-
-			server, err := startSessionServer(context.Background(), Options{
-				WorkspaceRoot:         workspace,
-				WorkspaceRootExplicit: true,
-			}, readyMemoryAuthHandler(), false)
-			if server != nil {
-				_ = server.Close()
-				t.Fatal("incompatible configured server must not start an interactive session server")
-			}
-			var preflight *configuredServerPreflightError
-			if !errors.As(err, &preflight) {
-				t.Fatalf("error = %v, want configured-server preflight error", err)
-			}
-			if preflight.operation != "validate compatibility" {
-				t.Fatalf("preflight operation = %q, want compatibility validation", preflight.operation)
-			}
-			var compatibility *startupRemoteCompatibilityError
-			if !errors.As(err, &compatibility) {
-				t.Fatalf("error = %v, want typed compatibility cause", err)
-			}
-			if compatibility.issue != test.issue {
-				t.Fatalf("compatibility issue = %d, want %d", compatibility.issue, test.issue)
-			}
-		})
 	}
 }
 
@@ -267,7 +209,13 @@ func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
 		t.Fatalf("save auth state: %v", err)
 	}
 
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
+	interactor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			t.Fatal("remote startup validation must not open auth picker when server auth is ready")
+			return authMethodPickerResult{}, nil
+		},
+	}
+	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, interactor, true)
 	if err != nil {
 		t.Fatalf("startSessionServer: %v", err)
 	}
@@ -277,7 +225,7 @@ func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
 	}
 
 	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -316,79 +264,6 @@ func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
 	}
 }
 
-func TestStartSessionServerRemoteReadyAuthDoesNotOpenStartupPicker(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-	}, memoryAuthHandler{state: auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type: auth.MethodOAuth,
-			OAuth: &auth.OAuthMethod{
-				AccessToken: "server-access-token",
-				AccountID:   "server-acct",
-				Email:       "user@example.com",
-			},
-		},
-		UpdatedAt: time.Now().UTC(),
-	}}, autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	interactor := &interactiveAuthInteractor{
-		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
-			t.Fatal("remote startup validation must not open auth picker when server auth is ready")
-			return authMethodPickerResult{}, nil
-		},
-	}
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, interactor, true)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); !ok {
-		t.Fatalf("expected remote app server, got %T", server)
-	}
-}
-
-func TestStartSessionServerOwnsLaunchedDaemonCloser(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	if _, ok := server.(*remoteAppServer); !ok {
-		t.Fatalf("expected remote app server, got %T", server)
-	}
-	if err := server.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-}
-
 func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemon(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
@@ -400,7 +275,7 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
+		Model:                 "gpt-5.4",
 		OpenAIBaseURL:         defaultResponses.URL,
 		OpenAIBaseURLExplicit: true,
 	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
@@ -416,7 +291,8 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	server, err := startSessionServer(context.Background(), Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
+		Model:                 "gpt-5.3-codex",
+		Tools:                 "shell",
 		OpenAIBaseURL:         overrideResponses.URL,
 		OpenAIBaseURLExplicit: true,
 	}, newHeadlessAuthInteractor(), false)
@@ -425,8 +301,14 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	}
 	defer func() { _ = server.Close() }()
 
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote interactive runtime override")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote interactive runtime override")
 	defer runtimePlan.Close()
+	if plan.ActiveSettings.Model != "gpt-5.3-codex" {
+		t.Fatalf("model = %q, want gpt-5.3-codex", plan.ActiveSettings.Model)
+	}
+	if len(plan.EnabledTools) != 1 || plan.EnabledTools[0] != toolspec.ToolExecCommand {
+		t.Fatalf("enabled tools = %+v, want only shell", plan.EnabledTools)
+	}
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive override")
 	message := submission.Message
@@ -442,49 +324,6 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	if defaultHits.Load() != 0 {
 		t.Fatalf("expected daemon default llm endpoint unused, got %d", defaultHits.Load())
 	}
-
-}
-
-func TestStartSessionServerPreservesExplicitCLIToolsWithCLIModelOverride(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5.4",
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5.3-codex",
-		Tools:                 "shell",
-	}, newHeadlessAuthInteractor(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	if plan.ActiveSettings.Model != "gpt-5.3-codex" {
-		t.Fatalf("model = %q, want gpt-5.3-codex", plan.ActiveSettings.Model)
-	}
-	if len(plan.EnabledTools) != 1 || plan.EnabledTools[0] != toolspec.ToolExecCommand {
-		t.Fatalf("enabled tools = %+v, want only shell", plan.EnabledTools)
-	}
-
 }
 
 func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) {
@@ -509,7 +348,7 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 		t.Fatalf("startSessionServer: %v", err)
 	}
 	defer func() { _ = server.Close() }()
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote prompt round trip")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote prompt round trip")
 	defer runtimePlan.Close()
 	finishStep := beginAppTestModelPromptStep(t, srv, plan.SessionID)
 

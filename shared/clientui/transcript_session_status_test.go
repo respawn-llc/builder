@@ -36,7 +36,17 @@ func TestTranscriptSessionStatusRejectsPartialNestedState(t *testing.T) {
 		}(),
 		func() TranscriptSessionStatus {
 			status := base
-			status.ParentSessionID = &runtimeids.SessionID{}
+			status.PreviousSessionID = &runtimeids.SessionID{}
+			return status
+		}(),
+		func() TranscriptSessionStatus {
+			status := base
+			status.ParentAgentSessionID = &runtimeids.SessionID{}
+			return status
+		}(),
+		func() TranscriptSessionStatus {
+			status := base
+			status.NavigationTargetSessionID = &runtimeids.SessionID{}
 			return status
 		}(),
 		func() TranscriptSessionStatus {

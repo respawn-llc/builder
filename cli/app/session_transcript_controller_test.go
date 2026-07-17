@@ -116,7 +116,8 @@ func TestOngoingTranscriptControllerLeavesUserMessageFlushPresentationToStateObs
 	controller := newOngoingTranscriptController(
 		surface,
 		ongoingTestFrameProvider,
-		func(message clientui.TranscriptMessage) tea.Cmd {
+		noopOngoingTranscriptRuntimeAdmission,
+		func(message clientui.TranscriptMessage, _ runtimeTupleMergeResult) tea.Cmd {
 			observed = append(observed, message.Kind)
 			return nil
 		},
@@ -341,9 +342,18 @@ func newTestOngoingTranscriptController(surface ongoingTranscriptSurface, frameP
 }
 
 func newNoopOngoingTranscriptController(surface ongoingTranscriptSurface, frameProvider ongoingFrameProvider) *ongoingTranscriptController {
-	return newOngoingTranscriptController(surface, frameProvider, func(clientui.TranscriptMessage) tea.Cmd {
-		return nil
-	})
+	return newOngoingTranscriptController(
+		surface,
+		frameProvider,
+		noopOngoingTranscriptRuntimeAdmission,
+		func(clientui.TranscriptMessage, runtimeTupleMergeResult) tea.Cmd {
+			return nil
+		},
+	)
+}
+
+func noopOngoingTranscriptRuntimeAdmission(clientui.TranscriptMessage) (runtimeTupleMergeResult, error) {
+	return runtimeTupleMergeResult{}, nil
 }
 
 func (c *testOngoingTranscriptController) Accept(message clientui.TranscriptMessage) (ongoing.Result, error) {

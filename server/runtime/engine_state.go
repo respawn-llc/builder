@@ -12,6 +12,8 @@ import (
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/rollbacktarget"
+	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -585,19 +587,27 @@ func (e *Engine) conversationPromptCacheKey(sessionID string) string {
 	return conversationPromptCacheKeyForLineage(sessionID, meta.PromptCacheLineageGeneration, e.compactionRuntimeState().Count())
 }
 
-func (e *Engine) ParentSessionID() *string {
+func (e *Engine) PreviousSessionID() *runtimeids.SessionID {
 	if e == nil || e.store == nil {
 		return nil
 	}
-	parentSessionID := e.store.Meta().ParentSessionID
-	if parentSessionID == nil {
+	meta := e.store.Meta()
+	return textutil.Pointer(meta.PreviousSessionID)
+}
+
+func (e *Engine) ParentAgentSessionID() *runtimeids.SessionID {
+	if e == nil || e.store == nil {
 		return nil
 	}
-	value := strings.TrimSpace(*parentSessionID)
-	if value == "" {
-		panic("runtime engine received an empty parent session id")
+	meta := e.store.Meta()
+	return textutil.Pointer(meta.ParentAgentSessionID)
+}
+
+func (e *Engine) NavigationTargetSessionID() *runtimeids.SessionID {
+	if e == nil || e.store == nil {
+		return nil
 	}
-	return &value
+	return session.NavigationTargetSessionID(e.store.Meta())
 }
 
 func (e *Engine) SetTranscriptWorkingDir(workdir string) {

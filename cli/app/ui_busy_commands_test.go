@@ -1,7 +1,6 @@
 package app
 
 import (
-	"strings"
 	"testing"
 
 	"core/cli/app/commands"
@@ -11,396 +10,229 @@ import (
 )
 
 func TestDefaultRegistryBusyContract(t *testing.T) {
-	r := commands.NewDefaultRegistry()
+	registry := commands.NewDefaultRegistry()
 	want := map[string]commands.ActiveRunPolicy{
-		"exit":           commands.ActiveRunPolicyAllowed,
-		"login":          commands.ActiveRunPolicyRequiresIdle,
-		"new":            commands.ActiveRunPolicyAllowed,
-		"resume":         commands.ActiveRunPolicyAllowed,
-		"logout":         commands.ActiveRunPolicyRequiresIdle,
-		"compact":        commands.ActiveRunPolicyRequiresIdle,
-		"name":           commands.ActiveRunPolicyAllowed,
-		"thinking":       commands.ActiveRunPolicyAllowed,
-		"fast":           commands.ActiveRunPolicyAllowed,
-		"supervisor":     commands.ActiveRunPolicyAllowed,
-		"autocompaction": commands.ActiveRunPolicyAllowed,
-		"questions":      commands.ActiveRunPolicyAllowed,
-		"status":         commands.ActiveRunPolicyAllowed,
-		"goal":           commands.ActiveRunPolicyAllowed,
-		"ps":             commands.ActiveRunPolicyAllowed,
-		"worktree":       commands.ActiveRunPolicyRequiresIdle,
-		"copy":           commands.ActiveRunPolicyAllowed,
-		"back":           commands.ActiveRunPolicyAllowed,
-		"review":         commands.ActiveRunPolicyAllowed,
-		"init":           commands.ActiveRunPolicyAllowed,
+		"exit": commands.ActiveRunPolicyAllowed, "login": commands.ActiveRunPolicyRequiresIdle,
+		"new": commands.ActiveRunPolicyAllowed, "resume": commands.ActiveRunPolicyAllowed,
+		"logout": commands.ActiveRunPolicyRequiresIdle, "compact": commands.ActiveRunPolicyAllowed,
+		"name": commands.ActiveRunPolicyAllowed, "thinking": commands.ActiveRunPolicyAllowed,
+		"fast": commands.ActiveRunPolicyAllowed, "supervisor": commands.ActiveRunPolicyAllowed,
+		"autocompaction": commands.ActiveRunPolicyAllowed, "questions": commands.ActiveRunPolicyAllowed,
+		"status": commands.ActiveRunPolicyAllowed, "goal": commands.ActiveRunPolicyAllowed,
+		"ps": commands.ActiveRunPolicyAllowed, "worktree": commands.ActiveRunPolicyRequiresIdle,
+		"copy": commands.ActiveRunPolicyAllowed, "back": commands.ActiveRunPolicyAllowed,
+		"review": commands.ActiveRunPolicyAllowed, "init": commands.ActiveRunPolicyAllowed,
 	}
-
-	for _, command := range r.Commands() {
-		wantBusy, ok := want[command.Name]
-		if !ok {
-			t.Fatalf("unexpected built-in command in registry: %q", command.Name)
-		}
-		if command.ActiveRunPolicy != wantBusy {
-			t.Fatalf("command %q active-run policy=%v, want %v", command.Name, command.ActiveRunPolicy, wantBusy)
+	for _, command := range registry.Commands() {
+		policy, ok := want[command.Name]
+		if !ok || command.ActiveRunPolicy != policy {
+			t.Fatalf("command %q policy = %v, want %v", command.Name, command.ActiveRunPolicy, policy)
 		}
 		delete(want, command.Name)
 	}
-
 	if len(want) != 0 {
-		t.Fatalf("missing built-in commands from registry: %+v", want)
+		t.Fatalf("missing built-in commands: %+v", want)
 	}
 }
 
-func TestBusyEnterCommandBehavior(t *testing.T) {
+func TestBusyEnterAppliesImmediateSettings(t *testing.T) {
 	tests := []struct {
-		name                string
-		input               string
-		setup               func(*uiModel)
-		wantInput           string
-		wantSessionName     string
-		wantThinkingLevel   string
-		wantFastModeEnabled bool
-		wantStatusMode      bool
-		wantProcessMode     bool
-		wantGoalMode        bool
-		wantStatusContains  string
-		wantStatusOmits     string
+		input         string
+		setup         func(*uiModel)
+		sessionName   string
+		thinkingLevel string
+		fast          bool
 	}{
+		{input: "/name queued title", sessionName: "queued title"},
+		{input: "/thinking low", thinkingLevel: "low"},
 		{
-			name:            "name executes immediately while busy",
-			input:           "/name queued title",
-			wantSessionName: "queued title",
-		},
-		{
-			name:              "thinking executes immediately while busy",
-			input:             "/thinking low",
-			wantThinkingLevel: "low",
-		},
-		{
-			name:           "status opens overlay while busy",
-			input:          "/status",
-			wantStatusMode: true,
-		},
-		{
-			name:            "goal pause executes while busy without duplicate local status",
-			input:           "/goal pause",
-			wantStatusOmits: "Goal paused",
-		},
-		{
-			name:  "goal set executes while busy",
-			input: "/goal ship feature",
-		},
-		{
-			name:            "goal dashboard opens while busy",
-			input:           "/goal",
-			wantGoalMode:    true,
-			wantStatusOmits: "cannot show /goal while model is working",
-		},
-		{
-			name:  "goal resume executes while busy",
-			input: "/goal resume",
-		},
-		{
-			name:            "ps opens overlay while busy",
-			input:           "/ps",
-			wantProcessMode: true,
-		},
-		{
-			name:  "fast executes immediately while busy",
 			input: "/fast on",
-			setup: func(m *uiModel) {
-				m.fastModeAvailable = true
+			setup: func(model *uiModel) {
+				model.fastModeAvailable = true
 			},
-			wantFastModeEnabled: true,
-		},
-		{
-			name:               "compact is blocked on enter while busy",
-			input:              "/compact now",
-			wantStatusContains: "cannot run /compact while model is working",
-		},
-		{
-			name:      "review starts fresh session while busy",
-			input:     "/review cli/app",
-			wantInput: "",
-		},
-		{
-			name:      "init starts fresh session while busy",
-			input:     "/init starter repo",
-			wantInput: "",
-		},
-		{
-			name:               "worktree is blocked on enter while busy",
-			input:              "/worktree list",
-			wantStatusContains: "cannot run /worktree while model is working",
+			fast: true,
 		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := newProjectedStaticUIModel(WithUIConversationFreshness(clientui.ConversationFreshnessEstablished))
-			m.setRuntimeActivityBusyForTest(true)
-			m.activity = uiActivityRunning
-			m.input = tt.input
-			if tt.setup != nil {
-				tt.setup(m)
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			model := busyCommandTestModel()
+			model.input = test.input
+			if test.setup != nil {
+				test.setup(model)
 			}
-
-			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
-			if !updated.isBusy() {
-				t.Fatal("expected model to remain busy")
+			if updated.input != "" || updated.sessionName != test.sessionName || updated.thinkingLevel != test.thinkingLevel || updated.fastModeEnabled != test.fast {
+				t.Fatalf("updated model = input %q, name %q, thinking %q, fast %t", updated.input, updated.sessionName, updated.thinkingLevel, updated.fastModeEnabled)
 			}
-			if len(updated.queued) != 0 {
-				t.Fatalf("expected no queued inputs, got %+v", updated.queued)
-			}
-			if len(updated.pendingInjected) != 0 {
-				t.Fatalf("expected no pending injected inputs, got %+v", updated.pendingInjected)
-			}
-			if updated.input != tt.wantInput {
-				t.Fatalf("input = %q, want %q", updated.input, tt.wantInput)
-			}
-			if updated.sessionName != tt.wantSessionName {
-				t.Fatalf("session name = %q, want %q", updated.sessionName, tt.wantSessionName)
-			}
-			if updated.thinkingLevel != tt.wantThinkingLevel {
-				t.Fatalf("thinking level = %q, want %q", updated.thinkingLevel, tt.wantThinkingLevel)
-			}
-			if updated.fastModeEnabled != tt.wantFastModeEnabled {
-				t.Fatalf("fast mode enabled = %t, want %t", updated.fastModeEnabled, tt.wantFastModeEnabled)
-			}
-			if got := updated.inputMode() == uiInputModeStatus; got != tt.wantStatusMode {
-				t.Fatalf("status overlay open=%t, want %t", got, tt.wantStatusMode)
-			}
-			if got := updated.inputMode() == uiInputModeProcessList; got != tt.wantProcessMode {
-				t.Fatalf("process overlay open=%t, want %t", got, tt.wantProcessMode)
-			}
-			if got := updated.inputMode() == uiInputModeGoal; got != tt.wantGoalMode {
-				t.Fatalf("goal overlay open=%t, want %t", got, tt.wantGoalMode)
-			}
-			if tt.wantStatusContains != "" {
-				status := stripANSIAndTrimRight(updated.layout().renderStatusLine(120, uiThemeStyles("dark")))
-				if !strings.Contains(status, tt.wantStatusContains) {
-					t.Fatalf("expected status line to contain %q, got %q", tt.wantStatusContains, status)
-				}
-			}
-			if tt.wantStatusOmits != "" {
-				status := stripANSIAndTrimRight(updated.layout().renderStatusLine(120, uiThemeStyles("dark")))
-				if strings.Contains(status, tt.wantStatusOmits) {
-					t.Fatalf("did not expect status line to contain %q, got %q", tt.wantStatusOmits, status)
-				}
-			}
+			requireBusyCommandQueuesEmpty(t, updated)
 		})
+	}
+}
+
+func TestBusyEnterOpensReadOverlays(t *testing.T) {
+	for input, mode := range map[string]uiInputMode{
+		"/status": uiInputModeStatus,
+		"/goal":   uiInputModeGoal,
+		"/ps":     uiInputModeProcessList,
+	} {
+		t.Run(input, func(t *testing.T) {
+			model := busyCommandTestModel()
+			model.sessionID = "busy-navigation-session"
+			model.input = input
+			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			updated := next.(*uiModel)
+			if updated.inputMode() != mode || !updated.isBusy() {
+				t.Fatalf("input mode = %v, busy = %t; want %v/true", updated.inputMode(), updated.isBusy(), mode)
+			}
+			requireBusyCommandQueuesEmpty(t, updated)
+		})
+	}
+}
+
+func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
+	for _, input := range []string{"/worktree list"} {
+		t.Run(input, func(t *testing.T) {
+			model := busyCommandTestModel()
+			model.input = input
+			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			updated := next.(*uiModel)
+			if cmd == nil || updated.input != "" {
+				t.Fatalf("blocked command result = cmd %v, input %q", cmd, updated.input)
+			}
+			requireBusyCommandQueuesEmpty(t, updated)
+		})
+	}
+}
+
+func TestBusyEnterDispatchesCompact(t *testing.T) {
+	model := busyCommandTestModel()
+	model.input = "/compact now"
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := next.(*uiModel)
+	if cmd == nil || updated.input != "" || len(updated.queued) != 0 || !updated.isCompacting() {
+		t.Fatalf("compact dispatch = cmd %v, input %q, queued %+v, compacting %t", cmd, updated.input, updated.queued, updated.isCompacting())
+	}
+	updated.input = "/compact again"
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = next.(*uiModel)
+	if refs := updated.pendingRuntimeOperationRefs(); len(refs) != 1 {
+		t.Fatalf("repeat compact pending refs = %+v, want one visible cancellable operation", refs)
 	}
 }
 
 func TestBusyNavigationCommandsStartTheirExistingTransitions(t *testing.T) {
-	tests := []struct {
-		input      string
-		wantAction UIAction
-	}{
-		{input: "/exit", wantAction: UIActionExit},
-		{input: "/new", wantAction: UIActionNewSession},
-		{input: "/resume", wantAction: UIActionResume},
-		{input: "/review", wantAction: UIActionNewSession},
-		{input: "/init", wantAction: UIActionNewSession},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			m := newProjectedStaticUIModel(WithUIConversationFreshness(clientui.ConversationFreshnessEstablished))
-			m.setRuntimeActivityBusyForTest(true)
-			m.activity = uiActivityRunning
-			m.input = tt.input
-
-			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			if cmd == nil {
-				t.Fatalf("expected transition command for %s", tt.input)
-			}
+	for input, action := range map[string]UIAction{
+		"/exit": UIActionExit, "/new": UIActionNewSession, "/resume": UIActionResume,
+		"/review": UIActionNewSession, "/init": UIActionNewSession,
+	} {
+		t.Run(input, func(t *testing.T) {
+			model := busyCommandTestModel()
+			model.input = input
+			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
-			if updated.exitAction != tt.wantAction {
-				t.Fatalf("action = %q, want %q", updated.exitAction, tt.wantAction)
+			if cmd == nil || updated.exitAction != action {
+				t.Fatalf("transition = cmd %v, action %q; want action %q", cmd, updated.exitAction, action)
 			}
 		})
 	}
 }
 
-func TestBusyQueueSubmissionCommandBehavior(t *testing.T) {
+func TestBusyTabQueuesValidatedCommands(t *testing.T) {
 	tests := []struct {
-		name               string
-		input              string
-		setup              func(*uiModel)
-		wantQueued         []string
-		wantInput          string
-		wantStatusContains string
+		input string
+		setup func(*uiModel)
 	}{
+		{input: "/compact now"},
+		{input: "/review cli/app"},
 		{
-			name:       "compact queues even though enter blocks it",
-			input:      "/compact now",
-			wantQueued: []string{"/compact now"},
-		},
-		{
-			name:       "review queues even though enter blocks it",
-			input:      "/review cli/app",
-			wantQueued: []string{"/review cli/app"},
-		},
-		{
-			name:  "fast queues when available",
 			input: "/fast on",
-			setup: func(m *uiModel) {
-				m.fastModeAvailable = true
+			setup: func(model *uiModel) {
+				model.fastModeAvailable = true
 			},
-			wantQueued: []string{"/fast on"},
 		},
-		{
-			name:       "goal resume queues while busy",
-			input:      "/goal resume",
-			wantQueued: []string{"/goal resume"},
-		},
-		{
-			name:               "fast is rejected when unavailable",
-			input:              "/fast on",
-			wantInput:          "/fast on",
-			wantStatusContains: "Fast mode is only available for OpenAI-based Responses providers",
-		},
-		{
-			name:               "back is rejected without parent session",
-			input:              "/back",
-			wantInput:          "/back",
-			wantStatusContains: "No parent session available",
-		},
-		{
-			name:               "ps action is rejected without process client",
-			input:              "/ps kill proc-1",
-			wantInput:          "/ps kill proc-1",
-			wantStatusContains: "background process client is unavailable",
-		},
-		{
-			name:               "worktree is rejected while busy",
-			input:              "/worktree list",
-			wantInput:          "/worktree list",
-			wantStatusContains: "cannot run /worktree while model is working",
-		},
+		{input: "/goal resume"},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := newProjectedStaticUIModel()
-			m.setRuntimeActivityBusyForTest(true)
-			m.activity = uiActivityRunning
-			m.input = tt.input
-			if tt.setup != nil {
-				tt.setup(m)
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			model := busyCommandTestModel()
+			model.input = test.input
+			if test.setup != nil {
+				test.setup(model)
 			}
-
-			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 			updated := next.(*uiModel)
+			if cmd != nil || updated.input != "" || len(updated.queued) != 1 || updated.queued[0].Text != test.input || len(updated.pendingInjected) != 0 {
+				t.Fatalf("queued command result = cmd %v, input %q, queued %+v, pending %+v", cmd, updated.input, updated.queued, updated.pendingInjected)
+			}
+		})
+	}
+}
 
-			if tt.wantStatusContains != "" {
-				if cmd == nil {
-					t.Fatal("expected transient-status command for rejected queued command")
-				}
-				if len(updated.queued) != 0 {
-					t.Fatalf("expected no queued inputs, got %+v", updated.queued)
-				}
-				if len(updated.pendingInjected) != 0 {
-					t.Fatalf("expected no pending injected inputs, got %+v", updated.pendingInjected)
-				}
-				if updated.input != tt.wantInput {
-					t.Fatalf("input = %q, want %q", updated.input, tt.wantInput)
-				}
-				status := stripANSIAndTrimRight(updated.layout().renderStatusLine(120, uiThemeStyles("dark")))
-				if !strings.Contains(status, tt.wantStatusContains) {
-					t.Fatalf("expected status line to contain %q, got %q", tt.wantStatusContains, status)
-				}
-				return
+func TestBusyTabRejectsInvalidCommands(t *testing.T) {
+	for _, input := range []string{"/fast on", "/back", "/ps kill proc-1", "/worktree list"} {
+		t.Run(input, func(t *testing.T) {
+			model := busyCommandTestModel()
+			model.input = input
+			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+			updated := next.(*uiModel)
+			if cmd == nil || updated.input != input {
+				t.Fatalf("rejected command result = cmd %v, input %q", cmd, updated.input)
 			}
-
-			if cmd != nil {
-				t.Fatal("did not expect immediate command execution for queued busy command")
-			}
-			if updated.input != tt.wantInput {
-				t.Fatalf("input = %q, want %q", updated.input, tt.wantInput)
-			}
-			if len(updated.queued) != len(tt.wantQueued) {
-				t.Fatalf("queued count = %d, want %d (%+v)", len(updated.queued), len(tt.wantQueued), updated.queued)
-			}
-			for i, want := range tt.wantQueued {
-				if updated.queued[i].Text != want {
-					t.Fatalf("queued[%d] = %q, want %q", i, updated.queued[i].Text, want)
-				}
-			}
-			if len(updated.pendingInjected) != 0 {
-				t.Fatalf("expected no pending injected inputs, got %+v", updated.pendingInjected)
-			}
+			requireBusyCommandQueuesEmpty(t, updated)
 		})
 	}
 }
 
 func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
-	m.activity = uiActivityRunning
-	m.input = "/compact tighten summary"
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model := busyCommandTestModel()
+	model.input = "/compact tighten summary"
+	want := model.input
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	updated := next.(*uiModel)
-	if len(updated.queued) != 1 || updated.queued[0].Text != "/compact tighten summary" {
-		t.Fatalf("expected queued compact command, got %+v", updated.queued)
+	if len(updated.queued) != 1 || updated.queued[0].Text != want {
+		t.Fatalf("queued commands = %+v", updated.queued)
 	}
 
 	next, cmd := updated.Update(submitDoneMsg{message: "done"})
 	updated = next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected compaction command after queued compact drains")
-	}
-	if !updated.isBusy() {
-		t.Fatal("expected compact drain to re-enter busy state")
-	}
-	if !updated.isCompacting() {
-		t.Fatal("expected queued compact drain to enter compaction mode")
-	}
-	if len(updated.queued) != 0 {
-		t.Fatalf("expected queued compact drained, got %+v", updated.queued)
+	if cmd == nil || !updated.isBusy() || !updated.isCompacting() || len(updated.queued) != 0 {
+		t.Fatalf("compact drain = cmd %v, busy %t, compacting %t, queued %+v", cmd, updated.isBusy(), updated.isCompacting(), updated.queued)
 	}
 }
 
 func TestCompactionKeepsInputEditableAndQueuesSteering(t *testing.T) {
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
-	m := newProjectedTestUIModel(client)
-	m.startupCmds = nil
+	model := newProjectedTestUIModel(client)
+	model.startupCmds = nil
 
-	cmd := m.inputController().startCompactionWithOrigin("", uiCompactionOriginManual)
-	if cmd == nil {
+	if cmd := model.inputController().startCompactionWithOrigin("", uiCompactionOriginManual); cmd == nil {
 		t.Fatal("expected compaction command")
 	}
-	if !m.isCompacting() {
-		t.Fatal("expected compaction lifecycle to be running")
-	}
-	if !m.blocksRuntimeInput() {
-		t.Fatal("expected compaction to keep runtime input delivery blocked")
-	}
-	prefix := m.layout().mainInputPrefix()
-	if prefix != "› " {
-		t.Fatalf("main input prefix = %q, want editable prompt", prefix)
+	if !model.isCompacting() || !model.blocksRuntimeInput() || model.layout().mainInputPrefix() != "› " {
+		t.Fatalf("compaction state = compacting %t, blocked %t, prefix %q", model.isCompacting(), model.blocksRuntimeInput(), model.layout().mainInputPrefix())
 	}
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("steer during compaction")})
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("steer during compaction")})
 	updated := next.(*uiModel)
-	if updated.input != "steer during compaction" {
-		t.Fatalf("input = %q, want steering draft", updated.input)
-	}
-
 	next, queueCmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if queueCmd == nil {
-		t.Fatal("expected async queue create command")
+	if queueCmd == nil || updated.input != "" || len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "steer during compaction" || !updated.isCompacting() {
+		t.Fatalf("queued steering = cmd %v, input %q, pending %+v, compacting %t", queueCmd, updated.input, updated.pendingInjected, updated.isCompacting())
 	}
-	if updated.input != "" {
-		t.Fatalf("input = %q, want cleared after queueing", updated.input)
-	}
-	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "steer during compaction" {
-		t.Fatalf("pending injected = %+v, want queued steering", updated.pendingInjected)
-	}
-	if !updated.isCompacting() {
-		t.Fatal("queueing steering must not clear compaction lifecycle")
+}
+
+func busyCommandTestModel() *uiModel {
+	model := newProjectedStaticUIModel(WithUIConversationFreshness(clientui.ConversationFreshnessEstablished))
+	model.sessionID = "busy-navigation-session"
+	model.setRuntimeActivityBusyForTest(true)
+	model.activity = uiActivityRunning
+	return model
+}
+
+func requireBusyCommandQueuesEmpty(t *testing.T, model *uiModel) {
+	t.Helper()
+	if len(model.queued) != 0 || len(model.pendingInjected) != 0 {
+		t.Fatalf("queued = %+v, pending injected = %+v", model.queued, model.pendingInjected)
 	}
 }

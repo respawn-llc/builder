@@ -3,7 +3,6 @@ package app
 import (
 	"bytes"
 	"strings"
-	"sync"
 	"testing"
 
 	"core/shared/clientui"
@@ -12,46 +11,279 @@ import (
 )
 
 type countRinger struct {
-	mu    sync.Mutex
-	count int
-	last  string
+	notifications int
+	bells         int
 }
 
-func (r *countRinger) Notify(message string) {
-	r.mu.Lock()
-	r.count++
-	r.last = message
-	r.mu.Unlock()
+func (r *countRinger) Notify(string) {
+	r.notifications++
 }
 
 func (r *countRinger) Bell() {
-	r.mu.Lock()
-	r.count++
-	r.last = terminalBell
-	r.mu.Unlock()
+	r.bells++
 }
 
-func (r *countRinger) Count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.count
-}
-
-func (r *countRinger) Last() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.last
+func (r *countRinger) total() int {
+	return r.notifications + r.bells
 }
 
 func newUnfocusedBellHooks(ringer *countRinger) *bellHooks {
 	return newBellHooks(ringer, nil, func() bool { return false })
 }
 
-func testAttentionPendingEvent(id string, kind clientui.AttentionNotificationKind, title string, body string) clientui.AttentionNotificationEvent {
-	notification := clientui.AttentionNotification{
-		ID:   attentionNotificationID(kind, id),
-		Kind: kind,
+func TestTerminalNotifierProtocolOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		env    map[string]string
+		bell   bool
+		want   string
+	}{
+		{name: "BEL notification", method: notificationMethodBEL, want: terminalBell},
+		{name: "OSC 9 notification", method: notificationMethodOSC9, want: osc9Prefix + "done" + terminalBell + terminalBell},
+		{name: "OSC 9 raw bell", method: notificationMethodOSC9, bell: true, want: terminalBell},
+		{name: "auto Ghostty", method: notificationMethodAuto, env: map[string]string{"TERM_PROGRAM": "ghostty"}, want: osc9Prefix + "done" + terminalBell + terminalBell},
+		{name: "auto Windows Terminal", method: notificationMethodAuto, env: map[string]string{"TERM_PROGRAM": "ghostty", "WT_SESSION": "1"}, want: terminalBell},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			notifier := newTerminalNotifier(test.method, &out, func(key string) (string, bool) {
+				value, ok := test.env[key]
+				return value, ok
+			})
+			if test.bell {
+				notifier.Bell()
+			} else {
+				notifier.Notify("done")
+			}
+			if got := out.String(); got != test.want {
+				t.Fatalf("terminal output = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestBellHooksAttentionNotificationPolicy(t *testing.T) {
+	unfocused := &countRinger{}
+	hooks := newUnfocusedBellHooks(unfocused)
+	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "question"))
+	hooks.OnAttentionNotification(testAttentionPendingEvent("approval-1", clientui.AttentionNotificationKindApproval, "approval"))
+	hooks.OnAttentionNotification(testAttentionPendingEvent("interrupted-1", clientui.AttentionNotificationKindInterruptedRun, "interrupted"))
+	if unfocused.notifications != 2 || unfocused.bells != 0 {
+		t.Fatalf("unfocused events = notifications %d, bells %d", unfocused.notifications, unfocused.bells)
+	}
+
+	focused := &countRinger{}
+	newBellHooks(focused, nil, func() bool { return true }).OnAttentionNotification(
+		testAttentionPendingEvent("question-2", clientui.AttentionNotificationKindQuestion, "question"),
+	)
+	if focused.notifications != 0 || focused.bells != 1 {
+		t.Fatalf("focused events = notifications %d, bells %d", focused.notifications, focused.bells)
+	}
+}
+
+func TestUIAskLifecycleDoesNotDuplicateAttentionNotifications(t *testing.T) {
+	ringer := &countRinger{}
+	model := newProjectedStaticUIModel(WithUITurnQueueHook(newUnfocusedBellHooks(ringer)))
+
+	next, _ := model.Update(askEventMsg{event: askEvent{prompt: bellTestPrompt("ask-1", "First?")}})
+	model = next.(*uiModel)
+	next, _ = model.Update(askEventMsg{event: askEvent{prompt: bellTestPrompt("ask-2", "Second?")}})
+	model = next.(*uiModel)
+	_, _ = model.Update(askEventMsg{event: askEvent{resolvedPromptID: "ask-1"}})
+
+	if ringer.total() != 0 {
+		t.Fatalf("UI ask lifecycle emitted %d notification events", ringer.total())
+	}
+}
+
+func TestAttentionNotificationLedgerLifecycle(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	surfaced := map[string]struct{}{}
+	pending := testAttentionPendingEvent("question-batch-1", clientui.AttentionNotificationKindQuestion, "question")
+
+	applyAttentionNotificationEvent(pending, surfaced, hooks)
+	applyAttentionNotificationEvent(pending, surfaced, hooks)
+	if ringer.notifications != 1 || len(surfaced) != 1 {
+		t.Fatalf("duplicate pending events = notifications %d, surfaced %+v", ringer.notifications, surfaced)
+	}
+
+	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{
+		Type: clientui.AttentionNotificationEventResolved,
+		ID:   attentionNotificationIDPtr(clientui.AttentionNotificationKindQuestion, "question-batch-1"),
+	}, surfaced, hooks)
+	applyAttentionNotificationEvent(pending, surfaced, hooks)
+	if ringer.notifications != 2 || len(surfaced) != 1 {
+		t.Fatalf("reopened pending event = notifications %d, surfaced %+v", ringer.notifications, surfaced)
+	}
+
+	applyAttentionNotificationEvent(testAttentionPendingEvent("interrupted-1", clientui.AttentionNotificationKindInterruptedRun, "interrupted"), surfaced, hooks)
+	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{Type: clientui.AttentionNotificationEventSnapshotComplete}, surfaced, hooks)
+	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{
+		Type: clientui.AttentionNotificationEventResolved,
+		ID:   attentionNotificationIDPtr(clientui.AttentionNotificationKindQuestion, "missing"),
+	}, surfaced, hooks)
+	if ringer.notifications != 2 || len(surfaced) != 1 {
+		t.Fatalf("unsupported/no-op events changed ledger: notifications %d, surfaced %+v", ringer.notifications, surfaced)
+	}
+}
+
+func TestBellHooksToolHeavyTurnCompletion(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
+	hooks.OnTurnQueueDrained()
+	if ringer.notifications != 0 {
+		t.Fatalf("single-tool turn emitted %d notifications", ringer.notifications)
+	}
+
+	recordToolHeavyBellTurn(hooks, 2)
+	if ringer.notifications != 0 {
+		t.Fatalf("tool-heavy turn notified before queue drain")
+	}
+	hooks.OnTurnQueueDrained()
+	hooks.OnTurnQueueDrained()
+	if ringer.notifications != 1 {
+		t.Fatalf("tool-heavy queue drain emitted %d notifications, want one", ringer.notifications)
+	}
+}
+
+func TestBellHooksTurnCompletionFocusPolicy(t *testing.T) {
+	t.Run("focused suppresses", func(t *testing.T) {
+		ringer := &countRinger{}
+		hooks := newBellHooks(ringer, nil, func() bool { return true })
+		recordToolHeavyBellTurn(hooks, 1)
+		hooks.OnTurnQueueDrained()
+		if ringer.total() != 0 {
+			t.Fatalf("focused completion emitted %d events", ringer.total())
+		}
+	})
+	t.Run("unknown focus notifies", func(t *testing.T) {
+		ringer := &countRinger{}
+		focus := newTerminalFocusState()
+		hooks := newBellHooks(ringer, nil, focus.FocusedForAttention)
+		recordToolHeavyBellTurn(hooks, 1)
+		hooks.OnTurnQueueDrained()
+		if ringer.notifications != 1 {
+			t.Fatalf("unknown-focus completion emitted %d notifications", ringer.notifications)
+		}
+	})
+}
+
+func TestBellHooksNoopFinalizationScope(t *testing.T) {
+	t.Run("clears pending completion", func(t *testing.T) {
+		ringer := &countRinger{}
+		hooks := newUnfocusedBellHooks(ringer)
+		recordToolHeavyBellTurn(hooks, 1)
+		hooks.OnTranscriptMessage(bellAssistantDeltaMessage(2, uiNoopFinalToken))
+		hooks.OnTurnQueueDrained()
+		if ringer.total() != 0 {
+			t.Fatalf("NO_OP finalization emitted %d events", ringer.total())
+		}
+	})
+	t.Run("preserves unrelated active turn", func(t *testing.T) {
+		ringer := &countRinger{}
+		hooks := newUnfocusedBellHooks(ringer)
+		recordToolHeavyBellTurn(hooks, 1)
+		hooks.OnTranscriptMessage(bellToolStartMessage(2))
+		hooks.OnTranscriptMessage(bellAssistantDeltaMessage(3, uiNoopFinalToken))
+		recordToolHeavyBellTurn(hooks, 2)
+		hooks.OnTurnQueueDrained()
+		if ringer.notifications != 1 {
+			t.Fatalf("unrelated active turn emitted %d notifications", ringer.notifications)
+		}
+	})
+}
+
+func TestFormatAssistantPreview(t *testing.T) {
+	long := strings.Repeat("a", terminalNotificationPreviewLimit+5)
+	for _, test := range []struct {
+		content string
+		limit   int
+		want    string
+	}{
+		{content: "\n  hello\tworld  ", limit: 80, want: "hello world"},
+		{content: "", limit: 80, want: ""},
+		{content: "abcdef", limit: 4, want: "abc…"},
+		{content: long, limit: terminalNotificationPreviewLimit, want: strings.Repeat("a", terminalNotificationPreviewLimit-1) + "…"},
+		{content: "ab\x1bcd\a ef", limit: 80, want: "abcd ef"},
+	} {
+		if got := formatAssistantPreview(test.content, test.limit); got != test.want {
+			t.Fatalf("formatAssistantPreview(%q, %d) = %q, want %q", test.content, test.limit, got, test.want)
+		}
+	}
+}
+
+func TestBellHooksCorrelateQueuedTurnSteps(t *testing.T) {
+	t.Run("mismatched final is ignored", func(t *testing.T) {
+		ringer := &countRinger{}
+		hooks := newUnfocusedBellHooks(ringer)
+		hooks.OnTranscriptMessage(bellToolStartMessage(1))
+		hooks.OnTranscriptMessage(bellToolStartMessage(1))
+		hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
+		hooks.OnTurnQueueDrained()
+		if ringer.total() != 0 {
+			t.Fatalf("mismatched final emitted %d events", ringer.total())
+		}
+	})
+	t.Run("multiple queued turns notify once", func(t *testing.T) {
+		ringer := &countRinger{}
+		hooks := newUnfocusedBellHooks(ringer)
+		recordToolHeavyBellTurn(hooks, 1)
+		recordToolHeavyBellTurn(hooks, 2)
+		hooks.OnTurnQueueDrained()
+		if ringer.notifications != 1 {
+			t.Fatalf("queued turns emitted %d notifications", ringer.notifications)
+		}
+	})
+}
+
+func TestBellHooksAbortClearsPendingCompletion(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	recordToolHeavyBellTurn(hooks, 1)
+	hooks.OnTurnQueueAborted()
+	hooks.OnTurnQueueDrained()
+	if ringer.total() != 0 {
+		t.Fatalf("aborted queue emitted %d events", ringer.total())
+	}
+}
+
+func TestBellHooksCompactionCompletionPolicy(t *testing.T) {
+	t.Run("unfocused immediate", func(t *testing.T) {
+		ringer := &countRinger{}
+		newUnfocusedBellHooks(ringer).OnUserCompactionCompleted(true)
+		if ringer.notifications != 1 {
+			t.Fatalf("immediate compaction emitted %d notifications", ringer.notifications)
+		}
+	})
+	t.Run("focused suppressed", func(t *testing.T) {
+		ringer := &countRinger{}
+		newBellHooks(ringer, nil, func() bool { return true }).OnUserCompactionCompleted(true)
+		if ringer.total() != 0 {
+			t.Fatalf("focused compaction emitted %d events", ringer.total())
+		}
+	})
+	t.Run("deferred until drain", func(t *testing.T) {
+		ringer := &countRinger{}
+		hooks := newUnfocusedBellHooks(ringer)
+		hooks.OnUserCompactionCompleted(false)
+		if ringer.total() != 0 {
+			t.Fatalf("deferred compaction emitted before drain")
+		}
+		hooks.OnTurnQueueDrained()
+		if ringer.notifications != 1 {
+			t.Fatalf("deferred compaction emitted %d notifications", ringer.notifications)
+		}
+	})
+}
+
+func testAttentionPendingEvent(id string, kind clientui.AttentionNotificationKind, body string) clientui.AttentionNotificationEvent {
+	notification := clientui.AttentionNotification{ID: attentionNotificationID(kind, id), Kind: kind}
 	if kind == clientui.AttentionNotificationKindApproval {
 		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: body}
 	} else {
@@ -64,212 +296,7 @@ func testAttentionPendingEvent(id string, kind clientui.AttentionNotificationKin
 			MaterializedCount:       1,
 		}
 	}
-	return clientui.AttentionNotificationEvent{
-		Type:    clientui.AttentionNotificationEventPending,
-		Pending: &notification,
-	}
-}
-
-func TestTerminalBellRingerWritesBellCharacter(t *testing.T) {
-	var out bytes.Buffer
-	notifier := newTerminalNotifier(notificationMethodBEL, &out, nil)
-	notifier.Notify("ignored")
-
-	if got := out.String(); got != terminalBell {
-		t.Fatalf("bell output = %q, want %q", got, terminalBell)
-	}
-}
-
-func TestOSC9TerminalNotifierWritesEscapeSequence(t *testing.T) {
-	var out bytes.Buffer
-	notifier := newTerminalNotifier(notificationMethodOSC9, &out, nil)
-	notifier.Notify("done")
-
-	want := osc9Prefix + "done" + terminalBell + terminalBell
-	if got := out.String(); got != want {
-		t.Fatalf("osc9 output = %q, want %q", got, want)
-	}
-}
-
-func TestOSC9TerminalNotifierWritesRawBellWithoutNotification(t *testing.T) {
-	var out bytes.Buffer
-	notifier := newTerminalNotifier(notificationMethodOSC9, &out, nil)
-	notifier.Bell()
-
-	if got := out.String(); got != terminalBell {
-		t.Fatalf("bell output = %q, want %q", got, terminalBell)
-	}
-}
-
-func TestAutoNotifierUsesOSC9ForGhostty(t *testing.T) {
-	var out bytes.Buffer
-	notifier := newTerminalNotifier(notificationMethodAuto, &out, func(key string) (string, bool) {
-		switch key {
-		case "TERM_PROGRAM":
-			return "ghostty", true
-		default:
-			return "", false
-		}
-	})
-	notifier.Notify("ping")
-
-	want := osc9Prefix + "ping" + terminalBell + terminalBell
-	if got := out.String(); got != want {
-		t.Fatalf("auto output = %q, want %q", got, want)
-	}
-}
-
-func TestAutoNotifierFallsBackToBELForWindowsTerminal(t *testing.T) {
-	var out bytes.Buffer
-	notifier := newTerminalNotifier(notificationMethodAuto, &out, func(key string) (string, bool) {
-		switch key {
-		case "TERM_PROGRAM":
-			return "ghostty", true
-		case "WT_SESSION":
-			return "1", true
-		default:
-			return "", false
-		}
-	})
-	notifier.Notify("ping")
-
-	if got := out.String(); got != terminalBell {
-		t.Fatalf("auto output = %q, want %q", got, terminalBell)
-	}
-}
-
-func TestBellHooksRingOnAttentionNotifications(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "Question", "question"))
-	hooks.OnAttentionNotification(testAttentionPendingEvent("approval-1", clientui.AttentionNotificationKindApproval, "Action required", "approval"))
-	hooks.OnAttentionNotification(testAttentionPendingEvent("interrupted-run-1", clientui.AttentionNotificationKindInterruptedRun, "Run interrupted", "interrupted"))
-
-	if got := ringer.Count(); got != 2 {
-		t.Fatalf("ring count = %d, want 2", got)
-	}
-	if got := ringer.Last(); got != "kent: Action required: approval" {
-		t.Fatalf("last message = %q, want %q", got, "kent: Action required: approval")
-	}
-}
-
-func TestBellHooksUseSessionNameAndQuestionTextForAskNotifications(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newBellHooks(ringer, func() string { return "incident triage" })
-
-	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "Question", "Which rollback strategy should I use?"))
-
-	if got := ringer.Last(); got != "incident triage: Question: Which rollback strategy should I use?" {
-		t.Fatalf("last message = %q, want %q", got, "incident triage: Question: Which rollback strategy should I use?")
-	}
-}
-
-func TestBellHooksAskUsesBellOnlyWhileFocused(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newBellHooks(ringer, nil, func() bool { return true })
-
-	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "Question", "question"))
-
-	if got := ringer.Count(); got != 1 {
-		t.Fatalf("ring count while focused = %d, want 1", got)
-	}
-	if got := ringer.Last(); got != terminalBell {
-		t.Fatalf("last message while focused = %q, want raw bell", got)
-	}
-}
-
-func TestBellHooksAskUsesRawBellOnlyWithOSC9NotifierWhileFocused(t *testing.T) {
-	var out bytes.Buffer
-	hooks := newBellHooks(newOSC9TerminalNotifier(&out), nil, func() bool { return true })
-
-	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "Question", "question"))
-
-	if got := out.String(); got != terminalBell {
-		t.Fatalf("focused OSC9 ask output = %q, want raw bell", got)
-	}
-}
-
-func TestUIAskEventDoesNotNotifyBellHookForActiveOrQueuedPrompts(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-	m := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
-
-	next, _ := m.Update(askEventMsg{event: askEvent{prompt: bellTestPrompt("ask-1", "First?")}})
-	m = next.(*uiModel)
-	next, _ = m.Update(askEventMsg{event: askEvent{prompt: bellTestPrompt("ask-2", "Second?")}})
-	_ = next.(*uiModel)
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ask notification count = %d, want 0; prompt activity must not notify", got)
-	}
-}
-
-func TestUIResolvedAskEventDoesNotNotifyBellHook(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-	m := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
-
-	next, _ := m.Update(askEventMsg{event: askEvent{resolvedPromptID: "ask-1"}})
-	_ = next.(*uiModel)
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("resolved ask notification count = %d, want 0", got)
-	}
-}
-
-func TestAttentionNotificationLedgerSuppressesPendingUpdatesUntilResolved(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-	surfaced := map[string]struct{}{}
-
-	applyAttentionNotificationEvent(testAttentionPendingEvent("question-batch-1", clientui.AttentionNotificationKindQuestion, "KT-1: 2 questions", "question from agent"), surfaced, hooks)
-	applyAttentionNotificationEvent(testAttentionPendingEvent("question-batch-1", clientui.AttentionNotificationKindQuestion, "KT-1: 2 questions", "second materialized"), surfaced, hooks)
-
-	if got := ringer.Count(); got != 1 {
-		t.Fatalf("attention notification count before resolved = %d, want 1", got)
-	}
-
-	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{
-		Type: clientui.AttentionNotificationEventResolved,
-		ID:   attentionNotificationIDPtr(clientui.AttentionNotificationKindQuestion, "question-batch-1"),
-	}, surfaced, hooks)
-	applyAttentionNotificationEvent(testAttentionPendingEvent("question-batch-1", clientui.AttentionNotificationKindQuestion, "KT-1: 2 questions", "new unresolved"), surfaced, hooks)
-
-	if got := ringer.Count(); got != 2 {
-		t.Fatalf("attention notification count after resolved = %d, want 2", got)
-	}
-}
-
-func TestAttentionNotificationLedgerFiltersUnsupportedTUIAttention(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-	surfaced := map[string]struct{}{}
-
-	applyAttentionNotificationEvent(testAttentionPendingEvent("interrupted-run-1", clientui.AttentionNotificationKindInterruptedRun, "Run interrupted", "interrupted"), surfaced, hooks)
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("attention notification count = %d, want 0", got)
-	}
-	if len(surfaced) != 0 {
-		t.Fatalf("surfaced unsupported notification = %+v", surfaced)
-	}
-}
-
-func TestAttentionNotificationLedgerIgnoresSnapshotCompleteAndUnknownResolved(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-	surfaced := map[string]struct{}{}
-
-	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{Type: clientui.AttentionNotificationEventSnapshotComplete, SessionID: "session-1"}, surfaced, hooks)
-	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{
-		Type: clientui.AttentionNotificationEventResolved,
-		ID:   attentionNotificationIDPtr(clientui.AttentionNotificationKindQuestion, "missing"),
-	}, surfaced, hooks)
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("attention notification count = %d, want 0", got)
-	}
+	return clientui.AttentionNotificationEvent{Type: clientui.AttentionNotificationEventPending, Pending: &notification}
 }
 
 func attentionNotificationID(kind clientui.AttentionNotificationKind, uuid string) clientui.AttentionNotificationID {
@@ -309,18 +336,12 @@ func bellToolStartMessage(step int) clientui.TranscriptMessage {
 		Sequence: 2,
 		Kind:     clientui.TranscriptMessageToolStart,
 		Payload: clientui.TranscriptPayload{ToolStart: &clientui.TranscriptToolStart{
-			StepID:     bellTestStepID(step),
-			ToolCallID: "tool-call",
-			ToolName:   "exec_command",
+			StepID: bellTestStepID(step), ToolCallID: "tool-call", ToolName: "exec_command",
 		}},
 	}
 }
 
 func bellAssistantFinalMessage(step int) clientui.TranscriptMessage {
-	return bellAssistantFinalMessageWithText(step, "turn complete")
-}
-
-func bellAssistantFinalMessageWithText(step int, text string) clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
 		Sequence: 2,
 		Kind:     clientui.TranscriptMessageCommittedRow,
@@ -329,9 +350,7 @@ func bellAssistantFinalMessageWithText(step int, text string) clientui.Transcrip
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       clientui.TranscriptRowAssistant,
 			Assistant: &clientui.TranscriptAssistantRow{
-				StepID: bellTestStepID(step),
-				Text:   text,
-				Phase:  transcript.AssistantPhaseFinal,
+				StepID: bellTestStepID(step), Text: "turn complete", Phase: transcript.AssistantPhaseFinal,
 			},
 		}},
 	}
@@ -342,238 +361,13 @@ func bellAssistantDeltaMessage(step int, delta string) clientui.TranscriptMessag
 		Sequence: 2,
 		Kind:     clientui.TranscriptMessageAssistantDelta,
 		Payload: clientui.TranscriptPayload{AssistantDelta: &clientui.TranscriptAssistantDelta{
-			StepID:   bellTestStepID(step),
-			StreamID: runtimeids.NewAssistantStreamID(),
-			Delta:    delta,
-			Phase:    transcript.AssistantPhaseFinal,
+			StepID: bellTestStepID(step), StreamID: runtimeids.NewAssistantStreamID(), Delta: delta, Phase: transcript.AssistantPhaseFinal,
 		}},
 	}
 }
 
-func TestBellHooksRingOnToolHeavyTurnEnd(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ring count = %d after single tool call turn, want 0", got)
-	}
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(2))
-	hooks.OnTranscriptMessage(bellToolStartMessage(2))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ring count = %d before queue drain, want 0", got)
-	}
-	hooks.OnTurnQueueDrained()
-	if got := ringer.Count(); got != 1 {
-		t.Fatalf("ring count = %d after queue drain, want 1", got)
-	}
-	if got := ringer.Last(); got != "kent: turn complete" {
-		t.Fatalf("last message = %q, want %q", got, "kent: turn complete")
-	}
-
-	hooks.OnTurnQueueDrained()
-	if got := ringer.Count(); got != 1 {
-		t.Fatalf("ring count = %d after duplicate queue drain, want 1", got)
-	}
-}
-
-func TestBellHooksSuppressTurnCompletionWhileFocused(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newBellHooks(ringer, nil, func() bool { return true })
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
-	hooks.OnTurnQueueDrained()
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ring count while focused = %d, want 0", got)
-	}
-}
-
-func TestBellHooksRingOnToolHeavyTurnEndWithUnknownFocus(t *testing.T) {
-	ringer := &countRinger{}
-	focus := newTerminalFocusState()
-	hooks := newBellHooks(ringer, nil, focus.FocusedForAttention)
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
-	hooks.OnTurnQueueDrained()
-
-	if got := ringer.Count(); got != 1 {
-		t.Fatalf("ring count with unknown focus = %d, want 1", got)
-	}
-}
-
-func TestBellHooksFallbackToTurnCompleteForWhitespacePreview(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, "\x1b\a"))
-	hooks.OnTurnQueueDrained()
-
-	if got := ringer.Last(); got != "kent: turn complete" {
-		t.Fatalf("last message = %q, want %q", got, "kent: turn complete")
-	}
-}
-
-func TestBellHooksNoopAssistantDeltaClearsPendingTurnCompletion(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(2, uiNoopFinalToken))
-	hooks.OnTurnQueueDrained()
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ring count = %d after NO_OP delta drain, want 0", got)
-	}
-}
-
-func TestBellHooksNoopAssistantEventPreservesUnrelatedActiveTurn(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(2))
-	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(3, uiNoopFinalToken))
-	hooks.OnTranscriptMessage(bellToolStartMessage(2))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
-	hooks.OnTurnQueueDrained()
-
-	if got := ringer.Count(); got != 1 {
-		t.Fatalf("ring count = %d after unrelated active turn completes, want 1", got)
-	}
-	if got := ringer.Last(); got != "kent: turn complete" {
-		t.Fatalf("last message = %q, want %q", got, "kent: turn complete")
-	}
-}
-
-func TestFormatAssistantPreview(t *testing.T) {
-	if got := formatAssistantPreview("\n  hello\tworld  ", 80); got != "hello world" {
-		t.Fatalf("preview = %q, want %q", got, "hello world")
-	}
-
-	if got := formatAssistantPreview("", 80); got != "" {
-		t.Fatalf("preview = %q, want empty", got)
-	}
-
-	if got := formatAssistantPreview("abcdef", 4); got != "abc…" {
-		t.Fatalf("preview = %q, want %q", got, "abc…")
-	}
-
-	long := strings.Repeat("a", terminalNotificationPreviewLimit+5)
-	want := strings.Repeat("a", terminalNotificationPreviewLimit-1) + "…"
-	if got := formatAssistantPreview(long, terminalNotificationPreviewLimit); got != want {
-		t.Fatalf("preview = %q, want %q", got, want)
-	}
-
-	if got := formatAssistantPreview("ab\x1bcd\a ef", 80); got != "abcd ef" {
-		t.Fatalf("preview = %q, want %q", got, "abcd ef")
-	}
-}
-
-func TestBellHooksIgnoresMismatchedTurnEndStep(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
-	hooks.OnTurnQueueDrained()
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ring count = %d, want 0", got)
-	}
-}
-
-func TestBellHooksRingOnceAfterQueuedTurnsDrain(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(2))
-	hooks.OnTranscriptMessage(bellToolStartMessage(2))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ring count = %d before queue drain, want 0", got)
-	}
-	hooks.OnTurnQueueDrained()
-	if got := ringer.Count(); got != 1 {
-		t.Fatalf("ring count = %d after queue drain, want 1", got)
-	}
-	if got := ringer.Last(); got != "kent: turn complete" {
-		t.Fatalf("last message = %q, want %q", got, "kent: turn complete")
-	}
-}
-
-func TestBellHooksClearPendingTurnCompletionAfterAbort(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
-	hooks.OnTurnQueueAborted()
-	hooks.OnTurnQueueDrained()
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ring count = %d after aborted queue, want 0", got)
-	}
-}
-
-func TestBellHooksRingOnUserCompactionCompletion(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnUserCompactionCompleted(true)
-
-	if got := ringer.Count(); got != 1 {
-		t.Fatalf("ring count = %d after user compaction completion, want 1", got)
-	}
-	if got := ringer.Last(); got != "kent: Compaction finished" {
-		t.Fatalf("last message = %q, want %q", got, "kent: Compaction finished")
-	}
-}
-
-func TestBellHooksSuppressUserCompactionCompletionWhileFocused(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newBellHooks(ringer, nil, func() bool { return true })
-
-	hooks.OnUserCompactionCompleted(true)
-
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ring count while focused = %d, want 0", got)
-	}
-}
-
-func TestBellHooksDeferUserCompactionCompletionUntilQueueDrains(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-
-	hooks.OnUserCompactionCompleted(false)
-	if got := ringer.Count(); got != 0 {
-		t.Fatalf("ring count before queue drain = %d, want 0", got)
-	}
-	hooks.OnTurnQueueDrained()
-
-	if got := ringer.Count(); got != 1 {
-		t.Fatalf("ring count after queue drain = %d, want 1", got)
-	}
-	if got := ringer.Last(); got != "kent: Compaction finished" {
-		t.Fatalf("last message = %q, want %q", got, "kent: Compaction finished")
-	}
+func recordToolHeavyBellTurn(hooks *bellHooks, step int) {
+	hooks.OnTranscriptMessage(bellToolStartMessage(step))
+	hooks.OnTranscriptMessage(bellToolStartMessage(step))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(step))
 }

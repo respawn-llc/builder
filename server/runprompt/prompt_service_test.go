@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
@@ -113,7 +114,7 @@ func TestPromptServiceReturnsPartialResultOnRunError(t *testing.T) {
 	}
 	service := NewPromptService(launcher)
 
-	result, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hello"}, nil)
+	result, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, nil)
 	if !errors.Is(err, runErr) {
 		t.Fatalf("RunPrompt error = %v, want %v", err, runErr)
 	}
@@ -128,6 +129,39 @@ func TestPromptServiceReturnsPartialResultOnRunError(t *testing.T) {
 	}
 	if got := strings.Join(launcher.runtime.logs, "\n"); !strings.Contains(got, "runtime.event.drop.total=3") || !strings.Contains(got, `app.run_prompt.exit err="boom"`) {
 		t.Fatalf("unexpected logs: %q", got)
+	}
+}
+
+func TestPromptServicePreservesTypedLaunchPolicyWithoutProgressOrRuntime(t *testing.T) {
+	policy := protocol.NewMaxDepthExceededSubagentLaunchPolicyError(1, 0)
+	launcher := &stubHeadlessPromptLauncher{err: fmt.Errorf("plan launch: %w", policy)}
+	service := NewPromptService(launcher)
+	var progresses []serverapi.RunPromptProgress
+
+	result, err := service.RunPrompt(
+		context.Background(),
+		serverapi.RunPromptRequest{
+			ClientRequestID: "depth-policy",
+			Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			Prompt:          "delegate",
+		},
+		serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+			progresses = append(progresses, progress)
+		}),
+	)
+	var decoded *protocol.SubagentLaunchPolicyError
+	if !errors.As(err, &decoded) || decoded != policy {
+		t.Fatalf("RunPrompt error = %T %+v, want original typed policy", err, decoded)
+	}
+	if result.SessionID != "" || result.SessionName != "" || result.Result != "" ||
+		result.Duration != 0 || len(result.Warnings) != 0 {
+		t.Fatalf("RunPrompt result = %+v, want empty response", result)
+	}
+	if launcher.runtime != nil {
+		t.Fatal("rejected launch unexpectedly prepared a runtime")
+	}
+	if len(progresses) != 0 {
+		t.Fatalf("rejected loopback run published progress: %+v", progresses)
 	}
 }
 
@@ -148,7 +182,7 @@ func TestPromptServiceAppliesTimeoutToSubmittedRun(t *testing.T) {
 	}
 	service := NewPromptService(launcher)
 
-	_, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hello", Timeout: 5 * time.Second}, nil)
+	_, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello", Timeout: 5 * time.Second}, nil)
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)
 	}
@@ -156,11 +190,15 @@ func TestPromptServiceAppliesTimeoutToSubmittedRun(t *testing.T) {
 
 type stubHeadlessPromptLauncher struct {
 	runtime     *stubPromptSessionRuntime
+	err         error
 	lastRequest serverapi.RunPromptRequest
 }
 
 func (s *stubHeadlessPromptLauncher) PrepareHeadlessPrompt(_ context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (PromptSessionRuntime, error) {
 	s.lastRequest = req
+	if s.err != nil {
+		return nil, s.err
+	}
 	if progress != nil {
 		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindCompactionStarted})
 	}

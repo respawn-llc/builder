@@ -13,6 +13,7 @@ import (
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 var errSessionWorkspaceRetargeterRequired = errors.New("session workspace retargeter is required")
@@ -22,6 +23,7 @@ type SessionLifecycleService struct {
 	containerDir    string
 	stores          sessionStoreResolver
 	retargeter      sessionWorkspaceRetargeter
+	navigation      sessionNavigationTargetResolver
 	authManager     *auth.Manager
 	storeOptions    []session.StoreOption
 	drafts          *requestmemo.Memo[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse]
@@ -45,6 +47,10 @@ type sessionStoreResolver interface {
 
 type sessionWorkspaceRetargeter interface {
 	RetargetWorkspace(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
+}
+
+type sessionNavigationTargetResolver interface {
+	ResolveSessionNavigationBinding(ctx context.Context, sessionID string) (serverapi.SessionNavigationBinding, error)
 }
 
 func NewSessionLifecycleService(containerDir string, stores sessionStoreResolver, authManager *auth.Manager, storeOptions ...session.StoreOption) *SessionLifecycleService {
@@ -71,6 +77,14 @@ func (s *SessionLifecycleService) WithWorkspaceRetargeter(retargeter sessionWork
 	return s
 }
 
+func (s *SessionLifecycleService) WithNavigationTargetResolver(resolver sessionNavigationTargetResolver) *SessionLifecycleService {
+	if s == nil {
+		return nil
+	}
+	s.navigation = resolver
+	return s
+}
+
 func (s *SessionLifecycleService) GetInitialInput(_ context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionInitialInputResponse{}, err
@@ -86,13 +100,9 @@ func (s *SessionLifecycleService) GetInitialInput(_ context.Context, req servera
 		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
 	}
 	meta := store.Meta()
-	recoveryBuffers, err := sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers)
-	if err != nil {
-		return serverapi.SessionInitialInputResponse{}, err
-	}
 	return serverapi.SessionInitialInputResponse{
 		Input:           initialSessionInput(store, req.TransitionInput),
-		RecoveryBuffers: recoveryBuffers,
+		RecoveryBuffers: sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers),
 	}, nil
 }
 
@@ -161,7 +171,7 @@ func sameSessionTransitionMemoRequest(a sessionTransitionMemoRequest, b sessionT
 		a.Transition.InitialInput == b.Transition.InitialInput &&
 		a.Transition.TargetSessionID == b.Transition.TargetSessionID &&
 		a.Transition.ForkRollbackTargetID == b.Transition.ForkRollbackTargetID &&
-		a.Transition.ParentSessionID == b.Transition.ParentSessionID
+		textutil.EqualOptional(a.Transition.PreviousSessionID, b.Transition.PreviousSessionID)
 }
 
 func sameSessionDraftMemoRequest(a sessionDraftMemoRequest, b sessionDraftMemoRequest) bool {
@@ -220,7 +230,7 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 				InitialInput:                 req.Transition.InitialInput,
 				TargetSessionID:              req.Transition.TargetSessionID,
 				ForkUserMessageSeq:           forkUserMessageSeq,
-				ParentSessionID:              req.Transition.ParentSessionID,
+				PreviousSessionID:            req.Transition.PreviousSessionID,
 			},
 		})
 		if err != nil {
@@ -239,6 +249,15 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 		}
 		return resolved, nil
 	}
+	if req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
+		store, err = s.openStore(req.SessionID)
+		if err != nil {
+			return serverapi.SessionResolveTransitionResponse{}, err
+		}
+		if store == nil {
+			return serverapi.SessionResolveTransitionResponse{}, errors.New("current session is required for session navigation")
+		}
+	}
 	resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{
 		Store: store,
 		Transition: sessionTransition{
@@ -247,13 +266,62 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 			InitialPromptHistoryRecorded: req.Transition.InitialPromptHistoryRecorded,
 			InitialInput:                 req.Transition.InitialInput,
 			TargetSessionID:              req.Transition.TargetSessionID,
-			ParentSessionID:              req.Transition.ParentSessionID,
+			PreviousSessionID:            req.Transition.PreviousSessionID,
 		},
 	})
 	if err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
 	}
+	if req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
+		return s.authorizeNavigationTransition(ctx, store, resolved)
+	}
 	return resolved, nil
+}
+
+func (s *SessionLifecycleService) authorizeNavigationTransition(ctx context.Context, current *session.Store, resolved serverapi.SessionDirective) (serverapi.SessionDirective, error) {
+	if current == nil {
+		return serverapi.SessionDirective{}, errors.New("current session is required for session navigation")
+	}
+	intent, present := resolved.LaunchIntent()
+	if !present {
+		return serverapi.SessionDirective{}, errors.New("session navigation did not resolve to a launch intent")
+	}
+	requestedTarget, present := intent.SessionID()
+	if !present {
+		return serverapi.SessionDirective{}, errors.New("session navigation launch intent omitted target session id")
+	}
+	authorizedTarget := session.NavigationTargetSessionID(current.Meta())
+	if authorizedTarget == nil || *authorizedTarget != requestedTarget {
+		return serverapi.SessionDirective{}, errors.New("session navigation target does not match current session provenance")
+	}
+	if s == nil || s.navigation == nil {
+		return serverapi.SessionDirective{}, errors.New("session navigation target resolver is required")
+	}
+	binding, err := s.navigation.ResolveSessionNavigationBinding(ctx, requestedTarget.String())
+	if err != nil {
+		return serverapi.SessionDirective{}, err
+	}
+	if err := binding.Validate(); err != nil {
+		return serverapi.SessionDirective{}, err
+	}
+	preparation, present := resolved.LaunchPreparation()
+	if !present {
+		return serverapi.SessionDirective{}, errors.New("session navigation did not resolve launch preparation")
+	}
+	initialPrompt, hasInitialPrompt := preparation.InitialPrompt()
+	var initialPromptPtr *serverapi.SessionInitialPromptMetadata
+	if hasInitialPrompt {
+		initialPromptPtr = &initialPrompt
+	}
+	return serverapi.LaunchSessionDirective(
+		intent,
+		serverapi.NewSessionNavigationLaunchPreparation(
+			initialPromptPtr,
+			preparation.DraftDisposition(),
+			preparation.AuthPreparation(),
+			binding,
+		),
+	), nil
 }
 
 func (s *SessionLifecycleService) preserveForkExecutionTarget(ctx context.Context, parentSessionID string, childSessionID string) error {

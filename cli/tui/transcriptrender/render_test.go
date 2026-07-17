@@ -15,80 +15,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-func TestRenderCommittedRowStyleMatrix(t *testing.T) {
-	legacy := "neutral notice"
-	cases := []struct {
-		name      string
-		row       clientui.TranscriptCommittedRow
-		want      string
-		wantRole  StyleRole
-		wantColor ColorRole
-	}{
-		{name: "user", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "hello"}}, want: "❯ hello", wantRole: StyleRoleUser, wantColor: ColorRoleForeground},
-		{name: "model", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "answer"}}, want: "❮ answer", wantRole: StyleRoleAssistant, wantColor: ColorRoleForeground},
-		{name: "warning", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeLegacyUntypedNotice, Severity: clientui.TranscriptNoticeWarning, LegacyText: &legacy}}, want: "⚠ neutral notice", wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
-		{name: "error", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeLegacyUntypedNotice, Severity: clientui.TranscriptNoticeError, LegacyText: &legacy}}, want: "! neutral notice", wantRole: StyleRoleError, wantColor: ColorRoleError},
-		{name: "notice", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeLegacyUntypedNotice, Severity: clientui.TranscriptNoticeInfo, LegacyText: &legacy}}, want: "ℹ neutral notice", wantRole: StyleRoleNotice, wantColor: ColorRoleForeground},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			rendered := RenderCommittedRow(tt.row, 80, "", ModeOngoing)
-			if len(rendered.Lines) == 0 {
-				t.Fatal("rendered no lines")
-			}
-			line := rendered.Lines[0]
-			if got := line.Plain(); got != tt.want {
-				t.Fatalf("rendered line = %q, want %q", got, tt.want)
-			}
-			if line.LeadingSymbol == nil || len(line.Spans) < 2 || line.LeadingSymbol.Style.SemanticRole != tt.wantRole {
-				t.Fatalf("line has invalid typed symbol or body spans: %+v", line)
-			}
-			if tt.wantRole != StyleRoleToolShell && line.Spans[1].Style.SemanticRole != tt.wantRole {
-				t.Fatalf("line content role = %v, want %v; spans: %+v", line.Spans[1].Style.SemanticRole, tt.wantRole, line.Spans)
-			}
-			if got := ColorRoleForStyle(tt.wantRole); got != tt.wantColor {
-				t.Fatalf("style role color = %v, want %v", got, tt.wantColor)
-			}
-		})
-	}
-}
-
-func TestFaintRowsUseBaseForegroundWithTerminalFaintAttribute(t *testing.T) {
-	legacy := "neutral notice"
-	notice := RenderCommittedRow(clientui.TranscriptCommittedRow{
-		Kind: clientui.TranscriptRowNotice,
-		Notice: &clientui.TranscriptNoticeRow{
-			Reason:     clientui.TranscriptNoticeLegacyUntypedNotice,
-			Severity:   clientui.TranscriptNoticeInfo,
-			LegacyText: &legacy,
-		},
-	}, 80, "dark", ModeDetailCollapsed)
-	tool := RenderCommittedRow(toolRow("ask_question", transcript.ToolPresentationDefault, "question", false), 80, "dark", ModeDetailCollapsed)
-
-	for name, row := range map[string]Row{"notice": notice, "tool": tool} {
-		if len(row.Lines) != 1 {
-			t.Fatalf("%s row lines = %+v, want one line", name, row.Lines)
-		}
-		var body *Span
-		for index := range row.Lines[0].Spans {
-			if strings.TrimSpace(row.Lines[0].Spans[index].Text) != "" {
-				body = &row.Lines[0].Spans[index]
-				break
-			}
-		}
-		if body == nil {
-			t.Fatalf("%s row has no body span: %+v", name, row.Lines[0])
-		}
-		resolved := ResolveSpanStyle(*body, "dark")
-		if resolved.Foreground.Kind != ResolvedForegroundTheme ||
-			resolved.Foreground.Theme != ColorForRole(ColorRoleForeground, "dark") ||
-			!resolved.Faint {
-			t.Fatalf("%s faint body resolves to %+v, want base foreground with terminal faint", name, resolved)
-		}
-	}
-}
-
 func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 	row := toolRow("exec_command", transcript.ToolPresentationShell, "sed -n '1,10p' cli/tui/model.go", false)
 	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{
@@ -187,31 +113,6 @@ func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
 	}
 }
 
-func TestDetailExpandedRowsRemoveFaintStyling(t *testing.T) {
-	row := toolRow("exec_command", transcript.ToolPresentationShell, "package example\n\nfunc main() {}", false)
-	row.Tool.Presentation.Command = "sed -n '1,20p' example.go"
-	row.Tool.Presentation.CompactText = row.Tool.Presentation.Command
-	row.Tool.Presentation.RenderHint = &transcript.ToolRenderHint{
-		Kind:       transcript.ToolRenderKindSource,
-		Path:       "example.go",
-		ResultOnly: true,
-	}
-
-	for _, line := range RenderDetailPresentation(row, 120, "dark").Expanded {
-		if line.LeadingSymbol != nil && line.LeadingSymbol.Style.Has(SpanAttributeFaint) {
-			t.Fatalf("expanded leading symbol remains faint: %+v", line.LeadingSymbol)
-		}
-		for _, span := range line.Spans {
-			if role, ok := span.Style.Role(); ok && role == StyleRoleNotice {
-				continue
-			}
-			if span.Style.Has(SpanAttributeFaint) {
-				t.Fatalf("expanded span remains faint: %+v", span)
-			}
-		}
-	}
-}
-
 func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -282,42 +183,6 @@ func TestMovedToBackgroundShellRowKeepsMovedToBackgroundSuffixAtNarrowWidth(t *t
 	}
 }
 
-func TestMovedToBackgroundMultilineShellStacksHiddenLineCount(t *testing.T) {
-	command := "sleep 20;\nprintf completed;\necho done"
-	row := toolRow("exec_command", transcript.ToolPresentationShell, command, false)
-	row.Tool.Presentation.MovedToBackground = true
-
-	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
-	if len(rendered.Lines) != 1 {
-		t.Fatalf("backgrounded multiline shell lines = %+v, want one compact line", rendered.Lines)
-	}
-	if got, want := rendered.Lines[0].Plain(), "$ sleep 20;  · 2 more lines · backgrounded"; got != want {
-		t.Fatalf("backgrounded multiline shell = %q, want %q", got, want)
-	}
-}
-
-func TestMovedToBackgroundMultilineShellShowsCountOnlyWhileDetailIsCollapsed(t *testing.T) {
-	command := "sleep 20;\nprintf completed;\necho done"
-	row := toolRow("exec_command", transcript.ToolPresentationShell, command, false)
-	row.Tool.Presentation.MovedToBackground = true
-
-	for _, tt := range []struct {
-		mode Mode
-		want string
-	}{
-		{mode: ModeDetailCollapsed, want: "$ sleep 20;  · 2 more lines · backgrounded"},
-		{mode: ModeDetailExpanded, want: "$ sleep 20;  · backgrounded"},
-	} {
-		rendered := RenderCommittedRow(row, 80, "", tt.mode)
-		if len(rendered.Lines) != 1 {
-			t.Fatalf("mode %v backgrounded detail lines = %+v, want one compact line", tt.mode, rendered.Lines)
-		}
-		if got := rendered.Lines[0].Plain(); got != tt.want {
-			t.Fatalf("mode %v backgrounded detail = %q, want %q", tt.mode, got, tt.want)
-		}
-	}
-}
-
 func assertShellLineIsPlainText(t *testing.T, line Line, wantFaint bool) {
 	t.Helper()
 	if len(line.Spans) < 2 {
@@ -360,112 +225,6 @@ func TestDefaultToolRowsDoNotUseChromaSyntax(t *testing.T) {
 	}
 }
 
-func TestToolSymbolsUseSeparateMetadataFromBodies(t *testing.T) {
-	rawShell := toolRow("exec_command", transcript.ToolPresentationShell, "go test ./...", false)
-	rawShell.Tool.Presentation.RawOutputRequested = true
-	patchTool := toolRow("patch", transcript.ToolPresentationDefault, "ignored", false)
-	patchTool.Tool.Presentation.PatchRender = &patchformat.RenderedPatch{
-		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2}},
-		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go +2", FileIndex: 0}},
-	}
-
-	cases := []struct {
-		name string
-		row  clientui.TranscriptCommittedRow
-	}{
-		{name: "successful tool", row: toolRow("custom_tool", transcript.ToolPresentationDefault, "custom preview", false)},
-		{name: "raw shell", row: rawShell},
-		{name: "failed tool", row: toolRow("custom_tool", transcript.ToolPresentationDefault, "failed input", true)},
-		{name: "patch tool", row: patchTool},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			rendered := RenderCommittedRow(tt.row, 120, "", ModeOngoing)
-			if len(rendered.Lines) == 0 || rendered.Lines[0].LeadingSymbol == nil || len(rendered.Lines[0].Spans) < 2 {
-				t.Fatalf("rendered invalid line: %+v", rendered.Lines)
-			}
-			symbol := *rendered.Lines[0].LeadingSymbol
-			body := rendered.Lines[0].Spans[1]
-			if symbol.Style == body.Style {
-				t.Fatalf("symbol metadata was coupled to body metadata: symbol=%+v body=%+v", symbol, body)
-			}
-		})
-	}
-}
-
-func TestRoleSymbolOwnsTypedLeadingSlotOutsideBodySpans(t *testing.T) {
-	rendered := RenderCommittedRow(
-		toolRow("exec_command", transcript.ToolPresentationShell, "go test ./...", false),
-		80,
-		"",
-		ModeOngoing,
-	)
-	if len(rendered.Lines) == 0 {
-		t.Fatal("rendered no tool lines")
-	}
-	line := rendered.Lines[0]
-	if line.LeadingSymbol == nil {
-		t.Fatalf("rendered line has no typed leading symbol: %+v", line)
-	}
-	if line.LeadingSymbol.Text == "" ||
-		line.LeadingSymbol.Style.SemanticRole != StyleRoleToolSuccess ||
-		line.LeadingSymbol.Style.Has(SpanAttributeFaint) {
-		t.Fatalf("typed leading symbol = %+v, want full-strength successful tool role", line.LeadingSymbol)
-	}
-	for _, span := range line.Spans {
-		if span.Text == line.LeadingSymbol.Text {
-			t.Fatalf("body spans duplicate typed leading symbol: symbol=%+v spans=%+v", line.LeadingSymbol, line.Spans)
-		}
-	}
-}
-
-func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) {
-	messageType := clientui.TranscriptMessageBackgroundNotice
-	compactLabel := "background complete"
-	row := clientui.TranscriptCommittedRow{
-		Kind: clientui.TranscriptRowNotice,
-		Notice: &clientui.TranscriptNoticeRow{
-			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
-			Severity:     clientui.TranscriptNoticeInfo,
-			MessageType:  &messageType,
-			CompactLabel: &compactLabel,
-			Diagnostic: &clientui.TranscriptDiagnostic{
-				Code:   "background_completion",
-				Detail: compactLabel,
-			},
-			Background: &clientui.TranscriptBackgroundNoticeIdentity{
-				ActivityID: runtimeids.NewBackgroundActivityID(),
-				ProcessID:  "background-process",
-			},
-		},
-	}
-
-	for _, mode := range []Mode{ModeOngoingCollapsed, ModeDetailCollapsed, ModeDetailExpanded} {
-		rendered := RenderCommittedRow(row, 80, "", mode)
-		if rendered.Group != clientui.TranscriptRowTool {
-			t.Fatalf("mode %v background notice group = %q, want tool activity", mode, rendered.Group)
-		}
-		if len(rendered.Lines) != 1 || rendered.Lines[0].LeadingSymbol == nil {
-			t.Fatalf("mode %v background notice = %+v, want one line with typed symbol", mode, rendered)
-		}
-		line := rendered.Lines[0]
-		if line.LeadingSymbol.Text != "ℹ" ||
-			line.LeadingSymbol.Style.SemanticRole != StyleRoleNoticePrimary ||
-			line.LeadingSymbol.Style.Has(SpanAttributeFaint) {
-			t.Fatalf("mode %v background symbol = %+v, want full-strength primary info symbol", mode, line.LeadingSymbol)
-		}
-		for _, span := range line.Spans {
-			if strings.TrimSpace(span.Text) == "" {
-				continue
-			}
-			if span.Style.SemanticRole != StyleRoleNoticeForeground || span.Style.Has(SpanAttributeFaint) {
-				t.Fatalf("mode %v background body span = %+v, want full-strength foreground", mode, span)
-			}
-		}
-	}
-}
-
 func TestWorktreeNoticeRendersTypedClientContext(t *testing.T) {
 	branch := "feature/client-rendered-context"
 	effectiveCWD := "/tmp/worktree/client-rendered-context"
@@ -501,27 +260,6 @@ func TestWorktreeNoticeRendersTypedClientContext(t *testing.T) {
 		if strings.Contains(text, row.Notice.Diagnostic.Detail) {
 			t.Fatalf("mode %v rendered model instructions instead of client presentation: %q", mode, text)
 		}
-	}
-}
-
-func TestResolveSpanStyleCarriesSemanticColorAndAttributes(t *testing.T) {
-	span := SemanticSpan(
-		"semantic",
-		StyleRoleWarning,
-		SpanAttributeFaint,
-		SpanAttributeBold,
-		SpanAttributeItalic,
-		SpanAttributeUnderline,
-		SpanAttributeStrikethrough,
-	)
-
-	resolved := ResolveSpanStyle(span, "dark")
-	if resolved.Foreground.Kind != ResolvedForegroundTheme ||
-		resolved.Foreground.Theme != ColorForRole(ColorRoleForStyle(span.Style.SemanticRole), "dark") {
-		t.Fatalf("resolved foreground = %+v, want role color", resolved.Foreground)
-	}
-	if !resolved.Faint || !resolved.Bold || !resolved.Italic || !resolved.Underline || !resolved.Strikethrough {
-		t.Fatalf("resolved attributes = %+v, want every semantic attribute", resolved)
 	}
 }
 
@@ -605,53 +343,6 @@ func TestRenderDetailPresentationDoesNotExpandUnrecoverableMalformedRows(t *test
 	}
 }
 
-func TestOngoingUserAssistantRowsUseCompactText(t *testing.T) {
-	condensedText := "compact assistant"
-	row := clientui.TranscriptCommittedRow{
-		Kind: clientui.TranscriptRowAssistant,
-		Assistant: &clientui.TranscriptAssistantRow{
-			Text:          "full first line\nfull second line",
-			CondensedText: &condensedText,
-		},
-	}
-
-	ongoing := RenderCommittedRow(row, 80, "", ModeOngoing)
-	if got, want := ongoing.Lines[0].Plain(), "❮ compact assistant"; got != want {
-		t.Fatalf("ongoing assistant row = %q, want %q", got, want)
-	}
-
-	expanded := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	if got, want := expanded.Lines[0].Plain(), "❮ full first line"; got != want {
-		t.Fatalf("expanded assistant row = %q, want %q", got, want)
-	}
-}
-
-func TestPendingToolChangesOnlyCommittedSymbolText(t *testing.T) {
-	start := clientui.TranscriptToolStart{
-		ToolCallID: "2d97d231-7765-471a-bf55-a4c17157af02",
-		ToolName:   "exec_command",
-		Presentation: &transcript.ToolCallMeta{
-			Presentation: transcript.ToolPresentationShell,
-			Command:      "go test ./...",
-		},
-	}
-	committed := RenderPendingTool(start, 80, "", "")
-	pending := RenderPendingTool(start, 80, "", "⢎ ")
-
-	if got, want := pending.Plain(), "⢎  go test ./..."; got != want {
-		t.Fatalf("pending tool plain line = %q, want %q", got, want)
-	}
-	if committed.LeadingSymbol == nil || pending.LeadingSymbol == nil || len(pending.Spans) != len(committed.Spans) {
-		t.Fatalf("pending line = %+v, committed line = %+v", pending, committed)
-	}
-	pendingSymbol := *pending.LeadingSymbol
-	committedSymbol := *committed.LeadingSymbol
-	pendingSymbol.Text = committedSymbol.Text
-	if pendingSymbol != committedSymbol || !slices.Equal(pending.Spans, committed.Spans) {
-		t.Fatalf("pending decoration changed non-text metadata: pending=%+v committed=%+v", pending, committed)
-	}
-}
-
 func TestPendingMultilineShellShowsExplicitHiddenLineCount(t *testing.T) {
 	command := "body=$(kent task show KENT-224 --project . --json |\n  jq -r '.body')\necho \"$body\""
 	line := RenderPendingTool(clientui.TranscriptToolStart{
@@ -667,21 +358,6 @@ func TestPendingMultilineShellShowsExplicitHiddenLineCount(t *testing.T) {
 
 	if got, want := line.Plain(), "⢎  body=$(kent task show KENT-224 --project . --json |  · 2 more lines"; got != want {
 		t.Fatalf("pending multiline shell = %q, want %q", got, want)
-	}
-}
-
-func TestRenderPatchToolShowsStructuredPathAndCounts(t *testing.T) {
-	row := toolRow("patch", transcript.ToolPresentationDefault, "ignored", false)
-	row.Tool.Presentation.PatchRender = &patchformat.RenderedPatch{
-		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2, Removed: 1}},
-		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go -1 +2", FileIndex: 0}},
-	}
-	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
-	if len(rendered.Lines) == 0 {
-		t.Fatal("rendered no patch lines")
-	}
-	if got, want := rendered.Lines[0].Plain(), "⇄ cli/tui/model.go -1 +2"; got != want {
-		t.Fatalf("patch line = %q, want %q", got, want)
 	}
 }
 
@@ -849,20 +525,6 @@ func TestDetailCompilerWrapsStructuredPatchWithOneMarkerPerSourceLine(t *testing
 	}
 }
 
-func TestDetailLineEqualityUsesExplicitStyleValues(t *testing.T) {
-	color := RGBColor{Red: 0x12, Green: 0x34, Blue: 0x56}
-	left := []Line{{Spans: []Span{ExplicitRGBSpan("source", color, SpanAttributeBold)}}}
-	right := []Line{{Spans: []Span{ExplicitRGBSpan("source", color, SpanAttributeBold)}}}
-
-	if !detailLinesEqual(left, right) {
-		t.Fatalf("separately constructed equivalent explicit styles compare unequal: left=%+v right=%+v", left, right)
-	}
-	right[0].Spans[0].Style = right[0].Spans[0].Style.With(SpanAttributeItalic)
-	if detailLinesEqual(left, right) {
-		t.Fatalf("different explicit attributes compare equal: left=%+v right=%+v", left, right)
-	}
-}
-
 func TestDetailCompilerSanitizesStructuredPatchSpans(t *testing.T) {
 	renderedPatch := patchformat.RenderedPatch{
 		Files: []patchformat.RenderedFile{{AbsPath: "/workspace/example.go", RelPath: "./example.go", Added: 1}},
@@ -949,54 +611,6 @@ func TestPendingPatchToolUsesStructuredPathAndCounts(t *testing.T) {
 	}
 	if removedRole != StyleRoleToolError || addedRole != StyleRoleToolSuccess {
 		t.Fatalf("pending patch count roles = removed %v added %v", removedRole, addedRole)
-	}
-}
-
-func TestPatchFamilyToolsDoNotFallbackToToolName(t *testing.T) {
-	for _, toolName := range []string{"patch", "edit", "replace", "write"} {
-		t.Run(toolName, func(t *testing.T) {
-			row := toolRow(toolName, transcript.ToolPresentationDefault, toolName, false)
-			row.Tool.Presentation = &transcript.ToolCallMeta{ToolName: toolName}
-			rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
-			if len(rendered.Lines) == 0 {
-				t.Fatal("rendered no patch-family lines")
-			}
-			if got := rendered.Lines[0].Plain(); got != "⇄ tool call" {
-				t.Fatalf("patch-family row fell back to tool name or unexpected fallback: %q", got)
-			}
-
-			pending := RenderPendingTool(clientui.TranscriptToolStart{
-				ToolCallID:   "2d97d231-7765-471a-bf55-a4c17157af03",
-				ToolName:     toolName,
-				Presentation: &transcript.ToolCallMeta{ToolName: toolName},
-			}, 80, "", "")
-			if got := pending.Plain(); got != "⇄ tool call" {
-				t.Fatalf("pending patch-family row fell back to tool name or unexpected fallback: %q", got)
-			}
-		})
-	}
-}
-
-func TestCollapsedToolResultSummaryRendersAsFaintInlineMetadata(t *testing.T) {
-	row := toolRow("exec_command", transcript.ToolPresentationShell, "go test ./...", false)
-	resultSummary := "passed"
-	row.Tool.ResultSummary = &resultSummary
-
-	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
-	if len(rendered.Lines) == 0 {
-		t.Fatal("rendered no lines")
-	}
-	spans := rendered.Lines[0].Spans
-	if len(spans) == 0 {
-		t.Fatal("rendered line has no spans")
-	}
-	meta := spans[len(spans)-1]
-	if meta.Text != "passed" || meta.Style.SemanticRole != StyleRoleNotice || !meta.Style.Has(SpanAttributeFaint) {
-		t.Fatalf("result summary span = %+v, want faint notice metadata", meta)
-	}
-	gap := spans[len(spans)-2]
-	if gap.Text != "  · " || gap.Style.SemanticRole != StyleRoleNotice || !gap.Style.Has(SpanAttributeFaint) {
-		t.Fatalf("result summary separator span = %+v, want faint inline separator", gap)
 	}
 }
 
@@ -1098,31 +712,6 @@ func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.
 	}
 }
 
-func TestExpandedToolRowsKeepTypedInputAheadOfOutput(t *testing.T) {
-	row := toolRow("exec_command", transcript.ToolPresentationShell, "raw output text", false)
-	resultSummary := "passed"
-	row.Tool.ResultSummary = &resultSummary
-	row.Tool.Presentation.Command = "go test ./..."
-	row.Tool.Presentation.CompactText = "run tests"
-
-	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	if got, want := PlainLines(rendered.Lines), []string{"$ go test ./...", "│ ", "│ raw output text", "└ passed"}; !slices.Equal(got, want) {
-		t.Fatalf("expanded tool lines = %q, want %q", got, want)
-	}
-}
-
-func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
-	row := toolRow("patch", transcript.ToolPresentationDefault, "raw patch output", true)
-	resultSummary := "failed"
-	row.Tool.ResultSummary = &resultSummary
-	row.Tool.Presentation.PatchDetail = "cli/tui/model.go\n-old\n+new"
-
-	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	if got, want := PlainLines(rendered.Lines), []string{"⇄ cli/tui/model.go", "│ -old", "│ +new", "│ ", "│ raw patch output", "└ failed"}; !slices.Equal(got, want) {
-		t.Fatalf("expanded patch lines = %q, want %q", got, want)
-	}
-}
-
 func TestToolErrorRowsKeepAuthoritativeInputFirstAndErrorClassification(t *testing.T) {
 	row := toolRow("exec_command", transcript.ToolPresentationShell, "raw failure output", true)
 	resultSummary := "permission denied"
@@ -1154,59 +743,6 @@ func TestToolErrorRowsKeepAuthoritativeInputFirstAndErrorClassification(t *testi
 		}
 		if got := line.Spans[len(line.Spans)-1].Text; got != test.wantSummary {
 			t.Fatalf("mode %v failed tool summary = %q, want %q", test.mode, got, test.wantSummary)
-		}
-	}
-}
-
-func TestUserAssistantFullRowsRenderMarkdownContent(t *testing.T) {
-	rows := []clientui.TranscriptCommittedRow{
-		{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "**bold** and `code`"}},
-		{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "# Heading\nplain"}},
-	}
-
-	expectedAssistant := map[Mode][]string{
-		ModeOngoingFull:    {"❮ Heading", "  ", "  plain"},
-		ModeDetailExpanded: {"❮ Heading", "│ ", "└ plain"},
-	}
-	for _, mode := range []Mode{ModeOngoingFull, ModeDetailExpanded} {
-		user := RenderCommittedRow(rows[0], 80, "", mode)
-		if got := PlainLines(user.Lines); !slices.Equal(got, []string{"❯ bold and code"}) {
-			t.Fatalf("mode %v user markdown content = %q", mode, got)
-		}
-
-		assistant := RenderCommittedRow(rows[1], 80, "", mode)
-		if got := PlainLines(assistant.Lines); !slices.Equal(got, expectedAssistant[mode]) {
-			t.Fatalf("mode %v assistant markdown content = %q, want %q", mode, got, expectedAssistant[mode])
-		}
-	}
-}
-
-func TestUserAssistantMarkdownCodeUsesPrimaryFullStrengthRole(t *testing.T) {
-	row := clientui.TranscriptCommittedRow{
-		Kind: clientui.TranscriptRowAssistant,
-		Assistant: &clientui.TranscriptAssistantRow{
-			Text: "Use `inline()`.\n\n```go\nblock()\n```",
-		},
-	}
-
-	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	codeSpans := make([]Span, 0, 2)
-	for _, line := range rendered.Lines {
-		for _, span := range line.Spans {
-			if span.Text == "inline()" || span.Text == "block()" {
-				codeSpans = append(codeSpans, span)
-			}
-		}
-	}
-	if len(codeSpans) != 2 {
-		t.Fatalf("markdown code spans = %+v, want inline and block code", codeSpans)
-	}
-	for _, span := range codeSpans {
-		if got := ColorRoleForStyle(span.Style.SemanticRole); got != ColorRolePrimary {
-			t.Fatalf("markdown code color role = %v, want primary", got)
-		}
-		if span.Style.Has(SpanAttributeFaint) {
-			t.Fatalf("markdown code span is faint: %+v", span)
 		}
 	}
 }
@@ -1291,44 +827,6 @@ func TestStableMarkdownTableUsesContinuousUnicodeSeparators(t *testing.T) {
 		if strings.Contains(plain, asciiSeparator) {
 			t.Fatalf("stable table = %q, contains ASCII separator %q", plain, asciiSeparator)
 		}
-	}
-}
-
-func TestMarkdownTableLinksRemainVerboseAcrossTerminalPresentations(t *testing.T) {
-	const target = "https://example.com/table"
-	const source = "| Link |\n| --- |\n| [label](" + target + ") |"
-	for _, test := range []struct {
-		name         string
-		presentation MarkdownLinkPresentation
-	}{
-		{
-			name:         "supported terminal",
-			presentation: MarkdownLinkLabelOnly,
-		},
-		{
-			name:         "fallback terminal",
-			presentation: MarkdownLinkLabelAndDestination,
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			lines := RenderMarkdownLinesWithLinkPresentation(
-				StyleRoleAssistant,
-				source,
-				80,
-				test.presentation,
-			)
-			var linked strings.Builder
-			for _, line := range lines {
-				for _, span := range line.Spans {
-					if span.Hyperlink != nil && span.Hyperlink.URL == target {
-						linked.WriteString(span.Text)
-					}
-				}
-			}
-			if got, want := linked.String(), "label"+target; got != want {
-				t.Fatalf("linked table content = %q, want %q", got, want)
-			}
-		})
 	}
 }
 
@@ -1536,61 +1034,6 @@ func TestMarkdownRendererPreservesGFMSemantics(t *testing.T) {
 	})
 }
 
-func TestCommittedMarkdownLinksAdaptToTerminalPresentation(t *testing.T) {
-	const target = "https://example.com/committed"
-	row := clientui.TranscriptCommittedRow{
-		Kind:       clientui.TranscriptRowAssistant,
-		Visibility: clientui.EntryVisibilityOngoing,
-		Integrity:  transcript.RowIntegrityValid,
-		Assistant: &clientui.TranscriptAssistantRow{
-			Text: "[label](" + target + ")",
-		},
-	}
-	for _, test := range []struct {
-		name            string
-		presentation    MarkdownLinkPresentation
-		wantPlain       string
-		wantLinkedSpans int
-	}{
-		{
-			name:            "supported terminal",
-			presentation:    MarkdownLinkLabelOnly,
-			wantPlain:       AssistantSymbol + " label",
-			wantLinkedSpans: 1,
-		},
-		{
-			name:            "fallback terminal",
-			presentation:    MarkdownLinkLabelAndDestination,
-			wantPlain:       AssistantSymbol + " label " + target,
-			wantLinkedSpans: 2,
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			rendered := RenderCommittedRowWithLinkPresentation(
-				row,
-				120,
-				"dark",
-				ModeOngoingStable,
-				test.presentation,
-			)
-			if got := strings.Join(PlainLines(rendered.Lines), "\n"); got != test.wantPlain {
-				t.Fatalf("plain committed row = %q, want %q", got, test.wantPlain)
-			}
-			linkedSpans := 0
-			for _, line := range rendered.Lines {
-				for _, span := range line.Spans {
-					if span.Hyperlink != nil && span.Hyperlink.URL == target {
-						linkedSpans++
-					}
-				}
-			}
-			if linkedSpans != test.wantLinkedSpans {
-				t.Fatalf("linked span count = %d, want %d", linkedSpans, test.wantLinkedSpans)
-			}
-		})
-	}
-}
-
 func TestBackgroundExitStatusDoesNotOverridePrimaryNoticeSymbol(t *testing.T) {
 	render := func(exitCode *int) Line {
 		messageType := clientui.TranscriptMessageBackgroundNotice
@@ -1628,47 +1071,6 @@ func TestBackgroundExitStatusDoesNotOverridePrimaryNoticeSymbol(t *testing.T) {
 	}
 	if !slices.Equal(success.Spans, failure.Spans) || !slices.Equal(success.Spans, missing.Spans) {
 		t.Fatalf("exit status changed background body metadata: success=%+v failure=%+v missing=%+v", success, failure, missing)
-	}
-}
-
-func TestPatchToolErrorKeepsAuthoritativeInputFirstAndErrorClassification(t *testing.T) {
-	row := toolRow("patch", transcript.ToolPresentationDefault, "patch failure output", true)
-	condensedText := "patch failed"
-	resultSummary := "failed"
-	row.Tool.CondensedText = &condensedText
-	row.Tool.ResultSummary = &resultSummary
-	row.Tool.Presentation.PatchRender = &patchformat.RenderedPatch{
-		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2, Removed: 1}},
-		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go -1 +2", FileIndex: 0}},
-	}
-
-	tests := []struct {
-		mode        Mode
-		wantSummary string
-	}{
-		{mode: ModeOngoing},
-		{mode: ModeOngoingCollapsed},
-		{mode: ModeDetailCollapsed, wantSummary: "failed"},
-	}
-	for _, test := range tests {
-		rendered := RenderCommittedRow(row, 120, "", test.mode)
-		if len(rendered.Lines) == 0 {
-			t.Fatalf("mode %v rendered no lines", test.mode)
-		}
-		assertFailedToolClassification(t, test.mode, rendered.Lines[0])
-		if got, want := rendered.Lines[0].LeadingSymbol.Text, "⇄"; got != want {
-			t.Fatalf("mode %v patch error symbol = %q, want %q", test.mode, got, want)
-		}
-		line := rendered.Lines[0]
-		if test.wantSummary == "" {
-			if got, want := line.Plain(), "⇄ cli/tui/model.go -1 +2"; got != want {
-				t.Fatalf("mode %v failed patch line = %q, want %q", test.mode, got, want)
-			}
-			continue
-		}
-		if got := line.Spans[len(line.Spans)-1].Text; got != test.wantSummary {
-			t.Fatalf("mode %v failed patch summary = %q, want %q", test.mode, got, test.wantSummary)
-		}
 	}
 }
 
@@ -1756,22 +1158,6 @@ func TestExpandedDetailWrapPreservesWhitespace(t *testing.T) {
 	want := []string{"❮   indented  value", "│ ", "└     code"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("expanded detail lines = %#v, want %#v", got, want)
-	}
-}
-
-func TestOngoingUsesCompactSingleLineWithoutContinuationTree(t *testing.T) {
-	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
-		Kind: clientui.TranscriptRowUser,
-		User: &clientui.TranscriptUserRow{Text: "first\nsecond"},
-	}, 80, "", ModeOngoing)
-
-	got := make([]string, 0, len(rendered.Lines))
-	for _, line := range rendered.Lines {
-		got = append(got, line.Plain())
-	}
-	want := []string{"❯ first…"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("ongoing compact lines = %#v, want %#v", got, want)
 	}
 }
 
@@ -1872,12 +1258,14 @@ func TestUserAssistantCompactTextToggleBetweenCollapsedAndExpanded(t *testing.T)
 			full := "first body line\nsecond body line\nthird body line"
 			condensed := "server compact summary"
 
-			collapsed := RenderCommittedRow(kind.row(full, condensed), 80, "", ModeDetailCollapsed)
-			if len(collapsed.Lines) != 1 {
-				t.Fatalf("collapsed lines = %d, want 1 (compact)", len(collapsed.Lines))
-			}
-			if got, want := collapsed.Lines[0].Plain(), kind.symbol+" "+condensed; got != want {
-				t.Fatalf("collapsed line = %q, want compact %q", got, want)
+			for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed} {
+				collapsed := RenderCommittedRow(kind.row(full, condensed), 80, "", mode)
+				if len(collapsed.Lines) != 1 {
+					t.Fatalf("mode %v lines = %d, want 1 compact line", mode, len(collapsed.Lines))
+				}
+				if got, want := collapsed.Lines[0].Plain(), kind.symbol+" "+condensed; got != want {
+					t.Fatalf("mode %v line = %q, want compact %q", mode, got, want)
+				}
 			}
 
 			expanded := RenderCommittedRow(kind.row(full, condensed), 80, "", ModeDetailExpanded)

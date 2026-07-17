@@ -3,12 +3,10 @@ package sessionservice
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 
 	"core/server/session"
-	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -21,7 +19,7 @@ type sessionTransition struct {
 	InitialInput                 string
 	TargetSessionID              string
 	ForkUserMessageSeq           int64
-	ParentSessionID              string
+	PreviousSessionID            *runtimeids.SessionID
 }
 
 type sessionTransitionResolveRequest struct {
@@ -56,85 +54,41 @@ func sessionRecoveryBuffersFromAPI(buffers []serverapi.SessionDraftRecoveryBuffe
 	}
 	out := make([]session.InputDraftRecoveryBuffer, 0, len(buffers))
 	for _, buffer := range buffers {
-		operationQueueItemID := ""
-		if buffer.OperationRef.QueueItemID != nil {
-			operationQueueItemID = buffer.OperationRef.QueueItemID.String()
-		}
 		out = append(out, session.InputDraftRecoveryBuffer{
-			Kind:                     string(buffer.Kind),
-			ID:                       strings.TrimSpace(buffer.ID),
-			ServerID:                 strings.TrimSpace(buffer.ServerID),
-			ClientRequestID:          strings.TrimSpace(buffer.ClientRequestID),
-			Text:                     buffer.Text,
-			OperationClientRequestID: buffer.OperationRef.ClientRequestID.String(),
-			OperationQueueItemID:     operationQueueItemID,
-			OperationKind:            string(buffer.OperationRef.Kind),
+			Kind: string(buffer.Kind),
+			Text: buffer.Text,
 		})
 	}
 	return out
 }
 
-func sessionRecoveryBuffersToAPI(buffers []session.InputDraftRecoveryBuffer) ([]serverapi.SessionDraftRecoveryBuffer, error) {
+func sessionRecoveryBuffersToAPI(buffers []session.InputDraftRecoveryBuffer) []serverapi.SessionDraftRecoveryBuffer {
 	if len(buffers) == 0 {
-		return nil, nil
+		return nil
 	}
 	out := make([]serverapi.SessionDraftRecoveryBuffer, 0, len(buffers))
-	for index, buffer := range buffers {
-		operationRef, err := sessionRecoveryOperationRef(buffer)
-		if err != nil {
-			return nil, fmt.Errorf("restore session draft recovery operation %d: %w", index, err)
-		}
+	for _, buffer := range buffers {
 		out = append(out, serverapi.SessionDraftRecoveryBuffer{
-			Kind:            serverapi.SessionDraftRecoveryBufferKind(strings.TrimSpace(buffer.Kind)),
-			ID:              strings.TrimSpace(buffer.ID),
-			ServerID:        strings.TrimSpace(buffer.ServerID),
-			ClientRequestID: strings.TrimSpace(buffer.ClientRequestID),
-			Text:            buffer.Text,
-			OperationRef:    operationRef,
+			Kind: serverapi.SessionDraftRecoveryBufferKind(buffer.Kind),
+			Text: buffer.Text,
 		})
 	}
-	return out, nil
-}
-
-func sessionRecoveryOperationRef(buffer session.InputDraftRecoveryBuffer) (clientui.RuntimeOperationRef, error) {
-	kind := clientui.RuntimeOperationKind(strings.TrimSpace(buffer.OperationKind))
-	if kind == "" {
-		return clientui.RuntimeOperationRef{}, nil
-	}
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(strings.TrimSpace(buffer.OperationClientRequestID))
-	if err != nil {
-		return clientui.RuntimeOperationRef{}, err
-	}
-	ref := clientui.RuntimeOperationRef{
-		Kind:            kind,
-		ClientRequestID: clientRequestID,
-	}
-	if rawQueueItemID := strings.TrimSpace(buffer.OperationQueueItemID); rawQueueItemID != "" {
-		queueItemID, err := runtimeids.ParseQueueItemID(rawQueueItemID)
-		if err != nil {
-			return clientui.RuntimeOperationRef{}, err
-		}
-		ref.QueueItemID = &queueItemID
-	}
-	if err := ref.Validate(); err != nil {
-		return clientui.RuntimeOperationRef{}, err
-	}
-	return ref, nil
+	return out
 }
 
 func resolveSessionTransition(_ context.Context, req sessionTransitionResolveRequest) (serverapi.SessionDirective, error) {
 	switch req.Transition.Action {
 	case serverapi.SessionTransitionActionNewSession:
-		parentID, err := optionalSessionID(req.Transition.ParentSessionID)
-		if err != nil {
-			return serverapi.SessionDirective{}, err
-		}
 		prompt, err := sessionInitialPromptMetadata(req.Transition.InitialPrompt, req.Transition.InitialPromptHistoryRecorded)
 		if err != nil {
 			return serverapi.SessionDirective{}, err
 		}
+		origin := serverapi.IndependentSessionCreateOrigin()
+		if req.Transition.PreviousSessionID != nil {
+			origin = serverapi.PreviousSessionCreateOrigin(*req.Transition.PreviousSessionID)
+		}
 		return serverapi.LaunchSessionDirective(
-			serverapi.CreateNewSessionLaunchIntent(parentID),
+			serverapi.CreateNewSessionLaunchIntent(origin),
 			serverapi.NewSessionLaunchPreparation(
 				prompt,
 				serverapi.RestoreStoredDraftSessionDraftDisposition(),
@@ -198,18 +152,6 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 			serverapi.SessionAuthPreparationKeepCurrent,
 		),
 	), nil
-}
-
-func optionalSessionID(raw string) (*runtimeids.SessionID, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil, nil
-	}
-	parsed, err := runtimeids.ParseSessionID(trimmed)
-	if err != nil {
-		return nil, err
-	}
-	return &parsed, nil
 }
 
 func sessionInitialPromptMetadata(text string, historyRecorded bool) (*serverapi.SessionInitialPromptMetadata, error) {

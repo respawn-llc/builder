@@ -42,17 +42,29 @@ func TestFinalizerDefaultEqualChoicesRenderLikeDefaults(t *testing.T) {
 
 func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndCompaction(t *testing.T) {
 	type want struct {
-		model      string
-		window     int
-		threshold  int
-		thinking   string
-		verbosity  config.ModelVerbosity
-		ask        *bool
-		supervisor string
-		compaction config.CompactionMode
+		model            string
+		window           int
+		threshold        int
+		thinking         string
+		verbosity        config.ModelVerbosity
+		enabledTools     map[toolspec.ID]bool
+		supervisor       string
+		reviewerModel    *string
+		reviewerThinking *string
+		compaction       config.CompactionMode
+		providerOverride *string
+		openAIBaseURL    *string
+		modelTimeout     *int
+		disabledSkill    *string
 	}
 	trueValue := true
 	falseValue := false
+	providerOverride := "openai"
+	openAIBaseURL := "http://127.0.0.1:8080/v1"
+	modelTimeout := 123
+	reviewerModel := "gpt-5.4"
+	reviewerThinking := "xhigh"
+	disabledSkill := "api result"
 	tests := []struct {
 		name string
 		req  serverapi.OnboardingFinalizeRequest
@@ -61,27 +73,40 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 		{
 			name: "known model large context level thinking verbosity true ask supervisor override native compaction",
 			req: serverapi.OnboardingFinalizeRequest{
+				MainProvider:  &serverapi.OnboardingProviderChoice{ProviderOverride: &providerOverride, OpenAIBaseURL: &openAIBaseURL},
 				Model:         &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5.4-mini"},
 				ContextWindow: &serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowLarge},
 				Thinking:      &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: "high"},
 				Verbosity:     ptr(serverapi.OnboardingVerbosityHigh),
 				AskQuestion:   &trueValue,
+				ToolOverrides: []serverapi.OnboardingToolOverride{
+					{ID: toolspec.ToolEdit, Enabled: true},
+					{ID: toolspec.ToolPatch, Enabled: false},
+				},
 				Supervisor: &serverapi.OnboardingSupervisorChoice{
 					Frequency: serverapi.OnboardingSupervisorAll,
 					Model:     &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5.4"},
 					Thinking:  &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingCustom, Value: "xhigh"},
 				},
-				Compaction: ptr(serverapi.OnboardingCompactionNative),
+				Compaction:          ptr(serverapi.OnboardingCompactionNative),
+				ModelTimeoutSeconds: &modelTimeout,
+				DisabledSkillNames:  []string{" API   Result "},
 			},
 			want: want{
-				model:      "gpt-5.4-mini",
-				window:     400_000,
-				threshold:  380_000,
-				thinking:   "high",
-				verbosity:  config.ModelVerbosityHigh,
-				ask:        &trueValue,
-				supervisor: "all",
-				compaction: config.CompactionModeNative,
+				model:            "gpt-5.4-mini",
+				window:           400_000,
+				threshold:        380_000,
+				thinking:         "high",
+				verbosity:        config.ModelVerbosityHigh,
+				enabledTools:     map[toolspec.ID]bool{toolspec.ToolAskQuestion: true, toolspec.ToolEdit: true, toolspec.ToolPatch: false},
+				supervisor:       "all",
+				reviewerModel:    &reviewerModel,
+				reviewerThinking: &reviewerThinking,
+				compaction:       config.CompactionModeNative,
+				providerOverride: &providerOverride,
+				openAIBaseURL:    &openAIBaseURL,
+				modelTimeout:     &modelTimeout,
+				disabledSkill:    &disabledSkill,
 			},
 		},
 		{
@@ -95,12 +120,14 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 				Compaction:    ptr(serverapi.OnboardingCompactionNone),
 			},
 			want: want{
-				model:      "custom-openai-model",
-				window:     123_456,
-				threshold:  117_283,
-				thinking:   "",
-				verbosity:  config.ModelVerbosityLow,
-				ask:        &falseValue,
+				model:     "custom-openai-model",
+				window:    123_456,
+				threshold: 117_283,
+				thinking:  "",
+				verbosity: config.ModelVerbosityLow,
+				enabledTools: map[toolspec.ID]bool{
+					toolspec.ToolAskQuestion: false,
+				},
 				supervisor: "off",
 				compaction: config.CompactionModeNone,
 			},
@@ -124,11 +151,28 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 			if cfg.Settings.ThinkingLevel != tc.want.thinking || cfg.Settings.ModelVerbosity != tc.want.verbosity {
 				t.Fatalf("thinking/verbosity = %q/%q, want %q/%q", cfg.Settings.ThinkingLevel, cfg.Settings.ModelVerbosity, tc.want.thinking, tc.want.verbosity)
 			}
-			if tc.want.ask != nil && cfg.Settings.EnabledTools[toolspec.ToolAskQuestion] != *tc.want.ask {
-				t.Fatalf("ask question = %t, want %t", cfg.Settings.EnabledTools[toolspec.ToolAskQuestion], *tc.want.ask)
+			for toolID, enabled := range tc.want.enabledTools {
+				if cfg.Settings.EnabledTools[toolID] != enabled {
+					t.Fatalf("tool %q enabled = %t, want %t", toolID, cfg.Settings.EnabledTools[toolID], enabled)
+				}
 			}
 			if cfg.Settings.Reviewer.Frequency != tc.want.supervisor || cfg.Settings.CompactionMode != tc.want.compaction {
 				t.Fatalf("supervisor/compaction = %q/%q, want %q/%q", cfg.Settings.Reviewer.Frequency, cfg.Settings.CompactionMode, tc.want.supervisor, tc.want.compaction)
+			}
+			if tc.want.reviewerModel != nil && (cfg.Settings.Reviewer.Model != *tc.want.reviewerModel || cfg.Settings.Reviewer.ThinkingLevel != *tc.want.reviewerThinking) {
+				t.Fatalf("reviewer model/thinking = %q/%q, want %q/%q", cfg.Settings.Reviewer.Model, cfg.Settings.Reviewer.ThinkingLevel, *tc.want.reviewerModel, *tc.want.reviewerThinking)
+			}
+			if tc.want.providerOverride != nil && (cfg.Settings.ProviderOverride != *tc.want.providerOverride || cfg.Settings.OpenAIBaseURL != *tc.want.openAIBaseURL) {
+				t.Fatalf("provider settings = %q/%q, want %q/%q", cfg.Settings.ProviderOverride, cfg.Settings.OpenAIBaseURL, *tc.want.providerOverride, *tc.want.openAIBaseURL)
+			}
+			if tc.want.modelTimeout != nil && cfg.Settings.Timeouts.ModelRequestSeconds != *tc.want.modelTimeout {
+				t.Fatalf("model timeout = %d, want %d", cfg.Settings.Timeouts.ModelRequestSeconds, *tc.want.modelTimeout)
+			}
+			if tc.want.disabledSkill != nil {
+				enabled, ok := cfg.Settings.SkillToggles[*tc.want.disabledSkill]
+				if !ok || enabled {
+					t.Fatalf("skill %q should be disabled: %+v", *tc.want.disabledSkill, cfg.Settings.SkillToggles)
+				}
 			}
 		})
 	}
@@ -148,45 +192,6 @@ func TestFinalizerAcceptsMinimumCustomContextWindow(t *testing.T) {
 	}
 	if effective := config.EffectivePreSubmitThresholdTokens(cfg.Settings.ContextCompactionThresholdTokens, cfg.Settings.PreSubmitCompactionLeadTokens); effective < config.MinimumThresholdTokens(cfg.Settings.ModelContextWindow) {
 		t.Fatalf("effective pre-submit threshold = %d below minimum", effective)
-	}
-}
-
-func TestFinalizerPreservesDisabledSupervisorThinking(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		Thinking: &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: "high"},
-		Supervisor: &serverapi.OnboardingSupervisorChoice{
-			Frequency: serverapi.OnboardingSupervisorAll,
-			Thinking:  &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDisabled},
-		},
-	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	cfg := loadFinalizedConfig(t, root)
-	if cfg.Settings.ThinkingLevel != "high" {
-		t.Fatalf("main thinking = %q, want high", cfg.Settings.ThinkingLevel)
-	}
-	if cfg.Settings.Reviewer.ThinkingLevel != "" {
-		t.Fatalf("reviewer thinking = %q, want disabled", cfg.Settings.Reviewer.ThinkingLevel)
-	}
-}
-
-func TestFinalizerDefaultSupervisorThinkingInheritsPrimaryThinking(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		Thinking: &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: "high"},
-		Supervisor: &serverapi.OnboardingSupervisorChoice{
-			Frequency: serverapi.OnboardingSupervisorAll,
-			Thinking:  &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDefault},
-		},
-	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	cfg := loadFinalizedConfig(t, root)
-	if cfg.Settings.ThinkingLevel != "high" || cfg.Settings.Reviewer.ThinkingLevel != "high" {
-		t.Fatalf("thinking/reviewer thinking = %q/%q, want high/high", cfg.Settings.ThinkingLevel, cfg.Settings.Reviewer.ThinkingLevel)
 	}
 }
 
@@ -232,56 +237,6 @@ func TestFinalizerAcceptsProviderDefaultVerbosityForCustomOpenAIModel(t *testing
 	cfg := loadFinalizedConfig(t, root)
 	if cfg.Settings.ModelVerbosity != config.ModelVerbosityHigh {
 		t.Fatalf("model verbosity = %q, want high", cfg.Settings.ModelVerbosity)
-	}
-}
-
-func TestFinalizerPersistsMainProviderChoice(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	providerOverride := "openai"
-	openAIBaseURL := "http://127.0.0.1:8080/v1"
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		MainProvider: &serverapi.OnboardingProviderChoice{
-			ProviderOverride: &providerOverride,
-			OpenAIBaseURL:    &openAIBaseURL,
-		},
-		Model: &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: "custom-openai-model"},
-	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	cfg := loadFinalizedConfig(t, root)
-	if cfg.Settings.ProviderOverride != providerOverride || cfg.Settings.OpenAIBaseURL != openAIBaseURL {
-		t.Fatalf("provider settings = %q/%q, want %q/%q", cfg.Settings.ProviderOverride, cfg.Settings.OpenAIBaseURL, providerOverride, openAIBaseURL)
-	}
-}
-
-func TestFinalizerPersistsToolOverrides(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		AskQuestion: ptr(true),
-		ToolOverrides: []serverapi.OnboardingToolOverride{
-			{ID: toolspec.ToolEdit, Enabled: true},
-			{ID: toolspec.ToolPatch, Enabled: false},
-		},
-	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	cfg := loadFinalizedConfig(t, root)
-	if !cfg.Settings.EnabledTools[toolspec.ToolAskQuestion] || !cfg.Settings.EnabledTools[toolspec.ToolEdit] || cfg.Settings.EnabledTools[toolspec.ToolPatch] {
-		t.Fatalf("enabled tools = %+v", cfg.Settings.EnabledTools)
-	}
-}
-
-func TestFinalizerPersistsModelTimeout(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	timeout := 123
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{ModelTimeoutSeconds: &timeout}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	if got := loadFinalizedConfig(t, root).Settings.Timeouts.ModelRequestSeconds; got != timeout {
-		t.Fatalf("model timeout = %d, want %d", got, timeout)
 	}
 }
 
@@ -332,124 +287,6 @@ func TestFinalizerImportsSelectedCapabilityFactSkillRoot(t *testing.T) {
 	if target != regularRoot {
 		t.Fatalf("skills symlink target = %q, want selected root %q", target, regularRoot)
 	}
-}
-
-func TestFinalizerImportsSelectedSkillRootWhenEarlierSameProviderRootFails(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".codex", "skills"), 0o755); err != nil {
-		t.Fatalf("mkdir codex skills parent: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".codex", "skills", "local"), []byte("not a directory"), 0o644); err != nil {
-		t.Fatalf("write earlier root blocker: %v", err)
-	}
-	regularRoot := filepath.Join(home, ".codex", "skills")
-	createSkillDirectory(t, filepath.Join(regularRoot, "regular-example"))
-	providerID := "codex"
-
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport: &serverapi.OnboardingImportSelection{
-			Mode:             serverapi.OnboardingImportModeSymlinkSource,
-			ImportProviderID: &providerID,
-			SourceRootPath:   &regularRoot,
-		},
-	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	target, err := os.Readlink(filepath.Join(root, "skills"))
-	if err != nil {
-		t.Fatalf("read skills symlink: %v", err)
-	}
-	if target != regularRoot {
-		t.Fatalf("skills symlink target = %q, want selected root %q", target, regularRoot)
-	}
-}
-
-func TestFinalizerImportsSelectedCommandRootWhenEarlierSameProviderRootFails(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	commandsParent := filepath.Join(home, ".codex")
-	if err := os.MkdirAll(commandsParent, 0o755); err != nil {
-		t.Fatalf("mkdir codex parent: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(commandsParent, "commands"), []byte("not a directory"), 0o644); err != nil {
-		t.Fatalf("write earlier command root blocker: %v", err)
-	}
-	promptsRoot := filepath.Join(commandsParent, "prompts")
-	if err := os.MkdirAll(promptsRoot, 0o755); err != nil {
-		t.Fatalf("mkdir prompts root: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(promptsRoot, "example.md"), []byte("command"), 0o644); err != nil {
-		t.Fatalf("write prompt command: %v", err)
-	}
-	providerID := "codex"
-
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		CommandsImport: &serverapi.OnboardingImportSelection{
-			Mode:             serverapi.OnboardingImportModeSymlinkSource,
-			ImportProviderID: &providerID,
-			SourceRootPath:   &promptsRoot,
-		},
-	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	target, err := os.Readlink(filepath.Join(root, "prompts"))
-	if err != nil {
-		t.Fatalf("read prompts symlink: %v", err)
-	}
-	if target != promptsRoot {
-		t.Fatalf("prompts symlink target = %q, want selected root %q", target, promptsRoot)
-	}
-}
-
-func TestFinalizerDiscoversSymlinkedProviderSkillDirectories(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	providerUUID := providerUUIDForHomeEntry(t, ".claude")
-	realSkillDir := filepath.Join(t.TempDir(), "example")
-	if err := os.MkdirAll(realSkillDir, 0o755); err != nil {
-		t.Fatalf("mkdir real skill source: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(realSkillDir, "SKILL.md"), []byte("---\nname: Example\ndescription: Example skill\n---\nBody\n"), 0o644); err != nil {
-		t.Fatalf("write skill metadata: %v", err)
-	}
-	skillsRoot := filepath.Join(home, ".claude", "skills")
-	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
-		t.Fatalf("mkdir provider skills root: %v", err)
-	}
-	if err := os.Symlink(realSkillDir, filepath.Join(skillsRoot, "example")); err != nil {
-		t.Fatalf("symlink provider skill: %v", err)
-	}
-
-	resp, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
-	})
-	if err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	if !resp.Completed {
-		t.Fatal("expected finalize completion")
-	}
-	assertSymlink(t, filepath.Join(root, "skills"))
-}
-
-func TestFinalizerIgnoresUnrelatedProviderDiscoveryErrors(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	providerUUID := createProviderSkillSource(t, home, ".claude")
-	if err := os.MkdirAll(filepath.Join(home, ".codex", "skills"), 0o755); err != nil {
-		t.Fatalf("mkdir codex skills parent: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".codex", "skills", "local"), []byte("not a directory"), 0o644); err != nil {
-		t.Fatalf("write unrelated provider blocker: %v", err)
-	}
-
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
-		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
-	}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	assertSymlink(t, filepath.Join(root, "skills"))
 }
 
 func TestFinalizerReturnsSelectedProviderDiscoveryError(t *testing.T) {
@@ -575,21 +412,6 @@ func TestFinalizerSkipsImportDiscoveryWhenNoImportsRequested(t *testing.T) {
 	}
 	if !resp.Completed {
 		t.Fatal("expected finalize completion")
-	}
-	if _, err := os.Stat(filepath.Join(root, "config.toml")); err != nil {
-		t.Fatalf("expected config file: %v", err)
-	}
-}
-
-func TestFinalizerDoesNotRequireHomeWithoutImports(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("HOME", "")
-	finalizer, err := onboarding.NewFinalizer(onboarding.Options{PersistenceRoot: root, SettingsPath: filepath.Join(root, "config.toml")})
-	if err != nil {
-		t.Fatalf("NewFinalizer: %v", err)
-	}
-	if _, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "config.toml")); err != nil {
 		t.Fatalf("expected config file: %v", err)
@@ -746,38 +568,6 @@ func TestFinalizerRejectsNonV4ProviderUUID(t *testing.T) {
 	})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeInvalidRequest) {
 		t.Fatalf("error = %v, want invalid_request", err)
-	}
-}
-
-func TestFinalizerWritesDisabledSkillNamesWithoutDiscovery(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	finalizer := newTestFinalizer(t, root, home)
-
-	if _, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{DisabledSkillNames: []string{"apiresult"}}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	cfg, err := config.LoadGlobal(config.LoadOptions{ConfigRoot: root})
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	enabled, ok := cfg.Settings.SkillToggles["apiresult"]
-	if !ok || enabled {
-		t.Fatalf("skill toggle should be disabled: %+v", cfg.Settings.SkillToggles)
-	}
-}
-
-func TestFinalizerNormalizesDisabledSkillNames(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-
-	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{DisabledSkillNames: []string{" API   Result "}}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	cfg := loadFinalizedConfig(t, root)
-	enabled, ok := cfg.Settings.SkillToggles["api result"]
-	if !ok || enabled {
-		t.Fatalf("skill toggle should be normalized and disabled: %+v", cfg.Settings.SkillToggles)
 	}
 }
 

@@ -191,6 +191,7 @@ type Settings struct {
 	Workflow                         WorkflowSettings
 	Reviewer                         ReviewerSettings
 	Subagents                        map[string]SubagentRole
+	MaxSubagentDepth                 int
 	PreventSleep                     SleepPreventionMode
 }
 

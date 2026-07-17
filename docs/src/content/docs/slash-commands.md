@@ -13,7 +13,7 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 | `/new` | none | Start a new session without stopping active work in the current session. |
 | `/resume` | none | Open the session picker without stopping active work in the current session. |
 | `/login` | none | Open auth options. |
-| `/compact <instructions>` | optional free-form text | Compact the current context. Trailing text is passed through as **additional** compaction instructions. |
+| `/compact <instructions>` | optional free-form text | Compact the current context. Trailing text is passed through as **additional** compaction instructions. Active non-workflow goals continue in the resumed context. |
 | `/name <title>` | optional free-form text | Set the session title. Empty input resets. |
 | <code>/thinking &lt;low&#124;medium&#124;high&#124;xhigh&#124;max&#124;ultra&gt;</code> | optional single value | Set the thinking level. Empty input shows the current level. |
 | <code>/fast [on&#124;off&#124;status]</code> | optional single value | Toggle or inspect Fast mode; |

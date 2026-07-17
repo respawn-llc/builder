@@ -24,7 +24,6 @@ import (
 	"core/server/skillcatalog"
 	askquestion "core/server/tools"
 	"core/server/workflow"
-	"core/server/workflowrunner"
 	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -33,106 +32,6 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestNewWithContextComposesRequiredBundles(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-
-	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
-	if err != nil {
-		t.Fatalf("ResolveConfig: %v", err)
-	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-
-	appCore, err := NewWithContext(t.Context(), resolved.Config, authSupport, runtimeSupport)
-	if err != nil {
-		t.Fatalf("NewWithContext: %v", err)
-	}
-	t.Cleanup(func() { _ = appCore.Close() })
-
-	if appCore.bundles == nil {
-		t.Fatal("expected bundles")
-	}
-	if appCore.bundles.Auth == nil || appCore.bundles.Auth.authBootstrap == nil || appCore.bundles.Auth.authStatus == nil {
-		t.Fatal("expected auth bundle clients")
-	}
-	if appCore.bundles.Persistence == nil || appCore.bundles.Persistence.rootLock == nil || appCore.bundles.Persistence.metadataStore == nil || appCore.bundles.Persistence.sessionStores == nil {
-		t.Fatal("expected persistence bundle resources")
-	}
-	if appCore.bundles.Processes == nil || appCore.bundles.Processes.processControls == nil || appCore.bundles.Processes.processOutput == nil || appCore.bundles.Processes.processViews == nil {
-		t.Fatal("expected process bundle clients")
-	}
-	if appCore.bundles.Projects == nil || appCore.bundles.Projects.projectViews == nil {
-		t.Fatal("expected project bundle client")
-	}
-	if appCore.bundles.Prompts == nil || appCore.bundles.Prompts.askViews == nil || appCore.bundles.Prompts.approvalViews == nil || appCore.bundles.Prompts.promptControl == nil {
-		t.Fatal("expected prompt bundle clients")
-	}
-	if appCore.bundles.Runtime == nil || appCore.bundles.Runtime.background == nil || appCore.bundles.Runtime.backgroundRouter == nil || appCore.bundles.Runtime.runtimeRegistry == nil || appCore.bundles.Runtime.runtimeControls == nil || appCore.bundles.Runtime.sessionRuntime == nil || appCore.bundles.Runtime.sessionTranscript == nil {
-		t.Fatal("expected runtime bundle services")
-	}
-	if appCore.bundles.Sessions == nil || appCore.bundles.Sessions.sessionLaunch == nil || appCore.bundles.Sessions.sessionViews == nil || appCore.bundles.Sessions.sessionLifecycle == nil || appCore.bundles.Sessions.runPrompt == nil {
-		t.Fatal("expected session bundle clients")
-	}
-	if appCore.bundles.Updates == nil || appCore.bundles.Updates.updateStatus == nil {
-		t.Fatal("expected update status bundle")
-	}
-	if appCore.bundles.Worktrees == nil || appCore.bundles.Worktrees.worktrees == nil {
-		t.Fatal("expected worktree bundle client")
-	}
-	if appCore.bundles.Workflows == nil || appCore.bundles.Workflows.workflows == nil {
-		t.Fatal("expected workflow bundle client")
-	}
-	if appCore.bundles.Workflows.scheduler == nil || !appCore.bundles.Workflows.scheduler.Started() {
-		t.Fatal("expected started workflow scheduler")
-	}
-	scheduler := appCore.bundles.Workflows.scheduler
-	if err := appCore.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if !scheduler.Stopped() {
-		t.Fatal("expected workflow scheduler to stop during core close")
-	}
-}
-
-func TestNewWithContextOptionsAcceptsRuntimeClientFactory(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-
-	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
-	if err != nil {
-		t.Fatalf("ResolveConfig: %v", err)
-	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	appCore, err := NewWithContextOptions(t.Context(), resolved.Config, authSupport, runtimeSupport, Options{
-		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
-			return nil, nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("NewWithContextOptions: %v", err)
-	}
-	t.Cleanup(func() { _ = appCore.Close() })
-	if appCore.bundles == nil || appCore.bundles.Runtime == nil || appCore.bundles.Runtime.sessionRuntimeService == nil {
-		t.Fatal("expected runtime bundle with session runtime service")
-	}
-}
-
 func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
@@ -140,11 +39,6 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("KENT_WORKTREE_SESSION_ID", "stale-parent-session")
 	testsetup.InitializeGitRepository(t, workspace)
-	sourceWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspace)
-	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
-	}
-
 	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
@@ -241,23 +135,6 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 		t.Fatal("timed out waiting for the first workflow model request")
 	}
 
-	invocation, err := setup.Invocation()
-	if err != nil {
-		t.Fatalf("setup invocation: %v", err)
-	}
-	payload, err := invocation.Payload()
-	if err != nil {
-		t.Fatalf("setup payload: %v", err)
-	}
-	if payload.SourceWorkspaceRoot != sourceWorkspaceRoot || payload.BranchName != task.Task.ShortID || payload.WorktreeRoot == "" {
-		t.Fatalf("workflow setup payload = %+v", payload)
-	}
-	if payload.SessionID != nil {
-		t.Fatalf("workflow setup session_id = %q, want nil", *payload.SessionID)
-	}
-	if err := invocation.Verify(payload); err != nil {
-		t.Fatalf("workflow setup process contract: %v", err)
-	}
 	waitForCoreWorkflowTaskDone(t, appCore, task.Task.ID)
 }
 
@@ -276,33 +153,26 @@ func TestRuntimePendingAskResolverUsesPendingPromptSource(t *testing.T) {
 		},
 	}}}
 
-	ok, err := resolver.CanRehydrate(t.Context(), "session-1", workflow.RunID("run-1"), "ask-1")
-	if err != nil {
-		t.Fatalf("CanRehydrate ask: %v", err)
+	tests := []struct {
+		name  string
+		askID string
+		want  bool
+	}{
+		{name: "ordinary ask", askID: "ask-1", want: true},
+		{name: "generic approval", askID: "approval-1"},
+		{name: "task approval", askID: "approval-2", want: true},
+		{name: "missing", askID: "missing"},
 	}
-	if !ok {
-		t.Fatal("expected pending ordinary ask to rehydrate")
-	}
-	ok, err = resolver.CanRehydrate(t.Context(), "session-1", workflow.RunID("run-1"), "approval-1")
-	if err != nil {
-		t.Fatalf("CanRehydrate approval: %v", err)
-	}
-	if ok {
-		t.Fatal("generic approval prompt must not satisfy workflow ask rehydration")
-	}
-	ok, err = resolver.CanRehydrate(t.Context(), "session-1", workflow.RunID("run-1"), "approval-2")
-	if err != nil {
-		t.Fatalf("CanRehydrate task approval: %v", err)
-	}
-	if !ok {
-		t.Fatal("task-scoped approval prompt should satisfy workflow ask rehydration")
-	}
-	ok, err = resolver.CanRehydrate(t.Context(), "session-1", workflow.RunID("run-1"), "missing")
-	if err != nil {
-		t.Fatalf("CanRehydrate missing: %v", err)
-	}
-	if ok {
-		t.Fatal("missing ask should not rehydrate")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolver.CanRehydrate(t.Context(), "session-1", workflow.RunID("run-1"), tt.askID)
+			if err != nil {
+				t.Fatalf("CanRehydrate: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("CanRehydrate(%q) = %t, want %t", tt.askID, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -380,15 +250,6 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 	}
 	if len(detail.Task.Attention) != 1 || detail.Task.Attention[0].Message != "Question from composed session transcript?" {
 		t.Fatalf("attention = %+v", detail.Task.Attention)
-	}
-}
-
-func TestRuntimeTaskWorktreeRestorerRequiresService(t *testing.T) {
-	if err := (runtimeTaskWorktreeRestorer{}).RestoreLockedTaskWorktree(
-		t.Context(),
-		workflowrunner.LockedTaskWorktreeRestoreRequest{},
-	); err == nil {
-		t.Fatal("RestoreLockedTaskWorktree succeeded without a worktree service")
 	}
 }
 

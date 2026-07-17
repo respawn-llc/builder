@@ -18,19 +18,19 @@ func (e *Engine) RunWhenIdle(ctx context.Context, activeKind ActiveKind, fn func
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	for {
-		err := e.stepLifecycle.Run(ctx, exclusiveStepOptions{ActiveKind: activeKind}, func(context.Context, string) error {
-			return fn()
-		})
-		if !errors.Is(err, ErrAgentBusy) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(queuedUserSubmissionBusyRetryDelay):
-		}
+	return runExclusiveStepWhenIdle(ctx, e.stepLifecycle, activeKind, nil, func(context.Context, string) error {
+		return fn()
+	})
+}
+
+func runExclusiveStepWhenIdle(ctx context.Context, steps exclusiveStepLifecycle, activeKind ActiveKind, reservation *exclusiveStepReservation, fn func(context.Context, string) error) error {
+	if steps == nil {
+		return errors.New("exclusive step lifecycle is required")
 	}
+	if fn == nil {
+		return nil
+	}
+	return steps.RunNext(ctx, exclusiveStepOptions{ActiveKind: activeKind, Reservation: reservation}, fn)
 }
 
 func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind ActiveKind, fn func() error) error {

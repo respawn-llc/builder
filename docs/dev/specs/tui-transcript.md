@@ -113,6 +113,7 @@
 - `worktree_mode`: `O`
 - `worktree_mode_exit`: `O`
 - `goal`: `O`
+- `active_goal_continuation`: `D`
 - Thinking-level feedback from `/thinking` is not rendered as a transcript row in ongoing or detail. The TUI surfaces thinking level through the status-line model label/reasoning segment instead of neutral transcript notices.
 - Locked non-message roles:
 - user turns: `O`
@@ -143,6 +144,7 @@
 - Compaction summaries and manual compaction carryover use secondary text.
 - Handoff future-agent context rows use the faint foreground system-notice style.
 - Goal-related rows use primary text.
+- Active-goal continuation initialization uses a developer-context row with compact label `Goal nudge`. The ordinary active-goal continuation nudge reuses the same compact label; goal set, pause, resume, completion, and clear feedback keep their existing compact presentation.
 - Workflow-related rows use primary text and `OC` visibility.
 - Worktree-enter rows use the faint foreground system-notice style.
 - Worktree-exit rows use full-strength foreground text.
@@ -259,11 +261,12 @@
 - `/copy` and `/back` share one correlated operation. Lookup is bounded to one second; while lookup is owned, the main input consumes user keys and no duplicate lookup or navigation starts. A stale, duplicate, wrong-purpose, wrong-session, or wrong-parent result is ignored without a state change.
 - A `/copy` success retains operation ownership through its bounded clipboard write. The matching clipboard completion is the only event that releases that ownership, so writes cannot overlap or reorder. Lookup, clipboard, and transport failures are surfaced distinctly.
 - `/review` auto-submits embedded review rubric; it stays in-place for empty sessions and forks fresh child session after a visible user prompt.
-- `/back` reads the child session's durable final answer before reopening its parent. A present answer pre-fills the parent input byte-for-byte; true absence opens the parent with an empty prefill; lookup failure leaves the child session open.
+- `/back` reads the child session's durable final answer before reopening its previous session through authoritative global session identity, including when the target belongs to another project. When no previous-session relationship exists, it falls back to the parent-agent session for a delegated session later opened interactively. A present answer pre-fills the target input byte-for-byte; true absence opens the target with an empty prefill; lookup failure leaves the child session open.
 - `/supervisor` toggles current-session reviewer invocation and does not persist to config.
 - `/autocompaction` toggles runtime auto-compaction for current session and does not persist to config.
 - `/fast`, `/supervisor`, and `/questions` toggle feedback is a committed runtime transcript entry in runtime-backed sessions.
 - `/status` opens a read-only detail overlay and refreshes progressively.
+- `/status` shows previous-session and parent-agent-session provenance as separate labeled facts when each relationship is present.
 - Built-in prompt commands use embedded Markdown templates.
 - File-backed prompts come from local/global `.kent/prompts` and `.kent/commands`; scan is non-recursive `.md`, namespace precedence is local over global and prompts over commands.
 - File command ID is `prompt:<filename-without-extension>` and submits file content verbatim as user message.

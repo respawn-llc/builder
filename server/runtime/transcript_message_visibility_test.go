@@ -20,6 +20,7 @@ func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
 		{name: "worktree mode", messageType: llm.MessageTypeWorktreeMode, want: transcript.EntryVisibilityOngoing},
 		{name: "worktree exit", messageType: llm.MessageTypeWorktreeModeExit, want: transcript.EntryVisibilityOngoing},
 		{name: "goal", messageType: llm.MessageTypeGoal, want: transcript.EntryVisibilityOngoing},
+		{name: "active goal continuation", messageType: llm.MessageTypeActiveGoalContinuation, want: transcript.EntryVisibilityDetail},
 		{name: "background notice", messageType: llm.MessageTypeBackgroundNotice, want: transcript.EntryVisibilityOngoingCollapsed},
 		{name: "custom tool output", messageType: llm.MessageTypeCustomToolCallOutput, want: transcript.EntryVisibilityOngoing},
 	}

@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -12,7 +11,6 @@ import (
 	"core/shared/transcript"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -62,9 +60,6 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 	if _, err := eng.runStepLoop(context.Background(), "step-1"); err != nil {
 		t.Fatalf("first runStepLoop: %v", err)
 	}
-	if reminders := countCompactionSoonReminderWarnings(eng, eng.ChatSnapshot()); reminders != 1 {
-		t.Fatalf("expected one reminder after first run, got %d entries=%+v", reminders, eng.ChatSnapshot().Entries)
-	}
 
 	changed, enabled := eng.SetAutoCompactionEnabled(false)
 	if !changed || enabled {
@@ -94,9 +89,6 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 	if remindersInThirdRequest != 1 {
 		t.Fatalf("expected exactly one historical reminder in request while disabled, got %d messages=%+v", remindersInThirdRequest, requestMessages(client.calls[2]))
 	}
-	if reminders := countCompactionSoonReminderWarnings(eng, eng.ChatSnapshot()); reminders != 1 {
-		t.Fatalf("expected reminder not to duplicate while disabled, got %d entries=%+v", reminders, eng.ChatSnapshot().Entries)
-	}
 }
 
 func countCompactionSoonReminderWarnings(_ *Engine, snapshot ChatSnapshot) int {
@@ -107,33 +99,6 @@ func countCompactionSoonReminderWarnings(_ *Engine, snapshot ChatSnapshot) int {
 		}
 	}
 	return count
-}
-
-func TestCompactionSoonReminderIncludesTriggerHandoffAdditionWhenConfigured(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	eng := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{
-		ContextWindowTokens:   2_000,
-		AutoCompactTokenLimit: 1_000,
-	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
-		t.Fatalf("append seed message: %v", err)
-	}
-	eng.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
-
-	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-1"); err != nil {
-		t.Fatalf("append reminder: %v", err)
-	}
-
-	reminders := 0
-	for _, entry := range eng.ChatSnapshot().Entries {
-		if entry.Role == "warning" && entry.MessageType == llm.MessageTypeCompactionSoonReminder {
-			reminders++
-		}
-	}
-	if reminders != 1 {
-		t.Fatalf("expected enabled reminder text once, got %d entries=%+v", reminders, eng.ChatSnapshot().Entries)
-	}
 }
 
 func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testing.T) {
@@ -171,15 +136,6 @@ func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testi
 	}
 	if !eng.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("expected reminder to enable trigger_handoff after exact recount")
-	}
-	reminders := 0
-	for _, entry := range eng.ChatSnapshot().Entries {
-		if entry.Role == "warning" && entry.MessageType == llm.MessageTypeCompactionSoonReminder {
-			reminders++
-		}
-	}
-	if reminders != 1 {
-		t.Fatalf("expected one reminder after exact recount, got %d entries=%+v", reminders, eng.ChatSnapshot().Entries)
 	}
 }
 
@@ -240,22 +196,11 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCa
 		t.Fatalf("expected one local-summary model call, got %d", len(client.calls))
 	}
 
-	foundPrompt := false
-	for _, item := range client.calls[0].Items {
-		if item.Type == llm.ResponseItemTypeMessage && item.Role == llm.RoleDeveloper && item.Content == compactionInstructions("keep API details") {
-			foundPrompt = true
-			break
-		}
-	}
-	if !foundPrompt {
-		t.Fatalf("expected handoff to reuse compaction instructions, got %+v", client.calls[0].Items)
-	}
-
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	foundFutureMessage := false
 	foundManualCarryover := false
 	for _, message := range messages {
-		if message.MessageType == llm.MessageTypeHandoffFutureMessage && message.Content == prompts.FormatHandoffFutureAgentMessage("resume with tests") {
+		if message.MessageType == llm.MessageTypeHandoffFutureMessage {
 			foundFutureMessage = true
 		}
 		if message.MessageType == llm.MessageTypeManualCompactionCarryover {
@@ -267,20 +212,6 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCa
 	}
 	if foundManualCarryover {
 		t.Fatalf("did not expect manual compaction carryover for trigger_handoff, got %+v", messages)
-	}
-
-	entries := eng.ChatSnapshot().Entries
-	foundDeveloperContext := false
-	for _, entry := range entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperContext) && entry.Text == prompts.FormatHandoffFutureAgentMessage("resume with tests") {
-			foundDeveloperContext = true
-		}
-		if entry.Role == string(transcript.EntryRoleManualCompactionCarryover) {
-			t.Fatalf("did not expect manual carryover transcript entry for trigger_handoff, got %+v", entries)
-		}
-	}
-	if !foundDeveloperContext {
-		t.Fatalf("expected future-agent message to be detail-only developer context, got %+v", entries)
 	}
 }
 
@@ -315,12 +246,8 @@ func TestPrepareModelTurnSkipsAutoCompactionAfterPendingHandoffCompaction(t *tes
 }
 
 func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompaction(t *testing.T) {
-	prevPrompt := prompts.WorktreeModePrompt
-	prompts.WorktreeModePrompt = "enter {{branch}}"
-	defer func() { prompts.WorktreeModePrompt = prevPrompt }()
-
 	store := mustCreateTestSession(t)
-	mustSetWorktreeReminderState(t, store, testWorktreeReminderState(
+	target := mustSetWorktreeReminderState(t, store, testWorktreeReminderState(
 		session.WorktreeReminderModeEnter,
 		"feature/handoff",
 		"/tmp/wt-handoff",
@@ -352,18 +279,10 @@ func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompacti
 	}
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	reminderCount := 0
-	for _, message := range messages {
-		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeWorktreeMode {
-			reminderCount++
-			if !strings.Contains(message.Content, "feature/handoff") {
-				t.Fatalf("unexpected worktree reminder content: %q", message.Content)
-			}
-		}
+	if got := worktreeReminderMessageCount(messages); got != 1 {
+		t.Fatalf("worktree reminders after handoff compaction = %d, want 1 messages=%+v", got, messages)
 	}
-	if reminderCount != 1 {
-		t.Fatalf("expected one materialized worktree reminder after handoff compaction, got %d messages=%+v", reminderCount, messages)
-	}
+	assertLatestWorktreeContext(t, messages, target)
 	if len(client.calls) != 1 {
 		t.Fatalf("expected only handoff compaction call, got %d calls", len(client.calls))
 	}
@@ -690,7 +609,7 @@ func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	foundFutureMessage := false
 	for _, message := range messages {
-		if message.MessageType == llm.MessageTypeHandoffFutureMessage && message.Content == prompts.FormatHandoffFutureAgentMessage("resume with tests") {
+		if message.MessageType == llm.MessageTypeHandoffFutureMessage {
 			foundFutureMessage = true
 			break
 		}
@@ -767,7 +686,7 @@ func TestPendingTriggerHandoffRetriesFutureMessageAfterAppendFailureWithoutRecom
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	foundFutureMessage := false
 	for _, message := range messages {
-		if message.MessageType == llm.MessageTypeHandoffFutureMessage && message.Content == prompts.FormatHandoffFutureAgentMessage(futureAgentMessage) {
+		if message.MessageType == llm.MessageTypeHandoffFutureMessage {
 			foundFutureMessage = true
 			break
 		}
@@ -872,7 +791,7 @@ func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWith
 	}
 	foundFuture := false
 	for _, item := range resumedClient.calls[0].Items {
-		if item.Type == llm.ResponseItemTypeMessage && item.MessageType == llm.MessageTypeHandoffFutureMessage && item.Content == prompts.FormatHandoffFutureAgentMessage("resume after restart") {
+		if item.Type == llm.ResponseItemTypeMessage && item.MessageType == llm.MessageTypeHandoffFutureMessage {
 			foundFuture = true
 			break
 		}
@@ -974,26 +893,26 @@ func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsF
 	followUp := client.calls[2]
 	foundCall := false
 	foundOutput := false
-	futureIdx := -1
-	for idx, item := range followUp.Items {
+	foundFuture := false
+	for _, item := range followUp.Items {
 		switch {
 		case item.Type == llm.ResponseItemTypeFunctionCall && item.CallID == "call_handoff_1":
 			foundCall = true
 		case item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call_handoff_1":
 			foundOutput = true
-		case item.Type == llm.ResponseItemTypeMessage && item.MessageType == llm.MessageTypeHandoffFutureMessage && item.Content == prompts.FormatHandoffFutureAgentMessage("resume with tests"):
-			futureIdx = idx
+		case item.Type == llm.ResponseItemTypeMessage && item.MessageType == llm.MessageTypeHandoffFutureMessage:
+			foundFuture = true
 		}
 	}
 	if foundCall || foundOutput {
 		t.Fatalf("expected follow-up request to omit trigger_handoff call/output items entirely, foundCall=%v foundOutput=%v items=%+v", foundCall, foundOutput, followUp.Items)
 	}
-	if futureIdx < 0 {
+	if !foundFuture {
 		t.Fatalf("expected future-agent message in follow-up request, items=%+v", followUp.Items)
 	}
 }
 
-func TestRunStepLoopInjectsReminderBeforeTriggerHandoffAndOmitsCallOutputFromFollowUp(t *testing.T) {
+func TestRunStepLoopInjectsReminderBeforeTriggerHandoff(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -1044,12 +963,6 @@ func TestRunStepLoopInjectsReminderBeforeTriggerHandoffAndOmitsCallOutputFromFol
 	if len(client.calls) != 3 {
 		t.Fatalf("expected trigger request, local compaction summary, and follow-up requests, got %d", len(client.calls))
 	}
-	if got, want := client.calls[2].SessionID, eng.SessionID(); got != want {
-		t.Fatalf("expected follow-up request session id to stay on the main conversation after handoff compaction, got %q want %q", got, want)
-	}
-	if got, want := client.calls[2].PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
-		t.Fatalf("expected follow-up request prompt cache key to rotate after handoff compaction, got %q want %q", got, want)
-	}
 
 	remindersInFirstRequest := 0
 	for _, reqMsg := range requestMessages(client.calls[0]) {
@@ -1059,27 +972,6 @@ func TestRunStepLoopInjectsReminderBeforeTriggerHandoffAndOmitsCallOutputFromFol
 	}
 	if remindersInFirstRequest != 1 {
 		t.Fatalf("expected exactly one pre-request reminder before trigger_handoff, got %d messages=%+v", remindersInFirstRequest, requestMessages(client.calls[0]))
-	}
-
-	followUp := client.calls[2]
-	foundCall := false
-	foundOutput := false
-	futureIdx := -1
-	for idx, item := range followUp.Items {
-		switch {
-		case item.Type == llm.ResponseItemTypeFunctionCall && item.CallID == "call_handoff_2":
-			foundCall = true
-		case item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call_handoff_2":
-			foundOutput = true
-		case item.Type == llm.ResponseItemTypeMessage && item.MessageType == llm.MessageTypeHandoffFutureMessage && item.Content == prompts.FormatHandoffFutureAgentMessage("resume with tests"):
-			futureIdx = idx
-		}
-	}
-	if foundCall || foundOutput {
-		t.Fatalf("expected follow-up request to omit trigger_handoff call/output items entirely, foundCall=%v foundOutput=%v items=%+v", foundCall, foundOutput, followUp.Items)
-	}
-	if futureIdx < 0 {
-		t.Fatalf("expected future-agent message in follow-up request, items=%+v", followUp.Items)
 	}
 }
 

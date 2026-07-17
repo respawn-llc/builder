@@ -216,9 +216,11 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						PromptID: string(req.PromptID),
 						Approval: &clientui.ApprovalPromptAnswer{Decision: decision, Commentary: commentary},
 					}
-					if queueCmd := m.enqueueInjectedInputWithApprovalAnswer(commentary, &resp); queueCmd != nil {
-						m.ask.answerPending = true
-						return m, queueCmd
+					if decision != clientui.ApprovalDecisionDeny {
+						if queueCmd := m.enqueueInjectedInputWithApprovalAnswer(commentary, &resp); queueCmd != nil {
+							m.ask.answerPending = true
+							return m, queueCmd
+						}
 					}
 					_, hasNext := c.answer(resp, nil)
 					if hasNext {

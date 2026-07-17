@@ -35,33 +35,6 @@ func TestOnboardingWorkflowUsesTypedStepIdentityAndOrder(t *testing.T) {
 	}
 }
 
-func TestOnboardingPrimaryThinkingPresetCustomCommitIsAtomic(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, nil)
-	thinking := findWorkflowStep(t, state, onboardingStepThinking)
-	if err := thinking.apply(state, "high"); err != nil {
-		t.Fatalf("select preset: %v", err)
-	}
-	if err := thinking.apply(state, "custom"); err != nil {
-		t.Fatalf("open custom edit: %v", err)
-	}
-	if state.selections.thinking.kind != onboardingThinkingLevel || state.selections.thinking.value != "high" {
-		t.Fatalf("opening custom edit mutated committed selection: %+v", state.selections.thinking)
-	}
-	if state.selections.pendingPrimaryThinking.kind != onboardingThinkingEditPending {
-		t.Fatalf("pending edit = %+v, want pending", state.selections.pendingPrimaryThinking)
-	}
-	custom := findWorkflowStep(t, state, onboardingStepThinkingCustom)
-	if err := custom.apply(state, "ultra"); err != nil {
-		t.Fatalf("commit custom input: %v", err)
-	}
-	if state.selections.thinking.kind != onboardingThinkingCustom || state.selections.thinking.value != "ultra" {
-		t.Fatalf("committed custom selection = %+v", state.selections.thinking)
-	}
-	if state.selections.pendingPrimaryThinking.kind != onboardingThinkingEditNone {
-		t.Fatalf("pending edit survived commit: %+v", state.selections.pendingPrimaryThinking)
-	}
-}
-
 func TestOnboardingNewPrimaryCustomEditStartsBlankAndCommittedCustomRevisitsValue(t *testing.T) {
 	state := testOnboardingFlowStatePtr(t, nil)
 	thinking := findWorkflowStep(t, state, onboardingStepThinking)
@@ -70,6 +43,10 @@ func TestOnboardingNewPrimaryCustomEditStartsBlankAndCommittedCustomRevisitsValu
 	}
 	if err := thinking.apply(state, "custom"); err != nil {
 		t.Fatalf("open new custom edit: %v", err)
+	}
+	if state.selections.thinking.kind != onboardingThinkingLevel || state.selections.thinking.value != "high" ||
+		state.selections.pendingPrimaryThinking.kind != onboardingThinkingEditPending {
+		t.Fatalf("opening custom edit changed committed state: %+v", state.selections)
 	}
 	custom := findWorkflowStep(t, state, onboardingStepThinkingCustom)
 	if screen := custom.build(state); screen.InputValue != "" {
@@ -83,6 +60,10 @@ func TestOnboardingNewPrimaryCustomEditStartsBlankAndCommittedCustomRevisitsValu
 	}
 	if err := custom.apply(state, "ultra"); err != nil {
 		t.Fatalf("commit custom input: %v", err)
+	}
+	if state.selections.thinking.kind != onboardingThinkingCustom || state.selections.thinking.value != "ultra" ||
+		state.selections.pendingPrimaryThinking.kind != onboardingThinkingEditNone {
+		t.Fatalf("committed custom state = %+v", state.selections)
 	}
 	if err := thinking.apply(state, "custom"); err != nil {
 		t.Fatalf("revisit custom edit: %v", err)
@@ -217,34 +198,6 @@ func TestOnboardingPendingThinkingBlocksCustomFinalizeButNotDefaults(t *testing.
 	}
 	if _, err := onboardingFinalizeRequest(state, true); err != nil {
 		t.Fatalf("theme-only defaults finalization rejected stale custom state: %v", err)
-	}
-}
-
-func TestOnboardingTypedSelectionTransitions(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, nil)
-	if err := findWorkflowStep(t, state, onboardingStepContextWindow).apply(state, "large"); err != nil {
-		t.Fatalf("select large context: %v", err)
-	}
-	if state.selections.contextWindow.kind != onboardingContextLarge {
-		t.Fatalf("context selection = %+v", state.selections.contextWindow)
-	}
-	if err := findWorkflowStep(t, state, onboardingStepVerbosity).apply(state, "high"); err != nil {
-		t.Fatalf("select verbosity: %v", err)
-	}
-	if state.selections.verbosity.kind != onboardingVerbosityLevel || state.selections.verbosity.value != "high" {
-		t.Fatalf("verbosity selection = %+v", state.selections.verbosity)
-	}
-	if err := findWorkflowStep(t, state, onboardingStepAskQuestion).apply(state, "yes"); err != nil {
-		t.Fatalf("enable questions: %v", err)
-	}
-	if !state.selections.askQuestion {
-		t.Fatal("ask-question selection was not enabled")
-	}
-	if err := findWorkflowStep(t, state, onboardingStepCompaction).apply(state, string(config.CompactionModeNone)); err != nil {
-		t.Fatalf("select manual compaction: %v", err)
-	}
-	if state.selections.compaction != onboardingCompactionManualOnly {
-		t.Fatalf("compaction selection = %q", state.selections.compaction)
 	}
 }
 

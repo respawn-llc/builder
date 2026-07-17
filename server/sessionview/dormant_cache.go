@@ -138,7 +138,9 @@ func buildDormantTranscriptCacheEntryWithMode(_ context.Context, store *session.
 func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clientui.ConversationFreshness) clientui.RuntimeMainView {
 	status := clientui.RuntimeStatus{
 		ConversationFreshness:             freshness,
-		ParentSessionID:                   textutil.Pointer(meta.ParentSessionID),
+		PreviousSessionID:                 textutil.Pointer(meta.PreviousSessionID),
+		ParentAgentSessionID:              textutil.Pointer(meta.ParentAgentSessionID),
+		NavigationTargetSessionID:         session.NavigationTargetSessionID(meta),
 		LastCommittedAssistantFinalAnswer: e.lastCommittedAssistantAnswer,
 		Goal:                              runtimeview.GoalFromSessionState(meta.Goal, false),
 	}

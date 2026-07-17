@@ -269,6 +269,8 @@ var (
 	CompactionSoonReminderPrompt                     = mustPrompt("compaction_soon_reminder.md")
 	CompactionSoonReminderTriggerHandoffPrompt       = mustPrompt("compaction_soon_reminder_trigger_handoff.md")
 	GoalNudgePrompt                                  = mustPrompt("goal/nudge.md")
+	GoalContinuationGuidancePrompt                   = mustPrompt("goal/continuation_guidance.md")
+	ActiveGoalContinuationPrompt                     = mustPrompt("goal/active_goal_continuation.md")
 	GoalSetPrompt                                    = mustPrompt("goal/set.md")
 	GoalPausePrompt                                  = mustPrompt("goal/pause.md")
 	GoalResumePrompt                                 = mustPrompt("goal/resume.md")
@@ -376,6 +378,32 @@ type goalPromptData struct {
 	Status        string
 }
 
+type goalContinuationGuidanceTemplateData struct {
+	LaunchCommand string
+}
+
+type goalNudgeTemplateData struct {
+	Objective      string
+	SharedGuidance string
+}
+
+type activeGoalContinuationTemplateData struct {
+	GoalText       string
+	SharedGuidance string
+}
+
+func renderGoalContinuationGuidance() string {
+	rendered, err := renderNamedTemplate(
+		"goal continuation guidance",
+		GoalContinuationGuidancePrompt,
+		goalContinuationGuidanceTemplateData{LaunchCommand: LaunchCommand()},
+	)
+	if err != nil {
+		panic(err)
+	}
+	return rendered
+}
+
 func renderGoalPrompt(name, text, objective, status string) string {
 	rendered, err := renderNamedTemplate(name, text, goalPromptData{
 		LaunchCommand: LaunchCommand(),
@@ -389,7 +417,30 @@ func renderGoalPrompt(name, text, objective, status string) string {
 }
 
 func RenderGoalNudgePrompt(objective, status string) string {
-	return renderGoalPrompt("goal nudge", GoalNudgePrompt, objective, status)
+	_ = status
+	rendered, err := renderNamedTemplate("goal nudge", GoalNudgePrompt, goalNudgeTemplateData{
+		Objective:      strings.TrimSpace(objective),
+		SharedGuidance: renderGoalContinuationGuidance(),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return rendered
+}
+
+func RenderActiveGoalContinuationPrompt(goalText string) string {
+	rendered, err := renderNamedTemplate(
+		"active goal continuation",
+		ActiveGoalContinuationPrompt,
+		activeGoalContinuationTemplateData{
+			GoalText:       goalText,
+			SharedGuidance: renderGoalContinuationGuidance(),
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+	return rendered
 }
 
 func RenderGoalSetPrompt(objective string) string {

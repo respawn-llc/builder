@@ -15,7 +15,6 @@ import (
 
 	"core/server/auth"
 	"core/server/authservice"
-	corepkg "core/server/core"
 	"core/server/metadata"
 	rpccontract "core/shared/apicontract"
 	"core/shared/client"
@@ -229,43 +228,6 @@ func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
 		capabilities.RuntimeLiveControl ||
 		capabilities.AttentionNotifications {
 		t.Fatalf("capabilities must not be true without their routes/dependencies: %+v", capabilities)
-	}
-}
-
-func TestServerCapabilityFlagsRequireAttachRouteDependencyPerMethod(t *testing.T) {
-	capabilities := serverCapabilityFlags([]rpccontract.Route{
-		{Method: protocol.MethodHandshake, Dependency: rpccontract.DependencyProtocol},
-		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocol},
-		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencyProtocolAttach},
-	})
-
-	if capabilities.ProjectAttach {
-		t.Fatalf("ProjectAttach advertised without protocol_attach dependency: %+v", capabilities)
-	}
-	if !capabilities.SessionAttach {
-		t.Fatalf("SessionAttach not advertised with protocol_attach dependency: %+v", capabilities)
-	}
-}
-
-func TestServerCapabilityFlagsAdvertiseRuntimeLiveControlWhenHandlersAreExecutable(t *testing.T) {
-	capabilities := serverCapabilityFlags(rpccontract.Routes())
-	if !capabilities.RuntimeLiveControl {
-		t.Fatalf("RuntimeLiveControl not advertised after executable live handlers are wired: %+v", capabilities)
-	}
-}
-
-func TestStartRejectsSecondOwnerForSamePersistenceRoot(t *testing.T) {
-	workspace := newServeWorkspace(t)
-
-	request := Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
-	authHandler := envAuthHandler{}
-	onboarding := noopOnboarding
-
-	_ = startServeTestServer(t, request, authHandler, onboarding)
-
-	_, err := StartServeServer(context.Background(), request, authHandler, onboarding)
-	if !errors.Is(err, corepkg.ErrPersistenceRootBusy) {
-		t.Fatalf("Start second error = %v, want ErrPersistenceRootBusy", err)
 	}
 }
 

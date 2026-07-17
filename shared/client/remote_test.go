@@ -13,6 +13,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"golang.org/x/net/websocket"
@@ -38,17 +39,8 @@ func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
 }
 
 func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
-	sessionID := " \t "
-	if _, err := dialRemoteWithTransport(
-		t.Context(),
-		remoteDialPlan{},
-		nil,
-		"",
-		"",
-		"",
-		&sessionID,
-	); !errors.Is(err, errRemoteSessionIDRequired) {
-		t.Fatalf("dial error = %v, want required session ID error", err)
+	if _, err := newRemoteSessionAttachmentIntent(" \t "); !errors.Is(err, errRemoteSessionIDRequired) {
+		t.Fatalf("intent error = %v, want required session ID error", err)
 	}
 }
 
@@ -75,6 +67,53 @@ func acceptRemoteHandshake(t *testing.T, ws *websocket.Conn) protocol.Request {
 		t.Fatalf("send handshake response: %v", err)
 	}
 	return req
+}
+
+func TestRemotePersistInputDraftSendsInertRecoveryBuffers(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Fatalf("receive persist input draft: %v", err)
+		}
+		if request.Method != protocol.MethodSessionPersistInputDraft {
+			t.Fatalf("method = %q, want %q", request.Method, protocol.MethodSessionPersistInputDraft)
+		}
+		var decoded serverapi.SessionPersistInputDraftRequest
+		if err := json.Unmarshal(request.Params, &decoded); err != nil {
+			t.Fatalf("decode persist input draft: %v", err)
+		}
+		want := []serverapi.SessionDraftRecoveryBuffer{{
+			Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+			Text: "pending steering",
+		}}
+		if !reflect.DeepEqual(decoded.RecoveryBuffers, want) {
+			t.Fatalf("recovery buffers = %+v, want %+v", decoded.RecoveryBuffers, want)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.SessionPersistInputDraftResponse{})); err != nil {
+			t.Fatalf("send persist input draft response: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	_, err = remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
+		ClientRequestID: "draft-1",
+		SessionID:       "session-1",
+		Input:           "visible draft",
+		RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{{
+			Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+			Text: "pending steering",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("PersistInputDraft: %v", err)
+	}
 }
 
 func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
@@ -113,7 +152,7 @@ func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	var updates []serverapi.RunPromptProgress
-	resp, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hello"}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+	resp, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 		updates = append(updates, progress)
 	}))
 	if err != nil {
@@ -130,7 +169,7 @@ func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 	}
 }
 
-func TestRemoteRunPromptCarriesCallerLineageAndExplicitDefault(t *testing.T) {
+func TestRemoteRunPromptCarriesTypedParentAgentOriginAndExplicitDefault(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		acceptRemoteHandshake(t, ws)
 		var req protocol.Request
@@ -147,10 +186,13 @@ func TestRemoteRunPromptCarriesCallerLineageAndExplicitDefault(t *testing.T) {
 		if err := json.Unmarshal(req.Params, &decoded); err != nil {
 			t.Fatalf("decode run prompt params: %v", err)
 		}
+		origin, present := decoded.Intent.CreateOrigin()
+		sourceID, hasSource := origin.SessionID()
 		if decoded.CallerSessionID == nil || *decoded.CallerSessionID != "caller-session" ||
-			decoded.ParentSessionID == nil || *decoded.ParentSessionID != "parent-session" ||
+			!present || origin.Kind() != serverapi.SessionCreateOriginParentAgent ||
+			!hasSource || sourceID.String() != "parent-session" ||
 			decoded.Overrides.AgentRole == nil || *decoded.Overrides.AgentRole != "default" {
-			t.Fatalf("decoded request = %+v, want present caller/parent/default selector", decoded)
+			t.Fatalf("decoded request = %+v, want caller/parent-agent origin/default selector", decoded)
 		}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RunPromptResponse{SessionID: "session-1", Result: "done"})); err != nil {
 			t.Fatalf("send response: %v", err)
@@ -166,8 +208,8 @@ func TestRemoteRunPromptCarriesCallerLineageAndExplicitDefault(t *testing.T) {
 	role := "default"
 	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{
 		ClientRequestID: "present",
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))),
 		CallerSessionID: &caller,
-		ParentSessionID: &parent,
 		Prompt:          "hello",
 		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
 	}, nil); err != nil {
@@ -175,7 +217,7 @@ func TestRemoteRunPromptCarriesCallerLineageAndExplicitDefault(t *testing.T) {
 	}
 }
 
-func TestInProcessAndRemoteRunPromptPreserveNullableProvenanceAndSelectors(t *testing.T) {
+func TestLoopbackAndRemoteRunPromptPreserveTypedIntentCallerAndSelectors(t *testing.T) {
 	caller := "caller-session"
 	parent := "parent-session"
 	defaultRole := "default"
@@ -184,10 +226,10 @@ func TestInProcessAndRemoteRunPromptPreserveNullableProvenanceAndSelectors(t *te
 		name string
 		req  serverapi.RunPromptRequest
 	}{
-		{name: "human omitted", req: serverapi.RunPromptRequest{ClientRequestID: "human-omitted", Prompt: "hello"}},
-		{name: "new child omitted selector", req: serverapi.RunPromptRequest{ClientRequestID: "new-omitted", CallerSessionID: &caller, ParentSessionID: &parent, Prompt: "hello"}},
-		{name: "selected explicit default", req: serverapi.RunPromptRequest{ClientRequestID: "selected-default", SelectedSessionID: "selected-session", CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}}},
-		{name: "selected custom", req: serverapi.RunPromptRequest{ClientRequestID: "selected-worker", SelectedSessionID: "selected-session", CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &worker}}},
+		{name: "human independent", req: serverapi.RunPromptRequest{ClientRequestID: "human-omitted", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}},
+		{name: "new child omitted selector", req: serverapi.RunPromptRequest{ClientRequestID: "new-omitted", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))), CallerSessionID: &caller, Prompt: "hello"}},
+		{name: "selected explicit default", req: serverapi.RunPromptRequest{ClientRequestID: "selected-default", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}}},
+		{name: "selected custom", req: serverapi.RunPromptRequest{ClientRequestID: "selected-worker", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &worker}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,20 +296,69 @@ func TestRemoteRunPromptDecodesTypedPolicyDenial(t *testing.T) {
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	_, err = remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "denied", Prompt: "hello"}, nil)
+	_, err = remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "denied", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, nil)
 	var denied *serverapi.SubagentLaunchDeniedError
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable || denied.Target == nil || *denied.Target != target {
 		t.Fatalf("RunPrompt error = %T %v, want typed hidden-target denial", err, err)
 	}
 }
 
+func TestRemoteRunPromptPreservesTypedSubagentDepthPolicyWithoutProgress(t *testing.T) {
+	source := protocol.NewMaxDepthExceededSubagentLaunchPolicyError(1, 0)
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Fatalf("receive run prompt: %v", err)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(
+			request.ID,
+			source.RPCErrorCode(),
+			source.Error(),
+			source.RPCErrorData(),
+		)); err != nil {
+			t.Fatalf("send typed policy error: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	var progresses []serverapi.RunPromptProgress
+	_, err = remote.RunPrompt(
+		context.Background(),
+		serverapi.RunPromptRequest{
+			ClientRequestID: "depth-policy",
+			Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			Prompt:          "delegate",
+		},
+		serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+			progresses = append(progresses, progress)
+		}),
+	)
+	var decoded *protocol.SubagentLaunchPolicyError
+	if !errors.As(err, &decoded) ||
+		decoded.Kind != protocol.SubagentLaunchPolicyMaxDepthExceeded ||
+		decoded.AttemptedDepth == nil || *decoded.AttemptedDepth != 1 ||
+		decoded.MaxDepth == nil || *decoded.MaxDepth != 0 {
+		t.Fatalf("RunPrompt error = %T %+v, want typed maximum-depth policy", err, decoded)
+	}
+	if len(progresses) != 0 {
+		t.Fatalf("rejected remote run published progress: %+v", progresses)
+	}
+}
+
 func assertSameRunPromptWireContract(t *testing.T, got serverapi.RunPromptRequest, want serverapi.RunPromptRequest) {
 	t.Helper()
 	if got.ClientRequestID != want.ClientRequestID ||
-		got.SelectedSessionID != want.SelectedSessionID ||
+		!got.Intent.Equal(want.Intent) ||
 		got.Prompt != want.Prompt ||
-		serverapi.CanonicalOptionalString(got.CallerSessionID) != serverapi.CanonicalOptionalString(want.CallerSessionID) ||
-		serverapi.CanonicalOptionalString(got.ParentSessionID) != serverapi.CanonicalOptionalString(want.ParentSessionID) {
+		serverapi.CanonicalOptionalString(got.CallerSessionID) != serverapi.CanonicalOptionalString(want.CallerSessionID) {
 		t.Fatalf("provenance request = %+v, want %+v", got, want)
 	}
 	gotOverrides, err := got.Overrides.CanonicalKey()
@@ -281,6 +372,15 @@ func assertSameRunPromptWireContract(t *testing.T, got serverapi.RunPromptReques
 	if !reflect.DeepEqual(gotOverrides, wantOverrides) {
 		t.Fatalf("selector/overrides = %+v, want %+v", gotOverrides, wantOverrides)
 	}
+}
+
+func mustRemoteSessionID(t *testing.T, raw string) runtimeids.SessionID {
+	t.Helper()
+	id, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		t.Fatalf("ParseSessionID(%q): %v", raw, err)
+	}
+	return id
 }
 
 func TestRemoteGetsLatestCommittedAssistantFinalAnswer(t *testing.T) {
@@ -325,7 +425,7 @@ func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(
 		if req.Method != protocol.MethodAttachSession {
 			t.Fatalf("expected attach-session before transcript subscribe, got %q", req.Method)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "session", SessionID: "session-1"})); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", "session-1"))); err != nil {
 			t.Fatalf("send attach response: %v", err)
 		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -387,7 +487,7 @@ func TestRemoteSessionTranscriptSubscriptionPreservesTypedCloseReason(t *testing
 			}
 			t.Fatalf("receive attach session: %v", err)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "session", SessionID: "session-1"})); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", "session-1"))); err != nil {
 			t.Fatalf("send attach response: %v", err)
 		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -541,7 +641,7 @@ func TestRemoteProcessOutputSubscriptionAttachesProjectBeforeSubscribe(t *testin
 		if attach.ProjectID != "project-1" {
 			t.Fatalf("attach project id = %q, want project-1", attach.ProjectID)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "project", ProjectID: attach.ProjectID})); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, attach.ProjectID, "workspace-1", "/workspace"))); err != nil {
 			return
 		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -591,7 +691,7 @@ func TestDialRemoteURLForProjectAttachesProjectAndReturnsRemote(t *testing.T) {
 		if attach.ProjectID != "project-1" {
 			t.Fatalf("attach project id = %q, want project-1", attach.ProjectID)
 		}
-		_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "project", ProjectID: attach.ProjectID}))
+		_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, attach.ProjectID, "workspace-1", "/server/workspace")))
 	})
 
 	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
@@ -601,6 +701,12 @@ func TestDialRemoteURLForProjectAttachesProjectAndReturnsRemote(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 	if got := remote.ProjectID(); got != "project-1" {
 		t.Fatalf("ProjectID = %q, want project-1", got)
+	}
+	if got := remote.WorkspaceID(); got != "workspace-1" {
+		t.Fatalf("WorkspaceID = %q, want workspace-1", got)
+	}
+	if got := remote.WorkspaceRoot(); got != "/server/workspace" {
+		t.Fatalf("WorkspaceRoot = %q, want /server/workspace", got)
 	}
 	if got := remote.Identity().ServerID; got != "server-1" {
 		t.Fatalf("server id = %q, want server-1", got)
@@ -623,10 +729,7 @@ func TestDialRemoteURLForSessionAttachesSessionBeforeUnaryCalls(t *testing.T) {
 		if attach.SessionID != "session-1" {
 			t.Fatalf("attach session id = %q, want session-1", attach.SessionID)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{
-			Kind:      "session",
-			SessionID: attach.SessionID,
-		})); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", attach.SessionID))); err != nil {
 			t.Fatalf("send attach response: %v", err)
 		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -695,6 +798,128 @@ func TestDialRemoteURLForProjectValidatesAttachProject(t *testing.T) {
 	}
 }
 
+func TestDialRemoteURLForProjectRejectsMalformedAttachmentResponse(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			return
+		}
+		if req.Method != protocol.MethodAttachProject {
+			t.Fatalf("method = %q, want attach project", req.Method)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, map[string]any{
+			"kind":           "project",
+			"project_id":     "project-1",
+			"workspace_id":   "workspace-1",
+			"workspace_root": "",
+		})); err != nil {
+			t.Fatalf("send malformed attach response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
+	if err == nil {
+		if remote != nil {
+			_ = remote.Close()
+		}
+		t.Fatal("expected malformed attachment response error")
+	}
+}
+
+func TestDialRemoteURLForProjectRejectsMismatchedAttachmentResponse(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			return
+		}
+		if req.Method != protocol.MethodAttachProject {
+			t.Fatalf("method = %q, want attach project", req.Method)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "other-project", "workspace-1", "/workspace"))); err != nil {
+			t.Fatalf("send mismatched attach response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], "project-1")
+	if err == nil {
+		if remote != nil {
+			_ = remote.Close()
+		}
+		t.Fatal("expected mismatched attachment response error")
+	}
+}
+
+func TestDialRemoteURLForProjectWorkspaceRejectsDifferentRootAttachment(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			return
+		}
+		var attach protocol.AttachProjectRequest
+		if err := json.Unmarshal(req.Params, &attach); err != nil {
+			t.Fatalf("decode attach-project: %v", err)
+		}
+		wrongRequest, err := protocol.AttachProjectRequestForWorkspaceRoot("project-1", "/workspace-b")
+		if err != nil {
+			t.Fatalf("wrong attach request: %v", err)
+		}
+		response, err := protocol.ProjectAttachResponseForRequest(wrongRequest, "workspace-b", "/workspace-b")
+		if err != nil {
+			t.Fatalf("wrong attach response: %v", err)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
+			t.Fatalf("send mismatched attach response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURLForProjectWorkspace(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		"project-1",
+		"/workspace-a",
+	)
+	if err == nil {
+		if remote != nil {
+			_ = remote.Close()
+		}
+		t.Fatal("expected mismatched workspace root response error")
+	}
+}
+
+func TestDialRemoteURLForProjectWorkspaceAcceptsServerCanonicalRoot(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			return
+		}
+		var attach protocol.AttachProjectRequest
+		if err := json.Unmarshal(req.Params, &attach); err != nil {
+			t.Fatalf("decode attach-project: %v", err)
+		}
+		response, err := protocol.ProjectAttachResponseForRequest(attach, "workspace-1", "/canonical/workspace")
+		if err != nil {
+			t.Fatalf("attach response: %v", err)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
+			t.Fatalf("send attach response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURLForProjectWorkspace(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		"project-1",
+		"/workspace-alias",
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProjectWorkspace: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	if got := remote.WorkspaceRoot(); got != "/canonical/workspace" {
+		t.Fatalf("WorkspaceRoot = %q, want canonical root", got)
+	}
+}
+
 func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 	var attachCount atomic.Int32
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
@@ -709,7 +934,15 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 			switch req.Method {
 			case protocol.MethodAttachProject:
 				attachCount.Add(1)
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "project", ProjectID: "project-1", WorkspaceRoot: "/tmp/attached"}))
+				var attach protocol.AttachProjectRequest
+				if err := json.Unmarshal(req.Params, &attach); err != nil {
+					t.Fatalf("decode attach-project: %v", err)
+				}
+				response, err := protocol.ProjectAttachResponseForRequest(attach, "workspace-1", "/tmp/attached")
+				if err != nil {
+					t.Fatalf("attach response: %v", err)
+				}
+				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response))
 			case protocol.MethodProjectResolvePath:
 				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectResolvePathResponse{CanonicalRoot: "/tmp/workspace-a"}))
 			case protocol.MethodProjectPlanWorkspaceBinding:
@@ -771,36 +1004,27 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 	}
 }
 
-func TestProtocolErrorMapsPromptTerminalCodes(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodePromptNotFound, Message: "missing"}); !errors.Is(err, serverapi.ErrPromptNotFound) {
-		t.Fatalf("expected prompt not found, got %v", err)
-	}
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodePromptResolved, Message: "resolved"}); !errors.Is(err, serverapi.ErrPromptAlreadyResolved) {
-		t.Fatalf("expected prompt already resolved, got %v", err)
-	}
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodePromptUnsupported, Message: "unsupported"}); !errors.Is(err, serverapi.ErrPromptUnsupported) {
-		t.Fatalf("expected prompt unsupported, got %v", err)
-	}
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeMethodNotFound, Message: "missing method"}); !errors.Is(err, serverapi.ErrMethodNotFound) {
-		t.Fatalf("expected rpc method not found, got %v", err)
-	}
-}
-
-func TestProtocolErrorMapsWorkflowTaskNotFoundCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskNotFound, Message: "missing task"}); !errors.Is(err, serverapi.ErrWorkflowTaskNotFound) {
-		t.Fatalf("expected workflow task not found, got %v", err)
-	}
-}
-
-func TestProtocolErrorMapsWorkflowTaskCompleteAmbiguousCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskCompleteAmbiguous, Message: "ambiguous completion target"}); !errors.Is(err, serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous) {
-		t.Fatalf("expected ambiguous workflow task completion target, got %v", err)
-	}
-}
-
-func TestProtocolErrorMapsWorkflowTaskCompleteNotFoundCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskCompleteNotFound, Message: "missing completion target"}); !errors.Is(err, serverapi.ErrWorkflowTaskCompleteTargetNotFound) {
-		t.Fatalf("expected missing workflow task completion target, got %v", err)
+func TestProtocolErrorMapsSentinelCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+		want error
+	}{
+		{name: "prompt not found", code: protocol.ErrCodePromptNotFound, want: serverapi.ErrPromptNotFound},
+		{name: "prompt resolved", code: protocol.ErrCodePromptResolved, want: serverapi.ErrPromptAlreadyResolved},
+		{name: "prompt unsupported", code: protocol.ErrCodePromptUnsupported, want: serverapi.ErrPromptUnsupported},
+		{name: "method not found", code: protocol.ErrCodeMethodNotFound, want: serverapi.ErrMethodNotFound},
+		{name: "workflow task not found", code: protocol.ErrCodeWorkflowTaskNotFound, want: serverapi.ErrWorkflowTaskNotFound},
+		{name: "workflow completion ambiguous", code: protocol.ErrCodeWorkflowTaskCompleteAmbiguous, want: serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous},
+		{name: "workflow completion target missing", code: protocol.ErrCodeWorkflowTaskCompleteNotFound, want: serverapi.ErrWorkflowTaskCompleteTargetNotFound},
+		{name: "auth required", code: protocol.ErrCodeAuthRequired, want: serverapi.ErrServerAuthRequired},
+		{name: "runtime unavailable", code: protocol.ErrCodeRuntimeUnavailable, want: serverapi.ErrRuntimeUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := protocolError(&protocol.ResponseError{Code: tc.code, Message: tc.name}); !errors.Is(err, tc.want) {
+				t.Fatalf("protocol error = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -823,25 +1047,6 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	if decoded.Kind != source.Kind || decoded.MissingScope == nil || *decoded.MissingScope != missing || len(decoded.ProjectIDs) != 2 || decoded.ProjectIDs[0] != "project-1" || decoded.ProjectIDs[1] != "project-2" {
 		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
 	}
-}
-
-func TestProtocolErrorDecodesSessionRetargetError(t *testing.T) {
-	source := &serverapi.SessionRetargetError{
-		Reason:        serverapi.SessionRetargetTargetProjectRequired,
-		SessionID:     "session-1",
-		SourceProject: serverapi.ProjectReference{ID: "project-source", Name: "Source"},
-		TargetRoot:    "/work/target",
-		CandidateProjects: []serverapi.ProjectReference{{
-			ID:   "project-target",
-			Name: "Target",
-		}},
-	}
-	err := protocolError(&protocol.ResponseError{
-		Code:    protocol.ErrCodeSessionRetarget,
-		Message: source.Error(),
-		Data:    source.RPCErrorData(),
-	})
-	assertRemoteSessionRetargetError(t, err, source)
 }
 
 func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
@@ -892,20 +1097,6 @@ func assertRemoteSessionRetargetError(t *testing.T, err error, source *serverapi
 		len(decoded.CandidateProjects) != len(source.CandidateProjects) ||
 		decoded.CandidateProjects[0] != source.CandidateProjects[0] {
 		t.Fatalf("decoded session retarget error = %+v, want %+v", decoded, source)
-	}
-}
-
-func TestProtocolErrorDecodesWorktreeStructuredErrors(t *testing.T) {
-	operationID := serverapi.NewWorktreeOperationID()
-	for _, source := range remoteTestWorktreeStructuredErrors(operationID) {
-		t.Run(source.Error(), func(t *testing.T) {
-			err := protocolError(&protocol.ResponseError{
-				Code:    source.RPCErrorCode(),
-				Message: source.Error(),
-				Data:    source.RPCErrorData(),
-			})
-			assertRemoteWorktreeStructuredError(t, err, source, operationID)
-		})
 	}
 }
 
@@ -1040,18 +1231,6 @@ func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
 	}
 	if decoded.Cause != source.Cause {
 		t.Fatalf("decoded locked target error = %+v, want %+v", decoded, source)
-	}
-}
-
-func TestProtocolErrorMapsAuthRequiredCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeAuthRequired, Message: "auth required"}); !errors.Is(err, serverapi.ErrServerAuthRequired) {
-		t.Fatalf("expected server auth required, got %v", err)
-	}
-}
-
-func TestProtocolErrorMapsRuntimeUnavailableCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeRuntimeUnavailable, Message: "runtime missing"}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("expected runtime unavailable, got %v", err)
 	}
 }
 

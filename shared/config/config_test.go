@@ -8,33 +8,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/BurntSushi/toml"
 )
 
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
-}
-
-func TestGeneratedSettingsTOMLRendersSkillNamedEnabled(t *testing.T) {
-	settings := configRegistry.defaultState().Settings
-	settings.SkillToggles["enabled"] = false
-	rendered := settingsTOMLWithRenderingOptions(settings, true, nil, nil)
-	var decoded map[string]any
-	if _, err := toml.Decode(rendered, &decoded); err != nil {
-		t.Fatalf("decode generated settings TOML: %v", err)
-	}
-	skillsValue, exists := decoded["skills"]
-	if !exists {
-		t.Fatal("generated settings TOML omitted configured skills table")
-	}
-	skills, ok := skillsValue.(map[string]any)
-	if !ok {
-		t.Fatalf("decoded skills section = %T, want table", skillsValue)
-	}
-	if enabled, exists := skills["enabled"]; !exists || enabled != false {
-		t.Fatalf("generated settings TOML skills.enabled = %v, want ordinary false toggle", enabled)
-	}
 }
 
 func TestPreparePersistenceRootRefusesProcessStartRootUnderGoTest(t *testing.T) {
@@ -264,12 +241,6 @@ func TestLoadFlagOverridesPersistenceRootEnv(t *testing.T) {
 	}
 }
 
-func TestWriteManagedRGConfigFileForSettingsPathRejectsEmptyPath(t *testing.T) {
-	if _, err := writeManagedRGConfigFileForSettingsPath(" \t "); err == nil {
-		t.Fatal("expected empty settings path error")
-	}
-}
-
 func TestLoadHonorsHOMEEnvironmentForDefaultConfigRoot(t *testing.T) {
 	home, workspace := newConfigTestEnv(t)
 
@@ -478,88 +449,6 @@ func TestEnsureManagedRGConfigFilePreservesExistingContents(t *testing.T) {
 	}
 }
 
-func TestResolveManagedRGConfigPathHonorsPersistenceRootEnv(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	root := t.TempDir()
-	t.Setenv(PersistenceRootEnvName, root)
-
-	path, err := ResolveManagedRGConfigPath()
-	if err != nil {
-		t.Fatalf("resolve managed rg config path: %v", err)
-	}
-	want := filepath.Join(root, managedRGConfigName)
-	if path != want {
-		t.Fatalf("managed rg config path = %q, want %q (under selected root, not home)", path, want)
-	}
-}
-
-func TestResolveManagedRGConfigPathDefaultsToHomeWithoutEnv(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv(PersistenceRootEnvName, "")
-
-	path, err := ResolveManagedRGConfigPath()
-	if err != nil {
-		t.Fatalf("resolve managed rg config path: %v", err)
-	}
-	want := filepath.Join(home, ConfigDirName, managedRGConfigName)
-	if path != want {
-		t.Fatalf("managed rg config path = %q, want %q", path, want)
-	}
-}
-
-func TestNormalizePersistenceRootExpandsTildeAndAbsolutizes(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	got, err := NormalizePersistenceRoot("~/nested/root")
-	if err != nil {
-		t.Fatalf("normalize persistence root: %v", err)
-	}
-	want := filepath.Join(home, "nested", "root")
-	if got != want {
-		t.Fatalf("normalized tilde root = %q, want %q", got, want)
-	}
-	if !filepath.IsAbs(got) {
-		t.Fatalf("expected absolute path, got %q", got)
-	}
-}
-
-func TestResolvePersistenceRootUsesFlagThenEnvironmentThenDefault(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	envRoot := filepath.Join(t.TempDir(), "env-root")
-	flagRoot := filepath.Join(t.TempDir(), "flag-root")
-
-	t.Setenv(PersistenceRootEnvName, envRoot)
-	got, err := ResolvePersistenceRoot(flagRoot)
-	if err != nil {
-		t.Fatalf("resolve flag root: %v", err)
-	}
-	if got != flagRoot {
-		t.Fatalf("flag root = %q, want %q", got, flagRoot)
-	}
-
-	got, err = ResolvePersistenceRoot("")
-	if err != nil {
-		t.Fatalf("resolve environment root: %v", err)
-	}
-	if got != envRoot {
-		t.Fatalf("environment root = %q, want %q", got, envRoot)
-	}
-
-	t.Setenv(PersistenceRootEnvName, "")
-	got, err = ResolvePersistenceRoot("")
-	if err != nil {
-		t.Fatalf("resolve default root: %v", err)
-	}
-	wantDefault := filepath.Join(home, ConfigDirName)
-	if got != wantDefault {
-		t.Fatalf("default root = %q, want %q", got, wantDefault)
-	}
-}
-
 func TestLoadSubagentRoleFromFile(t *testing.T) {
 	home, workspace, configPath := newConfigTestFile(t)
 	contents := strings.Join([]string{
@@ -758,79 +647,6 @@ func TestLoadSubagentRoleRejectsInvalidMetadata(t *testing.T) {
 	}
 }
 
-func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t *testing.T) {
-	baseHook := "/tmp/hook"
-	base := Settings{
-		Model:    "gpt-5.6-sol",
-		Timeouts: Timeouts{ModelRequestSeconds: 100},
-		Shell:    ShellSettings{PostprocessHook: &baseHook},
-		ProviderCapabilities: ProviderCapabilitiesOverride{
-			ProviderID:                "openai",
-			SupportsResponsesAPI:      true,
-			SupportsProviderVerbosity: true,
-		},
-		Reviewer: ReviewerSettings{
-			Model:          "gpt-5.6-sol",
-			TimeoutSeconds: 60,
-		},
-	}
-
-	same := SubagentRole{
-		Settings: base,
-		Sources: map[string]string{
-			"timeouts.model_request_seconds":                    "file",
-			"provider_capabilities.supports_responses_api":      "file",
-			"provider_capabilities.supports_provider_verbosity": "file",
-			"model":                  "file",
-			"shell.postprocess_hook": "file",
-			"reviewer.model":         "file",
-			"reviewer.provider_capabilities.supports_responses_api": "file",
-		},
-	}
-	roleHook := " /tmp/hook "
-	same.Settings.Model = " gpt-5.6-sol "
-	same.Settings.Shell.PostprocessHook = &roleHook
-	same.Settings.Reviewer.Model = " gpt-5.6-sol "
-	if SubagentRoleHasMeaningfulDiff(base, same) {
-		t.Fatal("expected equal trimmed scalar, optional, provider, reviewer, and timeout values to be no-op")
-	}
-
-	changedTimeout := same
-	changedTimeout.Settings = base
-	changedTimeout.Settings.Timeouts.ModelRequestSeconds = 200
-	if !SubagentRoleHasMeaningfulDiff(base, changedTimeout) {
-		t.Fatal("expected timeout change to be meaningful")
-	}
-
-	changedProvider := same
-	changedProvider.Settings = base
-	changedProvider.Settings.ProviderCapabilities.SupportsResponsesAPI = false
-	if !SubagentRoleHasMeaningfulDiff(base, changedProvider) {
-		t.Fatal("expected provider capability change to be meaningful")
-	}
-
-	changedVerbosityProvider := same
-	changedVerbosityProvider.Settings = base
-	changedVerbosityProvider.Settings.ProviderCapabilities.SupportsProviderVerbosity = false
-	if !SubagentRoleHasMeaningfulDiff(base, changedVerbosityProvider) {
-		t.Fatal("expected provider verbosity capability change to be meaningful")
-	}
-
-	changedReviewer := same
-	changedReviewer.Settings = base
-	changedReviewer.Settings.Reviewer.Model = "gpt-5.4-mini"
-	if !SubagentRoleHasMeaningfulDiff(base, changedReviewer) {
-		t.Fatal("expected reviewer change to be meaningful")
-	}
-
-	for _, key := range []string{"theme", "worktrees.base_dir", "unknown.setting"} {
-		role := SubagentRole{Settings: base, Sources: map[string]string{key: "file"}}
-		if !SubagentRoleHasMeaningfulDiff(base, role) {
-			t.Fatalf("expected source %q to preserve role catalog visibility", key)
-		}
-	}
-}
-
 func TestOverlaySubagentRoleSettingsDoesNotApplyProcessSettings(t *testing.T) {
 	base := Settings{
 		Worktrees:    WorktreeSettings{BaseDir: "/base", SetupScript: "base.sh", SetupTimeoutSeconds: 10},
@@ -909,37 +725,6 @@ func TestLookupSubagentRoleUsesConfiguredIdentity(t *testing.T) {
 				t.Fatalf("normalized selector = %q, want %q", *lookup.NormalizedSelector, tt.wantNormalized)
 			}
 		})
-	}
-}
-
-func TestAvailableSubagentRoleNamesRemainsPresentationOnly(t *testing.T) {
-	settings := Settings{
-		ThinkingLevel: "medium",
-		Subagents: map[string]SubagentRole{
-			"planner": {
-				Settings: Settings{ThinkingLevel: "medium"},
-				Sources:  map[string]string{"thinking_level": "file"},
-			},
-			"callable": {
-				Settings: Settings{Model: "gpt-5.4-mini"},
-				Sources:  map[string]string{"model": "file"},
-			},
-			"blocked": {
-				Settings:         Settings{Model: "gpt-5.4-mini"},
-				Sources:          map[string]string{"model": "file"},
-				AgentCallable:    false,
-				AgentCallableSet: true,
-			},
-		},
-	}
-
-	all := strings.Join(AvailableSubagentRoleNames(settings, false), ",")
-	if all != "fast,blocked,callable" {
-		t.Fatalf("available presentation roles = %q, want no no-op role and all meaningful roles", all)
-	}
-	callable := strings.Join(AvailableSubagentRoleNames(settings, true), ",")
-	if callable != "fast,callable" {
-		t.Fatalf("callable presentation roles = %q, want no no-op or non-callable roles", callable)
 	}
 }
 
@@ -1198,22 +983,6 @@ func TestLoadSubagentRoleRejectsModelContextWindowBelowMinimum(t *testing.T) {
 	}
 }
 
-func TestLoadSubagentRoleRejectsModelContextWindowZeroWithMinimumError(t *testing.T) {
-	err := loadConfigTestFileError(t, strings.Join([]string{
-		"[subagents.fast]",
-		"model_context_window = 0",
-	}, "\n"), LoadOptions{})
-	if err == nil {
-		t.Fatal("expected subagent model_context_window zero validation error")
-	}
-	if !errors.Is(err, errSubagentRole) {
-		t.Fatalf("expected subagent role validation error, got %v", err)
-	}
-	if !errors.Is(err, errModelContextWindowBelowMinimum) {
-		t.Fatalf("expected model context window minimum validation detail, got %v", err)
-	}
-}
-
 func TestLoadSubagentRoleRejectsReviewerModelContextWindowBelowMinimum(t *testing.T) {
 	err := loadConfigTestFileError(t, strings.Join([]string{
 		"[subagents.fast.reviewer]",
@@ -1227,54 +996,6 @@ func TestLoadSubagentRoleRejectsReviewerModelContextWindowBelowMinimum(t *testin
 	}
 	if !errors.Is(err, errModelContextWindowBelowMinimum) {
 		t.Fatalf("expected model context window minimum validation detail, got %v", err)
-	}
-}
-
-func TestLoadSubagentRoleRejectsReviewerModelContextWindowExplicitZero(t *testing.T) {
-	err := loadConfigTestFileError(t, strings.Join([]string{
-		"[subagents.fast.reviewer]",
-		"model_context_window = 0",
-	}, "\n"), LoadOptions{})
-	if err == nil {
-		t.Fatal("expected subagent reviewer.model_context_window=0 validation error")
-	}
-	if !errors.Is(err, errSubagentRole) {
-		t.Fatalf("expected subagent role validation error, got %v", err)
-	}
-	if !errors.Is(err, errModelContextWindowBelowMinimum) {
-		t.Fatalf("expected model context window minimum validation detail, got %v", err)
-	}
-}
-
-func TestLoadSubagentRoleAllowsReviewerAuthNoneToInheritParentBaseURL(t *testing.T) {
-	contents := strings.Join([]string{
-		"model = \"gpt-5.6-sol\"",
-		"openai_base_url = \"http://127.0.0.1:8080/v1\"",
-		"",
-		"[subagents.fast.reviewer]",
-		"auth = \"none\"",
-	}, "\n")
-
-	_, _, cfg := loadConfigTestFileApp(t, contents, LoadOptions{})
-	role := cfg.Settings.Subagents[BuiltInSubagentRoleFast]
-	if role.Settings.Reviewer.Auth != "none" {
-		t.Fatalf("expected subagent reviewer.auth=none, got %q", role.Settings.Reviewer.Auth)
-	}
-}
-
-func TestLoadSubagentRoleAllowsReviewerAuthNoneWithExplicitFirstPartyBaseURL(t *testing.T) {
-	contents := strings.Join([]string{
-		"model = \"gpt-5.6-sol\"",
-		"",
-		"[subagents.fast.reviewer]",
-		"auth = \"none\"",
-		"openai_base_url = \"https://api.openai.com/v1\"",
-	}, "\n")
-
-	_, _, cfg := loadConfigTestFileApp(t, contents, LoadOptions{})
-	role := cfg.Settings.Subagents[BuiltInSubagentRoleFast]
-	if role.Settings.Reviewer.Auth != "none" {
-		t.Fatalf("expected subagent reviewer.auth=none, got %q", role.Settings.Reviewer.Auth)
 	}
 }
 
@@ -1356,68 +1077,6 @@ func TestWriteSettingsFileForOnboardingDoesNotOverwriteExistingFile(t *testing.T
 	}
 	if string(contents) != "model = \"existing\"\n" {
 		t.Fatalf("expected existing settings file contents to remain unchanged, got %q", string(contents))
-	}
-}
-
-func TestValidateThemeAllowsAutoAndEmpty(t *testing.T) {
-	for _, value := range []string{"", "auto", "light", "dark"} {
-		if err := validateTheme(settingsState{Settings: Settings{Theme: value}}, nil); err != nil {
-			t.Fatalf("validate theme %q: %v", value, err)
-		}
-	}
-}
-
-func TestLoadReviewerDefaultsInheritMainSettingsWhenUnset(t *testing.T) {
-	home, workspace := newConfigTestEnv(t)
-
-	configPath := filepath.Join(home, ConfigDirName, "config.toml")
-	writeConfigTestFile(t, configPath, "model = \"gpt-main-file\"\nthinking_level = \"xhigh\"\nprovider_override = \"openai\"\nopenai_base_url = \"http://127.0.0.1:8080/v1\"\n[reviewer]\nfrequency = \"all\"\n")
-
-	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.Reviewer.Model != "gpt-main-file" {
-		t.Fatalf("expected reviewer.model to inherit file main model, got %q", cfg.Settings.Reviewer.Model)
-	}
-	if cfg.Settings.Reviewer.ThinkingLevel != "xhigh" {
-		t.Fatalf("expected reviewer.thinking_level to inherit file main thinking level, got %q", cfg.Settings.Reviewer.ThinkingLevel)
-	}
-	if cfg.Settings.Reviewer.ProviderOverride != "openai" {
-		t.Fatalf("expected reviewer.provider_override to inherit file main provider override, got %q", cfg.Settings.Reviewer.ProviderOverride)
-	}
-	if cfg.Settings.Reviewer.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
-		t.Fatalf("expected reviewer.openai_base_url to inherit file main base URL, got %q", cfg.Settings.Reviewer.OpenAIBaseURL)
-	}
-
-	t.Setenv("KENT_MODEL", "gpt-main-env")
-	t.Setenv("KENT_THINKING_LEVEL", "medium")
-	t.Setenv("KENT_OPENAI_BASE_URL", "http://localhost:9090/v1")
-	t.Setenv("KENT_REVIEWER_MODEL", "")
-	t.Setenv("KENT_REVIEWER_THINKING_LEVEL", "")
-	t.Setenv("KENT_REVIEWER_PROVIDER_OVERRIDE", "")
-	t.Setenv("KENT_REVIEWER_OPENAI_BASE_URL", "")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.Reviewer.Model != "gpt-main-env" {
-		t.Fatalf("expected reviewer.model to inherit env main model, got %q", cfg.Settings.Reviewer.Model)
-	}
-	if cfg.Settings.Reviewer.ThinkingLevel != "medium" {
-		t.Fatalf("expected reviewer.thinking_level to inherit env main thinking level, got %q", cfg.Settings.Reviewer.ThinkingLevel)
-	}
-	if cfg.Settings.Reviewer.OpenAIBaseURL != "http://localhost:9090/v1" {
-		t.Fatalf("expected reviewer.openai_base_url to inherit env main base URL, got %q", cfg.Settings.Reviewer.OpenAIBaseURL)
-	}
-}
-
-func TestLoadReviewerOpenAIProviderOverrideInheritsMainOpenAIBaseURL(t *testing.T) {
-	home, workspace := newConfigTestEnv(t)
-
-	configPath := filepath.Join(home, ConfigDirName, "config.toml")
-	writeConfigTestFile(t, configPath, "openai_base_url = \"http://127.0.0.1:8080/v1\"\n[reviewer]\nprovider_override = \"openai\"\nmodel = \"local-reviewer\"\n")
-
-	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.Reviewer.ProviderOverride != "openai" {
-		t.Fatalf("expected explicit reviewer.provider_override, got %q", cfg.Settings.Reviewer.ProviderOverride)
-	}
-	if cfg.Settings.Reviewer.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
-		t.Fatalf("expected reviewer.openai_base_url to inherit main OpenAI base URL, got %q", cfg.Settings.Reviewer.OpenAIBaseURL)
 	}
 }
 

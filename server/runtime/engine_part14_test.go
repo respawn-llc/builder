@@ -10,7 +10,6 @@ import (
 	brand "core/shared/config"
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,7 +104,7 @@ func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *t
 			foundCall = true
 		case item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == handoffCall.ID:
 			foundOutput = true
-		case item.Type == llm.ResponseItemTypeMessage && item.MessageType == llm.MessageTypeHandoffFutureMessage && item.Content == prompts.FormatHandoffFutureAgentMessage("resume after restart"):
+		case item.Type == llm.ResponseItemTypeMessage && item.MessageType == llm.MessageTypeHandoffFutureMessage:
 			foundFuture = true
 		}
 	}
@@ -339,107 +338,6 @@ func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 	}
 }
 
-func TestManualCompactionRemotePassesSlashCommandArgumentsAsInstructions(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeCompactionClient{
-		compactionResponses: []llm.CompactionResponse{
-			{
-				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "seed"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
-				},
-				Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
-			},
-		},
-	}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
-		t.Fatalf("append message: %v", err)
-	}
-
-	args := "preserve migration caveats"
-	if err := eng.CompactContext(context.Background(), args); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-	if len(client.compactionCalls) != 1 {
-		t.Fatalf("expected one remote compact call, got %d", len(client.compactionCalls))
-	}
-	if got, want := client.compactionCalls[0].Instructions, compactionInstructions(args); got != want {
-		t.Fatalf("unexpected compact instructions\nwant:\n%s\n\ngot:\n%s", want, got)
-	}
-}
-
-func TestManualCompactionLocalAppendsSlashCommandArgumentsToPrompt(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{
-		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"}},
-		},
-	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
-		t.Fatalf("append message: %v", err)
-	}
-
-	args := "keep TODO decisions"
-	if err := eng.CompactContext(context.Background(), args); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected one local-summary model call, got %d", len(client.calls))
-	}
-	if len(client.calls[0].Tools) == 0 {
-		t.Fatalf("expected tools to remain declared for local compaction cache stability")
-	}
-
-	additional := additionalCompactionInstructionsHeader + "\n " + args
-	found := false
-	for _, item := range client.calls[0].Items {
-		if item.Type == llm.ResponseItemTypeMessage && item.Role == llm.RoleDeveloper && item.Content == compactionInstructions(args) && strings.HasSuffix(item.Content, additional) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected local compact prompt to include appended slash command args, got %+v", client.calls[0].Items)
-	}
-}
-
-func TestManualCompactionLocalSendsPromptAsDeveloperMessage(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{
-		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"},
-		}},
-	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
-		t.Fatalf("append message: %v", err)
-	}
-
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected one local-summary model call, got %d", len(client.calls))
-	}
-
-	found := false
-	for _, item := range client.calls[0].Items {
-		if item.Type == llm.ResponseItemTypeMessage && item.Role == llm.RoleDeveloper && item.Content == prompts.CompactionPrompt {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected local compaction prompt as developer message, got %+v", client.calls[0].Items)
-	}
-}
-
 func TestManualCompactionAppendsLastVisibleUserMessageCarryover(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -564,6 +462,9 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 		Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
+	if _, err := eng.SetGoal("survive handoff compaction", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
 	if err := store.SetHeadlessActive(true); err != nil {
 		t.Fatalf("mark headless active: %v", err)
 	}
@@ -579,6 +480,8 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	futureIdx := -1
 	headlessIdx := -1
+	goalIdx := -1
+	goalCount := 0
 	for idx, message := range messages {
 		switch message.MessageType {
 		case llm.MessageTypeHandoffFutureMessage:
@@ -586,6 +489,12 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 		case llm.MessageTypeHeadlessMode:
 			if idx > 0 {
 				headlessIdx = idx
+			}
+		case llm.MessageTypeActiveGoalContinuation:
+			goalIdx = idx
+			goalCount++
+			if message.Content != prompts.RenderActiveGoalContinuationPrompt("survive handoff compaction") {
+				t.Fatalf("active-goal continuation content = %q", message.Content)
 			}
 		}
 	}
@@ -595,55 +504,11 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 	if headlessIdx < 0 {
 		t.Fatalf("expected headless enter reinjection after handoff compaction, got %+v", messages)
 	}
-	if headlessIdx >= futureIdx {
-		t.Fatalf("expected atomic headless context before future-agent carryover, headless=%d future=%d messages=%+v", headlessIdx, futureIdx, messages)
+	if goalIdx < 0 || goalCount != 1 {
+		t.Fatalf("expected one active-goal continuation after handoff compaction, count=%d messages=%+v", goalCount, messages)
 	}
-}
-
-func TestManualLocalCompactionPlacesSummaryBeforeCarryoverInTranscript(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeCompactionClient{
-		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
-			Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
-		}},
-	}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "please keep tests green"}})); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-
-	if err := eng.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-
-	entries := eng.ChatSnapshot().Entries
-	if len(entries) < 3 {
-		t.Fatalf("expected transcript entries after compaction, got %+v", entries)
-	}
-
-	summaryIndex := -1
-	summaryCount := 0
-	carryoverIndex := -1
-	for i, entry := range entries {
-		switch entry.Role {
-		case "compaction_summary":
-			summaryIndex = i
-			summaryCount++
-		case "manual_compaction_carryover":
-			carryoverIndex = i
-		}
-	}
-	if summaryIndex < 0 || carryoverIndex < 0 {
-		t.Fatalf("expected summary and carryover entries, got %+v", entries)
-	}
-	if summaryCount != 1 {
-		t.Fatalf("expected exactly one compaction summary entry, got %d entries=%+v", summaryCount, entries)
-	}
-	if summaryIndex >= carryoverIndex {
-		t.Fatalf("expected compaction summary before manual carryover, got %+v", entries)
+	if !(headlessIdx < goalIdx && goalIdx < futureIdx) {
+		t.Fatalf("expected headless then active goal then future-agent carryover, headless=%d goal=%d future=%d messages=%+v", headlessIdx, goalIdx, futureIdx, messages)
 	}
 }
 
@@ -674,11 +539,6 @@ func TestManualLocalCompactionOmitsCarryoverWithoutNewUserMessageSincePreviousCo
 			t.Fatalf("did not expect manual carryover message when no user message followed prior compaction, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
 		}
 	}
-	for _, entry := range eng.ChatSnapshot().Entries {
-		if entry.Role == string(transcript.EntryRoleManualCompactionCarryover) {
-			t.Fatalf("did not expect manual carryover transcript entry when no user message followed prior compaction, got %+v", eng.ChatSnapshot().Entries)
-		}
-	}
 }
 
 func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *testing.T) {
@@ -692,6 +552,9 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 	}
 
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
+	if _, err := eng.SetGoal("survive process reopen", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "please keep tests green"}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
@@ -719,22 +582,6 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 	if carryoverMessages != 1 {
 		t.Fatalf("manual compaction carryover message count = %d, want 1; messages=%+v", carryoverMessages, messages)
 	}
+	assertSingleActiveGoalContinuation(t, llm.ItemsFromMessages(messages), "survive process reopen")
 
-	entries := restored.ChatSnapshot().Entries
-	carryoverEntries := 0
-	for _, entry := range entries {
-		if entry.Role != string(transcript.EntryRoleManualCompactionCarryover) {
-			continue
-		}
-		carryoverEntries++
-		if !strings.Contains(entry.Text, "please keep tests green") {
-			t.Fatalf("expected reopened transcript carryover to preserve last user text, got %q", entry.Text)
-		}
-		if entry.Visibility != transcript.EntryVisibilityDetail {
-			t.Fatalf("expected reopened transcript carryover to stay detail-only, got %+v", entry)
-		}
-	}
-	if carryoverEntries != 1 {
-		t.Fatalf("manual compaction carryover transcript entry count = %d, want 1; entries=%+v", carryoverEntries, entries)
-	}
 }

@@ -813,28 +813,6 @@ func TestBoardAndTaskDetailProjectParallelBranchPlacements(t *testing.T) {
 	}
 }
 
-func TestBoardGroupsHideJoinNodesAndJoinOnlyGroups(t *testing.T) {
-	def := serverapi.WorkflowDefinition{
-		NodeGroups: []serverapi.WorkflowNodeGroup{
-			{GroupID: "group-visible", GroupKey: "visible", DisplayName: "Visible", SortOrder: 1},
-			{GroupID: "group-join-only", GroupKey: "join_only", DisplayName: "Join Only", SortOrder: 2},
-		},
-		Nodes: []serverapi.WorkflowNode{
-			{ID: "node-agent", GroupID: "group-visible", Kind: string(workflow.NodeKindAgent)},
-			{ID: "node-join-visible-group", GroupID: "group-visible", Kind: string(workflow.NodeKindJoin)},
-			{ID: "node-join-only", GroupID: "group-join-only", Kind: string(workflow.NodeKindJoin)},
-		},
-	}
-
-	groups := boardGroups(def)
-	if len(groups) != 1 || groups[0].GroupID != "group-visible" {
-		t.Fatalf("groups = %+v, want only visible group", groups)
-	}
-	if len(groups[0].NodeIDs) != 1 || groups[0].NodeIDs[0] != "node-agent" {
-		t.Fatalf("visible group node ids = %+v, want agent only", groups[0].NodeIDs)
-	}
-}
-
 func TestBoardColumnsUseWorkflowStructureInsteadOfDefinitionNodeOrder(t *testing.T) {
 	def := serverapi.WorkflowDefinition{
 		Workflow: serverapi.WorkflowRecord{ID: "workflow-1"},
@@ -865,115 +843,6 @@ func TestBoardColumnsUseWorkflowStructureInsteadOfDefinitionNodeOrder(t *testing
 	want := []string{"backlog", "plan", "plan_review", "implementation", "done"}
 	if strings.Join(keys, ",") != strings.Join(want, ",") {
 		t.Fatalf("board column keys = %+v, want structural order %+v", keys, want)
-	}
-}
-
-func TestBoardColumnsOrderAmbiguousSiblingsByNodeKey(t *testing.T) {
-	def := serverapi.WorkflowDefinition{
-		Workflow: serverapi.WorkflowRecord{ID: "workflow-1"},
-		Nodes: []serverapi.WorkflowNode{
-			{ID: "node-start", Key: "backlog", Kind: string(workflow.NodeKindStart), DisplayName: "Backlog"},
-			{ID: "node-zeta", Key: "zeta", Kind: string(workflow.NodeKindAgent), DisplayName: "Zeta"},
-			{ID: "node-alpha", Key: "alpha", Kind: string(workflow.NodeKindAgent), DisplayName: "Alpha"},
-			{ID: "node-done", Key: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done"},
-		},
-		TransitionGroups: []serverapi.WorkflowTransitionGroup{
-			{ID: "transition-start", SourceNodeID: "node-start", TransitionID: "start"},
-			{ID: "transition-alpha", SourceNodeID: "node-alpha", TransitionID: "done"},
-			{ID: "transition-zeta", SourceNodeID: "node-zeta", TransitionID: "done"},
-		},
-		Edges: []serverapi.WorkflowEdge{
-			{ID: "edge-zeta", TransitionGroupID: "transition-start", Key: "zeta", TargetNodeID: "node-zeta"},
-			{ID: "edge-alpha", TransitionGroupID: "transition-start", Key: "alpha", TargetNodeID: "node-alpha"},
-			{ID: "edge-alpha-done", TransitionGroupID: "transition-alpha", Key: "done", TargetNodeID: "node-done"},
-			{ID: "edge-zeta-done", TransitionGroupID: "transition-zeta", Key: "done", TargetNodeID: "node-done"},
-		},
-	}
-
-	keys := workflowViewBoardColumnKeys(boardColumns(def))
-	want := []string{"backlog", "alpha", "zeta", "done"}
-	if strings.Join(keys, ",") != strings.Join(want, ",") {
-		t.Fatalf("board column keys = %+v, want key-tied sibling order %+v", keys, want)
-	}
-}
-
-func TestBoardColumnsKeepReachableTerminalAfterAmbiguousSibling(t *testing.T) {
-	def := serverapi.WorkflowDefinition{
-		Workflow: serverapi.WorkflowRecord{ID: "workflow-1"},
-		Nodes: []serverapi.WorkflowNode{
-			{ID: "node-start", Key: "backlog", Kind: string(workflow.NodeKindStart), DisplayName: "Backlog"},
-			{ID: "node-zeta", Key: "zeta", Kind: string(workflow.NodeKindAgent), DisplayName: "Zeta"},
-			{ID: "node-done", Key: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done"},
-		},
-		TransitionGroups: []serverapi.WorkflowTransitionGroup{
-			{ID: "transition-start", SourceNodeID: "node-start", TransitionID: "start"},
-		},
-		Edges: []serverapi.WorkflowEdge{
-			{ID: "edge-done", TransitionGroupID: "transition-start", Key: "done", TargetNodeID: "node-done"},
-			{ID: "edge-zeta", TransitionGroupID: "transition-start", Key: "zeta", TargetNodeID: "node-zeta"},
-		},
-	}
-
-	keys := workflowViewBoardColumnKeys(boardColumns(def))
-	want := []string{"backlog", "zeta", "done"}
-	if strings.Join(keys, ",") != strings.Join(want, ",") {
-		t.Fatalf("board column keys = %+v, want terminal after ambiguous non-terminal sibling %+v", keys, want)
-	}
-}
-
-func TestBoardColumnsUseExplicitSiblingEdgeBeforeNodeKeyTie(t *testing.T) {
-	def := serverapi.WorkflowDefinition{
-		Workflow: serverapi.WorkflowRecord{ID: "workflow-1"},
-		Nodes: []serverapi.WorkflowNode{
-			{ID: "node-start", Key: "backlog", Kind: string(workflow.NodeKindStart), DisplayName: "Backlog"},
-			{ID: "node-alpha", Key: "alpha", Kind: string(workflow.NodeKindAgent), DisplayName: "Alpha"},
-			{ID: "node-zeta", Key: "zeta", Kind: string(workflow.NodeKindAgent), DisplayName: "Zeta"},
-			{ID: "node-done", Key: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done"},
-		},
-		TransitionGroups: []serverapi.WorkflowTransitionGroup{
-			{ID: "transition-start", SourceNodeID: "node-start", TransitionID: "start"},
-			{ID: "transition-zeta", SourceNodeID: "node-zeta", TransitionID: "alpha"},
-			{ID: "transition-alpha", SourceNodeID: "node-alpha", TransitionID: "done"},
-		},
-		Edges: []serverapi.WorkflowEdge{
-			{ID: "edge-alpha", TransitionGroupID: "transition-start", Key: "alpha", TargetNodeID: "node-alpha"},
-			{ID: "edge-zeta", TransitionGroupID: "transition-start", Key: "zeta", TargetNodeID: "node-zeta"},
-			{ID: "edge-zeta-alpha", TransitionGroupID: "transition-zeta", Key: "alpha", TargetNodeID: "node-alpha"},
-			{ID: "edge-alpha-done", TransitionGroupID: "transition-alpha", Key: "done", TargetNodeID: "node-done"},
-		},
-	}
-
-	keys := workflowViewBoardColumnKeys(boardColumns(def))
-	want := []string{"backlog", "zeta", "alpha", "done"}
-	if strings.Join(keys, ",") != strings.Join(want, ",") {
-		t.Fatalf("board column keys = %+v, want explicit sibling edge order %+v", keys, want)
-	}
-}
-
-func TestBoardColumnsAppendUnreachableVisibleNodesByKey(t *testing.T) {
-	def := serverapi.WorkflowDefinition{
-		Workflow: serverapi.WorkflowRecord{ID: "workflow-1"},
-		Nodes: []serverapi.WorkflowNode{
-			{ID: "node-start", Key: "backlog", Kind: string(workflow.NodeKindStart), DisplayName: "Backlog"},
-			{ID: "node-zeta", Key: "zeta", Kind: string(workflow.NodeKindAgent), DisplayName: "Zeta"},
-			{ID: "node-reachable", Key: "reachable", Kind: string(workflow.NodeKindAgent), DisplayName: "Reachable"},
-			{ID: "node-alpha", Key: "alpha", Kind: string(workflow.NodeKindAgent), DisplayName: "Alpha"},
-			{ID: "node-done", Key: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done"},
-		},
-		TransitionGroups: []serverapi.WorkflowTransitionGroup{
-			{ID: "transition-start", SourceNodeID: "node-start", TransitionID: "start"},
-			{ID: "transition-reachable", SourceNodeID: "node-reachable", TransitionID: "done"},
-		},
-		Edges: []serverapi.WorkflowEdge{
-			{ID: "edge-start", TransitionGroupID: "transition-start", Key: "start", TargetNodeID: "node-reachable"},
-			{ID: "edge-done", TransitionGroupID: "transition-reachable", Key: "done", TargetNodeID: "node-done"},
-		},
-	}
-
-	keys := workflowViewBoardColumnKeys(boardColumns(def))
-	want := []string{"backlog", "reachable", "done", "alpha", "zeta"}
-	if strings.Join(keys, ",") != strings.Join(want, ",") {
-		t.Fatalf("board column keys = %+v, want unreachable nodes appended by key %+v", keys, want)
 	}
 }
 
@@ -1096,61 +965,6 @@ func TestBoardSelectsWorkflowAndReturnsPickerAndGroups(t *testing.T) {
 	}
 }
 
-func TestBoardOmittedSelectorChoosesActiveDefault(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, false); err != nil {
-		t.Fatalf("LinkWorkflow first: %v", err)
-	}
-	defaultWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, defaultWorkflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow default: %v", err)
-	}
-
-	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("GetBoard: %v", err)
-	}
-	if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(defaultWorkflowID) {
-		t.Fatalf("selected workflow = %+v, want active default %s", board.SelectedWorkflow, defaultWorkflowID)
-	}
-}
-
-func TestBoardOmittedSelectorChoosesFirstActiveLinkWithoutDefault(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, false); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-
-	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("GetBoard: %v", err)
-	}
-	if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(workflowID) {
-		t.Fatalf("selected workflow = %+v, want first active link %s", board.SelectedWorkflow, workflowID)
-	}
-}
-
-func TestBoardOmittedSelectorKeepsBlockingLinkedWorkflowEligible(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-
-	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled())
-	if err != nil {
-		t.Fatalf("GetBoard: %v", err)
-	}
-	if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(workflowID) {
-		t.Fatalf("selected workflow = %+v, want linked workflow %s", board.SelectedWorkflow, workflowID)
-	}
-	if board.SelectedWorkflow.ValidForTaskCreation {
-		t.Fatalf("selected workflow = %+v, want blocking validation without losing link eligibility", board.SelectedWorkflow)
-	}
-}
-
 func TestBoardWithoutActiveLinksReturnsNoSelectionOrContent(t *testing.T) {
 	ctx, _, _, binding, view := newWorkflowViewTestContextService(t)
 
@@ -1166,7 +980,7 @@ func TestBoardWithoutActiveLinksReturnsNoSelectionOrContent(t *testing.T) {
 	}
 }
 
-func TestBoardUnknownExplicitSelectorFallsBackToActiveSelection(t *testing.T) {
+func TestBoardSelectorFallsBackToActiveSelection(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
 		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 		firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
@@ -1178,13 +992,17 @@ func TestBoardUnknownExplicitSelectorFallsBackToActiveSelection(t *testing.T) {
 			t.Fatalf("LinkWorkflow default: %v", err)
 		}
 		unknownWorkflowID := "workflow-unknown"
-
-		board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID}, testsetup.QuestionsEnabled("coder"))
-		if err != nil {
-			t.Fatalf("GetBoard: %v", err)
-		}
-		if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(defaultWorkflowID) {
-			t.Fatalf("selected workflow = %+v, want active default %s", board.SelectedWorkflow, defaultWorkflowID)
+		for _, request := range []serverapi.WorkflowBoardRequest{
+			{ProjectID: binding.ProjectID},
+			{ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID},
+		} {
+			board, err := view.GetBoard(ctx, request, testsetup.QuestionsEnabled("coder"))
+			if err != nil {
+				t.Fatalf("GetBoard: %v", err)
+			}
+			if board.SelectedWorkflow == nil || board.SelectedWorkflow.WorkflowID != string(defaultWorkflowID) {
+				t.Fatalf("selected workflow = %+v, want active default %s", board.SelectedWorkflow, defaultWorkflowID)
+			}
 		}
 	})
 
@@ -1204,50 +1022,6 @@ func TestBoardUnknownExplicitSelectorFallsBackToActiveSelection(t *testing.T) {
 			t.Fatalf("selected workflow = %+v, want first active link %s", board.SelectedWorkflow, workflowID)
 		}
 	})
-}
-
-func TestBoardUnknownExplicitSelectorWithoutLinksReturnsNoSelection(t *testing.T) {
-	ctx, _, _, binding, view := newWorkflowViewTestContextService(t)
-	unknownWorkflowID := "workflow-unknown"
-
-	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("GetBoard: %v", err)
-	}
-	if board.SelectedWorkflow != nil || len(board.WorkflowPicker) != 0 {
-		t.Fatalf("selection = %+v picker = %+v, want no active selection", board.SelectedWorkflow, board.WorkflowPicker)
-	}
-}
-
-func TestBoardPickerShowsOnlyActiveWorkflowLinks(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	defaultWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, defaultWorkflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow default: %v", err)
-	}
-	removedWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	removedLink, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, removedWorkflowID, false)
-	if err != nil {
-		t.Fatalf("LinkWorkflow removed: %v", err)
-	}
-	if result, err := workflowStore.UnlinkProjectWorkflow(ctx, removedLink.ID, ""); err != nil || !result.Unlinked {
-		t.Fatalf("UnlinkProjectWorkflow: %v", err)
-	}
-
-	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("GetBoard: %v", err)
-	}
-	var removed serverapi.WorkflowPickerItem
-	for _, item := range board.WorkflowPicker {
-		if item.WorkflowID == string(removedWorkflowID) {
-			removed = item
-			break
-		}
-	}
-	if removed.WorkflowID != "" {
-		t.Fatalf("removed workflow should not be in picker, got %+v", removed)
-	}
 }
 
 func TestTaskDetailPrefersActiveWorkflowLink(t *testing.T) {
@@ -1736,119 +1510,6 @@ func TestBoardHidesManualMoveTargetsForStartedRun(t *testing.T) {
 	}
 }
 
-func TestManualMoveTargetsExcludeEdgesWithDerivedRequiredProvisionFields(t *testing.T) {
-	def := serverapi.WorkflowDefinition{
-		Workflow: serverapi.WorkflowRecord{ID: "workflow-1", Name: "Workflow"},
-		Nodes: []serverapi.WorkflowNode{
-			{ID: "node-agent", WorkflowID: "workflow-1", Key: "agent", Kind: string(workflow.NodeKindAgent), DisplayName: "Agent"},
-			{ID: "node-review", WorkflowID: "workflow-1", Key: "review", Kind: string(workflow.NodeKindAgent), DisplayName: "Review"},
-			{ID: "node-done", WorkflowID: "workflow-1", Key: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done"},
-		},
-		TransitionGroups: []serverapi.WorkflowTransitionGroup{
-			{ID: "group-agent-review", WorkflowID: "workflow-1", SourceNodeID: "node-agent", TransitionID: "review", DisplayName: "Review"},
-			{ID: "group-agent-done", WorkflowID: "workflow-1", SourceNodeID: "node-agent", TransitionID: "done", DisplayName: "Done"},
-		},
-		Edges: []serverapi.WorkflowEdge{
-			{ID: "edge-review", WorkflowID: "workflow-1", TransitionGroupID: "group-agent-review", Key: "review", TargetNodeID: "node-review"},
-			{ID: "edge-done", WorkflowID: "workflow-1", TransitionGroupID: "group-agent-done", Key: "done", TargetNodeID: "node-done"},
-		},
-		DerivedWiring: serverapi.WorkflowDerivedWiring{
-			Edges: []serverapi.WorkflowDerivedEdgeWiring{
-				{EdgeID: "edge-review", RequiredProvisionFields: []serverapi.WorkflowOutputField{{Name: "summary", Description: "Summary."}}},
-				{EdgeID: "edge-done"},
-			},
-		},
-	}
-
-	targets := manualMoveTargetNodeIDs(
-		def,
-		[]sqlitegen.TaskNodePlacementRecord{{NodeID: sql.NullString{String: "node-agent", Valid: true}, State: "active"}},
-		map[string]workflow.NodeKind{
-			"node-agent":  workflow.NodeKindAgent,
-			"node-review": workflow.NodeKindAgent,
-			"node-done":   workflow.NodeKindTerminal,
-		},
-	)
-
-	if len(targets) != 1 || targets[0] != "node-done" {
-		t.Fatalf("manual move targets = %+v, want only terminal target", targets)
-	}
-}
-
-func TestManualMoveTargetsExcludePriorRunContextSources(t *testing.T) {
-	def := serverapi.WorkflowDefinition{
-		Workflow: serverapi.WorkflowRecord{ID: "workflow-1", Name: "Workflow"},
-		Nodes: []serverapi.WorkflowNode{
-			{ID: "node-agent", WorkflowID: "workflow-1", Key: "agent", Kind: string(workflow.NodeKindAgent), DisplayName: "Agent"},
-			{ID: "node-selected", WorkflowID: "workflow-1", Key: "selected", Kind: string(workflow.NodeKindAgent), DisplayName: "Selected"},
-			{ID: "node-previous", WorkflowID: "workflow-1", Key: "previous", Kind: string(workflow.NodeKindAgent), DisplayName: "Previous"},
-			{ID: "node-done", WorkflowID: "workflow-1", Key: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done"},
-		},
-		TransitionGroups: []serverapi.WorkflowTransitionGroup{
-			{ID: "group-agent-selected", WorkflowID: "workflow-1", SourceNodeID: "node-agent", TransitionID: "selected", DisplayName: "Selected"},
-			{ID: "group-agent-previous", WorkflowID: "workflow-1", SourceNodeID: "node-agent", TransitionID: "previous", DisplayName: "Previous"},
-			{ID: "group-agent-done", WorkflowID: "workflow-1", SourceNodeID: "node-agent", TransitionID: "done", DisplayName: "Done"},
-		},
-		Edges: []serverapi.WorkflowEdge{
-			{ID: "edge-selected", WorkflowID: "workflow-1", TransitionGroupID: "group-agent-selected", Key: "selected", TargetNodeID: "node-selected", ContextMode: string(workflow.ContextModeContinueSession), ContextSource: serverapi.WorkflowContextSource{Kind: string(workflow.ContextSourceSelectedNode), NodeKey: "agent"}},
-			{ID: "edge-previous", WorkflowID: "workflow-1", TransitionGroupID: "group-agent-previous", Key: "previous", TargetNodeID: "node-previous", ContextMode: string(workflow.ContextModeContinueSession), ContextSource: serverapi.WorkflowContextSource{Kind: string(workflow.ContextSourcePreviousTarget)}},
-			{ID: "edge-done", WorkflowID: "workflow-1", TransitionGroupID: "group-agent-done", Key: "done", TargetNodeID: "node-done"},
-		},
-		DerivedWiring: serverapi.WorkflowDerivedWiring{
-			Edges: []serverapi.WorkflowDerivedEdgeWiring{
-				{EdgeID: "edge-selected"},
-				{EdgeID: "edge-previous"},
-				{EdgeID: "edge-done"},
-			},
-		},
-	}
-
-	targets := manualMoveTargetNodeIDs(
-		def,
-		[]sqlitegen.TaskNodePlacementRecord{{NodeID: sql.NullString{String: "node-agent", Valid: true}, State: "active"}},
-		map[string]workflow.NodeKind{
-			"node-agent":    workflow.NodeKindAgent,
-			"node-selected": workflow.NodeKindAgent,
-			"node-previous": workflow.NodeKindAgent,
-			"node-done":     workflow.NodeKindTerminal,
-		},
-	)
-
-	if len(targets) != 1 || targets[0] != "node-done" {
-		t.Fatalf("manual move targets = %+v, want only terminal target", targets)
-	}
-}
-
-func TestManualMoveTargetsUseActiveTerminalSink(t *testing.T) {
-	def := serverapi.WorkflowDefinition{
-		Workflow: serverapi.WorkflowRecord{ID: "workflow-1", Name: "Workflow"},
-		Nodes: []serverapi.WorkflowNode{
-			{ID: "node-start", WorkflowID: "workflow-1", Key: "backlog", Kind: string(workflow.NodeKindStart), DisplayName: "Backlog"},
-			{ID: "node-done", WorkflowID: "workflow-1", Key: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done"},
-		},
-		TransitionGroups: []serverapi.WorkflowTransitionGroup{
-			{ID: "group-reset", WorkflowID: "workflow-1", SourceNodeID: "node-done", TransitionID: "manual_start", DisplayName: "Move to Backlog"},
-		},
-		Edges: []serverapi.WorkflowEdge{
-			{ID: "edge-reset", WorkflowID: "workflow-1", TransitionGroupID: "group-reset", Key: "manual_start", TargetNodeID: "node-start"},
-		},
-		DerivedWiring: serverapi.WorkflowDerivedWiring{Edges: []serverapi.WorkflowDerivedEdgeWiring{{EdgeID: "edge-reset"}}},
-	}
-
-	targets := manualMoveTargetNodeIDs(
-		def,
-		[]sqlitegen.TaskNodePlacementRecord{{NodeID: sql.NullString{String: "node-done", Valid: true}, State: "active"}},
-		map[string]workflow.NodeKind{
-			"node-start": workflow.NodeKindStart,
-			"node-done":  workflow.NodeKindTerminal,
-		},
-	)
-
-	if len(targets) != 1 || targets[0] != "node-start" {
-		t.Fatalf("manual move targets = %+v, want reset target", targets)
-	}
-}
-
 func TestTaskDetailProjectsCancellationAndInterruptedRun(t *testing.T) {
 	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
@@ -1877,57 +1538,6 @@ func TestTaskDetailProjectsCancellationAndInterruptedRun(t *testing.T) {
 	}
 	if detail.Actions.CanResume {
 		t.Fatalf("canceled task should not expose resume actions: %+v", detail.Actions)
-	}
-}
-
-func TestInterruptedTaskStatusUsesAttentionKind(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	if err := workflowStore.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, "manual", "{}"); err != nil {
-		t.Fatalf("InterruptRunGeneration: %v", err)
-	}
-
-	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("GetBoard: %v", err)
-	}
-	activeColumn := workflowViewColumnByKey(t, board, "agent")
-	activePage, err := view.ListBoardNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: activeColumn.Node.NodeID}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("ListBoardNodeCards active: %v", err)
-	}
-	var card serverapi.WorkflowBoardTaskCard
-	if len(activePage.Cards) == 1 {
-		card = activePage.Cards[0]
-	}
-	if card.TaskID == "" || card.Status.Kind != "interrupted" || len(card.Status.AttentionTypes) != 1 || card.Status.AttentionTypes[0] != serverapi.WorkflowTaskAttentionKindInterrupted {
-		t.Fatalf("board status = %+v", card.Status)
-	}
-
-	detail, err := view.GetTask(ctx, string(task.ID))
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if detail.Status.Kind != "interrupted" || len(detail.Status.AttentionTypes) != 1 || detail.Status.AttentionTypes[0] != serverapi.WorkflowTaskAttentionKindInterrupted {
-		t.Fatalf("detail status = %+v", detail.Status)
-	}
-	if len(detail.Attention) != 1 || detail.Attention[0].Kind != attentionKindInterruptedRun || detail.Attention[0].TaskID != string(task.ID) || detail.Attention[0].RunID != string(started.RunID) {
-		t.Fatalf("detail attention = %+v", detail.Attention)
 	}
 }
 
@@ -2047,41 +1657,6 @@ func TestTaskStatusIgnoresHistoricalRunUnderCompletedPlacement(t *testing.T) {
 	}
 	if len(cards.Cards) != 1 || cards.Cards[0].Status.Kind != serverapi.WorkflowTaskStatusKindWaitingApproval || containsString(cards.Cards[0].Status.RunIDs, string(started.RunID)) {
 		t.Fatalf("board cards = %+v, want waiting approval without stale run", cards.Cards)
-	}
-}
-
-func TestTaskStatusReadBoundaryNormalizesUnsetLifecycleFacts(t *testing.T) {
-	ctx, store, workflowStore, binding, _ := newWorkflowViewTestContextService(t)
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Queued", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-
-	var canceledAt, startedAt, completedAt, interruptedAt sql.NullInt64
-	var waitingAskID sql.NullString
-	if err := store.DB().QueryRowContext(ctx, `
-SELECT
-    task_status.canceled_at_unix_ms,
-    run_status.started_at_unix_ms,
-    run_status.completed_at_unix_ms,
-    run_status.interrupted_at_unix_ms,
-    run_status.waiting_ask_id
-FROM workflow_task_status_task_records task_status
-JOIN workflow_task_status_run_records run_status ON run_status.task_id = task_status.id
-WHERE run_status.id = ?
-`, string(started.RunID)).Scan(&canceledAt, &startedAt, &completedAt, &interruptedAt, &waitingAskID); err != nil {
-		t.Fatalf("query normalized status inputs: %v", err)
-	}
-	if canceledAt.Valid || startedAt.Valid || completedAt.Valid || interruptedAt.Valid || waitingAskID.Valid {
-		t.Fatalf("normalized status inputs = canceled=%+v started=%+v completed=%+v interrupted=%+v waiting=%+v, want nullable absence", canceledAt, startedAt, completedAt, interruptedAt, waitingAskID)
 	}
 }
 
@@ -2377,6 +1952,48 @@ func mustTaskDetail(t *testing.T, view *Service, ctx context.Context, taskID str
 	return detail
 }
 
+func createWorkflowViewWaitingAskTask(
+	t *testing.T,
+	ctx context.Context,
+	store *metadata.Store,
+	workflowStore *workflowstore.Store,
+	binding metadata.Binding,
+	sessionID string,
+	askID string,
+) (workflowstore.TaskRecord, workflowstore.StartTaskResult) {
+	t.Helper()
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Task",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json) VALUES (?, ?, ?, ?, '', '', '', NULL, NULL, 1, 1, 0, 0, 1, '.', '{}', '{}', '{}', '{}')`, sessionID, binding.ProjectID, binding.WorkspaceID, "sessions/"+sessionID); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if err := workflowStore.AttachRunSession(ctx, started.RunID, claimed.Generation, sessionID); err != nil {
+		t.Fatalf("AttachRunSession: %v", err)
+	}
+	if err := workflowStore.SetRunWaitingAsk(ctx, started.RunID, claimed.Generation, askID); err != nil {
+		t.Fatalf("SetRunWaitingAsk: %v", err)
+	}
+	return task, started
+}
+
 func containsString(values []string, expected string) bool {
 	for _, value := range values {
 		if value == expected {
@@ -2394,32 +2011,8 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
 	sessionID := "session-view-waiting-ask"
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json) VALUES (?, ?, ?, ?, '', '', '', NULL, 1, 1, 0, 0, 1, '.', '{}', '{}', '{}', '{}')`, sessionID, binding.ProjectID, binding.WorkspaceID, "sessions/"+sessionID); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	if err := workflowStore.AttachRunSession(ctx, started.RunID, claimed.Generation, sessionID); err != nil {
-		t.Fatalf("AttachRunSession: %v", err)
-	}
-	if err := workflowStore.SetRunWaitingAsk(ctx, started.RunID, claimed.Generation, "ask-view-1"); err != nil {
-		t.Fatalf("SetRunWaitingAsk: %v", err)
-	}
+	task, _ := createWorkflowViewWaitingAskTask(t, ctx, store, workflowStore, binding, sessionID, "ask-view-1")
 
 	detail, err := view.GetTask(ctx, string(task.ID))
 	if err != nil {
@@ -2457,31 +2050,7 @@ func TestTaskDetailProjectsRuntimeApprovalWaitingAskPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json) VALUES (?, ?, ?, ?, '', '', '', NULL, 1, 1, 0, 0, 1, '.', '{}', '{}', '{}', '{}')`, sessionID, binding.ProjectID, binding.WorkspaceID, "sessions/"+sessionID); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	if err := workflowStore.AttachRunSession(ctx, started.RunID, claimed.Generation, sessionID); err != nil {
-		t.Fatalf("AttachRunSession: %v", err)
-	}
-	if err := workflowStore.SetRunWaitingAsk(ctx, started.RunID, claimed.Generation, askID); err != nil {
-		t.Fatalf("SetRunWaitingAsk: %v", err)
-	}
+	task, started := createWorkflowViewWaitingAskTask(t, ctx, store, workflowStore, binding, sessionID, askID)
 
 	detail, err := view.GetTask(ctx, string(task.ID))
 	if err != nil {
@@ -2497,32 +2066,8 @@ func TestTaskDetailProjectsRuntimeApprovalWaitingAskPrompt(t *testing.T) {
 
 func TestTaskDetailPendingQuestionFallsBackWhenTranscriptLookupFails(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
 	sessionID := "session-missing-question-transcript"
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json) VALUES (?, ?, ?, ?, '', '', '', NULL, 1, 1, 0, 0, 1, '.', '{}', '{}', '{}', '{}')`, sessionID, binding.ProjectID, binding.WorkspaceID, "sessions/"+sessionID); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	if err := workflowStore.AttachRunSession(ctx, started.RunID, claimed.Generation, sessionID); err != nil {
-		t.Fatalf("AttachRunSession: %v", err)
-	}
-	if err := workflowStore.SetRunWaitingAsk(ctx, started.RunID, claimed.Generation, "ask-missing-transcript"); err != nil {
-		t.Fatalf("SetRunWaitingAsk: %v", err)
-	}
+	task, _ := createWorkflowViewWaitingAskTask(t, ctx, store, workflowStore, binding, sessionID, "ask-missing-transcript")
 
 	detail, err := view.GetTask(ctx, string(task.ID))
 	if err != nil {
@@ -2569,72 +2114,6 @@ func assertRuntimeApprovalQuestionAttention(t *testing.T, items []serverapi.Work
 	}
 	if strings.Contains(string(raw), "Allow once") || strings.Contains(string(raw), "label") {
 		t.Fatalf("runtime approval attention leaked server labels: %s", raw)
-	}
-}
-
-func TestTaskDetailProjectsGuiIdentityWorktreeStatusActionsAndAttention(t *testing.T) {
-	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := New(store, WithSessionTranscriptProvider(staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
-		"session-detail": transcriptEntriesWithAsk("ask-detail", "Which path should this task take?"),
-	}}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	worktreeID := "worktree-detail"
-	if err := store.Queries().UpsertWorktree(ctx, sqlitegen.UpsertWorktreeParams{ID: worktreeID, WorkspaceID: binding.WorkspaceID, CanonicalRootPath: t.TempDir(), Managed: 1, CreatedBranch: 1, GitMetadataJson: "{}", CreatedAtUnixMs: 1, UpdatedAtUnixMs: 2}); err != nil {
-		t.Fatalf("UpsertWorktree: %v", err)
-	}
-	if _, err := store.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{ID: string(task.ID), ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true}, UpdatedAtUnixMs: 3}); err != nil {
-		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	sessionID := "session-detail"
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json) VALUES (?, ?, ?, ?, ?, 'Task session', '', '', NULL, 1, 1, 0, 0, 1, 'subdir', '{}', '{}', '{}', '{}')`, sessionID, binding.ProjectID, binding.WorkspaceID, worktreeID, "sessions/"+sessionID); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	if err := workflowStore.AttachRunSession(ctx, started.RunID, claimed.Generation, sessionID); err != nil {
-		t.Fatalf("AttachRunSession: %v", err)
-	}
-	if err := workflowStore.SetRunWaitingAsk(ctx, started.RunID, claimed.Generation, "ask-detail"); err != nil {
-		t.Fatalf("SetRunWaitingAsk: %v", err)
-	}
-
-	detail, err := view.GetTask(ctx, string(task.ID))
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if detail.Summary.ProjectID != binding.ProjectID || detail.Project.ProjectKey != "WOR" || detail.Workflow.WorkflowID != string(workflowID) || !detail.Workflow.IsProjectDefault {
-		t.Fatalf("identity = project:%+v workflow:%+v", detail.Project, detail.Workflow)
-	}
-	if detail.ExecutionTarget != nil {
-		t.Fatalf("unlocked task unexpectedly exposed execution target: %+v", detail.ExecutionTarget)
-	}
-	if detail.Status.Kind != "waiting_question" || !detail.Actions.CanInterrupt {
-		t.Fatalf("status/actions = %+v/%+v", detail.Status, detail.Actions)
-	}
-	if len(detail.Attention) != 1 || detail.Attention[0].Kind != "question" || detail.Attention[0].AskID != "ask-detail" || detail.Attention[0].Message != "Which path should this task take?" {
-		t.Fatalf("attention = %+v", detail.Attention)
-	}
-	if len(detail.Placements) < 2 || detail.Placements[1].NodeDisplayName == "" || detail.Placements[1].NodeKind == "" {
-		t.Fatalf("placements missing node metadata: %+v", detail.Placements)
-	}
-	if len(detail.Runs) != 1 || detail.Runs[0].SessionName != "Task session" || detail.Runs[0].Role != "coder" || detail.Runs[0].Status != "waiting_question" {
-		t.Fatalf("runs = %+v", detail.Runs)
 	}
 }
 
@@ -2804,7 +2283,7 @@ func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 		t.Fatalf("ClaimRun question: %v", err)
 	}
 	sessionID := "session-attention-question"
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json) VALUES (?, ?, ?, ?, '', '', '', NULL, 1, 1, 0, 0, 1, '.', '{}', '{}', '{}', '{}')`, sessionID, binding.ProjectID, binding.WorkspaceID, "sessions/"+sessionID); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json) VALUES (?, ?, ?, ?, '', '', '', NULL, NULL, 1, 1, 0, 0, 1, '.', '{}', '{}', '{}', '{}')`, sessionID, binding.ProjectID, binding.WorkspaceID, "sessions/"+sessionID); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	if err := workflowStore.AttachRunSession(ctx, questionStarted.RunID, questionClaimed.Generation, sessionID); err != nil {
@@ -2973,172 +2452,68 @@ func TestAttentionListFillsPagePastDroppedCandidatesAndScopesTokenToProject(t *t
 	}
 }
 
-func TestAttentionListExcludesUserInterruptedRuns(t *testing.T) {
-	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := New(store)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Interrupted by user", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	if _, err := workflowStore.ClaimRun(ctx, started.RunID, 0); err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	if _, err := workflowStore.InterruptTaskRuns(ctx, task.ID, "", ""); err != nil {
-		t.Fatalf("InterruptTaskRuns: %v", err)
-	}
-
-	resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("ListAttention: %v", err)
-	}
-	for _, item := range resp.Items {
-		if item.Kind == "interrupted_run" {
-			t.Fatalf("user-interrupted run surfaced as attention: %+v", resp.Items)
-		}
-	}
-}
-
-func TestAttentionListExcludesBlankReasonInterruptedRuns(t *testing.T) {
-	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := New(store)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Blank interruption reason", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	if err := workflowStore.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, " \t ", "{}"); err != nil {
-		t.Fatalf("InterruptRunGeneration: %v", err)
+func TestAttentionListExcludesNonActionableInterruptions(t *testing.T) {
+	tests := []struct {
+		name      string
+		interrupt func(*testing.T, context.Context, *workflowstore.Store, workflowstore.TaskRecord, workflowstore.StartTaskResult, workflowstore.RunnableRunRecord)
+	}{
+		{
+			name: "user initiated",
+			interrupt: func(t *testing.T, ctx context.Context, store *workflowstore.Store, task workflowstore.TaskRecord, _ workflowstore.StartTaskResult, _ workflowstore.RunnableRunRecord) {
+				if _, err := store.InterruptTaskRuns(ctx, task.ID, "", ""); err != nil {
+					t.Fatalf("InterruptTaskRuns: %v", err)
+				}
+			},
+		},
+		{
+			name: "blank reason",
+			interrupt: func(t *testing.T, ctx context.Context, store *workflowstore.Store, _ workflowstore.TaskRecord, started workflowstore.StartTaskResult, claimed workflowstore.RunnableRunRecord) {
+				if err := store.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, " \t ", "{}"); err != nil {
+					t.Fatalf("InterruptRunGeneration: %v", err)
+				}
+			},
+		},
+		{
+			name: "runtime canceled",
+			interrupt: func(t *testing.T, ctx context.Context, store *workflowstore.Store, _ workflowstore.TaskRecord, started workflowstore.StartTaskResult, claimed workflowstore.RunnableRunRecord) {
+				if err := store.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, "workflow_runtime_canceled", "{}"); err != nil {
+					t.Fatalf("InterruptRunGeneration: %v", err)
+				}
+			},
+		},
 	}
 
-	resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("ListAttention: %v", err)
-	}
-	for _, item := range resp.Items {
-		if item.Kind == "interrupted_run" {
-			t.Fatalf("blank-reason run surfaced as attention: %+v", resp.Items)
-		}
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+			workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+			if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+				t.Fatalf("LinkWorkflow: %v", err)
+			}
+			task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: tt.name, Body: "Body"})
+			if err != nil {
+				t.Fatalf("CreateTask: %v", err)
+			}
+			started, err := workflowStore.StartTask(ctx, task.ID)
+			if err != nil {
+				t.Fatalf("StartTask: %v", err)
+			}
+			claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
+			if err != nil {
+				t.Fatalf("ClaimRun: %v", err)
+			}
+			tt.interrupt(t, ctx, workflowStore, task, started, claimed)
 
-func TestAttentionListExcludesRuntimeCanceledRuns(t *testing.T) {
-	ctx, store, workflowStore, binding, _ := newWorkflowViewTestContextService(t)
-	view, err := New(store)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Runtime canceled", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	if err := workflowStore.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, "workflow_runtime_canceled", "{}"); err != nil {
-		t.Fatalf("InterruptRunGeneration: %v", err)
-	}
-
-	resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("ListAttention: %v", err)
-	}
-	for _, item := range resp.Items {
-		if item.Kind == "interrupted_run" {
-			t.Fatalf("runtime-canceled run surfaced as attention: %+v", resp.Items)
-		}
-	}
-}
-
-func TestPendingQuestionResolverFindsPendingAskAtTail(t *testing.T) {
-	entries := make([]runtime.ChatEntry, 0, 64)
-	for i := 0; i < 32; i++ {
-		entries = append(entries, runtime.ChatEntry{Role: "assistant", Text: "entry"})
-	}
-	entries = append(entries, askTranscriptEntry("ask-pending", "Question at tail?", nil, 0))
-	resolver := newPendingQuestionResolver(staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
-		"session-tail": entries,
-	}}, nil)
-
-	question, err := resolver.Question(context.Background(), "session-tail", "ask-pending")
-	if err != nil {
-		t.Fatalf("Question: %v", err)
-	}
-	if question.message != "Question at tail?" {
-		t.Fatalf("question = %+v", question)
-	}
-}
-
-func TestPendingQuestionResolverResolvesMultiplePendingAsksIntertwinedWithToolCalls(t *testing.T) {
-	entries := []runtime.ChatEntry{
-		{Role: "assistant", Text: "working"},
-		{Role: "tool_call", ToolCallID: "shell-1", ToolCall: &transcript.ToolCallMeta{ToolName: "shell"}},
-		{Role: "tool_result_ok", ToolCallID: "shell-1", Text: "/tmp"},
-		askTranscriptEntry("ask-1", "First pending?", []string{"a", "b"}, 1),
-		{Role: "tool_call", ToolCallID: "shell-2", ToolCall: &transcript.ToolCallMeta{ToolName: "shell"}},
-		askTranscriptEntry("ask-2", "Second pending?", nil, 0),
-	}
-	resolver := newPendingQuestionResolver(staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
-		"session-multi": entries,
-	}}, nil)
-
-	first, err := resolver.Question(context.Background(), "session-multi", "ask-1")
-	if err != nil {
-		t.Fatalf("ask-1: %v", err)
-	}
-	if first.message != "First pending?" || first.recommendedOptionIndex != 1 || len(first.suggestions) != 2 {
-		t.Fatalf("ask-1 question = %+v", first)
-	}
-	second, err := resolver.Question(context.Background(), "session-multi", "ask-2")
-	if err != nil {
-		t.Fatalf("ask-2: %v", err)
-	}
-	if second.message != "Second pending?" {
-		t.Fatalf("ask-2 question = %+v", second)
-	}
-}
-
-func TestPendingQuestionResolverErrorsWhenQuestionMissingFromTranscript(t *testing.T) {
-	resolver := newPendingQuestionResolver(staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
-		"session-missing": transcriptEntriesWithAsk("other-ask", "Other?"),
-	}}, nil)
-
-	_, err := resolver.Question(context.Background(), "session-missing", "missing-ask")
-	if !errors.Is(err, ErrPendingQuestionNotFound) {
-		t.Fatalf("missing question error = %v", err)
+			resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
+			if err != nil {
+				t.Fatalf("ListAttention: %v", err)
+			}
+			for _, item := range resp.Items {
+				if item.Kind == "interrupted_run" {
+					t.Fatalf("non-actionable interruption surfaced as attention: %+v", resp.Items)
+				}
+			}
+		})
 	}
 }
 

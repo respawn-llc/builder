@@ -4,24 +4,19 @@ import (
 	"context"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
-	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	remoteclient "core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-	"core/shared/toolspec"
-	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -95,12 +90,16 @@ func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *te
 		t.Fatalf("expected explicit workspace selection error, got %+v", respErr)
 	}
 
-	callGateway(t, conn, "attach-project-explicit", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingA.ProjectID, WorkspaceID: bindingB.WorkspaceID}, nil)
+	attachWorkspaceB, err := protocol.AttachProjectRequestForWorkspaceID(bindingA.ProjectID, bindingB.WorkspaceID)
+	if err != nil {
+		t.Fatalf("AttachProjectRequestForWorkspaceID: %v", err)
+	}
+	callGateway(t, conn, "attach-project-explicit", protocol.MethodAttachProject, attachWorkspaceB, nil)
 	var planResp serverapi.SessionPlanResponse
 	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
 		ClientRequestID: "plan-after-explicit-workspace",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}, &planResp)
 	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-explicit-workspace", planResp.Plan.SessionID)
 	if got, want := target.EffectiveWorkdir, bindingB.CanonicalRoot; got != want {
@@ -144,14 +143,18 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingB.ProjectID, WorkspaceRoot: resolvedA.Config.WorkspaceRoot}, nil)
+	attachWorkspaceA, err := protocol.AttachProjectRequestForWorkspaceRoot(bindingB.ProjectID, resolvedA.Config.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("AttachProjectRequestForWorkspaceRoot: %v", err)
+	}
+	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, attachWorkspaceA, nil)
 	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: storeB.Meta().SessionID}, nil)
 
 	var planResp serverapi.SessionPlanResponse
 	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
 		ClientRequestID: "new-after-attach-session",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}, &planResp)
 	wantWorkspaceRoot, err := config.CanonicalWorkspaceRoot(resolvedB.Config.WorkspaceRoot)
 	if err != nil {
@@ -301,61 +304,6 @@ func runGatewayGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
 	return string(output)
-}
-
-type gatewayTestLLMClient struct {
-	response llm.Response
-}
-
-func (c gatewayTestLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return c.response, nil
-}
-
-type gatewayTestStreamingClient struct {
-	mu    sync.Mutex
-	calls int
-}
-
-func (c *gatewayTestStreamingClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return llm.Response{}, nil
-}
-
-func (c *gatewayTestStreamingClient) GenerateStreamWithEvents(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
-	c.mu.Lock()
-	call := c.calls
-	c.calls++
-	c.mu.Unlock()
-	if call == 0 {
-		if callbacks.OnAssistantDelta != nil {
-			callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "inspecting", Phase: llm.MessagePhaseCommentary})
-		}
-		return llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "Inspecting now", Phase: llm.MessagePhaseCommentary},
-			ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		}, nil
-	}
-	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}, nil
-}
-
-func (c *gatewayTestStreamingClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
-	}, nil
-}
-
-type gatewayTestShellTool struct{}
-
-func (gatewayTestShellTool) Call(_ context.Context, call tools.Call) (tools.Result, error) {
-	return tools.Result{CallID: call.ID, Name: call.Name, Output: json.RawMessage(`{"output":"/tmp\n"}`)}, nil
 }
 
 func TestGatewayProcessOutputSubscriptionStreamsOutputAndCompletion(t *testing.T) {

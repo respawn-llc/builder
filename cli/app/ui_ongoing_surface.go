@@ -71,6 +71,14 @@ func (m *uiModel) handleOngoingSurfaceError(err error) tea.Cmd {
 	return tea.Quit
 }
 
+func (m *uiModel) handleOngoingDeveloperError(err ongoing.DeveloperError) tea.Cmd {
+	if m != nil {
+		m.logf("ongoing.developer_error err=%q", err.Error())
+	}
+	ongoing.PanicDeveloperError(err)
+	return nil
+}
+
 func (m *uiModel) renderNativeOngoingSurface() tea.Cmd {
 	if m == nil || m.ongoingSurface == nil || !m.nativeOngoingSurfaceActive() {
 		return nil
@@ -214,30 +222,27 @@ func (m *uiModel) ongoingFrameInput() ongoing.FrameInput {
 		appendSection(ongoing.FrameSectionStatus, []string{statusLine})
 	}
 	cursor := layout.inputPaneCursor(width)
-	visible := cursor.Visible
-	column := cursor.Col + 1
-	cursorSectionRow := cursor.Row
-	if !visible {
-		visible = true
-		column = clampCursor(m.inputCursor, len([]rune(m.input))) + 1
-		cursorSectionRow = 1
+	frameCursor := ongoing.Cursor{}
+	if cursor.Visible {
+		frameCursor = ongoing.Cursor{
+			Visible: true,
+			Column:  cursor.Col + 1,
+			Target: &ongoing.CursorTarget{
+				SectionKind: ongoing.FrameSectionInput,
+				Row:         cursor.Row,
+			},
+		}
 	}
 	frame := ongoing.FrameInput{
 		Size:         ongoing.Size{Width: width, Height: height},
 		Theme:        m.theme,
 		SpinnerFrame: m.spinnerFrame,
 		Sections:     sections,
-		Cursor: ongoing.Cursor{
-			Visible: visible,
-			Row:     height,
-			Column:  column,
-			Target: &ongoing.CursorTarget{
-				SectionKind: ongoing.FrameSectionInput,
-				Row:         cursorSectionRow,
-			},
-		},
+		Cursor:       frameCursor,
 	}
-	frame.Cursor.Row = ongoingFrameInputCursorTerminalRow(frame, cursorSectionRow)
+	if cursor.Visible {
+		frame.Cursor.Row = ongoingFrameInputCursorTerminalRow(frame, cursor.Row)
+	}
 	return frame
 }
 

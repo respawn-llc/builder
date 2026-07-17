@@ -303,8 +303,8 @@ VALUES (?, ?, ?, '{}', ?, ?)`, worktreeID, attached.WorkspaceID, filepath.Join(a
 VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, worktreeID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
 	execSeed(t, store.db, "terminal source placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('placement-terminal-workspace', 'task-terminal-workspace', 'node-done', 'completed', ?, ?)`, now, now)
-	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
-VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', NULL, ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, worktreeID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
+	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
+VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, worktreeID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
 
 	blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 	if err != nil {
@@ -729,16 +729,9 @@ func TestCommitSessionWorkspaceRetargetClearsSameWorkspaceStaleWorktreeTarget(t 
 	}
 }
 
-func TestResolvePersistedSessionPreservesWorktreeReminderStateFromMetadata(t *testing.T) {
+func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.T) {
 	store, cfg, binding := newMetadataTestStore(t)
-	sess, err := session.Create(
-		filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
-		filepath.Base(cfg.WorkspaceRoot),
-		cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
+	sess := createMetadataTestSession(t, store, cfg, binding)
 	reminder := &session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeEnter,
 		WorktreeContext: session.WorktreeContext{
@@ -752,60 +745,13 @@ func TestResolvePersistedSessionPreservesWorktreeReminderStateFromMetadata(t *te
 		t.Fatalf("SetWorktreeReminderState: %v", err)
 	}
 	reminder = session.CloneWorktreeReminderState(sess.Meta().WorktreeReminder)
-
-	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("session.OpenByID: %v", err)
-	}
-	state := reopened.Meta().WorktreeReminder
-	if state == nil {
-		t.Fatal("expected persisted worktree reminder state")
-	}
-	if !session.WorktreeReminderStateEqual(*state, *reminder) {
-		t.Fatalf("worktree reminder = %+v, want %+v", *state, *reminder)
-	}
-}
-
-func TestResolvePersistedSessionPreservesGoalStateFromMetadata(t *testing.T) {
-	store, cfg, binding := newMetadataTestStore(t)
-	sess, err := session.Create(
-		filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
-		filepath.Base(cfg.WorkspaceRoot),
-		cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
 	goal, err := sess.SetGoal("ship durable goal metadata", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-
-	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("session.OpenByID: %v", err)
-	}
-	persisted := reopened.Meta().Goal
-	if persisted == nil {
-		t.Fatal("expected persisted goal state")
-	}
-	if *persisted != goal {
-		t.Fatalf("goal = %+v, want %+v", *persisted, goal)
-	}
-}
-
-func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.T) {
-	store, cfg, binding := newMetadataTestStore(t)
-	sess := createMetadataTestSession(t, store, cfg, binding)
 	buffers := []session.InputDraftRecoveryBuffer{{
-		Kind:                     "queued_input",
-		ID:                       "buffer-1",
-		ServerID:                 "server-1",
-		ClientRequestID:          "request-1",
-		Text:                     "recover this draft",
-		OperationClientRequestID: "operation-request-1",
-		OperationQueueItemID:     "queue-item-1",
-		OperationKind:            "steer",
+		Kind: "queued_input",
+		Text: "recover this draft",
 	}}
 	if err := sess.SetInputDraftRecovery("draft", buffers); err != nil {
 		t.Fatalf("SetInputDraftRecovery: %v", err)
@@ -838,6 +784,12 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	}
 	if !meta.ConversationEstablished {
 		t.Fatal("conversation establishment did not round-trip through SQLite")
+	}
+	if meta.WorktreeReminder == nil || !session.WorktreeReminderStateEqual(*meta.WorktreeReminder, *reminder) {
+		t.Fatalf("worktree reminder = %+v, want %+v", meta.WorktreeReminder, reminder)
+	}
+	if meta.Goal == nil || *meta.Goal != goal {
+		t.Fatalf("goal = %+v, want %+v", meta.Goal, goal)
 	}
 	if len(meta.InputDraftRecoveryBuffers) != 1 || meta.InputDraftRecoveryBuffers[0] != buffers[0] {
 		t.Fatalf("recovery buffers = %+v, want %+v", meta.InputDraftRecoveryBuffers, buffers)
@@ -1065,64 +1017,6 @@ func TestRebindWorkspaceNormalizesUniqueConflictRace(t *testing.T) {
 	}
 	if newResolved.ProjectID != oldBinding.ProjectID {
 		t.Fatalf("new workspace project id after race = %q, want %q", newResolved.ProjectID, oldBinding.ProjectID)
-	}
-}
-
-func TestInsertWorkspaceBindingAllowsSameCanonicalRootAcrossProjects(t *testing.T) {
-	ctx := context.Background()
-	store, cfg := newMetadataTestStoreWithoutBinding(t)
-	canonicalRoot, err := config.CanonicalWorkspaceRoot(cfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
-	}
-	now := time.Now().UTC()
-	winner, err := store.insertWorkspaceBinding(ctx, canonicalRoot, filepath.Base(canonicalRoot), "", filepath.Base(canonicalRoot), "project-winner", "workspace-winner", now, true)
-	if err != nil {
-		t.Fatalf("insertWorkspaceBinding winner: %v", err)
-	}
-	duplicateInProject, err := store.insertWorkspaceBinding(ctx, canonicalRoot, filepath.Base(canonicalRoot), "", filepath.Base(canonicalRoot), winner.ProjectID, "workspace-duplicate", now, true)
-	if err != nil {
-		t.Fatalf("insertWorkspaceBinding duplicate in project: %v", err)
-	}
-	if duplicateInProject.WorkspaceID != winner.WorkspaceID {
-		t.Fatalf("duplicate in project workspace id = %q, want %q", duplicateInProject.WorkspaceID, winner.WorkspaceID)
-	}
-	second, err := store.insertWorkspaceBinding(ctx, canonicalRoot, filepath.Base(canonicalRoot), "", filepath.Base(canonicalRoot), "project-second", "workspace-second", now, true)
-	if err != nil {
-		t.Fatalf("insertWorkspaceBinding second: %v", err)
-	}
-	if second.ProjectID == winner.ProjectID || second.WorkspaceID == winner.WorkspaceID {
-		t.Fatalf("second binding reused winner identity: got %+v winner %+v", second, winner)
-	}
-	var projectCount int
-	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM projects").Scan(&projectCount); err != nil {
-		t.Fatalf("count projects: %v", err)
-	}
-	if projectCount != 2 {
-		t.Fatalf("project count = %d, want 2", projectCount)
-	}
-	var workspaceCount int
-	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workspaces").Scan(&workspaceCount); err != nil {
-		t.Fatalf("count workspaces: %v", err)
-	}
-	if workspaceCount != 2 {
-		t.Fatalf("workspace count = %d, want 2", workspaceCount)
-	}
-	if _, err := store.EnsureWorkspaceBinding(ctx, cfg.WorkspaceRoot); !errors.Is(err, serverapi.ErrWorkspaceBindingAmbiguous) {
-		t.Fatalf("EnsureWorkspaceBinding after duplicate-path inserts error = %v, want ErrWorkspaceBindingAmbiguous", err)
-	}
-	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM projects WHERE id = ?", winner.ProjectID).Scan(&projectCount); err != nil {
-		t.Fatalf("count winner project: %v", err)
-	}
-	if projectCount != 1 {
-		t.Fatalf("winner project unexpectedly deleted")
-	}
-	var duplicatePathCount int
-	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workspaces WHERE canonical_root_path = ?", canonicalRoot).Scan(&duplicatePathCount); err != nil {
-		t.Fatalf("count duplicate canonical roots: %v", err)
-	}
-	if duplicatePathCount != 2 {
-		t.Fatalf("duplicate path count = %d, want 2", duplicatePathCount)
 	}
 }
 

@@ -28,12 +28,11 @@ func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Op
 	if err != nil {
 		return RunPromptResult{}, err
 	}
-	callerSessionID, parentSessionID := runPromptProvenance(opts, caller)
+	callerSessionID := runPromptCallerSessionID(opts, caller)
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: uuid.NewString(),
 		Intent:          intent,
 		CallerSessionID: callerSessionID,
-		ParentSessionID: parentSessionID,
 		Prompt:          prompt,
 		Timeout:         timeout,
 		Overrides:       runPromptOverridesFromOptions(opts),
@@ -51,15 +50,15 @@ func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Op
 	return result, nil
 }
 
-func runPromptProvenance(opts Options, caller startupconfig.CallerContext) (*string, *string) {
+func runPromptCallerSessionID(opts Options, caller startupconfig.CallerContext) *string {
 	if caller.Kind != startupconfig.CallerKindKentSession {
-		return nil, nil
+		return nil
 	}
 	sessionID := strings.TrimSpace(opts.WorkspaceContextSessionID)
 	if sessionID == "" {
-		return nil, nil
+		return nil
 	}
-	return &sessionID, &sessionID
+	return &sessionID
 }
 
 func runPromptLaunchIntent(opts Options, initialSessionID string) (serverapi.SessionLaunchIntent, error) {
@@ -70,15 +69,14 @@ func runPromptLaunchIntent(opts Options, initialSessionID string) (serverapi.Ses
 		}
 		return serverapi.OpenExistingSessionLaunchIntent(sessionID), nil
 	}
-	var parentID *runtimeids.SessionID
 	if rawParentID := strings.TrimSpace(opts.WorkspaceContextSessionID); rawParentID != "" {
 		parsedParentID, err := runtimeids.ParseSessionID(rawParentID)
 		if err != nil {
 			return serverapi.SessionLaunchIntent{}, err
 		}
-		parentID = &parsedParentID
+		return serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(parsedParentID)), nil
 	}
-	return serverapi.CreateNewSessionLaunchIntent(parentID), nil
+	return serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), nil
 }
 
 func runPromptOverridesFromOptions(opts Options) serverapi.RunPromptOverrides {

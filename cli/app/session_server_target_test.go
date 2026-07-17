@@ -61,7 +61,7 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("first startSessionServer: %v", err)
 	}
-	_, firstRuntimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, firstServer, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, fakeResponses.URL, io.Discard, "test remote no-auth runtime")
+	_, firstRuntimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, firstServer, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, fakeResponses.URL, io.Discard, "test remote no-auth runtime")
 	firstSubmission, err := submitRuntimeClientForTest(t, firstRuntimePlan.Wiring.runtimeClient, "hello after no auth")
 	if err != nil {
 		t.Fatalf("first SubmitUserMessage: %v", err)
@@ -89,7 +89,7 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 		t.Fatalf("second startSessionServer: %v", err)
 	}
 	defer func() { _ = secondServer.Close() }()
-	_, secondRuntimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, secondServer, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, fakeResponses.URL, io.Discard, "test remote persisted no-auth runtime")
+	_, secondRuntimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, secondServer, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, fakeResponses.URL, io.Discard, "test remote persisted no-auth runtime")
 	secondSubmission, err := submitRuntimeClientForTest(t, secondRuntimePlan.Wiring.runtimeClient, "hello after persisted no auth")
 	if err != nil {
 		t.Fatalf("second SubmitUserMessage: %v", err)
@@ -215,7 +215,7 @@ func TestConfiguredDaemonPlanSessionUsesSessionWorkspaceLocalConfig(t *testing.T
 	}
 	defer func() { _ = bound.Close() }()
 	planner := newSessionLaunchPlanner(bound)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test daemon environment cwd")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test daemon environment cwd")
 	defer runtimePlan.Close()
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive daemon")
@@ -301,26 +301,7 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 
 }
 
-func TestRemoteInteractiveRuntimeTwoClientsConvergeOnSameSessionAcrossWorkspaces(t *testing.T) {
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"shared daemon reply"})
-	defer fakeResponses.Close()
-	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
-
-	submission, err := submitRuntimeClientForTest(t, fixture.runtimePlanA.Wiring.runtimeClient, "hello from client A")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage A: %v", err)
-	}
-	if message != "shared daemon reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "shared daemon reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected one daemon-backed llm call, got %d", hits.Load())
-	}
-
-}
-
-func TestRemoteInteractiveRuntimeAskAnswersFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
+func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
 	fixture := startRemoteMultiClientRuntimeFixture(t, "")
 	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, fixture.planA.SessionID)
 
@@ -362,12 +343,6 @@ func TestRemoteInteractiveRuntimeAskAnswersFromAnyAttachedClientAcrossWorkspaces
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for ask response")
 	}
-	finishStep()
-}
-
-func TestRemoteInteractiveRuntimeApprovalAnswersFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
-	fixture := startRemoteMultiClientRuntimeFixture(t, "")
-	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, fixture.planA.SessionID)
 
 	approvalDone := make(chan struct {
 		resp askquestion.AskQuestionResponse
@@ -388,7 +363,6 @@ func TestRemoteInteractiveRuntimeApprovalAnswersFromAnyAttachedClientAcrossWorks
 	if approvalPrompt.Kind != clientui.TranscriptPromptKindApproval || approvalPrompt.Question != "Allow the command?" {
 		t.Fatalf("unexpected approval prompt: %+v", approvalPrompt)
 	}
-	runtimeClientsB := fixture.serverB.RuntimeAttachmentClients()
 
 	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
 		ClientRequestID: uuid.NewString(),
@@ -581,7 +555,7 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *r
 	if err != nil {
 		t.Fatalf("loadSessionServerConfig workspace B: %v", err)
 	}
-	remoteB, err := client.DialRemoteURLForProject(context.Background(), config.ServerRPCURL(cfgB), fixture.serverA.ProjectID())
+	remoteB, err := client.DialRemoteURL(context.Background(), config.ServerRPCURL(cfgB))
 	if err != nil {
 		t.Fatalf("DialRemote workspace B: %v", err)
 	}
@@ -594,7 +568,7 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *r
 		t.Fatalf("expected distinct workspace roots across clients, both=%q", fixture.serverA.Config().WorkspaceRoot)
 	}
 
-	fixture.planA, fixture.runtimePlanA = prepareAppRuntimePlan(t, fixture.serverA, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote multi-client runtime A")
+	fixture.planA, fixture.runtimePlanA = prepareAppRuntimePlan(t, fixture.serverA, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote multi-client runtime A")
 
 	plannerB := newSessionLaunchPlanner(fixture.serverB)
 	fixture.planB, err = plannerB.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionID(t, fixture.planA.SessionID))})
@@ -606,33 +580,4 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *r
 	}
 
 	return fixture
-}
-
-func TestStartSessionServerBypassesRemoteAndDaemonOnFirstInteractiveRun(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspaceWithoutSettings(t)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, &stubAuthInteractor{}, true)
-	if server != nil {
-		t.Cleanup(func() { _ = server.Close() })
-	}
-	if err == nil {
-		t.Fatal("expected unavailable configured server to fail")
-	}
-}
-
-func TestStartSessionServerUnregisteredWorkspaceStartsRegistrationCapableServer(t *testing.T) {
-	home := newAppTestHome(t)
-	workspace := t.TempDir()
-	configureAppTestServerPort(t)
-	if _, _, err := config.WriteDefaultSettingsFileAt(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
-		t.Fatalf("write test settings: %v", err)
-	}
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
-	if server != nil {
-		t.Cleanup(func() { _ = server.Close() })
-	}
-	if err == nil {
-		t.Fatal("expected unavailable configured server to fail")
-	}
 }

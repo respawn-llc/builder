@@ -80,6 +80,8 @@ pub struct Settings {
     pub subagents: BTreeMap<String, SubagentRole>,
     #[serde(rename = "PreventSleep")]
     pub prevent_sleep: String,
+    #[serde(rename = "MaxSubagentDepth")]
+    pub max_subagent_depth: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

@@ -41,23 +41,25 @@ func TestRunPromptCreateAndOpenUseTypedLaunchIntent(t *testing.T) {
 	}{
 		{
 			name:   "create without parent",
-			intent: serverapi.CreateNewSessionLaunchIntent(nil),
+			intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 			check: func(t *testing.T, got serverapi.SessionLaunchIntent) {
 				if got.Kind() != serverapi.SessionLaunchIntentCreateNew {
 					t.Fatalf("intent kind = %q, want create_new", got.Kind())
 				}
-				if _, present := got.ParentID(); present {
-					t.Fatal("create intent unexpectedly has a parent")
+				origin, present := got.CreateOrigin()
+				if !present || origin.Kind() != serverapi.SessionCreateOriginIndependent {
+					t.Fatalf("create origin = %+v/%v, want independent", origin, present)
 				}
 			},
 		},
 		{
 			name:   "create with parent",
-			intent: serverapi.CreateNewSessionLaunchIntent(&parent),
+			intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(parent)),
 			check: func(t *testing.T, got serverapi.SessionLaunchIntent) {
-				parentID, present := got.ParentID()
-				if !present || parentID != parent {
-					t.Fatalf("parent intent = %q/%v, want %q/true", parentID.String(), present, parent.String())
+				origin, present := got.CreateOrigin()
+				parentID, hasSource := origin.SessionID()
+				if !present || origin.Kind() != serverapi.SessionCreateOriginParentAgent || !hasSource || parentID != parent {
+					t.Fatalf("parent-agent origin = %+v/%v, want %q", origin, present, parent.String())
 				}
 			},
 		},

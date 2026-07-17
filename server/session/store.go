@@ -167,6 +167,18 @@ func openPersistedSessionWithReconciliationRefresh(storeOpts storeOptions, resol
 	return openPersistedSession(refreshed.SessionDir, refreshed.Meta, storeOpts)
 }
 
+// OpenResolved opens an authoritative persisted-session record without
+// resolving the session identity a second time.
+func OpenResolved(record PersistedSessionRecord, options ...StoreOption) (*Store, error) {
+	if record.Meta == nil {
+		return nil, errResolverRecordMissingMetadata
+	}
+	if err := validatePersistedSessionRecord(record.Meta.SessionID, record); err != nil {
+		return nil, err
+	}
+	return openPersistedSession(record.SessionDir, record.Meta, normalizeStoreOptions(options...))
+}
+
 func openPersistedSession(sessionDir string, resolvedMeta *Meta, storeOpts storeOptions) (*Store, error) {
 	s := &Store{
 		sessionDir: sessionDir,
@@ -591,23 +603,6 @@ func (s *Store) SetListingMetadata(name string, firstPromptPreview string) error
 	return s.mutateAndPersist(func() error {
 		s.meta.Name = strings.TrimSpace(name)
 		s.meta.FirstPromptPreview = normalizeFirstPromptPreview(firstPromptPreview)
-		s.meta.UpdatedAt = time.Now().UTC()
-		return nil
-	})
-}
-
-func (s *Store) SetParentSessionID(parentSessionID *string) error {
-	return s.mutateAndPersist(func() error {
-		if parentSessionID == nil {
-			s.meta.ParentSessionID = nil
-			s.meta.UpdatedAt = time.Now().UTC()
-			return nil
-		}
-		normalized := strings.TrimSpace(*parentSessionID)
-		if normalized == "" {
-			return errors.New("parent session id is required")
-		}
-		s.meta.ParentSessionID = &normalized
 		s.meta.UpdatedAt = time.Now().UTC()
 		return nil
 	})

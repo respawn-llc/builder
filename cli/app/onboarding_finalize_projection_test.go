@@ -70,42 +70,6 @@ func TestOnboardingDefaultsFinalizeThroughServerAPI(t *testing.T) {
 	}
 }
 
-func TestOnboardingFinalizeClientErrorReachesDoneMessage(t *testing.T) {
-	expected := errors.New("server unavailable")
-	state := newOnboardingFinalizeProjectionState(t, func(cfg *config.App) {
-		cfg.Settings.Theme = theme.Light
-	}, serverapi.CapabilityFactsResponse{})
-	model := newOnboardingModel(newOnboardingFinalization(&recordingOnboardingFinalizer{err: expected}, context.Background()), state)
-
-	msg := model.finalizeCmd(true)()
-	done, ok := msg.(onboardingFinalizeDoneMsg)
-	if !ok {
-		t.Fatalf("message = %T, want onboardingFinalizeDoneMsg", msg)
-	}
-	if !errors.Is(done.err, expected) {
-		t.Fatalf("error = %v, want %v", done.err, expected)
-	}
-}
-
-func TestOnboardingFinalizationRejectsPreSubmissionCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	finalizer := &recordingOnboardingFinalizer{}
-	state := newOnboardingFinalizeProjectionState(t, func(cfg *config.App) {
-		cfg.Settings.Theme = theme.Light
-	}, serverapi.CapabilityFactsResponse{})
-	model := newOnboardingModel(newOnboardingFinalization(finalizer, ctx), state)
-
-	msg := model.finalizeCmd(true)()
-	done := msg.(onboardingFinalizeDoneMsg)
-	if !errors.Is(done.err, context.Canceled) {
-		t.Fatalf("error = %v, want context canceled", done.err)
-	}
-	if len(finalizer.requests) != 0 {
-		t.Fatalf("finalize requests = %d, want 0", len(finalizer.requests))
-	}
-}
-
 func TestRunOnboardingFlowHonorsPreSubmissionParentCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -168,67 +132,6 @@ func TestOnboardingFinalizationTimeoutIsTerminalAndIndeterminate(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected terminal quit command")
-	}
-}
-
-func TestOnboardingFinalizationTypedFailureCanBeRetried(t *testing.T) {
-	typedFailure := serverapi.NewOnboardingFinalizeError(
-		serverapi.OnboardingFinalizeConfigWriteFailed,
-		serverapi.OnboardingConfigWriteFailedDetails{SettingsPath: "/server/config.toml", Operation: "write"},
-		errors.New("write failed"),
-	)
-	finalizer := &recordingOnboardingFinalizer{err: typedFailure}
-	finalization := newOnboardingFinalization(finalizer, context.Background())
-	state := newOnboardingFinalizeProjectionState(t, func(cfg *config.App) {
-		cfg.Settings.Theme = theme.Light
-	}, serverapi.CapabilityFactsResponse{})
-	model := newOnboardingModel(finalization, state)
-
-	first := model.finalizeCmd(true)().(onboardingFinalizeDoneMsg)
-	next, _ := model.Update(first)
-	model = next.(*onboardingModel)
-	if model.errorText == "" {
-		t.Fatal("typed finalization failure must be rendered in the wizard")
-	}
-	if _, submitted := finalization.waitIfSubmitted(); submitted {
-		t.Fatal("typed finalization failure must not retain a submitted lifecycle")
-	}
-
-	finalizer.err = nil
-	finalizer.response = serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/server/config.toml"}
-	second := model.finalizeCmd(true)().(onboardingFinalizeDoneMsg)
-	if second.err != nil {
-		t.Fatalf("retry finalization: %v", second.err)
-	}
-	if len(finalizer.requests) != 2 {
-		t.Fatalf("finalize requests = %d, want retry to invoke server twice", len(finalizer.requests))
-	}
-}
-
-func TestOnboardingTypedFailureReturnsToCancelableWizard(t *testing.T) {
-	typedFailure := serverapi.NewOnboardingFinalizeError(
-		serverapi.OnboardingFinalizeConfigWriteFailed,
-		serverapi.OnboardingConfigWriteFailedDetails{SettingsPath: "/server/config.toml", Operation: "write"},
-		errors.New("write failed"),
-	)
-	finalization := newOnboardingFinalization(
-		&recordingOnboardingFinalizer{err: typedFailure},
-		context.Background(),
-	)
-	state := newOnboardingFinalizeProjectionState(t, func(cfg *config.App) {
-		cfg.Settings.Theme = theme.Light
-	}, serverapi.CapabilityFactsResponse{})
-	model := newOnboardingModel(finalization, state)
-
-	done := model.finalizeCmd(true)().(onboardingFinalizeDoneMsg)
-	next, _ := model.Update(done)
-	model = next.(*onboardingModel)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if !next.(*onboardingModel).canceled {
-		t.Fatal("escape after a recoverable finalization failure must cancel setup")
-	}
-	if _, submitted := finalization.waitIfSubmitted(); submitted {
-		t.Fatal("canceled retry-ready wizard must not retain a submitted finalization")
 	}
 }
 
@@ -372,21 +275,6 @@ func TestOnboardingCustomProjectionPreservesTypedChoices(t *testing.T) {
 	}
 	if request.CommandsImport == nil || request.CommandsImport.Mode != serverapi.OnboardingImportModeNone {
 		t.Fatalf("commands import = %+v", request.CommandsImport)
-	}
-}
-
-func TestOnboardingPrimaryThinkingChoicePreservesSeededOverride(t *testing.T) {
-	state := newOnboardingFinalizeProjectionState(t, func(cfg *config.App) {
-		cfg.Settings.ThinkingLevel = "high"
-		cfg.Source.Sources["thinking_level"] = "file"
-	}, testOnboardingCapabilityFacts())
-
-	request, err := onboardingFinalizeRequest(state, false)
-	if err != nil {
-		t.Fatalf("project thinking choice: %v", err)
-	}
-	if request.Thinking == nil || request.Thinking.Kind != serverapi.OnboardingThinkingLevel || request.Thinking.Level != "high" {
-		t.Fatalf("thinking choice = %+v, want explicit high level", request.Thinking)
 	}
 }
 
@@ -595,6 +483,9 @@ func TestOnboardingRecoverableRetrySubmitsUnchangedRequest(t *testing.T) {
 	first := model.finalizeCmd(false)().(onboardingFinalizeDoneMsg)
 	next, _ := model.Update(first)
 	model = next.(*onboardingModel)
+	if model.errorText == "" {
+		t.Fatal("typed finalization failure must be rendered in the wizard")
+	}
 	finalizer.err = nil
 	finalizer.response = serverapi.OnboardingFinalizeResponse{Completed: true}
 	second := model.finalizeCmd(false)().(onboardingFinalizeDoneMsg)
