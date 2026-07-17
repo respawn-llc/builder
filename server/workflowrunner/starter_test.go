@@ -717,10 +717,7 @@ func TestStarterAutoUsesRunStartSnapshotForContinuationDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newStarterFixture(t, config.WorkflowCompletionModeAuto)
-			workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, tt.snapshotMode, "coder")
-			if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-				t.Fatalf("LinkWorkflow chained: %v", err)
-			}
+			workflowID := fixture.linkChainedWorkflow(t, tt.snapshotMode, "coder")
 			claimed, _, plan := fixture.claimPlannedRun(t)
 			updateChainedStarterWorkflowNextEdgeContextMode(t, fixture.metadata, workflowID, tt.liveMode)
 			input, err := fixture.store.GetRunStartContext(context.Background(), claimed.ID)
@@ -848,11 +845,7 @@ func TestStarterStartWorkflowRunPersistsEffectiveCompletionModeBeforeModelReques
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeAuto)
 	fixture.clientFactory = func(SchedulerStartRunRequest) llm.Client { return client }
 	fixture.rebuildStarter(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Process(context.Background()); err != nil {
@@ -875,11 +868,7 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`))
 	disableCoderShell(t, &fixture)
 	fixture.rebuildStarter(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
 		t.Fatalf("first Process: %v", err)
 	}
@@ -915,11 +904,7 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 
 func TestSchedulerRunsNextAgentWithBoundInputsAndTaskWorktreeContext(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
-	workflowID := createChainedStarterWorkflow(t, fixture.store)
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeNewSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Start(context.Background()); err != nil {
@@ -1003,11 +988,7 @@ func TestBuildWorkflowTaskInstructionsRendersTransitionCommentaryParameter(t *te
 
 func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Start(context.Background()); err != nil {
@@ -1047,11 +1028,7 @@ func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 
 func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	firstScheduler := fixture.scheduler(t)
 
 	if err := firstScheduler.Process(context.Background()); err != nil {
@@ -1103,11 +1080,7 @@ func TestWorkflowRuntimeCompactAndContinueReusesSourceSessionWithRealCompaction(
 			Input: json.RawMessage(`{"commentary":"second done"}`),
 		}),
 	)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeCompactAndContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeCompactAndContinueSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Process(context.Background()); err != nil {
@@ -1202,11 +1175,7 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	)
 	fixture.clientFactory = func(SchedulerStartRunRequest) llm.Client { return fixture.client }
 	fixture.rebuildStarter(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeCompactAndContinueSession, "reviewer")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeCompactAndContinueSession, "reviewer")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Process(context.Background()); err != nil {
@@ -1469,11 +1438,7 @@ func TestWorkflowRuntimeStartsWorkflowHiddenConfiguredNoOpRole(t *testing.T) {
 		WorkflowSubagentSet: true,
 	}
 	fixture.rebuildStarter(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeNewSession, "planner")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeNewSession, "planner")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Process(context.Background()); err != nil {
@@ -1897,6 +1862,21 @@ func (f starterFixture) createStartedTask(t *testing.T) workflowstore.TaskRecord
 		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
 	}
 	return task
+}
+
+func (f starterFixture) linkChainedWorkflow(t *testing.T, contextMode workflow.ContextMode, targetRole string) workflow.WorkflowID {
+	t.Helper()
+	workflowID := createChainedStarterWorkflowWithContextMode(t, f.store, contextMode, targetRole)
+	if _, err := f.store.LinkWorkflow(context.Background(), f.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow chained: %v", err)
+	}
+	return workflowID
+}
+
+func (f starterFixture) createStartedChainedTask(t *testing.T, contextMode workflow.ContextMode, targetRole string) workflowstore.TaskRecord {
+	t.Helper()
+	f.linkChainedWorkflow(t, contextMode, targetRole)
+	return f.createStartedTask(t)
 }
 
 func (f starterFixture) createStartedTaskWithoutManagedWorktree(t *testing.T) workflowstore.TaskRecord {
@@ -2613,11 +2593,6 @@ func createStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.Wo
 		t.Fatalf("AddEdge done: %v", err)
 	}
 	return created.ID
-}
-
-func createChainedStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.WorkflowID {
-	t.Helper()
-	return createChainedStarterWorkflowWithContextMode(t, store, workflow.ContextModeNewSession, "coder")
 }
 
 func createChainedStarterWorkflowWithContextMode(t *testing.T, store *workflowstore.Store, contextMode workflow.ContextMode, targetRole string) workflow.WorkflowID {
