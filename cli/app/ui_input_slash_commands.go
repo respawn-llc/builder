@@ -40,9 +40,6 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 	if m.isBusy() {
 		switch command.ActiveRunPolicy {
 		case commands.ActiveRunPolicyAllowed:
-		case commands.ActiveRunPolicyQueueUntilIdle:
-			next, cmd := c.queueOrStartSubmission(commandText)
-			return true, next, cmd
 		default:
 			m.clearInput()
 			return true, m, c.model.sendTransientStatusWithNoticeID(fmt.Sprintf("cannot run /%s while model is working", command.Name), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")

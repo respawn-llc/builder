@@ -30,17 +30,7 @@ func runExclusiveStepWhenIdle(ctx context.Context, steps exclusiveStepLifecycle,
 	if fn == nil {
 		return nil
 	}
-	for {
-		err := steps.Run(ctx, exclusiveStepOptions{ActiveKind: activeKind}, fn)
-		if !errors.Is(err, ErrAgentBusy) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(queuedUserSubmissionBusyRetryDelay):
-		}
-	}
+	return steps.RunNext(ctx, exclusiveStepOptions{ActiveKind: activeKind}, fn)
 }
 
 func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind ActiveKind, fn func() error) error {

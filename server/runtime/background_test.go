@@ -30,6 +30,10 @@ func (s *blockingBackgroundStepLifecycle) Run(ctx context.Context, _ exclusiveSt
 	return err
 }
 
+func (s *blockingBackgroundStepLifecycle) RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+	return s.Run(ctx, options, fn)
+}
+
 func (s *blockingBackgroundStepLifecycle) Interrupt() error { return nil }
 func (s *blockingBackgroundStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunSnapshot, error) {
 	return nil, nil

@@ -1036,6 +1036,42 @@ func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
 	}
 }
 
+func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	client := newScriptedGoalLoopClient()
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	client.beforeReturn = func(call int) {
+		if call == 3 {
+			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+		}
+	}
+	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	client.waitStarted(t, 1)
+
+	compactDone := make(chan error, 1)
+	go func() { compactDone <- engine.CompactContext(context.Background(), "preserve active goal") }()
+	time.Sleep(75 * time.Millisecond)
+	client.releaseCall(1)
+
+	client.waitStarted(t, 2)
+	if active := engine.ActiveRun(); active == nil || active.ActiveKind != ActiveKindCompaction {
+		t.Fatalf("second model request active run = %+v, want compaction before the next goal turn", active)
+	}
+	client.releaseCall(2)
+	if err := <-compactDone; err != nil {
+		t.Fatalf("CompactContext: %v", err)
+	}
+
+	client.waitStarted(t, 3)
+	client.releaseCall(3)
+	waitGoalLoopRunning(t, engine, false)
+}
+
 func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	if _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {

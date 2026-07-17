@@ -54,7 +54,7 @@ func TestExecuteBuiltins(t *testing.T) {
 func TestDefaultRegistryActiveRunPolicies(t *testing.T) {
 	registry := NewDefaultRegistry()
 	for name, want := range map[string]ActiveRunPolicy{
-		"compact":  ActiveRunPolicyQueueUntilIdle,
+		"compact":  ActiveRunPolicyAllowed,
 		"worktree": ActiveRunPolicyRequiresIdle,
 	} {
 		command, ok := registry.Command("/" + name)

@@ -26,8 +26,13 @@ type defaultExclusiveStepLifecycle struct {
 
 	mu                 sync.Mutex
 	active             *exclusiveRunState
+	nextWaiters        []*exclusiveStepWaiter
 	runSeq             uint64
 	terminalPublishing bool
+}
+
+type exclusiveStepWaiter struct {
+	ready chan struct{}
 }
 
 type exclusiveRunState struct {
@@ -43,7 +48,21 @@ type exclusiveRunState struct {
 }
 
 func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) (err error) {
-	stepCtx, stepID, err := s.begin(ctx, options)
+	return s.run(ctx, options, false, fn)
+}
+
+func (s *defaultExclusiveStepLifecycle) RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+	return s.run(ctx, options, true, fn)
+}
+
+func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusiveStepOptions, waitForNext bool, fn func(stepCtx context.Context, stepID string) error) (err error) {
+	var stepCtx context.Context
+	var stepID string
+	if waitForNext {
+		stepCtx, stepID, err = s.beginNext(ctx, options)
+	} else {
+		stepCtx, stepID, err = s.begin(ctx, options)
+	}
 	if err != nil {
 		return err
 	}
@@ -112,14 +131,7 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
 			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
 		}
-		if status != RunStatusFailed {
-			if !s.engine.scheduleQueuedUserInjectionsIfIdle() && s.background != nil {
-				s.background.ScheduleIfIdle()
-			}
-		} else if s.background != nil {
-			s.background.ScheduleIfIdle()
-		}
-		if startErr := s.engine.startPendingGoalLoop(); startErr != nil {
+		if startErr := s.scheduleIdleWork(status != RunStatusFailed); startErr != nil {
 			err = errors.Join(err, startErr)
 		}
 	}
@@ -169,7 +181,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 func (s *defaultExclusiveStepLifecycle) IsBusy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active != nil || s.terminalPublishing
+	return s.active != nil || s.terminalPublishing || len(s.nextWaiters) > 0
 }
 
 func (s *defaultExclusiveStepLifecycle) Snapshot() *RunSnapshot {
@@ -206,26 +218,75 @@ func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclu
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	select {
-	case <-ctx.Done():
-		return nil, "", ctx.Err()
-	default:
+	if err := validateExclusiveStepStart(ctx, options); err != nil {
+		return nil, "", err
 	}
 	s.mu.Lock()
-	if s.active != nil || s.terminalPublishing {
+	if s.active != nil || s.terminalPublishing || len(s.nextWaiters) > 0 {
 		s.mu.Unlock()
 		return nil, "", ErrAgentBusy
 	}
-	if !options.ActiveKind.Valid() {
+	if err := ctx.Err(); err != nil {
 		s.mu.Unlock()
-		return nil, "", fmt.Errorf("exclusive step active kind is required")
+		return nil, "", err
 	}
+	stepCtx, stepID := s.activateLocked(ctx, options)
+	s.mu.Unlock()
+	return s.publishStepBegan(options, stepCtx, stepID)
+}
+
+func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options exclusiveStepOptions) (context.Context, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := validateExclusiveStepStart(ctx, options); err != nil {
+		return nil, "", err
+	}
+
+	s.mu.Lock()
+	if s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0 {
+		stepCtx, stepID := s.activateLocked(ctx, options)
+		s.mu.Unlock()
+		return s.publishStepBegan(options, stepCtx, stepID)
+	}
+	waiter := &exclusiveStepWaiter{ready: make(chan struct{})}
+	s.nextWaiters = append(s.nextWaiters, waiter)
+	s.mu.Unlock()
+
 	select {
 	case <-ctx.Done():
-		s.mu.Unlock()
-		return nil, "", ctx.Err()
-	default:
+	case <-waiter.ready:
 	}
+	if err := ctx.Err(); err != nil {
+		idle := s.cancelNextWaiter(waiter)
+		if idle {
+			return nil, "", errors.Join(err, s.scheduleIdleWork(true))
+		}
+		return nil, "", err
+	}
+
+	s.mu.Lock()
+	if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter || s.active != nil || s.terminalPublishing {
+		s.mu.Unlock()
+		return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
+	}
+	s.nextWaiters = s.nextWaiters[1:]
+	stepCtx, stepID := s.activateLocked(ctx, options)
+	s.mu.Unlock()
+	return s.publishStepBegan(options, stepCtx, stepID)
+}
+
+func validateExclusiveStepStart(ctx context.Context, options exclusiveStepOptions) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !options.ActiveKind.Valid() {
+		return errors.New("exclusive step active kind is required")
+	}
+	return nil
+}
+
+func (s *defaultExclusiveStepLifecycle) activateLocked(ctx context.Context, options exclusiveStepOptions) (context.Context, string) {
 	stepCtx, cancel := context.WithCancel(ctx)
 	s.runSeq++
 	runID := uuid.NewString()
@@ -240,8 +301,10 @@ func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclu
 		stepID:     stepID,
 		startedAt:  startedAt,
 	}
-	s.mu.Unlock()
+	return stepCtx, stepID
+}
 
+func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOptions, stepCtx context.Context, stepID string) (context.Context, string, error) {
 	if snapshot := s.Snapshot(); snapshot != nil && s.engine.cfg.StepLifecycle != nil {
 		if err := s.engine.cfg.StepLifecycle.StepBegan(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionBegan, *snapshot)); err != nil {
 			finished := s.snapshotWithFinishedAt(time.Now().UTC(), RunStatusFailed)
@@ -274,9 +337,47 @@ func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclu
 	return stepCtx, stepID, nil
 }
 
+func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWaiter) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index, candidate := range s.nextWaiters {
+		if candidate != waiter {
+			continue
+		}
+		s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
+		s.notifyNextWaiterLocked()
+		return s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0
+	}
+	return false
+}
+
+func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
+	if s.active != nil || s.terminalPublishing || len(s.nextWaiters) == 0 {
+		return
+	}
+	waiter := s.nextWaiters[0]
+	select {
+	case <-waiter.ready:
+	default:
+		close(waiter.ready)
+	}
+}
+
+func (s *defaultExclusiveStepLifecycle) scheduleIdleWork(scheduleQueuedUserWork bool) error {
+	if scheduleQueuedUserWork {
+		if !s.engine.scheduleQueuedUserInjectionsIfIdle() && s.background != nil {
+			s.background.ScheduleIfIdle()
+		}
+	} else if s.background != nil {
+		s.background.ScheduleIfIdle()
+	}
+	return s.engine.startPendingGoalLoop()
+}
+
 func (s *defaultExclusiveStepLifecycle) end() {
 	s.mu.Lock()
 	s.active = nil
+	s.notifyNextWaiterLocked()
 	s.mu.Unlock()
 }
 
@@ -290,6 +391,7 @@ func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 	s.mu.Lock()
 	s.terminalPublishing = false
+	s.notifyNextWaiterLocked()
 	s.mu.Unlock()
 }
 

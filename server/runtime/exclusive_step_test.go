@@ -18,6 +18,7 @@ type stubExclusiveStepLifecycle struct {
 	mu           sync.Mutex
 	busy         bool
 	runCalls     int
+	runNextCalls int
 	runFn        func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
 	snapshot     *RunSnapshot
 	activeStepID string
@@ -102,6 +103,16 @@ func (s *stubExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveS
 	return fn(ctx, "stub-step")
 }
 
+func (s *stubExclusiveStepLifecycle) RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+	s.mu.Lock()
+	s.runNextCalls++
+	s.mu.Unlock()
+	if s.runFn != nil {
+		return s.runFn(ctx, options, fn)
+	}
+	return fn(ctx, "stub-step")
+}
+
 func (s *stubExclusiveStepLifecycle) Interrupt() error {
 	return nil
 }
@@ -141,7 +152,13 @@ func (s *stubExclusiveStepLifecycle) setBusy(busy bool) {
 func (s *stubExclusiveStepLifecycle) calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.runCalls
+	return s.runCalls + s.runNextCalls
+}
+
+func (s *stubExclusiveStepLifecycle) nextCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runNextCalls
 }
 
 func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
@@ -822,38 +839,13 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 	if steps.calls() != 1 {
 		t.Fatalf("expected compaction to execute through exclusive step lifecycle once, got %d", steps.calls())
 	}
+	if steps.nextCalls() != 1 {
+		t.Fatalf("expected compaction to reserve the next exclusive-step boundary, got %d queued calls", steps.nextCalls())
+	}
 	client.mu.Lock()
 	callCount := len(client.calls)
 	client.mu.Unlock()
 	if callCount != 1 {
 		t.Fatalf("expected one local compaction model call, got %d", callCount)
-	}
-}
-
-func TestContextCompactorRetriesBusyExclusiveStep(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
-		t.Fatalf("append seed message: %v", err)
-	}
-
-	attempts := 0
-	steps := &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, _ exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
-		attempts++
-		if attempts == 1 {
-			return ErrAgentBusy
-		}
-		return fn(ctx, "compact-step")
-	}}
-	compactor := &defaultContextCompactor{engine: eng, steps: steps}
-	if _, err := compactor.CompactContextWithActiveHook(context.Background(), "", nil); err != nil {
-		t.Fatalf("compact context: %v", err)
-	}
-	if attempts != 2 {
-		t.Fatalf("exclusive-step attempts = %d, want one busy retry then compaction", attempts)
 	}
 }
