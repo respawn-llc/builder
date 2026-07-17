@@ -266,9 +266,10 @@ func answerRemoteTranscriptPrompt(t *testing.T, answerer *transcriptPromptAnswer
 	if err != nil {
 		t.Fatalf("prepare transcript prompt answer: %v", err)
 	}
-	result, ok := cmd().(promptAnswerDeliveryResultMsg)
+	msg := cmd()
+	result, ok := msg.(promptAnswerDeliveryResultMsg)
 	if !ok {
-		t.Fatalf("transcript prompt answer result type = %T", cmd())
+		t.Fatalf("transcript prompt answer result type = %T", msg)
 	}
 	if result.err != nil {
 		t.Fatalf("deliver transcript prompt answer: %v", result.err)

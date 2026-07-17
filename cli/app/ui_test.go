@@ -522,7 +522,7 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 		t.Fatal("deny commentary did not create a direct approval delivery command")
 	}
 	updated = runPromptDeliveryCommand(t, updated, cmd)
-	request := <-control.approvalRequests
+	request := requireApprovalRequest(t, control)
 	if request.Decision != clientui.ApprovalDecisionDeny || request.Commentary != "blocked by policy" {
 		t.Fatalf("unexpected approval request: %+v", request)
 	}

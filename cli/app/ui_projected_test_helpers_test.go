@@ -101,7 +101,29 @@ func submitAskPromptKey(t *testing.T, model *uiModel, control *recordingPromptCo
 	t.Helper()
 	next, command := model.Update(key)
 	updated := runPromptDeliveryCommand(t, next.(*uiModel), command)
-	return updated, <-control.askRequests
+	return updated, requireAskRequest(t, control)
+}
+
+func requireAskRequest(t *testing.T, control *recordingPromptControl) serverapi.AskAnswerRequest {
+	t.Helper()
+	select {
+	case request := <-control.askRequests:
+		return request
+	default:
+		t.Fatal("completed prompt delivery recorded no ask request")
+		return serverapi.AskAnswerRequest{}
+	}
+}
+
+func requireApprovalRequest(t *testing.T, control *recordingPromptControl) serverapi.ApprovalAnswerRequest {
+	t.Helper()
+	select {
+	case request := <-control.approvalRequests:
+		return request
+	default:
+		t.Fatal("completed prompt delivery recorded no approval request")
+		return serverapi.ApprovalAnswerRequest{}
+	}
 }
 
 func newProjectedEngineUIModel(engine *runtime.Engine, opts ...UIOption) *uiModel {

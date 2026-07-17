@@ -49,7 +49,7 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = runPromptDeliveryCommand(t, next.(*uiModel), cmd)
-	request := <-control.askRequests
+	request := requireAskRequest(t, control)
 	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 1 {
 		t.Fatalf("expected first option selected by default, got %+v", request)
 	}
@@ -91,7 +91,7 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = runPromptDeliveryCommand(t, next.(*uiModel), cmd)
-	request := <-control.askRequests
+	request := requireAskRequest(t, control)
 	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 1 {
 		t.Fatalf("expected first option selected by default, got %+v", request)
 	}
