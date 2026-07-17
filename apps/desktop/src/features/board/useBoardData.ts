@@ -7,11 +7,11 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 
-import type { BoardNodeCardsPage } from "../../api";
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { workflowProjectEvent, workflowProjectQuestionTaskID } from "../../app/workflowProjectEvents";
+import type { BoardNodeCardsPage, WorkflowProjectEvent } from "@/api";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { workflowProjectQuestionTaskID } from "@/app-facade";
 
 export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
@@ -55,7 +55,7 @@ export function useProjectBoardSubscription(
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   const connection = useConnectionSnapshot();
-  const { onBackgroundError, onSelectedTaskDeleted, selectedTaskID = "", selectedWorkflowID } = input;
+  const { onBackgroundError, onSelectedTaskDeleted, selectedTaskID, selectedWorkflowID } = input;
   const consumeBackgroundError = useCallback(
     (error: unknown): void => {
       onBackgroundError?.(error);
@@ -80,8 +80,8 @@ export function useProjectBoardSubscription(
       await queryClient.invalidateQueries({ queryKey: queryKeys.attention("") });
       await queryClient.invalidateQueries({ queryKey: queryKeys.attention(projectID) });
     }
-    async function refreshQuestionTask(params: unknown): Promise<void> {
-      const taskID = workflowProjectQuestionTaskID(params);
+    async function refreshQuestionTask(event: WorkflowProjectEvent): Promise<void> {
+      const taskID = workflowProjectQuestionTaskID(event);
       if (taskID === null) {
         return;
       }
@@ -95,12 +95,12 @@ export function useProjectBoardSubscription(
       onOpen() {
         void refresh().catch(consumeBackgroundError);
       },
-      onEvent(_method, params) {
-        if (isDeletedTaskEvent(params, selectedTaskID)) {
+      onEvent(event) {
+        if (isDeletedTaskEvent(event, selectedTaskID)) {
           onSelectedTaskDeleted?.();
         }
-        void refreshQuestionTask(params).catch(consumeBackgroundError);
-        if (shouldRefreshBoardFromProjectEvent(params, boardQueryWorkflowID, selectedWorkflowID)) {
+        void refreshQuestionTask(event).catch(consumeBackgroundError);
+        if (shouldRefreshBoardFromProjectEvent(event, boardQueryWorkflowID, selectedWorkflowID)) {
           void refresh().catch(consumeBackgroundError);
         }
       },
@@ -129,30 +129,28 @@ export function useProjectBoardSubscription(
   ]);
 }
 
-function isDeletedTaskEvent(params: unknown, taskID: string): boolean {
+function isDeletedTaskEvent(event: WorkflowProjectEvent, taskID: string | undefined): boolean {
+  if (taskID === undefined) {
+    return false;
+  }
   const trimmedTaskID = taskID.trim();
-  const event = workflowProjectEvent(params);
-  if (trimmedTaskID.length === 0 || event === null) {
+  if (trimmedTaskID.length === 0) {
     return false;
   }
   return event.resource === "task" && event.action === "deleted" && event.changedIDs.includes(trimmedTaskID);
 }
 
 export function shouldRefreshBoardFromProjectEvent(
-  params: unknown,
+  event: WorkflowProjectEvent,
   boardQueryWorkflowID: string | undefined,
   selectedWorkflowID: string | undefined,
 ): boolean {
-  const event = workflowProjectEvent(params);
-  if (event === null) {
-    return true;
-  }
   if (event.resource === "workflow_link") {
     return true;
   }
   if (event.resource === "workflow" || event.resource === "task") {
     return (
-      event.workflowID.length === 0 ||
+      event.workflowID === null ||
       event.workflowID === boardQueryWorkflowID ||
       event.workflowID === selectedWorkflowID
     );

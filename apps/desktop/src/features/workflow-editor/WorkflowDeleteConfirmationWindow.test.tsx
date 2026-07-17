@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { vi } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
+import { initializeI18n } from "@/i18n";
 import { WorkflowDeleteConfirmationFallbackDialog } from "./WorkflowDeleteConfirmationWindow";
 
 void initializeI18n();

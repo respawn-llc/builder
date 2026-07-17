@@ -4,7 +4,7 @@ import {
   defaultWorkflowExecutionTargetPolicy,
   emptyWorkflowDerivedWiring,
   type WorkflowDefinition,
-} from "../../api";
+} from "@/api";
 import {
   initializeWorkflowEditorDraft,
   workflowDefinitionFromDraft,

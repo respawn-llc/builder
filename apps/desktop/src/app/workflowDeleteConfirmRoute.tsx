@@ -1,8 +1,10 @@
 import { createRoute, type AnyRootRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
-import { WorkflowDeleteConfirmationWindowRoute } from "../features/workflow-editor/WorkflowDeleteConfirmationWindow";
-import { workflowDeleteConfirmationWindowTargetFromSearch } from "../features/workflow-editor/workflowDeleteConfirmationModel";
+import {
+  WorkflowDeleteConfirmationWindowRoute,
+  workflowDeleteConfirmationWindowTargetFromSearch,
+} from "@/features/workflow-editor";
 
 export const workflowDeleteConfirmNativeDialogPath = "/native-dialog/workflow-delete-confirm";
 
@@ -25,7 +27,11 @@ export function createWorkflowDeleteConfirmWindowRoute(rootRoute: AnyRootRoute) 
     component() {
       const rawSearch: unknown = route.useSearch();
       const search = workflowDeleteConfirmSearchSchema.parse(rawSearch);
-      return <WorkflowDeleteConfirmationWindowRoute {...workflowDeleteConfirmationWindowTargetFromSearch(search)} />;
+      return (
+        <WorkflowDeleteConfirmationWindowRoute
+          {...workflowDeleteConfirmationWindowTargetFromSearch(search)}
+        />
+      );
     },
   });
   return route;

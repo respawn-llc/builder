@@ -3,10 +3,10 @@ import type { MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, IslandSurface } from "../../ui";
-import { cx } from "../../ui/classes";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, IslandSurface } from "@/ui";
+import { cx } from "@/ui";
 import { workflowEdgePath } from "./workflowEdgePath";
-import { workflowEdgeColor } from "./workflowGraphColors";
+import { workflowEdgeColor } from "@/shared/workflow-edge";
 import type { WorkflowGraphEdge as WorkflowGraphEdgeModel } from "./workflowGraphLayout";
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
 import { workflowGraphZOrder } from "./workflowGraphZOrder";
@@ -104,7 +104,9 @@ export function WorkflowGraphEdge(
                 as="div"
                 className={cx(
                   "workflow-editor-edge-label absolute max-w-[180px] truncate rounded-full px-[var(--space-2)] py-[2px] text-xs font-semibold text-[var(--color-on-background)]",
-                  props.data?.hasError === true ? "border-[var(--color-error)]" : "border-[var(--color-outline)]",
+                  props.data?.hasError === true
+                    ? "border-[var(--color-error)]"
+                    : "border-[var(--color-outline)]",
                 )}
                 data-testid={`workflow-edge-label-${props.id}`}
                 level={1}
@@ -119,7 +121,9 @@ export function WorkflowGraphEdge(
               </IslandSurface>
             </ContextMenuTrigger>
             <ContextMenuContent level={3}>
-              <ContextMenuItem onSelect={deleteFromContextMenu}>{t("workflowEditor.deleteEdge")}</ContextMenuItem>
+              <ContextMenuItem onSelect={deleteFromContextMenu}>
+                {t("workflowEditor.deleteEdge")}
+              </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
         </EdgeLabelRenderer>

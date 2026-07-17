@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactFlow as ReactFlowComponent } from "@xyflow/react";
 import { z } from "zod";
 
-import { initializeI18n } from "../../i18n/setup";
-import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
+import { initializeI18n } from "@/i18n";
+import { workflowEditorEnglish } from "@/i18n";
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
 
 type ReactFlowProps = ComponentProps<typeof ReactFlowComponent>;

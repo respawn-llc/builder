@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { appI18n, initializeI18n } from "../../i18n/setup";
+import { appI18n, initializeI18n } from "@/i18n";
 import type { PendingMissingInputDrop } from "./BoardDropActions";
 import { MissingInputsDialog } from "./BoardDropDialogs";
 

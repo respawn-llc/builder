@@ -5,7 +5,7 @@ import type {
   WorkflowNode,
   WorkflowNodeGroup,
   WorkflowTransitionGroup,
-} from "../../api";
+} from "@/api";
 
 export function workflowGraphsEqual(left: WorkflowDefinition, right: WorkflowDefinition): boolean {
   return (
@@ -33,7 +33,11 @@ function workflowNodesEqual(a: WorkflowNode, b: WorkflowNode): boolean {
 }
 
 function workflowNodeMetadataEqual(a: WorkflowNode, b: WorkflowNode): boolean {
-  return sameLengthAndEvery(workflowNodeMetadataValues(a), workflowNodeMetadataValues(b), (left, right) => left === right);
+  return sameLengthAndEvery(
+    workflowNodeMetadataValues(a),
+    workflowNodeMetadataValues(b),
+    (left, right) => left === right,
+  );
 }
 
 function workflowNodeMetadataValues(node: WorkflowNode): readonly string[] {

@@ -45,7 +45,12 @@ const inlineElements = {
 export function MarkdownPlainText({ value }: Readonly<{ value: string }>) {
   return (
     <span className="markdown-plain-text">
-      <ReactMarkdown components={inlineElements} rehypePlugins={[rehypeSanitize]} remarkPlugins={[remarkGfm]} skipHtml>
+      <ReactMarkdown
+        components={inlineElements}
+        rehypePlugins={[rehypeSanitize]}
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+      >
         {value}
       </ReactMarkdown>
     </span>

@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { WorkflowDefinition } from "../../api";
+import type { WorkflowDefinition } from "@/api";
 import { draftDefinitionFromSource } from "./workflowEditorDraft";
 import {
   edgesForTransition,
   groupableWorkflowDefinition,
   joinWorkflowDefinition,
+  withJoinProvider,
   workflowDefinition,
-} from "../../test-support/workflow-editor/workflowEditorGraphMutationFixtures";
+} from "./workflowEditorGraphMutationFixtures";
 import {
   addWorkflowNode,
   addWorkflowNodeToGroup,
@@ -843,21 +844,6 @@ const auditInferredTopologyIDs = {
   existingBranchJoinTransitionGroupID: "group-unused-existing-join",
   fanoutEdgeID: "edge-start-audit",
 };
-
-function withJoinProvider(
-  draft: ReturnType<typeof draftDefinitionFromSource>,
-  joinNodeID: string,
-  inputName: string,
-  providerEdgeID: string,
-) {
-  return {
-    ...draft,
-    nodes: draft.nodes.map((node) =>
-      node.id === joinNodeID ? { ...node, joinInputProviders: [{ inputName, providerEdgeID }] } : node,
-    ),
-  };
-}
-
 function withSourceTransitionIDConflict(draft: ReturnType<typeof draftDefinitionFromSource>) {
   return {
     ...draft,

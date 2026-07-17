@@ -13,15 +13,10 @@ export const homeListCardMaxWidthClassName = "max-w-[600px]";
 
 export const homeListCardListMaxWidthClassName = "[&>*]:max-w-[600px]";
 
-export const HomeListCard = forwardRef<HTMLElement, HomeListCardProps>(function HomeListCard({
-  action,
-  ariaLabel,
-  children,
-  className,
-  onClick,
-  title,
-  ...articleProps
-}, ref) {
+export const HomeListCard = forwardRef<HTMLElement, HomeListCardProps>(function HomeListCard(
+  { action, ariaLabel, children, className, onClick, title, ...articleProps },
+  ref,
+) {
   return (
     <article
       {...articleProps}

@@ -2,26 +2,24 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { type ReactNode, useState } from "react";
 import { afterEach, vi } from "vitest";
 
-import { App } from "../../App";
-import type { TaskDetail } from "../../api";
-import type { JsonValue } from "../../api/json";
-import { taskDetailSchema } from "../../api/schemas/workflowBoard";
-import { AppProviders } from "../../app/AppProviders";
-import { createTestServices, startupRoutes } from "../../testSupport/appServices";
+import type { TaskDetail } from "@/api";
+import type { JsonValue } from "@/api";
+import { createTestServices, startupRoutes, TestAppProviders } from "@/test-support/app-services";
 import {
   activityResponse,
+  createTaskDetailFixture,
   getCallCount,
   questionAttention,
   taskDetailNoInboxResponse,
-  taskDetailResponse,
   taskQuestionWaitingEvent,
   taskUpdateParamsSchema,
   taskUpdateResponse,
   taskUpdatedEvent,
-} from "../../testSupport/taskDetailFixtures";
+} from "@/test-support/task-detail";
 import { TaskDetailContent } from "./TaskDetailContent";
 import { initialDescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { DescriptionIsland, type TaskDraft } from "./TaskDetailRows";
+import { TaskDetailSurface } from "./TaskDetailSurface";
 import { useTaskActivity, useTaskComments } from "./useTaskDetailData";
 
 describe("TaskDetailSurface editing", () => {
@@ -160,7 +158,7 @@ describe("TaskDetailSurface editing", () => {
   });
 
   it("resets description presentation when a mounted detail surface switches tasks", async () => {
-    const taskOne: TaskDetail = taskDetailSchema.parse(taskDetailResponse);
+    const taskOne = await createTaskDetailFixture();
     const taskTwo: TaskDetail = {
       ...taskOne,
       id: "task-2",
@@ -220,7 +218,7 @@ describe("TaskDetailSurface editing", () => {
 
     hasQuestion = true;
     act(() => {
-      services.transport.emit("workflow.event", taskQuestionWaitingEvent);
+      services.transport.emit("workflow.project", taskQuestionWaitingEvent);
     });
 
     const question = await screen.findByRole("region", { name: "Question" });
@@ -251,7 +249,7 @@ describe("TaskDetailSurface editing", () => {
     serverBody = "Agent rewrote the body";
     serverUpdatedAt = 99;
     act(() => {
-      services.transport.emit("workflow.event", taskUpdatedEvent);
+      services.transport.emit("workflow.project", taskUpdatedEvent);
     });
 
     await waitFor(() => {
@@ -283,7 +281,7 @@ describe("TaskDetailSurface editing", () => {
     serverTitle = "Renamed by agent";
     serverUpdatedAt = 99;
     act(() => {
-      services.transport.emit("workflow.event", taskUpdatedEvent);
+      services.transport.emit("workflow.project", taskUpdatedEvent);
     });
 
     await waitFor(() => {
@@ -302,7 +300,11 @@ function mountTaskDetail(...routes: readonly TestRoute[]) {
     ...routes,
     { method: "workflow.task.activity.list", result: activityResponse },
   ]);
-  render(<App services={services} />);
+  render(
+    <TestAppProviders services={services}>
+      <TaskDetailSurface enabled taskId="task-1" />
+    </TestAppProviders>,
+  );
   return services;
 }
 
@@ -325,7 +327,9 @@ function makeDescriptionOverflow(description: HTMLElement): void {
 
 function renderWithAppProviders(content: ReactNode) {
   const services = createTestServices(startupRoutes);
-  const withProviders = (child: ReactNode) => <AppProviders services={services}>{child}</AppProviders>;
+  const withProviders = (child: ReactNode) => (
+    <TestAppProviders services={services}>{child}</TestAppProviders>
+  );
   const view = render(withProviders(content));
   return {
     ...view,
@@ -334,7 +338,6 @@ function renderWithAppProviders(content: ReactNode) {
     },
   };
 }
-
 function TaskDetailContentHarness({ detail }: Readonly<{ detail: TaskDetail }>) {
   const activity = useTaskActivity(detail.id, false);
   const comments = useTaskComments(detail.id, false);

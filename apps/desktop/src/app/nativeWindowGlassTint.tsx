@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { NativeBridge, NativeWindowGlassTint } from "@app/native-bridge";
 
-import { errorMessage } from "../api/errors";
+import { errorMessage } from "@/api";
 
 const themeAttribute = "data-theme";
 const windowGlassFillClassName = "window-glass-fill";

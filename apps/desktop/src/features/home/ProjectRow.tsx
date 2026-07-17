@@ -1,12 +1,12 @@
 import { useTranslation } from "react-i18next";
 import { Pencil } from "lucide-react";
 
-import type { ProjectSummary } from "../../api";
-import { formatHomeRelativePath } from "../../app/formatters";
-import { useAppNavigation } from "../../app/navigation";
-import { useSidebar } from "../../app/sidebarContext";
-import { useAppServices } from "../../app/useAppServices";
-import { HomeListCard } from "../../ui";
+import type { ProjectSummary } from "@/api";
+import { formatHomeRelativePath } from "@/app-facade";
+import { useAppNavigation } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { HomeListCard } from "@/ui";
 
 export function ProjectRow({ project }: Readonly<{ project: ProjectSummary }>) {
   const navigation = useAppNavigation();

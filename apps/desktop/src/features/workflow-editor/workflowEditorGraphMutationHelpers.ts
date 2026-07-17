@@ -1,4 +1,4 @@
-import type { WorkflowEdge } from "../../api";
+import type { WorkflowEdge } from "@/api";
 import type { DraftWorkflowDefinition, DraftWorkflowNode } from "./workflowEditorDraftTypes";
 import {
   type WorkflowEditorGraphMutationResult,
@@ -34,7 +34,9 @@ export function deleteNodeIDsInternal(
   );
   const removedEdgeIDs = new Set(
     draft.edges
-      .filter((edge) => nodeIDs.has(edge.targetNodeID) || removedTransitionGroupIDs.has(edge.transitionGroupID))
+      .filter(
+        (edge) => nodeIDs.has(edge.targetNodeID) || removedTransitionGroupIDs.has(edge.transitionGroupID),
+      )
       .map((edge) => edge.id),
   );
   const afterEdges = removeEdgesInternal(draft, removedEdgeIDs);
@@ -66,9 +68,7 @@ export function removeEdgesInternal(
     edges,
     nodes: draft.nodes.map((node) => ({
       ...node,
-      joinInputProviders: node.joinInputProviders.filter(
-        (provider) => !edgeIDs.has(provider.providerEdgeID),
-      ),
+      joinInputProviders: node.joinInputProviders.filter((provider) => !edgeIDs.has(provider.providerEdgeID)),
     })),
     transitionGroups: draft.transitionGroups.filter((group) => nonEmptyTransitionGroupIDs.has(group.id)),
   };
@@ -92,10 +92,7 @@ export function transitionGroupDifference(
   return before.transitionGroups.filter((group) => !afterIDs.has(group.id)).map((group) => group.id);
 }
 
-export function incidentEdges(
-  draft: DraftWorkflowDefinition,
-  nodeID: string,
-): readonly WorkflowEdge[] {
+export function incidentEdges(draft: DraftWorkflowDefinition, nodeID: string): readonly WorkflowEdge[] {
   const outgoingTransitionGroupIDs = new Set(
     draft.transitionGroups.filter((group) => group.sourceNodeID === nodeID).map((group) => group.id),
   );
@@ -120,14 +117,16 @@ export function edgesForTransitionGroup(
   return draft.edges.filter((edge) => edge.transitionGroupID === transitionGroupID);
 }
 
-export function workflowTransitionGroup(input: Readonly<{
-  description?: string | undefined;
-  id: string;
-  name: string;
-  sourceNodeID: string;
-  transitionID: string;
-  workflowID: string;
-}>) {
+export function workflowTransitionGroup(
+  input: Readonly<{
+    description?: string | undefined;
+    id: string;
+    name: string;
+    sourceNodeID: string;
+    transitionID: string;
+    workflowID: string;
+  }>,
+) {
   return {
     description: input.description ?? "",
     id: input.id,
@@ -138,13 +137,15 @@ export function workflowTransitionGroup(input: Readonly<{
   };
 }
 
-export function workflowEdge(input: Readonly<{
-  id: string;
-  key: string;
-  targetNodeID: string;
-  transitionGroupID: string;
-  workflowID: string;
-}>): WorkflowEdge {
+export function workflowEdge(
+  input: Readonly<{
+    id: string;
+    key: string;
+    targetNodeID: string;
+    transitionGroupID: string;
+    workflowID: string;
+  }>,
+): WorkflowEdge {
   return {
     contextMode: "new_session",
     contextSource: { kind: "immediate_source", nodeKey: "" },

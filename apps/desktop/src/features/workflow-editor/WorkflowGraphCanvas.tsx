@@ -12,7 +12,7 @@ import {
 } from "@xyflow/react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { TooltipProvider } from "../../ui";
+import { TooltipProvider } from "@/ui";
 import {
   connectWorkflowGraphNodes,
   groupIDFromPoint,
@@ -27,11 +27,7 @@ import {
   workflowGraphSelectionExists,
 } from "./workflowGraphCanvasInteractions";
 import { WorkflowGraphEdge as WorkflowGraphEdgeRenderer } from "./WorkflowGraphEdge";
-import {
-  WorkflowGroupNode,
-  WorkflowJoinNode,
-  WorkflowNode,
-} from "./WorkflowGraphNodes";
+import { WorkflowGroupNode, WorkflowJoinNode, WorkflowNode } from "./WorkflowGraphNodes";
 import { WorkflowGroupDragPreview, type WorkflowGroupDragState } from "./WorkflowGroupDragPreview";
 import type { CopyText } from "./WorkflowGraphNodeMetadata";
 import { WorkflowGraphToolbar } from "./WorkflowGraphToolbar";
@@ -58,7 +54,11 @@ export type WorkflowGraphCanvasProps = Readonly<{
   onCopyText?: ((value: string) => Promise<void> | void) | undefined;
   onAddNode?: ((kind: CreatableWorkflowNodeKind) => void) | undefined;
   onAddConnectedNode?:
-    | ((sourceNodeID: string, kind: CreatableWorkflowNodeKind, modality: WorkflowNodeKindSelectionModality) => void)
+    | ((
+        sourceNodeID: string,
+        kind: CreatableWorkflowNodeKind,
+        modality: WorkflowNodeKindSelectionModality,
+      ) => void)
     | undefined;
   onAddNodeToGroup?: ((nodeID: string, groupID: string) => void) | undefined;
   onConnectNodes?: ((sourceNodeID: string, targetNodeID: string) => void) | undefined;
@@ -166,7 +166,11 @@ function WorkflowGraphCanvasInner({
   keyboardScope: "focused" | "global";
   onAddNode: ((kind: CreatableWorkflowNodeKind) => void) | undefined;
   onAddConnectedNode:
-    | ((sourceNodeID: string, kind: CreatableWorkflowNodeKind, modality: WorkflowNodeKindSelectionModality) => void)
+    | ((
+        sourceNodeID: string,
+        kind: CreatableWorkflowNodeKind,
+        modality: WorkflowNodeKindSelectionModality,
+      ) => void)
     | undefined;
   onAddNodeToGroup: ((nodeID: string, groupID: string) => void) | undefined;
   onConnectNodes: ((sourceNodeID: string, targetNodeID: string) => void) | undefined;
@@ -188,7 +192,9 @@ function WorkflowGraphCanvasInner({
   const instance = useReactFlow();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const reconnectEndpointRef = useRef<WorkflowGraphReconnectEndpointState | null>(null);
-  const connectionGestureRef = useRef<Readonly<{ nodeID: string; start: ConnectionGesturePoint }> | null>(null);
+  const connectionGestureRef = useRef<Readonly<{ nodeID: string; start: ConnectionGesturePoint }> | null>(
+    null,
+  );
   const suppressedCreationHandleRef = useRef<string | null>(null);
   const consumedGraphSelectionRequestIDRef = useRef<string | null>(null);
   const graphSelectionRequestRef = useRef(graphSelectionRequest);
@@ -210,13 +216,14 @@ function WorkflowGraphCanvasInner({
     [groupDrag?.nodeID, renderNodes],
   );
   const selectedRenderNodes = useMemo(
-    () => dragAwareRenderNodes.map((node) => ({
-      ...node,
-      selected:
-        selection?.kind === "node" && node.data.entityKind === "node"
-          ? selection.nodeID === node.data.entityID
-          : false,
-    })),
+    () =>
+      dragAwareRenderNodes.map((node) => ({
+        ...node,
+        selected:
+          selection?.kind === "node" && node.data.entityKind === "node"
+            ? selection.nodeID === node.data.entityID
+            : false,
+      })),
     [dragAwareRenderNodes, selection],
   );
   const renderEdges = useMemo(() => workflowGraphRenderEdges(edges, selection), [edges, selection]);
@@ -257,45 +264,46 @@ function WorkflowGraphCanvasInner({
     [onDeleteSelection, onEdgeInspect],
   );
   const nodeTypes = useMemo(
-    () => ({
-      workflowGroup: (props: NodeProps<WorkflowGraphGroupNode>) => (
-        <WorkflowGroupNode {...props} activeDropTarget={groupDrag?.targetGroupID === props.data.entityID} />
-      ),
-      workflowJoin: (props: NodeProps<WorkflowGraphWorkflowNode>) => (
-        <WorkflowJoinNode
-          {...props}
-          onCopyText={onCopyText}
-          onAddConnectedNode={onAddConnectedNode}
-          onCreationHandleActivate={consumeCreationHandleActivation}
-          onDeleteSelection={onDeleteSelection}
-          onInspectNode={(nodeID) => {
-            setSelection({ kind: "node", nodeID });
-            onNodeInspect(nodeID);
-          }}
-          onSelectContextMenu={(nodeID) => {
-            setSelection({ kind: "node", nodeID });
-          }}
-        />
-      ),
-      workflowNode: (props: NodeProps<WorkflowGraphWorkflowNode>) => (
-        <WorkflowNode
-          {...props}
-          onCopyText={onCopyText}
-          onAddConnectedNode={onAddConnectedNode}
-          onCreationHandleActivate={consumeCreationHandleActivation}
-          onCreateNodeGroup={onCreateNodeGroup}
-          onDeleteSelection={onDeleteSelection}
-          onInspectNode={(nodeID) => {
-            setSelection({ kind: "node", nodeID });
-            onNodeInspect(nodeID);
-          }}
-          onRemoveNodeFromGroup={onRemoveNodeFromGroup}
-          onSelectContextMenu={(nodeID) => {
-            setSelection({ kind: "node", nodeID });
-          }}
-        />
-      ),
-    }) satisfies NodeTypes,
+    () =>
+      ({
+        workflowGroup: (props: NodeProps<WorkflowGraphGroupNode>) => (
+          <WorkflowGroupNode {...props} activeDropTarget={groupDrag?.targetGroupID === props.data.entityID} />
+        ),
+        workflowJoin: (props: NodeProps<WorkflowGraphWorkflowNode>) => (
+          <WorkflowJoinNode
+            {...props}
+            onCopyText={onCopyText}
+            onAddConnectedNode={onAddConnectedNode}
+            onCreationHandleActivate={consumeCreationHandleActivation}
+            onDeleteSelection={onDeleteSelection}
+            onInspectNode={(nodeID) => {
+              setSelection({ kind: "node", nodeID });
+              onNodeInspect(nodeID);
+            }}
+            onSelectContextMenu={(nodeID) => {
+              setSelection({ kind: "node", nodeID });
+            }}
+          />
+        ),
+        workflowNode: (props: NodeProps<WorkflowGraphWorkflowNode>) => (
+          <WorkflowNode
+            {...props}
+            onCopyText={onCopyText}
+            onAddConnectedNode={onAddConnectedNode}
+            onCreationHandleActivate={consumeCreationHandleActivation}
+            onCreateNodeGroup={onCreateNodeGroup}
+            onDeleteSelection={onDeleteSelection}
+            onInspectNode={(nodeID) => {
+              setSelection({ kind: "node", nodeID });
+              onNodeInspect(nodeID);
+            }}
+            onRemoveNodeFromGroup={onRemoveNodeFromGroup}
+            onSelectContextMenu={(nodeID) => {
+              setSelection({ kind: "node", nodeID });
+            }}
+          />
+        ),
+      }) satisfies NodeTypes,
     [
       groupDrag?.targetGroupID,
       onAddConnectedNode,
@@ -479,12 +487,7 @@ function WorkflowGraphCanvasInner({
             reconnectEndpoint !== null && reconnectEndpoint.edgeID === edge.id
               ? reconnectEndpoint.endpoint
               : null;
-          reconnectWorkflowGraphEdge(
-            edge,
-            connection,
-            endpoint,
-            onReconnectEdge,
-          );
+          reconnectWorkflowGraphEdge(edge, connection, endpoint, onReconnectEdge);
         }}
         onReconnectEnd={() => {
           reconnectEndpointRef.current = null;
@@ -517,7 +520,10 @@ function WorkflowGraphCanvasInner({
   );
 }
 
-function connectionDragDistance(event: unknown, gesture: Readonly<{ start: ConnectionGesturePoint }>): number {
+function connectionDragDistance(
+  event: unknown,
+  gesture: Readonly<{ start: ConnectionGesturePoint }>,
+): number {
   const end = connectionGesturePoint(event);
   if (end === null) {
     return 0;

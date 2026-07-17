@@ -1,11 +1,11 @@
 import { FileSearch } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowDefinition, WorkflowEdge, WorkflowValidation } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { useAppServices } from "../../app/useAppServices";
-import { Button, identifierInputAttributes, showStatusToast, TextInput } from "../../ui";
-import { writeClipboardText } from "../../ui/clipboard";
+import type { WorkflowDefinition, WorkflowEdge, WorkflowValidation } from "@/api";
+import { errorMessage } from "@/api";
+import { useAppServices } from "@/app-facade";
+import { writeClipboardText } from "@/shared/native-clipboard";
+import { Button, identifierInputAttributes, showStatusToast, TextInput } from "@/ui";
 import { DetailSection, InspectorStack, ValidationDetails } from "./WorkflowInspectorPrimitives";
 import type { DraftWorkflowNode } from "./workflowEditorDraft";
 import { useWorkflowScriptPathValidationQuery } from "./workflowEditorQueries";

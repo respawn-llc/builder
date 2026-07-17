@@ -12,7 +12,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { Maximize2, Play, Square } from "lucide-react";
 
-import { formatRelativeTime } from "../../app/formatters";
+import { formatRelativeTime } from "@/app-facade";
 import {
   AdaptiveLineClamp,
   Badge,
@@ -26,8 +26,8 @@ import {
   Spinner,
   VirtualizedInfiniteList,
   type VirtualizedInfiniteListBoundaryState,
-} from "../../ui";
-import { cx } from "../../ui/classes";
+} from "@/ui";
+import { cx } from "@/ui";
 import { type BoardColumnDropState, boardCardDragPayloadType } from "./BoardDragTypes";
 import type { ActiveBoardCardDrag } from "./BoardDragState";
 import { boardCardInstanceKey, type BoardCardInstance } from "./BoardCardInstance";
@@ -395,12 +395,8 @@ const TaskCard = memo(function TaskCard({
         >
           <header className="grid gap-[var(--space-1)]">
             <span className="flex min-w-0 items-center justify-between gap-[var(--space-2)] text-left text-xs leading-5 text-[var(--color-muted)]">
-              <span className="shrink-0 font-mono font-medium tracking-wide">
-                {card.shortID}
-              </span>
-              <span className="min-w-0 truncate text-right">
-                {formatRelativeTime(card.updatedAt)}
-              </span>
+              <span className="shrink-0 font-mono font-medium tracking-wide">{card.shortID}</span>
+              <span className="min-w-0 truncate text-right">{formatRelativeTime(card.updatedAt)}</span>
             </span>
             <strong
               className="task-card-title text-left text-base leading-snug font-semibold text-[var(--color-on-island)]"

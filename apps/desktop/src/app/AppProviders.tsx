@@ -3,14 +3,14 @@ import type { ReactNode } from "react";
 import { useMemo } from "react";
 import { I18nextProvider } from "react-i18next";
 
-import { appI18n, initializeI18n } from "../i18n/setup";
+import { appI18n, initializeI18n } from "@/i18n";
 import { useReconnectRefresh } from "./connectionRefresh";
 import { useNativeWindowGlassTintSync } from "./nativeWindowGlassTint";
 import { createAppQueryClient } from "./queryClient";
-import type { AppServices } from "./services";
-import { AppServicesProvider } from "./servicesContext";
-import { StatusProvider } from "./statusStore";
-import { WindowChromeTitleProvider } from "./WindowChromeTitleProvider";
+import type { AppServices } from "@/app-facade";
+import { AppServicesProvider } from "@/app-facade";
+import { StatusProvider } from "@/app-facade";
+import { WindowChromeTitleProvider } from "@/app-facade";
 
 void initializeI18n();
 
@@ -39,7 +39,9 @@ export function AppProviders({ services, children }: AppProvidersProps) {
   );
 }
 
-function NativeWindowGlassTintSync({ nativeBridge }: Readonly<{ nativeBridge: AppServices["nativeBridge"] }>) {
+function NativeWindowGlassTintSync({
+  nativeBridge,
+}: Readonly<{ nativeBridge: AppServices["nativeBridge"] }>) {
   useNativeWindowGlassTintSync(nativeBridge);
   return null;
 }

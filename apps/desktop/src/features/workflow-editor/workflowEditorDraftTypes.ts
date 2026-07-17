@@ -1,9 +1,4 @@
-import type {
-  WorkflowDefinition,
-  WorkflowEdge,
-  WorkflowNode,
-  WorkflowParameter,
-} from "../../api";
+import type { WorkflowDefinition, WorkflowEdge, WorkflowNode, WorkflowParameter } from "@/api";
 
 export type DraftInputField = Readonly<{
   rowID: string;

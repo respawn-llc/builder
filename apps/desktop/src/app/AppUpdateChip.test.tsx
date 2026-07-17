@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
 import { vi } from "vitest";
 
-import { appI18n, initializeI18n } from "../i18n/setup";
+import { appI18n, initializeI18n } from "@/i18n";
 import { AppUpdateChip } from "./AppUpdateChip";
 import type { DesktopUpdateState } from "./useDesktopUpdate";
 

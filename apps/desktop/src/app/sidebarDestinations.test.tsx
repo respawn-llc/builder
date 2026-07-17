@@ -12,7 +12,7 @@ const inspectorHarness = vi.hoisted(() => {
   return { props };
 });
 
-vi.mock("../features/workflow-editor/WorkflowInspectorSidebar", () => ({
+vi.mock("@/features/workflow-editor", () => ({
   WorkflowInspectorSidebar: ({
     initialFocus,
     selection,

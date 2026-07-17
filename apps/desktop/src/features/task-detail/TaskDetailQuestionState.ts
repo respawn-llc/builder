@@ -1,4 +1,4 @@
-import type { ApprovalDecision } from "../../api";
+import type { ApprovalDecision } from "@/api";
 
 export type QuestionSelectionState = Readonly<{
   answer: string;

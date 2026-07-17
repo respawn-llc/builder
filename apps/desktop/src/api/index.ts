@@ -1,9 +1,18 @@
-export { ApiClient } from "./client";
+export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type {
   QuestionAnswerInput,
   TaskEditInput,
+  TaskMoveInput,
   TaskMutationInput,
+  WorkflowCreateAndLinkInput,
+  WorkflowCreateInput,
   WorkflowDeleteInput,
+  WorkflowGraphDeriveWiringInput,
+  WorkflowGraphSaveInput,
+  WorkflowGraphSavePreviewInput,
+  WorkflowGraphValidateDraftInput,
+  WorkflowListInput,
+  WorkflowProjectLinkInput,
   WorkflowScriptPathValidateInput,
 } from "./clientInputs";
 export type {
@@ -16,8 +25,27 @@ export type {
   AttentionNotificationTaskDetailFocus,
   AttentionNotificationWorkflowTaskTarget,
 } from "./attentionNotifications";
-export { defaultWorkflowExecutionTargetPolicy, emptyWorkflowDerivedWiring, hasSelectedWorkflow } from "./models";
-export { createJsonRpcTransport } from "./jsonRpc";
+export {
+  defaultWorkflowExecutionTargetPolicy,
+  emptyWorkflowDerivedWiring,
+  hasSelectedWorkflow,
+} from "./models";
+export {
+  ContractError,
+  ProtocolMismatchError,
+  RpcError,
+  ServerRootMismatchError,
+  StartupConfigurationError,
+  TransportError,
+  errorMessage,
+} from "./errors";
+export { guiTaskCommentAuthor } from "./client";
+export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
+export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
+export { rpcErrorCodes } from "./rpcErrorCodes";
+export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
+export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
+export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
 export type {
   ActivityItem,
   ActivityPage,

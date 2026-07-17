@@ -5,12 +5,8 @@ import { cx } from "./classes";
 import type { FieldError } from "./Field";
 import { fieldInputClassName } from "./fieldInputStyles";
 import type { SelectFieldOption } from "./SelectField";
-import {
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from "../components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
+import { DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from "./radix/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./radix/tooltip";
 
 type SelectTriggerButtonProps = Omit<
   ComponentPropsWithoutRef<"button">,

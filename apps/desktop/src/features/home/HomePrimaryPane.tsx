@@ -2,9 +2,10 @@ import { useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { ProjectSummary } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { useAppNavigation } from "../../app/navigation";
+import type { ProjectSummary } from "@/api";
+import { errorMessage } from "@/api";
+import { useAppNavigation } from "@/app-facade";
+import { WorkflowCard, useWorkflowPages } from "@/shared/workflow-library";
 import {
   EmptyState,
   ErrorState,
@@ -12,9 +13,7 @@ import {
   IslandTabs,
   LoadingState,
   VirtualizedInfiniteList,
-} from "../../ui";
-import { WorkflowCard } from "../workflows/WorkflowCard";
-import { useWorkflowPages } from "../workflows/WorkflowData";
+} from "@/ui";
 import { ProjectRow } from "./ProjectRow";
 import type { useProjectPages } from "./useHomeData";
 

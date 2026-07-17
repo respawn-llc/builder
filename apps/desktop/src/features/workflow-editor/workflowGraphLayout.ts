@@ -2,8 +2,8 @@ import { MarkerType, type Edge, type Node } from "@xyflow/react";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ElkNode } from "elkjs/lib/elk-api";
 
-import type { WorkflowDefinition, WorkflowNodeKind, WorkflowValidation } from "../../api";
-import { workflowEdgeColor } from "./workflowGraphColors";
+import type { WorkflowDefinition, WorkflowNodeKind, WorkflowValidation } from "@/api";
+import { workflowEdgeColor } from "@/shared/workflow-edge";
 import { visibleWorkflowGraphEdgeModels, type WorkflowGraphEdgeModel } from "./workflowGraphEdges";
 import {
   absoluteLayoutOffsetByID,
@@ -135,32 +135,30 @@ export async function layoutWorkflowGraph(
   const nodeLayout = layoutWorkflowGraphNodes(result, definition, errorMarkers, endpointPortsByNodeID);
   const edgeLayoutByID = layoutEdgeByID(result);
   const containerOffsetByID = absoluteLayoutOffsetByID(result);
-  const edges = edgeModels.map(
-    (model): WorkflowGraphEdge => ({
-      id: model.id,
-      source: model.sourceNodeID,
-      sourceHandle: model.sourcePort.id,
-      target: model.targetNodeID,
-      targetHandle: model.targetPort.id,
-      type: "workflow",
-      reconnectable: true,
-      markerEnd: { color: workflowEdgeColor(model.contextMode, model.hasError), type: MarkerType.ArrowClosed },
-      data: {
-        label: model.label,
-        contextMode: model.contextMode,
-        entityID: model.edgeID,
-        entityKind: "edge",
-        hasError: model.hasError,
-        routePoints: workflowGraphEdgeRoutePoints(model, edgeLayoutByID.get(model.id), {
-          containerOffsetByID,
-          groupNodeByGroupID: nodeLayout.groupNodeByGroupID,
-          rectByNodeID: nodeLayout.rectByNodeID,
-          alignedJoinNodeIDs: nodeLayout.alignedJoinNodeIDs,
-        }),
-        transitionGroupID: model.transitionGroupID,
-      },
-    }),
-  );
+  const edges = edgeModels.map((model): WorkflowGraphEdge => ({
+    id: model.id,
+    source: model.sourceNodeID,
+    sourceHandle: model.sourcePort.id,
+    target: model.targetNodeID,
+    targetHandle: model.targetPort.id,
+    type: "workflow",
+    reconnectable: true,
+    markerEnd: { color: workflowEdgeColor(model.contextMode, model.hasError), type: MarkerType.ArrowClosed },
+    data: {
+      label: model.label,
+      contextMode: model.contextMode,
+      entityID: model.edgeID,
+      entityKind: "edge",
+      hasError: model.hasError,
+      routePoints: workflowGraphEdgeRoutePoints(model, edgeLayoutByID.get(model.id), {
+        containerOffsetByID,
+        groupNodeByGroupID: nodeLayout.groupNodeByGroupID,
+        rectByNodeID: nodeLayout.rectByNodeID,
+        alignedJoinNodeIDs: nodeLayout.alignedJoinNodeIDs,
+      }),
+      transitionGroupID: model.transitionGroupID,
+    },
+  }));
   return { nodes: nodeLayout.nodes, edges };
 }
 
@@ -256,7 +254,10 @@ export function workflowGraphLayoutWithDraftProjection(
           sourceHandle: model.sourcePort.id,
           target: model.targetNodeID,
           targetHandle: model.targetPort.id,
-          markerEnd: { color: workflowEdgeColor(model.contextMode, model.hasError), type: MarkerType.ArrowClosed },
+          markerEnd: {
+            color: workflowEdgeColor(model.contextMode, model.hasError),
+            type: MarkerType.ArrowClosed,
+          },
           data: {
             ...edge.data,
             contextMode: model.contextMode,
@@ -323,10 +324,7 @@ function elkEndpointPort(port: WorkflowGraphEndpointPort, nodeWidth: number): Wo
     id: port.id,
     width: workflowEndpointPortSize,
     height: workflowEndpointPortSize,
-    x:
-      port.side === "source"
-        ? nodeWidth - workflowEndpointPortSize / 2
-        : -workflowEndpointPortSize / 2,
+    x: port.side === "source" ? nodeWidth - workflowEndpointPortSize / 2 : -workflowEndpointPortSize / 2,
     y: port.y - workflowEndpointPortSize / 2,
     layoutOptions: { "elk.port.side": port.side === "source" ? "EAST" : "WEST" },
   };

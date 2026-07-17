@@ -1,10 +1,6 @@
 import { createContext, useContext, useEffect, useSyncExternalStore } from "react";
 
-import type {
-  WorkflowDerivedWiring,
-  WorkflowGraphValidationResults,
-  WorkflowValidation,
-} from "../../api";
+import type { WorkflowDerivedWiring, WorkflowGraphValidationResults, WorkflowValidation } from "@/api";
 import type {
   DraftWorkflowDefinition,
   WorkflowEditorDirtyState,

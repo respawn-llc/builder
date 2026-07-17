@@ -1,10 +1,10 @@
 import { useCallback, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../api/errors";
-import { useAppServices } from "../../app/useAppServices";
-import { useNativeDialogFallback } from "../../app/useNativeDialogFallback";
-import { useStatusController } from "../../app/useStatusController";
+import { errorMessage } from "@/api";
+import { useAppServices } from "@/app-facade";
+import { useNativeDialogFallback } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
 import { WorkflowDeleteConfirmationFallbackDialog } from "./WorkflowDeleteConfirmationWindow";
 import {
   workflowDeleteConfirmationTextKeys,

@@ -7,7 +7,7 @@ import {
   type WorkflowDefinition,
   type WorkflowNode,
   type WorkflowValidation,
-} from "../../api";
+} from "@/api";
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
 import { layoutWorkflowGraph, workflowGraphLayoutWithDraftProjection } from "./workflowGraphLayout";
 import {
@@ -17,7 +17,7 @@ import {
   workflowGraphEndpointPoint,
   workflowGraphRouteHasCorner,
   workflowGraphRouteIsOrthogonal,
-} from "../../test-support/workflow-editor/workflowGraphLayoutTestHelpers";
+} from "./workflowGraphLayoutTestHelpers";
 
 const nodeHeightSchema = z.number();
 

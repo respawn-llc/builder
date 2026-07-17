@@ -11,7 +11,9 @@ describe("workflowTopologyID", () => {
   });
 
   it("uses browser crypto randomUUID", () => {
-    const randomUUID = vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    const randomUUID = vi
+      .spyOn(globalThis.crypto, "randomUUID")
+      .mockReturnValue("00000000-0000-4000-8000-000000000001");
 
     expect(newWorkflowTopologyID("node")).toBe("workflow-node-00000000-0000-4000-8000-000000000001");
     expect(randomUUID).toHaveBeenCalledOnce();

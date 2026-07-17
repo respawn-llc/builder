@@ -2,10 +2,10 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { SidebarDestination } from "../../app/sidebarContext";
-import { useSidebar } from "../../app/sidebarContext";
-import { taskDetailInitialFocusFromAttentionItem } from "../../app/taskDetailInitialFocus";
-import { IconTooltipButton } from "../../ui";
+import type { SidebarDestination } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
+import { taskDetailInitialFocusFromAttentionItem } from "@/app-facade";
+import { IconTooltipButton } from "@/ui";
 import { inboxNavNeighbors, orderedInboxTaskIDs } from "./inboxNavNeighbors";
 import { useGlobalAttentionPages } from "./useHomeData";
 

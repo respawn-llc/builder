@@ -3,12 +3,12 @@ import { useTranslation } from "react-i18next";
 import type { NativeNotificationActivation, NativeNotificationTarget } from "@app/native-bridge";
 
 import type {
+  ApiSubscription,
   AttentionNotification,
   AttentionNotificationID,
   AttentionNotificationWorkflowTaskTarget,
-} from "../api";
-import { errorMessage } from "../api/errors";
-import type { RpcSubscription } from "../api/transport";
+} from "@/api";
+import { errorMessage } from "@/api";
 import {
   attentionToastID,
   attentionNotificationIDKey,
@@ -23,10 +23,10 @@ import {
   taskDetailInitialFocus,
   type SurfaceRecord,
 } from "./attentionNotificationSurfaces";
-import { useAppServices } from "./useAppServices";
-import { useConnectionSnapshot } from "./useConnectionSnapshot";
-import { useSidebar } from "./sidebarContext";
-import { useStatusController } from "./useStatusController";
+import { useAppServices } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
 
 export function AttentionNotificationController() {
   const { t } = useTranslation();
@@ -291,7 +291,7 @@ export function AttentionNotificationController() {
   }, [connection.generation, connection.phase, reconcileSurfacedNotifications]);
 
   useEffect(() => {
-    let subscription: RpcSubscription | null = api.subscribeAttentionNotifications({
+    let subscription: ApiSubscription | null = api.subscribeAttentionNotifications({
       onEvent(event) {
         if (event.type === "pending") {
           void handlePending(event.pending);

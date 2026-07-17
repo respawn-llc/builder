@@ -2,13 +2,7 @@ import { inboxNavNeighbors, orderedInboxTaskIDs } from "./inboxNavNeighbors";
 
 describe("orderedInboxTaskIDs", () => {
   it("drops items without a task and de-duplicates while preserving order", () => {
-    const items = [
-      { taskID: "a" },
-      { taskID: "" },
-      { taskID: "b" },
-      { taskID: "a" },
-      { taskID: "c" },
-    ];
+    const items = [{ taskID: "a" }, { taskID: "" }, { taskID: "b" }, { taskID: "a" }, { taskID: "c" }];
     expect(orderedInboxTaskIDs(items)).toEqual(["a", "b", "c"]);
   });
 });

@@ -7,7 +7,7 @@ import type {
   WorkflowInputField,
   WorkflowNode,
   WorkflowParameter,
-} from "../../api";
+} from "@/api";
 import {
   type AddWorkflowNodeInput,
   type AddConnectedWorkflowNodeInput,
@@ -69,7 +69,9 @@ export type WorkflowEditorDraftAction =
   | Readonly<{
       type: "editAgentNode";
       nodeID: string;
-      patch: Partial<Pick<WorkflowNode, "key" | "name" | "subagentRole" | "promptTemplate" | "completionMode">>;
+      patch: Partial<
+        Pick<WorkflowNode, "key" | "name" | "subagentRole" | "promptTemplate" | "completionMode">
+      >;
     }>
   | Readonly<{
       type: "editScriptNode";
@@ -307,7 +309,11 @@ function reduceNodeFieldAction(
         if (node.kind !== "agent") {
           return node;
         }
-        return { ...node, ...action.patch, completionMode: action.patch.completionMode ?? node.completionMode };
+        return {
+          ...node,
+          ...action.patch,
+          completionMode: action.patch.completionMode ?? node.completionMode,
+        };
       });
     case "editScriptNode":
       return editDraftNode(state, action.nodeID, false, (node) => {
@@ -327,9 +333,7 @@ function reduceNodeFieldAction(
           {
             description: "",
             name: "",
-            rowID: [node.id, "input", state.version.toString(), node.inputFields.length.toString()].join(
-              ":",
-            ),
+            rowID: [node.id, "input", state.version.toString(), node.inputFields.length.toString()].join(":"),
           },
           ...node.inputFields,
         ],
@@ -354,7 +358,11 @@ function reduceNodeFieldAction(
     case "assignJoinInputProvider":
       return editDraftNode(state, action.nodeID, false, (node) => ({
         ...node,
-        joinInputProviders: assignJoinInputProvider(node.joinInputProviders, action.inputName, action.providerEdgeID),
+        joinInputProviders: assignJoinInputProvider(
+          node.joinInputProviders,
+          action.inputName,
+          action.providerEdgeID,
+        ),
       }));
   }
 }
@@ -445,8 +453,7 @@ export function workflowEditorDirtyState(state: WorkflowEditorDraftState): Workf
   const metadataDirty =
     state.draft.workflow.name !== state.source.workflow.name ||
     state.draft.workflow.description !== state.source.workflow.description ||
-    state.draft.workflow.executionTargetPolicy.mode !==
-      state.source.workflow.executionTargetPolicy.mode ||
+    state.draft.workflow.executionTargetPolicy.mode !== state.source.workflow.executionTargetPolicy.mode ||
     state.draft.workflow.executionTargetPolicy.customRef !==
       state.source.workflow.executionTargetPolicy.customRef;
   const graphDirty = !workflowGraphsEqual(workflowDefinitionFromDraft(state.draft), state.source);

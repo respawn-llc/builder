@@ -1,22 +1,16 @@
-import type { NativeBridge } from "@app/native-bridge";
 import { useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { Link2Off, Star, Unlink } from "lucide-react";
 
-import type { WorkspaceSummary } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { formatHomeRelativePath } from "../../app/formatters";
-import { useAppServices } from "../../app/useAppServices";
-import { useStatusController } from "../../app/useStatusController";
-import {
-  Button,
-  Dialog,
-  fieldInputClassName,
-  fieldLabelClassName,
-  islandSurfaceClassName,
-  NativeDialogWindow,
-} from "../../ui";
-import { cx } from "../../ui/classes";
+import type { WorkspaceSummary } from "@/api";
+import { errorMessage } from "@/api";
+import { formatHomeRelativePath } from "@/app-facade";
+import type { AppServices } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { NativeDialogWindow } from "@/shared/native-dialog";
+import { Button, Dialog, fieldInputClassName, fieldLabelClassName, islandSurfaceClassName } from "@/ui";
+import { cx } from "@/ui";
 
 export const workspaceUnlinkDialogWidth = 400;
 
@@ -315,7 +309,7 @@ function WorkspaceUnlinkContent({
 
 async function confirmNativeWorkspaceUnlink(
   api: ReturnType<typeof useAppServices>["api"],
-  nativeBridge: NativeBridge,
+  nativeBridge: AppServices["nativeBridge"],
   target: WorkspaceUnlinkTarget,
   callbacks: Readonly<{
     onBlocked: (message: string) => void;

@@ -1,4 +1,4 @@
-import type { WorkflowContextSource, WorkflowNode, WorkflowNodeKind } from "../../api";
+import type { WorkflowContextSource, WorkflowNode, WorkflowNodeKind } from "@/api";
 import type { DraftWorkflowDefinition } from "./workflowEditorDraftTypes";
 
 export type WorkflowEditorSelection =

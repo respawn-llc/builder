@@ -6,7 +6,7 @@ import {
   type WorkflowDefinition,
   type WorkflowNode,
   type WorkflowValidation,
-} from "../../api";
+} from "@/api";
 import type { WorkflowGraphNode, WorkflowGraphPoint } from "./workflowGraphLayout";
 import { layoutWorkflowGraph } from "./workflowGraphLayout";
 import {
@@ -17,7 +17,7 @@ import {
   workflowGraphEndpointPoint,
   workflowGraphRouteHasCorner,
   workflowGraphRouteIsOrthogonal,
-} from "../../test-support/workflow-editor/workflowGraphLayoutTestHelpers";
+} from "./workflowGraphLayoutTestHelpers";
 
 describe("layoutWorkflowGraph node group bounds", () => {
   it("keeps unrelated nodes outside populated node group bounds", async () => {

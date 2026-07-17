@@ -1,11 +1,10 @@
 import { type ReactNode, useId } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ApprovalDecision, AttentionItem, PendingAsk } from "../../api";
-import { useOpenExternalLink } from "../../app/nativeHooks";
-import { Button, Island, MarkdownText, RadioGroup, RadioGroupItem } from "../../ui";
-import { cx } from "../../ui/classes";
-import { fieldInputClassName } from "../../ui/fieldInputStyles";
+import type { ApprovalDecision, AttentionItem, PendingAsk } from "@/api";
+import { useOpenExternalLink } from "@/app-facade";
+import { Button, Island, MarkdownText, RadioGroup, RadioGroupItem } from "@/ui";
+import { cx, fieldInputClassName } from "@/ui";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
 import { usePendingAsks, type useTaskMutations } from "./useTaskDetailData";
 
@@ -71,7 +70,8 @@ function QuestionForm({
   suggestions: readonly string[];
   taskId: string;
 }>) {
-  const approvalDecisions = attention.question?.kind === "approval" ? attention.question.approvalDecisions : null;
+  const approvalDecisions =
+    attention.question?.kind === "approval" ? attention.question.approvalDecisions : null;
   if (approvalDecisions !== null) {
     return (
       <ApprovalQuestionForm
@@ -133,7 +133,11 @@ function OrdinaryQuestionForm({
   const canSubmit = (selectedOption !== null && selectedOption > 0) || answer.trim().length > 0;
   const interactionDisabled = disabled || answerQuestion.isPending || selection.submitted;
   const selectedNeither = selection.userSelected && selectedOption === null;
-  const radioValue = selectedNeither ? neitherRadioValue : selectedOption === null ? "" : suggestionRadioValue(selectedOption);
+  const radioValue = selectedNeither
+    ? neitherRadioValue
+    : selectedOption === null
+      ? ""
+      : suggestionRadioValue(selectedOption);
 
   async function submit(): Promise<void> {
     await answerQuestion.mutateAsync({
@@ -219,7 +223,9 @@ function selectedOptionFromRadioValue(value: string, suggestions: readonly strin
   if (value === neitherRadioValue) {
     return null;
   }
-  const optionIndex = suggestions.findIndex((_suggestion, index) => suggestionRadioValue(index + 1) === value);
+  const optionIndex = suggestions.findIndex(
+    (_suggestion, index) => suggestionRadioValue(index + 1) === value,
+  );
   if (optionIndex < 0) {
     throw new Error(`Unknown ordinary-question radio value: ${value}`);
   }
@@ -444,7 +450,11 @@ function recommendedOptionNumber(
 function taskQuestionView(
   attention: AttentionItem,
   pendingAsk: PendingAsk | undefined,
-): Readonly<{ question: string | undefined; suggestions: readonly string[]; recommendedOption: number | null }> {
+): Readonly<{
+  question: string | undefined;
+  suggestions: readonly string[];
+  recommendedOption: number | null;
+}> {
   const question = attention.message.length > 0 ? attention.message : pendingAsk?.question;
   const suggestions =
     attention.question?.kind === "approval"
@@ -491,7 +501,10 @@ function approvalDecisionForValue(
   return decisions.find((decision) => decision === value) ?? null;
 }
 
-function approvalDecisionLabel(decision: ApprovalDecision, t: ReturnType<typeof useTranslation>["t"]): string {
+function approvalDecisionLabel(
+  decision: ApprovalDecision,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
   switch (decision) {
     case "allow_once":
       return t("task.approvalDecisionAllowOnce");

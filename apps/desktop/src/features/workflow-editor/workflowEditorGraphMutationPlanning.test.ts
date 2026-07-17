@@ -13,9 +13,7 @@ import {
 } from "./workflowEditorGraphMutationPlanning";
 import type { WorkflowEditorCascadeSummary } from "./workflowEditorGraphMutationTypes";
 
-function summary(
-  parts: Partial<WorkflowEditorCascadeSummary> = {},
-): WorkflowEditorCascadeSummary {
+function summary(parts: Partial<WorkflowEditorCascadeSummary> = {}): WorkflowEditorCascadeSummary {
   return {
     removedNodeIDs: [],
     removedEdgeIDs: [],
@@ -94,7 +92,9 @@ describe("confirmationOperation", () => {
       ),
     ).toBe("extract");
     expect(
-      confirmationOperation(pendingMutation({ kind: "delete", selection: { kind: "node", nodeID: "node-1" } })),
+      confirmationOperation(
+        pendingMutation({ kind: "delete", selection: { kind: "node", nodeID: "node-1" } }),
+      ),
     ).toBe("delete");
   });
 });
@@ -131,10 +131,7 @@ describe("dispatchPendingGraphMutation", () => {
     const dispatch = vi.fn<(action: WorkflowEditorDraftAction) => void>();
     const input = { nodeID: "node-1", rehomedIncomingTransitionGroupID: "group-1" };
 
-    dispatchPendingGraphMutation(
-      pendingMutation({ kind: "extract", graphVersion: 3, input }),
-      dispatch,
-    );
+    dispatchPendingGraphMutation(pendingMutation({ kind: "extract", graphVersion: 3, input }), dispatch);
 
     expect(dispatch).toHaveBeenCalledExactlyOnceWith({ type: "extractNodeFromGroup", input });
   });

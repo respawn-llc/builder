@@ -2,18 +2,19 @@ import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Trash2 } from "lucide-react";
 
-import { errorMessage } from "../../api/errors";
-import { useAppServices } from "../../app/useAppServices";
-import { useStatusController } from "../../app/useStatusController";
-import { Button, NativeDialogWindow } from "../../ui";
-import { WorkflowDeleteConfirmationContent } from "./WorkflowDeleteConfirmationContent";
-import { useWorkflowDeleteLauncher } from "./useWorkflowDeleteLauncher";
+import { errorMessage } from "@/api";
+import { useAppServices } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
 import {
+  useWorkflowDeleteLauncher,
+  WorkflowDeleteConfirmationContent,
   workflowDeleteBlockersMessage,
   workflowDeleteDialogWidth,
   workflowDeleteInputFromImpact,
   type WorkflowDeleteTarget,
-} from "./workflowDeleteShared";
+} from "@/shared/workflow-deletion";
+import { NativeDialogWindow } from "@/shared/native-dialog";
+import { Button } from "@/ui";
 
 export function WorkflowDeleteButton({ workflowID }: Readonly<{ workflowID: string }>) {
   const { t } = useTranslation();

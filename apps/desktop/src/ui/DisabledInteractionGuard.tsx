@@ -1,12 +1,7 @@
 import type { ReactNode, SyntheticEvent } from "react";
 
 import { cx } from "./classes";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "../components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./radix/tooltip";
 
 export type DisabledInteractionGuardProps = Readonly<{
   children: ReactNode;

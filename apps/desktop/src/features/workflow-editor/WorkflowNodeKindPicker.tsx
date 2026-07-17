@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Popover, PopoverContent, PopoverTrigger } from "../../ui";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui";
 import type { CreatableWorkflowNodeKind } from "./workflowEditorGraphMutationTypes";
 import { creatableWorkflowNodeKinds } from "./workflowGraphNodeKinds";
 
@@ -53,13 +53,16 @@ export function WorkflowNodeKindPicker({
     pointerInsideTriggerRef.current = false;
     setOpen(false);
   }, [cancelClose]);
-  const openPicker = useCallback((modality: Exclude<WorkflowNodeKindPickerOpenModality, null>) => {
-    if (!disabled) {
-      cancelClose();
-      setOpenModality(modality);
-      setOpen(true);
-    }
-  }, [cancelClose, disabled]);
+  const openPicker = useCallback(
+    (modality: Exclude<WorkflowNodeKindPickerOpenModality, null>) => {
+      if (!disabled) {
+        cancelClose();
+        setOpenModality(modality);
+        setOpen(true);
+      }
+    },
+    [cancelClose, disabled],
+  );
   const scheduleClose = useCallback(() => {
     cancelClose();
     closeTimerRef.current = setTimeout(() => {

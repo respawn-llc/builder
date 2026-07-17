@@ -2,9 +2,9 @@ import { CircleQuestionMark, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { z } from "zod";
 
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 import { cx } from "./classes";
 import type { IslandLevel } from "./islandSurfaceStyles";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./radix/tooltip";
 
 type HelpHintBaseProps = Readonly<{
   /**
@@ -70,7 +70,12 @@ export function HelpHint({
             <Icon aria-hidden="true" size={ICON_SIZE} strokeWidth={1.7} />
           </button>
         </TooltipTrigger>
-        <TooltipContent className="max-w-xs items-start gap-2 text-[13px]" level={level} side={side} sideOffset={6}>
+        <TooltipContent
+          className="max-w-xs items-start gap-2 text-[13px]"
+          level={level}
+          side={side}
+          sideOffset={6}
+        >
           <Icon
             aria-hidden="true"
             className="mt-px shrink-0 text-[var(--color-muted)]"

@@ -1,16 +1,17 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import type {
-  NativeBridge,
-  NativeProjectWorkspaceChanged,
-  NativeWorkspaceUnlinkTarget,
-} from "@app/native-bridge";
 
-import type { ProjectBinding } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { invalidateProjectDeleteQueries } from "../../app/projectDeletionEvents";
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
+import type { ProjectBinding } from "@/api";
+import { errorMessage } from "@/api";
+import { invalidateProjectDeleteQueries } from "@/app-facade";
+import type { AppServices } from "@/app-facade";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+
+type NativeBridge = AppServices["nativeBridge"];
+type ProjectWorkspaceBridge = NativeBridge["projectWorkspace"];
+type NativeProjectWorkspaceChanged = Parameters<Parameters<ProjectWorkspaceBridge["onChanged"]>[0]>[0];
+type NativeWorkspaceUnlinkTarget = Parameters<Parameters<ProjectWorkspaceBridge["onUnlinkRequested"]>[0]>[0];
 
 export function useProjectEdit(projectID: string) {
   const { api } = useAppServices();

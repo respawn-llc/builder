@@ -1,4 +1,4 @@
-import type { WorkflowNodeKind } from "../../api";
+import type { WorkflowNodeKind } from "@/api";
 import type { CreatableWorkflowNodeKind } from "./workflowEditorGraphMutationTypes";
 
 export type WorkflowNodeKindPickerChoice = Readonly<{

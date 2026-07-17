@@ -2,25 +2,25 @@ import { memo, useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import type { AttentionItem } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { basename, formatRelativeTime, projectKeyFromName } from "../../app/formatters";
-import { useAppNavigation } from "../../app/navigation";
-import { queryKeys } from "../../app/queryKeys";
-import { useSidebar } from "../../app/sidebarContext";
-import { taskDetailInitialFocusFromAttentionItem } from "../../app/taskDetailInitialFocus";
-import { useAppServices } from "../../app/useAppServices";
-import { useNativeDialogFallback } from "../../app/useNativeDialogFallback";
-import { useStatusController } from "../../app/useStatusController";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
+import type { AttentionItem } from "@/api";
+import { errorMessage } from "@/api";
+import { basename, formatRelativeTime, projectKeyFromName } from "@/app-facade";
+import { useAppNavigation } from "@/app-facade";
+import { queryKeys } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
+import { taskDetailInitialFocusFromAttentionItem } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useNativeDialogFallback } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
 import {
   ErrorState,
   homeListCardListMaxWidthClassName,
   islandSurfaceClassName,
   LoadingState,
   VirtualizedInfiniteList,
-} from "../../ui";
-import { cx } from "../../ui/classes";
+} from "@/ui";
+import { cx } from "@/ui";
 import { HomePrimaryPane, type HomePrimaryTab } from "./HomePrimaryPane";
 import { ProjectCreateDialog, type ProjectDraft } from "./ProjectCreateForm";
 import {
@@ -300,7 +300,11 @@ function attentionRowPropsEqual(
     openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
   }>,
 ): boolean {
-  return previous.openSidebar === next.openSidebar && previous.navigation === next.navigation && attentionItemsEqual(previous.item, next.item);
+  return (
+    previous.openSidebar === next.openSidebar &&
+    previous.navigation === next.navigation &&
+    attentionItemsEqual(previous.item, next.item)
+  );
 }
 
 function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): boolean {

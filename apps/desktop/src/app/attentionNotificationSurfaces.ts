@@ -11,13 +11,13 @@ import type {
   AttentionNotificationID,
   AttentionNotificationTaskDetailFocus,
   AttentionNotificationWorkflowTaskTarget,
-} from "../api";
-import { errorMessage } from "../api/errors";
-import { RpcError } from "../api/errors";
-import { rpcErrorCodes } from "../api/rpcErrorCodes";
-import type { AppServices } from "./services";
-import type { TaskDetailInitialFocus } from "./sidebarContext";
-import type { StatusController } from "./statusContextValue";
+} from "@/api";
+import { errorMessage } from "@/api";
+import { RpcError } from "@/api";
+import { rpcErrorCodes } from "@/api";
+import type { AppServices } from "@/app-facade";
+import type { TaskDetailInitialFocus } from "@/app-facade";
+import type { StatusController } from "@/app-facade";
 import { recoverOrThrowDebugFailure } from "./debugFailure";
 
 export type SurfaceRecord = Readonly<{
@@ -32,9 +32,7 @@ type NativeWindow = AppServices["nativeBridge"]["window"];
 type Logger = AppServices["logger"];
 type Api = AppServices["api"];
 type Translate = (key: string) => string;
-type SurfaceOutcome =
-  | Readonly<{ status: "done" }>
-  | Readonly<{ status: "retry" }>;
+type SurfaceOutcome = Readonly<{ status: "done" }> | Readonly<{ status: "retry" }>;
 
 export async function readCurrentPendingSurface({
   focusedRef,
@@ -174,7 +172,7 @@ export function taskDetailInitialFocus(focus: AttentionNotificationTaskDetailFoc
 }
 
 export function notificationTitle(notification: AttentionNotification, t: Translate): string {
-  const shortID = notification.target.kind === "workflow_task" ? notification.target.taskShortID ?? "" : "";
+  const shortID = notification.target.kind === "workflow_task" ? (notification.target.taskShortID ?? "") : "";
   const questionCount = notification.question?.displayCount ?? 1;
   const suffix =
     notification.kind === "question"
@@ -194,10 +192,7 @@ export function notificationBody(notification: AttentionNotification, t: Transla
   if (notification.kind === "approval") {
     return nonEmpty(notification.approval?.message) ?? t("app.attention.approvalFallback");
   }
-  return (
-    nonEmpty(notification.interruptedRun?.message) ??
-    interruptedRunFallback(notification, t)
-  );
+  return nonEmpty(notification.interruptedRun?.message) ?? interruptedRunFallback(notification, t);
 }
 
 export function attentionToastID(id: string): string {

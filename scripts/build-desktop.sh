@@ -228,7 +228,7 @@ case "${CI:-}" in
 esac
 
 if [ "$skip_install" != "1" ]; then
-	pnpm --dir apps install --frozen-lockfile
+	./scripts/install-frontend-dependencies.sh
 fi
 
 echo "Building Kent desktop bundle version ${version}" >&2

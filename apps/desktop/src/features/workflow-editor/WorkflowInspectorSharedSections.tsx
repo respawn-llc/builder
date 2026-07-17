@@ -1,9 +1,9 @@
 import { useId } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowDefinition, WorkflowEdge, WorkflowNode } from "../../api";
-import { Checkbox, HelpHint, IslandSurface, MarkdownText } from "../../ui";
-import { cx } from "../../ui/classes";
+import type { WorkflowDefinition, WorkflowEdge, WorkflowNode } from "@/api";
+import { Checkbox, HelpHint, IslandSurface, MarkdownText } from "@/ui";
+import { cx } from "@/ui";
 import { DetailRow, DetailSection } from "./WorkflowInspectorPrimitives";
 import { derivedNodeWiring, providerEdgeLabel } from "./workflowInspectorWiring";
 

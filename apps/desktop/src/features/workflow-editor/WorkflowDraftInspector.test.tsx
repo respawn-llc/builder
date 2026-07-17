@@ -1,17 +1,17 @@
-import { createBrowserNativeBridge, type NativeBridge } from "@app/native-bridge";
+import { createBrowserNativeBridge, type NativeBridge } from "@/test-support/native-bridge";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
-import { AppServicesProvider } from "../../app/servicesContext";
-import { initializeI18n } from "../../i18n/setup";
-import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
-import { createTestServices, type TestAppServices } from "../../testSupport/appServices";
+import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "@/api";
+import { AppServicesProvider } from "@/app-facade";
+import { initializeI18n } from "@/i18n";
+import { workflowEditorEnglish } from "@/i18n";
+import { createTestServices, type TestAppServices } from "@/test-support/app-services";
 import type { WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 import { initializeWorkflowEditorDraft, workflowEditorDirtyState } from "./workflowEditorDraft";
-import { workflowDefinition } from "../../test-support/workflow-editor/workflowEditorGraphMutationFixtures";
+import { workflowDefinition } from "./workflowEditorGraphMutationFixtures";
 import { WorkflowDraftInspectorContent } from "./WorkflowDraftInspector";
 
 void initializeI18n();
@@ -242,7 +242,11 @@ function mountInspector(
   render(
     <QueryClientProvider client={new QueryClient()}>
       <AppServicesProvider services={services}>
-        <WorkflowDraftInspectorContent controller={controller} initialFocus={initialFocus} selection={selection} />
+        <WorkflowDraftInspectorContent
+          controller={controller}
+          initialFocus={initialFocus}
+          selection={selection}
+        />
       </AppServicesProvider>
     </QueryClientProvider>,
   );

@@ -24,7 +24,11 @@ export function MarkdownText({ value, onOpenLink, inline = false }: MarkdownText
     </ReactMarkdown>
   );
   if (inline) {
-    return <span className="markdown-text markdown-text-inline" data-testid="markdown-text-inline">{rendered}</span>;
+    return (
+      <span className="markdown-text markdown-text-inline" data-testid="markdown-text-inline">
+        {rendered}
+      </span>
+    );
   }
   return (
     <div className="markdown-text" data-testid="markdown-text">

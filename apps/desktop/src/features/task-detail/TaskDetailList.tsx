@@ -1,21 +1,16 @@
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ActivityItem, TaskComment, TaskDetail } from "../../api";
-import { errorMessage } from "../../api/errors";
-import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
-import { taskDetailInitialFocusRequestKey } from "../../app/taskDetailInitialFocus";
-import { useSidebarHeaderOffset } from "../../app/sidebarHeaderOffset";
-import { ErrorState, LoadingState, VirtualizedInfiniteList } from "../../ui";
+import type { ActivityItem, TaskComment, TaskDetail } from "@/api";
+import { errorMessage } from "@/api";
+import type { TaskDetailInitialFocus } from "@/app-facade";
+import { taskDetailInitialFocusRequestKey } from "@/app-facade";
+import { useSidebarHeaderOffset } from "@/app-facade";
+import { ErrorState, LoadingState, VirtualizedInfiniteList } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { TaskInbox } from "./TaskDetailInbox";
-import {
-  DescriptionIsland,
-  PropertiesIsland,
-  TaskHeaderIsland,
-  type TaskDraft,
-} from "./TaskDetailRows";
+import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { useTaskActivity, useTaskComments, useTaskMutations } from "./useTaskDetailData";
@@ -84,8 +79,14 @@ export function TaskDetailList({
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
-  const activityItems = useMemo(() => activity.data?.pages.flatMap((page) => page.items) ?? [], [activity.data]);
-  const commentItems = useMemo(() => comments.data?.pages.flatMap((page) => page.comments) ?? [], [comments.data]);
+  const activityItems = useMemo(
+    () => activity.data?.pages.flatMap((page) => page.items) ?? [],
+    [activity.data],
+  );
+  const commentItems = useMemo(
+    () => comments.data?.pages.flatMap((page) => page.comments) ?? [],
+    [comments.data],
+  );
   const listItems = useMemo(
     () =>
       taskDetailListItems({
@@ -120,9 +121,7 @@ export function TaskDetailList({
       hasNextPage={paging.hasNextPage}
       initialScrollKey={initialFocus !== undefined ? "inbox" : undefined}
       initialScrollRequestKey={
-        initialFocus !== undefined
-          ? taskDetailInitialFocusRequestKey(detail.id, initialFocus)
-          : undefined
+        initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
       }
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
@@ -269,11 +268,7 @@ function BodyRow({
         onPresentationChange={onDescriptionPresentationChange}
         presentation={descriptionPresentation}
       />
-      <PropertiesIsland
-        detail={detail}
-        disabled={disabled}
-        mutations={mutations}
-      />
+      <PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />
     </div>
   );
 }
@@ -299,12 +294,7 @@ function InboxRow({
   );
 }
 
-function TabsRow({
-  activityCount,
-  commentCount,
-  selectedTab,
-  setTab,
-}: TaskDetailListRowProps): ReactNode {
+function TabsRow({ activityCount, commentCount, selectedTab, setTab }: TaskDetailListRowProps): ReactNode {
   return (
     <TaskTabs
       activityCount={activityCount}

@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import { useStatusController } from "../../app/useStatusController";
+import { useStatusController } from "@/app-facade";
 
 export type BoardMoveRunTracker = Readonly<{
   observeInterruptedRun: (input: Readonly<{ runID: string; taskID: string }>) => void;

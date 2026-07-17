@@ -2,9 +2,9 @@ import { type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
 import { Server } from "lucide-react";
 
-import { useOpenExternalLink } from "../../app/nativeHooks";
-import { Button, EmptyState } from "../../ui";
-import { serverSetupDocsUrl } from "../../appLinks";
+import { useOpenExternalLink } from "@/app-facade";
+import { serverSetupDocsUrl } from "@/shared/product-links";
+import { Button, EmptyState } from "@/ui";
 
 export type ServerSetupGuideProps = Readonly<{
   detail: string;

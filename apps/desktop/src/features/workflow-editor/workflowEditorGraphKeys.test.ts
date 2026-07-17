@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { isWorkflowModelKeyValid, uniqueWorkflowModelKey, workflowModelKeyFromLabel } from "./workflowEditorGraphKeys";
+import {
+  isWorkflowModelKeyValid,
+  uniqueWorkflowModelKey,
+  workflowModelKeyFromLabel,
+} from "./workflowEditorGraphKeys";
 
 describe("workflowEditorGraphKeys", () => {
   it("normalizes labels into workflow model keys", () => {

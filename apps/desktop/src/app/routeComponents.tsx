@@ -2,24 +2,24 @@ import { getRouteApi, Outlet, useMatch } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
-import { BoardRoute } from "../features/board/BoardRoute";
-import { HomeRoute } from "../features/home/HomeRoute";
-import { StandaloneTaskRoute } from "../features/task-detail/StandaloneTaskRoute";
-import { StartupGate } from "../features/startup/StartupGate";
-import { LoadingState } from "../ui";
+import { BoardRoute } from "@/features/board";
+import { HomeRoute } from "@/features/home";
+import { StartupGate } from "@/features/startup";
+import { StandaloneTaskRoute } from "@/features/task-detail";
+import { LoadingState } from "@/ui";
 import { AppChrome } from "./AppChrome";
-import { readLastProjectRoute, writeLastProjectRoute } from "./projectRoutePersistence";
+import { readLastProjectRoute, writeLastProjectRoute } from "@/app-facade";
 import { RouteTransitionFrame } from "./RouteTransitionFrame";
 import { shouldSkipNativeDialogStartupGate } from "./routes";
-import { useWindowChromeTitle } from "./windowChromeTitle";
+import { useWindowChromeTitle } from "@/app-facade";
 
 const LazyWorkflowEditorRoute = lazy(async () => {
-  const module = await import("../features/workflow-editor/WorkflowEditorRoute");
+  const module = await import("@/features/workflow-editor");
   return { default: module.WorkflowEditorRoute };
 });
 
 const LazyWorkflowLibraryRoute = lazy(async () => {
-  const module = await import("../features/workflows/WorkflowLibraryRoute");
+  const module = await import("@/features/workflows");
   return { default: module.WorkflowLibraryRoute };
 });
 
@@ -114,11 +114,7 @@ export function ProjectRoute() {
   const search = projectRouteApi.useSearch();
   useWindowChromeTitle(null);
   return (
-    <BoardRoute
-      projectId={params.projectId}
-      selectedTaskId={search.taskId}
-      workflowId={search.workflowId}
-    />
+    <BoardRoute projectId={params.projectId} selectedTaskId={search.taskId} workflowId={search.workflowId} />
   );
 }
 

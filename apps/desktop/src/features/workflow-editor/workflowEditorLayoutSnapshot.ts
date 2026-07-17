@@ -3,7 +3,7 @@ import {
   emptyWorkflowDerivedWiring,
   type WorkflowDefinition,
   type WorkflowValidation,
-} from "../../api";
+} from "@/api";
 import type { WorkflowGraphLayout } from "./workflowGraphLayout";
 
 export type WorkflowLayoutSnapshot = Readonly<{

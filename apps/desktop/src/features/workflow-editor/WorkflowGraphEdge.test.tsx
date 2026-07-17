@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { describe, expect, it, vi } from "vitest";
 import type * as XyflowReact from "@xyflow/react";
 
-import { initializeI18n } from "../../i18n/setup";
+import { initializeI18n } from "@/i18n";
 import { WorkflowGraphEdge } from "./WorkflowGraphEdge";
 
 void initializeI18n();

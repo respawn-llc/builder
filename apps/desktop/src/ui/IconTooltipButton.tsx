@@ -1,12 +1,7 @@
 import type { MouseEventHandler, ReactNode } from "react";
 
 import { Button, type ButtonSize, type ButtonVariant } from "./Button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "../components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./radix/tooltip";
 
 export type IconTooltipButtonProps = Readonly<{
   label: string;
@@ -36,13 +31,7 @@ export function IconTooltipButton({
       <Tooltip>
         <TooltipTrigger asChild>
           <span className="inline-flex">
-            <Button
-              aria-label={label}
-              disabled={disabled}
-              onClick={onClick}
-              size={size}
-              variant={variant}
-            >
+            <Button aria-label={label} disabled={disabled} onClick={onClick} size={size} variant={variant}>
               {children}
             </Button>
           </span>

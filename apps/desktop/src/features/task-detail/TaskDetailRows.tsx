@@ -2,10 +2,11 @@ import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "rea
 import { ChevronDown, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskDetail, TaskRun } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { useAppServices } from "../../app/useAppServices";
-import { useOpenExternalLink } from "../../app/nativeHooks";
+import type { TaskDetail, TaskRun } from "@/api";
+import { errorMessage } from "@/api";
+import { useAppServices } from "@/app-facade";
+import { useOpenExternalLink } from "@/app-facade";
+import { writeClipboardText } from "@/shared/native-clipboard";
 import {
   Button,
   Island,
@@ -16,11 +17,8 @@ import {
   compactExternalUrlLabel,
   safeExternalUrl,
   showStatusToast,
-} from "../../ui";
-import { writeClipboardText } from "../../ui/clipboard";
-import { cx } from "../../ui/classes";
-import { fieldIslandInputClassName } from "../../ui/fieldInputStyles";
-import { useOpacityExit } from "../../ui/motion";
+} from "@/ui";
+import { cx, fieldIslandInputClassName, useOpacityExit } from "@/ui";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { taskStatusTone } from "./taskStatusTone";
 import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
@@ -178,7 +176,10 @@ function DescriptionEditor({
       aria-invalid={error ? true : undefined}
       aria-label={t("task.description")}
       autoFocus
-      className={cx(fieldIslandInputClassName(1), "block min-h-[220px] min-w-0 resize-none p-[var(--space-2)] font-mono")}
+      className={cx(
+        fieldIslandInputClassName(1),
+        "block min-h-[220px] min-w-0 resize-none p-[var(--space-2)] font-mono",
+      )}
       id={id}
       onBlur={onBlur}
       onChange={(event) => {
@@ -252,7 +253,9 @@ function DescriptionReadView({
             aria-label={t("app.expand")}
             className={cx(
               "app-region-no-drag absolute inset-x-0 bottom-0 grid h-10 place-items-center text-[var(--color-on-island)] transition-opacity motion-reduce:transition-none",
-              affordancePhase === "visible" ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+              affordancePhase === "visible"
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0",
             )}
             data-state={affordancePhase}
             data-testid="task-description-expand"
@@ -338,7 +341,12 @@ export function PropertiesIsland({
         <TaskPropertyLine label={t("task.project")} value={detail.projectName} />
         <TaskPropertyLine
           label={t("task.status")}
-          value={<TaskStatusText label={t(`task.statusKinds.${detail.status.kind}`)} tone={taskStatusTone(detail.status)} />}
+          value={
+            <TaskStatusText
+              label={t(`task.statusKinds.${detail.status.kind}`)}
+              tone={taskStatusTone(detail.status)}
+            />
+          }
         />
         <TaskExecutionTargetFacts detail={detail} />
         <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
@@ -469,11 +477,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
   }
 
   async function openScript(): Promise<void> {
-    if (
-      scriptRun === null ||
-      scriptRun.scriptPath.trim().length === 0 ||
-      executionRoot === null
-    ) {
+    if (scriptRun === null || scriptRun.scriptPath.trim().length === 0 || executionRoot === null) {
       setOpenScriptError(t("task.scriptPathUnavailable"));
       return;
     }

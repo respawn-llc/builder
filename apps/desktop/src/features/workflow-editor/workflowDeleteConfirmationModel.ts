@@ -81,14 +81,16 @@ export function workflowDeleteConfirmationWindowOptions({
   };
 }
 
-export function workflowDeleteConfirmationWindowTargetFromSearch(search: Readonly<{
-  edgeCount: string;
-  nodeCount: string;
-  operation?: string | undefined;
-  promptCount?: string | undefined;
-  requestID: string;
-  transitionGroupCount: string;
-}>): WorkflowDeleteConfirmationWindowTarget {
+export function workflowDeleteConfirmationWindowTargetFromSearch(
+  search: Readonly<{
+    edgeCount: string;
+    nodeCount: string;
+    operation?: string | undefined;
+    promptCount?: string | undefined;
+    requestID: string;
+    transitionGroupCount: string;
+  }>,
+): WorkflowDeleteConfirmationWindowTarget {
   return {
     counts: {
       edgeCount: parseSearchCount(search.edgeCount),

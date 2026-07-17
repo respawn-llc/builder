@@ -1,16 +1,17 @@
 import { useEffect } from "react";
 import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
-import type { ProjectBinding } from "../../api";
-import { errorMessage } from "../../api/errors";
-import type { NativeProjectBinding } from "@app/native-bridge";
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import {
-  workflowProjectEventCanChangeAttention,
-  workflowProjectQuestionTaskID,
-} from "../../app/workflowProjectEvents";
+import type { ProjectBinding, WorkflowProjectEvent } from "@/api";
+import { errorMessage } from "@/api";
+import type { AppServices } from "@/app-facade";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { workflowProjectEventCanChangeAttention, workflowProjectQuestionTaskID } from "@/app-facade";
+
+type NativeProjectBinding = Parameters<
+  Parameters<AppServices["nativeBridge"]["projectCreation"]["onCreated"]>[0]
+>[0];
 
 export function useProjectPages() {
   const { api } = useAppServices();
@@ -60,8 +61,8 @@ export function useGlobalAttentionEvents() {
         void queryClient.invalidateQueries({ queryKey: queryKeys.allAttention, refetchType: "active" });
       });
     };
-    const refreshQuestionTask = (params: unknown) => {
-      const taskID = workflowProjectQuestionTaskID(params);
+    const refreshQuestionTask = (event: WorkflowProjectEvent) => {
+      const taskID = workflowProjectQuestionTaskID(event);
       if (taskID === null) {
         return;
       }
@@ -73,9 +74,9 @@ export function useGlobalAttentionEvents() {
       onOpen() {
         refreshAttention();
       },
-      onEvent(_method, params) {
-        refreshQuestionTask(params);
-        if (workflowProjectEventCanChangeAttention(params)) {
+      onEvent(event) {
+        refreshQuestionTask(event);
+        if (workflowProjectEventCanChangeAttention(event)) {
           refreshAttention();
         }
       },
@@ -104,15 +105,18 @@ export function useProjectCreationEvents(onCreated: (binding: NativeProjectBindi
     }
     let active = true;
     let unlisten: (() => void) | undefined;
-    void nativeBridge.projectCreation.onCreated(onCreated).then((nextUnlisten) => {
-      if (!active) {
-        nextUnlisten();
-        return;
-      }
-      unlisten = nextUnlisten;
-    }).catch((error: unknown) => {
-      void logger.append("warn", "Project creation event listener failed.", { error: errorMessage(error) });
-    });
+    void nativeBridge.projectCreation
+      .onCreated(onCreated)
+      .then((nextUnlisten) => {
+        if (!active) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+      })
+      .catch((error: unknown) => {
+        void logger.append("warn", "Project creation event listener failed.", { error: errorMessage(error) });
+      });
     return () => {
       active = false;
       unlisten?.();

@@ -2,9 +2,9 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, vi } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
-import type { WorkflowNodeKind } from "../../api";
-import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
+import { initializeI18n } from "@/i18n";
+import type { WorkflowNodeKind } from "@/api";
+import { workflowEditorEnglish } from "@/i18n";
 import { WorkflowGraphCanvas, type WorkflowGraphCanvasProps } from "./WorkflowGraphCanvas";
 import type { WorkflowGraphEdge, WorkflowGraphNode, WorkflowGraphNodeData } from "./workflowGraphLayout";
 

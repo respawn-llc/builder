@@ -1,9 +1,9 @@
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../api/errors";
-import { useOpenExternalLink } from "../../app/nativeHooks";
-import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
-import { ErrorState, LoadingState } from "../../ui";
+import { errorMessage } from "@/api";
+import { useOpenExternalLink } from "@/app-facade";
+import type { TaskDetailInitialFocus } from "@/app-facade";
+import { ErrorState, LoadingState } from "@/ui";
 import { TaskDetailContent } from "./TaskDetailContent";
 import { useTaskActivity, useTaskComments, useTaskDetail } from "./useTaskDetailData";
 
@@ -14,12 +14,7 @@ export type TaskDetailSurfaceProps = Readonly<{
   onMutated?: (() => void) | undefined;
 }>;
 
-export function TaskDetailSurface({
-  taskId,
-  enabled,
-  initialFocus,
-  onMutated,
-}: TaskDetailSurfaceProps) {
+export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: TaskDetailSurfaceProps) {
   const { t } = useTranslation();
   const detail = useTaskDetail(taskId, enabled);
   const activity = useTaskActivity(taskId, enabled);

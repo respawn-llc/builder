@@ -1,5 +1,5 @@
 import { sidebarPopOutOptions, taskDetailNativeDialogPath } from "./sidebarPopOut";
-import type { SidebarDestination } from "./sidebarContext";
+import type { SidebarDestination } from "@/app-facade";
 
 describe("sidebarPopOutOptions", () => {
   it("maps a task detail destination to its native window route and params", () => {

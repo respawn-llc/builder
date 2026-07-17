@@ -1,8 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
-import { queryKeys } from "./queryKeys";
-import { useConnectionSnapshot } from "./useConnectionSnapshot";
+import { queryKeys } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
 
 export function useReconnectRefresh() {
   const connection = useConnectionSnapshot();

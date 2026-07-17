@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { WorkflowParameter } from "../../api";
+import type { WorkflowParameter } from "@/api";
 
 const workflowParameterRowIDSchema = z.string();
 

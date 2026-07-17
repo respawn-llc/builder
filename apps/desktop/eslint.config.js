@@ -6,26 +6,18 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import testingLibrary from "eslint-plugin-testing-library";
 import tseslint from "typescript-eslint";
 
+import { createArchitecturePolicy } from "./eslint-architecture.config.js";
 import { appArchitecture } from "./eslint-app-plugin.js";
 
-const tauriImportRestriction = {
-  paths: [
-    {
-      name: "@tauri-apps/api",
-      message: "Import Tauri APIs only inside a NativeBridge package.",
-    },
-  ],
-  patterns: [
-    {
-      group: ["@tauri-apps/api/*"],
-      message: "Import Tauri APIs only inside a NativeBridge package.",
-    },
-  ],
-};
+const parserProjects = [
+  "./tsconfig.app.json",
+  "./tsconfig.node.json",
+  "./packages/native-bridge/tsconfig.json",
+];
 
 export default tseslint.config(
   {
-    ignores: ["**/dist", "src-tauri/target", "node_modules"],
+    ignores: ["**/dist", "eslint-fixtures/architecture", "src-tauri/target", "node_modules"],
   },
   {
     linterOptions: {
@@ -38,10 +30,18 @@ export default tseslint.config(
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,
   {
+    ...tseslint.configs.disableTypeChecked,
+    files: ["**/*.{js,mjs,cjs}"],
+  },
+  ...createArchitecturePolicy({
+    rootPath: import.meta.dirname,
+    parserProjects,
+  }),
+  {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       parserOptions: {
-        project: ["./tsconfig.app.json", "./tsconfig.node.json", "./packages/native-bridge/tsconfig.json"],
+        project: parserProjects,
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -79,7 +79,6 @@ export default tseslint.config(
       "app/no-array-index-key": "error",
       "app/no-eslint-disable": "error",
       "app/no-mutable-exports": "error",
-      "app/no-raw-dto-in-components": "error",
       "app/no-typeof-type-guards": "error",
       "app/no-useeffect-data-loading": "error",
       complexity: ["error", { max: 12 }],
@@ -88,31 +87,6 @@ export default tseslint.config(
       "max-params": ["error", 4],
       "no-console": "error",
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
-    },
-  },
-  {
-    files: ["src/**/*.{ts,tsx}"],
-    rules: {
-      "no-restricted-imports": ["error", tauriImportRestriction],
-    },
-  },
-  {
-    files: ["src/**/*.{tsx}"],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          ...tauriImportRestriction,
-          paths: [
-            ...tauriImportRestriction.paths,
-            {
-              name: "@app/native-bridge",
-              message:
-                "Components must use app services or feature hooks instead of importing NativeBridge directly.",
-            },
-          ],
-        },
-      ],
     },
   },
   {

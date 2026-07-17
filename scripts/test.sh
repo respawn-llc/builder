@@ -310,7 +310,7 @@ run_desktop_tests() {
     if [ ! -f apps/package.json ]; then
         return
     fi
-    if pnpm --dir apps install --frozen-lockfile >"$frontend_log_file" 2>&1 &&
+    if ./scripts/install-frontend-dependencies.sh >"$frontend_log_file" 2>&1 &&
         pnpm --dir apps test >>"$frontend_log_file" 2>&1; then
         return
     fi

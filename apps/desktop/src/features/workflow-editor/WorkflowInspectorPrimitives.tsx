@@ -1,9 +1,9 @@
 import { useId, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowValidationError } from "../../api";
-import { ErrorState, HelpHint, IslandSurface } from "../../ui";
-import { WorkflowValidationErrorDetailsLine } from "../workflow/WorkflowValidationIssues";
+import type { WorkflowValidationError } from "@/api";
+import { WorkflowValidationErrorDetailsLine } from "@/shared/workflow-validation";
+import { ErrorState, HelpHint, IslandSurface } from "@/ui";
 
 export function DetailSection({
   children,
@@ -36,9 +36,7 @@ export function DetailSection({
           <h3 className="m-0 text-sm font-bold" id={titleID}>
             {title}
           </h3>
-          {titleHelp === undefined ? null : (
-            <HelpHint className="shrink-0" label={titleHelp} side="right" />
-          )}
+          {titleHelp === undefined ? null : <HelpHint className="shrink-0" label={titleHelp} side="right" />}
         </div>
       )}
       {children}

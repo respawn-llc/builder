@@ -1,15 +1,11 @@
 import { Copy } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type {
-  TaskDetail,
-  WorkflowExecutionTarget,
-  WorkflowManagedExecutionTarget,
-} from "../../api";
-import { errorMessage } from "../../api/errors";
-import { useAppServices } from "../../app/useAppServices";
-import { IconTooltipButton, showStatusToast } from "../../ui";
-import { writeClipboardText } from "../../ui/clipboard";
+import type { TaskDetail, WorkflowExecutionTarget, WorkflowManagedExecutionTarget } from "@/api";
+import { errorMessage } from "@/api";
+import { useAppServices } from "@/app-facade";
+import { writeClipboardText } from "@/shared/native-clipboard";
+import { IconTooltipButton, showStatusToast } from "@/ui";
 import { TaskPropertyLine } from "./TaskPropertyLine";
 
 export function TaskExecutionTargetFacts({ detail }: Readonly<{ detail: TaskDetail }>) {
@@ -28,9 +24,7 @@ export function TaskExecutionTargetFacts({ detail }: Readonly<{ detail: TaskDeta
   );
 }
 
-function LockedExecutionTargetFacts({
-  target,
-}: Readonly<{ target: WorkflowExecutionTarget }>) {
+function LockedExecutionTargetFacts({ target }: Readonly<{ target: WorkflowExecutionTarget }>) {
   const { t } = useTranslation();
   return (
     <>
@@ -53,9 +47,7 @@ function LockedExecutionTargetFacts({
   );
 }
 
-function ManagedExecutionTargetFacts({
-  target,
-}: Readonly<{ target: WorkflowManagedExecutionTarget }>) {
+function ManagedExecutionTargetFacts({ target }: Readonly<{ target: WorkflowManagedExecutionTarget }>) {
   const { t } = useTranslation();
   return (
     <>
@@ -70,10 +62,7 @@ function ManagedExecutionTargetFacts({
           value={<span className="break-all font-mono">{target.currentBranch}</span>}
         />
       )}
-      <TaskPropertyLine
-        label={t("task.managedWorktree")}
-        value={<ManagedWorktreeFact target={target} />}
-      />
+      <TaskPropertyLine label={t("task.managedWorktree")} value={<ManagedWorktreeFact target={target} />} />
     </>
   );
 }
@@ -82,10 +71,7 @@ function CommitFact({ target }: Readonly<{ target: WorkflowManagedExecutionTarge
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const commitOID = target.commitOID;
-  const label =
-    target.provenance === "legacy_observed"
-      ? t("task.observedCommit")
-      : t("task.resolvedCommit");
+  const label = target.provenance === "legacy_observed" ? t("task.observedCommit") : t("task.resolvedCommit");
   return (
     <TaskPropertyLine
       label={label}
@@ -121,9 +107,7 @@ function CommitFact({ target }: Readonly<{ target: WorkflowManagedExecutionTarge
   );
 }
 
-function ManagedWorktreeFact({
-  target,
-}: Readonly<{ target: WorkflowManagedExecutionTarget }>) {
+function ManagedWorktreeFact({ target }: Readonly<{ target: WorkflowManagedExecutionTarget }>) {
   const { t } = useTranslation();
   const worktree = target.managedWorktree;
   if (worktree === null) {
@@ -132,9 +116,7 @@ function ManagedWorktreeFact({
   return (
     <span className="break-all">
       <span className="font-mono">{worktree.canonicalRoot}</span>
-      {worktree.availability === "available" ? null : (
-        <span> · {t("app.unavailable")}</span>
-      )}
+      {worktree.availability === "available" ? null : <span> · {t("app.unavailable")}</span>}
     </span>
   );
 }

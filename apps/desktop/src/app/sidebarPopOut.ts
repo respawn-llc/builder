@@ -1,6 +1,6 @@
 import type { NativeDialogWindowOptions } from "@app/native-bridge";
 
-import type { SidebarDestination } from "./sidebarContext";
+import type { SidebarDestination } from "@/app-facade";
 
 export const taskDetailNativeDialogPath = "/native-dialog/task-detail";
 

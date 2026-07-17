@@ -1,12 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AppServicesProvider } from "../../app/servicesContext";
-import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
-import { StatusProvider } from "../../app/statusStore";
-import { initializeI18n } from "../../i18n/setup";
-import { createTestServices } from "../../testSupport/appServices";
-import { workflowDefinition } from "../../test-support/workflow-editor/workflowEditorGraphMutationFixtures";
+import { AppServicesProvider } from "@/app-facade";
+import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "@/app-facade";
+import { StatusProvider } from "@/app-facade";
+import { initializeI18n } from "@/i18n";
+import { createTestServices } from "@/test-support/app-services";
+import { workflowDefinition } from "./workflowEditorGraphMutationFixtures";
 import {
   initializeWorkflowEditorDraft,
   workflowEditorDraftReducer,
@@ -24,7 +24,8 @@ vi.mock("./WorkflowGraphCanvas", () => ({
     graphCanvasHarness.props = props;
     const requestedEdgeID = props.graphSelectionRequest?.edgeID;
     const selectionReady =
-      requestedEdgeID !== undefined && props.graph.edges.some((edge) => edge.data?.entityID === requestedEdgeID);
+      requestedEdgeID !== undefined &&
+      props.graph.edges.some((edge) => edge.data?.entityID === requestedEdgeID);
     return (
       <div data-selection-ready={selectionReady} data-testid="workflow-editor-canvas-boundary">
         <button
@@ -110,15 +111,28 @@ describe("WorkflowEditorCanvas connected creation", () => {
         },
       ]);
     });
-    expect(screen.getByTestId("workflow-editor-canvas-boundary")).toHaveAttribute("data-selection-ready", "false");
+    expect(screen.getByTestId("workflow-editor-canvas-boundary")).toHaveAttribute(
+      "data-selection-ready",
+      "false",
+    );
     expect(graphCanvasHarness.props?.graphSelectionRequest).toEqual({
       edgeID: action.input.edgeID,
       requestID: `connected-node:${action.input.edgeID}`,
     });
 
-    rerender(editorCanvasTree({ dispatch, draftState: succeeded, graph: graphWithEdge(action.input.edgeID), inspect }));
+    rerender(
+      editorCanvasTree({
+        dispatch,
+        draftState: succeeded,
+        graph: graphWithEdge(action.input.edgeID),
+        inspect,
+      }),
+    );
 
-    expect(screen.getByTestId("workflow-editor-canvas-boundary")).toHaveAttribute("data-selection-ready", "true");
+    expect(screen.getByTestId("workflow-editor-canvas-boundary")).toHaveAttribute(
+      "data-selection-ready",
+      "true",
+    );
     fireEvent.click(screen.getByTestId("consume-graph-selection"));
     await waitFor(() => {
       expect(graphCanvasHarness.props?.graphSelectionRequest).toBeNull();
@@ -169,12 +183,17 @@ describe("WorkflowEditorCanvas connected creation", () => {
       expect(graphCanvasHarness.props?.graphSelectionRequest?.edgeID).toBe(action.input.edgeID);
     });
 
-    rerender(editorCanvasTree({ dispatch, draftState: initial, graph: graphWithEdge(action.input.edgeID), inspect }));
+    rerender(
+      editorCanvasTree({ dispatch, draftState: initial, graph: graphWithEdge(action.input.edgeID), inspect }),
+    );
 
     await waitFor(() => {
       expect(graphCanvasHarness.props?.graphSelectionRequest).toBeNull();
     });
-    expect(screen.getByTestId("workflow-editor-canvas-boundary")).toHaveAttribute("data-selection-ready", "false");
+    expect(screen.getByTestId("workflow-editor-canvas-boundary")).toHaveAttribute(
+      "data-selection-ready",
+      "false",
+    );
   });
 });
 

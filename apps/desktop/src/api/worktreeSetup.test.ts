@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { ApiClient } from "./client";
 import { ContractError } from "./errors";
-import { FakeRpcTransport } from "./fakeTransport";
+import { FakeRpcTransport } from "@/test-support/api";
 import { newSetupOperationID, parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEvent } from "./worktreeSetup";
 

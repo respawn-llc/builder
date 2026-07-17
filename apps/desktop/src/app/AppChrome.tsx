@@ -4,7 +4,8 @@ import { ChevronLeft, ChevronRight, Home, SunMoon } from "lucide-react";
 import { useCallback, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { toggleInMemoryThemeOverride } from "../appEnvironment";
+import { WorkflowEditorDraftBridgeProvider } from "@/features/workflow-editor";
+import { toggleInMemoryThemeOverride } from "./startup/appEnvironment";
 import { AttentionNotificationController } from "./AttentionNotificationController";
 import { AppUpdateChip } from "./AppUpdateChip";
 import { useDesktopUpdate, type DesktopUpdateState } from "./useDesktopUpdate";
@@ -14,16 +15,15 @@ import {
   appChromeTitleClassNames,
   appChromeTitlePlacementClassNames,
 } from "./appChromeStyles";
-import { useAppNavigation, useNavigationStackState } from "./navigation";
-import { completeProjectDeletion, useProjectDeletedEvents } from "./projectDeletionEvents";
+import { useAppNavigation, useNavigationStackState } from "@/app-facade";
+import { completeProjectDeletion, useProjectDeletedEvents } from "@/app-facade";
 import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
-import { useSidebar, type SidebarDestination } from "./sidebarContext";
+import { useSidebar, type SidebarDestination } from "@/app-facade";
 import { SidebarProvider } from "./sidebarProvider";
-import { useStatusController } from "./useStatusController";
-import { useAppServices } from "./useAppServices";
-import { useCurrentWindowChromeTitle } from "./windowChromeTitle";
+import { useStatusController } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useCurrentWindowChromeTitle } from "@/app-facade";
 import { completeWorkflowDeletion, useWorkflowDeletedEvents } from "./workflowDeletionEvents";
-import { WorkflowEditorDraftBridgeProvider } from "../features/workflow-editor/workflowEditorDraftBridge";
 
 export type AppChromeProps = Readonly<{
   children: ReactNode;
@@ -195,11 +195,7 @@ function WorkflowDeletionEventHandler() {
     nativeBridge,
     useCallback(
       (event) => {
-        const routeMatches = routeReferencesWorkflow(
-          location.pathname,
-          location.searchStr,
-          event.workflowID,
-        );
+        const routeMatches = routeReferencesWorkflow(location.pathname, location.searchStr, event.workflowID);
         const sidebarMatches = sidebarReferencesWorkflow(activeDestination, event.workflowID);
         void completeWorkflowDeletion({
           closeSidebar: routeMatches || sidebarMatches ? closeSidebar : noopCloseSidebar,

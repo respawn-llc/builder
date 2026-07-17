@@ -130,12 +130,12 @@ const validationErrorDetailsSchema = z
   .preprocess(
     (value) => value ?? {},
     z.object({
-    field_name: emptyString,
-    input_name: emptyString,
-    placeholder: emptyString,
-    provider_edge_id: emptyString,
-    role: nullableNonBlankString,
-    required_tool: nullableNonBlankString,
+      field_name: emptyString,
+      input_name: emptyString,
+      placeholder: emptyString,
+      provider_edge_id: emptyString,
+      role: nullableNonBlankString,
+      required_tool: nullableNonBlankString,
     }),
   )
   .transform((value) => ({
@@ -187,7 +187,10 @@ export const workflowParameterSchema: z.ZodType<WorkflowParameter> = z
 
 export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
   .object({
-    workflow_id: z.string().min(1).refine((value) => value.trim() === value),
+    workflow_id: z
+      .string()
+      .min(1)
+      .refine((value) => value.trim() === value),
     display_name: z.string(),
     description: emptyString,
     version: z.number(),

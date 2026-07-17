@@ -2,8 +2,8 @@ import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleQuestionMark } from "lucide-react";
 
-import { FloatingNoticeIsland, HelpHint } from "../../ui";
-import { cx } from "../../ui/classes";
+import { FloatingNoticeIsland, HelpHint } from "@/ui";
+import { cx } from "@/ui";
 
 export function WorkflowEditorLegendIsland({
   positionStrategy,
@@ -56,10 +56,7 @@ export function WorkflowEditorLegendIsland({
         >
           <EdgeLegendSwatch tone="secondary" />
         </LegendRow>
-        <LegendRow
-          help={t("workflowEditor.legendAgentNodeHelp")}
-          label={t("workflowEditor.legendAgentNode")}
-        >
+        <LegendRow help={t("workflowEditor.legendAgentNodeHelp")} label={t("workflowEditor.legendAgentNode")}>
           <NodeLegendSwatch tone="neutral" />
         </LegendRow>
         <LegendRow
@@ -91,7 +88,11 @@ export function WorkflowEditorLegendIsland({
   );
 }
 
-function LegendRow({ children, help, label }: Readonly<{ children: ReactNode; help: string; label: string }>) {
+function LegendRow({
+  children,
+  help,
+  label,
+}: Readonly<{ children: ReactNode; help: string; label: string }>) {
   return (
     <div className="grid grid-cols-[26px_minmax(0,1fr)] items-center gap-[var(--space-2)]">
       <span className="grid h-3 place-items-center">{children}</span>
@@ -136,7 +137,10 @@ function EdgeLegendSwatch({ tone }: Readonly<{ tone: "neutral" | "primary" | "se
 function NodeLegendSwatch({
   shape = "box",
   tone,
-}: Readonly<{ shape?: "box" | "diamond" | "script"; tone: "neutral" | "primary" | "secondary" | "success" }>) {
+}: Readonly<{
+  shape?: "box" | "diamond" | "script";
+  tone: "neutral" | "primary" | "secondary" | "success";
+}>) {
   const shapeClassName = nodeLegendShapeClassName(shape);
   return (
     <span

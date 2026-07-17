@@ -3,12 +3,13 @@ import { useForm, type FieldErrors, type RegisterOptions, type UseFormRegisterRe
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage } from "../../api/errors";
-import { useAppNavigation } from "../../app/navigation";
-import { useAppServices } from "../../app/useAppServices";
-import { useStatusController } from "../../app/useStatusController";
-import { Button, Dialog, NativeDialogWindow, TextInput } from "../../ui";
-import { cx } from "../../ui/classes";
+import { errorMessage } from "@/api";
+import { useAppNavigation } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { NativeDialogWindow } from "@/shared/native-dialog";
+import { Button, Dialog, TextInput } from "@/ui";
+import { cx } from "@/ui";
 import { useProjectCreation } from "./useHomeData";
 
 const LOCAL_UNBOUND_PLAN_KIND = "local_unbound";

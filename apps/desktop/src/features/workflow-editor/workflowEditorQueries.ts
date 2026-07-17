@@ -1,8 +1,8 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
-import type { WorkflowDefinition, WorkflowGraphSavePreview, WorkflowValidation } from "../../api";
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
+import type { WorkflowDefinition, WorkflowGraphSavePreview, WorkflowValidation } from "@/api";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
 import {
   initializeWorkflowEditorDraft,
   workflowEditorDraftGraph,

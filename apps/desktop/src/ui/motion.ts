@@ -16,9 +16,12 @@ export function useOpacityExit(visible: boolean): OpacityExitPhase {
     if (phase !== "exiting") {
       return undefined;
     }
-    const timer = window.setTimeout(() => {
-      setPhase("hidden");
-    }, motionDurationFromCSSVar(motionFastVarName, fallbackMotionFastMs));
+    const timer = window.setTimeout(
+      () => {
+        setPhase("hidden");
+      },
+      motionDurationFromCSSVar(motionFastVarName, fallbackMotionFastMs),
+    );
     return () => {
       window.clearTimeout(timer);
     };
@@ -35,7 +38,9 @@ export function motionDurationFromCSSVar(name: string, fallbackMs: number): numb
 }
 
 export function prefersReducedMotion(): boolean {
-  return window.matchMedia instanceof Function && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return (
+    window.matchMedia instanceof Function && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 function firstDurationMs(value: string): number | null {

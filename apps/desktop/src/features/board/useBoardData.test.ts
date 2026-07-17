@@ -3,10 +3,10 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
-import type { BoardNodeCardsPage } from "../../api";
-import { queryKeys } from "../../app/queryKeys";
-import { AppServicesProvider } from "../../app/servicesContext";
-import { createTestServices } from "../../testSupport/appServices";
+import type { BoardNodeCardsPage, WorkflowProjectEvent } from "@/api";
+import { queryKeys } from "@/app-facade";
+import { AppServicesProvider } from "@/app-facade";
+import { createTestServices } from "@/test-support/app-services";
 import { shouldRefreshBoardFromProjectEvent } from "./useBoardData";
 import { useBoardNodeCards } from "./useBoardData";
 
@@ -14,7 +14,7 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
   it("refreshes active workflow task events", () => {
     expect(
       shouldRefreshBoardFromProjectEvent(
-        eventParams({ resource: "task", workflow_id: "workflow-active" }),
+        workflowEvent({ resource: "task", workflowID: "workflow-active" }),
         "workflow-route",
         "workflow-active",
       ),
@@ -24,34 +24,40 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
   it("skips unrelated workflow task events", () => {
     expect(
       shouldRefreshBoardFromProjectEvent(
-        eventParams({ resource: "task", workflow_id: "workflow-other" }),
+        workflowEvent({ resource: "task", workflowID: "workflow-other" }),
         "workflow-route",
         "workflow-active",
       ),
     ).toBe(false);
   });
 
-  it("keeps workflow-link and unknown events conservative", () => {
+  it("keeps workflow-link and unscoped workflow events conservative", () => {
     expect(
       shouldRefreshBoardFromProjectEvent(
-        eventParams({ resource: "workflow_link", workflow_id: "workflow-other" }),
+        workflowEvent({ resource: "workflow_link", workflowID: "workflow-other" }),
         "workflow-route",
         "workflow-active",
       ),
     ).toBe(true);
-    expect(shouldRefreshBoardFromProjectEvent({}, "workflow-route", "workflow-active")).toBe(true);
+    expect(
+      shouldRefreshBoardFromProjectEvent(
+        workflowEvent({ resource: "task", workflowID: null }),
+        "workflow-route",
+        "workflow-active",
+      ),
+    ).toBe(true);
   });
   it("refreshes workflow links without a selected workflow and skips unrelated task events", () => {
     expect(
       shouldRefreshBoardFromProjectEvent(
-        eventParams({ resource: "workflow_link", workflow_id: "workflow-new" }),
+        workflowEvent({ resource: "workflow_link", workflowID: "workflow-new" }),
         undefined,
         undefined,
       ),
     ).toBe(true);
     expect(
       shouldRefreshBoardFromProjectEvent(
-        eventParams({ resource: "task", workflow_id: "workflow-other" }),
+        workflowEvent({ resource: "task", workflowID: "workflow-other" }),
         undefined,
         undefined,
       ),
@@ -135,8 +141,16 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
   });
 });
 
-function eventParams(event: Readonly<Record<string, unknown>>) {
-  return { event };
+function workflowEvent(overrides: Partial<WorkflowProjectEvent>): WorkflowProjectEvent {
+  return {
+    action: "updated",
+    changedIDs: [],
+    occurredAtUnixMs: 1,
+    projectID: "project-1",
+    resource: "task",
+    workflowID: "workflow-1",
+    ...overrides,
+  };
 }
 
 function boardCardsPage(index: number, previousPageToken: string | null, nextPageToken: string | null) {

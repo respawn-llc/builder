@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { NativeBridge } from "@app/native-bridge";
 
+import type { AppLogger } from "@/app-facade";
 import { checkForDesktopUpdate, installDesktopUpdate } from "./desktopUpdate";
-import type { GuiLogger } from "./logging";
 
 export type DesktopUpdatePhase = "none" | "available" | "installing" | "error";
 
@@ -24,7 +24,7 @@ export type DesktopUpdateState = Readonly<{
 // and hides the chip for the session on dismiss(). On a successful install the app
 // relaunches, so there is no terminal "done" state; failures fall back to "error"
 // so the chip stays actionable.
-export function useDesktopUpdate(nativeBridge: NativeBridge, logger: GuiLogger): DesktopUpdateState {
+export function useDesktopUpdate(nativeBridge: NativeBridge, logger: AppLogger): DesktopUpdateState {
   const [phase, setPhase] = useState<DesktopUpdatePhase>("none");
   const [version, setVersion] = useState("");
   const [progressRatio, setProgressRatio] = useState<number | null>(null);

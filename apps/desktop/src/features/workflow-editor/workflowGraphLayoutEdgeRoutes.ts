@@ -92,7 +92,9 @@ function edgeRoutePoints(
     return [];
   }
   const offset =
-    edge.container === undefined ? { x: 0, y: 0 } : containerOffsetByID.get(edge.container) ?? { x: 0, y: 0 };
+    edge.container === undefined
+      ? { x: 0, y: 0 }
+      : (containerOffsetByID.get(edge.container) ?? { x: 0, y: 0 });
   return [section.startPoint, ...(section.bendPoints ?? []), section.endPoint].map((point) => ({
     x: point.x + offset.x,
     y: point.y + offset.y,
@@ -104,7 +106,9 @@ function isBranchToAlignedJoin(
   target: WorkflowGraphNodeRect,
   targetAligned: boolean,
 ): boolean {
-  return targetAligned && target.kind === "join" && source.groupID.length > 0 && source.groupID === target.groupID;
+  return (
+    targetAligned && target.kind === "join" && source.groupID.length > 0 && source.groupID === target.groupID
+  );
 }
 
 function branchJoinEdgeRoutePoints(
@@ -152,7 +156,13 @@ function joinOutgoingEdgeRoutePoints(
   const midX = start.x + (end.x - start.x) / 2;
   if (start.y === end.y) {
     const jogY = start.y + workflowJoinOutgoingRouteJog;
-    return compactRoutePoints([start, { x: midX, y: start.y }, { x: midX, y: jogY }, { x: end.x, y: jogY }, end]);
+    return compactRoutePoints([
+      start,
+      { x: midX, y: start.y },
+      { x: midX, y: jogY },
+      { x: end.x, y: jogY },
+      end,
+    ]);
   }
   return compactRoutePoints([start, { x: midX, y: start.y }, { x: midX, y: end.y }, end]);
 }
