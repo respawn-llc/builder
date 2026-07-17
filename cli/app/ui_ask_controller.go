@@ -471,6 +471,7 @@ func (c uiAskController) resolveAnsweredPromptOptimistically() bool {
 }
 
 func (m *uiModel) answerQueuedApprovalCommentary(resp clientui.PromptAnswer) tea.Cmd {
+	m.ask.answerPending = false
 	accepted, hasNext, cmd := m.askController().answer(resp, nil)
 	if !accepted {
 		return nil
@@ -513,7 +514,6 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 		return nil
 	}
 	c.cancelActiveDelivery()
-	m.ask.answerPending = false
 	if errors.Is(result.err, context.Canceled) || runtimeattach.IsRuntimeConnectionError(result.err) {
 		return nil
 	}

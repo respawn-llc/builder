@@ -810,8 +810,69 @@ func TestAllowCommentaryQueuesBeforeApprovalRetriesWithOneRequestID(t *testing.T
 			t.Fatalf("allow request %d = %+v, want stable immutable request ID %q", index, request, requestID)
 		}
 	}
-	if !testPromptAnswerDeliveryActive(model) || !model.ask.answerPending {
-		t.Fatal("successful allow delivery stopped awaiting canonical resolution")
+	if !testPromptAnswerDeliveryActive(model) || model.ask.answerPending {
+		t.Fatal("successful allow delivery did not remain active with the queue-stage lock released")
+	}
+	resolveAnsweredTestAskThroughTranscript(t, model)
+}
+
+func TestAllowCommentaryQueueUnlocksBeforeCancelableApprovalDelivery(t *testing.T) {
+	control := newDeadlineThenSuccessApprovalControl()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtimeClient := &runtimeControlFakeClient{queueUserMessageID: "allow-commentary-queue"}
+	model := newProjectedTestUIModel(runtimeClient)
+	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
+	model.setRuntimeActivityBusyForTest(true)
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
+		testApprovalPrompt(
+			"allow-commentary-cancel",
+			"Allow access?",
+			clientui.ApprovalDecisionAllowOnce,
+			clientui.ApprovalDecisionDeny,
+		),
+	)})
+	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
+	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("safe operation")})
+
+	next, queueCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	if queueCommand == nil || !model.ask.answerPending {
+		t.Fatal("allow commentary did not enter the locked queue stage")
+	}
+	next, deliveryCommand := model.Update(queueCommand())
+	model = next.(*uiModel)
+	if deliveryCommand == nil || model.ask.answerPending {
+		t.Fatal("completed queue stage did not unlock the prompt before approval delivery")
+	}
+
+	firstResult := make(chan tea.Msg, 1)
+	go func() {
+		firstResult <- deliveryCommand()
+	}()
+	<-control.firstStarted
+
+	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" edited")})
+	if testAskInput(model) != "safe operation edited" {
+		t.Fatalf("approval retry draft = %q, want responsive editing during delivery", testAskInput(model))
+	}
+	next, cancelDelivery := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(*uiModel)
+	if cancelDelivery == nil || !testPromptAnswerDeliveryActive(model) {
+		t.Fatal("Esc did not replace the active approval delivery with a cancellation delivery")
+	}
+	model = updateUIModel(t, model, <-firstResult)
+	model = runPromptDeliveryCommand(t, model, cancelDelivery)
+
+	requests := control.requests()
+	if len(requests) != 2 {
+		t.Fatalf("approval requests = %d, want original allow plus cancellation", len(requests))
+	}
+	if requests[0].Decision != clientui.ApprovalDecisionAllowOnce || requests[0].Commentary != "safe operation" {
+		t.Fatalf("original immutable approval request = %+v", requests[0])
+	}
+	if requests[1].ErrorMessage == "" {
+		t.Fatalf("replacement approval request = %+v, want typed cancellation", requests[1])
 	}
 	resolveAnsweredTestAskThroughTranscript(t, model)
 }
@@ -874,8 +935,8 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	if runtimeClient.queueUserMessageCalls != 2 {
 		t.Fatalf("allow commentary queue calls = %d, want one per user submission", runtimeClient.queueUserMessageCalls)
 	}
-	if !testPromptAnswerDeliveryActive(model) || !model.ask.answerPending {
-		t.Fatal("successful allow resubmission stopped awaiting canonical resolution")
+	if !testPromptAnswerDeliveryActive(model) || model.ask.answerPending {
+		t.Fatal("successful allow resubmission did not remain active with the queue-stage lock released")
 	}
 	resolveAnsweredTestAskThroughTranscript(t, model)
 }
