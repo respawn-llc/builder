@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -169,6 +170,12 @@ type WorktreeEnterRequest struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`
 	Selector    string              `json:"selector"`
+	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
+}
+
+type RuntimeStepOrigin struct {
+	RunID  string `json:"run_id"`
+	StepID string `json:"step_id"`
 }
 
 type WorktreeLeaveRequest struct {
@@ -399,10 +406,23 @@ func (request WorktreeEnterRequest) Validate() error {
 	if err := request.OperationID.Validate(); err != nil {
 		return err
 	}
-	return (WorktreeSelectorPreviewRequest{
+	if err := (WorktreeSelectorPreviewRequest{
 		SessionID: request.SessionID,
 		Selector:  request.Selector,
-	}).Validate()
+	}).Validate(); err != nil {
+		return err
+	}
+	if request.Origin != nil {
+		return request.Origin.Validate()
+	}
+	return nil
+}
+
+func (origin RuntimeStepOrigin) Validate() error {
+	if err := runtimeids.ValidateUUIDv4(origin.RunID, "run_id"); err != nil {
+		return err
+	}
+	return runtimeids.ValidateUUIDv4(origin.StepID, "step_id")
 }
 
 func (request WorktreeLeaveRequest) Validate() error {

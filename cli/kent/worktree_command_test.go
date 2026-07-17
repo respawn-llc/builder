@@ -15,6 +15,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessionenv"
 )
 
 func TestWorktreeStatusUsesShellSessionFromNestedWorkspaceDirectory(t *testing.T) {
@@ -289,6 +290,9 @@ func TestWorktreeEnterAndLeaveReturnScheduledAcknowledgements(t *testing.T) {
 	remote := &worktreeCommandTestRemote{}
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
+	t.Setenv(sessionenv.RunIDEnv, "018fdd67-89ab-4cde-8123-456789abc001")
+	t.Setenv(sessionenv.StepIDEnv, "")
+	t.Setenv(sessionenv.StepIDEnv, "018fdd67-89ab-4cde-8123-456789abc002")
 	for _, args := range [][]string{
 		{"worktree", "enter", "--json", "feature/a"},
 		{"worktree", "leave", "--json"},
@@ -308,8 +312,61 @@ func TestWorktreeEnterAndLeaveReturnScheduledAcknowledgements(t *testing.T) {
 	if remote.enterRequest == nil || remote.enterRequest.SessionID != "shell-session" || remote.enterRequest.Selector != "feature/a" {
 		t.Fatalf("enter request = %+v", remote.enterRequest)
 	}
+	if remote.enterRequest.Origin == nil ||
+		remote.enterRequest.Origin.RunID != "018fdd67-89ab-4cde-8123-456789abc001" ||
+		remote.enterRequest.Origin.StepID != "018fdd67-89ab-4cde-8123-456789abc002" {
+		t.Fatalf("enter request origin = %+v", remote.enterRequest.Origin)
+	}
 	if remote.leaveRequest == nil || remote.leaveRequest.SessionID != "shell-session" {
 		t.Fatalf("leave request = %+v", remote.leaveRequest)
+	}
+}
+
+func TestWorktreeEnterAndLeaveHumanConfirmationsAreStableAndActionSpecific(t *testing.T) {
+	remote := &worktreeCommandTestRemote{}
+	replaceWorktreeCommandRemote(t, remote)
+	t.Setenv("KENT_SESSION_ID", "shell-session")
+
+	run := func(args ...string) string {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if exitCode := rootCommand(args, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", args, exitCode, stderr.String())
+		}
+		if stdout.Len() == 0 {
+			t.Fatalf("%v returned an empty confirmation", args)
+		}
+		return stdout.String()
+	}
+
+	firstEnter := run("worktree", "enter", "feature/a")
+	secondEnter := run("worktree", "enter", "feature/a")
+	if firstEnter != secondEnter {
+		t.Fatal("worktree enter confirmation varied with its operation acknowledgement")
+	}
+
+	firstLeave := run("worktree", "leave")
+	secondLeave := run("worktree", "leave")
+	if firstLeave != secondLeave {
+		t.Fatal("worktree leave confirmation varied with its operation acknowledgement")
+	}
+	if firstEnter == firstLeave {
+		t.Fatal("worktree enter and leave returned the same human confirmation")
+	}
+}
+
+func TestWorktreeEnterRejectsPartialRuntimeOriginBeforeRPC(t *testing.T) {
+	remote := &worktreeCommandTestRemote{}
+	replaceWorktreeCommandRemote(t, remote)
+	t.Setenv("KENT_SESSION_ID", "shell-session")
+	t.Setenv(sessionenv.RunIDEnv, "018fdd67-89ab-4cde-8123-456789abc001")
+
+	var stdout, stderr bytes.Buffer
+	if exitCode := rootCommand([]string{"worktree", "enter", "feature/a"}, strings.NewReader(""), &stdout, &stderr); exitCode != 2 {
+		t.Fatalf("exit=%d stderr=%s, want argument error", exitCode, stderr.String())
+	}
+	if remote.enterRequest != nil {
+		t.Fatalf("enter RPC ran with partial runtime origin: %+v", remote.enterRequest)
 	}
 }
 

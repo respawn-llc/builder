@@ -170,6 +170,15 @@ func (e *Engine) ActiveStepSnapshot() *RunSnapshot {
 	return e.ActiveRun()
 }
 
+var ErrActiveStepInactive = errors.New("originating model step is no longer active")
+
+func (e *Engine) ApplyForActiveStep(stepID string, apply func() error) error {
+	if e == nil || e.stepLifecycle == nil {
+		return ErrActiveStepInactive
+	}
+	return e.stepLifecycle.ApplyForActiveStep(stepID, apply)
+}
+
 func (e *Engine) LastCommittedAssistantFinalAnswer() string {
 	if e == nil {
 		return ""

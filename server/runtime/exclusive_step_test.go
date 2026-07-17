@@ -145,6 +145,16 @@ func (s *stubExclusiveStepLifecycle) WithActiveStep(fn func(stepID string) error
 	return true, fn(stepID)
 }
 
+func (s *stubExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply func() error) error {
+	s.mu.Lock()
+	activeStepID := s.activeStepID
+	s.mu.Unlock()
+	if activeStepID == "" || activeStepID != stepID || apply == nil {
+		return ErrActiveStepInactive
+	}
+	return apply()
+}
+
 func (s *stubExclusiveStepLifecycle) setBusy(busy bool) {
 	s.mu.Lock()
 	s.busy = busy
@@ -400,6 +410,31 @@ func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.
 	}
 	if !active {
 		t.Fatal("WithActiveStep after close active=false, want true with busy error")
+	}
+	lifecycle.end()
+}
+
+func TestExclusiveStepAuthorityRejectsInterruptedStepBeforeFinalDrain(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+	stepCtx, stepID, err := lifecycle.begin(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if stepCtx == nil || stepID == "" {
+		t.Fatalf("begin returned ctx=%v stepID=%q, want active step", stepCtx, stepID)
+	}
+	if _, err := lifecycle.InterruptCurrent(nil); err != nil {
+		t.Fatalf("InterruptCurrent: %v", err)
+	}
+	err = eng.ApplyForActiveStep(stepID, func() error {
+		t.Fatal("active-step callback ran after interruption")
+		return nil
+	})
+	if !errors.Is(err, ErrActiveStepInactive) {
+		t.Fatalf("ApplyForActiveStep after interruption error = %v, want ErrActiveStepInactive", err)
 	}
 	lifecycle.end()
 }

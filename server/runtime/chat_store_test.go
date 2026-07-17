@@ -76,8 +76,8 @@ func TestChatStoreCompactionPrunesWorkingStateAndPreservesCommittedCount(t *test
 	}})
 	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: "after"})
 
-	if len(s.items) != 1 || len(s.local) != 1 {
-		t.Fatalf("retained cache state after compaction: items=%d local=%d, want one active item and one projected checkpoint row", len(s.items), len(s.local))
+	if len(s.messageRecords) != 1 || len(s.local) != 1 {
+		t.Fatalf("retained cache state after compaction: messages=%d local=%d, want one active message and one projected checkpoint row", len(s.messageRecords), len(s.local))
 	}
 	if len(s.toolCompletions) != 0 ||
 		len(s.toolCompletionProviderItems) != 0 ||

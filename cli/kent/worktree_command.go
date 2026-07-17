@@ -247,11 +247,17 @@ func worktreeEnterSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, func(ctx context.Context, remote worktreeCommandRemote) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	origin, err := worktreeCommandRuntimeOrigin()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "enter", func(ctx context.Context, remote worktreeCommandRemote) (serverapi.WorktreeScheduledAcknowledgement, error) {
 		return remote.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
 			OperationID: serverapi.NewWorktreeOperationID(),
 			SessionID:   sessionID,
 			Selector:    strings.TrimSpace(fs.Args()[0]),
+			Origin:      origin,
 		})
 	})
 }
@@ -272,7 +278,7 @@ func worktreeLeaveSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, func(ctx context.Context, remote worktreeCommandRemote) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "leave", func(ctx context.Context, remote worktreeCommandRemote) (serverapi.WorktreeScheduledAcknowledgement, error) {
 		return remote.LeaveWorktree(ctx, serverapi.WorktreeLeaveRequest{
 			OperationID: serverapi.NewWorktreeOperationID(),
 			SessionID:   sessionID,
@@ -349,6 +355,7 @@ func runScheduledWorktreeCommand(
 	stderr io.Writer,
 	sessionID string,
 	jsonOut bool,
+	action string,
 	call func(context.Context, worktreeCommandRemote) (serverapi.WorktreeScheduledAcknowledgement, error),
 ) int {
 	return withWorktreeCommandRemote(stderr, sessionID, func(remote worktreeCommandRemote) int {
@@ -362,7 +369,7 @@ func runScheduledWorktreeCommand(
 		if jsonOut {
 			return writeCommandJSON(stdout, stderr, ack)
 		}
-		fmt.Fprintf(stdout, "Scheduled: %s\n", ack.OperationID.String())
+		fmt.Fprintf(stdout, "Worktree %s scheduled for the agent's next step. This usually takes a few seconds.\n", action)
 		return 0
 	})
 }
@@ -392,6 +399,16 @@ func resolveOptionalWorktreeCommandSession(sessionFlag string) *string {
 		return &trimmed
 	}
 	return nil
+}
+
+func worktreeCommandRuntimeOrigin() (*serverapi.RuntimeStepOrigin, error) {
+	runID, hasRunID := os.LookupEnv(sessionenv.RunIDEnv)
+	stepID, hasStepID := os.LookupEnv(sessionenv.StepIDEnv)
+	if !hasRunID && !hasStepID {
+		return nil, nil
+	}
+	origin := &serverapi.RuntimeStepOrigin{RunID: strings.TrimSpace(runID), StepID: strings.TrimSpace(stepID)}
+	return origin, origin.Validate()
 }
 
 func openWorktreeCommandRemote(ctx context.Context, sessionID string) (worktreeCommandRemote, error) {

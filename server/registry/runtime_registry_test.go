@@ -410,6 +410,29 @@ func TestRuntimeRegistryTracksPendingPromptsPerSession(t *testing.T) {
 	}
 }
 
+func TestRuntimeRegistryRejectsPromptWithoutStepIdentity(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := &runtime.Engine{}
+	registerReady(t, registry, "session-1", engine)
+	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+
+	_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{
+		ID:       "approval-1",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
+			{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
+		},
+	})
+	if err == nil {
+		t.Fatal("AwaitPromptResponse accepted a prompt without a step identity")
+	}
+	if prompts := registry.ListPendingPrompts("session-1"); len(prompts) != 0 {
+		t.Fatalf("pending prompts = %+v, want none", prompts)
+	}
+}
+
 func TestRuntimeRegistrySubmitPromptResponseRemovesPendingPromptBeforeWaiterReturns(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := &runtime.Engine{}

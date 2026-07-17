@@ -510,6 +510,55 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 	t.Fatal("reasoning progress was not committed")
 }
 
+func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *testing.T) {
+	const (
+		beforeStepID = "11111111-1111-4111-8111-111111111111"
+		emptyStepID  = "22222222-2222-4222-8222-222222222222"
+		afterStepID  = "33333333-3333-4333-8333-333333333333"
+	)
+	store := mustCreateTestSession(t)
+	if _, _, err := store.AppendEvent(beforeStepID, "message", llm.Message{
+		Role:    llm.RoleUser,
+		Content: "before",
+	}); err != nil {
+		t.Fatalf("append message before provider-empty assistant: %v", err)
+	}
+	if _, _, err := store.AppendEvent(emptyStepID, "message", llm.Message{
+		Role:  llm.RoleAssistant,
+		Phase: llm.MessagePhaseFinal,
+	}); err != nil {
+		t.Fatalf("append provider-empty assistant message: %v", err)
+	}
+	if _, _, err := store.AppendEvent(afterStepID, "message", llm.Message{
+		Role:    llm.RoleUser,
+		Content: "after",
+	}); err != nil {
+		t.Fatalf("append message after provider-empty assistant: %v", err)
+	}
+
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	var hydration TranscriptHydrationSnapshot
+	if err := eng.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
+		hydration = snapshot
+		return nil
+	}); err != nil {
+		t.Fatalf("hydrate restored transcript: %v", err)
+	}
+	if len(hydration.CommittedRows) != 2 {
+		t.Fatalf("hydrated rows = %+v, want only messages surrounding provider-empty assistant", hydration.CommittedRows)
+	}
+	if hydration.CommittedRows[0].StepID != beforeStepID ||
+		hydration.CommittedRows[0].User == nil ||
+		hydration.CommittedRows[0].User.Text != "before" {
+		t.Fatalf("hydrated row before provider-empty assistant = %+v", hydration.CommittedRows[0])
+	}
+	if hydration.CommittedRows[1].StepID != afterStepID ||
+		hydration.CommittedRows[1].User == nil ||
+		hydration.CommittedRows[1].User.Text != "after" {
+		t.Fatalf("hydrated row after provider-empty assistant = %+v", hydration.CommittedRows[1])
+	}
+}
+
 func TestRestoredCompactedRuntimePublishesCommittedRangesInVisibleTranscriptCoordinates(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})

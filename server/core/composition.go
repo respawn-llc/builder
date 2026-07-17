@@ -146,7 +146,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
 	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithOperationCoordinator(runtimeOperations).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
 	gitInspector := worktree.NewGitInspector(nil)
-	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript, SetupTimeoutSeconds: cfg.Settings.Worktrees.SetupTimeoutSeconds})
+	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{
+		BaseDir: cfg.Settings.Worktrees.BaseDir,
+		ResolveSetup: func(sourceWorkspaceRoot string) (config.WorktreeSettings, error) {
+			return config.LoadWorktreeSetupSettings(sourceWorkspaceRoot, cfg.PersistenceRoot)
+		},
+	})
 	projectViews := projectService
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)

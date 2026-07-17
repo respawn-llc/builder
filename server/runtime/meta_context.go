@@ -100,16 +100,15 @@ func (r metaContextBuildResult) OrderedBaseMessages() []llm.Message {
 }
 
 type metaContextBuilder struct {
-	workspaceRoot      string
-	environmentCWD     string
-	globalConfigDir    string
-	model              string
-	thinkingLevel      string
-	skillPolicy        config.SkillPolicy
-	subagentSettings   config.Settings
-	subagentCallerRole *string
-	enabledTools       []toolspec.ID
-	now                time.Time
+	workspaceRoot    string
+	environmentCWD   string
+	globalConfigDir  string
+	model            string
+	thinkingLevel    string
+	skillPolicy      config.SkillPolicy
+	subagentSettings config.Settings
+	enabledTools     []toolspec.ID
+	now              time.Time
 }
 
 func newMetaContextBuilder(workspaceRoot, model, thinkingLevel string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
@@ -153,16 +152,6 @@ func (b metaContextBuilder) withGlobalConfigDir(globalConfigDir string) metaCont
 func (b metaContextBuilder) withSubagents(settings config.Settings, enabledTools []toolspec.ID) metaContextBuilder {
 	b.subagentSettings = settings
 	b.enabledTools = append([]toolspec.ID(nil), enabledTools...)
-	return b
-}
-
-func (b metaContextBuilder) withSubagentCallerRole(role *string) metaContextBuilder {
-	if role == nil {
-		b.subagentCallerRole = nil
-		return b
-	}
-	value := *role
-	b.subagentCallerRole = &value
 	return b
 }
 
@@ -382,10 +371,7 @@ func (b metaContextBuilder) renderableSubagentRoles(context config.SubagentInvoc
 }
 
 func (b metaContextBuilder) subagentCaller(context config.SubagentInvocationContext) *subagentpolicy.Caller {
-	return &subagentpolicy.Caller{
-		Workflow:  context == config.SubagentInvocationContextWorkflow,
-		AgentRole: b.subagentCallerRole,
-	}
+	return &subagentpolicy.Caller{Workflow: context == config.SubagentInvocationContextWorkflow}
 }
 
 func fallbackSubagentDescription(base config.Settings, role config.SubagentRole) string {

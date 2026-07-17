@@ -32,7 +32,7 @@ func (p gitWorktreeAdvisoryProcessor) Process(_ context.Context, envelope Envelo
 		if !ok || subcommand != "worktree" {
 			continue
 		}
-		warning, err := NewWarning("Use `kent worktree` commands instead of `git worktree` so Kent keeps session targets and metadata consistent.")
+		warning, err := NewWarning("[System note: pefer `kent worktree` commands for a better experience].")
 		if err != nil {
 			return Decision{}, err
 		}

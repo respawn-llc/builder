@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"core/cli/app/internal/status"
 	"core/server/auth"
@@ -46,6 +47,55 @@ func TestStatusLineGitStartupUsesRuntimeWorktreeRootBranch(t *testing.T) {
 		if strings.Contains(rendered, unexpected) {
 			t.Fatalf("status line used non-authoritative branch %q: %q", unexpected, rendered)
 		}
+	}
+}
+
+func TestTranscriptSessionIdentityUpdatesStatusExecutionTarget(t *testing.T) {
+	initial := clientui.SessionExecutionTarget{
+		WorkspaceID:           "workspace-1",
+		WorkspaceRoot:         "/repo",
+		WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		CwdRelpath:            ".",
+		EffectiveWorkdir:      "/repo",
+	}
+	entered := clientui.SessionExecutionTarget{
+		WorkspaceID:           "workspace-1",
+		WorkspaceRoot:         "/repo",
+		WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		Worktree:              &clientui.SessionExecutionWorktreeTarget{ID: "worktree-1", Root: "/repo/feature"},
+		CwdRelpath:            ".",
+		EffectiveWorkdir:      "/repo/feature",
+	}
+	runtimeClient := &sessionRuntimeClient{
+		sessionID:   "session-1",
+		mainView:    clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}},
+		hasMainView: true,
+	}
+	model := newProjectedTestUIModel(runtimeClient, WithUIStatusConfig(uiStatusConfig{
+		WorkspaceRoot:   initial.EffectiveWorkdir,
+		ExecutionTarget: initial,
+	}))
+	sessionID, err := runtimeids.ParseSessionID("session-1")
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
+		Kind: clientui.TranscriptMessageSessionIdentity,
+		Payload: clientui.TranscriptPayload{SessionIdentity: &clientui.TranscriptSessionIdentity{
+			SessionID:             sessionID,
+			ConversationFreshness: clientui.ConversationFreshnessEstablished,
+			ExecutionTarget:       &entered,
+		}},
+	}); err != nil {
+		t.Fatalf("admit transcript session identity: %v", err)
+	}
+
+	request := model.newStatusRequest(time.Now())
+	if request.ExecutionTarget.EffectiveWorkdir != entered.EffectiveWorkdir {
+		t.Fatalf("status execution target = %+v, want %q", request.ExecutionTarget, entered.EffectiveWorkdir)
+	}
+	if request.WorkspaceRoot != entered.EffectiveWorkdir {
+		t.Fatalf("status workspace root = %q, want %q", request.WorkspaceRoot, entered.EffectiveWorkdir)
 	}
 }
 
