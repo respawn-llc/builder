@@ -38,9 +38,6 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	if appCore.Config().WorkspaceRoot == "" {
 		t.Fatal("expected workspace root")
 	}
-	if appCore.ContainerDir() == "" {
-		t.Fatal("expected container dir")
-	}
 	if appCore.ProjectID() == "" {
 		t.Fatal("expected project id")
 	}

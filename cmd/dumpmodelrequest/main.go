@@ -1,16 +1,17 @@
-// Command dumpmodelrequest captures the exact model-request payload for a Kent
-// session without executing a model turn or performing any network I/O.
+// Command dumpmodelrequest captures a semantically equivalent model-request
+// payload for a Kent session without executing a model turn or performing any
+// network I/O.
 //
 // Given a session ID (and an optional persistence root), it resolves the session
 // via the SQLite metadata index, reconstructs the production request-assembly path
 // (session store -> runtime.Engine -> llm.Request -> OpenAI transport payload),
-// and writes the literal OpenAI-compatible wire payload plus the provider-agnostic
-// llm.Request to a JSON file.
+// and writes a diagnostic OpenAI-compatible JSON payload plus the
+// provider-agnostic llm.Request to a file.
 //
-// Every byte of the wire payload is produced by the real production code path
-// (HTTPTransport.buildPayload -> responses.ResponseNewParams.MarshalJSON, the same
-// encoder the openai-go SDK uses to build the HTTP body). No proxy, mock,
-// approximation, or live OpenAI request is involved.
+// Payload parameters come from the production HTTPTransport.buildPayload path.
+// The diagnostic JSON is semantically equivalent but may differ byte-for-byte
+// from the openai-go SDK HTTP body because JSON escaping can differ. No proxy,
+// mock, or live OpenAI request is involved.
 //
 // Usage:
 //
@@ -100,8 +101,8 @@ type capturedRequest struct {
 }
 
 // captureSessionRequest reproduces the production request-prep path for a session
-// and returns the prepared provider-agnostic request plus the literal OpenAI wire
-// payload bytes. No model turn runs and no HTTP is performed.
+// and returns the prepared provider-agnostic request plus semantically equivalent
+// OpenAI payload JSON. No model turn runs and no HTTP is performed.
 func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, providerOverride string, allowTools bool) (capturedRequest, error) {
 	md, err := metadata.Open(persistenceRoot)
 	if err != nil {

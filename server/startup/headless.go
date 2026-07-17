@@ -14,12 +14,11 @@ type headlessAuthHandler struct {
 }
 
 func NewHeadlessHandlers(lookupEnv func(string) string) (AuthHandler, OnboardingHandler) {
-	return headlessAuthHandler{lookupEnv: lookupEnv}, func(ctx context.Context, req OnboardingRequest) (config.App, error) {
-		cfg, _, err := EnsureOnboardingReady(ctx, req.Config, req.AuthManager, false, req.ReloadConfig, nil)
-		if err != nil {
-			return config.App{}, err
+	return headlessAuthHandler{lookupEnv: lookupEnv}, func(_ context.Context, req OnboardingRequest) (config.App, error) {
+		if !req.Config.Source.SettingsFileExists {
+			return config.App{}, ErrOnboardingRequired
 		}
-		return cfg, nil
+		return req.Config, nil
 	}
 }
 

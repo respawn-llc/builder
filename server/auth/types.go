@@ -8,7 +8,6 @@ var (
 	ErrSwitchRequiresIdle    = sharedauth.ErrSwitchRequiresIdle
 	ErrOAuthRefreshFailed    = sharedauth.ErrOAuthRefreshFailed
 	ErrInvalidAuthScope      = sharedauth.ErrInvalidAuthScope
-	ErrMissingOAuthFactory   = sharedauth.ErrMissingOAuthFactory
 	ErrDeviceCodeUnsupported = sharedauth.ErrDeviceCodeUnsupported
 )
 

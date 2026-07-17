@@ -79,3 +79,38 @@ func assertConfigSource(t *testing.T, cfg App, key string, want string) {
 		t.Fatalf("expected %s source %s, got %q", key, want, got)
 	}
 }
+
+type configPrecedenceCase[T comparable] struct {
+	fileContents string
+	sourceKey    string
+	fileWant     T
+	envName      string
+	envValue     string
+	envWant      T
+	read         func(Settings) T
+}
+
+func assertConfigPrecedence[T comparable](t *testing.T, tc configPrecedenceCase[T]) string {
+	t.Helper()
+	_, workspace, cfg := loadConfigTestFileApp(t, tc.fileContents, LoadOptions{})
+	if got := tc.read(cfg.Settings); got != tc.fileWant {
+		t.Fatalf("expected file %s=%v, got %v", tc.sourceKey, tc.fileWant, got)
+	}
+	assertConfigSource(t, cfg, tc.sourceKey, "file")
+
+	t.Setenv(tc.envName, tc.envValue)
+	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
+	if got := tc.read(cfg.Settings); got != tc.envWant {
+		t.Fatalf("expected env %s=%v, got %v", tc.sourceKey, tc.envWant, got)
+	}
+	assertConfigSource(t, cfg, tc.sourceKey, "env")
+	return workspace
+}
+
+func assertConfigEnvRejected(t *testing.T, workspace string, envName string, envValue string) {
+	t.Helper()
+	t.Setenv(envName, envValue)
+	if _, err := Load(workspace, LoadOptions{}); err == nil {
+		t.Fatalf("expected invalid %s=%q to be rejected", envName, envValue)
+	}
+}

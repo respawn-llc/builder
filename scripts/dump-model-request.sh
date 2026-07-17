@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# dump-model-request.sh — capture the exact model-request payload for a Kent session.
+# dump-model-request.sh — capture a semantically equivalent model-request payload.
 #
 # Builds and runs cmd/dumpmodelrequest, which resolves a session by ID, reconstructs
-# the production request-prep path, and writes the literal OpenAI-compatible wire
-# payload (plus the provider-agnostic llm.Request) to a JSON file. No proxy, mock,
-# approximation, or live OpenAI request is involved.
+# the production request-prep path, and writes diagnostic OpenAI-compatible JSON
+# (plus the provider-agnostic llm.Request) to a file. JSON escaping may differ
+# from the SDK HTTP body. No proxy, mock, or live OpenAI request is involved.
 #
 # Usage:
 #   ./scripts/dump-model-request.sh -session <id> [options]

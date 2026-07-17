@@ -5,18 +5,46 @@ import (
 	"testing"
 )
 
-func TestBuildSetupEnvironmentReplacesReservedValuesWithPlatformKeyPolicy(t *testing.T) {
-	sessionID := "current-session"
-	payload := setupScriptPayload{
+type setupEnvironmentPolicyCase struct {
+	name                          string
+	canonicalize                  setupEnvironmentKeyCanonicalizer
+	wantMixedCaseSessionPreserved bool
+}
+
+func setupEnvironmentPolicies() []setupEnvironmentPolicyCase {
+	return []setupEnvironmentPolicyCase{
+		{name: "non-windows exact case", canonicalize: caseSensitiveSetupEnvironmentKey, wantMixedCaseSessionPreserved: true},
+		{name: "windows case insensitive", canonicalize: caseInsensitiveSetupEnvironmentKey, wantMixedCaseSessionPreserved: false},
+	}
+}
+
+func setupEnvironmentPayload(sessionID *string) setupScriptPayload {
+	return setupScriptPayload{
 		SourceWorkspaceRoot: "/source",
 		BranchName:          "task-123",
 		WorktreeRoot:        "/worktree",
-		SessionID:           &sessionID,
+		SessionID:           sessionID,
 		ProjectID:           "project-1",
 		WorkspaceID:         "workspace-1",
 		WorktreeID:          "worktree-1",
-		CreatedBranch:       true,
 	}
+}
+
+func assertMixedCaseSessionPolicy(t *testing.T, env []string, preserved bool) {
+	t.Helper()
+	mixedCase, found := setupEnvironmentEntry(t, env, "Kent_Worktree_Session_Id", caseSensitiveSetupEnvironmentKey)
+	if preserved && (!found || mixedCase != "mixed-case-stale-session") {
+		t.Fatalf("mixed-case session = %q, present=%t, want preserved value", mixedCase, found)
+	}
+	if !preserved && found {
+		t.Fatalf("mixed-case session = %q, want removed", mixedCase)
+	}
+}
+
+func TestBuildSetupEnvironmentReplacesReservedValuesWithPlatformKeyPolicy(t *testing.T) {
+	sessionID := "current-session"
+	payload := setupEnvironmentPayload(&sessionID)
+	payload.CreatedBranch = true
 	inherited := []string{
 		"PATH=/bin",
 		"UNRELATED=value",
@@ -26,23 +54,7 @@ func TestBuildSetupEnvironmentReplacesReservedValuesWithPlatformKeyPolicy(t *tes
 		"KENT_WORKTREE_NOT_RESERVED=preserve",
 	}
 
-	tests := []struct {
-		name                          string
-		canonicalize                  setupEnvironmentKeyCanonicalizer
-		wantMixedCaseSessionPreserved bool
-	}{
-		{
-			name:                          "non-windows exact case",
-			canonicalize:                  caseSensitiveSetupEnvironmentKey,
-			wantMixedCaseSessionPreserved: true,
-		},
-		{
-			name:                          "windows case insensitive",
-			canonicalize:                  caseInsensitiveSetupEnvironmentKey,
-			wantMixedCaseSessionPreserved: false,
-		},
-	}
-	for _, tt := range tests {
+	for _, tt := range setupEnvironmentPolicies() {
 		t.Run(tt.name, func(t *testing.T) {
 			env, err := buildSetupEnvironment(inherited, payload, tt.canonicalize)
 			if err != nil {
@@ -60,40 +72,20 @@ func TestBuildSetupEnvironmentReplacesReservedValuesWithPlatformKeyPolicy(t *tes
 			if got, found := setupEnvironmentEntry(t, env, "KENT_WORKTREE_NOT_RESERVED", tt.canonicalize); !found || got != "preserve" {
 				t.Fatalf("non-reserved Kent value = %q, present=%t, want preserve", got, found)
 			}
-			mixedCase, mixedCaseFound := setupEnvironmentEntry(t, env, "Kent_Worktree_Session_Id", caseSensitiveSetupEnvironmentKey)
-			if tt.wantMixedCaseSessionPreserved && (!mixedCaseFound || mixedCase != "mixed-case-stale-session") {
-				t.Fatalf("mixed-case session = %q, present=%t, want preserved value", mixedCase, mixedCaseFound)
-			}
-			if !tt.wantMixedCaseSessionPreserved && mixedCaseFound {
-				t.Fatalf("mixed-case session = %q, want removed", mixedCase)
-			}
+			assertMixedCaseSessionPolicy(t, env, tt.wantMixedCaseSessionPreserved)
 		})
 	}
 }
 
 func TestBuildSetupEnvironmentOmitsAbsentSessionAcrossPlatformPolicies(t *testing.T) {
-	payload := setupScriptPayload{
-		SourceWorkspaceRoot: "/source",
-		BranchName:          "task-123",
-		WorktreeRoot:        "/worktree",
-		ProjectID:           "project-1",
-		WorkspaceID:         "workspace-1",
-		WorktreeID:          "worktree-1",
-	}
+	payload := setupEnvironmentPayload(nil)
 	inherited := []string{
 		"PATH=/bin",
 		"KENT_WORKTREE_SESSION_ID=stale-session",
 		"Kent_Worktree_Session_Id=mixed-case-stale-session",
 	}
 
-	for _, tt := range []struct {
-		name                          string
-		canonicalize                  setupEnvironmentKeyCanonicalizer
-		wantMixedCaseSessionPreserved bool
-	}{
-		{name: "non-windows exact case", canonicalize: caseSensitiveSetupEnvironmentKey, wantMixedCaseSessionPreserved: true},
-		{name: "windows case insensitive", canonicalize: caseInsensitiveSetupEnvironmentKey, wantMixedCaseSessionPreserved: false},
-	} {
+	for _, tt := range setupEnvironmentPolicies() {
 		t.Run(tt.name, func(t *testing.T) {
 			env, err := buildSetupEnvironment(inherited, payload, tt.canonicalize)
 			if err != nil {
@@ -102,13 +94,7 @@ func TestBuildSetupEnvironmentOmitsAbsentSessionAcrossPlatformPolicies(t *testin
 			if got, found := setupEnvironmentEntry(t, env, setupEnvironmentKeySessionID, tt.canonicalize); found {
 				t.Fatalf("session id = %q, want absent", got)
 			}
-			mixedCase, mixedCaseFound := setupEnvironmentEntry(t, env, "Kent_Worktree_Session_Id", caseSensitiveSetupEnvironmentKey)
-			if tt.wantMixedCaseSessionPreserved && (!mixedCaseFound || mixedCase != "mixed-case-stale-session") {
-				t.Fatalf("mixed-case session = %q, present=%t, want preserved value", mixedCase, mixedCaseFound)
-			}
-			if !tt.wantMixedCaseSessionPreserved && mixedCaseFound {
-				t.Fatalf("mixed-case session = %q, want removed", mixedCase)
-			}
+			assertMixedCaseSessionPolicy(t, env, tt.wantMixedCaseSessionPreserved)
 			if got, found := setupEnvironmentEntry(t, env, "PATH", tt.canonicalize); !found || got != "/bin" {
 				t.Fatalf("PATH = %q, present=%t, want /bin", got, found)
 			}

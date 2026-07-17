@@ -70,7 +70,6 @@ type ProcessBundle struct {
 
 type ProjectBundle struct {
 	cfg          config.App
-	containerDir string
 	projectID    string
 	projectViews apicontract.ProjectViewService
 }
@@ -181,7 +180,6 @@ func emptySessionBundle() *SessionBundle {
 
 type bundleCompositionInput struct {
 	cfg                     config.App
-	containerDir            string
 	authSupport             serverbootstrap.AuthSupport
 	capabilityFactsService  *capabilityfacts.Service
 	runtimeSupport          serverbootstrap.RuntimeSupport
@@ -246,7 +244,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		},
 		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore, in.sessionStoreRegistry),
 		Processes:   newProcessBundle(in.processService, in.processOutputService),
-		Projects:    newProjectBundle(in.cfg, in.containerDir, in.projectViews),
+		Projects:    newProjectBundle(in.cfg, in.projectViews),
 		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.attentionService),
 		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
@@ -286,10 +284,9 @@ func newProcessBundle(processService *processview.ProcessViewService, processOut
 	}
 }
 
-func newProjectBundle(cfg config.App, containerDir string, projectViews apicontract.ProjectViewService) *ProjectBundle {
+func newProjectBundle(cfg config.App, projectViews apicontract.ProjectViewService) *ProjectBundle {
 	return &ProjectBundle{
 		cfg:          cfg,
-		containerDir: containerDir,
 		projectViews: projectViews,
 	}
 }

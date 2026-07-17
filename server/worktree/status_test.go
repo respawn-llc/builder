@@ -13,16 +13,36 @@ import (
 	"core/shared/serverapi"
 )
 
+func updateWorktreeStatusTarget(t *testing.T, env *serviceTestEnv, worktreeID string, cwdRelpath string) {
+	t.Helper()
+	updateServiceTestSessionTarget(
+		t,
+		env,
+		env.session.Meta().SessionID,
+		env.binding.WorkspaceID,
+		worktreeID,
+		cwdRelpath,
+	)
+}
+
+func mustGetWorktreeStatus(t *testing.T, env *serviceTestEnv) serverapi.WorktreeStatusResponse {
+	t.Helper()
+	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
+		SessionID: env.session.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("GetWorktreeStatus: %v", err)
+	}
+	return status
+}
+
 func TestWorktreeStatusInspectsOnlyTheRecordedTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
 	before, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget before: %v", err)
 	}
-	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{SessionID: env.session.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("GetWorktreeStatus: %v", err)
-	}
+	status := mustGetWorktreeStatus(t, env)
 	if len(status.Problems) != 0 {
 		t.Fatalf("status problems = %+v", status.Problems)
 	}
@@ -44,21 +64,9 @@ func TestWorktreeStatusUsesRecordedWorktreeRootWithNestedCwd(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(created.CanonicalRoot, "pkg"), 0o755); err != nil {
 		t.Fatalf("Mkdir nested cwd: %v", err)
 	}
-	updateServiceTestSessionTarget(
-		t,
-		env,
-		env.session.Meta().SessionID,
-		env.binding.WorkspaceID,
-		created.WorktreeID,
-		"pkg",
-	)
+	updateWorktreeStatusTarget(t, env, created.WorktreeID, "pkg")
 
-	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
-		SessionID: env.session.Meta().SessionID,
-	})
-	if err != nil {
-		t.Fatalf("GetWorktreeStatus: %v", err)
-	}
+	status := mustGetWorktreeStatus(t, env)
 	if len(status.Problems) != 0 {
 		t.Fatalf("status problems = %+v", status.Problems)
 	}
@@ -75,21 +83,9 @@ func TestWorktreeStatusUsesWorkspaceRootWithNestedCwd(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(env.workspaceRoot, "pkg"), 0o755); err != nil {
 		t.Fatalf("Mkdir nested cwd: %v", err)
 	}
-	updateServiceTestSessionTarget(
-		t,
-		env,
-		env.session.Meta().SessionID,
-		env.binding.WorkspaceID,
-		"",
-		"pkg",
-	)
+	updateWorktreeStatusTarget(t, env, "", "pkg")
 
-	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
-		SessionID: env.session.Meta().SessionID,
-	})
-	if err != nil {
-		t.Fatalf("GetWorktreeStatus: %v", err)
-	}
+	status := mustGetWorktreeStatus(t, env)
 	if status.Worktree.RecordedRoot != env.workspaceRoot {
 		t.Fatalf("recorded root = %q, want %q", status.Worktree.RecordedRoot, env.workspaceRoot)
 	}
@@ -101,14 +97,7 @@ func TestWorktreeStatusUsesWorkspaceRootWithNestedCwd(t *testing.T) {
 func TestWorktreeStatusReportsWorkspaceRootWhenWorkspaceGitBindingIsMissing(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/status-workspace-binding")
-	updateServiceTestSessionTarget(
-		t,
-		env,
-		env.session.Meta().SessionID,
-		env.binding.WorkspaceID,
-		created.WorktreeID,
-		".",
-	)
+	updateWorktreeStatusTarget(t, env, created.WorktreeID, ".")
 	missingWorkspaceRoot, err := config.CanonicalWorkspaceRoot(t.TempDir())
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
@@ -125,12 +114,7 @@ func TestWorktreeStatusReportsWorkspaceRootWhenWorkspaceGitBindingIsMissing(t *t
 		t.Fatalf("updated workspace bindings = %d, want 1", updated)
 	}
 
-	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
-		SessionID: env.session.Meta().SessionID,
-	})
-	if err != nil {
-		t.Fatalf("GetWorktreeStatus: %v", err)
-	}
+	status := mustGetWorktreeStatus(t, env)
 	if len(status.Problems) != 1 ||
 		status.Problems[0].Kind != serverapi.WorktreeStatusProblemGitBindingMissing ||
 		status.Problems[0].Root == nil ||
@@ -142,14 +126,7 @@ func TestWorktreeStatusReportsWorkspaceRootWhenWorkspaceGitBindingIsMissing(t *t
 func TestWorktreeStatusSurfacesInvalidRecordedGitMetadata(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/status-invalid-metadata")
-	updateServiceTestSessionTarget(
-		t,
-		env,
-		env.session.Meta().SessionID,
-		env.binding.WorkspaceID,
-		created.WorktreeID,
-		".",
-	)
+	updateWorktreeStatusTarget(t, env, created.WorktreeID, ".")
 	record, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID)
 	if err != nil {
 		t.Fatalf("GetWorktreeRecordByID: %v", err)
@@ -192,12 +169,7 @@ func TestWorktreeStatusReportsMissingGitBinding(t *testing.T) {
 		}
 	})
 
-	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
-		SessionID: env.session.Meta().SessionID,
-	})
-	if err != nil {
-		t.Fatalf("GetWorktreeStatus: %v", err)
-	}
+	status := mustGetWorktreeStatus(t, env)
 	if len(status.Problems) != 1 ||
 		status.Problems[0].Kind != serverapi.WorktreeStatusProblemGitBindingMissing {
 		t.Fatalf("status problems = %+v, want GitBindingMissing", status.Problems)
@@ -223,14 +195,7 @@ func (r statusRefFailingGitRunner) Run(ctx context.Context, dir string, args ...
 func TestWorktreeStatusPropagatesRecordedRefInspectionCancellation(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/status-ref")
-	updateServiceTestSessionTarget(
-		t,
-		env,
-		env.session.Meta().SessionID,
-		env.binding.WorkspaceID,
-		created.WorktreeID,
-		".",
-	)
+	updateWorktreeStatusTarget(t, env, created.WorktreeID, ".")
 	env.service.git = NewGitInspector(statusRefFailingGitRunner{err: context.Canceled, exitCode: -1})
 
 	_, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
@@ -244,25 +209,13 @@ func TestWorktreeStatusPropagatesRecordedRefInspectionCancellation(t *testing.T)
 func TestWorktreeStatusReportsMissingRecordedRef(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/status-missing-ref")
-	updateServiceTestSessionTarget(
-		t,
-		env,
-		env.session.Meta().SessionID,
-		env.binding.WorkspaceID,
-		created.WorktreeID,
-		".",
-	)
+	updateWorktreeStatusTarget(t, env, created.WorktreeID, ".")
 	env.service.git = NewGitInspector(statusRefFailingGitRunner{
 		err:      errors.New("exit status 1"),
 		exitCode: 1,
 	})
 
-	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
-		SessionID: env.session.Meta().SessionID,
-	})
-	if err != nil {
-		t.Fatalf("GetWorktreeStatus: %v", err)
-	}
+	status := mustGetWorktreeStatus(t, env)
 	if len(status.Problems) != 1 ||
 		status.Problems[0].Kind != serverapi.WorktreeStatusProblemRecordedRefMissing {
 		t.Fatalf("status problems = %+v, want RecordedRefMissing", status.Problems)

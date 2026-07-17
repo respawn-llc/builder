@@ -6,41 +6,52 @@ import (
 	"core/server/session"
 )
 
-func TestLookupModelMetadata(t *testing.T) {
-	meta, ok := LookupModelMetadata("gpt-5.3-codex")
+func requireModelMetadata(t *testing.T, model string) ModelMetadata {
+	t.Helper()
+	meta, ok := LookupModelMetadata(model)
 	if !ok {
-		t.Fatal("expected model metadata for gpt-5.3-codex")
+		t.Fatalf("expected model metadata for %q", model)
 	}
+	return meta
+}
+
+type modelSupportCase struct {
+	model string
+	want  bool
+}
+
+func requireModelSupport(t *testing.T, name string, supports func(string) bool, tests []modelSupportCase) {
+	t.Helper()
+	for _, test := range tests {
+		if got := supports(test.model); got != test.want {
+			t.Fatalf("%s(%q)=%v, want %v", name, test.model, got, test.want)
+		}
+	}
+}
+
+func TestLookupModelMetadata(t *testing.T) {
+	meta := requireModelMetadata(t, "gpt-5.3-codex")
 	if meta.ContextWindowTokens != 400_000 {
 		t.Fatalf("unexpected context window: %d", meta.ContextWindowTokens)
 	}
 }
 
 func TestLookupModelMetadataCaseInsensitive(t *testing.T) {
-	meta, ok := LookupModelMetadata(" GPT-5.3-CODEX ")
-	if !ok {
-		t.Fatal("expected case-insensitive model metadata lookup")
-	}
+	meta := requireModelMetadata(t, " GPT-5.3-CODEX ")
 	if meta.ContextWindowTokens != 400_000 {
 		t.Fatalf("unexpected context window: %d", meta.ContextWindowTokens)
 	}
 }
 
 func TestLookupModelMetadataForCodexSpark(t *testing.T) {
-	meta, ok := LookupModelMetadata("gpt-5.3-codex-spark")
-	if !ok {
-		t.Fatal("expected model metadata for gpt-5.3-codex-spark")
-	}
+	meta := requireModelMetadata(t, "gpt-5.3-codex-spark")
 	if meta.ContextWindowTokens != 128_000 {
 		t.Fatalf("unexpected context window: %d", meta.ContextWindowTokens)
 	}
 }
 
 func TestLookupModelMetadataForGPT56SolContextWindow(t *testing.T) {
-	meta, ok := LookupModelMetadata("gpt-5.6-sol")
-	if !ok {
-		t.Fatal("expected model metadata for gpt-5.6-sol")
-	}
+	meta := requireModelMetadata(t, "gpt-5.6-sol")
 	if meta.ContextWindowTokens != 372_000 {
 		t.Fatalf("unexpected default context window: %d", meta.ContextWindowTokens)
 	}
@@ -50,10 +61,7 @@ func TestLookupModelMetadataForGPT56SolContextWindow(t *testing.T) {
 }
 
 func TestLookupModelMetadataForGPT54LargeContext(t *testing.T) {
-	meta, ok := LookupModelMetadata("gpt-5.4")
-	if !ok {
-		t.Fatal("expected model metadata for gpt-5.4")
-	}
+	meta := requireModelMetadata(t, "gpt-5.4")
 	if meta.ContextWindowTokens != 272_000 {
 		t.Fatalf("unexpected default context window: %d", meta.ContextWindowTokens)
 	}
@@ -63,10 +71,7 @@ func TestLookupModelMetadataForGPT54LargeContext(t *testing.T) {
 }
 
 func TestLookupModelMetadataForGPT54MiniLargeContext(t *testing.T) {
-	meta, ok := LookupModelMetadata("gpt-5.4-mini")
-	if !ok {
-		t.Fatal("expected model metadata for gpt-5.4-mini")
-	}
+	meta := requireModelMetadata(t, "gpt-5.4-mini")
 	if meta.ContextWindowTokens != 272_000 {
 		t.Fatalf("unexpected default context window: %d", meta.ContextWindowTokens)
 	}
@@ -90,10 +95,7 @@ func TestSupportedThinkingLevelsModel(t *testing.T) {
 }
 
 func TestSupportsReasoningEffortModel(t *testing.T) {
-	tests := []struct {
-		model string
-		want  bool
-	}{
+	tests := []modelSupportCase{
 		{model: "gpt-5.6-sol", want: true},
 		{model: "gpt-5.4", want: true},
 		{model: "gpt-5.4-mini", want: true},
@@ -104,19 +106,11 @@ func TestSupportsReasoningEffortModel(t *testing.T) {
 		{model: "custom-alias", want: true},
 		{model: "", want: false},
 	}
-
-	for _, tc := range tests {
-		if got := SupportsReasoningEffortModel(tc.model); got != tc.want {
-			t.Fatalf("SupportsReasoningEffortModel(%q)=%v, want %v", tc.model, got, tc.want)
-		}
-	}
+	requireModelSupport(t, "SupportsReasoningEffortModel", SupportsReasoningEffortModel, tests)
 }
 
 func TestSupportsReasoningSummaryModel(t *testing.T) {
-	tests := []struct {
-		model string
-		want  bool
-	}{
+	tests := []modelSupportCase{
 		{model: "gpt-5.6-sol", want: true},
 		{model: "gpt-5.4", want: true},
 		{model: "gpt-5.4-mini", want: true},
@@ -126,19 +120,11 @@ func TestSupportsReasoningSummaryModel(t *testing.T) {
 		{model: "custom-alias", want: false},
 		{model: "", want: false},
 	}
-
-	for _, tc := range tests {
-		if got := SupportsReasoningSummaryModel(tc.model); got != tc.want {
-			t.Fatalf("SupportsReasoningSummaryModel(%q)=%v, want %v", tc.model, got, tc.want)
-		}
-	}
+	requireModelSupport(t, "SupportsReasoningSummaryModel", SupportsReasoningSummaryModel, tests)
 }
 
 func TestSupportsVisionInputsModel(t *testing.T) {
-	tests := []struct {
-		model string
-		want  bool
-	}{
+	tests := []modelSupportCase{
 		{model: "gpt-5.6-sol", want: true},
 		{model: "gpt-5.3-codex", want: true},
 		{model: "gpt-5.3-codex-spark", want: false},
@@ -148,19 +134,11 @@ func TestSupportsVisionInputsModel(t *testing.T) {
 		{model: "claude-3-7-sonnet", want: false},
 		{model: "", want: false},
 	}
-
-	for _, tc := range tests {
-		if got := SupportsVisionInputsModel(tc.model); got != tc.want {
-			t.Fatalf("SupportsVisionInputsModel(%q)=%v, want %v", tc.model, got, tc.want)
-		}
-	}
+	requireModelSupport(t, "SupportsVisionInputsModel", SupportsVisionInputsModel, tests)
 }
 
 func TestSupportsVerbosityModel(t *testing.T) {
-	tests := []struct {
-		model string
-		want  bool
-	}{
+	tests := []modelSupportCase{
 		{model: "gpt-5.6-sol", want: true},
 		{model: "gpt-5.4", want: true},
 		{model: "gpt-5.4-mini", want: true},
@@ -171,12 +149,7 @@ func TestSupportsVerbosityModel(t *testing.T) {
 		{model: "custom-alias", want: false},
 		{model: "", want: false},
 	}
-
-	for _, tc := range tests {
-		if got := SupportsVerbosityModel(tc.model); got != tc.want {
-			t.Fatalf("SupportsVerbosityModel(%q)=%v, want %v", tc.model, got, tc.want)
-		}
-	}
+	requireModelSupport(t, "SupportsVerbosityModel", SupportsVerbosityModel, tests)
 }
 
 func TestVerbositySupportForModelAndProvider(t *testing.T) {

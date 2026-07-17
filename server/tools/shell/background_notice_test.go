@@ -10,6 +10,19 @@ import (
 	"core/server/tools/shell/postprocess"
 )
 
+func writeBackgroundNoticeLog(t *testing.T, content []byte) string {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "1000.log")
+	if err := os.WriteFile(logPath, content, 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	return logPath
+}
+
+func completedBackgroundSnapshot(logPath string, exitCode *int) Snapshot {
+	return Snapshot{ID: "1000", State: "completed", LogPath: logPath, ExitCode: exitCode}
+}
+
 func TestBackgroundEventCompletionOutputApplicability(t *testing.T) {
 	exitCode := 0
 	snapshot := Snapshot{ID: "1000", State: "completed", ExitCode: &exitCode}
@@ -46,18 +59,10 @@ func TestBackgroundEventCompletionOutputApplicability(t *testing.T) {
 }
 
 func TestBackgroundNoticeFinalizedOutputKeepsRetainedLogMetadata(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "1000.log")
 	lines := strings.Repeat("line\n", 100)
-	if err := os.WriteFile(logPath, []byte(lines), 0o644); err != nil {
-		t.Fatalf("write log: %v", err)
-	}
+	logPath := writeBackgroundNoticeLog(t, []byte(lines))
 	exitCode := 0
-	event := newFinalizedBackgroundEvent(EventCompleted, Snapshot{
-		ID:       "1000",
-		State:    "completed",
-		LogPath:  logPath,
-		ExitCode: &exitCode,
-	}, "semantic replacement", nil, false)
+	event := newFinalizedBackgroundEvent(EventCompleted, completedBackgroundSnapshot(logPath, &exitCode), "semantic replacement", nil, false)
 
 	summary, err := SummarizeBackgroundEvent(event, BackgroundNoticeOptions{MaxChars: 80, SuccessOutputMode: BackgroundOutputDefault})
 	if err != nil {
@@ -95,21 +100,13 @@ func TestBackgroundNoticeFinalizedOutputKeepsRetainedLogMetadata(t *testing.T) {
 }
 
 func TestBackgroundNoticeWarningOnlyOutputDoesNotClaimLogContent(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "1000.log")
-	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
-		t.Fatalf("write empty log: %v", err)
-	}
+	logPath := writeBackgroundNoticeLog(t, nil)
 	warning, err := postprocess.NewWarning("recoverable warning")
 	if err != nil {
 		t.Fatalf("NewWarning: %v", err)
 	}
 	exitCode := 0
-	event := newFinalizedBackgroundEvent(EventCompleted, Snapshot{
-		ID:       "1000",
-		State:    "completed",
-		LogPath:  logPath,
-		ExitCode: &exitCode,
-	}, "", warning, false)
+	event := newFinalizedBackgroundEvent(EventCompleted, completedBackgroundSnapshot(logPath, &exitCode), "", warning, false)
 
 	summary, err := SummarizeBackgroundEvent(event, BackgroundNoticeOptions{SuccessOutputMode: BackgroundOutputConcise})
 	if err != nil {
@@ -130,17 +127,9 @@ func TestBackgroundNoticeWarningOnlyOutputDoesNotClaimLogContent(t *testing.T) {
 }
 
 func TestBackgroundNoticeWhitespaceLogRendersNoOutputCompletion(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "1000.log")
-	if err := os.WriteFile(logPath, []byte("\n"), 0o644); err != nil {
-		t.Fatalf("write whitespace log: %v", err)
-	}
+	logPath := writeBackgroundNoticeLog(t, []byte("\n"))
 	exitCode := 0
-	event := newFinalizedBackgroundEvent(EventCompleted, Snapshot{
-		ID:       "1000",
-		State:    "completed",
-		LogPath:  logPath,
-		ExitCode: &exitCode,
-	}, "", nil, false)
+	event := newFinalizedBackgroundEvent(EventCompleted, completedBackgroundSnapshot(logPath, &exitCode), "", nil, false)
 
 	summary, err := SummarizeBackgroundEvent(event, BackgroundNoticeOptions{SuccessOutputMode: BackgroundOutputDefault})
 	if err != nil {
@@ -192,17 +181,9 @@ func TestBackgroundNoticeFallbackCarriesTruncationWithoutFinalizedState(t *testi
 }
 
 func TestBackgroundNoticeConciseFallbackRetainsVisibleCompletion(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "1000.log")
-	if err := os.WriteFile(logPath, []byte("output\n"), 0o644); err != nil {
-		t.Fatalf("write log: %v", err)
-	}
+	logPath := writeBackgroundNoticeLog(t, []byte("output\n"))
 	exitCode := 0
-	event := newFallbackBackgroundEvent(EventCompleted, Snapshot{
-		ID:       "1000",
-		State:    "completed",
-		LogPath:  logPath,
-		ExitCode: &exitCode,
-	}, "output", nil, 0, false)
+	event := newFallbackBackgroundEvent(EventCompleted, completedBackgroundSnapshot(logPath, &exitCode), "output", nil, 0, false)
 
 	summary, err := SummarizeBackgroundEvent(event, BackgroundNoticeOptions{SuccessOutputMode: BackgroundOutputConcise})
 	if err != nil {

@@ -119,11 +119,11 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		var caller *subagentpolicy.Caller
 		if req.Mode == serverapi.SessionLaunchModeHeadless {
 			if req.CallerSessionID != nil {
-				callerContext, callerErr := launch.ResolveSessionCallerContext(planner.Config.PersistenceRoot, *req.CallerSessionID)
+				resolved, callerErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, *req.CallerSessionID)
 				if callerErr != nil {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialCallerMissing}
 				}
-				caller = &subagentpolicy.Caller{Workflow: callerContext.WorkflowSession}
+				caller = &resolved
 				if parentAgentSessionID != nil {
 					callerSessionID, parseErr := runtimeids.ParseSessionID(*req.CallerSessionID)
 					if parseErr != nil || *parentAgentSessionID != callerSessionID {
@@ -132,7 +132,7 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 				}
 			}
 			if parentAgentSessionID != nil && req.CallerSessionID == nil {
-				if _, parentErr := launch.ResolveSessionCallerContext(planner.Config.PersistenceRoot, parentAgentSessionID.String()); parentErr != nil {
+				if _, parentErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, parentAgentSessionID.String()); parentErr != nil {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialParentMissing}
 				}
 			}

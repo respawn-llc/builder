@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/shared/config"
 )
 
@@ -68,29 +69,20 @@ func currentCaffeinateCommand(t *testing.T, guard *Guard) *exec.Cmd {
 
 func waitForRestartedCaffeinate(t *testing.T, guard *Guard, previousPID int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 10*time.Millisecond, func() bool {
 		current := currentCaffeinateCommand(t, guard)
-		if current.Process.Pid != previousPID {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for caffeinate pid %d to be replaced", previousPID)
+		return current.Process.Pid != previousPID
+	}, "timed out waiting for caffeinate pid %d to be replaced", previousPID)
 }
 
 func waitForCaffeinateCommand(t *testing.T, guard *Guard) *exec.Cmd {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		cmd := currentCaffeinateCommandOrNil(guard)
-		if cmd != nil {
-			return cmd
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("timed out waiting for active caffeinate process")
-	return nil
+	var cmd *exec.Cmd
+	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 10*time.Millisecond, func() bool {
+		cmd = currentCaffeinateCommandOrNil(guard)
+		return cmd != nil
+	}, "timed out waiting for active caffeinate process")
+	return cmd
 }
 
 func currentCaffeinateCommandOrNil(guard *Guard) *exec.Cmd {

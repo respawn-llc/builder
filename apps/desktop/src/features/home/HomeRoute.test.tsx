@@ -17,9 +17,7 @@ describe("HomeRoute", () => {
   });
 
   it("reloads project pages from the first page after leaving and revisiting Home", async () => {
-    const services = createHomeRevisitServices();
-
-    render(<App services={services} />);
+    const services = mountHomeServices(createHomeRevisitServices());
 
     fireEvent.click(await screen.findByRole("button", { name: "Alpha /tmp/project-alpha" }));
     await waitFor(() => {
@@ -45,9 +43,7 @@ describe("HomeRoute", () => {
   });
 
   it("reloads project pages from the first page after browser back returns Home", async () => {
-    const services = createHomeRevisitServices();
-
-    render(<App services={services} />);
+    const services = mountHomeServices(createHomeRevisitServices());
 
     fireEvent.click(await screen.findByRole("button", { name: "Alpha /tmp/project-alpha" }));
     await waitFor(() => {
@@ -67,22 +63,15 @@ describe("HomeRoute", () => {
   });
 
   it("shows project card workspace paths relative to the user's home directory", async () => {
-    const services = createTestServices(
-      [
-        ...startupRoutes,
+    mountHome({
+      homePath: "/Users/nek",
+      routes: [
         {
           method: "project.home.list",
-          result: projectPage(
-            [projectSummary("project-kent", "Kent", 10, "/Users/nek/Developer/kent")],
-            "",
-          ),
+          result: projectPage([projectSummary("project-kent", "Kent", 10, "/Users/nek/Developer/kent")], ""),
         },
       ],
-      undefined,
-      { homePath: "/Users/nek" },
-    );
-
-    render(<App services={services} />);
+    });
 
     const projectCard = await screen.findByRole("button", { name: "Kent ~/Developer/kent" });
     expect(projectCard).toBeInTheDocument();
@@ -90,25 +79,24 @@ describe("HomeRoute", () => {
   });
 
   it("keeps Inbox on the right while Workflows replaces Projects in the left tabbed pane", async () => {
-    const services = createTestServices([
-      ...startupRoutes,
-      {
-        method: "workflow.list",
-        result: {
-          workflows: [
-            {
-              id: "workflow-delivery",
-              name: "Delivery",
-              description: "Ship changes",
-              version: 1,
-            },
-          ],
-          next_page_token: "",
+    mountHome({
+      routes: [
+        {
+          method: "workflow.list",
+          result: {
+            workflows: [
+              {
+                id: "workflow-delivery",
+                name: "Delivery",
+                description: "Ship changes",
+                version: 1,
+              },
+            ],
+            next_page_token: "",
+          },
         },
-      },
-    ]);
-
-    render(<App services={services} />);
+      ],
+    });
 
     expect(await screen.findByRole("tab", { name: "Projects" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("heading", { name: "Inbox" })).toBeInTheDocument();
@@ -121,35 +109,9 @@ describe("HomeRoute", () => {
   });
 
   it("renders Inbox cards without kind chips in the header", async () => {
-    const services = createTestServices([
-      ...startupRoutes,
-      {
-        method: "workflow.attention.list",
-        result: {
-          generated_at_unix_ms: 1,
-          items: [
-            {
-              ask_id: "ask-1",
-              id: "attention-1",
-              kind: "question",
-              message: "Pick answer",
-              occurred_at_unix_ms: 1,
-              project_id: "project-1",
-              run_id: "run-1",
-              session_id: "session-1",
-              task_id: "task-1",
-              task_short_id: "T-1",
-              task_title: "Resolve blocker",
-              task_transition_id: "",
-              workflow_id: "workflow-1",
-            },
-          ],
-          next_page_token: "",
-        },
-      },
-    ]);
-
-    render(<App services={services} />);
+    mountHome({
+      routes: [attentionListRoute(attentionItem({ kind: "question", message: "Pick answer" }))],
+    });
 
     const row = await screen.findByTestId("attention-row");
     expect(within(row).getByText("T-1")).toBeInTheDocument();
@@ -157,21 +119,13 @@ describe("HomeRoute", () => {
   });
 
   it("opens Inbox task cards in the Home task sidebar without navigating away", async () => {
-    const services = createTestServices([
-      ...startupRoutes,
-      {
-        method: "workflow.attention.list",
-        result: {
-          generated_at_unix_ms: 1,
-          items: [attentionItem({ kind: "question", message: "Pick answer" })],
-          next_page_token: "",
-        },
-      },
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.activity.list", result: emptyActivityResponse },
-    ]);
-
-    render(<App services={services} />);
+    const services = mountHome({
+      routes: [
+        attentionListRoute(attentionItem({ kind: "question", message: "Pick answer" })),
+        { method: "workflow.task.get", result: taskDetailResponse },
+        { method: "workflow.task.activity.list", result: emptyActivityResponse },
+      ],
+    });
 
     fireEvent.click(await screen.findByTestId("attention-row"));
 
@@ -190,22 +144,14 @@ describe("HomeRoute", () => {
       value: scrollIntoView,
     });
     try {
-      const services = createTestServices([
-        ...startupRoutes,
-        {
-          method: "workflow.attention.list",
-          result: {
-            generated_at_unix_ms: 1,
-            items: [attentionItem({ kind: "question", message: "Pick answer" })],
-            next_page_token: "",
-          },
-        },
-        { method: "workflow.task.get", result: taskDetailResponseWithQuestion },
-        { method: "workflow.task.activity.list", result: emptyActivityResponse },
-        { method: "ask.listPendingBySession", result: { Asks: [] } },
-      ]);
-
-      render(<App services={services} />);
+      mountHome({
+        routes: [
+          attentionListRoute(attentionItem({ kind: "question", message: "Pick answer" })),
+          { method: "workflow.task.get", result: taskDetailResponseWithQuestion },
+          { method: "workflow.task.activity.list", result: emptyActivityResponse },
+          { method: "ask.listPendingBySession", result: { Asks: [] } },
+        ],
+      });
 
       fireEvent.click(await screen.findByTestId("attention-row"));
 
@@ -225,30 +171,22 @@ describe("HomeRoute", () => {
   });
 
   it("opens workflow-only Inbox cards in the workflow editor", async () => {
-    const services = createTestServices([
-      ...startupRoutes,
-      {
-        method: "workflow.attention.list",
-        result: {
-          generated_at_unix_ms: 1,
-          items: [
-            attentionItem({
-              kind: "validation_blocker",
-              message: "Workflow invalid",
-              taskID: "",
-              taskShortID: "",
-              taskTitle: "",
-            }),
-          ],
-          next_page_token: "",
-        },
-      },
-      { method: "workflow.listProjectLinks", result: workflowProjectLinksResponse },
-      { method: "workflow.get", result: workflowDefinitionResponse },
-      { method: "workflow.validate", result: workflowValidationResponse },
-    ]);
-
-    render(<App services={services} />);
+    mountHome({
+      routes: [
+        attentionListRoute(
+          attentionItem({
+            kind: "validation_blocker",
+            message: "Workflow invalid",
+            taskID: "",
+            taskShortID: "",
+            taskTitle: "",
+          }),
+        ),
+        { method: "workflow.listProjectLinks", result: workflowProjectLinksResponse },
+        { method: "workflow.get", result: workflowDefinitionResponse },
+        { method: "workflow.validate", result: workflowValidationResponse },
+      ],
+    });
 
     fireEvent.click(await screen.findByTestId("attention-row"));
 
@@ -259,9 +197,7 @@ describe("HomeRoute", () => {
   });
 
   it("opens workflow creation from the Workflows tab plus action", async () => {
-    const services = createTestServices(startupRoutes);
-
-    render(<App services={services} />);
+    mountHome();
 
     fireEvent.click(await screen.findByRole("button", { name: "Create workflow" }));
 
@@ -270,14 +206,43 @@ describe("HomeRoute", () => {
   });
 
   it("disables workflow creation from the Workflows tab while disconnected", async () => {
-    const services = createTestServices(startupRoutes);
-    services.transport.connection.set("disconnected", "offline");
-
-    render(<App services={services} />);
+    mountHome({ disconnected: true });
 
     expect(await screen.findByRole("button", { name: "Create workflow" })).toBeDisabled();
   });
 });
+
+type HomeRoutes = Parameters<typeof createTestServices>[0];
+type HomeOptions = Readonly<{
+  disconnected?: boolean;
+  homePath?: string;
+  routes?: HomeRoutes;
+}>;
+
+function mountHomeServices(services: ReturnType<typeof createTestServices>) {
+  render(<App services={services} />);
+  return services;
+}
+
+function mountHome(options: HomeOptions = {}) {
+  const environment = options.homePath === undefined ? undefined : { homePath: options.homePath };
+  const services = createTestServices([...startupRoutes, ...(options.routes ?? [])], undefined, environment);
+  if (options.disconnected === true) {
+    services.transport.connection.set("disconnected", "offline");
+  }
+  return mountHomeServices(services);
+}
+
+function attentionListRoute(...items: readonly ReturnType<typeof attentionItem>[]) {
+  return {
+    method: "workflow.attention.list",
+    result: {
+      generated_at_unix_ms: 1,
+      items,
+      next_page_token: "",
+    },
+  } as const;
+}
 
 function createHomeRevisitServices() {
   return createTestServices([

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/requestmemo"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
@@ -233,53 +234,41 @@ func (s *stubKillProcessSource) InlineOutput(string, int) (string, string, error
 
 func waitForProcessCount(t *testing.T, manager *shelltool.Manager, count int) {
 	t.Helper()
-	deadline := time.Now().Add(processViewTestWaitTimeout)
-	for time.Now().Before(deadline) {
-		if len(manager.List()) >= count {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d processes", count)
+	testsetup.RequireUntil(t, time.Now().Add(processViewTestWaitTimeout), 10*time.Millisecond, func() bool {
+		return len(manager.List()) >= count
+	}, "timed out waiting for %d processes", count)
 }
 
 func waitForProcessKilled(t *testing.T, manager *shelltool.Manager, id string) {
 	t.Helper()
-	deadline := time.Now().Add(processViewTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(processViewTestWaitTimeout), 10*time.Millisecond, func() bool {
 		for _, entry := range manager.List() {
 			if entry.ID == id && (entry.KillRequested || !entry.Running) {
-				return
+				return true
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for process %s to be kill-requested", id)
+		return false
+	}, "timed out waiting for process %s to be kill-requested", id)
 }
 
 func waitForProcessSnapshot(t *testing.T, timeout time.Duration, check func() (shelltool.Snapshot, bool)) shelltool.Snapshot {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if snapshot, ok := check(); ok {
-			return snapshot
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("timed out waiting for process snapshot condition")
-	return shelltool.Snapshot{}
+	var snapshot shelltool.Snapshot
+	testsetup.RequireUntil(t, time.Now().Add(timeout), 10*time.Millisecond, func() bool {
+		var ok bool
+		snapshot, ok = check()
+		return ok
+	}, "timed out waiting for process snapshot condition")
+	return snapshot
 }
 
 func waitForInlineOutput(t *testing.T, timeout time.Duration, call func() (serverapi.ProcessInlineOutputResponse, error), match func(serverapi.ProcessInlineOutputResponse) bool) serverapi.ProcessInlineOutputResponse {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		resp, err := call()
-		if err == nil && match(resp) {
-			return resp
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("timed out waiting for inline output")
-	return serverapi.ProcessInlineOutputResponse{}
+	var resp serverapi.ProcessInlineOutputResponse
+	testsetup.RequireUntil(t, time.Now().Add(timeout), 10*time.Millisecond, func() bool {
+		var err error
+		resp, err = call()
+		return err == nil && match(resp)
+	}, "timed out waiting for inline output")
+	return resp
 }

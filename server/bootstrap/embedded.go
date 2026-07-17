@@ -31,8 +31,7 @@ type Request struct {
 }
 
 type ConfigPlan struct {
-	Config       config.App
-	ContainerDir string
+	Config config.App
 }
 
 func ValidateSessionExists(persistenceRoot string, sessionID string) error {
@@ -52,10 +51,6 @@ type RuntimeSupport struct {
 }
 
 func ResolveConfig(req Request) (ConfigPlan, error) {
-	now := req.Now
-	if now == nil {
-		now = time.Now
-	}
 	bootstrapPlan := launch.BootstrapPlan{
 		WorkspaceRoot:    strings.TrimSpace(req.WorkspaceRoot),
 		OpenAIBaseURL:    strings.TrimSpace(req.OpenAIBaseURL),

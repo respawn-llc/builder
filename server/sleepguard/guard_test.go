@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/shared/config"
 )
 
@@ -150,12 +151,5 @@ func (f *fakePlatformGuard) closeExitLocked() {
 
 func waitForCondition(t *testing.T, condition func() bool, description string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", description)
+	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 10*time.Millisecond, condition, "timed out waiting for %s", description)
 }

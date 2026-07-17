@@ -17,10 +17,23 @@ func (s stubHandler) Call(_ context.Context, c Call) (Result, error) {
 	return Result{CallID: c.ID, Name: c.Name, Output: json.RawMessage(`{}`)}, nil
 }
 
+func handlerRegistration(id toolspec.ID) HandlerRegistration {
+	return HandlerRegistration{ID: id, Handler: stubHandler{id: id}}
+}
+
+func requireDefinition(t *testing.T, id toolspec.ID) Definition {
+	t.Helper()
+	definition, ok := DefinitionFor(id)
+	if !ok {
+		t.Fatalf("expected %s definition", id)
+	}
+	return definition
+}
+
 func TestRegistryDefinitionsFollowCentralCatalog(t *testing.T) {
 	r := NewRegistry(
-		HandlerRegistration{ID: toolspec.ToolPatch, Handler: stubHandler{id: toolspec.ToolPatch}},
-		HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: stubHandler{id: toolspec.ToolExecCommand}},
+		handlerRegistration(toolspec.ToolPatch),
+		handlerRegistration(toolspec.ToolExecCommand),
 	)
 	defs := r.Definitions()
 	if len(defs) != 2 {
@@ -40,17 +53,17 @@ func TestRegistryRejectsUnknownToolDefinition(t *testing.T) {
 			t.Fatal("expected panic for unknown tool definition")
 		}
 	}()
-	_ = NewRegistry(HandlerRegistration{ID: toolspec.ID("unknown_tool"), Handler: stubHandler{id: toolspec.ID("unknown_tool")}})
+	_ = NewRegistry(handlerRegistration(toolspec.ID("unknown_tool")))
 }
 
 func TestRegistryReplaceHandlersSwapsDefinitionsAtomically(t *testing.T) {
-	r := NewRegistry(HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: stubHandler{id: toolspec.ToolExecCommand}})
+	r := NewRegistry(handlerRegistration(toolspec.ToolExecCommand))
 	if defs := r.Definitions(); len(defs) != 1 || defs[0].ID != toolspec.ToolExecCommand {
 		t.Fatalf("unexpected initial definitions: %+v", defs)
 	}
 	r.ReplaceHandlers(
-		HandlerRegistration{ID: toolspec.ToolPatch, Handler: stubHandler{id: toolspec.ToolPatch}},
-		HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: stubHandler{id: toolspec.ToolWriteStdin}},
+		handlerRegistration(toolspec.ToolPatch),
+		handlerRegistration(toolspec.ToolWriteStdin),
 	)
 	defs := r.Definitions()
 	if len(defs) != 2 {
@@ -97,10 +110,7 @@ func TestDefaultEnabledToolIDsIncludesStableTools(t *testing.T) {
 }
 
 func TestDefinitionContractsDriveRuntimeAndRequestExposure(t *testing.T) {
-	execTool, ok := DefinitionFor(toolspec.ToolExecCommand)
-	if !ok {
-		t.Fatalf("expected %s definition", toolspec.ToolExecCommand)
-	}
+	execTool := requireDefinition(t, toolspec.ToolExecCommand)
 	if !execTool.AvailableInLocalRuntime() {
 		t.Fatalf("expected %s to be available in local runtime", toolspec.ToolExecCommand)
 	}
@@ -111,10 +121,7 @@ func TestDefinitionContractsDriveRuntimeAndRequestExposure(t *testing.T) {
 		t.Fatalf("expected %s to be request-exposed without vision", toolspec.ToolExecCommand)
 	}
 
-	viewImage, ok := DefinitionFor(toolspec.ToolViewImage)
-	if !ok {
-		t.Fatalf("expected %s definition", toolspec.ToolViewImage)
-	}
+	viewImage := requireDefinition(t, toolspec.ToolViewImage)
 	if !viewImage.AvailableInLocalRuntime() {
 		t.Fatalf("expected %s to be available in local runtime", toolspec.ToolViewImage)
 	}
@@ -128,10 +135,7 @@ func TestDefinitionContractsDriveRuntimeAndRequestExposure(t *testing.T) {
 		t.Fatalf("expected %s to be request-exposed with vision support", toolspec.ToolViewImage)
 	}
 
-	triggerHandoff, ok := DefinitionFor(toolspec.ToolTriggerHandoff)
-	if !ok {
-		t.Fatalf("expected %s definition", toolspec.ToolTriggerHandoff)
-	}
+	triggerHandoff := requireDefinition(t, toolspec.ToolTriggerHandoff)
 	if !triggerHandoff.AvailableInLocalRuntime() {
 		t.Fatalf("expected %s to be available in local runtime", toolspec.ToolTriggerHandoff)
 	}
@@ -142,10 +146,7 @@ func TestDefinitionContractsDriveRuntimeAndRequestExposure(t *testing.T) {
 		t.Fatalf("expected %s to be request-exposed when enabled", toolspec.ToolTriggerHandoff)
 	}
 
-	webSearch, ok := DefinitionFor(toolspec.ToolWebSearch)
-	if !ok {
-		t.Fatalf("expected %s definition", toolspec.ToolWebSearch)
-	}
+	webSearch := requireDefinition(t, toolspec.ToolWebSearch)
 	if webSearch.AvailableInLocalRuntime() {
 		t.Fatalf("expected %s to remain hosted-only", toolspec.ToolWebSearch)
 	}
@@ -162,10 +163,7 @@ func TestDefinitionContractsDriveRuntimeAndRequestExposure(t *testing.T) {
 		t.Fatalf("expected %s native web search to honor disabled mode", toolspec.ToolWebSearch)
 	}
 
-	edit, ok := DefinitionFor(toolspec.ToolEdit)
-	if !ok {
-		t.Fatalf("expected %s definition", toolspec.ToolEdit)
-	}
+	edit := requireDefinition(t, toolspec.ToolEdit)
 	if !edit.AvailableInLocalRuntime() {
 		t.Fatalf("expected %s to be available in local runtime", toolspec.ToolEdit)
 	}
@@ -178,7 +176,7 @@ func TestDefinitionContractsDriveRuntimeAndRequestExposure(t *testing.T) {
 }
 
 func TestDefinitionContractsBuildTranscriptMetadata(t *testing.T) {
-	execTool, _ := DefinitionFor(toolspec.ToolExecCommand)
+	execTool := requireDefinition(t, toolspec.ToolExecCommand)
 	shellMeta := execTool.BuildToolCallMeta(ToolCallContext{DefaultShellPath: "/bin/zsh", GOOS: "darwin"}, json.RawMessage(`{"command":"pwd"}`))
 	if !shellMeta.IsShell || shellMeta.Presentation != "shell" {
 		t.Fatalf("expected shell contract to mark shell presentation, got %+v", shellMeta)
@@ -200,7 +198,7 @@ func TestDefinitionContractsBuildTranscriptMetadata(t *testing.T) {
 		t.Fatalf("expected raw exec_command transcript metadata to record raw output request, got %+v", rawShellMeta)
 	}
 
-	patch, _ := DefinitionFor(toolspec.ToolPatch)
+	patch := requireDefinition(t, toolspec.ToolPatch)
 	patchMeta := patch.BuildToolCallMeta(ToolCallContext{WorkingDir: "/workspace"}, json.RawMessage(`"*** Begin Patch\n*** Update File: a.go\n-old\n+new\n*** End Patch\n"`))
 	if !patchMeta.OmitSuccessfulResult {
 		t.Fatalf("expected patch transcript to suppress success result append, got %+v", patchMeta)
@@ -219,7 +217,7 @@ func TestDefinitionContractsBuildTranscriptMetadata(t *testing.T) {
 		t.Fatalf("expected custom freeform patch input summary, got %+v", freeformPatchMeta)
 	}
 
-	edit, _ := DefinitionFor(toolspec.ToolEdit)
+	edit := requireDefinition(t, toolspec.ToolEdit)
 	editMeta := edit.BuildToolCallMeta(ToolCallContext{}, json.RawMessage(`{"path":"a.go","old_string":"old","new_string":"new"}`))
 	if editMeta.ToolName != string(toolspec.ToolEdit) || editMeta.PatchRender == nil {
 		t.Fatalf("unexpected edit transcript metadata: %+v", editMeta)
@@ -231,7 +229,7 @@ func TestDefinitionContractsBuildTranscriptMetadata(t *testing.T) {
 		t.Fatalf("expected edit diff render hint, got %+v", editMeta.RenderHint)
 	}
 
-	askQuestion, _ := DefinitionFor(toolspec.ToolAskQuestion)
+	askQuestion := requireDefinition(t, toolspec.ToolAskQuestion)
 	askMeta := askQuestion.BuildToolCallMeta(ToolCallContext{}, json.RawMessage(`{"question":"Choose scope?","suggestions":["full"],"recommended_option_index":1}`))
 	if askMeta.Presentation != "ask_question" {
 		t.Fatalf("expected ask_question presentation, got %+v", askMeta)
@@ -246,7 +244,7 @@ func TestDefinitionContractsBuildTranscriptMetadata(t *testing.T) {
 		t.Fatalf("unexpected ask_question recommended option index: %+v", askMeta)
 	}
 
-	triggerHandoff, _ := DefinitionFor(toolspec.ToolTriggerHandoff)
+	triggerHandoff := requireDefinition(t, toolspec.ToolTriggerHandoff)
 	handoffMeta := triggerHandoff.BuildToolCallMeta(ToolCallContext{}, json.RawMessage(`{"summarizer_prompt":"keep API details","future_agent_message":"resume with tests"}`))
 	if handoffMeta.Command == "" || handoffMeta.CompactText == "" {
 		t.Fatalf("expected trigger_handoff metadata to expose compact and detail text, got %+v", handoffMeta)
@@ -254,10 +252,7 @@ func TestDefinitionContractsBuildTranscriptMetadata(t *testing.T) {
 }
 
 func TestEditDefinitionBuildsStructuredPresentationFromCallInput(t *testing.T) {
-	edit, ok := DefinitionFor(toolspec.ToolEdit)
-	if !ok {
-		t.Fatalf("expected %s definition", toolspec.ToolEdit)
-	}
+	edit := requireDefinition(t, toolspec.ToolEdit)
 
 	meta := edit.BuildToolCallMeta(ToolCallContext{WorkingDir: "/workspace"}, json.RawMessage(`{
 		"filePath":"a.go",
@@ -278,7 +273,7 @@ func TestEditDefinitionBuildsStructuredPresentationFromCallInput(t *testing.T) {
 }
 
 func TestDefinitionContractsFormatLegacyAskQuestionFreeformOnSingleLine(t *testing.T) {
-	askQuestion, _ := DefinitionFor(toolspec.ToolAskQuestion)
+	askQuestion := requireDefinition(t, toolspec.ToolAskQuestion)
 	got := askQuestion.FormatToolResult(Result{
 		Name: toolspec.ToolAskQuestion,
 		Output: json.RawMessage(`{
@@ -293,7 +288,7 @@ func TestDefinitionContractsFormatLegacyAskQuestionFreeformOnSingleLine(t *testi
 }
 
 func TestDefinitionContractsFormatLegacyAskQuestionApprovalCommentaryUsesDecisionOnly(t *testing.T) {
-	askQuestion, _ := DefinitionFor(toolspec.ToolAskQuestion)
+	askQuestion := requireDefinition(t, toolspec.ToolAskQuestion)
 	got := askQuestion.FormatToolResult(Result{
 		Name: toolspec.ToolAskQuestion,
 		Output: json.RawMessage(`{

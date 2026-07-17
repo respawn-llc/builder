@@ -17,72 +17,42 @@ bash_default_seconds = 42
 }
 
 func TestLoadShellOutputMaxCharsPrecedenceAndValidation(t *testing.T) {
-	_, workspace, configPath := newConfigTestFile(t)
-	writeConfigTestFile(t, configPath, "shell_output_max_chars = 12000\n")
-
-	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.ShellOutputMaxChars != 12000 {
-		t.Fatalf("expected file shell_output_max_chars=12000, got %d", cfg.Settings.ShellOutputMaxChars)
-	}
-	assertConfigSource(t, cfg, "shell_output_max_chars", "file")
-
-	t.Setenv("KENT_SHELL_OUTPUT_MAX_CHARS", "18000")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.ShellOutputMaxChars != 18000 {
-		t.Fatalf("expected env shell_output_max_chars=18000, got %d", cfg.Settings.ShellOutputMaxChars)
-	}
-	assertConfigSource(t, cfg, "shell_output_max_chars", "env")
-
-	t.Setenv("KENT_SHELL_OUTPUT_MAX_CHARS", "0")
-	if _, err := Load(workspace, LoadOptions{}); err == nil {
-		t.Fatal("expected invalid shell_output_max_chars")
-	}
+	workspace := assertConfigPrecedence(t, configPrecedenceCase[int]{
+		fileContents: "shell_output_max_chars = 12000\n",
+		sourceKey:    "shell_output_max_chars",
+		fileWant:     12000,
+		envName:      "KENT_SHELL_OUTPUT_MAX_CHARS",
+		envValue:     "18000",
+		envWant:      18000,
+		read:         func(settings Settings) int { return settings.ShellOutputMaxChars },
+	})
+	assertConfigEnvRejected(t, workspace, "KENT_SHELL_OUTPUT_MAX_CHARS", "0")
 }
 
 func TestLoadMinimumExecToBgSecondsPrecedenceAndValidation(t *testing.T) {
-	_, workspace, configPath := newConfigTestFile(t)
-	writeConfigTestFile(t, configPath, "minimum_exec_to_bg_seconds = 21\n")
-
-	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.MinimumExecToBgSeconds != 21 {
-		t.Fatalf("expected file minimum_exec_to_bg_seconds=21, got %d", cfg.Settings.MinimumExecToBgSeconds)
-	}
-	assertConfigSource(t, cfg, "minimum_exec_to_bg_seconds", "file")
-
-	t.Setenv("KENT_MINIMUM_EXEC_TO_BG_SECONDS", "18")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.MinimumExecToBgSeconds != 18 {
-		t.Fatalf("expected env minimum_exec_to_bg_seconds=18, got %d", cfg.Settings.MinimumExecToBgSeconds)
-	}
-	assertConfigSource(t, cfg, "minimum_exec_to_bg_seconds", "env")
-
-	t.Setenv("KENT_MINIMUM_EXEC_TO_BG_SECONDS", "0")
-	if _, err := Load(workspace, LoadOptions{}); err == nil {
-		t.Fatal("expected invalid minimum_exec_to_bg_seconds")
-	}
+	workspace := assertConfigPrecedence(t, configPrecedenceCase[int]{
+		fileContents: "minimum_exec_to_bg_seconds = 21\n",
+		sourceKey:    "minimum_exec_to_bg_seconds",
+		fileWant:     21,
+		envName:      "KENT_MINIMUM_EXEC_TO_BG_SECONDS",
+		envValue:     "18",
+		envWant:      18,
+		read:         func(settings Settings) int { return settings.MinimumExecToBgSeconds },
+	})
+	assertConfigEnvRejected(t, workspace, "KENT_MINIMUM_EXEC_TO_BG_SECONDS", "0")
 }
 
 func TestLoadBGShellsOutputPrecedenceAndValidation(t *testing.T) {
-	_, workspace, configPath := newConfigTestFile(t)
-	writeConfigTestFile(t, configPath, "bg_shells_output = \"concise\"\n")
-
-	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.BGShellsOutput != BGShellsOutputConcise {
-		t.Fatalf("expected file bg_shells_output=concise, got %q", cfg.Settings.BGShellsOutput)
-	}
-	assertConfigSource(t, cfg, "bg_shells_output", "file")
-
-	t.Setenv("KENT_BG_SHELLS_OUTPUT", "verbose")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.BGShellsOutput != BGShellsOutputVerbose {
-		t.Fatalf("expected env bg_shells_output=verbose, got %q", cfg.Settings.BGShellsOutput)
-	}
-	assertConfigSource(t, cfg, "bg_shells_output", "env")
-
-	t.Setenv("KENT_BG_SHELLS_OUTPUT", "loud")
-	if _, err := Load(workspace, LoadOptions{}); err == nil {
-		t.Fatal("expected invalid bg_shells_output")
-	}
+	workspace := assertConfigPrecedence(t, configPrecedenceCase[BGShellsOutputMode]{
+		fileContents: "bg_shells_output = \"concise\"\n",
+		sourceKey:    "bg_shells_output",
+		fileWant:     BGShellsOutputConcise,
+		envName:      "KENT_BG_SHELLS_OUTPUT",
+		envValue:     "verbose",
+		envWant:      BGShellsOutputVerbose,
+		read:         func(settings Settings) BGShellsOutputMode { return settings.BGShellsOutput },
+	})
+	assertConfigEnvRejected(t, workspace, "KENT_BG_SHELLS_OUTPUT", "loud")
 }
 
 func TestLoadShellPostprocessingPrecedenceAndValidation(t *testing.T) {
@@ -281,25 +251,15 @@ func TestLoadCanonicalTimeoutEnvAndSourceKeys(t *testing.T) {
 }
 
 func TestLoadStorePrecedence(t *testing.T) {
-	_, workspace, configPath := newConfigTestFile(t)
-	writeConfigTestFile(t, configPath, `store = true`)
-
-	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
-	if !cfg.Settings.Store {
-		t.Fatalf("expected file store=true")
-	}
-	if got := cfg.Source.Sources["store"]; got != "file" {
-		t.Fatalf("expected store source file, got %q", got)
-	}
-
-	t.Setenv("KENT_STORE", "false")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.Store {
-		t.Fatalf("expected env store=false")
-	}
-	if got := cfg.Source.Sources["store"]; got != "env" {
-		t.Fatalf("expected store source env, got %q", got)
-	}
+	assertConfigPrecedence(t, configPrecedenceCase[bool]{
+		fileContents: "store = true\n",
+		sourceKey:    "store",
+		fileWant:     true,
+		envName:      "KENT_STORE",
+		envValue:     "false",
+		envWant:      false,
+		read:         func(settings Settings) bool { return settings.Store },
+	})
 }
 
 func TestLoadIgnoresUnknownEnvVars(t *testing.T) {
@@ -329,48 +289,28 @@ func TestLoadRejectsRemovedReviewerMaxSuggestionsFileKey(t *testing.T) {
 }
 
 func TestLoadAllowNonCwdEditsPrecedence(t *testing.T) {
-	_, workspace, configPath := newConfigTestFile(t)
-	writeConfigTestFile(t, configPath, `allow_non_cwd_edits = true`)
-
-	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
-	if !cfg.Settings.AllowNonCwdEdits {
-		t.Fatalf("expected file allow_non_cwd_edits=true")
-	}
-	if got := cfg.Source.Sources["allow_non_cwd_edits"]; got != "file" {
-		t.Fatalf("expected allow_non_cwd_edits source file, got %q", got)
-	}
-
-	t.Setenv("KENT_ALLOW_NON_CWD_EDITS", "false")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.AllowNonCwdEdits {
-		t.Fatalf("expected env allow_non_cwd_edits=false")
-	}
-	if got := cfg.Source.Sources["allow_non_cwd_edits"]; got != "env" {
-		t.Fatalf("expected allow_non_cwd_edits source env, got %q", got)
-	}
+	assertConfigPrecedence(t, configPrecedenceCase[bool]{
+		fileContents: "allow_non_cwd_edits = true\n",
+		sourceKey:    "allow_non_cwd_edits",
+		fileWant:     true,
+		envName:      "KENT_ALLOW_NON_CWD_EDITS",
+		envValue:     "false",
+		envWant:      false,
+		read:         func(settings Settings) bool { return settings.AllowNonCwdEdits },
+	})
 }
 
 func TestLoadDebugPrecedenceAndValidation(t *testing.T) {
-	_, workspace, configPath := newConfigTestFile(t)
-	writeConfigTestFile(t, configPath, "debug = true\n")
-
-	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
-	if !cfg.Settings.Debug {
-		t.Fatalf("expected file debug=true")
-	}
-	assertConfigSource(t, cfg, "debug", "file")
-
-	t.Setenv("KENT_DEBUG", "false")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.Debug {
-		t.Fatalf("expected env debug=false")
-	}
-	assertConfigSource(t, cfg, "debug", "env")
-
-	t.Setenv("KENT_DEBUG", "broken")
-	if _, err := Load(workspace, LoadOptions{}); err == nil {
-		t.Fatal("expected invalid KENT_DEBUG error")
-	}
+	workspace := assertConfigPrecedence(t, configPrecedenceCase[bool]{
+		fileContents: "debug = true\n",
+		sourceKey:    "debug",
+		fileWant:     true,
+		envName:      "KENT_DEBUG",
+		envValue:     "false",
+		envWant:      false,
+		read:         func(settings Settings) bool { return settings.Debug },
+	})
+	assertConfigEnvRejected(t, workspace, "KENT_DEBUG", "broken")
 }
 
 func TestLoadServerHostPortPrecedenceAndValidation(t *testing.T) {
@@ -421,25 +361,15 @@ func TestLoadContextCompactionThresholdPrecedence(t *testing.T) {
 }
 
 func TestLoadCompactionModePrecedence(t *testing.T) {
-	_, workspace, configPath := newConfigTestFile(t)
-	writeConfigTestFile(t, configPath, "compaction_mode = \"local\"\n")
-
-	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.CompactionMode != CompactionModeLocal {
-		t.Fatalf("expected file override compaction_mode=local, got %q", cfg.Settings.CompactionMode)
-	}
-	if got := cfg.Source.Sources["compaction_mode"]; got != "file" {
-		t.Fatalf("expected compaction_mode source file, got %q", got)
-	}
-
-	t.Setenv("KENT_COMPACTION_MODE", "none")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.CompactionMode != CompactionModeNone {
-		t.Fatalf("expected env override compaction_mode=none, got %q", cfg.Settings.CompactionMode)
-	}
-	if got := cfg.Source.Sources["compaction_mode"]; got != "env" {
-		t.Fatalf("expected compaction_mode source env, got %q", got)
-	}
+	assertConfigPrecedence(t, configPrecedenceCase[CompactionMode]{
+		fileContents: "compaction_mode = \"local\"\n",
+		sourceKey:    "compaction_mode",
+		fileWant:     CompactionModeLocal,
+		envName:      "KENT_COMPACTION_MODE",
+		envValue:     "none",
+		envWant:      CompactionModeNone,
+		read:         func(settings Settings) CompactionMode { return settings.CompactionMode },
+	})
 }
 
 func TestLoadRejectsRemovedUseNativeCompactionSetting(t *testing.T) {

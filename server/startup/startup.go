@@ -41,12 +41,6 @@ type AuthHandler interface {
 	LookupEnv(key string) string
 }
 
-type AuthState interface {
-	Config() config.App
-	OAuthOptions() auth.OpenAIOAuthOptions
-	AuthManager() *auth.Manager
-}
-
 type OnboardingHandler func(ctx context.Context, req OnboardingRequest) (config.App, error)
 
 type OnboardingRequest struct {
@@ -54,10 +48,6 @@ type OnboardingRequest struct {
 	AuthManager           *auth.Manager
 	CapabilityFactsClient apicontract.CapabilityFactsService
 	ReloadConfig          func() (config.App, error)
-}
-
-func Start(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*EmbeddedServer, error) {
-	return StartWithOptions(ctx, req, authHandler, onboardingHandler, Options{})
 }
 
 func StartWithOptions(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler, opts Options) (*EmbeddedServer, error) {
@@ -71,42 +61,18 @@ func StartWithOptions(ctx context.Context, req Request, authHandler AuthHandler,
 	}
 	if !resolved.Config.Source.SettingsFileExists && onboardingHandler == nil {
 		cfg, deps, surfaceErr := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, opts)
-		if surfaceErr != nil {
-			if errors.Is(surfaceErr, errStartupControlSurfaceNotRequired) {
-				return startConfiguredEmbeddedServer(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
-			}
+		if surfaceErr == nil {
+			return &EmbeddedServer{deps: deps, cfg: cfg}, nil
+		}
+		if !errors.Is(surfaceErr, errStartupControlSurfaceNotRequired) {
 			return nil, surfaceErr
 		}
-		return &EmbeddedServer{deps: deps, cfg: cfg}, nil
 	}
 	appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
 	if err != nil {
-		if errors.Is(err, ErrOnboardingRequired) {
-			return nil, err
-		}
 		return nil, err
 	}
 	return &EmbeddedServer{Core: appCore}, nil
-}
-
-func startConfiguredEmbeddedServer(ctx context.Context, bootstrapReq serverbootstrap.Request, requireAuth bool, authHandler startupAuthHandler, onboardingHandler OnboardingHandler, opts Options) (*EmbeddedServer, error) {
-	appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, requireAuth, authHandler, onboardingHandler, opts)
-	if err != nil {
-		return nil, err
-	}
-	return &EmbeddedServer{Core: appCore}, nil
-}
-
-func StartCore(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*core.Core, error) {
-	return StartCoreWithOptions(ctx, req, authHandler, onboardingHandler, Options{})
-}
-
-func StartCoreWithOptions(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler, opts Options) (*core.Core, error) {
-	if authHandler == nil {
-		return nil, errors.New("auth handler is required")
-	}
-	bootstrapReq := buildRequest(req, authHandler)
-	return startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
 }
 
 type startupAuthHandler interface {
@@ -162,29 +128,6 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 		return nil, err
 	}
 	return appCore, nil
-}
-
-func EnsureReady(ctx context.Context, state AuthState, authHandler AuthHandler) error {
-	if state == nil {
-		return errors.New("auth state is required")
-	}
-	if state.AuthManager() == nil {
-		return errAuthManagerRequired
-	}
-	if authHandler == nil {
-		return errors.New("auth handler is required")
-	}
-	cfg := state.Config()
-	return authservice.EnsureFlowReady(
-		ctx,
-		state.AuthManager(),
-		state.OAuthOptions(),
-		cfg.Settings.Theme,
-		authHandler.LookupEnv,
-		authservice.StartupAuthRequired(cfg.Settings),
-		true,
-		authHandler,
-	)
 }
 
 func buildRequest(req Request, authHandler AuthHandler) serverbootstrap.Request {

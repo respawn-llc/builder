@@ -2,23 +2,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-import { SelectField } from "./SelectField";
+import { SelectField, type SelectFieldProps } from "./SelectField";
 
 describe("Field", () => {
   it("renders SelectField through a dropdown portal without native select markup", async () => {
     const onValueChange = vi.fn();
 
-    render(
-      <SelectField
-        label="Source"
-        onValueChange={onValueChange}
-        options={[
-          { label: "Main", value: "workspace-1" },
-          { label: "Docs", value: "workspace-2" },
-        ]}
-        value="workspace-1"
-      />,
-    );
+    render(selectFieldElement({ onValueChange }));
 
     const trigger = screen.getByRole("button", { name: "Source" });
     expect(trigger).toHaveAttribute("type", "button");
@@ -34,27 +24,13 @@ describe("Field", () => {
 
   it("closes an open SelectField menu when the field becomes disabled", async () => {
     const onValueChange = vi.fn();
-    const options = [
-      { label: "Main", value: "workspace-1" },
-      { label: "Docs", value: "workspace-2" },
-    ];
 
-    const { rerender } = render(
-      <SelectField label="Source" onValueChange={onValueChange} options={options} value="workspace-1" />,
-    );
+    const { rerender } = render(selectFieldElement({ onValueChange }));
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Source" }));
     expect(await screen.findByRole("menu")).toBeInTheDocument();
 
-    rerender(
-      <SelectField
-        disabled
-        label="Source"
-        onValueChange={onValueChange}
-        options={options}
-        value="workspace-1"
-      />,
-    );
+    rerender(selectFieldElement({ disabled: true, onValueChange }));
 
     expect(screen.getByRole("button", { name: "Source" })).toBeDisabled();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -72,17 +48,7 @@ describe("Field", () => {
           submitted(Object.fromEntries(new FormData(event.currentTarget)));
         }}
       >
-        <SelectField
-          disabled
-          label="Source"
-          name="source"
-          onValueChange={onValueChange}
-          options={[
-            { label: "Main", value: "workspace-1" },
-            { label: "Docs", value: "workspace-2" },
-          ]}
-          value="workspace-1"
-        />
+        {selectFieldElement({ disabled: true, name: "source", onValueChange })}
         <button type="submit">Submit</button>
       </form>,
     );
@@ -99,14 +65,11 @@ describe("Field", () => {
     const user = userEvent.setup();
 
     render(
-      <SelectField
-        disabled
-        disabledReason="Only one workspace is linked right now."
-        label="Source"
-        onValueChange={() => undefined}
-        options={[{ label: "Main", value: "workspace-1" }]}
-        value="workspace-1"
-      />,
+      selectFieldElement({
+        disabled: true,
+        disabledReason: "Only one workspace is linked right now.",
+        options: [{ label: "Main", value: "workspace-1" }],
+      }),
     );
 
     const trigger = screen.getByRole("button", { name: "Source" });
@@ -121,10 +84,9 @@ describe("Field", () => {
     const onValueChange = vi.fn();
 
     render(
-      <SelectField
-        label="Source"
-        onValueChange={onValueChange}
-        options={[
+      selectFieldElement({
+        onValueChange,
+        options: [
           { label: "Main", value: "workspace-1" },
           {
             disabled: true,
@@ -132,9 +94,8 @@ describe("Field", () => {
             label: "Docs",
             value: "workspace-2",
           },
-        ]}
-        value="workspace-1"
-      />,
+        ],
+      }),
     );
 
     await user.click(screen.getByRole("button", { name: "Source" }));
@@ -148,3 +109,18 @@ describe("Field", () => {
     expect(onValueChange).not.toHaveBeenCalled();
   });
 });
+
+const defaultOptions = [
+  { label: "Main", value: "workspace-1" },
+  { label: "Docs", value: "workspace-2" },
+] satisfies SelectFieldProps["options"];
+const defaultSelectFieldProps = {
+  label: "Source",
+  onValueChange: () => undefined,
+  options: defaultOptions,
+  value: "workspace-1",
+} satisfies SelectFieldProps;
+
+function selectFieldElement(overrides: Partial<SelectFieldProps> = {}) {
+  return <SelectField {...defaultSelectFieldProps} {...overrides} />;
+}

@@ -11,8 +11,12 @@ import {
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
 import { layoutWorkflowGraph, workflowGraphLayoutWithDraftProjection } from "./workflowGraphLayout";
 import {
+  requireWorkflowGraphEdge,
+  requireWorkflowGraphNode,
   workflowGraphAbsoluteNodeRect,
   workflowGraphEndpointPoint,
+  workflowGraphRouteHasCorner,
+  workflowGraphRouteIsOrthogonal,
 } from "../../test-support/workflow-editor/workflowGraphLayoutTestHelpers";
 
 const nodeHeightSchema = z.number();
@@ -64,7 +68,14 @@ describe("layoutWorkflowGraph", () => {
       errors: [
         {
           code: "workflow.validation.invalid",
-          details: { fieldName: "", inputName: "", placeholder: "", providerEdgeID: "", role: null, requiredTool: null },
+          details: {
+            fieldName: "",
+            inputName: "",
+            placeholder: "",
+            providerEdgeID: "",
+            role: null,
+            requiredTool: null,
+          },
           message: "Invalid",
           workflowID: "workflow-1",
           nodeID: "node-1",
@@ -89,7 +100,14 @@ describe("layoutWorkflowGraph", () => {
         {
           blocksContext: true,
           code: "workflow.validation.invalid_join_input_provider",
-          details: { fieldName: "", inputName: "summary", placeholder: "", providerEdgeID: "edge-join-b", role: null, requiredTool: null },
+          details: {
+            fieldName: "",
+            inputName: "summary",
+            placeholder: "",
+            providerEdgeID: "edge-join-b",
+            role: null,
+            requiredTool: null,
+          },
           edgeID: "",
           message: "join input provider must reference an incoming edge into the join",
           nodeID: "join",
@@ -129,8 +147,8 @@ describe("layoutWorkflowGraph", () => {
       type: "workflow",
     });
     expect(joinOutgoingRoutePoints.length).toBeGreaterThan(2);
-    expectRouteSegmentsToBeOrthogonal(joinOutgoingRoutePoints);
-    expectRouteToHaveCorner(joinOutgoingRoutePoints);
+    expect(workflowGraphRouteIsOrthogonal(joinOutgoingRoutePoints)).toBe(true);
+    expect(workflowGraphRouteHasCorner(joinOutgoingRoutePoints)).toBe(true);
   });
 
   it("keeps chained join hops inspectable instead of synthesizing edge chains", async () => {
@@ -149,15 +167,15 @@ describe("layoutWorkflowGraph", () => {
   it("keeps the model-order mainline layered when workflow transitions loop back", async () => {
     const graph = await layoutWorkflowGraph(loopedWorkflow, emptyValidation);
     const mainlineNodeIDs = ["start", "plan", "implement", "review", "approval", "done"];
-    const loopToPlanning = requireEdge(graph.edges, "edge-approval-plan");
-    const loopToImplementation = requireEdge(graph.edges, "edge-review-implement");
+    const loopToPlanning = requireWorkflowGraphEdge(graph.edges, "edge-approval-plan");
+    const loopToImplementation = requireWorkflowGraphEdge(graph.edges, "edge-review-implement");
 
     expectNodeXPositionsToIncrease(graph.nodes, mainlineNodeIDs);
-    expect(requireNode(graph.nodes, loopToPlanning.source).position.x).toBeGreaterThan(
-      requireNode(graph.nodes, loopToPlanning.target).position.x,
+    expect(requireWorkflowGraphNode(graph.nodes, loopToPlanning.source).position.x).toBeGreaterThan(
+      requireWorkflowGraphNode(graph.nodes, loopToPlanning.target).position.x,
     );
-    expect(requireNode(graph.nodes, loopToImplementation.source).position.x).toBeGreaterThan(
-      requireNode(graph.nodes, loopToImplementation.target).position.x,
+    expect(requireWorkflowGraphNode(graph.nodes, loopToImplementation.source).position.x).toBeGreaterThan(
+      requireWorkflowGraphNode(graph.nodes, loopToImplementation.target).position.x,
     );
   });
 
@@ -173,15 +191,19 @@ describe("layoutWorkflowGraph", () => {
       "approval-gate",
       "next-agent",
     ];
-    const planRejected = requireEdge(graph.edges, "edge-plan-review-planning");
-    const approvalRejected = requireEdge(graph.edges, "edge-approval-planning");
+    const planRejected = requireWorkflowGraphEdge(graph.edges, "edge-plan-review-planning");
+    const approvalRejected = requireWorkflowGraphEdge(graph.edges, "edge-approval-planning");
 
     expectAbsoluteNodeXPositionsToIncrease(graph.nodes, mainlineNodeIDs);
     expect(absoluteNodeX(graph.nodes, "code-review-join")).toBeGreaterThan(
       absoluteNodeX(graph.nodes, "workflow-group-code-review-parallel"),
     );
-    expect(absoluteNodeX(graph.nodes, planRejected.source)).toBeGreaterThan(absoluteNodeX(graph.nodes, planRejected.target));
-    expect(absoluteNodeX(graph.nodes, approvalRejected.source)).toBeGreaterThan(absoluteNodeX(graph.nodes, approvalRejected.target));
+    expect(absoluteNodeX(graph.nodes, planRejected.source)).toBeGreaterThan(
+      absoluteNodeX(graph.nodes, planRejected.target),
+    );
+    expect(absoluteNodeX(graph.nodes, approvalRejected.source)).toBeGreaterThan(
+      absoluteNodeX(graph.nodes, approvalRejected.target),
+    );
   });
 
   it("routes transition endpoints away from the reserved creation handle slot", async () => {
@@ -207,9 +229,9 @@ describe("layoutWorkflowGraph", () => {
 
   it("exposes matching React Flow handles for routed transition endpoint slots", async () => {
     const graph = await layoutWorkflowGraph(singleTransitionWorkflow, emptyValidation);
-    const edge = requireEdge(graph.edges, "edge-source-target");
-    const source = requireNode(graph.nodes, "node-source");
-    const target = requireNode(graph.nodes, "node-target");
+    const edge = requireWorkflowGraphEdge(graph.edges, "edge-source-target");
+    const source = requireWorkflowGraphNode(graph.nodes, "node-source");
+    const target = requireWorkflowGraphNode(graph.nodes, "node-target");
 
     assertEndpointHandle(edge, source, "source", graph.nodes);
     assertEndpointHandle(edge, target, "target", graph.nodes);
@@ -217,11 +239,11 @@ describe("layoutWorkflowGraph", () => {
 
   it("preserves endpoint slots for aligned join routes", async () => {
     const graph = await layoutWorkflowGraph(alignedJoinWorkflow, emptyValidation);
-    const internalBranch = requireEdge(graph.edges, "edge-internal-join");
-    const externalBranch = requireEdge(graph.edges, "edge-external-join");
-    const joinBranch = requireEdge(graph.edges, "edge-join-synth");
-    const internal = requireNode(graph.nodes, "node-a");
-    const join = requireNode(graph.nodes, "join");
+    const internalBranch = requireWorkflowGraphEdge(graph.edges, "edge-internal-join");
+    const externalBranch = requireWorkflowGraphEdge(graph.edges, "edge-external-join");
+    const joinBranch = requireWorkflowGraphEdge(graph.edges, "edge-join-synth");
+    const internal = requireWorkflowGraphNode(graph.nodes, "node-a");
+    const join = requireWorkflowGraphNode(graph.nodes, "join");
 
     assertEndpointHandle(internalBranch, internal, "source", graph.nodes);
     assertEndpointHandle(internalBranch, join, "target", graph.nodes);
@@ -231,12 +253,15 @@ describe("layoutWorkflowGraph", () => {
 });
 
 describe("workflowGraphLayoutWithDraftProjection", () => {
-  it("keeps a node whose draft group membership is unchanged", async () => {
-    const layout = await layoutWorkflowGraph(groupedWorkflow, emptyValidation);
+  it.each([
+    ["node", groupedWorkflow, "node-1"],
+    ["grouped join node", alignedJoinWorkflow, "join"],
+  ] as const)("keeps a %s whose draft group membership is unchanged", async (_, definition, nodeID) => {
+    const layout = await layoutWorkflowGraph(definition, emptyValidation);
 
-    const projected = workflowGraphLayoutWithDraftProjection(layout, groupedWorkflow, emptyValidation);
+    const projected = workflowGraphLayoutWithDraftProjection(layout, definition, emptyValidation);
 
-    expect(nodeByID(projected.nodes, "node-1")).toBeDefined();
+    expect(nodeByID(projected.nodes, nodeID)).toBeDefined();
   });
 
   it("drops a node whose draft group membership changed until the next layout", async () => {
@@ -267,14 +292,6 @@ describe("workflowGraphLayoutWithDraftProjection", () => {
 
     expect(edgeByID(projected.edges, "edge-x")).toMatchObject({ source: "node-source", target: "node-b" });
   });
-
-  it("keeps a grouped join node whose draft group membership is unchanged", async () => {
-    const layout = await layoutWorkflowGraph(alignedJoinWorkflow, emptyValidation);
-
-    const projected = workflowGraphLayoutWithDraftProjection(layout, alignedJoinWorkflow, emptyValidation);
-
-    expect(nodeByID(projected.nodes, "join")).toBeDefined();
-  });
 });
 
 function nodeByID(nodes: readonly WorkflowGraphNode[], id: string): WorkflowGraphNode | undefined {
@@ -283,22 +300,6 @@ function nodeByID(nodes: readonly WorkflowGraphNode[], id: string): WorkflowGrap
 
 function edgeByID(edges: readonly WorkflowGraphEdge[], id: string): WorkflowGraphEdge | undefined {
   return edges.find((edge) => edge.id === id);
-}
-
-function requireNode(nodes: readonly WorkflowGraphNode[], id: string): WorkflowGraphNode {
-  const node = nodeByID(nodes, id);
-  if (node === undefined) {
-    throw new Error(`Expected graph node ${id}.`);
-  }
-  return node;
-}
-
-function requireEdge(edges: readonly WorkflowGraphEdge[], id: string): WorkflowGraphEdge {
-  const edge = edgeByID(edges, id);
-  if (edge === undefined) {
-    throw new Error(`Expected graph edge ${id}.`);
-  }
-  return edge;
 }
 
 function nodeCenterY(node: WorkflowGraphNode | undefined): number | undefined {
@@ -321,16 +322,24 @@ function assertEndpointHandle(
   expect(point?.y).toBe(workflowGraphEndpointPoint(node, handle, side, nodes).y);
 }
 
-function expectNodeXPositionsToIncrease(nodes: readonly WorkflowGraphNode[], nodeIDs: readonly string[]): void {
+function expectNodeXPositionsToIncrease(
+  nodes: readonly WorkflowGraphNode[],
+  nodeIDs: readonly string[],
+): void {
   for (const [index, nodeID] of nodeIDs.entries()) {
     const previousID = nodeIDs[index - 1];
     if (previousID !== undefined) {
-      expect(requireNode(nodes, nodeID).position.x).toBeGreaterThan(requireNode(nodes, previousID).position.x);
+      expect(requireWorkflowGraphNode(nodes, nodeID).position.x).toBeGreaterThan(
+        requireWorkflowGraphNode(nodes, previousID).position.x,
+      );
     }
   }
 }
 
-function expectAbsoluteNodeXPositionsToIncrease(nodes: readonly WorkflowGraphNode[], nodeIDs: readonly string[]): void {
+function expectAbsoluteNodeXPositionsToIncrease(
+  nodes: readonly WorkflowGraphNode[],
+  nodeIDs: readonly string[],
+): void {
   for (const [index, nodeID] of nodeIDs.entries()) {
     const previousID = nodeIDs[index - 1];
     if (previousID !== undefined) {
@@ -342,32 +351,7 @@ function expectAbsoluteNodeXPositionsToIncrease(nodes: readonly WorkflowGraphNod
 }
 
 function absoluteNodeX(nodes: readonly WorkflowGraphNode[], nodeID: string): number {
-  return workflowGraphAbsoluteNodeRect(requireNode(nodes, nodeID), nodes).x;
-}
-
-function expectRouteSegmentsToBeOrthogonal(
-  points: readonly Readonly<{ x: number; y: number }>[],
-): void {
-  for (const [index, point] of points.entries()) {
-    const previous = points[index - 1];
-    if (previous !== undefined) {
-      expect(point.x === previous.x || point.y === previous.y).toBe(true);
-    }
-  }
-}
-
-function expectRouteToHaveCorner(points: readonly Readonly<{ x: number; y: number }>[]): void {
-  expect(
-    points.some((point, index) => {
-      const previous = points[index - 1];
-      const next = points[index + 1];
-      return (
-        previous !== undefined &&
-        next !== undefined &&
-        (previous.x - point.x) * (next.y - point.y) !== (previous.y - point.y) * (next.x - point.x)
-      );
-    }),
-  ).toBe(true);
+  return workflowGraphAbsoluteNodeRect(requireWorkflowGraphNode(nodes, nodeID), nodes).x;
 }
 
 const emptyValidation: WorkflowValidation = { valid: true, errors: [] };
@@ -399,23 +383,7 @@ const groupedWorkflow: WorkflowDefinition = {
     workflowNode("node-1", "Implement", "agent", "group-1"),
     workflowNode("done", "Done", "terminal", ""),
   ],
-  transitionGroups: [workflowTransitionGroup("tg-1", "node-1", "done", "Done")],
-  edges: [
-    {
-      id: "edge-1",
-      workflowID: "workflow-1",
-      transitionGroupID: "tg-1",
-      key: "done",
-      targetNodeID: "done",
-      requiresApproval: false,
-      contextMode: "new_session",
-      contextSource: { kind: "immediate_source", nodeKey: "" },
-      inputBindings: [],
-      outputRequirements: [],
-      parameters: [],
-      promptTemplate: "",
-    },
-  ],
+  ...workflowRoutes(workflowRoute("1", "node-1", "done", { name: "Done", transitionID: "done" })),
 };
 
 const fanoutWorkflow: WorkflowDefinition = {
@@ -442,15 +410,12 @@ const singleTransitionWorkflow: WorkflowDefinition = {
     workflowNode("node-source", "Source", "agent", ""),
     workflowNode("node-target", "Target", "agent", ""),
   ],
-  transitionGroups: [workflowTransitionGroup("tg-source-target", "node-source", "target", "Target")],
-  edges: [
-    workflowEdge({
-      id: "edge-source-target",
-      key: "target",
-      targetNodeID: "node-target",
-      transitionGroupID: "tg-source-target",
+  ...workflowRoutes(
+    workflowRoute("source-target", "node-source", "node-target", {
+      name: "Target",
+      transitionID: "target",
     }),
-  ],
+  ),
 };
 
 const twoOutgoingTransitionWorkflow: WorkflowDefinition = {
@@ -462,24 +427,10 @@ const twoOutgoingTransitionWorkflow: WorkflowDefinition = {
     workflowNode("node-a", "A", "agent", ""),
     workflowNode("node-b", "B", "agent", ""),
   ],
-  transitionGroups: [
-    workflowTransitionGroup("tg-source-a", "node-source", "a", "A"),
-    workflowTransitionGroup("tg-source-b", "node-source", "b", "B"),
-  ],
-  edges: [
-    workflowEdge({
-      id: "edge-source-a",
-      key: "a",
-      targetNodeID: "node-a",
-      transitionGroupID: "tg-source-a",
-    }),
-    workflowEdge({
-      id: "edge-source-b",
-      key: "b",
-      targetNodeID: "node-b",
-      transitionGroupID: "tg-source-b",
-    }),
-  ],
+  ...workflowRoutes(
+    workflowRoute("source-a", "node-source", "node-a", { name: "A", transitionID: "a" }),
+    workflowRoute("source-b", "node-source", "node-b", { name: "B", transitionID: "b" }),
+  ),
 };
 
 const reconnectWorkflow: WorkflowDefinition = {
@@ -521,19 +472,13 @@ const crossBoundaryWorkflow: WorkflowDefinition = {
     workflowNode("node-target", "Target", "agent", "group-target"),
     workflowNode("done", "Done", "terminal", ""),
   ],
-  transitionGroups: [
-    workflowTransitionGroup("tg-cross", "node-source", "cross", "Cross"),
-    workflowTransitionGroup("tg-exit", "node-target", "exit", "Exit"),
-  ],
-  edges: [
-    workflowEdge({
-      id: "edge-cross",
-      key: "cross",
-      targetNodeID: "node-target",
-      transitionGroupID: "tg-cross",
+  ...workflowRoutes(
+    workflowRoute("cross", "node-source", "node-target", {
+      name: "Cross",
+      transitionID: "cross",
     }),
-    workflowEdge({ id: "edge-exit", key: "exit", targetNodeID: "done", transitionGroupID: "tg-exit" }),
-  ],
+    workflowRoute("exit", "node-target", "done", { name: "Exit", transitionID: "exit" }),
+  ),
 };
 
 const alignedJoinWorkflow: WorkflowDefinition = {
@@ -555,31 +500,22 @@ const alignedJoinWorkflow: WorkflowDefinition = {
     workflowNode("join", "Join", "join", "group-join"),
     workflowNode("synth", "Synthesize", "agent", ""),
   ],
-  transitionGroups: [
-    workflowTransitionGroup("tg-internal-join", "node-a", "join", "Join"),
-    workflowTransitionGroup("tg-external-join", "external", "join", "Join"),
-    workflowTransitionGroup("tg-join-synth", "join", "synth", "Synthesize"),
-  ],
-  edges: [
-    workflowEdge({
-      id: "edge-internal-join",
+  ...workflowRoutes(
+    workflowRoute("internal-join", "node-a", "join", {
       key: "internal",
-      targetNodeID: "join",
-      transitionGroupID: "tg-internal-join",
+      name: "Join",
+      transitionID: "join",
     }),
-    workflowEdge({
-      id: "edge-external-join",
+    workflowRoute("external-join", "external", "join", {
       key: "external",
-      targetNodeID: "join",
-      transitionGroupID: "tg-external-join",
+      name: "Join",
+      transitionID: "join",
     }),
-    workflowEdge({
-      id: "edge-join-synth",
-      key: "synth",
-      targetNodeID: "synth",
-      transitionGroupID: "tg-join-synth",
+    workflowRoute("join-synth", "join", "synth", {
+      name: "Synthesize",
+      transitionID: "synth",
     }),
-  ],
+  ),
 };
 
 const joinWorkflow: WorkflowDefinition = {
@@ -592,34 +528,25 @@ const joinWorkflow: WorkflowDefinition = {
     workflowNode("join", "Join", "join", ""),
     workflowNode("synth", "Synthesize", "agent", ""),
   ],
-  transitionGroups: [
-    workflowTransitionGroup("tg-join-a", "node-a", "join", "Join"),
-    workflowTransitionGroup("tg-join-b", "node-b", "join", "Join"),
-    workflowTransitionGroup("tg-join-synth", "join", "done", "Done"),
-  ],
-  edges: [
-    workflowEdge({
+  ...workflowRoutes(
+    workflowRoute("join-a", "node-a", "join", {
       contextMode: "continue_session",
-      id: "edge-join-a",
       key: "join_a",
-      targetNodeID: "join",
-      transitionGroupID: "tg-join-a",
+      name: "Join",
+      transitionID: "join",
     }),
-    workflowEdge({
+    workflowRoute("join-b", "node-b", "join", {
       contextMode: "compact_and_continue_session",
-      id: "edge-join-b",
       key: "join_b",
-      targetNodeID: "join",
-      transitionGroupID: "tg-join-b",
+      name: "Join",
+      transitionID: "join",
     }),
-    workflowEdge({
-      contextMode: "new_session",
-      id: "edge-join-synth",
+    workflowRoute("join-synth", "join", "synth", {
       key: "synth",
-      targetNodeID: "synth",
-      transitionGroupID: "tg-join-synth",
+      name: "Done",
+      transitionID: "done",
     }),
-  ],
+  ),
 };
 
 const joinChainWorkflow: WorkflowDefinition = {
@@ -632,31 +559,23 @@ const joinChainWorkflow: WorkflowDefinition = {
     workflowNode("join-b", "Join B", "join", ""),
     workflowNode("synth", "Synthesize", "agent", ""),
   ],
-  transitionGroups: [
-    workflowTransitionGroup("tg-to-join-a", "node-a", "join", "Join"),
-    workflowTransitionGroup("tg-join-a-join-b", "join-a", "join", "Join"),
-    workflowTransitionGroup("tg-join-b-synth", "join-b", "done", "Done"),
-  ],
-  edges: [
-    workflowEdge({
-      id: "edge-to-join-a",
+  ...workflowRoutes(
+    workflowRoute("to-join-a", "node-a", "join-a", {
       key: "join_a",
-      targetNodeID: "join-a",
-      transitionGroupID: "tg-to-join-a",
+      name: "Join",
+      transitionID: "join",
     }),
-    workflowEdge({
-      id: "edge-join-a-join-b",
+    workflowRoute("join-a-join-b", "join-a", "join-b", {
       key: "join_b",
-      targetNodeID: "join-b",
-      transitionGroupID: "tg-join-a-join-b",
+      name: "Join",
+      transitionID: "join",
     }),
-    workflowEdge({
-      id: "edge-join-b-synth",
+    workflowRoute("join-b-synth", "join-b", "synth", {
       key: "synth",
-      targetNodeID: "synth",
-      transitionGroupID: "tg-join-b-synth",
+      name: "Done",
+      transitionID: "done",
     }),
-  ],
+  ),
 };
 
 const loopedWorkflow: WorkflowDefinition = {
@@ -671,49 +590,30 @@ const loopedWorkflow: WorkflowDefinition = {
     workflowNode("approval", "Approval", "agent", ""),
     workflowNode("done", "Done", "terminal", ""),
   ],
-  transitionGroups: [
-    workflowTransitionGroup("tg-start-plan", "start", "plan", "Plan"),
-    workflowTransitionGroup("tg-plan-implement", "plan", "implement", "Implement"),
-    workflowTransitionGroup("tg-implement-review", "implement", "review", "Review"),
-    workflowTransitionGroup("tg-review-approval", "review", "approval", "Approval"),
-    workflowTransitionGroup("tg-approval-done", "approval", "done", "Done"),
-    workflowTransitionGroup("tg-approval-plan", "approval", "rejected", "Rejected"),
-    workflowTransitionGroup("tg-review-implement", "review", "rework", "Rework"),
-  ],
-  edges: [
-    workflowEdge({ id: "edge-start-plan", key: "plan", targetNodeID: "plan", transitionGroupID: "tg-start-plan" }),
-    workflowEdge({
-      id: "edge-plan-implement",
-      key: "implement",
-      targetNodeID: "implement",
-      transitionGroupID: "tg-plan-implement",
+  ...workflowRoutes(
+    workflowRoute("start-plan", "start", "plan", { name: "Plan", transitionID: "plan" }),
+    workflowRoute("plan-implement", "plan", "implement", {
+      name: "Implement",
+      transitionID: "implement",
     }),
-    workflowEdge({
-      id: "edge-implement-review",
-      key: "review",
-      targetNodeID: "review",
-      transitionGroupID: "tg-implement-review",
+    workflowRoute("implement-review", "implement", "review", {
+      name: "Review",
+      transitionID: "review",
     }),
-    workflowEdge({
-      id: "edge-review-approval",
-      key: "approval",
-      targetNodeID: "approval",
-      transitionGroupID: "tg-review-approval",
+    workflowRoute("review-approval", "review", "approval", {
+      name: "Approval",
+      transitionID: "approval",
     }),
-    workflowEdge({ id: "edge-approval-done", key: "done", targetNodeID: "done", transitionGroupID: "tg-approval-done" }),
-    workflowEdge({
-      id: "edge-approval-plan",
-      key: "rejected",
-      targetNodeID: "plan",
-      transitionGroupID: "tg-approval-plan",
+    workflowRoute("approval-done", "approval", "done", { name: "Done", transitionID: "done" }),
+    workflowRoute("approval-plan", "approval", "plan", {
+      name: "Rejected",
+      transitionID: "rejected",
     }),
-    workflowEdge({
-      id: "edge-review-implement",
-      key: "rework",
-      targetNodeID: "implement",
-      transitionGroupID: "tg-review-implement",
+    workflowRoute("review-implement", "review", "implement", {
+      name: "Rework",
+      transitionID: "rework",
     }),
-  ],
+  ),
 };
 
 const mainSWEWorkflow: WorkflowDefinition = {
@@ -849,6 +749,42 @@ function workflowNode(id: string, name: string, kind: WorkflowNode["kind"], grou
 
 function workflowTransitionGroup(id: string, sourceNodeID: string, transitionID: string, name: string) {
   return { description: "", id, workflowID: "workflow-1", sourceNodeID, transitionID, name };
+}
+
+function workflowRoute(
+  id: string,
+  sourceNodeID: string,
+  targetNodeID: string,
+  contract: Readonly<{
+    contextMode?: string;
+    key?: string;
+    name: string;
+    transitionID: string;
+  }>,
+) {
+  const transitionGroupID = `tg-${id}`;
+  return {
+    edge: workflowEdge({
+      contextMode: contract.contextMode ?? "new_session",
+      id: `edge-${id}`,
+      key: contract.key ?? contract.transitionID,
+      targetNodeID,
+      transitionGroupID,
+    }),
+    transitionGroup: workflowTransitionGroup(
+      transitionGroupID,
+      sourceNodeID,
+      contract.transitionID,
+      contract.name,
+    ),
+  };
+}
+
+function workflowRoutes(...routes: readonly ReturnType<typeof workflowRoute>[]) {
+  return {
+    edges: routes.map((route) => route.edge),
+    transitionGroups: routes.map((route) => route.transitionGroup),
+  };
 }
 
 function workflowEdge({

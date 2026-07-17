@@ -30,11 +30,7 @@ func TestPendingPromptStoreSnapshotsDoNotWaitForLivePendingPublish(t *testing.T)
 		awaitDone <- err
 	}()
 
-	select {
-	case <-publishStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for pending prompt live publication")
-	}
+	waitForPendingPromptSignal(t, publishStarted, "timed out waiting for pending prompt live publication")
 
 	snapshotEntered := make(chan struct{})
 	snapshotDone := make(chan struct{})
@@ -49,23 +45,11 @@ func TestPendingPromptStoreSnapshotsDoNotWaitForLivePendingPublish(t *testing.T)
 		close(snapshotDone)
 	}()
 
-	select {
-	case <-snapshotEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for snapshot during live pending publication")
-	}
+	waitForPendingPromptSignal(t, snapshotEntered, "timed out waiting for snapshot during live pending publication")
 
 	close(releasePublish)
-	select {
-	case <-publishDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for pending prompt live publication to finish")
-	}
-	select {
-	case <-snapshotDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for snapshot after live pending publication")
-	}
+	waitForPendingPromptSignal(t, publishDone, "timed out waiting for pending prompt live publication to finish")
+	waitForPendingPromptSignal(t, snapshotDone, "timed out waiting for snapshot after live pending publication")
 
 	cancel()
 	select {
@@ -92,11 +76,7 @@ func TestPendingPromptStoreBeginSnapshotsDoNotWaitForLivePendingPublish(t *testi
 		close(beginDone)
 	}()
 
-	select {
-	case <-publishStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for pending prompt live publication")
-	}
+	waitForPendingPromptSignal(t, publishStarted, "timed out waiting for pending prompt live publication")
 
 	snapshotEntered := make(chan struct{})
 	snapshotDone := make(chan struct{})
@@ -111,21 +91,18 @@ func TestPendingPromptStoreBeginSnapshotsDoNotWaitForLivePendingPublish(t *testi
 		close(snapshotDone)
 	}()
 
-	select {
-	case <-snapshotEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for snapshot during Begin live pending publication")
-	}
+	waitForPendingPromptSignal(t, snapshotEntered, "timed out waiting for snapshot during Begin live pending publication")
 
 	close(releasePublish)
+	waitForPendingPromptSignal(t, beginDone, "timed out waiting for Begin to finish")
+	waitForPendingPromptSignal(t, snapshotDone, "timed out waiting for snapshot after Begin live pending publication")
+}
+
+func waitForPendingPromptSignal(t *testing.T, signal <-chan struct{}, timeoutMessage string) {
+	t.Helper()
 	select {
-	case <-beginDone:
+	case <-signal:
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for Begin to finish")
-	}
-	select {
-	case <-snapshotDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for snapshot after Begin live pending publication")
+		t.Fatal(timeoutMessage)
 	}
 }

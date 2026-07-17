@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/runtimewire"
 	askquestion "core/server/tools"
 	patchtool "core/server/tools/patch"
@@ -272,13 +273,12 @@ func TestOutsideWorkspaceApproverQueuedAllowSessionCachesWithoutSecondPrompt(t *
 
 func waitForPendingApprovals(t *testing.T, broker *askquestion.AskQuestionBroker, want int) []askquestion.AskQuestionRequest {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		pending := broker.Pending()
-		if len(pending) == want {
-			return pending
-		}
-		time.Sleep(5 * time.Millisecond)
+	var pending []askquestion.AskQuestionRequest
+	if testsetup.Until(time.Now().Add(2*time.Second), 5*time.Millisecond, func() bool {
+		pending = broker.Pending()
+		return len(pending) == want
+	}) {
+		return pending
 	}
 	return broker.Pending()
 }

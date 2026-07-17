@@ -22,6 +22,24 @@ func openAIClientFromProvider(t *testing.T, client Client) *OpenAIClient {
 	return openAIClient
 }
 
+func newOpenAIClientFromOptions(t *testing.T, options ProviderClientOptions) *OpenAIClient {
+	t.Helper()
+	client, err := NewProviderClient(options)
+	if err != nil {
+		t.Fatalf("new provider client: %v", err)
+	}
+	return openAIClientFromProvider(t, client)
+}
+
+func httpTransportFromOpenAIClient(t *testing.T, client *OpenAIClient) *HTTPTransport {
+	t.Helper()
+	transport, ok := client.transport.(*HTTPTransport)
+	if !ok {
+		t.Fatalf("expected *HTTPTransport, got %T", client.transport)
+	}
+	return transport
+}
+
 type providerTestAuth struct{}
 
 func (providerTestAuth) AuthorizationHeader(context.Context) (string, error) {
@@ -57,21 +75,14 @@ func TestInferProviderFromModel(t *testing.T) {
 func TestNewProviderClient_OpenAI(t *testing.T) {
 	httpClient := &http.Client{Timeout: 7 * time.Second}
 	providerIdentifier := "factory-agent"
-	client, err := NewProviderClient(ProviderClientOptions{
+	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
 		Model:              "gpt-5.3-codex",
 		Auth:               providerTestAuth{},
 		HTTPClient:         httpClient,
 		ModelVerbosity:     "HIGH",
 		ProviderIdentifier: &providerIdentifier,
 	})
-	if err != nil {
-		t.Fatalf("new provider client: %v", err)
-	}
-	openAIClient := openAIClientFromProvider(t, client)
-	transport, ok := openAIClient.transport.(*HTTPTransport)
-	if !ok {
-		t.Fatalf("expected *HTTPTransport, got %T", openAIClient.transport)
-	}
+	transport := httpTransportFromOpenAIClient(t, openAIClient)
 	if transport.Client != httpClient {
 		t.Fatal("expected provider HTTP client override to be used")
 	}
@@ -87,18 +98,11 @@ func TestNewProviderClient_OpenAI(t *testing.T) {
 }
 
 func TestNewProviderClient_CodexSparkUsesSparkMetadata(t *testing.T) {
-	client, err := NewProviderClient(ProviderClientOptions{
+	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
 		Model: "gpt-5.3-codex-spark",
 		Auth:  providerTestAuth{},
 	})
-	if err != nil {
-		t.Fatalf("new provider client: %v", err)
-	}
-	openAIClient := openAIClientFromProvider(t, client)
-	transport, ok := openAIClient.transport.(*HTTPTransport)
-	if !ok {
-		t.Fatalf("expected *HTTPTransport, got %T", openAIClient.transport)
-	}
+	transport := httpTransportFromOpenAIClient(t, openAIClient)
 	if transport.ContextWindowTokens != 128_000 {
 		t.Fatalf("expected spark context window from model metadata, got %d", transport.ContextWindowTokens)
 	}
@@ -115,16 +119,12 @@ func TestNewProviderClient_AnthropicNotImplemented(t *testing.T) {
 }
 
 func TestNewProviderClient_ExplicitProviderOverrideAllowsCustomModelAlias(t *testing.T) {
-	client, err := NewProviderClient(ProviderClientOptions{
+	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
 		Provider: ProviderOpenAI,
 		Model:    "my-team-alias",
 		Auth:     providerTestAuth{},
 	})
-	if err != nil {
-		t.Fatalf("new provider client: %v", err)
-	}
 
-	openAIClient := openAIClientFromProvider(t, client)
 	providerCaps, err := openAIClient.ProviderCapabilities(context.Background())
 	if err != nil {
 		t.Fatalf("provider capabilities: %v", err)
@@ -149,22 +149,14 @@ func TestNewProviderClient_CustomModelInferenceErrorMentionsProviderOverride(t *
 }
 
 func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsCustomModelFamily(t *testing.T) {
-	client, err := NewProviderClient(ProviderClientOptions{
+	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
 		Model:          "vendor-custom-model",
 		Auth:           providerTestAuth{},
 		OpenAIBaseURL:  "https://example.openrouter.ai/api/v1",
 		ModelVerbosity: "MEDIUM",
 	})
-	if err != nil {
-		t.Fatalf("new provider client: %v", err)
-	}
 
-	openAIClient := openAIClientFromProvider(t, client)
-
-	transport, ok := openAIClient.transport.(*HTTPTransport)
-	if !ok {
-		t.Fatalf("expected *HTTPTransport, got %T", openAIClient.transport)
-	}
+	transport := httpTransportFromOpenAIClient(t, openAIClient)
 	if transport.Provider != ProviderOpenAI {
 		t.Fatalf("expected explicit openai-compatible base URL to select openai transport family, got %q", transport.Provider)
 	}
@@ -191,16 +183,11 @@ func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsCustomModelFamily(
 }
 
 func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsAnonymousCapabilitiesResolution(t *testing.T) {
-	client, err := NewProviderClient(ProviderClientOptions{
+	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
 		Model:         "vendor-custom-model",
 		Auth:          providerTestMissingAuth{},
 		OpenAIBaseURL: "https://example.openrouter.ai/api/v1",
 	})
-	if err != nil {
-		t.Fatalf("new provider client: %v", err)
-	}
-
-	openAIClient := openAIClientFromProvider(t, client)
 
 	providerCaps, err := openAIClient.ProviderCapabilities(context.Background())
 	if err != nil {
@@ -212,19 +199,12 @@ func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsAnonymousCapabilit
 }
 
 func TestNewProviderClient_DefaultOpenAIBaseURLDoesNotStayExplicit(t *testing.T) {
-	client, err := NewProviderClient(ProviderClientOptions{
+	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
 		Model:         "gpt-5",
 		Auth:          providerTestMissingAuth{},
 		OpenAIBaseURL: "https://api.openai.com",
 	})
-	if err != nil {
-		t.Fatalf("new provider client: %v", err)
-	}
-	openAIClient := openAIClientFromProvider(t, client)
-	transport, ok := openAIClient.transport.(*HTTPTransport)
-	if !ok {
-		t.Fatalf("expected *HTTPTransport, got %T", openAIClient.transport)
-	}
+	transport := httpTransportFromOpenAIClient(t, openAIClient)
 	if transport.BaseURLExplicit {
 		t.Fatal("expected canonical default OpenAI URL to avoid explicit anonymous-mode transport")
 	}

@@ -148,7 +148,7 @@ func TestFormatMutationErrorWrapsMissingWorkspace(t *testing.T) {
 	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		t.Fatalf("expected wrapped workspace registration error, got %v", err)
 	}
-	if err == nil || err.Error() == serverapi.ErrWorkspaceNotRegistered.Error() {
+	if err == nil || err == serverapi.ErrWorkspaceNotRegistered {
 		t.Fatalf("expected contextual error, got %v", err)
 	}
 }

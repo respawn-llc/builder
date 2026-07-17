@@ -10,9 +10,7 @@ import (
 )
 
 func TestActiveManagerAcquiresImmediatelyOnActiveState(t *testing.T) {
-	guard := &fakeSleepInhibitor{}
-	timers := &manualTimerFactory{}
-	manager := newTestManager(t, guard, timers)
+	manager, guard, timers := newTestManager(t)
 	defer manager.Close()
 
 	manager.RuntimeActiveObserver()(true)
@@ -26,9 +24,7 @@ func TestActiveManagerAcquiresImmediatelyOnActiveState(t *testing.T) {
 }
 
 func TestActiveManagerDoesNotReleaseBeforeIdleGraceTimer(t *testing.T) {
-	guard := &fakeSleepInhibitor{}
-	timers := &manualTimerFactory{}
-	manager := newTestManager(t, guard, timers)
+	manager, guard, timers := newTestManager(t)
 	defer manager.Close()
 
 	manager.RuntimeActiveObserver()(true)
@@ -45,9 +41,7 @@ func TestActiveManagerDoesNotReleaseBeforeIdleGraceTimer(t *testing.T) {
 }
 
 func TestActiveManagerReleasesWhenIdleGraceTimerFires(t *testing.T) {
-	guard := &fakeSleepInhibitor{}
-	timers := &manualTimerFactory{}
-	manager := newTestManager(t, guard, timers)
+	manager, guard, timers := newTestManager(t)
 	defer manager.Close()
 
 	manager.RuntimeActiveObserver()(true)
@@ -61,9 +55,7 @@ func TestActiveManagerReleasesWhenIdleGraceTimerFires(t *testing.T) {
 }
 
 func TestActiveManagerCancelsReleaseWhenActiveDuringGrace(t *testing.T) {
-	guard := &fakeSleepInhibitor{}
-	timers := &manualTimerFactory{}
-	manager := newTestManager(t, guard, timers)
+	manager, guard, timers := newTestManager(t)
 	defer manager.Close()
 
 	manager.RuntimeActiveObserver()(true)
@@ -84,9 +76,7 @@ func TestActiveManagerCancelsReleaseWhenActiveDuringGrace(t *testing.T) {
 }
 
 func TestActiveManagerIgnoresEarlierStaleTimerDuringLaterGrace(t *testing.T) {
-	guard := &fakeSleepInhibitor{}
-	timers := &manualTimerFactory{}
-	manager := newTestManager(t, guard, timers)
+	manager, guard, timers := newTestManager(t)
 	defer manager.Close()
 
 	manager.RuntimeActiveObserver()(true)
@@ -108,9 +98,7 @@ func TestActiveManagerIgnoresEarlierStaleTimerDuringLaterGrace(t *testing.T) {
 }
 
 func TestActiveManagerCloseReleasesAndIgnoresLateActiveEvents(t *testing.T) {
-	guard := &fakeSleepInhibitor{}
-	timers := &manualTimerFactory{}
-	manager := newTestManager(t, guard, timers)
+	manager, guard, timers := newTestManager(t)
 
 	manager.RuntimeActiveObserver()(true)
 	waitForCondition(t, func() bool { return guard.acquireCount() == 1 }, "active manager acquire")
@@ -133,9 +121,7 @@ func TestActiveManagerCloseReleasesAndIgnoresLateActiveEvents(t *testing.T) {
 }
 
 func TestActiveManagerRetriesAcquireFailureWhileStillActive(t *testing.T) {
-	guard := &fakeSleepInhibitor{}
-	timers := &manualTimerFactory{}
-	manager := newTestManager(t, guard, timers)
+	manager, guard, timers := newTestManager(t)
 	defer manager.Close()
 
 	retryErr := errors.New("acquire failed")
@@ -158,9 +144,7 @@ func TestActiveManagerRetriesAcquireFailureWhileStillActive(t *testing.T) {
 }
 
 func TestActiveManagerRetriesAfterGuardRestartFailureWhileActive(t *testing.T) {
-	guard := &fakeSleepInhibitor{}
-	timers := &manualTimerFactory{}
-	manager := newTestManager(t, guard, timers)
+	manager, guard, _ := newTestManager(t)
 	defer manager.Close()
 
 	manager.RuntimeActiveObserver()(true)
@@ -177,10 +161,7 @@ func TestActiveManagerRetriesAfterGuardRestartFailureWhileActive(t *testing.T) {
 
 func TestManagerModeComposition(t *testing.T) {
 	activeGuard := &fakeSleepInhibitor{}
-	active, err := NewManager(config.SleepPreventionModeActive, nil, withGuard(activeGuard), withReleaseTimerFactory((&manualTimerFactory{}).AfterFunc))
-	if err != nil {
-		t.Fatalf("active manager: %v", err)
-	}
+	active := requireManager(t, config.SleepPreventionModeActive, withGuard(activeGuard), withReleaseTimerFactory((&manualTimerFactory{}).AfterFunc))
 	defer active.Close()
 	if active.RuntimeActiveObserver() == nil {
 		t.Fatal("expected active mode to expose runtime active observer")
@@ -190,10 +171,7 @@ func TestManagerModeComposition(t *testing.T) {
 	}
 
 	alwaysGuard := &fakeSleepInhibitor{}
-	always, err := NewManager(config.SleepPreventionModeAlways, nil, withGuard(alwaysGuard))
-	if err != nil {
-		t.Fatalf("always manager: %v", err)
-	}
+	always := requireManager(t, config.SleepPreventionModeAlways, withGuard(alwaysGuard))
 	if always.RuntimeActiveObserver() != nil {
 		t.Fatal("expected always mode not to expose runtime active observer")
 	}
@@ -206,10 +184,7 @@ func TestManagerModeComposition(t *testing.T) {
 	}
 
 	neverGuard := &fakeSleepInhibitor{}
-	never, err := NewManager(config.SleepPreventionModeNever, nil, withGuard(neverGuard))
-	if err != nil {
-		t.Fatalf("never manager: %v", err)
-	}
+	never := requireManager(t, config.SleepPreventionModeNever, withGuard(neverGuard))
 	if never.RuntimeActiveObserver() != nil {
 		t.Fatal("expected never mode not to expose runtime active observer")
 	}
@@ -222,16 +197,13 @@ func TestManagerModeComposition(t *testing.T) {
 func TestAlwaysManagerReacquiresAfterInhibitorRestartFailure(t *testing.T) {
 	guard := &fakeSleepInhibitor{}
 	timers := &manualTimerFactory{}
-	manager, err := NewManager(
+	manager := requireManager(
+		t,
 		config.SleepPreventionModeAlways,
-		nil,
 		withGuard(guard),
 		withAcquireRetryDelay(defaultActiveAcquireRetry),
 		withReleaseTimerFactory(timers.AfterFunc),
 	)
-	if err != nil {
-		t.Fatalf("always manager: %v", err)
-	}
 	defer manager.Close()
 	waitForCondition(t, func() bool { return guard.acquireCount() == 1 && guard.held() }, "always-mode startup acquire")
 
@@ -251,18 +223,26 @@ func TestAlwaysManagerReacquiresAfterInhibitorRestartFailure(t *testing.T) {
 	waitForCondition(t, func() bool { return guard.held() }, "always-mode reacquire after retry")
 }
 
-func newTestManager(t *testing.T, guard *fakeSleepInhibitor, timers *manualTimerFactory) *Manager {
+func newTestManager(t *testing.T) (*Manager, *fakeSleepInhibitor, *manualTimerFactory) {
 	t.Helper()
-	manager, err := NewManager(
+	guard := &fakeSleepInhibitor{}
+	timers := &manualTimerFactory{}
+	manager := requireManager(
+		t,
 		config.SleepPreventionModeActive,
-		nil,
 		withGuard(guard),
 		withIdleGrace(time.Minute),
 		withAcquireRetryDelay(defaultActiveAcquireRetry),
 		withReleaseTimerFactory(timers.AfterFunc),
 	)
+	return manager, guard, timers
+}
+
+func requireManager(t *testing.T, mode config.SleepPreventionMode, options ...managerOption) *Manager {
+	t.Helper()
+	manager, err := NewManager(mode, nil, options...)
 	if err != nil {
-		t.Fatalf("create active manager: %v", err)
+		t.Fatalf("create %q sleep prevention manager: %v", mode, err)
 	}
 	return manager
 }

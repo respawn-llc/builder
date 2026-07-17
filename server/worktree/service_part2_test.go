@@ -397,43 +397,38 @@ func writeExecutableFile(t *testing.T, path string, body string) {
 
 func waitForSetupPayload(t *testing.T, path string) setupScriptPayload {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	var payload setupScriptPayload
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 20*time.Millisecond, func() bool {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				time.Sleep(20 * time.Millisecond)
-				continue
+				return false
 			}
 			t.Fatalf("ReadFile %s: %v", path, err)
 		}
-		var payload setupScriptPayload
 		if err := json.Unmarshal(body, &payload); err != nil {
-			time.Sleep(20 * time.Millisecond)
-			continue
+			return false
 		}
-		return payload
-	}
-	t.Fatalf("timed out waiting for setup payload at %s", path)
-	return setupScriptPayload{}
+		return true
+	}, "timed out waiting for setup payload at %s", path)
+	return payload
 }
 
 func waitForFileText(t *testing.T, path string) string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	var text string
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 20*time.Millisecond, func() bool {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				time.Sleep(20 * time.Millisecond)
-				continue
+				return false
 			}
 			t.Fatalf("ReadFile %s: %v", path, err)
 		}
-		return strings.TrimSpace(string(body))
-	}
-	t.Fatalf("timed out waiting for text file at %s", path)
-	return ""
+		text = strings.TrimSpace(string(body))
+		return true
+	}, "timed out waiting for text file at %s", path)
+	return text
 }
 
 func waitForFileLines(t *testing.T, path string) []string {

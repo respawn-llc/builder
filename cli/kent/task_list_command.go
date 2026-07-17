@@ -89,31 +89,28 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 2
 		}
 	}
-	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
-	if !opened {
-		return 1
-	}
-	defer closeRemote()
-	request := serverapi.WorkflowTaskListRequest{
-		WorkflowID:     selectedWorkflowID,
-		ColumnKeys:     columnKeys,
-		StatusKinds:    statusKinds,
-		AttentionKinds: attentionKinds,
-		Sort:           sortSelectors,
-		PageSize:       *pageSize,
-		PageToken:      *pageToken,
-	}
-	var resp serverapi.WorkflowTaskListResponse
-	if projectProvided || (!workflowProvided && strings.TrimSpace(*pageToken) == "") {
-		resp, err = workflowTaskListForProject(context.Background(), cfg, remote, *projectRef, request)
-	} else {
-		resp, err = workflowTaskList(context.Background(), remote, request)
-	}
-	if err != nil {
-		writeTaskListError(stderr, err)
-		return 1
-	}
-	return writeTaskListResponse(stdout, stderr, resp, *jsonOut)
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+		request := serverapi.WorkflowTaskListRequest{
+			WorkflowID:     selectedWorkflowID,
+			ColumnKeys:     columnKeys,
+			StatusKinds:    statusKinds,
+			AttentionKinds: attentionKinds,
+			Sort:           sortSelectors,
+			PageSize:       *pageSize,
+			PageToken:      *pageToken,
+		}
+		var resp serverapi.WorkflowTaskListResponse
+		if projectProvided || (!workflowProvided && strings.TrimSpace(*pageToken) == "") {
+			resp, err = workflowTaskListForProject(context.Background(), cfg, remote, *projectRef, request)
+		} else {
+			resp, err = workflowTaskList(context.Background(), remote, request)
+		}
+		if err != nil {
+			writeTaskListError(stderr, err)
+			return 1
+		}
+		return writeTaskListResponse(stdout, stderr, resp, *jsonOut)
+	})
 }
 
 func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, jsonOut bool) int {

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -173,48 +174,41 @@ func newServiceHealthTestServer(t *testing.T, body string, statusCode ...int) *h
 	return server
 }
 
-func TestServiceStatusJSONReportsBackendSpecAndHealth(t *testing.T) {
-	server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-	backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: true, Running: true, PID: 123}}
-	withServiceCommandTestBackendEndpoint(t, backend, server.URL)
+func TestServiceStatusJSONKeepsBackendAndHealthAuthoritiesSeparate(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status serviceStatus
+	}{
+		{name: "running backend", status: serviceStatus{Installed: true, Loaded: true, Running: true, PID: 123}},
+		{name: "stopped backend with healthy listener", status: serviceStatus{Installed: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
+			backend := &stubServiceBackend{status: tc.status}
+			withServiceCommandTestBackendEndpoint(t, backend, server.URL)
 
-	stdout, stderr, code := runServiceCommandForTest("status", "--json")
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-	}
-	var decoded serviceStatus
-	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
-		t.Fatalf("decode status json: %v; raw=%q", err, stdout)
-	}
-	if decoded.Backend != "stub" || !decoded.Installed || !decoded.Running || decoded.PID != 123 {
-		t.Fatalf("decoded status = %+v, want installed running stub", decoded)
-	}
-	if decoded.Endpoint != server.URL || len(decoded.Logs) != 2 {
-		t.Fatalf("decoded status endpoint/logs = %q/%+v", decoded.Endpoint, decoded.Logs)
-	}
-	if decoded.HealthStatus != protocol.HealthStatusOK || decoded.HealthPID != 123 {
-		t.Fatalf("health status = %q pid=%d, want ok/123", decoded.HealthStatus, decoded.HealthPID)
-	}
-}
-
-func TestServiceStatusKeepsHealthSeparateFromBackendRunningState(t *testing.T) {
-	server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-	backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: false, Running: false}}
-	withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-	stdout, stderr, code := runServiceCommandForTest("status", "--json")
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-	}
-	var decoded serviceStatus
-	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
-		t.Fatalf("decode status json: %v; raw=%q", err, stdout)
-	}
-	if decoded.Running {
-		t.Fatalf("running = true, want false when backend reports stopped: %+v", decoded)
-	}
-	if decoded.HealthStatus != protocol.HealthStatusOK || decoded.HealthPID != 123 {
-		t.Fatalf("health status = %q pid=%d, want ok/123", decoded.HealthStatus, decoded.HealthPID)
+			stdout, stderr, code := runServiceCommandForTest("status", "--json")
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+			}
+			var decoded serviceStatus
+			if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+				t.Fatalf("decode status json: %v; raw=%q", err, stdout)
+			}
+			if decoded.Backend != "stub" ||
+				decoded.Installed != tc.status.Installed ||
+				decoded.Loaded != tc.status.Loaded ||
+				decoded.Running != tc.status.Running ||
+				decoded.PID != tc.status.PID {
+				t.Fatalf("decoded backend status = %+v, want %+v from stub", decoded, tc.status)
+			}
+			if decoded.Endpoint != server.URL || len(decoded.Logs) != 2 {
+				t.Fatalf("decoded status endpoint/logs = %q/%+v", decoded.Endpoint, decoded.Logs)
+			}
+			if decoded.HealthStatus != protocol.HealthStatusOK || decoded.HealthPID != 123 {
+				t.Fatalf("health status = %q pid=%d, want ok/123", decoded.HealthStatus, decoded.HealthPID)
+			}
+		})
 	}
 }
 
@@ -291,7 +285,7 @@ func TestServiceLifecycleGuardAllowsNonDisruptiveFlagsInsideCurrentSession(t *te
 		if backend.uninstallStop {
 			t.Fatal("expected --keep-running to skip stop")
 		}
-		if !serviceBackendSawAction(backend.calls, serviceActionUninstall) {
+		if !slices.Contains(backend.calls, serviceActionUninstall) {
 			t.Fatalf("backend calls = %+v, want uninstall", backend.calls)
 		}
 	})
@@ -335,7 +329,7 @@ func TestServiceRootMismatchBoundaries(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		if serviceBackendSawAction(backend.calls, serviceActionStop) {
+		if slices.Contains(backend.calls, serviceActionStop) {
 			t.Fatalf("stop must not run against a registration for a different root; calls=%+v", backend.calls)
 		}
 	})
@@ -349,7 +343,7 @@ func TestServiceRootMismatchBoundaries(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 		}
-		if stdout != "" || serviceBackendSawAction(backend.calls, serviceActionRestart) || serviceBackendSawAction(backend.calls, serviceActionInstall) {
+		if stdout != "" || slices.Contains(backend.calls, serviceActionRestart) || slices.Contains(backend.calls, serviceActionInstall) {
 			t.Fatalf("stdout=%q calls=%+v, want quiet no-op without mutation", stdout, backend.calls)
 		}
 	})
@@ -368,54 +362,46 @@ func TestServiceRootMismatchBoundaries(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 		}
-		if !serviceBackendSawAction(backend.calls, serviceActionStop) {
+		if !slices.Contains(backend.calls, serviceActionStop) {
 			t.Fatalf("backend calls = %+v, want stop", backend.calls)
 		}
 	})
 }
 
-func TestServiceRestartIfInstalledMissingServiceIsQuietNoOp(t *testing.T) {
-	backend := &stubServiceBackend{status: serviceStatus{Installed: false}}
-	withServiceCommandTestBackend(t, backend)
+func TestServiceRestartIfInstalledRefreshOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		status      serviceStatus
+		installErr  error
+		wantCode    int
+		wantInstall bool
+		wantQuiet   bool
+	}{
+		{name: "missing service is a quiet no-op", status: serviceStatus{}, wantCode: 0, wantQuiet: true},
+		{name: "installed service refreshes registration", status: serviceStatus{Installed: true}, wantCode: 0, wantInstall: true},
+		{name: "failed refresh stops before restart", status: serviceStatus{Installed: true}, installErr: errors.New("install failed"), wantCode: 1, wantInstall: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &stubServiceBackend{status: tc.status, installErr: tc.installErr}
+			withServiceCommandTestBackend(t, backend)
 
-	stdout, stderr, code := runServiceCommandForTest("restart", "--if-installed")
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-	}
-	if stdout != "" || serviceBackendSawAction(backend.calls, serviceActionRestart) || serviceBackendSawAction(backend.calls, serviceActionInstall) {
-		t.Fatalf("stdout=%q calls=%+v, want quiet no-op without mutation", stdout, backend.calls)
-	}
-}
-
-func TestServiceRestartIfInstalledRefreshesRegistration(t *testing.T) {
-	backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: false, Running: false}}
-	withServiceCommandTestBackend(t, backend)
-
-	_, stderr, code := runServiceCommandForTest("restart", "--if-installed")
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-	}
-	if !backend.installForce || !backend.installStart {
-		t.Fatalf("refresh flags force=%v start=%v, want force true start true", backend.installForce, backend.installStart)
-	}
-	if serviceBackendSawAction(backend.calls, serviceActionRestart) {
-		t.Fatalf("restart should refresh by reinstalling the registration; calls=%+v", backend.calls)
-	}
-}
-
-func TestServiceRestartIfInstalledStopsWhenRefreshFails(t *testing.T) {
-	backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: false, Running: false}, installErr: errors.New("install failed")}
-	withServiceCommandTestBackend(t, backend)
-
-	_, _, code := runServiceCommandForTest("restart", "--if-installed")
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1", code)
-	}
-	if !serviceBackendSawAction(backend.calls, serviceActionInstall) {
-		t.Fatalf("backend calls = %+v, want refresh install attempt", backend.calls)
-	}
-	if serviceBackendSawAction(backend.calls, serviceActionRestart) {
-		t.Fatalf("restart should not run after refresh install failure; calls=%+v", backend.calls)
+			stdout, stderr, code := runServiceCommandForTest("restart", "--if-installed")
+			if code != tc.wantCode {
+				t.Fatalf("exit code = %d, want %d; stderr=%q", code, tc.wantCode, stderr)
+			}
+			if slices.Contains(backend.calls, serviceActionInstall) != tc.wantInstall {
+				t.Fatalf("backend calls = %+v, want install=%t", backend.calls, tc.wantInstall)
+			}
+			if tc.wantInstall && (!backend.installForce || !backend.installStart) {
+				t.Fatalf("refresh flags force=%v start=%v, want force true start true", backend.installForce, backend.installStart)
+			}
+			if slices.Contains(backend.calls, serviceActionRestart) {
+				t.Fatalf("restart-if-installed must refresh through install only; calls=%+v", backend.calls)
+			}
+			if tc.wantQuiet && stdout != "" {
+				t.Fatalf("stdout = %q, want quiet no-op", stdout)
+			}
+		})
 	}
 }
 
@@ -429,155 +415,65 @@ func TestServiceActionErrorReturnsOne(t *testing.T) {
 	}
 }
 
-func TestServiceInstallRejectsUnmanagedRunningServer(t *testing.T) {
-	server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-	backend := &stubServiceBackend{status: serviceStatus{Installed: false}}
-	withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-	_, _, code := runServiceCommandForTest("install")
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1", code)
+func TestServiceActionOwnershipBoundaries(t *testing.T) {
+	type healthFixture struct {
+		body       string
+		statusCode int
 	}
-	if serviceBackendSawAction(backend.calls, serviceActionInstall) {
-		t.Fatalf("install should not mutate when a manual server owns the endpoint; calls=%+v", backend.calls)
+	healthy := &healthFixture{body: `{"status":"ok","pid":123}`, statusCode: http.StatusOK}
+	unhealthy := &healthFixture{body: `{"status":"starting"}`, statusCode: http.StatusServiceUnavailable}
+	for _, tc := range []struct {
+		name         string
+		action       serviceAction
+		force        bool
+		status       serviceStatus
+		health       *healthFixture
+		wantCode     int
+		wantMutation bool
+	}{
+		{name: "install rejects unmanaged healthy listener", action: serviceActionInstall, status: serviceStatus{}, health: healthy, wantCode: 1},
+		{name: "install allows healthy server owned by loaded service", action: serviceActionInstall, force: true, status: serviceStatus{Installed: true, Loaded: true, Running: true, PID: 123}, health: healthy, wantCode: 0, wantMutation: true},
+		{name: "start calls backend without ownership conflict", action: serviceActionStart, status: serviceStatus{Installed: true, Loaded: true}, wantCode: 0, wantMutation: true},
+		{name: "start rejects unmanaged healthy listener", action: serviceActionStart, status: serviceStatus{Installed: true}, health: healthy, wantCode: 1},
+		{
+			name:         "restart allows loaded service before pid visible",
+			action:       serviceActionRestart,
+			status:       serviceStatus{Installed: true, Loaded: true, Running: true, Command: []string{"/usr/local/bin/kent", "serve"}},
+			health:       healthy,
+			wantCode:     0,
+			wantMutation: true,
+		},
+		{name: "restart allows unloaded installed service recovery", action: serviceActionRestart, status: serviceStatus{Installed: true}, health: healthy, wantCode: 0, wantMutation: true},
+		{name: "restart allows loaded service with stale running state", action: serviceActionRestart, status: serviceStatus{Installed: true, Loaded: true}, health: healthy, wantCode: 0, wantMutation: true},
+		{name: "restart allows owned service with unhealthy health probe", action: serviceActionRestart, status: serviceStatus{Installed: true, Loaded: true, Running: true}, health: unhealthy, wantCode: 0, wantMutation: true},
+		{name: "restart rejects health pid mismatch", action: serviceActionRestart, status: serviceStatus{Installed: true, Loaded: true, Running: true, PID: 999}, health: healthy, wantCode: 1},
+		{name: "restart rejects registered command mismatch", action: serviceActionRestart, status: serviceStatus{Installed: true, Loaded: true, Running: true, Command: []string{"/other/kent", "serve"}}, health: healthy, wantCode: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &stubServiceBackend{status: tc.status}
+			if tc.health == nil {
+				withServiceCommandTestBackend(t, backend)
+			} else {
+				server := newServiceHealthTestServer(t, tc.health.body, tc.health.statusCode)
+				withServiceCommandTestBackendEndpoint(t, backend, server.URL)
+			}
+
+			args := []string{string(tc.action)}
+			if tc.force {
+				args = append(args, "--force")
+			}
+			_, stderr, code := runServiceCommandForTest(args...)
+			if code != tc.wantCode {
+				t.Fatalf("exit code = %d, want %d; stderr=%q", code, tc.wantCode, stderr)
+			}
+			if slices.Contains(backend.calls, tc.action) != tc.wantMutation {
+				t.Fatalf("backend calls = %+v, want %s mutation=%t", backend.calls, tc.action, tc.wantMutation)
+			}
+			if tc.action == serviceActionInstall && tc.wantMutation && (!backend.installForce || !backend.installStart) {
+				t.Fatalf("install flags force=%v start=%v, want force true start true", backend.installForce, backend.installStart)
+			}
+		})
 	}
-}
-
-func TestServiceInstallAllowsHealthyServerOwnedByLoadedService(t *testing.T) {
-	server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-	backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: true, Running: true, PID: 123}}
-	withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-	_, stderr, code := runServiceCommandForTest("install", "--force")
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-	}
-	if !backend.installForce || !backend.installStart {
-		t.Fatalf("install flags force=%v start=%v, want force true start true", backend.installForce, backend.installStart)
-	}
-}
-
-func TestServiceLifecycleOwnershipBoundaries(t *testing.T) {
-	t.Run("start_calls_backend_without_ownership_conflict", func(t *testing.T) {
-		backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: true, Running: false}}
-		withServiceCommandTestBackend(t, backend)
-
-		_, stderr, code := runServiceCommandForTest("start")
-		if code != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-		}
-		if !serviceBackendSawAction(backend.calls, serviceActionStart) {
-			t.Fatalf("backend calls = %+v, want start", backend.calls)
-		}
-	})
-
-	t.Run("start_rejects_unmanaged_healthy_listener", func(t *testing.T) {
-		server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-		backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: false, Running: false}}
-		withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-		_, _, code := runServiceCommandForTest("start")
-		if code != 1 {
-			t.Fatalf("exit code = %d, want 1", code)
-		}
-		if serviceBackendSawAction(backend.calls, serviceActionStart) {
-			t.Fatalf("start should not mutate when a manual server owns the endpoint; calls=%+v", backend.calls)
-		}
-	})
-
-	t.Run("restart_allows_loaded_service_before_pid_visible", func(t *testing.T) {
-		server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-		backend := &stubServiceBackend{status: serviceStatus{
-			Installed: true,
-			Loaded:    true,
-			Running:   true,
-			Command:   []string{"/usr/local/bin/kent", "serve"},
-		}}
-		withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-		_, stderr, code := runServiceCommandForTest("restart")
-		if code != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-		}
-		if !serviceBackendSawAction(backend.calls, serviceActionRestart) {
-			t.Fatalf("backend calls = %+v, want restart", backend.calls)
-		}
-	})
-
-	t.Run("restart_allows_unloaded_installed_service_recovery", func(t *testing.T) {
-		server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-		backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: false, Running: false}}
-		withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-		_, stderr, code := runServiceCommandForTest("restart")
-		if code != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-		}
-		if !serviceBackendSawAction(backend.calls, serviceActionRestart) {
-			t.Fatalf("backend calls = %+v, want restart", backend.calls)
-		}
-	})
-
-	t.Run("restart_allows_loaded_service_with_stale_running_state", func(t *testing.T) {
-		server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-		backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: true, Running: false}}
-		withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-		_, stderr, code := runServiceCommandForTest("restart")
-		if code != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-		}
-		if !serviceBackendSawAction(backend.calls, serviceActionRestart) {
-			t.Fatalf("backend calls = %+v, want restart", backend.calls)
-		}
-	})
-
-	t.Run("restart_allows_owned_service_with_unhealthy_health_probe", func(t *testing.T) {
-		server := newServiceHealthTestServer(t, `{"status":"starting"}`, http.StatusServiceUnavailable)
-		backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: true, Running: true}}
-		withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-		_, stderr, code := runServiceCommandForTest("restart")
-		if code != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-		}
-		if !serviceBackendSawAction(backend.calls, serviceActionRestart) {
-			t.Fatalf("backend calls = %+v, want restart", backend.calls)
-		}
-	})
-
-	t.Run("restart_rejects_health_pid_mismatch", func(t *testing.T) {
-		server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-		backend := &stubServiceBackend{status: serviceStatus{Installed: true, Loaded: true, Running: true, PID: 999}}
-		withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-		_, _, code := runServiceCommandForTest("restart")
-		if code != 1 {
-			t.Fatalf("exit code = %d, want 1", code)
-		}
-		if serviceBackendSawAction(backend.calls, serviceActionRestart) {
-			t.Fatalf("restart should not mutate when health PID disagrees with service PID; calls=%+v", backend.calls)
-		}
-	})
-
-	t.Run("restart_rejects_health_when_registered_command_differs", func(t *testing.T) {
-		server := newServiceHealthTestServer(t, `{"status":"ok","pid":123}`)
-		backend := &stubServiceBackend{status: serviceStatus{
-			Installed: true,
-			Loaded:    true,
-			Running:   true,
-			Command:   []string{"/other/kent", "serve"},
-		}}
-		withServiceCommandTestBackendEndpoint(t, backend, server.URL)
-
-		_, _, code := runServiceCommandForTest("restart")
-		if code != 1 {
-			t.Fatalf("exit code = %d, want 1", code)
-		}
-		if serviceBackendSawAction(backend.calls, serviceActionRestart) {
-			t.Fatalf("restart should not mutate when command proof does not match service spec; calls=%+v", backend.calls)
-		}
-	})
 }
 
 func TestServiceHelpSmoke(t *testing.T) {
@@ -621,13 +517,4 @@ func TestRootMismatchAllowsDefaultRootWithUnpinnedRegistration(t *testing.T) {
 			}
 		})
 	}
-}
-
-func serviceBackendSawAction(calls []serviceAction, want serviceAction) bool {
-	for _, call := range calls {
-		if call == want {
-			return true
-		}
-	}
-	return false
 }

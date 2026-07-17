@@ -489,18 +489,13 @@ type fakePendingPromptSource struct {
 
 func waitForCoreWorkflowTaskDone(t *testing.T, appCore *Core, taskID string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 20*time.Millisecond, func() bool {
 		detail, err := appCore.WorkflowClient().GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{TaskID: taskID})
 		if err != nil {
 			t.Fatalf("GetWorkflowTask: %v", err)
 		}
-		if detail.Task.Summary.Done {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("workflow task %q did not complete", taskID)
+		return detail.Task.Summary.Done
+	}, "workflow task %q did not complete", taskID)
 }
 
 type firstGenerateObserverClient struct {
