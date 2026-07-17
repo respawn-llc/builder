@@ -48,6 +48,9 @@ func (o TranscriptWorktreeTransitionOutcome) Validate() error {
 		if o.Failure == nil {
 			return fmt.Errorf("failed worktree transition requires failure diagnostic")
 		}
+		if o.Failure.Developer != nil {
+			return fmt.Errorf("failed worktree transition requires legacy failure diagnostic")
+		}
 		return o.Failure.Validate()
 	default:
 		return fmt.Errorf("unknown worktree transition state %q", o.State)

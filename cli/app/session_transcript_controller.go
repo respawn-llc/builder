@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"runtime/debug"
 	"strings"
 
 	"core/cli/tui/ongoing"
@@ -35,12 +36,24 @@ type ongoingTranscriptController struct {
 	queueOverflowed bool
 	renderPending   bool
 	liveReadModel   ongoingTranscriptReadModel
+	debug           bool
+	logf            func(string, ...any)
+}
+
+type ongoingTranscriptControllerOption func(*ongoingTranscriptController)
+
+func withOngoingTranscriptDeveloperDiagnostics(debugMode bool, logf func(string, ...any)) ongoingTranscriptControllerOption {
+	return func(controller *ongoingTranscriptController) {
+		controller.debug = debugMode
+		controller.logf = logf
+	}
 }
 
 func newOngoingTranscriptController(
 	surface ongoingTranscriptSurface,
 	frameProvider ongoingFrameProvider,
 	stateObserver ongoingTranscriptStateObserver,
+	options ...ongoingTranscriptControllerOption,
 ) *ongoingTranscriptController {
 	if frameProvider == nil {
 		panic("ongoing transcript controller requires frame provider")
@@ -48,13 +61,19 @@ func newOngoingTranscriptController(
 	if stateObserver == nil {
 		panic("ongoing transcript controller requires state observer")
 	}
-	return &ongoingTranscriptController{
+	controller := &ongoingTranscriptController{
 		surface:       surface,
 		frameProvider: frameProvider,
 		stateObserver: stateObserver,
 		normalOwned:   true,
 		liveReadModel: newOngoingTranscriptReadModel(),
 	}
+	for _, option := range options {
+		if option != nil {
+			option(controller)
+		}
+	}
+	return controller
 }
 
 func (c *ongoingTranscriptController) Accept(message clientui.TranscriptMessage) (ongoing.Result, tea.Cmd, error) {
@@ -175,17 +194,31 @@ func (c *ongoingTranscriptController) drainQueued() (ongoing.Result, error) {
 			return ongoing.Result{}, err
 		}
 	}
+	diagnostics := developerDiagnosticsFromTranscriptMessages(queued)
 	if needsRender {
-		return c.surface.Render(c.frameInput())
+		result, err := c.surface.Render(c.frameInput())
+		if err != nil {
+			return ongoing.Result{}, err
+		}
+		c.consumeDeveloperDiagnostics(diagnostics)
+		return result, nil
 	}
+	c.consumeDeveloperDiagnostics(diagnostics)
 	return ongoing.Result{}, nil
 }
 
 func (c *ongoingTranscriptController) applyNow(message clientui.TranscriptMessage, stateChanged bool) (ongoing.Result, error) {
+	diagnostics := developerDiagnosticsFromTranscriptMessage(message)
 	if isAppOwnedOngoingMessage(message.Kind) {
 		if stateChanged {
-			return c.surface.Render(c.frameInput())
+			result, err := c.surface.Render(c.frameInput())
+			if err != nil {
+				return ongoing.Result{}, err
+			}
+			c.consumeDeveloperDiagnostics(diagnostics)
+			return result, nil
 		}
+		c.consumeDeveloperDiagnostics(diagnostics)
 		return ongoing.Result{}, nil
 	}
 	if message.Kind == clientui.TranscriptMessageHydration {
@@ -194,11 +227,115 @@ func (c *ongoingTranscriptController) applyNow(message clientui.TranscriptMessag
 			return ongoing.Result{}, err
 		}
 		if stateChanged && hydrationHasNoTerminalRows(message.Payload.Hydration) {
-			return c.surface.Render(c.frameInput())
+			result, err = c.surface.Render(c.frameInput())
+			if err != nil {
+				return ongoing.Result{}, err
+			}
 		}
+		c.consumeDeveloperDiagnostics(diagnostics)
 		return result, nil
 	}
-	return c.surface.ApplyTerminalMessage(message, c.frameInput())
+	result, err := c.surface.ApplyTerminalMessage(message, c.frameInput())
+	if err != nil {
+		return ongoing.Result{}, err
+	}
+	c.consumeDeveloperDiagnostics(diagnostics)
+	return result, nil
+}
+
+type ongoingTranscriptDeveloperDiagnosticError struct {
+	Diagnostic transcript.DeveloperDiagnostic
+	Stack      string
+}
+
+func (e ongoingTranscriptDeveloperDiagnosticError) Error() string {
+	kind, present := e.Diagnostic.Kind()
+	if !present {
+		return fmt.Sprintf(
+			"ongoing transcript developer diagnostic: invalid variant detail=%q\n%s",
+			transcript.DeveloperDiagnosticText(e.Diagnostic),
+			e.Stack,
+		)
+	}
+	context := e.Diagnostic.DeletionFactMismatch
+	if context == nil {
+		return fmt.Sprintf(
+			"ongoing transcript developer diagnostic: kind=%s detail=%q\n%s",
+			kind,
+			transcript.DeveloperDiagnosticText(e.Diagnostic),
+			e.Stack,
+		)
+	}
+	return fmt.Sprintf(
+		"ongoing transcript developer diagnostic: kind=%s call_id=%q hunk_ordinal=%d mismatch=%s detail=%q\n%s",
+		kind,
+		context.CallID,
+		context.OperationID.HunkOrdinal,
+		context.MismatchKind,
+		transcript.DeveloperDiagnosticText(e.Diagnostic),
+		e.Stack,
+	)
+}
+
+func (c *ongoingTranscriptController) consumeDeveloperDiagnostics(diagnostics []transcript.DeveloperDiagnostic) {
+	var panicError *ongoingTranscriptDeveloperDiagnosticError
+	for index := range diagnostics {
+		err := ongoingTranscriptDeveloperDiagnosticError{
+			Diagnostic: *transcript.CloneDeveloperDiagnostic(&diagnostics[index]),
+			Stack:      string(debug.Stack()),
+		}
+		if c.logf != nil {
+			c.logf("%s", err.Error())
+		}
+		if panicError == nil {
+			panicError = &err
+		}
+	}
+	if c.debug && panicError != nil {
+		panic(*panicError)
+	}
+}
+
+func developerDiagnosticsFromTranscriptMessages(messages []clientui.TranscriptMessage) []transcript.DeveloperDiagnostic {
+	var diagnostics []transcript.DeveloperDiagnostic
+	for _, message := range messages {
+		diagnostics = append(diagnostics, developerDiagnosticsFromTranscriptMessage(message)...)
+	}
+	return diagnostics
+}
+
+func developerDiagnosticsFromTranscriptMessage(message clientui.TranscriptMessage) []transcript.DeveloperDiagnostic {
+	if message.Kind == clientui.TranscriptMessageCommittedRow {
+		if diagnostic := developerDiagnosticFromCommittedRow(message.Payload.CommittedRow); diagnostic != nil {
+			return []transcript.DeveloperDiagnostic{*diagnostic}
+		}
+		return nil
+	}
+	if message.Kind != clientui.TranscriptMessageHydration || message.Payload.Hydration == nil {
+		return nil
+	}
+	var diagnostics []transcript.DeveloperDiagnostic
+	for index := range message.Payload.Hydration.CommittedRows {
+		if diagnostic := developerDiagnosticFromCommittedRow(&message.Payload.Hydration.CommittedRows[index]); diagnostic != nil {
+			diagnostics = append(diagnostics, *diagnostic)
+		}
+	}
+	return diagnostics
+}
+
+func developerDiagnosticFromCommittedRow(row *clientui.TranscriptCommittedRow) *transcript.DeveloperDiagnostic {
+	if row == nil || row.Notice == nil || row.Notice.Diagnostic == nil {
+		return nil
+	}
+	diagnostic := row.Notice.Diagnostic.Developer
+	if diagnostic == nil || diagnostic.Validate() != nil {
+		return nil
+	}
+	kind, present := diagnostic.Kind()
+	if !present || kind != transcript.DeveloperDiagnosticDeletionFactMismatch {
+		return nil
+	}
+	return transcript.CloneDeveloperDiagnostic(diagnostic)
 }
 
 func (c *ongoingTranscriptController) applyState(message clientui.TranscriptMessage) bool {

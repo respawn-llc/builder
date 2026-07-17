@@ -1,0 +1,22 @@
+BUI-23 deterministic exact Delete File capture
+workspace: /var/folders/4y/3b8zshg92kn3ryxd1x2f1rs00000gn/T/bui23-exact-delete-1330433650
+--- pending ---
+*** Begin Patch
+*** Delete File: pending.txt
+*** End Patch
+source_exists_after_capture: true
+tui: ⇄ ./pending.txt
+--- positive ---
+*** Begin Patch
+*** Delete File: populated.txt
+*** End Patch
+source_exists_after_capture: false
+deletion_facts: [{{0} 3}]
+tui: ⇄ ./populated.txt -3
+--- known-zero ---
+*** Begin Patch
+*** Delete File: empty.txt
+*** End Patch
+source_exists_after_capture: false
+deletion_facts: [{{0} 0}]
+tui: ⇄ ./empty.txt -0

@@ -1,6 +1,10 @@
 package patchformat
 
-import "strings"
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+)
 
 type Document struct {
 	Hunks []any
@@ -13,6 +17,68 @@ type AddFile struct {
 
 type DeleteFile struct {
 	Path string
+}
+
+type WholeFileDeletionOperationID struct {
+	HunkOrdinal int
+}
+
+func (id *WholeFileDeletionOperationID) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		HunkOrdinal *int `json:"HunkOrdinal"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.HunkOrdinal == nil {
+		return errors.New("whole-file deletion operation hunk ordinal is required")
+	}
+	id.HunkOrdinal = *wire.HunkOrdinal
+	return nil
+}
+
+type WholeFileDeletionFact struct {
+	ID      WholeFileDeletionOperationID
+	Removed int
+}
+
+type WholeFileDeletionOperation struct {
+	ID         WholeFileDeletionOperationID
+	CountKnown bool
+}
+
+func (operation *WholeFileDeletionOperation) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ID         *WholeFileDeletionOperationID `json:"ID"`
+		CountKnown bool                          `json:"CountKnown"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.ID == nil {
+		return errors.New("whole-file deletion operation id is required")
+	}
+	operation.ID = *wire.ID
+	operation.CountKnown = wire.CountKnown
+	return nil
+}
+
+type WholeFileDeletionFactMismatchKind string
+
+const (
+	WholeFileDeletionFactMismatchDuplicate    WholeFileDeletionFactMismatchKind = "duplicate"
+	WholeFileDeletionFactMismatchUnmatched    WholeFileDeletionFactMismatchKind = "unmatched"
+	WholeFileDeletionFactMismatchMissing      WholeFileDeletionFactMismatchKind = "missing"
+	WholeFileDeletionFactMismatchInvalidCount WholeFileDeletionFactMismatchKind = "invalid_count"
+)
+
+type WholeFileDeletionFactMismatchError struct {
+	Kind WholeFileDeletionFactMismatchKind
+	ID   WholeFileDeletionOperationID
+}
+
+func (e *WholeFileDeletionFactMismatchError) Error() string {
+	return "whole-file deletion fact mismatch: " + string(e.Kind)
 }
 
 type UpdateFile struct {
@@ -44,11 +110,12 @@ type RenderedLine struct {
 }
 
 type RenderedFile struct {
-	AbsPath string
-	RelPath string
-	Added   int
-	Removed int
-	Diff    []string
+	AbsPath            string
+	RelPath            string
+	Added              int
+	Removed            int
+	Diff               []string
+	WholeFileDeletions []WholeFileDeletionOperation
 }
 
 type RenderedPatch struct {
@@ -67,6 +134,10 @@ func Clone(in *RenderedPatch) *RenderedPatch {
 		for _, file := range in.Files {
 			copyFile := file
 			copyFile.Diff = append([]string(nil), file.Diff...)
+			copyFile.WholeFileDeletions = append(
+				[]WholeFileDeletionOperation(nil),
+				file.WholeFileDeletions...,
+			)
 			out.Files = append(out.Files, copyFile)
 		}
 	}

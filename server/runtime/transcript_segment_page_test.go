@@ -1,12 +1,16 @@
 package runtime
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/toolspec"
+	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 func appendSegmentTestMessage(t *testing.T, store *session.Store, role llm.Role, content string) {
@@ -156,5 +160,76 @@ func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
 	texts := segmentEntryTexts(page)
 	if !containsText(texts, "only") || !containsText(texts, "answer") {
 		t.Fatalf("single segment must contain all turns, got %v", texts)
+	}
+}
+
+func TestEngineTranscriptSegmentPageRestoresToolCompletionDiagnosticAfterResult(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
+		"call-1",
+		patchformat.WholeFileDeletionFactMismatchError{
+			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
+			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
+		},
+	)
+	rendered := patchformat.Render(
+		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		"/workspace",
+	)
+	events := []struct {
+		kind    string
+		payload any
+	}{
+		{
+			kind: "message",
+			payload: llm.Message{
+				Role: llm.RoleAssistant,
+				ToolCalls: []llm.ToolCall{{
+					ID:    "call-1",
+					Name:  string(toolspec.ToolPatch),
+					Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"}`),
+				}},
+			},
+		},
+		{
+			kind: "tool_completed",
+			payload: storedToolCompletion{
+				CallID: "call-1",
+				Name:   string(toolspec.ToolPatch),
+				Output: json.RawMessage(`{"ok":true}`),
+				Presentation: &transcript.ToolCallMeta{
+					ToolName:    string(toolspec.ToolPatch),
+					PatchRender: &rendered,
+				},
+				Diagnostic: &diagnostic,
+			},
+		},
+		{
+			kind: "message",
+			payload: llm.Message{
+				Role:       llm.RoleTool,
+				ToolCallID: "call-1",
+				Name:       string(toolspec.ToolPatch),
+				Content:    `{"ok":true}`,
+			},
+		},
+	}
+	for _, event := range events {
+		if _, _, err := store.AppendEvent("step", event.kind, event.payload); err != nil {
+			t.Fatalf("append %s: %v", event.kind, err)
+		}
+	}
+
+	entries := mustEngineNewestSegmentPage(t, eng).Snapshot.Entries
+	if len(entries) != 3 {
+		t.Fatalf("entry count = %d, want tool call, result, diagnostic", len(entries))
+	}
+	if entries[1].Role != "tool_result_ok" ||
+		entries[2].Role != string(transcript.EntryRoleDeveloperErrorFeedback) ||
+		entries[1].StepID != entries[2].StepID ||
+		entries[2].StepID != "step" ||
+		!transcript.DeveloperDiagnosticEqual(entries[2].DeveloperDiagnostic, &diagnostic) {
+		t.Fatalf("segment completion/diagnostic adjacency = %+v", entries)
 	}
 }

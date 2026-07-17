@@ -6,7 +6,10 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/toolspec"
+	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 func applyPersistedScanEvents(t *testing.T, scan *PersistedTranscriptScan, events []session.Event) {
@@ -47,6 +50,125 @@ func TestPersistedTranscriptScanReconstructsPersistedTranscript(t *testing.T) {
 	}
 	if got := scan.LastCommittedAssistantFinalAnswer(); got != "final answer" {
 		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want final answer", got)
+	}
+}
+
+func TestPersistedTranscriptScanRestoresToolCompletionDiagnosticAfterResult(t *testing.T) {
+	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
+		"call-1",
+		patchformat.WholeFileDeletionFactMismatchError{
+			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
+			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 1},
+		},
+	)
+	rendered := patchformat.Render(
+		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		"/workspace",
+	)
+	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
+	applyPersistedScanEvents(t, scan, []session.Event{
+		mustPersistedEvent(t, "message", llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call-1",
+				Name:  string(toolspec.ToolPatch),
+				Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"}`),
+			}},
+		}),
+		mustPersistedEvent(t, "tool_completed", storedToolCompletion{
+			CallID: "call-1",
+			Name:   string(toolspec.ToolPatch),
+			Output: json.RawMessage(`{"ok":true}`),
+			Presentation: &transcript.ToolCallMeta{
+				ToolName:    string(toolspec.ToolPatch),
+				PatchRender: &rendered,
+			},
+			Diagnostic: &diagnostic,
+		}),
+		mustPersistedEvent(t, "message", llm.Message{
+			Role:       llm.RoleTool,
+			ToolCallID: "call-1",
+			Name:       string(toolspec.ToolPatch),
+			Content:    `{"ok":true}`,
+		}),
+		mustPersistedEvent(t, "message", llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "done",
+			Phase:   llm.MessagePhaseFinal,
+		}),
+	})
+
+	entries := scan.CollectedPageSnapshot().Entries
+	if len(entries) != 4 {
+		t.Fatalf("entry count = %d, want tool call, result, diagnostic, final", len(entries))
+	}
+	if entries[2].DeveloperDiagnostic == nil {
+		t.Fatalf("completion diagnostic is missing: %+v", entries)
+	}
+	diagnosticKind, diagnosticKindPresent := entries[2].DeveloperDiagnostic.Kind()
+	if entries[1].Role != "tool_result_ok" ||
+		entries[2].Role != string(transcript.EntryRoleDeveloperErrorFeedback) ||
+		entries[1].StepID != entries[2].StepID ||
+		!diagnosticKindPresent ||
+		diagnosticKind != transcript.DeveloperDiagnosticDeletionFactMismatch {
+		t.Fatalf("completion/diagnostic adjacency was not restored: %+v", entries)
+	}
+}
+
+func TestToolCompletionProjectionCarriesTypedResultAuthority(t *testing.T) {
+	message := llm.Message{
+		Role:       llm.RoleTool,
+		ToolCallID: "call-1",
+		Name:       string(toolspec.ToolPatch),
+		Content:    `{"ok":true}`,
+	}
+	completions := map[string]tools.Result{
+		"call-1": {
+			CallID:  "call-1",
+			Name:    toolspec.ToolPatch,
+			IsError: false,
+			Output:  json.RawMessage(`{"ok":true}`),
+		},
+	}
+
+	projections := visibleChatEntryProjectionsFromMessage(message, completions, nil)
+	if len(projections) != 1 || projections[0].ToolCompletion == nil {
+		t.Fatalf("tool result projection = %+v, want one typed completion", projections)
+	}
+	if projections[0].ToolCompletion.CallID != "call-1" ||
+		projections[0].ToolCompletion.IsError {
+		t.Fatalf("typed completion authority = %+v", projections[0].ToolCompletion)
+	}
+}
+
+func TestPersistedTranscriptScanRejectsDiagnosticForDifferentToolCompletion(t *testing.T) {
+	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
+		"call-b",
+		patchformat.WholeFileDeletionFactMismatchError{
+			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
+			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
+		},
+	)
+	rendered := patchformat.Render(
+		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		"/workspace",
+	)
+	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
+	err := scan.ApplyPersistedEvent(mustPersistedEvent(t, "tool_completed", storedToolCompletion{
+		CallID: "call-a",
+		Name:   string(toolspec.ToolPatch),
+		Output: json.RawMessage(`{"ok":true}`),
+		Presentation: &transcript.ToolCallMeta{
+			ToolName:    string(toolspec.ToolPatch),
+			PatchRender: &rendered,
+		},
+		Diagnostic: &diagnostic,
+	}))
+	if err == nil {
+		t.Fatal("streaming scan accepted diagnostic for a different tool completion")
+	}
+	if got := scan.TotalEntries(); got != 0 {
+		t.Fatalf("rejected completion projected %d entries", got)
 	}
 }
 

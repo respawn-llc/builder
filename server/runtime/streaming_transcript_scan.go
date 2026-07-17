@@ -30,6 +30,7 @@ type streamingTranscriptScan struct {
 	scan             *inMemoryTranscriptScan
 	completions      map[string]tools.Result
 	materialized     map[string]struct{}
+	diagnostics      map[string]*transcript.DeveloperDiagnostic
 	cacheWarningMode config.CacheWarningMode
 
 	turn turnBuffer
@@ -48,10 +49,12 @@ type turnBuffer struct {
 func newStreamingTranscriptScan(req inMemoryTranscriptScanRequest, cacheWarningMode config.CacheWarningMode) *streamingTranscriptScan {
 	completions := make(map[string]tools.Result)
 	materialized := make(map[string]struct{})
+	diagnostics := make(map[string]*transcript.DeveloperDiagnostic)
 	return &streamingTranscriptScan{
-		scan:             newInMemoryTranscriptScan(req, completions, materialized),
+		scan:             newInMemoryTranscriptScan(req, completions, materialized, diagnostics),
 		completions:      completions,
 		materialized:     materialized,
+		diagnostics:      diagnostics,
 		cacheWarningMode: cacheWarningMode,
 	}
 }
@@ -74,6 +77,9 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
 		if err := json.Unmarshal(evt.Payload, &completion); err != nil {
 			return fmt.Errorf("decode tool_completed event: %w", err)
 		}
+		if err := validateStoredToolCompletionDiagnostic(completion); err != nil {
+			return fmt.Errorf("decode tool_completed event: %w", err)
+		}
 		callID := strings.TrimSpace(completion.CallID)
 		if callID == "" {
 			return nil
@@ -86,6 +92,9 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
 			Summary:       completion.Summary,
 			CondensedText: completion.CondensedText,
 			Presentation:  completion.Presentation,
+		}
+		if completion.Diagnostic != nil {
+			s.diagnostics[callID] = transcript.CloneDeveloperDiagnostic(completion.Diagnostic)
 		}
 	case "local_entry":
 		s.closeTurn()
@@ -198,6 +207,7 @@ func (s *streamingTranscriptScan) closeTurn() {
 	for _, callID := range callIDs {
 		delete(s.completions, callID)
 		delete(s.materialized, callID)
+		delete(s.diagnostics, callID)
 	}
 	s.turn = turnBuffer{
 		callIDs:           callIDs[:0],

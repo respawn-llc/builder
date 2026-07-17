@@ -9,6 +9,7 @@ import (
 	"core/server/tools"
 	"core/shared/rollbacktarget"
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 type transcriptPageSnapshot struct {
@@ -36,11 +37,17 @@ type inMemoryTranscriptScan struct {
 	compactionEntryStart    int
 	hasCompactionCheckpoint bool
 
-	toolCompletions       map[string]tools.Result
-	materializedToolCalls map[string]struct{}
+	toolCompletions           map[string]tools.Result
+	materializedToolCalls     map[string]struct{}
+	toolCompletionDiagnostics map[string]*transcript.DeveloperDiagnostic
 }
 
-func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) *inMemoryTranscriptScan {
+func newInMemoryTranscriptScan(
+	req inMemoryTranscriptScanRequest,
+	completions map[string]tools.Result,
+	materializedToolCalls map[string]struct{},
+	diagnostics map[string]*transcript.DeveloperDiagnostic,
+) *inMemoryTranscriptScan {
 	if req.Offset < 0 {
 		req.Offset = 0
 	}
@@ -51,10 +58,11 @@ func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions ma
 		req.TailLimit = 0
 	}
 	return &inMemoryTranscriptScan{
-		request:               req,
-		compactionEntryStart:  -1,
-		toolCompletions:       completions,
-		materializedToolCalls: materializedToolCalls,
+		request:                   req,
+		compactionEntryStart:      -1,
+		toolCompletions:           completions,
+		materializedToolCalls:     materializedToolCalls,
+		toolCompletionDiagnostics: diagnostics,
 	}
 }
 
@@ -62,13 +70,20 @@ func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID
 	if s == nil {
 		return
 	}
-	for _, entry := range visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls) {
+	for _, projection := range visibleChatEntryProjectionsFromMessage(msg, s.toolCompletions, s.materializedToolCalls) {
+		entry := projection.Entry
 		if strings.TrimSpace(entry.Role) == "user" && seq > 0 {
 			targetID := rollbacktarget.EncodeUserMessageSeq(seq)
 			entry.RollbackTargetID = &targetID
 		}
 		entry.StepID = strings.TrimSpace(stepID)
 		s.appendEntry(entry)
+		if projection.ToolCompletion != nil &&
+			s.toolCompletionDiagnostics[strings.TrimSpace(projection.ToolCompletion.CallID)] != nil {
+			diagnostic := toolCompletionDiagnosticChatEntry(*s.toolCompletionDiagnostics[strings.TrimSpace(projection.ToolCompletion.CallID)])
+			diagnostic.StepID = strings.TrimSpace(stepID)
+			s.appendEntry(diagnostic)
+		}
 	}
 }
 

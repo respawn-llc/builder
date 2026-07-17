@@ -18,8 +18,11 @@ func (m *uiModel) reconcileTranscriptWorktreeTransitionOutcome(outcome clientui.
 	}
 	var statusCmd tea.Cmd
 	if outcome.State == clientui.WorktreeTransitionFailed {
+		if outcome.Failure == nil || outcome.Failure.Detail == nil {
+			panic("failed worktree transition is missing its legacy diagnostic")
+		}
 		statusCmd = m.sendTransientStatusWithNoticeID(
-			outcome.Failure.Detail,
+			*outcome.Failure.Detail,
 			uiStatusNoticeError,
 			transientStatusDuration,
 			uiStatusNoticeReplace,

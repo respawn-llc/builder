@@ -153,6 +153,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		ongoingSurface,
 		model.ongoingFrameInput,
 		model.applyTranscriptMessageState,
+		withOngoingTranscriptDeveloperDiagnostics(model.debugMode, model.logf),
 	)
 	return &uiProgramComposition{
 		model:   model,

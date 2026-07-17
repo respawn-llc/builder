@@ -74,6 +74,10 @@ func Raw(src string) RenderedPatch {
 
 func Format(doc Document, cwd string) RenderedPatch {
 	files := buildRenderedFiles(doc, cwd)
+	return renderFiles(files)
+}
+
+func renderFiles(files []RenderedFile) RenderedPatch {
 	if len(files) == 0 {
 		return RenderedPatch{}
 	}
@@ -145,7 +149,7 @@ func buildRenderedFiles(doc Document, cwd string) []RenderedFile {
 		return &files[idx]
 	}
 
-	for _, hunk := range doc.Hunks {
+	for ordinal, hunk := range doc.Hunks {
 		switch op := hunk.(type) {
 		case AddFile:
 			file := getFile(op.Path)
@@ -179,7 +183,9 @@ func buildRenderedFiles(doc Document, cwd string) []RenderedFile {
 			if file == nil {
 				continue
 			}
-			file.Removed++
+			file.WholeFileDeletions = append(file.WholeFileDeletions, WholeFileDeletionOperation{
+				ID: WholeFileDeletionOperationID{HunkOrdinal: ordinal},
+			})
 			file.Diff = append(file.Diff, "-<deleted file>")
 		}
 	}
@@ -205,10 +211,93 @@ func summaryLine(file RenderedFile) string {
 	if file.Added > 0 {
 		line += fmt.Sprintf(" +%d", file.Added)
 	}
-	if file.Removed > 0 {
+	if ShowsRemovedCount(file) {
 		line += fmt.Sprintf(" -%d", file.Removed)
 	}
 	return line
+}
+
+func ShowsRemovedCount(file RenderedFile) bool {
+	if file.Removed > 0 {
+		return true
+	}
+	for _, operation := range file.WholeFileDeletions {
+		if operation.CountKnown {
+			return true
+		}
+	}
+	return false
+}
+
+func ApplyWholeFileDeletionFacts(
+	rendered RenderedPatch,
+	facts []WholeFileDeletionFact,
+) (RenderedPatch, *WholeFileDeletionFactMismatchError) {
+	out := Clone(&rendered)
+	type operationLocation struct {
+		fileIndex      int
+		operationIndex int
+	}
+	locations := make(map[WholeFileDeletionOperationID]operationLocation)
+	for fileIndex := range out.Files {
+		for operationIndex, operation := range out.Files[fileIndex].WholeFileDeletions {
+			if _, duplicate := locations[operation.ID]; duplicate {
+				return RenderedPatch{}, &WholeFileDeletionFactMismatchError{
+					Kind: WholeFileDeletionFactMismatchDuplicate,
+					ID:   operation.ID,
+				}
+			}
+			locations[operation.ID] = operationLocation{
+				fileIndex:      fileIndex,
+				operationIndex: operationIndex,
+			}
+		}
+	}
+
+	seenFacts := make(map[WholeFileDeletionOperationID]struct{}, len(facts))
+	for _, fact := range facts {
+		if _, duplicate := seenFacts[fact.ID]; duplicate {
+			return RenderedPatch{}, &WholeFileDeletionFactMismatchError{
+				Kind: WholeFileDeletionFactMismatchDuplicate,
+				ID:   fact.ID,
+			}
+		}
+		seenFacts[fact.ID] = struct{}{}
+		location, matched := locations[fact.ID]
+		if !matched {
+			return RenderedPatch{}, &WholeFileDeletionFactMismatchError{
+				Kind: WholeFileDeletionFactMismatchUnmatched,
+				ID:   fact.ID,
+			}
+		}
+		if fact.Removed < 0 {
+			return RenderedPatch{}, &WholeFileDeletionFactMismatchError{
+				Kind: WholeFileDeletionFactMismatchInvalidCount,
+				ID:   fact.ID,
+			}
+		}
+		file := &out.Files[location.fileIndex]
+		operation := &file.WholeFileDeletions[location.operationIndex]
+		if operation.CountKnown {
+			return RenderedPatch{}, &WholeFileDeletionFactMismatchError{
+				Kind: WholeFileDeletionFactMismatchDuplicate,
+				ID:   fact.ID,
+			}
+		}
+		operation.CountKnown = true
+		file.Removed += fact.Removed
+	}
+	for fileIndex := range out.Files {
+		for _, operation := range out.Files[fileIndex].WholeFileDeletions {
+			if !operation.CountKnown {
+				return RenderedPatch{}, &WholeFileDeletionFactMismatchError{
+					Kind: WholeFileDeletionFactMismatchMissing,
+					ID:   operation.ID,
+				}
+			}
+		}
+	}
+	return renderFiles(out.Files), nil
 }
 
 func detailHeader(file RenderedFile) string {

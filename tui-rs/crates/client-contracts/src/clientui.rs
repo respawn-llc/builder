@@ -4,8 +4,10 @@ use uuid::Uuid;
 use crate::config::null_to_default;
 
 pub mod main_view;
+mod transcript_diagnostic;
 
 pub use main_view::*;
+pub use transcript_diagnostic::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RunState {
@@ -288,14 +290,6 @@ pub struct TranscriptCacheWarning {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct TranscriptDiagnostic {
-    #[serde(rename = "Code")]
-    pub code: String,
-    #[serde(rename = "Detail")]
-    pub detail: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TranscriptBackgroundNoticeIdentity {
     #[serde(rename = "ActivityID")]
     pub activity_id: Uuid,
@@ -379,6 +373,20 @@ pub struct RenderedFile {
     pub removed: i32,
     #[serde(rename = "Diff", default, deserialize_with = "null_to_default")]
     pub diff: Vec<String>,
+    #[serde(
+        rename = "WholeFileDeletions",
+        default,
+        deserialize_with = "null_to_default"
+    )]
+    pub whole_file_deletions: Vec<WholeFileDeletionOperation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct WholeFileDeletionOperation {
+    #[serde(rename = "ID")]
+    pub id: WholeFileDeletionOperationId,
+    #[serde(rename = "CountKnown")]
+    pub count_known: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

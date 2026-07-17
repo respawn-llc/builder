@@ -167,10 +167,9 @@ func transcriptCompactionStatus(evt runtime.Event) clientui.TranscriptCompaction
 		status.State = clientui.CompactionCompleted
 	case runtime.EventCompactionFailed:
 		status.State = clientui.CompactionFailed
-		status.Diagnostic = &clientui.TranscriptDiagnostic{
-			Code:   clientui.TranscriptDiagnosticCode("compaction_failed"),
-			Detail: strings.TrimSpace(evt.Compaction.Error),
-		}
+		code := clientui.TranscriptDiagnosticCode("compaction_failed")
+		detail := strings.TrimSpace(evt.Compaction.Error)
+		status.Diagnostic = &clientui.TranscriptDiagnostic{Code: &code, Detail: &detail}
 	default:
 		panic(fmt.Sprintf("runtime event %q carries compaction facts outside the compaction lifecycle", evt.Kind))
 	}
@@ -304,10 +303,9 @@ func transcriptToolAbortMessages(evt runtime.Event) []clientui.TranscriptMessage
 		Reason:     reason,
 	}
 	if reason == clientui.ToolAbortFailed {
-		abort.Diagnostic = &clientui.TranscriptDiagnostic{
-			Code:   clientui.TranscriptDiagnosticCode("tool_failed"),
-			Detail: strings.TrimSpace(evt.Error),
-		}
+		code := clientui.TranscriptDiagnosticCode("tool_failed")
+		detail := strings.TrimSpace(evt.Error)
+		abort.Diagnostic = &clientui.TranscriptDiagnostic{Code: &code, Detail: &detail}
 	}
 	return []clientui.TranscriptMessage{transcriptMessage(
 		clientui.TranscriptMessageToolAbort,
@@ -514,20 +512,37 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 			Visibility:      fact.CacheWarning.Visibility,
 		}
 	}
-	diagnosticCode := strings.TrimSpace(fact.DiagnosticCode)
-	diagnosticDetail := fact.DiagnosticDetail
-	if diagnosticCode != "" || strings.TrimSpace(diagnosticDetail) != "" {
-		if diagnosticCode == "" || strings.TrimSpace(diagnosticDetail) == "" {
+	hasLegacyDiagnostic := fact.DiagnosticCode != nil || fact.DiagnosticDetail != nil
+	hasDeveloperDiagnostic := fact.DeveloperDiagnostic != nil
+	if hasLegacyDiagnostic && hasDeveloperDiagnostic {
+		panic(fmt.Sprintf(
+			"runtime transcript notice has both legacy and developer diagnostic facts: code=%v detail=%v reason=%q",
+			fact.DiagnosticCode,
+			fact.DiagnosticDetail,
+			fact.Reason,
+		))
+	}
+	if hasLegacyDiagnostic {
+		if fact.DiagnosticCode == nil || fact.DiagnosticDetail == nil ||
+			strings.TrimSpace(*fact.DiagnosticCode) == "" ||
+			strings.TrimSpace(*fact.DiagnosticDetail) == "" {
 			panic(fmt.Sprintf(
-				"runtime transcript notice has partial diagnostic facts: code=%q detail_present=%t reason=%q",
-				diagnosticCode,
-				diagnosticDetail != "",
+				"runtime transcript notice has partial diagnostic facts: code=%v detail=%v reason=%q",
+				fact.DiagnosticCode,
+				fact.DiagnosticDetail,
 				fact.Reason,
 			))
 		}
+		code := clientui.TranscriptDiagnosticCode(strings.TrimSpace(*fact.DiagnosticCode))
+		detail := *fact.DiagnosticDetail
+		notice.Diagnostic = &clientui.TranscriptDiagnostic{Code: &code, Detail: &detail}
+	}
+	if hasDeveloperDiagnostic {
+		if err := fact.DeveloperDiagnostic.Validate(); err != nil {
+			panic(fmt.Sprintf("runtime transcript notice has invalid developer diagnostic: %v", err))
+		}
 		notice.Diagnostic = &clientui.TranscriptDiagnostic{
-			Code:   clientui.TranscriptDiagnosticCode(diagnosticCode),
-			Detail: diagnosticDetail,
+			Developer: transcript.CloneDeveloperDiagnostic(fact.DeveloperDiagnostic),
 		}
 	}
 	activityID := strings.TrimSpace(fact.BackgroundActivityID)
