@@ -18,29 +18,16 @@ import (
 const taskCommentListDefaultPageSize = 100
 
 func taskCommentSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fs := newCommandFlagSet(config.Command+" task comment", stderr, taskCommentUsage)
-		fs.Usage()
-		if len(args) == 0 {
-			return 2
-		}
-		return 0
-	}
-	switch args[0] {
-	case "add":
-		return taskCommentAddSubcommand(args[1:], stdout, stderr)
-	case "list":
-		return taskCommentListSubcommand(args[1:], stdout, stderr)
-	case "replace":
-		return taskCommentReplaceSubcommand(args[1:], stdout, stderr)
-	case "delete":
-		return taskCommentDeleteSubcommand(args[1:], stdout, stderr)
-	default:
-		fmt.Fprintf(stderr, "unknown task comment command: %s\n\n", args[0])
-		fs := newCommandFlagSet(config.Command+" task comment", stderr, taskCommentUsage)
-		fs.Usage()
-		return 2
-	}
+	return dispatchCommandGroup(args, stdout, stderr, commandGroup{
+		path:  "task comment",
+		usage: taskCommentUsage,
+		routes: map[string]commandHandler{
+			"add":     taskCommentAddSubcommand,
+			"list":    taskCommentListSubcommand,
+			"replace": taskCommentReplaceSubcommand,
+			"delete":  taskCommentDeleteSubcommand,
+		},
+	})
 }
 
 func taskCommentAddSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {

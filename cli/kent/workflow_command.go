@@ -71,47 +71,22 @@ func openWorkflowCommandSession(stderr io.Writer, path string) (config.App, work
 }
 
 func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	if stderr == nil {
-		stderr = io.Discard
-	}
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fs := newCommandFlagSet(config.Command+" workflow", stderr, workflowUsage)
-		fs.Usage()
-		if len(args) == 0 {
-			return 2
-		}
-		return 0
-	}
-	switch args[0] {
-	case "create":
-		return workflowCreateSubcommand(args[1:], stdout, stderr)
-	case "update":
-		return workflowUpdateSubcommand(args[1:], stdout, stderr)
-	case "list":
-		return workflowListSubcommand(args[1:], stdout, stderr)
-	case "node":
-		return workflowNodeSubcommand(args[1:], stdout, stderr)
-	case "edge":
-		return workflowEdgeSubcommand(args[1:], stdout, stderr)
-	case "link":
-		return workflowLinkSubcommand(args[1:], stdout, stderr)
-	case "unlink":
-		return workflowUnlinkSubcommand(args[1:], stdout, stderr)
-	case "default":
-		return workflowDefaultSubcommand(args[1:], stdout, stderr)
-	case "validate":
-		return workflowValidateSubcommand(args[1:], stdout, stderr)
-	case "inspect":
-		return workflowInspectSubcommand(args[1:], stdout, stderr)
-	default:
-		fmt.Fprintf(stderr, "unknown workflow command: %s\n\n", args[0])
-		fs := newCommandFlagSet(config.Command+" workflow", stderr, workflowUsage)
-		workflowUsage.write(fs)
-		return 2
-	}
+	return dispatchCommandGroup(args, stdout, stderr, commandGroup{
+		path:  "workflow",
+		usage: workflowUsage,
+		routes: map[string]commandHandler{
+			"create":   workflowCreateSubcommand,
+			"update":   workflowUpdateSubcommand,
+			"list":     workflowListSubcommand,
+			"node":     workflowNodeSubcommand,
+			"edge":     workflowEdgeSubcommand,
+			"link":     workflowLinkSubcommand,
+			"unlink":   workflowUnlinkSubcommand,
+			"default":  workflowDefaultSubcommand,
+			"validate": workflowValidateSubcommand,
+			"inspect":  workflowInspectSubcommand,
+		},
+	})
 }
 
 func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -251,23 +226,14 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 }
 
 func workflowNodeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) > 0 && args[0] == "add" {
-		return workflowNodeAddSubcommand(args[1:], stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "update" {
-		return workflowNodeUpdateSubcommand(args[1:], stdout, stderr)
-	}
-	fs := newCommandFlagSet(config.Command+" workflow node", stderr, workflowNodeUsage)
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fs.Usage()
-		if len(args) == 0 {
-			return 2
-		}
-		return 0
-	}
-	fmt.Fprintf(stderr, "unknown workflow node command: %s\n\n", args[0])
-	fs.Usage()
-	return 2
+	return dispatchCommandGroup(args, stdout, stderr, commandGroup{
+		path:  "workflow node",
+		usage: workflowNodeUsage,
+		routes: map[string]commandHandler{
+			"add":    workflowNodeAddSubcommand,
+			"update": workflowNodeUpdateSubcommand,
+		},
+	})
 }
 
 func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -407,23 +373,14 @@ func workflowScriptPathFlagValue(fs *flag.FlagSet, name string, value string) *s
 }
 
 func workflowEdgeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) > 0 && args[0] == "add" {
-		return workflowEdgeAddSubcommand(args[1:], stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "update" {
-		return workflowEdgeUpdateSubcommand(args[1:], stdout, stderr)
-	}
-	fs := newCommandFlagSet(config.Command+" workflow edge", stderr, workflowEdgeUsage)
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fs.Usage()
-		if len(args) == 0 {
-			return 2
-		}
-		return 0
-	}
-	fmt.Fprintf(stderr, "unknown workflow edge command: %s\n\n", args[0])
-	fs.Usage()
-	return 2
+	return dispatchCommandGroup(args, stdout, stderr, commandGroup{
+		path:  "workflow edge",
+		usage: workflowEdgeUsage,
+		routes: map[string]commandHandler{
+			"add":    workflowEdgeAddSubcommand,
+			"update": workflowEdgeUpdateSubcommand,
+		},
+	})
 }
 
 func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
