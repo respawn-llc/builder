@@ -46,6 +46,15 @@ type NativeBridgeHarness = Readonly<{
   triggerActivation(activation: NativeNotificationActivation): void;
 }>;
 
+type NativeBridgeHarnessOptions = Readonly<{
+  focused: boolean | Promise<boolean>;
+  nativeAvailable: boolean;
+  notifyError?: Error | undefined;
+  permission?: NativeNotificationPermission | undefined;
+  requestPermissionError?: Error | undefined;
+  requestedPermission?: NativeNotificationPermission | undefined;
+}>;
+
 describe("AttentionNotificationController", () => {
   beforeEach(() => {
     statusToastHarness.notices.clear();
@@ -54,29 +63,18 @@ describe("AttentionNotificationController", () => {
   });
 
   it("shows one persistent Sonner while focused and dismisses it on resolved", async () => {
-    const native = nativeBridgeHarness({ focused: true, nativeAvailable: true });
-    const services = createTestServices(startupRoutes, native.bridge);
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
-    });
+    const { emit, native } = await attentionFixture({ focused: true, nativeAvailable: true });
+    emit(attentionPendingEvent({ revision: 1, sequence: 1 }));
 
     await waitForSonnerArticleCount(1);
     expect(native.notify).not.toHaveBeenCalled();
 
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 2, sequence: 2 }));
-    });
+    emit(attentionPendingEvent({ revision: 2, sequence: 2 }));
     await waitFor(() => {
       expect(sonnerArticles()).toHaveLength(1);
     });
 
-    act(() => {
-      services.transport.emit("attention.notification", attentionResolvedEvent({ sequence: 3 }));
-    });
+    emit(attentionResolvedEvent({ sequence: 3 }));
     await waitFor(() => {
       expect(sonnerArticles()).toHaveLength(0);
     });
@@ -86,47 +84,33 @@ describe("AttentionNotificationController", () => {
   });
 
   it("sends one native notification while unfocused", async () => {
-    const native = nativeBridgeHarness({ focused: false, nativeAvailable: true });
-    const services = createTestServices(startupRoutes, native.bridge);
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
-    });
+    const { emit, native } = await attentionFixture({ focused: false, nativeAvailable: true });
+    emit(attentionPendingEvent({ revision: 1, sequence: 1 }));
 
     await waitFor(() => {
       expect(native.notify).toHaveBeenCalledOnce();
     });
-    expect(native.notify).toHaveBeenCalledWith(expect.objectContaining({
-      id: "k8_questionu7_batch-1",
-      target: {
-        kind: "task_detail",
-        taskID: "task-1",
-        focus: { kind: "question", askIDs: ["ask-1", "ask-2"] },
-      },
-    }));
+    expect(native.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "k8_questionu7_batch-1",
+        target: {
+          kind: "task_detail",
+          taskID: "task-1",
+          focus: { kind: "question", askIDs: ["ask-1", "ask-2"] },
+        },
+      }),
+    );
     expect(sonnerArticles()).toHaveLength(0);
 
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 2, sequence: 2 }));
-    });
+    emit(attentionPendingEvent({ revision: 2, sequence: 2 }));
     await waitFor(() => {
       expect(native.notify).toHaveBeenCalledTimes(2);
     });
   });
 
   it("ignores unsupported root attention targets at the desktop boundary", async () => {
-    const native = nativeBridgeHarness({ focused: true, nativeAvailable: true });
-    const services = createTestServices(startupRoutes, native.bridge);
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-
-    act(() => {
-      services.transport.emit("attention.notification", attentionSessionPromptPendingEvent({ sequence: 1 }));
-    });
+    const { emit, native } = await attentionFixture({ focused: true, nativeAvailable: true });
+    emit(attentionSessionPromptPendingEvent({ sequence: 1 }));
 
     await waitFor(() => {
       expect(native.notify).not.toHaveBeenCalled();
@@ -136,21 +120,14 @@ describe("AttentionNotificationController", () => {
 
   it("coalesces pending updates when an update races focus resolution", async () => {
     const focus = deferred<boolean>();
-    const native = nativeBridgeHarness({ focused: focus.promise, nativeAvailable: false });
-    const services = createTestServices(startupRoutes, native.bridge);
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-    act(() => {
-      services.transport.emit(
-        "attention.notification",
-        attentionPendingEvent({ revision: 1, sequence: 1, body: "Old question text" }),
-      );
-      services.transport.emit(
-        "attention.notification",
-        attentionPendingEvent({ revision: 2, sequence: 2, body: "Latest question text" }),
-      );
+    const { emit, native } = await attentionFixture({
+      focused: focus.promise,
+      nativeAvailable: false,
     });
+    emit(
+      attentionPendingEvent({ revision: 1, sequence: 1, body: "Old question text" }),
+      attentionPendingEvent({ revision: 2, sequence: 2, body: "Latest question text" }),
+    );
     await act(async () => {
       focus.resolve(true);
       await focus.promise;
@@ -161,19 +138,12 @@ describe("AttentionNotificationController", () => {
   });
 
   it("logs and stops surfacing when native delivery fails", async () => {
-    const native = nativeBridgeHarness({
+    const { emit, native } = await attentionFixture({
       focused: false,
       nativeAvailable: true,
       notifyError: new Error("notification send failed"),
     });
-    const services = createTestServices(startupRoutes, native.bridge);
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
-    });
+    emit(attentionPendingEvent({ revision: 1, sequence: 1 }));
 
     await waitFor(() => {
       expect(native.notify).toHaveBeenCalledOnce();
@@ -182,50 +152,38 @@ describe("AttentionNotificationController", () => {
   });
 
   it("sends interrupted-run native notifications with run focus", async () => {
-    const native = nativeBridgeHarness({ focused: false, nativeAvailable: true });
-    const services = createTestServices(startupRoutes, native.bridge);
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-
-    act(() => {
-      services.transport.emit("attention.notification", attentionInterruptedRunPendingEvent({ sequence: 1 }));
-    });
+    const { emit, native } = await attentionFixture({ focused: false, nativeAvailable: true });
+    emit(attentionInterruptedRunPendingEvent({ sequence: 1 }));
 
     await waitFor(() => {
       expect(native.notify).toHaveBeenCalledOnce();
     });
-    expect(native.notify).toHaveBeenCalledWith(expect.objectContaining({
-      id: "k15_interrupted_runu5_run-1",
-      target: {
-        kind: "task_detail",
-        taskID: "task-1",
-        focus: { kind: "interrupted_run", runID: "run-1" },
-      },
-    }));
+    expect(native.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "k15_interrupted_runu5_run-1",
+        target: {
+          kind: "task_detail",
+          taskID: "task-1",
+          focus: { kind: "interrupted_run", runID: "run-1" },
+        },
+      }),
+    );
   });
 
   it("does not surface stale pending attention after resolved races native delivery", async () => {
-    const native = nativeBridgeHarness({ focused: false, nativeAvailable: true });
-    const services = createTestServices(startupRoutes, native.bridge);
+    const { emit, native } = await attentionFixture({ focused: false, nativeAvailable: true });
     let rejectDelivery: ((error: Error) => void) | null = null;
     const delivery = new Promise<void>((_, reject) => {
       rejectDelivery = reject;
     });
     native.notify.mockReturnValueOnce(delivery);
 
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
-    });
+    emit(attentionPendingEvent({ revision: 1, sequence: 1 }));
     await waitFor(() => {
       expect(native.notify).toHaveBeenCalledOnce();
     });
 
-    act(() => {
-      services.transport.emit("attention.notification", attentionResolvedEvent({ sequence: 2 }));
-    });
+    emit(attentionResolvedEvent({ sequence: 2 }));
     await waitFor(() => {
       expect(native.removeActive).toHaveBeenCalledWith("k8_questionu7_batch-1");
     });
@@ -238,14 +196,8 @@ describe("AttentionNotificationController", () => {
   });
 
   it("opens task detail from Sonner action and native activation", async () => {
-    const native = nativeBridgeHarness({ focused: true, nativeAvailable: true });
-    const services = createTestServices(startupRoutes, native.bridge);
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
-    });
+    const { emit, native, services } = await attentionFixture({ focused: true, nativeAvailable: true });
+    emit(attentionPendingEvent({ revision: 1, sequence: 1 }));
 
     await waitForSonnerArticleCount(1);
     expect(singleSonnerArticle().onAction).toBeUndefined();
@@ -258,9 +210,7 @@ describe("AttentionNotificationController", () => {
       expect(sonnerArticles()).toHaveLength(0);
     });
 
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 2, sequence: 2 }));
-    });
+    emit(attentionPendingEvent({ revision: 2, sequence: 2 }));
     await waitFor(() => {
       expect(native.focusMain).toHaveBeenCalledOnce();
       expect(sonnerArticles()).toHaveLength(0);
@@ -320,24 +270,16 @@ describe("AttentionNotificationController", () => {
   });
 
   it("does not recreate a manually dismissed Sonner for the same pending notification", async () => {
-    const native = nativeBridgeHarness({ focused: true, nativeAvailable: true });
-    const services = createTestServices(startupRoutes, native.bridge);
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
-    });
+    const { emit, native } = await attentionFixture({ focused: true, nativeAvailable: true });
+    emit(attentionPendingEvent({ revision: 1, sequence: 1 }));
     await waitForSonnerArticleCount(1);
 
-    clickLastSonnerButton();
+    dismissStatusToast(singleSonnerArticle().id);
     await waitFor(() => {
       expect(sonnerArticles()).toHaveLength(0);
     });
 
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 2, sequence: 2 }));
-    });
+    emit(attentionPendingEvent({ revision: 2, sequence: 2 }));
     await waitFor(() => {
       expect(sonnerArticles()).toHaveLength(0);
     });
@@ -382,29 +324,21 @@ describe("AttentionNotificationController", () => {
   });
 
   it("reconciles surfaced attention after reconnect without notifying durable baseline attention", async () => {
-    const native = nativeBridgeHarness({ focused: true, nativeAvailable: false });
-    const services = createTestServices(
-      [
+    const { emit, native, reconnect, services } = await attentionFixture({
+      focused: true,
+      nativeAvailable: false,
+      routes: [
         ...startupRoutes,
         {
           method: "workflow.task.get",
           result: taskDetailResult([]),
         },
       ],
-      native.bridge,
-    );
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
     });
+    emit(attentionPendingEvent({ revision: 1, sequence: 1 }));
     await waitForSonnerArticleCount(1);
 
-    act(() => {
-      services.transport.connection.set("disconnected", "stream gap");
-      services.transport.connection.set("connected");
-    });
+    reconnect();
 
     await waitFor(() => {
       expect(sonnerArticles()).toHaveLength(0);
@@ -417,101 +351,64 @@ describe("AttentionNotificationController", () => {
   });
 
   it("removes native notifications when reconnect reconciliation finds stale attention", async () => {
-    const native = nativeBridgeHarness({ focused: false, nativeAvailable: true });
-    const services = createTestServices(
-      [
+    const { emit, native, reconnect } = await attentionFixture({
+      focused: false,
+      nativeAvailable: true,
+      routes: [
         ...startupRoutes,
         {
           method: "workflow.task.get",
           result: taskDetailResult([]),
         },
       ],
-      native.bridge,
-    );
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
     });
+    emit(attentionPendingEvent({ revision: 1, sequence: 1 }));
     await waitFor(() => {
       expect(native.notify).toHaveBeenCalledOnce();
     });
 
-    act(() => {
-      services.transport.connection.set("disconnected", "stream gap");
-      services.transport.connection.set("connected");
-    });
+    reconnect();
 
     await waitFor(() => {
       expect(native.removeActive).toHaveBeenCalledWith("k8_questionu7_batch-1");
     });
   });
 
-  it("treats structured task-not-found errors as stale during reconnect reconciliation", async () => {
-    const native = nativeBridgeHarness({ focused: true, nativeAvailable: false });
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        {
+  it.each([
+    {
+      reason: "structured task-not-found errors",
+      taskRoute: {
+        method: "workflow.task.get",
+        error: new RpcError({
+          code: rpcErrorCodes.workflowTaskNotFound,
+          message: "not localized",
           method: "workflow.task.get",
-          error: new RpcError({
-            code: rpcErrorCodes.workflowTaskNotFound,
-            message: "not localized",
-            method: "workflow.task.get",
+        }),
+      },
+    },
+    {
+      reason: "a reused ask id from another run",
+      taskRoute: {
+        method: "workflow.task.get",
+        result: taskDetailResult([
+          durableAttentionItem({
+            askID: "ask-1",
+            runID: "run-2",
+            sessionID: "session-1",
           }),
-        },
-      ],
-      native.bridge,
-    );
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
+        ]),
+      },
+    },
+  ])("treats $reason as stale during reconnect reconciliation", async ({ taskRoute }) => {
+    const { emit, reconnect } = await attentionFixture({
+      focused: true,
+      nativeAvailable: false,
+      routes: [...startupRoutes, taskRoute],
     });
+    emit(attentionPendingEvent({ revision: 1, sequence: 1 }));
     await waitForSonnerArticleCount(1);
 
-    act(() => {
-      services.transport.connection.set("disconnected", "stream gap");
-      services.transport.connection.set("connected");
-    });
-
-    await waitFor(() => {
-      expect(sonnerArticles()).toHaveLength(0);
-    });
-  });
-
-  it("treats a reused ask id from another run as stale during reconnect reconciliation", async () => {
-    const native = nativeBridgeHarness({ focused: true, nativeAvailable: false });
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        {
-          method: "workflow.task.get",
-          result: taskDetailResult([
-            durableAttentionItem({
-              askID: "ask-1",
-              runID: "run-2",
-              sessionID: "session-1",
-            }),
-          ]),
-        },
-      ],
-      native.bridge,
-    );
-
-    render(<App services={services} />);
-    await waitForAttentionSubscription(services.transport);
-    act(() => {
-      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
-    });
-    await waitForSonnerArticleCount(1);
-
-    act(() => {
-      services.transport.connection.set("disconnected", "stream gap");
-      services.transport.connection.set("connected");
-    });
+    reconnect();
 
     await waitFor(() => {
       expect(sonnerArticles()).toHaveLength(0);
@@ -519,9 +416,10 @@ describe("AttentionNotificationController", () => {
   });
 
   it("does not notify durable baseline attention loaded during startup", async () => {
-    const native = nativeBridgeHarness({ focused: false, nativeAvailable: true });
-    const services = createTestServices(
-      [
+    const { native, services } = await attentionFixture({
+      focused: false,
+      nativeAvailable: true,
+      routes: [
         ...startupRoutes,
         {
           method: "workflow.attention.list",
@@ -532,12 +430,13 @@ describe("AttentionNotificationController", () => {
           },
         },
       ],
-      native.bridge,
-    );
+    });
 
-    render(<App services={services} />);
-
-    await waitForTransportCall(services.transport, "workflow.attention.list");
+    await waitFor(() => {
+      expect(services.transport.calls).toContainEqual(
+        expect.objectContaining({ method: "workflow.attention.list" }),
+      );
+    });
     expect(native.notify).not.toHaveBeenCalled();
     expect(sonnerArticles()).toHaveLength(0);
   });
@@ -569,10 +468,6 @@ function clickFirstSonnerButton(): void {
   notice.onClick();
 }
 
-function clickLastSonnerButton(): void {
-  dismissStatusToast(singleSonnerArticle().id);
-}
-
 function sidebarController({
   openSidebar,
 }: Readonly<{ openSidebar: SidebarController["openSidebar"] }>): SidebarController {
@@ -587,13 +482,34 @@ function sidebarController({
   };
 }
 
-async function waitForTransportCall(
-  transport: { calls: readonly { method: string }[] },
-  method: string,
-): Promise<void> {
-  await waitFor(() => {
-    expect(transport.calls.some((call) => call.method === method)).toBe(true);
-  });
+async function attentionFixture({
+  routes = startupRoutes,
+  ...nativeOptions
+}: NativeBridgeHarnessOptions &
+  Readonly<{
+    routes?: Parameters<typeof createTestServices>[0] | undefined;
+  }>) {
+  const native = nativeBridgeHarness(nativeOptions);
+  const services = createTestServices(routes, native.bridge);
+  render(<App services={services} />);
+  await waitForAttentionSubscription(services.transport);
+  return {
+    native,
+    services,
+    emit: (...events: readonly unknown[]): void => {
+      act(() => {
+        for (const event of events) {
+          services.transport.emit("attention.notification", event);
+        }
+      });
+    },
+    reconnect: (): void => {
+      act(() => {
+        services.transport.connection.set("disconnected", "stream gap");
+        services.transport.connection.set("connected");
+      });
+    },
+  };
 }
 
 function nativeBridgeHarness({
@@ -603,14 +519,7 @@ function nativeBridgeHarness({
   permission = "granted",
   requestPermissionError,
   requestedPermission,
-}: Readonly<{
-  focused: boolean | Promise<boolean>;
-  nativeAvailable: boolean;
-  notifyError?: Error | undefined;
-  permission?: NativeNotificationPermission | undefined;
-  requestPermissionError?: Error | undefined;
-  requestedPermission?: NativeNotificationPermission | undefined;
-}>): NativeBridgeHarness {
+}: NativeBridgeHarnessOptions): NativeBridgeHarness {
   const base = createBrowserNativeBridge({ platform: "macos" });
   let activationHandler: ((activation: NativeNotificationActivation) => void) | null = null;
   const focusMain = vi.fn(async () => undefined);
