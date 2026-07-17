@@ -30,7 +30,15 @@ func (s *blockingBackgroundStepLifecycle) Run(ctx context.Context, _ exclusiveSt
 	return err
 }
 
-func (s *blockingBackgroundStepLifecycle) Interrupt() error { return nil }
+func (s *blockingBackgroundStepLifecycle) RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+	return s.Run(ctx, options, fn)
+}
+
+func (s *blockingBackgroundStepLifecycle) AcquireReservation(*exclusiveStepReservation) error {
+	return nil
+}
+func (s *blockingBackgroundStepLifecycle) ReleaseReservation(*exclusiveStepReservation) {}
+func (s *blockingBackgroundStepLifecycle) Interrupt() error                             { return nil }
 func (s *blockingBackgroundStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunSnapshot, error) {
 	return nil, nil
 }
@@ -40,6 +48,9 @@ func (s *blockingBackgroundStepLifecycle) Snapshot() *RunSnapshot {
 }
 func (s *blockingBackgroundStepLifecycle) WithActiveStep(func(stepID string) error) (bool, error) {
 	return false, nil
+}
+func (s *blockingBackgroundStepLifecycle) ApplyForActiveStep(string, func() error) error {
+	return ErrActiveStepInactive
 }
 
 func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *testing.T) {

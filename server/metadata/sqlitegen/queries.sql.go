@@ -1842,7 +1842,8 @@ SELECT
     s.name,
     s.first_prompt_preview,
     s.input_draft,
-    s.parent_session_id,
+    s.previous_session_id,
+    s.parent_agent_session_id,
     s.category,
     s.created_at_unix_ms,
     s.updated_at_unix_ms,
@@ -1860,22 +1861,23 @@ LIMIT 1
 `
 
 type GetSessionRecordByIDRow struct {
-	ID                 string
-	ArtifactRelpath    string
-	Name               string
-	FirstPromptPreview string
-	InputDraft         string
-	ParentSessionID    sql.NullString
-	Category           sql.NullString
-	CreatedAtUnixMs    int64
-	UpdatedAtUnixMs    int64
-	LastSequence       int64
-	ModelRequestCount  int64
-	ContinuationJson   string
-	LockedJson         string
-	UsageStateJson     string
-	MetadataJson       string
-	WorkspaceRoot      string
+	ID                   string
+	ArtifactRelpath      string
+	Name                 string
+	FirstPromptPreview   string
+	InputDraft           string
+	PreviousSessionID    sql.NullString
+	ParentAgentSessionID sql.NullString
+	Category             sql.NullString
+	CreatedAtUnixMs      int64
+	UpdatedAtUnixMs      int64
+	LastSequence         int64
+	ModelRequestCount    int64
+	ContinuationJson     string
+	LockedJson           string
+	UsageStateJson       string
+	MetadataJson         string
+	WorkspaceRoot        string
 }
 
 func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (GetSessionRecordByIDRow, error) {
@@ -1887,7 +1889,8 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (G
 		&i.Name,
 		&i.FirstPromptPreview,
 		&i.InputDraft,
-		&i.ParentSessionID,
+		&i.PreviousSessionID,
+		&i.ParentAgentSessionID,
 		&i.Category,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
@@ -10139,7 +10142,8 @@ INSERT INTO sessions (
     name,
     first_prompt_preview,
     input_draft,
-    parent_session_id,
+    previous_session_id,
+    parent_agent_session_id,
     category,
     created_at_unix_ms,
     updated_at_unix_ms,
@@ -10171,13 +10175,15 @@ INSERT INTO sessions (
     ?17,
     ?18,
     ?19,
-    ?20
+    ?20,
+    ?21
 )
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     first_prompt_preview = excluded.first_prompt_preview,
     input_draft = excluded.input_draft,
-    parent_session_id = excluded.parent_session_id,
+    previous_session_id = excluded.previous_session_id,
+    parent_agent_session_id = excluded.parent_agent_session_id,
     category = excluded.category,
     updated_at_unix_ms = MAX(sessions.updated_at_unix_ms, excluded.updated_at_unix_ms),
     last_sequence = excluded.last_sequence,
@@ -10193,26 +10199,27 @@ ON CONFLICT(id) DO UPDATE SET
 `
 
 type UpsertSessionParams struct {
-	ID                 string
-	ProjectID          string
-	WorkspaceID        sql.NullString
-	WorktreeID         sql.NullString
-	ArtifactRelpath    string
-	Name               string
-	FirstPromptPreview string
-	InputDraft         string
-	ParentSessionID    sql.NullString
-	Category           sql.NullString
-	CreatedAtUnixMs    int64
-	UpdatedAtUnixMs    int64
-	LastSequence       int64
-	ModelRequestCount  int64
-	LaunchVisible      int64
-	CwdRelpath         string
-	ContinuationJson   string
-	LockedJson         string
-	UsageStateJson     string
-	MetadataJson       string
+	ID                   string
+	ProjectID            string
+	WorkspaceID          sql.NullString
+	WorktreeID           sql.NullString
+	ArtifactRelpath      string
+	Name                 string
+	FirstPromptPreview   string
+	InputDraft           string
+	PreviousSessionID    sql.NullString
+	ParentAgentSessionID sql.NullString
+	Category             sql.NullString
+	CreatedAtUnixMs      int64
+	UpdatedAtUnixMs      int64
+	LastSequence         int64
+	ModelRequestCount    int64
+	LaunchVisible        int64
+	CwdRelpath           string
+	ContinuationJson     string
+	LockedJson           string
+	UsageStateJson       string
+	MetadataJson         string
 }
 
 func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) error {
@@ -10225,7 +10232,8 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.Name,
 		arg.FirstPromptPreview,
 		arg.InputDraft,
-		arg.ParentSessionID,
+		arg.PreviousSessionID,
+		arg.ParentAgentSessionID,
 		arg.Category,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,

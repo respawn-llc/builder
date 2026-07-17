@@ -90,7 +90,7 @@ func ResolveRunPromptConfig(req Request) (RunPromptResult, error) {
 	caller := humanCallerContext()
 	if contextSessionID != "" {
 		if contextSessionID != sessionID {
-			if err := bootstrap.ValidateSessionContext(plan.Config.PersistenceRoot, contextSessionID); err != nil {
+			if err := bootstrap.ValidateSessionExists(plan.Config.PersistenceRoot, contextSessionID); err != nil {
 				return RunPromptResult{}, workspaceContextSessionError(contextSessionID, err)
 			}
 		}

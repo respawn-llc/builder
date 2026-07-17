@@ -8,35 +8,59 @@ import (
 )
 
 func TestSessionLaunchIntentVariantsValidateAndRoundTrip(t *testing.T) {
-	parent := mustSessionLaunchIntentID(t, "parent-session")
+	previous := mustSessionLaunchIntentID(t, "previous-session")
+	parentAgent := mustSessionLaunchIntentID(t, "parent-agent-session")
 	target := mustSessionLaunchIntentID(t, "target-session")
 	tests := []struct {
 		name       string
 		intent     SessionLaunchIntent
 		kind       SessionLaunchIntentKind
-		parentID   *runtimeids.SessionID
+		originKind SessionCreateOriginKind
+		sourceID   *runtimeids.SessionID
 		sessionID  *runtimeids.SessionID
 		jsonFields map[string]any
 	}{
 		{
-			name:       "create without parent",
-			intent:     CreateNewSessionLaunchIntent(nil),
+			name:       "independent creation",
+			intent:     CreateNewSessionLaunchIntent(IndependentSessionCreateOrigin()),
 			kind:       SessionLaunchIntentCreateNew,
-			jsonFields: map[string]any{"kind": "create_new"},
+			originKind: SessionCreateOriginIndependent,
+			jsonFields: map[string]any{
+				"kind":   "create_new",
+				"origin": map[string]any{"kind": "independent"},
+			},
 		},
 		{
-			name:       "create with parent",
-			intent:     CreateNewSessionLaunchIntent(&parent),
+			name:       "previous session creation",
+			intent:     CreateNewSessionLaunchIntent(PreviousSessionCreateOrigin(previous)),
 			kind:       SessionLaunchIntentCreateNew,
-			parentID:   &parent,
-			jsonFields: map[string]any{"kind": "create_new", "parent_id": parent.String()},
+			originKind: SessionCreateOriginPreviousSession,
+			sourceID:   &previous,
+			jsonFields: map[string]any{
+				"kind":   "create_new",
+				"origin": map[string]any{"kind": "previous_session", "session_id": previous.String()},
+			},
 		},
 		{
-			name:       "open existing",
-			intent:     OpenExistingSessionLaunchIntent(target),
-			kind:       SessionLaunchIntentOpenExisting,
-			sessionID:  &target,
-			jsonFields: map[string]any{"kind": "open_existing", "session_id": target.String()},
+			name:       "parent agent creation",
+			intent:     CreateNewSessionLaunchIntent(ParentAgentSessionCreateOrigin(parentAgent)),
+			kind:       SessionLaunchIntentCreateNew,
+			originKind: SessionCreateOriginParentAgent,
+			sourceID:   &parentAgent,
+			jsonFields: map[string]any{
+				"kind":   "create_new",
+				"origin": map[string]any{"kind": "parent_agent", "session_id": parentAgent.String()},
+			},
+		},
+		{
+			name:      "open existing",
+			intent:    OpenExistingSessionLaunchIntent(target),
+			kind:      SessionLaunchIntentOpenExisting,
+			sessionID: &target,
+			jsonFields: map[string]any{
+				"kind":       "open_existing",
+				"session_id": target.String(),
+			},
 		},
 	}
 	for _, test := range tests {
@@ -52,51 +76,69 @@ func TestSessionLaunchIntentVariantsValidateAndRoundTrip(t *testing.T) {
 			if err := json.Unmarshal(data, &fields); err != nil {
 				t.Fatalf("Unmarshal fields: %v", err)
 			}
-			if len(fields) != len(test.jsonFields) {
+			if !jsonObjectsEqual(fields, test.jsonFields) {
 				t.Fatalf("JSON fields = %+v, want %+v", fields, test.jsonFields)
-			}
-			for key, want := range test.jsonFields {
-				if got := fields[key]; got != want {
-					t.Fatalf("JSON field %q = %#v, want %#v", key, got, want)
-				}
 			}
 
 			var decoded SessionLaunchIntent
 			if err := json.Unmarshal(data, &decoded); err != nil {
 				t.Fatalf("Unmarshal intent: %v", err)
 			}
+			if !decoded.Equal(test.intent) {
+				t.Fatalf("decoded intent = %+v, want equality with %+v", decoded, test.intent)
+			}
 			if decoded.Kind() != test.kind {
 				t.Fatalf("Kind = %q, want %q", decoded.Kind(), test.kind)
 			}
-			parentID, hasParent := decoded.ParentID()
-			if test.parentID == nil {
-				if hasParent {
-					t.Fatalf("unexpected parent ID %q", parentID.String())
+			origin, hasOrigin := decoded.CreateOrigin()
+			if test.kind == SessionLaunchIntentOpenExisting {
+				if hasOrigin {
+					t.Fatalf("open-existing intent unexpectedly has origin %+v", origin)
 				}
-			} else if !hasParent || parentID != *test.parentID {
-				t.Fatalf("ParentID = %q/%v, want %q", parentID.String(), hasParent, test.parentID.String())
+			} else {
+				if !hasOrigin || origin.Kind() != test.originKind {
+					t.Fatalf("origin = %+v/%v, want kind %q", origin, hasOrigin, test.originKind)
+				}
+				sourceID, hasSource := origin.SessionID()
+				if test.sourceID == nil {
+					if hasSource {
+						t.Fatalf("unexpected origin session ID %q", sourceID.String())
+					}
+				} else if !hasSource || sourceID != *test.sourceID {
+					t.Fatalf("origin session ID = %q/%v, want %q", sourceID.String(), hasSource, test.sourceID.String())
+				}
 			}
 			sessionID, hasSession := decoded.SessionID()
 			if test.sessionID == nil {
 				if hasSession {
-					t.Fatalf("unexpected session ID %q", sessionID.String())
+					t.Fatalf("unexpected target session ID %q", sessionID.String())
 				}
 			} else if !hasSession || sessionID != *test.sessionID {
-				t.Fatalf("SessionID = %q/%v, want %q", sessionID.String(), hasSession, test.sessionID.String())
+				t.Fatalf("target session ID = %q/%v, want %q", sessionID.String(), hasSession, test.sessionID.String())
 			}
 		})
 	}
 }
 
-func TestSessionLaunchIntentRejectsMalformedAndLegacyShapes(t *testing.T) {
+func TestSessionLaunchIntentRejectsMalformedUnknownMixedAndLegacyShapes(t *testing.T) {
 	for _, raw := range []string{
 		`{}`,
 		`{"kind":"unknown"}`,
-		`{"kind":"create_new","parent_id":""}`,
-		`{"kind":"create_new","session_id":"target-session"}`,
+		`{"kind":"create_new"}`,
+		`{"kind":"create_new","origin":{}}`,
+		`{"kind":"create_new","origin":{"kind":"unknown"}}`,
+		`{"kind":"create_new","origin":{"kind":"independent","session_id":"source-session"}}`,
+		`{"kind":"create_new","origin":{"kind":"previous_session"}}`,
+		`{"kind":"create_new","origin":{"kind":"previous_session","session_id":""}}`,
+		`{"kind":"create_new","origin":{"kind":"parent_agent"}}`,
+		`{"kind":"create_new","origin":{"kind":"parent_agent","session_id":"../escape"}}`,
+		`{"kind":"create_new","origin":{"kind":"previous_session","session_id":"source-session"},"session_id":"target-session"}`,
+		`{"kind":"create_new","origin":{"kind":"parent_agent","session_id":"source-session","previous_session_id":"mixed-session"}}`,
+		`{"kind":"create_new","parent_id":"legacy-parent"}`,
 		`{"kind":"open_existing"}`,
 		`{"kind":"open_existing","session_id":""}`,
-		`{"kind":"open_existing","session_id":"target-session","parent_id":"parent-session"}`,
+		`{"kind":"open_existing","session_id":"target-session","origin":{"kind":"independent"}}`,
+		`{"kind":"open_existing","session_id":"target-session","parent_id":"legacy-parent"}`,
 		`{"kind":"open_existing","session_id":"../escape"}`,
 	} {
 		var intent SessionLaunchIntent
@@ -131,7 +173,8 @@ func TestSessionPlanRequestOwnsExactlyOneTypedLaunchIntent(t *testing.T) {
 	for _, raw := range []string{
 		`{"client_request_id":"request-1","mode":"interactive"}`,
 		`{"client_request_id":"request-1","mode":"interactive","selected_session_id":"target-session","intent":{"kind":"open_existing","session_id":"target-session"}}`,
-		`{"client_request_id":"request-1","mode":"interactive","force_new_session":true,"intent":{"kind":"create_new"}}`,
+		`{"client_request_id":"request-1","mode":"interactive","force_new_session":true,"intent":{"kind":"create_new","origin":{"kind":"independent"}}}`,
+		`{"client_request_id":"request-1","mode":"interactive","parent_session_id":"legacy-parent","intent":{"kind":"create_new","origin":{"kind":"parent_agent","session_id":"parent-agent"}}}`,
 	} {
 		var legacy SessionPlanRequest
 		if err := json.Unmarshal([]byte(raw), &legacy); err == nil {
@@ -142,27 +185,10 @@ func TestSessionPlanRequestOwnsExactlyOneTypedLaunchIntent(t *testing.T) {
 	}
 }
 
-func TestSessionPlanRequestAcceptsTypedIntentLineage(t *testing.T) {
-	var request SessionPlanRequest
-	if err := json.Unmarshal([]byte(`{
-		"client_request_id":"request-1",
-		"mode":"headless",
-		"intent":{"kind":"create_new","parent_id":"parent-session"},
-		"caller_session_id":"caller-session",
-		"parent_session_id":"parent-session",
-		"overrides":{"agent_role":"worker"}
-	}`), &request); err != nil {
-		t.Fatalf("typed request with lineage rejected: %v", err)
-	}
-	if request.CallerSessionID == nil || *request.CallerSessionID != "caller-session" {
-		t.Fatalf("caller session ID = %v, want caller-session", request.CallerSessionID)
-	}
-	if request.ParentSessionID == nil || *request.ParentSessionID != "parent-session" {
-		t.Fatalf("parent session ID = %v, want parent-session", request.ParentSessionID)
-	}
-	if request.Overrides.AgentRole == nil || *request.Overrides.AgentRole != "worker" {
-		t.Fatalf("agent role = %v, want worker", request.Overrides.AgentRole)
-	}
+func jsonObjectsEqual(left map[string]any, right map[string]any) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func mustSessionLaunchIntentID(t *testing.T, raw string) runtimeids.SessionID {

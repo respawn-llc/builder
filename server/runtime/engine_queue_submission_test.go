@@ -374,6 +374,19 @@ func TestQueueUserMessageDuringTerminalPublicationAutoDrainsAfterIdlePublication
 	}
 }
 
+func TestCanceledManualReservationReleaseRedrivesQueuedUserWork(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}}}}
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
+	if err := eng.stepLifecycle.AcquireReservation(reservation); err != nil {
+		t.Fatalf("acquire canceled compaction reservation: %v", err)
+	}
+	eng.QueueUserMessageForAutoDrain("queued during canceled compaction", "queued-request")
+	eng.stepLifecycle.ReleaseReservation(reservation)
+	waitFakeClientCallCount(t, client, 1)
+	waitEngineLifecycleTasks(t, eng)
+}
+
 type blockingThenQueuedClient struct {
 	started        chan struct{}
 	releaseC       chan struct{}

@@ -1452,7 +1452,7 @@ func sameTaskQuestionAnswerMemoRequest(a taskQuestionAnswerMemoRequest, b taskQu
 		a.AskID == b.AskID &&
 		a.ErrorMessage == b.ErrorMessage &&
 		a.Answer == b.Answer &&
-		textutil.EqualOptionalInt(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
+		textutil.EqualOptional(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
 		a.FreeformAnswer == b.FreeformAnswer &&
 		a.ApprovalDecision == b.ApprovalDecision &&
 		a.ApprovalCommentary == b.ApprovalCommentary

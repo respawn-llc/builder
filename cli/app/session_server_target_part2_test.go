@@ -74,7 +74,7 @@ func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *t
 
 	t.Log("planning interactive session")
 	planner := newSessionLaunchPlanner(bound)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 	if err != nil {
 		t.Fatalf("ensureInteractiveProjectBinding: %v", err)
 	}
-	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
+	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after rebound no auth")
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -225,7 +225,7 @@ func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
 	}
 
 	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	}
 	defer func() { _ = server.Close() }()
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote interactive runtime override")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote interactive runtime override")
 	defer runtimePlan.Close()
 	if plan.ActiveSettings.Model != "gpt-5.3-codex" {
 		t.Fatalf("model = %q, want gpt-5.3-codex", plan.ActiveSettings.Model)
@@ -348,7 +348,7 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 		t.Fatalf("startSessionServer: %v", err)
 	}
 	defer func() { _ = server.Close() }()
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote prompt round trip")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote prompt round trip")
 	defer runtimePlan.Close()
 	finishStep := beginAppTestModelPromptStep(t, srv, plan.SessionID)
 

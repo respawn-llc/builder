@@ -11,6 +11,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/auth"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -19,13 +20,13 @@ const DefaultUsageBaseURL = "https://chatgpt.com/backend-api"
 type UsagePayloadFetcher func(context.Context, string, auth.State) (UsagePayload, error)
 
 type Collector struct {
-	AuthManager              AuthStateResolver
-	UsagePayloadFetcher      UsagePayloadFetcher
-	UsageBaseURL             string
-	RequestTimeout           time.Duration
-	GitTimeout               time.Duration
-	ParentSessionReadTimeout time.Duration
-	EnvSanitizer             func([]string) []string
+	AuthManager            AuthStateResolver
+	UsagePayloadFetcher    UsagePayloadFetcher
+	UsageBaseURL           string
+	RequestTimeout         time.Duration
+	GitTimeout             time.Duration
+	SessionNameReadTimeout time.Duration
+	EnvSanitizer           func([]string) []string
 }
 
 func (c Collector) Collect(ctx context.Context, req Request) (Snapshot, error) {
@@ -63,7 +64,8 @@ func (c Collector) CollectBase(req Request) Snapshot {
 	target := ExecutionTarget(req)
 	workdir := Workdir(req.WorkspaceRoot, target)
 	contextInfo := ContextInfo{ThresholdTokens: req.Settings.ContextCompactionThresholdTokens}
-	parentSessionID := ""
+	var previousSessionID *runtimeids.SessionID
+	var parentAgentSessionID *runtimeids.SessionID
 	compactionCount := 0
 	if req.Runtime != nil {
 		status := req.Runtime.Status()
@@ -74,21 +76,27 @@ func (c Collector) CollectBase(req Request) Snapshot {
 		if contextInfo.AvailableTokens < 0 {
 			contextInfo.AvailableTokens = 0
 		}
-		if status.ParentSessionID != nil {
-			parentSessionID = strings.TrimSpace(*status.ParentSessionID)
+		if status.PreviousSessionID != nil {
+			id := *status.PreviousSessionID
+			previousSessionID = &id
+		}
+		if status.ParentAgentSessionID != nil {
+			id := *status.ParentAgentSessionID
+			parentAgentSessionID = &id
 		}
 		compactionCount = status.CompactionCount
 	}
 	return Snapshot{
-		CollectedAt:     collectedAt,
-		Workdir:         filepath.ToSlash(strings.TrimSpace(workdir)),
-		SessionName:     strings.TrimSpace(req.SessionName),
-		SessionID:       strings.TrimSpace(req.SessionID),
-		ParentSessionID: parentSessionID,
-		OwnsServer:      req.OwnsServer,
-		Context:         contextInfo,
-		Model:           ModelInfo{Summary: ModelSummary(req)},
-		Update:          BuildUpdateInfo(req),
+		CollectedAt:          collectedAt,
+		Workdir:              filepath.ToSlash(strings.TrimSpace(workdir)),
+		SessionName:          strings.TrimSpace(req.SessionName),
+		SessionID:            strings.TrimSpace(req.SessionID),
+		PreviousSessionID:    previousSessionID,
+		ParentAgentSessionID: parentAgentSessionID,
+		OwnsServer:           req.OwnsServer,
+		Context:              contextInfo,
+		Model:                ModelInfo{Summary: ModelSummary(req)},
+		Update:               BuildUpdateInfo(req),
 		Config: ConfigInfo{
 			SettingsPath:    filepath.ToSlash(strings.TrimSpace(req.Source.SettingsPath)),
 			OverrideSources: ConfigOverrideSources(req.Source),
@@ -102,11 +110,22 @@ func (c Collector) CollectBase(req Request) Snapshot {
 }
 
 func (c Collector) EnrichBase(ctx context.Context, req Request, snapshot Snapshot) Snapshot {
-	if parentSessionID := strings.TrimSpace(snapshot.ParentSessionID); parentSessionID != "" {
-		if parentSessionName, warning := c.ParentSessionName(ctx, req.SessionViews, parentSessionID); strings.TrimSpace(parentSessionName) != "" {
-			snapshot.ParentSessionName = parentSessionName
-		} else if strings.TrimSpace(warning) != "" {
-			snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, warning)
+	if snapshot.PreviousSessionID != nil {
+		previousSessionName, err := c.ResolveSessionName(ctx, req.SessionViews, snapshot.PreviousSessionID.String())
+		if strings.TrimSpace(previousSessionName) != "" {
+			snapshot.PreviousSessionName = previousSessionName
+		}
+		if err != nil {
+			snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, "previous session: "+err.Error())
+		}
+	}
+	if snapshot.ParentAgentSessionID != nil {
+		parentAgentSessionName, err := c.ResolveSessionName(ctx, req.SessionViews, snapshot.ParentAgentSessionID.String())
+		if strings.TrimSpace(parentAgentSessionName) != "" {
+			snapshot.ParentAgentSessionName = parentAgentSessionName
+		}
+		if err != nil {
+			snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, "parent agent session: "+err.Error())
 		}
 	}
 	return snapshot
@@ -123,12 +142,12 @@ func JoinWarnings(existing string, warning string) string {
 	return strings.Join(parts, " | ")
 }
 
-func (c Collector) ParentSessionName(ctx context.Context, sessionViews apicontract.SessionViewService, parentSessionID string) (string, string) {
-	parentID := strings.TrimSpace(parentSessionID)
-	if sessionViews == nil || parentID == "" {
-		return "", ""
+func (c Collector) ResolveSessionName(ctx context.Context, sessionViews apicontract.SessionViewService, sessionID string) (string, error) {
+	id := strings.TrimSpace(sessionID)
+	if sessionViews == nil || id == "" {
+		return "", nil
 	}
-	readTimeout := c.ParentSessionReadTimeout
+	readTimeout := c.SessionNameReadTimeout
 	if readTimeout <= 0 {
 		readTimeout = c.RequestTimeout
 		if readTimeout <= 0 {
@@ -137,11 +156,11 @@ func (c Collector) ParentSessionName(ctx context.Context, sessionViews apicontra
 	}
 	readCtx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
-	resp, err := sessionViews.GetSessionMainView(readCtx, serverapi.SessionMainViewRequest{SessionID: parentID})
+	resp, err := sessionViews.GetSessionMainView(readCtx, serverapi.SessionMainViewRequest{SessionID: id})
 	if err != nil {
-		return "", "parent session: " + err.Error()
+		return "", err
 	}
-	return strings.TrimSpace(resp.MainView.Session.SessionName), ""
+	return strings.TrimSpace(resp.MainView.Session.SessionName), nil
 }
 
 func (c Collector) CollectAuth(ctx context.Context, req Request, _ Snapshot) AuthStageResult {

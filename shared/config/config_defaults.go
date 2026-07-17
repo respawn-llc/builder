@@ -28,6 +28,7 @@ const (
 	defaultWorkflowConcurrency           = 5
 	defaultWorkflowInvalidCompletionCap  = 5
 	defaultWorkflowSubagents             = false
+	defaultMaxSubagentDepth              = 2
 	defaultCompactionThreshold           = defaultModelContextWindow * 95 / 100
 	defaultPreSubmitCompactionLeadTokens = DefaultPreSubmitRunwayTokens
 	defaultReviewerFrequency             = "edits"

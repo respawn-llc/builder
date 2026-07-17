@@ -27,15 +27,15 @@ type Request struct {
 	OpenAIBaseURLExplicit bool
 	LoadOptions           config.LoadOptions
 	LookupEnv             func(string) string
+	Now                   func() time.Time
 }
 
 type ConfigPlan struct {
 	Config config.App
 }
 
-func ValidateSessionContext(persistenceRoot string, sessionID string) error {
-	_, err := launch.ResolveSessionCaller(persistenceRoot, sessionID)
-	return err
+func ValidateSessionExists(persistenceRoot string, sessionID string) error {
+	return launch.ValidateSessionExists(persistenceRoot, sessionID)
 }
 
 type AuthSupport struct {
@@ -77,12 +77,15 @@ func ResolveConfig(req Request) (ConfigPlan, error) {
 	return ConfigPlan{Config: cfg}, nil
 }
 
-func BuildAuthSupport(store auth.Store, lookupEnv func(string) string) (AuthSupport, error) {
+func BuildAuthSupport(store auth.Store, lookupEnv func(string) string, now func() time.Time) (AuthSupport, error) {
 	if store == nil {
 		return AuthSupport{}, errors.New("auth store is required")
 	}
 	if lookupEnv == nil {
 		lookupEnv = os.Getenv
+	}
+	if now == nil {
+		now = time.Now
 	}
 	oauthOpts := auth.OpenAIOAuthOptions{
 		Issuer:   auth.DefaultOpenAIIssuer,
@@ -92,8 +95,8 @@ func BuildAuthSupport(store auth.Store, lookupEnv func(string) string) (AuthSupp
 		OAuthOptions: oauthOpts,
 		AuthManager: auth.NewManager(
 			store,
-			auth.NewOpenAIOAuthRefresher(oauthOpts, time.Now, 5*time.Minute),
-			time.Now,
+			auth.NewOpenAIOAuthRefresher(oauthOpts, now, 5*time.Minute),
+			now,
 		),
 	}, nil
 }

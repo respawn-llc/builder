@@ -37,9 +37,13 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 		return false, m, nil
 	}
 	command := selection.command
-	if m.isBusy() && command.ActiveRunPolicy != commands.ActiveRunPolicyAllowed {
-		m.clearInput()
-		return true, m, c.model.sendTransientStatusWithNoticeID(fmt.Sprintf("cannot run /%s while model is working", command.Name), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	if m.isBusy() {
+		switch command.ActiveRunPolicy {
+		case commands.ActiveRunPolicyAllowed:
+		default:
+			m.clearInput()
+			return true, m, c.model.sendTransientStatusWithNoticeID(fmt.Sprintf("cannot run /%s while model is working", command.Name), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		}
 	}
 	if commandResult := m.commandRegistry.Execute(commandText); commandResult.Handled {
 		draftText, draftCursor, restoreDraft := m.capturePromptHistoryDraftForReuse()
@@ -77,7 +81,7 @@ func (m *uiModel) blockedDeferredSlashCommand(commandText string) (string, bool)
 	}
 	switch commandResult.Action {
 	case commands.ActionBack:
-		if !m.hasParentSession() {
+		if !m.hasNavigationTargetSession() {
 			return "No parent session available", true
 		}
 	case commands.ActionSetFast:

@@ -91,6 +91,7 @@ type runtimeControlDoneMsg struct {
 	changed        bool
 	mode           string
 	compactionMode string
+	runtimeTuple   *runtimeTupleCandidate
 	err            error
 }
 
@@ -182,10 +183,11 @@ type runtimeReconnectWarningMsg struct {
 }
 
 type runtimeMainViewRefreshedMsg struct {
-	token uint64
-	req   runtimeMainViewRefreshRequest
-	view  clientui.RuntimeMainView
-	err   error
+	token                    uint64
+	req                      runtimeMainViewRefreshRequest
+	metadataBaselineRevision *uint64
+	view                     clientui.RuntimeMainView
+	err                      error
 }
 
 type runtimeMainViewRefreshCause string

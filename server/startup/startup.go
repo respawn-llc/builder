@@ -88,7 +88,7 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 	}
 	cfg := resolved.Config
 	store := authHandler.WrapStore(auth.NewFileStore(config.GlobalAuthConfigPath(cfg)))
-	authSupport, err := serverbootstrap.BuildAuthSupport(store, bootstrapReq.LookupEnv)
+	authSupport, err := serverbootstrap.BuildAuthSupport(store, bootstrapReq.LookupEnv, bootstrapReq.Now)
 	if err != nil {
 		return nil, err
 	}

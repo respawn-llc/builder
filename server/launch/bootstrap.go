@@ -23,20 +23,19 @@ type BootstrapPlan struct {
 	UseOpenAIBaseURL bool
 }
 
-func sessionCaller(meta session.Meta) subagentpolicy.Caller {
-	caller := subagentpolicy.Caller{Workflow: meta.WorkflowSession != nil}
-	if meta.Continuation != nil {
-		caller.AgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
-	}
-	return caller
-}
-
 func ResolveSessionCaller(persistenceRoot string, sessionID string) (subagentpolicy.Caller, error) {
 	store, err := openSessionByID(persistenceRoot, sessionID)
 	if err != nil {
 		return subagentpolicy.Caller{}, err
 	}
-	return sessionCaller(store.Meta()), nil
+	return subagentpolicy.Caller{Workflow: store.Meta().WorkflowSession != nil}, nil
+}
+
+// ValidateSessionExists verifies a session reference without exposing its
+// persisted metadata to callers that only need provenance validation.
+func ValidateSessionExists(persistenceRoot string, sessionID string) error {
+	_, err := openSessionByID(persistenceRoot, sessionID)
+	return err
 }
 
 func ResolveBootstrapPlan(persistenceRoot string, req BootstrapRequest) (BootstrapPlan, error) {

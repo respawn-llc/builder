@@ -206,7 +206,7 @@ func TestCancellationMessageRoundTripsThroughRemoteClient(t *testing.T) {
 func newGatewayTestAuthSupport(t *testing.T, ready bool) serverbootstrap.AuthSupport {
 	t.Helper()
 	store := auth.NewMemoryStore(auth.EmptyState())
-	authSupport, err := serverbootstrap.BuildAuthSupport(store, nil)
+	authSupport, err := serverbootstrap.BuildAuthSupport(store, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildAuthSupport: %v", err)
 	}
@@ -589,7 +589,7 @@ func TestGatewayAuthBootstrapAPIKeyCompletionEnablesAuthRequiredMethods(t *testi
 	handshakeGateway(t, conn)
 
 	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-	if respErr := callGatewayExpectError(t, conn, "run-1", protocol.MethodRunPrompt, serverapi.RunPromptRequest{ClientRequestID: "run-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "test"}); respErr.Code != protocol.ErrCodeAuthRequired {
+	if respErr := callGatewayExpectError(t, conn, "run-1", protocol.MethodRunPrompt, serverapi.RunPromptRequest{ClientRequestID: "run-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "test"}); respErr.Code != protocol.ErrCodeAuthRequired {
 		t.Fatalf("run.prompt error = %+v, want auth required", respErr)
 	}
 
@@ -769,7 +769,7 @@ func gatewaySessionPlanRequest(id string) serverapi.SessionPlanRequest {
 	return serverapi.SessionPlanRequest{
 		ClientRequestID: id,
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}
 }
 
@@ -1083,7 +1083,11 @@ func TestGatewayRejectsAttachProjectWorkspaceOutsideProject(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	respErr := callGatewayExpectError(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingA.ProjectID, WorkspaceRoot: resolvedB.Config.WorkspaceRoot})
+	request, err := protocol.AttachProjectRequestForWorkspaceRoot(bindingA.ProjectID, resolvedB.Config.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("AttachProjectRequestForWorkspaceRoot: %v", err)
+	}
+	respErr := callGatewayExpectError(t, conn, "attach-project", protocol.MethodAttachProject, request)
 	if !strings.Contains(respErr.Message, "not bound to project") {
 		t.Fatalf("expected workspace/project mismatch error, got %+v", respErr)
 	}

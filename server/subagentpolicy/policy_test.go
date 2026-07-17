@@ -8,10 +8,6 @@ import (
 	"core/shared/serverapi"
 )
 
-func policyString(value string) *string {
-	return &value
-}
-
 func TestAuthorizeCallerTargetMatrix(t *testing.T) {
 	settings := config.Settings{
 		Workflow: config.WorkflowSettings{Subagents: true},
@@ -21,7 +17,7 @@ func TestAuthorizeCallerTargetMatrix(t *testing.T) {
 			"blocked": {AgentCallableSet: true, AgentCallable: false},
 		},
 	}
-	workflow := &Caller{Workflow: true, AgentRole: policyString("worker")}
+	workflow := &Caller{Workflow: true}
 	for _, target := range []Target{
 		{Kind: TargetOmittedBase},
 		{Kind: TargetExplicitBase},
@@ -45,18 +41,23 @@ func TestAuthorizeCallerTargetMatrix(t *testing.T) {
 	if err := Authorize(settings, nil, Target{Kind: TargetNamed, Selector: "missing"}); !isDenialKind(err, serverapi.SubagentLaunchDenialTargetMissing) {
 		t.Fatalf("human missing role error = %v, want missing-target denial", err)
 	}
-	ordinary := &Caller{AgentRole: policyString("worker")}
+	ordinary := &Caller{}
 	if err := Authorize(settings, ordinary, Target{Kind: TargetNamed, Selector: "blocked"}); !isDenialKind(err, serverapi.SubagentLaunchDenialNotCallable) {
 		t.Fatalf("ordinary blocked role error = %v, want not-callable denial", err)
 	}
-	workflowNoSwitch := &Caller{Workflow: true, AgentRole: policyString("worker")}
+	for _, selector := range []string{config.BuiltInSubagentRoleFast, "worker"} {
+		if err := Authorize(settings, ordinary, Target{Kind: TargetNamed, Selector: selector}); err != nil {
+			t.Fatalf("ordinary caller launching %q: %v", selector, err)
+		}
+	}
+	workflowNoSwitch := &Caller{Workflow: true}
 	if err := Authorize(config.Settings{Subagents: settings.Subagents}, workflowNoSwitch, Target{Kind: TargetNamed, Selector: config.BuiltInSubagentRoleFast}); err != nil {
-		t.Fatalf("fast target should bypass workflow controls for an assigned caller role: %v", err)
+		t.Fatalf("fast target should bypass workflow controls: %v", err)
 	}
 	blockedFast := config.Settings{Subagents: map[string]config.SubagentRole{
 		config.BuiltInSubagentRoleFast: {AgentCallableSet: true, AgentCallable: false},
 	}}
-	workflowBlockedFast := &Caller{Workflow: true, AgentRole: policyString(config.BuiltInSubagentRoleFast)}
+	workflowBlockedFast := &Caller{Workflow: true}
 	if err := Authorize(blockedFast, workflowBlockedFast, Target{Kind: TargetNamed, Selector: config.BuiltInSubagentRoleFast}); !isDenialKind(err, serverapi.SubagentLaunchDenialNotCallable) {
 		t.Fatalf("blocked fast role error = %v, want not-callable denial", err)
 	}

@@ -180,7 +180,7 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 
 	response, err := server.RunPromptClient().RunPrompt(context.Background(), serverapi.RunPromptRequest{
 		ClientRequestID: "embedded-run-1",
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 		Prompt:          "hello from user",
 	}, nil)
 	if err != nil {

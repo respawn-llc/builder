@@ -35,16 +35,18 @@ import (
 func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
+	serverWorkspace := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("KENT_WORKTREE_SESSION_ID", "stale-parent-session")
+	testsetup.InitializeGitRepository(t, serverWorkspace)
 	testsetup.InitializeGitRepository(t, workspace)
-	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: serverWorkspace})
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
 	}
 	resolved.Config.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeStructuredOutput
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil)
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
 	if err != nil {
 		t.Fatalf("BuildAuthSupport: %v", err)
 	}
@@ -66,7 +68,26 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 			Description: skillDescription,
 		},
 	})
-	resolved.Config.Settings.Worktrees.SetupScript = setup.InstallInSourceWorkspace(t, workspace)
+	setupScript := setup.InstallInSourceWorkspace(t, workspace)
+	configPath := filepath.Join(workspace, config.ConfigDirName, "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("create source workspace config directory: %v", err)
+	}
+	blockedBase := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedBase, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("write blocked base path: %v", err)
+	}
+	validSetupConfig := fmt.Sprintf(
+		"[worktrees]\nbase_dir = %q\nsetup_script = %q\n",
+		filepath.Join(blockedBase, "worktrees"),
+		filepath.ToSlash(setupScript),
+	)
+	if err := os.WriteFile(configPath, []byte("[worktrees]\nsetup_scrip = \"scripts/misspelled.sh\"\n"), 0o644); err != nil {
+		t.Fatalf("write invalid source workspace config: %v", err)
+	}
+	if resolved.Config.Settings.Worktrees.SetupScript != "" {
+		t.Fatalf("server startup config unexpectedly contains source workspace setup script")
+	}
 	observerClient := &firstGenerateObserverClient{
 		delegate: scriptedllm.NewLegacyOnlyClient(
 			llm.ProviderCapabilities{ProviderID: "scripted-workflow", SupportsResponsesAPI: true},
@@ -111,6 +132,18 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("CreateWorkflowTask: %v", err)
+	}
+	if _, err := appCore.WorkflowClient().StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	}); err == nil {
+		t.Fatal("StartWorkflowTask accepted invalid source workspace setup configuration")
+	}
+	if err := os.WriteFile(configPath, []byte(validSetupConfig), 0o644); err != nil {
+		t.Fatalf("write corrected source workspace config: %v", err)
 	}
 	started, err := appCore.WorkflowClient().StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           task.Task.ID,
@@ -186,7 +219,7 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil)
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
 	if err != nil {
 		t.Fatalf("BuildAuthSupport: %v", err)
 	}
@@ -364,7 +397,7 @@ func newComposedCoreForAttentionTest(t *testing.T) *Core {
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
 	}
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil)
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
 	if err != nil {
 		t.Fatalf("BuildAuthSupport: %v", err)
 	}

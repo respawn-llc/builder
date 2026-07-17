@@ -49,7 +49,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 		})
 	}
 	mainView := m.runtimeMainView()
-	status := mainView.Status
 	m.applyRuntimeMainViewState(mainView)
 	if !m.hasRuntimeClient() {
 		m.reviewerEnabled = strings.TrimSpace(m.reviewerMode) != "" && strings.TrimSpace(m.reviewerMode) != "off"
@@ -63,9 +62,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 			m.pathReferenceSearch.StartPrewarm(strings.TrimSpace(m.statusConfig.WorkspaceRoot))
 			return nil
 		})
-	}
-	if m.startupUpdateNotice && m.hasRuntimeClient() {
-		m.startupCmds = append(m.startupCmds, m.startupUpdateNoticeCmd(status.Update))
 	}
 	m.layout().syncViewport()
 	return m
@@ -205,7 +201,7 @@ func (m *uiModel) Transition() UITransition {
 		InitialInput:                 m.nextSessionInitialInput,
 		TargetSessionID:              strings.TrimSpace(m.nextSessionID),
 		ForkRollbackTargetID:         m.nextForkRollbackTargetID,
-		ParentSessionID:              strings.TrimSpace(m.nextParentSessionID),
+		PreviousSessionID:            m.nextPreviousSessionID,
 	}
 }
 

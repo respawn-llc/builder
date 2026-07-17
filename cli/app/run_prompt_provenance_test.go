@@ -6,20 +6,17 @@ import (
 	"core/cli/app/internal/startupconfig"
 )
 
-func TestRunPromptProvenanceCarriesKentSessionCallerAndParent(t *testing.T) {
+func TestRunPromptCallerSessionIDCarriesKentSessionCaller(t *testing.T) {
 	opts := Options{WorkspaceContextSessionID: "context-session"}
-	callerID, parentID := runPromptProvenance(opts, startupconfig.CallerContext{
+	callerID := runPromptCallerSessionID(opts, startupconfig.CallerContext{
 		Kind: startupconfig.CallerKindKentSession,
 	})
 	if callerID == nil || *callerID != "context-session" {
 		t.Fatalf("caller session ID = %v, want context-session", callerID)
 	}
-	if parentID == nil || *parentID != "context-session" {
-		t.Fatalf("parent session ID = %v, want context-session", parentID)
-	}
 }
 
-func TestRunPromptProvenanceOmitsHumanAndMissingContext(t *testing.T) {
+func TestRunPromptCallerSessionIDOmittedForHumanAndMissingContext(t *testing.T) {
 	tests := []struct {
 		name   string
 		opts   Options
@@ -37,9 +34,9 @@ func TestRunPromptProvenanceOmitsHumanAndMissingContext(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			callerID, parentID := runPromptProvenance(test.opts, test.caller)
-			if callerID != nil || parentID != nil {
-				t.Fatalf("provenance = %v/%v, want nil/nil", callerID, parentID)
+			callerID := runPromptCallerSessionID(test.opts, test.caller)
+			if callerID != nil {
+				t.Fatalf("caller session ID = %v, want nil", callerID)
 			}
 		})
 	}

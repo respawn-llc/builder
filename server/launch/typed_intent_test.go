@@ -18,7 +18,7 @@ func TestPlannerCreateNewIntentCreatesWithAndWithoutValidatedParent(t *testing.T
 		planner, containerDir, _ := newTypedIntentPlanner(t)
 		plan, err := planner.PlanSession(context.Background(), SessionRequest{
 			Mode:   ModeInteractive,
-			Intent: serverapi.CreateNewSessionLaunchIntent(nil),
+			Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 		})
 		if err != nil {
 			t.Fatalf("plan create-new session: %v", err)
@@ -26,8 +26,8 @@ func TestPlannerCreateNewIntentCreatesWithAndWithoutValidatedParent(t *testing.T
 		if plan.Store.Meta().Category == nil || *plan.Store.Meta().Category != sessioncontract.SessionCategoryMain {
 			t.Fatalf("created category = %v, want main", plan.Store.Meta().Category)
 		}
-		if plan.Store.Meta().ParentSessionID != nil {
-			t.Fatalf("parent session ID = %v, want absent", plan.Store.Meta().ParentSessionID)
+		if plan.Store.Meta().PreviousSessionID != nil || plan.Store.Meta().ParentAgentSessionID != nil {
+			t.Fatalf("provenance = previous:%v parent-agent:%v, want absent", plan.Store.Meta().PreviousSessionID, plan.Store.Meta().ParentAgentSessionID)
 		}
 		if plan.Store.Dir() == containerDir {
 			t.Fatal("expected a session directory below the container")
@@ -41,13 +41,13 @@ func TestPlannerCreateNewIntentCreatesWithAndWithoutValidatedParent(t *testing.T
 
 		plan, err := planner.PlanSession(context.Background(), SessionRequest{
 			Mode:   ModeInteractive,
-			Intent: serverapi.CreateNewSessionLaunchIntent(&parentID),
+			Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.PreviousSessionCreateOrigin(parentID)),
 		})
 		if err != nil {
 			t.Fatalf("plan child session: %v", err)
 		}
-		if plan.Store.Meta().ParentSessionID == nil || *plan.Store.Meta().ParentSessionID != parent.Meta().SessionID {
-			t.Fatalf("parent session ID = %v, want %q", plan.Store.Meta().ParentSessionID, parent.Meta().SessionID)
+		if plan.Store.Meta().PreviousSessionID == nil || *plan.Store.Meta().PreviousSessionID != parentID {
+			t.Fatalf("previous session ID = %v, want %q", plan.Store.Meta().PreviousSessionID, parent.Meta().SessionID)
 		}
 	})
 }
@@ -72,7 +72,7 @@ func TestPlannerOpenExistingIntentOpensTheRequestedSession(t *testing.T) {
 func TestTypedLaunchIntentRejectsInvalidIdentity(t *testing.T) {
 	var zeroID runtimeids.SessionID
 	tests := []serverapi.SessionLaunchIntent{
-		serverapi.CreateNewSessionLaunchIntent(&zeroID),
+		serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(zeroID)),
 		serverapi.OpenExistingSessionLaunchIntent(zeroID),
 	}
 	for _, intent := range tests {
@@ -126,11 +126,11 @@ func newTypedIntentPlanner(t *testing.T) (Planner, string, *sessiontest.Persiste
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "sessions")
 	persistence := sessiontest.NewPersistence()
-	return newTestPlanner(config.App{
+	return newPersistenceBackedTestPlanner(config.App{
 		WorkspaceRoot:   "/tmp/workspace-a",
 		PersistenceRoot: root,
 		Settings:        config.Settings{Model: "gpt-5"},
-	}, containerDir, persistence.Options()...), containerDir, persistence
+	}, containerDir, persistence), containerDir, persistence
 }
 
 func createTypedIntentSession(t *testing.T, containerDir string, category sessioncontract.SessionCategory, persistence *sessiontest.Persistence) *session.Store {
@@ -154,8 +154,8 @@ func mustTypedIntentSessionID(t *testing.T, raw string) runtimeids.SessionID {
 	return id
 }
 
-func createNewTypedIntentWithParent(t *testing.T, raw string) serverapi.SessionLaunchIntent {
+func createNewTypedIntentWithPreviousSession(t *testing.T, raw string) serverapi.SessionLaunchIntent {
 	t.Helper()
 	parentID := mustTypedIntentSessionID(t, raw)
-	return serverapi.CreateNewSessionLaunchIntent(&parentID)
+	return serverapi.CreateNewSessionLaunchIntent(serverapi.PreviousSessionCreateOrigin(parentID))
 }

@@ -29,6 +29,12 @@ func newTestPlanner(cfg config.App, containerDir string, storeOptions ...session
 	}
 }
 
+func newPersistenceBackedTestPlanner(cfg config.App, containerDir string, persistence *sessiontest.Persistence) Planner {
+	planner := newTestPlanner(cfg, containerDir, persistence.Options()...)
+	planner.PersistedSessions = persistence
+	return planner
+}
+
 func createTestSession(t *testing.T, workspace string) *session.Store {
 	t.Helper()
 	return createTestSessionInContainer(t, filepath.Join(t.TempDir(), "projects", testProjectID, "sessions"), testWorkspaceContainer, workspace)

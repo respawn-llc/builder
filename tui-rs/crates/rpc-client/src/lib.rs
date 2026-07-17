@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod attachment;
+
 pub mod api;
 pub mod endpoint;
 pub mod error;

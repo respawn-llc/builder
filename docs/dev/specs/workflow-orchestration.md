@@ -111,6 +111,7 @@
 - Workflow runs use dedicated workflow-mode developer instructions.
 - Prompt explains task identity, node role/assignee, selected completion behavior, question behavior, handoff/transition mechanics, task comments, and why ordinary final answers are invalid when the selected mode does not accept them.
 - Workflow runtime builds on reusable headless/session infrastructure for session launch, runtime wiring, logging, progress, subagent role handling, and mode prompts.
+- Workflow scheduler-created agent sessions begin at subagent depth `0`. Model-originated delegation from a workflow agent follows the global subagent-depth policy.
 - `RunPromptService.RunPrompt` final text is not workflow completion authority.
 - Existing user goal state is not reused as workflow autonomy state.
 - Workflow task sessions reject user `/goal` control; the workflow node/run is the task objective driver. Agents may still set themselves goals and complete them, per the agent goal rules in core-runtime-tools.
@@ -141,6 +142,7 @@
 ## Context Preservation And Bindings
 
 - Per-edge context preservation supports `new_session`, `continue_session`, and `compact_and_continue_session`.
+- Workflow-created clones follow the shared derived-session provenance contract, so cloning does not reset delegation depth.
 - Continuation modes may select `immediate_source`, `node:<node_key>`, `previous_target`, or `previous_target_or_new` as context source.
 - `previous_target` resolves the latest completed run of the target node before the transition event and fails when none exists.
 - `previous_target_or_new` resolves the latest completed run of the target node before the transition event when one exists; otherwise the target run starts with effective `new_session` and no source run/session.
@@ -228,7 +230,7 @@
 - A task locks target-selection provenance only when the initiating action successfully reaches its first executable placement. Later nodes and retries reuse the locked mode and managed requested/resolved facts despite workflow edits or Git ref movement.
 - Every pre-upgrade task with a recorded managed worktree and usable recorded HEAD metadata continues using that worktree after upgrade, regardless of whether it already has a run. Its observed commit is identified as legacy provenance and is not presented as a known original branch point.
 - Pre-upgrade tasks without a managed worktree remain unlocked and inherit their migrated workflow's source-`HEAD` policy.
-- Managed targets use the existing task-worktree creation, setup, and collision behavior. Before the first executable run is scheduled, setup either succeeds for the newly created candidate in that request or a later explicit request accepts the same available, base-compatible candidate as manually repaired.
+- Managed targets use the existing task-worktree creation, setup, and collision behavior. Before the first executable run is scheduled, Kent loads worktree setup settings from the task's source workspace; a configured setup script must succeed for the newly created candidate in that request.
 - Managed worktree setup failure leaves the initiating action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
 - Setup runs only when the current request creates or recreates a worktree root. A later retry trusts an already-existing compatible root and does not rerun setup; no durable setup-readiness state exists.
 - Setup receives the source workspace root, branch name, and managed worktree root as stable positional inputs.

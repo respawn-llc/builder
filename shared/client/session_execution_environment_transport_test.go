@@ -70,10 +70,7 @@ func TestRemoteSessionExecutionEnvironmentRoundTripsAuthApplicability(t *testing
 					}
 					switch req.Method {
 					case protocol.MethodAttachProject:
-						if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{
-							Kind:      "project",
-							ProjectID: "project-1",
-						})); err != nil {
+						if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/workspace"))); err != nil {
 							t.Fatalf("send attach response: %v", err)
 						}
 					case protocol.MethodSessionGetExecutionEnvironment:

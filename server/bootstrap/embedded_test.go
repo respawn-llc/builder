@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"core/prompts"
 	"core/server/auth"
@@ -21,6 +22,8 @@ func TestBuildAuthSupportUsesDefaultIssuerAndEnvClientID(t *testing.T) {
 		default:
 			return ""
 		}
+	}, func() time.Time {
+		return time.Unix(123, 0)
 	})
 	if err != nil {
 		t.Fatalf("build auth support: %v", err)

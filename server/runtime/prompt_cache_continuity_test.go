@@ -15,6 +15,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	brand "core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -549,7 +550,9 @@ type promptCacheComparableMainView struct {
 	ConversationFreshness          string                        `json:"conversation_freshness"`
 	Revision                       int64                         `json:"revision"`
 	CommittedEntryCount            int                           `json:"committed_entry_count"`
-	ParentSessionID                *string                       `json:"parent_session_id,omitempty"`
+	PreviousSessionID              *runtimeids.SessionID         `json:"previous_session_id,omitempty"`
+	ParentAgentSessionID           *runtimeids.SessionID         `json:"parent_agent_session_id,omitempty"`
+	NavigationTargetSessionID      *runtimeids.SessionID         `json:"navigation_target_session_id,omitempty"`
 	LastCommittedAssistantResponse string                        `json:"last_committed_assistant_response,omitempty"`
 	ActiveRun                      *promptCacheComparableRunView `json:"active_run,omitempty"`
 }
@@ -620,7 +623,9 @@ func runtimeMainViewComparable(engine *Engine) promptCacheComparableMainView {
 		ConversationFreshness:          conversationFreshnessLabel(engine.ConversationFreshness()),
 		Revision:                       engine.TranscriptRevision(),
 		CommittedEntryCount:            engine.CommittedTranscriptEntryCount(),
-		ParentSessionID:                engine.ParentSessionID(),
+		PreviousSessionID:              engine.PreviousSessionID(),
+		ParentAgentSessionID:           engine.ParentAgentSessionID(),
+		NavigationTargetSessionID:      engine.NavigationTargetSessionID(),
 		LastCommittedAssistantResponse: engine.LastCommittedAssistantFinalAnswer(),
 		ActiveRun:                      comparableRuntimeRunView(engine.ActiveRun()),
 	}
@@ -635,10 +640,24 @@ func persistedMainViewComparable(t *testing.T, store *session.Store, scan *Persi
 		ConversationFreshness:          conversationFreshnessLabel(store.ConversationFreshness()),
 		Revision:                       meta.LastSequence,
 		CommittedEntryCount:            scan.TotalEntries(),
-		ParentSessionID:                meta.ParentSessionID,
+		PreviousSessionID:              meta.PreviousSessionID,
+		ParentAgentSessionID:           meta.ParentAgentSessionID,
+		NavigationTargetSessionID:      navigationTargetSessionIDForPromptCache(meta),
 		LastCommittedAssistantResponse: scan.LastCommittedAssistantFinalAnswer(),
 		ActiveRun:                      nil,
 	}
+}
+
+func navigationTargetSessionIDForPromptCache(meta session.Meta) *runtimeids.SessionID {
+	if meta.PreviousSessionID != nil {
+		id := *meta.PreviousSessionID
+		return &id
+	}
+	if meta.ParentAgentSessionID != nil {
+		id := *meta.ParentAgentSessionID
+		return &id
+	}
+	return nil
 }
 
 func mustScanPersistedTranscript(t *testing.T, store *session.Store) *PersistedTranscriptScan {

@@ -40,7 +40,7 @@ func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req patchtool.Ou
 	}
 	a.mu.Unlock()
 
-	resp, err := a.broker.Ask(ctx, askquestion.AskQuestionRequest{
+	request := askquestion.AskQuestionRequest{
 		Question: fmt.Sprintf("Allow %s %s (outside workspace dir)?", a.actionVerb, req.ResolvedPath),
 		Approval: true,
 		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
@@ -48,7 +48,12 @@ func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req patchtool.Ou
 			{Decision: askquestion.AskQuestionApprovalDecisionAllowSession, Label: OutsideWorkspaceAllowSessionSuggestion},
 			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: OutsideWorkspaceDenySuggestion},
 		},
-	})
+	}
+	if identity, identityErr := askquestion.ExecutionIdentityFromContext(ctx); identityErr == nil {
+		request.RunID = identity.RunID
+		request.StepID = identity.StepID
+	}
+	resp, err := a.broker.Ask(ctx, request)
 	if err != nil {
 		return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny}, err
 	}

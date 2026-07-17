@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"core/server/skillcatalog"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -177,42 +179,6 @@ func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *t
 	}
 }
 
-func TestSubagentsMetaMessageHidesCatalogForPersistedNonCallableCaller(t *testing.T) {
-	settings := config.Settings{
-		Model: "gpt-5.6-sol",
-		EnabledTools: map[toolspec.ID]bool{
-			toolspec.ToolExecCommand: true,
-		},
-		Subagents: map[string]config.SubagentRole{
-			"current": {
-				Settings:         config.Settings{Model: "gpt-5.4-mini"},
-				Sources:          map[string]string{"model": "file"},
-				AgentCallable:    false,
-				AgentCallableSet: true,
-			},
-			"worker": {
-				Settings:    config.Settings{ThinkingLevel: "high"},
-				Sources:     map[string]string{"thinking_level": "file"},
-				Description: "Callable helper.",
-			},
-		},
-	}
-	current := "current"
-	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", config.ResolveSkillPolicy(settings), time.Unix(0, 0)).
-		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand}).
-		withSubagentCallerRole(&current)
-	result, err := builder.Build(metaContextBuildOptions{
-		IncludeSubagents:          true,
-		SubagentInvocationContext: config.SubagentInvocationContextOrdinary,
-	})
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if len(result.Subagents) != 0 {
-		t.Fatalf("persisted non-callable caller must not receive an actionable catalog: %+v", result.Subagents)
-	}
-}
-
 func TestSubagentCatalogAppliesInvocationContextPolicy(t *testing.T) {
 	baseSettings := func(globalEnabled bool, roleDisabled bool) config.Settings {
 		return config.Settings{
@@ -330,7 +296,61 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 	}
 }
 
-func TestSubagentCatalogCarriesPersistedCallerPolicyIntoBaseAndCompaction(t *testing.T) {
+func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits(t *testing.T) {
+	settings := config.Settings{
+		Model:         "gpt-5.5",
+		ThinkingLevel: "medium",
+		EnabledTools: map[toolspec.ID]bool{
+			toolspec.ToolExecCommand: true,
+		},
+		Subagents: map[string]config.SubagentRole{
+			"worker": {
+				Settings:    config.Settings{ThinkingLevel: "high"},
+				Sources:     map[string]string{"thinking_level": "file"},
+				Description: "Worker.",
+			},
+		},
+	}
+	for _, maxDepth := range []int{0, 2} {
+		t.Run(fmt.Sprintf("maximum_%d", maxDepth), func(t *testing.T) {
+			settings.MaxSubagentDepth = maxDepth
+			for _, path := range []string{
+				"independent",
+				"parent-agent",
+				"new",
+				"review",
+				"rollback-fork",
+				"workflow-fan-out-clone",
+				"resumed",
+			} {
+				t.Run(path, func(t *testing.T) {
+					store := runtimeCatalogStoreForPath(t, path)
+					eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+						Model:                   "gpt-5.5",
+						ThinkingLevel:           "medium",
+						EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
+						SubagentCatalogSettings: settings,
+					})
+					if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
+						t.Fatalf("steer base meta context: %v", err)
+					}
+					if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
+						t.Fatal("base context hid the subagent catalog")
+					}
+					compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
+					if err != nil {
+						t.Fatalf("compaction reinjection: %v", err)
+					}
+					if !hasSubagentMetaMessage(compacted) {
+						t.Fatal("compaction reconstruction hid the subagent catalog")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestSubagentCatalogIgnoresPersistedCallerTargetPolicyInBaseAndCompaction(t *testing.T) {
 	store := mustCreateTestSession(t)
 	current := "current"
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &current}); err != nil {
@@ -363,16 +383,82 @@ func TestSubagentCatalogCarriesPersistedCallerPolicyIntoBaseAndCompaction(t *tes
 	if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
 		t.Fatalf("steer base meta context: %v", err)
 	}
-	if hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
-		t.Fatal("base catalog must not advertise targets denied to the persisted caller")
+	if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
+		t.Fatal("base catalog must advertise eligible targets regardless of persisted caller callability")
 	}
 	compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
 	if err != nil {
 		t.Fatalf("compaction reinjection: %v", err)
 	}
-	if hasSubagentMetaMessage(compacted) {
-		t.Fatal("compaction catalog must not advertise targets denied to the persisted caller")
+	if !hasSubagentMetaMessage(compacted) {
+		t.Fatal("compaction catalog must advertise eligible targets regardless of persisted caller callability")
 	}
+}
+
+func runtimeCatalogStoreForPath(t *testing.T, path string) *session.Store {
+	t.Helper()
+	root := t.TempDir()
+	parentAgent := mustCreateTestSessionAt(t, root)
+	source := mustCreateCatalogDerivedStore(t, root, parentAgent, session.SessionCreationSourceParentAgent)
+
+	switch path {
+	case "independent":
+		return mustCreateCatalogDerivedStore(t, root, nil, session.SessionCreationSourceIndependent)
+	case "parent-agent":
+		return mustCreateCatalogDerivedStore(t, root, source, session.SessionCreationSourceParentAgent)
+	case "new", "review":
+		return mustCreateCatalogDerivedStore(t, root, source, session.SessionCreationSourcePreviousSession)
+	case "rollback-fork":
+		target, _, err := source.AppendEvent("step", "message", map[string]any{
+			"role":    "user",
+			"content": "fork target",
+		})
+		if err != nil {
+			t.Fatalf("append rollback target: %v", err)
+		}
+		forked, _, err := session.ForkAtUserMessage(source, target.Seq, "rollback fork", sessioncontract.SessionCategoryMain)
+		if err != nil {
+			t.Fatalf("ForkAtUserMessage: %v", err)
+		}
+		return forked
+	case "workflow-fan-out-clone":
+		cloned, err := session.CloneSession(source, "workflow clone", sessioncontract.SessionCategorySubagent)
+		if err != nil {
+			t.Fatalf("CloneSession: %v", err)
+		}
+		return cloned
+	case "resumed":
+		return mustOpenTestSession(t, source.Dir())
+	default:
+		t.Fatalf("unknown catalog path %q", path)
+		return nil
+	}
+}
+
+func mustCreateCatalogDerivedStore(
+	t *testing.T,
+	root string,
+	source *session.Store,
+	kind session.SessionCreationSourceKind,
+) *session.Store {
+	t.Helper()
+	store, err := session.NewLazy(
+		root,
+		"ws",
+		root,
+		sessioncontract.SessionCategoryMain,
+		runtimeTestSessionPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("create catalog test store: %v", err)
+	}
+	if err := session.InitializeCreationContext(store, source, kind, session.ChildContextOptions{}); err != nil {
+		t.Fatalf("InitializeCreationContext: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist catalog test store: %v", err)
+	}
+	return store
 }
 
 func TestCompactionReinjectsSubagentsMetaContext(t *testing.T) {

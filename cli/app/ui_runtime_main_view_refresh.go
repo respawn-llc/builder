@@ -29,6 +29,10 @@ type runtimeMainViewRefreshDecision struct {
 	busyPending bool
 }
 
+type runtimeMainViewCandidateClient interface {
+	fetchMainViewWithPendingRefs([]clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error)
+}
+
 func (m *uiModel) startRuntimeMainViewRefreshRequest(request runtimeMainViewRefreshRequest) runtimeMainViewRefreshDecision {
 	if m == nil || !m.hasRuntimeClient() {
 		return runtimeMainViewRefreshDecision{}
@@ -44,17 +48,30 @@ func (m *uiModel) startRuntimeMainViewRefreshRequest(request runtimeMainViewRefr
 	m.runtimeMainViewBusy = true
 	m.runtimeMainViewActiveRequest = request
 	refs := m.pendingRuntimeOperationRefs()
+	var metadataBaselineRevision *uint64
+	if sessionClient, ok := client.(*sessionRuntimeClient); ok {
+		revision := sessionClient.mainViewMetadataRevision()
+		metadataBaselineRevision = &revision
+	}
 	cmd := func() tea.Msg {
 		var (
 			view clientui.RuntimeMainView
 			err  error
 		)
-		if requestClient, ok := client.(runtimeMainViewReconciliationClient); ok {
+		if candidateClient, ok := client.(runtimeMainViewCandidateClient); ok {
+			view, err = candidateClient.fetchMainViewWithPendingRefs(refs)
+		} else if requestClient, ok := client.(runtimeMainViewReconciliationClient); ok {
 			view, err = requestClient.RefreshMainViewWithPendingRefs(refs)
 		} else {
 			view, err = client.RefreshMainView()
 		}
-		return runtimeMainViewRefreshedMsg{token: token, req: request, view: view, err: err}
+		return runtimeMainViewRefreshedMsg{
+			token:                    token,
+			req:                      request,
+			metadataBaselineRevision: metadataBaselineRevision,
+			view:                     view,
+			err:                      err,
+		}
 	}
 	return runtimeMainViewRefreshDecision{cmd: cmd, started: true}
 }
@@ -126,9 +143,17 @@ func (m *uiModel) handleRuntimeMainViewRefreshed(msg runtimeMainViewRefreshedMsg
 		return m.drainPendingRuntimeMainViewRefresh().cmd
 	}
 	m.observeRuntimeRequestResult(nil)
-	applyCmd := m.applyRuntimeMainViewState(msg.view)
-	noticeCmd := runtimeMainViewStartupUpdateNoticeCmd(req, msg.view)
-	return sequenceCmds(applyCmd, m.applyRuntimeSessionMetadata(msg.view.Session), noticeCmd, m.drainPendingRuntimeMainViewRefresh().cmd)
+	canonical := msg.view
+	if client, ok := m.runtimeClient().(*sessionRuntimeClient); ok {
+		canonical = client.mergeMainViewCandidate(
+			msg.view,
+			runtimeTupleIngressAuthoritativeSnapshot,
+			msg.metadataBaselineRevision,
+		).view
+	}
+	applyCmd := m.applyRuntimeMainViewState(canonical)
+	noticeCmd := runtimeMainViewStartupUpdateNoticeCmd(req, canonical)
+	return sequenceCmds(applyCmd, m.applyRuntimeSessionMetadata(canonical.Session), noticeCmd, m.drainPendingRuntimeMainViewRefresh().cmd)
 }
 
 func (m *uiModel) applyRuntimeSessionMetadata(session clientui.RuntimeSessionView) tea.Cmd {

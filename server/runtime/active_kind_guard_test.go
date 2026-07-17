@@ -25,9 +25,6 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 		"server/runtime/background.go:runQueuedNotices": {
 			activeKind: "ActiveKindBackground", spinnerPolicy: "background", statusPolicy: "background", interruptPolicy: "interruptible-if-step-cancelable", goalSuspension: "never", goalAutoResume: "never",
 		},
-		"server/runtime/compaction.go:compactContext": {
-			activeKind: "call-site-specific-compaction-kind", spinnerPolicy: "compaction", statusPolicy: "compaction", interruptPolicy: "interruptible-if-step-cancelable", goalSuspension: "never", goalAutoResume: "never",
-		},
 		"server/runtime/engine.go:submitUserMessage": {
 			activeKind: "ActiveKindUserTurn", spinnerPolicy: "model-turn", statusPolicy: "user-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "after-success-only",
 		},
@@ -37,7 +34,7 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 		"server/runtime/engine.go:submitUserShellCommand": {
 			activeKind: "ActiveKindUserShell", spinnerPolicy: "user-shell", statusPolicy: "user-shell", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "never",
 		},
-		"server/runtime/engine_queue_submission.go:RunWhenIdle": {
+		"server/runtime/engine_queue_submission.go:runExclusiveStepWhenIdle": {
 			activeKind: "caller-provided", spinnerPolicy: "caller-provided", statusPolicy: "caller-provided", interruptPolicy: "caller-provided", goalSuspension: "caller-provided", goalAutoResume: "caller-provided",
 		},
 		"server/runtime/engine_queue_submission.go:submitQueuedUserMessages": {

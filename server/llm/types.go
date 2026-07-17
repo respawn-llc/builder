@@ -58,6 +58,7 @@ const (
 	MessageTypeWorktreeMode              = clientui.MessageTypeWorktreeMode
 	MessageTypeWorktreeModeExit          = clientui.MessageTypeWorktreeModeExit
 	MessageTypeGoal                      = clientui.MessageTypeGoal
+	MessageTypeActiveGoalContinuation    = clientui.MessageTypeActiveGoalContinuation
 )
 
 type Message struct {

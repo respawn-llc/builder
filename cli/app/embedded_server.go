@@ -34,7 +34,9 @@ type appServerCore interface {
 type embeddedAppServer struct {
 	inner              *embeddedattach.Server
 	boundProjectID     string
+	boundWorkspaceID   string
 	boundSessionLaunch apicontract.SessionLaunchService
+	retarget           *sessionWorkspaceRetargetContext
 }
 
 func newEmbeddedAppServer(inner *embeddedattach.Server) *embeddedAppServer {
@@ -62,6 +64,14 @@ func (s *embeddedAppServer) Config() config.App {
 	return s.inner.Config()
 }
 
+func (s *embeddedAppServer) workspaceRetargetContext() *sessionWorkspaceRetargetContext {
+	if s == nil || s.retarget == nil {
+		return nil
+	}
+	copied := *s.retarget
+	return &copied
+}
+
 func (s *embeddedAppServer) BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error) {
 	if s == nil {
 		_, err := embeddedattach.BindProjectWorkspace(ctx, embeddedattach.WorkspaceBindingRequest{ProjectID: projectID, WorkspaceID: workspaceID})
@@ -75,10 +85,23 @@ func (s *embeddedAppServer) BindProjectWorkspace(ctx context.Context, projectID 
 	if err != nil {
 		return nil, err
 	}
+	nextWorkspaceID := strings.TrimSpace(workspaceID)
+	retargetContext, err := resolveSessionWorkspaceRetargetContext(
+		ctx,
+		s.ProjectViewClient(),
+		bound.ProjectID,
+		nextWorkspaceID,
+		s.PresentationTheme(),
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &embeddedAppServer{
 		inner:              s.inner,
 		boundProjectID:     bound.ProjectID,
+		boundWorkspaceID:   nextWorkspaceID,
 		boundSessionLaunch: bound.SessionLaunch,
+		retarget:           retargetContext,
 	}, nil
 }
 

@@ -3,8 +3,14 @@ package prompts
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
+	"text/template"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	markdowntext "github.com/yuin/goldmark/text"
 )
 
 func TestRenderSystemPromptTemplateUsesTypedFields(t *testing.T) {
@@ -339,19 +345,54 @@ func workflowInstructionsTestArgs(taskNumberOfComments int64) WorkflowNodeContex
 	}
 }
 
-func TestRenderGoalNudgePrompt(t *testing.T) {
-	rendered := RenderGoalNudgePrompt("ship /goal mode", "active")
-	// The objective and the launch command must both be substituted in.
-	for _, want := range []string{
-		"ship /goal mode",
-		LaunchCommand(),
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("expected goal nudge to substitute %q, got %q", want, rendered)
+func TestGoalPromptTemplatesKeepTypedCompositionContracts(t *testing.T) {
+	guidanceData := goalContinuationGuidanceTemplateData{LaunchCommand: LaunchCommand()}
+	guidance := renderGoalContinuationGuidance()
+	names := []string{"active goal continuation", "ordinary goal nudge", "shared guidance"}
+	data := []any{activeGoalContinuationTemplateData{GoalText: "goal", SharedGuidance: guidance}, goalNudgeTemplateData{Objective: "goal", SharedGuidance: guidance}, guidanceData}
+	wantFields := [][]string{{"GoalText", "SharedGuidance"}, {"Objective", "SharedGuidance"}, {"LaunchCommand"}}
+	sources := []string{ActiveGoalContinuationPrompt, GoalNudgePrompt, GoalContinuationGuidancePrompt}
+	for index, name := range names {
+		if err := validateTemplatePlaceholders(name, sources[index], data[index]); err != nil {
+			t.Fatalf("validate %s: %v", name, err)
+		}
+		tmpl := template.Must(template.New(name).Parse(sources[index]))
+		var fields []string
+		walkRootFieldIdents(tmpl.Root, func(field string) bool { fields = append(fields, field); return true })
+		if !reflect.DeepEqual(fields, wantFields[index]) {
+			t.Fatalf("%s fields = %#v, want %#v", name, fields, wantFields[index])
 		}
 	}
-	if strings.Contains(rendered, "{{") {
-		t.Fatalf("expected goal nudge placeholders rendered, got %q", rendered)
+}
+
+func TestRenderActiveGoalContinuationPromptPreservesOneExactGoalBlock(t *testing.T) {
+	goal := "  ship /goal mode  "
+	source := []byte(RenderActiveGoalContinuationPrompt(goal))
+	document := goldmark.New().Parser().Parse(markdowntext.NewReader(source))
+
+	var goalBlocks [][]string
+	if err := ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		block, ok := node.(*ast.HTMLBlock)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		lines := block.Lines()
+		if lines.Len() == 3 {
+			first, goal, last := lines.At(0), lines.At(1), lines.At(2)
+			if string(first.Value(source)) == "<goal>\n" {
+				goalBlocks = append(goalBlocks, []string{string(first.Value(source)), string(goal.Value(source)), string(last.Value(source))})
+			}
+		}
+		return ast.WalkContinue, nil
+	}); err != nil {
+		t.Fatalf("walk rendered markdown: %v", err)
+	}
+	want := [][]string{{"<goal>\n", goal + "\n", "</goal>\n"}}
+	if !reflect.DeepEqual(goalBlocks, want) {
+		t.Fatalf("goal blocks = %#v, want %#v", goalBlocks, want)
 	}
 }
 

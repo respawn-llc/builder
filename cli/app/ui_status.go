@@ -133,10 +133,11 @@ func WithUIStatusRepository(repository uiStatusRepository) UIOption {
 }
 
 func (m *uiModel) newStatusRequest(now time.Time) uiStatusRequest {
+	executionTarget := m.currentExecutionTarget()
 	request := uiStatusRequest{
-		WorkspaceRoot:         strings.TrimSpace(m.statusConfig.WorkspaceRoot),
+		WorkspaceRoot:         m.currentExecutionWorkdir(executionTarget),
 		PersistenceRoot:       strings.TrimSpace(m.statusConfig.PersistenceRoot),
-		ExecutionTarget:       m.statusConfig.ExecutionTarget,
+		ExecutionTarget:       executionTarget,
 		SessionViews:          m.statusConfig.SessionViews,
 		Settings:              m.statusConfig.Settings,
 		Source:                m.statusConfig.Source,
@@ -159,6 +160,24 @@ func (m *uiModel) newStatusRequest(now time.Time) uiStatusRequest {
 		CurrentTime:           now,
 	}
 	return populateStatusRequestCacheKeys(request)
+}
+
+func (m *uiModel) currentExecutionTarget() clientui.SessionExecutionTarget {
+	if m == nil {
+		return clientui.SessionExecutionTarget{}
+	}
+	target := m.cachedRuntimeMainView().Session.ExecutionTarget
+	if !clientui.SessionExecutionTargetIsZero(target) {
+		return target
+	}
+	return m.statusConfig.ExecutionTarget
+}
+
+func (m *uiModel) currentExecutionWorkdir(target clientui.SessionExecutionTarget) string {
+	if workdir := strings.TrimSpace(target.EffectiveWorkdir); workdir != "" {
+		return workdir
+	}
+	return strings.TrimSpace(m.statusConfig.WorkspaceRoot)
 }
 
 func (m *uiModel) newStatusCollectorRequest(seed uiStatusRequest) uiStatusRequest {
@@ -225,11 +244,11 @@ func (c defaultUIStatusCollector) CollectEnvironment(ctx context.Context, req ui
 
 func (c defaultUIStatusCollector) adapter() status.Collector {
 	return status.Collector{
-		AuthManager:              c.authManager,
-		RequestTimeout:           statusRefreshTimeout,
-		GitTimeout:               statusGitTimeout,
-		ParentSessionReadTimeout: uiRuntimeReadTimeout,
-		EnvSanitizer:             sanitizedGitEnv,
+		AuthManager:            c.authManager,
+		RequestTimeout:         statusRefreshTimeout,
+		GitTimeout:             statusGitTimeout,
+		SessionNameReadTimeout: uiRuntimeReadTimeout,
+		EnvSanitizer:           sanitizedGitEnv,
 	}
 }
 

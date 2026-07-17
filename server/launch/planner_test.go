@@ -8,6 +8,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"database/sql"
@@ -54,7 +55,7 @@ func TestPlannerHeadlessCreatesNewSessionAndAppliesContinuationContext(t *testin
 		},
 	}, containerDir, persistence.Options()...)
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeHeadless, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeHeadless, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestPlannerInteractiveRequiresExplicitOpenOrCreateIntent(t *testing.T) {
 	}, containerDir)
 
 	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive})
-	if err == nil || !errors.Is(err, errSessionSelectionRequired) {
+	if err == nil || !errors.Is(err, errSessionLaunchIntentRequired) {
 		t.Fatalf("PlanSession error = %v, want explicit intent required", err)
 	}
 }
@@ -548,21 +549,26 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
 	planner := Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
+		Config:            cfg,
+		ContainerDir:      containerDir,
+		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions: metadataStore,
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
 		Mode:   ModeInteractive,
-		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
+		Intent: createNewTypedIntentWithPreviousSession(t, parent.Meta().SessionID),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
 	}
 	childMeta := plan.Store.Meta()
-	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("child parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID parent: %v", err)
+	}
+	if childMeta.PreviousSessionID == nil || *childMeta.PreviousSessionID != parentID {
+		t.Fatalf("child previous session id = %v, want %q", childMeta.PreviousSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.Locked == nil || childMeta.Locked.Model != "locked-parent-model" {
 		t.Fatalf("child locked contract = %+v, want parent model lock", childMeta.Locked)
@@ -649,10 +655,10 @@ func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T)
 	}); err != nil {
 		t.Fatalf("SetContinuationContext parent: %v", err)
 	}
-	planner := newTestPlanner(cfg, containerDir, persistence.Options()...)
+	planner := newPersistenceBackedTestPlanner(cfg, containerDir, persistence)
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
 		Mode:   ModeHeadless,
-		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustTypedIntentSessionID(t, parent.Meta().SessionID))),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
@@ -695,21 +701,25 @@ func TestPlannerNewChildSessionFallsBackWhenParentExecutionTargetIsNotMetadataBa
 	}); err != nil {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
-	planner := newTestPlanner(config.App{
+	planner := newPersistenceBackedTestPlanner(config.App{
 		WorkspaceRoot:   "/tmp/workspace-a",
 		PersistenceRoot: root,
-	}, containerDir, persistence.Options()...)
+	}, containerDir, persistence)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
 		Mode:   ModeInteractive,
-		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
+		Intent: createNewTypedIntentWithPreviousSession(t, parent.Meta().SessionID),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
 	}
 	childMeta := plan.Store.Meta()
-	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID parent: %v", err)
+	}
+	if childMeta.PreviousSessionID == nil || *childMeta.PreviousSessionID != parentID {
+		t.Fatalf("previous session id = %v, want %q", childMeta.PreviousSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.WorktreeReminder == nil ||
 		childMeta.WorktreeReminder.Branch == nil ||
@@ -718,7 +728,7 @@ func TestPlannerNewChildSessionFallsBackWhenParentExecutionTargetIsNotMetadataBa
 	}
 }
 
-func TestPlannerNewChildSessionIgnoresParentOutsideActiveContainer(t *testing.T) {
+func TestPlannerNewChildSessionResolvesPreviousSessionAcrossProjectContainers(t *testing.T) {
 	root := t.TempDir()
 	containerA := filepath.Join(root, "projects", "project-a", "sessions")
 	containerB := filepath.Join(root, "projects", "project-b", "sessions")
@@ -730,30 +740,34 @@ func TestPlannerNewChildSessionIgnoresParentOutsideActiveContainer(t *testing.T)
 	if err := parent.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: "http://foreign.local/v1"}); err != nil {
 		t.Fatalf("SetContinuationContext parent: %v", err)
 	}
-	planner := newTestPlanner(config.App{
+	planner := newPersistenceBackedTestPlanner(config.App{
 		WorkspaceRoot:   "/tmp/workspace-a",
 		PersistenceRoot: root,
-	}, containerA, persistence.Options()...)
+	}, containerA, persistence)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
 		Mode:   ModeInteractive,
-		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
+		Intent: createNewTypedIntentWithPreviousSession(t, parent.Meta().SessionID),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
 	}
 	childMeta := plan.Store.Meta()
-	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID parent: %v", err)
 	}
-	if childMeta.WorkspaceRoot != "/tmp/workspace-a" || childMeta.WorkspaceContainer != "sessions" {
-		t.Fatalf("child workspace context = root %q container %q, want active project session root", childMeta.WorkspaceRoot, childMeta.WorkspaceContainer)
+	if childMeta.PreviousSessionID == nil || *childMeta.PreviousSessionID != parentID {
+		t.Fatalf("previous session id = %v, want %q", childMeta.PreviousSessionID, parent.Meta().SessionID)
 	}
-	if childMeta.Locked != nil {
-		t.Fatalf("locked contract = %+v, want no foreign parent lock copied", childMeta.Locked)
+	if childMeta.WorkspaceRoot != "/tmp/workspace-b" || childMeta.WorkspaceContainer != "workspace-b" {
+		t.Fatalf("child workspace context = root %q container %q, want source session", childMeta.WorkspaceRoot, childMeta.WorkspaceContainer)
 	}
-	if childMeta.Continuation != nil {
-		t.Fatalf("continuation = %+v, want no foreign parent continuation copied", childMeta.Continuation)
+	if childMeta.Locked == nil || childMeta.Locked.Model != "foreign-parent-model" {
+		t.Fatalf("locked contract = %+v, want source session lock copied", childMeta.Locked)
+	}
+	if childMeta.Continuation == nil || childMeta.Continuation.OpenAIBaseURL != "http://foreign.local/v1" {
+		t.Fatalf("continuation = %+v, want source session continuation copied", childMeta.Continuation)
 	}
 }
 
@@ -805,12 +819,13 @@ func TestPlannerNewChildSessionRollsBackDurableChildWhenExecutionTargetCopyFails
 		Config:              cfg,
 		ContainerDir:        containerDir,
 		StoreOptions:        metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:   metadataStore,
 		MetadataStoreOpener: func(string) (MetadataExecutionTargetStore, error) { return failingStore, nil },
 	}
 
 	_, err = planner.PlanSession(context.Background(), SessionRequest{
 		Mode:   ModeInteractive,
-		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
+		Intent: createNewTypedIntentWithPreviousSession(t, parent.Meta().SessionID),
 	})
 	if !errors.Is(err, session.ErrSessionNotFound) {
 		t.Fatalf("PlanSession error = %v, want session not found from metadata target update", err)
@@ -851,7 +866,7 @@ func TestPlannerNewSessionHonorsCanceledContextBeforeDurableCreation(t *testing.
 
 	_, err := planner.PlanSession(ctx, SessionRequest{
 		Mode:   ModeInteractive,
-		Intent: serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("PlanSession error = %v, want context canceled", err)
@@ -870,14 +885,15 @@ func TestPlannerNewChildSessionHonorsCanceledContextBeforeParentCopy(t *testing.
 			WorkspaceRoot:   "/tmp/workspace-a",
 			PersistenceRoot: root,
 		},
-		ContainerDir: containerDir,
+		ContainerDir:      containerDir,
+		PersistedSessions: sessiontest.NewPersistence(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	_, err := planner.PlanSession(ctx, SessionRequest{
 		Mode:   ModeInteractive,
-		Intent: createNewTypedIntentWithParent(t, parent.Meta().SessionID),
+		Intent: createNewTypedIntentWithPreviousSession(t, parent.Meta().SessionID),
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("PlanSession error = %v, want context canceled", err)

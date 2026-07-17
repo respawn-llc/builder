@@ -21,14 +21,6 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 	if m == nil {
 		return nil
 	}
-	if view.Version.Validate() == nil {
-		if m.acceptRuntimeReadModelVersion(view.Version, true) == runtimeReadModelVersionIgnore {
-			if view.Activity.State != "" && runtimeActivityConflictsWithProjection(view.Activity, m) {
-				_ = m.sendTransientStatusWithNoticeID("conflicting runtime activity read-model update ignored", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-			}
-			return nil
-		}
-	}
 	status := view.Status
 	m.reviewerMode = status.ReviewerFrequency
 	m.reviewerEnabled = status.ReviewerEnabled

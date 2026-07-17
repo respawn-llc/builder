@@ -157,13 +157,10 @@ func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
 }
 
 func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
-	store := newRuntimeViewStore(t)
-	parentSessionID := projectionParentID
+	dir := t.TempDir()
+	store, parentSessionID := newRuntimeViewParentAgentChild(t, dir, projectionWorkspaceID, dir)
 	if err := store.SetName("Session Name"); err != nil {
 		t.Fatalf("set name: %v", err)
-	}
-	if err := store.SetParentSessionID(&parentSessionID); err != nil {
-		t.Fatalf("set parent session id: %v", err)
 	}
 	if _, _, err := store.AppendEvent(projectionStepID, "message", llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}); err != nil {
 		t.Fatalf("append assistant message: %v", err)
@@ -185,7 +182,9 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	if view.Session.SessionID != store.Meta().SessionID || view.Session.SessionName != "Session Name" {
 		t.Fatalf("unexpected session hydration: %+v", view.Session)
 	}
-	if view.Status.ParentSessionID == nil || *view.Status.ParentSessionID != projectionParentID || view.Status.LastCommittedAssistantFinalAnswer != "final answer" {
+	if view.Status.ParentAgentSessionID == nil || view.Status.ParentAgentSessionID.String() != parentSessionID ||
+		view.Status.NavigationTargetSessionID == nil || view.Status.NavigationTargetSessionID.String() != parentSessionID ||
+		view.Status.LastCommittedAssistantFinalAnswer != "final answer" {
 		t.Fatalf("unexpected status hydration: %+v", view.Status)
 	}
 	if view.Status.ThinkingLevel != "high" || !view.Status.FastModeEnabled || view.Status.AutoCompactionEnabled {

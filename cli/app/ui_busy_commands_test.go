@@ -14,7 +14,7 @@ func TestDefaultRegistryBusyContract(t *testing.T) {
 	want := map[string]commands.ActiveRunPolicy{
 		"exit": commands.ActiveRunPolicyAllowed, "login": commands.ActiveRunPolicyRequiresIdle,
 		"new": commands.ActiveRunPolicyAllowed, "resume": commands.ActiveRunPolicyAllowed,
-		"logout": commands.ActiveRunPolicyRequiresIdle, "compact": commands.ActiveRunPolicyRequiresIdle,
+		"logout": commands.ActiveRunPolicyRequiresIdle, "compact": commands.ActiveRunPolicyAllowed,
 		"name": commands.ActiveRunPolicyAllowed, "thinking": commands.ActiveRunPolicyAllowed,
 		"fast": commands.ActiveRunPolicyAllowed, "supervisor": commands.ActiveRunPolicyAllowed,
 		"autocompaction": commands.ActiveRunPolicyAllowed, "questions": commands.ActiveRunPolicyAllowed,
@@ -78,6 +78,7 @@ func TestBusyEnterOpensReadOverlays(t *testing.T) {
 	} {
 		t.Run(input, func(t *testing.T) {
 			model := busyCommandTestModel()
+			model.sessionID = "busy-navigation-session"
 			model.input = input
 			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
@@ -90,7 +91,7 @@ func TestBusyEnterOpensReadOverlays(t *testing.T) {
 }
 
 func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
-	for _, input := range []string{"/compact now", "/worktree list"} {
+	for _, input := range []string{"/worktree list"} {
 		t.Run(input, func(t *testing.T) {
 			model := busyCommandTestModel()
 			model.input = input
@@ -101,6 +102,22 @@ func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
 			}
 			requireBusyCommandQueuesEmpty(t, updated)
 		})
+	}
+}
+
+func TestBusyEnterDispatchesCompact(t *testing.T) {
+	model := busyCommandTestModel()
+	model.input = "/compact now"
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := next.(*uiModel)
+	if cmd == nil || updated.input != "" || len(updated.queued) != 0 || !updated.isCompacting() {
+		t.Fatalf("compact dispatch = cmd %v, input %q, queued %+v, compacting %t", cmd, updated.input, updated.queued, updated.isCompacting())
+	}
+	updated.input = "/compact again"
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = next.(*uiModel)
+	if refs := updated.pendingRuntimeOperationRefs(); len(refs) != 1 {
+		t.Fatalf("repeat compact pending refs = %+v, want one visible cancellable operation", refs)
 	}
 }
 
@@ -207,6 +224,7 @@ func TestCompactionKeepsInputEditableAndQueuesSteering(t *testing.T) {
 
 func busyCommandTestModel() *uiModel {
 	model := newProjectedStaticUIModel(WithUIConversationFreshness(clientui.ConversationFreshnessEstablished))
+	model.sessionID = "busy-navigation-session"
 	model.setRuntimeActivityBusyForTest(true)
 	model.activity = uiActivityRunning
 	return model

@@ -6,6 +6,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,9 +20,13 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 		}
 	}
 	if commandResult.SubmitUser && commandResult.FreshConversation && (m.isBusy() || m.currentConversationFreshness() != clientui.ConversationFreshnessFresh) {
+		previousSessionID, err := runtimeids.ParseSessionID(m.sessionID)
+		if err != nil {
+			return m, c.model.appendLocalEntryWithNoticeID("error", "Current session identity is invalid: "+err.Error(), "")
+		}
 		m.nextSessionInitialPrompt = commandResult.User
 		m.nextSessionInitialPromptHistoryRecorded = true
-		m.nextParentSessionID = m.sessionID
+		m.nextPreviousSessionID = &previousSessionID
 		m.exitAction = UIActionNewSession
 		return m, tea.Quit
 	}
@@ -38,7 +43,11 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 		m.exitAction = UIActionExit
 		return m, sequenceCmds(prefixCmd, tea.Quit)
 	case commands.ActionNew:
-		m.nextParentSessionID = m.sessionID
+		previousSessionID, err := runtimeids.ParseSessionID(m.sessionID)
+		if err != nil {
+			return m, sequenceCmds(prefixCmd, c.model.appendLocalEntryWithNoticeID("error", "Current session identity is invalid: "+err.Error(), ""))
+		}
+		m.nextPreviousSessionID = &previousSessionID
 		m.exitAction = UIActionNewSession
 		return m, sequenceCmds(prefixCmd, tea.Quit)
 	case commands.ActionResume:
@@ -106,17 +115,13 @@ func (c uiInputController) handleResumeCommand() (tea.Model, tea.Cmd) {
 func (c uiInputController) handleBackCommand() (tea.Model, tea.Cmd) {
 	m := c.model
 	status := m.cachedRuntimeStatus()
-	parentSessionID := ""
-	if status.ParentSessionID != nil {
-		parentSessionID = strings.TrimSpace(*status.ParentSessionID)
-	}
-	if parentSessionID == "" {
+	if status.NavigationTargetSessionID == nil {
 		return m, c.model.appendLocalEntryWithNoticeID("system", "No parent session available", "")
 	}
 	if m.finalAnswerOperation != nil {
 		return m, nil
 	}
-	return m, m.startFinalAnswerOperation(uiFinalAnswerOperationBack, parentSessionID)
+	return m, m.startFinalAnswerOperation(uiFinalAnswerOperationBack, status.NavigationTargetSessionID.String())
 }
 
 func (c uiInputController) handleCopyCommand() (tea.Model, tea.Cmd) {

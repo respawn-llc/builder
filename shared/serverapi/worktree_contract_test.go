@@ -216,6 +216,9 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	valid := []interface{ Validate() error }{
 		WorktreeSelectorPreviewRequest{SessionID: "session", Selector: "feature"},
 		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature"},
+		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature", Origin: &RuntimeStepOrigin{
+			RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
+		}},
 		WorktreeLeaveRequest{OperationID: operationID, SessionID: "session"},
 		WorktreeDeleteRequest{
 			OperationID:         operationID,
@@ -232,6 +235,7 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	invalid := []interface{ Validate() error }{
 		WorktreeSelectorPreviewRequest{SessionID: "session"},
 		WorktreeEnterRequest{SessionID: "session", Selector: "feature"},
+		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature", Origin: &RuntimeStepOrigin{}},
 		WorktreeLeaveRequest{OperationID: operationID},
 		WorktreeDeleteRequest{OperationID: operationID, SessionID: "session", Selector: "feature"},
 	}

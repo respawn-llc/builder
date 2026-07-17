@@ -96,6 +96,13 @@ func (s *testEmbeddedServer) OwnsServer() bool { return true }
 
 func (s *testEmbeddedServer) Config() config.App { return s.cfg }
 
+func (s *testEmbeddedServer) workspaceRetargetContext() *sessionWorkspaceRetargetContext {
+	return &sessionWorkspaceRetargetContext{
+		workspaceRoot: s.cfg.WorkspaceRoot,
+		theme:         s.cfg.Settings.Theme,
+	}
+}
+
 func (s *testEmbeddedServer) PresentationTheme() string { return "dark" }
 
 func (s *testEmbeddedServer) ClientPromptRoots() (commands.ClientPromptRoots, error) {
@@ -299,9 +306,10 @@ func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchServ
 	}
 	if metadataStore, binding, ok := s.metadataBinding(); ok {
 		service := sessionlaunch.NewService(launch.Planner{
-			Config:       s.cfg,
-			ContainerDir: filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
-			StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
+			Config:            s.cfg,
+			ContainerDir:      filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
+			StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
+			PersistedSessions: metadataStore,
 		}, s.sessionStoreRegistry())
 		return service
 	}
@@ -310,9 +318,10 @@ func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchServ
 		storeOptions = s.sessionPersistence.Options()
 	}
 	service := sessionlaunch.NewService(launch.Planner{
-		Config:       s.cfg,
-		ContainerDir: s.containerDir,
-		StoreOptions: storeOptions,
+		Config:            s.cfg,
+		ContainerDir:      s.containerDir,
+		StoreOptions:      storeOptions,
+		PersistedSessions: s.sessionPersistence,
 	}, s.sessionStoreRegistry())
 	return service
 }
@@ -328,7 +337,8 @@ func (s *testEmbeddedServer) SessionLifecycleClient() apicontract.SessionLifecyc
 			s.authManager,
 			metadataStore.AuthoritativeSessionStoreOptions()...,
 		).WithPersistenceRoot(s.cfg.PersistenceRoot).
-			WithWorkspaceRetargeter(s.sessionWorkspaceRetargeter(metadataStore))
+			WithWorkspaceRetargeter(s.sessionWorkspaceRetargeter(metadataStore)).
+			WithNavigationTargetResolver(metadataStore)
 		return service
 	}
 	containerDir := strings.TrimSpace(s.containerDir)

@@ -44,7 +44,7 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 	if _, ok := server.(*remoteAppServer); !ok {
 		t.Fatalf("expected remote app server, got %T", server)
 	}
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)}, io.Discard, "test remote prompt snapshot reads")
+	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote prompt snapshot reads")
 	defer runtimePlan.Close()
 	finishStep := beginAppTestModelPromptStep(t, srv, plan.SessionID)
 
@@ -130,7 +130,7 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 	processes := remote.RuntimeAttachmentClients()
 
 	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
+	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}

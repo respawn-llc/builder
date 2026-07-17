@@ -51,6 +51,7 @@ const (
 	ErrCodeSessionRetarget                   = -32041
 	ErrCodeWorktreeImmediateTransition       = -32042
 	ErrCodeSubagentLaunchDenied              = -32043
+	ErrCodeSubagentLaunchPolicy              = -32044
 )
 
 type Request struct {

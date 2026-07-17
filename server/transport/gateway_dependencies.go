@@ -8,45 +8,46 @@ import (
 
 	"core/server/metadata"
 	"core/shared/apicontract"
+	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
-func (g *Gateway) resolveAttachedProjectWorkspace(ctx context.Context, projectID string, workspaceID string, workspaceRoot string) (string, string, error) {
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	if trimmedWorkspaceID != "" {
-		binding, err := g.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, trimmedWorkspaceID)
-		if err != nil {
-			return "", "", err
-		}
-		if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(projectID) {
-			return "", "", fmt.Errorf("workspace %q is not bound to project %q", binding.CanonicalRoot, strings.TrimSpace(projectID))
-		}
-		return binding.WorkspaceID, strings.TrimSpace(binding.CanonicalRoot), nil
-	}
-	trimmedWorkspaceRoot := strings.TrimSpace(workspaceRoot)
-	if trimmedWorkspaceRoot == "" {
-		overview, err := g.deps.ProjectViewClient().GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: strings.TrimSpace(projectID)})
+func (g *Gateway) resolveAttachedProjectWorkspace(ctx context.Context, request protocol.AttachProjectRequest) (string, string, error) {
+	selector, selected := request.Workspace()
+	if !selected {
+		overview, err := g.deps.ProjectViewClient().GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: request.ProjectID})
 		if err != nil {
 			return "", "", err
 		}
 		if len(overview.Overview.Workspaces) == 0 {
-			return "", "", fmt.Errorf("project %q has no attached workspaces", strings.TrimSpace(projectID))
+			return "", "", fmt.Errorf("project %q has no attached workspaces", request.ProjectID)
 		}
 		if len(overview.Overview.Workspaces) > 1 {
-			return "", "", fmt.Errorf("project %q requires explicit workspace selection", strings.TrimSpace(projectID))
+			return "", "", fmt.Errorf("project %q requires explicit workspace selection", request.ProjectID)
 		}
 		workspace := overview.Overview.Workspaces[0]
 		return strings.TrimSpace(workspace.WorkspaceID), strings.TrimSpace(workspace.RootPath), nil
 	}
-	resolved, err := g.deps.ProjectViewClient().ResolveProjectPath(ctx, serverapi.ProjectResolvePathRequest{Path: trimmedWorkspaceRoot})
+	if workspaceID, selectedByID := selector.WorkspaceID(); selectedByID {
+		binding, err := g.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, workspaceID)
+		if err != nil {
+			return "", "", err
+		}
+		if strings.TrimSpace(binding.ProjectID) != request.ProjectID {
+			return "", "", fmt.Errorf("workspace %q is not bound to project %q", binding.CanonicalRoot, request.ProjectID)
+		}
+		return binding.WorkspaceID, strings.TrimSpace(binding.CanonicalRoot), nil
+	}
+	workspaceRoot, _ := selector.WorkspaceRoot()
+	resolved, err := g.deps.ProjectViewClient().ResolveProjectPath(ctx, serverapi.ProjectResolvePathRequest{Path: workspaceRoot})
 	if err != nil {
 		return "", "", err
 	}
 	if resolved.Binding == nil {
 		return "", "", errors.Join(serverapi.ErrWorkspaceNotRegistered, fmt.Errorf("workspace %q is not registered", resolved.CanonicalRoot))
 	}
-	if strings.TrimSpace(resolved.Binding.ProjectID) != strings.TrimSpace(projectID) {
-		return "", "", fmt.Errorf("workspace %q is not bound to project %q", resolved.Binding.CanonicalRoot, strings.TrimSpace(projectID))
+	if strings.TrimSpace(resolved.Binding.ProjectID) != request.ProjectID {
+		return "", "", fmt.Errorf("workspace %q is not bound to project %q", resolved.Binding.CanonicalRoot, request.ProjectID)
 	}
 	return strings.TrimSpace(resolved.Binding.WorkspaceID), strings.TrimSpace(resolved.Binding.CanonicalRoot), nil
 }

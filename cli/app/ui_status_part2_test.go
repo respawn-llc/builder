@@ -6,11 +6,13 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"core/cli/app/internal/status"
 	"core/server/auth"
 	"core/server/sessionview"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -48,16 +50,65 @@ func TestStatusLineGitStartupUsesRuntimeWorktreeRootBranch(t *testing.T) {
 	}
 }
 
-func TestStatusParentSessionNameResolvesFromSessionViews(t *testing.T) {
+func TestTranscriptSessionIdentityUpdatesStatusExecutionTarget(t *testing.T) {
+	initial := clientui.SessionExecutionTarget{
+		WorkspaceID:           "workspace-1",
+		WorkspaceRoot:         "/repo",
+		WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		CwdRelpath:            ".",
+		EffectiveWorkdir:      "/repo",
+	}
+	entered := clientui.SessionExecutionTarget{
+		WorkspaceID:           "workspace-1",
+		WorkspaceRoot:         "/repo",
+		WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		Worktree:              &clientui.SessionExecutionWorktreeTarget{ID: "worktree-1", Root: "/repo/feature"},
+		CwdRelpath:            ".",
+		EffectiveWorkdir:      "/repo/feature",
+	}
+	runtimeClient := &sessionRuntimeClient{
+		sessionID:   "session-1",
+		mainView:    clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}},
+		hasMainView: true,
+	}
+	model := newProjectedTestUIModel(runtimeClient, WithUIStatusConfig(uiStatusConfig{
+		WorkspaceRoot:   initial.EffectiveWorkdir,
+		ExecutionTarget: initial,
+	}))
+	sessionID, err := runtimeids.ParseSessionID("session-1")
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
+		Kind: clientui.TranscriptMessageSessionIdentity,
+		Payload: clientui.TranscriptPayload{SessionIdentity: &clientui.TranscriptSessionIdentity{
+			SessionID:             sessionID,
+			ConversationFreshness: clientui.ConversationFreshnessEstablished,
+			ExecutionTarget:       &entered,
+		}},
+	}); err != nil {
+		t.Fatalf("admit transcript session identity: %v", err)
+	}
+
+	request := model.newStatusRequest(time.Now())
+	if request.ExecutionTarget.EffectiveWorkdir != entered.EffectiveWorkdir {
+		t.Fatalf("status execution target = %+v, want %q", request.ExecutionTarget, entered.EffectiveWorkdir)
+	}
+	if request.WorkspaceRoot != entered.EffectiveWorkdir {
+		t.Fatalf("status workspace root = %q, want %q", request.WorkspaceRoot, entered.EffectiveWorkdir)
+	}
+}
+
+func TestStatusSessionNameResolvesFromSessionViews(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	parentStore := createAuthoritativeAppSession(t, persistenceRoot, "/tmp/work-a")
 	if err := parentStore.SetName("incident-root"); err != nil {
 		t.Fatalf("set parent name: %v", err)
 	}
 	sessionViews := sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil)
-	got, warning := status.Collector{ParentSessionReadTimeout: uiRuntimeReadTimeout}.ParentSessionName(context.Background(), sessionViews, parentStore.Meta().SessionID)
-	if warning != "" {
-		t.Fatalf("unexpected warning: %q", warning)
+	got, err := status.Collector{SessionNameReadTimeout: uiRuntimeReadTimeout}.ResolveSessionName(context.Background(), sessionViews, parentStore.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionName: %v", err)
 	}
 	if got != "incident-root" {
 		t.Fatalf("parent session name = %q", got)
@@ -71,7 +122,11 @@ func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testi
 		t.Fatalf("set parent name: %v", err)
 	}
 	sessionViews := sessionview.NewService(sessionview.NewStaticSessionResolver(parentStore), nil, nil)
-	collector := &stubProgressiveStatusCollector{base: uiStatusSnapshot{ParentSessionID: parentStore.Meta().SessionID}}
+	previousSessionID, err := runtimeids.ParseSessionID(parentStore.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse previous session id: %v", err)
+	}
+	collector := &stubProgressiveStatusCollector{base: uiStatusSnapshot{PreviousSessionID: &previousSessionID}}
 	model := newProjectedStaticUIModel(
 		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
 		WithUIStatusCollector(collector),
@@ -88,8 +143,8 @@ func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testi
 	if !ok {
 		t.Fatalf("batched message type = %T, want statusBaseRefreshDoneMsg", batch[0]())
 	}
-	if baseMsg.snapshot.ParentSessionName != "incident-root" {
-		t.Fatalf("parent session name = %q", baseMsg.snapshot.ParentSessionName)
+	if baseMsg.snapshot.PreviousSessionName != "incident-root" {
+		t.Fatalf("previous session name = %q", baseMsg.snapshot.PreviousSessionName)
 	}
 }
 
@@ -131,8 +186,14 @@ type statusRefreshRuntimeClient struct {
 
 func (c *statusRefreshRuntimeClient) Status() clientui.RuntimeStatus {
 	c.statusCalls++
-	parentSessionID := "parent-session"
-	return clientui.RuntimeStatus{ParentSessionID: &parentSessionID}
+	parentSessionID, err := runtimeids.ParseSessionID("parent-session")
+	if err != nil {
+		panic(err)
+	}
+	return clientui.RuntimeStatus{
+		PreviousSessionID:         &parentSessionID,
+		NavigationTargetSessionID: &parentSessionID,
+	}
 }
 
 func initStatusLineGitRepo(t *testing.T, branch string) string {

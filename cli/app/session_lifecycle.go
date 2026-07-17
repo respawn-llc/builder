@@ -101,7 +101,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 				next = serverapi.StopSessionDirective()
 			case sessionPickerCreateResult:
 				next = serverapi.LaunchSessionDirective(
-					serverapi.CreateNewSessionLaunchIntent(nil),
+					serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 					serverapi.NewSessionLaunchPreparation(
 						nil,
 						serverapi.RestoreStoredDraftSessionDraftDisposition(),
@@ -152,6 +152,17 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		preparation, present := next.LaunchPreparation()
 		if !present {
 			return errors.New("launch directive is missing preparation")
+		}
+		reboundServer, rebound, err := bindNavigationSessionContext(ctx, server, preparation)
+		if err != nil {
+			return err
+		}
+		if rebound {
+			if shouldCloseReboundServer(server, reboundServer) {
+				defer func() { _ = reboundServer.Close() }()
+			}
+			server = reboundServer
+			planner = newSessionLaunchPlanner(server)
 		}
 		launchRequest, err := sessionLaunchRequestFromIntent(intent, nextSessionOverrides)
 		if err != nil {
@@ -208,6 +219,21 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		}
 		next = resolved
 	}
+}
+
+func bindNavigationSessionContext(ctx context.Context, server interactiveSessionServer, preparation serverapi.SessionLaunchPreparation) (interactiveSessionServer, bool, error) {
+	binding, present := preparation.NavigationBinding()
+	if !present {
+		return server, false, nil
+	}
+	if err := binding.Validate(); err != nil {
+		return nil, false, err
+	}
+	rebound, err := server.BindProjectWorkspace(ctx, binding.ProjectID, binding.WorkspaceID)
+	if err != nil {
+		return nil, false, err
+	}
+	return rebound, true, nil
 }
 
 func resolveAndReleaseSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition, runtimePlan *runtimeLaunchPlan) (serverapi.SessionDirective, error) {
@@ -435,7 +461,7 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 			InitialInput:                 transition.InitialInput,
 			TargetSessionID:              transition.TargetSessionID,
 			ForkRollbackTargetID:         transition.ForkRollbackTargetID,
-			ParentSessionID:              transition.ParentSessionID,
+			PreviousSessionID:            transition.PreviousSessionID,
 		},
 	})
 	if err != nil {

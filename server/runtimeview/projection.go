@@ -7,7 +7,6 @@ import (
 	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/transcript"
 	"core/shared/transcript/patchformat"
 )
@@ -56,7 +55,9 @@ func StatusFromRuntime(engine *runtime.Engine) clientui.RuntimeStatus {
 		FastModeAvailable:                 engine.FastModeAvailable(),
 		FastModeEnabled:                   engine.FastModeEnabled(),
 		ConversationFreshness:             ConversationFreshnessFromSession(engine.ConversationFreshness()),
-		ParentSessionID:                   engine.ParentSessionID(),
+		PreviousSessionID:                 engine.PreviousSessionID(),
+		ParentAgentSessionID:              engine.ParentAgentSessionID(),
+		NavigationTargetSessionID:         engine.NavigationTargetSessionID(),
 		LastCommittedAssistantFinalAnswer: engine.LastCommittedAssistantFinalAnswer(),
 		ThinkingLevel:                     engine.ThinkingLevel(),
 		CompactionMode:                    engine.CompactionMode(),
@@ -85,21 +86,17 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.Transcr
 		return clientui.TranscriptSessionStatus{}
 	}
 	status := clientui.TranscriptSessionStatus{
-		ReviewerFrequency:     engine.ReviewerFrequency(),
-		ReviewerEnabled:       engine.ReviewerEnabled(),
-		AutoCompactionEnabled: engine.AutoCompactionEnabled(),
-		QuestionsEnabled:      engine.QuestionsEnabled(),
-		FastModeAvailable:     engine.FastModeAvailable(),
-		FastModeEnabled:       engine.FastModeEnabled(),
-		ThinkingLevel:         engine.ThinkingLevel(),
-		CompactionMode:        engine.CompactionMode(),
-	}
-	if parentID := engine.ParentSessionID(); parentID != nil {
-		parsed, err := runtimeids.ParseSessionID(*parentID)
-		if err != nil {
-			panic(err)
-		}
-		status.ParentSessionID = &parsed
+		ReviewerFrequency:         engine.ReviewerFrequency(),
+		ReviewerEnabled:           engine.ReviewerEnabled(),
+		AutoCompactionEnabled:     engine.AutoCompactionEnabled(),
+		QuestionsEnabled:          engine.QuestionsEnabled(),
+		FastModeAvailable:         engine.FastModeAvailable(),
+		FastModeEnabled:           engine.FastModeEnabled(),
+		ThinkingLevel:             engine.ThinkingLevel(),
+		CompactionMode:            engine.CompactionMode(),
+		PreviousSessionID:         engine.PreviousSessionID(),
+		ParentAgentSessionID:      engine.ParentAgentSessionID(),
+		NavigationTargetSessionID: engine.NavigationTargetSessionID(),
 	}
 	if workflowState := engine.WorkflowSessionState(); workflowState.RunID != "" {
 		status.Workflow = &clientui.TranscriptWorkflowSession{

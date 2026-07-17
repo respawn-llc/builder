@@ -13,8 +13,8 @@ use client_contracts::project::{
 };
 use client_contracts::prompt::{ApprovalAnswerRequest, AskAnswerRequest};
 use client_contracts::protocol::{
-    AttachProjectRequest, AttachResponse, AttachSessionRequest, HandshakeRequest,
-    HandshakeResponse, SubscribeResponse,
+    AttachProjectRequest, AttachProjectWorkspace, AttachResponse, AttachSessionRequest,
+    HandshakeRequest, HandshakeResponse, ProjectAttachment, SessionAttachment, SubscribeResponse,
 };
 use client_contracts::runtime_control::{
     RuntimeAppendCommittedEntryRequest, RuntimeCompactContextRequest,
@@ -52,6 +52,10 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::attachment::{
+    ProjectAttachmentAuthority, validate_project_attachment_response,
+    validate_session_attachment_response,
+};
 use crate::error::RpcError;
 use crate::json_rpc::JsonRpcConnection;
 use crate::stream::{RawSubscription, SubscriptionRoute};
@@ -171,29 +175,22 @@ impl<C: FrameConnection> Client<C> {
 
     pub fn attach_project(
         &mut self,
-        project_id: &str,
-        workspace_id: &str,
-        workspace_root: &str,
-    ) -> Result<AttachResponse, RpcError> {
-        self.call_fixed(
-            REQUEST_ID_PROJECT_ATTACH,
-            METHOD_PROJECT_ATTACH,
-            &AttachProjectRequest {
-                project_id: project_id.trim().to_owned(),
-                workspace_id: workspace_id.trim().to_owned(),
-                workspace_root: workspace_root.trim().to_owned(),
-            },
-        )
+        request: &AttachProjectRequest,
+    ) -> Result<ProjectAttachment, RpcError> {
+        let response =
+            self.call_fixed(REQUEST_ID_PROJECT_ATTACH, METHOD_PROJECT_ATTACH, request)?;
+        validate_project_attachment_response(request, response)
     }
 
-    pub fn attach_session(&mut self, session_id: &str) -> Result<AttachResponse, RpcError> {
-        self.call_fixed(
+    pub fn attach_session(&mut self, session_id: &str) -> Result<SessionAttachment, RpcError> {
+        let response = self.call_fixed(
             REQUEST_ID_SESSION_ATTACH,
             METHOD_SESSION_ATTACH,
             &AttachSessionRequest {
-                session_id: session_id.trim().to_owned(),
+                session_id: session_id.to_owned(),
             },
-        )
+        )?;
+        validate_session_attachment_response(session_id, None, response)
     }
 
     pub fn get_project_overview(
@@ -339,40 +336,27 @@ impl<C: FrameConnection> Client<C> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteContext {
-    project_id: String,
-    workspace_id: String,
-    workspace_root: String,
+pub enum RemoteContext {
+    Unscoped,
+    Project(AttachProjectRequest),
 }
 
 impl RemoteContext {
-    pub fn project(project_id: &str, workspace_id: &str, workspace_root: &str) -> Self {
-        Self {
-            project_id: project_id.trim().to_owned(),
-            workspace_id: workspace_id.trim().to_owned(),
-            workspace_root: workspace_root.trim().to_owned(),
-        }
+    pub fn project(project_id: &str, workspace: Option<AttachProjectWorkspace>) -> Self {
+        Self::Project(AttachProjectRequest {
+            project_id: project_id.to_owned(),
+            workspace,
+        })
     }
 
     pub fn unscoped() -> Self {
-        Self {
-            project_id: String::new(),
-            workspace_id: String::new(),
-            workspace_root: String::new(),
-        }
+        Self::Unscoped
     }
 
-    fn attach_project_request(&self) -> AttachProjectRequest {
-        let workspace_id = self.workspace_id.trim().to_owned();
-        let workspace_root = if workspace_id.is_empty() {
-            self.workspace_root.trim().to_owned()
-        } else {
-            String::new()
-        };
-        AttachProjectRequest {
-            project_id: self.project_id.clone(),
-            workspace_id,
-            workspace_root,
+    fn attach_project_request(&self) -> Option<&AttachProjectRequest> {
+        match self {
+            Self::Unscoped => None,
+            Self::Project(request) => Some(request),
         }
     }
 }
@@ -380,6 +364,7 @@ impl RemoteContext {
 pub struct RemoteClient<F> {
     factory: F,
     context: RemoteContext,
+    project_attachment: ProjectAttachmentAuthority,
     subscription_item_read_timeout: Option<Duration>,
     unary_receive_timeout: Option<Duration>,
     io_guard: Option<Arc<dyn RpcIoGuard>>,
@@ -390,6 +375,7 @@ impl<F> RemoteClient<F> {
         Self {
             factory,
             context,
+            project_attachment: ProjectAttachmentAuthority::default(),
             subscription_item_read_timeout: None,
             unary_receive_timeout: None,
             io_guard: None,
@@ -891,7 +877,7 @@ impl<F: ConnectionFactory> RemoteClient<F> {
     }
 
     fn setup_connection(
-        &self,
+        &mut self,
         connection: F::Connection,
         session_id: Option<&str>,
     ) -> Result<F::Connection, RpcError> {
@@ -909,31 +895,49 @@ impl<F: ConnectionFactory> RemoteClient<F> {
             let _ = rpc.close();
             return Err(error);
         }
-        if !self.context.project_id.is_empty()
-            && let Err(error) = call_fixed_with_optional_timeout::<_, _, AttachResponse>(
+        if let Some(request) = self.context.attach_project_request().cloned() {
+            let response = match call_fixed_with_optional_timeout::<_, _, AttachResponse>(
                 &mut rpc,
                 REQUEST_ID_PROJECT_ATTACH,
                 METHOD_PROJECT_ATTACH,
-                &self.context.attach_project_request(),
+                &request,
                 self.unary_receive_timeout,
-            )
-        {
-            let _ = rpc.close();
-            return Err(error);
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    let _ = rpc.close();
+                    return Err(error);
+                }
+            };
+            if let Err(error) = self.project_attachment.accept(&request, response) {
+                let _ = rpc.close();
+                return Err(error);
+            }
         }
-        if let Some(session_id) = session_id
-            && let Err(error) = call_fixed_with_optional_timeout::<_, _, AttachResponse>(
+        if let Some(session_id) = session_id {
+            let response = match call_fixed_with_optional_timeout::<_, _, AttachResponse>(
                 &mut rpc,
                 REQUEST_ID_SESSION_ATTACH,
                 METHOD_SESSION_ATTACH,
                 &AttachSessionRequest {
-                    session_id: session_id.trim().to_owned(),
+                    session_id: session_id.to_owned(),
                 },
                 self.unary_receive_timeout,
-            )
-        {
-            let _ = rpc.close();
-            return Err(error);
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    let _ = rpc.close();
+                    return Err(error);
+                }
+            };
+            if let Err(error) = validate_session_attachment_response(
+                session_id,
+                self.project_attachment.get(),
+                response,
+            ) {
+                let _ = rpc.close();
+                return Err(error);
+            }
         }
         Ok(rpc.into_connection())
     }

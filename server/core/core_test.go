@@ -121,7 +121,7 @@ func TestNewRejectsSecondCoreForSamePersistenceRoot(t *testing.T) {
 		t.Fatal("expected first core to seed at least one generated skill")
 	}
 
-	authSupportB, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil)
+	authSupportB, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
 	if err != nil {
 		t.Fatalf("BuildAuthSupport B: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestSessionLaunchClientForProjectWorkspaceReplaysForceNewSessionAcrossClien
 	req := serverapi.SessionPlanRequest{
 		ClientRequestID: "req-1",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}
 	firstPlan, err := firstClient.PlanSession(context.Background(), req)
 	if err != nil {
@@ -263,7 +263,7 @@ func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testi
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{ClientRequestID: "req-1", Mode: serverapi.SessionLaunchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(nil)})
+	plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{ClientRequestID: "req-1", Mode: serverapi.SessionLaunchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	if err != nil {
 		t.Fatalf("RunPromptClientForProjectWorkspace second: %v", err)
 	}
-	req := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "hello"}
+	req := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}
 	firstRun, err := firstClient.RunPrompt(context.Background(), req, nil)
 	if err != nil {
 		t.Fatalf("RunPrompt first: %v", err)
@@ -409,7 +409,7 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t 
 
 func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State) *Core {
 	t.Helper()
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(state), nil)
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(state), nil, nil)
 	if err != nil {
 		t.Fatalf("BuildAuthSupport: %v", err)
 	}

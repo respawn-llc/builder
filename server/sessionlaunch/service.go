@@ -11,6 +11,7 @@ import (
 	"core/server/subagentpolicy"
 	servicecontract "core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -40,12 +41,10 @@ type PlanResult struct {
 }
 
 type sessionPlanMemoRequest struct {
-	Mode              serverapi.SessionLaunchMode
-	SelectedSessionID string
-	ForceNewSession   bool
-	CallerSessionID   serverapi.OptionalStringKey
-	ParentSessionID   serverapi.OptionalStringKey
-	Overrides         serverapi.RunPromptOverridesKey
+	Mode            serverapi.SessionLaunchMode
+	Intent          serverapi.SessionLaunchIntent
+	CallerSessionID serverapi.OptionalStringKey
+	Overrides       serverapi.RunPromptOverridesKey
 }
 
 func NewService(planner launch.Planner, stores sessionStoreRegistrar) *Service {
@@ -80,21 +79,17 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 	if err := req.Validate(); err != nil {
 		return PlanResult{}, err
 	}
-	selectedSessionID := strings.TrimSpace(req.SelectedSessionID)
-	forceNewSession := req.ForceNewSession
-	parentSessionID := req.ParentSessionID
-	if err := req.Intent.Validate(); err == nil {
-		switch req.Intent.Kind() {
-		case serverapi.SessionLaunchIntentOpenExisting:
-			sessionID, _ := req.Intent.SessionID()
-			selectedSessionID = sessionID.String()
-			forceNewSession = false
-		case serverapi.SessionLaunchIntentCreateNew:
-			forceNewSession = true
-			if parentID, ok := req.Intent.ParentID(); ok {
-				parent := parentID.String()
-				parentSessionID = &parent
-			}
+	var selectedSessionID *runtimeids.SessionID
+	var parentAgentSessionID *runtimeids.SessionID
+	switch req.Intent.Kind() {
+	case serverapi.SessionLaunchIntentOpenExisting:
+		sessionID, _ := req.Intent.SessionID()
+		selectedSessionID = &sessionID
+	case serverapi.SessionLaunchIntentCreateNew:
+		origin, _ := req.Intent.CreateOrigin()
+		if origin.Kind() == serverapi.SessionCreateOriginParentAgent {
+			sourceID, _ := origin.SessionID()
+			parentAgentSessionID = &sourceID
 		}
 	}
 	overrides, err := req.Overrides.CanonicalKey()
@@ -102,12 +97,10 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		return PlanResult{}, err
 	}
 	memoReq := sessionPlanMemoRequest{
-		Mode:              req.Mode,
-		SelectedSessionID: selectedSessionID,
-		ForceNewSession:   forceNewSession,
-		CallerSessionID:   serverapi.CanonicalOptionalString(req.CallerSessionID),
-		ParentSessionID:   serverapi.CanonicalOptionalString(parentSessionID),
-		Overrides:         overrides,
+		Mode:            req.Mode,
+		Intent:          req.Intent,
+		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
+		Overrides:       overrides,
 	}
 	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, func(ctx context.Context) (PlanResult, error) {
 		planner := s.planner
@@ -131,12 +124,15 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialCallerMissing}
 				}
 				caller = &resolved
-				if parentSessionID != nil && strings.TrimSpace(*parentSessionID) != strings.TrimSpace(*req.CallerSessionID) {
-					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialInvalidTarget}
+				if parentAgentSessionID != nil {
+					callerSessionID, parseErr := runtimeids.ParseSessionID(*req.CallerSessionID)
+					if parseErr != nil || *parentAgentSessionID != callerSessionID {
+						return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialInvalidTarget}
+					}
 				}
 			}
-			if parentSessionID != nil && req.CallerSessionID == nil {
-				if _, parentErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, *parentSessionID); parentErr != nil {
+			if parentAgentSessionID != nil && req.CallerSessionID == nil {
+				if _, parentErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, parentAgentSessionID.String()); parentErr != nil {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialParentMissing}
 				}
 			}
@@ -145,8 +141,8 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		if err := subagentpolicy.Authorize(planner.Config.Settings, caller, target); err != nil {
 			return PlanResult{}, err
 		}
-		if req.Mode == serverapi.SessionLaunchModeHeadless && selectedSessionID != "" && !roleOverride.Present {
-			persistedRole, roleErr := planner.SelectedSessionContinuationAgentRole(selectedSessionID)
+		if req.Mode == serverapi.SessionLaunchModeHeadless && selectedSessionID != nil && !roleOverride.Present {
+			persistedRole, roleErr := planner.SelectedSessionContinuationAgentRole(*selectedSessionID)
 			if roleErr != nil {
 				return PlanResult{}, roleErr
 			}
@@ -172,15 +168,15 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 			}
 		}
 		preparation := launch.RunPromptPreparationContext{}
-		if selectedSessionID != "" {
-			selectedLocked, selectedErr := planner.SelectedSessionLockedContract(selectedSessionID)
+		if selectedSessionID != nil {
+			selectedLocked, selectedErr := planner.SelectedSessionLockedContract(*selectedSessionID)
 			if selectedErr != nil {
 				return PlanResult{}, selectedErr
 			}
 			preparation.ModelLock = selectedLocked
 			preparation.ToolLock = selectedLocked
 			if !roleOverride.Present {
-				target, targetErr := planner.SelectedSessionPromptFacingTarget(selectedSessionID)
+				target, targetErr := planner.SelectedSessionPromptFacingTarget(*selectedSessionID)
 				if targetErr != nil {
 					return PlanResult{}, targetErr
 				}
@@ -208,9 +204,6 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		plan, err := planner.PlanSession(ctx, launch.SessionRequest{
 			Mode:                                launch.Mode(req.Mode),
 			Intent:                              req.Intent,
-			SelectedSessionID:                   selectedSessionID,
-			ForceNewSession:                     forceNewSession,
-			ParentSessionID:                     parentSessionID,
 			SkipContinuationAgentRoleValidation: roleOverride.Default,
 			PreparedPromptFacingTarget:          preparedPromptFacingTarget,
 		})
@@ -253,7 +246,10 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 }
 
 func sameSessionPlanMemoRequest(a sessionPlanMemoRequest, b sessionPlanMemoRequest) bool {
-	return a == b
+	return a.Mode == b.Mode &&
+		a.Intent.Equal(b.Intent) &&
+		a.CallerSessionID == b.CallerSessionID &&
+		a.Overrides == b.Overrides
 }
 
 var _ servicecontract.SessionLaunchService = (*Service)(nil)

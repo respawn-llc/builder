@@ -128,7 +128,7 @@ func (m *uiModel) currentSlashCommandMatches(token string) []commands.Command {
 	if len(matches) == 0 {
 		return nil
 	}
-	if m.hasParentSession() {
+	if m.hasNavigationTargetSession() {
 		return matches
 	}
 	filtered := make([]commands.Command, 0, len(matches))
@@ -209,9 +209,8 @@ func (m *uiModel) applyAuthSlashCommandRefreshed(msg authSlashCommandRefreshedMs
 	m.clampSlashCommandSelection()
 }
 
-func (m *uiModel) hasParentSession() bool {
-	parentSessionID := m.cachedRuntimeStatus().ParentSessionID
-	return parentSessionID != nil && strings.TrimSpace(*parentSessionID) != ""
+func (m *uiModel) hasNavigationTargetSession() bool {
+	return m.cachedRuntimeStatus().NavigationTargetSessionID != nil
 }
 
 func (m *uiModel) clampSlashCommandSelection() {

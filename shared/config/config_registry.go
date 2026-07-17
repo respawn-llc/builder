@@ -31,6 +31,10 @@ type registrySetting interface {
 	applyFile(settingsFile, string, *settingsState, map[string]string) error
 }
 
+type keyedRegistrySetting interface {
+	registryKey() string
+}
+
 type sourceInitializingSetting interface {
 	initSources(map[string]string)
 }
@@ -484,6 +488,12 @@ func newSettingsRegistry() settingsRegistry {
 			func(state settingsState) bool { return state.Settings.Workflow.Subagents },
 			"",
 			settingDocOptions{})},
+		rootOnlySetting[int]{newIntSetting("max_subagent_depth", defaultMaxSubagentDepth,
+			func(state *settingsState, value int) { state.Settings.MaxSubagentDepth = value },
+			func(state settingsState) int { return state.Settings.MaxSubagentDepth },
+			"",
+			nil,
+			settingDocOptions{})},
 		newStringSetting("reviewer.frequency", defaultReviewerFrequency,
 			func(state *settingsState, value string) { state.Settings.Reviewer.Frequency = value },
 			func(state settingsState) string { return state.Settings.Reviewer.Frequency },
@@ -727,6 +737,7 @@ func newSettingsRegistry() settingsRegistry {
 			validateCompactionMode,
 			validateReviewer,
 			validateWorkflowSettings,
+			validateMaxSubagentDepth,
 			validateSleepPreventionMode,
 		},
 	}
@@ -1022,6 +1033,10 @@ func newIntSetting(
 
 func (s scalarSetting[T]) applyDefault(state *settingsState) {
 	s.apply(state, s.defaultValue)
+}
+
+func (s scalarSetting[T]) registryKey() string {
+	return s.key
 }
 
 func (s scalarSetting[T]) initSources(sources map[string]string) {

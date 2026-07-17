@@ -9,6 +9,7 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -24,7 +25,7 @@ type UITransition struct {
 	InitialInput                 string
 	TargetSessionID              string
 	ForkRollbackTargetID         string
-	ParentSessionID              string
+	PreviousSessionID            *runtimeids.SessionID
 }
 
 const (

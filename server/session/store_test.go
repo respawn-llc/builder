@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/internal/testharness/filemode"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 )
 
@@ -91,10 +92,6 @@ func TestSessionCategoryUnaffectedByUnrelatedMetadataMutations(t *testing.T) {
 		t.Fatalf("rename: %v", err)
 	}
 	assertSubagent("rename")
-	parentSessionID := "legacy-parent"
-	if err := store.SetParentSessionID(&parentSessionID); err != nil {
-		t.Fatalf("set parent: %v", err)
-	}
 	assertSubagent("parent assignment")
 	if err := store.SetHeadlessActive(true); err != nil {
 		t.Fatalf("set headless active: %v", err)
@@ -520,34 +517,27 @@ func TestSetListingMetadataPersistsNameAndFirstPromptPreview(t *testing.T) {
 	}
 }
 
-func TestParentSessionIDValidationClearingAndSnapshotIsolation(t *testing.T) {
-	store := newSessionTestStore(t)
-	parentSessionID := "parent-session"
-	if err := store.SetParentSessionID(&parentSessionID); err != nil {
-		t.Fatalf("SetParentSessionID: %v", err)
+func TestMetaSnapshotDeepCopiesSessionProvenance(t *testing.T) {
+	root := t.TempDir()
+	parent := newSessionTestStoreAt(t, root)
+	store := newSessionTestLazyStoreAt(t, root)
+	if err := InitializeCreationContext(store, parent, SessionCreationSourceParentAgent, ChildContextOptions{}); err != nil {
+		t.Fatalf("InitializeCreationContext: %v", err)
 	}
 
 	snapshot := store.Meta()
-	if snapshot.ParentSessionID == nil {
-		t.Fatal("snapshot parent session id is nil")
+	if snapshot.ParentAgentSessionID == nil {
+		t.Fatal("snapshot parent-agent session id is nil")
 	}
-	*snapshot.ParentSessionID = "mutated-snapshot"
-	if got := store.Meta().ParentSessionID; got == nil || *got != parentSessionID {
-		t.Fatalf("store parent session id = %v after snapshot mutation", got)
+	original := *snapshot.ParentAgentSessionID
+	mutated, err := runtimeids.ParseSessionID("mutated-snapshot")
+	if err != nil {
+		t.Fatalf("ParseSessionID mutated snapshot: %v", err)
 	}
+	*snapshot.ParentAgentSessionID = mutated
 
-	blankParentSessionID := " \t "
-	if err := store.SetParentSessionID(&blankParentSessionID); err == nil {
-		t.Fatal("SetParentSessionID blank value unexpectedly succeeded")
-	}
-	if got := store.Meta().ParentSessionID; got == nil || *got != parentSessionID {
-		t.Fatalf("parent session id changed after rejected write: %v", got)
-	}
-	if err := store.SetParentSessionID(nil); err != nil {
-		t.Fatalf("SetParentSessionID(nil): %v", err)
-	}
-	if got := store.Meta().ParentSessionID; got != nil {
-		t.Fatalf("parent session id = %v, want nil", got)
+	if got := store.Meta().ParentAgentSessionID; got == nil || *got != original {
+		t.Fatalf("store parent-agent session id = %v, want %q after snapshot mutation", got, original.String())
 	}
 }
 
@@ -752,8 +742,12 @@ func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 		t.Fatalf("unexpected first message in fork: %+v", first)
 	}
 	meta := forked.Meta()
-	if meta.ParentSessionID == nil || *meta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("expected fork parent session id, got %v", meta.ParentSessionID)
+	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID parent: %v", err)
+	}
+	if meta.PreviousSessionID == nil || *meta.PreviousSessionID != parentID {
+		t.Fatalf("expected fork previous session id, got %v", meta.PreviousSessionID)
 	}
 	if meta.Name != "Parent → edit u2" {
 		t.Fatalf("expected fork name, got %q", meta.Name)
@@ -959,12 +953,19 @@ func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testi
 		t.Fatalf("new child: %v", err)
 	}
 
-	if err := InitializeChildFromParent(child, parent); err != nil {
-		t.Fatalf("InitializeChildFromParent: %v", err)
+	if err := InitializeCreationContext(child, parent, SessionCreationSourcePreviousSession, ChildContextOptions{
+		InheritLockedContract: true,
+		InheritContinuation:   true,
+	}); err != nil {
+		t.Fatalf("InitializeCreationContext: %v", err)
 	}
 	meta := child.Meta()
-	if meta.ParentSessionID == nil || *meta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("parent session id = %v, want %q", meta.ParentSessionID, parent.Meta().SessionID)
+	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID parent: %v", err)
+	}
+	if meta.PreviousSessionID == nil || *meta.PreviousSessionID != parentID {
+		t.Fatalf("previous session id = %v, want %q", meta.PreviousSessionID, parent.Meta().SessionID)
 	}
 	if meta.WorkspaceRoot != "/tmp/work-parent" || meta.WorkspaceContainer != "workspace-parent" {
 		t.Fatalf("workspace context = root %q container %q, want parent", meta.WorkspaceRoot, meta.WorkspaceContainer)

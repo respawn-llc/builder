@@ -14,11 +14,15 @@ import (
 )
 
 type sessionLaunchIntentGatewayService struct {
-	last serverapi.SessionPlanRequest
+	last    serverapi.SessionPlanRequest
+	planErr error
 }
 
 func (s *sessionLaunchIntentGatewayService) PlanSession(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 	s.last = req
+	if s.planErr != nil {
+		return serverapi.SessionPlanResponse{}, s.planErr
+	}
 	return serverapi.SessionPlanResponse{
 		Plan: serverapi.SessionPlan{SessionID: "planned-session"},
 	}, nil
@@ -53,25 +57,36 @@ func TestGatewaySessionPlanRoundTripsTypedLaunchIntent(t *testing.T) {
 	handshakeGateway(t, conn)
 	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
 
-	parent := mustGatewayIntentSessionID(t, "parent-session")
+	previous := mustGatewayIntentSessionID(t, "previous-session")
+	parentAgent := mustGatewayIntentSessionID(t, "parent-agent-session")
 	target := mustGatewayIntentSessionID(t, "target-session")
 	tests := []struct {
 		name       string
 		intent     serverapi.SessionLaunchIntent
 		wantKind   serverapi.SessionLaunchIntentKind
-		wantParent *runtimeids.SessionID
+		wantOrigin serverapi.SessionCreateOriginKind
+		wantSource *runtimeids.SessionID
 		wantTarget *runtimeids.SessionID
 	}{
 		{
-			name:     "create new without parent",
-			intent:   serverapi.CreateNewSessionLaunchIntent(nil),
-			wantKind: serverapi.SessionLaunchIntentCreateNew,
+			name:       "independent creation",
+			intent:     serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			wantKind:   serverapi.SessionLaunchIntentCreateNew,
+			wantOrigin: serverapi.SessionCreateOriginIndependent,
 		},
 		{
-			name:       "create new with parent",
-			intent:     serverapi.CreateNewSessionLaunchIntent(&parent),
+			name:       "previous session creation",
+			intent:     serverapi.CreateNewSessionLaunchIntent(serverapi.PreviousSessionCreateOrigin(previous)),
 			wantKind:   serverapi.SessionLaunchIntentCreateNew,
-			wantParent: &parent,
+			wantOrigin: serverapi.SessionCreateOriginPreviousSession,
+			wantSource: &previous,
+		},
+		{
+			name:       "parent agent creation",
+			intent:     serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(parentAgent)),
+			wantKind:   serverapi.SessionLaunchIntentCreateNew,
+			wantOrigin: serverapi.SessionCreateOriginParentAgent,
+			wantSource: &parentAgent,
 		},
 		{
 			name:       "open existing",
@@ -88,8 +103,45 @@ func TestGatewaySessionPlanRoundTripsTypedLaunchIntent(t *testing.T) {
 				Mode:            serverapi.SessionLaunchModeInteractive,
 				Intent:          test.intent,
 			}, nil)
-			assertGatewayIntent(t, service.last.Intent, test.wantKind, test.wantParent, test.wantTarget)
+			assertGatewayIntent(t, service.last.Intent, test.wantKind, test.wantOrigin, test.wantSource, test.wantTarget)
 		})
+	}
+}
+
+func TestGatewayPreservesSubagentLaunchPolicyErrorCodeAndData(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	source := protocol.NewMaxDepthExceededSubagentLaunchPolicyError(1, 0)
+	service := &sessionLaunchIntentGatewayService{planErr: source}
+	deps := &sessionLaunchIntentGatewayDependencies{Core: appCore, launch: service}
+	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptest.NewServer(gateway.Handler())
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+
+	respErr := callGatewayExpectError(t, conn, "blocked", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
+		ClientRequestID: "blocked-request",
+		Mode:            serverapi.SessionLaunchModeHeadless,
+		Intent: serverapi.CreateNewSessionLaunchIntent(
+			serverapi.ParentAgentSessionCreateOrigin(mustGatewayIntentSessionID(t, "parent-agent")),
+		),
+	})
+	if respErr.Code != protocol.ErrCodeSubagentLaunchPolicy {
+		t.Fatalf("error code = %d, want %d", respErr.Code, protocol.ErrCodeSubagentLaunchPolicy)
+	}
+	var decoded protocol.SubagentLaunchPolicyError
+	if err := json.Unmarshal(respErr.Data, &decoded); err != nil {
+		t.Fatalf("decode policy error data: %v", err)
+	}
+	if decoded.AttemptedDepth == nil || *decoded.AttemptedDepth != 1 ||
+		decoded.MaxDepth == nil || *decoded.MaxDepth != 0 {
+		t.Fatalf("policy error data = %+v", decoded)
 	}
 }
 
@@ -123,18 +175,28 @@ func TestGatewaySessionPlanRejectsLegacyLaunchFlags(t *testing.T) {
 	}
 }
 
-func assertGatewayIntent(t *testing.T, got serverapi.SessionLaunchIntent, wantKind serverapi.SessionLaunchIntentKind, wantParent *runtimeids.SessionID, wantTarget *runtimeids.SessionID) {
+func assertGatewayIntent(t *testing.T, got serverapi.SessionLaunchIntent, wantKind serverapi.SessionLaunchIntentKind, wantOrigin serverapi.SessionCreateOriginKind, wantSource *runtimeids.SessionID, wantTarget *runtimeids.SessionID) {
 	t.Helper()
 	if got.Kind() != wantKind {
 		t.Fatalf("intent kind = %q, want %q", got.Kind(), wantKind)
 	}
-	parent, hasParent := got.ParentID()
-	if wantParent == nil {
-		if hasParent {
-			t.Fatalf("unexpected parent ID %q", parent.String())
+	origin, hasOrigin := got.CreateOrigin()
+	if wantKind == serverapi.SessionLaunchIntentOpenExisting {
+		if hasOrigin {
+			t.Fatalf("unexpected creation origin %+v", origin)
 		}
-	} else if !hasParent || parent != *wantParent {
-		t.Fatalf("parent ID = %q/%v, want %q", parent.String(), hasParent, wantParent.String())
+	} else {
+		if !hasOrigin || origin.Kind() != wantOrigin {
+			t.Fatalf("creation origin = %+v/%v, want %q", origin, hasOrigin, wantOrigin)
+		}
+		source, hasSource := origin.SessionID()
+		if wantSource == nil {
+			if hasSource {
+				t.Fatalf("unexpected creation source %q", source.String())
+			}
+		} else if !hasSource || source != *wantSource {
+			t.Fatalf("creation source = %q/%v, want %q", source.String(), hasSource, wantSource.String())
+		}
 	}
 	target, hasTarget := got.SessionID()
 	if wantTarget == nil {
