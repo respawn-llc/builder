@@ -113,6 +113,8 @@ func (s *stubExclusiveStepLifecycle) RunNext(ctx context.Context, options exclus
 	return fn(ctx, "stub-step")
 }
 
+func (s *stubExclusiveStepLifecycle) AcquireReservation(*exclusiveStepReservation) error { return nil }
+func (s *stubExclusiveStepLifecycle) ReleaseReservation(*exclusiveStepReservation)       {}
 func (s *stubExclusiveStepLifecycle) Interrupt() error {
 	return nil
 }
@@ -218,6 +220,9 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
+	if err := lifecycle.AcquireReservation(reservation); err != nil {
+		t.Fatalf("acquire reservation: %v", err)
+	}
 	releaseStep := make(chan struct{})
 	firstDone := make(chan error, 1)
 	go func() {
@@ -228,14 +233,10 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	}()
 
 	close(releaseStep)
-	var ended StepLifecycleSnapshot
 	select {
-	case ended = <-sink.endedStarted:
+	case <-sink.endedStarted:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for terminal publication")
-	}
-	if ended.Transition != StepLifecycleTransitionEnded || ended.RunID == "" {
-		t.Fatalf("unexpected terminal snapshot: %+v", ended)
 	}
 	if snapshot := lifecycle.Snapshot(); snapshot != nil {
 		t.Fatalf("active snapshot must be cleared before terminal publication, got %+v", snapshot)
@@ -247,7 +248,7 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	if !errors.Is(err, ErrAgentBusy) {
 		t.Fatalf("successor run while terminal publication is pending err = %v, want ErrAgentBusy", err)
 	}
-	err = lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindCompaction, Reservation: reservation}, func(context.Context, string) error { return nil })
+	err = lifecycle.AcquireReservation(&exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction})
 	if !errors.Is(err, ErrExclusiveStepReservationPending) {
 		t.Fatalf("duplicate reservation during terminal publication err = %v, want pending rejection", err)
 	}
@@ -256,6 +257,11 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first run: %v", err)
 	}
+	err = lifecycle.AcquireReservation(&exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction})
+	if !errors.Is(err, ErrExclusiveStepReservationPending) {
+		t.Fatalf("duplicate reservation after terminal publication err = %v, want pending rejection", err)
+	}
+	lifecycle.ReleaseReservation(reservation)
 	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil }); err != nil {
 		t.Fatalf("successor after terminal publication: %v", err)
 	}

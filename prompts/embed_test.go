@@ -348,24 +348,19 @@ func workflowInstructionsTestArgs(taskNumberOfComments int64) WorkflowNodeContex
 func TestGoalPromptTemplatesKeepTypedCompositionContracts(t *testing.T) {
 	guidanceData := goalContinuationGuidanceTemplateData{LaunchCommand: LaunchCommand()}
 	guidance := renderGoalContinuationGuidance()
-	tests := []struct {
-		name, source string
-		data         any
-		wantFields   []string
-	}{
-		{"active goal continuation", ActiveGoalContinuationPrompt, activeGoalContinuationTemplateData{GoalText: "goal", SharedGuidance: guidance}, []string{"GoalText", "SharedGuidance"}},
-		{"ordinary goal nudge", GoalNudgePrompt, goalNudgeTemplateData{Objective: "goal", SharedGuidance: guidance}, []string{"Objective", "SharedGuidance"}},
-		{"shared guidance", GoalContinuationGuidancePrompt, guidanceData, []string{"LaunchCommand"}},
-	}
-	for _, tt := range tests {
-		if err := validateTemplatePlaceholders(tt.name, tt.source, tt.data); err != nil {
-			t.Fatalf("validate %s: %v", tt.name, err)
+	names := []string{"active goal continuation", "ordinary goal nudge", "shared guidance"}
+	data := []any{activeGoalContinuationTemplateData{GoalText: "goal", SharedGuidance: guidance}, goalNudgeTemplateData{Objective: "goal", SharedGuidance: guidance}, guidanceData}
+	wantFields := [][]string{{"GoalText", "SharedGuidance"}, {"Objective", "SharedGuidance"}, {"LaunchCommand"}}
+	sources := []string{ActiveGoalContinuationPrompt, GoalNudgePrompt, GoalContinuationGuidancePrompt}
+	for index, name := range names {
+		if err := validateTemplatePlaceholders(name, sources[index], data[index]); err != nil {
+			t.Fatalf("validate %s: %v", name, err)
 		}
-		tmpl := template.Must(template.New(tt.name).Parse(tt.source))
+		tmpl := template.Must(template.New(name).Parse(sources[index]))
 		var fields []string
 		walkRootFieldIdents(tmpl.Root, func(field string) bool { fields = append(fields, field); return true })
-		if !reflect.DeepEqual(fields, tt.wantFields) {
-			t.Fatalf("%s fields = %#v, want %#v", tt.name, fields, tt.wantFields)
+		if !reflect.DeepEqual(fields, wantFields[index]) {
+			t.Fatalf("%s fields = %#v, want %#v", name, fields, wantFields[index])
 		}
 	}
 }

@@ -23,6 +23,8 @@ type exclusiveStepReservation = struct{ Kind exclusiveStepReservationKind }
 type exclusiveStepLifecycle interface {
 	Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
 	RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
+	AcquireReservation(reservation *exclusiveStepReservation) error
+	ReleaseReservation(reservation *exclusiveStepReservation)
 	Interrupt() error
 	InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error)
 	IsBusy() bool

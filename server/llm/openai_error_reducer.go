@@ -301,8 +301,7 @@ func classifyOpenAIUnifiedErrorCode(statusCode int, providerCode string) Unified
 		"max_context_length_exceeded",
 		"token_limit_exceeded",
 		"prompt_too_long",
-		"input_too_long",
-		"prefill_memory_exceeded":
+		"input_too_long":
 		return UnifiedErrorCodeContextLengthOverflow
 	default:
 		return UnifiedErrorCodeUnknown

@@ -34,7 +34,11 @@ func (s *blockingBackgroundStepLifecycle) RunNext(ctx context.Context, options e
 	return s.Run(ctx, options, fn)
 }
 
-func (s *blockingBackgroundStepLifecycle) Interrupt() error { return nil }
+func (s *blockingBackgroundStepLifecycle) AcquireReservation(*exclusiveStepReservation) error {
+	return nil
+}
+func (s *blockingBackgroundStepLifecycle) ReleaseReservation(*exclusiveStepReservation) {}
+func (s *blockingBackgroundStepLifecycle) Interrupt() error                             { return nil }
 func (s *blockingBackgroundStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunSnapshot, error) {
 	return nil, nil
 }

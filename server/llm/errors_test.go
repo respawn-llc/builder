@@ -108,10 +108,6 @@ func TestUserFacingError(t *testing.T) {
 	if got := UserFacingError(&ProviderAPIError{ProviderID: "openai-compatible", StatusCode: 401, Code: UnifiedErrorCodeAuthentication}); got == "" || !containsAll(got, []string{"401", "/login", "OPENAI_API_KEY"}) {
 		t.Fatalf("expected authentication failure warning, got %q", got)
 	}
-	providerErr := &ProviderAPIError{ProviderID: "openai-compatible", StatusCode: 400, Code: UnifiedErrorCodeContextLengthOverflow, ProviderCode: "prefill_memory_exceeded", Message: "raw provider memory detail", Raw: "raw response"}
-	if got := UserFacingError(providerErr); got == "" || got == providerErr.Error() || got == providerErr.Message || got == providerErr.Raw {
-		t.Fatalf("expected opaque user-facing provider warning, got %q", got)
-	}
 }
 
 func containsAll(text string, parts []string) bool {

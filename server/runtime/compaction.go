@@ -91,11 +91,16 @@ func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall l
 }
 
 func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
-	return c.compactContext(ctx, compactionModeManual, args, true, onActive)
+	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
+	if err := c.steps.AcquireReservation(reservation); err != nil {
+		return session.CommitReceipt{}, err
+	}
+	defer c.steps.ReleaseReservation(reservation)
+	return c.compactContext(ctx, compactionModeManual, args, true, reservation, onActive)
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
-	return c.compactContext(ctx, compactionModeManual, "", false, onActive)
+	return c.compactContext(ctx, compactionModeManual, "", false, nil, onActive)
 }
 
 func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {
@@ -121,7 +126,7 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, args string, includeManualCarryover bool, onActive func()) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, args string, includeManualCarryover bool, reservation *exclusiveStepReservation, onActive func()) (session.CommitReceipt, error) {
 	e := c.engine
 	activeKind := ActiveKindPreSubmitCompaction
 	if includeManualCarryover {
@@ -130,10 +135,6 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 	e.pauseQueuedUserAutoDrain()
 	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
-	var reservation *exclusiveStepReservation
-	if includeManualCarryover {
-		reservation = &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
-	}
 	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
 		if onActive != nil {
 			onActive()

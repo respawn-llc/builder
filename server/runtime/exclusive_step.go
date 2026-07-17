@@ -26,12 +26,12 @@ type defaultExclusiveStepLifecycle struct {
 	engine     *Engine
 	background backgroundNoticeScheduler
 
-	mu                  sync.Mutex
-	active              *exclusiveRunState
-	nextWaiters         []*exclusiveStepWaiter
-	runSeq              uint64
-	terminalPublishing  bool
-	terminalReservation *exclusiveStepReservation
+	mu                 sync.Mutex
+	active             *exclusiveRunState
+	nextWaiters        []*exclusiveStepWaiter
+	heldReservation    *exclusiveStepReservation
+	runSeq             uint64
+	terminalPublishing bool
 }
 
 type exclusiveStepWaiter struct {
@@ -58,6 +58,28 @@ func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusi
 
 func (s *defaultExclusiveStepLifecycle) RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
 	return s.run(ctx, options, true, fn)
+}
+
+func (s *defaultExclusiveStepLifecycle) AcquireReservation(reservation *exclusiveStepReservation) error {
+	if reservation == nil || reservation.Kind != exclusiveStepReservationManualCompaction {
+		return errors.New("exclusive step reservation is invalid")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reservationPendingLocked(reservation) {
+		return ErrExclusiveStepReservationPending
+	}
+	s.heldReservation = reservation
+	return nil
+}
+
+func (s *defaultExclusiveStepLifecycle) ReleaseReservation(reservation *exclusiveStepReservation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if reservation == nil || s.heldReservation != reservation {
+		panic("exclusive step reservation release does not match the held reservation")
+	}
+	s.heldReservation = nil
 }
 
 func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusiveStepOptions, waitForNext bool, fn func(stepCtx context.Context, stepID string) error) (err error) {
@@ -351,21 +373,7 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 }
 
 func (s *defaultExclusiveStepLifecycle) reservationPendingLocked(reservation *exclusiveStepReservation) bool {
-	if reservation == nil {
-		return false
-	}
-	if s.active != nil && s.active.reservation != nil && s.active.reservation.Kind == reservation.Kind {
-		return true
-	}
-	if s.terminalReservation != nil && s.terminalReservation.Kind == reservation.Kind {
-		return true
-	}
-	for _, waiter := range s.nextWaiters {
-		if waiter.reservation != nil && waiter.reservation.Kind == reservation.Kind {
-			return true
-		}
-	}
-	return false
+	return reservation != nil && s.heldReservation != nil && s.heldReservation != reservation && s.heldReservation.Kind == reservation.Kind
 }
 
 func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWaiter) bool {
@@ -412,7 +420,6 @@ func (s *defaultExclusiveStepLifecycle) end() {
 
 func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 	s.mu.Lock()
-	s.terminalReservation = s.active.reservation
 	s.active = nil
 	s.terminalPublishing = true
 	s.mu.Unlock()
@@ -420,7 +427,7 @@ func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 
 func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 	s.mu.Lock()
-	s.terminalReservation, s.terminalPublishing = nil, false
+	s.terminalPublishing = false
 	s.notifyNextWaiterLocked()
 	s.mu.Unlock()
 }

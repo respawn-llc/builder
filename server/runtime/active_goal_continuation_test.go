@@ -13,33 +13,23 @@ import (
 )
 
 func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
-	first := activeGoalContinuationTestMessage("preserved continuation")
+	first := llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeActiveGoalContinuation, Content: "preserved continuation", CompactContent: clientui.GoalNudgeCompactLabel}
 	second := first
 	second.Content = "duplicate continuation"
-	result, err := newMetaContextBuilder(t.TempDir(), "", "", config.SkillPolicy{}, time.Unix(0, 0)).Build(metaContextBuildOptions{
-		ExistingMessages: []llm.Message{
-			first, second,
-			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorktreeMode, Content: "worktree"},
-			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, Content: "workflow"},
-			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless"},
-			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: "environment"},
-		},
-		ActiveGoal: &session.GoalState{Objective: "new mutable goal", Status: session.GoalStatusActive},
-	})
+	result, err := newMetaContextBuilder(t.TempDir(), "", "", config.SkillPolicy{}, time.Unix(0, 0)).Build(metaContextBuildOptions{ExistingMessages: []llm.Message{
+		first, second,
+		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorktreeMode, Content: "worktree"},
+		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, Content: "workflow"},
+		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless"},
+		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: "environment"},
+	}, ActiveGoal: &session.GoalState{Objective: "new mutable goal", Status: session.GoalStatusActive}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(result.ActiveGoalContinuation, []llm.Message{first}) {
 		t.Fatalf("active-goal continuation slot = %+v, want first existing message preserved", result.ActiveGoalContinuation)
 	}
-	assertMessageTypesInOrder(t, result.OrderedMetaMessages(),
-		llm.MessageTypeEnvironment,
-		llm.MessageTypeHeadlessMode,
-		llm.MessageTypeActiveGoalContinuation,
-		llm.MessageTypeWorkflowMode,
-		llm.MessageTypeWorktreeMode,
-	)
-
+	assertMessageTypesInOrder(t, result.OrderedMetaMessages(), llm.MessageTypeEnvironment, llm.MessageTypeHeadlessMode, llm.MessageTypeActiveGoalContinuation, llm.MessageTypeWorkflowMode, llm.MessageTypeWorktreeMode)
 	meta, ordinary := splitMetaContextMessages([]llm.Message{first, {Role: llm.RoleUser, Content: "request"}})
 	if !reflect.DeepEqual(meta, []llm.Message{first}) {
 		t.Fatalf("classified meta context = %+v, want active-goal continuation", meta)
@@ -50,47 +40,33 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 }
 
 func TestReviewerReconstructionPreservesActiveGoalContinuationBeforeBoundary(t *testing.T) {
-	continuation := activeGoalContinuationTestMessage("preserved active-goal continuation")
-	rebuilt, err := buildReviewerRequestMessagesWithBuilder(
-		[]llm.Message{continuation, {Role: llm.RoleUser, Content: "request"}},
-		newMetaContextBuilder(t.TempDir(), "test-model", "", config.SkillPolicy{}, time.Unix(0, 0)),
-		false,
-	)
+	continuation := llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeActiveGoalContinuation, Content: "preserved active-goal continuation", CompactContent: clientui.GoalNudgeCompactLabel}
+	rebuilt, err := buildReviewerRequestMessagesWithBuilder([]llm.Message{continuation, {Role: llm.RoleUser, Content: "request"}}, newMetaContextBuilder(t.TempDir(), "test-model", "", config.SkillPolicy{}, time.Unix(0, 0)), false)
 	if err != nil {
 		t.Fatalf("build reviewer request: %v", err)
 	}
-	continuationIndex, boundaryIndex := -1, -1
+	continuationIndex, boundaryIndex, continuationCount := -1, -1, 0
 	for index, message := range rebuilt {
 		if message.MessageType == llm.MessageTypeActiveGoalContinuation {
-			if continuationIndex >= 0 {
-				t.Fatalf("reviewer reconstruction duplicated active-goal continuation: %+v", rebuilt)
-			}
 			continuationIndex = index
+			continuationCount++
 		}
 		if message.Role == llm.RoleDeveloper && message.MessageType == "" && message.Content == reviewerMetaBoundaryMessage {
 			boundaryIndex = index
 		}
 	}
-	if continuationIndex < 0 || boundaryIndex <= continuationIndex || !reflect.DeepEqual(rebuilt[continuationIndex], continuation) {
+	if continuationCount != 1 || continuationIndex < 0 || boundaryIndex <= continuationIndex || !reflect.DeepEqual(rebuilt[continuationIndex], continuation) {
 		t.Fatalf("reviewer continuation/boundary = %d/%d in %+v", continuationIndex, boundaryIndex, rebuilt)
 	}
 }
 
 func TestActiveGoalContinuationProjectsAsDetailDeveloperContext(t *testing.T) {
-	entries := VisibleChatEntriesFromMessage(activeGoalContinuationTestMessage("active-goal continuation"))
+	entries := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeActiveGoalContinuation, Content: "active-goal continuation", CompactContent: clientui.GoalNudgeCompactLabel})
 	if len(entries) != 1 {
 		t.Fatalf("entries = %+v, want one active-goal continuation row", entries)
 	}
 	entry := entries[0]
-	if entry.Visibility != transcript.EntryVisibilityDetail ||
-		entry.Role != string(transcript.EntryRoleDeveloperContext) ||
-		entry.MessageType != llm.MessageTypeActiveGoalContinuation ||
-		entry.CondensedText != clientui.GoalNudgeCompactLabel ||
-		entry.CompactLabel != clientui.GoalNudgeCompactLabel {
+	if entry.Visibility != transcript.EntryVisibilityDetail || entry.Role != string(transcript.EntryRoleDeveloperContext) || entry.MessageType != llm.MessageTypeActiveGoalContinuation || entry.CondensedText != clientui.GoalNudgeCompactLabel || entry.CompactLabel != clientui.GoalNudgeCompactLabel {
 		t.Fatalf("active-goal continuation projection = %+v", entry)
 	}
-}
-
-func activeGoalContinuationTestMessage(content string) llm.Message {
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeActiveGoalContinuation, Content: content, CompactContent: clientui.GoalNudgeCompactLabel}
 }

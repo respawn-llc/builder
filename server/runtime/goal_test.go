@@ -532,11 +532,8 @@ func TestGoalTurnAppendsNudgePromptAndRunsModel(t *testing.T) {
 	if got := messages[1].Content; got != prompts.RenderGoalNudgePrompt("ship goal mode", "active") {
 		t.Fatalf("nudge prompt = %q", got)
 	}
-	if clientui.GoalNudgeCompactLabel == "" {
-		t.Fatal("goal nudge compact label must not be empty")
-	}
-	if got := messages[1].CompactContent; got != clientui.GoalNudgeCompactLabel {
-		t.Fatalf("nudge compact content = %q, want shared label %q", got, clientui.GoalNudgeCompactLabel)
+	if got := messages[1].CompactContent; clientui.GoalNudgeCompactLabel == "" || got != clientui.GoalNudgeCompactLabel {
+		t.Fatalf("nudge compact content = %q, want non-empty shared label %q", got, clientui.GoalNudgeCompactLabel)
 	}
 }
 
