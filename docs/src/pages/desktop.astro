@@ -1,26 +1,27 @@
 ---
+import ThemeProvider from '@astrojs/starlight/components/ThemeProvider.astro';
+
+import '../styles/custom.css';
+
 const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
     <title>Downloading Kent Desktop | Kent</title>
+    <ThemeProvider />
   </head>
   <body>
-    <main>
-      <h1>Downloading Kent Desktop</h1>
-      <p id="status">Resolving the latest desktop download...</p>
-      <p>
-        If the download does not start, open the
-        <a href={releasePageUrl}>latest Kent release</a>.
-      </p>
+    <main id="download-confirmation" hidden>
+      <p>Your download has started. You can close this tab.</p>
+      <a href={releasePageUrl}>Open the latest release</a>
     </main>
     <script>
-      const statusElement = document.getElementById('status');
+      const confirmationElement = document.getElementById('download-confirmation');
       const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
       const desktopAssets = [
         {
@@ -108,16 +109,70 @@ const releasePageUrl = 'https://github.com/respawn-llc/kent/releases/latest';
           throw new Error(`Latest Kent release does not contain ${assetRule.name}`);
         }
 
+        if (!(confirmationElement instanceof HTMLElement)) {
+          throw new Error('Kent Desktop download confirmation surface is unavailable');
+        }
+        confirmationElement.hidden = false;
         window.location.replace(asset.browser_download_url);
       }
 
       redirectToLatestDesktopDownload().catch((error) => {
         console.error(error);
-        if (statusElement) {
-          statusElement.textContent = 'Could not start the download automatically.';
-        }
-        window.location.assign(releasePageUrl);
+        window.location.replace(releasePageUrl);
       });
     </script>
   </body>
 </html>
+
+<style>
+  html,
+  body {
+    min-block-size: 100%;
+    background: var(--sl-color-bg);
+  }
+
+  body {
+    box-sizing: border-box;
+    min-block-size: 100vh;
+    min-block-size: 100svh;
+    margin: 0;
+    display: grid;
+    place-items: center;
+    color: var(--sl-color-text);
+    font-family: var(--sl-font);
+  }
+
+  main {
+    max-inline-size: var(--sl-content-width);
+    padding: var(--sl-text-2xl);
+    text-align: center;
+    animation: confirmation-in var(--kent-motion-fast) both;
+  }
+
+  main[hidden] {
+    display: none;
+  }
+
+  p {
+    margin: 0;
+    line-height: var(--sl-line-height);
+  }
+
+  a {
+    display: inline-block;
+    margin-block-start: var(--sl-text-base);
+    color: var(--sl-color-text-accent);
+    font-size: var(--sl-text-code-sm);
+    text-underline-offset: 0.2em;
+  }
+
+  @keyframes confirmation-in {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+</style>
