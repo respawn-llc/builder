@@ -133,6 +133,35 @@ func startServeTestServer(t *testing.T, request Request, authHandler envAuthHand
 	return server
 }
 
+func startServingTestServer(t *testing.T, server *ServeServer) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		releaseServeTestPortForConfig(server.Config())
+		errCh <- server.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) {
+			t.Errorf("Serve error = %v, want context canceled", serveErr)
+		}
+	})
+}
+
+func waitForServeResponse(t *testing.T, httpClient *http.Client, url string) *http.Response {
+	t.Helper()
+	var response *http.Response
+	var err error
+	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
+		response, err = httpClient.Get(url)
+		return err == nil
+	}) {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	return response
+}
+
 func configureServeTestServerPort(t *testing.T) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -256,13 +285,7 @@ func TestServeExposesConfiguredHealthEndpoints(t *testing.T) {
 	onboarding := noopOnboarding
 
 	server := startServeTestServer(t, request, authHandler, onboarding)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		releaseServeTestPortForConfig(server.Config())
-		errCh <- server.Serve(ctx)
-	}()
+	startServingTestServer(t, server)
 
 	loadCfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
@@ -270,13 +293,7 @@ func TestServeExposesConfiguredHealthEndpoints(t *testing.T) {
 	}
 	healthURL := config.ServerHTTPBaseURL(loadCfg) + protocol.HealthPath
 	readyURL := config.ServerHTTPBaseURL(loadCfg) + protocol.ReadinessPath
-	var healthResp *http.Response
-	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		healthResp, err = http.Get(healthURL)
-		return err == nil
-	}) {
-		t.Fatalf("GET health: %v", err)
-	}
+	healthResp := waitForServeResponse(t, http.DefaultClient, healthURL)
 	defer func() { _ = healthResp.Body.Close() }()
 	if healthResp.StatusCode != http.StatusOK {
 		t.Fatalf("health status = %d, want 200", healthResp.StatusCode)
@@ -298,10 +315,6 @@ func TestServeExposesConfiguredHealthEndpoints(t *testing.T) {
 		t.Fatalf("readiness status = %d, want 200", readyResp.StatusCode)
 	}
 
-	cancel()
-	if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) {
-		t.Fatalf("Serve error = %v, want context canceled", serveErr)
-	}
 }
 
 func TestServeExposesDerivedLocalUnixSocketAndCleansStalePath(t *testing.T) {
@@ -334,19 +347,7 @@ func TestServeExposesDerivedLocalUnixSocketAndCleansStalePath(t *testing.T) {
 	}
 
 	server := startServeTestServer(t, request, authHandler, onboarding)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		releaseServeTestPortForConfig(server.Config())
-		errCh <- server.Serve(ctx)
-	}()
-	defer func() {
-		cancel()
-		if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) {
-			t.Fatalf("Serve error = %v, want context canceled", serveErr)
-		}
-	}()
+	startServingTestServer(t, server)
 
 	deadline := time.Now().Add(5 * time.Second)
 	var socketErr error
@@ -454,37 +455,15 @@ func TestServeDegradesToTCPWhenDerivedLocalSocketFails(t *testing.T) {
 	t.Cleanup(func() { localSocketListener = originalLocalSocketListener })
 
 	server := startServeTestServer(t, request, authHandler, onboarding)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		releaseServeTestPortForConfig(server.Config())
-		errCh <- server.Serve(ctx)
-	}()
-	defer func() {
-		cancel()
-		if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) {
-			t.Fatalf("Serve error = %v, want context canceled", serveErr)
-		}
-	}()
+	startServingTestServer(t, server)
 
 	loadCfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
 	healthURL := config.ServerHTTPBaseURL(loadCfg) + protocol.HealthPath
-	var healthErr error
-	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		var resp *http.Response
-		resp, healthErr = http.Get(healthURL)
-		if healthErr == nil {
-			_ = resp.Body.Close()
-			return true
-		}
-		return false
-	}) {
-		t.Fatalf("GET health: %v", healthErr)
-	}
+	healthResp := waitForServeResponse(t, http.DefaultClient, healthURL)
+	_ = healthResp.Body.Close()
 
 	tcpRemote, err := client.DialRemoteURL(context.Background(), config.ServerRPCURL(loadCfg))
 	if err != nil {
@@ -501,13 +480,7 @@ func TestServeStartsUnauthenticatedAndReportsBootstrapReadiness(t *testing.T) {
 	onboarding := noopOnboarding
 
 	server := startServeTestServer(t, request, authHandler, onboarding)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		releaseServeTestPortForConfig(server.Config())
-		errCh <- server.Serve(ctx)
-	}()
+	startServingTestServer(t, server)
 
 	loadCfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
@@ -515,13 +488,7 @@ func TestServeStartsUnauthenticatedAndReportsBootstrapReadiness(t *testing.T) {
 	}
 	healthURL := config.ServerHTTPBaseURL(loadCfg) + protocol.HealthPath
 	readyURL := config.ServerHTTPBaseURL(loadCfg) + protocol.ReadinessPath
-	var healthResp *http.Response
-	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		healthResp, err = http.Get(healthURL)
-		return err == nil
-	}) {
-		t.Fatalf("GET health: %v", err)
-	}
+	healthResp := waitForServeResponse(t, http.DefaultClient, healthURL)
 	defer func() { _ = healthResp.Body.Close() }()
 	if healthResp.StatusCode != http.StatusOK {
 		t.Fatalf("health status = %d, want 200", healthResp.StatusCode)
@@ -550,10 +517,6 @@ func TestServeStartsUnauthenticatedAndReportsBootstrapReadiness(t *testing.T) {
 		t.Fatalf("unexpected readiness payload: %+v", readyBody)
 	}
 
-	cancel()
-	if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) {
-		t.Fatalf("Serve error = %v, want context canceled", serveErr)
-	}
 }
 
 func TestServeReadinessDoesNotRequireAuthForNonFirstPartyProvider(t *testing.T) {
@@ -578,19 +541,7 @@ openai_base_url = "http://127.0.0.1:11434/v1"
 		envAuthHandler{lookupEnv: func(string) string { return "" }},
 		noopOnboarding,
 	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		releaseServeTestPortForConfig(server.Config())
-		errCh <- server.Serve(ctx)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) {
-			t.Errorf("Serve error = %v, want context canceled", serveErr)
-		}
-	})
+	startServingTestServer(t, server)
 
 	loadCfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
@@ -598,16 +549,7 @@ openai_base_url = "http://127.0.0.1:11434/v1"
 	}
 	readyURL := config.ServerHTTPBaseURL(loadCfg) + protocol.ReadinessPath
 	client := &http.Client{Timeout: time.Second}
-	var (
-		resp       *http.Response
-		requestErr error
-	)
-	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		resp, requestErr = client.Get(readyURL)
-		return requestErr == nil
-	}) {
-		t.Fatalf("GET ready: %v", requestErr)
-	}
+	resp := waitForServeResponse(t, client, readyURL)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("readiness status = %d, want 200", resp.StatusCode)
@@ -713,37 +655,15 @@ model = "blocked-model"
 	registerServeWorkspace(t, workspace)
 
 	server := startServeTestServer(t, request, authHandler, onboarding)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		releaseServeTestPortForConfig(server.Config())
-		errCh <- server.Serve(ctx)
-	}()
-	defer func() {
-		cancel()
-		if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) {
-			t.Fatalf("Serve error = %v, want context canceled", serveErr)
-		}
-	}()
+	startServingTestServer(t, server)
 
 	loadCfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
 	healthURL := config.ServerHTTPBaseURL(loadCfg) + protocol.HealthPath
-	var healthErr error
-	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		var resp *http.Response
-		resp, healthErr = http.Get(healthURL)
-		if healthErr == nil {
-			_ = resp.Body.Close()
-			return true
-		}
-		return false
-	}) {
-		t.Fatalf("GET health: %v", healthErr)
-	}
+	healthResp := waitForServeResponse(t, http.DefaultClient, healthURL)
+	_ = healthResp.Body.Close()
 
 	remote, err := client.DialConfiguredRemote(context.Background(), loadCfg)
 	if err != nil {
