@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -70,6 +71,8 @@ func (s *defaultExclusiveStepLifecycle) AcquireReservation(reservation *exclusiv
 		return ErrExclusiveStepReservationPending
 	}
 	s.heldReservation = reservation
+	s.nextWaiters = append(s.nextWaiters, &exclusiveStepWaiter{ready: make(chan struct{}), reservation: reservation})
+	s.notifyNextWaiterLocked()
 	return nil
 }
 
@@ -79,7 +82,12 @@ func (s *defaultExclusiveStepLifecycle) ReleaseReservation(reservation *exclusiv
 	if reservation == nil || s.heldReservation != reservation {
 		panic("exclusive step reservation release does not match the held reservation")
 	}
+	if waiter := s.reservationWaiterLocked(reservation); waiter != nil {
+		index := slices.Index(s.nextWaiters, waiter)
+		s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
+	}
 	s.heldReservation = nil
+	s.notifyNextWaiterLocked()
 }
 
 func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusiveStepOptions, waitForNext bool, fn func(stepCtx context.Context, stepID string) error) (err error) {
@@ -275,13 +283,20 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 		s.mu.Unlock()
 		return nil, "", ErrExclusiveStepReservationPending
 	}
-	if s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0 {
+	if options.Reservation == nil && s.active == nil && s.heldReservation == nil && !s.terminalPublishing && len(s.nextWaiters) == 0 {
 		stepCtx, stepID := s.activateLocked(ctx, options)
 		s.mu.Unlock()
 		return s.publishStepBegan(options, stepCtx, stepID)
 	}
-	waiter := &exclusiveStepWaiter{ready: make(chan struct{}), reservation: options.Reservation}
-	s.nextWaiters = append(s.nextWaiters, waiter)
+	waiter := s.reservationWaiterLocked(options.Reservation)
+	if waiter == nil {
+		if options.Reservation != nil {
+			s.mu.Unlock()
+			return nil, "", errors.New("exclusive step reservation has no queued boundary token")
+		}
+		waiter = &exclusiveStepWaiter{ready: make(chan struct{})}
+		s.nextWaiters = append(s.nextWaiters, waiter)
+	}
 	s.mu.Unlock()
 
 	select {
@@ -376,21 +391,35 @@ func (s *defaultExclusiveStepLifecycle) reservationPendingLocked(reservation *ex
 	return reservation != nil && s.heldReservation != nil && s.heldReservation != reservation && s.heldReservation.Kind == reservation.Kind
 }
 
+func (s *defaultExclusiveStepLifecycle) reservationWaiterLocked(reservation *exclusiveStepReservation) *exclusiveStepWaiter {
+	for _, waiter := range s.nextWaiters {
+		if reservation != nil && waiter.reservation == reservation {
+			return waiter
+		}
+	}
+	return nil
+}
+
 func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWaiter) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for index, candidate := range s.nextWaiters {
-		if candidate == waiter {
-			s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
-			s.notifyNextWaiterLocked()
-			return s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0
-		}
+	if waiter.reservation != nil && waiter.reservation == s.heldReservation {
+		return false
 	}
-	return false
+	index := slices.Index(s.nextWaiters, waiter)
+	removed := index >= 0
+	if removed {
+		s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
+	}
+	s.notifyNextWaiterLocked()
+	return removed && s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0
 }
 
 func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
 	if s.active != nil || s.terminalPublishing || len(s.nextWaiters) == 0 {
+		return
+	}
+	if s.heldReservation != nil && s.reservationWaiterLocked(s.heldReservation) == nil {
 		return
 	}
 	select {

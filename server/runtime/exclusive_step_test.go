@@ -229,6 +229,14 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil }); !errors.Is(err, ErrAgentBusy) {
 		t.Fatalf("ordinary run with held reservation err = %v, want busy", err)
 	}
+	maintenanceStarted := make(chan struct{})
+	maintenanceDone := make(chan error, 1)
+	go func() {
+		maintenanceDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
+			close(maintenanceStarted)
+			return nil
+		})
+	}()
 	releaseStep := make(chan struct{})
 	firstDone := make(chan error, 1)
 	go func() {
@@ -267,9 +275,14 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	if !errors.Is(err, ErrExclusiveStepReservationPending) {
 		t.Fatalf("duplicate reservation after terminal publication err = %v, want pending rejection", err)
 	}
+	select {
+	case <-maintenanceStarted:
+		t.Fatal("non-holder RunNext started before the reservation lease was released")
+	case <-time.After(50 * time.Millisecond):
+	}
 	lifecycle.ReleaseReservation(reservation)
-	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil }); err != nil {
-		t.Fatalf("successor after terminal publication: %v", err)
+	if err := <-maintenanceDone; err != nil {
+		t.Fatalf("maintenance after reservation release: %v", err)
 	}
 }
 
