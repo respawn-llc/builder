@@ -59,6 +59,7 @@ describe("BoardRoute live refresh", () => {
         event: {
           action: "linked",
           changed_ids: ["workflow-link-1"],
+          occurred_at_unix_ms: 1,
           resource: "workflow_link",
           workflow_id: "workflow-1",
         },
@@ -100,6 +101,7 @@ describe("BoardRoute live refresh", () => {
         event: {
           action: "deleted",
           changed_ids: ["task-1"],
+          occurred_at_unix_ms: 1,
           project_id: "project-1",
           resource: "task",
           workflow_id: "workflow-1",

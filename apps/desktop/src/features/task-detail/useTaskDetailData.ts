@@ -28,8 +28,8 @@ export function useTaskDetailLiveRefresh(taskID: string, projectID: string, enab
       return;
     }
     const subscription = api.subscribeProject(projectID, {
-      onEvent(params) {
-        if (!workflowProjectEventAffectsTask(params, taskID)) {
+      onEvent(event) {
+        if (!workflowProjectEventAffectsTask(event, taskID)) {
           return;
         }
         void Promise.all([

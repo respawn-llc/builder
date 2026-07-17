@@ -52,6 +52,7 @@ import type {
 } from "./models";
 import type { SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEventHandler } from "./worktreeSetup";
+import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 
 export type ApiConnectionSource = Readonly<{
   snapshot(): ConnectionSnapshot;
@@ -60,13 +61,6 @@ export type ApiConnectionSource = Readonly<{
 
 export type ApiSubscription = Readonly<{
   close(): void;
-}>;
-
-export type ApiEventHandler = Readonly<{
-  onOpen?(): void;
-  onEvent(params: unknown): void;
-  onComplete(code: number, message: string): void;
-  onError(error: Error): void;
 }>;
 
 export interface ApiService {
@@ -141,8 +135,8 @@ export interface ApiService {
   deleteComment(commentID: string): Promise<void>;
   answerQuestion(input: QuestionAnswerInput): Promise<void>;
   listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]>;
-  subscribeProject(projectID: string, handler: ApiEventHandler): ApiSubscription;
-  subscribeWorkflow(workflowID: string, handler: ApiEventHandler): ApiSubscription;
+  subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
+  subscribeWorkflow(workflowID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): ApiSubscription;
   subscribeWorktreeSetup(
     setupOperationID: SetupOperationID,

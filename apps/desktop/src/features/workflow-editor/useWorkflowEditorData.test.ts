@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { WorkflowProjectEvent } from "@/api";
 import {
   shouldNotifyWorkflowEditorRefresh,
   shouldRefreshWorkflowDefinition,
@@ -11,42 +12,42 @@ describe("shouldRefreshWorkflowEditor", () => {
   it("refreshes workflow definition events for the open workflow only", () => {
     expect(
       shouldRefreshWorkflowEditor(
-        eventParams({ action: "node_updated", resource: "workflow", workflow_id: "workflow-1" }),
+        workflowEvent({ action: "node_updated", resource: "workflow", workflowID: "workflow-1" }),
         "project-1",
         "workflow-1",
       ),
     ).toBe(true);
     expect(
       shouldRefreshWorkflowEditor(
-        eventParams({ action: "updated", resource: "workflow", workflow_id: "workflow-1" }),
+        workflowEvent({ action: "updated", resource: "workflow", workflowID: "workflow-1" }),
         "project-1",
         "workflow-1",
       ),
     ).toBe(true);
     expect(
       shouldRefreshWorkflowEditor(
-        eventParams({ action: "graph_saved", resource: "workflow", workflow_id: "workflow-1" }),
+        workflowEvent({ action: "graph_saved", resource: "workflow", workflowID: "workflow-1" }),
         "project-1",
         "workflow-1",
       ),
     ).toBe(true);
     expect(
       shouldRefreshWorkflowEditor(
-        eventParams({ action: "deleted", resource: "workflow", workflow_id: "workflow-1" }),
+        workflowEvent({ action: "deleted", resource: "workflow", workflowID: "workflow-1" }),
         "",
         "workflow-1",
       ),
     ).toBe(true);
     expect(
       shouldRefreshWorkflowEditor(
-        eventParams({ action: "node_updated", resource: "workflow", workflow_id: "workflow-2" }),
+        workflowEvent({ action: "node_updated", resource: "workflow", workflowID: "workflow-2" }),
         "project-1",
         "workflow-1",
       ),
     ).toBe(false);
     expect(
       shouldRefreshWorkflowEditor(
-        eventParams({ action: "created", resource: "task", workflow_id: "workflow-1" }),
+        workflowEvent({ action: "created", resource: "task", workflowID: "workflow-1" }),
         "project-1",
         "workflow-1",
       ),
@@ -56,12 +57,12 @@ describe("shouldRefreshWorkflowEditor", () => {
   it("refreshes active project workflow-link events that may affect the open workflow", () => {
     expect(
       shouldRefreshWorkflowEditor(
-        eventParams({
+        workflowEvent({
           action: "unlinked",
-          changed_ids: ["link-1"],
-          project_id: "project-1",
+          changedIDs: ["link-1"],
+          projectID: "project-1",
           resource: "workflow_link",
-          workflow_id: "workflow-1",
+          workflowID: "workflow-1",
         }),
         "project-1",
         "workflow-1",
@@ -69,12 +70,12 @@ describe("shouldRefreshWorkflowEditor", () => {
     ).toBe(true);
     expect(
       shouldRefreshWorkflowEditor(
-        eventParams({
+        workflowEvent({
           action: "unlinked",
-          changed_ids: ["link-2"],
-          project_id: "project-1",
+          changedIDs: ["link-2"],
+          projectID: "project-1",
           resource: "workflow_link",
-          workflow_id: "workflow-2",
+          workflowID: "workflow-2",
         }),
         "project-1",
         "workflow-1",
@@ -82,11 +83,11 @@ describe("shouldRefreshWorkflowEditor", () => {
     ).toBe(false);
     expect(
       shouldRefreshWorkflowEditor(
-        eventParams({
+        workflowEvent({
           action: "unlinked",
-          project_id: "project-2",
+          projectID: "project-2",
           resource: "workflow_link",
-          workflow_id: "workflow-1",
+          workflowID: "workflow-1",
         }),
         "project-1",
         "workflow-1",
@@ -95,47 +96,47 @@ describe("shouldRefreshWorkflowEditor", () => {
   });
 
   it("separates workflow definition events from project workflow-link events", () => {
-    const workflowEvent = eventParams({
+    const definitionEvent = workflowEvent({
       action: "graph_saved",
       resource: "workflow",
-      workflow_id: "workflow-1",
+      workflowID: "workflow-1",
     });
-    const linkEvent = eventParams({
+    const linkEvent = workflowEvent({
       action: "default_changed",
-      changed_ids: ["link-1"],
-      project_id: "project-1",
+      changedIDs: ["link-1"],
+      projectID: "project-1",
       resource: "workflow_link",
-      workflow_id: "workflow-1",
+      workflowID: "workflow-1",
     });
 
-    expect(shouldRefreshWorkflowDefinition(workflowEvent, "workflow-1")).toBe(true);
+    expect(shouldRefreshWorkflowDefinition(definitionEvent, "workflow-1")).toBe(true);
     expect(shouldRefreshWorkflowDefinition(linkEvent, "workflow-1")).toBe(false);
-    expect(shouldRefreshWorkflowLink(workflowEvent, "project-1", "workflow-1")).toBe(false);
+    expect(shouldRefreshWorkflowLink(definitionEvent, "project-1", "workflow-1")).toBe(false);
     expect(shouldRefreshWorkflowLink(linkEvent, "project-1", "workflow-1")).toBe(true);
   });
 
   it("does not show workflow-updated feedback for workflow deletion refreshes", () => {
     expect(
       shouldNotifyWorkflowEditorRefresh(
-        eventParams({ action: "graph_saved", resource: "workflow", workflow_id: "workflow-1" }),
+        workflowEvent({ action: "graph_saved", resource: "workflow", workflowID: "workflow-1" }),
         "project-1",
         "workflow-1",
       ),
     ).toBe(true);
     expect(
       shouldNotifyWorkflowEditorRefresh(
-        eventParams({ action: "deleted", resource: "workflow", workflow_id: "workflow-1" }),
+        workflowEvent({ action: "deleted", resource: "workflow", workflowID: "workflow-1" }),
         "project-1",
         "workflow-1",
       ),
     ).toBe(false);
     expect(
       shouldNotifyWorkflowEditorRefresh(
-        eventParams({
+        workflowEvent({
           action: "unlinked",
-          project_id: "project-1",
+          projectID: "project-1",
           resource: "workflow_link",
-          workflow_id: "workflow-1",
+          workflowID: "workflow-1",
         }),
         "project-1",
         "workflow-1",
@@ -143,11 +144,11 @@ describe("shouldRefreshWorkflowEditor", () => {
     ).toBe(false);
     expect(
       shouldNotifyWorkflowEditorRefresh(
-        eventParams({
+        workflowEvent({
           action: "default_changed",
-          project_id: "project-1",
+          projectID: "project-1",
           resource: "workflow_link",
-          workflow_id: "workflow-1",
+          workflowID: "workflow-1",
         }),
         "project-1",
         "workflow-1",
@@ -156,6 +157,14 @@ describe("shouldRefreshWorkflowEditor", () => {
   });
 });
 
-function eventParams(event: Readonly<Record<string, unknown>>) {
-  return { event };
+function workflowEvent(overrides: Partial<WorkflowProjectEvent>): WorkflowProjectEvent {
+  return {
+    action: "updated",
+    changedIDs: [],
+    occurredAtUnixMs: 1,
+    projectID: null,
+    resource: "workflow",
+    workflowID: null,
+    ...overrides,
+  };
 }

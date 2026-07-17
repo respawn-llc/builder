@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
-import type { ProjectBinding } from "@/api";
+import type { ProjectBinding, WorkflowProjectEvent } from "@/api";
 import { errorMessage } from "@/api";
 import type { AppServices } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
@@ -61,8 +61,8 @@ export function useGlobalAttentionEvents() {
         void queryClient.invalidateQueries({ queryKey: queryKeys.allAttention, refetchType: "active" });
       });
     };
-    const refreshQuestionTask = (params: unknown) => {
-      const taskID = workflowProjectQuestionTaskID(params);
+    const refreshQuestionTask = (event: WorkflowProjectEvent) => {
+      const taskID = workflowProjectQuestionTaskID(event);
       if (taskID === null) {
         return;
       }
@@ -74,9 +74,9 @@ export function useGlobalAttentionEvents() {
       onOpen() {
         refreshAttention();
       },
-      onEvent(params) {
-        refreshQuestionTask(params);
-        if (workflowProjectEventCanChangeAttention(params)) {
+      onEvent(event) {
+        refreshQuestionTask(event);
+        if (workflowProjectEventCanChangeAttention(event)) {
           refreshAttention();
         }
       },

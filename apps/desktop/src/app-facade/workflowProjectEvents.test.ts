@@ -1,64 +1,41 @@
 import { describe, expect, it } from "vitest";
 
+import type { WorkflowProjectEvent } from "@/api";
 import {
-  workflowProjectEvent,
   workflowProjectEventAffectsTask,
   workflowProjectEventCanChangeAttention,
   workflowProjectQuestionTaskID,
 } from "./workflowProjectEvents";
 
-describe("workflowProjectEvent", () => {
-  it("parses workflow project event params", () => {
-    expect(
-      workflowProjectEvent({
-        event: {
-          action: "question_waiting",
-          changed_ids: ["task-1", "run-1", "ask-1"],
-          project_id: "project-1",
-          resource: "task",
-          workflow_id: "workflow-1",
-        },
-      }),
-    ).toEqual({
-      action: "question_waiting",
-      changedIDs: ["task-1", "run-1", "ask-1"],
-      projectID: "project-1",
-      resource: "task",
-      workflowID: "workflow-1",
-    });
-  });
-
+describe("workflow project event helpers", () => {
   it("recognizes resources that can affect attention", () => {
-    expect(workflowProjectEventCanChangeAttention({ event: { resource: "task" } })).toBe(true);
-    expect(workflowProjectEventCanChangeAttention({ event: { resource: "workflow_link" } })).toBe(true);
-    expect(workflowProjectEventCanChangeAttention({ event: { resource: "runtime_log" } })).toBe(false);
-    expect(workflowProjectEventCanChangeAttention({})).toBe(false);
+    expect(workflowProjectEventCanChangeAttention(workflowEvent({ resource: "task" }))).toBe(true);
+    expect(workflowProjectEventCanChangeAttention(workflowEvent({ resource: "workflow_link" }))).toBe(true);
+    expect(workflowProjectEventCanChangeAttention(workflowEvent({ resource: "runtime_log" }))).toBe(false);
   });
 
   it("extracts task ids from question lifecycle events", () => {
     expect(
-      workflowProjectQuestionTaskID({
-        event: {
+      workflowProjectQuestionTaskID(
+        workflowEvent({
           action: "question_waiting",
-          changed_ids: ["task-1", "run-1", "ask-1"],
+          changedIDs: ["task-1", "run-1", "ask-1"],
           resource: "task",
-        },
-      }),
+        }),
+      ),
     ).toBe("task-1");
     expect(
-      workflowProjectQuestionTaskID({
-        event: { action: "completed", changed_ids: ["task-1"], resource: "task" },
-      }),
+      workflowProjectQuestionTaskID(
+        workflowEvent({ action: "completed", changedIDs: ["task-1"], resource: "task" }),
+      ),
     ).toBeNull();
     expect(
-      workflowProjectQuestionTaskID({
-        event: { action: "question_waiting", changed_ids: [], resource: "task" },
-      }),
+      workflowProjectQuestionTaskID(
+        workflowEvent({ action: "question_waiting", changedIDs: [], resource: "task" }),
+      ),
     ).toBeNull();
   });
-});
 
-describe("workflowProjectEventAffectsTask", () => {
   it("matches any task-resource event whose changed ids include the task", () => {
     const cases = [
       "created",
@@ -72,7 +49,7 @@ describe("workflowProjectEventAffectsTask", () => {
     for (const action of cases) {
       expect(
         workflowProjectEventAffectsTask(
-          { event: { action, changed_ids: ["task-1", "run-1"], resource: "task" } },
+          workflowEvent({ action, changedIDs: ["task-1", "run-1"], resource: "task" }),
           "task-1",
         ),
       ).toBe(true);
@@ -81,14 +58,34 @@ describe("workflowProjectEventAffectsTask", () => {
 
   it("ignores events for other tasks, other resources, or a blank task id", () => {
     expect(
-      workflowProjectEventAffectsTask({ event: { changed_ids: ["task-2"], resource: "task" } }, "task-1"),
+      workflowProjectEventAffectsTask(
+        workflowEvent({ changedIDs: ["task-2"], resource: "task" }),
+        "task-1",
+      ),
     ).toBe(false);
     expect(
-      workflowProjectEventAffectsTask({ event: { changed_ids: ["task-1"], resource: "workflow" } }, "task-1"),
+      workflowProjectEventAffectsTask(
+        workflowEvent({ changedIDs: ["task-1"], resource: "workflow" }),
+        "task-1",
+      ),
     ).toBe(false);
     expect(
-      workflowProjectEventAffectsTask({ event: { changed_ids: ["task-1"], resource: "task" } }, "   "),
+      workflowProjectEventAffectsTask(
+        workflowEvent({ changedIDs: ["task-1"], resource: "task" }),
+        "   ",
+      ),
     ).toBe(false);
-    expect(workflowProjectEventAffectsTask({}, "task-1")).toBe(false);
   });
 });
+
+function workflowEvent(overrides: Partial<WorkflowProjectEvent>): WorkflowProjectEvent {
+  return {
+    action: "updated",
+    changedIDs: ["task-1"],
+    occurredAtUnixMs: 1,
+    projectID: "project-1",
+    resource: "task",
+    workflowID: "workflow-1",
+    ...overrides,
+  };
+}

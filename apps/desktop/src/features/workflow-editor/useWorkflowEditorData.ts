@@ -2,11 +2,11 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import type { WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
-import { workflowProjectEvent } from "@/app-facade";
 
 export type WorkflowEditorData = ReturnType<typeof useWorkflowEditorData>;
 
@@ -66,9 +66,9 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
         onOpen() {
           void refresh(false);
         },
-        onEvent(params) {
-          if (shouldRefreshWorkflowDefinition(params, workflowID)) {
-            void refresh(shouldNotifyWorkflowEditorRefresh(params, projectID, workflowID));
+        onEvent(event) {
+          if (shouldRefreshWorkflowDefinition(event, workflowID)) {
+            void refresh(shouldNotifyWorkflowEditorRefresh(event, projectID, workflowID));
           }
         },
         onComplete() {
@@ -85,9 +85,9 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
           onOpen() {
             void refresh(false);
           },
-          onEvent(params) {
-            if (shouldRefreshWorkflowLink(params, projectID, workflowID)) {
-              void refresh(shouldNotifyWorkflowEditorRefresh(params, projectID, workflowID));
+          onEvent(event) {
+            if (shouldRefreshWorkflowLink(event, projectID, workflowID)) {
+              void refresh(shouldNotifyWorkflowEditorRefresh(event, projectID, workflowID));
             }
           },
           onComplete() {
@@ -116,22 +116,22 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
   };
 }
 
-export function shouldRefreshWorkflowEditor(params: unknown, projectID: string, workflowID: string): boolean {
+export function shouldRefreshWorkflowEditor(
+  event: WorkflowProjectEvent,
+  projectID: string,
+  workflowID: string,
+): boolean {
   return (
-    shouldRefreshWorkflowDefinition(params, workflowID) ||
-    shouldRefreshWorkflowLink(params, projectID, workflowID)
+    shouldRefreshWorkflowDefinition(event, workflowID) ||
+    shouldRefreshWorkflowLink(event, projectID, workflowID)
   );
 }
 
 export function shouldNotifyWorkflowEditorRefresh(
-  params: unknown,
+  event: WorkflowProjectEvent,
   projectID: string,
   workflowID: string,
 ): boolean {
-  const event = workflowProjectEvent(params);
-  if (event === null) {
-    return false;
-  }
   if (
     event.resource === "workflow" &&
     event.workflowID === workflowID &&
@@ -150,11 +150,7 @@ export function shouldNotifyWorkflowEditorRefresh(
   return false;
 }
 
-export function shouldRefreshWorkflowDefinition(params: unknown, workflowID: string): boolean {
-  const event = workflowProjectEvent(params);
-  if (event === null) {
-    return false;
-  }
+export function shouldRefreshWorkflowDefinition(event: WorkflowProjectEvent, workflowID: string): boolean {
   return (
     event.resource === "workflow" &&
     event.workflowID === workflowID &&
@@ -162,11 +158,11 @@ export function shouldRefreshWorkflowDefinition(params: unknown, workflowID: str
   );
 }
 
-export function shouldRefreshWorkflowLink(params: unknown, projectID: string, workflowID: string): boolean {
-  const event = workflowProjectEvent(params);
-  if (event === null) {
-    return false;
-  }
+export function shouldRefreshWorkflowLink(
+  event: WorkflowProjectEvent,
+  projectID: string,
+  workflowID: string,
+): boolean {
   return (
     event.resource === "workflow_link" &&
     event.projectID === projectID &&

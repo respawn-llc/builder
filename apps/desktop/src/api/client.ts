@@ -1,6 +1,6 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
-import type { ApiConnectionSource, ApiEventHandler, ApiService, ApiSubscription } from "./apiService";
+import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import {
@@ -99,7 +99,9 @@ import {
   workflowListSchema,
   workflowValidationSchema,
 } from "./schemas/workflow";
-import type { RpcEventHandler, RpcTransport } from "./transport";
+import type { RpcTransport } from "./transport";
+import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
+import { workflowProjectEventRpcHandler } from "./workflowProjectEvents";
 
 export const guiTaskCommentAuthor = "user";
 
@@ -644,19 +646,19 @@ export class ApiClient implements ApiService {
     );
   }
 
-  subscribeProject(projectID: string, handler: ApiEventHandler): ApiSubscription {
+  subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription {
     return this.#transport.subscribe(
       "workflow.subscribeProject",
       { project_id: projectID },
-      apiEventRpcHandler(handler),
+      workflowProjectEventRpcHandler(handler),
     );
   }
 
-  subscribeWorkflow(workflowID: string, handler: ApiEventHandler): ApiSubscription {
+  subscribeWorkflow(workflowID: string, handler: WorkflowProjectEventHandler): ApiSubscription {
     return this.#transport.subscribe(
       "workflow.subscribe",
       { workflow_id: workflowID },
-      apiEventRpcHandler(handler),
+      workflowProjectEventRpcHandler(handler),
     );
   }
 
@@ -678,15 +680,4 @@ export class ApiClient implements ApiService {
       worktreeSetupRpcHandler(handler),
     );
   }
-}
-
-function apiEventRpcHandler(handler: ApiEventHandler): RpcEventHandler {
-  return {
-    ...(handler.onOpen === undefined ? {} : { onOpen: handler.onOpen }),
-    onComplete: handler.onComplete,
-    onError: handler.onError,
-    onEvent(_method, params) {
-      handler.onEvent(params);
-    },
-  };
 }

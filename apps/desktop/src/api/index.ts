@@ -1,4 +1,4 @@
-export type { ApiConnectionSource, ApiEventHandler, ApiService, ApiSubscription } from "./apiService";
+export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type {
   QuestionAnswerInput,
   TaskEditInput,
@@ -44,6 +44,7 @@ export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
 export { rpcErrorCodes } from "./rpcErrorCodes";
 export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
+export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
 export type {
   ActivityItem,

@@ -5,6 +5,7 @@ import { ApiClient } from "./client";
 import { ContractError } from "./errors";
 import { FakeRpcTransport } from "./fakeTransport";
 import { protocolVersion } from "./jsonRpcSocket";
+import type { WorkflowProjectEvent } from "./workflowProjectEvents";
 
 const startTaskParamsSchema = z.object({
   task_id: z.literal("task-1"),
@@ -81,6 +82,77 @@ describe("ApiClient", () => {
     );
 
     await expect(client.getReadiness()).rejects.toBeInstanceOf(ContractError);
+  });
+
+  it("adapts workflow subscription events before feature code receives them", () => {
+    const transport = new FakeRpcTransport([]);
+    const client: ApiService = new ApiClient(transport);
+    const events: WorkflowProjectEvent[] = [];
+
+    client.subscribeProject("project-1", {
+      onEvent(event) {
+        events.push(event);
+      },
+      onComplete() {
+        return;
+      },
+      onError() {
+        return;
+      },
+    });
+
+    transport.emit("workflow.event", {
+      event: {
+        action: "question_waiting",
+        changed_ids: ["task-1", "run-1", "ask-1"],
+        occurred_at_unix_ms: 1,
+        project_id: "project-1",
+        resource: "task",
+        workflow_id: "workflow-1",
+      },
+    });
+
+    expect(events).toEqual([
+      {
+        action: "question_waiting",
+        changedIDs: ["task-1", "run-1", "ask-1"],
+        occurredAtUnixMs: 1,
+        projectID: "project-1",
+        resource: "task",
+        workflowID: "workflow-1",
+      },
+    ]);
+  });
+
+  it("surfaces malformed workflow subscription events as contract errors", () => {
+    const transport = new FakeRpcTransport([]);
+    const client: ApiService = new ApiClient(transport);
+    const events: WorkflowProjectEvent[] = [];
+    const errors: Error[] = [];
+
+    client.subscribeWorkflow("workflow-1", {
+      onEvent(event) {
+        events.push(event);
+      },
+      onComplete() {
+        return;
+      },
+      onError(error) {
+        errors.push(error);
+      },
+    });
+
+    transport.emit("workflow.event", {
+      event: {
+        action: "",
+        changed_ids: ["task-1", 2],
+        resource: "task",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(ContractError);
   });
 
   it("preserves optional board workflow selectors and normalizes empty slices", async () => {
