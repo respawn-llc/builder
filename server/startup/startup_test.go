@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"core/server/auth"
 	"core/server/authservice"
@@ -59,87 +58,6 @@ func (h stubAuthHandler) LookupEnv(key string) string {
 		return ""
 	}
 	return h.lookupEnv(key)
-}
-
-type stubAuthState struct {
-	cfg       config.App
-	oauthOpts auth.OpenAIOAuthOptions
-	mgr       *auth.Manager
-}
-
-func (s stubAuthState) Config() config.App                    { return s.cfg }
-func (s stubAuthState) OAuthOptions() auth.OpenAIOAuthOptions { return s.oauthOpts }
-func (s stubAuthState) AuthManager() *auth.Manager            { return s.mgr }
-
-func TestEnsureReadyUsesAuthHandlerLookupEnv(t *testing.T) {
-	mgr := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now)
-	sawInteraction := false
-	err := EnsureReady(context.Background(), stubAuthState{
-		cfg: config.App{Settings: config.Settings{
-			Theme: "dark",
-		}},
-		oauthOpts: auth.OpenAIOAuthOptions{ClientID: "client-test"},
-		mgr:       mgr,
-	}, stubAuthHandler{
-		lookupEnv: func(key string) string {
-			if key == "OPENAI_API_KEY" {
-				return "sk-env"
-			}
-			return ""
-		},
-		needs: func(req authservice.FlowInteractionRequest) bool {
-			sawInteraction = true
-			if !req.HasEnvAPIKey {
-				t.Fatal("expected lookup env api key to be reflected in interaction request")
-			}
-			if req.Theme != "dark" {
-				t.Fatalf("theme = %q, want dark", req.Theme)
-			}
-			return true
-		},
-		interact: func(context.Context, authservice.FlowInteractionRequest) error {
-			return auth.ErrAuthNotConfigured
-		},
-	})
-	if !errors.Is(err, auth.ErrAuthNotConfigured) {
-		t.Fatalf("expected auth not configured, got %v", err)
-	}
-	if !sawInteraction {
-		t.Fatal("expected ensure ready to invoke auth interaction")
-	}
-}
-
-func TestEnsureReadyPromptsDuringExplicitReauthWhenStartupAuthIsOptional(t *testing.T) {
-	mgr := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now)
-	called := false
-	err := EnsureReady(context.Background(), stubAuthState{
-		cfg: config.App{Settings: config.Settings{
-			Theme:         "dark",
-			OpenAIBaseURL: "http://127.0.0.1:8080/v1",
-		}},
-		mgr: mgr,
-	}, stubAuthHandler{
-		needs: func(req authservice.FlowInteractionRequest) bool {
-			return !called && req.PromptOptional && !req.Gate.Ready
-		},
-		interact: func(context.Context, authservice.FlowInteractionRequest) error {
-			called = true
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("ensure ready: %v", err)
-	}
-	if !called {
-		t.Fatal("expected explicit reauth to prompt even when startup auth is optional")
-	}
-}
-
-func TestEnsureReadyRequiresAuthManager(t *testing.T) {
-	err := EnsureReady(context.Background(), stubAuthState{}, stubAuthHandler{})
-	if err == nil || !errors.Is(err, errAuthManagerRequired) {
-		t.Fatalf("expected missing auth manager error, got %v", err)
-	}
 }
 
 func TestBuildRequestMapsStartupOptionsAndLookupEnv(t *testing.T) {

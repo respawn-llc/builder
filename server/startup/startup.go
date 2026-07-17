@@ -41,12 +41,6 @@ type AuthHandler interface {
 	LookupEnv(key string) string
 }
 
-type AuthState interface {
-	Config() config.App
-	OAuthOptions() auth.OpenAIOAuthOptions
-	AuthManager() *auth.Manager
-}
-
 type OnboardingHandler func(ctx context.Context, req OnboardingRequest) (config.App, error)
 
 type OnboardingRequest struct {
@@ -134,29 +128,6 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 		return nil, err
 	}
 	return appCore, nil
-}
-
-func EnsureReady(ctx context.Context, state AuthState, authHandler AuthHandler) error {
-	if state == nil {
-		return errors.New("auth state is required")
-	}
-	if state.AuthManager() == nil {
-		return errAuthManagerRequired
-	}
-	if authHandler == nil {
-		return errors.New("auth handler is required")
-	}
-	cfg := state.Config()
-	return authservice.EnsureFlowReady(
-		ctx,
-		state.AuthManager(),
-		state.OAuthOptions(),
-		cfg.Settings.Theme,
-		authHandler.LookupEnv,
-		authservice.StartupAuthRequired(cfg.Settings),
-		true,
-		authHandler,
-	)
 }
 
 func buildRequest(req Request, authHandler AuthHandler) serverbootstrap.Request {
