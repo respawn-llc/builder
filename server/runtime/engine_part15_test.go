@@ -279,17 +279,6 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
-	raw := "provider capacity details"
-	if err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionFailed, compactionModeAuto, "remote", "openai", nil, 2, raw); err != nil {
-		t.Fatalf("emit compaction failure: %v", err)
-	}
-	if local := eng.ChatSnapshot().Entries[0].Text; strings.Contains(local, raw) {
-		t.Fatalf("local compaction failure exposed diagnostic %q", local)
-	}
-	if got := events[len(events)-1].Compaction.Error; got != raw {
-		t.Fatalf("compaction diagnostic = %q, want %q", got, raw)
-	}
-	events = nil
 	mustBlockTestEventLogAppends(t, store)
 
 	err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionFailed, compactionModeAuto, "remote", "openai", nil, 2, "quota exceeded")

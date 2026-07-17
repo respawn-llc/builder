@@ -31,12 +31,3 @@ func FormatSubmissionError(err error) string {
 	}
 	return err.Error()
 }
-
-func FormatCompactionError(err error) string {
-	var providerErr *llmerrors.ProviderAPIError
-	var statusErr *llmerrors.APIStatusError
-	if errors.As(err, &providerErr) || errors.As(err, &statusErr) {
-		return "Context compaction failed. See details or logs for provider diagnostics."
-	}
-	return FormatSubmissionError(err)
-}
