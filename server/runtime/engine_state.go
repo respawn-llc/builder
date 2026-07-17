@@ -13,6 +13,7 @@ import (
 	"core/shared/config"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -591,7 +592,7 @@ func (e *Engine) PreviousSessionID() *runtimeids.SessionID {
 		return nil
 	}
 	meta := e.store.Meta()
-	return cloneSessionID(meta.PreviousSessionID)
+	return textutil.Pointer(meta.PreviousSessionID)
 }
 
 func (e *Engine) ParentAgentSessionID() *runtimeids.SessionID {
@@ -599,7 +600,7 @@ func (e *Engine) ParentAgentSessionID() *runtimeids.SessionID {
 		return nil
 	}
 	meta := e.store.Meta()
-	return cloneSessionID(meta.ParentAgentSessionID)
+	return textutil.Pointer(meta.ParentAgentSessionID)
 }
 
 func (e *Engine) NavigationTargetSessionID() *runtimeids.SessionID {
@@ -607,14 +608,6 @@ func (e *Engine) NavigationTargetSessionID() *runtimeids.SessionID {
 		return nil
 	}
 	return session.NavigationTargetSessionID(e.store.Meta())
-}
-
-func cloneSessionID(value *runtimeids.SessionID) *runtimeids.SessionID {
-	if value == nil {
-		return nil
-	}
-	copied := *value
-	return &copied
 }
 
 func (e *Engine) SetTranscriptWorkingDir(workdir string) {

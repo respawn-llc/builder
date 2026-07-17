@@ -209,6 +209,35 @@ func TestSessionTransitionMemoizationUsesTypedLifecycleResult(t *testing.T) {
 	}
 }
 
+func TestSessionTransitionMemoizationComparesPreviousSessionIDByValue(t *testing.T) {
+	parentID := mustSessionLifecycleResultID(t, "parent-session")
+	service := newTestSessionLifecycleService(t.TempDir(), nil)
+	req := serverapi.SessionResolveTransitionRequest{
+		ClientRequestID: "previous-session-replay",
+		Transition: serverapi.SessionTransition{
+			Action:            serverapi.SessionTransitionActionNewSession,
+			PreviousSessionID: &parentID,
+		},
+	}
+	first, err := service.ResolveTransition(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ResolveTransition first: %v", err)
+	}
+	encoded, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal request: %v", err)
+	}
+	var decoded serverapi.SessionResolveTransitionRequest
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal request: %v", err)
+	}
+	second, err := service.ResolveTransition(context.Background(), decoded)
+	if err != nil {
+		t.Fatalf("ResolveTransition replay after JSON round trip: %v", err)
+	}
+	requireSessionDirectiveWireEqual(t, second, first)
+}
+
 func requireSessionDirectiveWireEqual(t *testing.T, got serverapi.SessionDirective, want serverapi.SessionDirective) {
 	t.Helper()
 	gotJSON, err := json.Marshal(got)

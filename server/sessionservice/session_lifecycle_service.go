@@ -13,6 +13,7 @@ import (
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 var errSessionWorkspaceRetargeterRequired = errors.New("session workspace retargeter is required")
@@ -170,7 +171,7 @@ func sameSessionTransitionMemoRequest(a sessionTransitionMemoRequest, b sessionT
 		a.Transition.InitialInput == b.Transition.InitialInput &&
 		a.Transition.TargetSessionID == b.Transition.TargetSessionID &&
 		a.Transition.ForkRollbackTargetID == b.Transition.ForkRollbackTargetID &&
-		a.Transition.PreviousSessionID == b.Transition.PreviousSessionID
+		textutil.EqualOptional(a.Transition.PreviousSessionID, b.Transition.PreviousSessionID)
 }
 
 func sameSessionDraftMemoRequest(a sessionDraftMemoRequest, b sessionDraftMemoRequest) bool {

@@ -14,6 +14,24 @@ func TestPointerCopiesOptionalValue(t *testing.T) {
 	}
 }
 
+func TestEqualOptionalComparesPresenceAndValue(t *testing.T) {
+	one := 1
+	anotherOne := 1
+	two := 2
+	if !EqualOptional[int](nil, nil) {
+		t.Fatal("two absent values are not equal")
+	}
+	if EqualOptional(nil, &one) || EqualOptional(&one, nil) {
+		t.Fatal("present and absent values are equal")
+	}
+	if !EqualOptional(&one, &anotherOne) {
+		t.Fatal("distinct pointers with equal values are not equal")
+	}
+	if EqualOptional(&one, &two) {
+		t.Fatal("different values are equal")
+	}
+}
+
 func TestCompareOptionalOrdersAbsentValuesFirst(t *testing.T) {
 	one := 1
 	two := 2

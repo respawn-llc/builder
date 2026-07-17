@@ -12,6 +12,7 @@ import (
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type runJSONResult struct {
@@ -117,17 +118,9 @@ func newRunJSONError(err error) *runJSONError {
 	if !errors.As(err, &policy) || policy.Kind != protocol.SubagentLaunchPolicyMaxDepthExceeded {
 		return result
 	}
-	result.AttemptedDepth = cloneOptionalInt(policy.AttemptedDepth)
-	result.MaxDepth = cloneOptionalInt(policy.MaxDepth)
+	result.AttemptedDepth = textutil.Pointer(policy.AttemptedDepth)
+	result.MaxDepth = textutil.Pointer(policy.MaxDepth)
 	return result
-}
-
-func cloneOptionalInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copied := *value
-	return &copied
 }
 
 func emitRunJSON(v runJSONResult) {
