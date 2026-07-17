@@ -2,8 +2,6 @@ package llm
 
 import (
 	"encoding/json"
-
-	"github.com/openai/openai-go/v3/responses"
 )
 
 // MarshalOpenAIWirePayload builds the exact responses.ResponseNewParams that the
@@ -31,12 +29,5 @@ func MarshalOpenAIWirePayload(request OpenAIRequest, store bool, modelVerbosity 
 	if err != nil {
 		return nil, err
 	}
-	return marshalOpenAIResponseNewParams(params)
-}
-
-// marshalOpenAIResponseNewParams serializes a prepared ResponseNewParams using the
-// SDK's own json.Marshaler implementation — the same encoder the openai-go
-// requestconfig layer invokes to build the HTTP request body.
-func marshalOpenAIResponseNewParams(params responses.ResponseNewParams) (json.RawMessage, error) {
 	return json.Marshal(params)
 }
