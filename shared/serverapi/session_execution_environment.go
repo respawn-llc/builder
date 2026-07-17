@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 )
@@ -303,7 +304,7 @@ func decodeSessionExecutionField[T any, R ~string, S rpcwire.FieldResultSchema[T
 	var shape S
 	label := shape.Label()
 	var wire sessionExecutionFieldWire[T, R]
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
 		return nil, err
 	}
 	var members map[string]json.RawMessage
@@ -527,7 +528,7 @@ func (e *SessionExecutionEnvironment) UnmarshalJSON(data []byte) error {
 		Auth      SessionExecutionAuthField      `json:"auth"`
 		Model     SessionExecutionModelField     `json:"model"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	value := SessionExecutionEnvironment{SessionID: wire.SessionID, Workspace: wire.Workspace, Branch: wire.Branch, Auth: wire.Auth, Model: wire.Model}
@@ -564,7 +565,7 @@ func (r *SessionExecutionEnvironmentRequest) UnmarshalJSON(data []byte) error {
 	var wire struct {
 		SessionID runtimeids.SessionID `json:"session_id"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	value := SessionExecutionEnvironmentRequest{SessionID: wire.SessionID}
@@ -579,7 +580,7 @@ func (r *SessionExecutionEnvironmentResponse) UnmarshalJSON(data []byte) error {
 	var wire struct {
 		Environment SessionExecutionEnvironment `json:"environment"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	if err := wire.Environment.Validate(); err != nil {

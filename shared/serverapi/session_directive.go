@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"core/shared/protocol"
 )
 
 type SessionAuthPreparation string
@@ -116,7 +118,7 @@ func (p *SessionDraftDisposition) UnmarshalJSON(data []byte) error {
 		Kind SessionDraftDispositionKind `json:"kind"`
 		Text *string                     `json:"text"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	decoded := SessionDraftDisposition{kind: wire.Kind, overrideText: wire.Text}
@@ -215,7 +217,7 @@ func (p *SessionLaunchPreparation) UnmarshalJSON(data []byte) error {
 		Auth              SessionAuthPreparation        `json:"auth"`
 		NavigationBinding *SessionNavigationBinding     `json:"navigation_binding"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	decoded := NewSessionLaunchPreparation(wire.InitialPrompt, wire.InputPolicy, wire.Auth)
@@ -345,7 +347,7 @@ func (r *SessionDirective) UnmarshalJSON(data []byte) error {
 		Intent      *SessionLaunchIntent      `json:"intent"`
 		Preparation *SessionLaunchPreparation `json:"preparation"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	decoded := SessionDirective{

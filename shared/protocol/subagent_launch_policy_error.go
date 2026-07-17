@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 )
 
 type SubagentLaunchPolicyErrorKind string
@@ -27,8 +28,8 @@ type SubagentLaunchPolicyError struct {
 func NewMaxDepthExceededSubagentLaunchPolicyError(attemptedDepth int, maxDepth int) *SubagentLaunchPolicyError {
 	return &SubagentLaunchPolicyError{
 		Kind:           SubagentLaunchPolicyMaxDepthExceeded,
-		AttemptedDepth: intPointer(attemptedDepth),
-		MaxDepth:       intPointer(maxDepth),
+		AttemptedDepth: textutil.Int(attemptedDepth),
+		MaxDepth:       textutil.Int(maxDepth),
 	}
 }
 
@@ -117,7 +118,7 @@ func (e *SubagentLaunchPolicyError) RPCErrorData() json.RawMessage {
 func DecodeSubagentLaunchPolicyError(data json.RawMessage, fallback string) error {
 	generic := errors.New(genericSubagentPolicyMessage(fallback))
 	var decoded SubagentLaunchPolicyError
-	if err := decodeStrictJSON(data, &decoded); err != nil {
+	if err := DecodeStrictJSON(data, &decoded); err != nil {
 		return generic
 	}
 	if err := decoded.Validate(); err != nil {
@@ -131,8 +132,4 @@ func genericSubagentPolicyMessage(fallback string) string {
 		return message
 	}
 	return "subagent launch rejected"
-}
-
-func intPointer(value int) *int {
-	return &value
 }

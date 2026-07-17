@@ -9,6 +9,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/protocol"
 
 	"github.com/google/uuid"
 )
@@ -32,7 +33,7 @@ func (r *RunPromptRequest) UnmarshalJSON(data []byte) error {
 		Overrides       RunPromptOverrides  `json:"overrides"`
 	}
 	var decoded wire
-	if err := decodeStrictJSON(data, &decoded); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
 		return err
 	}
 	request := RunPromptRequest{

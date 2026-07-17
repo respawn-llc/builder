@@ -1,14 +1,13 @@
 package serverapi
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"core/shared/config"
+	"core/shared/protocol"
 	"core/shared/runtimeids"
 )
 
@@ -105,7 +104,7 @@ func (o *SessionCreateOrigin) UnmarshalJSON(data []byte) error {
 		Kind      SessionCreateOriginKind `json:"kind"`
 		SessionID *runtimeids.SessionID   `json:"session_id"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	decoded := SessionCreateOrigin{kind: wire.Kind, sessionID: wire.SessionID}
@@ -214,7 +213,7 @@ func (i *SessionLaunchIntent) UnmarshalJSON(data []byte) error {
 		Origin    *SessionCreateOrigin    `json:"origin"`
 		SessionID *runtimeids.SessionID   `json:"session_id"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	decoded := SessionLaunchIntent{
@@ -246,7 +245,7 @@ func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 		Overrides       RunPromptOverrides  `json:"overrides"`
 	}
 	var decoded wire
-	if err := decodeStrictJSON(data, &decoded); err != nil {
+	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
 		return err
 	}
 	request := SessionPlanRequest{
@@ -297,19 +296,4 @@ func (r SessionPlanRequest) Validate() error {
 		return err
 	}
 	return r.Overrides.ValidateAgentRoleOverride()
-}
-
-func decodeStrictJSON(data []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("unexpected trailing JSON value")
-		}
-		return err
-	}
-	return nil
 }

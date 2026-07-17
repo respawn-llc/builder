@@ -317,7 +317,7 @@ func (s *AttachProjectWorkspaceSelector) UnmarshalJSON(data []byte) error {
 		WorkspaceID   *string                     `json:"workspace_id"`
 		WorkspaceRoot *string                     `json:"workspace_root"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	if wire.Kind == nil {
@@ -370,7 +370,7 @@ func (r *AttachProjectRequest) UnmarshalJSON(data []byte) error {
 		ProjectID *string         `json:"project_id"`
 		Workspace json.RawMessage `json:"workspace"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	if wire.ProjectID == nil {
@@ -624,7 +624,7 @@ func (s *ProjectAttachmentWorkspaceSelection) UnmarshalJSON(data []byte) error {
 		RequestedRoot *string                     `json:"requested_root"`
 		CanonicalRoot *string                     `json:"canonical_root"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	if wire.Kind == nil {
@@ -733,7 +733,7 @@ func (r *AttachResponse) UnmarshalJSON(data []byte) error {
 		SessionID     *string         `json:"session_id"`
 		Selection     json.RawMessage `json:"workspace_selection"`
 	}
-	if err := decodeStrictJSON(data, &wire); err != nil {
+	if err := DecodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	if wire.Kind == nil {
