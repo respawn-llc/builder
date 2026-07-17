@@ -444,7 +444,7 @@ func (c uiAskController) answer(resp clientui.PromptAnswer, err error) (bool, bo
 	}
 	active, cmd, deliveryErr := m.promptAnswers.delivery(m.ask.current.prompt, resp, err)
 	if deliveryErr != nil {
-		return true, false, m.sendTransientStatusWithNoticeID(deliveryErr.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		return true, true, m.sendTransientStatusWithNoticeID(deliveryErr.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	m.ask.activeDelivery = active
 	return true, false, cmd
@@ -471,11 +471,11 @@ func (c uiAskController) resolveAnsweredPromptOptimistically() bool {
 }
 
 func (m *uiModel) answerQueuedApprovalCommentary(resp clientui.PromptAnswer) tea.Cmd {
-	m.ask.answerPending = false
 	accepted, hasNext, cmd := m.askController().answer(resp, nil)
 	if !accepted {
 		return nil
 	}
+	m.ask.answerPending = false
 	if hasNext {
 		m.activity = uiActivityQuestion
 	} else {

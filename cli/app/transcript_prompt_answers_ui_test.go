@@ -278,6 +278,31 @@ func TestAskRepeatedEnterWhileDeliveryActiveDoesNotSubmitAgain(t *testing.T) {
 	}
 }
 
+func TestAskDeliverySetupFailureKeepsQuestionActivity(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	model, control := newProjectedPromptTestUIModel(t)
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
+		testQuestionPrompt("ask-empty-setup-failure", "Provide details"),
+	)})
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	if model.activity != uiActivityQuestion || testActiveAsk(model) == nil || testPromptAnswerDeliveryActive(model) {
+		t.Fatalf(
+			"setup failure state = activity %d prompt %v delivery %t, want actionable question",
+			model.activity,
+			testActiveAsk(model) != nil,
+			testPromptAnswerDeliveryActive(model),
+		)
+	}
+	if model.transientStatusKind != uiStatusNoticeError || model.transientStatus == "" {
+		t.Fatalf("setup failure notice = kind %d text %q, want visible error", model.transientStatusKind, model.transientStatus)
+	}
+	if len(control.askRequests) != 0 {
+		t.Fatalf("setup failure recorded %d ask requests, want zero", len(control.askRequests))
+	}
+}
+
 func TestAskRetryThenSuccessKeepsOneRequestIDUntilCanonicalResolution(t *testing.T) {
 	control := &scriptedAskPromptControl{results: []error{
 		errors.New("retryable one"),
@@ -881,6 +906,37 @@ func TestAllowCommentaryQueueUnlocksBeforeCancelableApprovalDelivery(t *testing.
 		t.Fatalf("replacement approval request = %+v, want typed cancellation", requests[1])
 	}
 	resolveAnsweredTestAskThroughTranscript(t, model)
+}
+
+func TestStaleQueuedApprovalCommentaryDoesNotUnlockCurrentPrompt(t *testing.T) {
+	model, _ := newProjectedPromptTestUIModel(t)
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
+		testApprovalPrompt(
+			"approval-current",
+			"Allow current operation?",
+			clientui.ApprovalDecisionAllowOnce,
+			clientui.ApprovalDecisionDeny,
+		),
+	)})
+	model.ask.answerPending = true
+
+	command := model.answerQueuedApprovalCommentary(clientui.PromptAnswer{
+		PromptID: "approval-stale",
+		Approval: &clientui.ApprovalPromptAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: "stale commentary",
+		},
+	})
+
+	if command != nil {
+		t.Fatal("stale queued approval commentary created a delivery command")
+	}
+	if !model.ask.answerPending {
+		t.Fatal("stale queued approval commentary unlocked the current prompt queue stage")
+	}
+	if testPromptAnswerDeliveryActive(model) {
+		t.Fatal("stale queued approval commentary created active delivery ownership")
+	}
 }
 
 func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t *testing.T) {
