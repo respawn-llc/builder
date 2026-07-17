@@ -1,7 +1,9 @@
 package app
 
 import (
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"core/cli/tui/ongoing"
@@ -22,38 +24,46 @@ type ongoingTranscriptSurface interface {
 
 type ongoingFrameProvider func() ongoing.FrameInput
 
-type ongoingTranscriptStateObserver func(clientui.TranscriptMessage) tea.Cmd
+type ongoingTranscriptRuntimeAdmission func(clientui.TranscriptMessage) (runtimeTupleMergeResult, error)
+
+type ongoingTranscriptAdmittedStateObserver func(clientui.TranscriptMessage, runtimeTupleMergeResult) tea.Cmd
 
 type ongoingTranscriptController struct {
-	surface         ongoingTranscriptSurface
-	frameProvider   ongoingFrameProvider
-	stateObserver   ongoingTranscriptStateObserver
-	normalOwned     bool
-	hydrated        bool
-	lastSequence    uint64
-	queue           []clientui.TranscriptMessage
-	queueOverflowed bool
-	renderPending   bool
-	liveReadModel   ongoingTranscriptReadModel
+	surface          ongoingTranscriptSurface
+	frameProvider    ongoingFrameProvider
+	runtimeAdmission ongoingTranscriptRuntimeAdmission
+	stateObserver    ongoingTranscriptAdmittedStateObserver
+	normalOwned      bool
+	hydrated         bool
+	lastSequence     uint64
+	queue            []clientui.TranscriptMessage
+	queueOverflowed  bool
+	renderPending    bool
+	liveReadModel    ongoingTranscriptReadModel
 }
 
 func newOngoingTranscriptController(
 	surface ongoingTranscriptSurface,
 	frameProvider ongoingFrameProvider,
-	stateObserver ongoingTranscriptStateObserver,
+	runtimeAdmission ongoingTranscriptRuntimeAdmission,
+	stateObserver ongoingTranscriptAdmittedStateObserver,
 ) *ongoingTranscriptController {
 	if frameProvider == nil {
 		panic("ongoing transcript controller requires frame provider")
+	}
+	if runtimeAdmission == nil {
+		panic("ongoing transcript controller requires runtime admission")
 	}
 	if stateObserver == nil {
 		panic("ongoing transcript controller requires state observer")
 	}
 	return &ongoingTranscriptController{
-		surface:       surface,
-		frameProvider: frameProvider,
-		stateObserver: stateObserver,
-		normalOwned:   true,
-		liveReadModel: newOngoingTranscriptReadModel(),
+		surface:          surface,
+		frameProvider:    frameProvider,
+		runtimeAdmission: runtimeAdmission,
+		stateObserver:    stateObserver,
+		normalOwned:      true,
+		liveReadModel:    newOngoingTranscriptReadModel(),
 	}
 }
 
@@ -61,11 +71,17 @@ func (c *ongoingTranscriptController) Accept(message clientui.TranscriptMessage)
 	if err := message.Validate(); err != nil {
 		return ongoing.Result{}, nil, fmt.Errorf("validate ongoing transcript message: %w", err)
 	}
-	if result, ok := c.acceptDelivery(message); ok {
+	if result, ok := c.classifyDelivery(message); ok {
+		c.requestScratchRehydration()
 		return result, nil, nil
 	}
+	admission, err := c.runtimeAdmission(message)
+	if err != nil {
+		return ongoing.Result{}, nil, c.diagnoseRuntimeAdmissionError(message, err)
+	}
+	c.commitDelivery(message)
 	stateChanged := c.applyState(message)
-	stateCmd := c.stateObserver(message)
+	stateCmd := c.stateObserver(message, admission)
 	if !c.normalOwned {
 		if !isAppOwnedOngoingMessage(message.Kind) {
 			c.enqueue(message)
@@ -75,6 +91,26 @@ func (c *ongoingTranscriptController) Accept(message clientui.TranscriptMessage)
 	}
 	result, err := c.applyNow(message, stateChanged)
 	return result, stateCmd, err
+}
+
+func (c *ongoingTranscriptController) diagnoseRuntimeAdmissionError(
+	message clientui.TranscriptMessage,
+	err error,
+) error {
+	var conflict hydrationRuntimeTupleConflictError
+	if !errors.As(err, &conflict) {
+		return err
+	}
+	frame := c.frameProvider()
+	facts := conflict.facts()
+	facts["terminal_size"] = frame.Size
+	facts["terminal_cursor"] = frame.Cursor
+	facts["quoted_payload"] = strconv.Quote(fmt.Sprintf("%+v", message.Payload.Hydration))
+	return ongoing.NewDeveloperError(
+		"admit_transcript_hydration_runtime_tuple",
+		conflict.Error(),
+		facts,
+	)
 }
 
 func (c *ongoingTranscriptController) SetNormalBufferOwned(owned bool) (ongoing.Result, error) {
@@ -122,26 +158,33 @@ func (c *ongoingTranscriptController) HandleSubscriptionLoss() ongoing.Result {
 	return ongoing.Result{Action: ongoing.ResultRequestScratchRehydration, Reason: ongoing.RehydrateReasonSequenceGap}
 }
 
-func (c *ongoingTranscriptController) acceptDelivery(message clientui.TranscriptMessage) (ongoing.Result, bool) {
+func (c *ongoingTranscriptController) classifyDelivery(message clientui.TranscriptMessage) (ongoing.Result, bool) {
 	if !c.hydrated {
 		if message.Sequence != 1 || message.Kind != clientui.TranscriptMessageHydration {
-			c.requestScratchRehydration()
 			return ongoing.Result{Action: ongoing.ResultRequestScratchRehydration, Reason: ongoing.RehydrateReasonSequenceGap}, true
 		}
-		c.hydrated = true
-		c.lastSequence = message.Sequence
 		return ongoing.Result{}, false
 	}
 	if message.Sequence != c.lastSequence+1 {
-		c.requestScratchRehydration()
 		return ongoing.Result{Action: ongoing.ResultRequestScratchRehydration, Reason: ongoing.RehydrateReasonSequenceGap}, true
 	}
 	if message.Kind == clientui.TranscriptMessageHydration {
-		c.requestScratchRehydration()
 		return ongoing.Result{Action: ongoing.ResultRequestScratchRehydration, Reason: ongoing.RehydrateReasonSequenceGap}, true
 	}
-	c.lastSequence = message.Sequence
 	return ongoing.Result{}, false
+}
+
+func (c *ongoingTranscriptController) commitDelivery(message clientui.TranscriptMessage) {
+	if !c.hydrated {
+		c.hydrated = true
+	}
+	c.lastSequence = message.Sequence
+}
+
+func (c *ongoingTranscriptController) acceptedHydration(message clientui.TranscriptMessage) bool {
+	return message.Kind == clientui.TranscriptMessageHydration &&
+		c.hydrated &&
+		c.lastSequence == message.Sequence
 }
 
 func (c *ongoingTranscriptController) requestScratchRehydration() {

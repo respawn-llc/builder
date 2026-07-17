@@ -136,6 +136,7 @@ func TestRuntimeAttachmentUnsupportedAttentionUsesTranscriptAndClosesLease(t *te
 	releaseCount := 0
 	attentionCalls := 0
 	supported := false
+	sessionViews := &countingSessionViewClient{}
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
 			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
@@ -154,7 +155,7 @@ func TestRuntimeAttachmentUnsupportedAttentionUsesTranscriptAndClosesLease(t *te
 		},
 		attentionNotificationsSupported: &supported,
 		sessionTranscript:               &recordingTranscriptSubscriber{subs: []*scriptedTranscriptSubscription{{}}},
-		sessionViews:                    &countingSessionViewClient{},
+		sessionViews:                    sessionViews,
 		runtimeControl:                  &reconnectRetryRuntimeControlClient{},
 	}
 
@@ -168,6 +169,9 @@ func TestRuntimeAttachmentUnsupportedAttentionUsesTranscriptAndClosesLease(t *te
 	}
 	if releaseCount != 1 {
 		t.Fatalf("release count = %d, want 1", releaseCount)
+	}
+	if got := sessionViews.mainViewCount.Load(); got != 0 {
+		t.Fatalf("startup main-view reads = %d, want 0 before feed hydration", got)
 	}
 }
 

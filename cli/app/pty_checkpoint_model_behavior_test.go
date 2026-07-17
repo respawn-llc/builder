@@ -331,7 +331,13 @@ func newPTYCheckpointOngoingModel(t *testing.T, writer *analyzer.Writer) *uiMode
 	model := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(surface),
 	), 40, 10)
-	model.ongoingTranscript = newOngoingTranscriptController(surface, model.ongoingFrameInput, model.applyTranscriptMessageState)
+	runtimeClient := &sessionRuntimeClient{sessionID: ongoingTestSessionID().String()}
+	model.ongoingTranscript = newOngoingTranscriptController(
+		surface,
+		model.ongoingFrameInput,
+		runtimeClient.admitTranscriptMessageState,
+		model.applyAdmittedTranscriptMessageState,
+	)
 	if _, _, err := model.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept initial hydration: %v", err)
 	}
