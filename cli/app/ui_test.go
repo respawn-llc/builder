@@ -556,17 +556,8 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	updated = next.(*uiModel)
 	next, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected approval commentary queue command")
-	}
-	select {
-	case <-reply:
-		t.Fatal("did not expect approval answer before commentary queue command completes")
-	default:
-	}
-	for _, msg := range collectCmdMessages(t, cmd) {
-		next, cmd = updated.Update(msg)
-		updated = next.(*uiModel)
+	if cmd != nil {
+		t.Fatal("deny commentary must not create a queued user-message command")
 	}
 
 	resp := <-reply
@@ -576,8 +567,8 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	if resp.response.Approval.Decision != clientui.ApprovalDecisionDeny || resp.response.Approval.Commentary != "blocked by policy" {
 		t.Fatalf("unexpected approval response: %+v", resp.response.Approval)
 	}
-	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "blocked by policy" {
-		t.Fatalf("expected deny commentary injected into regular user-said flow, got %+v", updated.pendingInjected)
+	if len(updated.pendingInjected) != 0 {
+		t.Fatalf("deny commentary created a duplicate queued user message: %+v", updated.pendingInjected)
 	}
 	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
