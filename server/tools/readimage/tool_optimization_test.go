@@ -17,8 +17,23 @@ import (
 	"core/server/tools"
 )
 
-func TestCall_OptimizesLargeJPEGToSmallerJPEGOutput(t *testing.T) {
+func readImageTestResult(t *testing.T, name string, content []byte, callID string, input string) tools.Result {
+	t.Helper()
 	workspace := t.TempDir()
+	writeReadImageTestFile(t, workspace, name, content)
+	return callReadImageTool(t, newReadImageTestTool(t, workspace, true), callID, input)
+}
+
+func readImageTestError(t *testing.T, name string, content []byte, callID string, input string) string {
+	t.Helper()
+	result := readImageTestResult(t, name, content, callID, input)
+	if !result.IsError {
+		t.Fatalf("expected tool error for %q", name)
+	}
+	return toolError(t, result)
+}
+
+func TestCall_OptimizesLargeJPEGToSmallerJPEGOutput(t *testing.T) {
 	var original bytes.Buffer
 	if err := jpeg.Encode(&original, generatedPhotoLikeImage(1024), &jpeg.Options{Quality: 95}); err != nil {
 		t.Fatalf("encode jpeg: %v", err)
@@ -29,10 +44,8 @@ func TestCall_OptimizesLargeJPEGToSmallerJPEGOutput(t *testing.T) {
 	if int64(original.Len()) <= maxFileSizeBytes {
 		t.Fatalf("test image must exceed attachment cap before optimization: %d", original.Len())
 	}
-	writeReadImageTestFile(t, workspace, "photo.jpg", original.Bytes())
 
-	tool := newReadImageTestTool(t, workspace, true)
-	result := callReadImageTool(t, tool, "call-optimized", `{"path":"photo.jpg"}`)
+	result := readImageTestResult(t, "photo.jpg", original.Bytes(), "call-optimized", `{"path":"photo.jpg"}`)
 	if result.IsError {
 		t.Fatalf("expected success result, got error payload: %s", string(result.Output))
 	}
@@ -50,7 +63,6 @@ func TestCall_OptimizesLargeJPEGToSmallerJPEGOutput(t *testing.T) {
 }
 
 func TestCall_OptimizesTransparentPNGToJPEGOutput(t *testing.T) {
-	workspace := t.TempDir()
 	var original bytes.Buffer
 	if err := png.Encode(&original, generatedTransparentHighEntropyImage(384)); err != nil {
 		t.Fatalf("encode png: %v", err)
@@ -58,10 +70,8 @@ func TestCall_OptimizesTransparentPNGToJPEGOutput(t *testing.T) {
 	if int64(original.Len()) < minOptimizationSizeBytes {
 		t.Fatalf("test image is too small for optimization path: %d", original.Len())
 	}
-	writeReadImageTestFile(t, workspace, "screenshot.png", original.Bytes())
 
-	tool := newReadImageTestTool(t, workspace, true)
-	result := callReadImageTool(t, tool, "call-transparent-png", `{"path":"screenshot.png"}`)
+	result := readImageTestResult(t, "screenshot.png", original.Bytes(), "call-transparent-png", `{"path":"screenshot.png"}`)
 	if result.IsError {
 		t.Fatalf("expected success result, got error payload: %s", string(result.Output))
 	}
@@ -87,15 +97,12 @@ func TestCall_OptimizesTransparentPNGToJPEGOutput(t *testing.T) {
 }
 
 func TestCall_RawImageSkipsOptimization(t *testing.T) {
-	workspace := t.TempDir()
 	var original bytes.Buffer
 	if err := jpeg.Encode(&original, generatedPhotoLikeImage(512), &jpeg.Options{Quality: 95}); err != nil {
 		t.Fatalf("encode jpeg: %v", err)
 	}
-	writeReadImageTestFile(t, workspace, "photo.jpg", original.Bytes())
 
-	tool := newReadImageTestTool(t, workspace, true)
-	result := callReadImageTool(t, tool, "call-raw", `{"path":"photo.jpg","raw":true}`)
+	result := readImageTestResult(t, "photo.jpg", original.Bytes(), "call-raw", `{"path":"photo.jpg","raw":true}`)
 	if result.IsError {
 		t.Fatalf("expected success result, got error payload: %s", string(result.Output))
 	}
@@ -110,7 +117,6 @@ func TestCall_RawImageSkipsOptimization(t *testing.T) {
 }
 
 func TestCall_RawImageStillEnforcesAttachmentCap(t *testing.T) {
-	workspace := t.TempDir()
 	var original bytes.Buffer
 	if err := jpeg.Encode(&original, generatedPhotoLikeImage(1024), &jpeg.Options{Quality: 95}); err != nil {
 		t.Fatalf("encode jpeg: %v", err)
@@ -118,14 +124,8 @@ func TestCall_RawImageStillEnforcesAttachmentCap(t *testing.T) {
 	if int64(original.Len()) <= maxFileSizeBytes {
 		t.Fatalf("test image must exceed attachment cap: %d", original.Len())
 	}
-	writeReadImageTestFile(t, workspace, "large.jpg", original.Bytes())
 
-	tool := newReadImageTestTool(t, workspace, true)
-	result := callReadImageTool(t, tool, "call-raw-large", `{"path":"large.jpg","raw":true}`)
-	if !result.IsError {
-		t.Fatalf("expected raw oversized image to be rejected")
-	}
-	if got := toolError(t, result); !strings.Contains(got, "max supported size is 819200 bytes (800 KiB)") {
+	if got := readImageTestError(t, "large.jpg", original.Bytes(), "call-raw-large", `{"path":"large.jpg","raw":true}`); !strings.Contains(got, "max supported size is 819200 bytes (800 KiB)") {
 		t.Fatalf("expected attachment cap error, got %q", got)
 	}
 }
@@ -155,43 +155,19 @@ func TestCall_StillGIFAcceptedAndAnimatedGIFRejected(t *testing.T) {
 }
 
 func TestCall_WebPRejectedAsUnsupported(t *testing.T) {
-	workspace := t.TempDir()
-	writeReadImageTestFile(t, workspace, "image.webp", minimalWebPHeader())
-
-	tool := newReadImageTestTool(t, workspace, true)
-	result := callReadImageTool(t, tool, "call-webp", `{"path":"image.webp"}`)
-	if !result.IsError {
-		t.Fatalf("expected webp to be rejected")
-	}
-	if got := toolError(t, result); !strings.Contains(got, "unsupported image format") || !strings.Contains(got, "image/webp") {
+	if got := readImageTestError(t, "image.webp", minimalWebPHeader(), "call-webp", `{"path":"image.webp"}`); !strings.Contains(got, "unsupported image format") || !strings.Contains(got, "image/webp") {
 		t.Fatalf("expected unsupported WebP guidance, got %q", got)
 	}
 }
 
 func TestCall_CorruptImageReturnsToolError(t *testing.T) {
-	workspace := t.TempDir()
-	writeReadImageTestFile(t, workspace, "corrupt.png", make([]byte, 1024))
-
-	tool := newReadImageTestTool(t, workspace, true)
-	result := callReadImageTool(t, tool, "call-corrupt", `{"path":"corrupt.png"}`)
-	if !result.IsError {
-		t.Fatalf("expected tool error result for corrupt image")
-	}
-	if got := toolError(t, result); !strings.Contains(got, "unable to decode image") {
+	if got := readImageTestError(t, "corrupt.png", make([]byte, 1024), "call-corrupt", `{"path":"corrupt.png"}`); !strings.Contains(got, "unable to decode image") {
 		t.Fatalf("expected decode error, got %q", got)
 	}
 }
 
 func TestCall_HugeDecodedDimensionsRejected(t *testing.T) {
-	workspace := t.TempDir()
-	writeReadImageTestFile(t, workspace, "huge-dimensions.png", pngWithDimensions(t, 100_000, 100_000))
-
-	tool := newReadImageTestTool(t, workspace, true)
-	result := callReadImageTool(t, tool, "call-huge-dimensions", `{"path":"huge-dimensions.png"}`)
-	if !result.IsError {
-		t.Fatalf("expected huge decoded dimensions to be rejected")
-	}
-	if got := toolError(t, result); !strings.Contains(got, "exceed the supported pixel limit") {
+	if got := readImageTestError(t, "huge-dimensions.png", pngWithDimensions(t, 100_000, 100_000), "call-huge-dimensions", `{"path":"huge-dimensions.png"}`); !strings.Contains(got, "exceed the supported pixel limit") {
 		t.Fatalf("expected decoded pixel limit error, got %q", got)
 	}
 }
